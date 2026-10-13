@@ -117,7 +117,7 @@ jobs:
 
       # Engine-host protocol conformance (#367), model-free subset, against the
       # signed hardened-runtime host that is bundled next. The full run with the
-      # Pianissimo model is in verify-release-draft.sh, next to its smoke.
+      # Pianissimo model follows the installed-app smoke below.
       - name: Engine-host conformance, model-free subset (signed Core ML host)
         run: python3 scripts/engine-host-conformance.py build/engine-host/sagascript-engine-host --no-model
 
@@ -236,6 +236,14 @@ jobs:
 
       - name: Gate signed Pianissimo through /usr/local/bin/sagascript
         run: ./scripts/smoke-pianissimo-installed.sh /usr/local/bin/sagascript test-audio/swedish-fleurs-hongkong.wav hongkong
+
+      # Engine-host protocol conformance (#367), full run, on every release path
+      # (prebuild and fallback): the host inside the installed signed app, with the
+      # Pianissimo model the previous step downloaded.
+      - name: Gate engine-host conformance, full run (installed signed host)
+        run: |
+          model_dir=$(/usr/local/bin/sagascript engine status --json | python3 -c 'import json, sys; print(json.load(sys.stdin)["model"]["dir"])')
+          python3 scripts/engine-host-conformance.py /Applications/Sagascript.app/Contents/Resources/EngineHost/sagascript-engine-host --model-dir "$model_dir"
 
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

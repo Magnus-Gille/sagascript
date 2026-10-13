@@ -321,10 +321,18 @@ signed hardened-runtime host before bundling it (`release-build-macos.yml`).
 `scripts/engine-host-conformance.py <host binary> --model-dir <dir>` runs those checks and then
 exercises `load`, `transcribe_window` (including out-of-order concurrent responses and an
 over-long window), `cancel`, `status`, `unload`, EOF exit and `shutdown` with a real model. Every
-engine host must pass it. It is part of the release gate: `scripts/verify-release-draft.sh` runs
-it against the host bundled in the release's app, with the Pianissimo model its smoke has just
-downloaded (`--model-dir` from `sagascript engine status --json`), on the promote path in CI and
-by hand on the fallback path ([RELEASING.md](../RELEASING.md#automated-draft-verification)). It
-is not in PR CI because it needs that ~640 MB model. By hand, run it the same way against any
+engine host must pass it. It is part of the release gate, always right after a Pianissimo smoke
+that has downloaded the model (`--model-dir` from `sagascript engine status --json`):
+
+- `release-build-macos.yml`, on every release path (prebuild and fallback), against the host in
+  the installed signed app (`/Applications/Sagascript.app/Contents/Resources/EngineHost/`), before
+  the artifacts are uploaded;
+- `scripts/verify-release-draft.sh`, against the host in the app of the downloaded draft: in CI
+  on the promote path, by hand on the fallback path
+  ([RELEASING.md](../RELEASING.md#automated-draft-verification));
+- `test-build.yml` (manual dispatch), against the host of the signed test build, which rehearses
+  the release gate.
+
+It is not in PR CI because it needs that ~640 MB model. By hand, run it the same way against any
 host. The script is engine-agnostic (it sends `compute_units:"ane"`, which non-Core ML hosts map
 to their only device); set `ORT_DYLIB_PATH` when running it against the ONNX host.

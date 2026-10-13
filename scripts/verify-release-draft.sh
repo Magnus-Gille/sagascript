@@ -185,8 +185,9 @@ check_updater_archive() {
 check_pianissimo_smoke() {
   "$repo_root/scripts/smoke-pianissimo-installed.sh" "$binary" "$repo_root/test-audio/swedish-fleurs-hongkong.wav" hongkong
 }
-# Engine-host protocol conformance (#367) against the shipped host. The full run
-# needs the Pianissimo model, which the smoke above has just downloaded.
+# Engine-host protocol conformance (#367) against the host in the draft's app (the
+# signed build already ran it before upload; this checks the stored artifacts). The
+# full run needs the Pianissimo model, which the smoke above has just downloaded.
 check_engine_host_conformance() {
   local model_dir
   model_dir=$("$binary" engine status --json | python3 -c 'import json, sys; print(json.load(sys.stdin)["model"]["dir"])')

@@ -132,7 +132,10 @@ the production team with the hardened runtime (`flags=0x10000(runtime)`), and th
 run it without `--release` and only check the SHA).
 `scripts/smoke-pianissimo-installed.sh` then runs `engine status`, downloads the
 Pianissimo model, runs `engine doctor` and transcribes a sample through the
-installed CLI path. The smoke fails (never skips) while the model manifest in
+installed CLI path, and the full engine-host protocol conformance run
+(`scripts/engine-host-conformance.py --model-dir`) exercises the host in the installed
+app with that model. Both run on the prebuild and the fallback path before any
+artifact is uploaded. The smoke fails (never skips) while the model manifest in
 `sagascript-core/src/transcription/pianissimo_model.rs` holds placeholders.
 
 ### Automated draft verification
@@ -147,7 +150,8 @@ the release SHA and not dirty; the updater archive; the Pianissimo smoke (engine
 doctor plus a Swedish transcription that must contain `hongkong`); and the full
 engine-host protocol conformance run (`scripts/engine-host-conformance.py --model-dir`:
 load, concurrent and over-long windows, cancel, status, unload, shutdown and EOF) against
-the bundled host with the model the smoke downloaded (see
+the host in the draft's app with the model the smoke downloaded, a second time after the
+signed build's own run, now on the artifacts as GitHub stores them (see
 [engine-host-protocol.md, Conformance](docs/engine-host-protocol.md#conformance)).
 `--skip-smoke` omits the model download and runs only the model-free conformance subset.
 In CI the script also checks the Windows acceptance JSON

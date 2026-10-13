@@ -11,9 +11,10 @@ wire behavior rather than importing or special-casing the CoreML implementation.
 
 CI runs the model-free subset against the staged Core ML host (ci.yml,
 test-macos). The full run needs a downloaded Pianissimo model. The release
-gate runs the subset against the signed host (release-build-macos.yml) and the
-full run against the host bundled in the release, with the model its Pianissimo
-smoke downloads (verify-release-draft.sh).
+gate runs the subset against the signed host before bundling it and the full
+run, after a Pianissimo smoke that downloads the model, against the host in the
+installed signed app (release-build-macos.yml) and in the downloaded draft
+(verify-release-draft.sh); test-build.yml rehearses the full run.
 """
 
 import argparse

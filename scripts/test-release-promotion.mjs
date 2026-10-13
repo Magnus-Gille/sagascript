@@ -246,15 +246,48 @@ test("draft verification script covers the release checklist", () => {
   ]) assert.ok(s.includes(needle), `verify-release-draft.sh covers ${needle}`);
 });
 
-test("the release gate runs engine-host conformance: model-free on the signed host, full run after the draft smoke (#367)", () => {
+/** Index of `needle` in `text`; fails when it is missing. */
+function at(text, needle, where) {
+  const index = text.indexOf(needle);
+  assert.ok(index >= 0, `${where}: missing ${needle}`);
+  return index;
+}
+
+test("the release gate runs engine-host conformance: model-free on the signed host, full run after each smoke (#367)", () => {
   const signing = workflows["release-build-macos"];
-  const signed = signing.indexOf("name: Sign Core ML engine host (hardened runtime)");
-  const conformance = signing.indexOf(
+  const where = "release-build-macos.yml";
+  const signed = at(signing, "name: Sign Core ML engine host (hardened runtime)", where);
+  const conformance = at(
+    signing,
     "run: python3 scripts/engine-host-conformance.py build/engine-host/sagascript-engine-host --no-model",
+    where,
   );
-  const bundled = signing.indexOf("npx tauri build");
-  assert.ok(signed >= 0 && bundled > signed, "release-build-macos.yml signs the host, then bundles it");
+  const bundled = at(signing, "npx tauri build", where);
+  assert.ok(bundled > signed, "release-build-macos.yml signs the host, then bundles it");
   assert.ok(conformance > signed && conformance < bundled, "the signed host passes the model-free conformance before it is bundled");
+
+  // The full run needs the model the installed-app smoke downloads, and gates the upload on both
+  // release paths (prebuild and fallback call this workflow).
+  const smoke = at(signing, "name: Gate signed Pianissimo through /usr/local/bin/sagascript", where);
+  const full = at(signing, "name: Gate engine-host conformance, full run (installed signed host)", where);
+  const upload = at(signing, "name: Upload macOS artifacts", where);
+  assert.ok(smoke < full && full < upload, "smoke, then the full conformance run, then the upload");
+  const fullStep = signing.slice(full, upload);
+  assert.match(fullStep, /\/usr\/local\/bin\/sagascript engine status --json \| python3 -c [^\n]*\["model"\]\["dir"\]/);
+  assert.match(
+    fullStep,
+    /python3 scripts\/engine-host-conformance\.py \/Applications\/Sagascript\.app\/Contents\/Resources\/EngineHost\/sagascript-engine-host --model-dir "\$model_dir"/,
+  );
+
+  // test-build.yml (manual) rehearses the same full run after its smoke.
+  const testBuild = read(".github/workflows/test-build.yml");
+  const testSmoke = at(testBuild, "name: Gate signed Pianissimo through installed CLI symlink", "test-build.yml");
+  const testFull = at(testBuild, "name: Gate engine-host conformance, full run (signed bundled host)", "test-build.yml");
+  assert.ok(testSmoke < testFull, "test-build.yml runs the full conformance after its smoke");
+  assert.match(
+    testBuild.slice(testFull),
+    /python3 scripts\/engine-host-conformance\.py "\$app\/Contents\/Resources\/EngineHost\/sagascript-engine-host" --model-dir "\$model_dir"/,
+  );
 
   const s = read("scripts/verify-release-draft.sh");
   assert.match(s, /engine-host-conformance\.py" "\$host" --model-dir "\$model_dir"/);

@@ -229,7 +229,8 @@ jobs:
       # host staged above: hello, ping, status, the errors the client relies on
       # (unsupported, model_missing, not_loaded), shutdown and EOF exit. The full
       # run (load, windows, cancel) needs a Pianissimo model and is in the release
-      # gate (scripts/verify-release-draft.sh; docs/engine-host-protocol.md, Conformance).
+      # gate (release-build-macos.yml, verify-release-draft.sh; docs/engine-host-protocol.md,
+      # Conformance).
       - name: Engine-host conformance, model-free subset (Core ML host)
         run: python scripts/engine-host-conformance.py build/engine-host/sagascript-engine-host --no-model
 
