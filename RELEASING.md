@@ -127,7 +127,9 @@ It independently verifies the Developer ID authority, Team ID, hardened-runtime
 flag, audio-input entitlement, notarization tickets, Gatekeeper acceptance, and
 bundle metadata. It also checks that the bundled engine host is arm64, signed by
 the production team with the hardened runtime (`flags=0x10000(runtime)`), and that
-`sagascript-engine-host --version` prints the exact release SHA.
+`sagascript-engine-host --version` prints the exact release SHA and `dirty=false`
+(`scripts/verify-macos-release.sh --release`; signed test builds in `test-build.yml`
+run it without `--release` and only check the SHA).
 `scripts/smoke-pianissimo-installed.sh` then runs `engine status`, downloads the
 Pianissimo model, runs `engine doctor` and transcribes a sample through the
 installed CLI path. The smoke fails (never skips) while the model manifest in

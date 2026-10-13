@@ -193,7 +193,7 @@ jobs:
           app="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sagascript.app"
           dmg=$(find src-tauri/target/aarch64-apple-darwin/release/bundle/dmg -name '*.dmg' -print -quit)
           [[ -n "$dmg" ]]
-          ./scripts/verify-macos-release.sh "$app" "$dmg" "$version" "$GITHUB_SHA"
+          ./scripts/verify-macos-release.sh --release "$app" "$dmg" "$version" "$GITHUB_SHA"
           updater_bundle="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sagascript.app.tar.gz"
           updater_signature="$updater_bundle.sig"
           tar -czf "$updater_bundle" -C "$(dirname "$app")" "$(basename "$app")"

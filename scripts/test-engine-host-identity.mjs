@@ -138,8 +138,13 @@ test("release paths check the host in release mode", () => {
   const checks = workflow.match(/check-engine-host-identity\.sh[^\n]*/g) ?? [];
   assert.ok(checks.length >= 2, "release-build-macos.yml checks the staged and the signed host");
   for (const line of checks) assert.match(line, /^check-engine-host-identity\.sh --release /, line);
-  assert.match(
-    readFileSync(join(scripts, "verify-macos-release.sh"), "utf8"),
-    /check-engine-host-identity\.sh" --release "\$host"/,
-  );
+  const verifier = readFileSync(join(scripts, "verify-macos-release.sh"), "utf8");
+  assert.match(verifier, /if \[\[ "\$release" == true \]\]; then\n\s+"\$\(dirname "\$0"\)\/check-engine-host-identity\.sh" --release "\$host"/);
+  // The release paths ask verify-macos-release.sh for the clean-tree check; signed test builds
+  // (test-build.yml, any branch) only check the host's SHA.
+  assert.match(workflow, /verify-macos-release\.sh --release "\$app"/);
+  assert.match(readFileSync(join(scripts, "verify-release-draft.sh"), "utf8"), /verify-macos-release\.sh" --release "\$app"/);
+  const testBuild = readFileSync(join(scripts, "../.github/workflows/test-build.yml"), "utf8");
+  assert.match(testBuild, /verify-macos-release\.sh "\$app"/);
+  assert.doesNotMatch(testBuild, /verify-macos-release\.sh --release/);
 });

@@ -163,7 +163,7 @@ check_spctl() {
 }
 check_stapler_app() { xcrun stapler validate "$app"; }
 check_stapler_dmg() { xcrun stapler validate "$dmg"; }
-check_release_verifier() { "$repo_root/scripts/verify-macos-release.sh" "$app" "$dmg" "$version" "$sha"; }
+check_release_verifier() { "$repo_root/scripts/verify-macos-release.sh" --release "$app" "$dmg" "$version" "$sha"; }
 check_versions() {
   local out host_out
   out=$("$binary" --version)
