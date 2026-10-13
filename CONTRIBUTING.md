@@ -8,8 +8,8 @@ Thanks for your interest in contributing! This guide will help you get set up an
 
 **All platforms:**
 
-- Rust 1.75+ with the `stable` toolchain
-- Node.js 20+
+- Rust 1.88+ (the minimum supported version, `rust-version` in `src-tauri/Cargo.toml`). Use rustup: it installs the development toolchain pinned in `rust-toolchain.toml` (with clippy and rustfmt) on the first `cargo` call
+- Node.js 22+ (`.nvmrc`)
 - Tauri CLI: `cargo install tauri-cli`
 
 **macOS:**

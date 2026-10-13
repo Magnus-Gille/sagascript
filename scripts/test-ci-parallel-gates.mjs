@@ -45,7 +45,7 @@ function runScopedAggregator(run, values) {
 for (const [jobId, needs, laneResultNames, stepName] of [
   ["check-macos", ["scope", "test-macos", "build-macos"], { TEST_RESULT: "test-macos", BUILD_RESULT: "build-macos" }, "Assert macOS CI lanes passed"],
   ["check-windows", ["scope", "test-windows", "build-windows"], { TEST_RESULT: "test-windows", BUILD_RESULT: "build-windows" }, "Assert Windows CI lanes passed"],
-  ["check-linux", ["scope", "test-linux"], { LINUX_RESULT: "test-linux" }, "Assert Linux CI lane passed"],
+  ["check-linux", ["scope", "test-linux", "msrv-linux"], { LINUX_RESULT: "test-linux", MSRV_RESULT: "msrv-linux" }, "Assert Linux CI lanes passed"],
 ]) {
   test(`${jobId} accepts only trusted docs-only skips or successful full lanes`, () => {
     const run = scopedAggregator(jobId, needs, laneResultNames, stepName);

@@ -30,10 +30,10 @@ test("required checks accept only successful full lanes or explicitly classified
     assert.match(job(id), /if: \$\{\{ always\(\) \}\}/);
     for (const docsOnly of ["true", "false", ""]) {
       for (const first of results) {
-        for (const second of id === "check-linux" ? [first] : results) {
+        for (const second of results) {
           const env = {
             SCOPE_RESULT: "success", SCOPE_TRUSTED: "true", DOCS_ONLY: docsOnly,
-            TEST_RESULT: first, BUILD_RESULT: second, LINUX_RESULT: first,
+            TEST_RESULT: first, BUILD_RESULT: second, LINUX_RESULT: first, MSRV_RESULT: second,
           };
           const expected = docsOnly === "true"
             ? first === "skipped" && second === "skipped"
@@ -45,13 +45,13 @@ test("required checks accept only successful full lanes or explicitly classified
     for (const result of results.filter(value => value !== "success")) {
       assert.notEqual(shell(run, {
         SCOPE_RESULT: result, SCOPE_TRUSTED: "true", DOCS_ONLY: "true",
-        TEST_RESULT: "skipped", BUILD_RESULT: "skipped", LINUX_RESULT: "skipped",
+        TEST_RESULT: "skipped", BUILD_RESULT: "skipped", LINUX_RESULT: "skipped", MSRV_RESULT: "skipped",
       }).status, 0, `${id} rejects unsuccessful scope`);
     }
     for (const trusted of ["false", ""]) {
       assert.notEqual(shell(run, {
         SCOPE_RESULT: "success", SCOPE_TRUSTED: trusted, DOCS_ONLY: "true",
-        TEST_RESULT: "skipped", BUILD_RESULT: "skipped", LINUX_RESULT: "skipped",
+        TEST_RESULT: "skipped", BUILD_RESULT: "skipped", LINUX_RESULT: "skipped", MSRV_RESULT: "skipped",
       }).status, 0);
     }
   }
@@ -111,7 +111,7 @@ test("CRLF workflow text still parses and executes scope and aggregate scripts",
   const scope = script("scope", crlfWorkflow);
   const aggregateEnvironment = {
     SCOPE_RESULT: "success", SCOPE_TRUSTED: "true", DOCS_ONLY: "false",
-    TEST_RESULT: "success", BUILD_RESULT: "success", LINUX_RESULT: "success",
+    TEST_RESULT: "success", BUILD_RESULT: "success", LINUX_RESULT: "success", MSRV_RESULT: "success",
   };
 
   const scopeResult = shell(scope, { EVENT_NAME: "push", GITHUB_OUTPUT: "" });
