@@ -269,7 +269,7 @@ public enum WireProtocol {
             "compiled": result.compiled,
             "window_s": result.windowSeconds,
             "frame_s": result.frameSeconds,
-            "vocab_size": result.vocabularySize,
+            "vocabulary_size": result.vocabularySize,
             "blank_id": result.blankID,
         ]
     }
