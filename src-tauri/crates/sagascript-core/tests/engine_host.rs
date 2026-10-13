@@ -1417,6 +1417,67 @@ fn failed_cooldown_recovers_only_after_a_successful_load() {
     assert_eq!(snap.spawns, 6);
 }
 
+/// A half-open start whose host survives but cannot load the model (here the
+/// load is refused) re-opens the cooldown, and the cooldown is enforced: that
+/// host is retired, so the next request fails fast instead of sending `load`
+/// to it again (and pushing the cooldown out on every request).
+#[test]
+fn failed_probe_load_on_a_live_host_enforces_the_new_cooldown() {
+    let marker = tempfile::tempdir().unwrap();
+    let crash = marker.path().join("crash");
+    std::fs::write(&crash, b"crash").unwrap();
+    let log = marker.path().join("ops.log");
+    let cooldown = Duration::from_secs(1);
+    let f = fixture_with(
+        &[
+            ("FAKE_CRASH_ON_START_FILE", crash.to_str().unwrap()),
+            ("FAKE_LOG", log.to_str().unwrap()),
+        ],
+        |c| {
+            c.failed_cooldown = cooldown;
+            c.load.model_dir = "/models/missing".into();
+        },
+    );
+    for _ in 0..4 {
+        let r = f.client.warm();
+        assert!(matches!(r, Err(EngineHostError::Crashed { .. })), "{r:?}");
+    }
+    assert!(matches!(f.client.warm(), Err(EngineHostError::Failed(_))));
+    let opened = Instant::now();
+    std::fs::remove_file(&crash).unwrap();
+
+    // After the cooldown: one start, whose handshake succeeds and whose load is refused.
+    std::thread::sleep(cooldown.saturating_sub(opened.elapsed()) + Duration::from_millis(50));
+    let r = f.client.warm();
+    assert!(
+        matches!(
+            r,
+            Err(EngineHostError::Remote {
+                code: ErrorCode::ModelMissing,
+                ..
+            })
+        ),
+        "{r:?}"
+    );
+    let loads = || ops_of(&log).iter().filter(|o| *o == "load").count();
+    assert_eq!(loads(), 1);
+    let snap = f.client.snapshot();
+    assert_eq!(snap.spawns, 5);
+    assert!(!snap.running, "the probe host that cannot load is retired");
+
+    // Within the new cooldown: fail fast, no new host, no second `load`.
+    match f.client.warm() {
+        Err(EngineHostError::Failed(m)) => {
+            assert!(m.contains("load after the cooldown failed"), "{m}")
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(loads(), 1, "{:?}", ops_of(&log));
+    let snap = f.client.snapshot();
+    assert_eq!(snap.spawns, 5);
+    assert!(snap.failed.is_some());
+}
+
 /// (b) A window that ignores cancel keeps its host slot while the host still
 /// answers `ping` (a Core ML prediction cannot be interrupted). Within the
 /// request timeout plus the wedge grace the client kills that host, and the

@@ -1261,35 +1261,58 @@ impl Inner {
     }
 
     /// After a model load on a half-open start (see [`State::probing`]):
-    /// success closes the breaker and clears the crash history; a failure
-    /// starts another cooldown, so a host that starts but cannot load is
+    /// success closes the breaker and clears the crash history. A failure
+    /// starts another cooldown and retires the probe host if it is still
+    /// alive (the load was refused or timed out): the failed state is only
+    /// checked when no host runs, so a live one would otherwise get `load`
+    /// again on every request. A host that starts but cannot load is thus
     /// tried once per cooldown instead of earning a new restart budget. A
     /// cancelled wait settles nothing: the load goes on for the next caller.
+    /// Lifecycle lock held; the host is terminated outside the state lock.
     fn settle_probe(&self, load_error: Option<&EngineHostError>) {
-        let mut st = self.lock_state();
-        if !st.probing {
-            return;
-        }
-        match load_error {
-            None => {
-                tracing::info!("engine host recovered after the failed cooldown");
-                st.probing = false;
-                st.failed = None;
-                st.crashes.clear();
+        let retired = {
+            let mut st = self.lock_state();
+            if !st.probing {
+                return;
             }
-            Some(EngineHostError::Cancelled) => {}
-            Some(error) => {
-                // `probing` stays set: if this host is still alive (the load
-                // was refused, not crashed), a later successful load on it
-                // still closes the breaker.
-                st.failed = Some(Failure {
-                    reason: format!(
-                        "model load after the cooldown failed: {}",
-                        first_line(error)
-                    ),
-                    since: Instant::now(),
-                });
+            match load_error {
+                None => {
+                    tracing::info!("engine host recovered after the failed cooldown");
+                    st.probing = false;
+                    st.failed = None;
+                    st.crashes.clear();
+                    None
+                }
+                Some(EngineHostError::Cancelled) => None,
+                Some(error) => {
+                    st.probing = false;
+                    st.failed = Some(Failure {
+                        reason: format!(
+                            "model load after the cooldown failed: {}",
+                            first_line(error)
+                        ),
+                        since: Instant::now(),
+                    });
+                    // A dead host stays for `plan_start_locked`, which
+                    // accounts for its exit.
+                    if st.proc.as_ref().is_some_and(|p| p.is_alive()) {
+                        st.caps = None;
+                        st.base_caps = None;
+                        st.load_pending = None;
+                        st.loaded = false;
+                        st.proc.take()
+                    } else {
+                        None
+                    }
+                }
             }
+        };
+        if let Some(proc) = retired {
+            tracing::warn!(
+                pid = proc.pid(),
+                "engine host cannot load the model after the failed cooldown; stopping it"
+            );
+            proc.terminate(self.cfg.timeouts.shutdown_grace, true);
         }
     }
 
