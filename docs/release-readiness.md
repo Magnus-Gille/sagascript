@@ -207,6 +207,16 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo build -p sagascript-cli --no-default-features
 ```
 
+Manual, when the release changes an engine host (`src-tauri/engine-host/**`) or the engine-host
+protocol: run the full conformance check against the staged host with a downloaded Pianissimo
+model and record the result (see
+[engine-host-protocol.md, Conformance](engine-host-protocol.md#conformance)):
+
+```text
+./scripts/stage-engine-host.sh
+python scripts/engine-host-conformance.py build/engine-host/sagascript-engine-host --model-dir <dir>
+```
+
 ## Deferred from this release
 
 - Teach/training UI.

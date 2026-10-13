@@ -352,6 +352,7 @@ contains no cpal/ALSA.
 | Rust unit, core/CLI/protocol | inline; `sagascript-cli/src/meeting_reprocessing_tests.rs`; `sagascript-engine-protocol/src/tests.rs` | `cargo test -p <crate>`; release-only guard: `cargo test --release -p sagascript-core --lib dev_overrides` | per-crate steps; protocol and the release guard in test-linux |
 | Rust integration | `sagascript-core/tests/*.rs` (engine host against the fake host, chunk-merge golden, Pianissimo adapter); `sagascript-cli/tests/*.rs` (spawn `CARGO_BIN_EXE_sagascript`) | `cargo test -p sagascript-core`, `-p sagascript-cli` | macOS, Linux, Windows |
 | ORT host | `src-tauri/engine-host/ort/src/**` | `cargo test` and `cargo clippy --all-targets -- -D warnings` in `engine-host/ort/` | test-linux (fmt, test, clippy) |
+| Engine-host protocol | golden transcripts `src-tauri/engine-host/test-vectors/protocol/*.jsonl` with the scripted `fake-engine.json` ([contract](engine-host-protocol.md#golden-transcripts)); replayed by `sagascript-engine-protocol/src/vector_tests.rs`, `engine-host/ort/src/server/golden_tests.rs` and `ProtocolServerTests.swift` | `cargo test -p sagascript-engine-protocol`; `cargo test --locked` in `engine-host/ort/`; `swift test` | test-linux (Rust, ORT host); test-macos (Swift) |
 | MSRV | whole workspace, lean CLI, ORT host | `RUSTUP_TOOLCHAIN=1.88 cargo check --workspace --locked` (see CONTRIBUTING.md) | msrv-linux |
 | Swift | `src-tauri/engine-host/coreml/Tests/EngineHostCoreTests/` | `scripts/build-engine-host.sh`, then `swift test` (`npm run verify -- --only swift`) | test-macos |
 | Node | `test-*.mjs` and `test_*.mjs` anywhere under `scripts/` except `fixtures/` (`node:test`), each in one group of `scripts/node-test-groups.mjs`: `ui` (frontend logic), `ci` (workflows, tooling), `release`, `codeHealth` | `npm run test:frontend` (all), `npm run test:ui` / `test:ci` / `test:release` | test-macos, test-windows |
@@ -360,7 +361,7 @@ contains no cpal/ALSA.
 | Python | `scripts/dictation_eval/test_*.py`, `scripts/diarization_sv/test_*.py` | `python -m unittest discover -s scripts/dictation_eval -p 'test_*.py'` | all OS (dictation_eval); Linux and macOS (diarization_sv) |
 | Types | Svelte/TS | `npx svelte-check --tsconfig ./tsconfig.json` | test-macos |
 | CLI smoke | release binary in `ci.yml` build jobs: help, `config`, `list-models`, `formats`, completions, download + transcribe, `--json` streams (`scripts/verify-json-cli-streams.py`) | — | build-macos, build-windows |
-| Conformance | `scripts/engine-host-conformance.py <host> --model-dir <dir>` | manual, needs a model | not in CI |
+| Conformance | `scripts/engine-host-conformance.py <host> --no-model` against a real host process; with `--model-dir <dir>` the full run | model-free: `npm run verify -- --only engine-host-conformance` (macOS); full run by hand, needs a downloaded model | model-free subset against the staged Core ML host in test-macos; full run manual before a release that changes a host or the protocol ([release gate](release-readiness.md#6-release-gate)) |
 
 CI (`.github/workflows/ci.yml`) splits cargo per crate and feature set: test-linux runs both
 `cargo fmt --check` gates, `cargo deny check` for both Cargo workspaces (`src-tauri/deny.toml`:

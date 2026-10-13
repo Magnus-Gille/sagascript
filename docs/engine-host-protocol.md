@@ -305,3 +305,10 @@ engine host must pass it. It needs a downloaded Pianissimo model, so it is run b
 example with `--model-dir` from `sagascript engine status --json`). The script is engine-agnostic
 (it sends `compute_units:"ane"`, which non-Core ML hosts map to their only device); set
 `ORT_DYLIB_PATH` when running it against the ONNX host.
+
+The full run is deliberately not part of CI or the release workflow: it needs a ~640 MB model
+download and a Swift build on the release runner, while the wire contract it would guard is
+already checked on every PR by the golden transcripts (all three implementations) and the
+model-free subset (the real Core ML host process). It is a manual release step instead, required
+when a release changes an engine host or this protocol
+([release readiness, release gate](release-readiness.md#6-release-gate)).
