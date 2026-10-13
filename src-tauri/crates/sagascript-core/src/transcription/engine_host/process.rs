@@ -287,8 +287,11 @@ impl HostProcess {
     /// Send a request; the returned handle receives events and the response.
     ///
     /// The write is bounded by the write timeout: a host that stops reading
-    /// its stdin is killed (it counts as a crash) and the request fails with
-    /// [`EngineHostError::Timeout`] instead of blocking forever.
+    /// its stdin is killed instead of blocking the caller forever. That is a
+    /// crash like any other: the restart budget counts it, and this request
+    /// fails with [`EngineHostError::Crashed`] just like every request that
+    /// was in flight on the host, so a pipeline resubmits it once on a fresh
+    /// host.
     pub fn send(&self, op: &RequestOp) -> Result<Pending> {
         self.send_within(op, self.write_timeout)
     }
@@ -325,10 +328,7 @@ impl HostProcess {
                     // Ending the process fails the blocked write, which frees
                     // the writer thread, and fails every in-flight request.
                     let _ = lock_or_recover(&self.child, CHILD_LOCK).kill();
-                    return Err(EngineHostError::Timeout {
-                        op: op.name(),
-                        after: write_timeout,
-                    });
+                    return Err(self.killed_for_not_reading(op.name(), write_timeout));
                 }
                 Err(RecvTimeoutError::Disconnected) => {
                     Err(std::io::Error::from(std::io::ErrorKind::BrokenPipe))
@@ -346,6 +346,23 @@ impl HostProcess {
             return Err(EngineHostError::Io(e));
         }
         Ok(Pending { id, rx })
+    }
+
+    /// The error for a request whose write timed out after the host was
+    /// killed for it. Waits (briefly) until the exit is seen, so a retry
+    /// does not mistake this host for a live one.
+    fn killed_for_not_reading(&self, op: &str, write_timeout: Duration) -> EngineHostError {
+        let (status, stderr_tail) = match self.wait_closed(Duration::from_millis(1500)) {
+            Some(info) => (info.status, info.stderr_tail),
+            None => ("killed".to_string(), self.stderr_tail()),
+        };
+        EngineHostError::Crashed {
+            status: format!(
+                "{status}; killed because it stopped reading requests: \
+                 `{op}` could not be written within {write_timeout:?}"
+            ),
+            stderr_tail,
+        }
     }
 
     /// Drop the waiter for `id` (late responses are discarded).
@@ -376,7 +393,8 @@ impl HostProcess {
     }
 
     /// Send a request and wait for its terminal response; `timeout` covers
-    /// the write as well.
+    /// the write as well (a write that cannot complete kills the host, see
+    /// [`Self::send`]).
     pub fn request(&self, op: &RequestOp, timeout: Duration) -> Result<Value> {
         let name = op.name();
         let deadline = Instant::now() + timeout;

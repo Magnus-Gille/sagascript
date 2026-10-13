@@ -1583,7 +1583,12 @@ fn pipe_filling_boost() -> BoostSpec {
 
 /// A host that reads the first window and then stops reading stdin, with a
 /// batch lane of two so the second window's write fills the pipe.
-fn stop_reading_fixture(marker: &Path, log: &Path, write_timeout: Duration) -> Fixture {
+fn stop_reading_fixture(
+    marker: &Path,
+    log: &Path,
+    write_timeout: Duration,
+    max_crash_retries: u32,
+) -> Fixture {
     let marker = marker.join("stop-reading");
     let f = fixture_with(
         &[
@@ -1593,21 +1598,24 @@ fn stop_reading_fixture(marker: &Path, log: &Path, write_timeout: Duration) -> F
             ("FAKE_OVERLAP_S", "4"),
             ("FAKE_LOG", log.to_str().unwrap()),
         ],
-        |c| c.timeouts.write = write_timeout,
+        |c| {
+            c.timeouts.write = write_timeout;
+            c.max_crash_retries = max_crash_retries;
+        },
     );
     f.client.set_boost(Some(pipe_filling_boost()));
     f.client.warm().unwrap();
     f
 }
 
-/// (c) A host that stops reading stdin: the blocked write ends in a request
-/// timeout instead of an eternal hang, that host is killed, and the next job
-/// runs on a fresh host.
+/// (c) A host that stops reading stdin: the blocked write is bounded instead
+/// of hanging forever, and that host is killed. It fails the request like a
+/// crash, the error says why, and the next job runs on a fresh host.
 #[test]
 fn blocked_stdin_write_times_out_instead_of_hanging() {
     let dir = tempfile::tempdir().unwrap();
     let log = dir.path().join("ops.log");
-    let f = stop_reading_fixture(dir.path(), &log, Duration::from_millis(300));
+    let f = stop_reading_fixture(dir.path(), &log, Duration::from_millis(300), 0);
     let pid = f.client.snapshot().pid.unwrap();
     let client = f.client.clone();
     let (r, elapsed) = run_bounded(Duration::from_secs(20), move || {
@@ -1615,16 +1623,14 @@ fn blocked_stdin_write_times_out_instead_of_hanging() {
             .transcribe_file_samples(&pcm(16.0), &CancelToken::new(), None)
             .map(|o| o.tokens.len())
     });
-    assert!(
-        matches!(
-            r,
-            Err(EngineHostError::Timeout {
-                op: "transcribe_window",
-                ..
-            })
+    match r {
+        Err(EngineHostError::Crashed { status, .. }) => assert!(
+            status.contains("stopped reading requests")
+                && status.contains("`transcribe_window` could not be written within 300ms"),
+            "{status}"
         ),
-        "{r:?}"
-    );
+        other => panic!("{other:?}"),
+    }
     assert!(elapsed < Duration::from_secs(5), "{elapsed:?}");
     wait_until(
         "host that stopped reading killed",
@@ -1641,7 +1647,33 @@ fn blocked_stdin_write_times_out_instead_of_hanging() {
         out.tokens.iter().map(|t| t.id).collect::<Vec<_>>(),
         expected_ids(samples.len())
     );
-    assert_eq!(f.client.snapshot().spawns, 2);
+    let snap = f.client.snapshot();
+    assert_eq!(snap.spawns, 2);
+    assert_eq!(snap.crashes_in_window, 1);
+}
+
+/// The window whose write timed out is resubmitted like the other windows
+/// that were in flight on the killed host, so the job still completes.
+#[test]
+fn job_survives_a_host_that_stopped_reading_stdin() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("ops.log");
+    let f = stop_reading_fixture(dir.path(), &log, Duration::from_millis(300), 1);
+    let pid = f.client.snapshot().pid.unwrap();
+    let client = f.client.clone();
+    let samples = pcm(16.0);
+    let n = samples.len();
+    let (r, elapsed) = run_bounded(Duration::from_secs(20), move || {
+        client
+            .transcribe_file_samples(&samples, &CancelToken::new(), None)
+            .map(|o| o.tokens.iter().map(|t| t.id).collect::<Vec<_>>())
+    });
+    assert_eq!(r.unwrap(), expected_ids(n));
+    assert!(elapsed < Duration::from_secs(5), "{elapsed:?}");
+    assert!(!pid_alive(pid));
+    let snap = f.client.snapshot();
+    assert_eq!(snap.spawns, 2);
+    assert_eq!(snap.crashes_in_window, 1);
 }
 
 /// (c) Shutting the host down does not wait for a stdin write that cannot
@@ -1650,7 +1682,7 @@ fn blocked_stdin_write_times_out_instead_of_hanging() {
 fn shutdown_is_not_blocked_by_a_stdin_write_that_cannot_complete() {
     let dir = tempfile::tempdir().unwrap();
     let log = dir.path().join("ops.log");
-    let f = stop_reading_fixture(dir.path(), &log, Duration::from_secs(30));
+    let f = stop_reading_fixture(dir.path(), &log, Duration::from_secs(30), 1);
     let pid = f.client.snapshot().pid.unwrap();
     let job = {
         let client = f.client.clone();

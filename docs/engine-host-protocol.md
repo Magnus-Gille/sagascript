@@ -149,7 +149,8 @@ terminates with error `cancelled`. Cancellation is best effort; a window may sti
   max(15 s, 3 × window seconds); `shutdown` grace 2 s, then kill.
 - Writes to the host's stdin go through a writer thread and are bounded (5 s, and never longer
   than the request's own timeout). A host that stops reading stdin is killed (counted as a crash)
-  and the request fails with a timeout; shutdown never waits on a blocked write.
+  and the request fails as crashed, like every other request in flight on that host, so a job
+  resubmits it once on a fresh host; shutdown never waits on a blocked write.
 - Wedged window: when a `transcribe_window` times out, the caller gets the timeout at once. A
   detached watcher sends `cancel` and waits up to 30 s (the wedge grace) for that request's
   terminal response; the window keeps its slot meanwhile. Without one the host is stuck in an

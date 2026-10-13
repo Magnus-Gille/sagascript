@@ -84,7 +84,8 @@ pub struct Timeouts {
     pub transcribe_factor: f64,
     pub shutdown_grace: Duration,
     /// Upper bound for writing one request to the host's stdin. A host that
-    /// stops reading it is killed and the request fails with a timeout.
+    /// stops reading it is killed, and the request fails as crashed (like the
+    /// other requests in flight on that host).
     pub write: Duration,
     /// After a window times out and is cancelled, how long the host gets to
     /// send that request's terminal response before it counts as wedged and
