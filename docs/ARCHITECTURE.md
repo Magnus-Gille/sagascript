@@ -358,8 +358,8 @@ Shared fixtures: `sagascript_testsupport` (`TempDir`, `sha256_hex`, `isolated_cl
 
 | Layer | Location | Local command | CI |
 |---|---|---|---|
-| Rust unit, app | inline `#[cfg(test)]` in `src-tauri/src/**`; sibling files via `#[path]` (`meeting_jobs_tests.rs`, `paste/windows_clipboard_tests.rs`) | `cargo test` (app only) | macOS, Windows |
-| Rust unit, core/CLI/protocol | inline; `sagascript-cli/src/meeting_reprocessing_tests.rs`; `sagascript-engine-protocol/src/tests.rs` | `cargo test -p <crate>`; release-only guard: `cargo test --release -p sagascript-core --lib dev_overrides` | per-crate steps; protocol and the release guard in test-linux |
+| Rust unit, app | sibling `foo_tests.rs` files, declared last in `foo.rs` as `#[cfg(test)] #[path = "foo_tests.rs"] mod tests;` (`commands_tests.rs`, `main_tests.rs`, `meeting_jobs_tests.rs`, `paste/windows_clipboard_tests.rs`); inline `#[cfg(test)]` modules in smaller files | `cargo test` (app only) | macOS, Windows |
+| Rust unit, core/CLI/protocol | inline, or sibling `foo_tests.rs` as in the app: core `download_tests.rs`, `settings/manager_tests.rs`, `transcription/whisper_backend_tests.rs`; CLI `transcribe_tests.rs`, `meeting_reprocessing_tests.rs`; `sagascript-engine-protocol/src/tests.rs` | `cargo test -p <crate>`; release-only guard: `cargo test --release -p sagascript-core --lib dev_overrides` | per-crate steps; protocol and the release guard in test-linux |
 | Rust integration | `sagascript-core/tests/*.rs` (engine host against the fake host, chunk-merge golden, Pianissimo adapter); `sagascript-cli/tests/*.rs` (spawn `CARGO_BIN_EXE_sagascript`) | `cargo test -p sagascript-core`, `-p sagascript-cli` | macOS, Linux, Windows |
 | ORT host | `src-tauri/engine-host/ort/src/**` | `cargo test` and `cargo clippy --all-targets -- -D warnings` in `engine-host/ort/` | test-linux (fmt, test, clippy) |
 | MSRV | whole workspace, lean CLI, ORT host | `RUSTUP_TOOLCHAIN=1.88 cargo check --workspace --locked` (see CONTRIBUTING.md) | msrv-linux |
