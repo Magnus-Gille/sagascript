@@ -41,7 +41,8 @@ the original bytes first.
 4. **Lenient per-field parsing.** If the object does not decode strictly, each top-level field
    that does not decode alone takes its default. A bad value nested inside a field resets the
    whole field. The rest is kept, and the reset fields are logged by name, never by value.
-   `profile_models` stays lenient per entry.
+   `profile_models` stays lenient per entry: an entry that does not read (a model id from a
+   newer release) is dropped alone, and that counts as a reset of `profile_models`.
 5. **Preserve the bytes before any replacement** (from #340). A write over a file that does not
    decode strictly first saves its exact bytes as `settings.json.bak[.N]`. The startup load
    never rewrites a file it could not load or had to repair. Only an explicit save does.

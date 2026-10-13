@@ -387,29 +387,45 @@ fn parse_settings_object(contents: &[u8]) -> Result<Object, SettingsParseError> 
     }
 }
 
-/// Invalid profile-model entries are dropped rather than failing the whole
-/// file; `report_ignored` logs them. Runs before the migrations, which give
-/// every profile left without a model the one its old selection implies.
-fn drop_invalid_profile_models(object: &mut Object, report_ignored: bool) {
-    if let Some(models) = object.get_mut("profile_models") {
-        if let Some(entries) = models.as_object_mut() {
-            entries.retain(|id, model| {
-                let valid = validate_profile_file_id(id).is_ok()
-                    && model
-                        .as_str()
-                        .is_some_and(|id| FileModelPreference::parse_id(id).is_ok());
-                if !valid && report_ignored {
-                    tracing::warn!("Ignoring invalid profile model setting");
-                }
-                valid
-            });
-        } else {
-            if report_ignored {
-                tracing::warn!("Ignoring malformed profile model map");
-            }
-            object.remove("profile_models");
-        }
+const PROFILE_MODELS_KEY: &str = "profile_models";
+
+/// `profile_models` is lenient per entry (ADR 0007): an entry that does not
+/// read, such as a model id from a newer release, is dropped on its own, and
+/// a value that is not a map is dropped whole. Runs before the migrations,
+/// which give every profile left without a model the one its old selection
+/// implies. Returns whether anything was dropped, which [`decode_object`]
+/// counts as a reset of `profile_models`: like any reset value, the dropped
+/// entries stay in the file until a save, which first preserves its bytes.
+fn drop_invalid_profile_models(object: &mut Object) -> bool {
+    let Some(models) = object.get_mut(PROFILE_MODELS_KEY) else {
+        return false;
+    };
+    let Some(entries) = models.as_object_mut() else {
+        object.remove(PROFILE_MODELS_KEY);
+        return true;
+    };
+    let before = entries.len();
+    entries.retain(|id, model| {
+        validate_profile_file_id(id).is_ok()
+            && model
+                .as_str()
+                .is_some_and(|id| FileModelPreference::parse_id(id).is_ok())
+    });
+    entries.len() != before
+}
+
+/// [`lenient::decode`] of an object [`drop_invalid_profile_models`] ran on,
+/// with `profile_models` among the reset fields if it dropped anything.
+fn decode_object(
+    object: &Object,
+    dropped_profile_models: bool,
+) -> Result<lenient::Decoded, String> {
+    let mut decoded = lenient::decode(object)?;
+    if dropped_profile_models && !decoded.reset.iter().any(|key| key == PROFILE_MODELS_KEY) {
+        decoded.reset.push(PROFILE_MODELS_KEY.to_string());
+        decoded.reset.sort();
     }
+    Ok(decoded)
 }
 
 /// Whether a settings file's object reads as [`Settings`] as it is, with
@@ -417,8 +433,8 @@ fn drop_invalid_profile_models(object: &mut Object, report_ignored: bool) {
 /// bytes (see [`existing_settings_for_merge`]).
 fn check_settings_object(mut object: Object) -> Result<(), SettingsParseError> {
     migrations::canonical_onboarding_key(&mut object);
-    drop_invalid_profile_models(&mut object, false);
-    match lenient::decode(&object) {
+    let dropped_profile_models = drop_invalid_profile_models(&mut object);
+    match decode_object(&object, dropped_profile_models) {
         Ok(decoded) if decoded.reset.is_empty() => Ok(()),
         Ok(decoded) => Err(SettingsParseError::Schema(invalid_fields(&decoded.reset))),
         Err(reason) => Err(SettingsParseError::Schema(format!(
@@ -445,10 +461,10 @@ fn settings_from_file_object(
     // Taken before the dictionaries are read in: embedding them is a legacy shape.
     let from = migrations::starting_version(&object);
     read_dictionary_files(path, &mut object);
-    drop_invalid_profile_models(&mut object, true);
+    let dropped_profile_models = drop_invalid_profile_models(&mut object);
     let migration = migrations::migrate(&mut object, from, machine)
         .map_err(|error| SettingsParseError::Schema(error.to_string()))?;
-    let decoded = lenient::decode(&object)
+    let decoded = decode_object(&object, dropped_profile_models)
         .map_err(|reason| SettingsParseError::Schema(format!("invalid settings: {reason}")))?;
     if !decoded.reset.is_empty() {
         tracing::warn!(
@@ -1548,17 +1564,58 @@ mod tests {
     }
 
     #[test]
-    fn invalid_profile_model_does_not_reset_language_hotkey_or_other_settings() {
-        with_temp_settings(|path| {
-            fs::write(&path, r#"{"language":"sv","hotkey":"Super+S","profile_models":{"default":"not-a-model"}}"#).unwrap();
-            let loaded = startup_load(&path);
-            assert_eq!(loaded.default_profile().language, Language::Swedish);
-            assert_eq!(loaded.default_profile().shortcut, "Super+S");
-            assert_eq!(loaded.profile_models["default"], FileModelPreference::Auto);
-            let persisted: serde_json::Value =
-                serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
-            assert_eq!(persisted["profile_models"]["default"], "auto");
-        });
+    fn invalid_profile_model_is_reset_in_memory_and_preserved_before_any_rewrite() {
+        // A model id from a newer release, in an old file and in a current one.
+        let unversioned: &[u8] =
+            br#"{"language":"sv","hotkey":"Super+S","profile_models":{"default":"not-a-model"}}"#;
+        let current: &[u8] = br#"{"schema_version":6,"language":"sv","hotkey":"Super+S","profile_glossary_migrated":true,"model_lineup_version":1,"engine_defaults_version":1,"hotkey_profiles":[{"id":"default","name":"Swedish","shortcut":"Super+S","language":"sv"},{"id":"english","name":"English","shortcut":"Super+E","language":"en"}],"profile_models":{"default":"kb-whisper-small","english":"whisper-xl-2027"},"future_key":7}"#;
+        for original in [unversioned, current] {
+            with_temp_settings(|path| {
+                fs::write(&path, original).unwrap();
+                let problem = match parse_settings_object(original) {
+                    Ok(object) => check_settings_object(object).unwrap_err().to_string(),
+                    Err(error) => panic!("{error}"),
+                };
+                assert_eq!(problem, "invalid value for profile_models");
+
+                // Only the unreadable entry takes its default, in memory.
+                let loaded = startup_load(&path);
+                assert_eq!(loaded.default_profile().language, Language::Swedish);
+                assert_eq!(loaded.default_profile().shortcut, "Super+S");
+                let unreadable = if original == unversioned {
+                    "default"
+                } else {
+                    "english"
+                };
+                assert_eq!(loaded.profile_models[unreadable], FileModelPreference::Auto);
+                if original == current {
+                    assert_eq!(
+                        loaded.profile_models["default"],
+                        FileModelPreference::Whisper(WhisperModel::KbWhisperSmall)
+                    );
+                }
+                // The startup migration never rewrites a file it had to repair.
+                assert_file_bytes(&path, original);
+                assert!(!recovery_copy_path(&path, 0).exists());
+
+                // The next save first preserves the exact original bytes.
+                let updated = update_at(&path, |settings| settings.beam_size = 9).unwrap();
+                assert_eq!(
+                    updated.profile_models[unreadable],
+                    FileModelPreference::Auto
+                );
+                assert_file_bytes(recovery_copy_path(&path, 0), original);
+                let raw: serde_json::Value =
+                    serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+                assert_eq!(raw["beam_size"], 9);
+                assert_eq!(raw["language"], "sv");
+                assert_eq!(raw["profile_models"][unreadable], "auto");
+                if original == current {
+                    assert_eq!(raw["profile_models"]["default"], "kb-whisper-small");
+                    assert_eq!(raw["future_key"], 7);
+                }
+            });
+        }
     }
 
     #[test]
