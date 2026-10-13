@@ -6,6 +6,13 @@ on:
   pull_request:
     branches: [main]
 
+# Least privilege (#354): no CI job writes to the repository, so the token is
+# read-only. Every job also sets timeout-minutes (60 for native build/test
+# lanes, 20 for the rest; at least twice the slowest observed run) instead of
+# the 360-minute default.
+permissions:
+  contents: read
+
 # Cancel superseded PR runs (#178): pushes to a PR share one group, so a fix
 # cancels the stale run instead of burning runner-minutes compiling it twice.
 # Pushes (e.g. to `main`) get a unique group per run, so a newer push can
@@ -30,13 +37,14 @@ jobs:
   # range is needed to keep that required path fail-closed.
   scope:
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     outputs:
       docs_only: ${{ steps.classify.outputs.docs_only }}
       scope_trusted: ${{ steps.classify.outputs.scope_trusted }}
       scope_classification: ${{ steps.classify.outputs.scope_classification }}
     steps:
       - name: Checkout scope policy
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 0
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.sha }}
@@ -78,10 +86,11 @@ jobs:
     needs: scope
     if: ${{ needs.scope.result == 'success' && needs.scope.outputs.docs_only != 'true' }}
     runs-on: macos-14
+    timeout-minutes: 60
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
       - name: Select evaluation Python runtime
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
@@ -101,7 +110,7 @@ jobs:
           components: clippy
 
       - name: Install Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: 22
           cache: npm
@@ -131,7 +140,7 @@ jobs:
 
       - name: Upload browser regression diagnostics
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: transcription-browser-diagnostics
           path: ${{ runner.temp }}/transcription-browser
@@ -212,10 +221,11 @@ jobs:
     needs: scope
     if: ${{ needs.scope.result == 'success' && needs.scope.outputs.docs_only != 'true' }}
     runs-on: macos-14
+    timeout-minutes: 60
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
       - name: Select evaluation Python runtime
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
@@ -228,7 +238,7 @@ jobs:
           toolchain: 1.99.0
 
       - name: Install Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: 22
           cache: npm
@@ -240,7 +250,7 @@ jobs:
           shared-key: sagascript-ci-native
 
       - name: Cache downloaded models
-        uses: actions/cache@v5
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: ~/Library/Application Support/Sagascript/Models
           key: macos-models-${{ hashFiles('src-tauri/crates/sagascript-core/src/settings/manager.rs', 'src-tauri/crates/sagascript-core/src/transcription/model.rs', 'src-tauri/crates/sagascript-core/src/diarization/model.rs') }}
@@ -324,6 +334,7 @@ jobs:
     needs: [scope, test-macos, build-macos]
     if: ${{ always() }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     env:
       SCOPE_RESULT: ${{ needs.scope.result }}
       SCOPE_TRUSTED: ${{ needs.scope.outputs.scope_trusted }}
@@ -348,10 +359,11 @@ jobs:
     needs: scope
     if: ${{ needs.scope.result == 'success' && needs.scope.outputs.docs_only != 'true' }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
       - name: Select evaluation Python runtime
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
@@ -389,7 +401,7 @@ jobs:
           cargo fmt --manifest-path engine-host/ort/Cargo.toml --all -- --check
 
       - name: Install Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: 22
           cache: npm
@@ -467,7 +479,7 @@ jobs:
 
       - name: Upload diarization metric receipts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: diarization-metric-crosscheck
           path: ${{ runner.temp }}/diarization-metric-crosscheck
@@ -506,10 +518,11 @@ jobs:
     needs: scope
     if: ${{ needs.scope.result == 'success' && needs.scope.outputs.docs_only != 'true' }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
       - name: Install Tauri system dependencies
         run: |
@@ -533,7 +546,7 @@ jobs:
           echo "Checking against Rust $msrv"
 
       - name: Install Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: 22
           cache: npm
@@ -569,6 +582,7 @@ jobs:
     needs: [scope, test-linux, msrv-linux]
     if: ${{ always() }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     env:
       SCOPE_RESULT: ${{ needs.scope.result }}
       SCOPE_TRUSTED: ${{ needs.scope.outputs.scope_trusted }}
@@ -593,10 +607,11 @@ jobs:
     needs: scope
     if: ${{ needs.scope.result == 'success' && needs.scope.outputs.docs_only != 'true' }}
     runs-on: windows-latest
+    timeout-minutes: 60
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
       - name: Select evaluation Python runtime
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
@@ -613,7 +628,7 @@ jobs:
           components: clippy
 
       - name: Install Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: 22
           cache: npm
@@ -667,10 +682,11 @@ jobs:
     needs: scope
     if: ${{ needs.scope.result == 'success' && needs.scope.outputs.docs_only != 'true' }}
     runs-on: windows-latest
+    timeout-minutes: 60
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # v1; toolchain must match rust-toolchain.toml
@@ -678,7 +694,7 @@ jobs:
           toolchain: 1.99.0
 
       - name: Install Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: 22
           cache: npm
@@ -690,7 +706,7 @@ jobs:
           shared-key: sagascript-ci-native
 
       - name: Cache downloaded models
-        uses: actions/cache@v5
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: ~\AppData\Roaming\Sagascript\Models
           key: windows-models-${{ hashFiles('src-tauri/crates/sagascript-core/src/settings/manager.rs', 'src-tauri/crates/sagascript-core/src/transcription/model.rs', 'src-tauri/crates/sagascript-core/src/diarization/model.rs') }}
@@ -775,6 +791,7 @@ jobs:
     needs: [scope, test-windows, build-windows]
     if: ${{ always() }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     env:
       SCOPE_RESULT: ${{ needs.scope.result }}
       SCOPE_TRUSTED: ${{ needs.scope.outputs.scope_trusted }}
