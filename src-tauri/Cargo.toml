@@ -3,9 +3,11 @@
 # Cargo.lock, target/, and every CI path keep working unchanged.
 #
 # Members:
-#   .                        — this package: the desktop app (Tauri GUI + CLI dispatch)
-#   crates/sagascript-core   — lib: audio, transcription, settings, diarization, error
-#   crates/sagascript-cli    — lib + headless `sagascript` bin (no Tauri)
+#   .                                 — this package: the desktop app (Tauri GUI + CLI dispatch)
+#   crates/sagascript-core            — lib: audio, transcription, settings, diarization, error
+#   crates/sagascript-cli             — lib + headless `sagascript` bin (no Tauri)
+#   crates/sagascript-engine-protocol — lib: engine-host JSON Lines wire types
+#   crates/sagascript-testsupport     — lib: test-only helpers, only ever a dev-dependency
 #
 # Bare `cargo build/test/clippy` here operates on the app package only (root
 # package default; `default-members` documents it). Use `--workspace` or `-p`
