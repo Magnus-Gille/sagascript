@@ -19,6 +19,7 @@ verification commands, [docs/recipes/](recipes/README.md) for step-by-step chang
 | `src-tauri/crates/sagascript-core/` | Library: audio decode/resample/capture, Whisper and Pianissimo transcription, engine-host client, settings store, model downloads, diarization, meeting documents. |
 | `src-tauri/crates/sagascript-cli/` | Library + headless `sagascript` binary: every clap subcommand. Also holds meeting/diarization pipelines that the app imports. |
 | `src-tauri/crates/sagascript-engine-protocol/` | Wire types for the engine-host JSON Lines protocol ([spec](engine-host-protocol.md)); used by the core client, the ORT host and the fake host. |
+| `src-tauri/crates/sagascript-testsupport/` | Dev-only test helpers shared by core, CLI and app tests: `TempDir` (unique, removed on drop), `sha256_hex`, `isolated_cli_env` (spawned CLI without inherited credentials, with `SAGASCRIPT_SETTINGS_PATH`). Never linked into a shipped binary. |
 | `src-tauri/engine-host/coreml/` | Swift package: Core ML host `sagascript-engine-host` (Pianissimo on macOS 14+ Apple silicon). |
 | `src-tauri/engine-host/ort/` | Standalone Cargo workspace (own `Cargo.lock`): ONNX Runtime CPU host `sagascript-engine-host-ort`, shipped for Windows on ARM. |
 | `src-tauri/engine-host/test-vectors/` | `context-biasing.json`, loaded by both hosts' unit tests. |
@@ -50,6 +51,11 @@ App crate modules (`src-tauri/src/`):
 `sagascript_cli::meeting_reprocessing`, `sagascript_cli::meeting_proposal`).
 **Planned:** [#374](https://github.com/Magnus-Gille/sagascript/issues/374) moves those
 pipelines into core.
+
+`sagascript-testsupport` is only a dev-dependency (of core, the CLI and the app) and depends
+on none of them; fixtures made of core types (`meeting_transcript()`) live in
+`sagascript_core::test_support` behind `cfg(test)` or core's `test-support` feature, which
+the CLI and the app enable as a dev-dependency.
 
 **Binaries:** the app crate and the CLI crate both build `sagascript`; a bare app invocation
 starts the GUI, a subcommand runs the CLI and exits. The headless CLI prints help and exits 2
@@ -345,6 +351,10 @@ no-feature builds honest, and asserts that `cargo tree -p sagascript-cli --no-de
 contains no cpal/ALSA.
 
 ## 5. Where tests live and how CI runs them
+
+Shared fixtures: `sagascript_testsupport` (`TempDir`, `sha256_hex`, `isolated_cli_env`) and
+`sagascript_core::test_support::meeting_transcript()`; use them instead of hand-written
+`std::env::temp_dir()` paths, cleanup guards or env-scrub loops.
 
 | Layer | Location | Local command | CI |
 |---|---|---|---|
