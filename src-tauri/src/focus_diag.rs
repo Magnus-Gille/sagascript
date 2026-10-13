@@ -20,7 +20,12 @@ fn windows_by_label(app: &tauri::AppHandle) -> Vec<(String, usize)> {
         .collect()
 }
 
-fn emit(event: &str, mut data: serde_json::Value, snapshot: Option<serde_json::Value>, deferred: bool) {
+fn emit(
+    event: &str,
+    mut data: serde_json::Value,
+    snapshot: Option<serde_json::Value>,
+    deferred: bool,
+) {
     if let (Some(snapshot), Some(map)) = (snapshot, data.as_object_mut()) {
         map.insert("focus".into(), snapshot);
         if deferred {
@@ -82,7 +87,10 @@ pub fn log(event: &'static str, data: serde_json::Value) {
 
 /// Log a window/app activation call site.
 pub fn activation(site: &'static str, step: &'static str) {
-    log("activation_call", serde_json::json!({ "site": site, "step": step }));
+    log(
+        "activation_call",
+        serde_json::json!({ "site": site, "step": step }),
+    );
 }
 
 #[cfg(test)]
@@ -92,8 +100,14 @@ mod tests {
 
     #[test]
     fn field_diagnostic_events_stay_info() {
-        assert_eq!(level_for("paste_guard_check", &json!({ "decision": "reject" })), "info");
-        assert_eq!(level_for("focus_restore_before_paste", &json!({ "attempted": true })), "info");
+        assert_eq!(
+            level_for("paste_guard_check", &json!({ "decision": "reject" })),
+            "info"
+        );
+        assert_eq!(
+            level_for("focus_restore_before_paste", &json!({ "attempted": true })),
+            "info"
+        );
         assert_eq!(
             level_for(
                 "activation_call",
@@ -102,20 +116,47 @@ mod tests {
             "info"
         );
         assert_eq!(
-            level_for("settings_window_open_requested", &json!({ "site": "paste_failed_copy_fallback" })),
+            level_for(
+                "settings_window_open_requested",
+                &json!({ "site": "paste_failed_copy_fallback" })
+            ),
             "info"
         );
     }
 
     #[test]
     fn everything_else_is_debug() {
-        assert_eq!(level_for("paste_guard_check", &json!({ "decision": "allow" })), "debug");
-        assert_eq!(level_for("focus_restore_before_paste", &json!({ "attempted": false })), "debug");
-        assert_eq!(level_for("settings_window_open_requested", &json!({ "site": "tray" })), "debug");
-        assert_eq!(level_for("activation_call", &json!({ "site": "main_window_reveal", "step": "show" })), "debug");
-        for e in ["hotkey_down", "overlay_shown", "focus_restore_after_overlay", "key_up_stop_requested",
-                  "capture_stopped", "transcription_result_ready", "result_emitted_to_ui",
-                  "engine_load_state_event", "startup_windows", "update_check_requested"] {
+        assert_eq!(
+            level_for("paste_guard_check", &json!({ "decision": "allow" })),
+            "debug"
+        );
+        assert_eq!(
+            level_for("focus_restore_before_paste", &json!({ "attempted": false })),
+            "debug"
+        );
+        assert_eq!(
+            level_for("settings_window_open_requested", &json!({ "site": "tray" })),
+            "debug"
+        );
+        assert_eq!(
+            level_for(
+                "activation_call",
+                &json!({ "site": "main_window_reveal", "step": "show" })
+            ),
+            "debug"
+        );
+        for e in [
+            "hotkey_down",
+            "overlay_shown",
+            "focus_restore_after_overlay",
+            "key_up_stop_requested",
+            "capture_stopped",
+            "transcription_result_ready",
+            "result_emitted_to_ui",
+            "engine_load_state_event",
+            "startup_windows",
+            "update_check_requested",
+        ] {
             assert_eq!(level_for(e, &json!({})), "debug", "{e}");
         }
     }

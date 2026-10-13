@@ -155,7 +155,8 @@ impl LiveDictationBackend {
                     encode_ms = window.encode_ms,
                     decode_ms = window.decode_ms,
                     round_trip_ms = window.round_trip_ms,
-                    pcm_and_ipc_overhead_ms = (timings.inference_ms as u64).saturating_sub(window.round_trip_ms),
+                    pcm_and_ipc_overhead_ms =
+                        (timings.inference_ms as u64).saturating_sub(window.round_trip_ms),
                     tokens = window.tokens,
                     "Pianissimo dictation window timings"
                 );

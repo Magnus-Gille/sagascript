@@ -40,6 +40,7 @@ Rust, Svelte 5, and local Whisper inference.
 
 Run Rust commands from `src-tauri/`:
 
+- `cargo fmt --all -- --check` (also for `engine-host/ort/` via `--manifest-path`)
 - `cargo check --workspace`
 - `cargo test --workspace`
 - `cargo clippy --workspace --all-targets -- -D warnings`

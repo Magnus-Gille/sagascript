@@ -1,11 +1,11 @@
 //! `sagascript-engine-host-ort`: Pianissimo on ONNX Runtime (CPU), engine-host protocol v1.
 //! stdout carries protocol lines only; diagnostics go to stderr.
 
+mod boost;
 mod ort_engine;
 mod pcm;
 mod server;
 mod tdt;
-mod boost;
 mod vocab;
 
 use ort_engine::{OrtEngine, RuntimeConfig};
@@ -37,7 +37,12 @@ fn main() {
         match arguments[index].as_str() {
             "--protocol" => {
                 index += 1;
-                protocol = Some(arguments.get(index).cloned().unwrap_or_else(|| fail("--protocol requires a value")));
+                protocol = Some(
+                    arguments
+                        .get(index)
+                        .cloned()
+                        .unwrap_or_else(|| fail("--protocol requires a value")),
+                );
             }
             // Accepted for interface parity with the Core ML host; ONNX Runtime keeps no on-disk cache.
             "--cache-dir" => {

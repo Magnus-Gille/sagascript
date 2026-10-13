@@ -396,7 +396,10 @@ mod tests {
     #[test]
     fn plan_without_a_hint_keeps_its_pre_hint_bytes_and_revision() {
         let plan = plan(ReprocessingMode::Recluster);
-        assert_eq!(plan.revision, "388dc03111067ffb3e0fece712a115e86d948d2d0dbbc40d7e60f697a28bcc5a");
+        assert_eq!(
+            plan.revision,
+            "388dc03111067ffb3e0fece712a115e86d948d2d0dbbc40d7e60f697a28bcc5a"
+        );
         assert_eq!(serde_json::to_string(&plan).unwrap(), PRE_HINT_PLAN);
         let read: ReprocessingPlan = serde_json::from_str(PRE_HINT_PLAN).unwrap();
         assert_eq!(read, plan);
@@ -406,14 +409,25 @@ mod tests {
     #[test]
     fn speaker_hint_changes_the_revision_only_when_set_and_round_trips() {
         let plain = plan(ReprocessingMode::Recluster);
-        assert!(!serde_json::to_string(&plain).unwrap().contains("speaker_hint"));
-        let hinted = plain.clone().with_speaker_hint(Some(SpeakerCountHint::exact(2))).unwrap();
+        assert!(!serde_json::to_string(&plain)
+            .unwrap()
+            .contains("speaker_hint"));
+        let hinted = plain
+            .clone()
+            .with_speaker_hint(Some(SpeakerCountHint::exact(2)))
+            .unwrap();
         assert_ne!(hinted.revision, plain.revision);
-        let back: ReprocessingPlan = serde_json::from_str(&serde_json::to_string(&hinted).unwrap()).unwrap();
+        let back: ReprocessingPlan =
+            serde_json::from_str(&serde_json::to_string(&hinted).unwrap()).unwrap();
         assert_eq!(back, hinted);
         let cleared = hinted.with_speaker_hint(None).unwrap();
-        assert_eq!(cleared, plain, "removing the hint restores the original revision");
-        assert!(plain.with_speaker_hint(Some(SpeakerCountHint::exact(0))).is_err());
+        assert_eq!(
+            cleared, plain,
+            "removing the hint restores the original revision"
+        );
+        assert!(plain
+            .with_speaker_hint(Some(SpeakerCountHint::exact(0)))
+            .is_err());
     }
 
     #[test]

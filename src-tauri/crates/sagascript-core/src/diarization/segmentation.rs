@@ -139,11 +139,7 @@ impl FrameActivations {
     /// Returns `(start_sec, end_sec, speaker_idx)` tuples, one per contiguous
     /// active region per speaker. Regions shorter than `min_duration` are dropped.
     /// Adjacent regions from the same speaker separated by less than `min_gap` are merged.
-    pub fn to_speaker_segments(
-        &self,
-        min_duration: f64,
-        min_gap: f64,
-    ) -> Vec<(f64, f64, usize)> {
+    pub fn to_speaker_segments(&self, min_duration: f64, min_gap: f64) -> Vec<(f64, f64, usize)> {
         let mut segments: Vec<(f64, f64, usize)> = Vec::new();
 
         for spk in 0..MAX_SPEAKERS {
@@ -155,7 +151,10 @@ impl FrameActivations {
                 match (start, active) {
                     (None, true) => start = Some(f),
                     (Some(s), false) => {
-                        raw.push((s as f64 * self.frame_duration, f as f64 * self.frame_duration));
+                        raw.push((
+                            s as f64 * self.frame_duration,
+                            f as f64 * self.frame_duration,
+                        ));
                         start = None;
                     }
                     _ => {}
@@ -261,13 +260,27 @@ impl Segmenter {
     /// Load the segmentation model from disk.
     pub fn new(model_path: &Path) -> Result<Self, DictationError> {
         let session = Session::builder()
-            .map_err(|e| DictationError::DiarizationError(format!("Failed to create ORT session builder: {e}")))?
+            .map_err(|e| {
+                DictationError::DiarizationError(format!(
+                    "Failed to create ORT session builder: {e}"
+                ))
+            })?
             .with_intra_threads(ORT_INTRA_THREADS)
-            .map_err(|e| DictationError::DiarizationError(format!("Failed to configure ORT intra-op threads: {e}")))?
+            .map_err(|e| {
+                DictationError::DiarizationError(format!(
+                    "Failed to configure ORT intra-op threads: {e}"
+                ))
+            })?
             .with_inter_threads(1)
-            .map_err(|e| DictationError::DiarizationError(format!("Failed to configure ORT inter-op threads: {e}")))?
+            .map_err(|e| {
+                DictationError::DiarizationError(format!(
+                    "Failed to configure ORT inter-op threads: {e}"
+                ))
+            })?
             .commit_from_file(model_path)
-            .map_err(|e| DictationError::DiarizationError(format!("Failed to load segmentation model: {e}")))?;
+            .map_err(|e| {
+                DictationError::DiarizationError(format!("Failed to load segmentation model: {e}"))
+            })?;
         info!(
             "Segmentation model loaded from {} (batch {}, ORT intra-op {}, inter-op 1)",
             model_path.display(),
@@ -330,12 +343,14 @@ impl Segmenter {
                 .map_err(|e| DictationError::DiarizationError(format!("Inference failed: {e}")))?;
 
             // Extract [batch, 589, 7] output.
-            let logits = outputs[0]
-                .try_extract_array::<f32>()
-                .map_err(|e| DictationError::DiarizationError(format!("Output extraction failed: {e}")))?;
-            let logits = logits
-                .into_dimensionality::<Ix3>()
-                .map_err(|e| DictationError::DiarizationError(format!("Unexpected segmentation output rank: {e}")))?;
+            let logits = outputs[0].try_extract_array::<f32>().map_err(|e| {
+                DictationError::DiarizationError(format!("Output extraction failed: {e}"))
+            })?;
+            let logits = logits.into_dimensionality::<Ix3>().map_err(|e| {
+                DictationError::DiarizationError(format!(
+                    "Unexpected segmentation output rank: {e}"
+                ))
+            })?;
             let decoded = decode_batch_logits(logits)?;
 
             // Preserve chronological stitching: speaker-slot alignment for a
@@ -494,11 +509,7 @@ impl WindowStitcher {
                 .map(|f| {
                     let i = frame_offset + f;
                     let n = self.counts[i] as f32;
-                    [
-                        self.acc[i][0] / n,
-                        self.acc[i][1] / n,
-                        self.acc[i][2] / n,
-                    ]
+                    [self.acc[i][0] / n, self.acc[i][1] / n, self.acc[i][2] / n]
                 })
                 .collect();
             best_permutation(&local[..overlap_len], &global_avg)
@@ -914,7 +925,10 @@ mod tests {
         let local = vec![frame(1); 10];
         let global = vec![frame(0); 10];
         let perm = best_permutation(&local, &global);
-        assert_eq!(perm[1], 0, "local slot 1 should map to global track 0, got {perm:?}");
+        assert_eq!(
+            perm[1], 0,
+            "local slot 1 should map to global track 0, got {perm:?}"
+        );
     }
 
     #[test]
@@ -949,8 +963,9 @@ mod tests {
     #[test]
     fn stitch_single_window_passthrough() {
         let mut st = WindowStitcher::new(10);
-        let local: Vec<[f32; MAX_SPEAKERS]> =
-            (0..10).map(|f| if f < 5 { frame(1) } else { SILENT }).collect();
+        let local: Vec<[f32; MAX_SPEAKERS]> = (0..10)
+            .map(|f| if f < 5 { frame(1) } else { SILENT })
+            .collect();
         st.add_window(0, &local);
         let out = st.finish();
         for (f, fr) in out.iter().enumerate() {
@@ -991,8 +1006,9 @@ mod tests {
         // talks frames 90..150 (slot 1 in window B). A brief overlap region
         // 50..60 lets alignment lock in.
         let mut st = WindowStitcher::new(150);
-        let win_a: Vec<[f32; MAX_SPEAKERS]> =
-            (0..100).map(|f| if f < 60 { frame(0) } else { SILENT }).collect();
+        let win_a: Vec<[f32; MAX_SPEAKERS]> = (0..100)
+            .map(|f| if f < 60 { frame(0) } else { SILENT })
+            .collect();
         st.add_window(0, &win_a);
         let win_b: Vec<[f32; MAX_SPEAKERS]> = (0..100)
             .map(|f| {

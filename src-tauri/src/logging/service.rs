@@ -37,7 +37,12 @@ fn verbose_filter(filter: &str) -> bool {
 /// Append one entry to the shared app log without touching the controller.
 /// Opens the file per call (events are rare) so rotation by the main service
 /// is always respected. A missing sink (not yet constructed) drops the entry.
-pub fn log_global(level: &'static str, category: &'static str, event: &str, data: serde_json::Value) {
+pub fn log_global(
+    level: &'static str,
+    category: &'static str,
+    event: &str,
+    data: serde_json::Value,
+) {
     if !level_enabled(level) {
         return;
     }
@@ -220,9 +225,7 @@ impl LoggingService {
     }
 
     fn rotate_if_needed(&self, file: &mut File) {
-        let size = fs::metadata(&self.log_path)
-            .map(|m| m.len())
-            .unwrap_or(0);
+        let size = fs::metadata(&self.log_path).map(|m| m.len()).unwrap_or(0);
 
         if size < MAX_FILE_SIZE {
             return;
@@ -307,7 +310,10 @@ mod tests {
             svc.log_path.display(),
             temp.display()
         );
-        assert!(!svc.log_path.to_string_lossy().contains("Library/Logs/Sagascript"));
+        assert!(!svc
+            .log_path
+            .to_string_lossy()
+            .contains("Library/Logs/Sagascript"));
     }
 
     #[test]
@@ -439,7 +445,10 @@ mod tests {
 
         // Old content should have been moved to sagascript.1.log
         let rotated = dir.join("sagascript.1.log");
-        assert!(rotated.exists(), "expected rotated file sagascript.1.log to exist");
+        assert!(
+            rotated.exists(),
+            "expected rotated file sagascript.1.log to exist"
+        );
         let rotated_size = fs::metadata(&rotated).unwrap().len();
         assert!(
             rotated_size >= MAX_FILE_SIZE,

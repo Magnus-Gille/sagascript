@@ -104,10 +104,7 @@ impl PasteService {
                 if let Some(snapshot) = saved_pasteboard {
                     // A failed write may already have cleared the pasteboard.
                     // Restore only if no other app has taken ownership since.
-                    let _ = macos_clipboard::restore_if_unchanged(
-                        snapshot,
-                        error.owned_generation,
-                    );
+                    let _ = macos_clipboard::restore_if_unchanged(snapshot, error.owned_generation);
                 }
                 return Err(DictationError::PasteError(format!(
                     "Failed to set clipboard: {}",
@@ -121,8 +118,10 @@ impl PasteService {
             .set_text(text.as_ref())
             .map_err(|e| DictationError::PasteError(format!("Failed to set clipboard: {e}")))?;
         #[cfg(target_os = "windows")]
-        let saved_windows = windows_clipboard::set_temporary_text(text.as_ref())
-            .map_err(|error| DictationError::PasteError(format!("Failed to set clipboard: {error}")))?;
+        let saved_windows =
+            windows_clipboard::set_temporary_text(text.as_ref()).map_err(|error| {
+                DictationError::PasteError(format!("Failed to set clipboard: {error}"))
+            })?;
 
         info!("Text copied to clipboard ({} chars)", text.len());
 
@@ -217,8 +216,9 @@ fn validate_accessibility(trusted: bool) -> Result<(), DictationError> {
 
 #[cfg(not(target_os = "linux"))]
 fn simulate_paste() -> Result<(), DictationError> {
-    let mut enigo = Enigo::new(&EnigoSettings::default())
-        .map_err(|e| DictationError::PasteError(format!("Failed to create input simulator: {e}")))?;
+    let mut enigo = Enigo::new(&EnigoSettings::default()).map_err(|e| {
+        DictationError::PasteError(format!("Failed to create input simulator: {e}"))
+    })?;
 
     #[cfg(target_os = "macos")]
     let modifier = Key::Meta; // Cmd
@@ -256,14 +256,20 @@ fn wait_for_windows_modifiers() -> Result<(), DictationError> {
     let target = unsafe { GetForegroundWindow() };
     let deadline = std::time::Instant::now()
         + std::time::Duration::from_millis(crate::paste_completion::WINDOWS_MODIFIER_WAIT_MS);
-    while [0x10, 0x11, 0x12, 0x5B, 0x5C].iter().any(|key| unsafe { GetAsyncKeyState(*key) < 0 }) {
+    while [0x10, 0x11, 0x12, 0x5B, 0x5C]
+        .iter()
+        .any(|key| unsafe { GetAsyncKeyState(*key) < 0 })
+    {
         if std::time::Instant::now() >= deadline {
             return Err(DictationError::PasteError("Release the shortcut keys and paste with Ctrl+V. The recognized text is on the clipboard.".into()));
         }
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
     if target == 0 || unsafe { GetForegroundWindow() } != target {
-        return Err(DictationError::PasteError("The focused window changed. Select the intended text field and paste with Ctrl+V.".into()));
+        return Err(DictationError::PasteError(
+            "The focused window changed. Select the intended text field and paste with Ctrl+V."
+                .into(),
+        ));
     }
     Ok(())
 }

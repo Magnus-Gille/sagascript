@@ -1,5 +1,5 @@
-pub(crate) mod chunking;
 pub mod chunk_merge;
+pub(crate) mod chunking;
 pub mod dev_overrides;
 pub mod diagnostics;
 pub mod engine_host;

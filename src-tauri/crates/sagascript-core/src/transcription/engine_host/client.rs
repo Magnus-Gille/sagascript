@@ -10,8 +10,8 @@ use sagascript_engine_protocol::{
 };
 use std::collections::VecDeque;
 use std::path::PathBuf;
-use std::sync::mpsc::RecvTimeoutError;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::mpsc::RecvTimeoutError;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, TryLockError, Weak};
 use std::time::{Duration, Instant};
 
@@ -323,7 +323,11 @@ impl EngineHostClient {
     }
 
     pub fn boost(&self) -> Option<Arc<BoostSpec>> {
-        self.inner.boost.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.inner
+            .boost
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     /// Start the host and load the model now (pre-warm). Returns its capabilities.
@@ -466,7 +470,10 @@ impl EngineHostClient {
         inner.hook("after_ready");
         if slot.is_none() {
             if caps.max_in_flight == 1
-                && inner.warned_no_reserve_pid.swap(proc.pid(), Ordering::SeqCst) != proc.pid()
+                && inner
+                    .warned_no_reserve_pid
+                    .swap(proc.pid(), Ordering::SeqCst)
+                    != proc.pid()
             {
                 tracing::warn!(
                     pid = proc.pid(),
@@ -528,7 +535,8 @@ pub struct BoostReport {
 impl BoostReport {
     /// Windows where biasing was in effect (it may still have changed nothing).
     pub fn active_windows(&self) -> u64 {
-        self.windows.saturating_sub(self.inactive_windows + self.unusable_windows)
+        self.windows
+            .saturating_sub(self.inactive_windows + self.unusable_windows)
     }
 
     /// A user-facing warning when biasing did not (fully) take effect, else `None`.
@@ -571,14 +579,20 @@ impl BoostSpec {
         let mut seen = std::collections::HashSet::new();
         let mut too_long = 0;
         let mut distinct: Vec<String> = Vec::new();
-        for term in terms.into_iter().map(|t| t.trim().to_string()).filter(|t| !t.is_empty()) {
+        for term in terms
+            .into_iter()
+            .map(|t| t.trim().to_string())
+            .filter(|t| !t.is_empty())
+        {
             if term.chars().count() > sagascript_engine_protocol::MAX_BOOST_TERM_CHARS {
                 too_long += 1;
             } else if seen.insert(term.to_lowercase()) {
                 distinct.push(term);
             }
         }
-        let truncated = distinct.len().saturating_sub(sagascript_engine_protocol::MAX_BOOST_TERMS);
+        let truncated = distinct
+            .len()
+            .saturating_sub(sagascript_engine_protocol::MAX_BOOST_TERMS);
         distinct.truncate(sagascript_engine_protocol::MAX_BOOST_TERMS);
         if distinct.is_empty() {
             return None;
@@ -600,7 +614,11 @@ fn window_op(req: &WindowRequest) -> RequestOp {
         sample_rate: req.sample_rate,
         format: "f32le".into(),
         priority: req.priority,
-        boost_terms: req.boost.as_ref().map(|b| b.terms.clone()).unwrap_or_default(),
+        boost_terms: req
+            .boost
+            .as_ref()
+            .map(|b| b.terms.clone())
+            .unwrap_or_default(),
         boost_weight: req.boost.as_ref().map_or(0.0, |b| b.weight),
     }
 }
@@ -650,7 +668,9 @@ impl WindowTicket {
                         parse_result(v).map_err(|e| EngineHostError::Protocol(e.0))?;
                     if self.req.boost.is_some() {
                         self.inner.boost_windows.fetch_add(1, Ordering::Relaxed);
-                        self.inner.boost_us.fetch_add(r.timings.boost_us, Ordering::Relaxed);
+                        self.inner
+                            .boost_us
+                            .fetch_add(r.timings.boost_us, Ordering::Relaxed);
                         if r.boost_active != Some(true) {
                             let counter = if r.boost_reason.as_deref() == Some("no_usable_terms") {
                                 &self.inner.boost_unusable_windows
@@ -964,7 +984,10 @@ impl Inner {
 
     /// Start the host if needed and load the model if not yet loaded. Returns
     /// the load time in ms (0 when nothing had to load). Lifecycle lock held.
-    fn start_and_load_locked(&self, cancel: Option<&CancelToken>) -> Result<(Arc<HostProcess>, u64)> {
+    fn start_and_load_locked(
+        &self,
+        cancel: Option<&CancelToken>,
+    ) -> Result<(Arc<HostProcess>, u64)> {
         let started = Instant::now();
         let (proc, _) = self.ensure_started_locked()?;
         let loaded = self.state.lock().unwrap().loaded;
@@ -977,7 +1000,10 @@ impl Inner {
             st.loaded = true;
             st.last_load = Some(r);
         }
-        Ok((proc, u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)))
+        Ok((
+            proc,
+            u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+        ))
     }
 
     fn record_crash(st: &mut State) {
@@ -1250,11 +1276,33 @@ mod boost_spec_tests {
     #[test]
     fn report_warns_only_when_windows_ran_without_biasing() {
         use super::BoostReport;
-        assert!(BoostReport { windows: 3, inactive_windows: 0, unusable_windows: 0, trie_build_us: 5 }.warning().is_none());
-        let warning = BoostReport { windows: 3, inactive_windows: 3, unusable_windows: 0, trie_build_us: 0 }.warning().unwrap();
+        assert!(BoostReport {
+            windows: 3,
+            inactive_windows: 0,
+            unusable_windows: 0,
+            trie_build_us: 5
+        }
+        .warning()
+        .is_none());
+        let warning = BoostReport {
+            windows: 3,
+            inactive_windows: 3,
+            unusable_windows: 0,
+            trie_build_us: 0,
+        }
+        .warning()
+        .unwrap();
         assert!(warning.contains("NOT applied to 3 of 3"));
-        let unusable = BoostReport { windows: 2, inactive_windows: 0, unusable_windows: 2, trie_build_us: 0 };
-        assert!(unusable.warning().unwrap().contains("could be tokenized") && unusable.active_windows() == 0);
+        let unusable = BoostReport {
+            windows: 2,
+            inactive_windows: 0,
+            unusable_windows: 2,
+            trie_build_us: 0,
+        };
+        assert!(
+            unusable.warning().unwrap().contains("could be tokenized")
+                && unusable.active_windows() == 0
+        );
     }
 
     #[test]
@@ -1262,7 +1310,9 @@ mod boost_spec_tests {
         let long = "x".repeat(65);
         let many: Vec<String> = (0..600).map(|i| format!("Namn{i}")).collect();
         let spec = BoostSpec::new(
-            vec!["Gille".into(), "gille".into(), long, "Magnus Gille".into()].into_iter().chain(many),
+            vec!["Gille".into(), "gille".into(), long, "Magnus Gille".into()]
+                .into_iter()
+                .chain(many),
             99.0,
         )
         .unwrap();

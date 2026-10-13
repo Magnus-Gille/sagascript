@@ -39,8 +39,13 @@ fn replay_case(c: &Value, ctx: &str) -> MergePath {
     let (a, b) = (toks(&c["a"]), toks(&c["b"]));
     match (&c["contiguous"], merge_longest_contiguous(&a, &b, overlap)) {
         (Value::Null, Err(_)) => {}
-        (want, Ok(got)) if !want.is_null() => assert_same(&got, &toks(want), &format!("{ctx} contiguous")),
-        (want, got) => panic!("{ctx}: contiguous mismatch want={want:?} got_ok={}", got.is_ok()),
+        (want, Ok(got)) if !want.is_null() => {
+            assert_same(&got, &toks(want), &format!("{ctx} contiguous"))
+        }
+        (want, got) => panic!(
+            "{ctx}: contiguous mismatch want={want:?} got_ok={}",
+            got.is_ok()
+        ),
     }
     assert_same(
         &merge_longest_common_subsequence(&a, &b, overlap),
@@ -76,7 +81,10 @@ fn chunk_merge_synthetic_text_and_sentences() {
     let v: Value = serde_json::from_str(SYNTH).unwrap();
     let tc = &v["text_case"];
     let t = toks(&tc["tokens"]);
-    let sentences: Vec<String> = tokens_to_sentences(&t).into_iter().map(|s| s.text).collect();
+    let sentences: Vec<String> = tokens_to_sentences(&t)
+        .into_iter()
+        .map(|s| s.text)
+        .collect();
     let want: Vec<String> = tc["sentences"]
         .as_array()
         .unwrap()
@@ -93,15 +101,26 @@ fn chunk_merge_real_audio_replay() {
     let total = v["total_samples"].as_u64().unwrap() as usize;
     let sr = v["sample_rate"].as_u64().unwrap() as u32;
     for run in v["runs"].as_array().unwrap() {
-        let (win_s, ov_s) = (run["window_s"].as_f64().unwrap(), run["overlap_s"].as_f64().unwrap());
+        let (win_s, ov_s) = (
+            run["window_s"].as_f64().unwrap(),
+            run["overlap_s"].as_f64().unwrap(),
+        );
         let ctx = format!("window={win_s} overlap={ov_s}");
         let windows = run["windows"].as_array().unwrap();
 
         let plan = plan_windows(total, sr, win_s, ov_s);
         assert_eq!(plan.len(), windows.len(), "{ctx}: window count");
         for (p, w) in plan.iter().zip(windows) {
-            assert_eq!(p.start_sample as u64, w["start_sample"].as_u64().unwrap(), "{ctx}");
-            assert_eq!(p.end_sample as u64, w["end_sample"].as_u64().unwrap(), "{ctx}");
+            assert_eq!(
+                p.start_sample as u64,
+                w["start_sample"].as_u64().unwrap(),
+                "{ctx}"
+            );
+            assert_eq!(
+                p.end_sample as u64,
+                w["end_sample"].as_u64().unwrap(),
+                "{ctx}"
+            );
         }
 
         // Every recorded merge call individually.
@@ -118,7 +137,11 @@ fn chunk_merge_real_audio_replay() {
         let merged = merge_all(per_window, ov_s);
         let sentences = tokens_to_sentences(&merged);
         let flat: Vec<AlignedToken> = sentences.iter().flat_map(|s| s.tokens.clone()).collect();
-        assert_same(&flat, &toks(&run["final_tokens"]), &format!("{ctx} final tokens"));
+        assert_same(
+            &flat,
+            &toks(&run["final_tokens"]),
+            &format!("{ctx} final tokens"),
+        );
         let want_sentences: Vec<&str> = run["sentences"]
             .as_array()
             .unwrap()
@@ -127,6 +150,10 @@ fn chunk_merge_real_audio_replay() {
             .collect();
         let got_sentences: Vec<&str> = sentences.iter().map(|s| s.text.as_str()).collect();
         assert_eq!(got_sentences, want_sentences, "{ctx}: sentences");
-        assert_eq!(tokens_to_text(&merged), run["final_text"].as_str().unwrap(), "{ctx}: text");
+        assert_eq!(
+            tokens_to_text(&merged),
+            run["final_text"].as_str().unwrap(),
+            "{ctx}: text"
+        );
     }
 }

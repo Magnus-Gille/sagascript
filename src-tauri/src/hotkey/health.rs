@@ -218,11 +218,7 @@ mod tests {
     #[test]
     fn record_success_after_success_is_not_changed() {
         let h = HotkeyHealth::new("Control+Shift+Space");
-        let change = h.record(
-            "Control+Shift+Space",
-            None,
-            OperationalHotkey::Inactive,
-        );
+        let change = h.record("Control+Shift+Space", None, OperationalHotkey::Inactive);
         assert!(!change.changed);
         assert!(change.status.ok);
     }
@@ -237,7 +233,10 @@ mod tests {
     #[test]
     fn status_reports_every_registered_profile_shortcut() {
         let h = HotkeyHealth::new("Control+Shift+Space");
-        let shortcuts = vec!["Control+Shift+Space".to_string(), "Option+Space".to_string()];
+        let shortcuts = vec![
+            "Control+Shift+Space".to_string(),
+            "Option+Space".to_string(),
+        ];
         h.record(
             &shortcuts[0],
             None,
@@ -245,7 +244,10 @@ mod tests {
         );
 
         assert_eq!(h.status().shortcuts, shortcuts);
-        assert_eq!(h.operational_hotkey(), OperationalHotkey::Registered(shortcuts));
+        assert_eq!(
+            h.operational_hotkey(),
+            OperationalHotkey::Registered(shortcuts)
+        );
     }
 
     #[test]
@@ -295,11 +297,7 @@ mod tests {
             OperationalHotkey::registered("Control+Shift+Space")
         );
 
-        h.record(
-            "Shift+F6",
-            None,
-            OperationalHotkey::registered("Shift+F6"),
-        );
+        h.record("Shift+F6", None, OperationalHotkey::registered("Shift+F6"));
         assert_eq!(
             h.operational_hotkey(),
             OperationalHotkey::registered("Shift+F6")

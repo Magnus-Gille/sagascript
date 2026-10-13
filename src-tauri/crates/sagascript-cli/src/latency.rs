@@ -261,9 +261,7 @@ pub fn summarize_reader<R: BufRead>(mut reader: R) -> Result<Report, String> {
             )
         })?;
         if !value.is_object() {
-            return Err(format!(
-                "line {line_number}: JSON record must be an object"
-            ));
+            return Err(format!("line {line_number}: JSON record must be an object"));
         }
         input_records += 1;
 
@@ -660,14 +658,9 @@ fn read_bounded_line<R: BufRead>(
     let mut line = Vec::with_capacity(4096);
     let mut ended_with_newline = false;
     loop {
-        let buffer = reader
-            .fill_buf()
-            .map_err(|error| {
-                format!(
-                    "line {line_number}: input read failed ({:?})",
-                    error.kind()
-                )
-            })?;
+        let buffer = reader.fill_buf().map_err(|error| {
+            format!("line {line_number}: input read failed ({:?})", error.kind())
+        })?;
         if buffer.is_empty() {
             break;
         }

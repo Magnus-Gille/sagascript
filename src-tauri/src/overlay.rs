@@ -5,7 +5,8 @@ use tracing::info;
 
 /// True until the first overlay window of this app session has been created.
 #[cfg(not(target_os = "linux"))]
-static FIRST_OVERLAY_PENDING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+static FIRST_OVERLAY_PENDING: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(true);
 
 const OVERLAY_LABEL: &str = "overlay";
 

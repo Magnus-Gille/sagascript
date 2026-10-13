@@ -97,10 +97,14 @@ mod tests {
     use super::*;
     use crate::settings::WhisperModel;
 
-    const BASE_MSG: &str = "whisper_init_state: failed to load Core ML model from '/m/ggml-base-encoder.mlmodelc'";
+    const BASE_MSG: &str =
+        "whisper_init_state: failed to load Core ML model from '/m/ggml-base-encoder.mlmodelc'";
 
     fn expected_for(model: WhisperModel) -> HashSet<String> {
-        model.unsupported_coreml_probe_dirname().into_iter().collect()
+        model
+            .unsupported_coreml_probe_dirname()
+            .into_iter()
+            .collect()
     }
 
     #[cfg(target_os = "macos")]
@@ -109,7 +113,9 @@ mod tests {
         const KB_MSG: &str = "whisper_init_state: failed to load Core ML model from '/Users/x/Library/Application Support/Sagascript/Models/kb-whisper-large-encoder.mlmodelc'";
         let expected = expected_for(WhisperModel::KbWhisperLarge);
         assert_eq!(
-            WhisperModel::KbWhisperLarge.unsupported_coreml_probe_dirname().as_deref(),
+            WhisperModel::KbWhisperLarge
+                .unsupported_coreml_probe_dirname()
+                .as_deref(),
             Some("kb-whisper-large-encoder.mlmodelc")
         );
         assert!(is_expected_coreml_miss(KB_MSG, &expected));
@@ -121,7 +127,10 @@ mod tests {
         assert!(expected.is_empty());
         assert!(!is_expected_coreml_miss(BASE_MSG, &expected));
         // A KB expectation must not hide a Base encoder failure either.
-        assert!(!is_expected_coreml_miss(BASE_MSG, &expected_for(WhisperModel::KbWhisperLarge)));
+        assert!(!is_expected_coreml_miss(
+            BASE_MSG,
+            &expected_for(WhisperModel::KbWhisperLarge)
+        ));
     }
 
     #[test]
@@ -131,7 +140,10 @@ mod tests {
             "whisper_init_state: failed to load whisper model from 'kb-whisper-large-encoder.mlmodelc'",
             &expected
         ));
-        assert!(!is_expected_coreml_miss("ggml_metal_init: error", &expected));
+        assert!(!is_expected_coreml_miss(
+            "ggml_metal_init: error",
+            &expected
+        ));
     }
 
     #[test]
@@ -139,8 +151,9 @@ mod tests {
         // whisper.cpp (whisper_init_state) wording; if an upgrade changes it,
         // suppression silently stops and this test must be revisited.
         assert_eq!(CORE_ML_LOAD_FAILURE, "failed to load Core ML model from '");
-        let expected: HashSet<String> =
-            ["kb-whisper-large-encoder.mlmodelc".to_string()].into_iter().collect();
+        let expected: HashSet<String> = ["kb-whisper-large-encoder.mlmodelc".to_string()]
+            .into_iter()
+            .collect();
         assert!(is_expected_coreml_miss(
             "whisper_init_state: failed to load Core ML model from '/m/kb-whisper-large-encoder.mlmodelc'\n",
             &expected

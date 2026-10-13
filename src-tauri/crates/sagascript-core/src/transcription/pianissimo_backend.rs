@@ -20,15 +20,16 @@ use serde::Deserialize;
 
 use crate::error::DictationError;
 use crate::settings::{EnginePrewarm, Settings};
-use crate::transcription::engine_host::{
-    CancelToken, ClientIdentity, EngineHostClient, EngineHostConfig, EngineHostError, LoadEvent, LoadObserver, LoadSpec,
-    Transcription, WindowTiming,
-};
 use crate::transcription::dev_overrides::env_override;
+use crate::transcription::engine_host::{
+    CancelToken, ClientIdentity, EngineHostClient, EngineHostConfig, EngineHostError, LoadEvent,
+    LoadObserver, LoadSpec, Transcription, WindowTiming,
+};
 use crate::transcription::pianissimo_model;
 
 /// Shown wherever Pianissimo is refused for platform reasons.
-pub const UNSUPPORTED_MESSAGE: &str = "Pianissimo requires macOS 14+ on Apple Silicon or Windows on ARM (Snapdragon)";
+pub const UNSUPPORTED_MESSAGE: &str =
+    "Pianissimo requires macOS 14+ on Apple Silicon or Windows on ARM (Snapdragon)";
 
 /// Environment override (development builds only): path of the `sagascript-engine-host` binary.
 pub const ENGINE_HOST_ENV: &str = "SAGASCRIPT_ENGINE_HOST";
@@ -82,12 +83,19 @@ fn macos_major(version: &str) -> Option<u32> {
 pub fn platform_supported(os: &str, arch: &str, macos_version: Option<&str>) -> bool {
     os == "macos"
         && arch == "aarch64"
-        && macos_version.and_then(macos_major).is_some_and(|major| major >= 14)
+        && macos_version
+            .and_then(macos_major)
+            .is_some_and(|major| major >= 14)
 }
 
 /// Full platform gate: the macOS gate, or Windows on ARM once the bundled host
 /// exists. Windows x64 and Linux are never supported.
-pub fn platform_gate(os: &str, arch: &str, macos_version: Option<&str>, windows_host_present: bool) -> bool {
+pub fn platform_gate(
+    os: &str,
+    arch: &str,
+    macos_version: Option<&str>,
+    windows_host_present: bool,
+) -> bool {
     platform_supported(os, arch, macos_version)
         || (os == "windows" && arch == "aarch64" && windows_host_present)
 }
@@ -122,8 +130,8 @@ pub fn runtime_supported_on_this_os() -> bool {
         } else {
             None
         };
-        let windows_host = os == "windows"
-            && resolve_host().is_some_and(|host| windows_runtime_complete(&host));
+        let windows_host =
+            os == "windows" && resolve_host().is_some_and(|host| windows_runtime_complete(&host));
         platform_gate(os, arch, version.as_deref(), windows_host)
     })
 }
@@ -143,7 +151,10 @@ fn bundled_macos_host(current_exe: &Path) -> Option<PathBuf> {
 /// `<exe dir>\engine-host\sagascript-engine-host-ort.exe` beside the app or CLI
 /// executable (no canonicalization: it would add a `\\?\` prefix).
 fn bundled_windows_host(current_exe: &Path) -> Option<PathBuf> {
-    let host = current_exe.parent()?.join(WINDOWS_HOST_DIR).join(WINDOWS_HOST_EXE);
+    let host = current_exe
+        .parent()?
+        .join(WINDOWS_HOST_DIR)
+        .join(WINDOWS_HOST_EXE);
     host.is_file().then_some(host)
 }
 
@@ -180,7 +191,11 @@ fn resolve_host_for(
 /// in the macOS bundle, `engine-host\` beside the Windows executable), else `None`.
 pub fn resolve_host() -> Option<PathBuf> {
     let current_exe = std::env::current_exe().ok();
-    resolve_host_for(cfg!(windows), env_override(ENGINE_HOST_ENV), current_exe.as_deref())
+    resolve_host_for(
+        cfg!(windows),
+        env_override(ENGINE_HOST_ENV),
+        current_exe.as_deref(),
+    )
 }
 
 // ---- identity and configuration ------------------------------------------
@@ -286,7 +301,9 @@ pub fn load_state_payload(event: Option<&(LoadEvent, LoadSource)>) -> serde_json
 /// Payload for the most recent load event (cached so a late-created overlay
 /// can seed itself). `unknown` before any load.
 pub fn current_load_state_payload() -> serde_json::Value {
-    let last = LAST_LOAD.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let last = LAST_LOAD
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     load_state_payload(last.as_ref())
 }
 
@@ -295,7 +312,9 @@ fn forward_load_event(event: LoadEvent) {
     if let LoadEvent::Failed(error) = &event {
         tracing::warn!(source = source.as_str(), %error, "Pianissimo engine load failed");
     }
-    *LAST_LOAD.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some((event.clone(), source));
+    *LAST_LOAD
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some((event.clone(), source));
     if let Some(listener) = LOAD_LISTENER.get() {
         listener(event, source);
     }
@@ -303,7 +322,9 @@ fn forward_load_event(event: LoadEvent) {
 
 #[cfg(test)]
 fn reset_last_load_for_test() {
-    *LAST_LOAD.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+    *LAST_LOAD
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
 }
 
 /// Engine-host configuration for an explicit host binary (no presence checks).
@@ -327,7 +348,9 @@ pub fn config_for_host(host: PathBuf, settings: &Settings) -> EngineHostConfig {
 /// Why Pianissimo cannot start right now, checked cheaply and in order.
 fn precheck() -> Result<PathBuf, DictationError> {
     if !runtime_supported_on_this_os() {
-        return Err(DictationError::TranscriptionFailed(UNSUPPORTED_MESSAGE.into()));
+        return Err(DictationError::TranscriptionFailed(
+            UNSUPPORTED_MESSAGE.into(),
+        ));
     }
     let host = resolve_host().ok_or_else(|| {
         DictationError::TranscriptionFailed(format!(
@@ -337,7 +360,8 @@ fn precheck() -> Result<PathBuf, DictationError> {
     })?;
     if !pianissimo_model::is_downloaded() {
         return Err(DictationError::TranscriptionFailed(
-            "Pianissimo model is not downloaded. Run 'sagascript download-model pianissimo-sv'".into(),
+            "Pianissimo model is not downloaded. Run 'sagascript download-model pianissimo-sv'"
+                .into(),
         ));
     }
     Ok(host)
@@ -385,9 +409,9 @@ pub fn shared_client() -> Result<EngineHostClient, DictationError> {
         compute_units: config.load.compute_units.clone(),
         idle_minutes: settings.engine_idle_unload_minutes,
     };
-    let mut slot = shared_slot()
-        .lock()
-        .map_err(|_| DictationError::TranscriptionFailed("Pianissimo client lock was poisoned".into()))?;
+    let mut slot = shared_slot().lock().map_err(|_| {
+        DictationError::TranscriptionFailed("Pianissimo client lock was poisoned".into())
+    })?;
     if let Some(shared) = slot.as_ref() {
         if shared.key == key {
             return Ok(shared.client.clone());
@@ -425,7 +449,11 @@ fn remember_host_identity(snapshot: &super::engine_host::HostSnapshot) {
 /// Engine-host build identity `(version, git_sha)` from the last successful
 /// `hello` in this process. Never starts the host.
 pub fn cached_host_identity() -> Option<(String, Option<String>)> {
-    if let Some(shared) = shared_slot().lock().ok().and_then(|slot| slot.as_ref().map(|s| s.client.snapshot())) {
+    if let Some(shared) = shared_slot()
+        .lock()
+        .ok()
+        .and_then(|slot| slot.as_ref().map(|s| s.client.snapshot()))
+    {
         remember_host_identity(&shared);
     }
     HOST_IDENTITY.lock().ok().and_then(|cache| cache.clone())
@@ -482,11 +510,17 @@ impl WarmTrigger {
 /// and need some profile on Pianissimo. Key-down warms in both `on_app_start`
 /// and `on_key_down` (an additional trigger after an idle unload) when the
 /// active profile uses Pianissimo. `off` never warms.
-pub fn warm_wanted(settings: &Settings, trigger: WarmTrigger, active_profile: Option<&str>) -> bool {
+pub fn warm_wanted(
+    settings: &Settings,
+    trigger: WarmTrigger,
+    active_profile: Option<&str>,
+) -> bool {
     match (settings.engine_prewarm, trigger) {
         (EnginePrewarm::Off, _) => false,
         (_, WarmTrigger::KeyDown) => {
-            let id = active_profile.map(str::to_owned).unwrap_or_else(|| settings.default_profile().id);
+            let id = active_profile
+                .map(str::to_owned)
+                .unwrap_or_else(|| settings.default_profile().id);
             settings.profile_uses_pianissimo(&id)
         }
         (EnginePrewarm::OnKeyDown, _) => false,
@@ -518,9 +552,9 @@ pub fn profile_change_needs_warm(old: &Settings, new: &Settings) -> bool {
     if !warm_wanted(old, WarmTrigger::ProfileChange, None) {
         return true;
     }
-    new.resolved_hotkey_profiles()
-        .iter()
-        .any(|profile| new.profile_uses_pianissimo(&profile.id) && !old.profile_uses_pianissimo(&profile.id))
+    new.resolved_hotkey_profiles().iter().any(|profile| {
+        new.profile_uses_pianissimo(&profile.id) && !old.profile_uses_pianissimo(&profile.id)
+    })
 }
 
 /// After a memory-pressure unload, key-down and wake warms are skipped for
@@ -537,7 +571,10 @@ fn warm_in_pressure_cooldown(reason: &str, last_unload: Option<Instant>, now: In
 }
 
 fn shared_client_if_created() -> Option<EngineHostClient> {
-    shared_slot().lock().ok().and_then(|slot| slot.as_ref().map(|shared| shared.client.clone()))
+    shared_slot()
+        .lock()
+        .ok()
+        .and_then(|slot| slot.as_ref().map(|shared| shared.client.clone()))
 }
 
 /// Free the engine's model memory when the system reports memory pressure and
@@ -547,7 +584,9 @@ fn shared_client_if_created() -> Option<EngineHostClient> {
 pub fn unload_if_idle_for_memory_pressure() -> bool {
     let unloaded = shared_client_if_created().is_some_and(|client| client.unload_if_idle());
     if unloaded {
-        *LAST_PRESSURE_UNLOAD.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(Instant::now());
+        *LAST_PRESSURE_UNLOAD
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(Instant::now());
         tracing::info!("Pianissimo engine unloaded under memory pressure");
     }
     unloaded
@@ -581,9 +620,14 @@ pub fn warm_in_background(reason: &'static str) {
     if !runtime_supported_on_this_os() || !pianissimo_model::is_downloaded() {
         return;
     }
-    let last_unload = *LAST_PRESSURE_UNLOAD.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let last_unload = *LAST_PRESSURE_UNLOAD
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     if warm_in_pressure_cooldown(reason, last_unload, Instant::now()) {
-        tracing::debug!(reason, "Pianissimo pre-warm skipped: recent memory-pressure unload");
+        tracing::debug!(
+            reason,
+            "Pianissimo pre-warm skipped: recent memory-pressure unload"
+        );
         return;
     }
     if IN_FLIGHT.swap(true, Ordering::SeqCst) {
@@ -594,13 +638,19 @@ pub fn warm_in_background(reason: &'static str) {
         .spawn(move || {
             LOAD_SOURCE.with(|source| source.set(LoadSource::Warm));
             let started = Instant::now();
-            match shared_client().map_err(|e| e.to_string()).and_then(|client| {
-                if client.snapshot().loaded {
-                    return Ok(false);
-                }
-                client.warm().map(|_| true).map_err(|e| e.to_string())
-            }) {
-                Ok(true) => tracing::info!(reason, ms = started.elapsed().as_millis() as u64, "Pianissimo engine pre-warmed"),
+            match shared_client()
+                .map_err(|e| e.to_string())
+                .and_then(|client| {
+                    if client.snapshot().loaded {
+                        return Ok(false);
+                    }
+                    client.warm().map(|_| true).map_err(|e| e.to_string())
+                }) {
+                Ok(true) => tracing::info!(
+                    reason,
+                    ms = started.elapsed().as_millis() as u64,
+                    "Pianissimo engine pre-warmed"
+                ),
                 Ok(false) => tracing::debug!(reason, "Pianissimo engine already warm"),
                 Err(error) => tracing::warn!(reason, %error, "Pianissimo engine pre-warm failed"),
             }
@@ -651,7 +701,11 @@ pub(crate) fn warm_client(
     client.warm_with_cancel(cancel).map_err(map_engine_error)?;
     Ok(WarmInfo {
         was_warm,
-        load_seconds: if was_warm { 0.0 } else { started.elapsed().as_secs_f64() },
+        load_seconds: if was_warm {
+            0.0
+        } else {
+            started.elapsed().as_secs_f64()
+        },
     })
 }
 
@@ -901,7 +955,10 @@ mod tests {
         assert_eq!(idle_policy(0), (None, None));
         assert_eq!(
             idle_policy(10),
-            (Some(Duration::from_secs(600)), Some(Duration::from_secs(1200)))
+            (
+                Some(Duration::from_secs(600)),
+                Some(Duration::from_secs(1200))
+            )
         );
     }
 
@@ -910,7 +967,11 @@ mod tests {
         settings.language = crate::settings::Language::Swedish;
         settings.engine_prewarm = prewarm;
         settings
-            .set_profile_model_gated("default", crate::settings::FileModelPreference::PianissimoOriginal, true)
+            .set_profile_model_gated(
+                "default",
+                crate::settings::FileModelPreference::PianissimoOriginal,
+                true,
+            )
             .unwrap();
         settings
     }
@@ -922,7 +983,9 @@ mod tests {
         settings
             .set_profile_model_gated(
                 "default",
-                crate::settings::FileModelPreference::Whisper(crate::settings::WhisperModel::KbWhisperMedium),
+                crate::settings::FileModelPreference::Whisper(
+                    crate::settings::WhisperModel::KbWhisperMedium,
+                ),
                 true,
             )
             .unwrap();
@@ -933,16 +996,30 @@ mod tests {
     fn warm_triggers_follow_prewarm_mode_and_pianissimo_use() {
         let on_start = pianissimo_settings(EnginePrewarm::OnAppStart);
         assert!(on_start.any_profile_uses_pianissimo());
-        for trigger in [WarmTrigger::AppStart, WarmTrigger::Wake, WarmTrigger::ProfileChange, WarmTrigger::KeyDown] {
+        for trigger in [
+            WarmTrigger::AppStart,
+            WarmTrigger::Wake,
+            WarmTrigger::ProfileChange,
+            WarmTrigger::KeyDown,
+        ] {
             assert!(warm_wanted(&on_start, trigger, None), "{trigger:?}");
         }
         let on_key = pianissimo_settings(EnginePrewarm::OnKeyDown);
         assert!(warm_wanted(&on_key, WarmTrigger::KeyDown, None));
-        for trigger in [WarmTrigger::AppStart, WarmTrigger::Wake, WarmTrigger::ProfileChange] {
+        for trigger in [
+            WarmTrigger::AppStart,
+            WarmTrigger::Wake,
+            WarmTrigger::ProfileChange,
+        ] {
             assert!(!warm_wanted(&on_key, trigger, None), "{trigger:?}");
         }
         let off = pianissimo_settings(EnginePrewarm::Off);
-        for trigger in [WarmTrigger::AppStart, WarmTrigger::Wake, WarmTrigger::ProfileChange, WarmTrigger::KeyDown] {
+        for trigger in [
+            WarmTrigger::AppStart,
+            WarmTrigger::Wake,
+            WarmTrigger::ProfileChange,
+            WarmTrigger::KeyDown,
+        ] {
             assert!(!warm_wanted(&off, trigger, None), "{trigger:?}");
         }
     }
@@ -951,7 +1028,12 @@ mod tests {
     fn warm_triggers_do_nothing_without_a_pianissimo_profile() {
         let settings = whisper_settings(EnginePrewarm::OnAppStart);
         assert!(!settings.any_profile_uses_pianissimo());
-        for trigger in [WarmTrigger::AppStart, WarmTrigger::Wake, WarmTrigger::ProfileChange, WarmTrigger::KeyDown] {
+        for trigger in [
+            WarmTrigger::AppStart,
+            WarmTrigger::Wake,
+            WarmTrigger::ProfileChange,
+            WarmTrigger::KeyDown,
+        ] {
             assert!(!warm_wanted(&settings, trigger, None), "{trigger:?}");
         }
     }
@@ -961,11 +1043,20 @@ mod tests {
         let settings = pianissimo_settings(EnginePrewarm::OnAppStart);
         assert!(settings.any_profile_uses_pianissimo());
         let calls = std::cell::RefCell::new(Vec::new());
-        assert!(warm_on(&settings, WarmTrigger::Wake, None, |r| calls.borrow_mut().push(r)));
-        assert!(warm_on(&settings, WarmTrigger::KeyDown, Some("default"), |r| calls.borrow_mut().push(r)));
+        assert!(warm_on(&settings, WarmTrigger::Wake, None, |r| calls
+            .borrow_mut()
+            .push(r)));
+        assert!(warm_on(
+            &settings,
+            WarmTrigger::KeyDown,
+            Some("default"),
+            |r| calls.borrow_mut().push(r)
+        ));
         assert_eq!(*calls.borrow(), vec!["wake", "key_down"]);
         let off = pianissimo_settings(EnginePrewarm::Off);
-        assert!(!warm_on(&off, WarmTrigger::Wake, None, |_| panic!("must not warm when off")));
+        assert!(!warm_on(&off, WarmTrigger::Wake, None, |_| panic!(
+            "must not warm when off"
+        )));
     }
 
     #[test]
@@ -988,9 +1079,19 @@ mod tests {
 
     #[test]
     fn model_unloads_when_no_profile_uses_pianissimo_even_with_prewarm_off() {
-        for prewarm in [EnginePrewarm::Off, EnginePrewarm::OnAppStart, EnginePrewarm::OnKeyDown] {
-            assert!(should_unload_when_unused(&whisper_settings(prewarm)), "{prewarm:?}");
-            assert!(!should_unload_when_unused(&pianissimo_settings(prewarm)), "{prewarm:?}");
+        for prewarm in [
+            EnginePrewarm::Off,
+            EnginePrewarm::OnAppStart,
+            EnginePrewarm::OnKeyDown,
+        ] {
+            assert!(
+                should_unload_when_unused(&whisper_settings(prewarm)),
+                "{prewarm:?}"
+            );
+            assert!(
+                !should_unload_when_unused(&pianissimo_settings(prewarm)),
+                "{prewarm:?}"
+            );
         }
         // Nothing created yet: nothing to unload, and it never starts anything.
         assert!(!unload_if_unused(&whisper_settings(EnginePrewarm::Off)));
@@ -1000,11 +1101,23 @@ mod tests {
     fn pressure_cooldown_skips_only_key_down_and_wake_warms() {
         let now = Instant::now();
         let recent = Some(now);
-        assert!(warm_in_pressure_cooldown("key_down", recent, now + Duration::from_secs(10)));
-        assert!(warm_in_pressure_cooldown("wake", recent, now + Duration::from_secs(10)));
+        assert!(warm_in_pressure_cooldown(
+            "key_down",
+            recent,
+            now + Duration::from_secs(10)
+        ));
+        assert!(warm_in_pressure_cooldown(
+            "wake",
+            recent,
+            now + Duration::from_secs(10)
+        ));
         assert!(!warm_in_pressure_cooldown("app_start", recent, now));
         assert!(!warm_in_pressure_cooldown("profile_change", recent, now));
-        assert!(!warm_in_pressure_cooldown("key_down", recent, now + PRESSURE_WARM_COOLDOWN));
+        assert!(!warm_in_pressure_cooldown(
+            "key_down",
+            recent,
+            now + PRESSURE_WARM_COOLDOWN
+        ));
         assert!(!warm_in_pressure_cooldown("key_down", None, now));
     }
 
@@ -1015,7 +1128,10 @@ mod tests {
         assert_eq!(current_load_state_payload()["state"], "unknown");
         forward_load_event(LoadEvent::Started);
         let p = current_load_state_payload();
-        assert_eq!((p["state"].as_str(), p["source"].as_str()), (Some("loading"), Some("request")));
+        assert_eq!(
+            (p["state"].as_str(), p["source"].as_str()),
+            (Some("loading"), Some("request"))
+        );
         forward_load_event(LoadEvent::Failed("/Users/x/secret/path: boom".into()));
         let p = current_load_state_payload();
         assert_eq!(p["state"], "failed");
@@ -1033,7 +1149,10 @@ mod tests {
         .join()
         .unwrap();
         let p = current_load_state_payload();
-        assert_eq!((p["state"].as_str(), p["source"].as_str()), (Some("failed"), Some("warm")));
+        assert_eq!(
+            (p["state"].as_str(), p["source"].as_str()),
+            (Some("failed"), Some("warm"))
+        );
         reset_last_load_for_test();
     }
 
@@ -1055,7 +1174,10 @@ mod tests {
     fn bundled_host_resolves_relative_to_app_executable() {
         let root = tempfile::tempdir().unwrap();
         let (host, app_executable) = app_layout(root.path());
-        assert_eq!(bundled_macos_host(&app_executable).unwrap(), host.canonicalize().unwrap());
+        assert_eq!(
+            bundled_macos_host(&app_executable).unwrap(),
+            host.canonicalize().unwrap()
+        );
     }
 
     #[test]
@@ -1076,7 +1198,10 @@ mod tests {
         let cli_symlink = cli_dir.join("sagascript");
         std::os::unix::fs::symlink(&app_executable, &cli_symlink).unwrap();
 
-        assert_eq!(bundled_macos_host(&cli_symlink).unwrap(), host.canonicalize().unwrap());
+        assert_eq!(
+            bundled_macos_host(&cli_symlink).unwrap(),
+            host.canonicalize().unwrap()
+        );
     }
 
     #[test]
@@ -1091,7 +1216,10 @@ mod tests {
             resolve_host_for(false, Some("".into()), Some(&app_executable)).unwrap(),
             host.canonicalize().unwrap()
         );
-        assert_eq!(resolve_host_for(false, None, Some(&root.path().join("nope"))), None);
+        assert_eq!(
+            resolve_host_for(false, None, Some(&root.path().join("nope"))),
+            None
+        );
         assert_eq!(resolve_host_for(false, None, None), None);
     }
 }

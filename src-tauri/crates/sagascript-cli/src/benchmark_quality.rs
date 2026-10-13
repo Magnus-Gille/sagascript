@@ -18,15 +18,21 @@ pub(crate) fn ensure_unused_destination(path: &Path) -> Result<(), DictationErro
         ));
     }
     match std::fs::symlink_metadata(path) {
-        Ok(_) => return Err(DictationError::SettingsError(
-            "Quality output already exists; choose an unused path".into(),
-        )),
+        Ok(_) => {
+            return Err(DictationError::SettingsError(
+                "Quality output already exists; choose an unused path".into(),
+            ))
+        }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(DictationError::SettingsError(format!(
-            "Could not inspect local quality output destination: {error}"
-        ))),
+        Err(error) => {
+            return Err(DictationError::SettingsError(format!(
+                "Could not inspect local quality output destination: {error}"
+            )))
+        }
     }
-    let parent = path.parent().filter(|parent| !parent.as_os_str().is_empty())
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
     let metadata = std::fs::metadata(parent).map_err(|error| {
         DictationError::SettingsError(format!("Quality output parent is unavailable: {error}"))
@@ -42,7 +48,9 @@ pub(crate) fn ensure_unused_destination(path: &Path) -> Result<(), DictationErro
 
 pub(crate) fn input_digest(path: &Path) -> Result<String, DictationError> {
     let mut file = File::open(path).map_err(|error| {
-        DictationError::FileDecodeError(format!("Could not open quality fixture for hashing: {error}"))
+        DictationError::FileDecodeError(format!(
+            "Could not open quality fixture for hashing: {error}"
+        ))
     })?;
     let mut digest = Sha256::new();
     let mut buffer = [0_u8; 32 * 1024];
@@ -74,10 +82,7 @@ pub(crate) fn decoded_digest(samples: &[f32]) -> String {
     format!("{:x}", digest.finalize())
 }
 
-pub(crate) fn write_private_new(
-    path: &Path,
-    value: &impl Serialize,
-) -> Result<(), DictationError> {
+pub(crate) fn write_private_new(path: &Path, value: &impl Serialize) -> Result<(), DictationError> {
     // Encode before creating the destination: serialization/size errors must
     // not create an apparently usable evidence file.
     let mut bytes = serde_json::to_vec_pretty(value).map_err(|error| {
@@ -103,13 +108,15 @@ pub(crate) fn write_private_new(
             "Could not create new local quality output (choose an unused path): {error}"
         ))
     })?;
-    file.write_all(&bytes).and_then(|()| file.sync_all()).map_err(|error| {
-        // Do not unlink by path on error: a concurrent owner could replace it.
-        // A partial file is invalid evidence and is never appended to/reused.
-        DictationError::SettingsError(format!(
-            "Could not finish local quality output; discard any incomplete report: {error}"
-        ))
-    })
+    file.write_all(&bytes)
+        .and_then(|()| file.sync_all())
+        .map_err(|error| {
+            // Do not unlink by path on error: a concurrent owner could replace it.
+            // A partial file is invalid evidence and is never appended to/reused.
+            DictationError::SettingsError(format!(
+                "Could not finish local quality output; discard any incomplete report: {error}"
+            ))
+        })
 }
 
 #[cfg(test)]
@@ -122,10 +129,8 @@ mod tests {
 
     impl TestDirectory {
         fn new() -> Self {
-            let path = std::env::temp_dir().join(format!(
-                "sagascript-quality-{}",
-                uuid::Uuid::new_v4()
-            ));
+            let path =
+                std::env::temp_dir().join(format!("sagascript-quality-{}", uuid::Uuid::new_v4()));
             fs::create_dir(&path).unwrap();
             Self(path)
         }
@@ -133,7 +138,8 @@ mod tests {
 
     impl Drop for TestDirectory {
         fn drop(&mut self) {
-            fs::remove_dir_all(&self.0).expect("remove only this test's unique temporary directory");
+            fs::remove_dir_all(&self.0)
+                .expect("remove only this test's unique temporary directory");
         }
     }
 
@@ -146,11 +152,17 @@ mod tests {
         write_private_new(&path, &value).unwrap();
         let bytes = fs::read(&path).unwrap();
         assert!(bytes.ends_with(b"\n"));
-        assert_eq!(serde_json::from_slice::<serde_json::Value>(&bytes).unwrap(), value);
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&bytes).unwrap(),
+            value
+        );
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+            assert_eq!(
+                fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
         }
     }
 
@@ -207,13 +219,17 @@ mod tests {
         struct Unserializable;
         impl Serialize for Unserializable {
             fn serialize<S: serde::Serializer>(&self, _serializer: S) -> Result<S::Ok, S::Error> {
-                Err(serde::ser::Error::custom("deliberate test serialization error"))
+                Err(serde::ser::Error::custom(
+                    "deliberate test serialization error",
+                ))
             }
         }
         let directory = TestDirectory::new();
         let path = directory.0.join("invalid.json");
         let error = write_private_new(&path, &Unserializable).unwrap_err();
-        assert!(error.to_string().contains("Could not encode local quality report"));
+        assert!(error
+            .to_string()
+            .contains("Could not encode local quality report"));
         assert!(!path.exists());
     }
 
@@ -225,7 +241,10 @@ mod tests {
         fs::write(&first, b"abc").unwrap();
         fs::write(&second, b"abc").unwrap();
         let digest = input_digest(&first).unwrap();
-        assert_eq!(digest, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+        assert_eq!(
+            digest,
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
         assert_eq!(digest, input_digest(&second).unwrap());
         fs::write(&second, b"abd").unwrap();
         assert_ne!(digest, input_digest(&second).unwrap());

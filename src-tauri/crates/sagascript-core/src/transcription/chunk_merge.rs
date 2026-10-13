@@ -147,7 +147,11 @@ fn stitch(
         if i + 1 < idx_a.len() {
             let gap_a = &a[idx_a[i] + 1..idx_a[i + 1]];
             let gap_b = &b[idx_b[i] + 1..idx_b[i + 1]];
-            result.extend_from_slice(if gap_b.len() > gap_a.len() { gap_b } else { gap_a });
+            result.extend_from_slice(if gap_b.len() > gap_a.len() {
+                gap_b
+            } else {
+                gap_a
+            });
         }
     }
     result.extend_from_slice(&b[idx_b[idx_b.len() - 1] + 1..]);
@@ -345,7 +349,8 @@ pub fn tokens_to_sentences(tokens: &[AlignedToken]) -> Vec<Sentence> {
             || tx.contains('。')
             || tx.contains('？')
             || tx.contains('！')
-            || (tx.contains('.') && (idx == tokens.len() - 1 || tokens[idx + 1].text.contains(' ')));
+            || (tx.contains('.')
+                && (idx == tokens.len() - 1 || tokens[idx + 1].text.contains(' ')));
         if is_punct {
             push_sentence(&mut sentences, std::mem::take(&mut current));
         }
@@ -397,7 +402,13 @@ mod tests {
     #[test]
     fn plan_single_window() {
         let w = plan_windows(16000 * 10, 16000, 15.0, 2.0);
-        assert_eq!(w, vec![Window { start_sample: 0, end_sample: 160000 }]);
+        assert_eq!(
+            w,
+            vec![Window {
+                start_sample: 0,
+                end_sample: 160000
+            }]
+        );
         assert_eq!(plan_windows(0, 16000, 15.0, 2.0).len(), 1);
     }
 
@@ -446,7 +457,13 @@ mod tests {
         // Alternating matches: longest contiguous run is 1, needs >= 3 of 6.
         let a: Vec<_> = (0..6).map(|i| tk(i + 1, "x", f64::from(i) * 0.1)).collect();
         let b: Vec<_> = (0..6)
-            .map(|i| tk(if i % 2 == 0 { i + 1 } else { 100 + i }, "y", f64::from(i) * 0.1))
+            .map(|i| {
+                tk(
+                    if i % 2 == 0 { i + 1 } else { 100 + i },
+                    "y",
+                    f64::from(i) * 0.1,
+                )
+            })
             .collect();
         assert!(merge_longest_contiguous(&a, &b, 2.0).is_err());
         let (_, path) = merge_window_traced(&a, &b, 2.0);
@@ -476,7 +493,9 @@ mod tests {
         // Deterministic LCG for varied stream lengths and window geometries.
         let mut seed = 12345u64;
         let mut rnd = |m: u64| {
-            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             (seed >> 33) % m
         };
         for _ in 0..200 {

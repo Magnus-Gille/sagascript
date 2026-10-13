@@ -487,23 +487,44 @@ mod tests {
     fn bounded_line_reader_splits_lines_and_bounds_memory() {
         let mut r = std::io::Cursor::new(b"ab\ncd\nlast".to_vec());
         let mut buf = Vec::new();
-        assert_eq!(read_bounded_line(&mut r, &mut buf, 8).unwrap(), LineRead::Line);
+        assert_eq!(
+            read_bounded_line(&mut r, &mut buf, 8).unwrap(),
+            LineRead::Line
+        );
         assert_eq!(buf, b"ab\n");
-        assert_eq!(read_bounded_line(&mut r, &mut buf, 8).unwrap(), LineRead::Line);
+        assert_eq!(
+            read_bounded_line(&mut r, &mut buf, 8).unwrap(),
+            LineRead::Line
+        );
         assert_eq!(buf, b"cd\n");
-        assert_eq!(read_bounded_line(&mut r, &mut buf, 8).unwrap(), LineRead::Line);
+        assert_eq!(
+            read_bounded_line(&mut r, &mut buf, 8).unwrap(),
+            LineRead::Line
+        );
         assert_eq!(buf, b"last");
-        assert_eq!(read_bounded_line(&mut r, &mut buf, 8).unwrap(), LineRead::Eof);
+        assert_eq!(
+            read_bounded_line(&mut r, &mut buf, 8).unwrap(),
+            LineRead::Eof
+        );
 
         // Exactly max bytes including the newline is fine; one more is not.
         let mut r = std::io::Cursor::new(b"1234567\n12345678\n".to_vec());
-        assert_eq!(read_bounded_line(&mut r, &mut buf, 8).unwrap(), LineRead::Line);
-        assert_eq!(read_bounded_line(&mut r, &mut buf, 8).unwrap(), LineRead::TooLong);
+        assert_eq!(
+            read_bounded_line(&mut r, &mut buf, 8).unwrap(),
+            LineRead::Line
+        );
+        assert_eq!(
+            read_bounded_line(&mut r, &mut buf, 8).unwrap(),
+            LineRead::TooLong
+        );
         assert!(buf.len() <= 8);
 
         // Tiny BufReader capacity: the bound holds across refills.
         let mut r = BufReader::with_capacity(3, std::io::Cursor::new(vec![b'x'; 100]));
-        assert_eq!(read_bounded_line(&mut r, &mut buf, 10).unwrap(), LineRead::TooLong);
+        assert_eq!(
+            read_bounded_line(&mut r, &mut buf, 10).unwrap(),
+            LineRead::TooLong
+        );
         assert_eq!(buf.len(), 10);
     }
 
@@ -534,7 +555,11 @@ mod tests {
 
         match pending.recv_timeout(Duration::from_secs(5)) {
             Ok(Delivery::Closed(info)) => {
-                assert!(info.io_error.as_deref().unwrap().contains("injected stdout failure"));
+                assert!(info
+                    .io_error
+                    .as_deref()
+                    .unwrap()
+                    .contains("injected stdout failure"));
                 match crashed(&info) {
                     EngineHostError::Io(e) => {
                         assert!(e.to_string().contains("injected stdout failure"), "{e}")

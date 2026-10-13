@@ -56,7 +56,13 @@ pub fn dictation_paste_guard_check() -> PasteGuardCheck {
     let current_pid = frontmost_pid();
     let own = own_pid();
     let (valid, reason) = paste_guard_decision(target_pid, current_pid, own);
-    PasteGuardCheck { valid, reason, target_pid, current_pid, own_pid: own }
+    PasteGuardCheck {
+        valid,
+        reason,
+        target_pid,
+        current_pid,
+        own_pid: own,
+    }
 }
 
 fn bundle_id_for_pid(pid: i32) -> Option<String> {
@@ -92,7 +98,9 @@ pub fn focus_snapshot(windows: &[(String, usize)]) -> serde_json::Value {
     let map = snapshot.as_object_mut().expect("object");
     if let Some(mtm) = MainThreadMarker::new() {
         let app = NSApplication::sharedApplication(mtm);
-        let key = app.keyWindow().map(|w| (&*w as *const objc2_app_kit::NSWindow) as usize);
+        let key = app
+            .keyWindow()
+            .map(|w| (&*w as *const objc2_app_kit::NSWindow) as usize);
         let key_label = key.map(|ptr| {
             windows
                 .iter()
@@ -102,7 +110,10 @@ pub fn focus_snapshot(windows: &[(String, usize)]) -> serde_json::Value {
         });
         map.insert("appActive".into(), app.isActive().into());
         map.insert("keyWindow".into(), key_label.into());
-        map.insert("activationPolicy".into(), format!("{:?}", app.activationPolicy()).into());
+        map.insert(
+            "activationPolicy".into(),
+            format!("{:?}", app.activationPolicy()).into(),
+        );
     } else {
         map.insert("appActive".into(), serde_json::Value::Null);
         map.insert("keyWindow".into(), serde_json::Value::Null);
@@ -159,7 +170,13 @@ pub fn restore_target_before_paste(
     mut activate: impl FnMut(i32) -> bool,
     mut sleep: impl FnMut(std::time::Duration),
 ) -> RestoreBeforePaste {
-    let skip = |reason| RestoreBeforePaste { attempted: false, restored: false, attempts: 0, wait_ms: 0, reason };
+    let skip = |reason| RestoreBeforePaste {
+        attempted: false,
+        restored: false,
+        attempts: 0,
+        wait_ms: 0,
+        reason,
+    };
     if !should_restore_dictation_target(target, frontmost(), own) {
         return skip("not_needed");
     }
@@ -167,16 +184,34 @@ pub fn restore_target_before_paste(
         return skip("target_not_running");
     }
     if !activate(target) {
-        return RestoreBeforePaste { attempted: true, restored: false, attempts: 0, wait_ms: 0, reason: "activate_refused" };
+        return RestoreBeforePaste {
+            attempted: true,
+            restored: false,
+            attempts: 0,
+            wait_ms: 0,
+            reason: "activate_refused",
+        };
     }
     let mut attempts = 0u32;
     let mut waited = 0u64;
     loop {
         if frontmost() == Some(target) {
-            return RestoreBeforePaste { attempted: true, restored: true, attempts, wait_ms: waited, reason: "target_frontmost" };
+            return RestoreBeforePaste {
+                attempted: true,
+                restored: true,
+                attempts,
+                wait_ms: waited,
+                reason: "target_frontmost",
+            };
         }
         if waited >= RESTORE_MAX_WAIT_MS {
-            return RestoreBeforePaste { attempted: true, restored: false, attempts, wait_ms: waited, reason: "timed_out" };
+            return RestoreBeforePaste {
+                attempted: true,
+                restored: false,
+                attempts,
+                wait_ms: waited,
+                reason: "timed_out",
+            };
         }
         sleep(std::time::Duration::from_millis(RESTORE_POLL_INTERVAL_MS));
         waited += RESTORE_POLL_INTERVAL_MS;
@@ -220,7 +255,11 @@ enum LaunchActivationEvent {
     Superseded,
 }
 
-fn launch_activation_event(pending: bool, frontmost: Option<i32>, own: i32) -> LaunchActivationEvent {
+fn launch_activation_event(
+    pending: bool,
+    frontmost: Option<i32>,
+    own: i32,
+) -> LaunchActivationEvent {
     match (pending, frontmost) {
         (false, _) | (_, None) => LaunchActivationEvent::Ignore,
         (true, Some(pid)) if pid == own => LaunchActivationEvent::Applied,
@@ -370,8 +409,8 @@ pub fn activate_app() {
 #[cfg(test)]
 mod tests {
     use super::{
-        accessibility_request_prompts_user, accessibility_settings_command, interpret_open_result,
-        can_paste_to_frontmost, should_restore_dictation_target, ACCESSIBILITY_SETTINGS_URL,
+        accessibility_request_prompts_user, accessibility_settings_command, can_paste_to_frontmost,
+        interpret_open_result, should_restore_dictation_target, ACCESSIBILITY_SETTINGS_URL,
     };
     use std::ffi::OsStr;
     use std::io;
@@ -400,7 +439,10 @@ mod tests {
                     let k = i.get();
                     i.set(k + 1);
                     // sequence entries after activation; first call is the decision
-                    front_seq.get(k).copied().unwrap_or(*front_seq.last().unwrap())
+                    front_seq
+                        .get(k)
+                        .copied()
+                        .unwrap_or(*front_seq.last().unwrap())
                 },
                 |_| running,
                 |_| {
@@ -424,18 +466,35 @@ mod tests {
         let (r, a) = run(101, vec![Some(202)], false, true);
         assert!(!a && r.reason == "target_not_running");
         // Stolen, target comes back after two polls.
-        let (r, a) = run(101, vec![Some(202), Some(202), Some(202), Some(101)], true, true);
+        let (r, a) = run(
+            101,
+            vec![Some(202), Some(202), Some(202), Some(101)],
+            true,
+            true,
+        );
         assert!(a);
         assert_eq!(
             r,
-            RestoreBeforePaste { attempted: true, restored: true, attempts: 2, wait_ms: 40, reason: "target_frontmost" }
+            RestoreBeforePaste {
+                attempted: true,
+                restored: true,
+                attempts: 2,
+                wait_ms: 40,
+                reason: "target_frontmost"
+            }
         );
         // Activation refused.
         let (r, _) = run(101, vec![Some(202)], true, false);
         assert!(r.attempted && !r.restored && r.reason == "activate_refused");
         // Never comes back: bounded, then guard will reject.
         let (r, _) = run(101, vec![Some(202)], true, true);
-        assert!(r.attempted && !r.restored && r.reason == "timed_out" && r.wait_ms == 400 && r.attempts == 20);
+        assert!(
+            r.attempted
+                && !r.restored
+                && r.reason == "timed_out"
+                && r.wait_ms == 400
+                && r.attempts == 20
+        );
         // Some other app (not the target) appears: not restored, guard decides.
         let (r, _) = run(101, vec![Some(202), Some(303)], true, true);
         assert!(!r.restored);
@@ -460,13 +519,22 @@ mod tests {
     #[test]
     fn paste_guard_reason_names_the_failed_condition() {
         use super::paste_guard_decision;
-        assert_eq!(paste_guard_decision(101, Some(303), 202), (true, "ok_other_app_frontmost"));
-        assert_eq!(paste_guard_decision(202, Some(202), 202), (true, "ok_sagascript_is_original_target"));
+        assert_eq!(
+            paste_guard_decision(101, Some(303), 202),
+            (true, "ok_other_app_frontmost")
+        );
+        assert_eq!(
+            paste_guard_decision(202, Some(202), 202),
+            (true, "ok_sagascript_is_original_target")
+        );
         assert_eq!(
             paste_guard_decision(101, Some(202), 202),
             (false, "reject_sagascript_frontmost_but_not_original_target")
         );
-        assert_eq!(paste_guard_decision(101, None, 202), (false, "reject_no_frontmost_app"));
+        assert_eq!(
+            paste_guard_decision(101, None, 202),
+            (false, "reject_no_frontmost_app")
+        );
     }
 
     #[test]

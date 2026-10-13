@@ -322,8 +322,11 @@ impl DiarizationReport {
                 ]
                 .into_iter()
                 .flatten()
-                .any(|v| !v.is_finite() || v < 0.0
-                    || v > region.end - region.start + ACTIVITY_DURATION_TOLERANCE)
+                .any(|v| {
+                    !v.is_finite()
+                        || v < 0.0
+                        || v > region.end - region.start + ACTIVITY_DURATION_TOLERANCE
+                })
             {
                 return Err(ReportError::Invalid("region evidence"));
             }

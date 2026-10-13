@@ -1,0 +1,35 @@
+# EditorConfig — https://editorconfig.org
+# Mirrors the conventions already in the tree; formatters (rustfmt, and Prettier
+# once #361 lands) remain the source of truth for code layout.
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+
+[*.{rs,swift,py}]
+indent_size = 4
+
+[*.{ts,js,mjs,cjs,svelte,json,css,html,yml,yaml}]
+indent_size = 2
+
+[*.plist]
+indent_style = tab
+
+[*.md]
+# Two trailing spaces are a Markdown hard line break.
+trim_trailing_whitespace = false
+
+# Reference data, golden fixtures and generated files (schemas, icons,
+# THIRD_PARTY_NOTICES.md) are byte-for-byte inputs: never let an editor
+# normalise them.
+[{docs/benchmarks/data/**,test-audio/**,**/testdata/**,**/fixtures/**,**/test-vectors/**,src-tauri/gen/**,src-tauri/icons/**,THIRD_PARTY_NOTICES.md}]
+charset = unset
+end_of_line = unset
+insert_final_newline = unset
+trim_trailing_whitespace = unset
+indent_style = unset
+indent_size = unset

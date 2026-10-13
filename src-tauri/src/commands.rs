@@ -15,17 +15,18 @@ const TRANSCRIPTION_TIMEOUT_SECS: u64 = 60;
 const ABORT_GRACE_SECS: u64 = 5;
 
 use crate::app_controller::{AppController, AppState, StopRecordingOutcome};
-use crate::hotkey::{HotkeyHealth, HotkeyStatus, OperationalHotkey};
 use crate::hotkey::configuration::HotkeyChange;
+use crate::hotkey::{HotkeyHealth, HotkeyStatus, OperationalHotkey};
 use sagascript_core::audio::decoder;
 use sagascript_core::settings::{
-    validate_hotkey, FileModel, FileModelPreference, HotkeyMode, HotkeyProfile, Language, Settings, WhisperModel,
+    validate_hotkey, FileModel, FileModelPreference, HotkeyMode, HotkeyProfile, Language, Settings,
+    WhisperModel,
 };
+use sagascript_core::transcription::pianissimo_model;
 use sagascript_core::transcription::{
     model, recommended_parallel_chunks, ContextProfile, TranscribeOptions, WhisperBackend,
     FILE_TRANSCRIBE_BEAM,
 };
-use sagascript_core::transcription::pianissimo_model;
 use sagascript_core::transcription::{
     suggest_glossary_candidates, Glossary, GlossarySuggestion, GlossarySuggestionKind,
 };
@@ -106,15 +107,24 @@ pub(crate) fn file_transcription_context(
         ),
     };
     let default_id = settings.default_profile().id;
-    let glossary = Glossary::parse(&settings.effective_glossary_source_with_prompt(
-        Some(profile_id.unwrap_or(&default_id)), prompt,
-    ));
+    let glossary = Glossary::parse(
+        &settings
+            .effective_glossary_source_with_prompt(Some(profile_id.unwrap_or(&default_id)), prompt),
+    );
     let mut options = build_file_transcribe_options(settings, prompt.map(str::to_owned));
     options.prompt = glossary.decoder_prompt();
-    Ok(FileTranscriptionContext { language, model, glossary, options })
+    Ok(FileTranscriptionContext {
+        language,
+        model,
+        glossary,
+        options,
+    })
 }
 
-pub(crate) fn file_transcription_language(settings: &Settings, profile_id: Option<&str>) -> Result<Language, String> {
+pub(crate) fn file_transcription_language(
+    settings: &Settings,
+    profile_id: Option<&str>,
+) -> Result<Language, String> {
     if let Some(id) = profile_id {
         ensure_known_profile(settings, id)?;
         let language = settings
@@ -145,18 +155,34 @@ mod lineup_option_tests {
     use super::*;
 
     fn ids(supported: bool, language: Language, include: Option<FileModel>) -> Vec<String> {
-        lineup_model_infos(language, supported, include, None).into_iter().map(|info| info.id).collect()
+        lineup_model_infos(language, supported, include, None)
+            .into_iter()
+            .map(|info| info.id)
+            .collect()
     }
 
     #[test]
     fn swedish_pickers_show_only_the_supported_lineup() {
-        assert_eq!(ids(true, Language::Swedish, None), ["pianissimo-sv", "kb-whisper-large"]);
-        assert_eq!(ids(false, Language::Swedish, None), ["kb-whisper-medium", "kb-whisper-large"]);
         assert_eq!(
-            ids(true, Language::Swedish, Some(FileModel::Whisper(WhisperModel::KbWhisperBase))),
+            ids(true, Language::Swedish, None),
+            ["pianissimo-sv", "kb-whisper-large"]
+        );
+        assert_eq!(
+            ids(false, Language::Swedish, None),
+            ["kb-whisper-medium", "kb-whisper-large"]
+        );
+        assert_eq!(
+            ids(
+                true,
+                Language::Swedish,
+                Some(FileModel::Whisper(WhisperModel::KbWhisperBase))
+            ),
             ["pianissimo-sv", "kb-whisper-large", "kb-whisper-base"]
         );
-        assert_eq!(ids(true, Language::English, None), ["tiny.en", "base.en", "small.en", "medium.en"]);
+        assert_eq!(
+            ids(true, Language::English, None),
+            ["tiny.en", "base.en", "small.en", "medium.en"]
+        );
     }
 
     #[test]
@@ -165,13 +191,29 @@ mod lineup_option_tests {
         let value = serde_json::to_value(info).unwrap();
         let mut keys: Vec<_> = value.as_object().unwrap().keys().cloned().collect();
         keys.sort();
-        assert_eq!(keys, ["active", "description", "display_name", "downloaded", "id", "size_mb"]);
+        assert_eq!(
+            keys,
+            [
+                "active",
+                "description",
+                "display_name",
+                "downloaded",
+                "id",
+                "size_mb"
+            ]
+        );
     }
 
     #[test]
     fn recommended_info_follows_the_platform_gate() {
-        assert_eq!(model_info_for(FileModel::recommended_for(Language::Swedish, true), true).id, "pianissimo-sv");
-        assert_eq!(model_info_for(FileModel::recommended_for(Language::Swedish, false), true).id, "kb-whisper-medium");
+        assert_eq!(
+            model_info_for(FileModel::recommended_for(Language::Swedish, true), true).id,
+            "pianissimo-sv"
+        );
+        assert_eq!(
+            model_info_for(FileModel::recommended_for(Language::Swedish, false), true).id,
+            "kb-whisper-medium"
+        );
     }
 }
 
@@ -326,10 +368,16 @@ mod glossary_options_tests {
         assert_eq!(context.options.prompt, context.glossary.decoder_prompt());
         let default = file_transcription_context(&settings, None, None).unwrap();
         assert_eq!(default.language, Language::Swedish);
-        assert_eq!(apply_glossary("company merch".into(), &default.glossary), "company merge");
+        assert_eq!(
+            apply_glossary("company merch".into(), &default.glossary),
+            "company merge"
+        );
         let english = file_transcription_context(&settings, Some("english"), None).unwrap();
         assert_eq!(english.language, Language::English);
-        assert_eq!(apply_glossary("company merch".into(), &english.glossary), "company merch");
+        assert_eq!(
+            apply_glossary("company merch".into(), &english.glossary),
+            "company merch"
+        );
     }
 
     #[test]
@@ -354,7 +402,12 @@ mod glossary_options_tests {
     fn gui_file_rejects_unknown_but_accepts_auto_profile_before_io() {
         let settings = scoped_file_settings();
         assert!(file_transcription_context(&settings, Some("missing"), None).is_err());
-        assert_eq!(file_transcription_context(&settings, Some("automatic"), None).unwrap().language, Language::Auto);
+        assert_eq!(
+            file_transcription_context(&settings, Some("automatic"), None)
+                .unwrap()
+                .language,
+            Language::Auto
+        );
         let context = file_transcription_context(&settings, Some("automatic"), None).unwrap();
         assert_eq!(context.language, Language::Auto);
         assert_eq!(apply_glossary("merch".into(), &context.glossary), "merch");
@@ -365,9 +418,13 @@ mod glossary_options_tests {
         let mut settings = scoped_file_settings();
         settings.file_transcription_model = FileModelPreference::PianissimoOriginal;
         let error = file_transcription_context(&settings, Some("swedish"), None)
-            .err().expect("meeting path must reject Pianissimo");
+            .err()
+            .expect("meeting path must reject Pianissimo");
         assert!(error.contains("plain Swedish"));
-        assert_eq!(settings.effective_model_for(Language::Swedish), WhisperModel::KbWhisperMedium);
+        assert_eq!(
+            settings.effective_model_for(Language::Swedish),
+            WhisperModel::KbWhisperMedium
+        );
     }
 
     #[test]
@@ -467,7 +524,9 @@ pub async fn get_loaded_model(
     whisper: State<'_, SharedWhisper>,
 ) -> Result<LoadedModelInfo, String> {
     let ctrl = controller.lock().unwrap();
-    let chosen = ctrl.settings().dictation_model_for_profile(&ctrl.settings().default_profile().id)?;
+    let chosen = ctrl
+        .settings()
+        .dictation_model_for_profile(&ctrl.settings().default_profile().id)?;
     if chosen == FileModel::PianissimoOriginal {
         return Ok(LoadedModelInfo {
             effective_model: "Pianissimo".into(),
@@ -477,7 +536,9 @@ pub async fn get_loaded_model(
             is_downloaded: pianissimo_model::is_downloaded(),
         });
     }
-    let FileModel::Whisper(effective) = chosen else { unreachable!() };
+    let FileModel::Whisper(effective) = chosen else {
+        unreachable!()
+    };
     let loaded = whisper.loaded_model();
     Ok(LoadedModelInfo {
         effective_model: effective.display_name().to_string(),
@@ -520,8 +581,13 @@ fn set_language_for_controller(
 }
 
 // Keep profile/dictionary validation ahead of all preset mutations.
-fn apply_language_selection(settings: &mut Settings, language: Language) -> Result<Vec<String>, String> {
-    let notices = sagascript_core::settings::ModelResetNotice::messages(&settings.set_default_profile_language(language)?);
+fn apply_language_selection(
+    settings: &mut Settings,
+    language: Language,
+) -> Result<Vec<String>, String> {
+    let notices = sagascript_core::settings::ModelResetNotice::messages(
+        &settings.set_default_profile_language(language)?,
+    );
     settings.whisper_model = WhisperModel::recommended(language);
     settings.auto_select_model = true;
     Ok(notices)
@@ -597,7 +663,8 @@ pub async fn set_whisper_model(
     controller: State<'_, SharedController>,
     model: WhisperModel,
 ) -> Result<(), String> {
-    let id = serde_json::to_value(model).and_then(serde_json::from_value::<String>)
+    let id = serde_json::to_value(model)
+        .and_then(serde_json::from_value::<String>)
         .map_err(|error| error.to_string())?;
     let profile_id = controller.lock().unwrap().settings().default_profile().id;
     set_profile_model(controller, profile_id, id).await
@@ -609,7 +676,12 @@ pub async fn set_pianissimo_dictation(
     enabled: bool,
 ) -> Result<(), String> {
     let profile_id = controller.lock().unwrap().settings().default_profile().id;
-    set_profile_model(controller, profile_id, if enabled { "pianissimo-sv" } else { "auto" }.into()).await
+    set_profile_model(
+        controller,
+        profile_id,
+        if enabled { "pianissimo-sv" } else { "auto" }.into(),
+    )
+    .await
 }
 
 #[tauri::command]
@@ -621,7 +693,11 @@ pub async fn set_file_transcription_model(
     let persisted = sagascript_core::settings::store::update(|settings| {
         settings.file_transcription_model = choice;
     })?;
-    controller.lock().unwrap().settings_mut().file_transcription_model = persisted.file_transcription_model;
+    controller
+        .lock()
+        .unwrap()
+        .settings_mut()
+        .file_transcription_model = persisted.file_transcription_model;
     Ok(())
 }
 
@@ -661,8 +737,11 @@ pub async fn set_auto_select_model(
     let (profile_id, model_id) = {
         let ctrl = controller.lock().unwrap();
         let settings = ctrl.settings();
-        let model_id = if enabled { "auto".into() } else {
-            serde_json::to_value(settings.whisper_model).and_then(serde_json::from_value::<String>)
+        let model_id = if enabled {
+            "auto".into()
+        } else {
+            serde_json::to_value(settings.whisper_model)
+                .and_then(serde_json::from_value::<String>)
                 .map_err(|error| error.to_string())?
         };
         (settings.default_profile().id, model_id)
@@ -698,7 +777,9 @@ pub async fn set_hotkey(
         .position(|profile| profile.id == "default")
         .unwrap_or(0);
     profiles[profile_index].set_primary_shortcut(shortcut);
-    set_hotkey_profiles(app, controller, health, profiles).await.map(|_| ())
+    set_hotkey_profiles(app, controller, health, profiles)
+        .await
+        .map(|_| ())
 }
 
 #[tauri::command]
@@ -722,7 +803,11 @@ impl Drop for HotkeyConfigurationLease<'_> {
 pub(crate) fn acquire_hotkey_configuration(
     controller: &SharedController,
 ) -> Result<HotkeyConfigurationLease<'_>, String> {
-    if !controller.lock().unwrap().begin_hotkey_configuration_change() {
+    if !controller
+        .lock()
+        .unwrap()
+        .begin_hotkey_configuration_change()
+    {
         return Err("Finish or cancel the active dictation before changing shortcuts".into());
     }
     Ok(HotkeyConfigurationLease(controller))
@@ -738,7 +823,8 @@ fn apply_hotkey_change(
     let _transition = health.transition_guard();
     let _recording_lease = acquire_hotkey_configuration(&controller)?;
     let old_settings = controller.lock().unwrap().settings().clone();
-    let (candidate, notices) = update.prepare_with_notices(&sagascript_core::settings::store::load())?;
+    let (candidate, notices) =
+        update.prepare_with_notices(&sagascript_core::settings::store::load())?;
     let new_shortcuts = candidate.resolved_shortcuts();
     let new_primary = candidate.hotkey.clone();
     let old_shortcut = old_settings.hotkey.clone();
@@ -950,7 +1036,9 @@ pub async fn retry_hotkey_registration(
         }
     }
     let profiles = sagascript_core::settings::store::load().resolved_hotkey_profiles();
-    set_hotkey_profiles(app, controller, health, profiles).await.map(|_| ())
+    set_hotkey_profiles(app, controller, health, profiles)
+        .await
+        .map(|_| ())
 }
 
 /// Current hotkey registration health — whether the last registration
@@ -1074,16 +1162,25 @@ async fn stop_and_transcribe_impl(
             .active_hotkey_profile()
             .map(|profile| profile.id.clone())
             .unwrap_or_else(|| ctrl.settings().default_profile().id);
-        let (effective_model, use_pianissimo) = match ctrl.settings().live_model_for_profile(&profile_id) {
-            Ok(choice) => choice,
-            Err(error) => {
-                let completion = ctrl.finish_transcription(Err(error.clone()));
-                return Err(completion.err().unwrap_or(error));
-            }
-        };
+        let (effective_model, use_pianissimo) =
+            match ctrl.settings().live_model_for_profile(&profile_id) {
+                Ok(choice) => choice,
+                Err(error) => {
+                    let completion = ctrl.finish_transcription(Err(error.clone()));
+                    return Err(completion.err().unwrap_or(error));
+                }
+            };
         let opts = build_transcribe_options_for_profile(ctrl.settings(), Some(&profile_id));
-        let glossary = Glossary::parse(&ctrl.settings().effective_glossary_source(Some(&profile_id)));
-        (audio, language, effective_model, opts, glossary, use_pianissimo)
+        let glossary =
+            Glossary::parse(&ctrl.settings().effective_glossary_source(Some(&profile_id)));
+        (
+            audio,
+            language,
+            effective_model,
+            opts,
+            glossary,
+            use_pianissimo,
+        )
     };
 
     if audio.is_empty() {
@@ -1107,18 +1204,18 @@ async fn stop_and_transcribe_impl(
         // state instead of running to completion and wedging the pipeline. The handle
         // is kept borrowed (`&mut fut`) across the timeout so we can await its actual
         // exit after abort and log whether the lock was released.
-        let live_backend = std::sync::Arc::new(sagascript_core::transcription::live_dictation::LiveDictationBackend::new(whisper.inner().clone(), use_pianissimo));
+        let live_backend = std::sync::Arc::new(
+            sagascript_core::transcription::live_dictation::LiveDictationBackend::new(
+                whisper.inner().clone(),
+                use_pianissimo,
+            ),
+        );
         let live_ref = live_backend.clone();
         let mut fut = tokio::task::spawn_blocking(move || {
             let mut timings =
                 sagascript_core::transcription::whisper_backend::DictationTimings::default();
-            let result = live_ref.transcribe(
-                effective_model,
-                &audio,
-                language,
-                &opts,
-                &mut timings,
-            );
+            let result =
+                live_ref.transcribe(effective_model, &audio, language, &opts, &mut timings);
             (result, timings)
         });
 
@@ -1214,7 +1311,8 @@ pub async fn transcribe_training_file(
             .into_iter()
             .find(|profile| profile.id == profile_id)
             .expect("validated profile must exist");
-        let (effective_model, use_pianissimo) = ctrl.settings().live_model_for_profile(&profile_id)?;
+        let (effective_model, use_pianissimo) =
+            ctrl.settings().live_model_for_profile(&profile_id)?;
         (
             profile.language,
             effective_model,
@@ -1229,7 +1327,12 @@ pub async fn transcribe_training_file(
     }
     let _ = app.emit(crate::events::event::STATE_CHANGED, "transcribing");
 
-    let live_backend = std::sync::Arc::new(sagascript_core::transcription::live_dictation::LiveDictationBackend::new(whisper.inner().clone(), use_pianissimo));
+    let live_backend = std::sync::Arc::new(
+        sagascript_core::transcription::live_dictation::LiveDictationBackend::new(
+            whisper.inner().clone(),
+            use_pianissimo,
+        ),
+    );
     let live_ref = live_backend.clone();
     let whisper_ref = whisper.inner().clone();
     let progress_app = app.clone();
@@ -1237,12 +1340,24 @@ pub async fn transcribe_training_file(
     let timeout = Duration::from_secs((duration_seconds * 6).max(TRANSCRIPTION_TIMEOUT_SECS));
     let mut task = tokio::task::spawn_blocking(move || {
         if use_pianissimo {
-            return live_ref.transcribe(effective_model, &audio, language, &opts, &mut Default::default());
+            return live_ref.transcribe(
+                effective_model,
+                &audio,
+                language,
+                &opts,
+                &mut Default::default(),
+            );
         }
         whisper_ref.with_model(effective_model, ContextProfile::FlashAttention, |backend| {
-            backend.transcribe_sync_with_options(&audio, language, &opts, move |progress| {
-                let _ = progress_app.emit("transcription-progress", progress);
-            }, None)
+            backend.transcribe_sync_with_options(
+                &audio,
+                language,
+                &opts,
+                move |progress| {
+                    let _ = progress_app.emit("transcription-progress", progress);
+                },
+                None,
+            )
         })
     });
 
@@ -1310,7 +1425,12 @@ pub async fn get_model_info(
     let ctrl = controller.lock().unwrap();
     let profile = ctrl.settings().default_profile();
     let effective = ctrl.settings().dictation_model_for_profile(&profile.id)?;
-    Ok(lineup_model_infos(profile.language, pianissimo_supported(), Some(effective), Some(effective)))
+    Ok(lineup_model_infos(
+        profile.language,
+        pianissimo_supported(),
+        Some(effective),
+        Some(effective),
+    ))
 }
 
 fn pianissimo_supported() -> bool {
@@ -1334,7 +1454,8 @@ fn model_info_for(choice: FileModel, active: bool) -> ModelInfo {
             id: "pianissimo-sv".into(),
             display_name: "Pianissimo".into(),
             description: if cfg!(windows) {
-                "Swedish file transcription · ONNX Runtime on the CPU · Windows on ARM (Snapdragon)".into()
+                "Swedish file transcription · ONNX Runtime on the CPU · Windows on ARM (Snapdragon)"
+                    .into()
             } else {
                 "Swedish file transcription · Core ML on the Neural Engine · macOS 14+ on Apple Silicon".into()
             },
@@ -1367,12 +1488,19 @@ pub async fn get_file_model_options(
     language: Language,
     include: Option<String>,
 ) -> Result<Vec<ModelInfo>, String> {
-    let include = include.as_deref().and_then(|id| match FileModelPreference::parse_id(id) {
-        Ok(FileModelPreference::Whisper(model)) => Some(FileModel::Whisper(model)),
-        Ok(FileModelPreference::PianissimoOriginal) => Some(FileModel::PianissimoOriginal),
-        _ => None,
-    });
-    Ok(lineup_model_infos(language, pianissimo_supported(), include, None))
+    let include = include
+        .as_deref()
+        .and_then(|id| match FileModelPreference::parse_id(id) {
+            Ok(FileModelPreference::Whisper(model)) => Some(FileModel::Whisper(model)),
+            Ok(FileModelPreference::PianissimoOriginal) => Some(FileModel::PianissimoOriginal),
+            _ => None,
+        });
+    Ok(lineup_model_infos(
+        language,
+        pianissimo_supported(),
+        include,
+        None,
+    ))
 }
 
 /// Download size of the Pianissimo model, in MB, for model listings.
@@ -1417,7 +1545,10 @@ pub async fn get_effective_model_info(
     _controller: State<'_, SharedController>,
     language: Language,
 ) -> Result<ModelInfo, String> {
-    Ok(model_info_for(FileModel::recommended_for(language, pianissimo_supported()), true))
+    Ok(model_info_for(
+        FileModel::recommended_for(language, pianissimo_supported()),
+        true,
+    ))
 }
 
 /// The model an `Auto` file-transcription preference will actually use for
@@ -1425,8 +1556,14 @@ pub async fn get_effective_model_info(
 /// downloaded compatible model (same resolution the transcribe command uses).
 #[tauri::command]
 pub async fn get_auto_file_model_info(language: Language) -> Result<ModelInfo, String> {
-    let auto = Settings { file_transcription_model: FileModelPreference::Auto, ..Default::default() };
-    Ok(model_info_for(auto.effective_file_model_for(language)?, true))
+    let auto = Settings {
+        file_transcription_model: FileModelPreference::Auto,
+        ..Default::default()
+    };
+    Ok(model_info_for(
+        auto.effective_file_model_for(language)?,
+        true,
+    ))
 }
 
 #[tauri::command]
@@ -1641,10 +1778,14 @@ fn ensure_known_profile(settings: &Settings, profile_id: &str) -> Result<(), Str
 
 fn ensure_learning_profile(settings: &Settings, profile_id: &str) -> Result<(), String> {
     ensure_known_profile(settings, profile_id)?;
-    if settings.resolved_hotkey_profiles().iter().any(|profile| {
-        profile.id == profile_id && profile.language == Language::Auto
-    }) {
-        return Err("Deterministic dictionary training requires a profile with an explicit language".into());
+    if settings
+        .resolved_hotkey_profiles()
+        .iter()
+        .any(|profile| profile.id == profile_id && profile.language == Language::Auto)
+    {
+        return Err(
+            "Deterministic dictionary training requires a profile with an explicit language".into(),
+        );
     }
     Ok(())
 }
@@ -1656,11 +1797,19 @@ fn set_profile_glossary_in(
     expected_source: Option<&str>,
 ) -> Result<(), String> {
     ensure_known_profile(settings, profile_id)?;
-    let auto_language = settings.resolved_hotkey_profiles().iter().any(|profile| {
-        profile.id == profile_id && profile.language == Language::Auto
-    });
-    if auto_language && Glossary::parse(&source).entries().iter().any(|entry| !entry.aliases.is_empty()) {
-        return Err("Auto-detect profiles support dictionary hints, not deterministic aliases".into());
+    let auto_language = settings
+        .resolved_hotkey_profiles()
+        .iter()
+        .any(|profile| profile.id == profile_id && profile.language == Language::Auto);
+    if auto_language
+        && Glossary::parse(&source)
+            .entries()
+            .iter()
+            .any(|entry| !entry.aliases.is_empty())
+    {
+        return Err(
+            "Auto-detect profiles support dictionary hints, not deterministic aliases".into(),
+        );
     }
     let current_source = settings
         .profile_glossaries
@@ -2300,8 +2449,11 @@ pub async fn set_engine_idle_unload_minutes(
     let persisted = sagascript_core::settings::store::update(|settings| {
         settings.engine_idle_unload_minutes = minutes;
     })?;
-    controller.lock().unwrap().settings_mut().engine_idle_unload_minutes =
-        persisted.engine_idle_unload_minutes;
+    controller
+        .lock()
+        .unwrap()
+        .settings_mut()
+        .engine_idle_unload_minutes = persisted.engine_idle_unload_minutes;
     info!("Engine idle unload: {minutes} min");
     Ok(())
 }
@@ -2320,7 +2472,9 @@ pub struct EngineStatus {
 /// `hello`, no model load) when the model is installed, Pianissimo is selected
 /// and no identity is cached yet.
 #[tauri::command]
-pub async fn engine_status(controller: State<'_, SharedController>) -> Result<EngineStatus, String> {
+pub async fn engine_status(
+    controller: State<'_, SharedController>,
+) -> Result<EngineStatus, String> {
     use sagascript_core::settings::FileModelPreference;
     use sagascript_core::transcription::pianissimo_backend as backend;
     let supported = backend::runtime_supported_on_this_os();
@@ -2339,7 +2493,12 @@ pub async fn engine_status(controller: State<'_, SharedController>) -> Result<En
             })
     };
     let mut identity = backend::cached_host_identity();
-    if identity.is_none() && supported && installed && selected && host.as_ref().is_some_and(|p| p.is_file()) {
+    if identity.is_none()
+        && supported
+        && installed
+        && selected
+        && host.as_ref().is_some_and(|p| p.is_file())
+    {
         identity = tokio::task::spawn_blocking(backend::refresh_host_identity)
             .await
             .map_err(|e| format!("engine status task failed: {e}"))?;
@@ -2396,7 +2555,10 @@ pub async fn acknowledge_update_result(
     controller: State<'_, SharedController>,
     expected_text: String,
 ) -> Result<bool, String> {
-    controller.lock().unwrap().acknowledge_update_result(&expected_text)
+    controller
+        .lock()
+        .unwrap()
+        .acknowledge_update_result(&expected_text)
 }
 
 fn update_recovery_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
@@ -2412,7 +2574,11 @@ pub async fn save_update_recovery(
     app: tauri::AppHandle,
     payload: serde_json::Value,
 ) -> Result<(), String> {
-    if payload.get("schema_version").and_then(serde_json::Value::as_u64) != Some(1) {
+    if payload
+        .get("schema_version")
+        .and_then(serde_json::Value::as_u64)
+        != Some(1)
+    {
         return Err("Unsupported recovery draft format.".into());
     }
     let path = update_recovery_path(&app)?;
@@ -2577,8 +2743,11 @@ pub async fn save_transcription_text(
             .into_path()
             .map_err(|error| format!("Choose a local file: {error}"))?;
         crate::meeting_jobs::write_new_export(&path, text.as_bytes()).map_err(|error| {
-            if path.exists() { "Choose a new file name — existing files are never overwritten.".to_string() }
-            else { error }
+            if path.exists() {
+                "Choose a new file name — existing files are never overwritten.".to_string()
+            } else {
+                error
+            }
         })?;
         Ok(true)
     })
@@ -2608,10 +2777,7 @@ mod save_name_tests {
     #[test]
     fn save_default_strips_directories_and_keeps_txt() {
         assert_eq!(sanitize_save_file_name("/a/b/talk.m4a"), "talk.m4a");
-        assert_eq!(
-            sanitize_save_file_name("C:\\audio\\talk"),
-            "talk.txt"
-        );
+        assert_eq!(sanitize_save_file_name("C:\\audio\\talk"), "talk.txt");
         assert_eq!(sanitize_save_file_name(""), "transcription.txt");
         assert_eq!(sanitize_save_file_name("   "), "transcription.txt");
         assert_eq!(sanitize_save_file_name("notes"), "notes.txt");
@@ -2620,7 +2786,7 @@ mod save_name_tests {
 
 #[tauri::command]
 #[allow(clippy::too_many_arguments)] // Tauri injects AppHandle + States; the
-// frontend call shape (file/prompt/diarize/profile) is unchanged.
+                                     // frontend call shape (file/prompt/diarize/profile) is unchanged.
 pub async fn transcribe_file(
     app: tauri::AppHandle,
     controller: State<'_, SharedController>,
@@ -2652,7 +2818,10 @@ pub async fn transcribe_file(
         };
         match resolved {
             FileModel::PianissimoOriginal => Some(Glossary::parse(
-                &settings.effective_glossary_source_with_prompt(profile_id.as_deref(), prompt.as_deref()),
+                &settings.effective_glossary_source_with_prompt(
+                    profile_id.as_deref(),
+                    prompt.as_deref(),
+                ),
             )),
             FileModel::Whisper(_) => None,
         }
@@ -2662,9 +2831,13 @@ pub async fn transcribe_file(
             return Err("Pianissimo supports plain Swedish file transcription only; choose a Whisper file model for diarization".into());
         }
         let text = crate::plain_file_jobs::transcribe_pianissimo(
-            app.clone(), jobs.inner().clone(), result_id.clone(),
-            file_path, glossary,
-        ).await?;
+            app.clone(),
+            jobs.inner().clone(),
+            result_id.clone(),
+            file_path,
+            glossary,
+        )
+        .await?;
         activity.set_result_pending(&result_id, true)?;
         if auto_paste.unwrap_or(true) && controller.lock().unwrap().settings().auto_paste {
             let paste_text = text.clone();
@@ -2672,7 +2845,8 @@ pub async fn transcribe_file(
                 if let Err(error) = crate::paste::PasteService::new().paste(&paste_text) {
                     error!(%error, "Auto-paste failed");
                 }
-            }).map_err(|error| format!("Could not dispatch auto-paste: {error}"))?;
+            })
+            .map_err(|error| format!("Could not dispatch auto-paste: {error}"))?;
         }
         return Ok(text);
     }
@@ -2683,9 +2857,13 @@ pub async fn transcribe_file(
 
     if !diarize.unwrap_or(false) {
         let text = crate::plain_file_jobs::transcribe(
-            app.clone(), jobs.inner().clone(), result_id.clone(),
-            file_path, context,
-        ).await?;
+            app.clone(),
+            jobs.inner().clone(),
+            result_id.clone(),
+            file_path,
+            context,
+        )
+        .await?;
         activity.set_result_pending(&result_id, true)?;
         if auto_paste.unwrap_or(true) && controller.lock().unwrap().settings().auto_paste {
             let paste_text = text.clone();
@@ -2693,11 +2871,17 @@ pub async fn transcribe_file(
                 if let Err(error) = crate::paste::PasteService::new().paste(&paste_text) {
                     error!(%error, "Auto-paste failed");
                 }
-            }).map_err(|error| format!("Could not dispatch auto-paste: {error}"))?;
+            })
+            .map_err(|error| format!("Could not dispatch auto-paste: {error}"))?;
         }
         return Ok(text);
     }
-    let FileTranscriptionContext { language, model: effective_model, glossary, options: mut opts } = context;
+    let FileTranscriptionContext {
+        language,
+        model: effective_model,
+        glossary,
+        options: mut opts,
+    } = context;
 
     let path = std::path::PathBuf::from(&file_path);
 
@@ -2712,7 +2896,8 @@ pub async fn transcribe_file(
 
     // Legacy diarized command path. The GUI uses the meeting-job API instead.
     let audio = tokio::task::spawn_blocking(move || decoder::decode_audio_file(&path))
-        .await.map_err(|error| format!("Decode task failed: {error}"))?
+        .await
+        .map_err(|error| format!("Decode task failed: {error}"))?
         .map_err(|error| error.to_string())?;
 
     if audio.is_empty() {
@@ -2902,9 +3087,15 @@ pub async fn transcribe_file(
             let on_encode_start = move || {
                 let _ = encode_app.emit(crate::events::event::TRANSCRIPTION_PHASE, "encoding");
             };
-            backend.transcribe_sync_with_gap_recovery_text(&audio, language, &opts, move |pct| {
-                let _ = app_progress.emit(crate::events::event::TRANSCRIPTION_PROGRESS, pct);
-            }, Some(&on_encode_start))
+            backend.transcribe_sync_with_gap_recovery_text(
+                &audio,
+                language,
+                &opts,
+                move |pct| {
+                    let _ = app_progress.emit(crate::events::event::TRANSCRIPTION_PROGRESS, pct);
+                },
+                Some(&on_encode_start),
+            )
         })
     });
 
@@ -3025,7 +3216,10 @@ pub async fn check_accessibility_permission() -> Result<bool, String> {
 pub async fn request_accessibility_permission() -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
-        crate::focus_diag::activation("command_request_accessibility_permission", "opens_system_settings");
+        crate::focus_diag::activation(
+            "command_request_accessibility_permission",
+            "opens_system_settings",
+        );
         crate::platform::macos::request_accessibility_permission()?;
     }
     Ok(())
@@ -3035,7 +3229,10 @@ pub async fn request_accessibility_permission() -> Result<(), String> {
 pub async fn open_accessibility_settings() -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
-        crate::focus_diag::activation("command_open_accessibility_settings", "opens_system_settings");
+        crate::focus_diag::activation(
+            "command_open_accessibility_settings",
+            "opens_system_settings",
+        );
         crate::platform::macos::open_accessibility_settings()?;
     }
     Ok(())
@@ -3052,7 +3249,10 @@ pub async fn microphone_status() -> Result<String, String> {
         if !macos_mic::is_in_app_bundle() {
             return Ok("unsupported".to_string());
         }
-        crate::focus_diag::activation("command_request_microphone_access", "may_show_system_prompt");
+        crate::focus_diag::activation(
+            "command_request_microphone_access",
+            "may_show_system_prompt",
+        );
         Ok(macos_mic::authorization_status_string())
     }
     #[cfg(not(target_os = "macos"))]

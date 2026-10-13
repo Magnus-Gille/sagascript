@@ -200,15 +200,18 @@ fn malformed_incoming_rejected() {
     assert!(decode_incoming(r#"{"id":1}"#).is_err());
 }
 
-
 #[test]
 fn millisecond_fields_accept_float_encoders() {
     let load: LoadResult =
-        serde_json::from_str(r#"{"model_id":"m","load_ms":95520.4529762268,"compiled":true}"#).unwrap();
+        serde_json::from_str(r#"{"model_id":"m","load_ms":95520.4529762268,"compiled":true}"#)
+            .unwrap();
     assert_eq!(load.load_ms, 95520);
     let timings: WindowTimings =
         serde_json::from_str(r#"{"preprocess_ms":1.9,"encode_ms":30,"decode_ms":24.5}"#).unwrap();
-    assert_eq!((timings.preprocess_ms, timings.encode_ms, timings.decode_ms), (2, 30, 25));
+    assert_eq!(
+        (timings.preprocess_ms, timings.encode_ms, timings.decode_ms),
+        (2, 30, 25)
+    );
     assert!(serde_json::from_str::<WindowTimings>(r#"{"encode_ms":-1}"#).is_err());
     assert!(serde_json::from_str::<WindowTimings>(r#"{"encode_ms":"30"}"#).is_err());
 }
@@ -220,7 +223,12 @@ fn transcribe_window_boost_fields_are_optional_and_omitted_when_off() {
         ParsedRequest::Ok { op, .. } => op,
         other => panic!("{other:?}"),
     };
-    let RequestOp::TranscribeWindow { boost_terms, boost_weight, .. } = parsed else {
+    let RequestOp::TranscribeWindow {
+        boost_terms,
+        boost_weight,
+        ..
+    } = parsed
+    else {
         panic!("not a transcribe_window")
     };
     assert!(boost_terms.is_empty());
@@ -249,12 +257,15 @@ fn context_biasing_capability_and_result_fields_are_backwards_compatible() {
     )
     .unwrap();
     assert!(!caps.context_biasing);
-    let old: TranscribeWindowResult = serde_json::from_str(r#"{"tokens":[],"audio_s":1.0,"timings":{"decode_ms":3}}"#).unwrap();
+    let old: TranscribeWindowResult =
+        serde_json::from_str(r#"{"tokens":[],"audio_s":1.0,"timings":{"decode_ms":3}}"#).unwrap();
     assert_eq!(old.boost_active, None);
     assert_eq!(old.timings.boost_us, 0);
     // New host: reported when a dictionary was sent, omitted otherwise.
-    let new: TranscribeWindowResult =
-        serde_json::from_str(r#"{"tokens":[],"audio_s":1.0,"timings":{"boost_us":120.0},"boost_active":false}"#).unwrap();
+    let new: TranscribeWindowResult = serde_json::from_str(
+        r#"{"tokens":[],"audio_s":1.0,"timings":{"boost_us":120.0},"boost_active":false}"#,
+    )
+    .unwrap();
     assert_eq!(new.boost_active, Some(false));
     assert_eq!(new.timings.boost_us, 120);
     let line = serde_json::to_string(&old).unwrap();
@@ -266,7 +277,10 @@ fn malformed_boost_fields_are_rejected_without_echoing_the_dictionary() {
     let line = r#"{"v":1,"id":4,"op":"transcribe_window","pcm_path":"/p","offset_samples":0,"num_samples":10,"sample_rate":16000,"format":"f32le","priority":"batch","boost_terms":"Magnus Gille secret"}"#;
     match decode_request(line).unwrap() {
         ParsedRequest::BadParams { message, .. } => {
-            assert!(!message.contains("Magnus") && !message.contains("secret"), "{message}");
+            assert!(
+                !message.contains("Magnus") && !message.contains("secret"),
+                "{message}"
+            );
         }
         other => panic!("{other:?}"),
     }

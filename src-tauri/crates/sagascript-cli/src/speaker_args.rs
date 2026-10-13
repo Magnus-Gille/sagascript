@@ -38,7 +38,12 @@ impl SpeakerCountArgs {
     pub fn hint(&self) -> Result<Option<SpeakerCountHint>, String> {
         match self.force_speakers {
             Some(n) => Ok(Some(SpeakerCountHint::forced(n))),
-            None => SpeakerCountHint::from_parts(self.speakers, self.min_speakers, self.max_speakers, false),
+            None => SpeakerCountHint::from_parts(
+                self.speakers,
+                self.min_speakers,
+                self.max_speakers,
+                false,
+            ),
         }
     }
 }
@@ -79,13 +84,22 @@ mod tests {
 
     #[test]
     fn exact_and_range_flags_build_hints() {
-        assert_eq!(parse(&["--speakers", "3"]), Ok(Some(SpeakerCountHint::exact(3))));
+        assert_eq!(
+            parse(&["--speakers", "3"]),
+            Ok(Some(SpeakerCountHint::exact(3)))
+        );
         assert_eq!(
             parse(&["--min-speakers", "2", "--max-speakers", "4"]),
             Ok(Some(SpeakerCountHint::range(Some(2), Some(4))))
         );
-        assert_eq!(parse(&["--min-speakers", "2"]), Ok(Some(SpeakerCountHint::range(Some(2), None))));
-        assert_eq!(parse(&["--max-speakers", "2"]), Ok(Some(SpeakerCountHint::range(None, Some(2)))));
+        assert_eq!(
+            parse(&["--min-speakers", "2"]),
+            Ok(Some(SpeakerCountHint::range(Some(2), None)))
+        );
+        assert_eq!(
+            parse(&["--max-speakers", "2"]),
+            Ok(Some(SpeakerCountHint::range(None, Some(2))))
+        );
         assert_eq!(
             parse(&["--min-speakers", "3", "--max-speakers", "3"]),
             Ok(Some(SpeakerCountHint::range(Some(3), Some(3))))
@@ -94,9 +108,15 @@ mod tests {
 
     #[test]
     fn force_speakers_is_an_exclusive_forced_exact_count() {
-        assert_eq!(parse(&["--force-speakers", "2"]), Ok(Some(SpeakerCountHint::forced(2))));
+        assert_eq!(
+            parse(&["--force-speakers", "2"]),
+            Ok(Some(SpeakerCountHint::forced(2)))
+        );
         for other in ["--speakers", "--min-speakers", "--max-speakers"] {
-            assert!(parse(&["--force-speakers", "2", other, "2"]).is_err(), "{other}");
+            assert!(
+                parse(&["--force-speakers", "2", other, "2"]).is_err(),
+                "{other}"
+            );
         }
         assert!(parse(&["--force-speakers", "0"]).is_err());
     }

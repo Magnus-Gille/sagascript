@@ -26,7 +26,11 @@ pub struct Canceller {
 
 impl Canceller {
     pub const fn new() -> Self {
-        Self { flag: AtomicBool::new(false), aborters: Mutex::new(Vec::new()), next_id: Mutex::new(0) }
+        Self {
+            flag: AtomicBool::new(false),
+            aborters: Mutex::new(Vec::new()),
+            next_id: Mutex::new(0),
+        }
     }
 
     pub fn flag(&self) -> &AtomicBool {
@@ -117,7 +121,10 @@ fn on_signal(exit_code: i32) {
         std::process::exit(EXIT_CODE.load(Ordering::SeqCst));
     }
     EXIT_CODE.store(exit_code, Ordering::SeqCst);
-    let _ = writeln!(std::io::stderr(), "\nCancelling... (press Ctrl-C again to force quit)");
+    let _ = writeln!(
+        std::io::stderr(),
+        "\nCancelling... (press Ctrl-C again to force quit)"
+    );
     GLOBAL.request();
 }
 
@@ -144,7 +151,11 @@ fn install_handler() -> bool {
     };
     std::thread::spawn(move || {
         for signal in signals.forever() {
-            on_signal(if signal == SIGTERM { 143 } else { EXIT_CANCELLED });
+            on_signal(if signal == SIGTERM {
+                143
+            } else {
+                EXIT_CANCELLED
+            });
         }
     });
     true
@@ -186,7 +197,10 @@ mod tests {
         assert!(canceller.request());
         assert!(!canceller.request(), "second request is reported as repeat");
         assert!(hits.load(Ordering::SeqCst));
-        assert_eq!(canceller.check().unwrap_err().to_string(), "Transcription failed: Cancelled");
+        assert_eq!(
+            canceller.check().unwrap_err().to_string(),
+            "Transcription failed: Cancelled"
+        );
     }
 
     #[test]
@@ -200,6 +214,9 @@ mod tests {
         let late = Arc::new(AtomicBool::new(false));
         let seen = late.clone();
         let _guard = canceller.register(move || seen.store(true, Ordering::SeqCst));
-        assert!(late.load(Ordering::SeqCst), "cancel before registration must still abort");
+        assert!(
+            late.load(Ordering::SeqCst),
+            "cancel before registration must still abort"
+        );
     }
 }

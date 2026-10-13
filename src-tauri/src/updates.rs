@@ -107,7 +107,10 @@ mod tests {
     #[test]
     fn signed_update_endpoint_matches_build_flavor() {
         #[cfg(feature = "updater-smoke-test")]
-        assert_eq!(SIGNED_UPDATE_MANIFEST_URL, "http://127.0.0.1:34827/latest.json");
+        assert_eq!(
+            SIGNED_UPDATE_MANIFEST_URL,
+            "http://127.0.0.1:34827/latest.json"
+        );
         #[cfg(not(feature = "updater-smoke-test"))]
         assert_eq!(
             SIGNED_UPDATE_MANIFEST_URL,

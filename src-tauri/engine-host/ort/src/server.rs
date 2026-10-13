@@ -5,11 +5,11 @@
 //! interactive-first, then in arrival order. `ping`, `status` and `cancel` are answered
 //! immediately, `load`/`unload` run on one serial control thread.
 
-use serde_json::{json, Map, Value};
 use sagascript_engine_protocol::{
     decode_request, Capabilities, ErrorCode, LoadResult, ParsedRequest, Priority, RequestOp,
     TranscribeWindowResult, MAX_LINE_BYTES, PROTOCOL_VERSION,
 };
+use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::PathBuf;
@@ -124,7 +124,9 @@ pub struct Server<E: Engine> {
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     // A poisoned lock only means another thread panicked; the data is still consistent
     // for our simple state, and dying here would take the whole host down.
-    mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 fn priority_rank(priority: Priority) -> u8 {
@@ -201,20 +203,33 @@ impl<E: Engine> Server<E> {
         if !saw_hello {
             match op {
                 Some(RequestOp::Hello { .. }) => self.handle_hello(id),
-                _ => self.send_failure(id, ErrorCode::Protocol, "hello must be the first operation", false),
+                _ => self.send_failure(
+                    id,
+                    ErrorCode::Protocol,
+                    "hello must be the first operation",
+                    false,
+                ),
             }
             return;
         }
         if is_hello {
-            self.send_failure(id, ErrorCode::Protocol, "hello may only be sent once", false);
+            self.send_failure(
+                id,
+                ErrorCode::Protocol,
+                "hello may only be sent once",
+                false,
+            );
             return;
         }
         let Some(op) = op else {
             // Unknown op or bad parameters, re-parse to tell them apart.
             match decode_request(line) {
-                Ok(ParsedRequest::UnknownOp { op, .. }) => {
-                    self.send_failure(id, ErrorCode::Unsupported, &format!("Unknown operation: {op}"), false)
-                }
+                Ok(ParsedRequest::UnknownOp { op, .. }) => self.send_failure(
+                    id,
+                    ErrorCode::Unsupported,
+                    &format!("Unknown operation: {op}"),
+                    false,
+                ),
                 Ok(ParsedRequest::BadParams { message, .. }) => {
                     self.send_failure(id, ErrorCode::BadRequest, &message, false)
                 }
@@ -232,9 +247,11 @@ impl<E: Engine> Server<E> {
                 fields.insert("cancelled".into(), json!(cancelled));
                 self.send_success(id, fields);
             }
-            RequestOp::Load { model_dir, model_id, compute_units } => {
-                self.handle_load(id, model_dir, model_id, compute_units)
-            }
+            RequestOp::Load {
+                model_dir,
+                model_id,
+                compute_units,
+            } => self.handle_load(id, model_dir, model_id, compute_units),
             RequestOp::TranscribeWindow {
                 pcm_path,
                 offset_samples,
@@ -244,7 +261,17 @@ impl<E: Engine> Server<E> {
                 priority,
                 boost_terms,
                 boost_weight,
-            } => self.handle_transcribe(id, pcm_path, offset_samples, num_samples, sample_rate, &format, priority, boost_terms, boost_weight),
+            } => self.handle_transcribe(
+                id,
+                pcm_path,
+                offset_samples,
+                num_samples,
+                sample_rate,
+                &format,
+                priority,
+                boost_terms,
+                boost_weight,
+            ),
             RequestOp::Unload => {
                 let this = Arc::clone(self);
                 self.run_control(Box::new(move || {
@@ -278,7 +305,8 @@ impl<E: Engine> Server<E> {
 
     fn handle_hello(&self, id: u64) {
         lock(&self.flags).saw_hello = true;
-        let mut capabilities = serde_json::to_value(self.engine.capabilities()).unwrap_or(Value::Null);
+        let mut capabilities =
+            serde_json::to_value(self.engine.capabilities()).unwrap_or(Value::Null);
         if let Some(object) = capabilities.as_object_mut() {
             // `min_macos` is Core ML specific; leave it out rather than sending null.
             if object.get("min_macos").is_some_and(Value::is_null) {
@@ -319,11 +347,20 @@ impl<E: Engine> Server<E> {
         fields.insert("model_id".into(), json!(model_id));
         fields.insert("in_flight".into(), json!(in_flight));
         fields.insert("rss_bytes".into(), json!(self.engine.rss_bytes()));
-        fields.insert("uptime_s".into(), json!(self.started.elapsed().as_secs_f64()));
+        fields.insert(
+            "uptime_s".into(),
+            json!(self.started.elapsed().as_secs_f64()),
+        );
         self.send_success(id, fields);
     }
 
-    fn handle_load(self: &Arc<Self>, id: u64, model_dir: String, model_id: String, compute_units: String) {
+    fn handle_load(
+        self: &Arc<Self>,
+        id: u64,
+        model_dir: String,
+        model_id: String,
+        compute_units: String,
+    ) {
         let path = PathBuf::from(&model_dir);
         if !path.is_absolute() || model_id.is_empty() {
             self.send_failure(
@@ -334,7 +371,11 @@ impl<E: Engine> Server<E> {
             );
             return;
         }
-        let params = LoadParams { model_dir: path, model_id, compute_units };
+        let params = LoadParams {
+            model_dir: path,
+            model_id,
+            compute_units,
+        };
         let this = Arc::clone(self);
         self.run_control(Box::new(move || match this.engine.load(&params) {
             Ok(result) => match serde_json::to_value(result) {
@@ -360,29 +401,54 @@ impl<E: Engine> Server<E> {
     ) {
         let path = PathBuf::from(&pcm_path);
         if !path.is_absolute() || num_samples == 0 || format != "f32le" {
-            self.send_failure(id, ErrorCode::BadRequest, "transcribe_window has invalid parameters", false);
+            self.send_failure(
+                id,
+                ErrorCode::BadRequest,
+                "transcribe_window has invalid parameters",
+                false,
+            );
             return;
         }
         let capabilities = self.engine.capabilities();
         if sample_rate != capabilities.sample_rate {
-            self.send_failure(id, ErrorCode::BadRequest, "sample_rate must match the host sample rate", false);
+            self.send_failure(
+                id,
+                ErrorCode::BadRequest,
+                "sample_rate must match the host sample rate",
+                false,
+            );
             return;
         }
-        let maximum = (capabilities.max_window_s * f64::from(capabilities.sample_rate)).floor() as u64;
+        let maximum =
+            (capabilities.max_window_s * f64::from(capabilities.sample_rate)).floor() as u64;
         if num_samples > maximum {
-            self.send_failure(id, ErrorCode::BadRequest, "num_samples exceeds max_window_s", false);
+            self.send_failure(
+                id,
+                ErrorCode::BadRequest,
+                "num_samples exceeds max_window_s",
+                false,
+            );
             return;
         }
         use sagascript_engine_protocol::{MAX_BOOST_TERMS, MAX_BOOST_TERM_CHARS, MAX_BOOST_WEIGHT};
         if boost_terms.len() > MAX_BOOST_TERMS
-            || boost_terms.iter().any(|t| t.chars().count() > MAX_BOOST_TERM_CHARS)
+            || boost_terms
+                .iter()
+                .any(|t| t.chars().count() > MAX_BOOST_TERM_CHARS)
             || !boost_weight.is_finite()
             || !(0.0..=MAX_BOOST_WEIGHT).contains(&boost_weight)
         {
             self.send_failure(id, ErrorCode::BadRequest, "boost_terms must be at most 500 strings of at most 64 characters and boost_weight within 0..=20", false);
             return;
         }
-        let request = WindowRequest { pcm_path: path, offset_samples, num_samples, priority, boost_terms, boost_weight };
+        let request = WindowRequest {
+            pcm_path: path,
+            offset_samples,
+            num_samples,
+            priority,
+            boost_terms,
+            boost_weight,
+        };
         {
             let mut sched = lock(&self.sched);
             let sequence = sched.next_sequence;
@@ -437,9 +503,10 @@ impl<E: Engine> Server<E> {
         let result = self.engine.transcribe(&job.request, &is_cancelled);
         // Honor a `cancel` that returned true even if the window happened to finish.
         let result = match result {
-            Ok(_) if job.flag.load(Ordering::SeqCst) => {
-                Err(HostError::new(ErrorCode::Cancelled, "Transcription was cancelled"))
-            }
+            Ok(_) if job.flag.load(Ordering::SeqCst) => Err(HostError::new(
+                ErrorCode::Cancelled,
+                "Transcription was cancelled",
+            )),
             other => other,
         };
         lock(&self.sched).running.remove(&job.id);
@@ -468,7 +535,12 @@ impl<E: Engine> Server<E> {
         };
         match removed {
             Some(job) => {
-                self.send_failure(job.id, ErrorCode::Cancelled, "Transcription was cancelled", false);
+                self.send_failure(
+                    job.id,
+                    ErrorCode::Cancelled,
+                    "Transcription was cancelled",
+                    false,
+                );
                 true
             }
             None => false,
@@ -521,7 +593,10 @@ impl<E: Engine> Server<E> {
         line.push('\n');
         let mut output = lock(&self.output);
         // stdout is protocol-only; a broken pipe means the parent is gone (EOF handling exits).
-        if let Err(error) = output.write_all(line.as_bytes()).and_then(|()| output.flush()) {
+        if let Err(error) = output
+            .write_all(line.as_bytes())
+            .and_then(|()| output.flush())
+        {
             eprintln!("cannot write response: {error}");
         }
     }

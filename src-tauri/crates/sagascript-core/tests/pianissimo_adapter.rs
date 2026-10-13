@@ -26,7 +26,10 @@ fn client(env: &[(&str, &str)], tmp: &Path) -> EngineHostClient {
             compute_units: "cpu".into(),
         },
     );
-    cfg.env = env.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+    cfg.env = env
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
     cfg.timeouts = Timeouts {
         hello: Duration::from_secs(5),
         load: Duration::from_secs(5),
@@ -120,7 +123,12 @@ fn cancelling_a_file_job_sends_the_protocol_cancel_and_the_next_job_works() {
     };
     std::thread::sleep(Duration::from_millis(600));
     backend.request_abort();
-    assert!(job.join().unwrap().unwrap_err().to_string().contains("cancelled"));
+    assert!(job
+        .join()
+        .unwrap()
+        .unwrap_err()
+        .to_string()
+        .contains("cancelled"));
 
     let lines = std::fs::read_to_string(&log).unwrap_or_default();
     assert!(
@@ -128,10 +136,17 @@ fn cancelling_a_file_job_sends_the_protocol_cancel_and_the_next_job_works() {
         "the host must receive a protocol cancel, got:\n{lines}"
     );
     // The engine is free for the next job: same backend and client, no respawn.
-    assert!(backend.client().snapshot().running, "host must survive a cancel");
+    assert!(
+        backend.client().snapshot().running,
+        "host must survive a cancel"
+    );
     let next = backend.transcribe(&ramp(5), |_| {});
     assert!(next.is_ok(), "{next:?}");
-    assert_eq!(spawn_count(&log), 1, "the same host must serve the next job");
+    assert_eq!(
+        spawn_count(&log),
+        1,
+        "the same host must serve the next job"
+    );
 }
 
 #[test]
@@ -152,8 +167,15 @@ fn warm_up_with_cancel_returns_promptly_and_keeps_the_host() {
     cancelled.store(true, Ordering::SeqCst);
     let error = job.join().unwrap().unwrap_err();
     assert!(error.to_string().contains("cancelled"), "{error}");
-    assert!(at.elapsed() < Duration::from_millis(500), "{:?}", at.elapsed());
-    assert!(backend.client().snapshot().running, "host keeps loading for the next job");
+    assert!(
+        at.elapsed() < Duration::from_millis(500),
+        "{:?}",
+        at.elapsed()
+    );
+    assert!(
+        backend.client().snapshot().running,
+        "host keeps loading for the next job"
+    );
 }
 
 #[test]
@@ -181,10 +203,8 @@ fn request_abort_cancels_the_active_job() {
 fn cancellation_before_start_never_spawns_the_host() {
     let tmp = tempfile::tempdir().unwrap();
     let log = tmp.path().join("log");
-    let backend = PianissimoBackend::with_client(client(
-        &[("FAKE_LOG", log.to_str().unwrap())],
-        tmp.path(),
-    ));
+    let backend =
+        PianissimoBackend::with_client(client(&[("FAKE_LOG", log.to_str().unwrap())], tmp.path()));
     let error = backend
         .transcribe_with_cancel(&ramp(2), |_| {}, &AtomicBool::new(true))
         .unwrap_err();
@@ -196,7 +216,12 @@ fn live(client: &EngineHostClient) -> LiveDictationBackend {
     LiveDictationBackend::with_engine(Arc::new(WhisperBackend::new()), client.clone())
 }
 
-fn dictate(backend: &LiveDictationBackend) -> (Result<String, sagascript_core::error::DictationError>, DictationTimings) {
+fn dictate(
+    backend: &LiveDictationBackend,
+) -> (
+    Result<String, sagascript_core::error::DictationError>,
+    DictationTimings,
+) {
     let mut timings = DictationTimings::default();
     let result = backend.transcribe(
         WhisperModel::Base,
@@ -213,7 +238,10 @@ fn second_utterance_reuses_the_warm_host() {
     let tmp = tempfile::tempdir().unwrap();
     let log = tmp.path().join("log");
     let shared = client(
-        &[("FAKE_LOG", log.to_str().unwrap()), ("FAKE_LOAD_DELAY_MS", "300")],
+        &[
+            ("FAKE_LOG", log.to_str().unwrap()),
+            ("FAKE_LOAD_DELAY_MS", "300"),
+        ],
         tmp.path(),
     );
 
@@ -224,11 +252,23 @@ fn second_utterance_reuses_the_warm_host() {
     assert!(!first.unwrap().is_empty());
     assert!(!second.unwrap().is_empty());
     assert!(!first_timings.model_cached);
-    assert!(first_timings.model_ms >= 250.0, "{}", first_timings.model_ms);
+    assert!(
+        first_timings.model_ms >= 250.0,
+        "{}",
+        first_timings.model_ms
+    );
     assert!(second_timings.model_cached, "warm host reported as cold");
-    assert!(second_timings.model_ms < 100.0, "{}", second_timings.model_ms);
+    assert!(
+        second_timings.model_ms < 100.0,
+        "{}",
+        second_timings.model_ms
+    );
     assert!(second_timings.inference_started);
-    assert_eq!(spawn_count(&log), 1, "host must not respawn between utterances");
+    assert_eq!(
+        spawn_count(&log),
+        1,
+        "host must not respawn between utterances"
+    );
     let loads = std::fs::read_to_string(&log)
         .unwrap()
         .lines()
@@ -278,7 +318,10 @@ fn live_abort_during_model_load_returns_promptly_and_keeps_the_host() {
     let tmp = tempfile::tempdir().unwrap();
     let log = tmp.path().join("log");
     let shared = client(
-        &[("FAKE_LOAD_DELAY_MS", "3000"), ("FAKE_LOG", log.to_str().unwrap())],
+        &[
+            ("FAKE_LOAD_DELAY_MS", "3000"),
+            ("FAKE_LOG", log.to_str().unwrap()),
+        ],
         tmp.path(),
     );
     let backend = Arc::new(live(&shared));
@@ -293,7 +336,11 @@ fn live_abort_during_model_load_returns_promptly_and_keeps_the_host() {
     let (result, timings) = job.join().unwrap();
 
     assert!(result.unwrap_err().to_string().contains("cancelled"));
-    assert!(at.elapsed() < Duration::from_millis(250), "{:?}", at.elapsed());
+    assert!(
+        at.elapsed() < Duration::from_millis(250),
+        "{:?}",
+        at.elapsed()
+    );
     assert!(!timings.inference_started);
     // The host survives so the first-use load can finish for the next utterance.
     assert!(shared.snapshot().running, "host must not be killed");

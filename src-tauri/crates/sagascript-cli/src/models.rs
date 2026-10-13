@@ -106,7 +106,9 @@ fn format_table(rows: &[ModelRow]) -> Vec<String> {
     };
 
     let mut lines = vec![
-        line(HEADERS[0], HEADERS[1], HEADERS[2], HEADERS[3], HEADERS[4], ""),
+        line(
+            HEADERS[0], HEADERS[1], HEADERS[2], HEADERS[3], HEADERS[4], "",
+        ),
         "-".repeat(w_id + w_name + w_size + w_dl + w_lang + 8),
     ];
     lines.extend(
@@ -140,7 +142,10 @@ pub fn list(args: ListModelsArgs) -> Result<(), DictationError> {
             rows.push(ModelRow {
                 id: "pianissimo-sv".into(),
                 name: "Pianissimo".into(),
-                size: format!("{} MB", pianissimo_model::installed_size_bytes() / 1_048_576),
+                size: format!(
+                    "{} MB",
+                    pianissimo_model::installed_size_bytes() / 1_048_576
+                ),
                 downloaded: yes_no(pianissimo_model::is_downloaded()),
                 language: lang.display_name().to_string(),
                 note: "",
@@ -294,7 +299,11 @@ impl DownloadProgress {
         let mb_done = downloaded as f64 / 1_048_576.0;
         let text = if total > 0 {
             let pct = (downloaded as f64 / total as f64 * 100.0) as u32;
-            format!("  {:.1}/{:.1} MB ({pct}%)", mb_done, total as f64 / 1_048_576.0)
+            format!(
+                "  {:.1}/{:.1} MB ({pct}%)",
+                mb_done,
+                total as f64 / 1_048_576.0
+            )
         } else {
             format!("  {:.1} MB downloaded", mb_done)
         };
@@ -327,7 +336,7 @@ pub async fn download(args: DownloadModelArgs) -> Result<(), DictationError> {
             pianissimo_model::download_size_bytes() / 1_048_576
         );
         let progress = DownloadProgress::new();
-    let cb_progress = progress.clone();
+        let cb_progress = progress.clone();
         let path = pianissimo_model::download(move |downloaded, total| {
             cb_progress.report(downloaded, total);
         })
@@ -451,8 +460,14 @@ mod progress_tests {
     fn non_tty_unknown_total_steps_by_50_mib() {
         let mut t = ProgressThrottle::default();
         assert_eq!(t.decide(0, 0, ms(0), false), ProgressAction::Line);
-        assert_eq!(t.decide(49 * 1_048_576, 0, ms(1), false), ProgressAction::Skip);
-        assert_eq!(t.decide(50 * 1_048_576, 0, ms(2), false), ProgressAction::Line);
+        assert_eq!(
+            t.decide(49 * 1_048_576, 0, ms(1), false),
+            ProgressAction::Skip
+        );
+        assert_eq!(
+            t.decide(50 * 1_048_576, 0, ms(2), false),
+            ProgressAction::Line
+        );
     }
 
     #[test]
@@ -484,7 +499,10 @@ mod lineup_tests {
             assert!(!row.ends_with(' '), "{row:?}");
         }
         // Other languages are unchanged.
-        assert!(!format_table(&[whisper_row(WhisperModel::Tiny, Language::Auto, false)])[2].contains("hidden"));
+        assert!(
+            !format_table(&[whisper_row(WhisperModel::Tiny, Language::Auto, false)])[2]
+                .contains("hidden")
+        );
         // Every Swedish model is still listed and parseable.
         for model in WhisperModel::models_for_language(Language::Swedish) {
             assert_eq!(parse_model(model_id_string(*model)).unwrap(), *model);
@@ -522,14 +540,22 @@ mod table_tests {
         // size column is right-aligned, so each line's SIZE cell ends at the
         // same display column.
         let size_end = |line: &str| {
-            let idx = line.find("MB").map(|i| i + 2).or_else(|| line.find("SIZE").map(|i| i + 4)).unwrap();
+            let idx = line
+                .find("MB")
+                .map(|i| i + 2)
+                .or_else(|| line.find("SIZE").map(|i| i + 4))
+                .unwrap();
             UnicodeWidthStr::width(&line[..idx])
         };
         let ends: Vec<_> = [&lines[0], &lines[2], &lines[3], &lines[4], &lines[5]]
             .iter()
             .map(|l| size_end(l))
             .collect();
-        assert!(ends.windows(2).all(|w| w[0] == w[1]), "{ends:?}\n{}", lines.join("\n"));
+        assert!(
+            ends.windows(2).all(|w| w[0] == w[1]),
+            "{ends:?}\n{}",
+            lines.join("\n")
+        );
         // Separator is dashes only; no trailing whitespace anywhere.
         assert!(lines.iter().all(|l| l == l.trim_end()));
         assert!(lines[1].chars().all(|c| c == '-'));
@@ -537,9 +563,22 @@ mod table_tests {
 
     #[test]
     fn widths_follow_the_data_not_fixed_numbers() {
-        let lines = format_table(&[row("a-very-long-model-identifier-over-20", "N", "1 MB", "English")]);
+        let lines = format_table(&[row(
+            "a-very-long-model-identifier-over-20",
+            "N",
+            "1 MB",
+            "English",
+        )]);
         let id = "a-very-long-model-identifier-over-20";
-        assert!(lines[0].starts_with(&format!("{:<w$}  NAME", "MODEL ID", w = id.len())), "{}", lines[0]);
-        assert!(lines[2].starts_with("a-very-long-model-identifier-over-20  N"), "{}", lines[2]);
+        assert!(
+            lines[0].starts_with(&format!("{:<w$}  NAME", "MODEL ID", w = id.len())),
+            "{}",
+            lines[0]
+        );
+        assert!(
+            lines[2].starts_with("a-very-long-model-identifier-over-20  N"),
+            "{}",
+            lines[2]
+        );
     }
 }

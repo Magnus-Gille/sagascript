@@ -81,7 +81,10 @@ pub fn resample_to_16khz_bounded(
     // Expected output plus rubato's padding/flush headroom (a few max-size
     // output chunks), reserved fallibly and refused if over the limit.
     let expected = (mono.len() as f64 * ratio).ceil() as usize;
-    let headroom = resampler.output_frames_max().saturating_mul(3).saturating_add(1024);
+    let headroom = resampler
+        .output_frames_max()
+        .saturating_mul(3)
+        .saturating_add(1024);
     let reserve = expected.saturating_add(headroom);
     let mut output: Vec<f32> = Vec::new();
     let initial = reserve.min(max_output_samples);
@@ -242,9 +245,19 @@ mod tests {
         let cancelled = Cell::new(false);
         let reports = Cell::new(0);
         let result = resample_to_16khz_with_control(
-            vec![0.25; 44_100], 44_100,
-            Some(&|_| { reports.set(reports.get() + 1); cancelled.set(true); }),
-            &|| if cancelled.get() { Err("cancelled in conversion".into()) } else { Ok(()) },
+            vec![0.25; 44_100],
+            44_100,
+            Some(&|_| {
+                reports.set(reports.get() + 1);
+                cancelled.set(true);
+            }),
+            &|| {
+                if cancelled.get() {
+                    Err("cancelled in conversion".into())
+                } else {
+                    Ok(())
+                }
+            },
         );
         assert_eq!(result.unwrap_err(), "cancelled in conversion");
         assert_eq!(reports.get(), 1);
@@ -308,7 +321,10 @@ mod tests {
 
         // Signal should have energy (not all zeros)
         let rms: f32 = (result.iter().map(|s| s * s).sum::<f32>() / result.len() as f32).sqrt();
-        assert!(rms > 0.3, "RMS too low: {rms} — resampled signal lost energy");
+        assert!(
+            rms > 0.3,
+            "RMS too low: {rms} — resampled signal lost energy"
+        );
 
         // No NaN or Inf values
         assert!(

@@ -9,7 +9,9 @@ use std::time::{Duration, Instant};
 
 use clap::{Args, Subcommand};
 use sagascript_core::error::DictationError;
-use sagascript_core::transcription::engine_host::{CancelToken, EngineHostClient, EngineHostConfig};
+use sagascript_core::transcription::engine_host::{
+    CancelToken, EngineHostClient, EngineHostConfig,
+};
 use sagascript_core::transcription::{pianissimo_backend, pianissimo_model};
 use serde_json::{json, Value};
 
@@ -134,7 +136,10 @@ impl Probe {
             (path, source)
         });
         let config = host.as_ref().map(|(path, _)| {
-            pianissimo_backend::config_for_host(path.clone(), &sagascript_core::settings::store::load())
+            pianissimo_backend::config_for_host(
+                path.clone(),
+                &sagascript_core::settings::store::load(),
+            )
         });
         Self {
             supported: pianissimo_backend::runtime_supported_on_this_os(),
@@ -258,10 +263,18 @@ fn print_status(report: &Value, json: bool) {
     let text = |v: &Value| v.as_str().unwrap_or("-").to_string();
     println!(
         "Engine (Pianissimo, {})",
-        if cfg!(windows) { "ONNX Runtime" } else { "Core ML" }
+        if cfg!(windows) {
+            "ONNX Runtime"
+        } else {
+            "Core ML"
+        }
     );
     if report["supported"] == true {
-        println!("  Platform:    supported ({} {})", text(&report["os"]), text(&report["arch"]));
+        println!(
+            "  Platform:    supported ({} {})",
+            text(&report["os"]),
+            text(&report["arch"])
+        );
     } else {
         println!(
             "  Platform:    NOT supported on {} {} ({})",
@@ -279,7 +292,11 @@ fn print_status(report: &Value, json: bool) {
     );
     println!("  Protocol:    {}", report["protocol"]);
     let host = &report["host"];
-    println!("  Host:        {} (source: {})", text(&host["path"]), text(&host["source"]));
+    println!(
+        "  Host:        {} (source: {})",
+        text(&host["path"]),
+        text(&host["source"])
+    );
     if let Some(hello) = host["hello"].as_object().filter(|h| !h.is_empty()) {
         println!(
             "  Host build:  {} {} git {} engine {} {}",
@@ -384,7 +401,13 @@ pub fn doctor_report(probe: &Probe, verify_model: bool) -> DoctorReport {
 
     let t = Instant::now();
     let verified = (probe.verify)(verify_model)
-        .map(|()| if verify_model { "all files re-hashed".into() } else { "verified".to_string() })
+        .map(|()| {
+            if verify_model {
+                "all files re-hashed".into()
+            } else {
+                "verified".to_string()
+            }
+        })
         .map_err(|e| e.to_string());
     if !step("model_verified", t, verified) {
         return finish(steps, failed);
@@ -392,7 +415,11 @@ pub fn doctor_report(probe: &Probe, verify_model: bool) -> DoctorReport {
 
     let Some(config) = &probe.config else {
         let t = Instant::now();
-        step("host_start", t, Err("engine configuration is unavailable".into()));
+        step(
+            "host_start",
+            t,
+            Err("engine configuration is unavailable".into()),
+        );
         return finish(steps, failed);
     };
     let client = quiet(config);
@@ -438,7 +465,13 @@ pub fn doctor_report(probe: &Probe, verify_model: bool) -> DoctorReport {
     let silence = vec![0.0_f32; 16_000];
     let transcribed = client
         .transcribe_file_samples(&silence, &CancelToken::new(), None)
-        .map(|r| format!("1 s of silence -> {} chars, {} window(s)", r.text.chars().count(), r.windows.len()))
+        .map(|r| {
+            format!(
+                "1 s of silence -> {} chars, {} window(s)",
+                r.text.chars().count(),
+                r.windows.len()
+            )
+        })
         .map_err(|e| e.to_string());
     step("transcribe", t, transcribed);
 
@@ -456,7 +489,10 @@ fn finish(steps: Vec<Value>, failed: Option<String>) -> DoctorReport {
 
 fn print_doctor(report: &DoctorReport, json: bool) {
     if json {
-        println!("{}", serde_json::to_string_pretty(&report.to_json()).unwrap());
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report.to_json()).unwrap()
+        );
         return;
     }
     for step in &report.steps {
@@ -468,7 +504,14 @@ fn print_doctor(report: &DoctorReport, json: bool) {
             step["ms"]
         );
     }
-    println!("{}", if report.ok { "Engine OK." } else { "Engine check FAILED." });
+    println!(
+        "{}",
+        if report.ok {
+            "Engine OK."
+        } else {
+            "Engine check FAILED."
+        }
+    );
 }
 
 // ---- warm -----------------------------------------------------------------
@@ -478,7 +521,9 @@ fn warm(seconds: Option<u64>) -> Result<(), DictationError> {
     pianissimo_model::verify_downloaded()?;
     let client = quiet(&config);
     let started = Instant::now();
-    client.warm().map_err(|e| DictationError::TranscriptionFailed(e.to_string()))?;
+    client
+        .warm()
+        .map_err(|e| DictationError::TranscriptionFailed(e.to_string()))?;
     let snapshot = client.snapshot();
     eprintln!(
         "Engine warm in {:.2} s (host pid {}). {}",
@@ -498,7 +543,9 @@ fn warm(seconds: Option<u64>) -> Result<(), DictationError> {
         // host exits on stdin EOF.
         if !client.snapshot().running {
             client.shutdown();
-            return Err(DictationError::TranscriptionFailed("engine host exited while warm".into()));
+            return Err(DictationError::TranscriptionFailed(
+                "engine host exited while warm".into(),
+            ));
         }
         std::thread::sleep(Duration::from_millis(200));
     }
@@ -533,7 +580,10 @@ mod tests {
     fn fake_host() -> PathBuf {
         let exe = std::env::current_exe().unwrap();
         let profile_dir = exe.parent().and_then(Path::parent).unwrap().to_path_buf();
-        let name = format!("sagascript-fake-engine-host{}", std::env::consts::EXE_SUFFIX);
+        let name = format!(
+            "sagascript-fake-engine-host{}",
+            std::env::consts::EXE_SUFFIX
+        );
         let path = profile_dir.join(&name);
         if !path.is_file() {
             let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
@@ -554,10 +604,9 @@ mod tests {
                 "building the fake engine host failed ({})",
                 output.status
             );
-            let emitted_path = fake_host_executable_from_cargo_messages(
-                &String::from_utf8_lossy(&output.stdout),
-            )
-            .expect("cargo did not report the fake engine host executable");
+            let emitted_path =
+                fake_host_executable_from_cargo_messages(&String::from_utf8_lossy(&output.stdout))
+                    .expect("cargo did not report the fake engine host executable");
             assert!(
                 emitted_path.is_file(),
                 "cargo reported a missing fake host at {}",
@@ -650,7 +699,10 @@ mod tests {
     fn status_reports_a_missing_host_binary() {
         let report = status_report(&probe(PathBuf::from("/nonexistent/host"), true, true));
         assert_eq!(report["host"]["exists"], false);
-        assert!(report["host"]["error"].as_str().unwrap().contains("not found"));
+        assert!(report["host"]["error"]
+            .as_str()
+            .unwrap()
+            .contains("not found"));
     }
 
     #[test]
@@ -658,10 +710,22 @@ mod tests {
         let report = doctor_report(&probe(fake_host(), true, true), false);
 
         assert!(report.ok, "{:?}", report.steps);
-        let names: Vec<_> = report.steps.iter().map(|s| s["step"].as_str().unwrap()).collect();
+        let names: Vec<_> = report
+            .steps
+            .iter()
+            .map(|s| s["step"].as_str().unwrap())
+            .collect();
         assert_eq!(
             names,
-            ["platform", "host", "model_installed", "model_verified", "host_start", "model_load", "transcribe"]
+            [
+                "platform",
+                "host",
+                "model_installed",
+                "model_verified",
+                "host_start",
+                "model_load",
+                "transcribe"
+            ]
         );
         assert!(report.steps.iter().all(|s| s["ok"] == true));
         let json = report.to_json();
@@ -680,7 +744,10 @@ mod tests {
         assert_eq!(report.failed_step.as_deref(), Some("platform"));
         assert_eq!(report.steps.len(), 1);
 
-        let report = doctor_report(&probe(PathBuf::from("/nonexistent/host"), true, true), false);
+        let report = doctor_report(
+            &probe(PathBuf::from("/nonexistent/host"), true, true),
+            false,
+        );
         assert_eq!(report.failed_step.as_deref(), Some("host"));
     }
 

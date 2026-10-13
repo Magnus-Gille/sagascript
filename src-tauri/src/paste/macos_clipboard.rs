@@ -114,13 +114,10 @@ unsafe fn set_temporary_text_on_pasteboard(
 
     let items: id = msg_send![class!(NSMutableArray), arrayWithCapacity: 1usize];
     let _: () = msg_send![items, addObject: item];
-    let still_owned_before_write = generation_still_owned(
-        owned_generation,
-        msg_send![pasteboard, changeCount],
-    );
-    let written = item_ready
-        && still_owned_before_write
-        && msg_send![pasteboard, writeObjects: items];
+    let still_owned_before_write =
+        generation_still_owned(owned_generation, msg_send![pasteboard, changeCount]);
+    let written =
+        item_ready && still_owned_before_write && msg_send![pasteboard, writeObjects: items];
     let current_generation: isize = msg_send![pasteboard, changeCount];
 
     let _: () = msg_send![value, release];
@@ -236,8 +233,7 @@ mod tests {
             }
 
             let expected = "Sagascript – räksmörgås 🎙️";
-            let owned_generation =
-                set_temporary_text_on_pasteboard(pasteboard, expected).unwrap();
+            let owned_generation = set_temporary_text_on_pasteboard(pasteboard, expected).unwrap();
             let current_generation: isize = msg_send![pasteboard, changeCount];
             assert_eq!(owned_generation, current_generation);
 

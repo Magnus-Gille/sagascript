@@ -1,9 +1,12 @@
 pub(crate) mod benchmark_config;
+pub mod benchmark_dictation;
 mod benchmark_quality;
 pub mod cancel;
 pub mod config;
+pub mod diarization;
+#[cfg(feature = "diarization")]
+mod diarization_cache;
 pub mod engine;
-pub mod benchmark_dictation;
 pub mod glossary;
 pub mod latency;
 pub mod meeting;
@@ -19,12 +22,9 @@ pub mod speaker_args;
 // Live recording is optional (`record` feature, on by default) so a pure
 // batch-transcribe build (`--no-default-features`) carries no audio-capture
 // stack — on Linux, no cpal/ALSA.
-#[cfg(feature = "diarization")]
-mod diarization_cache;
 #[cfg(feature = "record")]
 pub mod record;
 pub mod transcribe;
-pub mod diarization;
 
 use std::io::{self, Write};
 use std::path::PathBuf;
@@ -204,7 +204,9 @@ pub struct Cli {
 #[derive(Subcommand)]
 pub enum Command {
     /// Validate, export, inspect, and score offline diarization artifacts.
-    #[command(long_about = "Validate, export, inspect, and score bounded native diarization artifacts offline. This command reads no audio or settings, loads no models, contacts no network service, and writes results only to stdout.")]
+    #[command(
+        long_about = "Validate, export, inspect, and score bounded native diarization artifacts offline. This command reads no audio or settings, loads no models, contacts no network service, and writes results only to stdout."
+    )]
     Diarization(diarization::DiarizationArgs),
 
     /// Benchmark cold and warm in-process live dictation inference
@@ -451,12 +453,10 @@ This is a recovery path when the menu-bar status item is unavailable. On macOS, 
     Update,
 
     /// Reset first-launch onboarding (re-run setup wizard on next launch)
-    #[command(
-        long_about = "\
+    #[command(long_about = "\
 Reset the onboarding flag so the setup wizard runs again on next GUI launch.
 
-Useful for testing or if you want to re-configure language and permissions."
-    )]
+Useful for testing or if you want to re-configure language and permissions.")]
     ResetOnboarding,
 
     /// Manage settings (list, get, set, reset, path)
@@ -509,12 +509,10 @@ EXAMPLES:
     Glossary(glossary::GlossaryArgs),
 
     /// List supported audio/video file formats
-    #[command(
-        long_about = "\
+    #[command(long_about = "\
 Print all audio and video file formats that Sagascript can decode \
 for transcription. These formats are supported by both the 'transcribe' \
-subcommand and the GUI file-drop feature."
-    )]
+subcommand and the GUI file-drop feature.")]
     Formats,
 
     /// Generate shell completions
@@ -586,10 +584,14 @@ pub fn run(cli: Cli) {
 
     let result = match cli.command.unwrap() {
         Command::Diarization(args) => diarization::run(args),
-        Command::BenchmarkDictation(args) =>
-            run_inference_command("benchmark-dictation", move || benchmark_dictation::run(args)),
-        Command::Transcribe(args) =>
-            run_inference_command("transcribe", move || transcribe::run(args)),
+        Command::BenchmarkDictation(args) => {
+            run_inference_command("benchmark-dictation", move || {
+                benchmark_dictation::run(args)
+            })
+        }
+        Command::Transcribe(args) => {
+            run_inference_command("transcribe", move || transcribe::run(args))
+        }
         Command::LatencyReport(args) => latency::run(args),
         Command::Meeting(args) => meeting::run(args),
         #[cfg(feature = "record")]
@@ -600,15 +602,13 @@ pub fn run(cli: Cli) {
         Command::Open => open::run(),
         #[cfg(target_os = "macos")]
         Command::Update => open::run_update(),
-        Command::ResetOnboarding => {
-            sagascript_core::settings::store::update(|settings| {
-                settings.has_completed_onboarding = false;
-            })
-                .map_err(sagascript_core::error::DictationError::SettingsError)
-                .map(|_| {
-                    eprintln!("Onboarding reset. The setup wizard will run on next launch.");
-                })
-        }
+        Command::ResetOnboarding => sagascript_core::settings::store::update(|settings| {
+            settings.has_completed_onboarding = false;
+        })
+        .map_err(sagascript_core::error::DictationError::SettingsError)
+        .map(|_| {
+            eprintln!("Onboarding reset. The setup wizard will run on next launch.");
+        }),
         Command::Config(args) => config::run(args),
         Command::Engine(args) => engine::run(args),
         Command::Glossary(args) => glossary::run(args),
@@ -689,7 +689,9 @@ fn generate_manpages(dir: Option<PathBuf>) -> Result<(), sagascript_core::error:
     let cmd = Cli::command();
 
     let map_err = |e: io::Error| {
-        sagascript_core::error::DictationError::SettingsError(format!("Failed to generate man pages: {e}"))
+        sagascript_core::error::DictationError::SettingsError(format!(
+            "Failed to generate man pages: {e}"
+        ))
     };
 
     match dir {
@@ -773,10 +775,7 @@ mod tests {
     #[test]
     fn log_filter_preserves_explicit_native_diagnostics_opt_in() {
         let configured = "warn,whisper_rs=info";
-        assert_eq!(
-            effective_log_filter(Some(configured), "warn"),
-            configured
-        );
+        assert_eq!(effective_log_filter(Some(configured), "warn"), configured);
     }
 
     #[test]
@@ -806,10 +805,18 @@ mod tests {
         let benchmark = command
             .find_subcommand("benchmark-dictation")
             .expect("benchmark-dictation should be a root subcommand");
-        assert!(benchmark.get_arguments().any(|arg| arg.get_id() == "language"));
-        assert!(benchmark.get_arguments().any(|arg| arg.get_id() == "iterations"));
-        assert!(benchmark.get_arguments().any(|arg| arg.get_id() == "max_warm_ms"));
-        assert!(benchmark.get_arguments().any(|arg| arg.get_id() == "expect_word"));
+        assert!(benchmark
+            .get_arguments()
+            .any(|arg| arg.get_id() == "language"));
+        assert!(benchmark
+            .get_arguments()
+            .any(|arg| arg.get_id() == "iterations"));
+        assert!(benchmark
+            .get_arguments()
+            .any(|arg| arg.get_id() == "max_warm_ms"));
+        assert!(benchmark
+            .get_arguments()
+            .any(|arg| arg.get_id() == "expect_word"));
     }
 
     #[test]
@@ -838,7 +845,10 @@ mod tests {
         clap_complete::generate(Shell::Bash, &mut Cli::command(), "sagascript", &mut buf);
         assert!(!buf.is_empty(), "bash completions should not be empty");
         let output = String::from_utf8(buf).unwrap();
-        assert!(output.contains("sagascript"), "should reference the binary name");
+        assert!(
+            output.contains("sagascript"),
+            "should reference the binary name"
+        );
     }
 
     #[test]
@@ -858,8 +868,16 @@ mod tests {
     #[test]
     fn completions_generate_powershell() {
         let mut buf = Vec::new();
-        clap_complete::generate(Shell::PowerShell, &mut Cli::command(), "sagascript", &mut buf);
-        assert!(!buf.is_empty(), "powershell completions should not be empty");
+        clap_complete::generate(
+            Shell::PowerShell,
+            &mut Cli::command(),
+            "sagascript",
+            &mut buf,
+        );
+        assert!(
+            !buf.is_empty(),
+            "powershell completions should not be empty"
+        );
     }
 
     #[test]
@@ -878,12 +896,16 @@ mod tests {
         let mut buf = Vec::new();
         man.render(&mut buf).expect("root man page should render");
         let output = String::from_utf8(buf).unwrap();
-        assert!(output.contains("sagascript"), "man page should contain binary name");
+        assert!(
+            output.contains("sagascript"),
+            "man page should contain binary name"
+        );
     }
 
     #[test]
     fn manpage_renders_all_subcommands_to_dir() {
-        let dir = std::env::temp_dir().join(format!("sagascript-man-test-{}", uuid::Uuid::new_v4()));
+        let dir =
+            std::env::temp_dir().join(format!("sagascript-man-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
 
         let cmd = Cli::command();
@@ -932,10 +954,19 @@ mod tests {
     #[test]
     fn root_help_contains_examples() {
         let help = get_long_help(&Cli::command());
-        assert!(help.contains("EXAMPLES:"), "root help should contain EXAMPLES section");
-        assert!(help.contains("sagascript transcribe"), "root help should show transcribe example");
+        assert!(
+            help.contains("EXAMPLES:"),
+            "root help should contain EXAMPLES section"
+        );
+        assert!(
+            help.contains("sagascript transcribe"),
+            "root help should show transcribe example"
+        );
         #[cfg(feature = "record")]
-        assert!(help.contains("sagascript record"), "root help should show record example");
+        assert!(
+            help.contains("sagascript record"),
+            "root help should show record example"
+        );
     }
 
     #[test]
@@ -950,10 +981,18 @@ mod tests {
     #[test]
     fn transcribe_help_contains_examples() {
         let cmd = Cli::command();
-        let sub = cmd.find_subcommand("transcribe").expect("transcribe subcommand missing");
+        let sub = cmd
+            .find_subcommand("transcribe")
+            .expect("transcribe subcommand missing");
         let help = get_long_help(sub);
-        assert!(help.contains("EXAMPLES:"), "transcribe help should contain EXAMPLES");
-        assert!(help.contains("--json"), "transcribe help should mention --json");
+        assert!(
+            help.contains("EXAMPLES:"),
+            "transcribe help should contain EXAMPLES"
+        );
+        assert!(
+            help.contains("--json"),
+            "transcribe help should mention --json"
+        );
     }
 
     #[test]
@@ -973,12 +1012,26 @@ mod tests {
         // document re-running one file, --model/--beam variants, and that
         // Ctrl+C never wedges the next run (fresh in-process backend).
         let cmd = Cli::command();
-        let sub = cmd.find_subcommand("transcribe").expect("transcribe subcommand missing");
+        let sub = cmd
+            .find_subcommand("transcribe")
+            .expect("transcribe subcommand missing");
         let help = get_long_help(sub);
-        assert!(help.contains("Re-run the same file"), "transcribe help should document re-run");
-        assert!(help.contains("--model"), "transcribe help should document --model variants");
-        assert!(help.contains("--beam"), "transcribe help should document --beam variants");
-        assert!(help.contains("Ctrl+C"), "transcribe help should document interruption");
+        assert!(
+            help.contains("Re-run the same file"),
+            "transcribe help should document re-run"
+        );
+        assert!(
+            help.contains("--model"),
+            "transcribe help should document --model variants"
+        );
+        assert!(
+            help.contains("--beam"),
+            "transcribe help should document --beam variants"
+        );
+        assert!(
+            help.contains("Ctrl+C"),
+            "transcribe help should document interruption"
+        );
         assert!(
             help.contains("fresh in-process model backend"),
             "transcribe help should describe the fresh process: {help}"
@@ -1020,9 +1073,14 @@ mod tests {
     #[test]
     fn record_help_contains_examples() {
         let cmd = Cli::command();
-        let sub = cmd.find_subcommand("record").expect("record subcommand missing");
+        let sub = cmd
+            .find_subcommand("record")
+            .expect("record subcommand missing");
         let help = get_long_help(sub);
-        assert!(help.contains("EXAMPLES:"), "record help should contain EXAMPLES");
+        assert!(
+            help.contains("EXAMPLES:"),
+            "record help should contain EXAMPLES"
+        );
         assert!(help.contains("Ctrl+C"), "record help should mention Ctrl+C");
     }
 
@@ -1057,21 +1115,30 @@ mod tests {
                 assert!(!args.fail_fast);
                 assert!(!args.clipboard);
             }
-            other => panic!("expected Transcribe, got {:?}", std::mem::discriminant(&other)),
+            other => panic!(
+                "expected Transcribe, got {:?}",
+                std::mem::discriminant(&other)
+            ),
         }
     }
 
     #[test]
     fn parse_transcribe_all_flags() {
         let cli = Cli::try_parse_from([
-            "sagascript", "transcribe", "meeting.mp3",
-            "--language", "sv",
-            "--model", "kb-whisper-base",
+            "sagascript",
+            "transcribe",
+            "meeting.mp3",
+            "--language",
+            "sv",
+            "--model",
+            "kb-whisper-base",
             "--json",
             "--clipboard",
-            "--prompt", "Notre Dame, Sara",
+            "--prompt",
+            "Notre Dame, Sara",
             "--correct-hints",
-        ]).unwrap();
+        ])
+        .unwrap();
         match cli.command.unwrap() {
             Command::Transcribe(args) => {
                 assert_eq!(args.files, vec![PathBuf::from("meeting.mp3")]);
@@ -1144,8 +1211,13 @@ mod tests {
     fn parse_transcribe_hint_alias() {
         // --hint is a visible alias of --prompt and populates the same field.
         let cli = Cli::try_parse_from([
-            "sagascript", "transcribe", "f.wav", "--hint", "Estrid, Grimnir",
-        ]).unwrap();
+            "sagascript",
+            "transcribe",
+            "f.wav",
+            "--hint",
+            "Estrid, Grimnir",
+        ])
+        .unwrap();
         match cli.command.unwrap() {
             Command::Transcribe(args) => {
                 assert_eq!(args.prompt.as_deref(), Some("Estrid, Grimnir"));
@@ -1158,8 +1230,13 @@ mod tests {
     fn parse_transcribe_prompt_file() {
         // --hint-file is a visible alias of --prompt-file.
         let cli = Cli::try_parse_from([
-            "sagascript", "transcribe", "f.wav", "--hint-file", "vocab.txt",
-        ]).unwrap();
+            "sagascript",
+            "transcribe",
+            "f.wav",
+            "--hint-file",
+            "vocab.txt",
+        ])
+        .unwrap();
         match cli.command.unwrap() {
             Command::Transcribe(args) => {
                 assert_eq!(args.prompt_file, Some(PathBuf::from("vocab.txt")));
@@ -1173,25 +1250,41 @@ mod tests {
     fn parse_transcribe_prompt_and_file_conflict() {
         // --prompt and --prompt-file are mutually exclusive.
         let result = Cli::try_parse_from([
-            "sagascript", "transcribe", "f.wav",
-            "--prompt", "inline", "--prompt-file", "vocab.txt",
+            "sagascript",
+            "transcribe",
+            "f.wav",
+            "--prompt",
+            "inline",
+            "--prompt-file",
+            "vocab.txt",
         ]);
-        assert!(result.is_err(), "expected --prompt + --prompt-file to conflict");
+        assert!(
+            result.is_err(),
+            "expected --prompt + --prompt-file to conflict"
+        );
     }
 
     #[test]
     fn parse_transcribe_correct_hints_requires_json() {
-        let result = Cli::try_parse_from([
-            "sagascript", "transcribe", "f.wav", "--correct-hints",
-        ]);
-        assert!(result.is_err(), "expected --correct-hints to require --json");
+        let result = Cli::try_parse_from(["sagascript", "transcribe", "f.wav", "--correct-hints"]);
+        assert!(
+            result.is_err(),
+            "expected --correct-hints to require --json"
+        );
     }
 
     #[test]
     fn parse_transcribe_short_flags() {
         let cli = Cli::try_parse_from([
-            "sagascript", "transcribe", "f.wav", "-l", "en", "-m", "base.en",
-        ]).unwrap();
+            "sagascript",
+            "transcribe",
+            "f.wav",
+            "-l",
+            "en",
+            "-m",
+            "base.en",
+        ])
+        .unwrap();
         match cli.command.unwrap() {
             Command::Transcribe(args) => {
                 assert_eq!(args.language.as_deref(), Some("en"));
@@ -1224,15 +1317,22 @@ mod tests {
     #[test]
     fn parse_record_all_flags() {
         let cli = Cli::try_parse_from([
-            "sagascript", "record",
-            "--language", "no",
-            "--model", "nb-whisper-base",
-            "--duration", "30.5",
-            "--output", "capture.wav",
+            "sagascript",
+            "record",
+            "--language",
+            "no",
+            "--model",
+            "nb-whisper-base",
+            "--duration",
+            "30.5",
+            "--output",
+            "capture.wav",
             "--json",
             "--clipboard",
-            "--hint", "Notre Dame, Sara",
-        ]).unwrap();
+            "--hint",
+            "Notre Dame, Sara",
+        ])
+        .unwrap();
         match cli.command.unwrap() {
             Command::Record(args) => {
                 assert_eq!(args.language.as_deref(), Some("no"));
@@ -1263,7 +1363,11 @@ mod tests {
         .unwrap();
         match cli.command.unwrap() {
             Command::Glossary(args) => match args.action {
-                glossary::GlossaryAction::Add { term, aliases, profile } => {
+                glossary::GlossaryAction::Add {
+                    term,
+                    aliases,
+                    profile,
+                } => {
                     assert_eq!(term, "OpenRouter");
                     assert_eq!(aliases, vec!["open router", "open vrouter"]);
                     assert!(profile.is_none());
@@ -1276,14 +1380,8 @@ mod tests {
 
     #[test]
     fn parse_profile_glossary_path() {
-        let cli = Cli::try_parse_from([
-            "sagascript",
-            "glossary",
-            "path",
-            "--profile",
-            "swedish",
-        ])
-        .unwrap();
+        let cli = Cli::try_parse_from(["sagascript", "glossary", "path", "--profile", "swedish"])
+            .unwrap();
         match cli.command.unwrap() {
             Command::Glossary(args) => match args.action {
                 glossary::GlossaryAction::Path { profile } => {
@@ -1333,8 +1431,14 @@ mod tests {
     #[test]
     fn parse_glossary_suggest_without_profile_uses_default_at_execution() {
         let cli = Cli::try_parse_from([
-            "sagascript", "glossary", "suggest", "heard.txt", "--corrected", "corrected.txt",
-        ]).unwrap();
+            "sagascript",
+            "glossary",
+            "suggest",
+            "heard.txt",
+            "--corrected",
+            "corrected.txt",
+        ])
+        .unwrap();
         match cli.command.unwrap() {
             Command::Glossary(args) => match args.action {
                 glossary::GlossaryAction::Suggest { profile, .. } => assert!(profile.is_none()),
@@ -1411,12 +1515,34 @@ mod tests {
     #[test]
     fn parse_config_profile_create() {
         let cli = Cli::try_parse_from([
-            "sagascript", "config", "profiles", "create", "swedish",
-            "--name", "Swedish", "--hotkey", "Option+Space", "--language", "sv", "--model", "pianissimo-sv",
-        ]).unwrap();
+            "sagascript",
+            "config",
+            "profiles",
+            "create",
+            "swedish",
+            "--name",
+            "Swedish",
+            "--hotkey",
+            "Option+Space",
+            "--language",
+            "sv",
+            "--model",
+            "pianissimo-sv",
+        ])
+        .unwrap();
         match cli.command.unwrap() {
             Command::Config(args) => match args.action {
-                config::ConfigAction::Profiles { action: config::ProfileAction::Create { id, name, hotkey, language, model, .. } } => {
+                config::ConfigAction::Profiles {
+                    action:
+                        config::ProfileAction::Create {
+                            id,
+                            name,
+                            hotkey,
+                            language,
+                            model,
+                            ..
+                        },
+                } => {
                     assert_eq!(id, "swedish");
                     assert_eq!(name, "Swedish");
                     assert_eq!(hotkey.as_deref(), Some("Option+Space"));
@@ -1432,20 +1558,32 @@ mod tests {
     #[test]
     fn parse_config_profile_add_explicit_shortcuts() {
         let cli = Cli::try_parse_from([
-            "sagascript", "config", "profiles", "add", "swedish",
-            "--name", "Swedish", "--push-to-talk-shortcut", "Control+Shift+P",
-            "--toggle-shortcut", "Control+Shift+T", "--language", "sv",
-        ]).unwrap();
+            "sagascript",
+            "config",
+            "profiles",
+            "add",
+            "swedish",
+            "--name",
+            "Swedish",
+            "--push-to-talk-shortcut",
+            "Control+Shift+P",
+            "--toggle-shortcut",
+            "Control+Shift+T",
+            "--language",
+            "sv",
+        ])
+        .unwrap();
         match cli.command.unwrap() {
             Command::Config(args) => match args.action {
                 config::ConfigAction::Profiles {
-                    action: config::ProfileAction::Create {
-                        id,
-                        hotkey,
-                        push_to_talk_shortcut,
-                        toggle_shortcut,
-                        ..
-                    },
+                    action:
+                        config::ProfileAction::Create {
+                            id,
+                            hotkey,
+                            push_to_talk_shortcut,
+                            toggle_shortcut,
+                            ..
+                        },
                 } => {
                     assert_eq!(id, "swedish");
                     assert!(hotkey.is_none());
@@ -1461,18 +1599,25 @@ mod tests {
     #[test]
     fn parse_config_profile_set_clear_explicit_shortcuts() {
         let cli = Cli::try_parse_from([
-            "sagascript", "config", "profiles", "set", "swedish",
-            "--clear-push-to-talk-shortcut", "--clear-toggle-shortcut",
-        ]).unwrap();
+            "sagascript",
+            "config",
+            "profiles",
+            "set",
+            "swedish",
+            "--clear-push-to-talk-shortcut",
+            "--clear-toggle-shortcut",
+        ])
+        .unwrap();
         match cli.command.unwrap() {
             Command::Config(args) => match args.action {
                 config::ConfigAction::Profiles {
-                    action: config::ProfileAction::Update {
-                        id,
-                        clear_push_to_talk_shortcut,
-                        clear_toggle_shortcut,
-                        ..
-                    },
+                    action:
+                        config::ProfileAction::Update {
+                            id,
+                            clear_push_to_talk_shortcut,
+                            clear_toggle_shortcut,
+                            ..
+                        },
                 } => {
                     assert_eq!(id, "swedish");
                     assert!(clear_push_to_talk_shortcut);
@@ -1509,7 +1654,10 @@ mod tests {
     #[test]
     fn parse_no_subcommand_is_none() {
         let cli = Cli::try_parse_from(["sagascript"]).unwrap();
-        assert!(cli.command.is_none(), "no subcommand should yield None (GUI mode)");
+        assert!(
+            cli.command.is_none(),
+            "no subcommand should yield None (GUI mode)"
+        );
     }
 
     #[test]

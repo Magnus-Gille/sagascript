@@ -91,13 +91,7 @@ mod tests {
 
     #[test]
     fn finnish_tiny_is_optional_while_base_remains_default() {
-        let config = resolve(
-            Language::Finnish,
-            Some("fi-whisper-tiny"),
-            Some(2),
-            false,
-        )
-        .unwrap();
+        let config = resolve(Language::Finnish, Some("fi-whisper-tiny"), Some(2), false).unwrap();
         assert_eq!(config.model, WhisperModel::FinnishWhisperTiny);
         assert_eq!(
             resolve(Language::Finnish, None, None, false).unwrap().model,

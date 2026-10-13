@@ -1,5 +1,5 @@
-pub mod health;
 pub mod configuration;
+pub mod health;
 mod registration;
 pub mod service;
 
