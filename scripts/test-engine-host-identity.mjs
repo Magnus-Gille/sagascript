@@ -139,7 +139,7 @@ test("release paths check the host in release mode", () => {
   assert.ok(checks.length >= 2, "release-build-macos.yml checks the staged and the signed host");
   for (const line of checks) assert.match(line, /^check-engine-host-identity\.sh --release /, line);
   const verifier = readFileSync(join(scripts, "verify-macos-release.sh"), "utf8");
-  assert.match(verifier, /if \[\[ "\$release" == true \]\]; then\n\s+"\$\(dirname "\$0"\)\/check-engine-host-identity\.sh" --release "\$host"/);
+  assert.match(verifier, /if \[\[ "\$release" == true \]\]; then\s+"\$\(dirname "\$0"\)\/check-engine-host-identity\.sh" --release "\$host"/);
   // The release paths ask verify-macos-release.sh for the clean-tree check; signed test builds
   // (test-build.yml, any branch) only check the host's SHA.
   assert.match(workflow, /verify-macos-release\.sh --release "\$app"/);
