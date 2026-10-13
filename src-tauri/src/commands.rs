@@ -150,312 +150,6 @@ pub(crate) fn apply_glossary(text: String, glossary: &Glossary) -> String {
     corrected
 }
 
-#[cfg(test)]
-mod lineup_option_tests {
-    use super::*;
-
-    fn ids(supported: bool, language: Language, include: Option<FileModel>) -> Vec<String> {
-        lineup_model_infos(language, supported, include, None)
-            .into_iter()
-            .map(|info| info.id)
-            .collect()
-    }
-
-    #[test]
-    fn swedish_pickers_show_only_the_supported_lineup() {
-        assert_eq!(
-            ids(true, Language::Swedish, None),
-            ["pianissimo-sv", "kb-whisper-large"]
-        );
-        assert_eq!(
-            ids(false, Language::Swedish, None),
-            ["kb-whisper-medium", "kb-whisper-large"]
-        );
-        assert_eq!(
-            ids(
-                true,
-                Language::Swedish,
-                Some(FileModel::Whisper(WhisperModel::KbWhisperBase))
-            ),
-            ["pianissimo-sv", "kb-whisper-large", "kb-whisper-base"]
-        );
-        assert_eq!(
-            ids(true, Language::English, None),
-            ["tiny.en", "base.en", "small.en", "medium.en"]
-        );
-    }
-
-    #[test]
-    fn model_info_wire_keys_are_stable() {
-        let info = lineup_model_infos(Language::Swedish, true, None, None).remove(0);
-        let value = serde_json::to_value(info).unwrap();
-        let mut keys: Vec<_> = value.as_object().unwrap().keys().cloned().collect();
-        keys.sort();
-        assert_eq!(
-            keys,
-            [
-                "active",
-                "description",
-                "display_name",
-                "downloaded",
-                "id",
-                "size_mb"
-            ]
-        );
-    }
-
-    #[test]
-    fn recommended_info_follows_the_platform_gate() {
-        assert_eq!(
-            model_info_for(FileModel::recommended_for(Language::Swedish, true), true).id,
-            "pianissimo-sv"
-        );
-        assert_eq!(
-            model_info_for(FileModel::recommended_for(Language::Swedish, false), true).id,
-            "kb-whisper-medium"
-        );
-    }
-}
-
-#[cfg(test)]
-mod glossary_options_tests {
-    use super::*;
-
-    #[test]
-    fn live_options_prime_with_canonical_terms_only() {
-        let settings = Settings {
-            initial_prompt: "OpenRouter = open router | open vrouter\nmerge = merch".to_string(),
-            ..Settings::default()
-        };
-        assert_eq!(
-            build_transcribe_options(&settings).prompt.as_deref(),
-            Some("OpenRouter, merge")
-        );
-    }
-
-    #[test]
-    fn live_options_include_only_the_selected_profile_glossary() {
-        let mut settings = Settings {
-            initial_prompt: "Codex = code x".to_string(),
-            hotkey_profiles: vec![
-                HotkeyProfile {
-                    id: "svenska".to_string(),
-                    name: "Svenska".to_string(),
-                    shortcut: "Control+Shift+Space".to_string(),
-                    push_to_talk_shortcut: None,
-                    toggle_shortcut: None,
-                    language: Language::Swedish,
-                },
-                HotkeyProfile {
-                    id: "english".to_string(),
-                    name: "English".to_string(),
-                    shortcut: "Control+Option+Space".to_string(),
-                    push_to_talk_shortcut: None,
-                    toggle_shortcut: None,
-                    language: Language::English,
-                },
-            ],
-            ..Settings::default()
-        };
-        settings
-            .profile_glossaries
-            .insert("svenska".to_string(), "mergea = mördsa".to_string());
-        settings
-            .profile_glossaries
-            .insert("english".to_string(), "Lovable = love a ball".to_string());
-
-        assert_eq!(
-            build_transcribe_options_for_profile(&settings, Some("svenska"))
-                .prompt
-                .as_deref(),
-            Some("Codex, mergea")
-        );
-    }
-
-    #[test]
-    fn file_context_overrides_the_saved_dictionary_for_one_run() {
-        let settings = Settings {
-            initial_prompt: "OpenRouter = open router".to_string(),
-            ..Settings::default()
-        };
-        let prompt = Some("Cloudflare = cloud flare".to_string());
-        assert_eq!(
-            build_file_transcribe_options(&settings, prompt)
-                .prompt
-                .as_deref(),
-            Some("Cloudflare")
-        );
-    }
-
-    #[test]
-    fn correction_helper_applies_explicit_aliases() {
-        let glossary = Glossary::parse("merge = merch");
-        assert_eq!(
-            apply_glossary("Merch it".to_string(), &glossary),
-            "merge it"
-        );
-    }
-
-    #[test]
-    fn gui_file_global_alias_does_not_rewrite_english() {
-        let settings = Settings {
-            initial_prompt: "merge = merch".to_string(),
-            ..Settings::default()
-        };
-        let glossary = effective_file_glossary(&settings, None);
-        assert_eq!(
-            apply_glossary("company merch".into(), &glossary),
-            "company merch"
-        );
-        assert_eq!(glossary.decoder_prompt().as_deref(), Some("merge"));
-    }
-
-    fn scoped_file_settings() -> Settings {
-        let mut settings = Settings {
-            language: Language::English,
-            initial_prompt: "Codex = code x\nmerge = merch".into(),
-            hotkey_profiles: vec![
-                HotkeyProfile {
-                    id: "swedish".into(),
-                    name: "Swedish".into(),
-                    shortcut: "Super+S".into(),
-                    push_to_talk_shortcut: None,
-                    toggle_shortcut: None,
-                    language: Language::Swedish,
-                },
-                HotkeyProfile {
-                    id: "english".into(),
-                    name: "English".into(),
-                    shortcut: "Super+E".into(),
-                    push_to_talk_shortcut: None,
-                    toggle_shortcut: None,
-                    language: Language::English,
-                },
-                HotkeyProfile {
-                    id: "automatic".into(),
-                    name: "Automatic".into(),
-                    shortcut: "Super+A".into(),
-                    push_to_talk_shortcut: None,
-                    toggle_shortcut: None,
-                    language: Language::Auto,
-                },
-            ],
-            ..Settings::default()
-        };
-        settings.profile_glossaries.insert(
-            "swedish".into(),
-            "merge = merch\nOpenRouter = open router".into(),
-        );
-        settings
-            .profile_glossaries
-            .insert("automatic".into(), "merge = merch".into());
-        settings
-    }
-
-    #[test]
-    fn gui_file_profile_pins_language_model_and_dictionary_together() {
-        let settings = scoped_file_settings();
-        let context = file_transcription_context(&settings, Some("swedish"), None).unwrap();
-        assert_eq!(context.language, Language::Swedish);
-        assert_eq!(
-            context.model,
-            settings.effective_model_for(Language::Swedish)
-        );
-        assert_eq!(
-            apply_glossary("merch open router".into(), &context.glossary),
-            "merge OpenRouter"
-        );
-        assert_eq!(context.options.prompt, context.glossary.decoder_prompt());
-        let default = file_transcription_context(&settings, None, None).unwrap();
-        assert_eq!(default.language, Language::Swedish);
-        assert_eq!(
-            apply_glossary("company merch".into(), &default.glossary),
-            "company merge"
-        );
-        let english = file_transcription_context(&settings, Some("english"), None).unwrap();
-        assert_eq!(english.language, Language::English);
-        assert_eq!(
-            apply_glossary("company merch".into(), &english.glossary),
-            "company merch"
-        );
-    }
-
-    #[test]
-    fn gui_file_override_is_hint_only_but_keeps_explicit_profile_aliases() {
-        let context = file_transcription_context(
-            &scoped_file_settings(),
-            Some("swedish"),
-            Some("Cloudflare = cloud flare"),
-        )
-        .unwrap();
-        assert_eq!(
-            apply_glossary("cloud flare merch".into(), &context.glossary),
-            "cloud flare merge"
-        );
-        assert_eq!(
-            context.options.prompt.as_deref(),
-            Some("Cloudflare, merge, OpenRouter")
-        );
-    }
-
-    #[test]
-    fn gui_file_rejects_unknown_but_accepts_auto_profile_before_io() {
-        let settings = scoped_file_settings();
-        assert!(file_transcription_context(&settings, Some("missing"), None).is_err());
-        assert_eq!(
-            file_transcription_context(&settings, Some("automatic"), None)
-                .unwrap()
-                .language,
-            Language::Auto
-        );
-        let context = file_transcription_context(&settings, Some("automatic"), None).unwrap();
-        assert_eq!(context.language, Language::Auto);
-        assert_eq!(apply_glossary("merch".into(), &context.glossary), "merch");
-    }
-
-    #[test]
-    fn meeting_context_rejects_pianissimo_instead_of_switching_to_whisper() {
-        let mut settings = scoped_file_settings();
-        settings.file_transcription_model = FileModelPreference::PianissimoOriginal;
-        let error = file_transcription_context(&settings, Some("swedish"), None)
-            .err()
-            .expect("meeting path must reject Pianissimo");
-        assert!(error.contains("plain Swedish"));
-        assert_eq!(
-            settings.effective_model_for(Language::Swedish),
-            WhisperModel::KbWhisperMedium
-        );
-    }
-
-    #[test]
-    fn profile_dictionary_save_validates_without_partial_mutation() {
-        let mut settings = scoped_file_settings();
-        let original = settings.profile_glossaries.clone();
-        for profile in ["missing", "automatic"] {
-            assert!(
-                set_profile_glossary_in(&mut settings, profile, "new = old".into(), None).is_err()
-            );
-            assert_eq!(settings.profile_glossaries, original);
-        }
-        set_profile_glossary_in(&mut settings, "english", "OpenAI = open a i".into(), None)
-            .unwrap();
-        assert_eq!(settings.profile_glossaries["english"], "OpenAI = open a i");
-        assert_eq!(settings.profile_glossaries["swedish"], original["swedish"]);
-        assert_eq!(settings.initial_prompt, "Codex = code x\nmerge = merch");
-    }
-
-    #[test]
-    fn scoped_file_glossary_preserves_cross_fragment_phrase_matching() {
-        let context =
-            file_transcription_context(&scoped_file_settings(), Some("swedish"), None).unwrap();
-        let (fragments, corrections) = context
-            .glossary
-            .correct_fragments(&["open", " router merch"]);
-        assert_eq!(fragments.concat(), "OpenRouter merge");
-        assert_eq!(corrections.len(), 2);
-    }
-}
-
 /// Shared app state type — uses std::sync::Mutex (not tokio) because
 /// cpal::Stream is !Send and we need sync access from Tauri commands
 pub type SharedController = Mutex<AppController>;
@@ -606,56 +300,6 @@ fn apply_language_selection(
     settings.whisper_model = WhisperModel::recommended(language);
     settings.auto_select_model = true;
     Ok(notices)
-}
-
-#[cfg(test)]
-mod language_selection_tests {
-    use super::apply_language_selection;
-    use sagascript_core::settings::{Language, Settings, WhisperModel};
-
-    #[test]
-    fn explicit_language_selection_restores_recommended_model() {
-        for language in [
-            Language::English,
-            Language::Swedish,
-            Language::Norwegian,
-            Language::Finnish,
-            Language::Auto,
-        ] {
-            let mut settings = Settings {
-                whisper_model: WhisperModel::Small,
-                auto_select_model: false,
-                ..Default::default()
-            };
-            apply_language_selection(&mut settings, language).unwrap();
-            assert_eq!(settings.language, language);
-            assert_eq!(settings.whisper_model, WhisperModel::recommended(language));
-            assert_eq!(
-                settings.effective_model(),
-                WhisperModel::recommended(language)
-            );
-            assert!(settings.auto_select_model);
-        }
-    }
-
-    #[test]
-    fn rejected_language_change_preserves_model_and_dictionary() {
-        let mut settings = Settings {
-            language: Language::Swedish,
-            whisper_model: WhisperModel::KbWhisperSmall,
-            auto_select_model: false,
-            ..Default::default()
-        };
-        settings
-            .profile_glossaries
-            .insert("default".into(), "merge = merch".into());
-        let error = apply_language_selection(&mut settings, Language::English).unwrap_err();
-        assert!(error.contains("personal dictionary"));
-        assert_eq!(settings.language, Language::Swedish);
-        assert_eq!(settings.whisper_model, WhisperModel::KbWhisperSmall);
-        assert!(!settings.auto_select_model);
-        assert_eq!(settings.profile_glossaries["default"], "merge = merch");
-    }
 }
 
 #[tauri::command]
@@ -818,67 +462,6 @@ pub(crate) fn acquire_hotkey_configuration(
         return Err("Finish or cancel the active dictation before changing shortcuts".into());
     }
     Ok(HotkeyConfigurationLease(controller))
-}
-
-#[cfg(test)]
-mod controller_poison_tests {
-    use super::*;
-
-    /// Poison `mutex` the way production would: another thread panics while
-    /// holding the guard (#359).
-    fn poison<T: Send>(mutex: &Mutex<T>) {
-        std::thread::scope(|scope| {
-            let panicked = scope
-                .spawn(|| {
-                    let _guard = mutex.lock().unwrap();
-                    panic!("injected panic while holding the lock (#359)");
-                })
-                .join();
-            assert!(panicked.is_err());
-        });
-        assert!(mutex.is_poisoned());
-    }
-
-    fn controller() -> SharedController {
-        Mutex::new(AppController::new(Settings::default()))
-    }
-
-    /// A panic under the controller lock must not turn every later command
-    /// into a panic: the next real command path gets the controller.
-    #[test]
-    fn commands_keep_working_after_a_panic_poisoned_the_controller() {
-        let controller = controller();
-        poison(&controller);
-
-        let lease = acquire_hotkey_configuration(&controller)
-            .expect("a poisoned controller must be recovered, not propagated");
-        assert!(
-            acquire_hotkey_configuration(&controller).is_err(),
-            "the recovered controller still enforces the single-change lease"
-        );
-        drop(lease);
-        assert!(acquire_hotkey_configuration(&controller).is_ok());
-        assert!(!controller.is_poisoned(), "recovery clears the poison flag");
-    }
-
-    /// The lease's Drop runs during unwinding when a settings change panics.
-    /// Re-panicking on the poisoned controller there would abort the process.
-    #[test]
-    fn hotkey_configuration_lease_drop_tolerates_a_poisoned_controller() {
-        let controller = controller();
-        let lease = acquire_hotkey_configuration(&controller).unwrap();
-        poison(&controller);
-
-        let dropped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(lease)));
-        assert!(
-            dropped.is_ok(),
-            "Drop must not panic on a poisoned controller"
-        );
-        assert!(
-            acquire_hotkey_configuration(&controller).is_ok(),
-            "the lease was released despite the poison"
-        );
-    }
 }
 
 fn apply_hotkey_change(
@@ -1151,19 +734,6 @@ fn gui_start_recording_result(
                 .to_string(),
         ),
         Err(error) => Err(error.to_string()),
-    }
-}
-
-#[cfg(test)]
-mod gui_recording_tests {
-    use super::gui_start_recording_result;
-
-    #[test]
-    fn gui_start_while_transcribing_returns_busy_error() {
-        let error = gui_start_recording_result(Ok(false)).unwrap_err();
-
-        assert!(error.contains("busy"));
-        assert!(error.contains("current recording"));
     }
 }
 
@@ -1440,24 +1010,6 @@ pub async fn transcribe_training_file(
     })
 }
 
-#[cfg(test)]
-mod training_stop_tests {
-    use super::not_recording_result;
-
-    #[test]
-    fn duplicate_normal_stop_remains_a_noop() {
-        let result = not_recording_result(true).unwrap();
-        assert!(result.raw_text.is_empty());
-        assert!(result.effective_text.is_empty());
-    }
-
-    #[test]
-    fn training_stop_without_active_recording_is_an_error() {
-        let error = not_recording_result(false).unwrap_err();
-        assert!(error.contains("No training recording"));
-    }
-}
-
 #[tauri::command]
 pub async fn cancel_recording(
     app: tauri::AppHandle,
@@ -1699,18 +1251,6 @@ pub async fn set_auto_paste(
     }
 }
 
-#[cfg(test)]
-mod auto_paste_tests {
-    use super::effective_auto_paste;
-
-    #[test]
-    fn enabling_never_persists_true_before_accessibility_is_trusted() {
-        assert!(!effective_auto_paste(true, false));
-        assert!(effective_auto_paste(true, true));
-        assert!(!effective_auto_paste(false, true));
-    }
-}
-
 #[tauri::command]
 pub async fn set_show_overlay(
     app: tauri::AppHandle,
@@ -1777,20 +1317,6 @@ fn profile_dictionary_source_snapshot(
         })
 }
 
-#[cfg(test)]
-fn reconcile_global_dictionary_after_conflict(
-    settings: &mut Settings,
-    expected_source: &str,
-    persisted_source: &str,
-) {
-    if sagascript_core::settings::store::glossary_sources_match(
-        &settings.initial_prompt,
-        expected_source,
-    ) {
-        settings.initial_prompt = persisted_source.to_string();
-    }
-}
-
 fn reconcile_profile_dictionary_after_conflict(
     settings: &mut Settings,
     profile_id: &str,
@@ -1813,17 +1339,6 @@ fn reconcile_profile_dictionary_after_conflict(
     } else {
         settings.profile_glossaries.remove(profile_id);
     }
-}
-
-#[cfg(test)]
-fn set_initial_prompt_in(
-    settings: &mut Settings,
-    prompt: &str,
-    expected_source: Option<&str>,
-) -> Result<(), String> {
-    ensure_expected_dictionary_source(&settings.initial_prompt, expected_source)?;
-    settings.initial_prompt = prompt.to_string();
-    Ok(())
 }
 
 fn ensure_known_profile(settings: &Settings, profile_id: &str) -> Result<(), String> {
@@ -1925,216 +1440,6 @@ pub async fn set_profile_glossary(
             }
             Err(error)
         }
-    }
-}
-
-#[cfg(test)]
-mod dictionary_compare_and_set_tests {
-    use super::*;
-
-    #[test]
-    fn dictionary_cas_matches_the_stores_trailing_newline_normalization() {
-        assert!(ensure_expected_dictionary_source("OpenRouter", Some("OpenRouter\n\n")).is_ok());
-        assert!(
-            ensure_expected_dictionary_source("merge = merch", Some("merge = merch\r\n")).is_ok()
-        );
-        assert!(ensure_expected_dictionary_source("", Some("\r\n")).is_ok());
-        assert!(ensure_expected_dictionary_source("OpenRouter ", Some("OpenRouter")).is_err());
-        assert!(
-            ensure_expected_dictionary_source("OpenRouter\nmerge", Some("OpenRouter merge"))
-                .is_err()
-        );
-    }
-
-    fn profile_settings() -> Settings {
-        Settings {
-            hotkey_profiles: vec![HotkeyProfile {
-                id: "english".to_string(),
-                name: "English".to_string(),
-                shortcut: "Option+Space".to_string(),
-                push_to_talk_shortcut: None,
-                toggle_shortcut: None,
-                language: Language::English,
-            }],
-            ..Settings::default()
-        }
-    }
-
-    #[test]
-    fn stale_global_source_is_rejected_without_mutation() {
-        let mut settings = Settings {
-            initial_prompt: "remote".to_string(),
-            ..Settings::default()
-        };
-        let before = settings.clone();
-
-        let error = set_initial_prompt_in(&mut settings, "local", Some("old")).unwrap_err();
-
-        assert!(error.starts_with("Dictionary changed elsewhere:"));
-        assert_eq!(settings.initial_prompt, before.initial_prompt);
-        assert_eq!(settings.profile_glossaries, before.profile_glossaries);
-    }
-
-    #[test]
-    fn stale_profile_source_is_rejected_without_mutation() {
-        let mut settings = profile_settings();
-        settings
-            .profile_glossaries
-            .insert("english".to_string(), "remote".to_string());
-        let before = settings.clone();
-
-        let error =
-            set_profile_glossary_in(&mut settings, "english", "local".to_string(), Some("old"))
-                .unwrap_err();
-
-        assert!(error.starts_with("Dictionary changed elsewhere:"));
-        assert_eq!(settings.initial_prompt, before.initial_prompt);
-        assert_eq!(settings.profile_glossaries, before.profile_glossaries);
-    }
-
-    #[test]
-    fn matching_expected_sources_write_both_dictionary_scopes() {
-        let mut settings = profile_settings();
-        settings.initial_prompt = "global old".to_string();
-        settings
-            .profile_glossaries
-            .insert("english".to_string(), "profile old".to_string());
-
-        set_initial_prompt_in(&mut settings, "global new", Some("global old")).unwrap();
-        set_profile_glossary_in(
-            &mut settings,
-            "english",
-            "profile new".to_string(),
-            Some("profile old"),
-        )
-        .unwrap();
-
-        assert_eq!(settings.initial_prompt, "global new");
-        assert_eq!(settings.profile_glossaries["english"], "profile new");
-    }
-
-    #[test]
-    fn omitted_expected_source_preserves_legacy_writes() {
-        let mut settings = profile_settings();
-        settings.initial_prompt = "global old".to_string();
-        settings
-            .profile_glossaries
-            .insert("english".to_string(), "profile old".to_string());
-
-        set_initial_prompt_in(&mut settings, "global new", None).unwrap();
-        set_profile_glossary_in(&mut settings, "english", "profile new".to_string(), None).unwrap();
-
-        assert_eq!(settings.initial_prompt, "global new");
-        assert_eq!(settings.profile_glossaries["english"], "profile new");
-    }
-
-    #[test]
-    fn unrelated_scope_change_does_not_block_compare_and_set() {
-        let mut settings = profile_settings();
-        settings.initial_prompt = "global changed elsewhere".to_string();
-        settings
-            .profile_glossaries
-            .insert("english".to_string(), "profile old".to_string());
-
-        set_profile_glossary_in(
-            &mut settings,
-            "english",
-            "profile new".to_string(),
-            Some("profile old"),
-        )
-        .unwrap();
-
-        assert_eq!(settings.initial_prompt, "global changed elsewhere");
-        assert_eq!(settings.profile_glossaries["english"], "profile new");
-    }
-
-    #[test]
-    fn global_conflict_refreshes_stale_controller_field_without_touching_profiles() {
-        let mut controller_settings = profile_settings();
-        controller_settings.initial_prompt = "editor baseline".to_string();
-        controller_settings
-            .profile_glossaries
-            .insert("english".to_string(), "unchanged profile".to_string());
-
-        reconcile_global_dictionary_after_conflict(
-            &mut controller_settings,
-            "editor baseline",
-            "fresh persisted source",
-        );
-
-        assert_eq!(controller_settings.initial_prompt, "fresh persisted source");
-        assert_eq!(
-            controller_settings.profile_glossaries["english"],
-            "unchanged profile"
-        );
-    }
-
-    #[test]
-    fn global_conflict_does_not_clobber_a_newer_controller_field() {
-        let mut controller_settings = profile_settings();
-        controller_settings.initial_prompt = "newer controller value".to_string();
-
-        reconcile_global_dictionary_after_conflict(
-            &mut controller_settings,
-            "editor baseline",
-            "fresh persisted source",
-        );
-
-        assert_eq!(controller_settings.initial_prompt, "newer controller value");
-    }
-
-    #[test]
-    fn profile_conflict_preserves_persisted_presence_and_rejects_newer_controller_value() {
-        let mut stale_controller = profile_settings();
-        stale_controller
-            .profile_glossaries
-            .insert("english".to_string(), "editor baseline".to_string());
-        let missing = DictionarySourceSnapshot {
-            present: false,
-            source: String::new(),
-        };
-        reconcile_profile_dictionary_after_conflict(
-            &mut stale_controller,
-            "english",
-            "editor baseline",
-            &missing,
-        );
-        assert!(!stale_controller.profile_glossaries.contains_key("english"));
-
-        stale_controller
-            .profile_glossaries
-            .insert("english".to_string(), "editor baseline".to_string());
-        let explicitly_empty = DictionarySourceSnapshot {
-            present: true,
-            source: String::new(),
-        };
-        reconcile_profile_dictionary_after_conflict(
-            &mut stale_controller,
-            "english",
-            "editor baseline",
-            &explicitly_empty,
-        );
-        assert_eq!(
-            stale_controller.profile_glossaries.get("english"),
-            Some(&String::new())
-        );
-
-        stale_controller
-            .profile_glossaries
-            .insert("english".to_string(), "newer controller value".to_string());
-        reconcile_profile_dictionary_after_conflict(
-            &mut stale_controller,
-            "english",
-            "editor baseline",
-            &DictionarySourceSnapshot {
-                present: true,
-                source: "fresh persisted source".to_string(),
-            },
-        );
-        assert_eq!(
-            stale_controller.profile_glossaries["english"],
-            "newer controller value"
-        );
     }
 }
 
@@ -2262,174 +1567,6 @@ pub async fn apply_training_glossary(
         .profile_glossaries = persisted.profile_glossaries;
     info!(accepted_count, profile_id = %profile_id, "Applied reviewed training glossary suggestions");
     Ok(())
-}
-
-#[cfg(test)]
-mod training_glossary_tests {
-    use super::*;
-
-    #[test]
-    fn reviewed_candidates_are_saved_only_to_the_selected_profile() {
-        let mut settings = Settings::default();
-        let heard = "Jag heter Magnus Jille.";
-        let corrected = "Jag heter Magnus Gille.";
-        let candidates = suggest_glossary_candidates(heard, corrected, &Glossary::default());
-
-        apply_reviewed_training_candidates(&mut settings, heard, corrected, "default", &candidates)
-            .unwrap();
-
-        assert_eq!(settings.initial_prompt, "");
-        assert_eq!(
-            settings
-                .profile_glossaries
-                .get("default")
-                .map(String::as_str),
-            Some("Gille = Jille")
-        );
-    }
-
-    #[test]
-    fn fabricated_candidate_fails_without_mutating_settings() {
-        let mut settings = Settings::default();
-        let fabricated = GlossarySuggestion {
-            observed: "anything".to_string(),
-            canonical: "dangerous".to_string(),
-            kind: GlossarySuggestionKind::Alias,
-            context: "Magnus Jille".to_string(),
-        };
-
-        let error = apply_reviewed_training_candidates(
-            &mut settings,
-            "Magnus Jille",
-            "Magnus Gille",
-            "default",
-            &[fabricated],
-        )
-        .unwrap_err();
-
-        assert!(error.contains("review"));
-        assert!(settings.profile_glossaries.is_empty());
-    }
-
-    #[test]
-    fn reviewed_alias_can_be_edited_or_converted_to_a_hint() {
-        let heard = "Jag använder Love a ball idag.";
-        let corrected = "Jag använder Lovable idag.";
-        let original = suggest_glossary_candidates(heard, corrected, &Glossary::default())
-            .into_iter()
-            .next()
-            .unwrap();
-
-        let mut edited = original.clone();
-        edited.canonical = "Lovable.dev".to_string();
-        let mut settings = Settings::default();
-        apply_reviewed_training_candidates(&mut settings, heard, corrected, "default", &[edited])
-            .unwrap();
-        assert_eq!(
-            settings
-                .profile_glossaries
-                .get("default")
-                .map(String::as_str),
-            Some("Lovable.dev = Love a ball")
-        );
-
-        let mut as_hint = original;
-        as_hint.kind = GlossarySuggestionKind::HintOnly;
-        let mut settings = Settings::default();
-        apply_reviewed_training_candidates(&mut settings, heard, corrected, "default", &[as_hint])
-            .unwrap();
-        assert_eq!(
-            settings
-                .profile_glossaries
-                .get("default")
-                .map(String::as_str),
-            Some("Lovable")
-        );
-    }
-
-    #[test]
-    fn auto_language_profile_fails_closed_without_mutation() {
-        let mut settings = Settings {
-            language: Language::Auto,
-            ..Default::default()
-        };
-        let heard = "Magnus Jille";
-        let corrected = "Magnus Gille";
-        let candidates = suggest_glossary_candidates(heard, corrected, &Glossary::default());
-
-        let error = apply_reviewed_training_candidates(
-            &mut settings,
-            heard,
-            corrected,
-            "default",
-            &candidates,
-        )
-        .unwrap_err();
-
-        assert!(error.contains("explicit language"));
-        assert!(settings.profile_glossaries.is_empty());
-    }
-
-    #[test]
-    fn edited_canonical_cannot_shadow_an_existing_profile_alias() {
-        let mut settings = Settings::default();
-        settings
-            .profile_glossaries
-            .insert("default".into(), "Existing = dangerous".into());
-        let original = settings.profile_glossaries.clone();
-        let heard = "Magnus Jille";
-        let corrected = "Magnus Gille";
-        let mut candidate = suggest_glossary_candidates(
-            heard,
-            corrected,
-            &Glossary::parse(&settings.effective_glossary_source(Some("default"))),
-        )
-        .into_iter()
-        .next()
-        .unwrap();
-        candidate.canonical = "Dangerous".to_string();
-
-        let error = apply_reviewed_training_candidates(
-            &mut settings,
-            heard,
-            corrected,
-            "default",
-            &[candidate],
-        )
-        .unwrap_err();
-
-        assert!(error.contains("conflicts"));
-        assert_eq!(settings.profile_glossaries, original);
-    }
-
-    #[test]
-    fn inactive_global_alias_does_not_block_reviewed_profile_term() {
-        let mut settings = Settings {
-            initial_prompt: "Existing = dangerous".to_string(),
-            ..Default::default()
-        };
-        let heard = "Magnus Jille";
-        let corrected = "Magnus Gille";
-        let mut candidate = suggest_glossary_candidates(
-            heard,
-            corrected,
-            &Glossary::parse(&settings.effective_glossary_source(Some("default"))),
-        )
-        .into_iter()
-        .next()
-        .unwrap();
-        candidate.canonical = "Dangerous".to_string();
-        apply_reviewed_training_candidates(
-            &mut settings,
-            heard,
-            corrected,
-            "default",
-            &[candidate],
-        )
-        .unwrap();
-        assert_eq!(settings.initial_prompt, "Existing = dangerous");
-        assert_eq!(settings.profile_glossaries["default"], "Dangerous = Jille");
-    }
 }
 
 #[tauri::command]
@@ -2667,52 +1804,6 @@ fn update_recovery_payload(
     Ok(Some(snapshot.payload))
 }
 
-#[cfg(test)]
-mod recovery_payload_tests {
-    use super::update_recovery_payload;
-    use crate::update_recovery::RecoverySnapshot;
-    use serde_json::{json, Value};
-
-    #[test]
-    fn missing_snapshot_is_the_only_absent_draft() {
-        assert_eq!(update_recovery_payload(None).unwrap(), None);
-        for payload in [Value::Null, json!(false), json!(1), json!(""), json!([])] {
-            let snapshot = RecoverySnapshot {
-                schema_version: 1,
-                timestamp: 1,
-                payload,
-            };
-            assert!(update_recovery_payload(Some(snapshot)).is_err());
-        }
-    }
-
-    #[test]
-    fn unsupported_envelope_version_is_not_an_absent_draft() {
-        for schema_version in [0, 2] {
-            let snapshot = RecoverySnapshot {
-                schema_version,
-                timestamp: 1,
-                payload: json!({"schema_version": 1}),
-            };
-            assert!(update_recovery_payload(Some(snapshot)).is_err());
-        }
-    }
-
-    #[test]
-    fn object_payload_is_preserved_for_strict_frontend_validation() {
-        let payload = json!({"schema_version": 1, "dictation": null, "future_field": [1, 2]});
-        let snapshot = RecoverySnapshot {
-            schema_version: 1,
-            timestamp: 1,
-            payload: payload.clone(),
-        };
-        assert_eq!(
-            update_recovery_payload(Some(snapshot)).unwrap(),
-            Some(payload)
-        );
-    }
-}
-
 #[tauri::command]
 pub async fn load_update_recovery(
     app: tauri::AppHandle,
@@ -2823,20 +1914,6 @@ fn sanitize_save_file_name(name: &str) -> String {
         base.to_string()
     } else {
         format!("{base}.txt")
-    }
-}
-
-#[cfg(test)]
-mod save_name_tests {
-    use super::sanitize_save_file_name;
-
-    #[test]
-    fn save_default_strips_directories_and_keeps_txt() {
-        assert_eq!(sanitize_save_file_name("/a/b/talk.m4a"), "talk.m4a");
-        assert_eq!(sanitize_save_file_name("C:\\audio\\talk"), "talk.txt");
-        assert_eq!(sanitize_save_file_name(""), "transcription.txt");
-        assert_eq!(sanitize_save_file_name("   "), "transcription.txt");
-        assert_eq!(sanitize_save_file_name("notes"), "notes.txt");
     }
 }
 
@@ -3426,7 +2503,7 @@ mod macos_mic {
         unsafe { msg_send![ns_string_class, stringWithUTF8String: c"soun".as_ptr()] }
     }
 
-    fn authorization_status_label(status: isize, denied_recheck_granted: bool) -> &'static str {
+    pub(super) fn authorization_status_label(status: isize, denied_recheck_granted: bool) -> &'static str {
         match status {
             0 => "not_determined",
             1 => "restricted",
@@ -3438,12 +2515,12 @@ mod macos_mic {
     }
 
     #[derive(Debug, PartialEq, Eq)]
-    enum AccessRequestDecision {
+    pub(super) enum AccessRequestDecision {
         QuerySystem,
         Complete(bool),
     }
 
-    fn access_request_decision(status: isize) -> AccessRequestDecision {
+    pub(super) fn access_request_decision(status: isize) -> AccessRequestDecision {
         match status {
             AV_AUTH_STATUS_NOT_DETERMINED | AV_AUTH_STATUS_DENIED => {
                 AccessRequestDecision::QuerySystem
@@ -3536,49 +2613,6 @@ mod macos_mic {
             let _: () = msg_send![cls, requestAccessForMediaType: media_type completionHandler: &*completion];
         }
     }
-
-    #[cfg(test)]
-    mod tests {
-        use super::{access_request_decision, authorization_status_label, AccessRequestDecision};
-
-        #[test]
-        fn maps_avfoundation_authorization_constants_correctly() {
-            assert_eq!(authorization_status_label(0, false), "not_determined");
-            assert_eq!(authorization_status_label(1, false), "restricted");
-            assert_eq!(authorization_status_label(2, false), "denied");
-            assert_eq!(authorization_status_label(3, false), "authorized");
-        }
-
-        #[test]
-        fn denied_cache_can_be_refreshed_without_remapping_authorized() {
-            assert_eq!(authorization_status_label(2, true), "authorized");
-            assert_eq!(authorization_status_label(3, false), "authorized");
-        }
-
-        #[test]
-        fn request_decision_live_queries_undetermined_and_cached_denied() {
-            assert_eq!(
-                access_request_decision(0),
-                AccessRequestDecision::QuerySystem
-            );
-            assert_eq!(
-                access_request_decision(2),
-                AccessRequestDecision::QuerySystem
-            );
-        }
-
-        #[test]
-        fn request_decision_completes_known_restricted_and_authorized_states() {
-            assert_eq!(
-                access_request_decision(1),
-                AccessRequestDecision::Complete(false)
-            );
-            assert_eq!(
-                access_request_decision(3),
-                AccessRequestDecision::Complete(true)
-            );
-        }
-    }
 }
 
 #[tauri::command]
@@ -3609,3 +2643,7 @@ pub struct LoadedModelInfo {
     is_loaded: bool,
     is_downloaded: bool,
 }
+
+#[cfg(test)]
+#[path = "commands_tests.rs"]
+mod tests;
