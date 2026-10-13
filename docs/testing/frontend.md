@@ -1,27 +1,33 @@
 # Frontend tests
 
 How the Svelte/TypeScript frontend is tested ([ADR 0004](../adr/0004-test-strategy.md),
-[#361](https://github.com/Magnus-Gille/sagascript/issues/361)). Status: Vitest, the typed IPC
-mock and Prettier are in place. Component tests need a DOM environment (happy-dom) and
-`@testing-library/svelte`; they come with ESLint and the Settings pilot (#361 phase A2). The
-owner accepted the new license families of those packages (BSD-2-Clause, BlueOak-1.0.0) for
-dev-only packages ([decision](https://github.com/Magnus-Gille/sagascript/issues/361#issuecomment-6153321272)).
+[#361](https://github.com/Magnus-Gille/sagascript/issues/361)). Status: Vitest with unit and
+component tests (happy-dom, `@testing-library/svelte`), the typed IPC mock, Prettier and
+ESLint are in place; the Settings pilot replaced two source-text tests (mapping below). Phase B
+replaces the rest. happy-dom and ESLint bring BSD-2-Clause and BlueOak-1.0.0 packages, which
+the owner accepted for dev-only packages only
+([decision](https://github.com/Magnus-Gille/sagascript/issues/361#issuecomment-6153321272),
+`reviewedDevOnlyNpmLicenses` in `scripts/generate-third-party-notices.mjs`).
 
 | Layer | Where | Command |
 |---|---|---|
-| Unit (Vitest) | `src/**/*.test.ts`, next to the module | `npm run test:unit` (`npm run test:unit:coverage`: report in `coverage/`, no gate) |
+| Unit and component (Vitest) | `src/**/*.test.ts`, next to the module or component | `npm run test:unit` (`npm run test:unit:coverage`: report in `coverage/`, no gate) |
+| Lint (ESLint) | `src/`, `scripts/`, `tests/`; `eslint.config.js` | `npm run lint` |
 | Browser flows (Playwright) | `scripts/qa-*.mjs` against `scripts/fixtures/transcription-browser-mock.js` | `npm run test:browser` |
 | Legacy source-text tests | `scripts/test-*.mjs`: the `ui` group of `scripts/node-test-groups.mjs` and the component checks in `test-release-surface.mjs` (`release` group) | `npm run test:ui`, `npm run test:release`; being replaced (phase B), add none |
 
 ## Where tests live
 
 - `src/lib/<module>.test.ts` tests `src/lib/<module>.ts` (or `.svelte.ts`); component tests
-  will be `src/lib/<Component>.test.ts`. Name tests after the behaviour they pin.
-- Shared test code lives in `src/test/`: `setup.ts` (runs before every file) and `ipc.ts`.
-  Nothing in the app imports it, so it is never bundled; `svelte-check` type-checks tests
-  like app code.
-- Import `describe`/`test`/`expect` from `"vitest"` (no globals). Tests run in Node without
-  a DOM for now and without Node types: use web APIs (`TextEncoder`, not `Buffer`).
+  are `src/lib/<Component>.test.ts` (or `<Component>.<topic>.test.ts`, such as
+  `Settings.recovery.test.ts`). Name tests after the behaviour they pin.
+- Shared test code lives in `src/test/`: `setup.ts` (runs before every file), `ipc.ts`,
+  `deferred.ts` and backends for rendering components (`settings.ts`). Nothing in the app
+  imports it, so it is never bundled; `svelte-check` type-checks tests like app code.
+- Import `describe`/`test`/`expect` from `"vitest"` (no globals). Every file runs in happy-dom
+  (a DOM in Node) with Svelte's browser runtime; logic modules stay DOM-free by design, not by
+  environment. There are no Node types (`"types": []` in `tsconfig.json`): use web APIs
+  (`TextEncoder`, not `Buffer`).
 - One file in watch mode: `npx vitest src/lib/hotkey.test.ts`; one test by name:
   `npx vitest run -t "F13 through F24"`. Vitest only strips types; `npx svelte-check
   --tsconfig ./tsconfig.json` type-checks the tests (including `@ts-expect-error` lines).
@@ -47,8 +53,9 @@ expect(ipc.callsTo("set_language")).toEqual([{ language: "fi" }]);
 ipc.handle("get_platform", () => "windows"); // change an answer mid-test
 ```
 
-- Every call is recorded in order with a copy of its arguments; results are copies too, as
-  across the real IPC boundary.
+- Every call is recorded in order with a copy of its arguments; results and event payloads
+  are copies too. Copies go through JSON, as across the real IPC boundary: an `undefined`
+  field disappears, and Svelte `$state` proxies arrive as plain values.
 - A command without a handler rejects, and `setup.ts` fails the test afterwards even if the
   code under test swallowed the rejection. Never touch real settings or recordings.
 - A new command: add it to `CommandMap` and `COMMANDS` in `ipc.ts` and a row to
@@ -67,6 +74,61 @@ expect(ipc.listenerCount("state-changed")).toBe(1);
 `emit` throws when nothing listens, which usually means the test emitted before an
 asynchronous `listen()` resolved. `EventMap` lists the events the frontend listens for with
 the payload its listeners read (TODO #347: generate from `src-tauri/src/events.rs`).
+
+## Component tests
+
+Render the component against the IPC mock and drive it the way a user does. Query by role
+and accessible name, then by visible text; never by class, markup or component internals.
+
+```ts
+import { screen, waitFor, within } from "@testing-library/svelte";
+import userEvent from "@testing-library/user-event";
+import { renderSettings, settingsBackend, settingsValue } from "../test/settings";
+
+const { ipc } = await renderSettings(
+  settingsBackend({
+    get_settings: () => settingsValue({ file_transcription_model: "pianissimo-sv" }),
+    save_update_recovery: () => undefined,
+    complete_update_preparation: () => undefined,
+  }),
+);
+const user = userEvent.setup();
+await user.click(screen.getByRole("button", { name: "Transcribe" }));
+expect(screen.getByRole("combobox", { name: "File transcription model" })).toHaveValue("pianissimo-sv");
+ipc.emit("update-preparing", "nonce-1"); // what the updater would send
+await waitFor(() => expect(ipc.callsTo("complete_update_preparation")).toEqual([{ nonce: "nonce-1", error: null }]));
+```
+
+- `renderSettings()` (`src/test/settings.ts`) mounts Settings with an answer for every command
+  it invokes while mounting and waits until its listeners are registered. For another
+  component: `mockIpc({...})`, then `render(Component, props)`; add `mockWindows("main")`
+  from `@tauri-apps/api/mocks` when it calls `getCurrentWebview()` or other window APIs.
+- The jest-dom matchers (`toBeInTheDocument`, `toHaveValue`, `toBeDisabled`, …) are
+  registered in `setup.ts`. After each test it unmounts what was rendered, then removes the
+  IPC mock.
+- Updates that depend on IPC are asynchronous: use `findBy*` or `waitFor`. To hold a command
+  mid-flight, return `deferred().promise` from its handler (`src/test/deferred.ts`) and
+  settle it later; `settle()` lets pending work run before asserting that nothing more
+  happened.
+- Spy on `console.warn` (`vi.spyOn(console, "warn").mockImplementation(() => undefined)`)
+  when a test expects a warning; Vitest fails a run with an unhandled rejection.
+
+## Lint
+
+`npm run lint` runs ESLint (`eslint.config.js`): the recommended rules of ESLint,
+typescript-eslint (including `no-explicit-any` and `no-unused-vars`) and eslint-plugin-svelte
+over `src/`, and the Node scripts in `scripts/` and `tests/`. Prettier formats; ESLint does
+not.
+
+- `eslint-suppressions.json` records the 84 findings that existed when ESLint was introduced,
+  as counts per file and rule: 29 `no-explicit-any` and most of the rest in the Settings,
+  Onboarding, FileTranscription and meeting components, one in `profile-shortcuts.ts`, the
+  others in `scripts/`. A new
+  finding fails, also in a listed file. Fixing one makes ESLint ask for
+  `npx eslint --prune-suppressions`; commit the smaller file. Do not run `--suppress-all`.
+- Two choices in the configuration itself: `no-regex-spaces` is off for `scripts/` and
+  `tests/` (the workflow tests match YAML indentation literally), and `scripts/qa-*.mjs` get
+  browser globals for their `page.evaluate()` callbacks.
 
 ## Extracting logic from a component
 
@@ -96,9 +158,9 @@ Tests reach logic through modules, not through component source:
 
 Split by the component a branch has to change, so B1–B3 can run in parallel. Assertions over
 `api.ts` text (`invoke("…", { … })`) are superseded by `src/lib/api.test.ts`: delete them.
+Each branch also fixes and prunes its component's entries in `eslint-suppressions.json` and
+can drop `.svelte` from `.prettierignore` once no source-text test reads its component.
 
-- **A2 (pilot):** `test-settings-layout.mjs`, `test-settings-recovery.mjs` (update recovery in
-  Settings.svelte).
 - **B1, Settings.svelte:** `test-language-glossary.mjs`, `test-language-switch-recovery.mjs`
   and `test-dictionary-explicit-save.mjs` (both `vm`: extract the dictionary editor and
   language-switch recovery into `.svelte.ts` controllers), `test-finnish-language.mjs`, the
@@ -113,3 +175,35 @@ Split by the component a branch has to change, so B1–B3 can run in parallel. A
 - **B3, Onboarding.svelte and App.svelte:** the onboarding and window parts of
   `test-release-surface.mjs` (release group) and the Onboarding check of
   `test-finnish-language.mjs` (coordinate the file with B1).
+
+## Settings pilot: old assertion → new test
+
+`scripts/test-settings-layout.mjs` (6 tests, 48 assert calls) and
+`scripts/test-settings-recovery.mjs` (14 tests, 97) were removed; their claims are tested in `src/lib/Settings.test.ts`
+(layout), `src/lib/Settings.recovery.test.ts` (recovery) and `src/lib/Onboarding.test.ts`.
+Assertions that only pinned an identifier, a declaration or a function signature map to the
+test of the behaviour that code exists for (`void recoveryRestore.catch(…)`, for example, to
+the failed-read test: Vitest fails a run with an unhandled rejection).
+
+| Old test (assert calls) | New tests |
+|---|---|
+| layout: build identity above the ordered tabs (9) | header test ("the build identity sits in the one header, above … tabs in that order") |
+| layout: recording shortcuts, clear mode names, independent helpers (10) | "every profile offers both recording modes, each with its own shortcut and helper" |
+| layout: a model per profile, no global picker (5) | "each profile has its own speech model picker, filled from the backend lineup for its language" |
+| layout: onboarding explains both modes (6) | Onboarding: "the last step explains both recording modes and where to configure them" |
+| layout: engine host identity, Pianissimo controls, no outdated strings (7) | header test and "… only when the host reports a version"; "Advanced offers when to prepare and when to unload Pianissimo, and saves each choice"; "… hidden when Pianissimo is unsupported"; "choosing Pianissimo for files states its platform requirement and download size"; "no tab shows outdated Pianissimo size, model or macOS version" |
+| layout: Swedish lineup from the backend, one-click switch, download first, Auto label, onboarding downloads the recommendation (11) | "a profile on a retired model is offered the recommended one, downloaded before the switch"; "a downloaded recommendation switches without a download, …"; "the file picker's Auto entry names the model Auto resolves to"; "Auto shows (recommended) …"; Onboarding: the three "speech engine download" tests (Pianissimo, KB-Whisper Medium, fallback not a retired model) |
+| recovery: restores every result as a completed, reviewable job; Discard (6) | "every stored draft comes back as a completed, reviewable result …"; "Discard recovered drafts deletes the stored drafts …" |
+| recovery: preparation snapshots dictation, files, meetings; acknowledges (11) | "the snapshot holds the open dictation, file and meeting results, then acknowledges the nonce"; "the snapshot waits for the startup restore …"; "which dictation the snapshot keeps" (5 tests); "a snapshot over the recovery limits …"; "the serialized snapshot is size-checked …"; "a failed write is reported for the active preparation …" |
+| recovery: a failed startup read blocks the update (4) | "an unreadable recovery file blocks the update and keeps the drafts" |
+| recovery: result callbacks clear entries after Copy/Save (6) | "copying or saving a recovered result removes exactly that entry …"; "not a native result the user already copied …"; "not a result the user already copied" |
+| recovery: cleanup removes only delivered drafts (8) | "copying or saving a recovered result removes exactly that entry …"; "cleanup rereads the stored drafts and never adds unsaved results"; "an edited recovered dictation still removes its stored original …" |
+| recovery: warnings name the file and the repair path (4) | "when cleanup cannot read the drafts, Copy still succeeds and the window names the repair path"; the failed-read test |
+| recovery: one queue for every recovery write (4) | "cleanup, preparation and discard write the drafts one at a time, in request order"; "Discard waits for a running cleanup …"; "a delivery that matches no stored draft writes nothing" |
+| recovery: replacement restricted to the editor lineage (14) | "a newer native result may not overwrite a recovered draft it did not come from"; "the editor that stored a dictation replaces it, and delivering a later edit removes it"; "a stored draft is removed only by delivering it from the editor it was restored into" |
+| recovery: delivery cleanup before stale-editor handling, native origin (12) | "delivering a native result acknowledges the native text it came from, even after edits"; "a recovered draft that is also the pending native result is acknowledged …"; "a result that arrives during Copy stays open while the delivered draft is removed"; "a pending native result the editor never showed blocks the update"; "a native result the user cleared from the editor does not block the update" |
+| recovery: recovered jobs never transcribe or paste (2) | "every stored draft comes back … not transcribed or pasted again" |
+| recovery: reread before any destructive write (2) | "cleanup rereads the stored drafts …" (load before save); the IPC order in the snapshot test |
+| recovery: cleanup failure does not fail Copy or Save (3) | "when cleanup cannot read the drafts, Copy still succeeds …" |
+| recovery: every stale nonce continuation is fenced (13) | "an aborted or superseded preparation never stores or acknowledges anything"; "… aborted while it waits behind another recovery write …"; "… aborted while its snapshot is being written is not acknowledged"; "a superseded preparation that fails leaves the newer one in charge"; "a failed write is reported for the active preparation, not after an abort" |
+| recovery: the native result drains before the queued capture and read (8) | "a native result still in transit is delivered to the editor before the snapshot"; the IPC order in the snapshot test |

@@ -56,7 +56,7 @@ common changes, follow the recipes in [docs/recipes/](docs/recipes/README.md).
 check (command, working directory, platforms, prerequisites, time budget, CI lanes).
 
 ```bash
-npm run verify:fast                      # inner loop: rustfmt, app clippy, svelte-check, Prettier, unit and UI node tests
+npm run verify:fast                      # inner loop: rustfmt, app clippy, svelte-check, Prettier, ESLint, unit and UI node tests
 npm run verify                           # before a PR: every default check for this OS
 npm run verify -- --keep-going           # report every failure instead of stopping at the first
 npm run verify -- --only clippy,node-ui  # checks or whole areas, including opt-in checks
@@ -92,7 +92,8 @@ npm run verify -- --list                 # every check with its commands, budget
 | `release-guard` | `release-guard` | `cargo test --release -p sagascript-core --lib dev_overrides` | Rust | test-linux |
 | `svelte-check` | `svelte-check` | `npx svelte-check --tsconfig ./tsconfig.json` | `npm ci` | test-macos |
 | `format` | `format` | `npm run format:check` (Prettier over src/, scripts/, tests/; scope in `.prettierignore`; `npm run format` fixes) | `npm ci` | test-macos, test-windows |
-| `unit` | `unit` | `npm run test:unit` (Vitest, `src/**/*.test.ts`; see [docs/testing/frontend.md](docs/testing/frontend.md)) | `npm ci` | test-macos, test-windows |
+| `lint` | `lint` | `npm run lint` (ESLint over src/, scripts/, tests/; `eslint.config.js`; findings that predate it are counted in `eslint-suppressions.json`) | `npm ci` | test-macos |
+| `unit` | `unit` | `npm run test:unit` (Vitest unit and component tests, `src/**/*.test.ts`; see [docs/testing/frontend.md](docs/testing/frontend.md)) | `npm ci` | test-macos, test-windows |
 | `node` | `node-ui`, `node-ci`, `node-release` | `npm run test:ui`, `npm run test:ci`, `npm run test:release` | `npm ci` (ui) | test-macos, test-windows (`npm run test:frontend`) |
 | `code-health` | `code-health` | `npm run test:code-health` | Node | `code-health.yml`; also in `test:frontend` |
 | `python` | `python-dictation-eval`, `python-diarization-reference`; `python-diarization` (opt-in) | `python -m unittest discover -s scripts/dictation_eval -p 'test_*.py'`; `scripts/diarization_sv` reference tests; opt-in: the full suite against a freshly built lean CLI | Python 3.10+; opt-in: `pip install -r scripts/diarization_sv/requirements-evaluation.txt` | all three; diarization: test-macos, test-linux |
@@ -134,7 +135,7 @@ cargo test -p sagascript-cli --no-default-features
 ```
 
 From the repo root: `npx svelte-check --tsconfig ./tsconfig.json`, `npm run test:unit`,
-`npm run format:check` and `npm run test:frontend`.
+`npm run format:check`, `npm run lint` and `npm run test:frontend`.
 
 #### Example: a typical feature
 
@@ -159,7 +160,7 @@ feature gate, the lean-CLI checks code that compiles only with default features,
 
 - **Rust:** Prefer clarity over cleverness. Keep modules small and testable. Run `cargo fmt --all` (plus `cargo fmt --manifest-path engine-host/ort/Cargo.toml --all` for the separate ORT host workspace) before committing; CI rejects unformatted code (`src-tauri/rustfmt.toml`).
 - **Svelte 5:** Use runes (`$state`, `$effect`), not legacy stores.
-- **TypeScript and Node scripts:** Run `npm run format` (Prettier, `prettier.config.js`) before committing; CI rejects unformatted files in `src/`, `scripts/` and `tests/` (`.svelte` files follow once #361 replaces the source-text tests).
+- **TypeScript and Node scripts:** Run `npm run format` (Prettier, `prettier.config.js`) before committing; CI rejects unformatted files in `src/`, `scripts/` and `tests/` (`.svelte` files follow once #361 replaces the source-text tests). `npm run lint` (ESLint, `eslint.config.js`) must pass too: no new `any`, no unused variables; [docs/testing/frontend.md](docs/testing/frontend.md#lint) explains `eslint-suppressions.json`.
 - **No hardcoded secrets** -- ever.
 
 ### Clippy policy lints
