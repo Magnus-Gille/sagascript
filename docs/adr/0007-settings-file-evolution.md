@@ -61,8 +61,10 @@ reproduced in #340.
 - One bad value no longer costs the user every other setting. The dropped value can be
   recovered from the `.bak` copy.
 - A repaired file keeps its bad value on disk until the next save, and warns on every load
-  until then. Its startup migrations run in memory only, so the lineup step is evaluated again
-  at each launch until a save.
+  until then. If it also has a migration pending, that migration runs in memory only, so every
+  `store::load()` until then (each launch, each settings-watcher reload, each command or engine
+  call that loads settings) takes the writer lock and runs the pending steps again. A pending
+  lineup step probes the machine each time.
 - The legacy markers are written forever. Removing one would make older releases re-migrate.
 - Adding a migration: append a step, bump `SCHEMA_VERSION`, give it a `recorded` check, add
   or update a fixture, and regenerate the snapshots with `SAGASCRIPT_BLESS_SETTINGS=1`,

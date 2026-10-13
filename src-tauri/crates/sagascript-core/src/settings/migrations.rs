@@ -265,22 +265,26 @@ thread_local! {
 }
 
 /// Test-only fault injection: while alive, the step with this version fails
-/// whenever it runs on this thread.
+/// whenever it runs on this thread. Dropping it restores what was injected
+/// before.
 #[cfg(test)]
-pub(crate) struct FailStep;
+pub(crate) struct FailStep {
+    previous: Option<u32>,
+}
 
 #[cfg(test)]
 impl FailStep {
     pub(crate) fn enable(version: u32) -> Self {
-        FAIL_STEP.with(|fail| fail.set(Some(version)));
-        Self
+        Self {
+            previous: FAIL_STEP.with(|fail| fail.replace(Some(version))),
+        }
     }
 }
 
 #[cfg(test)]
 impl Drop for FailStep {
     fn drop(&mut self) {
-        FAIL_STEP.with(|fail| fail.set(None));
+        FAIL_STEP.with(|fail| fail.set(self.previous));
     }
 }
 
@@ -834,6 +838,19 @@ mod tests {
             FileModelPreference::Whisper(WhisperModel::KbWhisperSmall)
         );
         assert_eq!(settings.default_profile().language, Language::Swedish);
+    }
+
+    #[test]
+    fn fail_step_restores_the_previous_injection() {
+        let current = || FAIL_STEP.with(std::cell::Cell::get);
+        let outer = FailStep::enable(3);
+        {
+            let _inner = FailStep::enable(5);
+            assert_eq!(current(), Some(5));
+        }
+        assert_eq!(current(), Some(3));
+        drop(outer);
+        assert_eq!(current(), None);
     }
 
     #[test]
