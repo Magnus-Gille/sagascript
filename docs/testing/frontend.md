@@ -3,14 +3,15 @@
 How the Svelte/TypeScript frontend is tested ([ADR 0004](../adr/0004-test-strategy.md),
 [#361](https://github.com/Magnus-Gille/sagascript/issues/361)). Status: Vitest, the typed IPC
 mock and Prettier are in place. Component tests need a DOM environment (happy-dom) and
-`@testing-library/svelte`; they come with ESLint and the Settings pilot (#361 phase A2), once
-the new license families of those packages (BSD-2-Clause, BlueOak-1.0.0) are reviewed.
+`@testing-library/svelte`; they come with ESLint and the Settings pilot (#361 phase A2). The
+owner accepted the new license families of those packages (BSD-2-Clause, BlueOak-1.0.0) for
+dev-only packages ([decision](https://github.com/Magnus-Gille/sagascript/issues/361#issuecomment-6153321272)).
 
 | Layer | Where | Command |
 |---|---|---|
 | Unit (Vitest) | `src/**/*.test.ts`, next to the module | `npm run test:unit` (`npm run test:unit:coverage`: report in `coverage/`, no gate) |
 | Browser flows (Playwright) | `scripts/qa-*.mjs` against `scripts/fixtures/transcription-browser-mock.js` | `npm run test:browser` |
-| Legacy source-text tests | `scripts/test-*.mjs`, `ui` group of `scripts/node-test-groups.mjs` | `npm run test:ui`; being replaced (phase B), add none |
+| Legacy source-text tests | `scripts/test-*.mjs`: the `ui` group of `scripts/node-test-groups.mjs` and the component checks in `test-release-surface.mjs` (`release` group) | `npm run test:ui`, `npm run test:release`; being replaced (phase B), add none |
 
 ## Where tests live
 
@@ -21,6 +22,9 @@ the new license families of those packages (BSD-2-Clause, BlueOak-1.0.0) are rev
   like app code.
 - Import `describe`/`test`/`expect` from `"vitest"` (no globals). Tests run in Node without
   a DOM for now and without Node types: use web APIs (`TextEncoder`, not `Buffer`).
+- One file in watch mode: `npx vitest src/lib/hotkey.test.ts`; one test by name:
+  `npx vitest run -t "F13 through F24"`. Vitest only strips types; `npx svelte-check
+  --tsconfig ./tsconfig.json` type-checks the tests (including `@ts-expect-error` lines).
 
 ## Mocking IPC
 

@@ -5,7 +5,7 @@
 import { describe, expect, test } from "vitest";
 import * as api from "./api";
 import * as reprocessing from "./meeting-reprocessing-api";
-import { COMMAND_NAMES, mockIpc, type CommandArgs, type CommandHandlers, type CommandName } from "../test/ipc";
+import { COMMAND_NAMES, mockIpc, type CommandArgs, type CommandHandlers, type CommandName, type CommandResult } from "../test/ipc";
 import type { CorrectionFile, MeetingReview, MeetingTranscript } from "./meeting-types";
 import type { MeetingReprocessingProposal, SelectedReprocessingPlan } from "./meeting-reprocessing-types";
 import type { UpdateRecoveryPayload } from "./update-recovery";
@@ -92,9 +92,14 @@ interface Contract {
   args: unknown;
 }
 
-/** `wrapper(...params)` must invoke exactly `command` with `args`. */
+/**
+ * `wrapper(...params)` must invoke exactly `command` with `args`. The wrapper
+ * must also resolve with the command's result type, so a CommandMap row that
+ * names the wrong wrapper (e.g. for `engine_status`, whose wrapper is
+ * `getEngineStatus`) fails type-checking.
+ */
 function contract<P extends unknown[], C extends CommandName>(
-  wrapper: (...args: P) => Promise<unknown>,
+  wrapper: (...args: P) => Promise<CommandResult<C>>,
   params: P,
   command: C,
   args: CommandArgs<C>,

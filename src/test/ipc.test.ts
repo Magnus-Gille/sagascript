@@ -1,4 +1,4 @@
-import { emit, listen } from "@tauri-apps/api/event";
+import { emit, listen, once } from "@tauri-apps/api/event";
 import { describe, expect, test } from "vitest";
 import { getPlatform, getSettings, setLanguage, setProfileGlossary, type Settings } from "../lib/api";
 import { COMMAND_NAMES, isCommandName, mockIpc, resetIpcMock, type EventMap } from "./ipc";
@@ -160,6 +160,19 @@ describe("events", () => {
     await listen<string>("error", (event) => seen.push(`error:${event.payload}`));
     expect(ipc.emit("state-changed", "transcribing")).toBe(2);
     expect(seen).toEqual(["a:transcribing", "b:transcribing"]);
+  });
+
+  test("once() receives one event and then unlistens by the event's id", async () => {
+    // @tauri-apps/api's once() unlistens with `event.id` from inside the
+    // handler: the id the mock delivers must be the one listen() returned.
+    const ipc = mockIpc();
+    const received: string[] = [];
+    await once<string>("state-changed", (event) => received.push(event.payload));
+    expect(ipc.emit("state-changed", "recording")).toBe(1);
+    await Promise.resolve();
+    expect(ipc.listenerCount("state-changed")).toBe(0);
+    expect(() => ipc.emit("state-changed", "idle")).toThrow(/No listener for "state-changed"/);
+    expect(received).toEqual(["recording"]);
   });
 
   test("emitting without a listener fails loudly", () => {
