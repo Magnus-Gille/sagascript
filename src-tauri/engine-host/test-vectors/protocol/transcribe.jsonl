@@ -44,7 +44,14 @@
 {"expect":{"id":20,"ok":false,"error":{"code":"bad_request","message":"<string>","retryable":false}}}
 {"send":{"v":1,"id":21,"op":"transcribe_window","offset_samples":0,"num_samples":8000,"sample_rate":16000,"format":"f32le","priority":"batch"}}
 {"expect":{"id":21,"ok":false,"error":{"code":"bad_request","message":"<string>","retryable":false}}}
-{"send":{"v":1,"id":22,"op":"unload"}}
-{"expect":{"id":22,"ok":true}}
-{"send":{"v":1,"id":23,"op":"transcribe_window","pcm_path":"/vectors/speech.f32","offset_samples":0,"num_samples":8000,"sample_rate":16000,"format":"f32le","priority":"interactive"}}
-{"expect":{"id":23,"ok":false,"error":{"code":"not_loaded","message":"No model is loaded","retryable":false}}}
+{"note":"Integer parameters must be JSON integers: a float such as 8000.0 or a boolean is a bad_request (send_raw keeps the number class)."}
+{"send_raw":"{\"v\":1,\"id\":22,\"op\":\"transcribe_window\",\"pcm_path\":\"/vectors/speech.f32\",\"offset_samples\":8000.0,\"num_samples\":8000,\"sample_rate\":16000,\"format\":\"f32le\",\"priority\":\"batch\"}"}
+{"expect":{"id":22,"ok":false,"error":{"code":"bad_request","message":"<string>","retryable":false}}}
+{"send_raw":"{\"v\":1,\"id\":23,\"op\":\"transcribe_window\",\"pcm_path\":\"/vectors/speech.f32\",\"offset_samples\":0,\"num_samples\":true,\"sample_rate\":16000,\"format\":\"f32le\",\"priority\":\"batch\"}"}
+{"expect":{"id":23,"ok":false,"error":{"code":"bad_request","message":"<string>","retryable":false}}}
+{"send_raw":"{\"v\":1,\"id\":24,\"op\":\"transcribe_window\",\"pcm_path\":\"/vectors/speech.f32\",\"offset_samples\":0,\"num_samples\":8000,\"sample_rate\":16000.0,\"format\":\"f32le\",\"priority\":\"batch\"}"}
+{"expect":{"id":24,"ok":false,"error":{"code":"bad_request","message":"<string>","retryable":false}}}
+{"send":{"v":1,"id":25,"op":"unload"}}
+{"expect":{"id":25,"ok":true}}
+{"send":{"v":1,"id":26,"op":"transcribe_window","pcm_path":"/vectors/speech.f32","offset_samples":0,"num_samples":8000,"sample_rate":16000,"format":"f32le","priority":"interactive"}}
+{"expect":{"id":26,"ok":false,"error":{"code":"not_loaded","message":"No model is loaded","retryable":false}}}

@@ -44,9 +44,11 @@ reach the client with the host's code, message and `retryable` unchanged.
 
 Envelope errors are `protocol` errors. A line that is not a JSON object, or has no integer
 `id` ≥ 1, is answered with `id` 0; a line with a usable `id` but a missing or non-string `op`, or
-`v` other than the integer 1, is answered with that `id`. Integer fields must be JSON integers
-(`2.0` is not an id). After `shutdown`, and after stdin EOF, the host answers any further
-request with `protocol`.
+`v` other than the integer 1, is answered with that `id`. Integer fields must be JSON integers,
+never floats or booleans: `2.0`, `true` and `-1` are not ids (answered with `id` 0), `1.0` is not
+the `v` 1, and a float or boolean in an integer parameter (`offset_samples`, `num_samples`,
+`sample_rate`, `target`) is `bad_request`. After `shutdown`, and after stdin EOF, the host
+answers any further request with `protocol`.
 
 **Required and optional fields.** Every field of a request or result shown below is required
 unless this document marks it optional; a missing or mistyped required field is a decode error
@@ -255,7 +257,7 @@ joint steps, tokens); `scripts/benchmark-windows-engine-host.ps1` sweeps these s
 | `load.jsonl` | `load` parameter checks, `model_missing`, `model_load_failed`, a successful `load`, `status` around `load`/`unload`, loading another model |
 | `transcribe.jsonl` | `not_loaded` before `load` and after `unload`, windows of both priorities and maximal length, engine errors `busy` (retryable), `engine`, `internal`, every `transcribe_window` parameter check |
 | `context-biasing.jsonl` | a boosted window, `no_usable_terms`, dictionaries that decode unboosted, every malformed dictionary with its fixed text |
-| `cancel.jsonl` | cancelling a queued and a running window, unknown and finished targets, `status` while busy |
+| `cancel.jsonl` | cancelling a queued and a running window, unknown and finished targets, malformed targets, `status` while busy |
 | `shutdown.jsonl` | `shutdown` cancelling a running window, exit, requests after `shutdown` |
 | `eof.jsonl` | stdin EOF failing queued and running windows |
 
@@ -263,7 +265,8 @@ Each `.jsonl` line is one step, an object with exactly one of:
 
 - `{"send": <request>}`: the client writes the request as one line. A step may add
   `"unknown_fields": [...]` naming request fields that no host knows (they must be ignored).
-- `{"send_raw": "<text>"}`: the client writes this exact line (malformed input).
+- `{"send_raw": "<text>"}`: the client writes this exact line (malformed input, or number
+  classes such as `2.0` that re-encoding a `send` step might change).
 - `{"expect": <response>}`: the host writes a response with this `id`. It is matched against the
   earliest response with that `id` not matched yet, so concurrent responses may come in any
   order; events are ignored. Objects must have exactly the same keys (a renamed, missing or extra

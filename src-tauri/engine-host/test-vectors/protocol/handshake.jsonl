@@ -33,15 +33,27 @@
 {"expect":{"id":13,"ok":false,"error":{"code":"protocol","message":"<string>","retryable":false}}}
 {"send":{"v":1,"id":14,"op":5}}
 {"expect":{"id":14,"ok":false,"error":{"code":"protocol","message":"<string>","retryable":false}}}
+{"note":"v must be the JSON integer 1: a float or a boolean is an envelope error that still echoes the id. send_raw keeps the number class, which a re-encoded send step might not."}
+{"send_raw":"{\"v\":1.0,\"id\":15,\"op\":\"ping\"}"}
+{"expect":{"id":15,"ok":false,"error":{"code":"protocol","message":"<string>","retryable":false}}}
+{"send_raw":"{\"v\":true,\"id\":16,\"op\":\"ping\"}"}
+{"expect":{"id":16,"ok":false,"error":{"code":"protocol","message":"<string>","retryable":false}}}
 {"send":{"v":1,"op":"ping"}}
 {"expect":{"id":0,"ok":false,"error":{"code":"protocol","message":"<string>","retryable":false}}}
 {"send":{"v":1,"id":0,"op":"ping"}}
 {"expect":{"id":0,"ok":false,"error":{"code":"protocol","message":"<string>","retryable":false}}}
-{"send":{"v":1,"id":"15","op":"ping"}}
+{"send":{"v":1,"id":"17","op":"ping"}}
+{"expect":{"id":0,"ok":false,"error":{"code":"protocol","message":"<string>","retryable":false}}}
+{"note":"Only a JSON integer >= 1 is a usable id: 2.0, true and -1 are answered with id 0."}
+{"send_raw":"{\"v\":1,\"id\":2.0,\"op\":\"ping\"}"}
+{"expect":{"id":0,"ok":false,"error":{"code":"protocol","message":"<string>","retryable":false}}}
+{"send_raw":"{\"v\":1,\"id\":true,\"op\":\"ping\"}"}
+{"expect":{"id":0,"ok":false,"error":{"code":"protocol","message":"<string>","retryable":false}}}
+{"send_raw":"{\"v\":1,\"id\":-1,\"op\":\"ping\"}"}
 {"expect":{"id":0,"ok":false,"error":{"code":"protocol","message":"<string>","retryable":false}}}
 {"send_raw":"not json"}
 {"expect":{"id":0,"ok":false,"error":{"code":"protocol","message":"<string>","retryable":false}}}
 {"send_raw":"[1,2,3]"}
 {"expect":{"id":0,"ok":false,"error":{"code":"protocol","message":"<string>","retryable":false}}}
-{"send":{"v":1,"id":16,"op":"ping"}}
-{"expect":{"id":16,"ok":true}}
+{"send":{"v":1,"id":18,"op":"ping"}}
+{"expect":{"id":18,"ok":true}}

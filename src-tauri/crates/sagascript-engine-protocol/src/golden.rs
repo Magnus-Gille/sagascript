@@ -45,13 +45,16 @@ pub struct Transcript {
 }
 
 impl Transcript {
-    /// The request sent with this id before `step`, if any.
-    pub fn request_for(&self, id: u64, step: usize) -> Option<&Value> {
-        self.steps[..step].iter().rev().find_map(|s| match s {
-            Step::Send { request, .. } if request.get("id").and_then(Value::as_u64) == Some(id) => {
-                Some(request)
-            }
-            _ => None,
+    /// The request sent with this id before `step`, if any. A `send_raw` line counts when it is a
+    /// JSON object whose `id` is that integer.
+    pub fn request_for(&self, id: u64, step: usize) -> Option<Value> {
+        self.steps[..step].iter().rev().find_map(|s| {
+            let request = match s {
+                Step::Send { request, .. } => request.clone(),
+                Step::SendRaw(line) => serde_json::from_str::<Value>(line).ok()?,
+                _ => return None,
+            };
+            (request.get("id").and_then(Value::as_u64) == Some(id)).then_some(request)
         })
     }
 }

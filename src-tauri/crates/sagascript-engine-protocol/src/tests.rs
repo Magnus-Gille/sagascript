@@ -349,3 +349,38 @@ fn malformed_boost_fields_are_rejected_without_echoing_the_dictionary() {
         other => panic!("{other:?}"),
     }
 }
+
+/// JSON number classes are not interchangeable (the golden transcripts pin the hosts' side): an
+/// id must be an integer >= 1, and integer parameters reject floats and booleans. `v` is checked
+/// by the hosts, not by `decode_request`.
+#[test]
+fn integer_fields_reject_floats_and_booleans() {
+    for id in ["2.0", "true", "-1", "\"2\""] {
+        let line = format!(r#"{{"v":1,"id":{id},"op":"ping"}}"#);
+        assert!(decode_request(&line).is_err(), "{line}");
+    }
+    let window = |offset: &str, num: &str, rate: &str| {
+        format!(
+            r#"{{"v":1,"id":4,"op":"transcribe_window","pcm_path":"/p","offset_samples":{offset},"num_samples":{num},"sample_rate":{rate},"format":"f32le","priority":"batch"}}"#
+        )
+    };
+    assert!(matches!(
+        decode_request(&window("0", "8000", "16000")).unwrap(),
+        ParsedRequest::Ok { id: 4, .. }
+    ));
+    for line in [
+        window("8000.0", "8000", "16000"),
+        window("0", "true", "16000"),
+        window("0", "8000", "16000.0"),
+        r#"{"v":1,"id":4,"op":"cancel","target":3.0}"#.to_string(),
+        r#"{"v":1,"id":4,"op":"cancel","target":true}"#.to_string(),
+    ] {
+        assert!(
+            matches!(
+                decode_request(&line).unwrap(),
+                ParsedRequest::BadParams { id: 4, .. }
+            ),
+            "{line}"
+        );
+    }
+}

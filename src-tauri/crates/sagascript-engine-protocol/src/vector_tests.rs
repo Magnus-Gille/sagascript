@@ -50,7 +50,10 @@ fn answers(t: &Transcript) -> Vec<(usize, Value, Option<String>)> {
                     "{}: step {index} expects id {id}, which no earlier request used",
                     t.name
                 );
-                let op = request.and_then(|r| r["op"].as_str()).map(str::to_string);
+                let op = request
+                    .as_ref()
+                    .and_then(|r| r["op"].as_str())
+                    .map(str::to_string);
                 Some((index, expected.clone(), op))
             }
             _ => None,
@@ -346,23 +349,33 @@ fn answer_to(t: &Transcript, id: u64, step: usize) -> Option<&Value> {
 
 /// Requests decode as the hosts answer them, and the ones a host accepts use only field names
 /// the types know: decoding and encoding again reproduces every field the request carries.
+/// A `send_raw` line is decoded as written, so it keeps number classes such as `2.0`.
 #[test]
 fn golden_requests_decode_as_the_hosts_answer_them() {
     for t in transcripts() {
         for (index, step) in t.steps.iter().enumerate() {
             let at = format!("{} step {index}", t.name);
-            let (request, unknown) = match step {
+            let (request, unknown, line) = match step {
                 Step::Send {
                     request,
                     unknown_fields,
-                } => (request, unknown_fields),
-                Step::SendRaw(line) => {
-                    assert!(decode_request(line).is_err(), "{at}");
-                    continue;
-                }
+                } => (
+                    request.clone(),
+                    unknown_fields.as_slice(),
+                    request.to_string(),
+                ),
+                Step::SendRaw(line) => match serde_json::from_str::<Value>(line) {
+                    Ok(request) if request.is_object() => (request, &[][..], line.clone()),
+                    _ => {
+                        assert!(decode_request(line).is_err(), "{at}");
+                        answer_to(&t, 0, index).unwrap_or_else(|| panic!("{at}: no answer"));
+                        continue;
+                    }
+                },
                 _ => continue,
             };
-            let parsed = decode_request(&request.to_string());
+            let request = &request;
+            let parsed = decode_request(&line);
             let id = request["id"].as_u64().filter(|id| *id >= 1);
             let answer =
                 answer_to(&t, id.unwrap_or(0), index).unwrap_or_else(|| panic!("{at}: no answer"));

@@ -27,10 +27,15 @@
 {"expect":{"id":19,"ok":false,"error":{"code":"bad_request","message":"<string>","retryable":false}}}
 {"send":{"v":1,"id":20,"op":"cancel","target":"11"}}
 {"expect":{"id":20,"ok":false,"error":{"code":"bad_request","message":"<string>","retryable":false}}}
-{"send":{"v":1,"id":21,"op":"cancel","target":11}}
-{"expect":{"id":21,"ok":true,"cancelled":true}}
+{"note":"target must be a JSON integer: 11.0 or true is a bad_request and cancels nothing (window 11 is still held below)."}
+{"send_raw":"{\"v\":1,\"id\":21,\"op\":\"cancel\",\"target\":11.0}"}
+{"expect":{"id":21,"ok":false,"error":{"code":"bad_request","message":"<string>","retryable":false}}}
+{"send_raw":"{\"v\":1,\"id\":22,\"op\":\"cancel\",\"target\":true}"}
+{"expect":{"id":22,"ok":false,"error":{"code":"bad_request","message":"<string>","retryable":false}}}
+{"send":{"v":1,"id":23,"op":"cancel","target":11}}
+{"expect":{"id":23,"ok":true,"cancelled":true}}
 {"expect":{"id":11,"ok":false,"error":{"code":"cancelled","message":"<string>","retryable":false}}}
-{"send":{"v":1,"id":22,"op":"status"}}
-{"expect":{"id":22,"ok":true,"state":"ready","model_id":"vectors-model","in_flight":0,"rss_bytes":"<uint>","uptime_s":"<number>"}}
-{"send":{"v":1,"id":23,"op":"transcribe_window","pcm_path":"/vectors/speech.f32","offset_samples":0,"num_samples":8000,"sample_rate":16000,"format":"f32le","priority":"batch"}}
-{"expect":{"id":23,"ok":true,"tokens":[{"id":0,"text":"▁hej","start":0.0,"duration":0.08,"confidence":0.98},{"id":1,"text":"san","start":0.16,"duration":0.08,"confidence":0.5}],"audio_s":0.5,"timings":{"preprocess_ms":1,"encode_ms":2,"decode_ms":3}}}
+{"send":{"v":1,"id":24,"op":"status"}}
+{"expect":{"id":24,"ok":true,"state":"ready","model_id":"vectors-model","in_flight":0,"rss_bytes":"<uint>","uptime_s":"<number>"}}
+{"send":{"v":1,"id":25,"op":"transcribe_window","pcm_path":"/vectors/speech.f32","offset_samples":0,"num_samples":8000,"sample_rate":16000,"format":"f32le","priority":"batch"}}
+{"expect":{"id":25,"ok":true,"tokens":[{"id":0,"text":"▁hej","start":0.0,"duration":0.08,"confidence":0.98},{"id":1,"text":"san","start":0.16,"duration":0.08,"confidence":0.5}],"audio_s":0.5,"timings":{"preprocess_ms":1,"encode_ms":2,"decode_ms":3}}}
