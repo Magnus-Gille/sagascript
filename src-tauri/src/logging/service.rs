@@ -147,14 +147,10 @@ impl LoggingService {
 
     /// Unit tests (including `AppController::new()`, which builds a real
     /// `LoggingService`) must never write into the user's real app log, so
-    /// under `cfg(test)` the directory is a per-process temp directory. It
-    /// lives in a static for the whole test process, so it is never removed.
+    /// under `cfg(test)` the directory is a per-process temp directory.
     #[cfg(test)]
     fn log_directory() -> PathBuf {
-        static DIRECTORY: OnceLock<sagascript_testsupport::TempDir> = OnceLock::new();
-        DIRECTORY
-            .get_or_init(sagascript_testsupport::TempDir::new)
-            .to_path_buf()
+        std::env::temp_dir().join(format!("sagascript-test-logs-{}", std::process::id()))
     }
 
     #[cfg(not(test))]
