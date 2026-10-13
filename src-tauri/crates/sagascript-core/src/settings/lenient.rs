@@ -5,8 +5,11 @@
 //! added or a hand-edited wrong type, used to load the whole file as
 //! defaults, and the next save wrote those defaults over every other value
 //! (#340). Instead only that top-level field takes its default. A field is
-//! the unit: a bad value nested inside one (say, one profile's language)
-//! resets the whole field, so no half-read structure is ever kept.
+//! the unit: a bad value nested inside one resets the whole field, so no
+//! half-read structure is kept. The exception is a list of independent
+//! entries ([`PER_ENTRY`]): one dictation profile with, say, a language a
+//! newer release added is dropped alone, and the other profiles are kept.
+//! The store treats `profile_models` the same way, per entry.
 //!
 //! The store reports the reset fields by name, never by value. The file
 //! itself is not strictly valid, so every save first preserves its exact
@@ -24,10 +27,15 @@ pub(crate) struct Decoded {
     pub reset: Vec<String>,
 }
 
+/// List fields whose entries are independent: an entry that does not decode
+/// is dropped and the field keeps the others, but still counts as reset.
+const PER_ENTRY: &[&str] = &["hotkey_profiles"];
+
 /// Decode `object` as [`Settings`]. A strictly valid object decodes as it
 /// is. Otherwise each top-level field that does not decode on its own is
-/// reset and the rest decodes; unknown keys never count as invalid. Fails
-/// only if the object is invalid without any single field to blame.
+/// reset (a [`PER_ENTRY`] field keeps its entries that decode) and the rest
+/// decodes; unknown keys never count as invalid. Fails only if the object
+/// is invalid without any single field to blame.
 pub(crate) fn decode(object: &Object) -> Result<Decoded, String> {
     let strict_error = match serde_json::from_value(Value::Object(object.clone())) {
         Ok(settings) => {
@@ -49,11 +57,35 @@ pub(crate) fn decode(object: &Object) -> Result<Decoded, String> {
     reset.sort();
     let mut rest = object.clone();
     for key in &reset {
-        rest.remove(key);
+        match object
+            .get(key)
+            .and_then(|value| readable_entries(key, value))
+        {
+            Some(entries) => rest.insert(key.clone(), entries),
+            None => rest.remove(key),
+        };
     }
     let settings =
         serde_json::from_value(Value::Object(rest)).map_err(|error| error.to_string())?;
     Ok(Decoded { settings, reset })
+}
+
+/// The entries of a [`PER_ENTRY`] field's list that decode, unless none do.
+fn readable_entries(key: &str, value: &Value) -> Option<Value> {
+    if !PER_ENTRY.contains(&key) {
+        return None;
+    }
+    let entries: Vec<Value> = value
+        .as_array()?
+        .iter()
+        .filter(|entry| decodes_alone(key, &Value::Array(vec![(*entry).clone()])))
+        .cloned()
+        .collect();
+    if entries.is_empty() {
+        return None;
+    }
+    let entries = Value::Array(entries);
+    decodes_alone(key, &entries).then_some(entries)
 }
 
 /// Whether `key: value` decodes as [`Settings`] with every other field at
@@ -110,15 +142,42 @@ mod tests {
     fn a_bad_nested_value_resets_its_whole_field() {
         let decoded = decode(&object(json!({
             "language": "sv",
-            "hotkey_profiles": [
-                {"id": "default", "name": "Svenska", "shortcut": "Option+Space", "language": "sv"},
-                {"id": "german", "name": "Deutsch", "shortcut": "Option+D", "language": "de"}
-            ]
+            "profile_glossaries": {"default": "merge = merch", "english": 5}
+        })))
+        .unwrap();
+        assert_eq!(decoded.reset, ["profile_glossaries"]);
+        assert!(decoded.settings.profile_glossaries.is_empty());
+        assert_eq!(decoded.settings.language, Language::Swedish);
+    }
+
+    #[test]
+    fn an_unreadable_profile_is_dropped_alone() {
+        let svenska = json!({"id": "default", "name": "Svenska", "shortcut": "Option+Space", "language": "sv"});
+        let deutsch =
+            json!({"id": "german", "name": "Deutsch", "shortcut": "Option+D", "language": "de"});
+        let english =
+            json!({"id": "english", "name": "English", "shortcut": "Option+E", "language": "en"});
+        let decoded = decode(&object(json!({
+            "language": "sv",
+            "hotkey_profiles": [svenska, deutsch, english, "not a profile"]
         })))
         .unwrap();
         assert_eq!(decoded.reset, ["hotkey_profiles"]);
-        assert!(decoded.settings.hotkey_profiles.is_empty());
+        let ids: Vec<&str> = decoded
+            .settings
+            .hotkey_profiles
+            .iter()
+            .map(|profile| profile.id.as_str())
+            .collect();
+        assert_eq!(ids, ["default", "english"]);
         assert_eq!(decoded.settings.language, Language::Swedish);
+
+        // With no profile left, or no list at all, the whole field resets.
+        for unreadable in [json!([deutsch]), json!("not a list")] {
+            let decoded = decode(&object(json!({"hotkey_profiles": unreadable}))).unwrap();
+            assert_eq!(decoded.reset, ["hotkey_profiles"]);
+            assert!(decoded.settings.hotkey_profiles.is_empty());
+        }
     }
 
     #[test]

@@ -469,7 +469,7 @@ fn settings_from_file_object(
         .map_err(|reason| SettingsParseError::Schema(format!("invalid settings: {reason}")))?;
     if !decoded.reset.is_empty() {
         tracing::warn!(
-            "Settings file {} has {}; using their defaults. The file keeps them until the next save, which first saves a recovery copy of it",
+            "Settings file {} has {}; ignoring what cannot be read. The file keeps it until the next save, which first saves a recovery copy of it",
             path.display(),
             invalid_fields(&decoded.reset)
         );
@@ -541,21 +541,19 @@ fn defaults_for(path: &Path) -> Settings {
 /// be read or parsed at all loads as defaults. Saving over an invalid file
 /// preserves its bytes first (see [`save_to`]).
 pub fn load_from(path: &Path) -> Settings {
-    load_or_defaults(path, None)
-}
-
-/// [`load_checked`], or defaults for a file that cannot be loaded.
-fn load_or_defaults(path: &Path, machine: Option<&dyn MachineProbe>) -> Settings {
-    load_checked(path, machine).map_or_else(
-        |error| {
-            tracing::warn!(
-                "Failed to load settings file at {} ({error}) — falling back to defaults",
-                path.display()
-            );
-            defaults_for(path)
-        },
+    load_checked(path, None).map_or_else(
+        |error| defaults_after_failed_load(path, &error),
         |loaded| loaded.settings,
     )
+}
+
+/// The settings a load of a file [`load_checked`] could not load returns.
+fn defaults_after_failed_load(path: &Path, error: &SettingsLoadError) -> Settings {
+    tracing::warn!(
+        "Failed to load settings file at {} ({error}) — falling back to defaults",
+        path.display()
+    );
+    defaults_for(path)
 }
 
 /// Persist settings to disk using read-merge-write to preserve unknown or
@@ -620,7 +618,8 @@ where
 /// startup load does, with every pending migration step, machine state
 /// included: the save records `schema_version` and the steps' markers, so a
 /// step left pending here would run at the next start over the value the
-/// user has just chosen.
+/// user has just chosen. A file that cannot be loaded is updated from
+/// defaults, so the save first preserves its bytes (see [`save_over`]).
 fn update_locked<F>(
     path: &Path,
     sources: impl IntoIterator<Item = PathBuf>,
@@ -632,9 +631,12 @@ where
 {
     with_settings_lock(path, || {
         migrate_legacy_identifier_settings_locked(path, sources);
-        let mut settings = load_or_defaults(path, Some(machine));
+        let (mut settings, load_failure) = match load_checked(path, Some(machine)) {
+            Ok(loaded) => (loaded.settings, None),
+            Err(error) => (defaults_after_failed_load(path, &error), Some(error)),
+        };
         mutate(&mut settings)?;
-        save_to(path, &settings)?;
+        save_over(path, &settings, load_failure.as_ref())?;
         Ok(settings)
     })
 }
@@ -676,6 +678,18 @@ where
 /// Persist settings to a specific path. Test seam for `save`, which always
 /// targets `settings_path()`. Caller must hold the settings lock.
 fn save_to(path: &Path, settings: &Settings) -> Result<(), String> {
+    save_over(path, settings, None)
+}
+
+/// [`save_to`] for settings that come from a load of `path`. `load_failure`
+/// is why that load could not use the file: the file is then preserved
+/// before it is replaced even if it reads as valid settings (a migration
+/// step failed on it, say), because the settings written are defaults.
+fn save_over(
+    path: &Path,
+    settings: &Settings,
+    load_failure: Option<&SettingsLoadError>,
+) -> Result<(), String> {
     let dir = path
         .parent()
         .map(|p| p.to_path_buf())
@@ -687,7 +701,7 @@ fn save_to(path: &Path, settings: &Settings) -> Result<(), String> {
     // Read existing file to preserve non-settings keys. This is the one place
     // every settings write passes through, so it is also where an unreadable
     // or invalid file is protected before anything is replaced.
-    let (mut map, recovered) = existing_settings_for_merge(path)?;
+    let (mut map, recovered) = existing_settings_for_merge(path, load_failure)?;
     let written = merge_and_write(path, settings, &mut map);
     if let Some(recovered) = recovered {
         return match written {
@@ -753,13 +767,16 @@ struct RecoveredSettings {
 ///
 /// - Missing: an empty object.
 /// - Unreadable: an error, so the file is never replaced.
-/// - Valid settings: its object, so unknown keys survive.
+/// - Valid settings, unless `load_failure` says their load failed: its
+///   object, so unknown keys survive.
 /// - Invalid settings: its exact bytes are first preserved by
 ///   [`preserve_invalid_settings`] (an error if that fails, so nothing is
-///   written). Then its object for a schema error, so unknown keys survive, or
-///   an empty object for a syntax error, plus where the copy went.
+///   written). Then its object for a schema error or a failed load, so
+///   unknown keys survive, or an empty object for a syntax error, plus where
+///   the copy went.
 fn existing_settings_for_merge(
     path: &Path,
+    load_failure: Option<&SettingsLoadError>,
 ) -> Result<
     (
         serde_json::Map<String, serde_json::Value>,
@@ -781,10 +798,11 @@ fn existing_settings_for_merge(
     };
     // The load already reported any ignored profile-model entries.
     let (problem, merge_base) = match parse_settings_object(&contents) {
-        Err(problem) => (problem, serde_json::Map::new()),
-        Ok(object) => match check_settings_object(object.clone()) {
-            Ok(()) => return Ok((object, None)),
-            Err(problem) => (problem, object),
+        Err(problem) => (problem.to_string(), serde_json::Map::new()),
+        Ok(object) => match (check_settings_object(object.clone()), load_failure) {
+            (Ok(()), None) => return Ok((object, None)),
+            (Ok(()), Some(failure)) => (failure.to_string(), object),
+            (Err(problem), _) => (problem.to_string(), object),
         },
     };
     let recovery = preserve_invalid_settings(path, &contents).map_err(|error| {
@@ -796,7 +814,7 @@ fn existing_settings_for_merge(
     Ok((
         merge_base,
         Some(RecoveredSettings {
-            problem: problem.to_string(),
+            problem,
             copy: recovery,
         }),
     ))
@@ -2618,15 +2636,28 @@ mod tests {
     }
 
     #[test]
-    fn an_invalid_value_nested_in_a_field_resets_the_whole_field() {
+    fn an_unreadable_profile_is_dropped_alone_and_preserved_before_a_save() {
         with_temp_settings(|path| {
+            // A language a newer release added, in the second of two profiles.
             let mut map = every_field_set();
             map["hotkey_profiles"][1]["language"] = "de".into();
-            fs::write(&path, serde_json::to_vec(&map).unwrap()).unwrap();
-            let loaded = load_from(&path);
-            assert_only_reset(&loaded, &["hotkey_profiles"]);
-            // Without explicit profiles the legacy default profile applies.
-            assert_eq!(loaded.default_profile().shortcut, "Option+Space");
+            let original = serde_json::to_vec(&map).unwrap();
+            fs::write(&path, &original).unwrap();
+
+            let mut kept = every_field_set();
+            kept["hotkey_profiles"] = serde_json::json!([kept["hotkey_profiles"][0].clone()]);
+            let kept: Settings = serde_json::from_value(serde_json::Value::Object(kept)).unwrap();
+            let kept = serde_json::to_value(kept).unwrap();
+            assert_eq!(serde_json::to_value(load_from(&path)).unwrap(), kept);
+            assert_eq!(serde_json::to_value(startup_load(&path)).unwrap(), kept);
+            assert_file_bytes(&path, &original);
+
+            update_at(&path, |settings| settings.beam_size = 9).unwrap();
+            assert_file_bytes(recovery_copy_path(&path, 0), &original);
+            let raw: serde_json::Value =
+                serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+            assert_eq!(raw["hotkey_profiles"], kept["hotkey_profiles"]);
+            assert_eq!(raw["beam_size"], 9);
         });
     }
 
@@ -2910,6 +2941,42 @@ mod tests {
                 assert_file_bytes(&path, original);
                 assert!(!recovery_copy_path(&path, 0).exists());
                 assert!(!global_glossary_path_for_settings(&path).exists());
+            });
+        }
+    }
+
+    #[test]
+    fn a_failing_migration_step_never_silently_replaces_the_file() {
+        // Strictly valid, with the profile-models step (3) pending.
+        let original: &[u8] =
+            br#"{"language":"sv","beam_size":3,"show_overlay":false,"future_key":1}"#;
+        for fallible in [false, true] {
+            with_temp_settings(|path| {
+                fs::write(&path, original).unwrap();
+                let _failing = migrations::FailStep::enable(3);
+
+                // The startup load uses defaults in memory and leaves the file alone.
+                assert_eq!(startup_load(&path).beam_size, Settings::default().beam_size);
+                assert_file_bytes(&path, original);
+                assert!(!recovery_copy_path(&path, 0).exists());
+
+                // A field update can only start from defaults, so it first
+                // preserves the file, like one that does not parse (#340).
+                let updated = if fallible {
+                    try_update_at(&path, |settings| {
+                        settings.beam_size = 9;
+                        Ok(())
+                    })
+                } else {
+                    update_at(&path, |settings| settings.beam_size = 9)
+                }
+                .unwrap();
+                assert_eq!(updated.beam_size, 9);
+                assert_file_bytes(recovery_copy_path(&path, 0), original);
+                let raw: serde_json::Value =
+                    serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+                assert_eq!(raw["beam_size"], 9);
+                assert_eq!(raw["future_key"], 1);
             });
         }
     }

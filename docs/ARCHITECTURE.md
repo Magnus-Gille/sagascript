@@ -171,14 +171,12 @@ Rules: write through `store::update`/`try_update` (never `save()` a possibly sta
 release the file lock before taking the controller lock; the watcher replays only hotkey
 registration, Pianissimo warm/unload and the profiles menu, so side effects that live in a
 setter (for example `overlay::on_show_overlay_changed`, the VAD model download in
-`set_vad_enabled`) do not run for CLI edits. A typed parse error makes `load_from` return
-`Settings::default()` with a warning. Migrations today: serde aliases,
-`canonicalize_legacy_keys`, legacy identifier copy, the version markers
-`model_lineup_version` / `engine_defaults_version`, and `materialize_profile_models` /
-`migrate_global_glossary_to_profiles` on every load. **Planned:**
-[#365](https://github.com/Magnus-Gille/sagascript/issues/365) (`schema_version`, ordered
-migrations, no silent reset) and [#373](https://github.com/Magnus-Gille/sagascript/issues/373)
-(one implementation per CLI/app operation).
+`set_vad_enabled`) do not run for CLI edits. A value that does not read resets only its field,
+with a warning, and a save over such a file first preserves its bytes as `.bak`. Migrations are
+the ordered steps in `settings/migrations.rs`, recorded as `schema_version` plus the legacy
+markers, and the copy from legacy locations ([ADR 0007](adr/0007-settings-file-evolution.md)).
+**Planned:** [#373](https://github.com/Magnus-Gille/sagascript/issues/373) (one implementation
+per CLI/app operation).
 
 ### 2.3 Updater phases
 

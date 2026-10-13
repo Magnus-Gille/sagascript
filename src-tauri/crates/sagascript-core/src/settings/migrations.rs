@@ -231,6 +231,14 @@ pub(crate) fn migrate(
             (Apply::Machine(apply), Some(machine)) => Some(apply(object, machine)),
             (Apply::Machine(_), None) => None,
         };
+        #[cfg(test)]
+        let result = result.map(|result| {
+            if FAIL_STEP.with(std::cell::Cell::get) == Some(step.version) {
+                Err("injected failure".to_string())
+            } else {
+                result
+            }
+        });
         let applied = match result {
             Some(Ok(())) => true,
             Some(Err(reason)) => {
@@ -249,6 +257,31 @@ pub(crate) fn migrate(
     let to = reached.min(SCHEMA_VERSION);
     object.insert(SCHEMA_VERSION_KEY.to_string(), Value::from(to));
     Ok(Migration { from, to })
+}
+
+#[cfg(test)]
+thread_local! {
+    static FAIL_STEP: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+}
+
+/// Test-only fault injection: while alive, the step with this version fails
+/// whenever it runs on this thread.
+#[cfg(test)]
+pub(crate) struct FailStep;
+
+#[cfg(test)]
+impl FailStep {
+    pub(crate) fn enable(version: u32) -> Self {
+        FAIL_STEP.with(|fail| fail.set(Some(version)));
+        Self
+    }
+}
+
+#[cfg(test)]
+impl Drop for FailStep {
+    fn drop(&mut self) {
+        FAIL_STEP.with(|fail| fail.set(None));
+    }
 }
 
 /// Step 1. Pre-release builds stored the onboarding flag under the Tauri

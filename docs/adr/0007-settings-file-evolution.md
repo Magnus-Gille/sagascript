@@ -43,11 +43,13 @@ the original bytes first.
 4. **Lenient per-field parsing.** If the object does not decode strictly, each top-level field
    that does not decode alone takes its default. A bad value nested inside a field resets the
    whole field. The rest is kept, and the reset fields are logged by name, never by value.
-   `profile_models` stays lenient per entry: an entry that does not read (a model id from a
-   newer release) is dropped alone, and that counts as a reset of `profile_models`.
+   `hotkey_profiles` and `profile_models` are lenient per entry: an entry that does not read
+   (a language or model id from a newer release) is dropped alone, and the field counts as
+   reset.
 5. **Preserve the bytes before any replacement** (from #340). A write over a file that does not
-   decode strictly first saves its exact bytes as `settings.json.bak[.N]`. The startup load
-   never rewrites a file it could not load or had to repair. Only an explicit save does.
+   decode strictly, or that the field update could not load (a migration step failed), first
+   saves its exact bytes as `settings.json.bak[.N]`. The startup load never rewrites a file it
+   could not load or had to repair. Only an explicit save does.
 
 This reverses the July 2026 deferral of "preserve parseable fields" because of the data loss
 reproduced in #340.
@@ -60,8 +62,10 @@ reproduced in #340.
   until then. Its startup migrations run in memory only, so the lineup step is evaluated again
   at each launch until a save.
 - The legacy markers are written forever. Removing one would make older releases re-migrate.
-- Adding a migration: append a step, bump `SCHEMA_VERSION`, give it a `recorded` check (or
-  rely on `schema_version` alone when no older release can undo it), add or update a fixture,
-  and regenerate the snapshots with `SAGASCRIPT_BLESS_SETTINGS=1`, reviewing the diff.
+- Adding a migration: append a step, bump `SCHEMA_VERSION`, give it a `recorded` check, add
+  or update a fixture, and regenerate the snapshots with `SAGASCRIPT_BLESS_SETTINGS=1`,
+  reviewing the diff. A step that changes a value is guarded by a marker of its own: a file
+  from a newer release is written back with this build's version, so `schema_version` alone
+  cannot keep a step from running again.
 - The probes for machine state still reach `crate::transcription` from the store. That
   module cycle is #372.
