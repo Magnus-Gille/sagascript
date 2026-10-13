@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { appImportedPackages, npmLicenseError, shippedNpmClosure } from "./lib/npm-license-policy.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const outputPath = join(root, "THIRD_PARTY_NOTICES.md");
@@ -30,20 +31,8 @@ function npmInstallationError(pkg, installedVersion, directoryExists) {
   return null;
 }
 
-// Reviewed npm license expressions, as exact SPDX strings (see the Rust list
-// below for why this is an allowlist). Every npm package must use one of these.
-const reviewedNpmLicenses = new Set(["0BSD", "Apache-2.0", "Apache-2.0 OR MIT", "BSD-3-Clause", "ISC", "MIT", "MIT OR Apache-2.0"]);
-
-// Reviewed only for dev-only npm packages: lockfile entries marked
-// `"dev": true`, which the production dependency tree never contains (test,
-// lint and build tooling). `"devOptional": true` does not count: such a
-// package is optional in the production tree. A runtime dependency with one
-// of these licenses still fails and needs a new owner decision. Decision:
-// https://github.com/Magnus-Gille/sagascript/issues/361#issuecomment-6153321272
-const reviewedDevOnlyNpmLicenses = new Set(["BSD-2-Clause", "BlueOak-1.0.0"]);
-
 /** The inventory record for one `packages` entry of package-lock.json (v3). */
-function npmPackageFromLock(path, entry) {
+function npmPackageFromLock(path, entry, shipped) {
   const name = path.slice(path.lastIndexOf("node_modules/") + "node_modules/".length);
   return {
     ecosystem: "npm",
@@ -54,19 +43,10 @@ function npmPackageFromLock(path, entry) {
     directory: join(root, path),
     optional: entry.optional === true,
     devOnly: entry.dev === true,
+    // In the closure of what the app bundle can contain (see
+    // scripts/lib/npm-license-policy.mjs: "dev" does not mean "not shipped").
+    shipped: shipped.has(path),
   };
-}
-
-function npmLicenseError(pkg) {
-  const id = `npm ${pkg.name}@${pkg.version}`;
-  if (!pkg.license) return `${id} has no SPDX license`;
-  if (reviewedNpmLicenses.has(pkg.license)) return null;
-  if (reviewedDevOnlyNpmLicenses.has(pkg.license)) {
-    return pkg.devOnly
-      ? null
-      : `${id} has license ${pkg.license}, which is reviewed for dev-only packages only, not for runtime dependencies`;
-  }
-  return `${id} has unreviewed license: ${pkg.license}`;
 }
 
 if (mode === "--test-sort") {
@@ -117,31 +97,69 @@ if (mode === "--test-newline-normalization") {
 }
 
 if (mode === "--test-dev-only-licenses") {
-  // Lockfile v3 entries: "dev" marks a package only dev dependencies reach;
-  // "devOptional" one that is also optional in the production tree.
-  const entry = (license, flags = {}) => npmPackageFromLock("node_modules/example", { version: "1.0.0", license, ...flags });
-  const runtimeOnly = (license) =>
-    `npm example@1.0.0 has license ${license}, which is reviewed for dev-only packages only, not for runtime dependencies`;
-  const cases = [
-    [entry("MIT"), null],
-    [entry("MIT", { dev: true }), null],
-    [entry("BSD-2-Clause", { dev: true }), null],
-    [entry("BlueOak-1.0.0", { dev: true }), null],
-    [entry("BSD-2-Clause"), runtimeOnly("BSD-2-Clause")],
-    [entry("BlueOak-1.0.0"), runtimeOnly("BlueOak-1.0.0")],
-    [entry("BSD-2-Clause", { optional: true }), runtimeOnly("BSD-2-Clause")],
-    [entry("BSD-2-Clause", { devOptional: true }), runtimeOnly("BSD-2-Clause")],
-    [entry("BlueOak-1.0.0", { devOptional: true, optional: true }), runtimeOnly("BlueOak-1.0.0")],
-    [entry("BSD-2-Clause", { dev: "true" }), runtimeOnly("BSD-2-Clause")],
-    [entry("GPL-3.0-only", { dev: true }), "npm example@1.0.0 has unreviewed license: GPL-3.0-only"],
-    [entry("BSD-2-Clause OR MIT", { dev: true }), "npm example@1.0.0 has unreviewed license: BSD-2-Clause OR MIT"],
-    [entry(undefined, { dev: true }), "npm example@1.0.0 has no SPDX license"],
+  // A synthetic package-lock.json (v3). The project depends on runtime-dep,
+  // which needs nested (installed under it) and hoisted; app code under src/
+  // imports entities, a dev dependency (as svelte is); tooling is a dev
+  // dependency nothing imports; opt is devOptional; vite injects its
+  // module-preload polyfill but its own dependencies stay build-time only.
+  const packages = {
+    "": { dependencies: { "runtime-dep": "^1.0.0" }, devDependencies: { entities: "^7.0.0", tooling: "^1.0.0", vite: "^6.0.0" } },
+    "node_modules/runtime-dep": { version: "1.0.0", license: "MIT", dependencies: { nested: "^2.0.0", hoisted: "^1.0.0" } },
+    "node_modules/runtime-dep/node_modules/nested": { version: "2.0.0", license: "BlueOak-1.0.0" },
+    "node_modules/nested": { version: "1.0.0", license: "BSD-2-Clause", dev: true },
+    "node_modules/hoisted": { version: "1.0.0", license: "BSD-2-Clause" },
+    "node_modules/entities": { version: "7.0.1", license: "BSD-2-Clause", dev: true },
+    "node_modules/tooling": { version: "1.0.0", license: "BSD-2-Clause", dev: true, dependencies: { "tooling-dep": "^1.0.0" } },
+    "node_modules/tooling-dep": { version: "1.0.0", license: "BlueOak-1.0.0", dev: true },
+    "node_modules/opt": { version: "1.0.0", license: "BSD-2-Clause", devOptional: true, optional: true },
+    "node_modules/vite": { version: "6.4.3", license: "MIT", dev: true, dependencies: { rollup: "^4.0.0" } },
+    "node_modules/rollup": { version: "4.0.0", license: "BlueOak-1.0.0", dev: true },
+    "node_modules/gpl-tool": { version: "1.0.0", license: "GPL-3.0-only", dev: true },
+    "node_modules/compound": { version: "1.0.0", license: "BSD-2-Clause OR MIT", dev: true },
+    "node_modules/unlicensed": { version: "1.0.0", dev: true },
+  };
+  const shipped = shippedNpmClosure(packages, ["entities"]);
+  const expectedShipped = [
+    "node_modules/entities",
+    "node_modules/hoisted",
+    "node_modules/runtime-dep",
+    "node_modules/runtime-dep/node_modules/nested",
+    "node_modules/vite",
   ];
-  for (const [pkg, expected] of cases) {
-    const actual = npmLicenseError(pkg);
-    if (actual !== expected) {
-      throw new Error(`Unexpected npm license result for ${JSON.stringify(pkg)}: ${actual}`);
-    }
+  if ([...shipped].sort().join("\n") !== expectedShipped.join("\n")) {
+    throw new Error(`Unexpected shipped closure: ${[...shipped].sort().join(", ")}`);
+  }
+  const shippedError = (id, license) =>
+    `npm ${id} has license ${license}, which is reviewed for dev-only tooling only; the app bundle can contain this package (src/ or a runtime dependency reaches it)`;
+  const expected = {
+    "node_modules/runtime-dep": null,
+    "node_modules/runtime-dep/node_modules/nested": shippedError("nested@2.0.0", "BlueOak-1.0.0"),
+    "node_modules/nested": null,
+    "node_modules/hoisted": shippedError("hoisted@1.0.0", "BSD-2-Clause"),
+    // Imported by app code: shipped, although "dev": true.
+    "node_modules/entities": shippedError("entities@7.0.1", "BSD-2-Clause"),
+    "node_modules/tooling": null,
+    "node_modules/tooling-dep": null,
+    "node_modules/opt":
+      "npm opt@1.0.0 has license BSD-2-Clause, which is reviewed for dev-only tooling only; this package is not a dev dependency",
+    "node_modules/vite": null,
+    "node_modules/rollup": null,
+    "node_modules/gpl-tool": "npm gpl-tool@1.0.0 has unreviewed license: GPL-3.0-only",
+    "node_modules/compound": "npm compound@1.0.0 has unreviewed license: BSD-2-Clause OR MIT",
+    "node_modules/unlicensed": "npm unlicensed@1.0.0 has no SPDX license",
+  };
+  for (const [path, error] of Object.entries(expected)) {
+    const actual = npmLicenseError(npmPackageFromLock(path, packages[path], shipped));
+    if (actual !== error) throw new Error(`Unexpected npm license result for ${path}: ${actual}`);
+  }
+  let unresolved = null;
+  try {
+    shippedNpmClosure(packages, ["not-installed"]);
+  } catch (error) {
+    unresolved = error.message;
+  }
+  if (unresolved !== "src/ needs npm package not-installed, which package-lock.json does not contain") {
+    throw new Error(`An app import missing from the lockfile must fail: ${unresolved}`);
   }
   console.log("dev-only npm license policy passed");
   process.exit(0);
@@ -262,9 +280,10 @@ const rustPackages = [...rustById.values()]
   .sort((a, b) => compareCodeUnits(a.name, b.name) || compareCodeUnits(a.version, b.version));
 
 const lock = JSON.parse(readFileSync(join(root, "package-lock.json"), "utf8"));
+const shippedNpm = shippedNpmClosure(lock.packages, appImportedPackages(root));
 const lockedNpmPackages = Object.entries(lock.packages)
   .filter(([path]) => path.includes("node_modules/"))
-  .map(([path, entry]) => npmPackageFromLock(path, entry))
+  .map(([path, entry]) => npmPackageFromLock(path, entry, shippedNpm))
   .sort((a, b) => compareCodeUnits(a.name, b.name) || compareCodeUnits(a.version, b.version));
 // Keep every locked npm package in the inventory so output is identical on
 // Apple Silicon and Intel CI. Platform-specific optional packages are not

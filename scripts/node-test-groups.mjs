@@ -26,6 +26,7 @@ export const GROUP_DESCRIPTIONS = {
 // failure per file. Groups not listed need nothing beyond Node itself.
 export const GROUP_NPM_PACKAGES = {
   ui: ["typescript"],
+  ci: ["vite"],
 };
 
 export const TEST_GROUPS = {
@@ -53,6 +54,7 @@ export const TEST_GROUPS = {
     "scripts/test-clippy-policy.mjs",
     "scripts/test-dependency-policy.mjs",
     "scripts/test-frontend-test-groups.mjs",
+    "scripts/test-npm-license-policy.mjs",
     "scripts/test-pipeline-cache.mjs",
     "scripts/test-rust-toolchain-pin.mjs",
     "scripts/test-verify-ci-parity.mjs",
