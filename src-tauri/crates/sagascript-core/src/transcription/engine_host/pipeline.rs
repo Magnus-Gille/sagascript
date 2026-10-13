@@ -92,6 +92,10 @@ const PCM_OWNER_MARKER: &str = "sagascript-pcm-owner";
 /// for as long as this value lives. The OS drops the lock when the process
 /// ends, however it ends, so a dir whose lock can be taken has no live owner:
 /// [`sweep_stale_pcm_dirs`] removes such dirs left behind by a killed process.
+/// Where the file system cannot lock (some network, FUSE or container temp
+/// dirs) the dir is used unlocked and without the owner marker: transcription
+/// still works, and the sweep, unable to prove the owner dead, never removes
+/// it (it is still removed on drop).
 pub struct PcmFile {
     // Field order is drop order: the lock is released before the dir is
     // removed (a sweep that slips in between removes the same dir).
@@ -102,6 +106,16 @@ pub struct PcmFile {
 
 impl PcmFile {
     pub fn write(samples: &[f32], parent: Option<&Path>) -> Result<Self> {
+        Self::write_with_lock(samples, parent, fs2::FileExt::lock_exclusive)
+    }
+
+    /// [`Self::write`] with the owner lock injectable (tests simulate a file
+    /// system that cannot lock).
+    fn write_with_lock(
+        samples: &[f32],
+        parent: Option<&Path>,
+        lock: impl FnOnce(&std::fs::File) -> std::io::Result<()>,
+    ) -> Result<Self> {
         let mut builder = tempfile::Builder::new();
         builder.prefix(PCM_DIR_PREFIX).rand_bytes(PCM_DIR_RAND_LEN);
         #[cfg(unix)]
@@ -113,7 +127,7 @@ impl PcmFile {
             Some(p) => builder.tempdir_in(p)?,
             None => builder.tempdir()?,
         };
-        let owner = lock_pcm_owner(dir.path())?;
+        let owner = lock_pcm_owner(dir.path(), lock)?;
         let path = dir.path().join(PCM_AUDIO_FILE);
         let mut opts = std::fs::OpenOptions::new();
         opts.write(true).create_new(true);
@@ -150,7 +164,14 @@ impl PcmFile {
 /// Create `owner.lock` in a new PCM dir, lock it, then write the marker. A
 /// sweep that takes the lock but finds no marker yet (the owner is between
 /// creating and locking the file) leaves the dir alone.
-fn lock_pcm_owner(dir: &Path) -> std::io::Result<std::fs::File> {
+///
+/// If the lock cannot be taken (a file system without locking; the file is
+/// new, so nobody else holds it) the marker is not written: the dir is then
+/// one the sweep cannot prove abandoned, and transcription goes on.
+fn lock_pcm_owner(
+    dir: &Path,
+    lock: impl FnOnce(&std::fs::File) -> std::io::Result<()>,
+) -> std::io::Result<std::fs::File> {
     let mut opts = std::fs::OpenOptions::new();
     opts.read(true).write(true).create_new(true);
     #[cfg(unix)]
@@ -159,10 +180,33 @@ fn lock_pcm_owner(dir: &Path) -> std::io::Result<std::fs::File> {
         opts.mode(0o600);
     }
     let mut file = opts.open(dir.join(PCM_OWNER_FILE))?;
-    fs2::FileExt::lock_exclusive(&file)?;
+    if let Err(e) = lock(&file) {
+        warn_pcm_lock_unavailable(&e);
+        return Ok(file);
+    }
     writeln!(file, "{PCM_OWNER_MARKER} pid={}", std::process::id())?;
     file.flush()?;
     Ok(file)
+}
+
+/// Once per process: PCM temp dirs cannot be locked here.
+fn warn_pcm_lock_unavailable(error: &std::io::Error) {
+    static WARNED: AtomicBool = AtomicBool::new(false);
+    if !WARNED.swap(true, Ordering::Relaxed) {
+        tracing::warn!(
+            error_kind = ?error.kind(),
+            %error,
+            "cannot lock PCM temp dirs (file system without locking?); using them unlocked, \
+             so ones left behind by a killed process are not swept"
+        );
+    }
+}
+
+/// True when a failed `try_lock` means another handle holds the lock, as
+/// opposed to a file system that cannot lock at all.
+fn owner_lock_is_held(error: &std::io::Error) -> bool {
+    error.raw_os_error().is_some()
+        && error.raw_os_error() == fs2::lock_contended_error().raw_os_error()
 }
 
 /// Outcome of [`sweep_stale_pcm_dirs`].
@@ -181,15 +225,16 @@ fn is_pcm_rand(rand: &str) -> bool {
 /// `Some(true)` when the dir's owner is provably gone: its owner file is a
 /// regular file carrying the marker and its lock can be taken. `Some(false)`
 /// while the lock is held. `None` when it cannot tell (no owner file, as in
-/// dirs from before #366, or an owner still setting up).
+/// dirs from before #366, an owner still setting up, or a file system that
+/// cannot lock, whose dirs carry no marker).
 fn pcm_owner_is_dead(dir: &Path) -> Option<bool> {
     let owner = dir.join(PCM_OWNER_FILE);
     if !std::fs::symlink_metadata(&owner).is_ok_and(|m| m.is_file()) {
         return None;
     }
     let file = std::fs::File::open(&owner).ok()?;
-    if fs2::FileExt::try_lock_exclusive(&file).is_err() {
-        return Some(false);
+    if let Err(e) = fs2::FileExt::try_lock_exclusive(&file) {
+        return owner_lock_is_held(&e).then_some(false);
     }
     let mut marker = String::new();
     (&file)
@@ -568,5 +613,38 @@ mod sweep_tests {
             !names.iter().any(|n| n.starts_with(PCM_DEAD_PREFIX)),
             "{names:?}"
         );
+    }
+
+    /// A file system that cannot lock must not fail transcription: the dir is
+    /// used without the owner marker, so a sweep never removes it (nobody
+    /// holds its lock, yet its owner cannot be proven dead).
+    #[test]
+    fn pcm_file_without_file_locking_still_works_and_is_never_swept() {
+        let parent = tempfile::tempdir().unwrap();
+        let file = PcmFile::write_with_lock(&[0.5; 16], Some(parent.path()), |_| {
+            Err(std::io::Error::from(std::io::ErrorKind::Unsupported))
+        })
+        .unwrap();
+        assert_eq!(std::fs::metadata(file.path()).unwrap().len(), 16 * 4);
+        let owner = std::fs::read(file.dir().join(PCM_OWNER_FILE)).unwrap();
+        assert!(owner.is_empty(), "no owner marker without a lock");
+
+        assert_eq!(
+            sweep_stale_pcm_dirs(parent.path()).unwrap(),
+            PcmSweep::default()
+        );
+        assert!(file.path().is_file());
+        let dir = file.dir().to_path_buf();
+        drop(file);
+        assert!(!dir.exists(), "still removed on drop");
+    }
+
+    #[test]
+    fn only_a_contended_lock_counts_as_a_live_owner() {
+        assert!(owner_lock_is_held(&fs2::lock_contended_error()));
+        assert!(!owner_lock_is_held(&std::io::Error::from(
+            std::io::ErrorKind::Unsupported
+        )));
+        assert!(!owner_lock_is_held(&std::io::Error::other("no locks here")));
     }
 }
