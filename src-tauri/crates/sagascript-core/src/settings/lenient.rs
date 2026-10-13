@@ -6,10 +6,10 @@
 //! defaults, and the next save wrote those defaults over every other value
 //! (#340). Instead only that top-level field takes its default. A field is
 //! the unit: a bad value nested inside one resets the whole field, so no
-//! half-read structure is kept. The exception is a list of independent
-//! entries ([`PER_ENTRY`]): one dictation profile with, say, a language a
-//! newer release added is dropped alone, and the other profiles are kept.
-//! The store treats `profile_models` the same way, per entry.
+//! half-read structure is kept. The exception is `hotkey_profiles`, read
+//! profile by profile (see [`readable_profiles`]): one profile with, say, a
+//! language a newer release added does not cost the user the others. The
+//! store treats `profile_models` per entry too.
 //!
 //! The store reports the reset fields by name, never by value. The file
 //! itself is not strictly valid, so every save first preserves its exact
@@ -17,7 +17,7 @@
 
 use serde_json::Value;
 
-use super::{migrations::Object, Settings};
+use super::{migrations::Object, HotkeyProfile, Settings};
 
 /// Settings decoded from a settings object.
 pub(crate) struct Decoded {
@@ -27,15 +27,13 @@ pub(crate) struct Decoded {
     pub reset: Vec<String>,
 }
 
-/// List fields whose entries are independent: an entry that does not decode
-/// is dropped and the field keeps the others, but still counts as reset.
-const PER_ENTRY: &[&str] = &["hotkey_profiles"];
+const HOTKEY_PROFILES: &str = "hotkey_profiles";
 
 /// Decode `object` as [`Settings`]. A strictly valid object decodes as it
 /// is. Otherwise each top-level field that does not decode on its own is
-/// reset (a [`PER_ENTRY`] field keeps its entries that decode) and the rest
-/// decodes; unknown keys never count as invalid. Fails only if the object
-/// is invalid without any single field to blame.
+/// reset (`hotkey_profiles` keeps the profiles [`readable_profiles`] can
+/// read) and the rest decodes; unknown keys never count as invalid. Fails
+/// only if the object is invalid without any single field to blame.
 pub(crate) fn decode(object: &Object) -> Result<Decoded, String> {
     let strict_error = match serde_json::from_value(Value::Object(object.clone())) {
         Ok(settings) => {
@@ -57,35 +55,64 @@ pub(crate) fn decode(object: &Object) -> Result<Decoded, String> {
     reset.sort();
     let mut rest = object.clone();
     for key in &reset {
-        match object
-            .get(key)
-            .and_then(|value| readable_entries(key, value))
-        {
-            Some(entries) => rest.insert(key.clone(), entries),
-            None => rest.remove(key),
-        };
+        rest.remove(key);
     }
-    let settings =
+    let mut settings: Settings =
         serde_json::from_value(Value::Object(rest)).map_err(|error| error.to_string())?;
+    if let Some(profiles) = object
+        .get(HOTKEY_PROFILES)
+        .filter(|_| reset.iter().any(|key| key == HOTKEY_PROFILES))
+    {
+        settings.hotkey_profiles = readable_profiles(profiles, &settings);
+    }
     Ok(Decoded { settings, reset })
 }
 
-/// The entries of a [`PER_ENTRY`] field's list that decode, unless none do.
-fn readable_entries(key: &str, value: &Value) -> Option<Value> {
-    if !PER_ENTRY.contains(&key) {
-        return None;
-    }
-    let entries: Vec<Value> = value
-        .as_array()?
+/// The profiles of a `hotkey_profiles` value that does not decode, read one
+/// by one. A profile that does not read is dropped, except the primary one
+/// (`default`, else the first), whose shortcut and language `hotkey` and
+/// `language` mirror: dropping it would leave `hotkey` naming a shortcut
+/// that nothing registers. It is kept, and each of its fields that does not
+/// read is the one a file without profiles gives it
+/// ([`HotkeyProfile::legacy_default`] of `settings`). If even that fails,
+/// or the value is not a list, the whole field resets (no profiles).
+fn readable_profiles(value: &Value, settings: &Settings) -> Vec<HotkeyProfile> {
+    let Some(entries) = value.as_array() else {
+        return Vec::new();
+    };
+    let primary = entries
         .iter()
-        .filter(|entry| decodes_alone(key, &Value::Array(vec![(*entry).clone()])))
-        .cloned()
-        .collect();
-    if entries.is_empty() {
-        return None;
+        .position(|entry| entry.get("id").and_then(Value::as_str) == Some("default"))
+        .unwrap_or(0);
+    let mut profiles = Vec::with_capacity(entries.len());
+    for (index, entry) in entries.iter().enumerate() {
+        match serde_json::from_value(entry.clone()) {
+            Ok(profile) => profiles.push(profile),
+            Err(_) if index == primary => match repaired_profile(entry, settings) {
+                Some(profile) => profiles.push(profile),
+                None => return Vec::new(),
+            },
+            Err(_) => {}
+        }
     }
-    let entries = Value::Array(entries);
-    decodes_alone(key, &entries).then_some(entries)
+    profiles
+}
+
+/// [`HotkeyProfile::legacy_default`] of `settings` with every field of
+/// `entry` that reads in its place.
+fn repaired_profile(entry: &Value, settings: &Settings) -> Option<HotkeyProfile> {
+    let fallback = HotkeyProfile::legacy_default(settings.hotkey.clone(), settings.language);
+    let Ok(Value::Object(mut repaired)) = serde_json::to_value(fallback) else {
+        return None;
+    };
+    for (key, value) in entry.as_object()? {
+        let mut candidate = repaired.clone();
+        candidate.insert(key.clone(), value.clone());
+        if serde_json::from_value::<HotkeyProfile>(Value::Object(candidate)).is_ok() {
+            repaired.insert(key.clone(), value.clone());
+        }
+    }
+    serde_json::from_value(Value::Object(repaired)).ok()
 }
 
 /// Whether `key: value` decodes as [`Settings`] with every other field at
@@ -172,12 +199,59 @@ mod tests {
         assert_eq!(ids, ["default", "english"]);
         assert_eq!(decoded.settings.language, Language::Swedish);
 
-        // With no profile left, or no list at all, the whole field resets.
-        for unreadable in [json!([deutsch]), json!("not a list")] {
-            let decoded = decode(&object(json!({"hotkey_profiles": unreadable}))).unwrap();
-            assert_eq!(decoded.reset, ["hotkey_profiles"]);
-            assert!(decoded.settings.hotkey_profiles.is_empty());
+        // Without a list at all, the whole field resets.
+        let decoded = decode(&object(json!({"hotkey_profiles": "not a list"}))).unwrap();
+        assert_eq!(decoded.reset, ["hotkey_profiles"]);
+        assert!(decoded.settings.hotkey_profiles.is_empty());
+    }
+
+    #[test]
+    fn the_primary_profile_is_repaired_not_dropped() {
+        let unreadable_default = json!({"id": "default", "name": "Klingon", "shortcut": "Super+K", "push_to_talk_shortcut": "Super+P", "language": "tlh"});
+        let english =
+            json!({"id": "english", "name": "English", "shortcut": "Super+E", "language": "en"});
+        for (language, expected) in [
+            (json!("sv"), Language::Swedish),
+            (json!("tlh"), Language::default()),
+        ] {
+            let decoded = decode(&object(json!({
+                "language": language,
+                "hotkey": "Super+K",
+                "hotkey_profiles": [english, unreadable_default]
+            })))
+            .unwrap();
+            assert!(decoded.reset.contains(&"hotkey_profiles".to_string()));
+            let profiles = &decoded.settings.hotkey_profiles;
+            assert_eq!(profiles.len(), 2);
+            // Its unreadable language is the one `language` gives it.
+            let primary = &profiles[1];
+            assert_eq!(
+                (
+                    primary.id.as_str(),
+                    primary.name.as_str(),
+                    primary.shortcut.as_str()
+                ),
+                ("default", "Klingon", "Super+K")
+            );
+            assert_eq!(primary.push_to_talk_shortcut.as_deref(), Some("Super+P"));
+            assert_eq!(primary.language, expected);
         }
+
+        // Without a `default` profile, the first one is the primary.
+        let decoded = decode(&object(json!({
+            "hotkey": "Super+K",
+            "hotkey_profiles": [{"id": "work", "name": 7, "shortcut": "Super+K", "language": "tlh"}, english]
+        })))
+        .unwrap();
+        let first = &decoded.settings.hotkey_profiles[0];
+        assert_eq!(
+            (first.id.as_str(), first.name.as_str()),
+            ("work", "Default")
+        );
+
+        // A primary entry that is not a profile at all resets the field.
+        let decoded = decode(&object(json!({"hotkey_profiles": ["default", english]}))).unwrap();
+        assert!(decoded.settings.hotkey_profiles.is_empty());
     }
 
     #[test]

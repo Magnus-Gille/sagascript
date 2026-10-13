@@ -2662,6 +2662,34 @@ mod tests {
     }
 
     #[test]
+    fn an_unreadable_primary_profile_is_repaired_not_dropped() {
+        with_temp_settings(|path| {
+            // `hotkey` and `language` mirror the primary profile, whose
+            // language a newer release added.
+            let mut map = every_field_set();
+            map["hotkey_profiles"][0]["language"] = "tlh".into();
+            let original = serde_json::to_vec(&map).unwrap();
+            fs::write(&path, &original).unwrap();
+
+            for loaded in [load_from(&path), startup_load(&path)] {
+                // Only the unreadable language is reset, to `language`.
+                assert_only_reset(&loaded, &[]);
+                let bindings: Vec<String> = loaded
+                    .resolved_hotkey_bindings()
+                    .into_iter()
+                    .map(|(_, shortcut, _)| shortcut)
+                    .collect();
+                assert_eq!(bindings, ["Option+Space", "Option+E"]);
+                assert_eq!(loaded.default_profile().shortcut, loaded.hotkey);
+            }
+            assert_file_bytes(&path, &original);
+
+            update_at(&path, |settings| settings.beam_size = 9).unwrap();
+            assert_file_bytes(recovery_copy_path(&path, 0), &original);
+        });
+    }
+
+    #[test]
     fn invalid_values_are_reported_by_field_name_only() {
         let map = match serde_json::from_slice(SCHEMA_INVALID_SETTINGS).unwrap() {
             serde_json::Value::Object(map) => map,

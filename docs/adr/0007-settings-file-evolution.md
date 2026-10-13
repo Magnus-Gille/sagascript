@@ -45,7 +45,9 @@ the original bytes first.
    whole field. The rest is kept, and the reset fields are logged by name, never by value.
    `hotkey_profiles` and `profile_models` are lenient per entry: an entry that does not read
    (a language or model id from a newer release) is dropped alone, and the field counts as
-   reset.
+   reset. The primary profile (`default`, else the first), which `hotkey` and `language`
+   mirror, is never dropped: its unreadable parts take the values a file without profiles
+   would give it.
 5. **Preserve the bytes before any replacement** (from #340). A write over a file that does not
    decode strictly, or that the field update could not load (a migration step failed), first
    saves its exact bytes as `settings.json.bak[.N]`. The startup load never rewrites a file it
