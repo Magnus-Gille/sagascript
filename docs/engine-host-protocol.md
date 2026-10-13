@@ -58,6 +58,13 @@ error), `hello.host.build_dirty`, `hello.capabilities.min_macos`,
 `boost_reason`, and `status.model_id` (`null` when no model is loaded). The optional request
 fields are `boost_terms` and `boost_weight`.
 
+**Malformed host lines.** The `error` object's `code`, `message` and `retryable` are all
+required too. When the host answers a request's `id` with a line that is neither an event nor a
+well-formed response (a failure whose `error` object is missing or malformed, or no boolean
+`ok`), the client fails that request at once with a `protocol` error instead of waiting for its
+timeout. A line without a usable `id` cannot be matched to a request; the client logs and drops
+it.
+
 All `*_ms` and `*_bytes` fields are non-negative JSON integers (clients also accept and round
 non-negative floats for robustness).
 

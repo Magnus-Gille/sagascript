@@ -198,10 +198,58 @@ fn events_and_ok_round_trip() {
 
 #[test]
 fn malformed_incoming_rejected() {
+    // No usable id: nothing to fail, so the line is an error (the client logs and drops it).
     assert!(decode_incoming("garbage").is_err());
     assert!(decode_incoming("[1]").is_err());
     assert!(decode_incoming(r#"{"ok":true}"#).is_err());
-    assert!(decode_incoming(r#"{"id":1}"#).is_err());
+    assert!(decode_incoming(r#"{"id":-1,"ok":false,"error":{"code":"busy"}}"#).is_err());
+    assert!(decode_incoming(r#"{"id":2.0,"ok":true}"#).is_err());
+}
+
+/// A malformed line for a usable id fails that request with `protocol` instead of being dropped,
+/// which would leave the request waiting for its timeout (#367 review).
+#[test]
+fn malformed_response_for_a_usable_id_fails_that_request() {
+    for (line, needle) in [
+        (
+            r#"{"id":3,"ok":false,"error":{"code":"busy","message":"full"}}"#,
+            "malformed error object",
+        ),
+        (
+            r#"{"id":3,"ok":false,"error":{"code":"engine","retryable":false}}"#,
+            "malformed error object",
+        ),
+        (
+            r#"{"id":3,"ok":false,"error":{"message":"m","retryable":false}}"#,
+            "malformed error object",
+        ),
+        (
+            r#"{"id":3,"ok":false,"error":{"code":"engine","message":5,"retryable":false}}"#,
+            "malformed error object",
+        ),
+        (
+            r#"{"id":3,"ok":false,"error":"boom"}"#,
+            "malformed error object",
+        ),
+        (r#"{"id":3,"ok":false}"#, "without an error object"),
+        (r#"{"id":3}"#, "neither a response"),
+        (r#"{"id":3,"ok":"true"}"#, "neither a response"),
+        (r#"{"id":3,"event":7}"#, "neither a response"),
+    ] {
+        let Ok(Incoming::Response {
+            id: 3,
+            result: Err(error),
+        }) = decode_incoming(line)
+        else {
+            panic!(
+                "{line} must fail request 3, got {:?}",
+                decode_incoming(line)
+            );
+        };
+        assert_eq!(error.code, ErrorCode::Protocol, "{line}");
+        assert!(!error.retryable, "{line}");
+        assert!(error.message.contains(needle), "{line}: {}", error.message);
+    }
 }
 
 #[test]

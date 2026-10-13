@@ -254,6 +254,34 @@ fn model_missing_is_reported_as_remote_error() {
     assert_eq!(snap.crashes_in_window, 0);
 }
 
+/// A malformed failure line for a request's id fails that request at once with `protocol`
+/// instead of being dropped, which would leave it waiting for the full `load` timeout (#367).
+#[test]
+fn malformed_load_response_fails_the_load_promptly() {
+    for kind in ["error", "neither"] {
+        let f = fixture_with(&[("FAKE_MALFORMED_LOAD", kind)], |c| {
+            c.timeouts.load = Duration::from_secs(60)
+        });
+        let started = Instant::now();
+        match f.client.warm() {
+            Err(EngineHostError::Remote {
+                code: ErrorCode::Protocol,
+                message,
+                retryable: false,
+            }) => assert!(message.contains("engine host sent"), "{kind}: {message}"),
+            other => panic!("{kind}: {other:?}"),
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "{kind}: the load must fail at once, not after its timeout ({:?})",
+            started.elapsed()
+        );
+        // The host itself is still up and answering.
+        assert!(f.client.snapshot().running, "{kind}");
+        f.client.ping().unwrap();
+    }
+}
+
 // ----------------------------------------------------- routing / timeouts
 
 #[test]

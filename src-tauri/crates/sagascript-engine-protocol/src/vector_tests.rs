@@ -76,12 +76,25 @@ fn reencode(op: &str, result: Value) -> Result<Value, String> {
     }
 }
 
-/// The flattened result of a success line, or the error object of a failure line.
+/// The flattened result of a success line, or the error object of a failure line, which is
+/// decoded strictly: `decode_incoming` would turn a malformed error object into a `protocol`
+/// failure instead of an error, so it is not the place to check one.
 fn decode_line(line: &Value) -> Result<Result<Value, ErrorBody>, String> {
+    if line["ok"] == false {
+        let error = line
+            .get("error")
+            .ok_or("a failure line needs an error object")?;
+        return Ok(Err(strict_error(error)?));
+    }
     match decode_incoming(&line.to_string()).map_err(|e| e.0)? {
         Incoming::Response { result, .. } => Ok(result),
         Incoming::Event { .. } => Err("transcripts contain no events".into()),
     }
+}
+
+/// An `error` object decoded with the client's type.
+fn strict_error(error: &Value) -> Result<ErrorBody, String> {
+    serde_json::from_value(error.clone()).map_err(|e| e.to_string())
 }
 
 #[test]
@@ -200,6 +213,45 @@ fn required_result_fields_are_required() {
         optional_seen, listed,
         "every optional field appears in a transcript"
     );
+}
+
+/// `code`, `message` and `retryable` are all required in an error object: a host that drops one
+/// gets its failure turned into a `protocol` error of that request, never a silent default.
+#[test]
+fn required_error_fields_are_required() {
+    for t in transcripts() {
+        for (index, expected, _) in answers(&t) {
+            if expected["ok"] != false {
+                continue;
+            }
+            let line = concrete(&expected).unwrap();
+            let error = line["error"].as_object().unwrap();
+            assert_eq!(
+                error.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+                BTreeSet::from(["code", "message", "retryable"]),
+                "{} step {index}",
+                t.name
+            );
+            for key in error.keys() {
+                let mut without = error.clone();
+                without.remove(key);
+                assert!(
+                    strict_error(&Value::Object(without.clone())).is_err(),
+                    "{} step {index}: an error object without {key} must not decode",
+                    t.name
+                );
+                let mut broken = line.clone();
+                broken["error"] = Value::Object(without);
+                match decode_incoming(&broken.to_string()) {
+                    Ok(Incoming::Response {
+                        result: Err(failure),
+                        ..
+                    }) => assert_eq!(failure.code, ErrorCode::Protocol, "{} step {index}", t.name),
+                    other => panic!("{} step {index}: {other:?}", t.name),
+                }
+            }
+        }
+    }
 }
 
 /// `(path, value without that field)` for every field of an object, its nested objects and the
@@ -405,6 +457,13 @@ fn a_mutated_golden_line_fails_the_strict_decode() {
             "{field} renamed must not decode"
         );
     }
-    let error = r#"{"id":3,"ok":false,"error":{"code":"busy","message":"full"}}"#;
-    assert!(decode_incoming(error).is_err(), "retryable is required");
+    let error = json!({"code":"busy","message":"full","retryable":true});
+    assert!(strict_error(&error).is_ok());
+    let mut renamed = error.as_object().unwrap().clone();
+    let retryable = renamed.remove("retryable").unwrap();
+    renamed.insert("retry".into(), retryable);
+    assert!(
+        strict_error(&Value::Object(renamed)).is_err(),
+        "retryable renamed must not decode"
+    );
 }

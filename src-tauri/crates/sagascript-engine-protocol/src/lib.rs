@@ -304,7 +304,8 @@ impl<'de> Deserialize<'de> for ErrorCode {
 // transcripts in `src-tauri/engine-host/test-vectors/protocol/` are checked against these types
 // (`vector_tests.rs`), including that every non-optional field is required.
 
-/// The `error` object of a failure response.
+/// The `error` object of a failure response. Every field is required; [`decode_incoming`] turns
+/// a malformed one into a `protocol` failure of the request it answers.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ErrorBody {
     pub code: ErrorCode,
@@ -481,6 +482,12 @@ impl Incoming {
 
 /// Decode one host line. Unknown fields are kept in the raw value and ignored
 /// by the typed accessors.
+///
+/// Only a line without a usable `id` is an error (no request can be failed with it). A line with
+/// a usable `id` that is neither an event nor a well-formed response (no boolean `ok`, or a
+/// failure without a valid `error` object) decodes as a `protocol` failure of that request, so
+/// the client fails the request at once instead of waiting for its timeout. A success whose
+/// fields do not match the op's result type is rejected later by [`parse_result`].
 pub fn decode_incoming(line: &str) -> Result<Incoming, DecodeError> {
     let value: Value =
         serde_json::from_str(line.trim()).map_err(|e| DecodeError(format!("invalid JSON: {e}")))?;
@@ -501,6 +508,14 @@ pub fn decode_incoming(line: &str) -> Result<Incoming, DecodeError> {
             fields: obj,
         });
     }
+    let violation = |message: String| Incoming::Response {
+        id,
+        result: Err(ErrorBody {
+            code: ErrorCode::Protocol,
+            message,
+            retryable: false,
+        }),
+    };
     match obj.get("ok").and_then(Value::as_bool) {
         Some(true) => {
             obj.remove("id");
@@ -510,23 +525,19 @@ pub fn decode_incoming(line: &str) -> Result<Incoming, DecodeError> {
                 result: Ok(Value::Object(obj)),
             })
         }
-        Some(false) => {
-            let err = obj
-                .remove("error")
-                .map(serde_json::from_value::<ErrorBody>)
-                .transpose()
-                .map_err(|e| DecodeError(format!("invalid error object: {e}")))?
-                .unwrap_or(ErrorBody {
-                    code: ErrorCode::Internal,
-                    message: "failure response without error object".into(),
-                    retryable: false,
-                });
-            Ok(Incoming::Response {
-                id,
-                result: Err(err),
-            })
-        }
-        None => Err(DecodeError("neither ok nor event present".into())),
+        Some(false) => Ok(match obj.remove("error") {
+            None => violation("engine host sent a failure response without an error object".into()),
+            Some(error) => match serde_json::from_value::<ErrorBody>(error) {
+                Ok(error) => Incoming::Response {
+                    id,
+                    result: Err(error),
+                },
+                Err(e) => violation(format!("engine host sent a malformed error object: {e}")),
+            },
+        }),
+        None => Ok(violation(
+            "engine host sent a line that is neither a response (boolean ok) nor an event".into(),
+        )),
     }
 }
 
