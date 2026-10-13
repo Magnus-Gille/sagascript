@@ -284,6 +284,12 @@ returns `load_result` with the requested `model_id`; `transcribe` before `load` 
 `hold` (block until cancelled, then fail with `cancelled`). `expect_boost` is the dictionary the
 engine must receive (terms with a positive weight); a window without it must receive none.
 
+Files are named by POSIX paths under `/vectors/`; nothing is read from them. Where such a path
+is not absolute (Windows has no drive in it), a replay moves every `/vectors/` prefix under an
+absolute directory of its platform, in the requests, in `fake-engine.json` and in expected
+messages alike. The ONNX host's replay always does this (`<temp dir>/vectors/`), so CI on Linux
+also exercises the mapping.
+
 Who checks what:
 
 - `sagascript-engine-protocol` (`src/vector_tests.rs`, `cargo test -p sagascript-engine-protocol`)
