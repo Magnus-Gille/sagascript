@@ -78,13 +78,31 @@ class Host:
                 self.pending[response["id"]] = response
         fail(f"timed out waiting for id {request_id}")
 
-    def stderr_tail(self):
+    def stderr_tail(self, limit=1000, budget=1 << 20):
+        """The last `limit` characters the host has written to stderr so far, without blocking.
+
+        A host that is alive but stuck keeps stderr open, so `read()` would wait for EOF (and the
+        release job for its timeout). Read only what is already in the pipe, in raw chunks of at
+        most 4096 bytes, and at most `budget` bytes for a host that never stops writing.
+        """
         if not self.process.stderr:
             return ""
-        ready, _, _ = select.select([self.process.stderr], [], [], 0)
-        if not ready:
-            return ""
-        return self.process.stderr.read()[-1000:]
+        fd = self.process.stderr.fileno()
+        chunks = []
+        total = 0
+        try:
+            while total < budget:
+                ready, _, _ = select.select([fd], [], [], 0)
+                if not ready:
+                    break
+                chunk = os.read(fd, 4096)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                total += len(chunk)
+        except OSError:
+            pass
+        return b"".join(chunks).decode("utf-8", "replace")[-limit:]
 
     def shutdown(self):
         if self.process.stdin:
