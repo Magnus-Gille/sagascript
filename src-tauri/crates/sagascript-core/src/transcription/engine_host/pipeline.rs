@@ -84,9 +84,11 @@ const PCM_DEAD_PREFIX: &str = "sagascript-pcm-dead-";
 /// random letters and digits, without an owner file. Nothing can prove their
 /// owner dead, so the sweep removes them only once they are clearly abandoned.
 const LEGACY_PCM_RAND_LEN: usize = 6;
-/// A legacy dir whose contents are older than this is abandoned: a dictation
-/// or file job keeps its PCM dir for seconds to minutes.
-const LEGACY_PCM_MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
+/// A PCM dir whose owner cannot be proven dead (one from before #366, or one
+/// on a file system that cannot lock) is abandoned once neither it nor
+/// anything directly in it changed for this long: a dictation or file job
+/// keeps its PCM dir for seconds to minutes.
+const PCM_ABANDONED_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 const PCM_AUDIO_FILE: &str = "audio.f32le";
 /// Locked by the owning process for the dir's whole lifetime.
 const PCM_OWNER_FILE: &str = "owner.lock";
@@ -101,8 +103,8 @@ const PCM_OWNER_MARKER: &str = "sagascript-pcm-owner";
 /// [`sweep_stale_pcm_dirs`] removes such dirs left behind by a killed process.
 /// Where the file system cannot lock (some network, FUSE or container temp
 /// dirs) the dir is used unlocked and without the owner marker: transcription
-/// still works, and the sweep, unable to prove the owner dead, never removes
-/// it (it is still removed on drop).
+/// still works, and the sweep, unable to prove the owner dead, removes the dir
+/// only once it was left untouched for a day (it is still removed on drop).
 pub struct PcmFile {
     // Field order is drop order: the lock is released before the dir is
     // removed (a sweep that slips in between removes the same dir).
@@ -173,8 +175,9 @@ impl PcmFile {
 /// creating and locking the file) leaves the dir alone.
 ///
 /// If the lock cannot be taken (a file system without locking; the file is
-/// new, so nobody else holds it) the marker is not written: the dir is then
-/// one the sweep cannot prove abandoned, and transcription goes on.
+/// new, so nobody else holds it) the marker is not written: the sweep then
+/// cannot prove the owner dead and goes by age instead, and transcription
+/// goes on.
 fn lock_pcm_owner(
     dir: &Path,
     lock: impl FnOnce(&std::fs::File) -> std::io::Result<()>,
@@ -204,7 +207,7 @@ fn warn_pcm_lock_unavailable(error: &std::io::Error) {
             error_kind = ?error.kind(),
             %error,
             "cannot lock PCM temp dirs (file system without locking?); using them unlocked, \
-             so ones left behind by a killed process are not swept"
+             so ones left behind by a killed process are swept only after a day"
         );
     }
 }
@@ -219,8 +222,9 @@ fn owner_lock_is_held(error: &std::io::Error) -> bool {
 /// Outcome of [`sweep_stale_pcm_dirs`].
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct PcmSweep {
-    /// Dirs that were removed: those of dead owners, and dirs from before
-    /// #366 that were left untouched for a day.
+    /// Dirs that were removed: those of dead owners, and dirs whose owner
+    /// cannot be proven dead (from before #366, or on a file system that
+    /// cannot lock) that were left untouched for a day.
     pub removed: usize,
     /// Dirs whose owner is alive (its lock is held).
     pub kept: usize,
@@ -234,24 +238,28 @@ fn is_legacy_pcm_rand(rand: &str) -> bool {
     rand.len() == LEGACY_PCM_RAND_LEN && rand.bytes().all(|b| b.is_ascii_alphanumeric())
 }
 
-/// A dir from before #366 (named like one, see [`LEGACY_PCM_RAND_LEN`]) that
-/// is abandoned: it has no owner file, and neither it nor anything directly
-/// in it was modified within [`LEGACY_PCM_MAX_AGE`] before `now`. Any doubt
-/// (an unreadable entry, a timestamp in the future) keeps it.
-fn legacy_pcm_dir_is_abandoned(dir: &Path, now: SystemTime) -> bool {
+/// Neither `dir` nor anything directly in it was modified within
+/// [`PCM_ABANDONED_AGE`] before `now`. Any doubt (an unreadable entry, a
+/// timestamp in the future) counts as recent.
+fn pcm_dir_untouched(dir: &Path, now: SystemTime) -> bool {
     let old = |path: &Path| {
         std::fs::symlink_metadata(path)
             .and_then(|m| m.modified())
             .is_ok_and(|modified| {
                 now.duration_since(modified)
-                    .is_ok_and(|age| age > LEGACY_PCM_MAX_AGE)
+                    .is_ok_and(|age| age > PCM_ABANDONED_AGE)
             })
     };
-    if std::fs::symlink_metadata(dir.join(PCM_OWNER_FILE)).is_ok() || !old(dir) {
-        return false;
-    }
-    std::fs::read_dir(dir)
-        .is_ok_and(|mut entries| entries.all(|entry| entry.is_ok_and(|entry| old(&entry.path()))))
+    old(dir)
+        && std::fs::read_dir(dir).is_ok_and(|mut entries| {
+            entries.all(|entry| entry.is_ok_and(|entry| old(&entry.path())))
+        })
+}
+
+/// A dir from before #366 (named like one, see [`LEGACY_PCM_RAND_LEN`]) that
+/// is abandoned: it has no owner file and is [`pcm_dir_untouched`].
+fn legacy_pcm_dir_is_abandoned(dir: &Path, now: SystemTime) -> bool {
+    std::fs::symlink_metadata(dir.join(PCM_OWNER_FILE)).is_err() && pcm_dir_untouched(dir, now)
 }
 
 /// `Some(true)` when the dir's owner is provably gone: its owner file is a
@@ -309,9 +317,10 @@ fn retire_pcm_dir(parent: &Path, dir: &Path, rand: &str) -> bool {
 ///
 /// Only real directories (never symlinks) named exactly like a PCM dir are
 /// considered, and only those whose owner lock can be taken, so a dir of a
-/// running app or CLI (or of this process) is never touched. Dirs from before
-/// #366, which have no owner lock, are removed once untouched for a day.
-/// Logs counts only.
+/// running app or CLI (or of this process) is never touched. Dirs whose owner
+/// cannot be proven dead (from before #366, without an owner lock, or on a
+/// file system that cannot lock, without the owner marker) are removed once
+/// untouched for a day. Logs counts only.
 pub fn sweep_stale_pcm_dirs(parent: &Path) -> std::io::Result<PcmSweep> {
     sweep_stale_pcm_dirs_at(parent, SystemTime::now())
 }
@@ -350,6 +359,11 @@ fn sweep_stale_pcm_dirs_at(parent: &Path, now: SystemTime) -> std::io::Result<Pc
         match pcm_owner_is_dead(&path) {
             Some(false) => sweep.kept += 1,
             Some(true) if retire_pcm_dir(parent, &path, rand) => sweep.removed += 1,
+            // Owner unknown (no marker: a file system that cannot lock, or an
+            // owner killed while setting up): go by age, as for legacy dirs.
+            None if pcm_dir_untouched(&path, now) && retire_pcm_dir(parent, &path, rand) => {
+                sweep.removed += 1
+            }
             Some(true) | None => {}
         }
     }
@@ -664,10 +678,10 @@ mod sweep_tests {
     }
 
     /// A file system that cannot lock must not fail transcription: the dir is
-    /// used without the owner marker, so a sweep never removes it (nobody
-    /// holds its lock, yet its owner cannot be proven dead).
+    /// used without the owner marker, so a sweep keeps it while it is recent
+    /// (nobody holds its lock, yet its owner cannot be proven dead).
     #[test]
-    fn pcm_file_without_file_locking_still_works_and_is_never_swept() {
+    fn pcm_file_without_file_locking_still_works_and_is_kept_by_the_sweep() {
         let parent = tempfile::tempdir().unwrap();
         let file = PcmFile::write_with_lock(&[0.5; 16], Some(parent.path()), |_| {
             Err(std::io::Error::from(std::io::ErrorKind::Unsupported))
@@ -727,7 +741,7 @@ mod sweep_tests {
         assert!(legacy.join(PCM_AUDIO_FILE).is_file());
 
         // A day later it is abandoned.
-        let later = now + LEGACY_PCM_MAX_AGE + Duration::from_secs(60);
+        let later = now + PCM_ABANDONED_AGE + Duration::from_secs(60);
         let sweep = sweep_stale_pcm_dirs_at(parent.path(), later).unwrap();
         assert_eq!(
             sweep,
@@ -752,6 +766,43 @@ mod sweep_tests {
             !names.iter().any(|n| n.starts_with(PCM_DEAD_PREFIX)),
             "{names:?}"
         );
+    }
+
+    /// Dirs in the current format whose owner cannot be proven dead (no
+    /// marker: a file system that cannot lock, or an owner killed while
+    /// setting up) do not leak: they are removed once untouched for a day.
+    #[test]
+    fn sweep_removes_unprovable_dirs_only_after_a_day() {
+        let parent = tempfile::tempdir().unwrap();
+        let unlocked = pcm_dir(parent.path(), "NoLock123456");
+        std::fs::write(unlocked.join(PCM_OWNER_FILE), b"").unwrap();
+        let no_owner_file = pcm_dir(parent.path(), "NoOwner12345");
+        // A live owner (this process) is kept however old its dir looks.
+        let live = PcmFile::write(&[0.0; 16], Some(parent.path())).unwrap();
+
+        let now = SystemTime::now();
+        let sweep = sweep_stale_pcm_dirs_at(parent.path(), now).unwrap();
+        assert_eq!(
+            sweep,
+            PcmSweep {
+                removed: 0,
+                kept: 1
+            }
+        );
+        assert!(unlocked.join(PCM_AUDIO_FILE).is_file());
+        assert!(no_owner_file.join(PCM_AUDIO_FILE).is_file());
+
+        let later = now + PCM_ABANDONED_AGE + Duration::from_secs(60);
+        let sweep = sweep_stale_pcm_dirs_at(parent.path(), later).unwrap();
+        assert_eq!(
+            sweep,
+            PcmSweep {
+                removed: 2,
+                kept: 1
+            }
+        );
+        assert!(!unlocked.exists() && !no_owner_file.exists());
+        assert!(live.path().is_file());
     }
 
     #[test]

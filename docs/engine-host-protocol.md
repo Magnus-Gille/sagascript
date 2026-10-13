@@ -197,9 +197,10 @@ terminates with error `cancelled`. Cancellation is best effort; a window may sti
   its shared engine client remove, in the background, dirs whose lock can be taken (the owner was
   killed before it could clean up); a running app or CLI keeps its lock, so its dir is never
   touched. Where the temp dir's file system cannot lock, a dir is used unlocked and without the
-  owner marker (logged once): transcription works, and the sweep never removes such a dir. Dirs
-  from before #366 (`sagascript-pcm-<6 letters/digits>`, no `owner.lock`) are removed once neither
-  the dir nor anything in it changed for 24 h. `sagascript engine doctor` runs the same sweep and
+  owner marker (logged once): transcription works, and the sweep removes such a dir only after
+  24 h. Dirs whose owner cannot be proven dead (no marker, or from before #366:
+  `sagascript-pcm-<6 letters/digits>` without `owner.lock`) are removed once neither the dir nor
+  anything in it changed for 24 h. `sagascript engine doctor` runs the same sweep and
   reports how many dirs it removed and how many are in use.
 
 ## Engine hosts

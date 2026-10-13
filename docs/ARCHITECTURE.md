@@ -271,7 +271,8 @@ sequenceDiagram
   (`shared_client`), model deletion shuts it down, and the CLI `engine doctor` uses its own client.
 - PCM temp dirs hold a locked `owner.lock`; `pipeline::sweep_stale_pcm_dirs` (app startup and
   shared-client creation, background, once per process; `engine doctor` on demand) removes the
-  dirs of dead owners and pre-#366 dirs untouched for 24 h.
+  dirs of dead owners, and dirs whose owner cannot be proven dead (pre-#366, or on a file system
+  that cannot lock) once untouched for 24 h.
 - **Planned:** [#367](https://github.com/Magnus-Gille/sagascript/issues/367) (machine-checked
   protocol).
 

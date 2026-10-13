@@ -25,8 +25,9 @@
 //!   FAKE_WINDOW_DELAY_MS, FAKE_BATCH_DELAY_MS           per-window delay (batch adds to base)
 //!   FAKE_FIRST_SLOW_MS                                  extra delay for the first window received
 //!   FAKE_FIRST_UNINTERRUPTIBLE_MS                       the first window received first spends this long in a
-//!                                                       stage that ignores cancel (a Neural Engine recompile),
-//!                                                       then answers: `cancelled` if a cancel arrived, else tokens
+//!                                                       stage that ignores cancel (a Neural Engine recompile);
+//!                                                       a cancel that arrived meanwhile is answered right after
+//!                                                       it (`cancelled`), otherwise the window goes on
 //!   FAKE_IGNORE_CANCEL=1                                answer cancel but keep working
 //!   FAKE_BUSY=1                                         reject with busy when slots are full
 //!   FAKE_LOAD_DELAY_MS                                  delay `load`
@@ -426,6 +427,11 @@ fn run_window(
             // Holds the slot and does not look at cancel until the stage ends.
             eprintln!("fake host: window {id} in an uninterruptible stage for {stall} ms");
             std::thread::sleep(Duration::from_millis(stall));
+            if cancel.load(Ordering::SeqCst) {
+                host.sched.lock().unwrap().running -= 1;
+                finish_cancelled(host, id);
+                return;
+            }
         }
     }
     let mut delay = env_u64("FAKE_WINDOW_DELAY_MS", 0);

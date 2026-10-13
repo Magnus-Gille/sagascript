@@ -698,8 +698,24 @@ mod tests {
         assert_eq!(fake_host_executable_from_cargo_messages("not json"), None);
     }
 
-    fn probe(host: PathBuf, supported: bool, installed: bool) -> Probe {
-        let config = EngineHostConfig::new(
+    /// A [`Probe`] whose engine writes its PCM temp dirs into a private
+    /// temp dir (removed with this value), so the doctor's sweep never
+    /// touches the system temp dir.
+    struct TestProbe {
+        probe: Probe,
+        pcm_dir: tempfile::TempDir,
+    }
+
+    impl std::ops::Deref for TestProbe {
+        type Target = Probe;
+        fn deref(&self) -> &Probe {
+            &self.probe
+        }
+    }
+
+    fn probe(host: PathBuf, supported: bool, installed: bool) -> TestProbe {
+        let pcm_dir = tempfile::tempdir().unwrap();
+        let mut config = EngineHostConfig::new(
             host.clone(),
             LoadSpec {
                 model_dir: "/models/ok".into(),
@@ -707,7 +723,8 @@ mod tests {
                 compute_units: "cpu".into(),
             },
         );
-        Probe {
+        config.temp_dir = Some(pcm_dir.path().to_path_buf());
+        let probe = Probe {
             supported,
             os: "testos".into(),
             arch: "testarch".into(),
@@ -724,7 +741,8 @@ mod tests {
                     Ok(())
                 }
             },
-        }
+        };
+        TestProbe { probe, pcm_dir }
     }
 
     #[test]
@@ -827,29 +845,24 @@ mod tests {
     /// reports the counts as an additive JSON field and one text line.
     #[test]
     fn doctor_sweeps_stale_pcm_dirs_and_reports_the_counts() {
-        let tmp = tempfile::tempdir().unwrap();
+        let probe = probe(fake_host(), false, true);
+        let tmp = probe.pcm_dir.path();
+        assert_eq!(pcm_temp_dir(&probe), tmp);
         // A dir whose owner was killed: owner marker present, lock free.
-        let dead = tmp.path().join("sagascript-pcm-DeadOwner123");
+        let dead = tmp.join("sagascript-pcm-DeadOwner123");
         std::fs::create_dir(&dead).unwrap();
         std::fs::write(dead.join("owner.lock"), b"sagascript-pcm-owner pid=1\n").unwrap();
         std::fs::write(dead.join("audio.f32le"), b"pcm").unwrap();
         // A dir of a live owner (this process).
-        let live = pipeline::PcmFile::write(&[0.0; 16], Some(tmp.path())).unwrap();
+        let live = pipeline::PcmFile::write(&[0.0; 16], Some(tmp)).unwrap();
 
-        let mut probe = probe(fake_host(), false, true);
-        if let Some(config) = probe.config.as_mut() {
-            config.temp_dir = Some(tmp.path().to_path_buf());
-        }
         let report = doctor_report(&probe, false);
         // The sweep runs even when a step fails (here: the platform gate).
         assert_eq!(report.failed_step.as_deref(), Some("platform"));
         let json = report.to_json();
         assert_eq!(json["pcm_sweep"]["removed"], 1, "{json}");
         assert_eq!(json["pcm_sweep"]["kept"], 1, "{json}");
-        assert_eq!(
-            json["pcm_sweep"]["dir"],
-            tmp.path().display().to_string().as_str()
-        );
+        assert_eq!(json["pcm_sweep"]["dir"], tmp.display().to_string().as_str());
         assert!(!dead.exists());
         assert!(live.path().is_file());
         let line = pcm_sweep_line(&json["pcm_sweep"]);
