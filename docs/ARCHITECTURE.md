@@ -21,7 +21,7 @@ verification commands, [docs/recipes/](recipes/README.md) for step-by-step chang
 | `src-tauri/crates/sagascript-engine-protocol/` | Wire types for the engine-host JSON Lines protocol ([spec](engine-host-protocol.md)); used by the core client, the ORT host and the fake host. |
 | `src-tauri/engine-host/coreml/` | Swift package: Core ML host `sagascript-engine-host` (Pianissimo on macOS 14+ Apple silicon). |
 | `src-tauri/engine-host/ort/` | Standalone Cargo workspace (own `Cargo.lock`): ONNX Runtime CPU host `sagascript-engine-host-ort`, shipped for Windows on ARM. |
-| `src-tauri/engine-host/test-vectors/` | `context-biasing.json`, loaded by both hosts' unit tests. |
+| `src-tauri/engine-host/test-vectors/` | Vectors shared by both hosts' unit tests: `protocol/` (the golden JSONL transcripts and the scripted `fake-engine.json` that define the wire contract, also decoded by `sagascript-engine-protocol`; [spec](engine-host-protocol.md#golden-transcripts)) and `context-biasing.json`. |
 | `src-tauri/tauri.conf.json`, `src-tauri/capabilities/` | App config (`frontendDist: ../dist`) and plugin permissions. |
 | Meeting modules | Core `meeting.rs`, `meeting_media.rs`, `meeting_review.rs`, `meeting_reprocess*.rs`; CLI `meeting.rs`, `meeting_proposal.rs`, `meeting_reprocessing*.rs` and the meeting part of `transcribe.rs`; app `meeting_jobs.rs`, `meeting_media*.rs`, `meeting_review_commands.rs`, `meeting_reprocessing_commands.rs`. Docs: `docs/meeting-*.md`. |
 | `scripts/` | Build/release/CI helpers (`*.sh`, `*.mjs`, `*.ps1`), Node tests `test-*.mjs`, Playwright suites `qa-*.mjs`, browser IPC mock `fixtures/transcription-browser-mock.js`, Python tooling `dictation_eval/` and `diarization_sv/`, Core ML conversion `pianissimo-coreml/`. |

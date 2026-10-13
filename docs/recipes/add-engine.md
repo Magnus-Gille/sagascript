@@ -13,27 +13,50 @@ open network connections or touch the microphone ([ADR 0002](../adr/0002-privacy
 
 ## 1. Protocol changes (only if the wire format must change)
 
+The source of truth is the set of golden transcripts in
+`src-tauri/engine-host/test-vectors/protocol/` (`*.jsonl` plus the scripted
+`fake-engine.json`; format in
+[engine-host-protocol.md, Golden transcripts](../engine-host-protocol.md#golden-transcripts)).
+Change the wire format in one PR, in this order:
+
 1. Rust types: `src-tauri/crates/sagascript-engine-protocol/src/lib.rs` (`RequestOp`,
    `Capabilities`, `HelloResult`, `LoadResult`, `ErrorCode`, limits such as
-   `MAX_LINE_BYTES`). Tests in `src/tests.rs`. The core client, the ORT host and the fake host
-   all use this crate.
-2. Swift copy: `src-tauri/engine-host/coreml/Sources/EngineHostCore/EngineTypes.swift` and
-   `ProtocolServer.swift` are hand-written duplicates; change them in the same PR.
-3. Spec: update `docs/engine-host-protocol.md`.
-4. Compatibility: new fields are optional and omitted when unused (unknown fields are ignored
+   `MAX_LINE_BYTES`). Fields are required unless the spec marks them optional; only optional
+   ones get `#[serde(default)]`. The core client, the ORT host and the fake host all use this
+   crate.
+2. Golden transcripts: add or change the steps that show the new behaviour (and its errors) in
+   the `.jsonl` files and, if the engine's answers change, in `fake-engine.json`. A new optional
+   result field also goes into `OPTIONAL` in `src/vector_tests.rs`.
+3. Core ML host: `src-tauri/engine-host/coreml/Sources/EngineHostCore/WireProtocol.swift` owns
+   every wire field name, request parser and response builder of the Swift host, and
+   `WireErrorCode` (`EngineTypes.swift`) every error code; `ProtocolServer.swift` (handshake
+   state, dispatch, scheduling) goes through them.
+4. ONNX host: `src-tauri/engine-host/ort/src/server.rs` (it decodes requests with the protocol
+   crate, so usually only new behaviour needs code).
+5. Spec: update `docs/engine-host-protocol.md`.
+6. Compatibility: new fields are optional and omitted when unused (unknown fields are ignored
    by both sides); a breaking change bumps `PROTOCOL_VERSION` and the client rejects other
    versions in `hello`.
 
-Planned: [#367](https://github.com/Magnus-Gille/sagascript/issues/367) adds golden JSONL
-transcripts shared by Rust and Swift tests and runs conformance in CI.
+What catches drift: `cargo test -p sagascript-engine-protocol` (`src/vector_tests.rs`) decodes
+every expected response with the client's types, checks that every field not listed as optional
+is required and that the transcripts cover every op and error code; the Core ML host replays
+the transcripts in `ProtocolServerTests.swift` (`swift test`) and the ONNX host in
+`src/server/golden_tests.rs` (`cargo test` in `engine-host/ort`). A field renamed in any one of
+them fails at least one of these tests.
 
 ## 2. The host process
 
 - Speak JSON Lines on stdin/stdout when started with `--protocol 1`; diagnostics only on
   stderr; exit on stdin EOF or when orphaned; answer `ping`, `status` and `cancel` immediately.
-- Report build identity in `hello` (`version`, 40-hex `git_sha`); the client rejects a missing
-  SHA. The Core ML host gets it from `BuildInfo.swift` written by
-  `scripts/build-engine-host.sh`; the ORT host from its `build.rs`.
+- Report build identity in `hello` (`version`, 40-hex `git_sha`, `build_dirty`); the client
+  rejects a missing SHA. One definition serves every host: `scripts/engine-host-identity.sh`
+  prints version, SHA and dirty, and a tree is dirty when `git status` lists anything besides
+  the generated files in `scripts/build-identity-generated-paths.txt`. The Core ML host gets it
+  from `BuildInfo.swift`, which `scripts/build-engine-host.sh` writes from that script; the ORT
+  host's `build.rs` (`build_identity.rs`) and the Windows packaging gate
+  (`scripts/ci-build-identity.mjs`) read the same path list. Release checks
+  (`scripts/check-engine-host-identity.sh --release`) reject a dirty host.
 - Advertise `max_in_flight` ≥ 2 so the client can reserve a slot for dictation.
 - Layout options: a Swift package like `src-tauri/engine-host/coreml/`, or a standalone Cargo
   workspace like `src-tauri/engine-host/ort/` (own `[workspace]` and `Cargo.lock`, depends on
@@ -42,10 +65,11 @@ transcripts shared by Rust and Swift tests and runs conformance in CI.
 ## 3. Shared test vectors
 
 Logic that must match across hosts gets vectors in `src-tauri/engine-host/test-vectors/`.
-Today `context-biasing.json` is loaded by `ContextBiasingTests.swift` and by
-`engine-host/ort/src/boost.rs` (`include_str!`). A new host that supports context biasing
-loads the same file in its unit tests; new shared behaviour gets a new vector file used by
-every host.
+`protocol/` holds the golden transcripts (see step 1), which every host replays through its
+protocol server against the scripted `fake-engine.json`; a new host does the same in its unit
+tests. `context-biasing.json` is loaded by `ContextBiasingTests.swift` and by
+`engine-host/ort/src/boost.rs` (`include_str!`); a new host that supports context biasing loads
+it too. New shared behaviour gets a new vector file used by every host.
 
 ## 4. Client integration: `src-tauri/crates/sagascript-core/src/transcription/`
 
@@ -64,10 +88,10 @@ every host.
 | What | Where / command |
 |---|---|
 | Client behaviour (restarts, timeouts, ordering, cancel) | `crates/sagascript-core/tests/engine_host.rs` against `sagascript-fake-engine-host` (`tests/support/fake_engine_host.rs`; `FAKE_*` variables select faults). Add a fake mode for new behaviour. |
-| Protocol crate | `cargo test -p sagascript-engine-protocol` (CI: test-linux). |
-| Swift host | `scripts/build-engine-host.sh`, then `swift test` in `src-tauri/engine-host/coreml` (CI: test-macos). |
+| Protocol crate | `cargo test -p sagascript-engine-protocol`, including the golden transcripts (CI: test-linux). |
+| Swift host | `scripts/build-engine-host.sh`, then `swift test` in `src-tauri/engine-host/coreml`, including the golden-transcript replay (CI: test-macos). |
 | ORT host | In `src-tauri/engine-host/ort/`: `cargo test`, `cargo clippy --all-targets -- -D warnings`, `cargo fmt --check` (CI: test-linux runs all three; locally `npm run verify -- --only ort-host,fmt`). |
-| Conformance | `scripts/engine-host-conformance.py <host binary> --model-dir <dir>`; every host must pass it (needs a model; not in CI). |
+| Conformance | `scripts/engine-host-conformance.py <host binary> --model-dir <dir>`; every host must pass it. `--no-model` runs the model-free subset: CI test-macos runs it against the staged Core ML host (`npm run verify -- --only engine-host-conformance`). The full run needs a downloaded model and is in the release gate (`scripts/verify-release-draft.sh`); run it by hand for a new host. |
 | End to end | `sagascript engine status --json`, `sagascript engine doctor`. |
 | macOS packaging | `scripts/stage-engine-host.sh`, `scripts/tauri-engine-host-bundle.json`, `scripts/check-engine-host-identity.sh`. |
 | Windows packaging | `scripts/tauri-windows-engine-host.json`, `.github/workflows/windows-package.yml`. |
