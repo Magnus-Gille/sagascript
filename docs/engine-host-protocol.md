@@ -59,14 +59,9 @@ error), `hello.host.build_dirty` (optional for the client only, see `hello`),
 `hello.capabilities.min_macos`,
 `hello.capabilities.context_biasing`, `tokens[].confidence`, `timings.boost_us`, `boost_active`,
 `boost_reason`, and `status.model_id` (`null` when no model is loaded). The optional request
-fields are `boost_terms` and `boost_weight`.
-
-**Malformed host lines.** The `error` object's `code`, `message` and `retryable` are all
-required too. When the host answers a request's `id` with a line that is neither an event nor a
-well-formed response (a failure whose `error` object is missing or malformed, or no boolean
-`ok`), the client fails that request at once with a `protocol` error instead of waiting for its
-timeout. A line without a usable `id` cannot be matched to a request; the client logs and drops
-it.
+fields are `boost_terms` and `boost_weight`. The `error` object's `code`, `message` and
+`retryable` are all required too; what the client does with a malformed line is under
+[Client behavior](#client-behavior-normative-for-sagascripts-rust-client).
 
 All `*_ms` and `*_bytes` fields are non-negative JSON integers (clients also accept and round
 non-negative floats for robustness).
@@ -218,6 +213,13 @@ On stdin EOF the host fails queued windows with `cancelled`, cancels running one
 - Stdout lines are read with a hard 16 MiB bound. A longer line (or a flood without a newline)
   is a protocol violation: the client kills the host and fails in-flight requests with a protocol
   error; the restart budget applies.
+- A line for a request's `id` that is neither an event nor a well-formed response (a failure
+  whose `error` object is missing or malformed, or no boolean `ok`) fails that request at once
+  with a `protocol` error, naming the host's `code` when it is readable, and the client logs the
+  line (first 200 characters) at warn level. A success whose result does not decode (for example
+  a `load` result without `blank_id`) fails the request at once with a protocol error. Neither
+  waits for the request's timeout. A line without a usable `id` cannot be matched to a request;
+  the client logs and drops it.
 - `SAGASCRIPT_ENGINE_HOST` and `SAGASCRIPT_PIANISSIMO_MODEL_DIR` are honored in development builds
   only (debug, or the `dev-overrides` cargo feature); release and signed builds ignore them (with
   one warning) and use the bundled host and the manifest-verified model.
