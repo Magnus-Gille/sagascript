@@ -6,8 +6,10 @@
 //! `spawn_blocking` / a worker thread). Per host process there is one stdout
 //! reader thread (routes responses to waiters by request id), one stderr
 //! drain thread and one stdin writer thread (bounded writes); per client
-//! there is one small supervisor thread for idle unload/shutdown. No async runtime is required, which keeps the CLI's lean
-//! build and test doubles simple.
+//! there is one small supervisor thread for idle unload/shutdown, and each
+//! timed-out window gets a short-lived watcher thread that waits for the
+//! host's late answer (or kills a wedged host). No async runtime is required,
+//! which keeps the CLI's lean build and test doubles simple.
 //!
 //! Layers:
 //! - [`process`]: spawn, JSON-Lines transport, id routing, crash detection.

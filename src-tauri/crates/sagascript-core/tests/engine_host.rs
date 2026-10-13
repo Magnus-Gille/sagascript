@@ -1432,6 +1432,77 @@ fn host_wedged_on_a_timed_out_window_is_restarted_and_the_next_window_succeeds()
     );
 }
 
+/// #397: a healthy host can spend longer than the window timeout in one
+/// uninterruptible call (the Neural Engine recompiling the encoder took
+/// 11.5-16.7 s). The caller gets its timeout at once, not after the wedge
+/// grace; the host answers the cancelled window late but within the grace, so
+/// it is not killed, no crash is counted and later requests keep using it
+/// (killing it would throw the compile away and the next dictation would pay
+/// for it again).
+#[test]
+fn slow_uninterruptible_window_times_out_promptly_and_keeps_the_host() {
+    let timeout = Duration::from_millis(300);
+    // Longer than the 5 s grace used before #397 was addressed.
+    let stall = Duration::from_secs(6);
+    let stall_ms = stall.as_millis().to_string();
+    let f = fixture_with(
+        &[("FAKE_FIRST_UNINTERRUPTIBLE_MS", stall_ms.as_str())],
+        |c| {
+            c.timeouts.transcribe_min = timeout;
+            c.timeouts.wedge_grace = Timeouts::default().wedge_grace;
+        },
+    );
+    f.client.warm().unwrap();
+    let pid = f.client.snapshot().pid.unwrap();
+
+    let started = Instant::now();
+    let r = f
+        .client
+        .transcribe_dictation(&pcm(1.0), &CancelToken::new());
+    let elapsed = started.elapsed();
+    assert!(
+        matches!(
+            r,
+            Err(EngineHostError::Timeout {
+                op: "transcribe_window",
+                ..
+            })
+        ),
+        "{r:?}"
+    );
+    assert!(
+        elapsed < timeout + Duration::from_secs(1),
+        "the caller waited for the wedge grace: {elapsed:?}"
+    );
+
+    // The host is busy, not broken: the next dictation runs on it meanwhile.
+    let out = f
+        .client
+        .transcribe_dictation(&pcm(1.0), &CancelToken::new())
+        .unwrap();
+    assert_eq!(out.tokens.len(), 2);
+    assert_eq!(f.client.snapshot().pid, Some(pid));
+
+    // The stalled window ends and answers its cancel within the grace.
+    wait_until(
+        "late answer to the timed-out window",
+        stall + Duration::from_secs(5),
+        || f.client.status().is_ok_and(|s| s.in_flight == 0),
+    );
+    assert!(started.elapsed() >= stall, "{:?}", started.elapsed());
+    assert!(pid_alive(pid), "a host that answered late was killed");
+    let snap = f.client.snapshot();
+    assert_eq!(snap.pid, Some(pid));
+    assert_eq!(snap.crashes_in_window, 0);
+    assert_eq!(snap.spawns, 1);
+    let out = f
+        .client
+        .transcribe_dictation(&pcm(2.0), &CancelToken::new())
+        .unwrap();
+    assert_eq!(out.tokens.len(), 4);
+    assert_eq!(f.client.snapshot().pid, Some(pid));
+}
+
 /// 500 terms of 64 four-byte characters: each window request line is about
 /// 125 KB, more than an OS pipe buffer holds.
 fn pipe_filling_boost() -> BoostSpec {

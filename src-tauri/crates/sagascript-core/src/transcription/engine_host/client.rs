@@ -12,7 +12,7 @@ use sagascript_engine_protocol::{
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-use std::sync::mpsc::RecvTimeoutError;
+use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, TryLockError, Weak};
 use std::time::{Duration, Instant};
 
@@ -49,11 +49,20 @@ pub struct LoadSpec {
     pub compute_units: String,
 }
 
-/// Default [`Timeouts::wedge_grace`]. A host honours `cancel` between
-/// inference stages, so a healthy one answers a cancelled window well within
-/// this; one that does not is stuck in an uninterruptible call (a Core ML
-/// prediction cannot be cancelled) and keeps its slot until it is killed.
-pub const DEFAULT_WEDGE_GRACE: Duration = Duration::from_secs(5);
+/// Default [`Timeouts::wedge_grace`]: how long a host may take, after a
+/// timed-out window was cancelled, to send that window's terminal response
+/// before it counts as wedged and is killed.
+///
+/// A host honours `cancel` only between inference stages, and a stage can be
+/// uninterruptible: a Core ML prediction always runs to its end, and when the
+/// Neural Engine has evicted the compiled encoder the first prediction
+/// recompiles it, which took 11.5-16.7 s in #397. The grace must exceed the
+/// longest such legitimate stage with a wide margin; otherwise a healthy host
+/// is killed mid-compile, the compile is lost, the next dictation pays for it
+/// again and the kills use up the restart budget. Nobody waits on it: the
+/// caller gets its timeout at once, and a detached watcher thread keeps the
+/// window's slot until the host answers or is killed.
+pub const DEFAULT_WEDGE_GRACE: Duration = Duration::from_secs(30);
 
 /// Default [`EngineHostConfig::failed_cooldown`]. While failed, requests fail
 /// at once without spawning anything; the first request after the cooldown
@@ -78,7 +87,8 @@ pub struct Timeouts {
     pub write: Duration,
     /// After a window times out and is cancelled, how long the host gets to
     /// send that request's terminal response before it counts as wedged and
-    /// is killed (see [`DEFAULT_WEDGE_GRACE`]).
+    /// is killed (see [`DEFAULT_WEDGE_GRACE`]). The caller does not wait for
+    /// it; the window keeps its slot meanwhile.
     pub wedge_grace: Duration,
 }
 
@@ -573,7 +583,7 @@ impl EngineHostClient {
             started: Instant::now(),
             busy_attempts: 0,
             reloaded: false,
-            _slot: slot,
+            slot: Some(slot),
         }))
     }
 }
@@ -708,7 +718,8 @@ pub struct WindowTicket {
     busy_attempts: u32,
     /// The window was already resent once after a `not_loaded` answer.
     reloaded: bool,
-    _slot: Slot,
+    /// `None` only after a timeout handed it to a [`WedgeWatch`].
+    slot: Option<Slot>,
 }
 
 impl WindowTicket {
@@ -726,7 +737,10 @@ impl WindowTicket {
             let now = Instant::now();
             if now >= self.deadline {
                 if let Some(pending) = self.pending.take() {
-                    self.inner.after_timeout(&self.proc, pending);
+                    // Returns at once; the host's late answer (or its kill) is
+                    // awaited on a detached thread.
+                    self.inner
+                        .watch_timed_out_window(self.proc.clone(), pending, self.slot.take());
                 }
                 return Err(EngineHostError::Timeout {
                     op: "transcribe_window",
@@ -818,14 +832,21 @@ impl Drop for WindowTicket {
 }
 
 /// Scheduling slot; releasing it wakes queued batch windows.
+///
+/// Holds the client weakly: a slot kept by a [`WedgeWatch`] must not keep a
+/// dropped client, and so its host, alive. Once the client is gone there is
+/// no count left to update.
 struct Slot {
-    inner: Arc<Inner>,
+    inner: Weak<Inner>,
     priority: Priority,
 }
 
 impl Drop for Slot {
     fn drop(&mut self) {
-        let mut st = self.inner.lock_state();
+        let Some(inner) = self.inner.upgrade() else {
+            return;
+        };
+        let mut st = inner.lock_state();
         st.active -= 1;
         match self.priority {
             Priority::Batch => st.batch_in_flight -= 1,
@@ -833,7 +854,72 @@ impl Drop for Slot {
         }
         st.last_activity = Instant::now();
         drop(st);
-        self.inner.cv.notify_all();
+        inner.cv.notify_all();
+    }
+}
+
+/// A timed-out window whose terminal response is still outstanding. It keeps
+/// the window's slot until the host answers or is killed, because the host
+/// really is still busy with it.
+///
+/// It holds the client weakly, so dropping the last client handle shuts the
+/// host down at once instead of after the grace.
+struct WedgeWatch {
+    inner: Weak<Inner>,
+    proc: Arc<HostProcess>,
+    pending: Pending,
+    grace: Duration,
+    _slot: Option<Slot>,
+}
+
+impl WedgeWatch {
+    /// Cancel the window and give the host `grace` to send its terminal
+    /// response (`cancelled` or a late result). Without one the host is
+    /// wedged on that request, which keeps its slot forever although `ping`
+    /// is still answered inline, so count a crash and kill it; the next
+    /// request restarts it. The slot is released when this returns.
+    fn run(self) {
+        if self.proc.is_alive() {
+            // The answer to the cancel itself is not needed.
+            let _ = self.proc.send(&RequestOp::Cancel {
+                target: self.pending.id,
+            });
+        }
+        let deadline = Instant::now() + self.grace;
+        loop {
+            let now = Instant::now();
+            if now >= deadline {
+                break;
+            }
+            match self.pending.recv_timeout(deadline - now) {
+                Ok(Delivery::Event { .. }) | Err(RecvTimeoutError::Timeout) => {}
+                // Answered: the host is responsive and has freed the slot.
+                Ok(Delivery::Response(_)) | Err(RecvTimeoutError::Disconnected) => return,
+                Ok(Delivery::Closed(info)) => {
+                    if !info.expected {
+                        self.record_crash();
+                    }
+                    return;
+                }
+            }
+        }
+        self.proc.forget(self.pending.id);
+        tracing::warn!(
+            pid = self.proc.pid(),
+            grace_ms = self.grace.as_millis() as u64,
+            "engine host did not finish a timed-out window after cancel; killing it"
+        );
+        self.record_crash();
+        self.proc.terminate(Duration::from_millis(200), false);
+    }
+
+    fn record_crash(&self) {
+        if !self.proc.claim_crash() {
+            return;
+        }
+        if let Some(inner) = self.inner.upgrade() {
+            Inner::record_crash(&mut inner.lock_state());
+        }
     }
 }
 
@@ -1009,7 +1095,7 @@ impl Inner {
         st.active += 1;
         st.interactive_active += 1;
         Slot {
-            inner: self.clone(),
+            inner: Arc::downgrade(self),
             priority: Priority::Interactive,
         }
     }
@@ -1030,7 +1116,7 @@ impl Inner {
                 st.active += 1;
                 st.batch_in_flight += 1;
                 return Ok(Some(Slot {
-                    inner: self.clone(),
+                    inner: Arc::downgrade(self),
                     priority: Priority::Batch,
                 }));
             }
@@ -1345,46 +1431,46 @@ impl Inner {
         }
     }
 
-    /// A window timed out: cancel it and give the host `wedge_grace` to send
-    /// the request's terminal response (`cancelled` or a late result). Without
-    /// one the host is wedged on that request, which keeps its slot forever
-    /// although `ping` is still answered inline, so count a crash and kill it;
-    /// the next request restarts it.
-    fn after_timeout(&self, proc: &Arc<HostProcess>, pending: Pending) {
-        if proc.is_alive() {
-            // The answer to the cancel itself is not needed.
-            let _ = proc.send(&RequestOp::Cancel { target: pending.id });
-        }
-        let deadline = Instant::now() + self.cfg.timeouts.wedge_grace;
-        loop {
-            let now = Instant::now();
-            if now >= deadline {
-                break;
-            }
-            match pending.recv_timeout(deadline - now) {
-                Ok(Delivery::Event { .. }) => {}
-                // Answered: the host is responsive and has freed the slot.
-                Ok(Delivery::Response(_)) => return,
-                Ok(Delivery::Closed(info)) => {
-                    if !info.expected && proc.claim_crash() {
-                        Self::record_crash(&mut self.lock_state());
-                    }
-                    return;
+    /// A window timed out: hand it to a detached [`WedgeWatch`] so the caller
+    /// gets its timeout at once. If no thread can be started, the watch runs
+    /// here (the caller then waits up to the wedge grace, as a fallback).
+    fn watch_timed_out_window(
+        self: &Arc<Self>,
+        proc: Arc<HostProcess>,
+        pending: Pending,
+        slot: Option<Slot>,
+    ) {
+        let watch = WedgeWatch {
+            inner: Arc::downgrade(self),
+            proc,
+            pending,
+            grace: self.cfg.timeouts.wedge_grace,
+            _slot: slot,
+        };
+        // Passed over a channel so the watch is still ours when the thread
+        // cannot be started (or ends before receiving it).
+        let (tx, rx) = mpsc::channel::<WedgeWatch>();
+        let spawned = std::thread::Builder::new()
+            .name("engine-host-wedge-watch".into())
+            .spawn(move || {
+                if let Ok(watch) = rx.recv() {
+                    watch.run();
                 }
-                Err(RecvTimeoutError::Timeout) => {}
-                Err(RecvTimeoutError::Disconnected) => return,
+            });
+        let watch = match spawned {
+            Ok(_) => match tx.send(watch) {
+                Ok(()) => return,
+                Err(mpsc::SendError(watch)) => watch,
+            },
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "could not start the engine host wedge watcher; waiting on this thread"
+                );
+                watch
             }
-        }
-        proc.forget(pending.id);
-        tracing::warn!(
-            pid = proc.pid(),
-            grace_ms = self.cfg.timeouts.wedge_grace.as_millis() as u64,
-            "engine host did not finish a timed-out window after cancel; killing it"
-        );
-        if proc.claim_crash() {
-            Self::record_crash(&mut self.lock_state());
-        }
-        proc.terminate(Duration::from_millis(200), false);
+        };
+        watch.run();
     }
 
     fn idle_check(&self) {

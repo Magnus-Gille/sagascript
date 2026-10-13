@@ -262,8 +262,9 @@ sequenceDiagram
   `engine-host\sagascript-engine-host-ort.exe`); `SAGASCRIPT_ENGINE_HOST` only in development
   builds (`dev-overrides`).
 - Recovery ([#366](https://github.com/Magnus-Gille/sagascript/issues/366)): `Failed` lasts
-  `failed_cooldown` (60 s), then one fresh start (half-open); a window that times out and gets no
-  terminal response within `wedge_grace` after `cancel` kills the host; stdin writes are bounded
+  `failed_cooldown` (60 s), then one fresh start (half-open); a window that times out returns at
+  once, and a detached `engine-host-wedge-watch` thread kills the host if it sends no terminal
+  response within `wedge_grace` (30 s) after `cancel`; stdin writes are bounded
   (`Timeouts::write`); the restart backoff is slept unlocked and is cancel-aware.
   `EngineHostClient::reset()` clears `Failed` at once but has no production caller: settings that
   change the engine (host, model, compute units, idle policy) already replace the shared client
@@ -280,7 +281,7 @@ sequenceDiagram
 | Main (UI) thread | Tauri setup, tray/window/overlay APIs, global-shortcut callbacks on macOS (and key-down on Windows), `macos_bare` callbacks, `run_on_main_thread` closures (macOS paste, AppKit focus calls), sync (non-`async`) Tauri commands. |
 | Tokio runtime | `async` Tauri commands, tasks from `tauri::async_runtime::spawn` (dictation stop pipeline, update flow). |
 | Blocking pool | `spawn_blocking`: inference, paste on Windows/Linux, focus-restore wait, recovery file I/O. |
-| Dedicated threads | Settings watcher, startup model warm-up, engine-host reader/stderr/stdin-writer/supervisor threads and the PCM temp dir sweep, audio capture worker and cpal callback, `global-hotkey` event thread (Linux) and key-up polling thread (Windows). |
+| Dedicated threads | Settings watcher, startup model warm-up, engine-host reader/stderr/stdin-writer/supervisor/wedge-watch threads and the PCM temp dir sweep, audio capture worker and cpal callback, `global-hotkey` event thread (Linux) and key-up polling thread (Windows). |
 | CLI | `sagascript_cli::run` builds its own Tokio runtime; inference commands run on a worker thread (16 MiB stack on Windows, `run_inference_command`). |
 
 | Lock | Where | Notes |

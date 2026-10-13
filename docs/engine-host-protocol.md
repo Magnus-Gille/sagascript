@@ -150,11 +150,14 @@ terminates with error `cancelled`. Cancellation is best effort; a window may sti
 - Writes to the host's stdin go through a writer thread and are bounded (5 s, and never longer
   than the request's own timeout). A host that stops reading stdin is killed (counted as a crash)
   and the request fails with a timeout; shutdown never waits on a blocked write.
-- Wedged window: when a `transcribe_window` times out, the client sends `cancel` and waits up to
-  5 s (the wedge grace) for that request's terminal response. Without one the host is stuck in an
+- Wedged window: when a `transcribe_window` times out, the caller gets the timeout at once. A
+  detached watcher sends `cancel` and waits up to 30 s (the wedge grace) for that request's
+  terminal response; the window keeps its slot meanwhile. Without one the host is stuck in an
   uninterruptible call (a Core ML prediction cannot be cancelled, yet `ping` is still answered),
-  so it is killed (counted as a crash) and the next request starts a fresh host. `status.in_flight`
-  is not used for this: it also counts healthy windows of other jobs.
+  so it is killed (counted as a crash) and the next request starts a fresh host. The grace exceeds
+  the longest legitimate uninterruptible stage with margin: a Neural Engine recompile of the
+  encoder took 11.5-16.7 s (#397), and killing a host mid-compile throws the compile away.
+  `status.in_flight` is not used for this: it also counts healthy windows of other jobs.
 - Long audio: decode to 16 kHz mono f32 once, write one PCM file, plan windows with
   `chunk_merge::plan_windows(preferred_window_s, preferred_overlap_s)` with the effective window
   (see `load`), keep at most `max_in_flight − 1` batch windows in flight (`max_in_flight` when it
