@@ -1,0 +1,15 @@
+# Clippy configuration for the src-tauri workspace (#356). Clippy finds this
+# file from every crate below src-tauri/, including the standalone ORT engine
+# host. These keys tune lints that are off in the regular `-D warnings` gate;
+# they matter for the policy lints that scripts/clippy-policy.mjs counts and
+# for crates that deny those lints (see CONTRIBUTING.md, "Clippy policy lints").
+
+# Tests may unwrap, expect, panic and print: that is how a test fails or
+# reports. The policy is about production code.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-print-in-tests = true
+
+too-many-lines-threshold = 150
+cognitive-complexity-threshold = 30

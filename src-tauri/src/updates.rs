@@ -28,6 +28,11 @@ pub async fn check_signed_update(
     app.updater_builder()
         .endpoints(vec![endpoint])
         .map_err(|error| format!("invalid updater endpoint: {error}"))?
+        // The updater shares the app's reqwest 0.13 (#355), whose
+        // native-tls feature would otherwise become its default backend.
+        // Keep the plugin's own choice: rustls (its `rustls-tls` default,
+        // ring provider, platform verifier). Applies to check and download.
+        .configure_client(|client| client.tls_backend_rustls())
         .build()
         .map_err(|error| format!("failed to configure updater: {error}"))?
         .check()
@@ -54,6 +59,8 @@ struct LatestRelease {
 /// neither downloads nor installs anything, and it stores no release data.
 pub async fn check_for_update(current_version: &str) -> Result<UpdateCheck, String> {
     let client = reqwest::Client::builder()
+        // Platform TLS, as for every first-party request (see Cargo.toml).
+        .tls_backend_native()
         .timeout(UPDATE_CHECK_TIMEOUT)
         .user_agent(format!("sagascript/{current_version}"))
         .build()

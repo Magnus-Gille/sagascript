@@ -298,6 +298,9 @@ async fn fetch_inner(
     // Redirects are followed manually so the header-phase idle timeout applies
     // per hop rather than to the whole chain; the total deadline is shared.
     let client = reqwest::Client::builder()
+        // The platform TLS stack, whatever else in the binary enables
+        // rustls (the macOS updater does); see this crate's Cargo.toml.
+        .tls_backend_native()
         .connect_timeout(limits.connect_timeout)
         .redirect(reqwest::redirect::Policy::none())
         .build()

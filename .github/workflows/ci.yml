@@ -6,6 +6,13 @@ on:
   pull_request:
     branches: [main]
 
+# Least privilege (#354): no CI job writes to the repository, so the token is
+# read-only. Every job also sets timeout-minutes (60 for native build/test
+# lanes, 20 for the rest; at least twice the slowest observed run) instead of
+# the 360-minute default.
+permissions:
+  contents: read
+
 # Cancel superseded PR runs (#178): pushes to a PR share one group, so a fix
 # cancels the stale run instead of burning runner-minutes compiling it twice.
 # Pushes (e.g. to `main`) get a unique group per run, so a newer push can
@@ -30,13 +37,14 @@ jobs:
   # range is needed to keep that required path fail-closed.
   scope:
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     outputs:
       docs_only: ${{ steps.classify.outputs.docs_only }}
       scope_trusted: ${{ steps.classify.outputs.scope_trusted }}
       scope_classification: ${{ steps.classify.outputs.scope_classification }}
     steps:
       - name: Checkout scope policy
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 0
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.sha }}
@@ -78,10 +86,11 @@ jobs:
     needs: scope
     if: ${{ needs.scope.result == 'success' && needs.scope.outputs.docs_only != 'true' }}
     runs-on: macos-14
+    timeout-minutes: 60
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
       - name: Select evaluation Python runtime
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
@@ -95,14 +104,15 @@ jobs:
         run: python -m unittest discover -s scripts/diarization_sv -p 'test_reference_dataset.py'
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # v1; toolchain must match rust-toolchain.toml
         with:
+          toolchain: 1.99.0
           components: clippy
 
       - name: Install Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       - name: Cache Rust dependencies
@@ -113,6 +123,14 @@ jobs:
 
       - name: Install npm dependencies
         run: npm ci
+
+      # npm advisories (#355): fail on a high or critical finding anywhere in
+      # the root package-lock.json, dev dependencies included, since they
+      # build the shipped frontend bundle. site/ and tooling/code-health/ have
+      # their own lockfiles; neither ships in the app and neither is audited
+      # here.
+      - name: Audit npm dependencies
+        run: npm audit --audit-level=high
 
       - name: Test frontend lifecycle helpers
         run: |
@@ -130,7 +148,7 @@ jobs:
 
       - name: Upload browser regression diagnostics
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: transcription-browser-diagnostics
           path: ${{ runner.temp }}/transcription-browser
@@ -211,10 +229,11 @@ jobs:
     needs: scope
     if: ${{ needs.scope.result == 'success' && needs.scope.outputs.docs_only != 'true' }}
     runs-on: macos-14
+    timeout-minutes: 60
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
       - name: Select evaluation Python runtime
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
@@ -222,12 +241,14 @@ jobs:
           python-version: "3.12"
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # v1; toolchain must match rust-toolchain.toml
+        with:
+          toolchain: 1.99.0
 
       - name: Install Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       - name: Cache Rust dependencies
@@ -237,7 +258,7 @@ jobs:
           shared-key: sagascript-ci-native
 
       - name: Cache downloaded models
-        uses: actions/cache@v5
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: ~/Library/Application Support/Sagascript/Models
           key: macos-models-${{ hashFiles('src-tauri/crates/sagascript-core/src/settings/manager.rs', 'src-tauri/crates/sagascript-core/src/transcription/model.rs', 'src-tauri/crates/sagascript-core/src/diarization/model.rs') }}
@@ -321,6 +342,7 @@ jobs:
     needs: [scope, test-macos, build-macos]
     if: ${{ always() }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     env:
       SCOPE_RESULT: ${{ needs.scope.result }}
       SCOPE_TRUSTED: ${{ needs.scope.outputs.scope_trusted }}
@@ -345,10 +367,11 @@ jobs:
     needs: scope
     if: ${{ needs.scope.result == 'success' && needs.scope.outputs.docs_only != 'true' }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
       - name: Select evaluation Python runtime
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
@@ -371,8 +394,9 @@ jobs:
             xdotool
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # v1; toolchain must match rust-toolchain.toml
         with:
+          toolchain: 1.99.0
           components: clippy, rustfmt
 
       # Formatting gate (#352). Both Cargo workspaces must be rustfmt-clean:
@@ -385,18 +409,35 @@ jobs:
           cargo fmt --manifest-path engine-host/ort/Cargo.toml --all -- --check
 
       - name: Install Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       # Same rust-cache scheme as the macOS job (#178); the shared key spans
-      # branches while rust-cache keeps OS/target entries separate.
+      # branches while rust-cache keeps OS/target entries separate. The
+      # standalone ORT engine host is its own Cargo workspace (#357).
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          workspaces: src-tauri
+          workspaces: |
+            src-tauri
+            src-tauri/engine-host/ort
           shared-key: sagascript-ci
+
+      # Dependency policy (#355), before any compilation: RustSec advisories,
+      # licenses, banned or duplicated crates and allowed sources, as set in
+      # src-tauri/deny.toml, for both Cargo workspaces. The advisory database
+      # is fetched at run time. rust-cache keeps the installed binary. The ORT
+      # host run allows the policy entries only the main workspace uses.
+      - name: Install cargo-deny
+        run: cargo install --locked cargo-deny --version 0.20.2
+
+      - name: Check Rust dependency policy (cargo-deny)
+        working-directory: src-tauri
+        run: |
+          cargo deny --locked --workspace check
+          cargo deny --locked --manifest-path engine-host/ort/Cargo.toml --workspace check -A license-not-encountered -A license-exception-not-encountered -A unmatched-source
 
       - name: Install npm dependencies
         run: npm ci
@@ -431,6 +472,14 @@ jobs:
         working-directory: src-tauri
         run: cargo clippy -p sagascript-cli --all-targets --no-default-features -- -D warnings
 
+      # Clippy policy lints (#356): unwrap/expect/panic/print/size counts in
+      # production code, per lint and crate, must not rise above
+      # src-tauri/clippy-policy-baseline.json. It re-lints only the workspace
+      # crates (workspace + batch-only CLI); dependencies come from the steps
+      # above. Measures Linux code only. See CONTRIBUTING.md.
+      - name: Clippy policy lints (counts must not rise)
+        run: node scripts/clippy-policy.mjs
+
       - name: Cargo test (headless CLI, batch-only)
         working-directory: src-tauri
         run: cargo test -p sagascript-cli --no-default-features
@@ -463,7 +512,7 @@ jobs:
 
       - name: Upload diarization metric receipts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: diarization-metric-crosscheck
           path: ${{ runner.temp }}/diarization-metric-crosscheck
@@ -493,35 +542,142 @@ jobs:
           fi
           echo "OK: no cpal/ALSA in batch-only tree"
 
+      # The Rust<->Swift engine-host wire format (#357). No CI lane runs
+      # `cargo test --workspace` and cargo never runs a dependency's tests, so
+      # these otherwise ran only in the release gate and windows-package.yml.
+      - name: Cargo test (sagascript-engine-protocol)
+        working-directory: src-tauri
+        run: cargo test -p sagascript-engine-protocol
+
+      # The ONNX Runtime engine host is a separate Cargo workspace (#357), so
+      # the workspace steps above never reach it; windows-package.yml only
+      # builds it. Its tests include the context-biasing parity vectors shared
+      # with the Swift host. ort's `load-dynamic` means neither step needs an
+      # ONNX Runtime binary. rustfmt is gated in "Check Rust formatting".
+      - name: Cargo test (ORT engine host)
+        working-directory: src-tauri/engine-host/ort
+        run: cargo test --locked
+
+      - name: Cargo clippy (ORT engine host)
+        working-directory: src-tauri/engine-host/ort
+        run: cargo clippy --all-targets --locked -- -D warnings
+
+      # Release-profile guard (#357): `release_build_ignores_the_real_environment`
+      # proves a release build ignores SAGASCRIPT_ENGINE_HOST and
+      # SAGASCRIPT_PIANISSIMO_MODEL_DIR. It is compiled only without
+      # debug_assertions and the `dev-overrides` feature, so every debug
+      # `cargo test` above leaves it out.
+      - name: Cargo test (sagascript-core, release-profile dev-override guard)
+        working-directory: src-tauri
+        run: |
+          set -o pipefail
+          cargo test --release -p sagascript-core --lib dev_overrides 2>&1 | tee "$RUNNER_TEMP/release-guard.log"
+          # cargo test exits 0 when the filter matches nothing: prove the guard ran.
+          grep -q 'release_build_ignores_the_real_environment ... ok' "$RUNNER_TEMP/release-guard.log"
+
+  # Minimum supported Rust version (#353). `rust-version` in
+  # src-tauri/Cargo.toml (and engine-host/ort) is a promise to people building
+  # from source; compile with exactly that toolchain so it stays true. Linux is
+  # the cheapest lane that builds every workspace member. RUSTUP_TOOLCHAIN
+  # overrides the newer development pin in rust-toolchain.toml.
+  msrv-linux:
+    needs: scope
+    if: ${{ needs.scope.result == 'success' && needs.scope.outputs.docs_only != 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libasound2-dev \
+            build-essential \
+            file
+
+      - name: Install the declared MSRV toolchain
+        run: |
+          msrv=$(sed -n 's/^rust-version = "\(.*\)"$/\1/p' src-tauri/Cargo.toml)
+          ort_msrv=$(sed -n 's/^rust-version = "\(.*\)"$/\1/p' src-tauri/engine-host/ort/Cargo.toml)
+          test -n "$msrv"
+          test "$msrv" = "$ort_msrv"
+          rustup toolchain install "$msrv" --profile minimal
+          echo "RUSTUP_TOOLCHAIN=$msrv" >> "$GITHUB_ENV"
+          echo "Checking against Rust $msrv"
+
+      - name: Install Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: |
+            src-tauri
+            src-tauri/engine-host/ort
+          shared-key: sagascript-msrv
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      # tauri::generate_context! embeds ../dist, so the app crate needs it.
+      - name: Build frontend
+        run: npm run build
+
+      - name: Cargo check (workspace) on MSRV
+        working-directory: src-tauri
+        run: cargo check --workspace --locked
+
+      - name: Cargo check (headless CLI, batch-only) on MSRV
+        working-directory: src-tauri
+        run: cargo check -p sagascript-cli --no-default-features --locked
+
+      - name: Cargo check (ORT engine host) on MSRV
+        working-directory: src-tauri/engine-host/ort
+        run: cargo check --locked
+
   check-linux:
-    needs: [scope, test-linux]
+    needs: [scope, test-linux, msrv-linux]
     if: ${{ always() }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     env:
       SCOPE_RESULT: ${{ needs.scope.result }}
       SCOPE_TRUSTED: ${{ needs.scope.outputs.scope_trusted }}
       DOCS_ONLY: ${{ needs.scope.outputs.docs_only }}
       LINUX_RESULT: ${{ needs.test-linux.result }}
+      MSRV_RESULT: ${{ needs.msrv-linux.result }}
     steps:
-      - name: Assert Linux CI lane passed
+      - name: Assert Linux CI lanes passed
         run: |
           test "$SCOPE_RESULT" = success
           test "$SCOPE_TRUSTED" = true
           if [ "$DOCS_ONLY" = true ]; then
             test "$LINUX_RESULT" = skipped
+            test "$MSRV_RESULT" = skipped
           else
             test "$DOCS_ONLY" = false
             test "$LINUX_RESULT" = success
+            test "$MSRV_RESULT" = success
           fi
 
   test-windows:
     needs: scope
     if: ${{ needs.scope.result == 'success' && needs.scope.outputs.docs_only != 'true' }}
     runs-on: windows-latest
+    timeout-minutes: 60
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
       - name: Select evaluation Python runtime
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
@@ -532,14 +688,15 @@ jobs:
         run: python -m unittest discover -s scripts/dictation_eval -p 'test_*.py'
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # v1; toolchain must match rust-toolchain.toml
         with:
+          toolchain: 1.99.0
           components: clippy
 
       - name: Install Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       - name: Cache Rust dependencies
@@ -553,6 +710,12 @@ jobs:
 
       - name: Install npm dependencies
         run: npm ci
+
+      # The whole Node test suite on a Windows checkout (#357), not only the
+      # build identity gates above (which stay first so they fail before any
+      # npm or Cargo work). Platform-only cases skip themselves.
+      - name: Test frontend suite
+        run: npm run test:frontend
 
       - name: Build frontend
         run: npm run build
@@ -591,18 +754,21 @@ jobs:
     needs: scope
     if: ${{ needs.scope.result == 'success' && needs.scope.outputs.docs_only != 'true' }}
     runs-on: windows-latest
+    timeout-minutes: 60
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # v1; toolchain must match rust-toolchain.toml
+        with:
+          toolchain: 1.99.0
 
       - name: Install Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       - name: Cache Rust dependencies
@@ -612,7 +778,7 @@ jobs:
           shared-key: sagascript-ci-native
 
       - name: Cache downloaded models
-        uses: actions/cache@v5
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: ~\AppData\Roaming\Sagascript\Models
           key: windows-models-${{ hashFiles('src-tauri/crates/sagascript-core/src/settings/manager.rs', 'src-tauri/crates/sagascript-core/src/transcription/model.rs', 'src-tauri/crates/sagascript-core/src/diarization/model.rs') }}
@@ -673,8 +839,16 @@ jobs:
           $env:BINARY = "src-tauri\target\release\sagascript.exe"
           & $env:BINARY completions powershell | Out-Null
 
+      # The two model smoke steps stay non-blocking (#357), but no longer
+      # silently: a step's `conclusion` is reported AFTER continue-on-error, so
+      # it read "success" while the transcription actually died after
+      # "Encoding audio..." in about half of the runs since 2026-10-09 (masked
+      # exit 1; suspected non-portable whisper.cpp build in the shared native
+      # cache). The report step below turns every masked failure into a
+      # warning annotation and a job-summary line until the cause is fixed.
       - name: Smoke test — download model and transcribe
-        continue-on-error: true  # Model download/GPU availability varies across CI runners
+        id: smoke_transcribe
+        continue-on-error: true
         run: |
           $env:BINARY = "src-tauri\target\release\sagascript.exe"
           & $env:BINARY download-model nb-whisper-tiny
@@ -683,7 +857,8 @@ jobs:
           if ($result -notmatch "(?i)stortinget") { throw "Expected 'stortinget' in output" }
 
       - name: Smoke test — transcribe with JSON output
-        continue-on-error: true  # Model download/GPU availability varies across CI runners
+        id: smoke_json
+        continue-on-error: true
         shell: cmd
         run: |
           set BINARY=src-tauri\target\release\sagascript.exe
@@ -693,10 +868,27 @@ jobs:
           findstr /C:"duration_seconds" json_output.txt
           findstr /C:"language" json_output.txt
 
+      - name: Report masked smoke test failures
+        if: ${{ always() }}
+        shell: bash
+        env:
+          TRANSCRIBE_OUTCOME: ${{ steps.smoke_transcribe.outcome }}
+          JSON_OUTCOME: ${{ steps.smoke_json.outcome }}
+        run: |
+          for pair in "download model and transcribe=$TRANSCRIBE_OUTCOME" "transcribe with JSON output=$JSON_OUTCOME"; do
+            name=${pair%%=*}
+            outcome=${pair##*=}
+            echo "Windows smoke test — $name: $outcome" >> "$GITHUB_STEP_SUMMARY"
+            if [ "$outcome" != success ]; then
+              echo "::warning title=Windows smoke test failed (non-blocking)::Smoke test — $name: $outcome (masked by continue-on-error, see #357)"
+            fi
+          done
+
   check-windows:
     needs: [scope, test-windows, build-windows]
     if: ${{ always() }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     env:
       SCOPE_RESULT: ${{ needs.scope.result }}
       SCOPE_TRUSTED: ${{ needs.scope.outputs.scope_trusted }}

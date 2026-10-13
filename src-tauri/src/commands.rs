@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use tauri::State;
@@ -460,6 +460,19 @@ mod glossary_options_tests {
 /// cpal::Stream is !Send and we need sync access from Tauri commands
 pub type SharedController = Mutex<AppController>;
 
+/// Lock name for the shared controller in poison-recovery logs.
+pub const CONTROLLER_LOCK: &str = "app_controller";
+
+/// Lock the shared controller, recovering it if a panic poisoned the mutex
+/// (ADR 0005, #359). Every command and hotkey path re-reads `state()` and the
+/// settings it needs, and interrupted work is ended through the existing
+/// stop/cancel/error paths, so continuing with the recovered controller is
+/// safe; propagating the poison would panic every later command and hotkey
+/// press until the app restarts. Never unwrap the plain `lock()` result.
+pub fn lock_controller(controller: &SharedController) -> MutexGuard<'_, AppController> {
+    sagascript_core::sync::lock_or_recover(controller, CONTROLLER_LOCK)
+}
+
 /// Shared whisper backend — separate from AppController to avoid holding
 /// the controller lock during blocking transcription
 pub type SharedWhisper = Arc<WhisperBackend>;
@@ -468,14 +481,16 @@ pub type SharedWhisper = Arc<WhisperBackend>;
 pub async fn get_active_hotkey_profile(
     controller: State<'_, SharedController>,
 ) -> Result<Option<HotkeyProfile>, String> {
-    Ok(controller.lock().unwrap().active_hotkey_profile().cloned())
+    Ok(lock_controller(&controller)
+        .active_hotkey_profile()
+        .cloned())
 }
 
 // -- State queries --
 
 #[tauri::command]
 pub async fn get_state(controller: State<'_, SharedController>) -> Result<AppState, String> {
-    let ctrl = controller.lock().unwrap();
+    let ctrl = lock_controller(&controller);
     Ok(ctrl.state())
 }
 
@@ -487,7 +502,7 @@ pub async fn get_engine_load_state() -> Result<serde_json::Value, String> {
 
 #[tauri::command]
 pub async fn get_settings(controller: State<'_, SharedController>) -> Result<Settings, String> {
-    let ctrl = controller.lock().unwrap();
+    let ctrl = lock_controller(&controller);
     let mut settings = ctrl.settings().clone();
     if settings.hotkey_profiles.is_empty() {
         settings.hotkey_profiles = settings.resolved_hotkey_profiles();
@@ -499,7 +514,7 @@ pub async fn get_settings(controller: State<'_, SharedController>) -> Result<Set
 pub async fn get_last_transcription(
     controller: State<'_, SharedController>,
 ) -> Result<Option<String>, String> {
-    let ctrl = controller.lock().unwrap();
+    let ctrl = lock_controller(&controller);
     Ok(ctrl.last_transcription().map(|s| s.to_string()))
 }
 
@@ -507,13 +522,13 @@ pub async fn get_last_transcription(
 pub async fn get_last_error(
     controller: State<'_, SharedController>,
 ) -> Result<Option<String>, String> {
-    let ctrl = controller.lock().unwrap();
+    let ctrl = lock_controller(&controller);
     Ok(ctrl.last_error().map(|s| s.to_string()))
 }
 
 #[tauri::command]
 pub async fn is_model_ready(controller: State<'_, SharedController>) -> Result<bool, String> {
-    let ctrl = controller.lock().unwrap();
+    let ctrl = lock_controller(&controller);
     Ok(ctrl.is_model_ready())
 }
 
@@ -523,7 +538,7 @@ pub async fn get_loaded_model(
     controller: State<'_, SharedController>,
     whisper: State<'_, SharedWhisper>,
 ) -> Result<LoadedModelInfo, String> {
-    let ctrl = controller.lock().unwrap();
+    let ctrl = lock_controller(&controller);
     let chosen = ctrl
         .settings()
         .dictation_model_for_profile(&ctrl.settings().default_profile().id)?;
@@ -572,7 +587,7 @@ fn set_language_for_controller(
         notices = apply_language_selection(settings, language)?;
         Ok(())
     })?;
-    let mut ctrl = controller.lock().unwrap();
+    let mut ctrl = lock_controller(controller);
     ctrl.update_settings(persisted.clone());
     drop(ctrl);
     crate::update_profiles_menu(app, &persisted.resolved_hotkey_profiles());
@@ -650,7 +665,7 @@ pub async fn set_onboarding_completed(
     let persisted = sagascript_core::settings::store::update(|settings| {
         settings.has_completed_onboarding = true;
     })?;
-    let mut ctrl = controller.lock().unwrap();
+    let mut ctrl = lock_controller(&controller);
     ctrl.settings_mut().has_completed_onboarding = persisted.has_completed_onboarding;
     drop(ctrl);
 
@@ -666,7 +681,7 @@ pub async fn set_whisper_model(
     let id = serde_json::to_value(model)
         .and_then(serde_json::from_value::<String>)
         .map_err(|error| error.to_string())?;
-    let profile_id = controller.lock().unwrap().settings().default_profile().id;
+    let profile_id = lock_controller(&controller).settings().default_profile().id;
     set_profile_model(controller, profile_id, id).await
 }
 
@@ -675,7 +690,7 @@ pub async fn set_pianissimo_dictation(
     controller: State<'_, SharedController>,
     enabled: bool,
 ) -> Result<(), String> {
-    let profile_id = controller.lock().unwrap().settings().default_profile().id;
+    let profile_id = lock_controller(&controller).settings().default_profile().id;
     set_profile_model(
         controller,
         profile_id,
@@ -693,9 +708,7 @@ pub async fn set_file_transcription_model(
     let persisted = sagascript_core::settings::store::update(|settings| {
         settings.file_transcription_model = choice;
     })?;
-    controller
-        .lock()
-        .unwrap()
+    lock_controller(&controller)
         .settings_mut()
         .file_transcription_model = persisted.file_transcription_model;
     Ok(())
@@ -713,7 +726,7 @@ pub async fn set_profile_model(
         settings.set_profile_model(&profile_id, preference)
     })?;
     let warm = {
-        let mut ctrl = controller.lock().unwrap();
+        let mut ctrl = lock_controller(&controller);
         let warm = sagascript_core::transcription::pianissimo_backend::profile_change_needs_warm(
             ctrl.settings(),
             &persisted,
@@ -735,7 +748,7 @@ pub async fn set_auto_select_model(
     enabled: bool,
 ) -> Result<(), String> {
     let (profile_id, model_id) = {
-        let ctrl = controller.lock().unwrap();
+        let ctrl = lock_controller(&controller);
         let settings = ctrl.settings();
         let model_id = if enabled {
             "auto".into()
@@ -767,9 +780,7 @@ pub async fn set_hotkey(
     shortcut: String,
 ) -> Result<(), String> {
     validate_hotkey(&shortcut)?;
-    let mut profiles = controller
-        .lock()
-        .unwrap()
+    let mut profiles = lock_controller(&controller)
         .settings()
         .resolved_hotkey_profiles();
     let profile_index = profiles
@@ -796,21 +807,78 @@ pub(crate) struct HotkeyConfigurationLease<'a>(&'a SharedController);
 
 impl Drop for HotkeyConfigurationLease<'_> {
     fn drop(&mut self) {
-        self.0.lock().unwrap().end_hotkey_configuration_change();
+        lock_controller(self.0).end_hotkey_configuration_change();
     }
 }
 
 pub(crate) fn acquire_hotkey_configuration(
     controller: &SharedController,
 ) -> Result<HotkeyConfigurationLease<'_>, String> {
-    if !controller
-        .lock()
-        .unwrap()
-        .begin_hotkey_configuration_change()
-    {
+    if !lock_controller(controller).begin_hotkey_configuration_change() {
         return Err("Finish or cancel the active dictation before changing shortcuts".into());
     }
     Ok(HotkeyConfigurationLease(controller))
+}
+
+#[cfg(test)]
+mod controller_poison_tests {
+    use super::*;
+
+    /// Poison `mutex` the way production would: another thread panics while
+    /// holding the guard (#359).
+    fn poison<T: Send>(mutex: &Mutex<T>) {
+        std::thread::scope(|scope| {
+            let panicked = scope
+                .spawn(|| {
+                    let _guard = mutex.lock().unwrap();
+                    panic!("injected panic while holding the lock (#359)");
+                })
+                .join();
+            assert!(panicked.is_err());
+        });
+        assert!(mutex.is_poisoned());
+    }
+
+    fn controller() -> SharedController {
+        Mutex::new(AppController::new(Settings::default()))
+    }
+
+    /// A panic under the controller lock must not turn every later command
+    /// into a panic: the next real command path gets the controller.
+    #[test]
+    fn commands_keep_working_after_a_panic_poisoned_the_controller() {
+        let controller = controller();
+        poison(&controller);
+
+        let lease = acquire_hotkey_configuration(&controller)
+            .expect("a poisoned controller must be recovered, not propagated");
+        assert!(
+            acquire_hotkey_configuration(&controller).is_err(),
+            "the recovered controller still enforces the single-change lease"
+        );
+        drop(lease);
+        assert!(acquire_hotkey_configuration(&controller).is_ok());
+        assert!(!controller.is_poisoned(), "recovery clears the poison flag");
+    }
+
+    /// The lease's Drop runs during unwinding when a settings change panics.
+    /// Re-panicking on the poisoned controller there would abort the process.
+    #[test]
+    fn hotkey_configuration_lease_drop_tolerates_a_poisoned_controller() {
+        let controller = controller();
+        let lease = acquire_hotkey_configuration(&controller).unwrap();
+        poison(&controller);
+
+        let dropped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(lease)));
+        assert!(
+            dropped.is_ok(),
+            "Drop must not panic on a poisoned controller"
+        );
+        assert!(
+            acquire_hotkey_configuration(&controller).is_ok(),
+            "the lease was released despite the poison"
+        );
+    }
 }
 
 fn apply_hotkey_change(
@@ -822,7 +890,7 @@ fn apply_hotkey_change(
     use tauri::Emitter;
     let _transition = health.transition_guard();
     let _recording_lease = acquire_hotkey_configuration(&controller)?;
-    let old_settings = controller.lock().unwrap().settings().clone();
+    let old_settings = lock_controller(&controller).settings().clone();
     let (candidate, notices) =
         update.prepare_with_notices(&sagascript_core::settings::store::load())?;
     let new_shortcuts = candidate.resolved_shortcuts();
@@ -844,10 +912,7 @@ fn apply_hotkey_change(
         let persisted = sagascript_core::settings::store::try_update(|settings| {
             update.apply_registered(settings, &new_shortcuts)
         })?;
-        controller
-            .lock()
-            .unwrap()
-            .update_settings(persisted.clone());
+        lock_controller(&controller).update_settings(persisted.clone());
         let change = health.record(&new_primary, None, old_operational);
         if change.changed {
             let _ = app.emit(
@@ -976,9 +1041,9 @@ fn apply_hotkey_change(
     };
 
     {
-        let mut ctrl = controller.lock().unwrap();
+        let mut ctrl = lock_controller(&controller);
         ctrl.update_settings(persisted.clone());
-        ctrl.hotkey_service_mut().set_shortcut(&persisted.hotkey);
+        info!("Hotkey set to: {}", persisted.hotkey);
     }
 
     let change = health.record(
@@ -1056,7 +1121,7 @@ pub async fn hotkey_status(health: State<'_, HotkeyHealth>) -> Result<HotkeyStat
 
 #[tauri::command]
 pub async fn start_recording(controller: State<'_, SharedController>) -> Result<(), String> {
-    let mut ctrl = controller.lock().unwrap();
+    let mut ctrl = lock_controller(&controller);
     gui_start_recording_result(ctrl.start_recording())
 }
 
@@ -1065,7 +1130,7 @@ pub async fn start_training_recording(
     controller: State<'_, SharedController>,
     profile_id: String,
 ) -> Result<(), String> {
-    let mut ctrl = controller.lock().unwrap();
+    let mut ctrl = lock_controller(&controller);
     ensure_known_profile(ctrl.settings(), &profile_id)?;
     let profile = ctrl
         .settings()
@@ -1143,7 +1208,7 @@ async fn stop_and_transcribe_impl(
     allow_empty_not_recording: bool,
 ) -> Result<TrainingTranscript, String> {
     let (audio, language, effective_model, opts, glossary, use_pianissimo) = {
-        let mut ctrl = controller.lock().unwrap();
+        let mut ctrl = lock_controller(&controller);
         // A late/duplicate normal stop racing the hotkey path remains an
         // Ok-empty no-op so it cannot clobber an in-flight transcription.
         // Teach owns its recording lifecycle, so a missing recording there is
@@ -1185,10 +1250,7 @@ async fn stop_and_transcribe_impl(
 
     if audio.is_empty() {
         let error = "No audio captured".to_string();
-        let completion = controller
-            .lock()
-            .unwrap()
-            .finish_transcription(Err(error.clone()));
+        let completion = lock_controller(&controller).finish_transcription(Err(error.clone()));
         return Err(completion.err().unwrap_or(error));
     }
 
@@ -1222,7 +1284,7 @@ async fn stop_and_transcribe_impl(
         let timeout = Duration::from_secs(TRANSCRIPTION_TIMEOUT_SECS);
         match tokio::time::timeout(timeout, &mut fut).await {
             Ok(Ok((result, timings))) => {
-                let mut ctrl = controller.lock().unwrap();
+                let mut ctrl = lock_controller(&controller);
                 if timings.model_acquisition_started {
                     ctrl.record_phase(
                         "model_acquisition",
@@ -1273,10 +1335,7 @@ async fn stop_and_transcribe_impl(
         .as_ref()
         .map(|transcript| transcript.effective_text.clone())
         .map_err(Clone::clone);
-    controller
-        .lock()
-        .unwrap()
-        .finish_transcription(completion)?;
+    lock_controller(&controller).finish_transcription(completion)?;
     training_result
 }
 
@@ -1303,7 +1362,7 @@ pub async fn transcribe_training_file(
     }
 
     let (language, effective_model, opts, glossary, use_pianissimo) = {
-        let ctrl = controller.lock().unwrap();
+        let ctrl = lock_controller(&controller);
         ensure_known_profile(ctrl.settings(), &profile_id)?;
         let profile = ctrl
             .settings()
@@ -1404,7 +1463,7 @@ pub async fn cancel_recording(
     app: tauri::AppHandle,
     controller: State<'_, SharedController>,
 ) -> Result<(), String> {
-    let mut ctrl = controller.lock().unwrap();
+    let mut ctrl = lock_controller(&controller);
     ctrl.cancel_recording();
     drop(ctrl);
     crate::overlay::hide(&app);
@@ -1422,7 +1481,7 @@ pub async fn is_model_downloaded(whisper_model: WhisperModel) -> Result<bool, St
 pub async fn get_model_info(
     controller: State<'_, SharedController>,
 ) -> Result<Vec<ModelInfo>, String> {
-    let ctrl = controller.lock().unwrap();
+    let ctrl = lock_controller(&controller);
     let profile = ctrl.settings().default_profile();
     let effective = ctrl.settings().dictation_model_for_profile(&profile.id)?;
     Ok(lineup_model_infos(
@@ -1513,7 +1572,7 @@ pub async fn get_profile_model_info(
     controller: State<'_, SharedController>,
     profile_id: String,
 ) -> Result<ModelInfo, String> {
-    let ctrl = controller.lock().unwrap();
+    let ctrl = lock_controller(&controller);
     let choice = ctrl.settings().dictation_model_for_profile(&profile_id)?;
     Ok(model_info_for(choice, true))
 }
@@ -1571,7 +1630,7 @@ pub async fn get_dictation_model_info(
     controller: State<'_, SharedController>,
     language: Language,
 ) -> Result<ModelInfo, String> {
-    let profile = controller.lock().unwrap().settings().default_profile();
+    let profile = lock_controller(&controller).settings().default_profile();
     if profile.language == language {
         return get_profile_model_info(controller, profile.id).await;
     }
@@ -1630,7 +1689,7 @@ pub async fn set_auto_paste(
     let persisted = sagascript_core::settings::store::update(|settings| {
         settings.auto_paste = effective;
     })?;
-    let mut ctrl = controller.lock().unwrap();
+    let mut ctrl = lock_controller(&controller);
     ctrl.settings_mut().auto_paste = persisted.auto_paste;
     info!("Auto-paste: {effective}");
     if enabled && !permission_granted {
@@ -1661,7 +1720,7 @@ pub async fn set_show_overlay(
     let persisted = sagascript_core::settings::store::update(|settings| {
         settings.show_overlay = enabled;
     })?;
-    let mut ctrl = controller.lock().unwrap();
+    let mut ctrl = lock_controller(&controller);
     ctrl.settings_mut().show_overlay = persisted.show_overlay;
     drop(ctrl);
     crate::overlay::on_show_overlay_changed(&app, persisted.show_overlay);
@@ -1675,7 +1734,7 @@ pub async fn set_initial_prompt(
     prompt: String,
     expected_source: Option<String>,
 ) -> Result<(), String> {
-    let profile_id = controller.lock().unwrap().settings().default_profile().id;
+    let profile_id = lock_controller(&controller).settings().default_profile().id;
     set_profile_glossary(controller, profile_id, prompt, expected_source).await
 }
 
@@ -1848,7 +1907,7 @@ pub async fn set_profile_glossary(
     });
     match persisted {
         Ok(persisted) => {
-            controller.lock().unwrap().update_settings(persisted);
+            lock_controller(&controller).update_settings(persisted);
             info!(source_len, "Profile personal dictionary updated");
             Ok(())
         }
@@ -1856,7 +1915,7 @@ pub async fn set_profile_glossary(
             if let (Some(expected), Some(persisted_source)) =
                 (expected_source.as_deref(), conflict_source.as_ref())
             {
-                let mut ctrl = controller.lock().unwrap();
+                let mut ctrl = lock_controller(&controller);
                 reconcile_profile_dictionary_after_conflict(
                     ctrl.settings_mut(),
                     &profile_id,
@@ -2198,7 +2257,9 @@ pub async fn apply_training_glossary(
         apply_reviewed_training_candidates(settings, &heard, &corrected, &profile_id, &accepted)
     })?;
 
-    controller.lock().unwrap().settings_mut().profile_glossaries = persisted.profile_glossaries;
+    lock_controller(&controller)
+        .settings_mut()
+        .profile_glossaries = persisted.profile_glossaries;
     info!(accepted_count, profile_id = %profile_id, "Applied reviewed training glossary suggestions");
     Ok(())
 }
@@ -2379,7 +2440,7 @@ pub async fn set_beam_size(
     let persisted = sagascript_core::settings::store::update(|settings| {
         settings.beam_size = beam_size;
     })?;
-    let mut ctrl = controller.lock().unwrap();
+    let mut ctrl = lock_controller(&controller);
     ctrl.settings_mut().beam_size = persisted.beam_size;
     info!("Beam size: {beam_size}");
     Ok(())
@@ -2393,7 +2454,7 @@ pub async fn set_temperature_fallback(
     let persisted = sagascript_core::settings::store::update(|settings| {
         settings.temperature_fallback = enabled;
     })?;
-    let mut ctrl = controller.lock().unwrap();
+    let mut ctrl = lock_controller(&controller);
     ctrl.settings_mut().temperature_fallback = persisted.temperature_fallback;
     info!("Temperature fallback: {enabled}");
     Ok(())
@@ -2408,7 +2469,7 @@ pub async fn set_vad_enabled(
         settings.vad_enabled = enabled;
     })?;
     {
-        let mut ctrl = controller.lock().unwrap();
+        let mut ctrl = lock_controller(&controller);
         ctrl.settings_mut().vad_enabled = persisted.vad_enabled;
     }
     // Fetch the Silero VAD model so it's ready for the next dictation. Done
@@ -2433,7 +2494,7 @@ pub async fn set_engine_prewarm(
     let persisted = sagascript_core::settings::store::update(|settings| {
         settings.engine_prewarm = mode;
     })?;
-    controller.lock().unwrap().settings_mut().engine_prewarm = persisted.engine_prewarm;
+    lock_controller(&controller).settings_mut().engine_prewarm = persisted.engine_prewarm;
     info!("Engine prewarm: {}", mode.id());
     Ok(())
 }
@@ -2449,9 +2510,7 @@ pub async fn set_engine_idle_unload_minutes(
     let persisted = sagascript_core::settings::store::update(|settings| {
         settings.engine_idle_unload_minutes = minutes;
     })?;
-    controller
-        .lock()
-        .unwrap()
+    lock_controller(&controller)
         .settings_mut()
         .engine_idle_unload_minutes = persisted.engine_idle_unload_minutes;
     info!("Engine idle unload: {minutes} min");
@@ -2481,7 +2540,7 @@ pub async fn engine_status(
     let installed = pianissimo_model::is_downloaded();
     let host = backend::resolve_host();
     let selected = {
-        let ctrl = controller.lock().unwrap();
+        let ctrl = lock_controller(&controller);
         let settings = ctrl.settings();
         settings.file_transcription_model == FileModelPreference::PianissimoOriginal
             || settings.profile_models.values().any(|m| *m == FileModelPreference::PianissimoOriginal)
@@ -2555,10 +2614,7 @@ pub async fn acknowledge_update_result(
     controller: State<'_, SharedController>,
     expected_text: String,
 ) -> Result<bool, String> {
-    controller
-        .lock()
-        .unwrap()
-        .acknowledge_update_result(&expected_text)
+    lock_controller(&controller).acknowledge_update_result(&expected_text)
 }
 
 fn update_recovery_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
@@ -2807,7 +2863,7 @@ pub async fn transcribe_file(
     let result_id = run_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
     let pianissimo_glossary = {
-        let ctrl = controller.lock().unwrap();
+        let ctrl = lock_controller(&controller);
         let settings = ctrl.settings();
         let language = file_transcription_language(settings, profile_id.as_deref())?;
         // Diarization needs Whisper, so an Auto preference must not pick Pianissimo for it.
@@ -2839,7 +2895,7 @@ pub async fn transcribe_file(
         )
         .await?;
         activity.set_result_pending(&result_id, true)?;
-        if auto_paste.unwrap_or(true) && controller.lock().unwrap().settings().auto_paste {
+        if auto_paste.unwrap_or(true) && lock_controller(&controller).settings().auto_paste {
             let paste_text = text.clone();
             app.run_on_main_thread(move || {
                 if let Err(error) = crate::paste::PasteService::new().paste(&paste_text) {
@@ -2851,7 +2907,7 @@ pub async fn transcribe_file(
         return Ok(text);
     }
     let context = {
-        let ctrl = controller.lock().unwrap();
+        let ctrl = lock_controller(&controller);
         file_transcription_context(ctrl.settings(), profile_id.as_deref(), prompt.as_deref())?
     };
 
@@ -2865,7 +2921,7 @@ pub async fn transcribe_file(
         )
         .await?;
         activity.set_result_pending(&result_id, true)?;
-        if auto_paste.unwrap_or(true) && controller.lock().unwrap().settings().auto_paste {
+        if auto_paste.unwrap_or(true) && lock_controller(&controller).settings().auto_paste {
             let paste_text = text.clone();
             app.run_on_main_thread(move || {
                 if let Err(error) = crate::paste::PasteService::new().paste(&paste_text) {
@@ -3042,7 +3098,7 @@ pub async fn transcribe_file(
 
         // Auto-paste if enabled
         let should_paste = {
-            let c = controller.lock().unwrap();
+            let c = lock_controller(&controller);
             auto_paste.unwrap_or(true) && c.settings().auto_paste
         };
         if should_paste {
@@ -3140,7 +3196,7 @@ pub async fn transcribe_file(
 
             // Auto-paste if enabled
             let should_paste = {
-                let c = controller.lock().unwrap();
+                let c = lock_controller(&controller);
                 auto_paste.unwrap_or(true) && c.settings().auto_paste
             };
 
@@ -3467,7 +3523,9 @@ mod macos_mic {
         // This properly attributes the permission request to the app's bundle ID.
         let callback = std::sync::Mutex::new(Some(callback));
         let completion = block::ConcreteBlock::new(move |granted: bool| {
-            if let Some(cb) = callback.lock().unwrap().take() {
+            if let Some(cb) =
+                sagascript_core::sync::lock_or_recover(&callback, "mic_permission.callback").take()
+            {
                 cb(granted);
             }
         });

@@ -644,7 +644,9 @@ where
         .map_err(|e| format!("Failed to lock settings: {e}"))?;
 
     let result = operation();
-    if let Err(e) = lock_file.unlock() {
+    // fs2's trait method, spelled out: from Rust 1.89 the inherent
+    // `File::unlock` shadows it, and the 1.88 MSRV does not have that.
+    if let Err(e) = FileExt::unlock(&lock_file) {
         tracing::warn!(
             "Failed to unlock settings file {}: {e}",
             lock_path.display()

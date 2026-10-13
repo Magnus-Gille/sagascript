@@ -60,9 +60,7 @@ pub async fn plan_meeting_reprocessing(
     }
     #[cfg(feature = "diarization")]
     {
-        let settings = controller
-            .lock()
-            .map_err(|_| "Settings are unavailable")?
+        let settings = crate::commands::lock_controller(&controller)
             .settings()
             .clone();
         let context = crate::commands::file_transcription_context(

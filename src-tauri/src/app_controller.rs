@@ -4,10 +4,8 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 use tracing::{info, warn};
 
-use crate::hotkey::HotkeyService;
 use crate::logging::log_events;
 use crate::logging::LoggingService;
-use crate::paste::PasteService;
 use sagascript_core::audio::AudioCaptureService;
 use sagascript_core::error::DictationError;
 use sagascript_core::settings::{canonical_hotkey, FileModel, HotkeyMode, HotkeyProfile, Settings};
@@ -47,6 +45,8 @@ pub enum AppState {
     Idle,
     Recording,
     Transcribing,
+    // Never constructed yet; kept because it is part of the serialized state
+    // contract the frontend declares (`AppState` in src/lib/api.ts).
     #[allow(dead_code)]
     Error,
 }
@@ -56,7 +56,6 @@ impl AppState {
         matches!(self, AppState::Recording)
     }
 
-    #[allow(dead_code)]
     pub fn is_busy(&self) -> bool {
         matches!(self, AppState::Recording | AppState::Transcribing)
     }
@@ -66,9 +65,6 @@ impl AppState {
 pub struct AppController {
     state: AppState,
     audio: AudioCaptureService,
-    #[allow(dead_code)]
-    paste: PasteService,
-    hotkey: HotkeyService,
     logging: LoggingService,
     settings: Settings,
     recording_start: Option<Instant>,
@@ -108,8 +104,6 @@ impl AppController {
         Self {
             state: AppState::Idle,
             audio: AudioCaptureService::new(),
-            paste: PasteService::new(),
-            hotkey: HotkeyService::new(),
             logging,
             settings,
             recording_start: None,
@@ -196,10 +190,6 @@ impl AppController {
 
     pub fn settings_mut(&mut self) -> &mut Settings {
         &mut self.settings
-    }
-
-    pub fn hotkey_service_mut(&mut self) -> &mut HotkeyService {
-        &mut self.hotkey
     }
 
     pub fn last_transcription(&self) -> Option<&str> {
@@ -637,7 +627,6 @@ impl AppController {
                 warn!("Could not track the pending live transcription result: {error}");
             }
         }
-        self.audio.clear_last_captured();
         self.state = AppState::Idle;
         self.active_work_lease = None;
         self.active_hotkey_profile = None;
@@ -649,10 +638,9 @@ impl AppController {
     }
 
     /// Complete a quiet push-to-talk cancellation without replacing the last
-    /// useful transcript, surfacing an error, or leaving retry audio behind.
+    /// useful transcript or surfacing an error.
     pub fn on_no_speech_detected(&mut self) {
         self.end_session("no_speech");
-        self.audio.clear_last_captured();
         self.state = AppState::Idle;
         self.active_work_lease = None;
         self.active_hotkey_profile = None;
@@ -717,19 +705,9 @@ impl AppController {
         }
     }
 
-    /// Auto-paste text if enabled
-    #[allow(dead_code)]
-    pub fn auto_paste(&self, text: &str) -> Result<(), DictationError> {
-        if !self.settings.auto_paste {
-            return Ok(());
-        }
-        self.paste.paste(text)
-    }
-
     /// Cancel recording without transcribing
     pub fn complete_cancelled_recording(&mut self) {
         self.end_session("cancelled");
-        self.audio.clear_last_captured();
         self.state = AppState::Idle;
         self.active_work_lease = None;
         self.active_hotkey_profile = None;
@@ -786,11 +764,6 @@ impl AppController {
         self.recording_start
             .map(|s| s.elapsed())
             .unwrap_or(Duration::ZERO)
-    }
-
-    #[allow(dead_code)]
-    pub fn set_model_ready(&mut self, ready: bool) {
-        self.model_ready = ready;
     }
 
     /// Update settings
@@ -1029,18 +1002,6 @@ mod tests {
             ctrl.settings().language,
             sagascript_core::settings::Language::Swedish
         );
-    }
-
-    // -- Model ready --
-
-    #[test]
-    fn set_model_ready() {
-        let mut ctrl = default_controller();
-        assert!(!ctrl.is_model_ready());
-        ctrl.set_model_ready(true);
-        assert!(ctrl.is_model_ready());
-        ctrl.set_model_ready(false);
-        assert!(!ctrl.is_model_ready());
     }
 
     // -- Transcription callbacks --
@@ -1498,16 +1459,6 @@ mod tests {
         ctrl.state = AppState::Transcribing;
         let result = ctrl.handle_hotkey_down().unwrap();
         assert_eq!(result, HotkeyDownResult::NoOp);
-    }
-
-    // -- auto_paste --
-
-    #[test]
-    fn auto_paste_disabled_is_noop() {
-        let mut ctrl = default_controller();
-        ctrl.settings_mut().auto_paste = false;
-        // Should return Ok without attempting paste
-        assert!(ctrl.auto_paste("test").is_ok());
     }
 
     // -- cancel_recording --

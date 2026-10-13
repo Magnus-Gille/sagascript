@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
-use crate::commands::{file_transcription_context, SharedController};
+use crate::commands::{file_transcription_context, lock_controller, SharedController};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -155,7 +155,7 @@ async fn begin_job(
             );
         }
         let id = uuid::Uuid::new_v4().to_string();
-        let mut ctrl = controller.lock().map_err(|_| lock_error())?;
+        let mut ctrl = lock_controller(&controller);
         let settings = ctrl.settings().clone();
         let context =
             file_transcription_context(&settings, profile_id.as_deref(), prompt.as_deref())?;
@@ -287,23 +287,17 @@ async fn begin_job(
                 if let Some(job) = slot.as_mut().filter(|job| job.snapshot.id == worker_id) {
                     // Freeze the durations only once the actual worker has exited.
                     job.snapshot = job.snapshot_at(Instant::now());
-                    let controller = app.state::<SharedController>();
-                    if let Ok(mut ctrl) = controller.lock() {
-                        let has_result = match &result {
-                            Ok(JobOutput::Import(_)) => true,
-                            #[cfg(feature = "diarization")]
-                            Ok(JobOutput::Reprocessing(_)) => true,
-                            _ => false,
-                        };
-                        if has_result {
-                            if let Err(error) = ctrl
-                                .set_update_result_pending(&format!("meeting:{worker_id}"), true)
-                            {
-                                tracing::warn!(%error, "Could not track pending meeting result");
-                            }
-                        }
-                        released = ctrl.finish_meeting_job(&worker_id);
-                    }
+                    let has_result = match &result {
+                        Ok(JobOutput::Import(_)) => true,
+                        #[cfg(feature = "diarization")]
+                        Ok(JobOutput::Reprocessing(_)) => true,
+                        _ => false,
+                    };
+                    released = release_meeting_lease(
+                        &app.state::<SharedController>(),
+                        &worker_id,
+                        has_result,
+                    );
                     if released {
                         finish_snapshot(
                             &mut job.snapshot,
@@ -327,6 +321,21 @@ async fn begin_job(
         });
         Ok(id)
     }
+}
+
+/// Hand the controller back after the meeting worker exited: track a pending
+/// result for the updater and end the controller's meeting lease. Returns
+/// whether the lease for `worker_id` was released.
+fn release_meeting_lease(controller: &SharedController, worker_id: &str, has_result: bool) -> bool {
+    // Recover a poisoned controller (ADR 0005): skipping the release would
+    // leave it Transcribing with this job's lease for the rest of the session.
+    let mut ctrl = lock_controller(controller);
+    if has_result {
+        if let Err(error) = ctrl.set_update_result_pending(&format!("meeting:{worker_id}"), true) {
+            tracing::warn!(%error, "Could not track pending meeting result");
+        }
+    }
+    ctrl.finish_meeting_job(worker_id)
 }
 
 fn finish_snapshot(

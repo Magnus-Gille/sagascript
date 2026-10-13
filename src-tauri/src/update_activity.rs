@@ -1,6 +1,13 @@
+use sagascript_core::sync::lock_or_recover;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use tokio::sync::oneshot;
+
+// Recovered as-is after a panic (ADR 0005): each critical section is one
+// counter/flag/set update or `Option` swap, so the data stays valid. The lease
+// `Drop`s run while unwinding, where a second panic would abort the app.
+const PREPARATION_LOCK: &str = "update.preparation";
+const ACTIVITY_LOCK: &str = "update.activity";
 
 struct PendingPreparation {
     nonce: String,
@@ -20,7 +27,7 @@ impl UpdatePreparation {
     pub fn begin(&self) -> (String, oneshot::Receiver<Result<(), String>>) {
         let nonce = uuid::Uuid::new_v4().to_string();
         let (sender, receiver) = oneshot::channel();
-        *self.pending.lock().unwrap() = Some(PendingPreparation {
+        *lock_or_recover(&self.pending, PREPARATION_LOCK) = Some(PendingPreparation {
             nonce: nonce.clone(),
             sender,
         });
@@ -28,7 +35,7 @@ impl UpdatePreparation {
     }
 
     pub fn complete(&self, nonce: &str, result: Result<(), String>) -> Result<(), String> {
-        let mut pending = self.pending.lock().unwrap();
+        let mut pending = lock_or_recover(&self.pending, PREPARATION_LOCK);
         if pending
             .as_ref()
             .is_none_or(|current| current.nonce != nonce)
@@ -43,7 +50,7 @@ impl UpdatePreparation {
 
     #[cfg(any(target_os = "macos", test))]
     pub fn cancel(&self, nonce: &str) {
-        let mut pending = self.pending.lock().unwrap();
+        let mut pending = lock_or_recover(&self.pending, PREPARATION_LOCK);
         if pending
             .as_ref()
             .is_some_and(|current| current.nonce == nonce)
@@ -82,7 +89,7 @@ pub enum ExclusiveError {
 
 impl UpdateActivity {
     pub fn begin_work(self: &Arc<Self>) -> Result<WorkLease, String> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = lock_or_recover(&self.state, ACTIVITY_LOCK);
         if state.exclusive {
             return Err("An update is being applied. Wait for Sagascript to restart.".into());
         }
@@ -94,7 +101,7 @@ impl UpdateActivity {
         if result_id.is_empty() || result_id.len() > 128 {
             return Err("Invalid transcription result ID.".into());
         }
-        let mut state = self.state.lock().unwrap();
+        let mut state = lock_or_recover(&self.state, ACTIVITY_LOCK);
         if pending && state.exclusive {
             return Err("An update is being applied. Wait for Sagascript to restart.".into());
         }
@@ -107,21 +114,21 @@ impl UpdateActivity {
     }
 
     pub fn is_result_pending(&self, result_id: &str) -> bool {
-        self.state
-            .lock()
-            .unwrap()
+        lock_or_recover(&self.state, ACTIVITY_LOCK)
             .unsaved_results
             .contains(result_id)
     }
 
     #[cfg(test)]
     pub fn active_work_count(&self) -> usize {
-        self.state.lock().unwrap().active_work
+        lock_or_recover(&self.state, ACTIVITY_LOCK).active_work
     }
 
     #[cfg(test)]
     pub fn pending_result_count(&self) -> usize {
-        self.state.lock().unwrap().unsaved_results.len()
+        lock_or_recover(&self.state, ACTIVITY_LOCK)
+            .unsaved_results
+            .len()
     }
 
     #[cfg(any(target_os = "macos", test))]
@@ -129,7 +136,7 @@ impl UpdateActivity {
         self: &Arc<Self>,
         require_no_pending_results: bool,
     ) -> Result<ExclusiveLease, ExclusiveError> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = lock_or_recover(&self.state, ACTIVITY_LOCK);
         if state.exclusive {
             return Err(ExclusiveError::AlreadyExclusive);
         }
@@ -146,7 +153,7 @@ impl UpdateActivity {
 
 impl Drop for WorkLease {
     fn drop(&mut self) {
-        let mut state = self.0.state.lock().unwrap();
+        let mut state = lock_or_recover(&self.0.state, ACTIVITY_LOCK);
         state.active_work = state.active_work.saturating_sub(1);
     }
 }
@@ -154,7 +161,7 @@ impl Drop for WorkLease {
 #[cfg(any(target_os = "macos", test))]
 impl Drop for ExclusiveLease {
     fn drop(&mut self) {
-        self.0.state.lock().unwrap().exclusive = false;
+        lock_or_recover(&self.0.state, ACTIVITY_LOCK).exclusive = false;
     }
 }
 
@@ -244,6 +251,38 @@ mod tests {
         assert_eq!(activity.active_work_count(), 1);
         drop(work);
         assert_eq!(activity.active_work_count(), 0);
+    }
+
+    fn poison<T: Send>(mutex: &Mutex<T>) {
+        std::thread::scope(|scope| {
+            let panicked = scope
+                .spawn(|| {
+                    let _guard = mutex.lock().unwrap();
+                    panic!("injected panic while holding the lock (#359)");
+                })
+                .join();
+            assert!(panicked.is_err());
+        });
+        assert!(mutex.is_poisoned());
+    }
+
+    /// A lease is dropped while unwinding from a panic in update-guarded work.
+    /// Panicking again on the poisoned state would be a double panic (abort).
+    #[test]
+    fn lease_drops_tolerate_a_poisoned_activity_state() {
+        let activity = Arc::new(UpdateActivity::default());
+        let work = activity.begin_work().unwrap();
+        poison(&activity.state);
+
+        let dropped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(work)));
+        assert!(dropped.is_ok(), "WorkLease::drop must not panic");
+        assert_eq!(activity.active_work_count(), 0);
+
+        let exclusive = activity.try_exclusive(false).unwrap();
+        poison(&activity.state);
+        let dropped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(exclusive)));
+        assert!(dropped.is_ok(), "ExclusiveLease::drop must not panic");
+        assert!(activity.begin_work().is_ok(), "exclusivity was released");
     }
 
     #[test]

@@ -7,6 +7,8 @@
 name = "sagascript-engine-host-ort"
 version = "1.4.4"
 edition = "2021"
+# Same MSRV as the main workspace (#353).
+rust-version = "1.88"
 license = "MIT"
 description = "ONNX Runtime (CPU) engine host for Pianissimo, protocol v1 (see docs/engine-host-protocol.md)"
 build = "build.rs"
