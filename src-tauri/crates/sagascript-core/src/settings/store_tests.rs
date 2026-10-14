@@ -983,8 +983,10 @@ fn settings_save_preserves_a_dotfiles_symlink() {
 fn newly_created_configuration_directory_is_private() {
     use std::os::unix::fs::PermissionsExt;
 
+    // Two missing levels, as when the root did not exist either: the save
+    // must create the whole chain, not just the last directory.
     let root = TempDir::new();
-    let path = root.join("config").join(SETTINGS_FILENAME);
+    let path = root.join("outer").join("config").join(SETTINGS_FILENAME);
     save_to(&path, &Settings::default()).unwrap();
     let mode = fs::metadata(path.parent().unwrap())
         .unwrap()
