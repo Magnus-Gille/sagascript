@@ -132,10 +132,14 @@ jobs:
       - name: Audit npm dependencies
         run: npm audit --audit-level=high
 
-      # Prettier over src/, scripts/ and tests/, and the Vitest unit tests
-      # (src/**/*.test.ts, #361). verify runs both as `format` and `unit`.
+      # Prettier over src/, scripts/ and tests/, ESLint, and the Vitest unit
+      # and component tests (src/**/*.test.ts, #361). verify runs them as
+      # `format`, `lint` and `unit`.
       - name: Check frontend formatting
         run: npm run format:check
+
+      - name: Lint frontend and tooling
+        run: npm run lint
 
       - name: Unit-test frontend modules
         run: npm run test:unit
@@ -232,6 +236,15 @@ jobs:
           echo "Swift tests with $newest"
           swift --version
           swift test
+
+      # Engine-host protocol conformance (#367), model-free subset, against the
+      # host staged above: hello, ping, status, the errors the client relies on
+      # (unsupported, model_missing, not_loaded), shutdown and EOF exit. The full
+      # run (load, windows, cancel) needs a Pianissimo model and is in the release
+      # gate (release-build-macos.yml, verify-release-draft.sh; docs/engine-host-protocol.md,
+      # Conformance).
+      - name: Engine-host conformance, model-free subset (Core ML host)
+        run: python scripts/engine-host-conformance.py build/engine-host/sagascript-engine-host --no-model
 
   build-macos:
     needs: scope
@@ -732,10 +745,14 @@ jobs:
           node-version: 22
           cache: npm
 
+      # The standalone ORT engine host is its own Cargo workspace (#357); its
+      # tests run here too (last step below).
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          workspaces: src-tauri
+          workspaces: |
+            src-tauri
+            src-tauri/engine-host/ort
           shared-key: sagascript-ci-checks
 
       - name: Test Windows build identity gates
@@ -790,6 +807,14 @@ jobs:
       - name: Cargo clippy (sagascript-cli)
         working-directory: src-tauri
         run: cargo clippy -p sagascript-cli --all-targets -- -D warnings
+
+      # The ONNX Runtime engine host ships for Windows, and its golden protocol
+      # replay moves the POSIX vector paths (/vectors/...) under an absolute
+      # Windows directory (#367), which only a Windows run exercises. ort's
+      # `load-dynamic` means no ONNX Runtime binary is needed.
+      - name: Cargo test (ORT engine host)
+        working-directory: src-tauri/engine-host/ort
+        run: cargo test --locked
 
   build-windows:
     needs: scope

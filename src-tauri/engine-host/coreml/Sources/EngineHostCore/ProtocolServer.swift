@@ -16,7 +16,7 @@ private final class CancellationFlag {
 
 private final class ScheduledJob {
     let id: UInt64
-    let priority: String
+    let priority: WindowPriority
     let sequence: UInt64
     let flag = CancellationFlag()
     let work: (CancellationFlag) throws -> [String: Any]
@@ -24,7 +24,7 @@ private final class ScheduledJob {
 
     init(
         id: UInt64,
-        priority: String,
+        priority: WindowPriority,
         sequence: UInt64,
         work: @escaping (CancellationFlag) throws -> [String: Any],
         completion: @escaping (Result<[String: Any], EngineHostError>) -> Void
@@ -61,7 +61,7 @@ private final class RequestScheduler {
 
     func submit(
         id: UInt64,
-        priority: String,
+        priority: WindowPriority,
         work: @escaping (CancellationFlag) throws -> [String: Any],
         completion: @escaping (Result<[String: Any], EngineHostError>) -> Void
     ) {
@@ -86,7 +86,7 @@ private final class RequestScheduler {
         if let index = pending.firstIndex(where: { $0.id == id }) {
             let job = pending.remove(at: index)
             lock.unlock()
-            job.completion(.failure(EngineHostError(code: "cancelled", message: "Transcription was cancelled")))
+            job.completion(.failure(EngineHostError(code: .cancelled, message: "Transcription was cancelled")))
             return true
         }
         if let job = running[id] {
@@ -105,7 +105,7 @@ private final class RequestScheduler {
         for job in running.values { job.flag.cancel() }
         lock.unlock()
         for job in jobs {
-            job.completion(.failure(EngineHostError(code: "cancelled", message: "Host is exiting")))
+            job.completion(.failure(EngineHostError(code: .cancelled, message: "Host is exiting")))
         }
     }
 
@@ -113,8 +113,8 @@ private final class RequestScheduler {
         var result: [ScheduledJob] = []
         while running.count + result.count < maximum, !pending.isEmpty {
             let index = pending.indices.min { left, right in
-                let leftPriority = pending[left].priority == "interactive" ? 0 : 1
-                let rightPriority = pending[right].priority == "interactive" ? 0 : 1
+                let leftPriority = pending[left].priority == .interactive ? 0 : 1
+                let rightPriority = pending[right].priority == .interactive ? 0 : 1
                 if leftPriority != rightPriority { return leftPriority < rightPriority }
                 return pending[left].sequence < pending[right].sequence
             }!
@@ -134,10 +134,12 @@ private final class RequestScheduler {
                 } catch let error as EngineHostError {
                     result = .failure(error)
                 } catch {
-                    result = .failure(EngineHostError(code: "internal", message: error.localizedDescription))
+                    result = .failure(EngineHostError(code: .internalError, message: error.localizedDescription))
                 }
-                job.completion(result)
+                // Free the slot before the response goes out (as the ONNX host does), so a `status`
+                // sent after the client saw the response never still counts this window.
                 self?.finish(job.id)
+                job.completion(result)
             }
         }
     }
@@ -175,54 +177,50 @@ public final class EngineHostServer {
     }
 
     public func handleLine(_ line: String) {
-        guard line.utf8.count <= 16 * 1024 * 1024 else {
-            sendFailure(id: 0, error: EngineHostError(code: "protocol", message: "JSON line exceeds 16 MiB"))
+        let parsed = WireProtocol.parse(line: line)
+        let id: UInt64
+        let op: String
+        switch parsed {
+        case let .invalidEnvelope(envelopeID, message):
+            sendFailure(id: envelopeID, error: EngineHostError(code: .protocolError, message: message))
             return
-        }
-        guard let data = line.data(using: .utf8),
-              let object = try? JSONSerialization.jsonObject(with: data),
-              let request = object as? [String: Any] else {
-            sendFailure(id: 0, error: EngineHostError(code: "protocol", message: "Malformed JSON request"))
-            return
-        }
-        let id = requestID(request) ?? 0
-        guard let version = request["v"] as? NSNumber, version.intValue == 1,
-              let requestID = requestID(request),
-              let op = request["op"] as? String, !op.isEmpty else {
-            sendFailure(id: id, error: EngineHostError(code: "protocol", message: "Invalid request envelope"))
-            return
+        case let .unknownOp(requestID, name), let .badParams(requestID, name, _), let .request(requestID, name, _):
+            id = requestID
+            op = name
         }
         stateLock.lock()
         let isStopping = stopping
         let hasHello = sawHello
         stateLock.unlock()
         if isStopping {
-            sendFailure(id: requestID, error: EngineHostError(code: "protocol", message: "Host is shutting down"))
+            sendFailure(id: id, error: EngineHostError(code: .protocolError, message: "Host is shutting down"))
             return
         }
         if !hasHello {
-            guard op == "hello" else {
-                sendFailure(id: requestID, error: EngineHostError(code: "protocol", message: "hello must be the first operation"))
-                return
+            switch parsed {
+            case .request(_, _, .hello):
+                handleHello(id: id)
+            case let .badParams(_, "hello", message):
+                // An incomplete client identity is a bad request, not the handshake.
+                sendFailure(id: id, error: EngineHostError(code: .badRequest, message: message))
+            default:
+                sendFailure(id: id, error: EngineHostError(code: .protocolError, message: "hello must be the first operation"))
             }
-            handleHello(id: requestID, request: request)
             return
         }
         if op == "hello" {
-            sendFailure(id: requestID, error: EngineHostError(code: "protocol", message: "hello may only be sent once"))
+            sendFailure(id: id, error: EngineHostError(code: .protocolError, message: "hello may only be sent once"))
             return
         }
-
-        switch op {
-        case "ping": sendSuccess(id: requestID, fields: [:])
-        case "status": handleStatus(id: requestID)
-        case "cancel": handleCancel(id: requestID, request: request)
-        case "load": handleLoad(id: requestID, request: request)
-        case "transcribe_window": handleTranscribe(id: requestID, request: request)
-        case "unload": handleUnload(id: requestID)
-        case "shutdown": handleShutdown(id: requestID)
-        default:
-            sendFailure(id: requestID, error: EngineHostError(code: "unsupported", message: "Unknown operation: \(op)"))
+        switch parsed {
+        case .invalidEnvelope:
+            return
+        case let .unknownOp(_, name):
+            sendFailure(id: id, error: EngineHostError(code: .unsupported, message: "Unknown operation: \(name)"))
+        case let .badParams(_, _, message):
+            sendFailure(id: id, error: EngineHostError(code: .badRequest, message: message))
+        case let .request(_, _, request):
+            dispatch(id: id, request: request)
         }
     }
 
@@ -233,139 +231,98 @@ public final class EngineHostServer {
         scheduler.cancelAll()
     }
 
-    private func handleHello(id: UInt64, request: [String: Any]) {
-        guard request["client"] is [String: Any] else {
-            sendFailure(id: id, error: EngineHostError(code: "bad_request", message: "hello requires a client object"))
-            return
+    private func dispatch(id: UInt64, request: WireRequest) {
+        switch request {
+        case .hello: return
+        case .ping: sendSuccess(id: id, fields: [:])
+        case .status: handleStatus(id: id)
+        case let .cancel(target):
+            sendSuccess(id: id, fields: WireProtocol.cancelResult(cancelled: scheduler.cancel(id: target)))
+        case let .load(modelDirectory, modelID, computeUnits):
+            handleLoad(id: id, modelDirectory: modelDirectory, modelID: modelID, computeUnits: computeUnits)
+        case let .transcribeWindow(parameters): handleTranscribe(id: id, parameters: parameters)
+        case .unload: handleUnload(id: id)
+        case .shutdown: handleShutdown(id: id)
         }
+    }
+
+    private func handleHello(id: UInt64) {
         stateLock.lock(); sawHello = true; stateLock.unlock()
-        let host: [String: Any] = [
-            "name": "sagascript-engine-host",
-            "version": BuildInfo.version,
-            "git_sha": BuildInfo.gitSHA,
-            "build_dirty": BuildInfo.dirty,
-            "engine": "coreml",
-            "engine_version": "CoreML / \(ProcessInfo.processInfo.operatingSystemVersionString)",
-        ]
-        sendSuccess(id: id, fields: [
-            "protocol": 1,
-            "host": host,
-            "capabilities": engine.capabilities.jsonObject(),
-        ])
+        let host = WireHostIdentity(
+            version: BuildInfo.version,
+            gitSHA: BuildInfo.gitSHA,
+            dirty: BuildInfo.dirty,
+            engine: "coreml",
+            engineVersion: "CoreML / \(ProcessInfo.processInfo.operatingSystemVersionString)"
+        )
+        sendSuccess(id: id, fields: WireProtocol.helloResult(host: host, capabilities: engine.capabilities))
     }
 
     private func handleStatus(id: UInt64) {
         let inFlight = scheduler.inFlight
         let loading = engine.isLoading
         let modelID = engine.loadedModelID
-        let state: String
-        if loading { state = "loading" }
-        else if inFlight > 0 { state = "busy" }
-        else if modelID != nil { state = "ready" }
-        else { state = "idle" }
-        sendSuccess(id: id, fields: [
-            "state": state,
-            "model_id": modelID ?? NSNull(),
-            "in_flight": inFlight,
-            "rss_bytes": 0,
-            "uptime_s": Date().timeIntervalSince(startedAt),
-        ])
+        let state: WireHostState
+        if loading { state = .loading }
+        else if inFlight > 0 { state = .busy }
+        else if modelID != nil { state = .ready }
+        else { state = .idle }
+        sendSuccess(id: id, fields: WireProtocol.statusResult(
+            state: state,
+            modelID: modelID,
+            inFlight: inFlight,
+            rssBytes: 0,
+            uptimeSeconds: Date().timeIntervalSince(startedAt)
+        ))
     }
 
-    private func handleCancel(id: UInt64, request: [String: Any]) {
-        guard let target = unsignedInteger(request["target"]) else {
-            sendFailure(id: id, error: EngineHostError(code: "bad_request", message: "cancel requires target"))
-            return
-        }
-        sendSuccess(id: id, fields: ["cancelled": scheduler.cancel(id: target)])
-    }
-
-    private func handleLoad(id: UInt64, request: [String: Any]) {
-        guard let modelDirectory = request["model_dir"] as? String, modelDirectory.hasPrefix("/"),
-              let modelID = request["model_id"] as? String, !modelID.isEmpty,
-              let computeUnits = request["compute_units"] as? String else {
-            sendFailure(id: id, error: EngineHostError(code: "bad_request", message: "load requires absolute model_dir, model_id, and compute_units"))
+    private func handleLoad(id: UInt64, modelDirectory: String, modelID: String, computeUnits: String) {
+        guard modelDirectory.hasPrefix("/"), !modelID.isEmpty else {
+            sendFailure(id: id, error: EngineHostError(code: .badRequest, message: "load requires absolute model_dir, model_id, and compute_units"))
             return
         }
         controlQueue.async { [weak self] in
             guard let self else { return }
             do {
                 let result = try self.engine.load(modelDirectory: modelDirectory, modelID: modelID, computeUnits: computeUnits)
-                self.sendSuccess(id: id, fields: result.jsonObject())
+                self.sendSuccess(id: id, fields: WireProtocol.loadResult(result))
             } catch let error as EngineHostError {
                 self.sendFailure(id: id, error: error)
             } catch {
-                self.sendFailure(id: id, error: EngineHostError(code: "model_load_failed", message: error.localizedDescription))
+                self.sendFailure(id: id, error: EngineHostError(code: .modelLoadFailed, message: error.localizedDescription))
             }
         }
     }
 
-    /// Validates `boost_terms` / `boost_weight` (presence, type and bounds, whether or not terms are
-    /// given) with fixed error texts: dictionary terms are personal data and are never echoed.
-    static func parseBoost(_ request: [String: Any]) -> Result<BoostConfig?, EngineHostError> {
-        func bad(_ message: String) -> Result<BoostConfig?, EngineHostError> {
-            .failure(EngineHostError(code: "bad_request", message: message))
-        }
-        var terms: [String] = []
-        if let raw = request["boost_terms"] {
-            guard let array = raw as? [Any], array.count <= BoostConfig.maxTerms else {
-                return bad("boost_terms must be an array of at most 500 strings")
-            }
-            for item in array {
-                guard let term = item as? String, term.unicodeScalars.count <= BoostConfig.maxTermLength else {
-                    return bad("boost_terms must be an array of at most 500 strings of at most 64 characters")
-                }
-                terms.append(term)
-            }
-        }
-        var weight: Float = 0
-        if let raw = request["boost_weight"] {
-            guard let number = raw as? NSNumber, String(cString: number.objCType) != "c",
-                  number.doubleValue.isFinite, number.doubleValue >= 0, number.doubleValue <= 20 else {
-                return bad("boost_weight must be a number within 0...20")
-            }
-            weight = number.floatValue
-        }
-        return .success(!terms.isEmpty && weight > 0 ? BoostConfig(terms: terms, weight: weight) : nil)
-    }
-
-    private func handleTranscribe(id: UInt64, request: [String: Any]) {
-        guard let pcmPath = request["pcm_path"] as? String, pcmPath.hasPrefix("/"),
-              let offsetSamples = integer(request["offset_samples"]), offsetSamples >= 0,
-              let numSamples = integer(request["num_samples"]), numSamples > 0,
-              let sampleRate = integer(request["sample_rate"]),
-              let format = request["format"] as? String else {
-            sendFailure(id: id, error: EngineHostError(code: "bad_request", message: "transcribe_window has invalid parameters"))
+    /// Checks a window against this host's limits (the ONNX host applies the same checks).
+    private func handleTranscribe(id: UInt64, parameters: WireWindowParameters) {
+        let capabilities = engine.capabilities
+        guard parameters.pcmPath.hasPrefix("/"), parameters.numSamples > 0, parameters.format == "f32le" else {
+            sendFailure(id: id, error: EngineHostError(code: .badRequest, message: "transcribe_window has invalid parameters"))
             return
         }
-        let priority = request["priority"] as? String ?? "batch"
-        guard priority == "interactive" || priority == "batch" else {
-            sendFailure(id: id, error: EngineHostError(code: "bad_request", message: "priority must be interactive or batch"))
+        guard parameters.sampleRate == capabilities.sampleRate else {
+            sendFailure(id: id, error: EngineHostError(code: .badRequest, message: "sample_rate must match the host sample rate"))
             return
         }
-        let maximumSamples = Int((engine.capabilities.maxWindowSeconds * Double(engine.capabilities.sampleRate)).rounded(.down))
-        guard numSamples <= maximumSamples else {
-            sendFailure(id: id, error: EngineHostError(code: "bad_request", message: "num_samples exceeds max_window_s", retryable: false))
+        let maximumSamples = Int((capabilities.maxWindowSeconds * Double(capabilities.sampleRate)).rounded(.down))
+        guard parameters.numSamples <= maximumSamples else {
+            sendFailure(id: id, error: EngineHostError(code: .badRequest, message: "num_samples exceeds max_window_s"))
             return
-        }
-        let boost: BoostConfig?
-        switch Self.parseBoost(request) {
-        case let .success(config): boost = config
-        case let .failure(error): sendFailure(id: id, error: error); return
         }
         let window = WindowRequest(
-            pcmPath: pcmPath,
-            offsetSamples: offsetSamples,
-            numSamples: numSamples,
-            sampleRate: sampleRate,
-            format: format,
-            priority: priority,
-            boost: boost
+            pcmPath: parameters.pcmPath,
+            offsetSamples: parameters.offsetSamples,
+            numSamples: parameters.numSamples,
+            sampleRate: parameters.sampleRate,
+            format: parameters.format,
+            priority: parameters.priority,
+            boost: parameters.boost
         )
-        scheduler.submit(id: id, priority: priority, work: { [weak self] flag in
-            guard let self else { throw EngineHostError(code: "internal", message: "Host deallocated") }
+        scheduler.submit(id: id, priority: parameters.priority, work: { [weak self] flag in
+            guard let self else { throw EngineHostError(code: .internalError, message: "Host deallocated") }
             let result = try self.engine.transcribe(window, isCancelled: { flag.isCancelled })
-            return result.jsonObject()
+            return WireProtocol.windowResult(result)
         }, completion: { [weak self] result in
             guard let self else { return }
             switch result {
@@ -394,35 +351,15 @@ public final class EngineHostServer {
     }
 
     private func sendSuccess(id: UInt64, fields: [String: Any]) {
-        var response: [String: Any] = ["id": id, "ok": true]
-        for (key, value) in fields { response[key] = value }
-        send(response)
+        send(WireProtocol.success(id: id, fields: fields))
     }
 
     private func sendFailure(id: UInt64, error: EngineHostError) {
-        send([
-            "id": id,
-            "ok": false,
-            "error": ["code": error.code, "message": error.message, "retryable": error.retryable],
-        ])
+        send(WireProtocol.failure(id: id, error: error))
     }
 
     private func send(_ object: [String: Any]) {
         outputLock.lock(); defer { outputLock.unlock() }
         output(object)
-    }
-
-    private func requestID(_ request: [String: Any]) -> UInt64? { unsignedInteger(request["id"]) }
-
-    private func unsignedInteger(_ value: Any?) -> UInt64? {
-        guard let number = value as? NSNumber, number.doubleValue.rounded() == number.doubleValue,
-              number.doubleValue >= 1, number.doubleValue <= Double(UInt64.max) else { return nil }
-        return number.uint64Value
-    }
-
-    private func integer(_ value: Any?) -> Int? {
-        guard let number = value as? NSNumber, number.doubleValue.rounded() == number.doubleValue,
-              number.doubleValue >= Double(Int.min), number.doubleValue <= Double(Int.max) else { return nil }
-        return number.intValue
     }
 }

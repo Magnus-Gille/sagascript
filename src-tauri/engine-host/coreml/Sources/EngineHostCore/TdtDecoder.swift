@@ -30,7 +30,7 @@ func makeAlignedArray(shape: [Int], dataType: MLMultiArrayDataType) throws -> ML
     let bytes = max(64, ((elements * elementSize + 63) / 64) * 64)
     var raw: UnsafeMutableRawPointer?
     guard posix_memalign(&raw, 64, bytes) == 0, let pointer = raw else {
-        throw EngineHostError(code: "engine", message: "Cannot allocate aligned tensor")
+        throw EngineHostError(code: .engine, message: "Cannot allocate aligned tensor")
     }
     memset(pointer, 0, bytes)
     return try MLMultiArray(
@@ -71,14 +71,14 @@ struct EncoderFrames {
         let shape = array.shape.map(\.intValue)
         guard shape.count == 3, shape[0] == 1, let precision = TensorPrecision(array.dataType) else {
             throw EngineHostError(
-                code: "engine",
+                code: .engine,
                 message: "Encoder output 'encoder': unexpected layout, \(describe(array)); expected [1, \(hiddenSize), frames] float32 or float16"
             )
         }
         let hiddenAxis = shape[1] == hiddenSize ? 1 : 2
         guard shape[hiddenAxis] == hiddenSize else {
             throw EngineHostError(
-                code: "engine",
+                code: .engine,
                 message: "Encoder output 'encoder': hidden size mismatch, \(describe(array)); expected \(hiddenSize)"
             )
         }
@@ -86,7 +86,7 @@ struct EncoderFrames {
         let strides = array.strides.map(\.intValue)
         guard strides[hiddenAxis] > 0, strides[timeAxis] > 0 else {
             throw EngineHostError(
-                code: "engine",
+                code: .engine,
                 message: "Encoder output 'encoder': unexpected strides \(strides), \(describe(array))"
             )
         }
@@ -170,7 +170,7 @@ final class TdtDecodeSession {
             ("output", "c_out", try floatPrecision(of: decoder, output: "c_out", model: "Decoder")),
         ] where precision != statePrecision {
             throw EngineHostError(
-                code: "model_load_failed",
+                code: .modelLoadFailed,
                 message: "Decoder \(kind) '\(name)' is \(precision.rawValue) but h_in is \(statePrecision.rawValue)"
             )
         }
@@ -238,7 +238,7 @@ final class TdtDecodeSession {
         let output = try decoder.prediction(from: decoderInput, options: decoderOptions)
         guard let projection = output.featureValue(for: "decoder")?.multiArrayValue else {
             throw EngineHostError(
-                code: "engine",
+                code: .engine,
                 message: "Decoder output 'decoder' is missing (outputs: \(output.featureNames.sorted()))"
             )
         }
@@ -250,14 +250,14 @@ final class TdtDecodeSession {
         let strides = source.strides.map(\.intValue)
         guard shape.count == 3, let precision = TensorPrecision(source.dataType) else {
             throw EngineHostError(
-                code: "engine",
+                code: .engine,
                 message: "Decoder output 'decoder': invalid projection, \(describe(source)); expected rank 3 float32 or float16"
             )
         }
         let hiddenAxis = shape[2] == decoderHidden ? 2 : 1
         guard shape[hiddenAxis] == decoderHidden else {
             throw EngineHostError(
-                code: "engine",
+                code: .engine,
                 message: "Decoder output 'decoder': hidden size mismatch, \(describe(source)); expected \(decoderHidden)"
             )
         }
@@ -307,7 +307,7 @@ final class TdtDecodeSession {
     /// duration class is the frame advance.
     private func mapDuration(_ bin: Int) throws -> Int {
         guard bin >= 0 && bin <= 4 else {
-            throw EngineHostError(code: "engine", message: "Duration bin index out of range: \(bin)")
+            throw EngineHostError(code: .engine, message: "Duration bin index out of range: \(bin)")
         }
         return bin
     }
@@ -337,7 +337,7 @@ final class TdtDecodeSession {
         var tokensProcessed = 0
 
         func cancelCheck() throws {
-            if isCancelled() { throw EngineHostError(code: "cancelled", message: "Transcription was cancelled") }
+            if isCancelled() { throw EngineHostError(code: .cancelled, message: "Transcription was cancelled") }
         }
 
         while activeMask {

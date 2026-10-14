@@ -35,8 +35,9 @@ Known problems on this branch:
 
 1. **Layers.** Rust unit tests (inline or sibling `*_tests.rs`) for logic; Rust integration
    tests for process boundaries (CLI binary, fake engine host); Vitest for frontend modules
-   (`src/lib/<module>.test.ts`, IPC through the typed mock in `src/test/ipc.ts`; component
-   tests with testing-library follow in #361; [docs/testing/frontend.md](../testing/frontend.md));
+   and components (`src/lib/<module>.test.ts`, `src/lib/<Component>.test.ts` with
+   testing-library in happy-dom, IPC through the typed mock in `src/test/ipc.ts`;
+   [docs/testing/frontend.md](../testing/frontend.md));
    Playwright (`scripts/qa-*.mjs`, mocked IPC) for user flows; Swift tests for the Core ML host; Python `unittest` for evaluation tooling; CLI
    smoke in CI for the release binary. Test each fact at the lowest layer that can see it.
 2. **Behaviour, not source text.** No new test reads `.svelte` or other source as text to
@@ -54,8 +55,9 @@ Known problems on this branch:
    `SAGASCRIPT_SETTINGS_PATH` pointing into a temp directory (set on the `Command`, not with
    `std::env::set_var` in a parallel test process); in-process tests use the path-taking store
    helpers (`load_from`, the `*_at` functions) on temp files. Never write the real settings,
-   dictionaries, models or recordings. Fixtures are synthetic. `isolated_cli_env` and `TempDir`
-   in `sagascript-testsupport` do this for spawned CLIs and temp files.
+   dictionaries, models or recordings. Fixtures are synthetic. `isolated_cli_env`,
+   `fake_settings` and `TempDir` in `sagascript-testsupport` do this for spawned CLIs, settings
+   files and temp files.
 6. **Deterministic.** Wait on events or conditions instead of wall-clock thresholds; no
    automatic retries to hide flakes (#381).
 7. **Testable seams over Tauri.** Keep decisions in plain functions that take plain values

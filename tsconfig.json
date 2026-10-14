@@ -6,7 +6,8 @@
     "module": "ESNext",
     "resolveJsonModule": true,
     "isolatedModules": true,
-    "moduleDetection": "force"
+    "moduleDetection": "force",
+    "types": []
   },
   "include": ["src/**/*.ts", "src/**/*.svelte"]
 }

@@ -45,8 +45,8 @@ Decisions and their reasons: `docs/adr/`.
 - `src-tauri/crates/sagascript-core/src/`: transcription, audio, settings, diarization, engine-host client.
 - `src-tauri/crates/sagascript-cli/src/`: canonical CLI commands.
 - `src-tauri/crates/sagascript-engine-protocol/`: engine-host JSON Lines wire types.
-- `src-tauri/crates/sagascript-testsupport/`: dev-only test helpers (`TempDir`, `sha256_hex`,
-  `isolated_cli_env`); fixtures made of core types are in `sagascript_core::test_support`.
+- `src-tauri/crates/sagascript-testsupport/`: dev-only test helpers (`TempDir`, `fake_settings`,
+  `sha256_hex`, `isolated_cli_env`); fixtures made of core types are in `sagascript_core::test_support`.
 - `src-tauri/engine-host/`: `coreml/` Swift host, `ort/` ONNX host (separate Cargo workspace), shared `test-vectors/`.
 - The app crate and CLI crate both emit a binary named `sagascript`; `target/release/sagascript`
   is whichever one was built most recently.
@@ -58,7 +58,7 @@ command that compiles the app crate (`tauri::generate_context!`).
 
 `npm run verify` runs every default check for this OS (opt-in ones, such as browser and
 MSRV, only with `--only`) and stops at the first failure (`--keep-going` reports all); `npm run verify:fast` is the inner loop (rustfmt, app clippy,
-svelte-check, Prettier, unit and UI node tests); `--only <check|area>` focuses; `--list` prints the checks.
+svelte-check, Prettier, ESLint, unit and UI node tests); `--only <check|area>` focuses; `--list` prints the checks.
 `scripts/verify.mjs` defines them, CONTRIBUTING.md "Running tests" has the control matrix. Its
 preflight lists every missing prerequisite (including `dist/`) in one error and installs
 nothing.
@@ -73,4 +73,4 @@ Reference commands, from `src-tauri/`:
 
 From the repo root: `npx svelte-check --tsconfig ./tsconfig.json` and `npm run test:frontend`
 (every Node test group; add new test files to `scripts/node-test-groups.mjs`).
-Frontend tests are Vitest files next to the code (`npm run test:unit`; `npm run format` before committing); follow docs/testing/frontend.md and never assert on `.svelte` source text.
+Frontend tests are Vitest unit and component tests next to the code (`npm run test:unit`; `npm run format` and `npm run lint` before committing); follow docs/testing/frontend.md and never assert on `.svelte` source text.

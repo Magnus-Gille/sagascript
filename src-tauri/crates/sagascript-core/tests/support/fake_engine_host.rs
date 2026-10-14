@@ -34,6 +34,12 @@
 //!   FAKE_LOAD_WINDOW_S                                  `LoadResult.window_s` and the enforced limit
 //!                                                       (default: FAKE_MAX_WINDOW_S / FAKE_WINDOW_S)
 //!   FAKE_FLOOD=1                                        on the first window, write 17 MiB without a newline
+//!   FAKE_MALFORMED_LOAD=error|neither|result            answer `load` with a malformed line for its id:
+//!                                                       an error object without `message`/`retryable`,
+//!                                                       a line with neither `ok` nor `event`, or a
+//!                                                       success whose result lacks `blank_id`
+//!   FAKE_MALFORMED_FIRST_WINDOW=1                       the first window received answers (result or cancelled)
+//!                                                       with an error object without `message`/`retryable`
 //!   FAKE_LOG=<path>                                     append "<op> <id>" lines
 
 use sagascript_engine_protocol::{
@@ -225,6 +231,28 @@ fn handle(host: &Arc<Host>, id: u64, op: RequestOp) {
                     json!({"phase":"compiling"}),
                 ));
                 std::thread::sleep(Duration::from_millis(env_u64("FAKE_LOAD_DELAY_MS", 0)));
+                match std::env::var("FAKE_MALFORMED_LOAD").as_deref() {
+                    Ok("error") => {
+                        host.write(&format!(
+                            "{}\n",
+                            json!({"id": id, "ok": false, "error": {"code": "model_missing"}})
+                        ));
+                        return;
+                    }
+                    Ok("neither") => {
+                        host.write(&format!("{}\n", json!({"id": id, "model_id": model_id})));
+                        return;
+                    }
+                    Ok("result") => {
+                        host.write(&encode_ok(
+                            id,
+                            json!({"model_id":model_id,"load_ms":1,"compiled":false,
+                              "window_s":enforced_window_s(),"frame_s":0.08,"vocab_size":1025}),
+                        ));
+                        return;
+                    }
+                    _ => {}
+                }
                 if model_dir.contains("missing") {
                     host.write(&encode_err(
                         id,
@@ -461,6 +489,18 @@ fn run_window(
     }
     host.cv.notify_all();
     host.cancels.lock().unwrap().remove(&id);
+    if nth == 0 && env_flag("FAKE_MALFORMED_FIRST_WINDOW") {
+        let code = if result.is_err() {
+            "cancelled"
+        } else {
+            "engine"
+        };
+        host.write(&format!(
+            "{}\n",
+            json!({"id": id, "ok": false, "error": {"code": code}})
+        ));
+        return;
+    }
     match result {
         Err(()) => host.write(&encode_err(id, ErrorCode::Cancelled, "cancelled", false)),
         Ok(Err(msg)) => host.write(&encode_err(id, ErrorCode::Engine, &msg, false)),

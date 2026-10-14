@@ -129,23 +129,23 @@ struct ContextBiasingTests {
         for item in vectors.root["request_cases"] as! [[String: Any]] {
             let fields = item["fields"] as! [String: Any]
             let valid = item["valid"] as! Bool
-            let result = EngineHostServer.parseBoost(fields)
+            let result = WireProtocol.parseBoost(fields)
             switch result {
             case .success: #expect(valid, "request case \(item["name"] as! String)")
             case let .failure(error):
                 #expect(!valid, "request case \(item["name"] as! String)")
-                #expect(error.code == "bad_request")
+                #expect(error.code == .badRequest)
                 #expect(!error.message.contains("Magnus") && !error.message.contains("secret"))
             }
         }
     }
 
     @Test func helloAdvertisesBiasingAndResultsReportItOnlyWhenRequested() {
-        #expect(HostCapabilities().jsonObject()["context_biasing"] as? Bool == true)
+        #expect(WireProtocol.capabilitiesObject(HostCapabilities())["context_biasing"] as? Bool == true)
         var result = WindowResult(tokens: [], audioSeconds: 1, preprocessMilliseconds: 0, encodeMilliseconds: 0, decodeMilliseconds: 0)
-        #expect(result.jsonObject()["boost_active"] == nil)
-        #expect((result.jsonObject()["timings"] as? [String: Any])?["boost_us"] == nil)
+        #expect(WireProtocol.windowResult(result)["boost_active"] == nil)
+        #expect((WireProtocol.windowResult(result)["timings"] as? [String: Any])?["boost_us"] == nil)
         result.boostActive = false
-        #expect(result.jsonObject()["boost_active"] as? Bool == false)
+        #expect(WireProtocol.windowResult(result)["boost_active"] as? Bool == false)
     }
 }

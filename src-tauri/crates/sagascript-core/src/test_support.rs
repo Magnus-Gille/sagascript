@@ -3,9 +3,9 @@
 //! Compiled for this crate's unit tests (`cfg(test)`) and, through the
 //! `test-support` feature that `sagascript-cli` and the app enable as a
 //! dev-dependency, for theirs; release builds never contain it. Fixtures that
-//! need no core type (temporary directories, SHA-256, the isolated CLI
-//! environment) are in the `sagascript-testsupport` crate, which core's unit
-//! tests can use because it does not depend on core.
+//! need no core type (temporary directories, a test's own settings file,
+//! SHA-256, the isolated CLI environment) are in the `sagascript-testsupport`
+//! crate, which core's unit tests can use because it does not depend on core.
 
 use crate::meeting::{MeetingSegmentInput, MeetingSpeaker, MeetingTranscript};
 

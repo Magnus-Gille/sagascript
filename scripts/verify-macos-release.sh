@@ -13,8 +13,16 @@ if [[ ${1:-} == "--check-entitlements-plist" ]]; then
   exit
 fi
 
+# --release (release builds and the draft verification): the bundled engine host must also
+# report a clean tree (dirty=false). Signed test builds (test-build.yml) only check its SHA.
+release=false
+if [[ ${1:-} == "--release" ]]; then
+  release=true
+  shift
+fi
+
 if [[ $# -ne 4 ]]; then
-  echo "Usage: $0 /path/to/Sagascript.app /path/to/Sagascript.dmg VERSION FULL_GIT_SHA" >&2
+  echo "Usage: $0 [--release] /path/to/Sagascript.app /path/to/Sagascript.dmg VERSION FULL_GIT_SHA" >&2
   exit 2
 fi
 
@@ -77,7 +85,11 @@ grep -q '^Authority=Developer ID Application:' <<<"$host_signature" || {
   echo "Engine host is not signed with Developer ID Application" >&2
   exit 1
 }
-"$(dirname "$0")/check-engine-host-identity.sh" "$host" "$expected_sha"
+if [[ "$release" == true ]]; then
+  "$(dirname "$0")/check-engine-host-identity.sh" --release "$host" "$expected_sha"
+else
+  "$(dirname "$0")/check-engine-host-identity.sh" "$host" "$expected_sha"
+fi
 signature=$(codesign -dvvv "$app" 2>&1)
 grep -q '^Authority=Developer ID Application:' <<<"$signature" || {
   echo "App is not signed with Developer ID Application" >&2

@@ -56,7 +56,11 @@ test("signed macOS workflows stage, sign, bundle, verify, and smoke the engine h
       `${path} signs the host with the hardened runtime`,
     );
     assert.match(content, /--config scripts\/tauri-engine-host-bundle\.json/, `${path} bundles the host`);
-    assert.match(content, /verify-macos-release\.sh "\$app" "\$dmg" "\$version" "\$GITHUB_SHA"/, `${path} verifies the host revision`);
+    assert.match(
+      content,
+      /verify-macos-release\.sh (--release )?"\$app" "\$dmg" "\$version" "\$GITHUB_SHA"/,
+      `${path} verifies the host revision`,
+    );
     assert.match(content, /scripts\/smoke-pianissimo-installed\.sh/, `${path} smokes Pianissimo`);
     assert.doesNotMatch(content, /pianissimo-sv[^\n]*\.gguf/, `${path} must not ship a GGUF`);
   }
