@@ -178,6 +178,11 @@ test("every lane that runs Python selects the supported runtime first", () => {
   assert.equal(actionInput(action, setupStep(workflow.job("msrv-linux")), "python"), "false");
 });
 
+test("the Rust cache key follows the gate list: rust-cache saves only under a new key, so new gates need one to get cached", () => {
+  const cache = loadAction("setup").steps.find((step) => step.uses?.startsWith("Swatinem/rust-cache@"));
+  assert.equal(cache.with["shared-key"], "${{ inputs.cache-key }}-${{ hashFiles('scripts/ci/cargo-gates.mjs') }}");
+});
+
 test("only the native build lanes cache downloaded models", () => {
   const action = loadAction("setup");
   for (const id of LANES) {
