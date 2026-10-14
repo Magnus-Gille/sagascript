@@ -4,11 +4,13 @@
 //! transcription command, and delegates work to the validated reprocessing
 //! orchestration API.  It never replaces an existing review or output file.
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use clap::{Args, Subcommand, ValueEnum};
 use sagascript_core::error::DictationError;
+use sagascript_core::fsutil::{PublishFs, RealFs};
 use sagascript_core::meeting_reprocess_plan::{ReprocessingMode, ReprocessingPlan};
 use sagascript_core::meeting_review::MeetingReview;
 use sagascript_core::settings::{FileModel, Language, Settings, WhisperModel};
@@ -197,6 +199,7 @@ fn run_execute(args: ExecuteArgs, out: &Out) -> Result<(), DictationError> {
             stored: &runtime.stored,
             whisper: &whisper,
         },
+        &RealFs,
         out,
     )
 }
@@ -310,8 +313,11 @@ fn execute_and_publish(
     input: &ReprocessingInput<'_>,
     models_available: impl FnOnce() -> bool,
     backend: &mut impl WorkBackend,
+    ops: &dyn PublishFs,
     out: &Out,
 ) -> Result<(), DictationError> {
+    // What earlier runs left; `ensure_outputs_ready` has warned about it.
+    let before = staging_files_beside(args);
     let staged = execute_with_model_check(
         plan,
         &args.expected_revision,
@@ -324,9 +330,26 @@ fn execute_and_publish(
     let pending = staged.stage_proposal(&args.output)?;
     ensure_previous_revision_unchanged(&args.previous_review, &input.previous.revision)?;
     let receipt = pending
-        .commit()
+        .commit_with(ops)
         .map_err(|error| publication_error(error, args))?;
-    report_receipt(receipt, out)
+    // Staging files the receipt knows about, plus any the pipeline itself left
+    // beside the outputs during the run (they are not in the receipt).
+    let mut leftovers = receipt
+        .leftovers
+        .iter()
+        .map(|leftover| leftover.path.clone())
+        .collect::<BTreeSet<_>>();
+    leftovers.extend(staging_files_beside(args).difference(&before).cloned());
+    report_receipt(receipt, &leftovers, out)
+}
+
+/// The private staging files that exist beside either output.
+fn staging_files_beside(args: &ExecuteArgs) -> BTreeSet<PathBuf> {
+    let mut found = sagascript_core::fsutil::staging_leftovers(&args.output);
+    if let Some(cache) = args.cache_output.as_deref() {
+        found.extend(sagascript_core::fsutil::staging_leftovers(cache));
+    }
+    found.into_iter().collect()
 }
 
 /// The error for a commit that did not publish everything.
@@ -347,17 +370,24 @@ fn publication_error(error: CommitError, args: &ExecuteArgs) -> DictationError {
     }
 }
 
-fn report_receipt(receipt: PublishReceipt, out: &Out) -> Result<(), DictationError> {
+fn report_receipt(
+    receipt: PublishReceipt,
+    leftovers: &BTreeSet<PathBuf>,
+    out: &Out,
+) -> Result<(), DictationError> {
     if let Some(cache) = &receipt.cache {
         errln!(out, "Saved reusable diarization cache: {}", cache.display());
     }
-    if !receipt.leftovers.is_empty() {
+    if !leftovers.is_empty() {
+        let list = leftovers
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
         errln!(
             out,
-            "Warning: the outputs were published, but {} private temporary file(s) beside them (hidden \
-             .NAME.UUID.tmp files with the same content) could not be removed; delete them. The next \
-             `execute` with the same output paths lists them.",
-            receipt.leftovers.len()
+            "Warning: the outputs were published, but private temporary files beside them could not \
+             be removed. They hold the same content as the outputs; delete them: {list}"
         );
     }
     let diagnostics = json!({
@@ -767,6 +797,16 @@ mod tests {
 
         /// The work and the publication, as `run` does after the output checks.
         fn execute(&self, backend: &mut FakeFull, out: &Out) -> Result<(), DictationError> {
+            self.execute_on(backend, &RealFs, out)
+        }
+
+        /// [`execute`](Self::execute) on the given filesystem operations.
+        fn execute_on(
+            &self,
+            backend: &mut FakeFull,
+            ops: &dyn PublishFs,
+            out: &Out,
+        ) -> Result<(), DictationError> {
             let input = ReprocessingInput {
                 audio: &self.args.audio,
                 cache: None,
@@ -775,7 +815,7 @@ mod tests {
                 model: WhisperModel::Base,
                 glossary: &self.glossary,
             };
-            execute_and_publish(&self.args, &self.plan, &input, || true, backend, out)
+            execute_and_publish(&self.args, &self.plan, &input, || true, backend, ops, out)
         }
     }
 
@@ -798,6 +838,65 @@ mod tests {
             serde_json::from_str(stderr.lines().last().expect("diagnostics line")).expect("json");
         assert!(diagnostics.get("required_work").is_some());
         assert!(diagnostics.get("timings").is_some());
+    }
+
+    #[test]
+    fn leftovers_after_a_successful_run_are_named_on_stderr_and_the_run_succeeds() {
+        use sagascript_core::test_support::FaultyFs;
+        let fixture = ExecuteFixture::new();
+        let (out, captured) = Out::capture();
+
+        fixture
+            .execute_on(&mut quiet(), &FaultyFs::new().failing_remove(), &out)
+            .expect("both outputs are published, so the run succeeds");
+
+        let cache = fixture.args.cache_output.clone().expect("cache output");
+        let mut leftovers = sagascript_core::fsutil::staging_leftovers(&cache);
+        leftovers.extend(sagascript_core::fsutil::staging_leftovers(
+            &fixture.args.output,
+        ));
+        assert_eq!(leftovers.len(), 2, "{leftovers:?}");
+        let stderr = captured.stderr();
+        for leftover in &leftovers {
+            assert!(stderr.contains(&leftover.display().to_string()), "{stderr}");
+        }
+        assert!(!stderr.contains("next `execute`"), "{stderr}");
+        assert_eq!(
+            fixture
+                .names()
+                .iter()
+                .filter(|name| name.ends_with(".tmp"))
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn a_staging_file_left_by_the_pipeline_itself_is_reported_too() {
+        let fixture = ExecuteFixture::new();
+        let cache = fixture.args.cache_output.clone().expect("cache output");
+        // What a pipeline's own staging file, killed or unremovable, looks like.
+        let mut backend = FakeFull {
+            during_inference: Some(Box::new(move || {
+                let leftover =
+                    sagascript_core::fsutil::StagedFile::create(&cache, b"x").expect("leftover");
+                std::mem::forget(leftover);
+            })),
+        };
+        let (out, captured) = Out::capture();
+
+        fixture
+            .execute_on(&mut backend, &RealFs, &out)
+            .expect("the run succeeds");
+
+        let cache = fixture.args.cache_output.clone().expect("cache output");
+        let leftovers = sagascript_core::fsutil::staging_leftovers(&cache);
+        assert_eq!(leftovers.len(), 1, "{leftovers:?}");
+        let stderr = captured.stderr();
+        assert!(
+            stderr.contains(&leftovers[0].display().to_string()),
+            "{stderr}"
+        );
     }
 
     #[test]

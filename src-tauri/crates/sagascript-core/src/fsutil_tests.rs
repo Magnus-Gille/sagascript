@@ -523,3 +523,97 @@ fn unsupported_sync_is_tolerated_but_real_failures_are_not() {
     assert!(tolerate_unsupported(Err(Error::from_raw_os_error(25))).is_ok());
     assert!(tolerate_unsupported(Err(Error::from_raw_os_error(5))).is_err());
 }
+
+// Round 2 (#342): which staging files belong to which destination.
+
+#[test]
+fn destinations_sharing_a_long_prefix_do_not_share_staging_leftovers() {
+    let dir = TempDir::new();
+    // Longer than the part of a name copied into a staging name, and equal in it.
+    let shared = "a".repeat(120);
+    let one = dir.join(format!("{shared}-one.json"));
+    let two = dir.join(format!("{shared}-two.json"));
+    let staged_two = StagedFile::create(&two, b"bytes").expect("stage two");
+
+    assert_eq!(staging_leftovers(&two), [staged_two.staged_path()]);
+    assert_eq!(
+        staging_leftovers(&one),
+        Vec::<PathBuf>::new(),
+        "another destination's staging file is not one's own"
+    );
+    let staged_one = StagedFile::create(&one, b"bytes").expect("stage one");
+    assert_eq!(staging_leftovers(&one), [staged_one.staged_path()]);
+    assert_eq!(staging_leftovers(&two), [staged_two.staged_path()]);
+    staged_one.publish().expect("publish one");
+    staged_two.publish().expect("publish two");
+    assert_eq!(names(&dir).len(), 2);
+}
+
+#[test]
+fn a_destination_shaped_like_a_staging_name_finds_its_own_staging_file_and_not_itself() {
+    let dir = TempDir::new();
+    let destination = dir.join(".report.2f6c5b0e-8c1f-4a8e-9f3a-6a0b8f1c2d3e.tmp");
+    // The user's own file, named like a staging file.
+    fs::write(&destination, b"the user's file").expect("user file");
+    let staged = StagedFile::create(&destination, b"bytes").expect("stage");
+    std::mem::forget(staged);
+
+    let found = staging_leftovers(&destination);
+
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_ne!(
+        found[0], destination,
+        "the destination is not its own leftover"
+    );
+    assert_eq!(fs::read(&destination).expect("kept"), b"the user's file");
+}
+
+/// Everything `tracing` logs at debug level and above while `work` runs.
+fn logged_while(work: impl FnOnce()) -> String {
+    use std::sync::Mutex;
+    #[derive(Clone, Default)]
+    struct Buffer(Arc<Mutex<Vec<u8>>>);
+    impl io::Write for Buffer {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.0.lock().expect("log buffer").extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+    let buffer = Buffer::default();
+    let writer = buffer.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer(move || writer.clone())
+        .with_ansi(false)
+        .with_max_level(tracing::Level::DEBUG)
+        .finish();
+    tracing::subscriber::with_default(subscriber, work);
+    let logged = buffer.0.lock().expect("log buffer").clone();
+    String::from_utf8_lossy(&logged).into_owned()
+}
+
+#[test]
+fn a_folder_that_cannot_sync_still_publishes_and_only_a_real_failure_warns() {
+    let dir = TempDir::new();
+    for (kind, warns) in [
+        (io::ErrorKind::Unsupported, false),
+        (io::ErrorKind::StorageFull, true),
+    ] {
+        let destination = dir.join(format!("{kind:?}.json"));
+        let ops = FaultyFs::new().failing_sync_dir(kind);
+
+        let logged = logged_while(|| {
+            publish_new_with(&destination, b"bytes", &ops).expect("the file is published");
+        });
+
+        assert_eq!(fs::read(&destination).expect("read"), b"bytes", "{kind:?}");
+        assert_eq!(logged.contains("WARN"), warns, "{kind:?}: {logged}");
+        assert!(logged.contains("sync"), "{kind:?}: {logged}");
+        assert!(
+            !logged.contains(&dir.display().to_string()),
+            "no path in the log: {logged}"
+        );
+    }
+}

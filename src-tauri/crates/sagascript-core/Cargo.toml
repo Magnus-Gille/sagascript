@@ -78,6 +78,8 @@ test-support = []
 
 [dev-dependencies]
 sagascript-testsupport = { path = "../sagascript-testsupport" }
+# Captures the log lines a test expects (fsutil's warn-versus-debug choices).
+tracing-subscriber = "0.3"
 
 [lints]
 workspace = true

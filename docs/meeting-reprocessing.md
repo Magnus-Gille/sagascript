@@ -158,7 +158,7 @@ when `PROPOSAL` exists.
 | An output path appears while the run works | untouched (yours) or absent | untouched (yours) or absent | 1 | Nothing is published and nothing of theirs is changed; choose a free path. |
 | The cache cannot be published (first publication) | absent | absent | 1 | Run the same command again. |
 | The proposal cannot be published after the cache was | published, complete | absent | 1, with a receipt on stderr | [Recover from the cache](#interrupted-publication). |
-| A temporary file cannot be removed after a successful publication | published | published | 0, with a warning on stderr | Delete the hidden `.NAME.UUID.tmp` file beside the output; the next `execute` with the same paths lists it. |
+| A temporary file cannot be removed after a successful publication | published | published | 0, with a warning on stderr | Delete the hidden `.NAME.UUID.tmp` files the warning names (it prints their paths). |
 | The process is killed (SIGKILL, power loss) | published only if it got that far | absent | none | The next `execute` with the same paths detects it and says how to continue. |
 
 A repeated command is only refused while one of its outputs exists. After a
@@ -204,7 +204,12 @@ refusal is safe and `--mode rediarize` is refused the same way. Then delete
 paths. Sagascript never deletes `CACHE_OUT`.
 
 A killed run can also leave hidden `.NAME.UUID.tmp` files beside its outputs,
-which nothing reads. The next `execute` with the same output paths lists them.
+which nothing reads. If it was killed before it published anything, both outputs
+are still absent and the next `execute` with the same output paths warns about
+them, naming each. Once an output exists, `execute` stops before it looks: it
+reports "already exists" or the diagnosis above, and the diagnosis names only a
+surviving staged proposal, so look for the hidden `.NAME.UUID.tmp` files beside
+the outputs yourself.
 One is worth keeping: when the cache was published, the staged proposal beside
 `PROPOSAL` is complete (it is fully written and synced before the cache is
 published). If `sagascript meeting proposal inspect` accepts it, renaming it to

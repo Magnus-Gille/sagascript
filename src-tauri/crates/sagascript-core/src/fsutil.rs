@@ -52,9 +52,12 @@ use std::path::{Path, PathBuf};
 
 /// The longest part of a destination name copied into a staging name, in the
 /// unit the filesystem limits: UTF-8 bytes on Unix (255 per name), UTF-16 units
-/// elsewhere. `.<name>.<uuid>.tmp` is then at most 142, and a staging name of a
-/// staging name 179, of the 255 allowed.
+/// elsewhere. A longer name is cut and gets a hash of the whole name appended
+/// (`.<cut>-<hash>`, 110 units), so `.<name>.<uuid>.tmp` is then at most 151,
+/// and a staging name of a staging name 188, of the 255 allowed.
 const MAX_STAGING_NAME_UNITS: usize = 100;
+/// The hex digits of the name hash kept in the stem of a cut name.
+const NAME_HASH_DIGITS: usize = 8;
 /// The length of a hyphenated UUID.
 const ID_LEN: usize = 36;
 
@@ -227,9 +230,21 @@ fn truncated(name: &str) -> String {
     kept
 }
 
-/// The stem every staging name of `name` starts with: `.<name>`.
-fn staging_stem(name: &OsStr) -> String {
-    format!(".{}", truncated(&name.to_string_lossy()))
+/// The stem every staging name of the file name `name` starts with: `.<name>`.
+/// A name that had to be cut keeps a hash of the whole name, so two names that
+/// share their first [`MAX_STAGING_NAME_UNITS`] units do not share a stem.
+fn staging_stem(name: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let kept = truncated(name);
+    if kept.len() == name.len() {
+        return format!(".{kept}");
+    }
+    let digest = Sha256::digest(name.as_bytes());
+    let hash = digest
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    format!(".{kept}-{}", &hash[..NAME_HASH_DIGITS])
 }
 
 /// Whether `text` ends in `.<uuid>`.
@@ -240,36 +255,60 @@ fn ends_with_id(text: &str) -> bool {
             .is_some_and(|tail| tail.starts_with('.') && uuid::Uuid::parse_str(&tail[1..]).is_ok())
 }
 
-/// A fresh staging file name for the destination file `name`:
-/// `.<name>.<uuid>.tmp`. When `name` is itself a staging name (a reserved
-/// writer publishing its reserved path) the new id is appended to it, so the
-/// result is still attributable to the final destination.
-fn staging_file_name(name: &OsStr) -> String {
-    let lossy = name.to_string_lossy();
-    if let Some(base) = lossy
-        .strip_suffix(".tmp")
-        .filter(|base| base.starts_with('.') && ends_with_id(base))
-    {
-        return format!("{base}.{}.tmp", uuid::Uuid::new_v4());
-    }
-    format!("{}.{}.tmp", staging_stem(name), uuid::Uuid::new_v4())
+/// How the staging names of one destination are built and recognised. The
+/// producer ([`reserve`](StagedFile::reserve)) and the matcher
+/// ([`staging_leftovers`]) both derive it here, so they cannot disagree.
+struct StagingNames {
+    /// Every staging name is `<prefix>.<uuid>.tmp`, or with a second id.
+    prefix: String,
+    /// The most ids after the prefix the matcher accepts.
+    max_ids: usize,
 }
 
-/// Whether `file_name` is `<stem>.<uuid>.tmp`, or `<stem>.<uuid>.<uuid>.tmp`
-/// (the staging name of a reserved staging path).
-fn is_staging_name_of(file_name: &str, stem: &str) -> bool {
-    let Some(ids) = file_name
-        .strip_prefix(stem)
-        .and_then(|rest| rest.strip_suffix(".tmp"))
-        .and_then(|ids| ids.strip_prefix('.'))
-    else {
-        return false;
-    };
-    let parts = ids.split('.').collect::<Vec<_>>();
-    (1..=2).contains(&parts.len())
-        && parts
-            .iter()
-            .all(|part| part.len() == ID_LEN && uuid::Uuid::parse_str(part).is_ok())
+impl StagingNames {
+    /// For the destination file name `name`. A destination that is itself a
+    /// staging name (a reserved writer publishing its reserved path) keeps
+    /// that name as the prefix and gains exactly one id, so the result is still
+    /// attributable to the final destination and the destination is never its
+    /// own staging file. Any other name `n` has `.<n>.<uuid>.tmp`, and the
+    /// staging name of that, `.<n>.<uuid>.<uuid>.tmp`.
+    fn of(name: &OsStr) -> Self {
+        let lossy = name.to_string_lossy();
+        match lossy
+            .strip_suffix(".tmp")
+            .filter(|base| base.starts_with('.') && ends_with_id(base))
+        {
+            Some(base) => Self {
+                prefix: base.to_string(),
+                max_ids: 1,
+            },
+            None => Self {
+                prefix: staging_stem(&lossy),
+                max_ids: 2,
+            },
+        }
+    }
+
+    /// A fresh staging file name.
+    fn fresh(&self) -> String {
+        format!("{}.{}.tmp", self.prefix, uuid::Uuid::new_v4())
+    }
+
+    /// Whether `file_name` is a staging name of this destination.
+    fn matches(&self, file_name: &str) -> bool {
+        let Some(ids) = file_name
+            .strip_prefix(&self.prefix)
+            .and_then(|rest| rest.strip_suffix(".tmp"))
+            .and_then(|ids| ids.strip_prefix('.'))
+        else {
+            return false;
+        };
+        let parts = ids.split('.').collect::<Vec<_>>();
+        (1..=self.max_ids).contains(&parts.len())
+            && parts
+                .iter()
+                .all(|part| part.len() == ID_LEN && uuid::Uuid::parse_str(part).is_ok())
+    }
 }
 
 /// A file written privately beside its destination, not yet published.
@@ -316,7 +355,7 @@ impl StagedFile {
     /// when [`publish`](Self::publish) runs is published.
     pub fn reserve(destination: &Path) -> Result<Self, PublishError> {
         let (parent, name) = destination_parts(destination)?;
-        let staged = parent.join(staging_file_name(name));
+        let staged = parent.join(StagingNames::of(name).fresh());
         Ok(Self {
             staged,
             destination: destination.to_path_buf(),
@@ -415,7 +454,10 @@ impl Drop for StagedFile {
 /// Remove the staging file. A failure is a [`Leftover`] only if the file is
 /// still there: a staging file whose creation failed (a name that is too long,
 /// a read-only folder) does not exist, and removing it fails for that same
-/// reason.
+/// reason. Existence is asked of the real filesystem, not of `ops`: every
+/// [`PublishFs`] wraps the real filesystem and injects a fault on top of it, so
+/// there is no failure to inject here, and a trait method would only be
+/// forwarded by each implementation.
 fn remove_staged(ops: &dyn PublishFs, staged: &Path) -> Option<Leftover> {
     match ops.remove_file(staged) {
         Ok(()) => None,
@@ -455,13 +497,13 @@ pub fn staging_leftovers(destination: &Path) -> Vec<PathBuf> {
     let Ok((parent, name)) = destination_parts(destination) else {
         return Vec::new();
     };
-    let stem = staging_stem(name);
+    let names = StagingNames::of(name);
     let Ok(entries) = fs::read_dir(parent) else {
         return Vec::new();
     };
     let mut found = entries
         .flatten()
-        .filter(|entry| is_staging_name_of(&entry.file_name().to_string_lossy(), &stem))
+        .filter(|entry| names.matches(&entry.file_name().to_string_lossy()))
         .map(|entry| entry.path())
         .collect::<Vec<_>>();
     found.sort();

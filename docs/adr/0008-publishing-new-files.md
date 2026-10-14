@@ -39,12 +39,17 @@ output names was refused by the existence check (#342).
    not touched. Any other error: nothing was created, so a retry is safe. A staging file that
    cannot be removed is reported (`leftover`) and only if it exists. After a success it is a
    warning, never a failure, because the artifact is complete: failing there would lose a
-   validated result and make a retry hit "already exists". The CLI writes the warning to stderr
-   through its output layer, core and the app through `tracing::warn!`, and the log carries no
-   user path. A process killed mid-publication leaves at most a staging file, found by
-   `fsutil::staging_leftovers` (also the staging name of a reserved staging path,
-   `.<name>.<uuid>.<uuid>.tmp`). Names are cut to 100 UTF-8 bytes (UTF-16 units on Windows)
-   so a staging name never exceeds the 255-byte limit.
+   validated result and make a retry hit "already exists". The CLI single-file commands and the
+   `execute` receipt write the warning to stderr through the output layer; the receipt names every
+   staging file beside the outputs, including one the cache pipeline's own `save_new` left (found
+   by comparing a scan before and after the run). Core (`StagedReprocessing::finish`,
+   `save_new`) and the app log `tracing::warn!` with the error kind only, no user path. A process
+   killed mid-publication leaves at most a staging file, found by `fsutil::staging_leftovers`.
+   Staging names are `.<name>.<uuid>.tmp`, and `.<name>.<uuid>.<uuid>.tmp` for the staging name
+   of a reserved staging path; a destination that is itself named like a staging file keeps its
+   name as the prefix and gains one id, and is never its own leftover. A name longer than 100
+   UTF-8 bytes (UTF-16 units on Windows) is cut and a hash of the whole name is appended, so
+   a staging name never exceeds the 255-byte limit and two long names never share a stem.
 3. **Related outputs: stage all, validate, then publish in a documented order.**
    `StagedFile` stages an artifact (or reserves a staging path for a pipeline that writes a large
    one) and removes it when dropped, so every early return publishes nothing. A caller serializes
@@ -80,4 +85,6 @@ output names was refused by the existence check (#342).
 - Known gap: `benchmark_quality::write_private_new` creates its report at the final name with
   `create_new` and can leave a partial file after a failed write; it is outside #342.
 - A killed run can leave `.<name>.<uuid>.tmp` files. They hold private content, are never read,
-  and the CLI warns about them on the next `execute` with the same output path.
+  and the CLI warns about them on the next `execute` with the same output paths, but only while the
+  outputs are still absent: once one exists `execute` refuses before it scans, and the
+  interrupted-run diagnosis lists only a surviving staged proposal.

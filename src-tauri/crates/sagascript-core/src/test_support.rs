@@ -17,7 +17,7 @@ use crate::meeting::{MeetingSegmentInput, MeetingSpeaker, MeetingTranscript};
 
 /// The real filesystem with chosen failures injected into a publication
 /// ([`PublishFs`], #342): the n-th hard link, every unlink, the creation of
-/// the staging file, or the file fsync. Build one with [`FaultyFs::new`] and
+/// the staging file, the file fsync or the folder fsync. Build one with [`FaultyFs::new`] and
 /// the `failing_*` methods.
 #[derive(Debug, Default)]
 pub struct FaultyFs {
@@ -25,6 +25,7 @@ pub struct FaultyFs {
     fail_remove: bool,
     fail_create: bool,
     sync_file_error: Option<io::ErrorKind>,
+    sync_dir_error: Option<io::ErrorKind>,
     links: Cell<usize>,
 }
 
@@ -49,6 +50,12 @@ impl FaultyFs {
     /// Fail the creation of the staging file, which then does not exist.
     pub fn failing_create(mut self) -> Self {
         self.fail_create = true;
+        self
+    }
+
+    /// Fail every folder fsync with an error of this kind.
+    pub fn failing_sync_dir(mut self, kind: io::ErrorKind) -> Self {
+        self.sync_dir_error = Some(kind);
         self
     }
 
@@ -90,7 +97,10 @@ impl PublishFs for FaultyFs {
     }
 
     fn sync_dir(&self, dir: &Path) -> io::Result<()> {
-        RealFs.sync_dir(dir)
+        match self.sync_dir_error {
+            Some(kind) => Err(io::Error::new(kind, "injected folder sync failure")),
+            None => RealFs.sync_dir(dir),
+        }
     }
 }
 
