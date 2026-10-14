@@ -88,12 +88,6 @@ const ALLOWLIST = [
     prefix: true,
     reason: "needs the scorer the lane downloads with curl; CI-only network step",
   },
-  {
-    run: "./scripts/stage-engine-host.sh",
-    reason:
-      "copies the built host to build/engine-host for bundling and asserts arm64-only (packaging); " +
-      "the swift check builds it with build-engine-host.sh and runs the same revision check",
-  },
   { run: "swift --version", reason: "prints the selected toolchain for the CI log" },
 ];
 

@@ -1,8 +1,11 @@
 //! Wire types for the `sagascript-engine-host` protocol, version 1.
 //!
-//! The contract is `docs/engine-host-protocol.md`. Messages are single JSON
-//! objects on one `\n`-terminated line. Unknown fields are ignored everywhere
-//! and unknown error codes decode to [`ErrorCode::Unknown`].
+//! The contract is `docs/engine-host-protocol.md` (prose) and the golden
+//! transcripts in `src-tauri/engine-host/test-vectors/protocol/` (the source of
+//! truth, checked by the `golden` test tooling). Messages are single JSON objects on one
+//! `\n`-terminated line. Unknown fields are ignored everywhere and unknown
+//! error codes decode to [`ErrorCode::Unknown`]; fields the spec does not mark
+//! optional are required.
 
 // This crate is at zero for every clippy policy lint (#356), so it denies
 // them outright instead of tracking a count in clippy-policy-baseline.json.
@@ -297,28 +300,35 @@ impl<'de> Deserialize<'de> for ErrorCode {
     }
 }
 
-/// The `error` object of a failure response.
+// Strictness (#367): a response field is required unless docs/engine-host-protocol.md marks it
+// optional. Only the optional ones carry `#[serde(default)]`, so a host that drops or misspells a
+// required field fails to decode instead of silently reading as 0, `false` or "". The golden
+// transcripts in `src-tauri/engine-host/test-vectors/protocol/` are checked against these types
+// (`vector_tests.rs`), including that every non-optional field is required.
+
+/// The `error` object of a failure response. Every field is required; [`decode_incoming`] turns
+/// a malformed one into a `protocol` failure of the request it answers.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ErrorBody {
     pub code: ErrorCode,
-    #[serde(default)]
     pub message: String,
-    #[serde(default)]
+    /// The client retries `busy` only when this is true.
     pub retryable: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HostInfo {
-    #[serde(default)]
     pub name: String,
-    #[serde(default)]
     pub version: String,
-    /// Required by the client; `None` makes the handshake fail.
+    /// Required by the client, but decoded leniently: `None` makes the handshake fail with an
+    /// explicit build-identity error rather than a generic decode error.
     #[serde(default)]
     pub git_sha: Option<String>,
-    #[serde(default)]
+    /// Whether the host was built from a dirty tree. Every host must send it (the golden
+    /// transcripts require it); the client decodes it leniently so that older hosts handshake.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build_dirty: Option<bool>,
     pub engine: String,
-    #[serde(default)]
     pub engine_version: String,
 }
 
@@ -329,13 +339,11 @@ pub struct Capabilities {
     pub preferred_window_s: f64,
     pub preferred_overlap_s: f64,
     pub max_in_flight: u32,
-    #[serde(default)]
     pub token_timestamps: bool,
-    #[serde(default)]
     pub languages: Vec<String>,
-    #[serde(default)]
     pub compute_units: Vec<String>,
-    #[serde(default)]
+    /// Core ML only; absent on other hosts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_macos: Option<String>,
     /// The host honours `boost_terms` / `boost_weight` on `transcribe_window`. Absent (an older
     /// host) means it ignores them and decodes unboosted.
@@ -371,19 +379,16 @@ where
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LoadResult {
-    #[serde(default)]
     pub model_id: String,
-    #[serde(default, deserialize_with = "lenient_u64")]
+    #[serde(deserialize_with = "lenient_u64")]
     pub load_ms: u64,
-    #[serde(default)]
     pub compiled: bool,
-    #[serde(default)]
+    /// The model's fixed input length and the effective window (see `effective_capabilities` in
+    /// the client); a missing value must not read as 0.
     pub window_s: f64,
-    #[serde(default)]
     pub frame_s: f64,
-    #[serde(default)]
     pub vocab_size: u32,
-    #[serde(default)]
+    /// A real token id: 0 is a valid id, so a missing value must not read as 0.
     pub blank_id: u32,
 }
 
@@ -400,13 +405,15 @@ pub struct WireToken {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct WindowTimings {
-    #[serde(default, deserialize_with = "lenient_u64")]
+    #[serde(deserialize_with = "lenient_u64")]
     pub preprocess_ms: u64,
-    #[serde(default, deserialize_with = "lenient_u64")]
+    #[serde(deserialize_with = "lenient_u64")]
     pub encode_ms: u64,
-    #[serde(default, deserialize_with = "lenient_u64")]
+    #[serde(deserialize_with = "lenient_u64")]
     pub decode_ms: u64,
     /// Microseconds spent building the context-biasing trie (0 on a cache hit or when unused).
+    /// Optional: only results for a window that carried a dictionary have it, and a host may omit
+    /// it when it is 0.
     #[serde(
         default,
         deserialize_with = "lenient_u64",
@@ -422,9 +429,7 @@ fn is_zero_u64(value: &u64) -> bool {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TranscribeWindowResult {
     pub tokens: Vec<WireToken>,
-    #[serde(default)]
     pub audio_s: f64,
-    #[serde(default)]
     pub timings: WindowTimings,
     /// Present only when the request carried a dictionary: whether biasing was in effect. `false`
     /// means the host could not apply it (for example a model without top-K outputs).
@@ -444,13 +449,12 @@ pub struct CancelResult {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StatusResult {
     pub state: String,
+    /// `null` (or absent) while no model is loaded.
     #[serde(default)]
     pub model_id: Option<String>,
-    #[serde(default)]
     pub in_flight: u32,
-    #[serde(default, deserialize_with = "lenient_u64")]
+    #[serde(deserialize_with = "lenient_u64")]
     pub rss_bytes: u64,
-    #[serde(default)]
     pub uptime_s: f64,
 }
 
@@ -469,18 +473,29 @@ pub enum Incoming {
         name: String,
         fields: Map<String, Value>,
     },
+    /// A line for request `id` that is neither an event nor a well-formed response. `error` is
+    /// the `protocol` failure to fail that request with (the client also logs the line).
+    Malformed { id: u64, error: ErrorBody },
 }
 
 impl Incoming {
     pub fn id(&self) -> u64 {
         match self {
-            Incoming::Response { id, .. } | Incoming::Event { id, .. } => *id,
+            Incoming::Response { id, .. }
+            | Incoming::Event { id, .. }
+            | Incoming::Malformed { id, .. } => *id,
         }
     }
 }
 
 /// Decode one host line. Unknown fields are kept in the raw value and ignored
 /// by the typed accessors.
+///
+/// Only a line without a usable `id` is an error (no request can be failed with it). A line with
+/// a usable `id` that is neither an event nor a well-formed response (no boolean `ok`, or a
+/// failure without a valid `error` object) is [`Incoming::Malformed`]: a `protocol` failure of
+/// that request, so the client fails the request at once instead of waiting for its timeout. A
+/// success whose fields do not match the op's result type is rejected later by [`parse_result`].
 pub fn decode_incoming(line: &str) -> Result<Incoming, DecodeError> {
     let value: Value =
         serde_json::from_str(line.trim()).map_err(|e| DecodeError(format!("invalid JSON: {e}")))?;
@@ -501,6 +516,14 @@ pub fn decode_incoming(line: &str) -> Result<Incoming, DecodeError> {
             fields: obj,
         });
     }
+    let violation = |message: String| Incoming::Malformed {
+        id,
+        error: ErrorBody {
+            code: ErrorCode::Protocol,
+            message,
+            retryable: false,
+        },
+    };
     match obj.get("ok").and_then(Value::as_bool) {
         Some(true) => {
             obj.remove("id");
@@ -510,23 +533,33 @@ pub fn decode_incoming(line: &str) -> Result<Incoming, DecodeError> {
                 result: Ok(Value::Object(obj)),
             })
         }
-        Some(false) => {
-            let err = obj
-                .remove("error")
-                .map(serde_json::from_value::<ErrorBody>)
-                .transpose()
-                .map_err(|e| DecodeError(format!("invalid error object: {e}")))?
-                .unwrap_or(ErrorBody {
-                    code: ErrorCode::Internal,
-                    message: "failure response without error object".into(),
-                    retryable: false,
-                });
-            Ok(Incoming::Response {
-                id,
-                result: Err(err),
-            })
-        }
-        None => Err(DecodeError("neither ok nor event present".into())),
+        Some(false) => Ok(match obj.remove("error") {
+            None => violation("engine host sent a failure response without an error object".into()),
+            Some(error) => {
+                // The host's own code, when it has a readable one, says what went wrong.
+                let code = error
+                    .get("code")
+                    .and_then(Value::as_str)
+                    .map(|code| code.chars().take(64).collect::<String>());
+                match serde_json::from_value::<ErrorBody>(error) {
+                    Ok(error) => Incoming::Response {
+                        id,
+                        result: Err(error),
+                    },
+                    Err(e) => {
+                        violation(match code {
+                            Some(code) => {
+                                format!("engine host sent a malformed error object (code `{code}`): {e}")
+                            }
+                            None => format!("engine host sent a malformed error object: {e}"),
+                        })
+                    }
+                }
+            }
+        }),
+        None => Ok(violation(
+            "engine host sent a line that is neither a response (boolean ok) nor an event".into(),
+        )),
     }
 }
 
@@ -574,5 +607,10 @@ pub fn encode_event(id: u64, name: &str, fields: Value) -> String {
     line
 }
 
+#[cfg(any(test, feature = "golden"))]
+pub mod golden;
+
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod vector_tests;

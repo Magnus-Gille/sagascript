@@ -112,10 +112,14 @@ fn hello_response_parses_with_unknown_fields() {
 
 #[test]
 fn hello_without_git_sha_parses_as_none() {
-    let v = json!({"protocol":1,"host":{"name":"h"},"capabilities":{"sample_rate":16000,
-        "max_window_s":30.0,"preferred_window_s":30.0,"preferred_overlap_s":6.0,"max_in_flight":1}});
+    // Decoded leniently so the client can fail the handshake with a build-identity error.
+    let v = json!({"protocol":1,"host":{"name":"h","version":"1","engine":"coreml","engine_version":"x"},
+        "capabilities":{"sample_rate":16000,"max_window_s":30.0,"preferred_window_s":30.0,
+        "preferred_overlap_s":6.0,"max_in_flight":1,"token_timestamps":true,"languages":["sv"],
+        "compute_units":["cpu"]}});
     let hello: HelloResult = parse_result(v).unwrap();
     assert!(hello.host.git_sha.is_none());
+    assert!(hello.capabilities.min_macos.is_none() && !hello.capabilities.context_biasing);
 }
 
 #[test]
@@ -194,17 +198,63 @@ fn events_and_ok_round_trip() {
 
 #[test]
 fn malformed_incoming_rejected() {
+    // No usable id: nothing to fail, so the line is an error (the client logs and drops it).
     assert!(decode_incoming("garbage").is_err());
     assert!(decode_incoming("[1]").is_err());
     assert!(decode_incoming(r#"{"ok":true}"#).is_err());
-    assert!(decode_incoming(r#"{"id":1}"#).is_err());
+    assert!(decode_incoming(r#"{"id":-1,"ok":false,"error":{"code":"busy"}}"#).is_err());
+    assert!(decode_incoming(r#"{"id":2.0,"ok":true}"#).is_err());
+}
+
+/// A malformed line for a usable id fails that request with `protocol` instead of being dropped,
+/// which would leave the request waiting for its timeout (#367 review).
+#[test]
+fn malformed_response_for_a_usable_id_fails_that_request() {
+    for (line, needle) in [
+        (
+            r#"{"id":3,"ok":false,"error":{"code":"busy","message":"full"}}"#,
+            "malformed error object (code `busy`): missing field `retryable`",
+        ),
+        (
+            r#"{"id":3,"ok":false,"error":{"code":"engine","retryable":false}}"#,
+            "malformed error object",
+        ),
+        (
+            r#"{"id":3,"ok":false,"error":{"message":"m","retryable":false}}"#,
+            "malformed error object",
+        ),
+        (
+            r#"{"id":3,"ok":false,"error":{"code":"engine","message":5,"retryable":false}}"#,
+            "malformed error object",
+        ),
+        (
+            r#"{"id":3,"ok":false,"error":"boom"}"#,
+            "malformed error object",
+        ),
+        (r#"{"id":3,"ok":false}"#, "without an error object"),
+        (r#"{"id":3}"#, "neither a response"),
+        (r#"{"id":3,"ok":"true"}"#, "neither a response"),
+        (r#"{"id":3,"event":7}"#, "neither a response"),
+    ] {
+        let Ok(Incoming::Malformed { id: 3, error }) = decode_incoming(line) else {
+            panic!(
+                "{line} must fail request 3, got {:?}",
+                decode_incoming(line)
+            );
+        };
+        assert_eq!(error.code, ErrorCode::Protocol, "{line}");
+        assert!(!error.retryable, "{line}");
+        assert!(error.message.contains(needle), "{line}: {}", error.message);
+    }
 }
 
 #[test]
 fn millisecond_fields_accept_float_encoders() {
-    let load: LoadResult =
-        serde_json::from_str(r#"{"model_id":"m","load_ms":95520.4529762268,"compiled":true}"#)
-            .unwrap();
+    let load: LoadResult = serde_json::from_str(
+        r#"{"model_id":"m","load_ms":95520.4529762268,"compiled":true,"window_s":15.0,
+            "frame_s":0.08,"vocab_size":1025,"blank_id":1024}"#,
+    )
+    .unwrap();
     assert_eq!(load.load_ms, 95520);
     let timings: WindowTimings =
         serde_json::from_str(r#"{"preprocess_ms":1.9,"encode_ms":30,"decode_ms":24.5}"#).unwrap();
@@ -212,8 +262,13 @@ fn millisecond_fields_accept_float_encoders() {
         (timings.preprocess_ms, timings.encode_ms, timings.decode_ms),
         (2, 30, 25)
     );
-    assert!(serde_json::from_str::<WindowTimings>(r#"{"encode_ms":-1}"#).is_err());
-    assert!(serde_json::from_str::<WindowTimings>(r#"{"encode_ms":"30"}"#).is_err());
+    for bad in [r#"-1"#, r#""30""#] {
+        let line = format!(r#"{{"preprocess_ms":1,"encode_ms":{bad},"decode_ms":1}}"#);
+        assert!(
+            serde_json::from_str::<WindowTimings>(&line).is_err(),
+            "{line}"
+        );
+    }
 }
 
 #[test]
@@ -253,17 +308,22 @@ fn transcribe_window_boost_fields_are_optional_and_omitted_when_off() {
 fn context_biasing_capability_and_result_fields_are_backwards_compatible() {
     // An older host: no `context_biasing` capability, no `boost_active`, no `boost_us`.
     let caps: Capabilities = serde_json::from_str(
-        r#"{"sample_rate":16000,"max_window_s":30,"preferred_window_s":30,"preferred_overlap_s":6,"max_in_flight":1}"#,
+        r#"{"sample_rate":16000,"max_window_s":30,"preferred_window_s":30,"preferred_overlap_s":6,
+            "max_in_flight":1,"token_timestamps":true,"languages":["sv"],"compute_units":["ane"],
+            "min_macos":"14.0"}"#,
     )
     .unwrap();
     assert!(!caps.context_biasing);
-    let old: TranscribeWindowResult =
-        serde_json::from_str(r#"{"tokens":[],"audio_s":1.0,"timings":{"decode_ms":3}}"#).unwrap();
+    let old: TranscribeWindowResult = serde_json::from_str(
+        r#"{"tokens":[],"audio_s":1.0,"timings":{"preprocess_ms":1,"encode_ms":2,"decode_ms":3}}"#,
+    )
+    .unwrap();
     assert_eq!(old.boost_active, None);
     assert_eq!(old.timings.boost_us, 0);
     // New host: reported when a dictionary was sent, omitted otherwise.
     let new: TranscribeWindowResult = serde_json::from_str(
-        r#"{"tokens":[],"audio_s":1.0,"timings":{"boost_us":120.0},"boost_active":false}"#,
+        r#"{"tokens":[],"audio_s":1.0,"timings":{"preprocess_ms":1,"encode_ms":2,"decode_ms":3,
+            "boost_us":120.0},"boost_active":false}"#,
     )
     .unwrap();
     assert_eq!(new.boost_active, Some(false));
@@ -283,5 +343,40 @@ fn malformed_boost_fields_are_rejected_without_echoing_the_dictionary() {
             );
         }
         other => panic!("{other:?}"),
+    }
+}
+
+/// JSON number classes are not interchangeable (the golden transcripts pin the hosts' side): an
+/// id must be an integer >= 1, and integer parameters reject floats and booleans. `v` is checked
+/// by the hosts, not by `decode_request`.
+#[test]
+fn integer_fields_reject_floats_and_booleans() {
+    for id in ["2.0", "true", "-1", "\"2\""] {
+        let line = format!(r#"{{"v":1,"id":{id},"op":"ping"}}"#);
+        assert!(decode_request(&line).is_err(), "{line}");
+    }
+    let window = |offset: &str, num: &str, rate: &str| {
+        format!(
+            r#"{{"v":1,"id":4,"op":"transcribe_window","pcm_path":"/p","offset_samples":{offset},"num_samples":{num},"sample_rate":{rate},"format":"f32le","priority":"batch"}}"#
+        )
+    };
+    assert!(matches!(
+        decode_request(&window("0", "8000", "16000")).unwrap(),
+        ParsedRequest::Ok { id: 4, .. }
+    ));
+    for line in [
+        window("8000.0", "8000", "16000"),
+        window("0", "true", "16000"),
+        window("0", "8000", "16000.0"),
+        r#"{"v":1,"id":4,"op":"cancel","target":3.0}"#.to_string(),
+        r#"{"v":1,"id":4,"op":"cancel","target":true}"#.to_string(),
+    ] {
+        assert!(
+            matches!(
+                decode_request(&line).unwrap(),
+                ParsedRequest::BadParams { id: 4, .. }
+            ),
+            "{line}"
+        );
     }
 }

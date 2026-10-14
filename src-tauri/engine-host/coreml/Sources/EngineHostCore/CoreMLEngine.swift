@@ -95,7 +95,7 @@ public final class CoreMLEngine: EngineBackend {
         // directory, so a symlinked model dir (or component) would look empty.
         let sourceURL = URL(fileURLWithPath: modelDirectory, isDirectory: true).resolvingSymlinksInPath()
         guard FileManager.default.fileExists(atPath: sourceURL.path) else {
-            throw EngineHostError(code: "model_missing", message: "Model directory does not exist: \(modelDirectory)")
+            throw EngineHostError(code: .modelMissing, message: "Model directory does not exist: \(modelDirectory)")
         }
         let units = try makeComputeUnits(computeUnits)
 
@@ -174,25 +174,25 @@ public final class CoreMLEngine: EngineBackend {
         } catch let error as EngineHostError {
             throw error
         } catch {
-            throw EngineHostError(code: "model_load_failed", message: error.localizedDescription)
+            throw EngineHostError(code: .modelLoadFailed, message: error.localizedDescription)
         }
     }
 
     public func transcribe(_ request: WindowRequest, isCancelled: @escaping () -> Bool) throws -> WindowResult {
         guard request.sampleRate == 16_000 else {
-            throw EngineHostError(code: "bad_request", message: "sample_rate must be 16000")
+            throw EngineHostError(code: .badRequest, message: "sample_rate must be 16000")
         }
         guard request.format == "f32le" else {
-            throw EngineHostError(code: "bad_request", message: "format must be f32le")
+            throw EngineHostError(code: .badRequest, message: "format must be f32le")
         }
         guard request.offsetSamples >= 0, request.numSamples > 0 else {
-            throw EngineHostError(code: "bad_request", message: "offset_samples and num_samples must be valid")
+            throw EngineHostError(code: .badRequest, message: "offset_samples and num_samples must be valid")
         }
         guard let loaded = snapshotModel() else {
-            throw EngineHostError(code: "not_loaded", message: "No CoreML model is loaded")
+            throw EngineHostError(code: .notLoaded, message: "No CoreML model is loaded")
         }
         guard request.numSamples <= loaded.windowSamples else {
-            throw EngineHostError(code: "bad_request", message: "num_samples exceeds the loaded model window")
+            throw EngineHostError(code: .badRequest, message: "num_samples exceeds the loaded model window")
         }
         try checkCancelled(isCancelled)
 
@@ -213,7 +213,7 @@ public final class CoreMLEngine: EngineBackend {
         let preprocessed = try loaded.preprocessor.prediction(from: preprocessorInput)
         guard let mel = preprocessed.featureValue(for: "mel")?.multiArrayValue else {
             throw EngineHostError(
-                code: "engine",
+                code: .engine,
                 message: "Preprocessor output 'mel' is missing (outputs: \(preprocessed.featureNames.sorted()))"
             )
         }
@@ -231,7 +231,7 @@ public final class CoreMLEngine: EngineBackend {
         let encoded = try loaded.encoder.prediction(from: encoderInput)
         guard let encoderOutput = encoded.featureValue(for: "encoder")?.multiArrayValue else {
             throw EngineHostError(
-                code: "engine",
+                code: .engine,
                 message: "Encoder output 'encoder' is missing (outputs: \(encoded.featureNames.sorted()))"
             )
         }
@@ -310,7 +310,7 @@ public final class CoreMLEngine: EngineBackend {
         case "cpu": return .cpuOnly
         case "all": return .all
         default:
-            throw EngineHostError(code: "bad_request", message: "compute_units must be ane, gpu, cpu, or all")
+            throw EngineHostError(code: .badRequest, message: "compute_units must be ane, gpu, cpu, or all")
         }
     }
 
@@ -332,11 +332,11 @@ public final class CoreMLEngine: EngineBackend {
             } else if let package = findComponent(named: name, suffix: "mlpackage", in: sourceURL) {
                 packages[name] = package
             } else {
-                throw EngineHostError(code: "model_missing", message: "Missing \(name).mlmodelc or \(name).mlpackage")
+                throw EngineHostError(code: .modelMissing, message: "Missing \(name).mlmodelc or \(name).mlpackage")
             }
         }
         guard let vocabularyURL = findVocabulary(in: sourceURL) else {
-            throw EngineHostError(code: "model_missing", message: "Missing parakeet_vocab.json")
+            throw EngineHostError(code: .modelMissing, message: "Missing parakeet_vocab.json")
         }
         guard !packages.isEmpty else {
             return PreparedComponents(paths: paths, vocabularyURL: vocabularyURL, compiled: false)
@@ -389,11 +389,11 @@ public final class CoreMLEngine: EngineBackend {
         let url = unresolvedURL.resolvingSymlinksInPath()
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) else {
-            throw EngineHostError(code: "model_missing", message: "Missing model component: \(url.path)")
+            throw EngineHostError(code: .modelMissing, message: "Missing model component: \(url.path)")
         }
         if !isDirectory.boolValue { return try sha256File(url) }
         guard let enumerator = FileManager.default.enumerator(at: url, includingPropertiesForKeys: [.isDirectoryKey]) else {
-            throw EngineHostError(code: "model_load_failed", message: "Cannot enumerate model component: \(url.path)")
+            throw EngineHostError(code: .modelLoadFailed, message: "Cannot enumerate model component: \(url.path)")
         }
         let files = enumerator.compactMap { $0 as? URL }.filter { candidate in
             var childDirectory: ObjCBool = false
@@ -412,17 +412,17 @@ public final class CoreMLEngine: EngineBackend {
     private func loadVocabulary(at url: URL) throws -> [Int: String] {
         let data = try Data(contentsOf: url)
         guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw EngineHostError(code: "model_load_failed", message: "Vocabulary is not a JSON object")
+            throw EngineHostError(code: .modelLoadFailed, message: "Vocabulary is not a JSON object")
         }
         var vocabulary: [Int: String] = [:]
         for (key, value) in object {
             guard let id = Int(key), let text = value as? String else {
-                throw EngineHostError(code: "model_load_failed", message: "Vocabulary contains an invalid entry")
+                throw EngineHostError(code: .modelLoadFailed, message: "Vocabulary contains an invalid entry")
             }
             vocabulary[id] = text
         }
         guard !vocabulary.isEmpty else {
-            throw EngineHostError(code: "model_load_failed", message: "Vocabulary is empty")
+            throw EngineHostError(code: .modelLoadFailed, message: "Vocabulary is empty")
         }
         return vocabulary
     }
@@ -437,27 +437,27 @@ public final class CoreMLEngine: EngineBackend {
     ) throws -> LoadedModel {
         guard let audioShape = shape(of: preprocessor, input: "audio_signal"), audioShape.count >= 2,
               let windowSamples = audioShape.last?.intValue, windowSamples > 0 else {
-            throw EngineHostError(code: "model_load_failed", message: "Preprocessor audio_signal shape is unavailable")
+            throw EngineHostError(code: .modelLoadFailed, message: "Preprocessor audio_signal shape is unavailable")
         }
         guard let encoderShape = shape(of: encoder, output: "encoder"), encoderShape.count == 3 else {
-            throw EngineHostError(code: "model_load_failed", message: "Encoder output shape is unavailable")
+            throw EngineHostError(code: .modelLoadFailed, message: "Encoder output shape is unavailable")
         }
         let encoderHidden = encoderShape.dropFirst().map(\.intValue).max() ?? 0
         let encoderFrames = encoderShape.dropFirst().map(\.intValue).min() ?? 0
         guard encoderHidden > 0, encoderFrames > 0 else {
-            throw EngineHostError(code: "model_load_failed", message: "Encoder output shape is invalid")
+            throw EngineHostError(code: .modelLoadFailed, message: "Encoder output shape is invalid")
         }
         guard let stateShape = shape(of: decoder, input: "h_in"), stateShape.count == 3,
               let decoderLayers = stateShape.first?.intValue,
               let decoderHidden = stateShape.last?.intValue,
               decoderLayers > 0, decoderHidden > 0 else {
-            throw EngineHostError(code: "model_load_failed", message: "Decoder h_in shape is unavailable")
+            throw EngineHostError(code: .modelLoadFailed, message: "Decoder h_in shape is unavailable")
         }
         // Parakeet-TDT-v3 stores the 8192 regular SentencePiece entries in
         // parakeet_vocab.json; the transducer blank is the following class
         // and is intentionally absent from the vocabulary file.
         guard let maxVocabularyID = vocabulary.keys.max() else {
-            throw EngineHostError(code: "model_load_failed", message: "Vocabulary is empty")
+            throw EngineHostError(code: .modelLoadFailed, message: "Vocabulary is empty")
         }
         let blankID = maxVocabularyID + 1
         let windowSeconds = Double(windowSamples) / 16_000
@@ -518,16 +518,16 @@ public final class CoreMLEngine: EngineBackend {
         let byteOffset = request.offsetSamples.multipliedReportingOverflow(by: 4)
         let byteCount = request.numSamples.multipliedReportingOverflow(by: 4)
         guard !byteOffset.overflow, !byteCount.overflow else {
-            throw EngineHostError(code: "bad_request", message: "PCM range is too large")
+            throw EngineHostError(code: .badRequest, message: "PCM range is too large")
         }
         let handle: FileHandle
         do { handle = try FileHandle(forReadingFrom: URL(fileURLWithPath: request.pcmPath)) }
-        catch { throw EngineHostError(code: "bad_request", message: "Cannot open pcm_path: \(error.localizedDescription)") }
+        catch { throw EngineHostError(code: .badRequest, message: "Cannot open pcm_path: \(error.localizedDescription)") }
         defer { try? handle.close() }
         do {
             handle.seek(toFileOffset: UInt64(byteOffset.partialValue))
             guard let data = try handle.read(upToCount: byteCount.partialValue), data.count == byteCount.partialValue else {
-                throw EngineHostError(code: "bad_request", message: "pcm_path does not contain the requested range")
+                throw EngineHostError(code: .badRequest, message: "pcm_path does not contain the requested range")
             }
             var samples = [Float](repeating: 0, count: count)
             data.withUnsafeBytes { raw in
@@ -545,7 +545,7 @@ public final class CoreMLEngine: EngineBackend {
         } catch let error as EngineHostError {
             throw error
         } catch {
-            throw EngineHostError(code: "bad_request", message: "Cannot read pcm_path: \(error.localizedDescription)")
+            throw EngineHostError(code: .badRequest, message: "Cannot read pcm_path: \(error.localizedDescription)")
         }
     }
 
@@ -604,6 +604,6 @@ public final class CoreMLEngine: EngineBackend {
     }
 
     private func checkCancelled(_ isCancelled: () -> Bool) throws {
-        if isCancelled() { throw EngineHostError(code: "cancelled", message: "Transcription was cancelled") }
+        if isCancelled() { throw EngineHostError(code: .cancelled, message: "Transcription was cancelled") }
     }
 }

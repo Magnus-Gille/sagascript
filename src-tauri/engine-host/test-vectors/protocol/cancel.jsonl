@@ -1,0 +1,41 @@
+{"send":{"v":1,"id":1,"op":"hello","client":{"name":"sagascript","version":"1.4.4","git_sha":"0123456789abcdef0123456789abcdef01234567"}}}
+{"expect":{"id":1,"ok":true,"protocol":1,"host":{"name":"sagascript-engine-host","version":"<string>","git_sha":"<sha40>","build_dirty":"<bool>","engine":"<string>","engine_version":"<string>"},"capabilities":{"sample_rate":16000,"max_window_s":1.0,"preferred_window_s":1.0,"preferred_overlap_s":0.2,"max_in_flight":2,"token_timestamps":true,"languages":["sv"],"compute_units":["ane","gpu","cpu","all"],"min_macos":"14.0","context_biasing":true}}}
+{"send":{"v":1,"id":2,"op":"load","model_dir":"/vectors/model","model_id":"vectors-model","compute_units":"ane"}}
+{"expect":{"id":2,"ok":true,"model_id":"vectors-model","load_ms":4,"compiled":false,"window_s":1.0,"frame_s":0.08,"vocab_size":3,"blank_id":2}}
+{"note":"Two held windows fill max_in_flight (2); the third is queued."}
+{"send":{"v":1,"id":10,"op":"transcribe_window","pcm_path":"/vectors/hold.f32","offset_samples":0,"num_samples":8000,"sample_rate":16000,"format":"f32le","priority":"batch"}}
+{"send":{"v":1,"id":11,"op":"transcribe_window","pcm_path":"/vectors/hold.f32","offset_samples":0,"num_samples":8000,"sample_rate":16000,"format":"f32le","priority":"interactive"}}
+{"send":{"v":1,"id":12,"op":"transcribe_window","pcm_path":"/vectors/speech.f32","offset_samples":0,"num_samples":8000,"sample_rate":16000,"format":"f32le","priority":"batch"}}
+{"send":{"v":1,"id":13,"op":"status"}}
+{"expect":{"id":13,"ok":true,"state":"busy","model_id":"vectors-model","in_flight":2,"rss_bytes":"<uint>","uptime_s":"<number>"}}
+{"note":"Cancelling a queued window: the ack says true and the window terminates with cancelled."}
+{"send":{"v":1,"id":14,"op":"cancel","target":12}}
+{"expect":{"id":14,"ok":true,"cancelled":true}}
+{"expect":{"id":12,"ok":false,"error":{"code":"cancelled","message":"<string>","retryable":false}}}
+{"note":"Cancelling a running window."}
+{"send":{"v":1,"id":15,"op":"cancel","target":10}}
+{"expect":{"id":15,"ok":true,"cancelled":true}}
+{"expect":{"id":10,"ok":false,"error":{"code":"cancelled","message":"<string>","retryable":false}}}
+{"note":"Unknown or finished targets are not an error; the answer is false."}
+{"send":{"v":1,"id":16,"op":"cancel","target":999}}
+{"expect":{"id":16,"ok":true,"cancelled":false}}
+{"send":{"v":1,"id":17,"op":"cancel","target":0}}
+{"expect":{"id":17,"ok":true,"cancelled":false}}
+{"send":{"v":1,"id":18,"op":"cancel","target":2}}
+{"expect":{"id":18,"ok":true,"cancelled":false}}
+{"send":{"v":1,"id":19,"op":"cancel"}}
+{"expect":{"id":19,"ok":false,"error":{"code":"bad_request","message":"<string>","retryable":false}}}
+{"send":{"v":1,"id":20,"op":"cancel","target":"11"}}
+{"expect":{"id":20,"ok":false,"error":{"code":"bad_request","message":"<string>","retryable":false}}}
+{"note":"target must be a JSON integer: 11.0 or true is a bad_request and cancels nothing (window 11 is still held below)."}
+{"send_raw":"{\"v\":1,\"id\":21,\"op\":\"cancel\",\"target\":11.0}"}
+{"expect":{"id":21,"ok":false,"error":{"code":"bad_request","message":"<string>","retryable":false}}}
+{"send_raw":"{\"v\":1,\"id\":22,\"op\":\"cancel\",\"target\":true}"}
+{"expect":{"id":22,"ok":false,"error":{"code":"bad_request","message":"<string>","retryable":false}}}
+{"send":{"v":1,"id":23,"op":"cancel","target":11}}
+{"expect":{"id":23,"ok":true,"cancelled":true}}
+{"expect":{"id":11,"ok":false,"error":{"code":"cancelled","message":"<string>","retryable":false}}}
+{"send":{"v":1,"id":24,"op":"status"}}
+{"expect":{"id":24,"ok":true,"state":"ready","model_id":"vectors-model","in_flight":0,"rss_bytes":"<uint>","uptime_s":"<number>"}}
+{"send":{"v":1,"id":25,"op":"transcribe_window","pcm_path":"/vectors/speech.f32","offset_samples":0,"num_samples":8000,"sample_rate":16000,"format":"f32le","priority":"batch"}}
+{"expect":{"id":25,"ok":true,"tokens":[{"id":0,"text":"▁hej","start":0.0,"duration":0.08,"confidence":0.98},{"id":1,"text":"san","start":0.16,"duration":0.08,"confidence":0.5}],"audio_s":0.5,"timings":{"preprocess_ms":1,"encode_ms":2,"decode_ms":3}}}
