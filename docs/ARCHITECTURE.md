@@ -171,7 +171,7 @@ sequenceDiagram
 | Store | `crates/sagascript-core/src/settings/store.rs` | `load`, `load_from`, `save`, `update`, `try_update`; cross-process `fs2` lock on `<file>.json.lock`; read-merge-write keeps unknown keys; atomic rename. |
 | AppController | `app_controller.rs` | In-memory copy: `settings()`, `settings_mut()`, `update_settings()`. Dictation reads it at use time. |
 | Watcher | `start_settings_watcher` in `main.rs` | `PollWatcher` on macOS, `RecommendedWatcher` elsewhere; filter `configuration_event_may_affect`; waits while a dictation records (`acquire_hotkey_configuration`). Fires for the app's own writes too (harmless reload). |
-| Frontend | `getSettings()` / setters in `src/lib/api.ts`; `applySetting()` and the `settings_reloaded` listener in `Settings.svelte` | Always re-reads after a write. |
+| Frontend | `getSettings()` / setters in `src/lib/api.ts`; `saveSetting()`, `applySetting()` and the `settings_reloaded` listener in `Settings.svelte` | Re-reads after a write. A rejected setter saved nothing; a saved change whose re-read fails is reported as saved, never repeated and never rolled back: the window shows a Reload settings notice and sends no further change until a read succeeds. Reads are applied in the order they were issued, so a late answer cannot replace a newer one ([#341](https://github.com/Magnus-Gille/sagascript/issues/341)). |
 
 Rules: write through `store::update`/`try_update` (never `save()` a possibly stale clone);
 release the file lock before taking the controller lock; the watcher replays only hotkey
