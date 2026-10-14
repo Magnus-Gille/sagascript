@@ -47,15 +47,23 @@
    the host's code (`engine_model_missing`, `engine_busy`, …; host-side failures are
    `engine_crashed`, `engine_timeout`, `engine_unavailable`, `engine_io`) and its retry hint.
 5. **Paths are scrubbed at the Rust boundary** by `sagascript_core::path_scrub::scrub_paths`:
-   macOS and Linux account folders, volumes and temporary folders, Windows drive and UNC
-   paths, `file://` URLs and the current home directory become `<path>`, keeping the file name
-   below the account folder (`<path>/foo.mlmodelc`). It runs where foreign text enters an error
-   type (`EngineFailure::new`), in the engine's log lines (load failure, host stderr, pre-warm
-   failure) and again when `CommandError` is serialized, so a path that arrives through a plain
-   string is removed too. The Swift sources are unchanged.
-6. **Retry or download** is decided from the error, not the text: `retryable` offers another
-   attempt, `engine_model_missing` and `engine_model_load_failed` offer a model download
-   (`backendErrorRecovery`).
+   macOS and Linux account folders, volumes and temporary folders (matched ASCII
+   case-insensitively, also as `/System/Volumes/Data/…`), `file://` and `file://localhost` URLs,
+   Windows drive, UNC and `\\?\` paths and the current home directory become `<path>`, keeping
+   the file name below the account folder (`<path>/foo.mlmodelc`) and removing every folder
+   before it. It runs where foreign text enters an error type (`EngineFailure::new`), in the
+   engine's log lines (load failure, host stderr, malformed host lines, pre-warm failure) and
+   again when `CommandError` is serialized, so a path that arrives through a plain string is
+   removed too. The Swift sources are unchanged.
+6. **`retryable` means the user's action may be repeated** (record again, run the file again)
+   and is expected to succeed: a busy engine, a model still loading, nothing captured, an engine
+   host restart. It does not mean the same `invoke` may be repeated: `stop_and_transcribe` has
+   consumed the audio, so a second call finds no recording and resolves with an empty text.
+   Part 2 must not wire `backendErrorRecovery() === "retry"` to a bare re-invoke of
+   `stop_and_transcribe`; "Try again" restarts the action. A timeout is not retryable: the same
+   input under the same budget tends to time out again, and a file that always exceeds it would
+   be offered a retry forever. `engine_model_missing` and `engine_model_load_failed` offer a model
+   download instead (`backendErrorRecovery`).
 
 ## Consequences
 
@@ -67,12 +75,18 @@
   `sagascript open` construct them. The CLI's `code` changes only for failures that were
   `transcription_failed` or `file_decode_error` before (engine failures, cancellation, a missing
   file).
-- The scrubber is a heuristic for text it does not control. A path with several spaces in a
-  folder name may keep a trailing word; it never keeps the account name.
+- The scrubber is a heuristic for text it does not control. It removes the account name from
+  every path in a recognised spelling (decision 5). Known non-goals: a JSON-escaped path
+  (`\/Users\/zoe`), a percent-encoded one (`%2FUsers%2F`), `~zoe/`, relative paths, and a home
+  directory the process does not know. A file name with spaces keeps its words; a path is cut at
+  a quote, bracket, comma, semicolon, line break or a colon followed by a space, so a later
+  slash in the same clause is not swallowed.
 - **Part 2** ([#360](https://github.com/Magnus-Gille/sagascript/issues/360)): convert the rest
   of the app crate's `Result<_, String>` (the target is at most 20, each justified), give every
   `Unclassified` producer a code, type `SettingsError` (the one remaining text match,
   `defaultDictionaryLanguageBlock` in `Settings.svelte`, needs it), add `From` impls for the nine
   `Meeting*`/`Reference`/`Proposal` error enums, keep the source errors in
-  `meeting_reprocessing_commands.rs`, and wire "Try again" and "Download the model again" into
-  the transcription error views.
+  `meeting_reprocessing_commands.rs`, wire "Try again" (restarting the action, decision 6) and
+  "Download the model again" into the transcription error views, have `FileTranscription` mark a
+  backend `cancelled` as cancelled rather than failed, and have the hotkey path show a
+  `Cancelled` as a quiet end instead of `UiState::Error`.
