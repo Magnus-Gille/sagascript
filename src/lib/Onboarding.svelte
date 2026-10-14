@@ -51,7 +51,7 @@
   let accessibilityChecking = $state(false);
   let accessibilityOpening = $state(false);
   let savingManualPaste = $state(false);
-  let pollTimer: ReturnType<typeof setTimeout> | null = $state(null);
+  let pollTimer: ReturnType<typeof setTimeout> | null = null;
   let pollGeneration = 0;
 
   // Hotkey (read from settings)
