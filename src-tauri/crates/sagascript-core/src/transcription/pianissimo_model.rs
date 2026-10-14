@@ -938,14 +938,18 @@ async fn download_in(
         }
     };
 
-    run_blocking({
+    // Best effort: the install itself already succeeded.
+    if let Err(error) = run_blocking({
         let models = models.clone();
         move || {
             cleanup_superseded(manifest, &models);
             Ok(())
         }
     })
-    .await?;
+    .await
+    {
+        warn!("Could not clean up superseded Pianissimo files: {error}");
+    }
     info!("Pianissimo model installed: {}", installed.display());
     Ok(installed)
 }
