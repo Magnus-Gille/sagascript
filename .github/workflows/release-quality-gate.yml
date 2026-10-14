@@ -59,7 +59,7 @@ jobs:
       # carries over). Note: caches are tag-scoped, so each new tag downloads
       # the release-only models once; same-tag reruns are warm.
       - name: Cache downloaded models
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/Library/Application Support/Sagascript/Models
           key: macos-models-release-${{ hashFiles('src-tauri/crates/sagascript-core/src/settings/manager.rs', 'src-tauri/crates/sagascript-core/src/transcription/model.rs', 'src-tauri/crates/sagascript-core/src/diarization/model.rs') }}
@@ -71,7 +71,7 @@ jobs:
       # (#178). RUNNER_TEMP is per-run, so the cache lives in a stable path
       # and is copied into place; actions/cache persists it post-job.
       - name: Cache diarization fixture
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/sagascript-fixture-cache
           key: diarization-fixture-dj_2022_feu-6b63943
