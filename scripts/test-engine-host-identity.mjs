@@ -61,7 +61,12 @@ function fixture() {
 
 function identity(repo) {
   const output = execFileSync(join(repo.cwd, "scripts/engine-host-identity.sh"), { cwd: repo.cwd, env: repo.env, encoding: "utf8" });
-  return Object.fromEntries(output.trim().split("\n").map((line) => line.split("=")));
+  return Object.fromEntries(
+    output
+      .trim()
+      .split("\n")
+      .map((line) => line.split("=")),
+  );
 }
 
 // What the Windows packaging gate says about the same tree.
@@ -82,12 +87,31 @@ test("a clean tree: version from tauri.conf.json, full HEAD, not dirty", { skip 
 
 test("the script and the CI gate agree on what makes a tree dirty", { skip }, () => {
   const cases = [
-    { name: "rewritten generated schema", change: (cwd) => writeFileSync(join(cwd, "src-tauri/gen/schemas/desktop-schema.json"), '{"x":1}\n'), dirty: false },
-    { name: "created generated schema", change: (cwd) => writeFileSync(join(cwd, "src-tauri/gen/schemas/windows-schema.json"), "{}\n"), dirty: false },
-    { name: "gitignored file", change: (cwd) => { mkdirSync(join(cwd, "ignored")); writeFileSync(join(cwd, "ignored/x"), "x"); }, dirty: false },
+    {
+      name: "rewritten generated schema",
+      change: (cwd) => writeFileSync(join(cwd, "src-tauri/gen/schemas/desktop-schema.json"), '{"x":1}\n'),
+      dirty: false,
+    },
+    {
+      name: "created generated schema",
+      change: (cwd) => writeFileSync(join(cwd, "src-tauri/gen/schemas/windows-schema.json"), "{}\n"),
+      dirty: false,
+    },
+    {
+      name: "gitignored file",
+      change: (cwd) => {
+        mkdirSync(join(cwd, "ignored"));
+        writeFileSync(join(cwd, "ignored/x"), "x");
+      },
+      dirty: false,
+    },
     { name: "modified source", change: (cwd) => writeFileSync(join(cwd, "src-tauri/lib.rs"), "fn main() { }\n"), dirty: true },
     { name: "untracked source", change: (cwd) => writeFileSync(join(cwd, "src-tauri/new.rs"), "\n"), dirty: true },
-    { name: "schema not in the list", change: (cwd) => writeFileSync(join(cwd, "src-tauri/gen/schemas/macOS-schema.json"), "{}\n"), dirty: true },
+    {
+      name: "schema not in the list",
+      change: (cwd) => writeFileSync(join(cwd, "src-tauri/gen/schemas/macOS-schema.json"), "{}\n"),
+      dirty: true,
+    },
     { name: "deleted source", change: (cwd) => rmSync(join(cwd, "src-tauri/lib.rs")), dirty: true },
   ];
   for (const { name, change, dirty } of cases) {
@@ -139,7 +163,10 @@ test("release paths check the host in release mode", () => {
   assert.ok(checks.length >= 2, "release-build-macos.yml checks the staged and the signed host");
   for (const line of checks) assert.match(line, /^check-engine-host-identity\.sh --release /, line);
   const verifier = readFileSync(join(scripts, "verify-macos-release.sh"), "utf8");
-  assert.match(verifier, /if \[\[ "\$release" == true \]\]; then\s+"\$\(dirname "\$0"\)\/check-engine-host-identity\.sh" --release "\$host"/);
+  assert.match(
+    verifier,
+    /if \[\[ "\$release" == true \]\]; then\s+"\$\(dirname "\$0"\)\/check-engine-host-identity\.sh" --release "\$host"/,
+  );
   // The release paths ask verify-macos-release.sh for the clean-tree check; signed test builds
   // (test-build.yml, any branch) only check the host's SHA.
   assert.match(workflow, /verify-macos-release\.sh --release "\$app"/);

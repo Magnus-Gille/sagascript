@@ -311,6 +311,12 @@ test("the release gate runs engine-host conformance: model-free on the signed ho
   const run = s.slice(s.indexOf("# --- run"));
   // The full run needs the model the smoke downloads, so it follows the smoke; --skip-smoke
   // (no model) still runs the model-free subset against the shipped host.
-  assert.match(run, /run_check "Pianissimo smoke[^\n]*" check_pianissimo_smoke\n\s+run_check "Engine-host conformance, full run[^\n]*" check_engine_host_conformance\n/);
-  assert.match(run, /skip_check "Pianissimo smoke[^\n]*"\n\s+run_check "Engine-host conformance, model-free subset[^\n]*" check_engine_host_conformance_no_model\n/);
+  assert.match(
+    run,
+    /run_check "Pianissimo smoke[^\n]*" check_pianissimo_smoke\n\s+run_check "Engine-host conformance, full run[^\n]*" check_engine_host_conformance\n/,
+  );
+  assert.match(
+    run,
+    /skip_check "Pianissimo smoke[^\n]*"\n\s+run_check "Engine-host conformance, model-free subset[^\n]*" check_engine_host_conformance_no_model\n/,
+  );
 });
