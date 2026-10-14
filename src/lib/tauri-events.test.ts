@@ -3,6 +3,7 @@
 import { emit } from "@tauri-apps/api/event";
 import { mockWindows } from "@tauri-apps/api/mocks";
 import { render, waitFor } from "@testing-library/svelte";
+import { mount, unmount } from "svelte";
 import { describe, expect, test, vi } from "vitest";
 import { subscribe, subscribeDragDrop, subscribeTauriEvent, type Subscription, type Unlisten } from "./tauri-events.svelte";
 import EventProbe from "../test/EventProbe.svelte";
@@ -245,6 +246,23 @@ describe("listening for the life of a component", () => {
 
     await waitFor(() => expect(ipc.listeners()).toEqual([]));
     expect(states).toEqual(["recording"]);
+  });
+
+  test("destroyed before its effects ever ran, it registers nothing", async () => {
+    // mount() leaves effects pending until the next flush; the test renderer
+    // flushes synchronously and would hide a listener started at init.
+    const ipc = mockIpc();
+    mockWindows("main");
+    const target = document.body.appendChild(document.createElement("div"));
+    const handler = vi.fn();
+
+    const instance = mount(EventProbe, { target, props: { onState: handler, onDrop: handler } });
+    await unmount(instance);
+    await settle(20);
+    target.remove();
+
+    expect(ipc.listeners()).toEqual([]);
+    expect(handler).not.toHaveBeenCalled();
   });
 
   test("destroyed before the registration finished, it still ends with no listener", async () => {
