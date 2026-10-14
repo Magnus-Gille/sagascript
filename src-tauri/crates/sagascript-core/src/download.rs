@@ -23,6 +23,7 @@
 //!   and every blocking filesystem step runs on Tokio's blocking pool rather
 //!   than on an async executor thread (#368).
 
+use std::fs::File;
 use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -865,47 +866,6 @@ fn failure_into_error(failure: VerificationFailure) -> DictationError {
     }
 }
 
-/// Verify an app-managed artifact and remove it only when its bytes are proven
-/// not to match the immutable manifest. I/O failures and invalid manifest data
-/// are returned without touching the file.
-///
-/// Blocking: without a matching verification stamp this hashes the whole
-/// file, which can be gigabytes. Async code uses
-/// [`prepare_existing_artifact_async`].
-pub fn prepare_existing_artifact(
-    path: &Path,
-    integrity: DownloadIntegrity,
-) -> Result<ExistingArtifact, DictationError> {
-    prepare_existing_artifact_with(path, integrity, &sha256_of_file)
-}
-
-/// [`prepare_existing_artifact`] for async callers (#368): the check, and the
-/// hash it may need, run on Tokio's blocking pool. Dropping the future stops
-/// the hash before its next 1 MiB read; a hash stopped that way never deletes
-/// the file.
-pub async fn prepare_existing_artifact_async(
-    path: &Path,
-    integrity: DownloadIntegrity,
-) -> Result<ExistingArtifact, DictationError> {
-    prepare_existing_artifact_async_with(path.to_path_buf(), integrity, sha256_of_file_until).await
-}
-
-async fn prepare_existing_artifact_async_with<H>(
-    path: PathBuf,
-    integrity: DownloadIntegrity,
-    hasher: H,
-) -> Result<ExistingArtifact, DictationError>
-where
-    H: Fn(std::fs::File, &Path, &CancelFlag) -> Result<String, VerificationFailure>
-        + Send
-        + 'static,
-{
-    run_blocking_cancellable(move |cancel| {
-        prepare_existing_artifact_with(&path, integrity, &|file, p| hasher(file, p, cancel))
-    })
-    .await
-}
-
 fn prepare_existing_artifact_with(
     path: &Path,
     integrity: DownloadIntegrity,
@@ -944,6 +904,45 @@ fn prepare_existing_artifact_with(
     }
 }
 
+/// Verify an app-managed artifact and remove it only when its bytes are proven
+/// not to match the immutable manifest. I/O failures and invalid manifest data
+/// are returned without touching the file.
+///
+/// Blocking: without a matching verification stamp this hashes the whole
+/// file, which can be gigabytes. Async code uses
+/// [`prepare_existing_artifact_async`].
+pub fn prepare_existing_artifact(
+    path: &Path,
+    integrity: DownloadIntegrity,
+) -> Result<ExistingArtifact, DictationError> {
+    prepare_existing_artifact_with(path, integrity, &sha256_of_file)
+}
+
+/// [`prepare_existing_artifact`] for async callers (#368): the check, and the
+/// hash it may need, run on Tokio's blocking pool. Dropping the future stops
+/// the hash before its next 1 MiB read; a hash stopped that way never deletes
+/// the file.
+pub async fn prepare_existing_artifact_async(
+    path: &Path,
+    integrity: DownloadIntegrity,
+) -> Result<ExistingArtifact, DictationError> {
+    prepare_existing_artifact_async_with(path.to_path_buf(), integrity, sha256_of_file_until).await
+}
+
+async fn prepare_existing_artifact_async_with<H>(
+    path: PathBuf,
+    integrity: DownloadIntegrity,
+    hasher: H,
+) -> Result<ExistingArtifact, DictationError>
+where
+    H: Fn(File, &Path, &CancelFlag) -> Result<String, VerificationFailure> + Send + 'static,
+{
+    run_blocking_cancellable(move |cancel| {
+        prepare_existing_artifact_with(&path, integrity, &|file, p| hasher(file, p, cancel))
+    })
+    .await
+}
+
 fn verify_file_detailed(
     path: &Path,
     integrity: DownloadIntegrity,
@@ -952,7 +951,7 @@ fn verify_file_detailed(
 }
 
 /// Hashing is injected so tests can observe whether a verification hashed.
-type FileHasher<'a> = &'a dyn Fn(std::fs::File, &Path) -> Result<String, VerificationFailure>;
+type FileHasher<'a> = &'a dyn Fn(File, &Path) -> Result<String, VerificationFailure>;
 
 fn verify_file_detailed_with(
     path: &Path,
