@@ -4,6 +4,7 @@
 use super::pipeline::CancelToken;
 use super::process::{crashed, Delivery, HostProcess, Pending};
 use super::{EngineHostError, Result};
+use crate::sync::{lock_or_recover_with, recover_poisoned};
 use sagascript_engine_protocol::{
     parse_result, Capabilities, ClientInfo, ErrorCode, HelloResult, HostInfo, LoadResult, Priority,
     RequestOp, StatusResult, TranscribeWindowResult, WindowTimings, WireToken, PROTOCOL_VERSION,
@@ -12,8 +13,11 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::mpsc::RecvTimeoutError;
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, TryLockError, Weak};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, TryLockError, Weak};
 use std::time::{Duration, Instant};
+
+const STATE_LOCK: &str = "engine_host_client.state";
+const LIFECYCLE_LOCK: &str = "engine_host_client.lifecycle";
 
 /// Identity announced in `hello`; compared with the host's build for a warning.
 #[derive(Debug, Clone)]
@@ -233,6 +237,20 @@ struct State {
     interactive_active: usize,
 }
 
+impl State {
+    /// Called when `state` was poisoned (ADR 0005). Every critical section
+    /// writes related fields without a panic point in between, so the data
+    /// is valid, but `loaded` may describe a load or unload the panicking
+    /// thread did not finish. Clearing it sends the next request through the
+    /// lifecycle-serialized readiness path, which re-checks that the host is
+    /// alive (restarting it within the crash budget) and re-sends `load` (a
+    /// no-op for an already loaded model). The slot counters are left alone:
+    /// live `Slot`/`Reservation` guards still decrement them.
+    fn revalidate_after_poison(&mut self) {
+        self.loaded = false;
+    }
+}
+
 pub(crate) struct Inner {
     pub(crate) cfg: EngineHostConfig,
     state: Mutex<State>,
@@ -350,7 +368,7 @@ impl EngineHostClient {
     }
 
     pub fn snapshot(&self) -> HostSnapshot {
-        let mut st = self.inner.state.lock().unwrap();
+        let mut st = self.inner.lock_state();
         let cutoff = self.inner.cfg.restart_window;
         st.crashes.retain(|t| t.elapsed() <= cutoff);
         HostSnapshot {
@@ -371,7 +389,7 @@ impl EngineHostClient {
     /// model (diagnostics). The returned snapshot carries the host identity.
     pub fn connect(&self) -> Result<HostSnapshot> {
         {
-            let _g = self.inner.lifecycle.lock().unwrap();
+            let _g = self.inner.lock_lifecycle_blocking();
             self.inner.ensure_started_locked()?;
         }
         Ok(self.snapshot())
@@ -379,7 +397,7 @@ impl EngineHostClient {
 
     /// Clear the `Failed` state and the crash history.
     pub fn reset(&self) {
-        let mut st = self.inner.state.lock().unwrap();
+        let mut st = self.inner.lock_state();
         st.failed = None;
         st.crashes.clear();
     }
@@ -401,7 +419,7 @@ impl EngineHostClient {
 
     /// Free model memory but keep the process.
     pub fn unload(&self) -> Result<()> {
-        let _g = self.inner.lifecycle.lock().unwrap();
+        let _g = self.inner.lock_lifecycle_blocking();
         self.inner.unload_locked()
     }
 
@@ -411,16 +429,16 @@ impl EngineHostClient {
     pub fn unload_if_idle(&self) -> bool {
         let inner = &self.inner;
         {
-            let st = inner.state.lock().unwrap();
+            let st = inner.lock_state();
             if st.active > 0 || !st.loaded {
                 return false;
             }
         }
-        let Ok(_g) = inner.lifecycle.try_lock() else {
+        let Some(_g) = inner.try_lock_lifecycle() else {
             return false;
         };
         {
-            let mut st = inner.state.lock().unwrap();
+            let mut st = inner.lock_state();
             if st.active > 0 || !st.loaded {
                 return false;
             }
@@ -434,13 +452,13 @@ impl EngineHostClient {
 
     /// Graceful shutdown (`shutdown` op, then kill after the grace period).
     pub fn shutdown(&self) {
-        let _g = self.inner.lifecycle.lock().unwrap();
+        let _g = self.inner.lock_lifecycle_blocking();
         self.inner.shutdown_locked();
     }
 
     /// Capabilities negotiated with the running host, if any.
     pub fn capabilities(&self) -> Option<Capabilities> {
-        self.inner.state.lock().unwrap().caps.clone()
+        self.inner.lock_state().caps.clone()
     }
 
     /// Ensure the host is loaded, then submit one window.
@@ -713,7 +731,7 @@ impl WindowTicket {
                 Ok(Delivery::Closed(info)) => {
                     self.pending = None;
                     if !info.expected && self.proc.claim_crash() {
-                        Inner::record_crash(&mut self.inner.state.lock().unwrap());
+                        Inner::record_crash(&mut self.inner.lock_state());
                     }
                     return Err(crashed(&info));
                 }
@@ -751,7 +769,7 @@ struct Slot {
 
 impl Drop for Slot {
     fn drop(&mut self) {
-        let mut st = self.inner.state.lock().unwrap();
+        let mut st = self.inner.lock_state();
         st.active -= 1;
         match self.priority {
             Priority::Batch => st.batch_in_flight -= 1,
@@ -770,7 +788,7 @@ struct Reservation {
 
 impl Drop for Reservation {
     fn drop(&mut self) {
-        let mut st = self.inner.state.lock().unwrap();
+        let mut st = self.inner.lock_state();
         st.active -= 1;
         st.last_activity = Instant::now();
     }
@@ -805,23 +823,62 @@ pub fn effective_capabilities(base: &Capabilities, load_window_s: f64) -> Result
 
 impl Inner {
     fn reserve_activity(self: &Arc<Self>) -> Reservation {
-        self.state.lock().unwrap().active += 1;
+        self.lock_state().active += 1;
         Reservation {
             inner: self.clone(),
         }
     }
 
     fn mark_unloaded(&self, proc: &Arc<HostProcess>) {
-        let mut st = self.state.lock().unwrap();
+        let mut st = self.lock_state();
         if st.proc.as_ref().is_some_and(|p| Arc::ptr_eq(p, proc)) {
             st.loaded = false;
+        }
+    }
+
+    /// `state.lock()`, recovering from poison (ADR 0005). Each critical
+    /// section updates `State` without a panic point between related fields,
+    /// so the data is valid; [`State::revalidate_after_poison`] only stops the
+    /// client from trusting a `loaded` flag the panic may have left stale.
+    fn lock_state(&self) -> MutexGuard<'_, State> {
+        lock_or_recover_with(&self.state, STATE_LOCK, State::revalidate_after_poison)
+    }
+
+    /// `lifecycle.lock()`, recovering from poison.
+    fn lock_lifecycle_blocking(&self) -> MutexGuard<'_, ()> {
+        self.lifecycle
+            .lock()
+            .unwrap_or_else(|poisoned| self.recover_lifecycle(poisoned))
+    }
+
+    /// A start/load/unload/shutdown was cut short by a panic. Its effects
+    /// live in `state`, which every lifecycle step re-reads; additionally force
+    /// the next request to re-validate the host before dispatching to it.
+    fn recover_lifecycle<'a>(
+        &'a self,
+        poisoned: PoisonError<MutexGuard<'a, ()>>,
+    ) -> MutexGuard<'a, ()> {
+        let guard = recover_poisoned(&self.lifecycle, LIFECYCLE_LOCK, poisoned);
+        self.lock_state().revalidate_after_poison();
+        guard
+    }
+
+    /// `lifecycle.try_lock()` for opportunistic passes (idle supervision,
+    /// memory pressure): `None` only while another lifecycle step runs. A
+    /// poisoned lock is recovered (and the host re-validated), not mistaken
+    /// for "busy", or these passes would never run again.
+    fn try_lock_lifecycle(&self) -> Option<MutexGuard<'_, ()>> {
+        match self.lifecycle.try_lock() {
+            Ok(guard) => Some(guard),
+            Err(TryLockError::Poisoned(poisoned)) => Some(self.recover_lifecycle(poisoned)),
+            Err(TryLockError::WouldBlock) => None,
         }
     }
 
     /// `lifecycle.lock()`, but a cancelled caller stops waiting for it.
     fn lock_lifecycle(&self, cancel: Option<&CancelToken>) -> Result<MutexGuard<'_, ()>> {
         let Some(cancel) = cancel else {
-            return Ok(self.lifecycle.lock().unwrap());
+            return Ok(self.lock_lifecycle_blocking());
         };
         loop {
             match self.lifecycle.try_lock() {
@@ -832,7 +889,9 @@ impl Inner {
                     }
                     std::thread::sleep(Duration::from_millis(10));
                 }
-                Err(TryLockError::Poisoned(_)) => panic!("engine host lifecycle lock poisoned"),
+                Err(TryLockError::Poisoned(poisoned)) => {
+                    return Ok(self.recover_lifecycle(poisoned))
+                }
             }
         }
     }
@@ -843,7 +902,7 @@ impl Inner {
         proc: &Arc<HostProcess>,
         cancel: Option<&CancelToken>,
     ) -> Result<LoadResult> {
-        let resumed = self.state.lock().unwrap().load_pending.take();
+        let resumed = self.lock_state().load_pending.take();
         let (pending, deadline) = match resumed {
             Some(p) => (p.pending, p.deadline),
             None => {
@@ -865,7 +924,7 @@ impl Inner {
         };
         let value = loop {
             if cancel.is_some_and(CancelToken::is_cancelled) {
-                self.state.lock().unwrap().load_pending = Some(LoadPending { pending, deadline });
+                self.lock_state().load_pending = Some(LoadPending { pending, deadline });
                 return Err(EngineHostError::Cancelled);
             }
             let now = Instant::now();
@@ -890,7 +949,7 @@ impl Inner {
     }
 
     fn acquire_interactive(self: &Arc<Self>) -> Slot {
-        let mut st = self.state.lock().unwrap();
+        let mut st = self.lock_state();
         st.active += 1;
         st.interactive_active += 1;
         Slot {
@@ -906,7 +965,7 @@ impl Inner {
         wait: Duration,
     ) -> Result<Option<Slot>> {
         let deadline = Instant::now() + wait;
-        let mut st = self.state.lock().unwrap();
+        let mut st = self.lock_state();
         loop {
             if cancel.is_cancelled() {
                 return Err(EngineHostError::Cancelled);
@@ -924,7 +983,14 @@ impl Inner {
                 return Ok(None);
             }
             let slice = (deadline - now).min(Duration::from_millis(20));
-            st = self.cv.wait_timeout(st, slice).unwrap().0;
+            st = match self.cv.wait_timeout(st, slice) {
+                Ok((st, _)) => st,
+                Err(poisoned) => {
+                    let (mut st, _) = recover_poisoned(&self.state, STATE_LOCK, poisoned);
+                    st.revalidate_after_poison();
+                    st
+                }
+            };
         }
     }
 
@@ -935,7 +1001,7 @@ impl Inner {
     }
 
     fn live_proc(&self) -> Result<Arc<HostProcess>> {
-        let st = self.state.lock().unwrap();
+        let st = self.lock_state();
         match &st.proc {
             Some(p) if p.is_alive() => Ok(p.clone()),
             _ => Err(EngineHostError::NotRunning),
@@ -949,7 +1015,7 @@ impl Inner {
         cancel: Option<&CancelToken>,
     ) -> Result<(Arc<HostProcess>, Capabilities)> {
         {
-            let mut st = self.state.lock().unwrap();
+            let mut st = self.lock_state();
             if let (Some(p), Some(c)) = (&st.proc, &st.caps) {
                 if st.loaded && p.is_alive() {
                     let out = (p.clone(), c.clone());
@@ -970,7 +1036,7 @@ impl Inner {
             Err(error) => self.notify_load(LoadEvent::Failed(error.to_string())),
         }
         let (proc, _) = result?;
-        let mut st = self.state.lock().unwrap();
+        let mut st = self.lock_state();
         st.last_activity = Instant::now();
         let caps = st.caps.clone().expect("caps set with proc");
         Ok((proc, caps))
@@ -990,11 +1056,11 @@ impl Inner {
     ) -> Result<(Arc<HostProcess>, u64)> {
         let started = Instant::now();
         let (proc, _) = self.ensure_started_locked()?;
-        let loaded = self.state.lock().unwrap().loaded;
+        let loaded = self.lock_state().loaded;
         if !loaded {
             let r = self.load_locked(&proc, cancel)?;
             tracing::info!(model_id = %r.model_id, load_ms = r.load_ms, window_s = r.window_s, compiled = r.compiled, "engine host model loaded");
-            let mut st = self.state.lock().unwrap();
+            let mut st = self.lock_state();
             let base = st.base_caps.clone().expect("base caps set with proc");
             st.caps = Some(effective_capabilities(&base, r.window_s)?);
             st.loaded = true;
@@ -1013,7 +1079,7 @@ impl Inner {
     fn ensure_started_locked(&self) -> Result<(Arc<HostProcess>, Capabilities)> {
         // Inspect the current process; account for an unexpected exit.
         let (backoff, dead) = {
-            let mut st = self.state.lock().unwrap();
+            let mut st = self.lock_state();
             if let Some(p) = &st.proc {
                 if p.is_alive() {
                     return Ok((p.clone(), st.caps.clone().expect("caps set with proc")));
@@ -1061,7 +1127,7 @@ impl Inner {
         }
         match self.start_and_handshake() {
             Ok((proc, caps, host_info)) => {
-                let mut st = self.state.lock().unwrap();
+                let mut st = self.lock_state();
                 st.proc = Some(proc.clone());
                 st.caps = Some(caps.clone());
                 st.base_caps = Some(caps.clone());
@@ -1072,7 +1138,7 @@ impl Inner {
                 Ok((proc, caps))
             }
             Err(e) => {
-                Self::record_crash(&mut self.state.lock().unwrap());
+                Self::record_crash(&mut self.lock_state());
                 Err(e)
             }
         }
@@ -1110,15 +1176,15 @@ impl Inner {
 
     fn unload_locked(&self) -> Result<()> {
         let proc = {
-            let st = self.state.lock().unwrap();
+            let st = self.lock_state();
             match &st.proc {
                 Some(p) if p.is_alive() => p.clone(),
                 _ => return Ok(()),
             }
         };
-        self.state.lock().unwrap().load_pending = None;
+        self.lock_state().load_pending = None;
         proc.request(&RequestOp::Unload, self.cfg.timeouts.unload)?;
-        let mut st = self.state.lock().unwrap();
+        let mut st = self.lock_state();
         st.loaded = false;
         st.last_activity = Instant::now();
         Ok(())
@@ -1126,7 +1192,7 @@ impl Inner {
 
     fn shutdown_locked(&self) {
         let proc = {
-            let mut st = self.state.lock().unwrap();
+            let mut st = self.lock_state();
             st.loaded = false;
             st.caps = None;
             st.base_caps = None;
@@ -1155,14 +1221,14 @@ impl Inner {
             "engine host unresponsive after timeout; killing"
         );
         if proc.claim_crash() {
-            Self::record_crash(&mut self.state.lock().unwrap());
+            Self::record_crash(&mut self.lock_state());
         }
         proc.terminate(Duration::from_millis(200), false);
     }
 
     fn idle_check(&self) {
         let (unload, shutdown) = {
-            let st = self.state.lock().unwrap();
+            let st = self.lock_state();
             let Some(p) = &st.proc else { return };
             if st.active > 0 || !p.is_alive() {
                 return;
@@ -1175,7 +1241,7 @@ impl Inner {
         if !unload && !shutdown {
             return;
         }
-        let Ok(_g) = self.lifecycle.try_lock() else {
+        let Some(_g) = self.try_lock_lifecycle() else {
             return;
         };
         // Re-check under the lifecycle lock: a request may have slipped in.
@@ -1183,7 +1249,7 @@ impl Inner {
         // later request take the (lifecycle-serialized) reload path instead of
         // dispatching to a host that is about to unload.
         {
-            let mut st = self.state.lock().unwrap();
+            let mut st = self.lock_state();
             if st.active > 0 {
                 return;
             }
@@ -1205,7 +1271,13 @@ impl Inner {
 
 impl Drop for Inner {
     fn drop(&mut self) {
-        let proc = self.state.get_mut().unwrap().proc.take();
+        // Exclusive access while dropping: a poisoned flag needs no report.
+        let proc = self
+            .state
+            .get_mut()
+            .unwrap_or_else(PoisonError::into_inner)
+            .proc
+            .take();
         if let Some(p) = proc {
             p.terminate(self.cfg.timeouts.shutdown_grace, true);
         }
@@ -1260,6 +1332,127 @@ pub fn validate_hello(hello: &HelloResult, client: &ClientIdentity) -> Result<Ca
         );
     }
     Ok(c.clone())
+}
+
+#[cfg(test)]
+mod poison_tests {
+    use super::*;
+
+    fn poison<T: Send>(mutex: &Mutex<T>) {
+        std::thread::scope(|scope| {
+            let panicked = scope
+                .spawn(|| {
+                    let _guard = mutex.lock().unwrap();
+                    panic!("injected panic while holding the lock (#359)");
+                })
+                .join();
+            assert!(panicked.is_err());
+        });
+        assert!(mutex.is_poisoned());
+    }
+
+    fn client() -> EngineHostClient {
+        let mut cfg = EngineHostConfig::new(
+            "/nonexistent/sagascript-engine-host",
+            LoadSpec {
+                model_dir: PathBuf::from("/nonexistent"),
+                model_id: "test".into(),
+                compute_units: "cpu".into(),
+            },
+        );
+        cfg.idle_unload = None;
+        cfg.idle_shutdown = None;
+        EngineHostClient::new(cfg)
+    }
+
+    /// A panic under the state lock must not panic every later request, and
+    /// the client must not trust a `loaded` flag the panic may have
+    /// interrupted: the next request re-validates the host first.
+    #[test]
+    fn poisoned_state_is_recovered_and_forces_host_revalidation() {
+        let client = client();
+        client.inner.state.lock().unwrap().loaded = true;
+        poison(&client.inner.state);
+
+        let snapshot = client.snapshot();
+        assert!(!snapshot.running);
+        assert!(!client.inner.state.is_poisoned());
+        assert!(
+            !client.inner.state.lock().unwrap().loaded,
+            "recovery must force the next request through the readiness check"
+        );
+
+        // Slot/reservation guards drop while unwinding: no double panic.
+        let reservation = client.inner.reserve_activity();
+        poison(&client.inner.state);
+        let dropped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(reservation)));
+        assert!(dropped.is_ok(), "Reservation::drop must not panic");
+        assert_eq!(client.inner.state.lock().unwrap().active, 0);
+    }
+
+    #[test]
+    fn poisoned_lifecycle_lock_is_recovered() {
+        let client = client();
+        poison(&client.inner.lifecycle);
+        assert!(client.unload().is_ok());
+
+        poison(&client.inner.lifecycle);
+        let started = client.warm_with_cancel(&CancelToken::new());
+        assert!(
+            matches!(started, Err(EngineHostError::Spawn { .. })),
+            "expected the missing host to fail to spawn, got {:?}",
+            started.err()
+        );
+    }
+
+    /// A client whose idle passes act immediately, with a live stand-in host
+    /// (`/bin/cat` never answers, so requests to it time out quickly).
+    #[cfg(unix)]
+    fn idle_client_with_live_host() -> EngineHostClient {
+        let mut cfg = EngineHostConfig::new(
+            "/nonexistent/sagascript-engine-host",
+            LoadSpec {
+                model_dir: PathBuf::from("/nonexistent"),
+                model_id: "test".into(),
+                compute_units: "cpu".into(),
+            },
+        );
+        cfg.idle_unload = Some(Duration::ZERO);
+        cfg.idle_shutdown = Some(Duration::ZERO);
+        cfg.supervisor_tick = Duration::from_secs(3600); // passes run only when the test asks
+        cfg.timeouts.unload = Duration::from_millis(50);
+        cfg.timeouts.shutdown_grace = Duration::from_millis(50);
+        let client = EngineHostClient::new(cfg);
+        let host = HostProcess::spawn(std::path::Path::new("/bin/cat"), &[], &[]).unwrap();
+        client.inner.lock_state().proc = Some(Arc::new(host));
+        client
+    }
+
+    /// The idle supervisor and the memory-pressure unload take the lifecycle
+    /// lock with `try_lock`; a poisoned lock must be recovered there, not
+    /// treated as "busy" forever (no idle unload or shutdown ever again).
+    #[cfg(unix)]
+    #[test]
+    fn idle_and_memory_pressure_passes_recover_a_poisoned_lifecycle_lock() {
+        let client = idle_client_with_live_host();
+        client.inner.lock_state().loaded = true;
+        poison(&client.inner.lifecycle);
+
+        // Recovery re-validates the host, so this pass finds nothing loaded…
+        assert!(!client.unload_if_idle());
+        assert!(!client.inner.lifecycle.is_poisoned());
+        // …and the next one (after a reload marked the model loaded) unloads.
+        client.inner.lock_state().loaded = true;
+        assert!(client.unload_if_idle(), "memory-pressure unload runs again");
+
+        poison(&client.inner.lifecycle);
+        client.run_idle_check_now();
+        assert!(!client.inner.lifecycle.is_poisoned());
+        assert!(
+            !client.snapshot().running,
+            "the idle pass shut the host down despite the poisoned lock"
+        );
+    }
 }
 
 #[cfg(test)]

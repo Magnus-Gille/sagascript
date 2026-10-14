@@ -56,7 +56,7 @@ pub async fn set_example_flag(
     let persisted = sagascript_core::settings::store::update(|settings| {
         settings.example_flag = enabled;
     })?;
-    let mut ctrl = controller.lock().unwrap();
+    let mut ctrl = lock_controller(&controller);
     ctrl.settings_mut().example_flag = persisted.example_flag;
     info!("Example flag: {enabled}");
     Ok(())

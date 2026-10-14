@@ -75,6 +75,13 @@ export interface HotkeyStatus {
   error: string | null;
   shortcut: string;
   shortcuts: string[];
+  /** Health of the settings hot-reload watcher (ADR 0005); not part of `ok`. */
+  settings_watcher: SettingsWatcherStatus;
+}
+
+export interface SettingsWatcherStatus {
+  running: boolean;
+  recovered_panics: number;
 }
 
 export interface TrainingTranscript {

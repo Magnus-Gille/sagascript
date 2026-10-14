@@ -6,10 +6,16 @@
 //! also shuts the engine host down (no orphan). A second signal exits
 //! immediately with the same status as an interrupt.
 use sagascript_core::error::DictationError;
+use sagascript_core::sync::lock_or_recover;
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
+
+// Poisoned locks here are recovered (ADR 0005): each critical section is one
+// counter bump or `Vec` push/retain/iteration.
+const ABORTERS_LOCK: &str = "cancel.aborters";
+const NEXT_ID_LOCK: &str = "cancel.next_id";
 
 /// Conventional exit status for termination by SIGINT (128 + 2).
 pub const EXIT_CANCELLED: i32 = 130;
@@ -59,10 +65,10 @@ impl Canceller {
     }
 
     fn fire(&self) {
-        if let Ok(aborters) = self.aborters.lock() {
-            for (_, abort) in aborters.iter() {
-                abort();
-            }
+        // Recover a poisoned list (ADR 0005): skipping it would silently stop
+        // Ctrl-C from aborting inference.
+        for (_, abort) in lock_or_recover(&self.aborters, ABORTERS_LOCK).iter() {
+            abort();
         }
     }
 
@@ -70,11 +76,11 @@ impl Canceller {
     /// happened it fires immediately, so there is no registration race.
     pub fn register<'a>(&'a self, abort: impl Fn() + Send + 'static) -> AborterGuard<'a> {
         let id = {
-            let mut next = self.next_id.lock().unwrap();
+            let mut next = lock_or_recover(&self.next_id, NEXT_ID_LOCK);
             *next += 1;
             *next
         };
-        self.aborters.lock().unwrap().push((id, Box::new(abort)));
+        lock_or_recover(&self.aborters, ABORTERS_LOCK).push((id, Box::new(abort)));
         if self.is_cancelled() {
             self.fire();
         }
@@ -96,9 +102,7 @@ pub struct AborterGuard<'a> {
 
 impl Drop for AborterGuard<'_> {
     fn drop(&mut self) {
-        if let Ok(mut aborters) = self.owner.aborters.lock() {
-            aborters.retain(|(id, _)| *id != self.id);
-        }
+        lock_or_recover(&self.owner.aborters, ABORTERS_LOCK).retain(|(id, _)| *id != self.id);
     }
 }
 

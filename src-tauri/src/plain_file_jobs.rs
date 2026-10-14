@@ -2,6 +2,7 @@
 //! A lease stays alive until the actual worker exits; Stop never targets an
 //! unrelated inference or a later import.
 use crate::commands::FileTranscriptionContext;
+use sagascript_core::sync::lock_or_recover;
 use sagascript_core::transcription::{pianissimo_backend::PianissimoBackend, Glossary};
 use sagascript_core::{
     audio::decoder,
@@ -15,6 +16,14 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 use tauri::Emitter;
+
+// Recovered as-is after a panic (ADR 0005): every critical section is a single
+// `Option`/`VecDeque` update, so the data stays valid, and `Lease::drop` runs
+// while a panicking worker unwinds, where a second panic would abort.
+const ACTIVE_LOCK: &str = "plain_file_jobs.active";
+const PENDING_CANCELS_LOCK: &str = "plain_file_jobs.pending_cancels";
+const PIANISSIMO_BACKEND_LOCK: &str = "plain_file_jobs.pianissimo_backend";
+const DEADLINE_LOCK: &str = "plain_file_jobs.deadline";
 
 pub type SharedPlainFileJobs = Arc<PlainFileJobs>;
 
@@ -45,7 +54,7 @@ struct Lease {
 }
 impl Drop for Lease {
     fn drop(&mut self) {
-        let mut active = self.jobs.active.lock().unwrap();
+        let mut active = lock_or_recover(&self.jobs.active, ACTIVE_LOCK);
         if active
             .as_ref()
             .is_some_and(|run| Arc::ptr_eq(run, &self.control))
@@ -59,11 +68,11 @@ impl PlainFileJobs {
         if id.is_empty() || id.len() > 128 {
             return Err("Invalid transcription run ID.".into());
         }
-        let mut active = self.active.lock().unwrap();
+        let mut active = lock_or_recover(&self.active, ACTIVE_LOCK);
         if active.is_some() {
             return Err("A file transcription is still running or stopping.".into());
         }
-        let mut pending = self.pending_cancels.lock().unwrap();
+        let mut pending = lock_or_recover(&self.pending_cancels, PENDING_CANCELS_LOCK);
         pending.retain(|(_, time)| time.elapsed() < Duration::from_secs(30));
         let cancelled = pending.iter().any(|(pending_id, _)| pending_id == &id);
         pending.retain(|(pending_id, _)| pending_id != &id);
@@ -79,12 +88,12 @@ impl PlainFileJobs {
         }))
     }
     pub fn cancel(&self, id: &str) -> bool {
-        let active = self.active.lock().unwrap();
+        let active = lock_or_recover(&self.active, ACTIVE_LOCK);
         let Some(run) = active.as_ref().filter(|run| run.id == id) else {
             // IPC commands may arrive out of order. Remember a bounded, short-
             // lived stop intent so a following begin cannot erase it.
             if !id.is_empty() && id.len() <= 128 {
-                let mut pending = self.pending_cancels.lock().unwrap();
+                let mut pending = lock_or_recover(&self.pending_cancels, PENDING_CANCELS_LOCK);
                 pending.retain(|(pending_id, time)| {
                     pending_id != id && time.elapsed() < Duration::from_secs(30)
                 });
@@ -98,13 +107,15 @@ impl PlainFileJobs {
         run.cancelled.store(true, Ordering::SeqCst);
         // This backend is exclusively leased to this run, never live dictation.
         self.backend.request_abort();
-        if let Some(backend) = self.pianissimo_backend.lock().unwrap().as_ref() {
+        if let Some(backend) =
+            lock_or_recover(&self.pianissimo_backend, PIANISSIMO_BACKEND_LOCK).as_ref()
+        {
             backend.request_abort();
         }
         true
     }
     fn finish(&self, lease: &Lease, result: Result<String, String>) -> Result<String, String> {
-        let mut active = self.active.lock().unwrap();
+        let mut active = lock_or_recover(&self.active, ACTIVE_LOCK);
         let result = if lease.control.cancelled.load(Ordering::SeqCst) {
             Err("Transcription cancelled.".into())
         } else {
@@ -154,13 +165,16 @@ pub async fn transcribe_pianissimo(
             let timeout = Duration::from_secs(((audio.len() / 16_000) as u64 * 10).max(180));
             progress("loading", None);
             let backend = Arc::new(PianissimoBackend::start_with_cancel(&run.cancelled)?);
-            *worker_lease.jobs.pianissimo_backend.lock().unwrap() = Some(backend.clone());
+            *lock_or_recover(
+                &worker_lease.jobs.pianissimo_backend,
+                PIANISSIMO_BACKEND_LOCK,
+            ) = Some(backend.clone());
             run.check()?;
             // Load the model before the deadline starts: a first-time Core ML
             // compile can take minutes and is not inference time.
             backend.warm_up_with_cancel(&run.cancelled)?;
             run.check()?;
-            *run.deadline.lock().unwrap() = Some(Instant::now() + timeout);
+            *lock_or_recover(&run.deadline, DEADLINE_LOCK) = Some(Instant::now() + timeout);
             progress("transcribing", Some(0));
             let result = backend.transcribe_with_cancel(
                 &audio,
@@ -172,7 +186,10 @@ pub async fn transcribe_pianissimo(
             Ok(crate::commands::apply_glossary(result.text, &glossary))
         };
         let result = work().map_err(|error| error.to_string());
-        *worker_lease.jobs.pianissimo_backend.lock().unwrap() = None;
+        *lock_or_recover(
+            &worker_lease.jobs.pianissimo_backend,
+            PIANISSIMO_BACKEND_LOCK,
+        ) = None;
         result
     });
     let mut tick = tokio::time::interval(Duration::from_millis(100));
@@ -181,12 +198,12 @@ pub async fn transcribe_pianissimo(
         tokio::select! {
             result = &mut worker => break result.unwrap_or_else(|error| Err(format!("Transcription worker failed: {error}"))),
             _ = tick.tick() => {
-                if lease.control.deadline.lock().unwrap().is_some_and(|end| Instant::now() >= end) {
+                if lock_or_recover(&lease.control.deadline, DEADLINE_LOCK).is_some_and(|end| Instant::now() >= end) {
                     timed_out = true;
                     lease.control.cancelled.store(true, Ordering::SeqCst);
                 }
                 if lease.control.cancelled.load(Ordering::SeqCst) {
-                    if let Some(backend) = jobs.pianissimo_backend.lock().unwrap().as_ref() {
+                    if let Some(backend) = lock_or_recover(&jobs.pianissimo_backend, PIANISSIMO_BACKEND_LOCK).as_ref() {
                         backend.request_abort();
                     }
                 }
@@ -252,7 +269,7 @@ pub async fn transcribe(
             )?;
             run.check()?;
             let timeout = Duration::from_secs(((audio.len() / 16_000) as u64 * 6).max(60));
-            *run.deadline.lock().unwrap() = Some(Instant::now() + timeout);
+            *lock_or_recover(&run.deadline, DEADLINE_LOCK) = Some(Instant::now() + timeout);
             let mut options = context.options;
             options.parallel_chunks =
                 recommended_parallel_chunks(audio.len(), context.model, options.beam_size);
@@ -307,7 +324,7 @@ pub async fn transcribe(
         tokio::select! {
             result = &mut worker => break result.unwrap_or_else(|error| Err(format!("Transcription worker failed: {error}"))),
             _ = tick.tick() => {
-                if lease.control.deadline.lock().unwrap().is_some_and(|end| Instant::now() >= end) {
+                if lock_or_recover(&lease.control.deadline, DEADLINE_LOCK).is_some_and(|end| Instant::now() >= end) {
                     timed_out = true;
                     lease.control.cancelled.store(true, Ordering::SeqCst);
                 }
@@ -356,6 +373,28 @@ mod tests {
         assert!(second.control.check().is_ok());
         assert!(jobs.cancel("second"));
     }
+    /// A worker panic drops its lease while unwinding; the slot must still be
+    /// released (no double panic) so the next import can start.
+    #[test]
+    fn lease_drop_releases_the_slot_even_when_the_lock_is_poisoned() {
+        let jobs = Arc::new(PlainFileJobs::default());
+        let lease = jobs.begin("first".into()).unwrap();
+        std::thread::scope(|scope| {
+            let panicked = scope
+                .spawn(|| {
+                    let _active = jobs.active.lock().unwrap();
+                    panic!("injected panic while holding the lock (#359)");
+                })
+                .join();
+            assert!(panicked.is_err());
+        });
+        assert!(jobs.active.is_poisoned());
+
+        let dropped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(lease)));
+        assert!(dropped.is_ok(), "Lease::drop must not panic");
+        assert!(jobs.begin("second".into()).is_ok());
+    }
+
     #[test]
     fn dropped_caller_keeps_slot_until_worker_releases_lease() {
         let jobs = Arc::new(PlainFileJobs::default());

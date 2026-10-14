@@ -61,12 +61,13 @@ use tracing::{error, info, warn};
 
 use app_controller::AppState;
 use app_controller::{AppController, HotkeyDownResult, StopRecordingOutcome};
-use commands::{SharedController, SharedWhisper};
+use commands::{lock_controller, SharedController, SharedWhisper};
 use sagascript_core::settings::canonical_hotkey;
 use sagascript_core::settings::HotkeyMode;
 use sagascript_core::settings::HotkeyProfile;
 #[cfg(test)]
 use sagascript_core::settings::{validate_hotkey, Language};
+use sagascript_core::sync::lock_or_recover;
 use sagascript_core::transcription::{
     WhisperBackend, WARM_MODEL_CACHE_BUDGET_MB, WARM_MODEL_CACHE_MAX_MODELS,
 };
@@ -89,6 +90,12 @@ const DEFAULT_TRAY_PREFERRED_POSITION: f64 = 340.0;
 
 /// Shared tray status menu item for updating from anywhere
 type SharedStatusItem = Mutex<Option<MenuItem<tauri::Wry>>>;
+
+// Tray menu bookkeeping is recovered as-is after a panic (ADR 0005): it only
+// holds menu handles and flags that the next menu update overwrites.
+const STATUS_ITEM_LOCK: &str = "tray.status_item";
+const PROFILE_MENU_LOCK: &str = "tray.profile_menu";
+const UPDATE_MENU_LOCK: &str = "tray.update_menu";
 
 struct ProfileMenuState {
     submenu: Submenu<tauri::Wry>,
@@ -186,7 +193,7 @@ fn create_profile_menu_items(
 
 pub(crate) fn update_profiles_menu(app: &tauri::AppHandle, profiles: &[HotkeyProfile]) {
     let state: tauri::State<'_, SharedProfileMenuState> = app.state();
-    let mut state = state.lock().unwrap();
+    let mut state = lock_or_recover(&state, PROFILE_MENU_LOCK);
     let Some(state) = state.as_mut() else {
         return;
     };
@@ -220,16 +227,14 @@ pub(crate) fn update_profiles_menu(app: &tauri::AppHandle, profiles: &[HotkeyPro
 fn select_profile_menu(app: &tauri::AppHandle, profile: &HotkeyProfile) {
     let profiles = {
         let controller: tauri::State<'_, SharedController> = app.state();
-        let profiles = controller
-            .lock()
-            .unwrap()
+        let profiles = lock_controller(&controller)
             .settings()
             .resolved_hotkey_profiles();
         profiles
     };
     {
         let state: tauri::State<'_, SharedProfileMenuState> = app.state();
-        let mut state = state.lock().unwrap();
+        let mut state = lock_or_recover(&state, PROFILE_MENU_LOCK);
         if let Some(state) = state.as_mut() {
             state.selected_profile_id = Some(profile.id.clone());
         }
@@ -317,7 +322,7 @@ fn set_update_menu(
     dispatch_to_main(app, move |app| {
         let items = {
             let state: tauri::State<'_, SharedUpdateMenuState> = app.state();
-            let mut state = state.lock().unwrap();
+            let mut state = lock_or_recover(&state, UPDATE_MENU_LOCK);
             match mode {
                 UpdateMenuMode::Available(version) => {
                     state.checking = false;
@@ -371,7 +376,7 @@ fn check_for_updates_with_intent(app: tauri::AppHandle, install_when_available: 
 
     let items = {
         let state: tauri::State<'_, SharedUpdateMenuState> = app.state();
-        let mut state = state.lock().unwrap();
+        let mut state = lock_or_recover(&state, UPDATE_MENU_LOCK);
         if state.checking || state.installing {
             return;
         }
@@ -505,7 +510,7 @@ async fn prepare_update_recovery(app: &tauri::AppHandle) -> Result<(), String> {
     // its last result without creating or focusing a window during an update.
     let last_text = {
         let controller: tauri::State<'_, SharedController> = app.state();
-        let ctrl = controller.lock().unwrap();
+        let ctrl = lock_controller(&controller);
         if ctrl.is_update_result_pending("live-dictation") {
             ctrl.last_transcription().map(str::to_owned)
         } else {
@@ -804,7 +809,7 @@ fn prewarm_engine_on_key_down(ctrl: &tauri::State<'_, SharedController>) {
     use sagascript_core::transcription::pianissimo_backend::{
         warm_in_background, warm_on, WarmTrigger,
     };
-    let c = ctrl.lock().unwrap();
+    let c = lock_controller(ctrl);
     let profile_id = c.active_hotkey_profile().map(|profile| profile.id.clone());
     warm_on(
         c.settings(),
@@ -848,13 +853,20 @@ fn prewarm_engine_for(
     use sagascript_core::transcription::pianissimo_backend::{warm_in_background, warm_on};
     let ctrl: tauri::State<'_, SharedController> = app.state();
     // Wake callbacks run on the main thread inside an ObjC block: never block
-    // on the controller there. Skip this warm when it is busy.
-    let Ok(c) = ctrl.try_lock() else {
-        tracing::debug!(
-            reason = trigger.reason(),
-            "pre-warm skipped: controller busy"
-        );
-        return;
+    // on the controller there. Skip this warm when it is busy; a poisoned
+    // controller is recovered like everywhere else (ADR 0005), not "busy".
+    let c = match ctrl.try_lock() {
+        Ok(c) => c,
+        Err(std::sync::TryLockError::Poisoned(poisoned)) => {
+            sagascript_core::sync::recover_poisoned(&ctrl, commands::CONTROLLER_LOCK, poisoned)
+        }
+        Err(std::sync::TryLockError::WouldBlock) => {
+            tracing::debug!(
+                reason = trigger.reason(),
+                "pre-warm skipped: controller busy"
+            );
+            return;
+        }
     };
     warm_on(c.settings(), trigger, None, warm_in_background);
 }
@@ -866,7 +878,10 @@ fn hide_overlay_after_error(app: tauri::AppHandle) {
         tokio::time::sleep(OVERLAY_ERROR_VISIBLE).await;
         let idle = {
             let ctrl: tauri::State<'_, SharedController> = app.state();
-            let idle = matches!(ctrl.lock().unwrap().state(), app_controller::AppState::Idle);
+            let idle = matches!(
+                lock_controller(&ctrl).state(),
+                app_controller::AppState::Idle
+            );
             idle
         };
         if idle {
@@ -892,7 +907,7 @@ fn handle_hotkey_event(app: &tauri::AppHandle, shortcut: &str, state: hotkey::Ba
             let pressed_target_opt: Option<i32> = None;
             let health: tauri::State<'_, hotkey::HotkeyHealth> = app.state();
             let safe_fallback = {
-                let c = ctrl.lock().unwrap();
+                let c = lock_controller(&ctrl);
                 should_use_safe_fallback(
                     shortcut,
                     c.settings().validate_shortcut_configuration().is_ok(),
@@ -900,7 +915,7 @@ fn handle_hotkey_event(app: &tauri::AppHandle, shortcut: &str, state: hotkey::Ba
                 )
             };
             let (result, active_profile) = {
-                let mut c = ctrl.lock().unwrap();
+                let mut c = lock_controller(&ctrl);
                 let binding = c.settings().resolved_hotkey_bindings().into_iter().find(
                     |(_, configured, _)| {
                         canonical_hotkey(configured).ok() == canonical_hotkey(shortcut).ok()
@@ -967,7 +982,7 @@ fn handle_hotkey_event(app: &tauri::AppHandle, shortcut: &str, state: hotkey::Ba
                     );
                     prewarm_engine_on_key_down(&ctrl);
                     let show_overlay = {
-                        let c = ctrl.lock().unwrap();
+                        let c = lock_controller(&ctrl);
                         c.settings().show_overlay
                     };
                     let _ = app.emit(events::event::STATE_CHANGED, "recording");
@@ -1012,6 +1027,9 @@ fn handle_hotkey_event(app: &tauri::AppHandle, shortcut: &str, state: hotkey::Ba
     }
 }
 fn main() {
+    // Remember panic messages so a lock recovered after a panic can name the
+    // cause in its error log (ADR 0005); the default stderr report is kept.
+    sagascript_core::sync::install_panic_recorder();
     let startup_args: Vec<std::ffi::OsString> = std::env::args_os().collect();
     let gui_launch_mode = gui_launch_mode(startup_args.iter().cloned());
 
@@ -1083,7 +1101,7 @@ fn main() {
                 }
                 let should_reveal = app
                     .try_state::<SharedController>()
-                    .map(|ctrl| should_reveal_for_reopen(ctrl.lock().unwrap().state()))
+                    .map(|ctrl| should_reveal_for_reopen(lock_controller(&ctrl).state()))
                     .unwrap_or(true);
                 if should_reveal {
                     info!("Second-instance launch requested Settings");
@@ -1176,7 +1194,7 @@ fn main() {
             // Read every configured dictation profile and register its shortcut.
             let requested_settings = {
                 let ctrl: tauri::State<'_, SharedController> = app.state();
-                let c = ctrl.lock().unwrap();
+                let c = lock_controller(&ctrl);
                 c.settings().clone()
             };
             let profiles = requested_settings.resolved_hotkey_profiles();
@@ -1258,7 +1276,7 @@ fn main() {
                 MenuItem::with_id(app, "status", "Sagascript - Idle", false, None::<&str>)?;
             let profiles = {
                 let ctrl: tauri::State<'_, SharedController> = app.state();
-                let profiles = ctrl.lock().unwrap().settings().resolved_hotkey_profiles();
+                let profiles = lock_controller(&ctrl).settings().resolved_hotkey_profiles();
                 profiles
             };
             let selected_profile_id = profiles.first().map(|profile| profile.id.clone());
@@ -1288,11 +1306,11 @@ fn main() {
             // Store status item so we can update it after transcription
             {
                 let status_state: tauri::State<'_, SharedStatusItem> = app.state();
-                *status_state.lock().unwrap() = Some(status.clone());
+                *lock_or_recover(&status_state, STATUS_ITEM_LOCK) = Some(status.clone());
             }
             {
                 let profile_state: tauri::State<'_, SharedProfileMenuState> = app.state();
-                *profile_state.lock().unwrap() = Some(ProfileMenuState {
+                *lock_or_recover(&profile_state, PROFILE_MENU_LOCK) = Some(ProfileMenuState {
                     submenu: profiles_menu.clone(),
                     items: profile_items,
                     selected_profile_id,
@@ -1300,7 +1318,7 @@ fn main() {
             }
             {
                 let update_state: tauri::State<'_, SharedUpdateMenuState> = app.state();
-                update_state.lock().unwrap().items = Some(UpdateMenuItems {
+                lock_or_recover(&update_state, UPDATE_MENU_LOCK).items = Some(UpdateMenuItems {
                     status: update_status.clone(),
                     check: check_for_updates_item.clone(),
                 });
@@ -1354,7 +1372,7 @@ fn main() {
                     "check_for_updates" => {
                         let (available_version, installing) = {
                             let state: tauri::State<'_, SharedUpdateMenuState> = app.state();
-                            let state = state.lock().unwrap();
+                            let state = lock_or_recover(&state, UPDATE_MENU_LOCK);
                             (
                                 state.available_version.clone(),
                                 state.installing,
@@ -1464,7 +1482,7 @@ fn main() {
                 let whisper = whisper.inner().clone();
                 let (warm_plan, vad_enabled) = {
                     let ctrl: tauri::State<'_, SharedController> = app.state();
-                    let c = ctrl.lock().unwrap();
+                    let c = lock_controller(&ctrl);
                     (
                         c.settings().warm_model_plan(
                             WARM_MODEL_CACHE_MAX_MODELS,
@@ -1679,7 +1697,7 @@ fn main() {
                 tauri::RunEvent::Reopen { .. } => {
                     let state = {
                         let ctrl: tauri::State<'_, SharedController> = _app_handle.state();
-                        let state = ctrl.lock().unwrap().state();
+                        let state = lock_controller(&ctrl).state();
                         state
                     };
                     if should_reveal_for_reopen(state) {
@@ -1866,7 +1884,7 @@ fn update_tray_last_result(app: &tauri::AppHandle, text: &str) {
 
 /// Helper to update the status menu item text
 fn set_status_menu_text(app: &tauri::AppHandle, text: &str) {
-    let guard = app.state::<SharedStatusItem>().lock().unwrap().clone();
+    let guard = lock_or_recover(&app.state::<SharedStatusItem>(), STATUS_ITEM_LOCK).clone();
     if let Some(item) = guard {
         let _ = item.set_text(text);
     }
@@ -2136,7 +2154,7 @@ fn handle_hotkey_release(
     shortcut: &str,
 ) {
     let should_stop = {
-        let mut c = ctrl.lock().unwrap();
+        let mut c = lock_controller(ctrl);
         let should_stop = c.should_stop_profile_on_key_up(shortcut);
         c.note_hotkey_release(shortcut);
         should_stop
@@ -2184,7 +2202,7 @@ fn stop_recording_and_transcribe(
     // (finding 2): a std::thread::sleep here freezes UI redraw and stalls
     // subsequent hotkey events. The delay is offloaded to an async task below.
     let (elapsed, generation) = {
-        let mut c = ctrl.lock().unwrap();
+        let mut c = lock_controller(ctrl);
         c.mark_release();
         (c.recording_elapsed(), c.recording_generation())
     };
@@ -2214,7 +2232,7 @@ fn stop_recording_and_transcribe(
         // failure surfaces as a real error (findings 3 & 4).
         let outcome = {
             let ctrl: tauri::State<'_, SharedController> = app_handle.state();
-            let mut c = ctrl.lock().unwrap();
+            let mut c = lock_controller(&ctrl);
             c.stop_recording_generation(generation)
         };
         let audio = match outcome {
@@ -2251,7 +2269,7 @@ fn stop_recording_and_transcribe(
         if audio.is_empty() {
             {
                 let ctrl: tauri::State<'_, SharedController> = app_handle.state();
-                let mut c = ctrl.lock().unwrap();
+                let mut c = lock_controller(&ctrl);
                 c.log_dictation_performance(serde_json::json!({
                     "outcome": "no_speech",
                     "keyUpToCaptureStoppedMs": key_up_to_capture_stopped_ms,
@@ -2278,7 +2296,7 @@ fn stop_recording_and_transcribe(
 
         // Extract what we need for transcription (lock briefly)
         let selection = {
-            let c = ctrl.lock().unwrap();
+            let c = lock_controller(&ctrl);
             let profile_id = c
                 .active_hotkey_profile()
                 .map(|profile| profile.id.clone())
@@ -2304,10 +2322,8 @@ fn stop_recording_and_transcribe(
             Ok(selection) => selection,
             Err(error) => {
                 error!("Cannot resolve profile model: {error}");
-                if let Err(finish_error) = ctrl
-                    .lock()
-                    .unwrap()
-                    .finish_transcription(Err(error.clone()))
+                if let Err(finish_error) =
+                    lock_controller(&ctrl).finish_transcription(Err(error.clone()))
                 {
                     error!("Profile-model failure completion: {finish_error}");
                 }
@@ -2377,7 +2393,7 @@ fn stop_recording_and_transcribe(
             let timeout = Duration::from_secs(TRANSCRIPTION_TIMEOUT_SECS);
             match tokio::time::timeout(timeout, &mut fut).await {
                 Ok(Ok((r, timings))) => {
-                    let mut c = ctrl.lock().unwrap();
+                    let mut c = lock_controller(&ctrl);
                     if timings.model_acquisition_started {
                         model_load_ms = Some(timings.model_ms);
                         model_was_warm = timings.model_cached;
@@ -2431,9 +2447,7 @@ fn stop_recording_and_transcribe(
             whisper_ms.and_then(|_| elapsed_ms_if_success(&result, key_up_at));
         let postprocess_started = std::time::Instant::now();
         let result = result.map(|text| commands::apply_glossary(text, &glossary));
-        ctrl.lock()
-            .unwrap()
-            .record_phase("postprocessing", postprocess_started.elapsed());
+        lock_controller(&ctrl).record_phase("postprocessing", postprocess_started.elapsed());
         match result {
             Ok(text) => {
                 info!("Transcription complete: {} chars", text.len());
@@ -2443,7 +2457,7 @@ fn stop_recording_and_transcribe(
                 );
 
                 if text.trim().is_empty() {
-                    let mut c = ctrl.lock().unwrap();
+                    let mut c = lock_controller(&ctrl);
                     c.log_dictation_performance(serde_json::json!({
                         "outcome": "no_speech",
                         "model": model_name,
@@ -2473,7 +2487,7 @@ fn stop_recording_and_transcribe(
 
                 // Check if auto-paste is enabled (lock briefly)
                 let should_paste = {
-                    let c = ctrl.lock().unwrap();
+                    let c = lock_controller(&ctrl);
                     c.settings().auto_paste
                 };
 
@@ -2552,12 +2566,11 @@ fn stop_recording_and_transcribe(
                             warn!("Auto-paste completion timed out after {PASTE_COMPLETION_TIMEOUT_MS}ms");
                         }
                     }
-                    ctrl.lock()
-                        .unwrap()
+                    lock_controller(&ctrl)
                         .record_phase("clipboard_focus_paste", paste_started.elapsed());
                 }
 
-                let mut c = ctrl.lock().unwrap();
+                let mut c = lock_controller(&ctrl);
                 c.log_dictation_performance(serde_json::json!({
                     "outcome": "success",
                     "model": model_name,
@@ -2627,7 +2640,7 @@ fn stop_recording_and_transcribe(
             }
             Err(e) => {
                 error!("Transcription failed: {e}");
-                let mut c = ctrl.lock().unwrap();
+                let mut c = lock_controller(&ctrl);
                 c.log_dictation_performance(serde_json::json!({
                     "outcome": "error",
                     "model": model_name,
@@ -2681,6 +2694,34 @@ fn configuration_event_may_affect(
                         && path.extension().and_then(|extension| extension.to_str())
                             == Some("txt"))))
     })
+}
+
+/// Feed every watcher event to `handle`, isolating each in `catch_unwind`
+/// (#359): a panic while hot-reloading one change is logged and counted in
+/// `health`, and the watcher keeps serving later changes instead of dying
+/// silently with its thread.
+fn run_settings_watcher_loop<E>(
+    events: impl IntoIterator<Item = E>,
+    health: &hotkey::health::SettingsWatcherHealth,
+    mut handle: impl FnMut(E),
+) {
+    health.set_running(true);
+    for event in events {
+        // AssertUnwindSafe: the state a reload shares with the rest of the app
+        // sits behind poison-tolerant locks (ADR 0005), its guards and leases
+        // release while unwinding, and every event re-reads settings from
+        // disk, so the next event never builds on a half-applied reload.
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handle(event)));
+        if let Err(payload) = outcome {
+            let recovered_panics = health.record_recovered_panic();
+            error!(
+                recovered_panics,
+                panic = sagascript_core::sync::panic_message(&*payload),
+                "Settings watcher recovered from a panic while hot-reloading a change; still watching"
+            );
+        }
+    }
+    health.set_running(false);
 }
 
 /// Watch settings and personal dictionaries for external changes and hot-reload
@@ -2738,12 +2779,13 @@ fn start_settings_watcher(app: tauri::AppHandle) {
 
         info!("Settings file watcher started on {}", watch_dir.display());
 
-        for event in rx {
+        let health: tauri::State<'_, hotkey::HotkeyHealth> = app.state();
+        run_settings_watcher_loop(rx, health.settings_watcher(), |event| {
             let event = match event {
                 Ok(e) => e,
                 Err(e) => {
                     error!("File watcher error: {e}");
-                    continue;
+                    return;
                 }
             };
 
@@ -2753,7 +2795,7 @@ fn start_settings_watcher(app: tauri::AppHandle) {
                 &global_glossary_path,
                 &profile_glossary_dir,
             ) {
-                continue;
+                return;
             }
 
             // Small delay to let atomic rename complete
@@ -2773,7 +2815,7 @@ fn start_settings_watcher(app: tauri::AppHandle) {
             let _transition = health.transition_guard();
             let mut new_settings = load_settings_with_permission_gate();
             let old_settings = {
-                let c = ctrl.lock().unwrap();
+                let c = lock_controller(&ctrl);
                 c.settings().clone()
             };
 
@@ -2782,6 +2824,9 @@ fn start_settings_watcher(app: tauri::AppHandle) {
             let validation_error = new_settings.validate_shortcut_configuration().err();
             if new_shortcuts != old_shortcuts || validation_error.is_some() {
                 info!("Settings watcher: hotkey profiles changed");
+                // A panic between unregister and register must not leave
+                // health claiming the old shortcuts are still registered.
+                let _registration_change = health.registration_change();
                 let old_operational = health.operational_hotkey();
                 let unregister_error = if validation_error.is_none() {
                     match &old_operational {
@@ -2871,7 +2916,7 @@ fn start_settings_watcher(app: tauri::AppHandle) {
                 );
             let settings_for_unload = new_settings.clone();
             {
-                let mut c = ctrl.lock().unwrap();
+                let mut c = lock_controller(&ctrl);
                 c.update_settings(new_settings);
             }
             if warm_after_change {
@@ -2888,7 +2933,7 @@ fn start_settings_watcher(app: tauri::AppHandle) {
             let _ = app.emit(events::event::STATE_CHANGED, "settings_reloaded");
 
             info!("Settings hot-reloaded from disk");
-        }
+        });
     });
 }
 
@@ -2950,6 +2995,41 @@ async fn restore_target_before_paste(app: &tauri::AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #359: a panic while hot-reloading one settings change used to kill the
+    /// watcher thread silently. The loop must log it, record it in the health
+    /// status and keep serving later changes.
+    #[test]
+    fn settings_watcher_survives_a_panicking_reload_and_records_it() {
+        let health = hotkey::HotkeyHealth::new("Control+Shift+Space");
+        let watcher = health.settings_watcher();
+        let mut handled = Vec::new();
+        let mut running_while_handling = Vec::new();
+
+        run_settings_watcher_loop(1..=3, watcher, |event| {
+            running_while_handling.push(watcher.status().running);
+            if event == 2 {
+                let _registration_change = health.registration_change();
+                panic!("injected panic between unregister and register (#359)");
+            }
+            handled.push(event);
+        });
+
+        assert_eq!(handled, [1, 3], "the event after the panic was handled");
+        assert_eq!(running_while_handling, [true, true, true]);
+        let status = health.status();
+        assert_eq!(status.settings_watcher.recovered_panics, 1);
+        assert!(
+            !status.settings_watcher.running,
+            "the loop ended with its event source"
+        );
+        assert_eq!(
+            health.operational_hotkey(),
+            hotkey::OperationalHotkey::Unknown,
+            "an interrupted re-registration is not reported as still registered"
+        );
+        assert!(!status.ok);
+    }
 
     #[test]
     fn elapsed_ms_if_success_only_marks_successful_operations_complete() {

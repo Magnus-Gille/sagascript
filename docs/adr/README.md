@@ -12,12 +12,11 @@ where the code shows them. The map of the code is [ARCHITECTURE.md](../ARCHITECT
 | [0002](0002-privacy-first.md) | Privacy first: local by default, remote opt-in | Accepted |
 | [0003](0003-main-thread-native-apis.md) | Native input and UI APIs run on the main thread | Accepted |
 | [0004](0004-test-strategy.md) | Test strategy | Accepted |
-| 0005 | Mutex poison policy | Proposed — decided in [#359](https://github.com/Magnus-Gille/sagascript/issues/359) |
+| [0005](0005-mutex-poison-policy.md) | Mutex poison policy: recover, log, restore a safe state | Accepted |
 | 0006 | Error types across boundaries | Proposed — decided in [#360](https://github.com/Magnus-Gille/sagascript/issues/360) |
 
-0005 and 0006 are reserved numbers without a file: the issues above will write them. Until
-then, [ARCHITECTURE.md §3](../ARCHITECTURE.md#3-threads-and-locks) records today's poison
-handling and the commands keep returning `Result<_, String>`.
+0006 is a reserved number without a file: #360 will write it. Until then the commands keep
+returning `Result<_, String>`.
 
 ## Writing an ADR
 
