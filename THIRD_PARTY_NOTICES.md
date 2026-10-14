@@ -543,11 +543,16 @@ attribution as well. No matching CoreML encoder is supplied for the fine-tune.
 
 | Component | Version | Declared license | Source |
 |---|---:|---|---|
+| @adobe/css-tools | 4.5.0 | MIT | [upstream](https://www.npmjs.com/package/@adobe/css-tools/v/4.5.0) |
+| @babel/code-frame | 7.29.7 | MIT | [upstream](https://www.npmjs.com/package/@babel/code-frame/v/7.29.7) |
 | @babel/helper-string-parser | 7.29.7 | MIT | [upstream](https://www.npmjs.com/package/@babel/helper-string-parser/v/7.29.7) |
 | @babel/helper-validator-identifier | 7.29.7 | MIT | [upstream](https://www.npmjs.com/package/@babel/helper-validator-identifier/v/7.29.7) |
 | @babel/parser | 7.29.9 | MIT | [upstream](https://www.npmjs.com/package/@babel/parser/v/7.29.9) |
+| @babel/runtime | 7.29.7 | MIT | [upstream](https://www.npmjs.com/package/@babel/runtime/v/7.29.7) |
 | @babel/types | 7.29.8 | MIT | [upstream](https://www.npmjs.com/package/@babel/types/v/7.29.8) |
 | @bcoe/v8-coverage | 1.0.2 | MIT | [upstream](https://www.npmjs.com/package/@bcoe/v8-coverage/v/1.0.2) |
+| @cacheable/memory | 2.2.0 | MIT | [upstream](https://www.npmjs.com/package/@cacheable/memory/v/2.2.0) |
+| @cacheable/utils | 2.5.0 | MIT | [upstream](https://www.npmjs.com/package/@cacheable/utils/v/2.5.0) |
 | @esbuild/aix-ppc64 | 0.25.12 | MIT | [upstream](https://www.npmjs.com/package/@esbuild/aix-ppc64/v/0.25.12) |
 | @esbuild/android-arm | 0.25.12 | MIT | [upstream](https://www.npmjs.com/package/@esbuild/android-arm/v/0.25.12) |
 | @esbuild/android-arm64 | 0.25.12 | MIT | [upstream](https://www.npmjs.com/package/@esbuild/android-arm64/v/0.25.12) |
@@ -574,11 +579,26 @@ attribution as well. No matching CoreML encoder is supplied for the fine-tune.
 | @esbuild/win32-arm64 | 0.25.12 | MIT | [upstream](https://www.npmjs.com/package/@esbuild/win32-arm64/v/0.25.12) |
 | @esbuild/win32-ia32 | 0.25.12 | MIT | [upstream](https://www.npmjs.com/package/@esbuild/win32-ia32/v/0.25.12) |
 | @esbuild/win32-x64 | 0.25.12 | MIT | [upstream](https://www.npmjs.com/package/@esbuild/win32-x64/v/0.25.12) |
+| @eslint-community/eslint-utils | 4.10.1 | MIT | [upstream](https://www.npmjs.com/package/@eslint-community/eslint-utils/v/4.10.1) |
+| @eslint-community/regexpp | 4.12.2 | MIT | [upstream](https://www.npmjs.com/package/@eslint-community/regexpp/v/4.12.2) |
+| @eslint/config-array | 0.23.5 | Apache-2.0 | [upstream](https://www.npmjs.com/package/@eslint/config-array/v/0.23.5) |
+| @eslint/config-helpers | 0.7.0 | Apache-2.0 | [upstream](https://www.npmjs.com/package/@eslint/config-helpers/v/0.7.0) |
+| @eslint/core | 1.2.1 | Apache-2.0 | [upstream](https://www.npmjs.com/package/@eslint/core/v/1.2.1) |
+| @eslint/js | 10.0.1 | MIT | [upstream](https://www.npmjs.com/package/@eslint/js/v/10.0.1) |
+| @eslint/object-schema | 3.0.5 | Apache-2.0 | [upstream](https://www.npmjs.com/package/@eslint/object-schema/v/3.0.5) |
+| @eslint/plugin-kit | 0.7.3 | Apache-2.0 | [upstream](https://www.npmjs.com/package/@eslint/plugin-kit/v/0.7.3) |
+| @humanfs/core | 0.19.2 | Apache-2.0 | [upstream](https://www.npmjs.com/package/@humanfs/core/v/0.19.2) |
+| @humanfs/node | 0.16.8 | Apache-2.0 | [upstream](https://www.npmjs.com/package/@humanfs/node/v/0.16.8) |
+| @humanfs/types | 0.15.0 | Apache-2.0 | [upstream](https://www.npmjs.com/package/@humanfs/types/v/0.15.0) |
+| @humanwhocodes/module-importer | 1.0.1 | Apache-2.0 | [upstream](https://www.npmjs.com/package/@humanwhocodes/module-importer/v/1.0.1) |
+| @humanwhocodes/retry | 0.4.3 | Apache-2.0 | [upstream](https://www.npmjs.com/package/@humanwhocodes/retry/v/0.4.3) |
 | @jridgewell/gen-mapping | 0.3.13 | MIT | [upstream](https://www.npmjs.com/package/@jridgewell/gen-mapping/v/0.3.13) |
 | @jridgewell/remapping | 2.3.5 | MIT | [upstream](https://www.npmjs.com/package/@jridgewell/remapping/v/2.3.5) |
 | @jridgewell/resolve-uri | 3.1.2 | MIT | [upstream](https://www.npmjs.com/package/@jridgewell/resolve-uri/v/3.1.2) |
 | @jridgewell/sourcemap-codec | 1.6.0 | MIT | [upstream](https://www.npmjs.com/package/@jridgewell/sourcemap-codec/v/1.6.0) |
 | @jridgewell/trace-mapping | 0.3.31 | MIT | [upstream](https://www.npmjs.com/package/@jridgewell/trace-mapping/v/0.3.31) |
+| @keyv/bigmap | 1.3.1 | MIT | [upstream](https://www.npmjs.com/package/@keyv/bigmap/v/1.3.1) |
+| @keyv/serialize | 1.1.1 | MIT | [upstream](https://www.npmjs.com/package/@keyv/serialize/v/1.1.1) |
 | @rollup/rollup-android-arm-eabi | 4.62.2 | MIT | [upstream](https://www.npmjs.com/package/@rollup/rollup-android-arm-eabi/v/4.62.2) |
 | @rollup/rollup-android-arm64 | 4.62.2 | MIT | [upstream](https://www.npmjs.com/package/@rollup/rollup-android-arm64/v/4.62.2) |
 | @rollup/rollup-darwin-arm64 | 4.62.2 | MIT | [upstream](https://www.npmjs.com/package/@rollup/rollup-darwin-arm64/v/4.62.2) |
@@ -622,71 +642,189 @@ attribution as well. No matching CoreML encoder is supplied for the fine-tune.
 | @tauri-apps/cli-win32-x64-msvc | 2.10.0 | Apache-2.0 OR MIT | [upstream](https://www.npmjs.com/package/@tauri-apps/cli-win32-x64-msvc/v/2.10.0) |
 | @tauri-apps/plugin-autostart | 2.5.1 | MIT OR Apache-2.0 | [upstream](https://www.npmjs.com/package/@tauri-apps/plugin-autostart/v/2.5.1) |
 | @tauri-apps/plugin-dialog | 2.6.0 | MIT OR Apache-2.0 | [upstream](https://www.npmjs.com/package/@tauri-apps/plugin-dialog/v/2.6.0) |
+| @testing-library/dom | 10.4.2 | MIT | [upstream](https://www.npmjs.com/package/@testing-library/dom/v/10.4.2) |
+| @testing-library/jest-dom | 7.0.1 | MIT | [upstream](https://www.npmjs.com/package/@testing-library/jest-dom/v/7.0.1) |
+| @testing-library/svelte | 5.4.2 | MIT | [upstream](https://www.npmjs.com/package/@testing-library/svelte/v/5.4.2) |
+| @testing-library/svelte-core | 1.1.3 | MIT | [upstream](https://www.npmjs.com/package/@testing-library/svelte-core/v/1.1.3) |
+| @testing-library/user-event | 14.6.7 | MIT | [upstream](https://www.npmjs.com/package/@testing-library/user-event/v/14.6.7) |
 | @tsconfig/svelte | 5.0.8 | MIT | [upstream](https://www.npmjs.com/package/@tsconfig/svelte/v/5.0.8) |
+| @types/aria-query | 5.0.4 | MIT | [upstream](https://www.npmjs.com/package/@types/aria-query/v/5.0.4) |
 | @types/chai | 5.2.3 | MIT | [upstream](https://www.npmjs.com/package/@types/chai/v/5.2.3) |
 | @types/deep-eql | 4.0.2 | MIT | [upstream](https://www.npmjs.com/package/@types/deep-eql/v/4.0.2) |
+| @types/esrecurse | 4.3.1 | MIT | [upstream](https://www.npmjs.com/package/@types/esrecurse/v/4.3.1) |
 | @types/estree | 1.0.9 | MIT | [upstream](https://www.npmjs.com/package/@types/estree/v/1.0.9) |
+| @types/json-schema | 7.0.15 | MIT | [upstream](https://www.npmjs.com/package/@types/json-schema/v/7.0.15) |
+| @types/node | 26.6.3 | MIT | [upstream](https://www.npmjs.com/package/@types/node/v/26.6.3) |
 | @types/trusted-types | 2.0.7 | MIT | [upstream](https://www.npmjs.com/package/@types/trusted-types/v/2.0.7) |
+| @types/whatwg-mimetype | 3.0.2 | MIT | [upstream](https://www.npmjs.com/package/@types/whatwg-mimetype/v/3.0.2) |
+| @types/ws | 8.18.1 | MIT | [upstream](https://www.npmjs.com/package/@types/ws/v/8.18.1) |
+| @typescript-eslint/eslint-plugin | 8.71.0 | MIT | [upstream](https://www.npmjs.com/package/@typescript-eslint/eslint-plugin/v/8.71.0) |
+| @typescript-eslint/parser | 8.71.0 | MIT | [upstream](https://www.npmjs.com/package/@typescript-eslint/parser/v/8.71.0) |
+| @typescript-eslint/project-service | 8.71.0 | MIT | [upstream](https://www.npmjs.com/package/@typescript-eslint/project-service/v/8.71.0) |
+| @typescript-eslint/scope-manager | 8.71.0 | MIT | [upstream](https://www.npmjs.com/package/@typescript-eslint/scope-manager/v/8.71.0) |
+| @typescript-eslint/tsconfig-utils | 8.71.0 | MIT | [upstream](https://www.npmjs.com/package/@typescript-eslint/tsconfig-utils/v/8.71.0) |
+| @typescript-eslint/type-utils | 8.71.0 | MIT | [upstream](https://www.npmjs.com/package/@typescript-eslint/type-utils/v/8.71.0) |
+| @typescript-eslint/types | 8.71.0 | MIT | [upstream](https://www.npmjs.com/package/@typescript-eslint/types/v/8.71.0) |
+| @typescript-eslint/typescript-estree | 8.71.0 | MIT | [upstream](https://www.npmjs.com/package/@typescript-eslint/typescript-estree/v/8.71.0) |
+| @typescript-eslint/utils | 8.71.0 | MIT | [upstream](https://www.npmjs.com/package/@typescript-eslint/utils/v/8.71.0) |
+| @typescript-eslint/visitor-keys | 8.71.0 | MIT | [upstream](https://www.npmjs.com/package/@typescript-eslint/visitor-keys/v/8.71.0) |
 | @vitest/coverage-v8 | 5.0.2 | MIT | [upstream](https://www.npmjs.com/package/@vitest/coverage-v8/v/5.0.2) |
 | @vitest/istanbul-lib-coverage | 1.0.2 | MIT | [upstream](https://www.npmjs.com/package/@vitest/istanbul-lib-coverage/v/1.0.2) |
 | @vitest/istanbul-lib-report | 1.0.2 | MIT | [upstream](https://www.npmjs.com/package/@vitest/istanbul-lib-report/v/1.0.2) |
 | @vitest/mocker | 5.0.2 | MIT | [upstream](https://www.npmjs.com/package/@vitest/mocker/v/5.0.2) |
 | @vitest/spy | 5.0.2 | MIT | [upstream](https://www.npmjs.com/package/@vitest/spy/v/5.0.2) |
 | acorn | 8.17.0 | MIT | [upstream](https://www.npmjs.com/package/acorn/v/8.17.0) |
+| acorn-jsx | 5.3.2 | MIT | [upstream](https://www.npmjs.com/package/acorn-jsx/v/5.3.2) |
+| ajv | 6.15.0 | MIT | [upstream](https://www.npmjs.com/package/ajv/v/6.15.0) |
+| ansi-regex | 5.0.1 | MIT | [upstream](https://www.npmjs.com/package/ansi-regex/v/5.0.1) |
+| ansi-styles | 5.2.0 | MIT | [upstream](https://www.npmjs.com/package/ansi-styles/v/5.2.0) |
+| aria-query | 5.3.0 | Apache-2.0 | [upstream](https://www.npmjs.com/package/aria-query/v/5.3.0) |
 | aria-query | 5.3.1 | Apache-2.0 | [upstream](https://www.npmjs.com/package/aria-query/v/5.3.1) |
 | assertion-error | 2.0.1 | MIT | [upstream](https://www.npmjs.com/package/assertion-error/v/2.0.1) |
 | ast-v8-to-istanbul | 1.0.7 | MIT | [upstream](https://www.npmjs.com/package/ast-v8-to-istanbul/v/1.0.7) |
 | axobject-query | 4.1.0 | Apache-2.0 | [upstream](https://www.npmjs.com/package/axobject-query/v/4.1.0) |
+| balanced-match | 4.0.4 | MIT | [upstream](https://www.npmjs.com/package/balanced-match/v/4.0.4) |
+| brace-expansion | 5.0.12 | MIT | [upstream](https://www.npmjs.com/package/brace-expansion/v/5.0.12) |
+| buffer-image-size | 0.6.4 | MIT | [upstream](https://www.npmjs.com/package/buffer-image-size/v/0.6.4) |
+| cacheable | 2.5.0 | MIT | [upstream](https://www.npmjs.com/package/cacheable/v/2.5.0) |
 | chai | 6.2.2 | MIT | [upstream](https://www.npmjs.com/package/chai/v/6.2.2) |
 | chokidar | 4.0.3 | MIT | [upstream](https://www.npmjs.com/package/chokidar/v/4.0.3) |
 | clsx | 2.1.1 | MIT | [upstream](https://www.npmjs.com/package/clsx/v/2.1.1) |
+| cross-spawn | 7.0.6 | MIT | [upstream](https://www.npmjs.com/package/cross-spawn/v/7.0.6) |
+| css.escape | 1.5.1 | MIT | [upstream](https://www.npmjs.com/package/css.escape/v/1.5.1) |
+| cssesc | 3.0.0 | MIT | [upstream](https://www.npmjs.com/package/cssesc/v/3.0.0) |
 | debug | 4.4.3 | MIT | [upstream](https://www.npmjs.com/package/debug/v/4.4.3) |
+| deep-is | 0.1.4 | MIT | [upstream](https://www.npmjs.com/package/deep-is/v/0.1.4) |
 | deepmerge | 4.3.1 | MIT | [upstream](https://www.npmjs.com/package/deepmerge/v/4.3.1) |
+| dequal | 2.0.3 | MIT | [upstream](https://www.npmjs.com/package/dequal/v/2.0.3) |
 | devalue | 5.9.4 | MIT | [upstream](https://www.npmjs.com/package/devalue/v/5.9.4) |
+| dom-accessibility-api | 0.5.16 | MIT | [upstream](https://www.npmjs.com/package/dom-accessibility-api/v/0.5.16) |
+| dom-accessibility-api | 0.6.3 | MIT | [upstream](https://www.npmjs.com/package/dom-accessibility-api/v/0.6.3) |
+| entities | 7.0.1 | BSD-2-Clause | [upstream](https://www.npmjs.com/package/entities/v/7.0.1) |
 | es-module-lexer | 2.3.2 | MIT | [upstream](https://www.npmjs.com/package/es-module-lexer/v/2.3.2) |
 | esbuild | 0.25.12 | MIT | [upstream](https://www.npmjs.com/package/esbuild/v/0.25.12) |
+| escape-string-regexp | 4.0.0 | MIT | [upstream](https://www.npmjs.com/package/escape-string-regexp/v/4.0.0) |
+| eslint | 10.11.0 | MIT | [upstream](https://www.npmjs.com/package/eslint/v/10.11.0) |
+| eslint-plugin-svelte | 3.23.0 | MIT | [upstream](https://www.npmjs.com/package/eslint-plugin-svelte/v/3.23.0) |
+| eslint-scope | 8.4.0 | BSD-2-Clause | [upstream](https://www.npmjs.com/package/eslint-scope/v/8.4.0) |
+| eslint-scope | 9.1.2 | BSD-2-Clause | [upstream](https://www.npmjs.com/package/eslint-scope/v/9.1.2) |
+| eslint-visitor-keys | 3.4.3 | Apache-2.0 | [upstream](https://www.npmjs.com/package/eslint-visitor-keys/v/3.4.3) |
+| eslint-visitor-keys | 4.2.1 | Apache-2.0 | [upstream](https://www.npmjs.com/package/eslint-visitor-keys/v/4.2.1) |
+| eslint-visitor-keys | 5.0.1 | Apache-2.0 | [upstream](https://www.npmjs.com/package/eslint-visitor-keys/v/5.0.1) |
 | esm-env | 1.2.2 | MIT | [upstream](https://www.npmjs.com/package/esm-env/v/1.2.2) |
+| espree | 10.4.0 | BSD-2-Clause | [upstream](https://www.npmjs.com/package/espree/v/10.4.0) |
+| espree | 11.2.0 | BSD-2-Clause | [upstream](https://www.npmjs.com/package/espree/v/11.2.0) |
+| esquery | 1.7.0 | BSD-3-Clause | [upstream](https://www.npmjs.com/package/esquery/v/1.7.0) |
 | esrap | 2.2.13 | MIT | [upstream](https://www.npmjs.com/package/esrap/v/2.2.13) |
+| esrecurse | 4.3.0 | BSD-2-Clause | [upstream](https://www.npmjs.com/package/esrecurse/v/4.3.0) |
+| estraverse | 5.3.0 | BSD-2-Clause | [upstream](https://www.npmjs.com/package/estraverse/v/5.3.0) |
 | estree-walker | 3.0.3 | MIT | [upstream](https://www.npmjs.com/package/estree-walker/v/3.0.3) |
+| esutils | 2.0.3 | BSD-2-Clause | [upstream](https://www.npmjs.com/package/esutils/v/2.0.3) |
 | expect-type | 1.4.0 | Apache-2.0 | [upstream](https://www.npmjs.com/package/expect-type/v/1.4.0) |
+| fast-deep-equal | 3.1.3 | MIT | [upstream](https://www.npmjs.com/package/fast-deep-equal/v/3.1.3) |
+| fast-json-stable-stringify | 2.1.0 | MIT | [upstream](https://www.npmjs.com/package/fast-json-stable-stringify/v/2.1.0) |
+| fast-levenshtein | 2.0.6 | MIT | [upstream](https://www.npmjs.com/package/fast-levenshtein/v/2.0.6) |
 | fdir | 6.5.0 | MIT | [upstream](https://www.npmjs.com/package/fdir/v/6.5.0) |
+| file-entry-cache | 11.1.5 | MIT | [upstream](https://www.npmjs.com/package/file-entry-cache/v/11.1.5) |
+| find-up | 5.0.0 | MIT | [upstream](https://www.npmjs.com/package/find-up/v/5.0.0) |
+| flat-cache | 6.1.23 | MIT | [upstream](https://www.npmjs.com/package/flat-cache/v/6.1.23) |
+| flatted | 3.4.4 | ISC | [upstream](https://www.npmjs.com/package/flatted/v/3.4.4) |
 | fsevents | 2.3.3 | MIT | [upstream](https://www.npmjs.com/package/fsevents/v/2.3.3) |
+| glob-parent | 6.0.2 | ISC | [upstream](https://www.npmjs.com/package/glob-parent/v/6.0.2) |
+| globals | 16.5.0 | MIT | [upstream](https://www.npmjs.com/package/globals/v/16.5.0) |
+| globals | 17.12.0 | MIT | [upstream](https://www.npmjs.com/package/globals/v/17.12.0) |
+| happy-dom | 20.14.5 | MIT | [upstream](https://www.npmjs.com/package/happy-dom/v/20.14.5) |
+| hashery | 1.5.1 | MIT | [upstream](https://www.npmjs.com/package/hashery/v/1.5.1) |
+| hookified | 1.15.1 | MIT | [upstream](https://www.npmjs.com/package/hookified/v/1.15.1) |
+| hookified | 2.2.0 | MIT | [upstream](https://www.npmjs.com/package/hookified/v/2.2.0) |
+| ignore | 5.3.2 | MIT | [upstream](https://www.npmjs.com/package/ignore/v/5.3.2) |
+| ignore | 7.0.10 | MIT | [upstream](https://www.npmjs.com/package/ignore/v/7.0.10) |
+| imurmurhash | 0.1.4 | MIT | [upstream](https://www.npmjs.com/package/imurmurhash/v/0.1.4) |
+| indent-string | 4.0.0 | MIT | [upstream](https://www.npmjs.com/package/indent-string/v/4.0.0) |
+| is-extglob | 2.1.1 | MIT | [upstream](https://www.npmjs.com/package/is-extglob/v/2.1.1) |
+| is-glob | 4.0.3 | MIT | [upstream](https://www.npmjs.com/package/is-glob/v/4.0.3) |
 | is-reference | 3.0.3 | MIT | [upstream](https://www.npmjs.com/package/is-reference/v/3.0.3) |
+| isexe | 2.0.0 | ISC | [upstream](https://www.npmjs.com/package/isexe/v/2.0.0) |
 | js-tokens | 10.0.0 | MIT | [upstream](https://www.npmjs.com/package/js-tokens/v/10.0.0) |
+| js-tokens | 4.0.0 | MIT | [upstream](https://www.npmjs.com/package/js-tokens/v/4.0.0) |
+| json-schema-traverse | 0.4.1 | MIT | [upstream](https://www.npmjs.com/package/json-schema-traverse/v/0.4.1) |
+| json-stable-stringify-without-jsonify | 1.0.1 | MIT | [upstream](https://www.npmjs.com/package/json-stable-stringify-without-jsonify/v/1.0.1) |
+| keyv | 5.6.0 | MIT | [upstream](https://www.npmjs.com/package/keyv/v/5.6.0) |
 | kleur | 4.1.5 | MIT | [upstream](https://www.npmjs.com/package/kleur/v/4.1.5) |
+| known-css-properties | 0.37.0 | MIT | [upstream](https://www.npmjs.com/package/known-css-properties/v/0.37.0) |
+| levn | 0.4.1 | MIT | [upstream](https://www.npmjs.com/package/levn/v/0.4.1) |
+| lilconfig | 2.1.0 | MIT | [upstream](https://www.npmjs.com/package/lilconfig/v/2.1.0) |
 | locate-character | 3.0.0 | MIT | [upstream](https://www.npmjs.com/package/locate-character/v/3.0.0) |
+| locate-path | 6.0.0 | MIT | [upstream](https://www.npmjs.com/package/locate-path/v/6.0.0) |
+| lz-string | 1.5.0 | MIT | [upstream](https://www.npmjs.com/package/lz-string/v/1.5.0) |
 | magic-string | 0.30.21 | MIT | [upstream](https://www.npmjs.com/package/magic-string/v/0.30.21) |
 | magic-string | 1.4.2 | MIT | [upstream](https://www.npmjs.com/package/magic-string/v/1.4.2) |
 | magic-string | 1.4.2 | MIT | [upstream](https://www.npmjs.com/package/magic-string/v/1.4.2) |
 | magicast | 0.5.5 | MIT | [upstream](https://www.npmjs.com/package/magicast/v/0.5.5) |
+| min-indent | 1.0.1 | MIT | [upstream](https://www.npmjs.com/package/min-indent/v/1.0.1) |
+| minimatch | 10.2.6 | BlueOak-1.0.0 | [upstream](https://www.npmjs.com/package/minimatch/v/10.2.6) |
 | mri | 1.2.0 | MIT | [upstream](https://www.npmjs.com/package/mri/v/1.2.0) |
 | ms | 2.1.3 | MIT | [upstream](https://www.npmjs.com/package/ms/v/2.1.3) |
 | nanoid | 3.3.18 | MIT | [upstream](https://www.npmjs.com/package/nanoid/v/3.3.18) |
+| natural-compare | 1.4.0 | MIT | [upstream](https://www.npmjs.com/package/natural-compare/v/1.4.0) |
 | obug | 2.2.1 | MIT | [upstream](https://www.npmjs.com/package/obug/v/2.2.1) |
+| optionator | 0.9.4 | MIT | [upstream](https://www.npmjs.com/package/optionator/v/0.9.4) |
+| p-limit | 3.1.0 | MIT | [upstream](https://www.npmjs.com/package/p-limit/v/3.1.0) |
+| p-locate | 5.0.0 | MIT | [upstream](https://www.npmjs.com/package/p-locate/v/5.0.0) |
+| path-exists | 4.0.0 | MIT | [upstream](https://www.npmjs.com/package/path-exists/v/4.0.0) |
+| path-key | 3.1.1 | MIT | [upstream](https://www.npmjs.com/package/path-key/v/3.1.1) |
 | picocolors | 1.1.1 | ISC | [upstream](https://www.npmjs.com/package/picocolors/v/1.1.1) |
 | picomatch | 4.0.7 | MIT | [upstream](https://www.npmjs.com/package/picomatch/v/4.0.7) |
 | playwright | 1.63.0 | Apache-2.0 | [upstream](https://www.npmjs.com/package/playwright/v/1.63.0) |
 | playwright-core | 1.63.0 | Apache-2.0 | [upstream](https://www.npmjs.com/package/playwright-core/v/1.63.0) |
 | postcss | 8.5.26 | MIT | [upstream](https://www.npmjs.com/package/postcss/v/8.5.26) |
+| postcss-load-config | 3.1.4 | MIT | [upstream](https://www.npmjs.com/package/postcss-load-config/v/3.1.4) |
+| postcss-safe-parser | 7.1.0 | MIT | [upstream](https://www.npmjs.com/package/postcss-safe-parser/v/7.1.0) |
+| postcss-scss | 4.0.9 | MIT | [upstream](https://www.npmjs.com/package/postcss-scss/v/4.0.9) |
+| postcss-selector-parser | 7.1.6 | MIT | [upstream](https://www.npmjs.com/package/postcss-selector-parser/v/7.1.6) |
+| prelude-ls | 1.2.1 | MIT | [upstream](https://www.npmjs.com/package/prelude-ls/v/1.2.1) |
 | prettier | 3.9.9 | MIT | [upstream](https://www.npmjs.com/package/prettier/v/3.9.9) |
 | prettier-plugin-svelte | 4.1.1 | MIT | [upstream](https://www.npmjs.com/package/prettier-plugin-svelte/v/4.1.1) |
+| pretty-format | 27.5.1 | MIT | [upstream](https://www.npmjs.com/package/pretty-format/v/27.5.1) |
+| punycode | 2.3.1 | MIT | [upstream](https://www.npmjs.com/package/punycode/v/2.3.1) |
+| qified | 0.10.1 | MIT | [upstream](https://www.npmjs.com/package/qified/v/0.10.1) |
+| react-is | 17.0.2 | MIT | [upstream](https://www.npmjs.com/package/react-is/v/17.0.2) |
 | readdirp | 4.1.2 | MIT | [upstream](https://www.npmjs.com/package/readdirp/v/4.1.2) |
+| redent | 3.0.0 | MIT | [upstream](https://www.npmjs.com/package/redent/v/3.0.0) |
 | rollup | 4.62.2 | MIT | [upstream](https://www.npmjs.com/package/rollup/v/4.62.2) |
 | sade | 1.8.1 | MIT | [upstream](https://www.npmjs.com/package/sade/v/1.8.1) |
+| semver | 7.8.5 | ISC | [upstream](https://www.npmjs.com/package/semver/v/7.8.5) |
+| shebang-command | 2.0.0 | MIT | [upstream](https://www.npmjs.com/package/shebang-command/v/2.0.0) |
+| shebang-regex | 3.0.0 | MIT | [upstream](https://www.npmjs.com/package/shebang-regex/v/3.0.0) |
 | source-map-js | 1.2.2 | BSD-3-Clause | [upstream](https://www.npmjs.com/package/source-map-js/v/1.2.2) |
 | std-env | 4.2.0 | MIT | [upstream](https://www.npmjs.com/package/std-env/v/4.2.0) |
+| strip-indent | 3.0.0 | MIT | [upstream](https://www.npmjs.com/package/strip-indent/v/3.0.0) |
 | svelte | 5.56.4 | MIT | [upstream](https://www.npmjs.com/package/svelte/v/5.56.4) |
 | svelte-check | 4.4.1 | MIT | [upstream](https://www.npmjs.com/package/svelte-check/v/4.4.1) |
+| svelte-eslint-parser | 1.8.1 | MIT | [upstream](https://www.npmjs.com/package/svelte-eslint-parser/v/1.8.1) |
 | tinybench | 6.2.0 | MIT | [upstream](https://www.npmjs.com/package/tinybench/v/6.2.0) |
 | tinyexec | 1.3.1 | MIT | [upstream](https://www.npmjs.com/package/tinyexec/v/1.3.1) |
 | tinyglobby | 0.2.17 | MIT | [upstream](https://www.npmjs.com/package/tinyglobby/v/0.2.17) |
 | tinyrainbow | 3.1.1 | MIT | [upstream](https://www.npmjs.com/package/tinyrainbow/v/3.1.1) |
+| ts-api-utils | 2.5.0 | MIT | [upstream](https://www.npmjs.com/package/ts-api-utils/v/2.5.0) |
 | tslib | 2.8.1 | 0BSD | [upstream](https://www.npmjs.com/package/tslib/v/2.8.1) |
+| type-check | 0.4.0 | MIT | [upstream](https://www.npmjs.com/package/type-check/v/0.4.0) |
 | typescript | 5.9.3 | Apache-2.0 | [upstream](https://www.npmjs.com/package/typescript/v/5.9.3) |
+| typescript-eslint | 8.71.0 | MIT | [upstream](https://www.npmjs.com/package/typescript-eslint/v/8.71.0) |
+| undici-types | 8.9.0 | MIT | [upstream](https://www.npmjs.com/package/undici-types/v/8.9.0) |
+| uri-js | 4.4.1 | BSD-2-Clause | [upstream](https://www.npmjs.com/package/uri-js/v/4.4.1) |
+| util-deprecate | 1.0.2 | MIT | [upstream](https://www.npmjs.com/package/util-deprecate/v/1.0.2) |
 | vite | 6.4.3 | MIT | [upstream](https://www.npmjs.com/package/vite/v/6.4.3) |
 | vitefu | 1.1.1 | MIT | [upstream](https://www.npmjs.com/package/vitefu/v/1.1.1) |
 | vitest | 5.0.2 | MIT | [upstream](https://www.npmjs.com/package/vitest/v/5.0.2) |
+| whatwg-mimetype | 3.0.0 | MIT | [upstream](https://www.npmjs.com/package/whatwg-mimetype/v/3.0.0) |
+| which | 2.0.2 | ISC | [upstream](https://www.npmjs.com/package/which/v/2.0.2) |
 | why-is-node-running | 3.2.2 | MIT | [upstream](https://www.npmjs.com/package/why-is-node-running/v/3.2.2) |
+| word-wrap | 1.2.5 | MIT | [upstream](https://www.npmjs.com/package/word-wrap/v/1.2.5) |
+| ws | 8.22.0 | MIT | [upstream](https://www.npmjs.com/package/ws/v/8.22.0) |
+| yaml | 1.10.3 | ISC | [upstream](https://www.npmjs.com/package/yaml/v/1.10.3) |
+| yaml | 2.9.1 | ISC | [upstream](https://www.npmjs.com/package/yaml/v/2.9.1) |
+| yocto-queue | 0.1.0 | MIT | [upstream](https://www.npmjs.com/package/yocto-queue/v/0.1.0) |
 | zimmerframe | 1.1.4 | MIT | [upstream](https://www.npmjs.com/package/zimmerframe/v/1.1.4) |
 
 ## Pianissimo engine host
@@ -1055,6 +1193,40 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ~~~~
 
+### 058972da33a1
+
+Components: npm espree@10.4.0, npm espree@11.2.0
+
+Source filenames: LICENSE
+
+~~~~text
+BSD 2-Clause License
+
+Copyright (c) Open JS Foundation
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this
+   list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+~~~~
+
 ### 07414b6c33f3
 
 Components: Rust ring@0.17.14
@@ -1075,6 +1247,91 @@ SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
 WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION
 OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
 CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+~~~~
+
+### 088a9d7852d7
+
+Components: npm @typescript-eslint/type-utils@8.71.0
+
+Source filenames: LICENSE
+
+~~~~text
+MIT License
+
+Copyright (c) 2021 typescript-eslint and other contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+~~~~
+
+### 08dcdcc2b4b4
+
+Components: npm eslint-scope@8.4.0, npm eslint-scope@9.1.2
+
+Source filenames: LICENSE
+
+~~~~text
+Copyright JS Foundation and other contributors, https://js.foundation
+Copyright (C) 2012-2013 Yusuke Suzuki (twitter: @Constellation) and other contributors.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+  * Redistributions of source code must retain the above copyright
+    notice, this list of conditions and the following disclaimer.
+  * Redistributions in binary form must reproduce the above copyright
+    notice, this list of conditions and the following disclaimer in the
+    documentation and/or other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ARE DISCLAIMED. IN NO EVENT SHALL <COPYRIGHT HOLDER> BE LIABLE FOR ANY
+DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
+THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+~~~~
+
+### 0ae52fe329cc
+
+Components: npm isexe@2.0.0, npm semver@7.8.5, npm which@2.0.2
+
+Source filenames: LICENSE
+
+~~~~text
+The ISC License
+
+Copyright (c) Isaac Z. Schlueter and Contributors
+
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted, provided that the above
+copyright notice and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR
+IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 ~~~~
 
 ### 0b3a20ded830
@@ -1211,6 +1468,57 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ~~~~
 
+### 0e57eeaccc07
+
+Components: npm entities@7.0.1
+
+Source filenames: LICENSE
+
+~~~~text
+Copyright (c) Felix Böhm
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
+
+Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
+
+Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.
+
+THIS IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS,
+EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+~~~~
+
+### 0e677f246e84
+
+Components: npm levn@0.4.1, npm optionator@0.9.4, npm prelude-ls@1.2.1, npm type-check@0.4.0
+
+Source filenames: LICENSE
+
+~~~~text
+Copyright (c) George Zahariev
+
+Permission is hereby granted, free of charge, to any person
+obtaining a copy of this software and associated documentation
+files (the "Software"), to deal in the Software without
+restriction, including without limitation the rights to use,
+copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the
+Software is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+OTHER DEALINGS IN THE SOFTWARE.
+~~~~
+
 ### 0e8d2550baea
 
 Components: npm tslib@2.8.1
@@ -1230,6 +1538,36 @@ INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
 LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
 OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
 PERFORMANCE OF THIS SOFTWARE.
+~~~~
+
+### 0ead7e8cd8b0
+
+Components: npm is-glob@4.0.3
+
+Source filenames: LICENSE
+
+~~~~text
+The MIT License (MIT)
+
+Copyright (c) 2014-2017, Jon Schlinkert.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
 ~~~~
 
 ### 0f3a69e2be47
@@ -1431,6 +1769,24 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ~~~~
 
+### 1407925f6128
+
+Components: npm shebang-command@2.0.0
+
+Source filenames: license
+
+~~~~text
+MIT License
+
+Copyright (c) Kevin Mårtensson <kevinmartensson@gmail.com> (github.com/kevva)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+~~~~
+
 ### 14435fbcd271
 
 Components: Rust bitflags@1.3.2, Rust bitflags@2.11.0, Rust glob@0.3.3, Rust log@0.4.29, Rust num-complex@0.4.6, Rust num-integer@0.1.46, Rust num-integer@0.1.47, Rust num-traits@0.2.19, Rust regex-automata@0.4.14, Rust regex-syntax@0.8.9, Rust regex@1.12.3
@@ -1465,6 +1821,24 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 ~~~~
 
+### 1529f88b3675
+
+Components: npm escape-string-regexp@4.0.0, npm find-up@5.0.0, npm globals@16.5.0, npm globals@17.12.0, npm locate-path@6.0.0, npm p-limit@3.1.0, npm p-locate@5.0.0, npm yocto-queue@0.1.0
+
+Source filenames: license
+
+~~~~text
+MIT License
+
+Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (https://sindresorhus.com)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+~~~~
+
 ### 154c1af2b38e
 
 Components: Rust aho-corasick@1.1.4, Rust byteorder-lite@0.1.0, Rust byteorder@1.5.0, Rust memchr@2.8.0, Rust memchr@2.8.3, Rust walkdir@2.5.0
@@ -1475,6 +1849,36 @@ Source filenames: LICENSE-MIT
 The MIT License (MIT)
 
 Copyright (c) 2015 Andrew Gallant
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+~~~~
+
+### 15d3087ff517
+
+Components: npm min-indent@1.0.1
+
+Source filenames: license
+
+~~~~text
+The MIT License (MIT)
+
+Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (sindresorhus.com), James Kyle <me@thejameskyle.com> (thejameskyle.com)
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -2195,6 +2599,39 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ~~~~
 
+### 1c11f56087ba
+
+Components: npm esquery@1.7.0
+
+Source filenames: license.txt
+
+~~~~text
+Copyright (c) 2013, Joel Feenstra
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+    * Redistributions of source code must retain the above copyright
+      notice, this list of conditions and the following disclaimer.
+    * Redistributions in binary form must reproduce the above copyright
+      notice, this list of conditions and the following disclaimer in the
+      documentation and/or other materials provided with the distribution.
+    * Neither the name of the ESQuery nor the names of its contributors may
+      be used to endorse or promote products derived from this software without
+      specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL JOEL FEENSTRA BE LIABLE FOR ANY
+DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+~~~~
+
 ### 1c5ed1a530e6
 
 Components: Rust console@0.15.11, Rust indicatif@0.17.11
@@ -2369,6 +2806,38 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ~~~~
 
+### 23b57495a1f9
+
+Components: npm balanced-match@4.0.4
+
+Source filenames: LICENSE.md
+
+~~~~text
+(MIT)
+
+Original code Copyright Julian Gruber <julian@juliangruber.com>
+
+Port to TypeScript Copyright Isaac Z. Schlueter <i@izs.me>
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+of the Software, and to permit persons to whom the Software is furnished to do
+so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+~~~~
+
 ### 23c3dce12b90
 
 Components: Rust sharded-slab@0.1.7
@@ -2449,6 +2918,30 @@ PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
 LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
 NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+~~~~
+
+### 25a567ead23e
+
+Components: npm glob-parent@6.0.2
+
+Source filenames: LICENSE
+
+~~~~text
+The ISC License
+
+Copyright (c) 2015, 2019 Elan Shanker, 2021 Blaine Bublitz <blaine.bublitz@gmail.com>, Eric Schoffstall <yo@contra.io> and other contributors
+
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted, provided that the above
+copyright notice and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR
+IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 ~~~~
 
 ### 26235c41e314
@@ -2721,9 +3214,39 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ~~~~
 
+### 27720accc79b
+
+Components: npm hashery@1.5.1
+
+Source filenames: LICENSE
+
+~~~~text
+MIT License
+
+Copyright (c) 2025 Jared Wray
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+~~~~
+
 ### 283ea6cc2997
 
-Components: Rust clang-sys@1.8.1, Rust cpal@0.15.3, Rust embed_plist@1.2.2, Rust encoding_rs@0.8.35, Rust iri-string@0.7.10, Rust lzma-rust2@0.15.7, Rust ort-sys@2.0.0-rc.12, Rust ort-sys@2.0.0-rc.13, Rust ort@2.0.0-rc.12, Rust ort@2.0.0-rc.13, Rust rustls-platform-verifier@0.6.2, Rust serialize-to-javascript-impl@0.1.2, Rust serialize-to-javascript@0.1.2, Rust ureq@3.3.0, Rust utf8_iter@1.0.4, Rust zeroize@1.8.2
+Components: Rust clang-sys@1.8.1, Rust cpal@0.15.3, Rust embed_plist@1.2.2, Rust encoding_rs@0.8.35, Rust iri-string@0.7.10, Rust lzma-rust2@0.15.7, Rust ort-sys@2.0.0-rc.12, Rust ort-sys@2.0.0-rc.13, Rust ort@2.0.0-rc.12, Rust ort@2.0.0-rc.13, Rust rustls-platform-verifier@0.6.2, Rust serialize-to-javascript-impl@0.1.2, Rust serialize-to-javascript@0.1.2, Rust ureq@3.3.0, Rust utf8_iter@1.0.4, Rust zeroize@1.8.2, npm @eslint/config-array@0.23.5, npm @eslint/config-helpers@0.7.0, npm @eslint/core@1.2.1, npm @eslint/object-schema@3.0.5, npm @eslint/plugin-kit@0.7.3, npm @humanfs/core@0.19.2, npm @humanfs/node@0.16.8, npm @humanwhocodes/module-importer@1.0.1, npm @humanwhocodes/retry@0.4.3
 
 Source filenames: LICENSE, LICENSE-APACHE, LICENSE-APACHE.txt, LICENSE.txt
 
@@ -3113,6 +3636,36 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ~~~~
 
+### 2b83ff7e31ca
+
+Components: npm @testing-library/svelte-core@1.1.3, npm @testing-library/svelte@5.4.2
+
+Source filenames: LICENSE
+
+~~~~text
+MIT License
+
+Copyright (c) 2019 Ben Monro <ben.monro@gmail.com> (https://github.com/benmonro)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+~~~~
+
 ### 2c01906af3a2
 
 Components: Rust kodama@0.2.3
@@ -3141,6 +3694,33 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
+~~~~
+
+### 2cd23e64d699
+
+Components: npm json-stable-stringify-without-jsonify@1.0.1
+
+Source filenames: LICENSE
+
+~~~~text
+This software is released under the MIT license:
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software is furnished to do so,
+subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ~~~~
 
 ### 2d0c4751a72c
@@ -5307,6 +5887,25 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 ~~~~
 
+### 42dffb46e69e
+
+Components: npm @adobe/css-tools@4.5.0
+
+Source filenames: LICENSE
+
+~~~~text
+(The MIT License)
+
+Copyright (c) 2012 TJ Holowaychuk <tj@vision-media.ca>
+Copyright (c) 2022 Jean-Philippe Zolesio <holblin@gmail.com>
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the 'Software'), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED 'AS IS', WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+~~~~
+
 ### 430e912c26ce
 
 Components: Rust rustls-pki-types@1.14.0
@@ -5643,6 +6242,34 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+~~~~
+
+### 46cde592c339
+
+Components: npm @eslint/js@10.0.1, npm eslint@10.11.0
+
+Source filenames: LICENSE
+
+~~~~text
+Copyright OpenJS Foundation and other contributors, <www.openjsf.org>
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
 ~~~~
 
 ### 47248d1ec833
@@ -6074,6 +6701,216 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+~~~~
+
+### 49e5be3608a0
+
+Components: npm eslint-visitor-keys@3.4.3, npm eslint-visitor-keys@4.2.1, npm eslint-visitor-keys@5.0.1
+
+Source filenames: LICENSE
+
+~~~~text
+Apache License
+                           Version 2.0, January 2004
+                        http://www.apache.org/licenses/
+
+   TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
+
+   1. Definitions.
+
+      "License" shall mean the terms and conditions for use, reproduction,
+      and distribution as defined by Sections 1 through 9 of this document.
+
+      "Licensor" shall mean the copyright owner or entity authorized by
+      the copyright owner that is granting the License.
+
+      "Legal Entity" shall mean the union of the acting entity and all
+      other entities that control, are controlled by, or are under common
+      control with that entity. For the purposes of this definition,
+      "control" means (i) the power, direct or indirect, to cause the
+      direction or management of such entity, whether by contract or
+      otherwise, or (ii) ownership of fifty percent (50%) or more of the
+      outstanding shares, or (iii) beneficial ownership of such entity.
+
+      "You" (or "Your") shall mean an individual or Legal Entity
+      exercising permissions granted by this License.
+
+      "Source" form shall mean the preferred form for making modifications,
+      including but not limited to software source code, documentation
+      source, and configuration files.
+
+      "Object" form shall mean any form resulting from mechanical
+      transformation or translation of a Source form, including but
+      not limited to compiled object code, generated documentation,
+      and conversions to other media types.
+
+      "Work" shall mean the work of authorship, whether in Source or
+      Object form, made available under the License, as indicated by a
+      copyright notice that is included in or attached to the work
+      (an example is provided in the Appendix below).
+
+      "Derivative Works" shall mean any work, whether in Source or Object
+      form, that is based on (or derived from) the Work and for which the
+      editorial revisions, annotations, elaborations, or other modifications
+      represent, as a whole, an original work of authorship. For the purposes
+      of this License, Derivative Works shall not include works that remain
+      separable from, or merely link (or bind by name) to the interfaces of,
+      the Work and Derivative Works thereof.
+
+      "Contribution" shall mean any work of authorship, including
+      the original version of the Work and any modifications or additions
+      to that Work or Derivative Works thereof, that is intentionally
+      submitted to Licensor for inclusion in the Work by the copyright owner
+      or by an individual or Legal Entity authorized to submit on behalf of
+      the copyright owner. For the purposes of this definition, "submitted"
+      means any form of electronic, verbal, or written communication sent
+      to the Licensor or its representatives, including but not limited to
+      communication on electronic mailing lists, source code control systems,
+      and issue tracking systems that are managed by, or on behalf of, the
+      Licensor for the purpose of discussing and improving the Work, but
+      excluding communication that is conspicuously marked or otherwise
+      designated in writing by the copyright owner as "Not a Contribution."
+
+      "Contributor" shall mean Licensor and any individual or Legal Entity
+      on behalf of whom a Contribution has been received by Licensor and
+      subsequently incorporated within the Work.
+
+   2. Grant of Copyright License. Subject to the terms and conditions of
+      this License, each Contributor hereby grants to You a perpetual,
+      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+      copyright license to reproduce, prepare Derivative Works of,
+      publicly display, publicly perform, sublicense, and distribute the
+      Work and such Derivative Works in Source or Object form.
+
+   3. Grant of Patent License. Subject to the terms and conditions of
+      this License, each Contributor hereby grants to You a perpetual,
+      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+      (except as stated in this section) patent license to make, have made,
+      use, offer to sell, sell, import, and otherwise transfer the Work,
+      where such license applies only to those patent claims licensable
+      by such Contributor that are necessarily infringed by their
+      Contribution(s) alone or by combination of their Contribution(s)
+      with the Work to which such Contribution(s) was submitted. If You
+      institute patent litigation against any entity (including a
+      cross-claim or counterclaim in a lawsuit) alleging that the Work
+      or a Contribution incorporated within the Work constitutes direct
+      or contributory patent infringement, then any patent licenses
+      granted to You under this License for that Work shall terminate
+      as of the date such litigation is filed.
+
+   4. Redistribution. You may reproduce and distribute copies of the
+      Work or Derivative Works thereof in any medium, with or without
+      modifications, and in Source or Object form, provided that You
+      meet the following conditions:
+
+      (a) You must give any other recipients of the Work or
+          Derivative Works a copy of this License; and
+
+      (b) You must cause any modified files to carry prominent notices
+          stating that You changed the files; and
+
+      (c) You must retain, in the Source form of any Derivative Works
+          that You distribute, all copyright, patent, trademark, and
+          attribution notices from the Source form of the Work,
+          excluding those notices that do not pertain to any part of
+          the Derivative Works; and
+
+      (d) If the Work includes a "NOTICE" text file as part of its
+          distribution, then any Derivative Works that You distribute must
+          include a readable copy of the attribution notices contained
+          within such NOTICE file, excluding those notices that do not
+          pertain to any part of the Derivative Works, in at least one
+          of the following places: within a NOTICE text file distributed
+          as part of the Derivative Works; within the Source form or
+          documentation, if provided along with the Derivative Works; or,
+          within a display generated by the Derivative Works, if and
+          wherever such third-party notices normally appear. The contents
+          of the NOTICE file are for informational purposes only and
+          do not modify the License. You may add Your own attribution
+          notices within Derivative Works that You distribute, alongside
+          or as an addendum to the NOTICE text from the Work, provided
+          that such additional attribution notices cannot be construed
+          as modifying the License.
+
+      You may add Your own copyright statement to Your modifications and
+      may provide additional or different license terms and conditions
+      for use, reproduction, or distribution of Your modifications, or
+      for any such Derivative Works as a whole, provided Your use,
+      reproduction, and distribution of the Work otherwise complies with
+      the conditions stated in this License.
+
+   5. Submission of Contributions. Unless You explicitly state otherwise,
+      any Contribution intentionally submitted for inclusion in the Work
+      by You to the Licensor shall be under the terms and conditions of
+      this License, without any additional terms or conditions.
+      Notwithstanding the above, nothing herein shall supersede or modify
+      the terms of any separate license agreement you may have executed
+      with Licensor regarding such Contributions.
+
+   6. Trademarks. This License does not grant permission to use the trade
+      names, trademarks, service marks, or product names of the Licensor,
+      except as required for reasonable and customary use in describing the
+      origin of the Work and reproducing the content of the NOTICE file.
+
+   7. Disclaimer of Warranty. Unless required by applicable law or
+      agreed to in writing, Licensor provides the Work (and each
+      Contributor provides its Contributions) on an "AS IS" BASIS,
+      WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+      implied, including, without limitation, any warranties or conditions
+      of TITLE, NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A
+      PARTICULAR PURPOSE. You are solely responsible for determining the
+      appropriateness of using or redistributing the Work and assume any
+      risks associated with Your exercise of permissions under this License.
+
+   8. Limitation of Liability. In no event and under no legal theory,
+      whether in tort (including negligence), contract, or otherwise,
+      unless required by applicable law (such as deliberate and grossly
+      negligent acts) or agreed to in writing, shall any Contributor be
+      liable to You for damages, including any direct, indirect, special,
+      incidental, or consequential damages of any character arising as a
+      result of this License or out of the use or inability to use the
+      Work (including but not limited to damages for loss of goodwill,
+      work stoppage, computer failure or malfunction, or any and all
+      other commercial damages or losses), even if such Contributor
+      has been advised of the possibility of such damages.
+
+   9. Accepting Warranty or Additional Liability. While redistributing
+      the Work or Derivative Works thereof, You may choose to offer,
+      and charge a fee for, acceptance of support, warranty, indemnity,
+      or other liability obligations and/or rights consistent with this
+      License. However, in accepting such obligations, You may act only
+      on Your own behalf and on Your sole responsibility, not on behalf
+      of any other Contributor, and only if You agree to indemnify,
+      defend, and hold each Contributor harmless for any liability
+      incurred by, or claims asserted against, such Contributor by reason
+      of your accepting any such warranty or additional liability.
+
+   END OF TERMS AND CONDITIONS
+
+   APPENDIX: How to apply the Apache License to your work.
+
+      To apply the Apache License to your work, attach the following
+      boilerplate notice, with the fields enclosed by brackets "{}"
+      replaced with your own identifying information. (Don't include
+      the brackets!)  The text should be enclosed in the appropriate
+      comment syntax for the file format. We also recommend that a
+      file or class name and description of purpose be included on the
+      same "printed page" as the copyright notice for easier
+      identification within third-party archives.
+
+   Copyright contributors
+
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
 ~~~~
 
 ### 4a4d43f3f90d
@@ -7004,6 +7841,36 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 ~~~~
 
+### 51e9b6529a45
+
+Components: npm @typescript-eslint/project-service@8.71.0, npm @typescript-eslint/tsconfig-utils@8.71.0
+
+Source filenames: LICENSE
+
+~~~~text
+MIT License
+
+Copyright (c) 2025 typescript-eslint and other contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+~~~~
+
 ### 51f778ffff2c
 
 Components: Rust bytes@1.11.1
@@ -7751,6 +8618,36 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 ~~~~
 
+### 5e7b89989b94
+
+Components: npm cross-spawn@7.0.6
+
+Source filenames: LICENSE
+
+~~~~text
+The MIT License (MIT)
+
+Copyright (c) 2018 Made With MOXY Lda <hello@moxy.studio>
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+~~~~
+
 ### 5f89ce4ac63b
 
 Components: Rust jsonptr@0.6.3
@@ -8397,6 +9294,36 @@ distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
+~~~~
+
+### 66f97c93d31e
+
+Components: npm @keyv/bigmap@1.3.1
+
+Source filenames: LICENSE
+
+~~~~text
+MIT License
+
+Copyright (c) Jared Wray
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 ~~~~
 
 ### 673a1ac4a9d8
@@ -9326,6 +10253,66 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ~~~~
 
+### 713541ad7d78
+
+Components: npm postcss-load-config@3.1.4
+
+Source filenames: LICENSE
+
+~~~~text
+The MIT License (MIT)
+
+Copyright Michael Ciniawsky <michael.ciniawsky@gmail.com>
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software is furnished to do so,
+subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+~~~~
+
+### 71878c02c23e
+
+Components: npm postcss-selector-parser@7.1.6
+
+Source filenames: LICENSE-MIT
+
+~~~~text
+Copyright (c) Ben Briggs <beneb.info@gmail.com> (http://beneb.info)
+
+Permission is hereby granted, free of charge, to any person
+obtaining a copy of this software and associated documentation
+files (the "Software"), to deal in the Software without
+restriction, including without limitation the rights to use,
+copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the
+Software is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+OTHER DEALINGS IN THE SOFTWARE.
+~~~~
+
 ### 739620ea44ad
 
 Components: Rust same-file@1.0.6
@@ -9423,6 +10410,51 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+~~~~
+
+### 745048d8eb46
+
+Components: npm @testing-library/dom@10.4.2, npm @testing-library/jest-dom@7.0.1
+
+Source filenames: LICENSE
+
+~~~~text
+The MIT License (MIT)
+Copyright (c) 2017 Kent C. Dodds
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+~~~~
+
+### 745f4ee4c28f
+
+Components: npm whatwg-mimetype@3.0.0
+
+Source filenames: LICENSE.txt
+
+~~~~text
+Copyright © Domenic Denicola <d@domenic.me>
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ~~~~
 
 ### 74f1c9127a52
@@ -10219,6 +11251,35 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 ~~~~
 
+### 7adebaeee45b
+
+Components: npm ws@8.22.0
+
+Source filenames: LICENSE
+
+~~~~text
+Copyright (c) 2011 Einar Otto Stangvik <einaros@gmail.com>
+Copyright (c) 2013 Arnout Kazemier and contributors
+Copyright (c) 2016 Luigi Pinca and contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software is furnished to do so,
+subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+~~~~
+
 ### 7b1444e03705
 
 Components: npm playwright-core@1.63.0, npm playwright@1.63.0
@@ -10281,6 +11342,36 @@ CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
+~~~~
+
+### 7cccb389da92
+
+Components: npm known-css-properties@0.37.0
+
+Source filenames: LICENSE
+
+~~~~text
+MIT License
+
+Copyright (c) 2017 Mavrix Technologies
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 ~~~~
 
 ### 7d4bef28325e
@@ -10377,6 +11468,36 @@ Permission is hereby granted, free of charge, to any person obtaining a copy of 
 The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+~~~~
+
+### 7e02e9c37c88
+
+Components: npm js-tokens@4.0.0
+
+Source filenames: LICENSE
+
+~~~~text
+The MIT License (MIT)
+
+Copyright (c) 2014, 2015, 2016, 2017, 2018 Simon Lydell
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
 ~~~~
 
 ### 7e1b38c60796
@@ -10835,6 +11956,30 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+~~~~
+
+### 832f8f5ac508
+
+Components: npm flatted@3.4.4
+
+Source filenames: LICENSE
+
+~~~~text
+ISC License
+
+Copyright (c) 2018-2020, Andrea Giammarchi, @WebReflection
+
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted, provided that the above
+copyright notice and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
+REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
+AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
+INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
+LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE
+OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
+PERFORMANCE OF THIS SOFTWARE.
 ~~~~
 
 ### 8348c9fe2fb7
@@ -14740,7 +15885,7 @@ DEALINGS IN THE SOFTWARE.
 
 ### 8f08c824b2bb
 
-Components: npm @babel/helper-string-parser@7.29.7, npm @babel/helper-validator-identifier@7.29.7, npm @babel/types@7.29.8
+Components: npm @babel/code-frame@7.29.7, npm @babel/helper-string-parser@7.29.7, npm @babel/helper-validator-identifier@7.29.7, npm @babel/runtime@7.29.7, npm @babel/types@7.29.8
 
 Source filenames: LICENSE
 
@@ -14769,6 +15914,36 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
 WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ~~~~
 
+### 8f48c4095e8a
+
+Components: npm happy-dom@20.14.5
+
+Source filenames: LICENSE
+
+~~~~text
+MIT License
+
+Copyright (c) 2019 David Ortner (capricorn86)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+~~~~
+
 ### 8fd8980cab89
 
 Components: Rust strsim@0.11.1
@@ -14781,6 +15956,34 @@ The MIT License (MIT)
 Copyright (c) 2015 Danny Guo
 Copyright (c) 2016 Titus Wormer <tituswormer@gmail.com>
 Copyright (c) 2018 Akash Kurdekar
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+~~~~
+
+### 9030768ea020
+
+Components: npm hookified@1.15.1, npm hookified@2.2.0, npm qified@0.10.1
+
+Source filenames: LICENSE
+
+~~~~text
+MIT License & © Jared Wray
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -15616,6 +16819,36 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 ~~~~
 
+### 9bd6c6d978b2
+
+Components: npm @eslint-community/eslint-utils@4.10.1, npm @eslint-community/regexpp@4.12.2
+
+Source filenames: LICENSE
+
+~~~~text
+MIT License
+
+Copyright (c) 2018 Toru Nagashima
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+~~~~
+
 ### 9c5127ab88e8
 
 Components: Rust digest@0.10.7
@@ -15648,6 +16881,36 @@ CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
+~~~~
+
+### 9c94db23dc4b
+
+Components: npm ignore@5.3.2, npm ignore@7.0.10
+
+Source filenames: LICENSE-MIT
+
+~~~~text
+Copyright (c) 2013 Kael Zhang <i@kael.me>, contributors
+http://kael.me/
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+"Software"), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
+LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ~~~~
 
 ### 9d8e882729a5
@@ -16087,7 +17350,7 @@ OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 ### a2764f26c504
 
-Components: npm postcss@8.5.26
+Components: npm postcss-safe-parser@7.1.0, npm postcss@8.5.26
 
 Source filenames: LICENSE
 
@@ -16289,6 +17552,37 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 ~~~~
 
+### a6ea8b9acb87
+
+Components: npm deep-is@0.1.4
+
+Source filenames: LICENSE
+
+~~~~text
+Copyright (c) 2012, 2013 Thorsten Lorenz <thlorenz@gmx.de>
+Copyright (c) 2012 James Halliday <mail@substack.net>
+Copyright (c) 2009 Thomas Robinson <280north.com>
+
+This software is released under the MIT license:
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software is furnished to do so,
+subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+~~~~
+
 ### a759ce38c686
 
 Components: Rust shlex@1.3.0
@@ -16309,6 +17603,36 @@ distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
+~~~~
+
+### a80c79b8f80e
+
+Components: npm pretty-format@27.5.1, npm react-is@17.0.2
+
+Source filenames: LICENSE
+
+~~~~text
+MIT License
+
+Copyright (c) Facebook, Inc. and its affiliates.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 ~~~~
 
 ### a8d4c5f13258
@@ -16999,6 +18323,100 @@ Repository: https://github.com/yargs/yargs-parser.git
 > ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 ~~~~
 
+### aa407ee69b3f
+
+Components: npm fast-deep-equal@3.1.3, npm json-schema-traverse@0.4.1
+
+Source filenames: LICENSE
+
+~~~~text
+MIT License
+
+Copyright (c) 2017 Evgeny Poberezkin
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+~~~~
+
+### aa4c6585f201
+
+Components: npm minimatch@10.2.6
+
+Source filenames: LICENSE.md
+
+~~~~text
+# Blue Oak Model License
+
+Version 1.0.0
+
+## Purpose
+
+This license gives everyone as much permission to work with
+this software as possible, while protecting contributors
+from liability.
+
+## Acceptance
+
+In order to receive this license, you must agree to its
+rules. The rules of this license are both obligations
+under that agreement and conditions to your license.
+You must not do anything with this software that triggers
+a rule that you cannot or will not follow.
+
+## Copyright
+
+Each contributor licenses you to do everything with this
+software that would otherwise infringe that contributor's
+copyright in it.
+
+## Notices
+
+You must ensure that everyone who gets a copy of
+any part of this software from you, with or without
+changes, also gets the text of this license or a link to
+<https://blueoakcouncil.org/license/1.0.0>.
+
+## Excuse
+
+If anyone notifies you in writing that you have not
+complied with [Notices](#notices), you can keep your
+license by taking all practical steps to comply within 30
+days after the notice. If you do not do so, your license
+ends immediately.
+
+## Patent
+
+Each contributor licenses you to do everything with this
+software that would otherwise infringe any patent claims
+they can license or become able to license.
+
+## Reliability
+
+No contributor can revoke this license.
+
+## No Liability
+
+**_As far as the law allows, this software comes as is,
+without any warranty or condition, and no contributor
+will be liable to anyone for any damages related to this
+software or this license, under any kind of legal claim._**
+~~~~
+
 ### aa69fda6dd94
 
 Components: Rust raw-window-handle@0.6.2
@@ -17404,6 +18822,36 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 ~~~~
 
+### af497a8fc8a8
+
+Components: npm ajv@6.15.0
+
+Source filenames: LICENSE
+
+~~~~text
+The MIT License (MIT)
+
+Copyright (c) 2015-2017 Evgeny Poberezkin
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+~~~~
+
 ### af6da3f3f6b4
 
 Components: Rust hyper-rustls@0.27.7, Rust rustls@0.23.45
@@ -17426,6 +18874,35 @@ DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR
 PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS
 ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
 THIS SOFTWARE.
+~~~~
+
+### b02d6103a91d
+
+Components: npm postcss-scss@4.0.9
+
+Source filenames: LICENSE
+
+~~~~text
+The MIT License (MIT)
+
+Copyright 2013 Andrey Sitnik <andrey@sitnik.ru>
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software is furnished to do so,
+subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ~~~~
 
 ### b03a9c03f816
@@ -17524,6 +19001,36 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 ~~~~
 
+### b263be8715c2
+
+Components: npm @typescript-eslint/eslint-plugin@8.71.0, npm @typescript-eslint/parser@8.71.0, npm @typescript-eslint/scope-manager@8.71.0, npm @typescript-eslint/types@8.71.0, npm @typescript-eslint/typescript-estree@8.71.0, npm @typescript-eslint/utils@8.71.0, npm @typescript-eslint/visitor-keys@8.71.0, npm typescript-eslint@8.71.0
+
+Source filenames: LICENSE
+
+~~~~text
+MIT License
+
+Copyright (c) 2019 typescript-eslint and other contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+~~~~
+
 ### b2653abd3fa1
 
 Components: Rust ort-sys@2.0.0-rc.12, Rust ort-sys@2.0.0-rc.13, Rust ort@2.0.0-rc.12, Rust ort@2.0.0-rc.13
@@ -17589,6 +19096,26 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 ~~~~
 
+### b2f2bd6cbc1b
+
+Components: npm uri-js@4.4.1
+
+Source filenames: LICENSE
+
+~~~~text
+Copyright 2011 Gary Court. All rights reserved.
+
+Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
+
+1.	Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
+
+2.	Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY GARY COURT "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL GARY COURT OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+The views and conclusions contained in the software and documentation are those of the authors and should not be interpreted as representing official policies, either expressed or implied, of Gary Court.
+~~~~
+
 ### b420d8add23b
 
 Components: Rust futures-channel@0.3.32, Rust futures-core@0.3.32, Rust futures-io@0.3.32, Rust futures-macro@0.3.32, Rust futures-sink@0.3.32, Rust futures-task@0.3.32, Rust futures-util@0.3.32
@@ -17622,6 +19149,36 @@ CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
+~~~~
+
+### b434f29fc748
+
+Components: npm dom-accessibility-api@0.5.16, npm dom-accessibility-api@0.6.3
+
+Source filenames: LICENSE.md
+
+~~~~text
+MIT License
+
+Copyright (c) 2020 Sebastian Silbermann
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 ~~~~
 
 ### b46700117441
@@ -18148,6 +19705,28 @@ Apache License
    limitations under the License.
 ~~~~
 
+### b98c7fcf09a5
+
+Components: npm yaml@1.10.3
+
+Source filenames: LICENSE
+
+~~~~text
+Copyright 2018 Eemeli Aro <eemeli@gmail.com>
+
+Permission to use, copy, modify, and/or distribute this software for any purpose
+with or without fee is hereby granted, provided that the above copyright notice
+and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
+REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND
+FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
+INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS
+OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
+TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
+THIS SOFTWARE.
+~~~~
+
 ### b98db07f2ff2
 
 Components: Rust arboard@3.6.1
@@ -18270,6 +19849,36 @@ CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
+~~~~
+
+### ba91ee0b2913
+
+Components: npm fast-json-stable-stringify@2.1.0
+
+Source filenames: LICENSE
+
+~~~~text
+This software is released under the MIT license:
+
+Copyright (c) 2017 Evgeny Poberezkin
+Copyright (c) 2013 James Halliday
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software is furnished to do so,
+subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ~~~~
 
 ### bb8278137f73
@@ -18397,6 +20006,35 @@ CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
+~~~~
+
+### bd6e42566775
+
+Components: npm @testing-library/user-event@14.6.7
+
+Source filenames: LICENSE
+
+~~~~text
+The MIT License (MIT)
+Copyright (c) 2020 Giorgio Polvara
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 ~~~~
 
 ### bdcf37a4554a
@@ -18676,6 +20314,39 @@ Apache License
    limitations under the License.
 ~~~~
 
+### c0a3701e6fbe
+
+Components: npm fast-levenshtein@2.0.6
+
+Source filenames: LICENSE.md
+
+~~~~text
+(MIT License)
+
+Copyright (c) 2013 [Ramesh Nair](http://www.hiddentao.com/)
+
+Permission is hereby granted, free of charge, to any person
+obtaining a copy of this software and associated documentation
+files (the "Software"), to deal in the Software without
+restriction, including without limitation the rights to use,
+copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the
+Software is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+OTHER DEALINGS IN THE SOFTWARE.
+~~~~
+
 ### c0fdcda1a4ff
 
 Components: Rust tokio-macros@2.6.0
@@ -18705,6 +20376,35 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+~~~~
+
+### c19039068c59
+
+Components: npm ts-api-utils@2.5.0
+
+Source filenames: LICENSE.md
+
+~~~~text
+# MIT License
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+'Software'), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED 'AS IS', WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ~~~~
 
 ### c1e08ee9a728
@@ -18842,7 +20542,7 @@ SOFTWARE.
 
 ### c4da23066f58
 
-Components: npm aria-query@5.3.1, npm axobject-query@4.1.0
+Components: npm aria-query@5.3.0, npm aria-query@5.3.1, npm axobject-query@4.1.0
 
 Source filenames: LICENSE
 
@@ -19126,6 +20826,34 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+~~~~
+
+### c7a13840e603
+
+Components: npm acorn-jsx@5.3.2
+
+Source filenames: LICENSE
+
+~~~~text
+Copyright (C) 2012-2017 by Ingvar Stepanyan
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
 ~~~~
 
 ### c7d2b1c2fc02
@@ -19473,6 +21201,24 @@ CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
+~~~~
+
+### c9808a775260
+
+Components: npm ansi-regex@5.0.1, npm ansi-styles@5.2.0, npm indent-string@4.0.0, npm path-exists@4.0.0, npm path-key@3.1.1, npm redent@3.0.0, npm shebang-regex@3.0.0, npm strip-indent@3.0.0
+
+Source filenames: license
+
+~~~~text
+MIT License
+
+Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (sindresorhus.com)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ~~~~
 
 ### cc367a7134c2
@@ -19947,6 +21693,36 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ~~~~
 
+### ceec5825cd62
+
+Components: npm lz-string@1.5.0
+
+Source filenames: LICENSE
+
+~~~~text
+MIT License
+
+Copyright (c) 2013 pieroxy
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+~~~~
+
 ### cf798811e9a0
 
 Components: Rust quick-error@2.0.1
@@ -19977,7 +21753,7 @@ SOFTWARE.
 
 ### d0a8e5996a99
 
-Components: npm kleur@4.1.5, npm mri@1.2.0
+Components: npm dequal@2.0.3, npm kleur@4.1.5, npm mri@1.2.0
 
 Source filenames: license, license.md
 
@@ -20003,6 +21779,34 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
+~~~~
+
+### d0b1e75b0f84
+
+Components: npm estraverse@5.3.0, npm esutils@2.0.3
+
+Source filenames: LICENSE.BSD
+
+~~~~text
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+  * Redistributions of source code must retain the above copyright
+    notice, this list of conditions and the following disclaimer.
+  * Redistributions in binary form must reproduce the above copyright
+    notice, this list of conditions and the following disclaimer in the
+    documentation and/or other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ARE DISCLAIMED. IN NO EVENT SHALL <COPYRIGHT HOLDER> BE LIABLE FOR ANY
+DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
+THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ~~~~
 
 ### d10fa7c720bc
@@ -20741,6 +22545,36 @@ If the Work includes a "NOTICE" text file as part of its distribution, then any 
 END OF TERMS AND CONDITIONS
 ~~~~
 
+### d4cde38a8f7b
+
+Components: npm eslint-plugin-svelte@3.23.0, npm svelte-eslint-parser@1.8.1
+
+Source filenames: LICENSE
+
+~~~~text
+MIT License
+
+Copyright (c) 2021 Yosuke Ota
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+~~~~
+
 ### d5652808cd24
 
 Components: Rust mach2@0.4.3
@@ -21317,6 +23151,36 @@ have been licensed under extremely permissive terms.
 ------------------------------------------------------------------------------
 ~~~~
 
+### e08220077539
+
+Components: npm lilconfig@2.1.0
+
+Source filenames: LICENSE
+
+~~~~text
+MIT License
+
+Copyright (c) 2022 Anton Kastritskiy
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+~~~~
+
 ### e200d5c2b112
 
 Components: npm obug@2.2.1
@@ -21377,6 +23241,24 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
+~~~~
+
+### e4e6e64cbe37
+
+Components: npm buffer-image-size@0.6.4
+
+Source filenames: LICENSE
+
+~~~~text
+The MIT License (MIT)
+
+Copyright © 2017 Aditya Yadav, http://netroy.in
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the “Software”), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ~~~~
 
 ### e6e853531994
@@ -21657,6 +23539,36 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 ~~~~
 
+### e7950ccd3b1f
+
+Components: npm is-extglob@2.1.1, npm word-wrap@1.2.5
+
+Source filenames: LICENSE
+
+~~~~text
+The MIT License (MIT)
+
+Copyright (c) 2014-2016, Jon Schlinkert
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+~~~~
+
 ### e7d622e4783e
 
 Components: Rust hyper-util@0.1.20
@@ -21683,6 +23595,66 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
+~~~~
+
+### e7f14c40a4fc
+
+Components: npm css.escape@1.5.1, npm cssesc@3.0.0, npm punycode@2.3.1
+
+Source filenames: LICENSE-MIT.txt
+
+~~~~text
+Copyright Mathias Bynens <https://mathiasbynens.be/>
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+"Software"), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
+LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+~~~~
+
+### e8130cba6114
+
+Components: npm @keyv/serialize@1.1.1, npm keyv@5.6.0
+
+Source filenames: LICENSE
+
+~~~~text
+MIT License
+
+Copyright (c) 2017-2021 Luke Childs
+Copyright (c) 2021-2022 Jared Wray
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 ~~~~
 
 ### e8541ea93f02
@@ -22796,6 +24768,38 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ~~~~
 
+### f36e2da26df2
+
+Components: npm brace-expansion@5.0.12
+
+Source filenames: LICENSE
+
+~~~~text
+MIT License
+
+Copyright Julian Gruber <julian@juliangruber.com>
+
+TypeScript port Copyright Isaac Z. Schlueter <i@izs.me>
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+~~~~
+
 ### f47894ff9c86
 
 Components: Rust http@1.4.0
@@ -23123,6 +25127,34 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 ~~~~
 
+### fb743f679e11
+
+Components: npm @cacheable/memory@2.2.0, npm @cacheable/utils@2.5.0, npm cacheable@2.5.0, npm file-entry-cache@11.1.5, npm flat-cache@6.1.23
+
+Source filenames: LICENSE
+
+~~~~text
+MIT License & © Jared Wray
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to
+deal in the Software without restriction, including without limitation the
+rights to use, copy, modify, merge, publish, distribute, sublicense, and/or
+sell copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+~~~~
+
 ### fbda89b82ff2
 
 Components: Rust auto-launch@0.5.0
@@ -23428,6 +25460,36 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 ~~~~
 
+### fe64958bfaef
+
+Components: npm undici-types@8.9.0
+
+Source filenames: LICENSE
+
+~~~~text
+MIT License
+
+Copyright (c) Matteo Collina and Undici contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+~~~~
+
 ### fee4d7ce394c
 
 Components: Rust rand@0.8.5
@@ -23613,9 +25675,42 @@ TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
 END OF TERMS AND CONDITIONS
 ~~~~
 
+### ff15562c1fef
+
+Components: npm util-deprecate@1.0.2
+
+Source filenames: LICENSE
+
+~~~~text
+(The MIT License)
+
+Copyright (c) 2014 Nathan Rajlich <nathan@tootallnate.net>
+
+Permission is hereby granted, free of charge, to any person
+obtaining a copy of this software and associated documentation
+files (the "Software"), to deal in the Software without
+restriction, including without limitation the rights to use,
+copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the
+Software is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+OTHER DEALINGS IN THE SOFTWARE.
+~~~~
+
 ### ff82c90f8494
 
-Components: Rust windows-link@0.2.1, Rust windows-sys@0.52.0, Rust windows-targets@0.52.6, Rust windows_aarch64_msvc@0.52.6, npm @types/chai@5.2.3, npm @types/deep-eql@4.0.2, npm @types/estree@1.0.9, npm @types/trusted-types@2.0.7
+Components: Rust windows-link@0.2.1, Rust windows-sys@0.52.0, Rust windows-targets@0.52.6, Rust windows_aarch64_msvc@0.52.6, npm @types/aria-query@5.0.4, npm @types/chai@5.2.3, npm @types/deep-eql@4.0.2, npm @types/esrecurse@4.3.1, npm @types/estree@1.0.9, npm @types/json-schema@7.0.15, npm @types/node@26.6.3, npm @types/trusted-types@2.0.7, npm @types/whatwg-mimetype@3.0.2, npm @types/ws@8.18.1
 
 Source filenames: LICENSE, license-mit
 

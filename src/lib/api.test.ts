@@ -93,10 +93,13 @@ interface Contract {
 }
 
 /**
- * `wrapper(...params)` must invoke exactly `command` with `args`. The wrapper
- * must also resolve with the command's result type, so a CommandMap row that
- * names the wrong wrapper (e.g. for `engine_status`, whose wrapper is
- * `getEngineStatus`) fails type-checking.
+ * `wrapper(...params)` must invoke exactly `command` with `args` (checked at
+ * run time). The wrapper must also resolve with the command's CommandMap
+ * result type: a CommandMap row that names the wrong wrapper fails
+ * type-checking when the two wrappers' result types differ (e.g. for
+ * `engine_status`, whose wrapper is `getEngineStatus`). Wrappers with the same
+ * result type, such as the many `Promise<void>` setters, are told apart only
+ * by the run-time command and argument check.
  */
 function contract<P extends unknown[], C extends CommandName>(
   wrapper: (...args: P) => Promise<CommandResult<C>>,

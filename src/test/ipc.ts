@@ -15,7 +15,7 @@
 // command without a handler rejects, and src/test/setup.ts fails the test even
 // if the code under test swallowed that rejection.
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
-import type { InvokeArgs } from "@tauri-apps/api/core";
+import { SERIALIZE_TO_IPC_FN, type InvokeArgs } from "@tauri-apps/api/core";
 import type * as api from "../lib/api";
 import type * as reprocessing from "../lib/meeting-reprocessing-api";
 import type { EngineLoadState, HotkeyProfile, HotkeyStatus } from "../lib/api";
@@ -473,10 +473,31 @@ interface ActiveMock {
 
 let active: ActiveMock | null = null;
 
-// Arguments and results cross a serialization boundary in the real app;
-// copying them keeps a test's fixtures and recorded calls independent.
+// Arguments, results and event payloads cross a JSON boundary in the real app:
+// the webview serializes invoke arguments with JSON.stringify and Rust answers
+// in JSON. Copy them the same way, so a test's fixtures and recorded calls stay
+// independent, an `undefined` field disappears as it does over IPC, and Svelte
+// `$state` proxies (which components pass as arguments, and which
+// structuredClone rejects) are serialized like plain objects.
 function copy<T>(value: T): T {
-  return value === undefined ? value : structuredClone(value);
+  return value === undefined ? value : (JSON.parse(JSON.stringify(value, ipcReplacer)) as T);
+}
+
+// The replacer of Tauri's injected IPC serializer (tauri 2.10.2,
+// scripts/process-ipc-message-fn.js): a Map becomes an object, a Uint8Array or
+// ArrayBuffer an array of numbers, and an object with a SERIALIZE_TO_IPC_FN
+// method (a Channel, a Resource) serializes itself. Not modelled: Tauri sends
+// a top-level ArrayBuffer, ArrayBuffer view or Array payload as raw
+// application/octet-stream (scripts/ipc-protocol.js), which the typed wrappers
+// never do.
+function ipcReplacer(_key: string, value: unknown): unknown {
+  if (value instanceof Map) return Object.fromEntries(value.entries());
+  if (value instanceof Uint8Array) return Array.from(value);
+  if (value instanceof ArrayBuffer) return Array.from(new Uint8Array(value));
+  if (typeof value === "object" && value !== null && SERIALIZE_TO_IPC_FN in value) {
+    return (value as { [SERIALIZE_TO_IPC_FN]: () => unknown })[SERIALIZE_TO_IPC_FN]();
+  }
+  return value;
 }
 
 function record(state: ActiveMock, command: CommandName, args: unknown): void {
