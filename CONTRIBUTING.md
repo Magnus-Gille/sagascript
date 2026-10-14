@@ -187,8 +187,8 @@ stricter set of policy lints in production code and fails when any count rises
 - **New code:** return or handle the error (`?`, `map_err`, a fallback) instead of `unwrap`
   or `expect`, and split long functions. If an `expect` guards a real invariant, mark it
   `#[expect(clippy::expect_used, reason = "...")]`; reviewers treat the reason like code.
-  The CLI's user-facing output will get a scoped allow for the print lints
-  ([#364](https://github.com/Magnus-Gille/sagascript/issues/364)).
+  The CLI writes through its output layer (`sagascript_cli::output::Out`) and denies the print
+  lints ([#364](https://github.com/Magnus-Gille/sagascript/issues/364)).
 - **Lowering the baseline:** after removing findings, run
   `node scripts/clippy-policy.mjs --update` and commit the baseline in the same PR. `--update`
   refuses to raise a count; `--update --allow-increase` does, and the PR must say why.

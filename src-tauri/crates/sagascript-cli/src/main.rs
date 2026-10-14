@@ -2,10 +2,16 @@
 //! batch-transcription build (e.g. on Linux). A bare invocation (no
 //! subcommand) prints help, since there is no GUI to launch.
 
+// Output goes through `sagascript_cli::output::Out` (#364).
+#![deny(clippy::print_stdout, clippy::print_stderr)]
+
+use std::io::Write;
+use std::process::ExitCode;
+
 use clap::CommandFactory;
 use tracing_subscriber::EnvFilter;
 
-fn main() {
+fn main() -> ExitCode {
     // Lets a lock recovered after a panic name the cause (ADR 0005).
     sagascript_core::sync::install_panic_recorder();
     // Warn-level logging to stderr keeps stdout clean for piped output.
@@ -21,10 +27,11 @@ fn main() {
     match sagascript_cli::try_parse() {
         Some(parsed) => sagascript_cli::run(parsed),
         None => {
-            // No subcommand and no GUI to fall back to — show help and exit non-zero.
+            // No subcommand and no GUI to fall back to — show help and exit
+            // non-zero. A closed stdout changes nothing: the status says it all.
             let _ = sagascript_cli::Cli::command().print_help();
-            println!();
-            std::process::exit(2);
+            let _ = writeln!(std::io::stdout());
+            sagascript_cli::exit::Exit::Usage.into()
         }
     }
 }

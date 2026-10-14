@@ -85,8 +85,10 @@ awaits.
    `export async function setExampleFlag(enabled: boolean): Promise<void> { return invoke("set_example_flag", { enabled }); }`
    (Rust parameter names arrive as camelCase keys).
 2. `Settings.svelte`: import the wrapper; add a handler next to `onTemperatureFallbackToggle`
-   that calls `applySetting(() => setExampleFlag(next))` (it re-reads `getSettings()` and shows
-   errors); copy the `.field-row` toggle markup of "Show recording overlay"
+   that calls `applySetting(() => setExampleFlag(next))` (it re-reads the settings and shows
+   errors; it resolves `true` once the change is saved, even if the re-read failed, which the
+   window reports separately; for a native `<select>` or `<input>` put the saved value back
+   when it resolves `false`, as `onBeamSizeChange` does); copy the `.field-row` toggle markup of "Show recording overlay"
    (`role="switch"`, `aria-checked`, `aria-label`, and the `hotkey-hint` line under it). Put it
    next to related settings: dictation and paste behaviour lives in the Dictate tab (next to
    the auto-paste toggle), general settings in `{#if activeTab === "settings"}`, tuning knobs
@@ -99,7 +101,7 @@ awaits.
 | Where | What |
 |---|---|
 | `settings/manager_tests.rs` | Assert the default in `settings_default_values` and the round trip in `settings_serde_roundtrip`. |
-| `settings/store.rs` | Assert a file without the key loads the default (`partial_json_fills_defaults`). Migrations: test through the `*_at(path, …)` helpers on a temp file, never the real settings path. |
+| `settings/store_tests.rs` | Assert a file without the key loads the default (`partial_json_fills_defaults`). Migrations: test through the `*_at(path, …)` helpers on a `fake_settings()` file (`with_temp_settings`), never the real settings path. |
 | `config.rs` | Extend `get_setting_value_returns_serialized_values`; add a set/reset/reject test modeled on `engine_settings_can_be_set_reset_and_reject_bad_values`. |
 | `commands_tests.rs` | Unit-test any extracted setter logic. |
 | Frontend | New logic in a `.ts` module gets a Vitest test in `src/lib/<module>.test.ts`; what Settings shows or invokes gets a component test (`src/lib/Settings.test.ts`, [docs/testing/frontend.md](../testing/frontend.md)). Do not add regex tests over `Settings.svelte` source ([ADR 0004](../adr/0004-test-strategy.md)). |

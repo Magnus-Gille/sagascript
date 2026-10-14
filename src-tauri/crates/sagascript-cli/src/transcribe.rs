@@ -1,7 +1,6 @@
 use std::collections::HashSet;
 #[cfg(feature = "diarization")]
 use std::io::Read;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
@@ -44,6 +43,9 @@ use sagascript_core::transcription::{
     normalize_nonspeech_markers, recommended_parallel_chunks, ContextProfile, Glossary,
     TranscribeOptions, TranscriptSegment, WhisperBackend,
 };
+
+use crate::exit::{dictation_error_code, ErrorObject, JsonOutput};
+use crate::output::{errln, outln, Out, WriteError};
 
 #[derive(Args)]
 pub struct TranscribeArgs {
@@ -536,9 +538,11 @@ struct DiarizationPerformance {
 #[derive(Debug)]
 struct BatchExecution {
     source: PathBuf,
-    output: Result<FileTranscription, String>,
+    output: Result<FileTranscription, DictationError>,
 }
 
+/// One input's outcome in `--json` arrays and `--jsonl` lines:
+/// `{"status":"ok","source":…,"result":…}` or `{"status":"error","source":…,"error":…}`.
 #[derive(Debug, serde::Serialize)]
 #[serde(tag = "status", rename_all = "lowercase")]
 enum BatchItem {
@@ -549,7 +553,121 @@ enum BatchItem {
     Error {
         source: String,
         error: String,
+        /// For the single-input `--json` error object only; batch items keep
+        /// their three keys.
+        #[serde(skip)]
+        code: String,
     },
+}
+
+/// Where `transcribe` writes each input's outcome (#364). The Whisper and
+/// Pianissimo batches share it, so the three output modes are defined once:
+///
+/// - plain text: each transcript on stdout, under a `==> file <==` header when
+///   there are several inputs;
+/// - `--json`: one document after the batch: the result object for a single
+///   input (or its error object when it failed), otherwise an array of items;
+/// - `--jsonl`: one compact item per line, written as soon as the input is done.
+///
+/// A failed input is also reported as `Error transcribing …` on stderr.
+enum BatchSink {
+    Plain { headers: bool },
+    Json { single: bool, items: Vec<BatchItem> },
+    Jsonl,
+}
+
+impl BatchSink {
+    fn new(args: &TranscribeArgs, inputs: usize) -> Self {
+        if args.jsonl {
+            Self::Jsonl
+        } else if args.json {
+            Self::Json {
+                single: inputs == 1,
+                items: Vec::with_capacity(inputs),
+            }
+        } else {
+            Self::Plain {
+                headers: inputs > 1,
+            }
+        }
+    }
+
+    fn emit(
+        &mut self,
+        out: &Out,
+        args: &TranscribeArgs,
+        execution: BatchExecution,
+    ) -> Result<(), DictationError> {
+        let file = execution.source;
+        match execution.output {
+            Ok(output) => {
+                #[cfg(feature = "diarization")]
+                if args.meeting_json {
+                    let meeting = output.meeting.as_ref().ok_or_else(|| {
+                        DictationError::TranscriptionFailed(
+                            "meeting JSON was not produced by the diarized pipeline".to_string(),
+                        )
+                    })?;
+                    out.json(meeting)?;
+                    return Ok(());
+                }
+                if args.clipboard {
+                    copy_to_clipboard(&output.plain)?;
+                    errln!(out, "Copied to clipboard.");
+                }
+                let item = BatchItem::Ok {
+                    source: file.display().to_string(),
+                    result: output.json,
+                };
+                match self {
+                    Self::Jsonl => out.jsonl(&item)?,
+                    Self::Json { items, .. } => items.push(item),
+                    Self::Plain { headers } => {
+                        if *headers {
+                            outln!(out, "==> {} <==", file.display())?;
+                        }
+                        outln!(out, "{}", output.plain)?;
+                    }
+                }
+            }
+            Err(error) => {
+                errln!(out, "Error transcribing {}: {error}", file.display());
+                let item = BatchItem::Error {
+                    source: file.display().to_string(),
+                    error: error.to_string(),
+                    code: dictation_error_code(&error),
+                };
+                match self {
+                    Self::Jsonl => out.jsonl(&item)?,
+                    Self::Json { items, .. } => items.push(item),
+                    Self::Plain { .. } => {}
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Writes the `--json` document once the batch is done.
+    fn finish(self, out: &Out) -> Result<(), WriteError> {
+        let Self::Json { single, mut items } = self else {
+            return Ok(());
+        };
+        if single && items.len() == 1 {
+            match items.pop() {
+                Some(BatchItem::Ok { result, .. }) => return out.json(&result),
+                Some(BatchItem::Error {
+                    source,
+                    error,
+                    code,
+                }) => {
+                    return ErrorObject::new(&code, Some(&source), &error)
+                        .write(out, JsonOutput::Pretty)
+                }
+                None => {}
+            }
+        }
+        out.json(&items)
+    }
 }
 
 /// Run the diarized file pipeline and return the validated shared meeting
@@ -724,6 +842,12 @@ fn transcribe_meeting_file_inner(
         parallel: None,
     };
     let mut model_loaded = false;
+    // The pipeline's progress lines go to the process's stderr, as they did
+    // before the output layer; the meeting document is the return value.
+    // This private `Out` must never write stdout: it is not the run's `Out`,
+    // so a stdout write here would escape its closed-pipe handling and the
+    // error-object bookkeeping of `exit::conclude`. `transcribe_file` writes
+    // it with `errln!` only.
     let output = transcribe_file(
         &args,
         file,
@@ -736,6 +860,7 @@ fn transcribe_meeting_file_inner(
         &[],
         control,
         cache_policy,
+        &Out::stdio(),
     )?;
     output.meeting.ok_or_else(|| {
         DictationError::TranscriptionFailed(
@@ -766,13 +891,13 @@ fn validate_meeting_input_scope(
     Ok(())
 }
 
-pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
+pub fn run(args: TranscribeArgs, out: &Out) -> Result<(), DictationError> {
     crate::cancel::install();
     let progress_json = args.progress_json;
     let started = Instant::now();
-    let result = run_inner(args);
+    let result = run_inner(args, out);
     if crate::cancel::is_cancelled() {
-        emit_progress(progress_json, started, "cancelled", None);
+        emit_progress(out, progress_json, started, "cancelled", None);
     }
     result
 }
@@ -795,7 +920,7 @@ fn speaker_hint_from_args(
     Ok(hint)
 }
 
-fn run_inner(args: TranscribeArgs) -> Result<(), DictationError> {
+fn run_inner(args: TranscribeArgs, out: &Out) -> Result<(), DictationError> {
     #[cfg(feature = "diarization")]
     speaker_hint_from_args(&args)?;
     let stored = sagascript_core::settings::store::load();
@@ -871,7 +996,7 @@ fn run_inner(args: TranscribeArgs) -> Result<(), DictationError> {
                 "Pianissimo supports plain Swedish file transcription only; select a Whisper model for diarization or meeting output".into(),
             ));
         }
-        return run_pianissimo_batch(&args, &files, &stored, language, &glossary);
+        return run_pianissimo_batch(&args, &files, &stored, language, &glossary, out);
     }
     let FileModel::Whisper(model) = selected_model else {
         unreachable!()
@@ -918,12 +1043,12 @@ fn run_inner(args: TranscribeArgs) -> Result<(), DictationError> {
     };
     let mut model_loaded = false;
 
-    let mut items = Vec::with_capacity(if args.json { files.len() } else { 0 });
+    let mut sink = BatchSink::new(&args, files.len());
     let (processed, failures) = process_batch(
         &files,
         args.fail_fast,
         |index, file| {
-            eprintln!("[{}/{}] {}", index + 1, files.len(), file.display());
+            errln!(out, "[{}/{}] {}", index + 1, files.len(), file.display());
             transcribe_file(
                 &args,
                 file,
@@ -936,78 +1061,12 @@ fn run_inner(args: TranscribeArgs) -> Result<(), DictationError> {
                 &correction_vocabulary,
                 None,
                 CachePolicy::Normal,
+                out,
             )
         },
-        |execution| {
-            let file = execution.source;
-            match execution.output {
-                Ok(output) => {
-                    #[cfg(feature = "diarization")]
-                    if args.meeting_json {
-                        let meeting = output.meeting.as_ref().ok_or_else(|| {
-                            DictationError::TranscriptionFailed(
-                                "meeting JSON was not produced by the diarized pipeline"
-                                    .to_string(),
-                            )
-                        })?;
-                        println!(
-                            "{}",
-                            serde_json::to_string_pretty(meeting).expect("meeting serializes")
-                        );
-                        return Ok(());
-                    }
-                    if args.clipboard {
-                        copy_to_clipboard(&output.plain)?;
-                        eprintln!("Copied to clipboard.");
-                    }
-                    let item = BatchItem::Ok {
-                        source: file.display().to_string(),
-                        result: output.json,
-                    };
-                    if args.jsonl {
-                        emit_jsonl_item(&item)?;
-                    } else if args.json {
-                        items.push(item);
-                    } else {
-                        if files.len() > 1 {
-                            println!("==> {} <==", file.display());
-                        }
-                        println!("{}", output.plain);
-                    }
-                }
-                Err(error) => {
-                    eprintln!("Error transcribing {}: {error}", file.display());
-                    let item = BatchItem::Error {
-                        source: file.display().to_string(),
-                        error,
-                    };
-                    if args.jsonl {
-                        emit_jsonl_item(&item)?;
-                    } else if args.json {
-                        items.push(item);
-                    }
-                }
-            }
-            Ok(())
-        },
+        |execution| sink.emit(out, &args, execution),
     )?;
-
-    if args.json {
-        if files.len() == 1 && failures == 0 {
-            let BatchItem::Ok { result, .. } = &items[0] else {
-                unreachable!("successful single item")
-            };
-            println!(
-                "{}",
-                serde_json::to_string_pretty(result).expect("result serializes")
-            );
-        } else {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&items).expect("batch serializes")
-            );
-        }
-    }
+    sink.finish(out)?;
 
     if failures > 0 {
         return Err(DictationError::TranscriptionFailed(format!(
@@ -1103,6 +1162,7 @@ fn run_pianissimo_batch(
     _stored: &Settings,
     language: Language,
     glossary: &Glossary,
+    out: &Out,
 ) -> Result<(), DictationError> {
     if language != Language::Swedish {
         return Err(DictationError::SettingsError(
@@ -1131,7 +1191,7 @@ fn run_pianissimo_batch(
         ));
     }
     if glossary.decoder_prompt().is_some() {
-        eprintln!("Pianissimo does not use Whisper decoder hints; saved glossary replacements still apply after transcription.");
+        errln!(out, "Pianissimo does not use Whisper decoder hints; saved glossary replacements still apply after transcription.");
     }
     let load_started = Instant::now();
     let cancel_flag = crate::cancel::flag();
@@ -1153,27 +1213,33 @@ fn run_pianissimo_batch(
         }
         match sagascript_core::transcription::engine_host::BoostSpec::new(terms, weight) {
             Some(spec) => {
-                eprintln!(
+                errln!(
+                    out,
                     "Context biasing requested: {} terms, weight {}",
                     spec.terms.len(),
                     spec.weight
                 );
                 if spec.truncated > 0 {
-                    eprintln!(
+                    errln!(
+                        out,
                         "Warning: only the first {} distinct terms are used; {} more were ignored.",
                         spec.terms.len(),
                         spec.truncated
                     );
                 }
                 if spec.too_long > 0 {
-                    eprintln!(
+                    errln!(
+                        out,
                         "Warning: {} term(s) longer than 64 characters were ignored.",
                         spec.too_long
                     );
                 }
                 backend.set_boost(Some(spec));
             }
-            None => eprintln!("Context biasing requested but no terms/weight; decoding unchanged."),
+            None => errln!(
+                out,
+                "Context biasing requested but no terms/weight; decoding unchanged."
+            ),
         }
     }
     let _abort_pianissimo = {
@@ -1183,27 +1249,27 @@ fn run_pianissimo_batch(
     let model_verification_seconds = load_started.elapsed().as_secs_f64();
     // Start the engine host and load the model once for the whole batch.
     let warm = backend.warm_up_with_cancel(cancel_flag)?;
-    let mut items = Vec::with_capacity(if args.json { files.len() } else { 0 });
+    let mut sink = BatchSink::new(args, files.len());
     let (processed, failures) = process_batch(
         files,
         args.fail_fast,
         |index, file| {
-            eprintln!("[{}/{}] {}", index + 1, files.len(), file.display());
+            errln!(out, "[{}/{}] {}", index + 1, files.len(), file.display());
             let started = Instant::now();
-            emit_progress(args.progress_json, started, "decoding", Some(0));
+            emit_progress(out, args.progress_json, started, "decoding", Some(0));
             let audio = sagascript_core::audio::decoder::decode_audio_file_with_stage_progress(
                 file,
                 Some(&crate::cancel::check),
-                &|pct| emit_progress(args.progress_json, started, "decoding", Some(pct)),
-                &|pct| emit_progress(args.progress_json, started, "resampling", Some(pct)),
+                &|pct| emit_progress(out, args.progress_json, started, "decoding", Some(pct)),
+                &|pct| emit_progress(out, args.progress_json, started, "resampling", Some(pct)),
             )?;
             let duration = audio.len() as f64 / 16_000.0;
             let decode_resample_seconds = started.elapsed().as_secs_f64();
-            emit_progress(args.progress_json, started, "transcribing", Some(0));
+            emit_progress(out, args.progress_json, started, "transcribing", Some(0));
             let result = backend.transcribe_with_cancel(
                 &audio,
                 |pct| {
-                    emit_progress(args.progress_json, started, "transcribing", Some(pct));
+                    emit_progress(out, args.progress_json, started, "transcribing", Some(pct));
                 },
                 cancel_flag,
             )?;
@@ -1229,7 +1295,7 @@ fn run_pianissimo_batch(
                     windows: result.window_timings.clone(),
                 },
             );
-            emit_progress(args.progress_json, started, "completed", Some(100));
+            emit_progress(out, args.progress_json, started, "completed", Some(100));
             Ok(FileTranscription {
                 json: output,
                 plain: text,
@@ -1237,50 +1303,14 @@ fn run_pianissimo_batch(
                 meeting: None,
             })
         },
-        |execution| {
-            let file = execution.source;
-            match execution.output {
-                Ok(output) => {
-                    if args.clipboard {
-                        copy_to_clipboard(&output.plain)?;
-                        eprintln!("Copied to clipboard.");
-                    }
-                    let item = BatchItem::Ok {
-                        source: file.display().to_string(),
-                        result: output.json,
-                    };
-                    if args.jsonl {
-                        emit_jsonl_item(&item)?;
-                    } else if args.json {
-                        items.push(item);
-                    } else {
-                        if files.len() > 1 {
-                            println!("==> {} <==", file.display());
-                        }
-                        println!("{}", output.plain);
-                    }
-                }
-                Err(error) => {
-                    eprintln!("Error transcribing {}: {error}", file.display());
-                    let item = BatchItem::Error {
-                        source: file.display().to_string(),
-                        error,
-                    };
-                    if args.jsonl {
-                        emit_jsonl_item(&item)?;
-                    } else if args.json {
-                        items.push(item);
-                    }
-                }
-            }
-            Ok(())
-        },
+        |execution| sink.emit(out, args, execution),
     )?;
     if args.glossary_boost.is_some() {
         let report = backend.client().boost_report();
         match report.warning() {
-            Some(warning) => eprintln!("Warning: {warning}"),
-            None if report.active_windows() > 0 => eprintln!(
+            Some(warning) => errln!(out, "Warning: {warning}"),
+            None if report.active_windows() > 0 => errln!(
+                out,
                 "Context biasing active on {} window(s); trie build {:.1} ms.",
                 report.active_windows(),
                 report.trie_build_us as f64 / 1000.0
@@ -1288,22 +1318,7 @@ fn run_pianissimo_batch(
             None => {}
         }
     }
-    if args.json {
-        if files.len() == 1 && failures == 0 {
-            let BatchItem::Ok { result, .. } = &items[0] else {
-                unreachable!()
-            };
-            println!(
-                "{}",
-                serde_json::to_string_pretty(result).expect("result serializes")
-            );
-        } else {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&items).expect("batch serializes")
-            );
-        }
-    }
+    sink.finish(out)?;
     if failures > 0 {
         return Err(DictationError::TranscriptionFailed(format!(
             "{failures} of {processed} batch item(s) failed"
@@ -1353,9 +1368,10 @@ fn progress_event_with_decoder(
     event
 }
 
-fn emit_progress(enabled: bool, started: Instant, phase: &str, percent: Option<u8>) {
+fn emit_progress(out: &Out, enabled: bool, started: Instant, phase: &str, percent: Option<u8>) {
     if enabled {
-        eprintln!(
+        errln!(
+            out,
             "{}",
             progress_event(
                 phase,
@@ -1369,6 +1385,7 @@ fn emit_progress(enabled: bool, started: Instant, phase: &str, percent: Option<u
 }
 
 fn emit_progress_with_decoder(
+    out: &Out,
     enabled: bool,
     started: Instant,
     phase: &str,
@@ -1376,7 +1393,8 @@ fn emit_progress_with_decoder(
     decoder: Option<&serde_json::Value>,
 ) {
     if enabled {
-        eprintln!(
+        errln!(
+            out,
             "{}",
             progress_event_with_decoder(
                 phase,
@@ -1392,13 +1410,15 @@ fn emit_progress_with_decoder(
 
 #[cfg(feature = "diarization")]
 fn emit_meeting_progress(
+    out: &Out,
     enabled: bool,
     started: Instant,
     phase: &str,
     decoder: Option<&serde_json::Value>,
 ) {
     if enabled {
-        eprintln!(
+        errln!(
+            out,
             "{}",
             progress_event_with_decoder(
                 phase,
@@ -1410,16 +1430,6 @@ fn emit_meeting_progress(
             )
         );
     }
-}
-
-fn emit_jsonl_item(item: &BatchItem) -> Result<(), DictationError> {
-    println!(
-        "{}",
-        serde_json::to_string(item).expect("batch item serializes")
-    );
-    std::io::stdout().flush().map_err(|error| {
-        DictationError::TranscriptionFailed(format!("Failed to flush JSONL output: {error}"))
-    })
 }
 
 fn process_batch<F, E>(
@@ -1452,7 +1462,7 @@ where
         // Ctrl-C cancels the whole batch: no further files start and no
         // partial result for the interrupted one is emitted.
         canceller.check()?;
-        let output = process(index, file).map_err(|error| error.to_string());
+        let output = process(index, file);
         canceller.check()?;
         let failed = output.is_err();
         processed += 1;
@@ -1469,6 +1479,7 @@ where
 }
 
 fn ensure_model_loaded(
+    out: &Out,
     backend: &WhisperBackend,
     model: WhisperModel,
     profile: ContextProfile,
@@ -1484,7 +1495,7 @@ fn ensure_model_loaded(
             model_id_string(model)
         )));
     }
-    eprintln!("Loading model: {}...", model.display_name());
+    errln!(out, "Loading model: {}...", model.display_name());
     let started = Instant::now();
     backend.load_model_with_profile(model, profile)?;
     *loaded = true;
@@ -1521,6 +1532,7 @@ fn transcribe_file(
     correction_vocabulary: &[String],
     control: Option<&MeetingControl<'_>>,
     cache_policy: CachePolicy,
+    out: &Out,
 ) -> Result<FileTranscription, DictationError> {
     #[cfg(not(feature = "diarization"))]
     let _ = (control, cache_policy);
@@ -1605,11 +1617,14 @@ fn transcribe_file(
                     args.diarize_exclusive_speech_embeddings,
                 )? {
                     crate::diarization_cache::CacheLookup::Hit(cached) => {
-                        eprintln!("Reusing diarization cache: {}", path.display());
+                        errln!(out, "Reusing diarization cache: {}", path.display());
                         Some(cached)
                     }
                     crate::diarization_cache::CacheLookup::Miss(reason) => {
-                        eprintln!("Diarization cache miss ({reason}); computing analysis.");
+                        errln!(
+                            out,
+                            "Diarization cache miss ({reason}); computing analysis."
+                        );
                         None
                     }
                 }
@@ -1645,13 +1660,13 @@ fn transcribe_file(
                 .expect("cache_hit requires cached data")
                 .coverage_profile
                 .duration_seconds();
-            eprintln!("Audio (cached): {duration:.1}s");
+            errln!(out, "Audio (cached): {duration:.1}s");
             (None, 0.0, duration)
         }
         #[cfg(not(feature = "diarization"))]
         unreachable!("cache hits require the diarization feature")
     } else {
-        eprintln!("Decoding {}...", file.display());
+        errln!(out, "Decoding {}...", file.display());
         let decode_started = Instant::now();
         // Byte-fraction decode bar for large files (#237): small files
         // decode sub-second, so only bar above 8 MB to avoid flicker.
@@ -1663,6 +1678,7 @@ fn transcribe_file(
         });
         let on_decode = |pct: u8| {
             emit_progress_with_decoder(
+                out,
                 args.progress_json,
                 file_started,
                 "decoding",
@@ -1675,6 +1691,7 @@ fn transcribe_file(
         };
         let on_resample = |pct: u8| {
             emit_progress_with_decoder(
+                out,
                 args.progress_json,
                 file_started,
                 "resampling",
@@ -1706,7 +1723,7 @@ fn transcribe_file(
         }
         let decode_resample_seconds = decode_started.elapsed().as_secs_f64();
         let duration = audio.len() as f64 / 16_000.0;
-        eprintln!("Audio: {:.1}s, {} samples", duration, audio.len());
+        errln!(out, "Audio: {:.1}s, {} samples", duration, audio.len());
         (Some(audio), decode_resample_seconds, duration)
     };
     #[cfg(feature = "diarization")]
@@ -1732,7 +1749,7 @@ fn transcribe_file(
     if !cache_hit {
         if let Some(options) = diarization_options.as_ref() {
             if options.vad_model_path.is_some() {
-                eprintln!("Verifying Silero VAD model...");
+                errln!(out, "Verifying Silero VAD model...");
                 tokio::runtime::Runtime::new()
                     .map_err(|e| {
                         DictationError::ModelDownloadFailed(format!("tokio runtime: {e}"))
@@ -1761,6 +1778,7 @@ fn transcribe_file(
             #[cfg(not(feature = "diarization"))]
             let context_profile = ContextProfile::FlashAttention;
             emit_progress_with_decoder(
+                out,
                 args.progress_json,
                 file_started,
                 "loading",
@@ -1768,9 +1786,10 @@ fn transcribe_file(
                 diarization_decoder_progress.as_ref(),
             );
             let model_load_seconds =
-                ensure_model_loaded(backend, model, context_profile, model_loaded)?;
+                ensure_model_loaded(out, backend, model, context_profile, model_loaded)?;
             crate::cancel::check()?;
             emit_progress_with_decoder(
+                out,
                 args.progress_json,
                 file_started,
                 "language_detection",
@@ -1779,17 +1798,24 @@ fn transcribe_file(
             );
             let language_detection_started = Instant::now();
             let audio = audio.as_deref().expect("cache misses decode audio");
-            let detected_language = match detect_file_language(backend, audio, model) {
+            let detected_language = match detect_file_language(out, backend, audio, model) {
                 Ok(detection) => detection,
                 Err(error) => {
-                    eprintln!("Warning: local language detection was unavailable: {error}");
+                    errln!(
+                        out,
+                        "Warning: local language detection was unavailable: {error}"
+                    );
                     None
                 }
             };
-            let language_regions = match detect_file_language_regions(backend, audio, language) {
+            let language_regions = match detect_file_language_regions(out, backend, audio, language)
+            {
                 Ok(diagnostics) => diagnostics,
                 Err(error) => {
-                    eprintln!("Warning: language region detection was unavailable: {error}");
+                    errln!(
+                        out,
+                        "Warning: language region detection was unavailable: {error}"
+                    );
                     None
                 }
             };
@@ -1845,9 +1871,11 @@ fn transcribe_file(
             ..DiarizationPerformance::default()
         };
         performance.cache_lookup_seconds = cache_lookup_seconds;
-        eprintln!(
+        errln!(
+            out,
             "Whisper acceleration: {} (Core ML: {})",
-            acceleration.backend, acceleration.coreml_status
+            acceleration.backend,
+            acceleration.coreml_status
         );
 
         let speaker_hint = speaker_hint_from_args(args)?;
@@ -1857,7 +1885,8 @@ fn transcribe_file(
             exclusive_speech_embeddings: args.diarize_exclusive_speech_embeddings,
             ..DiarizeConfig::default()
         };
-        eprintln!(
+        errln!(
+            out,
             "Diarization decoder: beam={}, temp_fallback={}, vad={}",
             effective_options.beam_size,
             effective_options.temperature_fallback,
@@ -1865,6 +1894,7 @@ fn transcribe_file(
         );
 
         emit_meeting_progress(
+            out,
             args.progress_json,
             file_started,
             "analyzing",
@@ -1884,7 +1914,10 @@ fn transcribe_file(
                     DiarizationTranscriptionTimings::default(),
                 )
             } else {
-                eprintln!("Running speaker diarization and Whisper timestamps concurrently...");
+                errln!(
+                    out,
+                    "Running speaker diarization and Whisper timestamps concurrently..."
+                );
                 let parallel_started = Instant::now();
                 let audio = audio.as_deref().expect("cache misses decode audio");
                 meeting_checkpoint(control, MeetingPhase::Analyzing)?;
@@ -1926,7 +1959,7 @@ fn transcribe_file(
                         }
                     }
                     performance.cache_write_seconds = cache_write_started.elapsed().as_secs_f64();
-                    eprintln!("Saved reusable diarization cache: {}", path.display());
+                    errln!(out, "Saved reusable diarization cache: {}", path.display());
                 }
 
                 (
@@ -1949,6 +1982,7 @@ fn transcribe_file(
 
         let clustering_started = Instant::now();
         emit_meeting_progress(
+            out,
             args.progress_json,
             file_started,
             "clustering",
@@ -1958,21 +1992,26 @@ fn transcribe_file(
         let (speaker_segments, hint_outcome) = cluster_with_outcome(&analysis, &config)?;
         meeting_checkpoint(control, MeetingPhase::Clustering)?;
         performance.diarization_clustering_seconds = clustering_started.elapsed().as_secs_f64();
-        eprintln!("Found {} speaker segment(s)", speaker_segments.len());
+        errln!(out, "Found {} speaker segment(s)", speaker_segments.len());
         if std::env::var("SAGA_DIAR_DEBUG").is_ok() {
             for s in &speaker_segments {
-                eprintln!("DIARSEG\t{:.3}\t{:.3}\t{}", s.start, s.end, s.speaker);
+                errln!(out, "DIARSEG\t{:.3}\t{:.3}\t{}", s.start, s.end, s.speaker);
             }
         }
 
-        eprintln!("Got {} word/segment(s) for merging", raw_segments.len());
+        errln!(
+            out,
+            "Got {} word/segment(s) for merging",
+            raw_segments.len()
+        );
         if std::env::var("SAGA_DIAR_DEBUG").is_ok() {
             for (st, en, tx) in &raw_segments {
-                eprintln!("WORD\t{:.3}\t{:.3}\t{}", st, en, tx.replace('\t', " "));
+                errln!(out, "WORD\t{:.3}\t{:.3}\t{}", st, en, tx.replace('\t', " "));
             }
         }
 
         emit_meeting_progress(
+            out,
             args.progress_json,
             file_started,
             "finalizing",
@@ -2040,7 +2079,7 @@ fn transcribe_file(
         if let Some(diagnostics) = &language_regions {
             warnings.extend(diagnostics.warnings.clone());
         }
-        emit_warnings(&warnings);
+        emit_warnings(out, &warnings);
 
         let speakers: Vec<String> = {
             let mut seen = HashSet::new();
@@ -2073,7 +2112,8 @@ fn transcribe_file(
         performance.total_seconds = file_started.elapsed().as_secs_f64();
         json["performance"] =
             serde_json::to_value(&performance).expect("diarization performance serializes");
-        eprintln!(
+        errln!(
+            out,
             "Diarized transcription: {:.2}s total ({:.2}x realtime), cache_hit={}",
             performance.total_seconds,
             duration / performance.total_seconds.max(f64::EPSILON),
@@ -2099,6 +2139,7 @@ fn transcribe_file(
             })?;
             meeting_checkpoint(control, MeetingPhase::Finalizing)?;
             emit_meeting_progress(
+                out,
                 args.progress_json,
                 file_started,
                 "completed",
@@ -2111,6 +2152,7 @@ fn transcribe_file(
             });
         }
         emit_meeting_progress(
+            out,
             args.progress_json,
             file_started,
             "completed",
@@ -2135,7 +2177,7 @@ fn transcribe_file(
     };
     let vad_model_path = if vad_enabled {
         let path = model::vad_model_path();
-        eprintln!("Verifying Silero VAD model...");
+        errln!(out, "Verifying Silero VAD model...");
         tokio::runtime::Runtime::new()
             .map_err(|e| DictationError::ModelDownloadFailed(format!("tokio runtime: {e}")))?
             .block_on(model::download_vad_model(|_, _| {}))?;
@@ -2163,31 +2205,32 @@ fn transcribe_file(
         .parallel
         .unwrap_or_else(|| recommended_parallel_chunks(audio.len(), model, opts.beam_size));
     if opts.beam_size >= 2 {
-        eprintln!("Beam search: width {}", opts.beam_size);
+        errln!(out, "Beam search: width {}", opts.beam_size);
     }
     if opts.parallel_chunks > 1 {
-        eprintln!("Parallel Whisper states: {}", opts.parallel_chunks);
+        errln!(out, "Parallel Whisper states: {}", opts.parallel_chunks);
     }
     if vad_enabled {
-        eprintln!("VAD: enabled");
+        errln!(out, "VAD: enabled");
     }
 
     // "Preparing" narration (GUI parity, #237): lock acquisition plus
     // parallel-state creation are silent multi-second work on first use.
-    eprintln!("Preparing Whisper states...");
+    errln!(out, "Preparing Whisper states...");
     // "Encoding" narration (GUI parity, #237): fires when compute resources
     // are held and mel/encoder work begins — the silent window before the
     // first Transcribing-bar update.
-    emit_progress(args.progress_json, file_started, "preparing", None);
+    emit_progress(out, args.progress_json, file_started, "preparing", None);
     let progress_json = args.progress_json;
     let on_encode_start = || {
-        eprintln!("Encoding audio...");
-        emit_progress(progress_json, file_started, "encoding", None);
+        errln!(out, "Encoding audio...");
+        emit_progress(out, progress_json, file_started, "encoding", None);
     };
     let segments = if duration > 10.0 {
         let pb = ProgressBar::new(100);
         pb.set_style(ProgressStyle::with_template("  Transcribing [{bar:40}] {pos}%").unwrap());
         let pb_cb = pb.clone();
+        let progress_out = out.clone();
         let segments = backend.transcribe_sync_with_gap_recovery(
             &audio,
             language,
@@ -2196,6 +2239,7 @@ fn transcribe_file(
                 crate::set_transcription_progress(&pb_cb, pct);
                 if pct > 1 {
                     emit_progress(
+                        &progress_out,
                         progress_json,
                         file_started,
                         "transcribing",
@@ -2208,7 +2252,8 @@ fn transcribe_file(
         pb.finish_and_clear();
         segments
     } else {
-        eprintln!("Transcribing...");
+        errln!(out, "Transcribing...");
+        let progress_out = out.clone();
         backend.transcribe_sync_with_gap_recovery(
             &audio,
             language,
@@ -2216,6 +2261,7 @@ fn transcribe_file(
             move |pct| {
                 if pct > 1 {
                     emit_progress(
+                        &progress_out,
                         progress_json,
                         file_started,
                         "transcribing",
@@ -2226,7 +2272,7 @@ fn transcribe_file(
             Some(&on_encode_start),
         )?
     };
-    emit_progress(args.progress_json, file_started, "finalizing", None);
+    emit_progress(out, args.progress_json, file_started, "finalizing", None);
     let mut segments = segments;
     let mut corrections = apply_glossary_corrections(&mut segments, glossary);
     if args.correct_hints {
@@ -2250,7 +2296,7 @@ fn transcribe_file(
         warnings.extend(diagnostics.warnings.clone());
     }
     warnings.extend(repetition.warnings.clone());
-    emit_warnings(&warnings);
+    emit_warnings(out, &warnings);
 
     // Per-segment confidence (#81): avg_logprob is the mean token
     // log-probability (null when a segment has no scoreable tokens);
@@ -2286,7 +2332,13 @@ fn transcribe_file(
         "vocabulary_corrections": corrections,
     });
 
-    emit_progress(args.progress_json, file_started, "completed", Some(100));
+    emit_progress(
+        out,
+        args.progress_json,
+        file_started,
+        "completed",
+        Some(100),
+    );
     Ok(FileTranscription {
         json,
         plain: text,
@@ -2608,9 +2660,9 @@ fn combined_warnings(
     warnings
 }
 
-fn emit_warnings(warnings: &[TranscriptionWarning]) {
+fn emit_warnings(out: &Out, warnings: &[TranscriptionWarning]) {
     for warning in warnings {
-        eprintln!("Warning [{}]: {}", warning.code, warning.message);
+        errln!(out, "Warning [{}]: {}", warning.code, warning.message);
     }
 }
 
@@ -2624,16 +2676,18 @@ const LANGUAGE_WINDOW_MIN_RMS: f64 = 0.0015;
 /// bounded for multi-hour sources; this function is called independently for
 /// each source when native batch mode invokes the single-file pipeline.
 fn detect_file_language_regions(
+    out: &Out,
     backend: &WhisperBackend,
     audio: &[f32],
     configured_language: Language,
 ) -> Result<Option<LanguageRegionDiagnostics>, DictationError> {
-    detect_language_regions_with(audio, configured_language, |window| {
+    detect_language_regions_with(out, audio, configured_language, |window| {
         backend.detect_language(window)
     })
 }
 
 fn detect_language_regions_with(
+    out: &Out,
     audio: &[f32],
     configured_language: Language,
     mut detect: impl FnMut(&[f32]) -> Result<Option<LanguageDetection>, DictationError>,
@@ -2643,7 +2697,8 @@ fn detect_language_regions_with(
         return Ok(None);
     }
 
-    eprintln!(
+    errln!(
+        out,
         "Checking {} sampled window(s) for sustained language changes...",
         windows.len()
     );
@@ -2716,6 +2771,7 @@ fn root_mean_square(samples: &[f32]) -> f64 {
 }
 
 fn detect_file_language(
+    out: &Out,
     transcription_backend: &WhisperBackend,
     audio: &[f32],
     transcription_model: WhisperModel,
@@ -2728,12 +2784,14 @@ fn detect_file_language(
     }
 
     let Some(detection_model) = neutral_language_detection_model(model::is_model_downloaded) else {
-        eprintln!(
+        errln!(
+            out,
             "Warning: language mismatch check skipped because no neutral multilingual model is downloaded."
         );
         return Ok(None);
     };
-    eprintln!(
+    errln!(
+        out,
         "Checking language with neutral model: {}...",
         detection_model.display_name()
     );
@@ -2757,7 +2815,8 @@ fn detect_file_language(
     else {
         return Ok(Some(initial));
     };
-    eprintln!(
+    errln!(
+        out,
         "Language check was uncertain ({} p={:.3}); verifying with {}...",
         initial.language,
         initial.probability,

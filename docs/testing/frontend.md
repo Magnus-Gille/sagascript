@@ -26,7 +26,7 @@ a real `vite build` bundles, emits or reads) and `npm run licenses:check` (relea
 
 - `src/lib/<module>.test.ts` tests `src/lib/<module>.ts` (or `.svelte.ts`); component tests
   are `src/lib/<Component>.test.ts` (or `<Component>.<topic>.test.ts`, such as
-  `Settings.recovery.test.ts`). Name tests after the behaviour they pin.
+  `Settings.recovery.test.ts` and `Settings.readback.test.ts`). Name tests after the behaviour they pin.
 - Shared test code lives in `src/test/`: `setup.ts` (runs before every file), `ipc.ts`,
   `deferred.ts`, `EventProbe.svelte` and backends for rendering components (`settings.ts`). Nothing in the app
   imports it, so it is never bundled; `svelte-check` type-checks tests like app code.
