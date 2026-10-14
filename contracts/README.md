@@ -28,9 +28,13 @@ A change on one side fails a test:
 - A `#[tauri::command]` missing from `generate_handler!`, a Rust type without a TypeScript
   mapping, or a raw event name: the app crate's tests or clippy fail.
 
-Everything runs in the existing gates: `cargo test` and clippy of the app crate
-(test-macos, test-windows; `npm run verify`), and svelte-check and Vitest (test-macos,
-test-windows). No model, GUI or network is needed.
+Everything runs in the existing gates, with no model, GUI or network: `cargo test` of the app
+crate (test-macos, test-windows; `npm run verify`'s `test-workspace`) compares the fixtures and
+the generated file, clippy of the app crate (test-linux, test-macos, test-windows) rejects a raw event name,
+svelte-check (test-macos) checks each schema against its type, and Vitest (test-macos,
+test-windows) parses the fixtures. The generated `CommandMap` and the fixtures need no check of
+their own in `ci.yml` or `scripts/verify.mjs`: the app crate's tests are the "up to date"
+check, so `scripts/test-verify-ci-parity.mjs` has no new command to match.
 
 ## After an intended change
 
