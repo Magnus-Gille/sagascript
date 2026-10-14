@@ -305,16 +305,23 @@ item is reported while later items continue; the command still exits non-zero.
 Use `--fail-fast` to stop immediately. For machine consumers, multi-input
 `--json` returns an array of `{source,status,result|error}` objects and
 `--jsonl` emits the same objects one per line. Single-file `--json` retains its
-existing object shape.
+existing object shape; when that file fails it is one error object,
+`{"status":"error","code":"file_decode_error","source":…,"error":…}`. A
+`--json`/`--jsonl` run that fails before any result (unknown profile, model not
+downloaded) writes the same kind of object without `source`, so stdout is never
+empty. A reader that stops early (`sagascript transcribe --jsonl dir/ | head -1`)
+ends the run quietly with exit 0.
 
 Press Ctrl-C (or send SIGTERM) to cancel a running `transcribe`. Whisper
 decoding (including parallel chunks and the gap re-decode pass) and Pianissimo
 requests stop within about a second, the engine host is shut down, and the
 command prints `Cancelled` and exits with status 130 (143 for SIGTERM). With
-`--progress-json` a final `phase: "cancelled"` progress event is emitted. Cancelling a batch stops
-all remaining files and discards the interrupted file's partial result; results
-already printed stay printed, and no transcript is written for the cancelled
-file. A second Ctrl-C force-quits immediately. The next run starts normally.
+`--progress-json` a final `phase: "cancelled"` progress event is emitted; with
+`--json`/`--jsonl` and nothing printed yet, stdout gets a `"code":"cancelled"`
+error object. Cancelling a batch stops all remaining files and discards the
+interrupted file's partial result; results already printed stay printed, and no
+transcript is written for the cancelled file. A second Ctrl-C force-quits
+immediately. The next run starts normally.
 
 ## Permissions
 
