@@ -287,7 +287,7 @@ export async function getBuildInfo(): Promise<BuildInfo> {
 
 export async function transcribeFile(
   filePath: string,
-  options?: { prompt?: string; diarize?: boolean; profileId?: string; runId?: string }
+  options?: { prompt?: string; diarize?: boolean; profileId?: string; runId?: string },
 ): Promise<string> {
   return invoke("transcribe_file", {
     filePath,
@@ -305,11 +305,7 @@ export async function cancelFileTranscription(runId: string): Promise<boolean> {
   return invoke("cancel_file_transcription", { runId });
 }
 
-export async function saveTranscriptionText(
-  text: string,
-  fileName: string,
-  directory: string | null,
-): Promise<boolean> {
+export async function saveTranscriptionText(text: string, fileName: string, directory: string | null): Promise<boolean> {
   return invoke("save_transcription_text", { text, fileName, directory });
 }
 
@@ -345,11 +341,7 @@ export async function completeUpdatePreparation(nonce: string, error: string | n
   return invoke("complete_update_preparation", { nonce, error });
 }
 
-export async function beginMeetingFile(
-  filePath: string,
-  prompt: string | null,
-  profileId: string | null,
-): Promise<string> {
+export async function beginMeetingFile(filePath: string, prompt: string | null, profileId: string | null): Promise<string> {
   return invoke("begin_meeting_file", { filePath, prompt, profileId });
 }
 
@@ -361,26 +353,15 @@ export async function cancelMeetingJob(jobId: string): Promise<boolean> {
   return invoke("cancel_meeting_job", { jobId });
 }
 
-export async function renameMeetingSpeaker(
-  transcript: MeetingTranscript,
-  speakerId: string,
-  label: string,
-): Promise<MeetingTranscript> {
+export async function renameMeetingSpeaker(transcript: MeetingTranscript, speakerId: string, label: string): Promise<MeetingTranscript> {
   return invoke("rename_meeting_speaker", { transcript, speakerId, label });
 }
 
-export async function mergeMeetingSpeakers(
-  transcript: MeetingTranscript,
-  fromId: string,
-  intoId: string,
-): Promise<MeetingTranscript> {
+export async function mergeMeetingSpeakers(transcript: MeetingTranscript, fromId: string, intoId: string): Promise<MeetingTranscript> {
   return invoke("merge_meeting_speakers", { transcript, fromId, intoId });
 }
 
-export async function saveMeetingExport(
-  transcript: MeetingTranscript,
-  format: MeetingExportFormat,
-): Promise<boolean> {
+export async function saveMeetingExport(transcript: MeetingTranscript, format: MeetingExportFormat): Promise<boolean> {
   return invoke("save_meeting_export", { transcript, format });
 }
 
@@ -388,24 +369,15 @@ export async function createMeetingReview(transcript: MeetingTranscript): Promis
   return invoke("create_meeting_review", { transcript });
 }
 
-export async function applyMeetingCorrections(
-  review: MeetingReview,
-  corrections: CorrectionFile,
-): Promise<MeetingReviewState> {
+export async function applyMeetingCorrections(review: MeetingReview, corrections: CorrectionFile): Promise<MeetingReviewState> {
   return invoke("apply_meeting_corrections", { review, corrections });
 }
 
-export async function undoMeetingReview(
-  review: MeetingReview,
-  expectedRevision: string,
-): Promise<MeetingReviewState> {
+export async function undoMeetingReview(review: MeetingReview, expectedRevision: string): Promise<MeetingReviewState> {
   return invoke("undo_meeting_review", { review, expectedRevision });
 }
 
-export async function resetMeetingReview(
-  review: MeetingReview,
-  expectedRevision: string,
-): Promise<MeetingReviewState> {
+export async function resetMeetingReview(review: MeetingReview, expectedRevision: string): Promise<MeetingReviewState> {
   return invoke("reset_meeting_review", { review, expectedRevision });
 }
 
@@ -413,10 +385,7 @@ export async function openMeetingReview(): Promise<MeetingReviewState | null> {
   return invoke("open_meeting_review");
 }
 
-export async function saveMeetingReview(
-  review: MeetingReview,
-  format: MeetingExportFormat,
-): Promise<boolean> {
+export async function saveMeetingReview(review: MeetingReview, format: MeetingExportFormat): Promise<boolean> {
   return invoke("save_meeting_review", { review, format });
 }
 
@@ -452,18 +421,11 @@ export async function stopAndTranscribeTraining(): Promise<TrainingTranscript> {
   return invoke("stop_and_transcribe_training");
 }
 
-export async function transcribeTrainingFile(
-  filePath: string,
-  profileId: string
-): Promise<TrainingTranscript> {
+export async function transcribeTrainingFile(filePath: string, profileId: string): Promise<TrainingTranscript> {
   return invoke("transcribe_training_file", { filePath, profileId });
 }
 
-export async function suggestTrainingGlossary(
-  heard: string,
-  corrected: string,
-  profileId: string
-): Promise<GlossarySuggestion[]> {
+export async function suggestTrainingGlossary(heard: string, corrected: string, profileId: string): Promise<GlossarySuggestion[]> {
   return invoke("suggest_training_glossary", { heard, corrected, profileId });
 }
 
@@ -471,7 +433,7 @@ export async function applyTrainingGlossary(
   heard: string,
   corrected: string,
   profileId: string,
-  accepted: GlossarySuggestion[]
+  accepted: GlossarySuggestion[],
 ): Promise<void> {
   return invoke("apply_training_glossary", { heard, corrected, profileId, accepted });
 }

@@ -78,13 +78,13 @@
     formatHotkeyDisplay as formatShortcutDisplay,
     supportedBareFunctionKeyRange,
     tauriKeyName,
-  } from "./hotkey.js";
+  } from "./hotkey";
   import {
     allProfileShortcutValues,
     displayProfileShortcut,
     profileWithShortcut,
     suggestedProfileShortcuts,
-  } from "./profile-shortcuts.js";
+  } from "./profile-shortcuts";
 
   let settings: Settings | null = $state(null);
   let buildInfo: BuildInfo | null = $state(null);

@@ -7,8 +7,7 @@ import { readdirSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-const read = async (path) =>
-  (await readFile(new URL(`../${path}`, import.meta.url), "utf8")).replace(/\r\n?/g, "\n");
+const read = async (path) => (await readFile(new URL(`../${path}`, import.meta.url), "utf8")).replace(/\r\n?/g, "\n");
 
 const [workflow, deny, notices, ...manifests] = await Promise.all([
   read(".github/workflows/ci.yml"),
@@ -88,9 +87,7 @@ test("test-linux gates both Cargo workspaces on cargo-deny before compiling", ()
 test("npm run verify runs the same cargo-deny release CI installs", async () => {
   const { CARGO_DENY_VERSION } = await import("./verify.mjs");
   assert.ok(
-    steps("test-linux").some((step) =>
-      step.commands.includes(`cargo install --locked cargo-deny --version ${CARGO_DENY_VERSION}`),
-    ),
+    steps("test-linux").some((step) => step.commands.includes(`cargo install --locked cargo-deny --version ${CARGO_DENY_VERSION}`)),
     `verify's preflight asks for cargo-deny ${CARGO_DENY_VERSION}; test-linux must install the same release`,
   );
 });
@@ -185,7 +182,11 @@ test("deny.toml judges every shipped platform, feature and advisory kind", () =>
   // An ignore is an inline table with the advisory id and a reason.
   const ignore = /^ignore = \[([\s\S]*?)\]$/m.exec(deny)?.[1];
   assert.ok(ignore !== undefined, "[advisories] must set ignore");
-  const entries = ignore.replace(/#.*$/gm, "").split(/\}\s*,?/).map((entry) => entry.trim()).filter(Boolean);
+  const entries = ignore
+    .replace(/#.*$/gm, "")
+    .split(/\}\s*,?/)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
   for (const entry of entries) {
     assert.match(entry, /^\{\s*id = "RUSTSEC-\d{4}-\d{4}",\s*reason = "[^"]{10,}"$/, `ignore entry needs an id and a reason: ${entry}`);
   }
@@ -193,9 +194,7 @@ test("deny.toml judges every shipped platform, feature and advisory kind", () =>
 
 test("deny.toml allows exactly the git sources the Cargo manifests use", () => {
   const used = new Set(
-    manifests.flatMap((manifest) =>
-      [...manifest.replace(/#.*$/gm, "").matchAll(/\bgit = "([^"]+)"/g)].map((match) => match[1]),
-    ),
+    manifests.flatMap((manifest) => [...manifest.replace(/#.*$/gm, "").matchAll(/\bgit = "([^"]+)"/g)].map((match) => match[1])),
   );
   assert.deepEqual(new Set(tomlStrings(deny, "sources", "allow-git")), used);
   assert.match(deny, /^unknown-git = "deny"$/m);

@@ -56,7 +56,7 @@ common changes, follow the recipes in [docs/recipes/](docs/recipes/README.md).
 check (command, working directory, platforms, prerequisites, time budget, CI lanes).
 
 ```bash
-npm run verify:fast                      # inner loop: rustfmt, app clippy, svelte-check, UI node tests
+npm run verify:fast                      # inner loop: rustfmt, app clippy, svelte-check, Prettier, unit and UI node tests
 npm run verify                           # before a PR: every default check for this OS
 npm run verify -- --keep-going           # report every failure instead of stopping at the first
 npm run verify -- --only clippy,node-ui  # checks or whole areas, including opt-in checks
@@ -91,6 +91,8 @@ npm run verify -- --list                 # every check with its commands, budget
 | `deps` | `deny`, `npm-audit` | `cargo deny --locked --workspace check` and the same for the ORT host (`src-tauri`; policy and what to do about a new advisory: `src-tauri/deny.toml`); `npm audit --audit-level=high` (root lockfile). Both fetch advisory data over the network | `cargo install --locked cargo-deny --version 0.20.2` | deny: test-linux; audit: test-macos |
 | `release-guard` | `release-guard` | `cargo test --release -p sagascript-core --lib dev_overrides` | Rust | test-linux |
 | `svelte-check` | `svelte-check` | `npx svelte-check --tsconfig ./tsconfig.json` | `npm ci` | test-macos |
+| `format` | `format` | `npm run format:check` (Prettier over src/, scripts/, tests/; scope in `.prettierignore`; `npm run format` fixes) | `npm ci` | test-macos, test-windows |
+| `unit` | `unit` | `npm run test:unit` (Vitest, `src/**/*.test.ts`; see [docs/testing/frontend.md](docs/testing/frontend.md)) | `npm ci` | test-macos, test-windows |
 | `node` | `node-ui`, `node-ci`, `node-release` | `npm run test:ui`, `npm run test:ci`, `npm run test:release` | `npm ci` (ui) | test-macos, test-windows (`npm run test:frontend`) |
 | `code-health` | `code-health` | `npm run test:code-health` | Node | `code-health.yml`; also in `test:frontend` |
 | `python` | `python-dictation-eval`, `python-diarization-reference`; `python-diarization` (opt-in) | `python -m unittest discover -s scripts/dictation_eval -p 'test_*.py'`; `scripts/diarization_sv` reference tests; opt-in: the full suite against a freshly built lean CLI | Python 3.10+; opt-in: `pip install -r scripts/diarization_sv/requirements-evaluation.txt` | all three; diarization: test-macos, test-linux |
@@ -105,11 +107,17 @@ build-windows), engine-host staging, the DER/JER cross-check against a downloade
 the release checks `npm run release:check` and `npm run licenses:check`. Where every suite
 lives is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#5-where-tests-live-and-how-ci-runs-them).
 
+**Frontend tests.** Frontend modules are tested with Vitest next to the code
+(`src/lib/<module>.test.ts`, IPC through the typed mock in `src/test/ipc.ts`):
+[docs/testing/frontend.md](docs/testing/frontend.md) has the patterns and the rules. Do not
+add `scripts/test-*.mjs` files that read `.svelte` source.
+
 **Node test groups.** `scripts/node-test-groups.mjs` puts every `test-*.mjs` and `test_*.mjs`
-file anywhere under `scripts/` (except `fixtures/`) in one group: `ui`, `ci`, `release` or
-`codeHealth`. `npm run test:frontend` runs all of them (as CI does); a new test file that is
-not in the manifest makes the runner fail. Tests in both `ci` and `release` read workflow
-files, so after editing `.github/workflows/` run `npm run test:frontend`, not one group.
+file anywhere under `scripts/` (except `fixtures/`) in one group: `ui` (the remaining
+component source-text tests, being replaced by #361), `ci`, `release` or `codeHealth`.
+`npm run test:frontend` runs all of them (as CI does); a new test file that is not in the
+manifest makes the runner fail. Tests in both `ci` and `release` read workflow files, so after
+editing `.github/workflows/` run `npm run test:frontend`, not one group.
 
 #### Reference: the individual commands
 
@@ -125,7 +133,8 @@ cargo test --workspace
 cargo test -p sagascript-cli --no-default-features
 ```
 
-From the repo root: `npx svelte-check --tsconfig ./tsconfig.json` and `npm run test:frontend`.
+From the repo root: `npx svelte-check --tsconfig ./tsconfig.json`, `npm run test:unit`,
+`npm run format:check` and `npm run test:frontend`.
 
 #### Example: a typical feature
 
@@ -150,6 +159,7 @@ feature gate, the lean-CLI checks code that compiles only with default features,
 
 - **Rust:** Prefer clarity over cleverness. Keep modules small and testable. Run `cargo fmt --all` (plus `cargo fmt --manifest-path engine-host/ort/Cargo.toml --all` for the separate ORT host workspace) before committing; CI rejects unformatted code (`src-tauri/rustfmt.toml`).
 - **Svelte 5:** Use runes (`$state`, `$effect`), not legacy stores.
+- **TypeScript and Node scripts:** Run `npm run format` (Prettier, `prettier.config.js`) before committing; CI rejects unformatted files in `src/`, `scripts/` and `tests/` (`.svelte` files follow once #361 replaces the source-text tests).
 - **No hardcoded secrets** -- ever.
 
 ### Clippy policy lints

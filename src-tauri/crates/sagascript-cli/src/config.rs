@@ -606,7 +606,7 @@ fn shortcut_warning(shortcut: &str) -> Option<&'static str> {
 }
 
 /// macOS maps bare F14/F15 to the screen-brightness keys, so they usually never
-/// reach the app. Mirrors the hint in src/lib/hotkey.js.
+/// reach the app. Mirrors the hint in src/lib/hotkey.ts.
 fn brightness_key_hotkey_warning(shortcut: &str) -> Option<&'static str> {
     let is_brightness_key = matches!(shortcut.trim().to_ascii_uppercase().as_str(), "F14" | "F15");
     (cfg!(target_os = "macos") && is_brightness_key).then_some(
@@ -616,7 +616,7 @@ fn brightness_key_hotkey_warning(shortcut: &str) -> Option<&'static str> {
 }
 
 fn bare_extended_hotkey_warning(shortcut: &str) -> Option<&'static str> {
-    // Strict parity with src/lib/hotkey.js (/^F(\d{1,2})$/i): at most two
+    // Strict parity with src/lib/hotkey.ts (/^F(\d{1,2})$/i): at most two
     // ASCII digits, so "F013" never warns as a bare extended key.
     let normalized = shortcut.trim().to_ascii_lowercase();
     let digits = normalized.strip_prefix('f')?;
@@ -1210,6 +1210,7 @@ mod tests {
             "profile_glossary_migrated",
             "model_lineup_version",
             "engine_defaults_version",
+            "schema_version",
         ];
 
         let settings = Settings::default();

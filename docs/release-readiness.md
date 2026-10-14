@@ -196,6 +196,7 @@ Required deterministic checks:
 
 ```text
 npm run test:frontend
+npm run test:unit
 npm run check
 npm run build
 npm run release:check

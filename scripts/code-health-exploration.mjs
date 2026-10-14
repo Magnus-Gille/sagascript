@@ -45,7 +45,20 @@ function walkAst(node, counts, seen = new WeakSet()) {
   seen.add(node);
   if (typeof node.type === "string") {
     if (["FunctionDeclaration", "FunctionExpression", "ArrowFunctionExpression"].includes(node.type)) counts.functions += 1;
-    if (["IfStatement", "ForStatement", "ForOfStatement", "ForInStatement", "WhileStatement", "DoWhileStatement", "SwitchCase", "ConditionalExpression", "CatchClause"].includes(node.type)) counts.branches += 1;
+    if (
+      [
+        "IfStatement",
+        "ForStatement",
+        "ForOfStatement",
+        "ForInStatement",
+        "WhileStatement",
+        "DoWhileStatement",
+        "SwitchCase",
+        "ConditionalExpression",
+        "CatchClause",
+      ].includes(node.type)
+    )
+      counts.branches += 1;
     if (node.type === "LogicalExpression" && ["&&", "||", "??"].includes(node.operator)) counts.branches += 1;
     if (["IfBlock", "EachBlock", "AwaitBlock", "KeyBlock"].includes(node.type)) counts.template_blocks += 1;
   }
@@ -68,8 +81,25 @@ function astMetrics(path, language) {
     if (ast.parseDiagnostics.length) throw new Error(`TypeScript parse failed: ${path}`);
     const visit = (node) => {
       if (ts.isFunctionDeclaration(node) || ts.isFunctionExpression(node) || ts.isArrowFunction(node)) counts.functions += 1;
-      if (ts.isIfStatement(node) || ts.isForStatement(node) || ts.isForOfStatement(node) || ts.isForInStatement(node) || ts.isWhileStatement(node) || ts.isDoStatement(node) || ts.isCaseClause(node) || ts.isConditionalExpression(node) || ts.isCatchClause(node)) counts.branches += 1;
-      if (ts.isBinaryExpression(node) && [ts.SyntaxKind.AmpersandAmpersandToken, ts.SyntaxKind.BarBarToken, ts.SyntaxKind.QuestionQuestionToken].includes(node.operatorToken.kind)) counts.branches += 1;
+      if (
+        ts.isIfStatement(node) ||
+        ts.isForStatement(node) ||
+        ts.isForOfStatement(node) ||
+        ts.isForInStatement(node) ||
+        ts.isWhileStatement(node) ||
+        ts.isDoStatement(node) ||
+        ts.isCaseClause(node) ||
+        ts.isConditionalExpression(node) ||
+        ts.isCatchClause(node)
+      )
+        counts.branches += 1;
+      if (
+        ts.isBinaryExpression(node) &&
+        [ts.SyntaxKind.AmpersandAmpersandToken, ts.SyntaxKind.BarBarToken, ts.SyntaxKind.QuestionQuestionToken].includes(
+          node.operatorToken.kind,
+        )
+      )
+        counts.branches += 1;
       ts.forEachChild(node, visit);
     };
     visit(ast);
@@ -80,8 +110,9 @@ function astMetrics(path, language) {
 }
 
 function grouped(files, language) {
-  return files.map((path) => ({ path: relative(root, path), language, ...astMetrics(path, language) }))
-    .sort((a, b) => (b.branches + b.template_blocks) - (a.branches + a.template_blocks) || a.path.localeCompare(b.path));
+  return files
+    .map((path) => ({ path: relative(root, path), language, ...astMetrics(path, language) }))
+    .sort((a, b) => b.branches + b.template_blocks - (a.branches + a.template_blocks) || a.path.localeCompare(b.path));
 }
 
 const rustFiles = walk(join(root, "src-tauri"), (p) => p.endsWith(".rs"));
@@ -90,7 +121,19 @@ const swiftFiles = walk(join(root, "src-tauri/engine-host/coreml"), (p) => p.end
 
 let churn = { window_start: "2026-09-09", window_end: "2026-10-10", paths: {} };
 try {
-  const rows = git("log", "--since=2026-09-09T00:00:00Z", "--until=2026-10-10T00:00:00Z", "--format=", "--numstat", base, "--", "src-tauri", "src").split("\n").filter(Boolean);
+  const rows = git(
+    "log",
+    "--since=2026-09-09T00:00:00Z",
+    "--until=2026-10-10T00:00:00Z",
+    "--format=",
+    "--numstat",
+    base,
+    "--",
+    "src-tauri",
+    "src",
+  )
+    .split("\n")
+    .filter(Boolean);
   for (const row of rows) {
     const [add, del, path] = row.split("\t");
     if (/^\d+$/.test(add) && /^\d+$/.test(del)) {
@@ -117,8 +160,14 @@ const evidence = {
   inventory: {
     rust: grouped(rustFiles, "rust"),
     frontend: {
-      svelte: grouped(frontendFiles.filter((p) => p.endsWith(".svelte")), "svelte"),
-      typescript: grouped(frontendFiles.filter((p) => p.endsWith(".ts")), "typescript"),
+      svelte: grouped(
+        frontendFiles.filter((p) => p.endsWith(".svelte")),
+        "svelte",
+      ),
+      typescript: grouped(
+        frontendFiles.filter((p) => p.endsWith(".ts")),
+        "typescript",
+      ),
     },
     swift: grouped(swiftFiles, "swift"),
   },

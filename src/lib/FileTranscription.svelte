@@ -24,7 +24,7 @@
     type MeetingJobStatus, type MeetingJobSnapshot,
   } from "./api";
   import MeetingReview from "./MeetingReview.svelte";
-  import type { MeetingReviewDraftSnapshot } from "./MeetingReview.svelte";
+  import type { MeetingReviewDraftSnapshot } from "./meeting-review-drafts";
   import type {
     CorrectionOperation,
     MeetingDraftState,

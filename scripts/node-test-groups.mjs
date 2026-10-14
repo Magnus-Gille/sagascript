@@ -1,9 +1,11 @@
-// Every Node test file belongs to exactly one group (#350). The files stay
-// where they are (#361 moves the UI tests to Vitest); this manifest gives
-// them names. scripts/run-frontend-tests.mjs fails when a `test-*.mjs` or
-// `test_*.mjs` file anywhere under scripts/ (except fixtures/ and
-// node_modules/) is missing here, or an entry points to a file that does not
-// exist. (This file is not named test-*.mjs so that the
+// Every Node test file belongs to exactly one group (#350). Frontend module
+// tests run under Vitest (`npm run test:unit`, src/**/*.test.ts, #361); the
+// ui group keeps the source-text and component-harness tests until #361's
+// phase B replaces them. This manifest gives the files names.
+// scripts/run-frontend-tests.mjs fails when a `test-*.mjs` or `test_*.mjs`
+// file anywhere under scripts/ (except fixtures/ and node_modules/) is
+// missing here, or an entry points to a file that does not exist. (This file
+// is not named test-*.mjs so that the
 // discovery does not take it for a test.)
 //
 //   npm run test:frontend      all groups (what CI runs)
@@ -13,7 +15,7 @@
 //   npm run test:code-health   codeHealth, plus tests/scripts/ (code-health.yml)
 
 export const GROUP_DESCRIPTIONS = {
-  ui: "frontend logic and component contracts (src/lib), language/settings surface",
+  ui: "component source-text and harness tests awaiting #361 phase B (module tests: npm run test:unit)",
   ci: "CI workflows, toolchain pins, local verification and evaluation tooling",
   release: "release, updater, signing, packaging and Windows distribution",
   codeHealth: "code-health producer and workflow (also in npm run test:code-health)",
@@ -28,30 +30,17 @@ export const GROUP_NPM_PACKAGES = {
 
 export const TEST_GROUPS = {
   ui: [
-    "scripts/test-dictation-ui-state.mjs",
     "scripts/test-dictionary-explicit-save.mjs",
     "scripts/test-file-transcription-integration.mjs",
     "scripts/test-file-transcription-recovery.mjs",
     "scripts/test-finnish-language.mjs",
-    "scripts/test-hotkey-shortcuts.mjs",
     "scripts/test-language-glossary.mjs",
     "scripts/test-language-switch-recovery.mjs",
     "scripts/test-meeting-integration.mjs",
-    "scripts/test-meeting-playback.mjs",
-    "scripts/test-meeting-progress.mjs",
     "scripts/test-meeting-reprocessing-integration.mjs",
     "scripts/test-meeting-reprocessing.mjs",
-    "scripts/test-onboarding-download-state.mjs",
-    "scripts/test-overlay-state.mjs",
-    "scripts/test-profile-shortcuts.mjs",
-    "scripts/test-recent-transcriptions.mjs",
     "scripts/test-settings-layout.mjs",
     "scripts/test-settings-recovery.mjs",
-    "scripts/test-transcribe-stages.mjs",
-    "scripts/test-transcribe-ui-state.mjs",
-    "scripts/test-transcription-queue.mjs",
-    "scripts/test-update-preparation.mjs",
-    "scripts/test-update-recovery.mjs",
   ],
   ci: [
     "scripts/diarization_sv/test_reference_review.mjs",
@@ -94,8 +83,5 @@ export const TEST_GROUPS = {
     "scripts/test-windows-x64-cpu-policy.mjs",
     "scripts/test-windows-x64-portable.mjs",
   ],
-  codeHealth: [
-    "scripts/test-code-health-producer.mjs",
-    "scripts/test-code-health-workflow.mjs",
-  ],
+  codeHealth: ["scripts/test-code-health-producer.mjs", "scripts/test-code-health-workflow.mjs"],
 };

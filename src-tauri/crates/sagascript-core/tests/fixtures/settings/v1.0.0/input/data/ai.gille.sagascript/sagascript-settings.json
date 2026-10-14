@@ -1,0 +1,14 @@
+{
+  "auto_paste": true,
+  "auto_select_model": false,
+  "beam_size": 5,
+  "has_completed_onboarding": true,
+  "hotkey": "Option+Space",
+  "hotkey_mode": "push",
+  "initial_prompt": "Sagascript, OpenRouter, Magnus Gille",
+  "language": "sv",
+  "show_overlay": true,
+  "temperature_fallback": false,
+  "vad_enabled": true,
+  "whisper_model": "kb-whisper-small"
+}

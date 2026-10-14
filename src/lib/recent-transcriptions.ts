@@ -6,8 +6,6 @@ export interface RecentTranscription {
 }
 
 /** Session-only re-run requests, without audio or transcript results. */
-export function rememberTranscription(
-  history: RecentTranscription[], run: RecentTranscription,
-): RecentTranscription[] {
-  return [{ ...run }, ...history.filter(item => item.path !== run.path)].slice(0, 5);
+export function rememberTranscription(history: RecentTranscription[], run: RecentTranscription): RecentTranscription[] {
+  return [{ ...run }, ...history.filter((item) => item.path !== run.path)].slice(0, 5);
 }

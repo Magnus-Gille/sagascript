@@ -9,6 +9,8 @@
   "scripts": {
     "dev": "vite",
     "build": "node scripts/build-frontend.mjs",
+    "test:unit": "vitest run",
+    "test:unit:coverage": "vitest run --coverage",
     "test:frontend": "node scripts/run-frontend-tests.mjs",
     "test:ui": "node scripts/run-frontend-tests.mjs --group ui",
     "test:ci": "node scripts/run-frontend-tests.mjs --group ci",
@@ -16,6 +18,8 @@
     "test:code-health": "node --test scripts/test-code-health-producer.mjs scripts/test-code-health-workflow.mjs && node tests/scripts/test-code-health-contract-provenance.mjs && node tests/scripts/validate-code-health-objective.mjs && node tests/scripts/test-code-health-policy.mjs",
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.json",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
     "release:check": "node scripts/check-release.mjs",
     "licenses:generate": "node scripts/generate-third-party-notices.mjs --write",
     "licenses:check": "node scripts/generate-third-party-notices.mjs --check",
@@ -28,12 +32,16 @@
     "@sveltejs/vite-plugin-svelte": "^5.0.0",
     "@tauri-apps/cli": "^2.10.0",
     "@tsconfig/svelte": "^5.0.0",
+    "@vitest/coverage-v8": "^5.0.2",
     "playwright": "1.63.0",
+    "prettier": "^3.9.9",
+    "prettier-plugin-svelte": "^4.1.1",
     "svelte": "^5.0.0",
     "svelte-check": "^4.0.0",
     "tslib": "^2.6.0",
     "typescript": "^5.5.0",
-    "vite": "^6.0.0"
+    "vite": "^6.0.0",
+    "vitest": "^5.0.2"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",

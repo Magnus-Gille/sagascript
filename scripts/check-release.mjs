@@ -21,9 +21,7 @@ const versions = new Map([
 const expected = packageJson.version;
 const mismatches = [...versions].filter(([, version]) => version !== expected);
 if (mismatches.length) {
-  throw new Error(
-    `Release versions differ from ${expected}: ${mismatches.map(([file, version]) => `${file}=${version}`).join(", ")}`,
-  );
+  throw new Error(`Release versions differ from ${expected}: ${mismatches.map(([file, version]) => `${file}=${version}`).join(", ")}`);
 }
 
 const tag = process.env.RELEASE_TAG;
@@ -34,10 +32,7 @@ if (tauri.identifier.endsWith(".app")) {
   throw new Error(`Bundle identifier must not end in .app: ${tauri.identifier}`);
 }
 
-const store = readFileSync(
-  join(root, "src-tauri", "crates", "sagascript-core", "src", "settings", "store.rs"),
-  "utf8",
-);
+const store = readFileSync(join(root, "src-tauri", "crates", "sagascript-core", "src", "settings", "store.rs"), "utf8");
 if (!store.includes(`const APP_IDENTIFIER: &str = "${tauri.identifier}";`)) {
   throw new Error("Tauri and settings-store application identifiers differ");
 }

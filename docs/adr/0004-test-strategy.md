@@ -34,14 +34,16 @@ Known problems on this branch:
 ## Decision
 
 1. **Layers.** Rust unit tests (inline or sibling `*_tests.rs`) for logic; Rust integration
-   tests for process boundaries (CLI binary, fake engine host); `node:test` for DOM-free
-   frontend modules in `src/lib/*.ts`; Playwright (`scripts/qa-*.mjs`, mocked IPC) for user
-   flows; Swift tests for the Core ML host; Python `unittest` for evaluation tooling; CLI
+   tests for process boundaries (CLI binary, fake engine host); Vitest for frontend modules
+   (`src/lib/<module>.test.ts`, IPC through the typed mock in `src/test/ipc.ts`; component
+   tests with testing-library follow in #361; [docs/testing/frontend.md](../testing/frontend.md));
+   Playwright (`scripts/qa-*.mjs`, mocked IPC) for user flows; Swift tests for the Core ML host; Python `unittest` for evaluation tooling; CLI
    smoke in CI for the release binary. Test each fact at the lowest layer that can see it.
 2. **Behaviour, not source text.** No new test reads `.svelte` or other source as text to
    assert on its content. Extract logic into `.ts` modules and test them, or test the rendered
-   component. The existing source-text tests are replaced by #361 (Vitest, testing-library,
-   typed `mockIPC`); while they exist, update them only as far as a change requires.
+   component. The existing source-text tests (the `ui` group of `scripts/node-test-groups.mjs`)
+   are replaced by #361 (Vitest, testing-library, typed `mockIPC`); while they exist, update
+   them only as far as a change requires.
 3. **Regression test for every bug.** A bug fix starts with a test that fails before the fix
    and passes after; the PR says so. If no automated test is possible (TCC, signing, native
    focus), the PR states the manual check instead.

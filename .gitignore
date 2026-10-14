@@ -37,6 +37,7 @@ secrets/
 .vscode/
 
 # Test / benchmark outputs
+coverage/
 *.xcresult
 benchmark/audio/
 scripts/dictation_eval/__pycache__/

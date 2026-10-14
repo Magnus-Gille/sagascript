@@ -5,23 +5,20 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 test("Windows PR CI runs build identity regression tests before compilation", async () => {
-  const ci = (await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8"))
-    .replace(/\r\n?/g, "\n");
+  const ci = (await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8")).replace(/\r\n?/g, "\n");
   const testWindowsStart = ci.indexOf("  test-windows:");
   const buildWindowsStart = ci.indexOf("  build-windows:", testWindowsStart);
   assert.ok(testWindowsStart >= 0 && buildWindowsStart > testWindowsStart);
   const windows = ci.slice(testWindowsStart, buildWindowsStart);
-  const command = "node --test scripts/test-ci-build-identity.mjs scripts/test-windows-release-identity.mjs scripts/test-windows-package-workflow.mjs";
+  const command =
+    "node --test scripts/test-ci-build-identity.mjs scripts/test-windows-release-identity.mjs scripts/test-windows-package-workflow.mjs";
   const checks = windows.indexOf(command);
   assert.ok(checks > windows.indexOf("name: Install Node.js"));
   assert.ok(checks < windows.indexOf("name: Cargo check"));
 });
 
 test("Windows candidates pin and verify source identity around release compilation", async () => {
-  const workflow = await readFile(
-    new URL("../.github/workflows/windows-package.yml", import.meta.url),
-    "utf8",
-  );
+  const workflow = await readFile(new URL("../.github/workflows/windows-package.yml", import.meta.url), "utf8");
   const initialize = workflow.indexOf("node scripts/ci-build-identity.mjs --initialize");
   const installNode = workflow.indexOf("name: Install Node.js");
   const installDependencies = workflow.indexOf("name: Install npm dependencies");
@@ -32,8 +29,7 @@ test("Windows candidates pin and verify source identity around release compilati
   const cliBuild = workflow.indexOf("name: Gate real Windows transcription");
   const installerBuild = workflow.indexOf("name: Build unsigned internal installers");
   const artifacts = workflow.indexOf("name: Prepare and verify candidate artifacts");
-  const verifies = [...workflow.matchAll(/node scripts\/ci-build-identity\.mjs --verify/g)]
-    .map((match) => match.index);
+  const verifies = [...workflow.matchAll(/node scripts\/ci-build-identity\.mjs --verify/g)].map((match) => match.index);
   assert.equal(verifies.length, 3);
   assert.ok(verifies[0] > rustTests && verifies[0] < cliBuild);
   assert.ok(verifies[1] > cliBuild && verifies[1] < installerBuild);
@@ -41,18 +37,9 @@ test("Windows candidates pin and verify source identity around release compilati
   assert.match(workflow.slice(artifacts), /-ExpectedGitHash \$env:SAGASCRIPT_GIT_HASH/);
 });
 
-const workflow = await readFile(
-  new URL("../.github/workflows/windows-package.yml", import.meta.url),
-  "utf8",
-);
-const releaseGuide = await readFile(
-  new URL("../docs/windows-release.md", import.meta.url),
-  "utf8",
-);
-const acceptanceScript = await readFile(
-  new URL("./accept-windows-candidate.ps1", import.meta.url),
-  "utf8",
-);
+const workflow = await readFile(new URL("../.github/workflows/windows-package.yml", import.meta.url), "utf8");
+const releaseGuide = await readFile(new URL("../docs/windows-release.md", import.meta.url), "utf8");
+const acceptanceScript = await readFile(new URL("./accept-windows-candidate.ps1", import.meta.url), "utf8");
 
 test("Windows candidate workflow stays non-publishing and explicitly unsigned", () => {
   assert.match(workflow, /workflow_dispatch:/);
@@ -89,21 +76,18 @@ test("Windows candidate workflow stays non-publishing and explicitly unsigned", 
   const nodeStart = workflow.indexOf("name: Install Node.js");
   assert.ok(imageStart >= 0 && cacheStart > imageStart && nodeStart > cacheStart);
   const rustCache = workflow.slice(cacheStart, nodeStart);
-  assert.match(
-    rustCache,
-    /uses: Swatinem\/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6/,
-  );
+  assert.match(rustCache, /uses: Swatinem\/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6/);
   assert.match(rustCache, /workspaces:\s*\|\s*\n\s+src-tauri\s*\n\s+src-tauri\/engine-host\/ort/);
-  assert.doesNotMatch(rustCache, /cache-targets:\s*\$\{\{ matrix\.architecture != 'arm64' \}\}/, "arm64 targets are cacheable now that LLVM has a fixed path");
+  assert.doesNotMatch(
+    rustCache,
+    /cache-targets:\s*\$\{\{ matrix\.architecture != 'arm64' \}\}/,
+    "arm64 targets are cacheable now that LLVM has a fixed path",
+  );
   assert.match(
     rustCache,
     /shared-key:\s+windows-package-\$\{\{ matrix\.architecture \}\}-\$\{\{ steps\.windows-image\.outputs\.image_os \}\}-\$\{\{ steps\.windows-image\.outputs\.image_version \}\}-\$\{\{ hashFiles\('\.github\/workflows\/windows-package\.yml', 'scripts\/cmake\/windows-x64-portable\.cmake', 'scripts\/cmake\/windows-arm64-native\.cmake', 'scripts\/verify-windows-x64-cpu-policy\.ps1'\) \}\}/,
   );
-  assert.doesNotMatch(
-    rustCache,
-    /actions\/cache/,
-    "native cache must use the target-aware Rust cache namespace",
-  );
+  assert.doesNotMatch(rustCache, /actions\/cache/, "native cache must use the target-aware Rust cache namespace");
   assert.match(workflow, /accept-windows-candidate\.ps1/);
   assert.match(workflow, /norwegian-short-3s\.mp3/);
   assert.match(workflow, /Sagascript-Windows-\$architecture-Portable\.exe/);
@@ -142,10 +126,7 @@ test("Windows ARM64 pins and validates the LLVM toolchain before native configur
 
   const pin = workflow.slice(pinStart, nativeStart);
   assert.match(pin, /if: matrix\.architecture == 'arm64'/);
-  assert.match(
-    pin,
-    /https:\/\/github\.com\/llvm\/llvm-project\/releases\/download\/llvmorg-20\.1\.8\/LLVM-20\.1\.8-woa64\.exe/,
-  );
+  assert.match(pin, /https:\/\/github\.com\/llvm\/llvm-project\/releases\/download\/llvmorg-20\.1\.8\/LLVM-20\.1\.8-woa64\.exe/);
   assert.match(pin, /7c4ac97eb2ae6b960ca5f9caf3ff6124c8d2a18cc07a7840a4d2ea15537bad8e/);
 
   const download = pin.indexOf("Invoke-WebRequest");
@@ -214,16 +195,9 @@ test("Windows candidate makes real transcription a blocking gate", () => {
   assert.ok(gateStart >= 0 && buildStart > gateStart);
   const gate = workflow.slice(gateStart, buildStart);
   const downloadCalls = gate.match(/& \$binary download-model nb-whisper-tiny/g) ?? [];
-  assert.equal(
-    downloadCalls.length,
-    2,
-    "native gate must download once and re-verify the existing model",
-  );
+  assert.equal(downloadCalls.length, 2, "native gate must download once and re-verify the existing model");
   const firstDownload = gate.indexOf("& $binary download-model nb-whisper-tiny");
-  const secondDownload = gate.indexOf(
-    "& $binary download-model nb-whisper-tiny",
-    firstDownload + 1,
-  );
+  const secondDownload = gate.indexOf("& $binary download-model nb-whisper-tiny", firstDownload + 1);
   const transcription = gate.indexOf("& $binary transcribe");
   assert.ok(firstDownload >= 0 && secondDownload > firstDownload);
   assert.ok(transcription > secondDownload);
@@ -235,14 +209,9 @@ test("Windows candidate makes real transcription a blocking gate", () => {
 });
 
 test("Windows acceptance re-verifies an already-downloaded model", () => {
-  const downloadCalls = acceptanceScript.match(
-    /Invoke-Sagascript -Executable \$cliExePath -Arguments @\("download-model", "nb-whisper-tiny"\)/g,
-  ) ?? [];
-  assert.equal(
-    downloadCalls.length,
-    2,
-    "packaged acceptance must exercise existing-model verification",
-  );
+  const downloadCalls =
+    acceptanceScript.match(/Invoke-Sagascript -Executable \$cliExePath -Arguments @\("download-model", "nb-whisper-tiny"\)/g) ?? [];
+  assert.equal(downloadCalls.length, 2, "packaged acceptance must exercise existing-model verification");
   const firstDownload = acceptanceScript.indexOf(
     'Invoke-Sagascript -Executable $cliExePath -Arguments @("download-model", "nb-whisper-tiny")',
   );
@@ -250,7 +219,7 @@ test("Windows acceptance re-verifies an already-downloaded model", () => {
     'Invoke-Sagascript -Executable $cliExePath -Arguments @("download-model", "nb-whisper-tiny")',
     firstDownload + 1,
   );
-  const transcription = acceptanceScript.indexOf('$transcriptionOutput = Invoke-Sagascript');
+  const transcription = acceptanceScript.indexOf("$transcriptionOutput = Invoke-Sagascript");
   assert.ok(firstDownload >= 0 && secondDownload > firstDownload);
   assert.ok(transcription > secondDownload);
   assert.match(acceptanceScript, /verification_seconds/);
@@ -272,10 +241,7 @@ test("Windows release guide distinguishes the unsigned beta from stable release"
 test("third-party notice comparison accepts Windows checkout line endings", () => {
   const output = execFileSync(
     process.execPath,
-    [
-      fileURLToPath(new URL("./generate-third-party-notices.mjs", import.meta.url)),
-      "--test-newline-normalization",
-    ],
+    [fileURLToPath(new URL("./generate-third-party-notices.mjs", import.meta.url)), "--test-newline-normalization"],
     { encoding: "utf8" },
   );
   assert.match(output, /newline normalization passed/);

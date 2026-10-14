@@ -6,10 +6,7 @@ export function isSegmentActive(segment: MeetingSegment, time: number): boolean 
 }
 
 /** Return every active overlap in chronological order; gaps and EOF return []. */
-export function activeSegmentsAtTime(
-  segments: readonly MeetingSegment[],
-  time: number,
-): MeetingSegment[] {
+export function activeSegmentsAtTime(segments: readonly MeetingSegment[], time: number): MeetingSegment[] {
   return segments
     .filter((segment) => isSegmentActive(segment, time))
     .sort((a, b) => a.start - b.start || a.end - b.end || a.id.localeCompare(b.id));

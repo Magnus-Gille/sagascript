@@ -22,9 +22,7 @@ function runGit(args) {
     stdio: ["ignore", "pipe", "ignore"],
   });
   if (result.error || result.status !== 0 || !result.stdout) {
-    const detail = result.error && typeof result.error.code === "string"
-      ? "error=" + result.error.code
-      : "status=" + String(result.status);
+    const detail = result.error && typeof result.error.code === "string" ? "error=" + result.error.code : "status=" + String(result.status);
     throw new Error("git command failed: " + args.join(" ") + " (" + detail + ")");
   }
   return result.stdout;
@@ -118,13 +116,7 @@ function outputPathIsRegular(relativePath) {
 }
 
 function statusError(entry, reason) {
-  return new Error(
-    reason +
-      " path=" +
-      JSON.stringify(entry.path) +
-      " xy=" +
-      JSON.stringify(entry.xy),
-  );
+  return new Error(reason + " path=" + JSON.stringify(entry.path) + " xy=" + JSON.stringify(entry.xy));
 }
 
 function verifyStatus(entries) {
@@ -191,11 +183,7 @@ function initialize() {
   }
   const buildDate = new Date().toISOString().slice(0, 10);
   try {
-    appendFileSync(
-      githubEnv,
-      "SAGASCRIPT_GIT_HASH=" + sha + "\nSAGASCRIPT_BUILD_DATE=" + buildDate + "\n",
-      { encoding: "utf8" },
-    );
+    appendFileSync(githubEnv, "SAGASCRIPT_GIT_HASH=" + sha + "\nSAGASCRIPT_BUILD_DATE=" + buildDate + "\n", { encoding: "utf8" });
   } catch (error) {
     const code = error && typeof error.code === "string" ? error.code : "unknown";
     throw new Error("could not append build identity to GITHUB_ENV (" + code + ")");

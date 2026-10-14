@@ -15,8 +15,14 @@ export interface StageRow {
 
 const titles = ["Read audio", "Prepare audio & model", "Transcribe"];
 const phaseStages: Record<string, number> = {
-  decoding: 0, resampling: 1, loading: 1, language_detection: 1,
-  preparing: 1, encoding: 1, transcribing: 2, finalizing: 2,
+  decoding: 0,
+  resampling: 1,
+  loading: 1,
+  language_detection: 1,
+  preparing: 1,
+  encoding: 1,
+  transcribing: 2,
+  finalizing: 2,
 };
 
 export function initialStages(): StageState {
@@ -60,22 +66,29 @@ export function updateStages(state: StageState, phase: string, reported?: unknow
 
 export function finishStages(state: StageState, status: "completed" | "failed" | "cancelled"): StageState {
   if (state.status !== "running") return state;
-  return status === "completed"
-    ? { status, index: 2, phase: "completed", percent: 100 }
-    : { ...state, status };
+  return status === "completed" ? { status, index: 2, phase: "completed", percent: 100 } : { ...state, status };
 }
 
 function activeDetail(state: StageState): string {
   switch (state.phase) {
-    case "decoding": return "Decoding the file";
-    case "resampling": return "Converting to 16 kHz mono";
-    case "loading": return "Loading the speech model";
-    case "language_detection": return "Checking the language";
-    case "preparing": return "Preparing the speech engine";
-    case "encoding": return "Analysing sound before the first words";
-    case "transcribing": return state.percent === 100 ? "Finishing transcript…" : "Recognising words";
-    case "finalizing": return "Finishing transcript…";
-    default: return "";
+    case "decoding":
+      return "Decoding the file";
+    case "resampling":
+      return "Converting to 16 kHz mono";
+    case "loading":
+      return "Loading the speech model";
+    case "language_detection":
+      return "Checking the language";
+    case "preparing":
+      return "Preparing the speech engine";
+    case "encoding":
+      return "Analysing sound before the first words";
+    case "transcribing":
+      return state.percent === 100 ? "Finishing transcript…" : "Recognising words";
+    case "finalizing":
+      return "Finishing transcript…";
+    default:
+      return "";
   }
 }
 
@@ -86,11 +99,21 @@ export function stageRows(state: StageState): StageRow[] {
       if (state.status === "completed" || index < state.index) status = "completed";
       else if (index === state.index) status = state.status === "running" ? "active" : state.status;
     }
-    const detail = status === "active" ? activeDetail(state)
-      : status === "completed" ? "Done"
-      : status === "failed" ? "Failed"
-      : status === "cancelled" ? "Cancelled" : "Waiting";
-    return { title, status, detail, percent: status === "completed" ? 100
-      : index === state.index && status !== "pending" ? state.percent : 0 };
+    const detail =
+      status === "active"
+        ? activeDetail(state)
+        : status === "completed"
+          ? "Done"
+          : status === "failed"
+            ? "Failed"
+            : status === "cancelled"
+              ? "Cancelled"
+              : "Waiting";
+    return {
+      title,
+      status,
+      detail,
+      percent: status === "completed" ? 100 : index === state.index && status !== "pending" ? state.percent : 0,
+    };
   });
 }

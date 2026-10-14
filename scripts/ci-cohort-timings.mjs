@@ -95,11 +95,16 @@ function validateRun(run, index) {
     throw new Error(`${label}: ${error.message}`, { cause: error });
   }
   const jobs = normalizedRun.jobs;
-  const jobStarts = jobs.map((job) => parseTimestamp(run.jobs.find((candidate) => candidate.databaseId === job.id)?.startedAt, `${label}.jobs[${job.id}].startedAt`));
-  const jobEnds = jobs.map((job) => parseTimestamp(run.jobs.find((candidate) => candidate.databaseId === job.id)?.completedAt, `${label}.jobs[${job.id}].completedAt`));
-  const completeTiming = createdMilliseconds !== null && jobs.length > 0 && jobs.every((job, position) => (
-    job.durationSeconds !== null && jobStarts[position] !== null && jobEnds[position] !== null
-  ));
+  const jobStarts = jobs.map((job) =>
+    parseTimestamp(run.jobs.find((candidate) => candidate.databaseId === job.id)?.startedAt, `${label}.jobs[${job.id}].startedAt`),
+  );
+  const jobEnds = jobs.map((job) =>
+    parseTimestamp(run.jobs.find((candidate) => candidate.databaseId === job.id)?.completedAt, `${label}.jobs[${job.id}].completedAt`),
+  );
+  const completeTiming =
+    createdMilliseconds !== null &&
+    jobs.length > 0 &&
+    jobs.every((job, position) => job.durationSeconds !== null && jobStarts[position] !== null && jobEnds[position] !== null);
   const initialWaitSeconds = completeTiming ? interval(createdMilliseconds, Math.min(...jobStarts), `${label}.createdAt→first job`) : null;
   const elapsedSeconds = completeTiming ? interval(createdMilliseconds, Math.max(...jobEnds), `${label}.createdAt→last job`) : null;
   const eligible = status === "completed" && run.conclusion === "success" && completeTiming;
@@ -114,7 +119,7 @@ function validateRun(run, index) {
     createdAt: run.createdAt === undefined || run.createdAt === null ? null : requiredString(run.createdAt, `${label}.createdAt`),
     eligible,
     incomplete: status === "completed" && run.conclusion === "success" && !completeTiming,
-    reason: eligible ? null : (status === "completed" && run.conclusion === "success" ? "incomplete-timing" : "unsuccessful"),
+    reason: eligible ? null : status === "completed" && run.conclusion === "success" ? "incomplete-timing" : "unsuccessful",
     normalizedRun,
     initialWaitSeconds,
     elapsedSeconds,
@@ -192,25 +197,35 @@ export function summarizeCohorts(runs) {
     }
   }
   return {
-    cohorts: [...cohorts.values()].map((cohort) => {
-      const metrics = Object.fromEntries(Object.entries(cohort.metricValues).map(([name, values]) => [name, stats(values)]));
-      cohort.ledger.sort((left, right) => left.id - right.id || (left.attempt ?? -1) - (right.attempt ?? -1));
-      return {
-        workflowName: cohort.workflowName,
-        event: cohort.event,
-        attempt: cohort.attempt,
-        ledger: cohort.ledger,
-        counts: { ...cohort.counts, outcomes: { ...cohort.counts.outcomes } },
-        elapsedSeconds: metrics.elapsedSeconds,
-        initialWaitSeconds: metrics.initialWaitSeconds,
-        wallSeconds: metrics.wallSeconds,
-        runnerSeconds: metrics.runnerSeconds,
-        jobs: aggregate(cohort.jobValues),
-        steps: [...cohort.stepValues.values()]
-          .sort((left, right) => left.jobName.localeCompare(right.jobName) || left.number - right.number || left.name.localeCompare(right.name))
-          .map(({ jobName, name, number, values }) => ({ jobName, name, number, ...stats(values) })),
-      };
-    }).sort((left, right) => left.workflowName.localeCompare(right.workflowName) || left.event.localeCompare(right.event) || (left.attempt ?? -1) - (right.attempt ?? -1)),
+    cohorts: [...cohorts.values()]
+      .map((cohort) => {
+        const metrics = Object.fromEntries(Object.entries(cohort.metricValues).map(([name, values]) => [name, stats(values)]));
+        cohort.ledger.sort((left, right) => left.id - right.id || (left.attempt ?? -1) - (right.attempt ?? -1));
+        return {
+          workflowName: cohort.workflowName,
+          event: cohort.event,
+          attempt: cohort.attempt,
+          ledger: cohort.ledger,
+          counts: { ...cohort.counts, outcomes: { ...cohort.counts.outcomes } },
+          elapsedSeconds: metrics.elapsedSeconds,
+          initialWaitSeconds: metrics.initialWaitSeconds,
+          wallSeconds: metrics.wallSeconds,
+          runnerSeconds: metrics.runnerSeconds,
+          jobs: aggregate(cohort.jobValues),
+          steps: [...cohort.stepValues.values()]
+            .sort(
+              (left, right) =>
+                left.jobName.localeCompare(right.jobName) || left.number - right.number || left.name.localeCompare(right.name),
+            )
+            .map(({ jobName, name, number, values }) => ({ jobName, name, number, ...stats(values) })),
+        };
+      })
+      .sort(
+        (left, right) =>
+          left.workflowName.localeCompare(right.workflowName) ||
+          left.event.localeCompare(right.event) ||
+          (left.attempt ?? -1) - (right.attempt ?? -1),
+      ),
   };
 }
 
@@ -222,7 +237,9 @@ function isDirectEntry() {
 }
 
 function printHelp() {
-  process.stdout.write(`Usage: node scripts/ci-cohort-timings.mjs < runs.json\n\nRead a JSON array of GitHub workflow runs from stdin and group by workflowName, event, and attempt.\nBuild the array from gh run view RUN_ID --json databaseId,headSha,workflowName,event,attempt,status,conclusion,createdAt,jobs\n(or concatenate those objects from multiple gh run view calls). Required run fields: databaseId, headSha, workflowName, event,\nstatus, conclusion, jobs. attempt and timestamps may be null/missing; conclusion may be null while a run is in progress.\nSuccessful runs with incomplete timestamps stay in the ledger and counts but are excluded from latency aggregates.\np50 is the median; p90 uses nearest rank.\n`);
+  process.stdout.write(
+    `Usage: node scripts/ci-cohort-timings.mjs < runs.json\n\nRead a JSON array of GitHub workflow runs from stdin and group by workflowName, event, and attempt.\nBuild the array from gh run view RUN_ID --json databaseId,headSha,workflowName,event,attempt,status,conclusion,createdAt,jobs\n(or concatenate those objects from multiple gh run view calls). Required run fields: databaseId, headSha, workflowName, event,\nstatus, conclusion, jobs. attempt and timestamps may be null/missing; conclusion may be null while a run is in progress.\nSuccessful runs with incomplete timestamps stay in the ledger and counts but are excluded from latency aggregates.\np50 is the median; p90 uses nearest rank.\n`,
+  );
 }
 
 function main() {

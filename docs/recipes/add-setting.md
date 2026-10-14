@@ -14,17 +14,16 @@ step below. Per-profile values (language, model, dictionary, shortcuts) live on
    `impl Default for Settings`.
 2. The struct is `#[serde(default)]`, so files without the key load the default: an additive
    field needs no migration. You need one only to
-   - change the default for existing users: copy the version-marker pattern
-     (`engine_defaults_version`, `ENGINE_DEFAULTS_VERSION`, `Settings::migrate_engine_defaults`,
-     `migrate_engine_defaults_at`, called from `store::load()` in `settings/store.rs`);
-   - rename a key: `#[serde(alias = "old_name")]` (see `has_completed_onboarding`) or
-     `canonicalize_legacy_keys` in `store.rs`;
+   - change the default for existing users: append a step to `settings/migrations.rs`, guarded
+     by a version marker of its own like step 6 (`engine_defaults_version`,
+     `ENGINE_DEFAULTS_VERSION`, `Settings::migrate_engine_defaults`); see "Adding a migration"
+     in [ADR 0007](../adr/0007-settings-file-evolution.md);
+   - rename a key: `#[serde(alias = "old_name")]` (see `has_completed_onboarding`) or a
+     migration step;
    - add an enum: `#[serde(rename_all = "snake_case")]` plus `id()` / `parse_id()` like
      `EnginePrewarm`. Never remove or rename a variant that may be on disk: an unknown value
-     makes `load_from` fall back to `Settings::default()` for the whole file.
-
-Planned: [#365](https://github.com/Magnus-Gille/sagascript/issues/365) replaces the markers
-with `schema_version` and ordered migrations in one module.
+     resets that field to its default, and the next save replaces it (after saving a `.bak`
+     copy of the file).
 
 ## 2. CLI key: `src-tauri/crates/sagascript-cli/src/config.rs`
 
@@ -129,7 +128,7 @@ cli config set --help | grep example_flag       # the help text
 cli config reset example_flag && grep example_flag "$SAGASCRIPT_SETTINGS_PATH"  # key stays, now false
 cd ..
 grep -n set_example_flag src-tauri/src/commands.rs src-tauri/src/main.rs src/lib/api.ts  # all three
-npx svelte-check --tsconfig ./tsconfig.json && npm run test:frontend
+npx svelte-check --tsconfig ./tsconfig.json && npm run test:unit && npm run test:frontend
 npx playwright install chromium && npm run test:browser   # you touched Settings.svelte and the mock
 ```
 

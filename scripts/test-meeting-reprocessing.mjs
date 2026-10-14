@@ -1,25 +1,16 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import {
-  filterCandidateSegments,
-  proposalIsCurrent,
-  proposalIsFullyApplied,
-  proposalWasExported,
-  selectedPlanIsCurrent,
-} from "../src/lib/meeting-reprocessing-state.js";
 
-const source = await readFile(
-  new URL("../src/lib/MeetingReprocessing.svelte", import.meta.url),
-  "utf8",
-);
+// Source-text assertions over MeetingReprocessing.svelte, left for phase B of
+// #361. The meeting-reprocessing-state tests moved to
+// src/lib/meeting-reprocessing-state.test.ts (Vitest).
+
+const source = await readFile(new URL("../src/lib/MeetingReprocessing.svelte", import.meta.url), "utf8");
 
 test("execution uses the selected plan when plan controls have changed", () => {
   assert.match(source, /These controls set the next plan/);
-  assert.match(
-    source,
-    /selected && \(mode !== selected\.plan\.mode \|\| threshold !== selected\.plan\.threshold\)/,
-  );
+  assert.match(source, /selected && \(mode !== selected\.plan\.mode \|\| threshold !== selected\.plan\.threshold\)/);
   assert.match(source, /This is the plan that Execute will run/);
   assert.match(source, /selected\.plan\.mode\].label/);
   assert.match(source, /selected\.plan\.threshold\.toFixed\(2\)/);
@@ -36,72 +27,6 @@ test("proposal conflicts stay explicit, ordered, and nonempty", () => {
   assert.match(source, /row\.text !== undefined \|\| row\.speaker_id !== undefined/);
   assert.match(source, /Add another candidate target/);
   assert.match(source, /Mapped disposition/);
-});
-
-function proposalWithStatuses(statuses, resolutions = []) {
-  return {
-    preview: { steps: statuses.map((status) => ({ status })) },
-    proposal: { resolutions },
-  };
-}
-
-test("proposal acceptance allows empty and automatic dispositions but blocks conflicts", () => {
-  assert.equal(proposalIsFullyApplied(null), false);
-  assert.equal(proposalIsFullyApplied(proposalWithStatuses([])), true);
-  assert.equal(
-    proposalIsFullyApplied(proposalWithStatuses(["applied"], [null])),
-    true,
-  );
-  assert.equal(
-    proposalIsFullyApplied(proposalWithStatuses(["applied", "applied"], [null, []])),
-    true,
-  );
-  assert.equal(
-    proposalIsFullyApplied(proposalWithStatuses(["applied", "conflict"], [null])),
-    false,
-  );
-  assert.equal(
-    proposalIsFullyApplied(proposalWithStatuses(["applied", "blocked"], [null])),
-    false,
-  );
-});
-
-function selectedPlan(previousRevision) {
-  return { plan: { context: { previous_revision: previousRevision } } };
-}
-
-function proposalWithPrevious(previousRevision, revision = "proposal-revision") {
-  return { proposal: { previous: { revision: previousRevision }, revision } };
-}
-
-test("plans and proposals become stale when the current review revision changes", () => {
-  assert.equal(selectedPlanIsCurrent(selectedPlan("review-1"), "review-1"), true);
-  assert.equal(selectedPlanIsCurrent(selectedPlan("review-1"), "review-2"), false);
-  assert.equal(selectedPlanIsCurrent(selectedPlan("review-1"), null), false);
-  assert.equal(proposalIsCurrent(proposalWithPrevious("review-1"), "review-1"), true);
-  assert.equal(proposalIsCurrent(proposalWithPrevious("review-1"), "review-2"), false);
-  assert.equal(proposalIsCurrent(proposalWithPrevious("review-1"), null), false);
-});
-
-test("only a successful save for the current proposal revision counts as exported", () => {
-  const proposal = proposalWithPrevious("review-1", "proposal-1");
-  assert.equal(proposalWasExported(proposal, null), false);
-  assert.equal(proposalWasExported(proposal, "proposal-2"), false);
-  assert.equal(proposalWasExported(proposal, "proposal-1"), true);
-  assert.equal(proposalWasExported(null, "proposal-1"), false);
-});
-
-test("candidate filtering matches text, ids, and formatted time while retaining selected targets", () => {
-  const segments = [
-    { id: "seg-a", start: 0, end: 5.25, text: "Opening remarks" },
-    { id: "seg-b", start: 754, end: 760, text: "Budget discussion" },
-    { id: "seg-c", start: 1200, end: 1205, text: "Closing remarks" },
-  ];
-  assert.deepEqual(filterCandidateSegments(segments, "budget").map((segment) => segment.id), ["seg-b"]);
-  assert.deepEqual(filterCandidateSegments(segments, "12:34").map((segment) => segment.id), ["seg-b"]);
-  assert.deepEqual(filterCandidateSegments(segments, "seg-c").map((segment) => segment.id), ["seg-c"]);
-  assert.deepEqual(filterCandidateSegments(segments, "missing", ["seg-a"]).map((segment) => segment.id), ["seg-a"]);
-  assert.deepEqual(filterCandidateSegments(segments, "").map((segment) => segment.id), ["seg-a", "seg-b", "seg-c"]);
 });
 
 test("replacement and acceptance warn before discarding or replacing proposal state", () => {

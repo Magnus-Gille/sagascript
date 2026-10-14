@@ -5,8 +5,7 @@ import test from "node:test";
 // #357: suites that used to run in no PR lane (or only in the release gate)
 // are now part of PR CI. These assertions keep them there.
 
-const read = async (path) =>
-  (await readFile(new URL(`../${path}`, import.meta.url), "utf8")).replace(/\r\n?/g, "\n");
+const read = async (path) => (await readFile(new URL(`../${path}`, import.meta.url), "utf8")).replace(/\r\n?/g, "\n");
 
 const [workflow, devOverrides, workspaceManifest, ortManifest] = await Promise.all([
   read(".github/workflows/ci.yml"),
@@ -31,7 +30,8 @@ function steps(jobId) {
     .map((raw) => {
       const name = /^      - name: (.*)$/m.exec(raw)[1];
       const inline = /^        run: (?![|>])(.*)$/m.exec(raw)?.[1];
-      const block = /^        run: [|>]-?\n((?:          .*\n?|\n)*)/m.exec(raw)?.[1]
+      const block = /^        run: [|>]-?\n((?:          .*\n?|\n)*)/m
+        .exec(raw)?.[1]
         ?.split("\n")
         .map((line) => line.replace(/^          /, ""))
         .join("\n");
@@ -100,8 +100,19 @@ test("test-windows runs the full frontend suite after npm ci", () => {
   assert.ok(index > names.indexOf("Install npm dependencies"), "the suite needs node_modules");
   assert.ok(index < names.indexOf("Cargo check"), "the suite must fail before Cargo work");
   const identity = names.indexOf("Test Windows build identity gates");
-  assert.ok(
-    identity >= 0 && identity < names.indexOf("Install npm dependencies"),
-    "the early build identity gates stay ahead of npm ci",
-  );
+  assert.ok(identity >= 0 && identity < names.indexOf("Install npm dependencies"), "the early build identity gates stay ahead of npm ci");
+});
+
+test("test-macos and test-windows run the Vitest unit tests and the Prettier check after npm ci", () => {
+  for (const job of ["test-macos", "test-windows"]) {
+    const names = steps(job).map((step) => step.name);
+    const install = names.indexOf("Install npm dependencies");
+    assert.ok(install >= 0, `${job} must install npm dependencies`);
+    for (const command of ["npm run test:unit", "npm run format:check"]) {
+      const step = stepRunning(job, command, undefined);
+      const index = names.indexOf(step.name);
+      assert.ok(index > install, `${job}: \`${command}\` needs node_modules`);
+      assert.ok(index < names.indexOf("Cargo check"), `${job}: \`${command}\` must fail before Cargo work`);
+    }
+  }
 });
