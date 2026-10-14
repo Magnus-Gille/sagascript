@@ -78,7 +78,10 @@ impl CommandError {
         }
     }
 
-    /// Whether the same action can succeed on a second attempt.
+    /// Whether the user's action may be repeated (record again, run the file
+    /// again) and is expected to succeed: a busy engine, a model still loading,
+    /// nothing captured. Not that the same call may be repeated (a stopped
+    /// recording's audio is consumed), and never a timeout (ADR 0006).
     pub fn retryable(&self) -> bool {
         match self {
             Self::Busy(_) => true,

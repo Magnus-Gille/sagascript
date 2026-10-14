@@ -48,13 +48,19 @@
    `engine_crashed`, `engine_timeout`, `engine_unavailable`, `engine_io`) and its retry hint.
 5. **Paths are scrubbed at the Rust boundary** by `sagascript_core::path_scrub::scrub_paths`:
    macOS and Linux account folders, volumes and temporary folders (matched ASCII
-   case-insensitively, also as `/System/Volumes/Data/…`), `file://` and `file://localhost` URLs,
-   Windows drive, UNC and `\\?\` paths and the current home directory become `<path>`, keeping
-   the file name below the account folder (`<path>/foo.mlmodelc`) and removing every folder
-   before it. It runs where foreign text enters an error type (`EngineFailure::new`), in the
-   engine's log lines (load failure, host stderr, malformed host lines, pre-warm failure) and
-   again when `CommandError` is serialized, so a path that arrives through a plain string is
-   removed too. The Swift sources are unchanged.
+   case-insensitively, also as `/System/Volumes/Data/…` and after a run of slashes), `file://`
+   URLs with or without a host, Windows drive, UNC and `\\?\` paths and the current home
+   directory become `<path>`, keeping the file name below the account folder
+   (`<path>/foo.mlmodelc`) and removing every folder before it. The Swift JSON encoder's `\/`
+   spelling of a slash is read as a slash. It runs where foreign text enters an error type
+   (`EngineFailure::new`), in the engine's log lines (load failure, host stderr cut to 4 KB,
+   malformed host lines, pre-warm failure) and again when `CommandError` is serialized, so a
+   path that arrives through a plain string is removed too. The Swift sources are unchanged.
+   Privacy first: removing too much text is acceptable, keeping an account name is not. Three
+   properties are tested, also on generated inputs: a path never extends past the start of
+   another recognised root; the scan is linear (a megabyte takes milliseconds in a release build,
+   so the stderr drain thread never stalls); and a second scrub changes nothing, which matters
+   because the app scrubs twice.
 6. **`retryable` means the user's action may be repeated** (record again, run the file again)
    and is expected to succeed: a busy engine, a model still loading, nothing captured, an engine
    host restart. It does not mean the same `invoke` may be repeated: `stop_and_transcribe` has
@@ -76,11 +82,20 @@
   `transcription_failed` or `file_decode_error` before (engine failures, cancellation, a missing
   file).
 - The scrubber is a heuristic for text it does not control. It removes the account name from
-  every path in a recognised spelling (decision 5). Known non-goals: a JSON-escaped path
-  (`\/Users\/zoe`), a percent-encoded one (`%2FUsers%2F`), `~zoe/`, relative paths, and a home
-  directory the process does not know. A file name with spaces keeps its words; a path is cut at
-  a quote, bracket, comma, semicolon, line break or a colon followed by a space, so a later
-  slash in the same clause is not swallowed.
+  every path in a recognised spelling (decision 5). Known non-goals:
+  - a root that does not start a word (`é/Users/zoe`, `-o/Users/zoe`), a percent-encoded path
+    (`%2FUsers%2Fzoe`), `~zoe/`, relative paths, and a home directory the process does not know;
+  - an account folder whose name has a space and ends its clause (`C:\Users\John Smith.` with no
+    folder after it) keeps the words after the space, because they cannot be told from prose; with
+    a folder after it (`C:\Users\John Smith\x.bin`) the whole name goes;
+  - a comma, semicolon or colon followed by a space ends a path even inside a folder name, so the
+    folder names after it stay visible (`/Users/zoe/Smith, John/x.wav` becomes
+    `<path>/Smith, John/x.wav`); never the account folder, which comes first.
+
+  Where it ends a path early it errs towards keeping prose readable after the file name (a word
+  without a separator after a name with an extension, a word ending in a colon, a period or an
+  exclamation mark, a URL), and towards removing more when a later word contains a separator
+  (`and/or` after `a.wav` joins the path).
 - **Part 2** ([#360](https://github.com/Magnus-Gille/sagascript/issues/360)): convert the rest
   of the app crate's `Result<_, String>` (the target is at most 20, each justified), give every
   `Unclassified` producer a code, type `SettingsError` (the one remaining text match,
