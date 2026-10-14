@@ -91,10 +91,15 @@ awaits.
    `export async function setExampleFlag(enabled: boolean): Promise<void> { return invoke("set_example_flag", { enabled }); }`
    (Rust parameter names arrive as camelCase keys).
 2. `Settings.svelte`: import the wrapper; add a handler next to `onTemperatureFallbackToggle`
-   that calls `applySetting(() => setExampleFlag(next))` (it re-reads the settings and shows
-   errors; it resolves `true` once the change is saved, even if the re-read failed, which the
-   window reports separately; for a native `<select>` or `<input>` put the saved value back
-   when it resolves `false`, as `onBeamSizeChange` does); copy the `.field-row` toggle markup of "Show recording overlay"
+   that calls `applyScalarSetting(() => setExampleFlag(next))`. It writes, re-reads the
+   settings and shows errors, and does not query the models again. Use plain `applySetting`
+   only when the value feeds `dictation_model_for_profile` or the file-model resolution
+   (language, the profile list, a profile's or the file model): it also re-queries every
+   profile's models. Both resolve `true` once the change is saved, even if the re-read
+   failed, which the window reports separately; for a native `<select>` or `<input>` put the
+   saved value back when it resolves `false`, as `onBeamSizeChange` does. Add the new control
+   to the `changes` table in `src/lib/Settings.saving.test.ts`, which pins one write and one
+   read-back with no model queries. Copy the `.field-row` toggle markup of "Show recording overlay"
    (`role="switch"`, `aria-checked`, `aria-label`, and the `hotkey-hint` line under it). Put it
    next to related settings: dictation and paste behaviour lives in the Dictate tab (next to
    the auto-paste toggle), general settings in `{#if activeTab === "settings"}`, tuning knobs

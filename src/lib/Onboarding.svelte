@@ -1,21 +1,15 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
-  import { listen } from "@tauri-apps/api/event";
   import { toErrorMessage } from "./errors";
-  import type { ModelDownloadProgress } from "./events";
   import { hotkeyKeyLabel } from "./hotkey";
+  import { downloadModelById } from "./models.svelte";
+  import { waitForAccessibility } from "./permissions";
+  import { loadPlatform } from "./platform";
+  import { awaitDownloadCompletion, completedDownloadState } from "./onboarding-download-state";
+  import { useTauriEvent } from "./tauri-events.svelte";
   import {
-    adoptDownloadListeners,
-    awaitDownloadCompletion,
-    completedDownloadState,
-    registerDownloadListeners,
-  } from "./onboarding-download-state";
-  import {
-    getPlatform,
     getSettings,
     setLanguage,
-    downloadModel,
-    downloadPianissimoModel,
     getEffectiveModelInfo,
     microphoneStatus,
     requestMicrophoneAccess,
@@ -58,16 +52,23 @@
   let accessibilityChecking = $state(false);
   let accessibilityOpening = $state(false);
   let savingManualPaste = $state(false);
-  let pollTimer: ReturnType<typeof setTimeout> | null = $state(null);
+  let pollTimer: ReturnType<typeof setTimeout> | null = null;
   let pollGeneration = 0;
 
   // Hotkey (read from settings)
   let hotkeyParts: string[] = $state(["Ctrl", "Shift", "Space"]);
 
-  // Cleanup for event listeners
-  let unlistenProgress: (() => void) | null = null;
-  let unlistenReady: (() => void) | null = null;
   let componentDestroyed = false;
+
+  // Registered as the component initializes, before any initialization invoke:
+  // the component is interactive while those awaits are pending, so listeners
+  // registered after them could miss a fast model-ready event.
+  const downloadEvents = [
+    useTauriEvent("model-download-progress", ({ progress }) => {
+      downloadProgress = progress;
+    }),
+    useTauriEvent("model-ready", markDownloadComplete),
+  ];
 
   const engineSize: Record<OnboardingLanguage, string> = {
     en: "142 MB",
@@ -96,8 +97,7 @@
     } catch {
       // Fall back to the static recommendation; the download reports real errors.
     }
-    if (id === "pianissimo-sv") await downloadPianissimoModel();
-    else await downloadModel(id);
+    await downloadModelById(id);
   }
 
   function getSteps(): Step[] {
@@ -217,38 +217,41 @@
 
   async function grantAccessibility() {
     const generation = beginPollOperation();
+    const isCancelled = () => !isPollCurrent(generation);
     accessibilityError = null;
     accessibilityChecking = true;
     try {
       await requestAccessibilityPermission();
-      if (!isPollCurrent(generation)) return;
-      startPoll(generation, async (isCurrent) => {
-        try {
-          const granted = await checkAccessibilityPermission();
-          if (!isCurrent()) return;
-          if (granted) {
-            accessibilityGranted = true;
-            accessibilityChecking = false;
-            stopPoll();
-            try {
-              await retryHotkeyRegistration();
-            } catch (e) {
-              accessibilityError = `Accessibility was granted, but the saved dictation shortcut could not be registered: ${toErrorMessage(e, "unknown error")}`;
-            }
-          }
-        } catch (e) {
-          if (!isCurrent()) return;
-          stopPoll();
-          accessibilityChecking = false;
-          accessibilityError =
-            toErrorMessage(e, "Failed to check Accessibility permission. Please try again.");
-        }
-      });
     } catch (e) {
-      if (!isPollCurrent(generation)) return;
+      if (isCancelled()) return;
       accessibilityError =
         toErrorMessage(e, "Failed to request Accessibility permission. Please try again.");
       accessibilityChecking = false;
+      return;
+    }
+    if (isCancelled()) return;
+
+    let granted: boolean;
+    try {
+      // Until the user decides or leaves the step: `stopPoll()` cancels the wait.
+      granted = await waitForAccessibility({ attempts: Infinity, isCancelled });
+    } catch (e) {
+      if (isCancelled()) return;
+      stopPoll();
+      accessibilityChecking = false;
+      accessibilityError =
+        toErrorMessage(e, "Failed to check Accessibility permission. Please try again.");
+      return;
+    }
+    if (!granted) return;
+
+    accessibilityGranted = true;
+    accessibilityChecking = false;
+    stopPoll();
+    try {
+      await retryHotkeyRegistration();
+    } catch (e) {
+      accessibilityError = `Accessibility was granted, but the saved dictation shortcut could not be registered: ${toErrorMessage(e, "unknown error")}`;
     }
   }
 
@@ -347,33 +350,13 @@
   }
 
   onMount(async () => {
-    // Start listener registration before any initialization invokes. The
-    // component is interactive while awaits are pending, so registering these
-    // after permission/settings calls can miss a fast model-ready event.
-    let registeredListeners: [() => void, () => void] | null = null;
-    try {
-      registeredListeners = await registerDownloadListeners(
-        () => listen<ModelDownloadProgress>("model-download-progress", (event) => {
-          downloadProgress = event.payload.progress;
-        }),
-        () => listen("model-ready", markDownloadComplete),
-        () => componentDestroyed,
-      );
-    } catch (error) {
-      console.error("Failed to register onboarding download listeners", error);
-    }
-    adoptDownloadListeners(
-      registeredListeners,
-      () => componentDestroyed,
-      (progress, ready) => {
-        unlistenProgress = progress;
-        unlistenReady = ready;
-      },
-    );
+    // Failed registrations are already logged; the download still completes
+    // through its command result.
+    await Promise.allSettled(downloadEvents.map((events) => events.ready));
     if (componentDestroyed) return;
 
     try {
-      platform = await getPlatform();
+      platform = await loadPlatform();
     } catch (error) {
       // Never fall back to the macOS-only permission flow when platform
       // detection fails. "unknown" follows the portable onboarding path.
@@ -404,8 +387,6 @@
   onDestroy(() => {
     componentDestroyed = true;
     stopPoll();
-    unlistenProgress?.();
-    unlistenReady?.();
   });
 </script>
 

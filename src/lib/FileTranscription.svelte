@@ -10,7 +10,7 @@
     ReprocessingMode, SelectedReprocessingPlan, ProposalState, ReprocessingResult,
   } from "./meeting-reprocessing-types";
   import { onDestroy, tick, untrack } from "svelte";
-  import { listen } from "@tauri-apps/api/event";
+  import { subscribeTauriEvent, type Subscription } from "./tauri-events.svelte";
   import TranscriptionStages from "./TranscriptionStages.svelte";
   import MeetingProgress from "./MeetingProgress.svelte";
   import { initialStages, startStages, acceptRunProgress, finishStages } from "./transcribe-stages";
@@ -461,13 +461,14 @@
     const startedAt = Date.now();
     // Elapsed time is feedback, never measured compute progress.
     const timer = setInterval(() => { transcribeElapsedSec = Math.floor((Date.now() - startedAt) / 1000); }, 500);
-    let stopProgress: (() => void) | undefined;
+    let progress: Subscription | undefined;
     try {
       await waitForMeetingActions();
       // Register before invoking native work so even the first event is scoped.
-      stopProgress = await listen("plain-transcription-progress", (event) => {
-        plainStages = acceptRunProgress(plainStages, plainRunId, event.payload);
+      progress = subscribeTauriEvent("plain-transcription-progress", (payload) => {
+        plainStages = acceptRunProgress(plainStages, plainRunId, payload);
       });
+      await progress.ready;
       if (cancellingPlain) {
         plainStages = finishStages(plainStages, "cancelled");
         transcribeError = "Transcription was cancelled.";
@@ -489,7 +490,7 @@
       plainStages = finishStages(plainStages, cancellingPlain ? "cancelled" : "failed");
       transcribeError = cancellingPlain ? "Transcription was cancelled." : toErrorMessage(error, "Transcription failed");
     } finally {
-      stopProgress?.();
+      progress?.dispose();
       clearInterval(timer);
       plainRunId = null;
       plainRequestStarted = false;
