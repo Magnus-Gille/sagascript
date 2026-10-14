@@ -29,10 +29,10 @@ pub fn read_window(path: &Path, offset_samples: u64, num_samples: u64) -> Result
     let mut raw = vec![0u8; bytes as usize];
     file.read_exact(&mut raw)
         .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-    Ok(raw
-        .chunks_exact(4)
-        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-        .collect())
+    // `raw` holds exactly `num_samples * 4` bytes, so there is never a remainder.
+    let (samples, rest) = raw.as_chunks::<4>();
+    debug_assert!(rest.is_empty());
+    Ok(samples.iter().map(|&c| f32::from_le_bytes(c)).collect())
 }
 
 #[cfg(test)]
