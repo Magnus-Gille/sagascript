@@ -20,6 +20,7 @@ use serde::Deserialize;
 
 use crate::error::DictationError;
 use crate::settings::{EnginePrewarm, Settings};
+use crate::sync::lock_or_recover;
 use crate::transcription::dev_overrides::env_override;
 use crate::transcription::engine_host::{
     CancelToken, ClientIdentity, EngineHostClient, EngineHostConfig, EngineHostError, LoadEvent,
@@ -436,10 +437,23 @@ pub fn shared_client() -> Result<EngineHostClient, DictationError> {
 /// Shut the shared host down (CLI exit, model deletion, app quit). No-op when
 /// none was created.
 pub fn shutdown_shared_client() {
-    let shared = shared_slot().lock().ok().and_then(|mut slot| slot.take());
-    if let Some(shared) = shared {
-        shared.client.shutdown();
-    }
+    shutdown_slot(shared_slot());
+}
+
+/// Recovered as-is (ADR 0005): the slot holds either the previous complete
+/// `Shared` or the next one, whichever critical section a panic interrupted.
+const SHARED_SLOT_LOCK: &str = "pianissimo.shared_slot";
+
+/// Takes the client out of `slot` and shuts it down; whether there was one.
+/// Recovers a poisoned slot: the CLI shuts the host down after a command that
+/// panicked, which can be what poisoned it, and the host must not be orphaned.
+fn shutdown_slot(slot: &Mutex<Option<Shared>>) -> bool {
+    // The guard is gone before the (slow) shutdown.
+    let Some(shared) = lock_or_recover(slot, SHARED_SLOT_LOCK).take() else {
+        return false;
+    };
+    shared.client.shutdown();
+    true
 }
 
 static HOST_IDENTITY: Mutex<Option<(String, Option<String>)>> = Mutex::new(None);
@@ -857,6 +871,63 @@ impl PianissimoBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn idle_client() -> EngineHostClient {
+        // Never started (the host does not exist) and without idle supervision.
+        let mut config = EngineHostConfig::new(
+            "/nonexistent/sagascript-engine-host",
+            LoadSpec {
+                model_dir: "/nonexistent/models".into(),
+                model_id: "test-model".into(),
+                compute_units: "cpu".into(),
+            },
+        );
+        config.idle_unload = None;
+        config.idle_shutdown = None;
+        EngineHostClient::new(config)
+    }
+
+    fn shared_for_test() -> Shared {
+        Shared {
+            key: SharedKey {
+                host: "/nonexistent/sagascript-engine-host".into(),
+                model_dir: "/nonexistent/models".into(),
+                model_id: "test-model".into(),
+                compute_units: "cpu".into(),
+                idle_minutes: 0,
+            },
+            client: idle_client(),
+        }
+    }
+
+    #[test]
+    fn shutdown_takes_the_client_out_of_the_slot() {
+        let slot = Mutex::new(Some(shared_for_test()));
+        assert!(shutdown_slot(&slot));
+        assert!(slot.lock().unwrap().is_none());
+        assert!(!shutdown_slot(&slot), "nothing left to shut down");
+    }
+
+    /// The CLI shuts the host down after a command that panicked, and a
+    /// panic can be what poisoned the slot (ADR 0005): the host must still
+    /// be stopped, not orphaned.
+    #[test]
+    fn shutdown_still_runs_when_a_panic_poisoned_the_slot() {
+        let slot = Mutex::new(Some(shared_for_test()));
+        std::thread::scope(|scope| {
+            let panicked = scope
+                .spawn(|| {
+                    let _guard = slot.lock().unwrap();
+                    panic!("panic while holding the shared engine slot");
+                })
+                .join();
+            assert!(panicked.is_err());
+        });
+        assert!(slot.is_poisoned());
+
+        assert!(shutdown_slot(&slot), "the client was not shut down");
+        assert!(slot.lock().is_ok_and(|slot| slot.is_none()));
+    }
 
     #[test]
     fn gate_matrix_allows_only_macos_14_on_apple_silicon() {
