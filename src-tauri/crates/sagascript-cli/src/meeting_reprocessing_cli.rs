@@ -20,6 +20,7 @@ use crate::meeting_proposal::{read_json, write_json_new};
 use crate::meeting_reprocessing::{
     execute_reprocessing, plan_reprocessing, ReprocessingInput, ReprocessingResult,
 };
+use crate::output::{errln, Out};
 use crate::speaker_args::SpeakerCountArgs;
 
 const MAX_REPROCESSING_JSON_BYTES: usize = 24 * 1024 * 1024;
@@ -133,10 +134,10 @@ struct RuntimeInputs {
     glossary: Glossary,
 }
 
-pub fn run(args: ReprocessingArgs) -> Result<(), DictationError> {
+pub fn run(args: ReprocessingArgs, out: &Out) -> Result<(), DictationError> {
     match args.action {
         ReprocessingAction::Plan(args) => run_plan(args),
-        ReprocessingAction::Execute(args) => run_execute(args),
+        ReprocessingAction::Execute(args) => run_execute(args, out),
     }
 }
 
@@ -166,7 +167,7 @@ fn run_plan(args: PlanArgs) -> Result<(), DictationError> {
     write_json_new(&args.output, &plan)
 }
 
-fn run_execute(args: ExecuteArgs) -> Result<(), DictationError> {
+fn run_execute(args: ExecuteArgs, out: &Out) -> Result<(), DictationError> {
     ensure_output_absent(&args.output)?;
     if let Some(cache_output) = args.cache_output.as_deref() {
         ensure_output_absent(cache_output)?;
@@ -201,10 +202,14 @@ fn run_execute(args: ExecuteArgs) -> Result<(), DictationError> {
         None,
     )?;
     ensure_previous_revision_unchanged(&args.previous_review, &previous.revision)?;
-    publish_result(&args.output, result)
+    publish_result(&args.output, result, out)
 }
 
-fn publish_result(path: &Path, result: ReprocessingResult) -> Result<(), DictationError> {
+fn publish_result(
+    path: &Path,
+    result: ReprocessingResult,
+    out: &Out,
+) -> Result<(), DictationError> {
     let ReprocessingResult {
         proposal,
         required_work,
@@ -220,7 +225,7 @@ fn publish_result(path: &Path, result: ReprocessingResult) -> Result<(), Dictati
             "reprocessing diagnostics could not be serialized".to_string(),
         )
     })?;
-    eprintln!("{serialized}");
+    errln!(out, "{serialized}");
     Ok(())
 }
 

@@ -47,6 +47,11 @@ rustfft = { version = "6", optional = true }
 kodama = { version = "0.2", optional = true }
 ndarray = { version = "0.17", optional = true }
 
+# fsync(2) as the fallback for volumes that reject F_FULLFSYNC, which is all
+# std's `sync_all` does on Apple platforms (download.rs). Already in the graph.
+[target.'cfg(target_vendor = "apple")'.dependencies]
+libc = "0.2"
+
 # whisper-rs is declared per-target because macOS enables Metal/CoreML;
 # Windows and Linux use the CPU backend (Vulkan is a separate, currently-broken opt-in).
 [target.'cfg(target_os = "macos")'.dependencies]

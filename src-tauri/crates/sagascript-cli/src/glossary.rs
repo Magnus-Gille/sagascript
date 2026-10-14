@@ -14,6 +14,7 @@ use sagascript_core::transcription::{
     WhisperBackend,
 };
 
+use crate::output::{errln, outln, Out};
 use crate::transcribe::{effective_glossary, model_id_string};
 
 #[derive(Args)]
@@ -82,51 +83,56 @@ pub enum GlossaryAction {
     },
 }
 
-pub fn run(args: GlossaryArgs) -> Result<(), DictationError> {
+pub fn run(args: GlossaryArgs, out: &Out) -> Result<(), DictationError> {
     match args.action {
-        GlossaryAction::Path { profile } => path(profile.as_deref()),
-        GlossaryAction::List { profile } => list(profile.as_deref()),
+        GlossaryAction::Path { profile } => path(profile.as_deref(), out),
+        GlossaryAction::List { profile } => list(profile.as_deref(), out),
         GlossaryAction::Add {
             term,
             aliases,
             profile,
-        } => add(&term, &aliases, profile.as_deref()),
-        GlossaryAction::Remove { term, profile } => remove(&term, profile.as_deref()),
-        GlossaryAction::Clear { yes, profile } => clear(yes, profile.as_deref()),
+        } => add(&term, &aliases, profile.as_deref(), out),
+        GlossaryAction::Remove { term, profile } => remove(&term, profile.as_deref(), out),
+        GlossaryAction::Clear { yes, profile } => clear(yes, profile.as_deref(), out),
         GlossaryAction::Suggest {
             heard,
             corrected,
             profile,
             json,
             apply,
-        } => suggest(&heard, &corrected, profile.as_deref(), json, apply),
+        } => suggest(&heard, &corrected, profile.as_deref(), json, apply, out),
     }
 }
 
-fn path(profile: Option<&str>) -> Result<(), DictationError> {
+fn path(profile: Option<&str>, out: &Out) -> Result<(), DictationError> {
     let stored = settings::store::load();
     let profile = resolved_profile_id(&stored, profile)?;
     let path =
         settings::store::profile_glossary_path(&profile).map_err(DictationError::SettingsError)?;
-    println!("{}", path.display());
+    outln!(out, "{}", path.display())?;
     Ok(())
 }
 
-fn list(profile: Option<&str>) -> Result<(), DictationError> {
+fn list(profile: Option<&str>, out: &Out) -> Result<(), DictationError> {
     let stored = settings::store::load();
     let source = glossary_source(&stored, profile)?;
     let glossary = Glossary::parse(source);
     for entry in glossary.entries() {
         if entry.aliases.is_empty() {
-            println!("{}", entry.canonical);
+            outln!(out, "{}", entry.canonical)?;
         } else {
-            println!("{} = {}", entry.canonical, entry.aliases.join(" | "));
+            outln!(out, "{} = {}", entry.canonical, entry.aliases.join(" | "))?;
         }
     }
     Ok(())
 }
 
-fn add(term: &str, aliases: &[String], profile: Option<&str>) -> Result<(), DictationError> {
+fn add(
+    term: &str,
+    aliases: &[String],
+    profile: Option<&str>,
+    out: &Out,
+) -> Result<(), DictationError> {
     let term = validate_component("term", term)?;
     let aliases = aliases
         .iter()
@@ -156,11 +162,11 @@ fn add(term: &str, aliases: &[String], profile: Option<&str>) -> Result<(), Dict
         Ok(())
     })
     .map_err(DictationError::SettingsError)?;
-    eprintln!("Saved personal dictionary term: {term}");
+    errln!(out, "Saved personal dictionary term: {term}");
     Ok(())
 }
 
-fn remove(term: &str, profile: Option<&str>) -> Result<(), DictationError> {
+fn remove(term: &str, profile: Option<&str>, out: &Out) -> Result<(), DictationError> {
     let term = validate_component("term", term)?;
     let mut removed = false;
     settings::store::try_update(|stored| {
@@ -175,7 +181,7 @@ fn remove(term: &str, profile: Option<&str>) -> Result<(), DictationError> {
     .map_err(DictationError::SettingsError)?;
 
     if removed {
-        eprintln!("Removed personal dictionary term: {term}");
+        errln!(out, "Removed personal dictionary term: {term}");
         Ok(())
     } else {
         Err(DictationError::SettingsError(format!(
@@ -184,7 +190,7 @@ fn remove(term: &str, profile: Option<&str>) -> Result<(), DictationError> {
     }
 }
 
-fn clear(confirmed: bool, profile: Option<&str>) -> Result<(), DictationError> {
+fn clear(confirmed: bool, profile: Option<&str>, out: &Out) -> Result<(), DictationError> {
     if !confirmed {
         return Err(DictationError::SettingsError(
             "Refusing to clear the personal dictionary without --yes".to_string(),
@@ -195,7 +201,7 @@ fn clear(confirmed: bool, profile: Option<&str>) -> Result<(), DictationError> {
         Ok(())
     })
     .map_err(DictationError::SettingsError)?;
-    eprintln!("Cleared personal dictionary");
+    errln!(out, "Cleared personal dictionary");
     Ok(())
 }
 
@@ -205,6 +211,7 @@ fn suggest(
     profile: Option<&str>,
     json: bool,
     apply: bool,
+    out: &Out,
 ) -> Result<(), DictationError> {
     let corrected = std::fs::read_to_string(corrected_path).map_err(|error| {
         DictationError::SettingsError(format!(
@@ -217,7 +224,7 @@ fn suggest(
     let profile_id = resolved_profile_id(&stored, profile)?;
     validate_learning_profile(&stored, &profile_id)?;
     let glossary = effective_glossary(&stored, Some(&profile_id), None, None)?;
-    let heard = load_training_input(heard_path, &stored, &profile_id, &glossary)?;
+    let heard = load_training_input(heard_path, &stored, &profile_id, &glossary, out)?;
     let suggestions = suggest_glossary_candidates(&heard, &corrected, &glossary);
 
     if apply {
@@ -251,27 +258,31 @@ fn suggest(
     }
 
     if json {
-        println!(
+        outln!(
+            out,
             "{}",
             serde_json::json!({
                 "profile": profile_id,
                 "applied": apply,
                 "suggestions": suggestions,
             })
-        );
+        )?;
     } else if suggestions.is_empty() {
-        println!("No safe personal dictionary suggestions.");
+        outln!(out, "No safe personal dictionary suggestions.")?;
     } else {
         for candidate in &suggestions {
             match candidate.kind {
                 GlossarySuggestionKind::Alias => {
-                    println!("{} = {}", candidate.canonical, candidate.observed);
+                    outln!(out, "{} = {}", candidate.canonical, candidate.observed)?;
                 }
-                GlossarySuggestionKind::HintOnly => println!("{}", candidate.canonical),
+                GlossarySuggestionKind::HintOnly => outln!(out, "{}", candidate.canonical)?,
             }
         }
         if !apply {
-            eprintln!("Dry run only. Re-run with --apply to save these profile-scoped entries.");
+            errln!(
+                out,
+                "Dry run only. Re-run with --apply to save these profile-scoped entries."
+            );
         }
     }
     Ok(())
@@ -282,6 +293,7 @@ fn load_training_input(
     stored: &settings::Settings,
     profile_id: &str,
     glossary: &Glossary,
+    out: &Out,
 ) -> Result<String, DictationError> {
     let is_text = path
         .extension()
@@ -329,7 +341,8 @@ fn load_training_input(
     }
     let raw = match choice {
         FileModel::Whisper(model) => {
-            eprintln!(
+            errln!(
+                out,
                 "Transcribing training input locally with {}...",
                 model.display_name()
             );
@@ -343,7 +356,10 @@ fn load_training_input(
             )?
         }
         FileModel::PianissimoOriginal => {
-            eprintln!("Transcribing training input locally with Pianissimo...");
+            errln!(
+                out,
+                "Transcribing training input locally with Pianissimo..."
+            );
             PianissimoBackend::start()?.transcribe(&audio, |_| {})?.text
         }
     };

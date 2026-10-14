@@ -63,6 +63,16 @@ without a subcommand. `target/<profile>/sagascript` is whichever was built last.
 builds `sagascript-fake-engine-host` (`crates/sagascript-core/tests/support/fake_engine_host.rs`)
 for tests.
 
+**CLI output and exit:** both binaries call `sagascript_cli::run(cli) -> ExitCode` and return
+it from `main`. `run_with(cli, &Out)` dispatches the subcommand and returns an `exit::Exit`
+without exiting the process, so unit tests call it with `Out::capture()`. Every command writes
+through `output::Out` (`outln!`/`errln!`, `Out::json`/`jsonl`; the crate denies
+`println!`/`eprintln!`): a closed stdout pipe ends the run quietly with exit 0, and
+`exit::conclude` maps the result to the exit status and, for a `--json`/`--jsonl` run that
+failed before writing anything, writes one `{"status":"error","code","error"}` object on
+stdout. `transcribe`'s three output modes live in one `BatchSink`. The statuses are listed in
+[add-cli-subcommand.md](recipes/add-cli-subcommand.md#4-exit-codes).
+
 **Build facts that bite:**
 
 - Bare `cargo build/test/clippy` in `src-tauri/` covers only the app (`default-members = ["."]`);
@@ -171,7 +181,7 @@ sequenceDiagram
 | Store | `crates/sagascript-core/src/settings/store.rs` | `load`, `load_from`, `save`, `update`, `try_update`; cross-process `fs2` lock on `<file>.json.lock`; read-merge-write keeps unknown keys; atomic rename. |
 | AppController | `app_controller.rs` | In-memory copy: `settings()`, `settings_mut()`, `update_settings()`. Dictation reads it at use time. |
 | Watcher | `start_settings_watcher` in `main.rs` | `PollWatcher` on macOS, `RecommendedWatcher` elsewhere; filter `configuration_event_may_affect`; waits while a dictation records (`acquire_hotkey_configuration`). Fires for the app's own writes too (harmless reload). |
-| Frontend | `getSettings()` / setters in `src/lib/api.ts`; `applySetting()` and the `settings_reloaded` listener in `Settings.svelte` | Always re-reads after a write. |
+| Frontend | `getSettings()` / setters in `src/lib/api.ts`; `saveSetting()`, `applySetting()` and the `settings_reloaded` listener in `Settings.svelte` | Re-reads after a write. A rejected setter saved nothing; a saved change whose re-read fails is reported as saved, never repeated and never rolled back: the window shows a Reload settings notice, disables the controls that save a setting and sends no further change until a read succeeds. Reads are settled in the order they were issued, so a late answer, success or failure, cannot replace or hide a newer one ([#341](https://github.com/Magnus-Gille/sagascript/issues/341)). |
 
 Rules: write through `store::update`/`try_update` (never `save()` a possibly stale clone);
 release the file lock before taking the controller lock; the watcher replays only hotkey
@@ -286,7 +296,7 @@ sequenceDiagram
 |---|---|
 | Main (UI) thread | Tauri setup, tray/window/overlay APIs, global-shortcut callbacks on macOS (and key-down on Windows), `macos_bare` callbacks, `run_on_main_thread` closures (macOS paste, AppKit focus calls), sync (non-`async`) Tauri commands. |
 | Tokio runtime | `async` Tauri commands, tasks from `tauri::async_runtime::spawn` (dictation stop pipeline, update flow). |
-| Blocking pool | `spawn_blocking`: inference, paste on Windows/Linux, focus-restore wait, recovery file I/O. |
+| Blocking pool | `spawn_blocking`: inference, paste on Windows/Linux, focus-restore wait, recovery file I/O, and the file work of model downloads (`download::run_blocking`: directory preparation, hashing existing artifacts, fsync, rename and directory sync on install, Pianissimo staging and promotion). |
 | Dedicated threads | Settings watcher, startup model warm-up, engine-host reader/stderr/stdin-writer/supervisor/wedge-watch threads and the PCM temp dir sweep, audio capture worker and cpal callback, `global-hotkey` event thread (Linux) and key-up polling thread (Windows). |
 | CLI | `sagascript_cli::run` builds its own Tokio runtime; inference commands run on a worker thread (16 MiB stack on Windows, `run_inference_command`). |
 
@@ -302,7 +312,7 @@ sequenceDiagram
 | `WhisperBackend` (`load_lock`, `state`, `context`, `loaded_runtime`, `cached_runtime`) | `transcription/whisper_backend.rs` | `load_lock` and `state` are taken with a bounded wait (`lock_load_bounded`, `lock_state_bounded`, `WARM_STATE_GRACE`), returning `ModelBusy` instead of blocking. |
 | Engine host (`lifecycle`, `state`, `boost`; process `routing`, `stdin`, `child`) | `engine_host/client.rs`, `process.rs` | `lifecycle` serializes start/load/unload/shutdown; it is released while a restart backoff is slept. `stdin` only guards the writer thread's queue, never a write. |
 | Pianissimo `shared_slot` and load-state statics | `pianissimo_backend.rs` | Process-global client. |
-| Others | `AudioCaptureService` buffers (`audio/capture.rs`), `GLOBAL_DICTATION` (`logging/service.rs`), the download `verification_cache` (`download.rs`), `LiveDictationBackend.active_job`, `PianissimoBackend.active`, `HostProcess` `stderr_tail`/`reader`, the CLI `Canceller` (`cancel.rs`) | Leaf locks. The capture buffers are taken under `SharedController` by start/stop and without it by the capture worker and cpal callback. |
+| Others | `AudioCaptureService` buffers (`audio/capture.rs`), `GLOBAL_DICTATION` (`logging/service.rs`), the download `verification_cache` and `download.http_clients` client cache (`download.rs`), `LiveDictationBackend.active_job`, `PianissimoBackend.active`, `HostProcess` `stderr_tail`/`reader`, the CLI `Canceller` (`cancel.rs`) | Leaf locks. The capture buffers are taken under `SharedController` by start/stop and without it by the capture worker and cpal callback. |
 
 Observed acquisition order (outer → inner). Nothing enforces it; keep new code consistent:
 
@@ -414,10 +424,17 @@ replaces the remaining source-text tests in the `ui` group with component tests.
   carries `settings_reloaded`. **Planned:** [#347](https://github.com/Magnus-Gille/sagascript/issues/347).
 - Commands return `Result<_, String>` and the frontend matches on message text. **Planned:**
   [#360](https://github.com/Magnus-Gille/sagascript/issues/360) (ADR 0006).
-- CLI output goes through `println!`/`eprintln!` and `run()` ends in `process::exit`.
-  **Planned:** [#364](https://github.com/Magnus-Gille/sagascript/issues/364).
+- Only some CLI subcommands offer `--json` (`list-models`, `config list`, `glossary list`,
+  `formats` and `config profiles list` do not), `--progress-json` events share stderr with prose
+  and `tracing`, and a second Ctrl-C still force-quits from the signal thread
+  (`cancel.rs`). Follow-ups of [#364](https://github.com/Magnus-Gille/sagascript/issues/364).
 - Whisper and Pianissimo are selected by hand (`LiveDictationBackend::new(whisper, pianissimo)`);
   there is no engine trait. **Planned:** [#378](https://github.com/Magnus-Gille/sagascript/issues/378).
 - `main.rs` and `commands.rs` will be split by domain
   ([#369](https://github.com/Magnus-Gille/sagascript/issues/369),
   [#370](https://github.com/Magnus-Gille/sagascript/issues/370)); update this map when files move.
+- Most `async` Tauri commands in `commands.rs` have no `.await` and call synchronous helpers
+  that write the settings file (`store::update`, under the settings file lock) on a Tokio
+  worker. Model downloads and Pianissimo installs already do their file work on the blocking
+  pool ([#368](https://github.com/Magnus-Gille/sagascript/issues/368)). **Planned:** the setters
+  become plain `fn`s or `spawn_blocking` writes together with `persist_and_sync` in #370.

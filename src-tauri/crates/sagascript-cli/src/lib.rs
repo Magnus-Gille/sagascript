@@ -1,3 +1,9 @@
+// All CLI output goes through `output::Out` (#364): `println!`/`eprintln!`
+// would bypass its broken-pipe handling and the JSON error objects. The crate
+// is at zero for both print lints, so it denies them (CONTRIBUTING.md, "Clippy
+// policy lints"); tests may still print (src-tauri/clippy.toml).
+#![deny(clippy::print_stdout, clippy::print_stderr)]
+
 pub(crate) mod benchmark_config;
 pub mod benchmark_dictation;
 mod benchmark_quality;
@@ -7,6 +13,7 @@ pub mod diarization;
 #[cfg(feature = "diarization")]
 mod diarization_cache;
 pub mod engine;
+pub mod exit;
 pub mod glossary;
 pub mod latency;
 pub mod meeting;
@@ -17,6 +24,7 @@ pub mod meeting_reprocessing;
 pub mod meeting_reprocessing_cli;
 pub mod models;
 pub mod open;
+pub mod output;
 #[cfg(feature = "diarization")]
 pub mod speaker_args;
 // Live recording is optional (`record` feature, on by default) so a pure
@@ -26,10 +34,14 @@ pub mod speaker_args;
 pub mod record;
 pub mod transcribe;
 
-use std::io::{self, Write};
 use std::path::PathBuf;
+use std::process::ExitCode;
 
 use clap::{CommandFactory, Parser, Subcommand};
+use sagascript_core::error::DictationError;
+
+use crate::exit::{conclude, CliError, Exit, JsonOutput};
+use crate::output::{errln, outln, Out};
 
 /// Default CLI logging keeps application warnings/errors but suppresses native
 /// Whisper/GGML messages below error. Those libraries classify routine Metal
@@ -577,73 +589,124 @@ pub fn try_parse() -> Option<Cli> {
     }
 }
 
-/// Run the CLI subcommand. Blocks until complete, then exits.
-pub fn run(cli: Cli) {
-    install_engine_identity();
-    let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
+/// Run the CLI subcommand on the process's stdout and stderr and return the
+/// exit status for `main` to return. Blocks until complete.
+pub fn run(cli: Cli) -> ExitCode {
+    run_with(cli, &Out::stdio()).into()
+}
 
-    let result = match cli.command.unwrap() {
-        Command::Diarization(args) => diarization::run(args),
-        Command::BenchmarkDictation(args) => {
-            run_inference_command("benchmark-dictation", move || {
-                benchmark_dictation::run(args)
-            })
-        }
-        Command::Transcribe(args) => {
-            run_inference_command("transcribe", move || transcribe::run(args))
-        }
-        Command::LatencyReport(args) => latency::run(args),
-        Command::Meeting(args) => meeting::run(args),
-        #[cfg(feature = "record")]
-        Command::Record(args) => run_inference_command("record", move || record::run(args)),
-        Command::ListModels(args) => models::list(args),
-        Command::DownloadModel(args) => rt.block_on(models::download(args)),
-        Command::DeleteModel(args) => models::delete(args),
-        Command::Open => open::run(),
-        #[cfg(target_os = "macos")]
-        Command::Update => open::run_update(),
-        Command::ResetOnboarding => sagascript_core::settings::store::update(|settings| {
-            settings.has_completed_onboarding = false;
-        })
-        .map_err(sagascript_core::error::DictationError::SettingsError)
-        .map(|_| {
-            eprintln!("Onboarding reset. The setup wizard will run on next launch.");
-        }),
-        Command::Config(args) => config::run(args),
-        Command::Engine(args) => engine::run(args),
-        Command::Glossary(args) => glossary::run(args),
-        Command::Formats => {
-            formats();
-            Ok(())
-        }
-        Command::Completions { shell } => {
-            generate_completions(shell);
-            Ok(())
-        }
-        Command::Manpages { dir } => generate_manpages(dir),
+/// Run the CLI subcommand, writing through `out`, and return how the run
+/// ended (docs/recipes/add-cli-subcommand.md, "Exit codes"). Never exits the
+/// process, so tests call it directly with [`Out::capture`].
+pub fn run_with(cli: Cli, out: &Out) -> Exit {
+    let Some(command) = cli.command else {
+        errln!(
+            out,
+            "Error: a subcommand is required; see 'sagascript --help'"
+        );
+        return Exit::Usage;
     };
+    install_engine_identity();
+    let json = json_output(&command);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| dispatch(command, out)));
 
-    // Stop the engine host (if this command started one) before exiting.
+    // Stop the engine host (if this command started one) before exiting, also
+    // when the command panicked: the panic then continues as before (exit 101).
     sagascript_core::transcription::pianissimo_backend::shutdown_shared_client();
+    let result = result.unwrap_or_else(|panic| std::panic::resume_unwind(panic));
 
     // A Ctrl-C/SIGTERM during file transcription unwinds to here with whatever
-    // error the aborted work produced; report it as a cancellation, not a failure.
-    if cancel::is_cancelled() {
-        eprintln!("Cancelled");
-        std::process::exit(cancel::exit_code());
-    }
+    // error the aborted work produced; `conclude` reports it as a cancellation.
+    conclude(
+        result,
+        json,
+        out,
+        cancel::is_cancelled().then(cancel::exit_code),
+    )
+}
 
-    if let Err(e) = result {
-        eprintln!("Error: {e}");
-        std::process::exit(1);
+/// The framing of the command's machine-readable stdout, when it was asked
+/// for one with `--json`/`--jsonl`. A failure before any output then writes a
+/// structured error object (`exit::conclude`). A command whose stdout is
+/// always JSON has no such flag and is deliberately absent: when it fails
+/// before it has a report, stdout stays empty (`latency-report`,
+/// `benchmark-dictation`, `diarization *`, `transcribe --meeting-json`).
+fn json_output(command: &Command) -> Option<JsonOutput> {
+    match command {
+        Command::Transcribe(args) if args.jsonl => Some(JsonOutput::Compact),
+        Command::Transcribe(args) if args.json => Some(JsonOutput::Pretty),
+        #[cfg(feature = "record")]
+        Command::Record(args) if args.json => Some(JsonOutput::Pretty),
+        Command::Engine(args) => match args.action {
+            engine::EngineAction::Status { json: true }
+            | engine::EngineAction::Doctor { json: true, .. } => Some(JsonOutput::Pretty),
+            _ => None,
+        },
+        Command::Glossary(args) => match args.action {
+            glossary::GlossaryAction::Suggest { json: true, .. } => Some(JsonOutput::Compact),
+            _ => None,
+        },
+        _ => None,
     }
+}
+
+fn dispatch(command: Command, out: &Out) -> Result<(), CliError> {
+    match command {
+        Command::Diarization(args) => diarization::run(args, out)?,
+        Command::BenchmarkDictation(args) => {
+            let out = out.clone();
+            run_inference_command("benchmark-dictation", move || {
+                benchmark_dictation::run(args, &out)
+            })?
+        }
+        Command::Transcribe(args) => {
+            let out = out.clone();
+            run_inference_command("transcribe", move || Ok(transcribe::run(args, &out)?))?
+        }
+        Command::LatencyReport(args) => return latency::run(args, out),
+        Command::Meeting(args) => meeting::run(args, out)?,
+        #[cfg(feature = "record")]
+        Command::Record(args) => {
+            let out = out.clone();
+            run_inference_command("record", move || Ok(record::run(args, &out)?))?
+        }
+        Command::ListModels(args) => models::list(args, out)?,
+        Command::DownloadModel(args) => tokio::runtime::Runtime::new()
+            .map_err(|error| {
+                DictationError::ModelDownloadFailed(format!(
+                    "could not start the download runtime: {error}"
+                ))
+            })?
+            .block_on(models::download(args, out))?,
+        Command::DeleteModel(args) => models::delete(args, out)?,
+        Command::Open => open::run(out)?,
+        #[cfg(target_os = "macos")]
+        Command::Update => open::run_update(out)?,
+        Command::ResetOnboarding => {
+            sagascript_core::settings::store::update(|settings| {
+                settings.has_completed_onboarding = false;
+            })
+            .map_err(DictationError::SettingsError)?;
+            errln!(
+                out,
+                "Onboarding reset. The setup wizard will run on next launch."
+            );
+        }
+        Command::Config(args) => config::run(args, out)?,
+        Command::Engine(args) => return engine::run(args, out),
+        Command::Glossary(args) => glossary::run(args, out)?,
+        Command::Formats => formats(out)?,
+        Command::Completions { shell } => generate_completions(shell, out)?,
+        Command::Manpages { dir } => generate_manpages(dir, out)?,
+    }
+    Ok(())
 }
 
 #[cfg(target_os = "windows")]
 fn run_inference_command(
     command: &'static str,
-    task: impl FnOnce() -> Result<(), sagascript_core::error::DictationError> + Send + 'static,
-) -> Result<(), sagascript_core::error::DictationError> {
+    task: impl FnOnce() -> Result<(), CliError> + Send + 'static,
+) -> Result<(), CliError> {
     // MSVC executables start with a much smaller main-thread stack than the
     // worker threads used by the desktop app. Whisper inference exhausted it
     // with STATUS_STACK_OVERFLOW (0xC00000FD) in the real Windows CI gate.
@@ -667,44 +730,48 @@ fn run_inference_command(
 #[cfg(not(target_os = "windows"))]
 fn run_inference_command(
     _command: &'static str,
-    task: impl FnOnce() -> Result<(), sagascript_core::error::DictationError>,
-) -> Result<(), sagascript_core::error::DictationError> {
+    task: impl FnOnce() -> Result<(), CliError>,
+) -> Result<(), CliError> {
     task()
 }
 
-fn formats() {
+fn formats(out: &Out) -> Result<(), DictationError> {
     use sagascript_core::audio::decoder::SUPPORTED_EXTENSIONS;
 
-    println!("Supported audio/video formats:");
+    outln!(out, "Supported audio/video formats:")?;
     for ext in SUPPORTED_EXTENSIONS {
-        println!("  .{ext}");
+        outln!(out, "  .{ext}")?;
     }
+    Ok(())
 }
 
-fn generate_completions<G: Generator>(gen: G) {
-    clap_complete::generate(gen, &mut Cli::command(), "sagascript", &mut io::stdout());
+/// clap_complete panics when its writer fails, so the script is rendered in
+/// memory and written through `out` (a closed pipe then ends the run quietly).
+fn generate_completions<G: Generator>(gen: G, out: &Out) -> Result<(), DictationError> {
+    let mut script = Vec::new();
+    clap_complete::generate(gen, &mut Cli::command(), "sagascript", &mut script);
+    out.bytes(&script)?;
+    Ok(())
 }
 
-fn generate_manpages(dir: Option<PathBuf>) -> Result<(), sagascript_core::error::DictationError> {
+fn generate_manpages(dir: Option<PathBuf>, out: &Out) -> Result<(), DictationError> {
     let cmd = Cli::command();
 
-    let map_err = |e: io::Error| {
-        sagascript_core::error::DictationError::SettingsError(format!(
-            "Failed to generate man pages: {e}"
-        ))
+    let map_err = |e: std::io::Error| {
+        DictationError::SettingsError(format!("Failed to generate man pages: {e}"))
     };
 
     match dir {
         Some(dir) => {
             std::fs::create_dir_all(&dir).map_err(|e| {
-                sagascript_core::error::DictationError::SettingsError(format!(
+                DictationError::SettingsError(format!(
                     "Failed to create directory '{}': {e}",
                     dir.display()
                 ))
             })?;
 
             // Generate man pages for root command and all subcommands
-            render_manpage_tree(&cmd, &dir).map_err(map_err)?;
+            render_manpage_tree(&cmd, &dir, out).map_err(map_err)?;
 
             Ok(())
         }
@@ -713,19 +780,23 @@ fn generate_manpages(dir: Option<PathBuf>) -> Result<(), sagascript_core::error:
             let man = clap_mangen::Man::new(cmd);
             let mut buf = Vec::new();
             man.render(&mut buf).map_err(map_err)?;
-            io::stdout().write_all(&buf).map_err(map_err)?;
+            out.bytes(&buf)?;
             Ok(())
         }
     }
 }
 
-fn render_manpage_tree(cmd: &clap::Command, dir: &PathBuf) -> Result<(), io::Error> {
+fn render_manpage_tree(
+    cmd: &clap::Command,
+    dir: &PathBuf,
+    out: &Out,
+) -> Result<(), std::io::Error> {
     let man = clap_mangen::Man::new(cmd.clone());
     let name = cmd.get_name().replace(' ', "-");
     let path = dir.join(format!("{name}.1"));
     let mut file = std::fs::File::create(&path)?;
     man.render(&mut file)?;
-    eprintln!("Generated: {}", path.display());
+    errln!(out, "Generated: {}", path.display());
 
     for sub in cmd.get_subcommands() {
         if sub.get_name() == "help" {
@@ -734,7 +805,7 @@ fn render_manpage_tree(cmd: &clap::Command, dir: &PathBuf) -> Result<(), io::Err
         let mut sub = sub.clone();
         let full_name = format!("{}-{}", cmd.get_name(), sub.get_name());
         sub = sub.name(&full_name);
-        render_manpage_tree(&sub, dir)?;
+        render_manpage_tree(&sub, dir, out)?;
     }
 
     Ok(())
@@ -908,7 +979,17 @@ mod tests {
         let dir = temp.path().to_path_buf();
 
         let cmd = Cli::command();
-        render_manpage_tree(&cmd, &dir).expect("man page tree should render");
+        let (out, captured) = Out::capture();
+        render_manpage_tree(&cmd, &dir, &out).expect("man page tree should render");
+        assert!(
+            captured.stderr().starts_with(&format!(
+                "Generated: {}\n",
+                dir.join("sagascript.1").display()
+            )),
+            "each page is reported on stderr: {}",
+            captured.stderr()
+        );
+        assert_eq!(captured.stdout(), "");
 
         // Root page must exist
         assert!(dir.join("sagascript.1").exists(), "root man page missing");
@@ -1661,5 +1742,196 @@ mod tests {
     fn parse_unknown_subcommand_is_error() {
         let result = Cli::try_parse_from(["sagascript", "nonexistent"]);
         assert!(result.is_err());
+    }
+
+    // -- Exit codes of run_with, in-process (#364) --
+
+    fn run_captured(args: &[&str]) -> (Exit, output::Captured) {
+        let cli = Cli::try_parse_from(std::iter::once("sagascript").chain(args.iter().copied()))
+            .expect("valid arguments");
+        let (out, captured) = Out::capture();
+        (run_with(cli, &out), captured)
+    }
+
+    #[test]
+    fn run_with_succeeds_with_the_result_on_stdout() {
+        let (exit, captured) = run_captured(&["formats"]);
+        assert_eq!(exit, Exit::Success);
+        assert_eq!(exit.code(), 0);
+        assert!(
+            captured
+                .stdout()
+                .starts_with("Supported audio/video formats:\n  .wav\n  .mp3\n"),
+            "{}",
+            captured.stdout()
+        );
+        assert_eq!(captured.stderr(), "");
+    }
+
+    #[test]
+    fn run_with_reports_a_failed_command_on_stderr_with_exit_one() {
+        let temp = sagascript_testsupport::TempDir::new();
+        let missing = temp.join("missing-events.jsonl");
+        let (exit, captured) =
+            run_captured(&["latency-report", "--input", missing.to_str().unwrap()]);
+        assert_eq!(exit, Exit::Failure);
+        assert_eq!(exit.code(), 1);
+        assert_eq!(captured.stdout(), "");
+        assert_eq!(
+            captured.stderr(),
+            "Error: File decode error: latency-report input could not be opened (NotFound)\n"
+        );
+    }
+
+    #[test]
+    fn run_with_without_a_subcommand_is_a_usage_error() {
+        let (out, captured) = Out::capture();
+        let exit = run_with(Cli { command: None }, &out);
+        assert_eq!(exit, Exit::Usage);
+        assert_eq!(exit.code(), 2);
+        assert_eq!(captured.stdout(), "");
+        assert!(captured.stderr().starts_with("Error: "));
+    }
+
+    #[test]
+    fn run_with_reports_a_failed_check_with_exit_three_after_its_report() {
+        let temp = sagascript_testsupport::TempDir::new();
+        let input = temp.join("events.jsonl");
+        std::fs::write(&input, "").unwrap();
+        let (exit, captured) = run_captured(&[
+            "latency-report",
+            "--input",
+            input.to_str().unwrap(),
+            "--budget-length",
+            "short",
+            "--max-warm-p95-ms",
+            "100",
+        ]);
+        assert_eq!(exit, Exit::CheckFailed);
+        assert_eq!(exit.code(), 3);
+        let report: serde_json::Value =
+            serde_json::from_str(&captured.stdout()).expect("the report is on stdout");
+        assert_eq!(report["budget"]["passed"], false);
+        assert_eq!(
+            captured.stderr(),
+            "Error: Settings error: latency budget check failed\n"
+        );
+    }
+
+    #[test]
+    fn run_with_reports_an_unready_reference_qualification_with_exit_three() {
+        let temp = sagascript_testsupport::TempDir::new();
+        let reference = temp.join("reference.json");
+        let manifest = temp.join("manifest.json");
+        std::fs::write(&reference, "{\"not\":\"a reference\"}").unwrap();
+        std::fs::write(&manifest, "{\"not\":\"a manifest\"}").unwrap();
+        let (exit, captured) = run_captured(&[
+            "diarization",
+            "reference-qualify",
+            reference.to_str().unwrap(),
+            "--manifest",
+            manifest.to_str().unwrap(),
+        ]);
+        assert_eq!(exit, Exit::CheckFailed);
+        assert_eq!(exit.code(), 3);
+        let report: serde_json::Value =
+            serde_json::from_str(&captured.stdout()).expect("the report is on stdout");
+        assert_eq!(report["status"], "invalid-input");
+        assert_eq!(
+            captured.stderr(),
+            "Error: Transcription failed: reference qualification is not ready\n"
+        );
+    }
+
+    #[test]
+    fn run_with_ends_quietly_with_zero_when_stdout_is_closed() {
+        use crate::output::test_writers::ClosedPipe;
+        for args in [&["formats"][..], &["completions", "bash"], &["manpages"]] {
+            let cli =
+                Cli::try_parse_from(std::iter::once("sagascript").chain(args.iter().copied()))
+                    .unwrap();
+            let (out, captured) = Out::capture_stderr(ClosedPipe);
+            let exit = run_with(cli, &out);
+            assert_eq!(exit, Exit::StdoutClosed, "{args:?}");
+            assert_eq!(exit.code(), 0, "{args:?}");
+            assert_eq!(captured.stderr(), "", "{args:?}");
+        }
+    }
+
+    #[test]
+    fn run_with_keeps_a_failed_budget_when_stdout_is_closed() {
+        use crate::output::test_writers::ClosedPipe;
+        let temp = sagascript_testsupport::TempDir::new();
+        let input = temp.join("events.jsonl");
+        std::fs::write(&input, "").unwrap();
+        let cli = |extra: &[&str]| {
+            let mut args = vec![
+                "sagascript".to_owned(),
+                "latency-report".to_owned(),
+                "--input".to_owned(),
+                input.to_str().unwrap().to_owned(),
+            ];
+            args.extend(extra.iter().map(|arg| (*arg).to_owned()));
+            Cli::try_parse_from(args).unwrap()
+        };
+
+        // The reader leaving does not change whether the budget passed.
+        let (out, captured) = Out::capture_stderr(ClosedPipe);
+        let exit = run_with(
+            cli(&["--budget-length", "short", "--max-warm-p95-ms", "100"]),
+            &out,
+        );
+        assert_eq!(exit, Exit::CheckFailed);
+        assert_eq!(
+            captured.stderr(),
+            "Error: Settings error: latency budget check failed\n"
+        );
+
+        // Without a budget there is no verdict: a closed reader ends it quietly.
+        let (out, captured) = Out::capture_stderr(ClosedPipe);
+        assert_eq!(run_with(cli(&[]), &out), Exit::StdoutClosed);
+        assert_eq!(captured.stderr(), "");
+    }
+
+    #[test]
+    fn run_with_fails_with_the_cause_when_stdout_cannot_be_written() {
+        use crate::output::test_writers::FullDisk;
+        let cli = Cli::try_parse_from(["sagascript", "formats"]).unwrap();
+        let (out, captured) = Out::capture_stderr(FullDisk);
+        let exit = run_with(cli, &out);
+        assert_eq!(exit, Exit::Failure);
+        assert_eq!(
+            captured.stderr(),
+            "Error: could not write to stdout: No space left on device\n"
+        );
+    }
+
+    #[test]
+    fn run_with_writes_an_error_object_for_a_failed_json_command() {
+        let temp = sagascript_testsupport::TempDir::new();
+        let heard = temp.join("heard.txt");
+        std::fs::write(&heard, "heard\n").unwrap();
+        let corrected = temp.join("missing-corrected.txt");
+        let (exit, captured) = run_captured(&[
+            "glossary",
+            "suggest",
+            heard.to_str().unwrap(),
+            "--corrected",
+            corrected.to_str().unwrap(),
+            "--json",
+        ]);
+        assert_eq!(exit, Exit::Failure);
+        let error: serde_json::Value =
+            serde_json::from_str(&captured.stdout()).expect("one JSON document on stdout");
+        assert_eq!(error["status"], "error");
+        assert_eq!(error["code"], "settings_error");
+        assert!(error["error"]
+            .as_str()
+            .unwrap()
+            .starts_with("Settings error: Failed to read corrected transcript"));
+        assert_eq!(
+            captured.stderr(),
+            format!("Error: {}\n", error["error"].as_str().unwrap())
+        );
     }
 }
