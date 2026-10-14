@@ -165,6 +165,7 @@ impl MeetingAudio {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sagascript_testsupport::{sha256_hex, TempDir};
     use std::io::Write;
 
     struct ShortReader {
@@ -183,20 +184,27 @@ mod tests {
         }
     }
 
+    /// A new, empty file in its own temporary directory, open for writing.
+    /// Fields drop in order: the file is closed before its directory goes.
     struct TestFile {
-        path: std::path::PathBuf,
         file: File,
+        path: std::path::PathBuf,
+        _directory: TempDir,
     }
     impl TestFile {
         fn new() -> Self {
-            let path = std::env::temp_dir()
-                .join(format!("sagascript-media-test-{}", uuid::Uuid::new_v4()));
+            let directory = TempDir::new();
+            let path = directory.join("media");
             let file = File::options()
                 .write(true)
                 .create_new(true)
                 .open(&path)
                 .unwrap();
-            Self { path, file }
+            Self {
+                file,
+                path,
+                _directory: directory,
+            }
         }
         fn path(&self) -> &Path {
             &self.path
@@ -213,17 +221,12 @@ mod tests {
             &mut self.file
         }
     }
-    impl Drop for TestFile {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_file(&self.path);
-        }
-    }
 
     fn fixture() -> (TestFile, Vec<u8>, String) {
         let mut file = TestFile::new();
         let bytes = b"RIFF\x24\0\0\0WAVEfmt \x10\0\0\0test audio contents".to_vec();
         file.write_all(&bytes).unwrap();
-        let hash = format!("{:x}", Sha256::digest(&bytes));
+        let hash = sha256_hex(&bytes);
         (file, bytes, hash)
     }
     #[test]
@@ -236,7 +239,7 @@ mod tests {
         let (header, digest, total) = read_digest_and_header(&mut reader).unwrap();
         assert_eq!(header, bytes);
         assert_eq!(total, bytes.len() as u64);
-        assert_eq!(digest, format!("{:x}", Sha256::digest(&bytes)));
+        assert_eq!(digest, sha256_hex(&bytes));
         assert!(header.starts_with(b"RIFF") && header.get(8..12) == Some(b"WAVE"));
     }
     #[test]
@@ -260,14 +263,11 @@ mod tests {
         let (file, _, _) = fixture();
         assert!(MeetingAudio::open(file.path(), &"0".repeat(64)).is_err());
         let empty = TestFile::new();
-        assert!(MeetingAudio::open(empty.path(), &format!("{:x}", Sha256::digest([]))).is_err());
+        assert!(MeetingAudio::open(empty.path(), &sha256_hex(b"")).is_err());
         assert!(MeetingAudio::open(file.path().parent().unwrap(), &"0".repeat(64)).is_err());
         let mut text = TestFile::new();
         text.write_all(b"not audio").unwrap();
-        assert!(
-            MeetingAudio::open(text.path(), &format!("{:x}", Sha256::digest(b"not audio")))
-                .is_err()
-        );
+        assert!(MeetingAudio::open(text.path(), &sha256_hex(b"not audio")).is_err());
     }
     #[test]
     fn changes_invalidate_attachment_permanently() {
