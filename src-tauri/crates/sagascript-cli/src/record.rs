@@ -1,4 +1,3 @@
-use std::io::{self, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -14,6 +13,8 @@ use sagascript_core::transcription::live_dictation::LiveDictationBackend;
 use sagascript_core::transcription::model;
 use sagascript_core::transcription::pianissimo_model;
 use sagascript_core::transcription::{Glossary, TranscribeOptions, WhisperBackend};
+
+use crate::output::{errln, outln, Out, WriteError};
 
 use super::transcribe::{
     copy_to_clipboard, effective_glossary, model_id_string, parse_language,
@@ -68,7 +69,7 @@ pub struct RecordArgs {
     pub prompt_file: Option<PathBuf>,
 }
 
-pub fn run(args: RecordArgs) -> Result<(), DictationError> {
+pub fn run(args: RecordArgs, out: &Out) -> Result<(), DictationError> {
     let stored = sagascript_core::settings::store::load();
     let profile = match args.profile.as_deref() {
         Some(profile_id) => resolve_profile(&stored, profile_id)?,
@@ -166,9 +167,9 @@ pub fn run(args: RecordArgs) -> Result<(), DictationError> {
     capture.start_capture()?;
 
     if let Some(secs) = args.duration {
-        eprintln!("Recording for {secs}s... (press Ctrl+C to stop early)");
+        errln!(out, "Recording for {secs}s... (press Ctrl+C to stop early)");
     } else {
-        eprintln!("Recording... press Ctrl+C to stop");
+        errln!(out, "Recording... press Ctrl+C to stop");
     }
 
     // Wait for duration or Ctrl+C
@@ -187,7 +188,8 @@ pub fn run(args: RecordArgs) -> Result<(), DictationError> {
 
     let audio = capture.stop_capture()?;
     let duration = audio.len() as f64 / TARGET_SAMPLE_RATE as f64;
-    eprintln!(
+    errln!(
+        out,
         "Captured {:.1}s of audio ({} samples)",
         duration,
         audio.len()
@@ -202,7 +204,7 @@ pub fn run(args: RecordArgs) -> Result<(), DictationError> {
         let wav_bytes = sagascript_core::audio::wav::encode_wav(&audio);
         std::fs::write(output_path, &wav_bytes)
             .map_err(|e| DictationError::FileDecodeError(format!("Failed to write WAV: {e}")))?;
-        eprintln!("Saved to {output_path}");
+        errln!(out, "Saved to {output_path}");
         return Ok(());
     }
 
@@ -210,7 +212,7 @@ pub fn run(args: RecordArgs) -> Result<(), DictationError> {
     let selected_model = selected_model.expect("transcription model resolved before capture");
     let (text, model_id) = match selected_model {
         RecordModel::Whisper(model) => {
-            eprintln!("Loading model: {}...", model.display_name());
+            errln!(out, "Loading model: {}...", model.display_name());
             let backend = WhisperBackend::new();
             backend.load_model(model)?;
 
@@ -236,17 +238,17 @@ pub fn run(args: RecordArgs) -> Result<(), DictationError> {
                 pb.finish_and_clear();
                 text
             } else {
-                eprintln!("Transcribing...");
+                errln!(out, "Transcribing...");
                 backend.transcribe_live_sync_with_options(&audio, language, &opts, |_| {})?
             };
             (text, model_id_string(model))
         }
         RecordModel::Pianissimo => {
             if glossary.decoder_prompt().is_some() {
-                eprintln!("Pianissimo does not use Whisper decoder hints; aliases in the selected profile still correct the transcript after inference.");
+                errln!(out, "Pianissimo does not use Whisper decoder hints; aliases in the selected profile still correct the transcript after inference.");
             }
-            eprintln!("Loading model: Pianissimo...");
-            let text = transcribe_pianissimo_record(&audio, duration)?;
+            errln!(out, "Loading model: Pianissimo...");
+            let text = transcribe_pianissimo_record(&audio, duration, out)?;
             (text, "pianissimo-sv")
         }
     };
@@ -263,17 +265,14 @@ pub fn run(args: RecordArgs) -> Result<(), DictationError> {
             "duration_seconds": duration,
             "vocabulary_corrections": vocabulary_corrections,
         });
-        println!("{}", serde_json::to_string_pretty(&json).unwrap());
+        out.json(&json)?;
     } else {
-        let mut stdout = io::stdout().lock();
-        write_plain_record_output(&mut stdout, &text).map_err(|error| {
-            DictationError::TranscriptionFailed(format!("Failed to write output: {error}"))
-        })?;
+        write_plain_record_output(out, &text)?;
     }
 
     if args.clipboard && has_text {
         copy_to_clipboard(&text)?;
-        eprintln!("Copied to clipboard.");
+        errln!(out, "Copied to clipboard.");
     }
 
     Ok(())
@@ -354,9 +353,13 @@ fn validate_pianissimo_record_options(
     Ok(())
 }
 
-fn transcribe_pianissimo_record(audio: &[f32], duration: f64) -> Result<String, DictationError> {
+fn transcribe_pianissimo_record(
+    audio: &[f32],
+    duration: f64,
+    out: &Out,
+) -> Result<String, DictationError> {
     let backend = LiveDictationBackend::new(Arc::new(WhisperBackend::new()), true);
-    transcribe_pianissimo_with_progress(duration, |progress| {
+    transcribe_pianissimo_with_progress(duration, out, |progress| {
         progress(0);
         let result = backend.transcribe(
             WhisperModel::Base,
@@ -374,6 +377,7 @@ fn transcribe_pianissimo_record(audio: &[f32], duration: f64) -> Result<String, 
 
 fn transcribe_pianissimo_with_progress<T>(
     duration: f64,
+    out: &Out,
     transcribe: impl FnOnce(Box<dyn Fn(u8) + Send>) -> Result<T, DictationError>,
 ) -> Result<T, DictationError> {
     if duration > 10.0 {
@@ -386,17 +390,17 @@ fn transcribe_pianissimo_with_progress<T>(
         pb.finish_and_clear();
         result
     } else {
-        eprintln!("Transcribing...");
+        errln!(out, "Transcribing...");
         transcribe(Box::new(|_| {}))
     }
 }
 
-fn write_plain_record_output(writer: &mut impl Write, text: &str) -> io::Result<bool> {
+fn write_plain_record_output(out: &Out, text: &str) -> Result<bool, WriteError> {
     if text.trim().is_empty() {
         return Ok(false);
     }
 
-    writeln!(writer, "{text}")?;
+    outln!(out, "{text}")?;
     Ok(true)
 }
 
@@ -412,6 +416,7 @@ mod tests {
         resolve_record_model, resolve_record_model_for_profile, validate_pianissimo_record_options,
         write_plain_record_output, RecordModel,
     };
+    use crate::output::Out;
     use sagascript_core::settings::{
         FileModelPreference, HotkeyProfile, Language, Settings, WhisperModel,
     };
@@ -457,7 +462,7 @@ mod tests {
     fn pianissimo_silence_skips_native_model_in_record() {
         for audio in [vec![0.0; 1600], vec![0.00001; 1600]] {
             assert_eq!(
-                super::transcribe_pianissimo_record(&audio, 0.1).unwrap(),
+                super::transcribe_pianissimo_record(&audio, 0.1, &Out::capture().0).unwrap(),
                 ""
             );
         }
@@ -563,16 +568,17 @@ mod tests {
     #[test]
     fn empty_plain_record_output_emits_nothing() {
         for text in ["", " \n\t"] {
-            let mut output = Vec::new();
-            assert!(!write_plain_record_output(&mut output, text).unwrap());
-            assert!(output.is_empty());
+            let (out, captured) = Out::capture();
+            assert!(!write_plain_record_output(&out, text).unwrap());
+            assert!(captured.stdout().is_empty());
+            assert!(!out.stdout_used());
         }
     }
 
     #[test]
     fn nonempty_plain_record_output_keeps_text_and_newline() {
-        let mut output = Vec::new();
-        assert!(write_plain_record_output(&mut output, "hello").unwrap());
-        assert_eq!(output, b"hello\n");
+        let (out, captured) = Out::capture();
+        assert!(write_plain_record_output(&out, "hello").unwrap());
+        assert_eq!(captured.stdout(), "hello\n");
     }
 }

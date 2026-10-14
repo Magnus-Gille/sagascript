@@ -1,7 +1,7 @@
 //! Read-only CLI operations for validated meeting transcript documents.
 
 use std::fs::File;
-use std::io::{self, Read, Write};
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 use clap::{Args, Subcommand, ValueEnum};
@@ -9,6 +9,8 @@ use sagascript_core::error::DictationError;
 use sagascript_core::meeting::{MeetingExportFormat, MeetingTranscript};
 use sagascript_core::meeting_media::MeetingAudio;
 use sagascript_core::meeting_review::{CorrectionFile, MeetingReview, MeetingReviewError};
+
+use crate::output::{outln, Out};
 
 const MAX_INPUT_BYTES: usize = 24 * 1024 * 1024;
 const MAX_IO_CONTEXT_CHARS: usize = 160;
@@ -127,11 +129,11 @@ impl From<MeetingFormat> for MeetingExportFormat {
     }
 }
 
-pub fn run(args: MeetingArgs) -> Result<(), DictationError> {
+pub fn run(args: MeetingArgs, out: &Out) -> Result<(), DictationError> {
     match args.action {
         #[cfg(feature = "diarization")]
-        MeetingAction::Reprocess(args) => crate::meeting_reprocessing_cli::run(*args),
-        MeetingAction::Proposal(args) => crate::meeting_proposal::run(args),
+        MeetingAction::Reprocess(args) => crate::meeting_reprocessing_cli::run(*args, out),
+        MeetingAction::Proposal(args) => crate::meeting_proposal::run(args, out),
         MeetingAction::Review {
             action:
                 MeetingReviewAction::AudioRange {
@@ -142,11 +144,11 @@ pub fn run(args: MeetingArgs) -> Result<(), DictationError> {
                 },
         } => {
             let output = run_audio_range(&input, &audio, start, length)?;
-            write_bytes(&output)
+            Ok(out.bytes(&output)?)
         }
         action => {
             let output = execute(MeetingArgs { action })?;
-            write_stdout(&output)
+            Ok(outln!(out, "{output}")?)
         }
     }
 }
@@ -377,21 +379,6 @@ fn media_transform_error<E>(_error: E) -> DictationError {
     DictationError::TranscriptionFailed(
         "meeting audio operation rejected by validated source-bound media contract".to_string(),
     )
-}
-
-fn write_stdout(output: &str) -> Result<(), DictationError> {
-    let mut stdout = io::stdout().lock();
-    stdout
-        .write_all(output.as_bytes())
-        .and_then(|_| stdout.write_all(b"\n"))
-        .map_err(|error| io_error("meeting output could not be written", error))
-}
-
-fn write_bytes(output: &[u8]) -> Result<(), DictationError> {
-    io::stdout()
-        .lock()
-        .write_all(output)
-        .map_err(|error| io_error("meeting audio output could not be written", error))
 }
 
 fn io_error(action: &str, error: io::Error) -> DictationError {

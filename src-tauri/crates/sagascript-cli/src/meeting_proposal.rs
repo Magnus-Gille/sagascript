@@ -17,6 +17,8 @@ use sagascript_core::meeting_reprocess_proposal::{
 use sagascript_core::meeting_review::{CorrectionOperation, MeetingReview};
 use serde::{de::DeserializeOwned, Serialize};
 
+use crate::output::Out;
+
 const MAX_REVIEW_BYTES: usize = 24 * 1024 * 1024;
 const MAX_TRANSCRIPT_BYTES: usize = 24 * 1024 * 1024;
 const MAX_OPERATIONS_BYTES: usize = 24 * 1024 * 1024;
@@ -64,7 +66,7 @@ pub enum ProposalAction {
     },
 }
 
-pub fn run(args: ProposalArgs) -> Result<(), DictationError> {
+pub fn run(args: ProposalArgs, out: &Out) -> Result<(), DictationError> {
     match args.action {
         ProposalAction::New {
             previous,
@@ -81,13 +83,13 @@ pub fn run(args: ProposalArgs) -> Result<(), DictationError> {
         ProposalAction::Inspect { input } => {
             let proposal: MeetingReprocessingProposal =
                 read_json(&input, MAX_SERIALIZED_PROPOSAL_BYTES, "proposal")?;
-            write_stdout_json(&proposal)
+            write_stdout_json(&proposal, out)
         }
         ProposalAction::Preview { input } => {
             let proposal: MeetingReprocessingProposal =
                 read_json(&input, MAX_SERIALIZED_PROPOSAL_BYTES, "proposal")?;
             let preview = proposal.preview().map_err(proposal_transform_error)?;
-            write_stdout_json(&preview)
+            write_stdout_json(&preview, out)
         }
         ProposalAction::Resolve {
             input,
@@ -240,13 +242,10 @@ fn write_atomic_new(path: &Path, bytes: &[u8]) -> Result<(), DictationError> {
     }
 }
 
-fn write_stdout_json<T: Serialize>(value: &T) -> Result<(), DictationError> {
+fn write_stdout_json<T: Serialize>(value: &T, out: &Out) -> Result<(), DictationError> {
     let mut bytes = serde_json::to_vec(value).map_err(|_| serialization_error())?;
     bytes.push(b'\n');
-    io::stdout()
-        .lock()
-        .write_all(&bytes)
-        .map_err(|error| io_error("meeting output could not be written", error))
+    Ok(out.bytes(&bytes)?)
 }
 
 fn proposal_transform_error(_error: ProposalError) -> DictationError {
@@ -328,13 +327,16 @@ mod tests {
         let proposed = transcript(&"a".repeat(64), "hello");
         write_fixture(&previous_path, &previous);
         write_fixture(&proposed_path, &proposed);
-        run(ProposalArgs {
-            action: ProposalAction::New {
-                previous: previous_path,
-                proposed: proposed_path,
-                output: proposal_path.clone(),
+        run(
+            ProposalArgs {
+                action: ProposalAction::New {
+                    previous: previous_path,
+                    proposed: proposed_path,
+                    output: proposal_path.clone(),
+                },
             },
-        })
+            &Out::capture().0,
+        )
         .expect("new");
         let proposal: MeetingReprocessingProposal =
             read_json(&proposal_path, MAX_SERIALIZED_PROPOSAL_BYTES, "proposal").expect("proposal");
@@ -342,15 +344,18 @@ mod tests {
 
         let operations = vec![edit("seg-000001", "new correction")];
         write_fixture(&operations_path, &operations);
-        run(ProposalArgs {
-            action: ProposalAction::Resolve {
-                input: proposal_path,
-                expected_revision: proposal.revision.clone(),
-                index: 0,
-                operations: operations_path,
-                output: resolved_path.clone(),
+        run(
+            ProposalArgs {
+                action: ProposalAction::Resolve {
+                    input: proposal_path,
+                    expected_revision: proposal.revision.clone(),
+                    index: 0,
+                    operations: operations_path,
+                    output: resolved_path.clone(),
+                },
             },
-        })
+            &Out::capture().0,
+        )
         .expect("resolve");
         let resolved: MeetingReprocessingProposal =
             read_json(&resolved_path, MAX_SERIALIZED_PROPOSAL_BYTES, "proposal").expect("resolved");
@@ -360,13 +365,16 @@ mod tests {
         ));
 
         write_fixture(&current_path, &previous);
-        run(ProposalArgs {
-            action: ProposalAction::Accept {
-                input: resolved_path,
-                current_review: current_path.clone(),
-                output: accepted_path.clone(),
+        run(
+            ProposalArgs {
+                action: ProposalAction::Accept {
+                    input: resolved_path,
+                    current_review: current_path.clone(),
+                    output: accepted_path.clone(),
+                },
             },
-        })
+            &Out::capture().0,
+        )
         .expect("accept");
         let accepted: MeetingReview =
             read_json(&accepted_path, MAX_REVIEW_BYTES, "review").expect("accepted");
@@ -391,13 +399,16 @@ mod tests {
         let output_path = temp.join("accepted.json");
         write_fixture(&proposal_path, &proposal);
         write_fixture(&current_path, &previous);
-        let error = run(ProposalArgs {
-            action: ProposalAction::Accept {
-                input: proposal_path,
-                current_review: current_path.clone(),
-                output: output_path.clone(),
+        let error = run(
+            ProposalArgs {
+                action: ProposalAction::Accept {
+                    input: proposal_path,
+                    current_review: current_path.clone(),
+                    output: output_path.clone(),
+                },
             },
-        })
+            &Out::capture().0,
+        )
         .expect_err("unresolved conflict");
         assert!(error.to_string().contains("proposal operation rejected"));
         assert!(!output_path.exists());
@@ -418,13 +429,16 @@ mod tests {
         let resolved_path = temp.join("resolved.json");
         write_fixture(&resolved_path, &resolved);
         write_fixture(&current_path, &changed);
-        let error = run(ProposalArgs {
-            action: ProposalAction::Accept {
-                input: resolved_path,
-                current_review: current_path,
-                output: output_path.clone(),
+        let error = run(
+            ProposalArgs {
+                action: ProposalAction::Accept {
+                    input: resolved_path,
+                    current_review: current_path,
+                    output: output_path.clone(),
+                },
             },
-        })
+            &Out::capture().0,
+        )
         .expect_err("stale current review");
         assert!(error.to_string().contains("proposal operation rejected"));
         assert!(!output_path.exists());
