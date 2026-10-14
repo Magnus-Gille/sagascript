@@ -110,9 +110,11 @@ export interface MeetingJobSnapshot {
   reprocessing?: import("./meeting-reprocessing-types").ReprocessingResult | null;
 }
 
+/** Built by `pianissimo_backend::load_state_payload` (command and `engine-load-state` event). */
 export interface EngineLoadState {
-  state: string;
-  source?: string;
+  state: "unknown" | "loading" | "ready" | "failed";
+  /** `warm`: a background pre-load; its failure is not a dictation error. */
+  source?: "warm" | "request";
   loadMs?: number;
   message?: string;
 }

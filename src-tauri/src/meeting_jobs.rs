@@ -86,6 +86,16 @@ impl MeetingJob {
     }
 }
 
+/// The snapshot's `phase`: the closed enum's wire name, never text or a
+/// source path. The frontend labels these in src/lib/meeting-progress.ts.
+#[cfg(any(feature = "diarization", test))]
+fn phase_name(phase: sagascript_cli::transcribe::MeetingPhase) -> String {
+    serde_json::to_value(phase)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_else(|| "processing".into())
+}
+
 #[derive(Default)]
 pub struct MeetingJobs(Mutex<Option<MeetingJob>>);
 pub type SharedMeetingJobs = Arc<MeetingJobs>;
@@ -203,12 +213,7 @@ async fn begin_job(
                             slot.as_mut().filter(|job| job.snapshot.id == processing_id)
                         {
                             if job.snapshot.status == JobStatus::Running {
-                                // Serialize the closed enum, never text or a source path.
-                                let phase = serde_json::to_value(phase)
-                                    .ok()
-                                    .and_then(|value| value.as_str().map(str::to_owned))
-                                    .unwrap_or_else(|| "processing".into());
-                                job.set_phase(phase, Instant::now());
+                                job.set_phase(phase_name(phase), Instant::now());
                             }
                         }
                     }

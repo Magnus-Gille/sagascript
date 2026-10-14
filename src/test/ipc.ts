@@ -18,7 +18,7 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import type { InvokeArgs } from "@tauri-apps/api/core";
 import type * as api from "../lib/api";
 import type * as reprocessing from "../lib/meeting-reprocessing-api";
-import type { EngineLoadState, HotkeyProfile, HotkeyStatus } from "../lib/api";
+import type { EventMap, EventName } from "../lib/events";
 
 declare global {
   interface Window {
@@ -416,29 +416,8 @@ export function isCommandName(name: string): name is CommandName {
   return Object.hasOwn(COMMANDS, name);
 }
 
-/**
- * Events the frontend listens for, with the payload its listeners expect.
- *
- * TODO(#347): generate from the Rust emit sites (src-tauri/src/events.rs and
- * the updater). Payloads here are what the listeners read, not a contract
- * the backend has been checked against.
- */
-export interface EventMap {
-  error: string;
-  "transcription-result": string;
-  "state-changed": string;
-  "model-download-progress": { progress: number };
-  "model-ready": null;
-  "plain-transcription-progress": { runId: string; phase: string; percent?: number };
-  "hotkey-registration-changed": HotkeyStatus;
-  "active-hotkey-profile-changed": HotkeyProfile;
-  "engine-load-state": EngineLoadState;
-  /** The updater sends the preparation nonce; Settings also accepts `{ nonce }`. */
-  "update-preparing": string | { nonce: string };
-  "update-aborted": null;
-  navigate_tab: string;
-}
-export type EventName = keyof EventMap;
+// Events and their payloads: the frontend half of the event catalogue (#347).
+export type { EventMap, EventName } from "../lib/events";
 
 export interface IpcMock {
   /** Every command invoked so far, in order, with a copy of its arguments. */

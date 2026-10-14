@@ -197,12 +197,18 @@ pub async fn get_engine_load_state() -> Result<serde_json::Value, String> {
 
 #[tauri::command]
 pub async fn get_settings(controller: State<'_, SharedController>) -> Result<Settings, String> {
-    let ctrl = lock_controller(&controller);
-    let mut settings = ctrl.settings().clone();
+    let settings = lock_controller(&controller).settings().clone();
+    Ok(settings_for_frontend(settings))
+}
+
+/// What `get_settings` sends: the settings with a legacy file's implicit
+/// default profile made explicit, so the frontend always sees one. The
+/// shared fixture contracts/transport/get_settings.json pins its shape (#347).
+pub(crate) fn settings_for_frontend(mut settings: Settings) -> Settings {
     if settings.hotkey_profiles.is_empty() {
         settings.hotkey_profiles = settings.resolved_hotkey_profiles();
     }
-    Ok(settings)
+    settings
 }
 
 #[tauri::command]

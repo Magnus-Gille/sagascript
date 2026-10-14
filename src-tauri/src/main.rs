@@ -16,6 +16,8 @@ mod logging;
 
 mod app_controller;
 mod commands;
+#[cfg(test)]
+mod contract;
 mod events;
 mod focus_diag;
 mod hotkey;
