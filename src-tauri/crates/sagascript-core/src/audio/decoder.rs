@@ -503,8 +503,11 @@ fn decode_audio_file_inner(
         )));
     }
 
-    let file = std::fs::File::open(path)
-        .map_err(|e| DictationError::FileDecodeError(format!("Failed to open file: {e}")))?;
+    let file = std::fs::File::open(path).map_err(|e| match e.kind() {
+        // Typed so callers (the GUI forgets a moved file) never match the text.
+        std::io::ErrorKind::NotFound => DictationError::FileNotFound(e.to_string()),
+        _ => DictationError::FileDecodeError(format!("Failed to open file: {e}")),
+    })?;
 
     // Byte-fraction denominator for progress. File size is always available,
     // unlike packet counts or durations the container may omit or misreport.
@@ -703,6 +706,26 @@ mod tests {
         let result = decode_audio_file(&path);
         assert!(result.is_err());
         match result.unwrap_err() {
+            DictationError::FileNotFound(msg) => {
+                assert!(
+                    !msg.contains("definitely_does_not_exist"),
+                    "the OS text must not name the path: {msg}"
+                );
+            }
+            other => panic!("expected FileNotFound, got: {:?}", other),
+        }
+    }
+
+    /// Only a missing file is `FileNotFound`; any other reason it cannot be opened
+    /// stays a decode error (a path below a regular file is NotADirectory on Unix).
+    #[cfg(unix)]
+    #[test]
+    fn a_file_that_cannot_be_opened_for_another_reason_is_a_decode_error() {
+        let dir = TempDir::new();
+        let file = dir.join("plain.wav");
+        std::fs::write(&file, b"x").expect("write fixture");
+        let below_a_file = file.join("inner.wav");
+        match decode_audio_file(&below_a_file).unwrap_err() {
             DictationError::FileDecodeError(msg) => {
                 assert!(msg.contains("open"), "error should mention opening: {msg}");
             }
@@ -829,9 +852,9 @@ mod tests {
         let path = PathBuf::from("/tmp/definitely_does_not_exist.WAV");
         let result = decode_audio_file(&path);
         assert!(result.is_err());
-        // Should be a FileDecodeError (file not found), not UnsupportedFormat
+        // Should be FileNotFound (the file is missing), not UnsupportedFormat
         match result.unwrap_err() {
-            DictationError::FileDecodeError(_) => {} // expected
+            DictationError::FileNotFound(_) => {} // expected
             DictationError::UnsupportedFormat(msg) => {
                 panic!(
                     "uppercase .WAV should be treated as supported, got UnsupportedFormat: {msg}"

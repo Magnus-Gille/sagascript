@@ -1,7 +1,13 @@
 use serde::Serialize;
 use thiserror::Error;
 
-/// Errors that can occur during dictation workflow
+use crate::path_scrub::scrub_paths;
+
+/// Errors that can occur during dictation workflow.
+///
+/// Every variant has a stable machine-readable [`code`](Self::code); callers
+/// across a boundary (the CLI's JSON error object, the app's command errors)
+/// match on that and never on the message text (ADR 0006, #360).
 #[derive(Error, Debug, Serialize, Clone)]
 #[serde(tag = "kind", content = "message")]
 pub enum DictationError {
@@ -16,6 +22,26 @@ pub enum DictationError {
 
     #[error("Transcription failed: {0}")]
     TranscriptionFailed(String),
+
+    /// The work was stopped on request (Stop, Ctrl-C, shutdown). Not a failure:
+    /// callers end quietly or show a neutral notice.
+    #[error("Transcription cancelled.")]
+    Cancelled,
+
+    /// A transcription outran its time budget and was aborted. The payload is
+    /// the complete user-facing text.
+    #[error("{0}")]
+    TranscriptionTimedOut(String),
+
+    /// A background task ended abnormally (a join error: the worker panicked
+    /// or was dropped). The payload is the complete user-facing text.
+    #[error("{0}")]
+    TaskFailed(String),
+
+    /// A failure reported by the Pianissimo engine host, with the host's code
+    /// and retry hint kept. Build it with [`DictationError::engine`].
+    #[error("{0}")]
+    Engine(EngineFailure),
 
     #[error(
         "Transcription engine is busy — a previous transcription may still be running. \
@@ -44,12 +70,111 @@ pub enum DictationError {
     #[error("File decode error: {0}")]
     FileDecodeError(String),
 
+    /// The input file does not exist (any more). The payload is the OS error
+    /// text, which names no path.
+    #[error("File decode error: Failed to open file: {0}")]
+    FileNotFound(String),
+
     #[error("Unsupported format: {0}")]
     UnsupportedFormat(String),
 
     #[cfg(feature = "diarization")]
     #[error("Diarization error: {0}")]
     DiarizationError(String),
+}
+
+/// What the engine host reported, kept apart from [`DictationError::Engine`]'s
+/// variant so its message can only be built through [`EngineFailure::new`],
+/// which removes absolute paths. Fields of an enum variant are public; the
+/// private fields of this struct are what make "the text was scrubbed" true for
+/// every value, the log line and the UI alike. The raw text is not kept.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct EngineFailure {
+    code: String,
+    retryable: bool,
+    message: String,
+}
+
+impl EngineFailure {
+    /// `code` is a stable snake_case identifier (`engine_model_missing`, …),
+    /// `retryable` says whether trying the same action again can succeed and
+    /// `message` is the host's text, which may contain absolute paths.
+    pub fn new(code: impl Into<String>, retryable: bool, message: &str) -> Self {
+        Self {
+            code: code.into(),
+            retryable,
+            message: scrub_paths(message),
+        }
+    }
+
+    pub fn code(&self) -> &str {
+        &self.code
+    }
+
+    pub fn retryable(&self) -> bool {
+        self.retryable
+    }
+
+    /// The user-facing text, with absolute paths removed.
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+}
+
+impl std::fmt::Display for EngineFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl DictationError {
+    /// An engine-host failure with its code and retry hint (see
+    /// [`EngineFailure::new`]; `message` is scrubbed of absolute paths).
+    pub fn engine(code: impl Into<String>, retryable: bool, message: &str) -> Self {
+        Self::Engine(EngineFailure::new(code, retryable, message))
+    }
+
+    /// The stable machine-readable code: the variant name in snake_case
+    /// (`FileDecodeError` is `file_decode_error`), or the engine's own code for
+    /// [`DictationError::Engine`]. Codes are never renamed or reused for another
+    /// meaning (ADR 0006).
+    pub fn code(&self) -> &str {
+        match self {
+            Self::MicrophonePermissionDenied => "microphone_permission_denied",
+            Self::AccessibilityPermissionDenied => "accessibility_permission_denied",
+            Self::ModelNotLoaded => "model_not_loaded",
+            Self::TranscriptionFailed(_) => "transcription_failed",
+            Self::Cancelled => "cancelled",
+            Self::TranscriptionTimedOut(_) => "transcription_timed_out",
+            Self::TaskFailed(_) => "task_failed",
+            Self::Engine(failure) => failure.code(),
+            Self::ModelBusy => "model_busy",
+            Self::NoAudioCaptured => "no_audio_captured",
+            Self::AudioCaptureError(_) => "audio_capture_error",
+            Self::ModelDownloadFailed(_) => "model_download_failed",
+            Self::SettingsError(_) => "settings_error",
+            Self::ApplicationLaunchError(_) => "application_launch_error",
+            Self::PasteError(_) => "paste_error",
+            Self::FileDecodeError(_) => "file_decode_error",
+            Self::FileNotFound(_) => "file_not_found",
+            Self::UnsupportedFormat(_) => "unsupported_format",
+            #[cfg(feature = "diarization")]
+            Self::DiarizationError(_) => "diarization_error",
+        }
+    }
+
+    /// Whether doing the same thing again can succeed: the engine or model was
+    /// busy or not ready yet, nothing was captured, or the work timed out.
+    pub fn retryable(&self) -> bool {
+        match self {
+            Self::ModelBusy
+            | Self::ModelNotLoaded
+            | Self::NoAudioCaptured
+            | Self::TranscriptionTimedOut(_) => true,
+            Self::Engine(failure) => failure.retryable(),
+            _ => false,
+        }
+    }
 }
 
 // String conversion so callers (e.g. the app crate's Tauri command handlers,
@@ -155,5 +280,127 @@ mod tests {
         let debug = format!("{:?}", err);
         assert!(debug.contains("PasteError"));
         assert!(debug.contains("conflict"));
+    }
+
+    #[test]
+    fn cancelled_is_its_own_error_with_a_stable_code() {
+        let err = DictationError::Cancelled;
+        assert_eq!(err.code(), "cancelled");
+        assert!(!err.retryable());
+        assert_eq!(err.to_string(), "Transcription cancelled.");
+        let json = serde_json::to_value(&err).unwrap();
+        assert_eq!(json["kind"], "Cancelled");
+    }
+
+    #[test]
+    fn engine_error_keeps_its_code_and_retryable_flag_and_scrubs_the_message() {
+        let err = DictationError::engine(
+            "engine_model_load_failed",
+            false,
+            "Pianissimo engine: Failed to load model at /Users/x/Library/Application Support/Sagascript/models/foo.mlmodelc: The file couldn't be opened.",
+        );
+        assert_eq!(err.code(), "engine_model_load_failed");
+        assert!(!err.retryable());
+        let shown = err.to_string();
+        assert!(!shown.contains("/Users/x"), "{shown}");
+        assert!(shown.contains("foo.mlmodelc"), "{shown}");
+        let debug = format!("{err:?}");
+        assert!(
+            !debug.contains("/Users/x"),
+            "Debug must not leak the path: {debug}"
+        );
+        let json = serde_json::to_string(&err).unwrap();
+        assert!(!json.contains("/Users/x"), "{json}");
+
+        let busy = DictationError::engine("engine_busy", true, "queue full");
+        assert_eq!(busy.code(), "engine_busy");
+        assert!(busy.retryable());
+    }
+
+    #[test]
+    fn every_variant_has_a_snake_case_code() {
+        let table: Vec<(DictationError, &str)> = vec![
+            (
+                DictationError::MicrophonePermissionDenied,
+                "microphone_permission_denied",
+            ),
+            (
+                DictationError::AccessibilityPermissionDenied,
+                "accessibility_permission_denied",
+            ),
+            (DictationError::ModelNotLoaded, "model_not_loaded"),
+            (
+                DictationError::TranscriptionFailed("x".into()),
+                "transcription_failed",
+            ),
+            (
+                DictationError::TranscriptionTimedOut("x".into()),
+                "transcription_timed_out",
+            ),
+            (DictationError::TaskFailed("x".into()), "task_failed"),
+            (DictationError::ModelBusy, "model_busy"),
+            (DictationError::NoAudioCaptured, "no_audio_captured"),
+            (
+                DictationError::AudioCaptureError("x".into()),
+                "audio_capture_error",
+            ),
+            (
+                DictationError::ModelDownloadFailed("x".into()),
+                "model_download_failed",
+            ),
+            (DictationError::SettingsError("x".into()), "settings_error"),
+            (
+                DictationError::ApplicationLaunchError("x".into()),
+                "application_launch_error",
+            ),
+            (DictationError::PasteError("x".into()), "paste_error"),
+            (
+                DictationError::FileDecodeError("x".into()),
+                "file_decode_error",
+            ),
+            (DictationError::FileNotFound("x".into()), "file_not_found"),
+            (
+                DictationError::UnsupportedFormat("x".into()),
+                "unsupported_format",
+            ),
+            (DictationError::Cancelled, "cancelled"),
+        ];
+        for (error, code) in table {
+            assert_eq!(error.code(), code, "{error:?}");
+        }
+        #[cfg(feature = "diarization")]
+        assert_eq!(
+            DictationError::DiarizationError("x".into()).code(),
+            "diarization_error"
+        );
+    }
+
+    #[test]
+    fn retryable_errors_are_the_ones_a_second_attempt_can_fix() {
+        assert!(DictationError::ModelBusy.retryable());
+        assert!(DictationError::ModelNotLoaded.retryable());
+        assert!(DictationError::NoAudioCaptured.retryable());
+        assert!(DictationError::TranscriptionTimedOut("x".into()).retryable());
+        assert!(!DictationError::TranscriptionFailed("x".into()).retryable());
+        assert!(!DictationError::FileNotFound("x".into()).retryable());
+        assert!(!DictationError::MicrophonePermissionDenied.retryable());
+    }
+
+    #[test]
+    fn timeouts_and_task_failures_keep_their_text_and_their_kind() {
+        let timeout = DictationError::TranscriptionTimedOut(
+            "Transcription timed out after 60s (inference aborted)".into(),
+        );
+        assert_eq!(
+            timeout.to_string(),
+            "Transcription timed out after 60s (inference aborted)"
+        );
+        let task = DictationError::TaskFailed("Task join error: panicked".into());
+        assert_eq!(task.to_string(), "Task join error: panicked");
+        let missing = DictationError::FileNotFound("No such file or directory (os error 2)".into());
+        assert_eq!(
+            missing.to_string(),
+            "File decode error: Failed to open file: No such file or directory (os error 2)"
+        );
     }
 }

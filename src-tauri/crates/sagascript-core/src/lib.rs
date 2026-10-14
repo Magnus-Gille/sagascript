@@ -18,6 +18,7 @@ pub mod meeting_reprocess_matching;
 pub mod meeting_reprocess_plan;
 pub mod meeting_reprocess_proposal;
 pub mod meeting_review;
+pub mod path_scrub;
 pub mod settings;
 pub mod speaker_hint;
 pub mod sync;

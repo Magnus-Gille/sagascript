@@ -877,7 +877,7 @@ impl WhisperBackend {
     }
 
     fn cancelled_error() -> DictationError {
-        DictationError::TranscriptionFailed("Cancelled".into())
+        DictationError::Cancelled
     }
 
     /// FFI abort callback. whisper.cpp invokes this before each ggml graph
