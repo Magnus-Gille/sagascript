@@ -95,6 +95,13 @@ export interface IpcMock {
   emit<E extends EventName>(event: E, payload: EventMap[E]): number;
   /** How many `listen()` registrations for an event are active. */
   listenerCount(event: EventName): number;
+  /**
+   * The event of every active registration, sorted (an event listened to
+   * twice appears twice), including events the frontend does not map, such as
+   * the webview's `tauri://drag-*`. `[]` after a component unmounted shows it
+   * unlistened everything.
+   */
+  listeners(): string[];
 }
 
 interface Listener {
@@ -231,6 +238,9 @@ export function mockIpc(handlers: CommandHandlers = {}): IpcMock {
     },
     listenerCount(event) {
       return state.listeners.filter((listener) => listener.event === event).length;
+    },
+    listeners() {
+      return state.listeners.map((listener) => listener.event).sort();
     },
   };
 }

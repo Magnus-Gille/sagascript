@@ -36,12 +36,8 @@
     getFileModelOptions,
     getEffectiveModelInfo,
     getAutoFileModelInfo,
-    downloadModel,
-    downloadPianissimoModel,
     getSupportedFormats,
-    getPlatform,
     checkAccessibilityPermission,
-    requestAccessibilityPermission,
     retryHotkeyRegistration,
     startRecording,
     stopAndTranscribe,
@@ -61,12 +57,13 @@
     type EngineStatus,
     type Language,
     type WhisperModel,
-    type HotkeyStatus,
     type HotkeyProfile,
   } from "./api";
-  import { listen } from "@tauri-apps/api/event";
   import { open } from "@tauri-apps/plugin-dialog";
-  import { getCurrentWebview } from "@tauri-apps/api/webview";
+  import { PIANISSIMO_ID, downloadModelById, useModelDownloads } from "./models.svelte";
+  import { requestAccessibility } from "./permissions";
+  import { loadPlatform } from "./platform";
+  import { useDragDropEvent, useTauriEvent } from "./tauri-events.svelte";
   import {
     dictateButtonAction,
     retainTestRecordingOwnership,
@@ -97,7 +94,7 @@
   );
   let fileModelOptions: WhisperModel[] = $state([]);
   const pianissimoSizeMb = $derived(
-    fileModelOptions.find((model) => model.id === "pianissimo-sv")?.size_mb ?? 0,
+    fileModelOptions.find((model) => model.id === PIANISSIMO_ID)?.size_mb ?? 0,
   );
   // What Auto will use now (recommended if downloaded, else best downloaded) and what is recommended.
   let fileAutoModel: WhisperModel | null = $state(null);
@@ -106,9 +103,11 @@
   let fileModelSaving = $state(false);
   type SettingsTab = "dictate" | "transcribe" | "settings";
   let activeTab: SettingsTab = $state("dictate");
-  let downloading: string | null = $state(null);
-  let downloadingName: string = $state("");
-  let downloadProgress: number = $state(0);
+  // One download at a time; its progress follows the backend's events.
+  const downloads = useModelDownloads();
+  const downloading = $derived(downloads.id);
+  const downloadingName = $derived(downloads.name);
+  const downloadProgress = $derived(downloads.progress);
   let profileModels: Record<string, WhisperModel> = $state({});
   let profileModelOptions: Record<string, WhisperModel[]> = $state({});
   // What "Recommended" resolves to per profile (Pianissimo, or KB-Whisper Medium
@@ -701,42 +700,34 @@
     }
   }
 
+  let dictationEventRevision = 0;
+  const errorEvents = useTauriEvent("error", (message) => {
+    dictationEventRevision++;
+    testError = message;
+    requestTabChange("dictate");
+  });
+  const resultEvents = useTauriEvent("transcription-result", (text) => {
+    dictationEventRevision++;
+    liveDictationRevision++;
+    dictationEditorLineage++;
+    testResultRecoveryPending = true;
+    testResultEdited = false;
+    recoveredDictationActive = false;
+    observedNativeDictation = text;
+    nativeEditorOrigin = { text, lineage: dictationEditorLineage };
+    testResult = text;
+    testError = "";
+  });
+
   onMount(() => {
     let disposed = false;
-    let revision = 0;
-    const stops: Array<() => void> = [];
-    const remember = (stop: () => void) => disposed ? stop() : stops.push(stop);
-    const errorListener = listen<string>("error", (event) => {
-      revision++;
-      testError = event.payload;
-      requestTabChange("dictate");
-    }).then(remember);
-    const resultListener = listen<string>("transcription-result", (event) => {
-      revision++;
-      liveDictationRevision++;
-      dictationEditorLineage++;
-      testResultRecoveryPending = true;
-      testResultEdited = false;
-      recoveredDictationActive = false;
-      observedNativeDictation = event.payload;
-      nativeEditorOrigin = { text: event.payload, lineage: dictationEditorLineage };
-      testResult = event.payload;
-      testError = "";
-    }).then(remember);
-    const stateListener = listen<string>("state-changed", (event) => {
-      if (event.payload === "recording") {
-        revision++;
-        liveDictationRevision++;
-        testError = "";
-      }
-    }).then(remember);
     // A failed background dictation may create this window after its event.
     // Recover the persisted-in-memory result without racing newer events.
-    Promise.all([errorListener, resultListener, stateListener]).then(async () => {
-      const initialRevision = revision;
+    Promise.all([errorEvents.ready, resultEvents.ready, stateEvents.ready]).then(async () => {
+      const initialRevision = dictationEventRevision;
       await recoveryRestore.catch(() => undefined);
       const [error, text] = await Promise.all([getLastError(), getLastTranscription()]);
-      if (!disposed && revision === initialRevision) {
+      if (!disposed && dictationEventRevision === initialRevision) {
         // Native delivery has settled even if a different recovered draft is
         // already visible in the editor. Otherwise updater preparation waits
         // forever for an event that preceded listener registration.
@@ -755,7 +746,7 @@
     }).catch((error) => {
       console.warn("Could not restore the last dictation result", error);
     });
-    return () => { disposed = true; stops.forEach((stop) => stop()); };
+    return () => { disposed = true; };
   });
 
   // Transcribe tab state
@@ -978,11 +969,20 @@
     return selectedTranscribeProfile()?.language ?? "auto";
   }
 
+  // The file model lineup depends on these two values and on what is on disk.
+  // Read the first two as derived primitives: the effect below must not run
+  // again for every new `settings` object (a Voice activity detection toggle,
+  // say). A download that finishes elsewhere in the window bumps the third.
+  const fileModelLanguage = $derived.by(() => (settings ? transcribeLanguage() : null));
+  const fileModelSelection = $derived.by(() => settings?.file_transcription_model);
+  let fileModelDiskRevision = $state(0);
+
   $effect(() => {
-    if (!settings) return;
-    const language = transcribeLanguage();
+    const language = fileModelLanguage;
+    void fileModelDiskRevision;
+    if (language === null) return;
     let stale = false;
-    const selected = settings.file_transcription_model;
+    const selected = fileModelSelection;
     void Promise.all([
       getFileModelOptions(language, selected && selected !== "auto" ? selected : undefined),
       getAutoFileModelInfo(language),
@@ -1018,7 +1018,7 @@
         return;
       }
       // Saved, whether or not the read-back could confirm it.
-      if (id === "pianissimo-sv") { transcribeDiarize = false; transcribePrompt = ""; }
+      if (id === PIANISSIMO_ID) { transcribeDiarize = false; transcribePrompt = ""; }
     } finally { fileModelSaving = false; }
   }
 
@@ -1026,15 +1026,15 @@
     const preference = settings?.file_transcription_model;
     // "Auto" downloads the recommended model (it may currently use an older downloaded one).
     const id = preference === "auto" ? fileRecommendedModel?.id : preference;
-    if (!id || downloading !== null) return;
-    downloading = id;
-    downloadingName = fileModelOptions.find((model) => model.id === id)?.display_name
-      ?? (fileRecommendedModel?.id === id ? fileRecommendedModel.display_name : id);
-    downloadProgress = 0;
+    if (!id || downloads.busy) return;
+    downloads.start(
+      id,
+      fileModelOptions.find((model) => model.id === id)?.display_name
+        ?? (fileRecommendedModel?.id === id ? fileRecommendedModel.display_name : id),
+    );
     fileModelError = "";
     try {
-      if (id === "pianissimo-sv") await downloadPianissimoModel();
-      else await downloadModel(id);
+      await downloadModelById(id);
       const options = await getFileModelOptions(
         transcribeLanguage(),
         id !== "auto" ? id : undefined,
@@ -1047,7 +1047,7 @@
       ]);
     } catch (error) {
       fileModelError = typeof error === "string" ? error : String(error);
-    } finally { downloading = null; downloadProgress = 0; }
+    } finally { downloads.finish(); }
   }
 
   // Settings can be reloaded after hotkey/profile changes. Never leave a
@@ -1123,97 +1123,88 @@
     }
   }
 
-  onMount(() => {
-    let disposed = false;
-    let recoveryStop: (() => void) | null = null;
-    let recoveryAbortStop: (() => void) | null = null;
-    const recoveryListener = listen<string>("update-preparing", (event) => {
-      const nonce = event.payload;
-      if (nonce && !disposed) {
-        activePreparationNonce = nonce;
-        updatePreparing = true;
-        void prepareForUpdate(nonce);
+  // The listeners below register as the component initializes, before the
+  // data fetch in onMount: they don't depend on it, so a rejected invoke in
+  // the fetch sequence must never prevent them from wiring up (e.g. a
+  // stuck-at-0% download).
+  useTauriEvent("update-preparing", (nonce) => {
+    if (nonce) {
+      activePreparationNonce = nonce;
+      updatePreparing = true;
+      void prepareForUpdate(nonce);
+    }
+  });
+  useTauriEvent("update-aborted", () => {
+    activePreparationNonce = null;
+    updatePreparing = false;
+  });
+
+  useTauriEvent("model-ready", async () => {
+    // The event can arrive before the download command settles. Its caller
+    // owns the busy flag through its finally block so a second operation
+    // cannot start during the remaining selection or refresh work.
+    if (settings) await refreshProfileModels(settings.hotkey_profiles);
+  });
+
+  // Hotkey registration health can change at any time (settings-file
+  // hot-reload, a failed re-register racing a Spotlight/Raycast combo
+  // claim, etc.) — not just as a result of something this window did.
+  useTauriEvent("hotkey-registration-changed", (status) => {
+    hotkeyStatusOk = status.ok;
+    hotkeyStatusError = status.error ?? "";
+  });
+
+  // Keep Dictate synchronized with hotkey-driven work. Previously these
+  // states were ignored, so the button still offered "Start recording"
+  // while the backend was loading/transcribing and the next click produced
+  // a misleading busy error.
+  const stateEvents = useTauriEvent("state-changed", async (nextState) => {
+    if (nextState === "recording") {
+      // A new dictation supersedes the restored result and error, and
+      // outdates the restore that waits for the listeners above.
+      dictationEventRevision++;
+      liveDictationRevision++;
+      testError = "";
+    }
+
+    if (nextState === "settings_reloaded") {
+      await syncSettings();
+      return;
+    }
+
+    if (!["idle", "recording", "loading_model", "transcribing"].includes(nextState)) return;
+    const acceptedState = nextState as BackendDictationState;
+    testOwnsRecording = retainTestRecordingOwnership(acceptedState, testOwnsRecording);
+    backendDictationState = acceptedState;
+    testRecording = nextState === "recording";
+    testTranscribing = nextState === "loading_model" || nextState === "transcribing";
+  });
+
+  // Listen for tab navigation from tray menu
+  useTauriEvent("navigate_tab", (t) => {
+    if (t === "dictate" || t === "transcribe" || t === "settings") {
+      requestTabChange(t);
+    }
+  });
+
+  // Listen for drag-and-drop events
+  useDragDropEvent((payload) => {
+    if (payload.type === "over") {
+      dragOver = true;
+    } else if (payload.type === "drop") {
+      dragOver = false;
+      const paths = payload.paths;
+      if (paths.length > 0 && !updatePreparing) {
+        requestTabChange("transcribe", () => handleFilesTranscription(paths));
       }
-    });
-    recoveryListener.then((stop) => {
-      if (disposed) stop();
-      else recoveryStop = stop;
-    }).catch((error) => console.warn("Could not listen for update preparation", error));
-    listen("update-aborted", () => {
-      activePreparationNonce = null;
-      updatePreparing = false;
-    }).then((stop) => {
-      if (disposed) stop();
-      else recoveryAbortStop = stop;
-    }).catch((error) => console.warn("Could not listen for update abort", error));
+    } else {
+      dragOver = false;
+    }
+  });
+
+  onMount(() => {
     recoveryRestore = restoreUpdateRecovery();
     void recoveryRestore.catch(() => undefined);
-
-    // Register listeners + drag-drop FIRST — they don't depend on the data
-    // fetched below, so a rejected invoke in the fetch sequence must never
-    // prevent them from wiring up (e.g. a stuck-at-0% download).
-    listen("model-download-progress", (event: any) => {
-      downloadProgress = event.payload.progress;
-    });
-
-    listen("model-ready", async () => {
-      // The event can arrive before the download command settles. Its caller
-      // owns the busy flag through its finally block so a second operation
-      // cannot start during the remaining selection or refresh work.
-      if (settings) await refreshProfileModels(settings.hotkey_profiles);
-    });
-
-    // Hotkey registration health can change at any time (settings-file
-    // hot-reload, a failed re-register racing a Spotlight/Raycast combo
-    // claim, etc.) — not just as a result of something this window did.
-    listen("hotkey-registration-changed", (event: any) => {
-      const status = event.payload as HotkeyStatus;
-      hotkeyStatusOk = status.ok;
-      hotkeyStatusError = status.error ?? "";
-    });
-
-    // Keep Dictate synchronized with hotkey-driven work. Previously these
-    // states were ignored, so the button still offered "Start recording"
-    // while the backend was loading/transcribing and the next click produced
-    // a misleading busy error.
-    listen("state-changed", async (event: any) => {
-      const nextState = event.payload;
-      if (nextState === "settings_reloaded") {
-        await syncSettings();
-        return;
-      }
-
-      if (!["idle", "recording", "loading_model", "transcribing"].includes(nextState)) return;
-      const acceptedState = nextState as BackendDictationState;
-      testOwnsRecording = retainTestRecordingOwnership(acceptedState, testOwnsRecording);
-      backendDictationState = acceptedState;
-      testRecording = nextState === "recording";
-      testTranscribing = nextState === "loading_model" || nextState === "transcribing";
-    });
-
-    // Listen for tab navigation from tray menu
-    listen("navigate_tab", (event: any) => {
-      const t = event.payload;
-      if (t === "dictate" || t === "transcribe" || t === "settings") {
-        requestTabChange(t);
-      }
-    });
-
-    // Listen for drag-and-drop events
-    const webview = getCurrentWebview();
-    webview.onDragDropEvent((event) => {
-      if (event.payload.type === "over") {
-        dragOver = true;
-      } else if (event.payload.type === "drop") {
-        dragOver = false;
-        const paths = event.payload.paths;
-        if (paths.length > 0 && !updatePreparing) {
-          requestTabChange("transcribe", () => handleFilesTranscription(paths));
-        }
-      } else {
-        dragOver = false;
-      }
-    });
 
     // Fetch initial data. A rejection here surfaces as a visible inline
     // error instead of leaving a half-initialized window.
@@ -1233,7 +1224,7 @@
       try {
         const loaded = await readSettings();
         await refreshProfileModels(loaded.hotkey_profiles);
-        platform = await getPlatform();
+        platform = await loadPlatform();
         if (platform === "macos") {
           accessibilityGranted = await checkAccessibilityPermission();
         }
@@ -1261,10 +1252,7 @@
       }
     })();
     return () => {
-      disposed = true;
       activePreparationNonce = null;
-      recoveryStop?.();
-      recoveryAbortStop?.();
     };
   });
 
@@ -1441,6 +1429,7 @@
     mutate: () => Promise<void | string[]>,
     errorSink?: { value: string },
     reportError = true,
+    refreshModels = true,
   ): Promise<boolean> {
     if (reportError) settingsError = "";
     const outcome = await saveSetting(mutate, (notices) => {
@@ -1453,8 +1442,13 @@
       if (settings) settings = { ...settings };
       return false;
     }
-    if (outcome.confirmed && settings) await refreshProfileModels(settings.hotkey_profiles);
+    if (refreshModels && outcome.confirmed && settings) await refreshProfileModels(settings.hotkey_profiles);
     return true;
+  }
+
+  /** `applySetting` for a setting no model depends on: the models are not queried again. */
+  function applyScalarSetting(mutate: () => Promise<void | string[]>): Promise<boolean> {
+    return applySetting(mutate, undefined, true, false);
   }
 
   async function onLanguageChange(e: Event) {
@@ -1546,7 +1540,7 @@
     if (!settings) return;
     const enabling = !settings.auto_paste;
     if (!enabling || platform !== "macos") {
-      await applySetting(() => setAutoPaste(enabling));
+      await applyScalarSetting(() => setAutoPaste(enabling));
       return;
     }
 
@@ -1558,35 +1552,21 @@
     try {
       accessibilityGranted = await checkAccessibilityPermission();
       if (!accessibilityGranted) {
-        await requestAccessibilityPermission();
-        accessibilityGranted = await waitForAccessibilityPermission();
+        accessibilityGranted = await requestAccessibility({ onGranted: refreshHotkeyRegistration });
       }
 
       if (accessibilityGranted) {
-        await applySetting(() => setAutoPaste(true));
+        await applyScalarSetting(() => setAutoPaste(true));
       } else {
-        await applySetting(() => setAutoPaste(false));
+        await applyScalarSetting(() => setAutoPaste(false));
         settingsError = "Accessibility permission was not granted. Auto-paste remains off.";
       }
     } catch (e: any) {
-      await applySetting(() => setAutoPaste(false));
+      await applyScalarSetting(() => setAutoPaste(false));
       settingsError = typeof e === "string" ? e : e?.message || "Failed to check Accessibility permission.";
     } finally {
       accessibilityChecking = false;
     }
-  }
-
-  async function waitForAccessibilityPermission(): Promise<boolean> {
-    // System Settings can take a while to update TCC. Recheck for at most one
-    // minute; no unbounded timer survives after this explicit attempt.
-    for (let attempt = 0; attempt < 60; attempt += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-      if (await checkAccessibilityPermission()) {
-        await refreshHotkeyRegistration();
-        return true;
-      }
-    }
-    return false;
   }
 
   // Non-blocking hint when a configured shortcut is bare F14/F15 on macOS.
@@ -1634,7 +1614,7 @@
   async function onShowOverlayToggle() {
     if (!settings) return;
     const next = !settings.show_overlay;
-    await applySetting(() => setShowOverlay(next));
+    await applyScalarSetting(() => setShowOverlay(next));
   }
 
   async function refreshDictionaryAfterConflict(primaryError: string, request: GlossarySaveRequest) {
@@ -1880,46 +1860,44 @@
   async function onBeamSizeChange(e: Event) {
     const select = e.currentTarget as HTMLSelectElement;
     const value = Number(select.value);
-    const saved = await applySetting(() => setBeamSize(value));
+    const saved = await applyScalarSetting(() => setBeamSize(value));
     if (!saved && settings) select.value = String(settings.beam_size);
   }
 
   async function onTemperatureFallbackToggle() {
     if (!settings) return;
     const next = !settings.temperature_fallback;
-    await applySetting(() => setTemperatureFallback(next));
+    await applyScalarSetting(() => setTemperatureFallback(next));
   }
 
   async function onEnginePrewarmChange(e: Event) {
     const select = e.currentTarget as HTMLSelectElement;
     const value = select.value as EnginePrewarm;
-    const saved = await applySetting(() => setEnginePrewarm(value));
+    const saved = await applyScalarSetting(() => setEnginePrewarm(value));
     if (!saved && settings) select.value = settings.engine_prewarm;
   }
 
   async function onEngineIdleChange(e: Event) {
     const select = e.currentTarget as HTMLSelectElement;
     const value = Number(select.value);
-    const saved = await applySetting(() => setEngineIdleUnloadMinutes(value));
+    const saved = await applyScalarSetting(() => setEngineIdleUnloadMinutes(value));
     if (!saved && settings) select.value = String(settings.engine_idle_unload_minutes);
   }
 
   async function onVadToggle() {
     if (!settings) return;
     const next = !settings.vad_enabled;
-    await applySetting(() => setVadEnabled(next));
+    await applyScalarSetting(() => setVadEnabled(next));
   }
 
   async function downloadProfileModel(profile: HotkeyProfile) {
     const model = profileModels[profile.id];
-    if (!model || model.downloaded || downloading !== null) return;
-    downloading = model.id;
-    downloadingName = model.display_name;
-    downloadProgress = 0;
+    if (!model || model.downloaded || downloads.busy) return;
+    downloads.start(model.id, model.display_name);
     profileModelErrors = { ...profileModelErrors, [profile.id]: "" };
     try {
-      if (model.id === "pianissimo-sv") await downloadPianissimoModel();
-      else await downloadModel(model.id);
+      await downloadModelById(model.id);
+      fileModelDiskRevision += 1;
       await refreshProfileModels(settings?.hotkey_profiles ?? []);
     } catch (e: any) {
       profileModelErrors = {
@@ -1927,8 +1905,7 @@
         [profile.id]: typeof e === "string" ? e : e?.message || "Speech engine download failed.",
       };
     } finally {
-      downloading = null;
-      downloadProgress = 0;
+      downloads.finish();
     }
   }
 
@@ -1943,17 +1920,16 @@
 
   async function switchProfileToRecommended(profile: HotkeyProfile) {
     const target = retiredModelSuggestion(profile);
-    if (!target || downloading !== null || dictationModelSaving) return;
+    if (!target || downloads.busy || dictationModelSaving) return;
     profileModelErrors = { ...profileModelErrors, [profile.id]: "" };
     dictationModelSaving = true;
+    let downloaded = false;
     try {
       // Download first: the old model keeps dictating until the new one is ready.
       if (!target.downloaded) {
-        downloading = target.id;
-        downloadingName = target.display_name;
-        downloadProgress = 0;
-        if (target.id === "pianissimo-sv") await downloadPianissimoModel();
-        else await downloadModel(target.id);
+        downloads.start(target.id, target.display_name);
+        await downloadModelById(target.id);
+        downloaded = true;
       }
       const outcome = await saveSetting(() => setProfileModel(profile.id, target.id));
       if (!outcome.saved) throw outcome.error;
@@ -1964,9 +1940,10 @@
         [profile.id]: typeof e === "string" ? e : e?.message || `Could not switch to ${target.display_name}.`,
       };
     } finally {
-      downloading = null;
-      downloadProgress = 0;
+      downloads.finish();
       dictationModelSaving = false;
+      // The Transcribe tab's lineup follows what is on disk, also after a failed switch.
+      if (downloaded) fileModelDiskRevision += 1;
     }
   }
 
@@ -1990,7 +1967,7 @@
   }
 
   async function onTestRecord() {
-    if (updatePreparing || dictationModelSaving || downloading !== null) return;
+    if (updatePreparing || dictationModelSaving || downloads.busy) return;
     const action = dictateButtonAction(backendDictationState, testOwnsRecording);
     if (action === "blocked") return;
 
@@ -2118,8 +2095,7 @@
       try {
         accessibilityGranted = await checkAccessibilityPermission();
         if (!accessibilityGranted) {
-          await requestAccessibilityPermission();
-          accessibilityGranted = await waitForAccessibilityPermission();
+          accessibilityGranted = await requestAccessibility({ onGranted: refreshHotkeyRegistration });
         }
       } catch (error: any) {
         hotkeyError = typeof error === "string" ? error : error?.message || "Failed to check Accessibility permission.";
@@ -2582,7 +2558,7 @@
                 {downloading !== null ? `Downloading ${downloadingName}… ${downloadProgress}%` : settings.file_transcription_model === "auto" && fileRecommendedModel ? `Download ${fileRecommendedModel.display_name}` : "Download selected model"}
               </button>
             {/if}
-            {#if settings.file_transcription_model === "pianissimo-sv"}
+            {#if settings.file_transcription_model === PIANISSIMO_ID}
               <div class="hotkey-hint">Requires macOS 14+ on Apple Silicon or Windows on ARM (Snapdragon). Runs locally (Neural Engine on Mac, CPU on Windows){pianissimoSizeMb > 0 ? `; one-time download of about ${pianissimoSizeMb} MB` : "; downloaded once"}.</div>
             {/if}
             {#if fileModelError}<div class="transcribe-error" role="alert">{fileModelError}</div>{/if}
@@ -2591,7 +2567,7 @@
             <div class="hotkey-hint">This profile fixes the file language and uses its personal dictionary.</div>
           {/if}
           <div class="diarize-row"><label class="diarize-option">
-            <input type="checkbox" bind:checked={transcribeDiarize} disabled={transcribing || settings.file_transcription_model === "pianissimo-sv"} />
+            <input type="checkbox" bind:checked={transcribeDiarize} disabled={transcribing || settings.file_transcription_model === PIANISSIMO_ID} />
             Speaker diarization
           </label>
           <button class="info-dot" bind:this={diarizeInfoButton} aria-label="What is speaker diarization?"
@@ -2608,7 +2584,7 @@
           {/if}
           <textarea class="prompt-input" aria-label="Extra context for this file"
             placeholder="Extra context, e.g. names to listen for: Astrid, Grimnir (optional)"
-            bind:value={transcribePrompt} rows="2" disabled={transcribing || settings.file_transcription_model === "pianissimo-sv"}></textarea>
+            bind:value={transcribePrompt} rows="2" disabled={transcribing || settings.file_transcription_model === PIANISSIMO_ID}></textarea>
         </div>
 
         <div

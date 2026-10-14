@@ -55,31 +55,24 @@ let _ = app.emit_event(event::EXAMPLE_PROGRESS, ExampleProgress { percent });
 
 Add the event to `EventMap` in `src/lib/events.ts` (payload type next to it) and its schema
 to `eventPayloads` in `src/test/transport-schemas.ts`; `src/test/transport.test.ts` then
-parses the Rust samples with it. Listen inside `onMount`, cleaning up on unmount. `listen` resolves
-asynchronously, so a component can unmount before the unlisten function arrives; handle that.
-The pattern in `src/lib/Overlay.svelte`:
+parses the Rust samples with it. Listen through `useTauriEvent` from
+`src/lib/tauri-events.svelte.ts`, typed by `EventMap`; it owns the unlisten, so a component
+that unmounts before the registration resolved leaves no listener behind (ESLint forbids a
+raw `listen()` in `src/`). Call it while the component initializes, not inside `onMount`:
 
 ```ts
-import { onMount } from "svelte";
-import { listen } from "@tauri-apps/api/event";
+import { useTauriEvent } from "./tauri-events.svelte";
 
-onMount(() => {
-  let disposed = false;
-  const stops: Array<() => void> = [];
-  const remember = (stop: () => void) => (disposed ? stop() : stops.push(stop));
-  listen<ExampleProgress>("example-progress", (event) => {
-    progress = event.payload.percent;
-  }).then(remember);
-  return () => { disposed = true; stops.forEach((stop) => stop()); };
+useTauriEvent("example-progress", (payload) => {
+  progress = payload.percent;
 });
 ```
 
-`src/lib/onboarding-download-state.ts` shows the same ownership rules as a tested helper.
-Several older listeners in `Settings.svelte` drop the unlisten promise; do not copy them.
-Keep payload interpretation in a DOM-free `src/lib/*.ts` module (for example the reducer in
-`overlay-state.ts`) so it can be unit-tested. Planned:
-[#362](https://github.com/Magnus-Gille/sagascript/issues/362) adds a shared
-`useTauriEvent` helper, which can type `listen` by `EventMap`.
+It returns a subscription whose `ready` promise settles once the listener is active; use it
+to order work that must not start before the listener. A listener with its own lifetime (one
+run, one request) uses `subscribeTauriEvent(name, handler)` and calls `dispose()` when done;
+`src/lib/FileTranscription.svelte` is the example. Keep payload interpretation in a DOM-free
+`src/lib/*.ts` module (for example the reducer in `overlay-state.ts`) so it can be unit-tested.
 
 ## 4. Tests
 

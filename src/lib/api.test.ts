@@ -6,6 +6,7 @@
 import { describe, expect, test } from "vitest";
 import * as api from "./api";
 import * as reprocessing from "./meeting-reprocessing-api";
+import { PIANISSIMO_ID } from "./models.svelte";
 import { COMMAND_NAMES, mockIpc, type CommandArgs, type CommandHandlers, type CommandName, type CommandResult } from "../test/ipc";
 import type { CorrectionFile, MeetingReview, MeetingTranscript } from "./meeting-types";
 import type { MeetingReprocessingProposal, SelectedReprocessingPlan } from "./meeting-reprocessing-types";
@@ -15,7 +16,7 @@ const transcript: MeetingTranscript = {
   schema_version: 1,
   source_sha256: "source",
   language: "sv",
-  model: "pianissimo-sv",
+  model: PIANISSIMO_ID,
   duration_seconds: 2,
   segments: [{ id: "seg-1", start: 0, end: 2, text: "Hej", speaker: "s1" }],
   speakers: [{ id: "s1", label: "Talare 1" }],

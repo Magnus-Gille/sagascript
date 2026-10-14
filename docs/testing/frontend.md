@@ -28,7 +28,7 @@ a real `vite build` bundles, emits or reads) and `npm run licenses:check` (relea
   are `src/lib/<Component>.test.ts` (or `<Component>.<topic>.test.ts`, such as
   `Settings.recovery.test.ts` and `Settings.readback.test.ts`). Name tests after the behaviour they pin.
 - Shared test code lives in `src/test/`: `setup.ts` (runs before every file), `ipc.ts`,
-  `deferred.ts` and backends for rendering components (`settings.ts`). Nothing in the app
+  `deferred.ts`, `EventProbe.svelte` and backends for rendering components (`settings.ts`). Nothing in the app
   imports it, so it is never bundled; `svelte-check` type-checks tests like app code.
 - Import `describe`/`test`/`expect` from `"vitest"` (no globals). Every file runs in happy-dom
   (a DOM in Node) with Svelte's browser runtime; logic modules stay DOM-free by design, not by
@@ -92,6 +92,21 @@ asynchronous `listen()` resolved. `EventMap` (`src/lib/events.ts`) lists the eve
 frontend listens for with their payloads; `src/test/transport.test.ts` checks it against the
 Rust event catalogue and its sample payloads.
 
+`ipc.listeners()` names every registration that is still active, including the webview's own
+`tauri://drag-*` events. A component that unmounted must leave none:
+
+```ts
+view.unmount();
+await waitFor(() => expect(ipc.listeners()).toEqual([]));
+```
+
+Components never call `listen()`: they use `useTauriEvent(name, handler)` and
+`useDragDropEvent(handler)` from `src/lib/tauri-events.svelte.ts` while they initialize, or
+`subscribeTauriEvent` and `dispose()` for a listener with its own lifetime. The helpers type
+the payload from `EventMap`. ESLint rejects the raw imports in `src/` (tests and the helper
+excepted). `src/lib/listeners.test.ts` pins that every window unlistens;
+`src/test/EventProbe.svelte` is a component for testing the helper.
+
 ## Transport contract
 
 Payloads that cross IPC are pinned by shared fixtures ([contracts/README.md](../../contracts/README.md)):
@@ -148,8 +163,9 @@ typescript-eslint (including `no-explicit-any` and `no-unused-vars`) and eslint-
 over `src/`, and the Node scripts in `scripts/` and `tests/`. Prettier formats; ESLint does
 not.
 
-- `eslint-suppressions.json` records the 84 findings that existed when ESLint was introduced,
-  as counts per file and rule: 29 `no-explicit-any` and most of the rest in the Settings,
+- `eslint-suppressions.json` records the 84 findings that existed when ESLint was introduced
+  (76 as of #362, which typed the event handlers), as counts per file and rule: 21 `no-explicit-any`
+  and most of the rest in the Settings,
   Onboarding, FileTranscription and meeting components, one in `profile-shortcuts.ts`, the
   others in `scripts/`. A new
   finding fails, also in a listed file. Fixing one makes ESLint ask for
@@ -170,6 +186,13 @@ Tests reach logic through modules, not through component source:
 3. Move first, behaviour unchanged, in its own commit (ADR 0004 §4); keep the component wired
    to the moved code. Example: MeetingReview.svelte's `<script module>` became
    `src/lib/meeting-review-drafts.ts`.
+
+Code that more than one component needs lives in shared modules (#362), each with its own
+unit tests: `tauri-events.svelte.ts` (listeners, above), `models.svelte.ts` (`PIANISSIMO_ID`,
+`downloadModelById`, `ModelDownloads`), `permissions.ts` (`requestAccessibility`,
+`waitForAccessibility`) and `platform.ts` (`loadPlatform`, one lookup per window; the test
+setup forgets it after every test). The Pianissimo id appears once in `src/`; a component
+asks `downloadModelById(id)` instead of choosing the command.
 
 ## Rules for new and converted tests
 

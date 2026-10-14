@@ -40,6 +40,30 @@ export default defineConfig(
     },
   },
   {
+    // Listeners go through src/lib/tauri-events.svelte.ts: a raw listen() or
+    // onDragDropEvent() resolves with an unlisten that components dropped (#362).
+    files: ["src/**/*.{ts,svelte}"],
+    ignores: ["src/lib/tauri-events.svelte.ts", "src/**/*.test.ts", "src/test/**"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: [
+            {
+              name: "@tauri-apps/api/event",
+              message: "Listen through useTauriEvent() or subscribeTauriEvent() (src/lib/tauri-events.svelte.ts), which unlisten.",
+            },
+            {
+              name: "@tauri-apps/api/webview",
+              importNames: ["getCurrentWebview"],
+              message: "Use useDragDropEvent() or subscribeDragDrop() (src/lib/tauri-events.svelte.ts), which unlisten.",
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
     // Node tooling and config files.
     files: ["scripts/**/*.{js,mjs,cjs}", "tests/**/*.{js,mjs,cjs}", "*.config.{js,ts}"],
     languageOptions: { globals: globals.node },

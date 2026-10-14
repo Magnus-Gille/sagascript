@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { listen } from "@tauri-apps/api/event";
   import { getActiveHotkeyProfile, getEngineLoadState, getState, type HotkeyProfile } from "./api";
+  import { useTauriEvent } from "./tauri-events.svelte";
   import {
     LOADING_LABEL_DELAY_MS,
     initialOverlayState,
@@ -30,24 +30,23 @@
     return () => clearTimeout(timer);
   });
 
+  let revision = 0;
+  const profileEvents = useTauriEvent("active-hotkey-profile-changed", (payload) => {
+    revision++;
+    profile = payload;
+  });
+  const stateEvents = useTauriEvent("state-changed", (value) => {
+    revision++;
+    dispatch({ type: "state", value });
+  });
+  const engineEvents = useTauriEvent("engine-load-state", (payload) => {
+    revision++;
+    dispatch({ type: "engine", value: payload.state, source: payload.source });
+  });
+
   onMount(() => {
     let disposed = false;
-    let revision = 0;
-    const stops: Array<() => void> = [];
-    const remember = (stop: () => void) => disposed ? stop() : stops.push(stop);
-    const profileListener = listen<HotkeyProfile>("active-hotkey-profile-changed", (event) => {
-      revision++;
-      profile = event.payload;
-    }).then(remember);
-    const stateListener = listen<string>("state-changed", (event) => {
-      revision++;
-      dispatch({ type: "state", value: event.payload });
-    }).then(remember);
-    const engineListener = listen<{ state: string; source?: string }>("engine-load-state", (event) => {
-      revision++;
-      dispatch({ type: "engine", value: event.payload.state, source: event.payload.source });
-    }).then(remember);
-    Promise.all([profileListener, stateListener, engineListener]).then(async () => {
+    Promise.all([profileEvents.ready, stateEvents.ready, engineEvents.ready]).then(async () => {
       const initialRevision = revision;
       const [active, state, engineLoad] = await Promise.all([
         getActiveHotkeyProfile(),
@@ -63,7 +62,7 @@
     }).catch((error) => {
       console.warn("Could not initialize dictation indicator state", error);
     });
-    return () => { disposed = true; stops.forEach((stop) => stop()); };
+    return () => { disposed = true; };
   });
 </script>
 

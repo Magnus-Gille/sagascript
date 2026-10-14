@@ -45,11 +45,14 @@ function fileHarness(path, overrides = {}) {
     ...stages,
     ...ui,
     job: { id: "job-1", path, profileId: "swedish", prompt: "Astrid", diarize: false },
-    listen: async (event, handler) => {
+    subscribeTauriEvent: (event, handler) => {
       assert.equal(event, "plain-transcription-progress");
       listener = handler;
-      return () => {
-        removed++;
+      return {
+        ready: Promise.resolve(),
+        dispose: () => {
+          removed++;
+        },
       };
     },
     transcribeFile: async (...args) => {
@@ -83,7 +86,7 @@ function fileHarness(path, overrides = {}) {
       copy: copyTranscriptionResult, save: saveTranscriptionResult,
       state: () => ({transcribing, cancellingPlain, plainStages, transcribeError, transcriptionResult, resultActionMessage}) };`;
   const instance = new Function(...Object.keys(deps), compile(source))(...Object.values(deps));
-  return { ...instance, calls, native, progress: (payload) => listener({ payload }), removed: () => removed };
+  return { ...instance, calls, native, progress: (payload) => listener(payload), removed: () => removed };
 }
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 
