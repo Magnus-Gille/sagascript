@@ -1,9 +1,10 @@
 # Recipe: add a Tauri command
 
-A command is a Rust function the frontend calls with `invoke`. Nothing checks at compile
-time that the Rust name, the `generate_handler!` entry, the TypeScript wrapper and the
-browser mock agree, so each step below is manual. Example: `get_example_info(profile_id)`
-returning a small struct.
+A command is a Rust function the frontend calls with `invoke`. The frontend's `CommandMap`
+is generated from the registered Rust signatures, and the app crate's tests fail while it is
+out of date or a `#[tauri::command]` is not registered; the wrapper and the browser mock are
+still written by hand ([contracts/README.md](../../contracts/README.md)). Example:
+`get_example_info(profile_id)` returning a small struct.
 
 ## 1. Rust command
 
@@ -58,8 +59,18 @@ pub async fn get_example_info(
 ## 2. Register it
 
 Add `commands::get_example_info,` to `tauri::generate_handler![...]` in `main()` in
-`src-tauri/src/main.rs`. A missing entry compiles fine and fails at run time when the
-frontend calls it.
+`src-tauri/src/main.rs`. A missing entry compiles, but the app crate's
+`command_map_is_generated_from_the_rust_signatures` test fails.
+
+Then regenerate the frontend's `CommandMap` and review the new entry:
+
+```bash
+cd src-tauri && SAGASCRIPT_BLESS_CONTRACTS=1 cargo test -p sagascript contract
+```
+
+A Rust type the generator does not know fails with "no TypeScript type for `ExampleInfo`":
+add it to `TYPESCRIPT_NAMES` in `src-tauri/src/contract/command_map.rs` (Rust name,
+TypeScript name, module). Untyped `serde_json::Value` needs an entry in `JSON_VALUES`.
 
 ## 3. Frontend wrapper and types
 
@@ -78,9 +89,13 @@ export async function getExampleInfo(profileId: string): Promise<ExampleInfo> {
 ```
 
 - Argument keys are the Rust parameter names in camelCase (`profile_id` → `profileId`);
-  returned field names follow serde (snake_case unless the struct renames them).
+  returned field names follow serde (snake_case unless the struct renames them). The
+  generated `CommandMap` entry shows both.
 - Components import the wrapper; they do not call `invoke` themselves.
-- The interface is a hand copy of the Rust struct; keep them in step.
+- The interface is a hand copy of the Rust struct; keep them in step. To pin it, add a
+  fixture: a test next to the command writes `contracts/transport/<command>.json` with
+  `contract::assert_fixture`, and `src/test/transport.test.ts` parses it with a schema proven
+  equal to the interface (see `get_settings`).
 
 ## 4. Browser mock
 
@@ -94,14 +109,13 @@ depends on it. Calls are recorded in `window.qa.calls` for assertions.
 | Layer | Where |
 |---|---|
 | Rust logic | A test module in `commands_tests.rs`, the test file of `commands.rs` (pure function, no Tauri runtime). |
-| Frontend logic | Put non-trivial handling in a `src/lib/*.ts` module and test it with Vitest in `src/lib/<module>.test.ts` (see `src/lib/overlay-state.test.ts`). Add the command to `CommandMap` in `src/test/ipc.ts` and its wrapper to `src/lib/api.test.ts`. |
+| Frontend logic | Put non-trivial handling in a `src/lib/*.ts` module and test it with Vitest in `src/lib/<module>.test.ts` (see `src/lib/overlay-state.test.ts`). Add the wrapper's row to `src/lib/api.test.ts`; it is type-checked against the generated `CommandMap`. |
 | User flow | A `scripts/qa-*.mjs` Playwright check against the mock, run by `npm run test:browser`. |
 
 Do not test by reading `.svelte` source with regexes ([ADR 0004](../adr/0004-test-strategy.md)).
-`src/lib/api.test.ts` pins each wrapper's command name and arguments against the typed mock
-([docs/testing/frontend.md](../testing/frontend.md)); planned:
-[#347](https://github.com/Magnus-Gille/sagascript/issues/347) extends that contract to
-`generate_handler!` and the Rust command signatures.
+`src/lib/api.test.ts` pins each wrapper's command name, arguments and result against the
+`CommandMap` generated from `generate_handler!` and the Rust signatures
+([docs/testing/frontend.md](../testing/frontend.md)).
 
 ## 6. CLI equivalent
 
@@ -114,7 +128,7 @@ both the command and a subcommand ([add-cli-subcommand.md](add-cli-subcommand.md
 ```bash
 npm run build && cd src-tauri
 cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
+cargo test --workspace           # includes the CommandMap check
 cd .. && npx svelte-check --tsconfig ./tsconfig.json && npm run test:unit && npm run test:frontend
 npm run test:browser        # if a view or qa flow uses the command
 ```
