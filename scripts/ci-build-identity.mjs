@@ -1,13 +1,16 @@
-import { appendFileSync, lstatSync } from "node:fs";
+import { appendFileSync, lstatSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 
-const ALLOWED_GENERATED_PATHS = Object.freeze([
-  "src-tauri/gen/schemas/acl-manifests.json",
-  "src-tauri/gen/schemas/capabilities.json",
-  "src-tauri/gen/schemas/desktop-schema.json",
-  "src-tauri/gen/schemas/windows-schema.json",
-]);
+// Generated files a CI build may rewrite without making the source identity dirty. The list is
+// shared with the engine hosts' build identity (#367): scripts/engine-host-identity.sh and
+// src-tauri/engine-host/ort/build_identity.rs read the same file.
+const ALLOWED_GENERATED_PATHS = Object.freeze(
+  readFileSync(new URL("./build-identity-generated-paths.txt", import.meta.url), "utf8")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line !== "" && !line.startsWith("#")),
+);
 const ALLOWED_GENERATED_SET = new Set(ALLOWED_GENERATED_PATHS);
 const SHA_PATTERN = /^[0-9a-f]{40}$/;
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;

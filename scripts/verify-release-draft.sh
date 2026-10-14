@@ -163,7 +163,7 @@ check_spctl() {
 }
 check_stapler_app() { xcrun stapler validate "$app"; }
 check_stapler_dmg() { xcrun stapler validate "$dmg"; }
-check_release_verifier() { "$repo_root/scripts/verify-macos-release.sh" "$app" "$dmg" "$version" "$sha"; }
+check_release_verifier() { "$repo_root/scripts/verify-macos-release.sh" --release "$app" "$dmg" "$version" "$sha"; }
 check_versions() {
   local out host_out
   out=$("$binary" --version)
@@ -184,6 +184,17 @@ check_updater_archive() {
 }
 check_pianissimo_smoke() {
   "$repo_root/scripts/smoke-pianissimo-installed.sh" "$binary" "$repo_root/test-audio/swedish-fleurs-hongkong.wav" hongkong
+}
+# Engine-host protocol conformance (#367) against the host in the draft's app (the
+# signed build already ran it before upload; this checks the stored artifacts). The
+# full run needs the Pianissimo model, which the smoke above has just downloaded.
+check_engine_host_conformance() {
+  local model_dir
+  model_dir=$("$binary" engine status --json | python3 -c 'import json, sys; print(json.load(sys.stdin)["model"]["dir"])')
+  python3 "$repo_root/scripts/engine-host-conformance.py" "$host" --model-dir "$model_dir"
+}
+check_engine_host_conformance_no_model() {
+  python3 "$repo_root/scripts/engine-host-conformance.py" "$host" --no-model
 }
 
 check_windows() { # ARCH DIR SUMS_FILE_DIR
@@ -230,8 +241,10 @@ if mount_and_copy_app >"$work/mount.log" 2>&1 && [[ -d $app ]]; then
   run_check "Updater archive: stapled, Gatekeeper, version" check_updater_archive
   if [[ $skip_smoke == 1 ]]; then
     skip_check "Pianissimo smoke (engine doctor + exact-word transcription)"
+    run_check "Engine-host conformance, model-free subset (bundled host; full run skipped with the smoke)" check_engine_host_conformance_no_model
   else
     run_check "Pianissimo smoke (engine doctor + transcription contains 'hongkong')" check_pianissimo_smoke
+    run_check "Engine-host conformance, full run with the Pianissimo model (bundled host)" check_engine_host_conformance
   fi
 else
   results+=("FAIL|Mount DMG and copy app"); failed=1

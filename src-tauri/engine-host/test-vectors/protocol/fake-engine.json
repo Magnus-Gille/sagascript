@@ -1,0 +1,169 @@
+{
+ "comment": "The scripted engine behind a host's protocol server while it replays the *.jsonl transcripts in this directory (docs/engine-host-protocol.md, Golden transcripts). load: model_dir in load_errors fails with that error, any other succeeds with load_result plus the requested model_id. transcribe: not loaded -> not_loaded; otherwise windows[pcm_path]. expect_boost is the dictionary the engine must receive (absent: none; a mismatch fails with internal); hold blocks until the window is cancelled, then fails with cancelled.",
+ "capabilities": {
+  "sample_rate": 16000,
+  "max_window_s": 1.0,
+  "preferred_window_s": 1.0,
+  "preferred_overlap_s": 0.2,
+  "max_in_flight": 2,
+  "token_timestamps": true,
+  "languages": [
+   "sv"
+  ],
+  "compute_units": [
+   "ane",
+   "gpu",
+   "cpu",
+   "all"
+  ],
+  "min_macos": "14.0",
+  "context_biasing": true
+ },
+ "load_result": {
+  "load_ms": 4,
+  "compiled": false,
+  "window_s": 1.0,
+  "frame_s": 0.08,
+  "vocab_size": 3,
+  "blank_id": 2
+ },
+ "load_errors": {
+  "/vectors/missing-model": {
+   "code": "model_missing",
+   "message": "Model directory does not exist: /vectors/missing-model",
+   "retryable": false
+  },
+  "/vectors/broken-model": {
+   "code": "model_load_failed",
+   "message": "Encoder cannot be loaded",
+   "retryable": false
+  }
+ },
+ "not_loaded": {
+  "code": "not_loaded",
+  "message": "No model is loaded",
+  "retryable": false
+ },
+ "windows": {
+  "/vectors/speech.f32": {
+   "result": {
+    "tokens": [
+     {
+      "id": 0,
+      "text": "▁hej",
+      "start": 0.0,
+      "duration": 0.08,
+      "confidence": 0.98
+     },
+     {
+      "id": 1,
+      "text": "san",
+      "start": 0.16,
+      "duration": 0.08,
+      "confidence": 0.5
+     }
+    ],
+    "audio_s": 0.5,
+    "timings": {
+     "preprocess_ms": 1,
+     "encode_ms": 2,
+     "decode_ms": 3
+    }
+   }
+  },
+  "/vectors/boost.f32": {
+   "expect_boost": {
+    "terms": [
+     "Gille",
+     "Magnus Gille"
+    ],
+    "weight": 5.0
+   },
+   "result": {
+    "tokens": [
+     {
+      "id": 0,
+      "text": "▁hej",
+      "start": 0.0,
+      "duration": 0.08,
+      "confidence": 0.98
+     },
+     {
+      "id": 1,
+      "text": "san",
+      "start": 0.16,
+      "duration": 0.08,
+      "confidence": 0.25
+     }
+    ],
+    "audio_s": 0.5,
+    "timings": {
+     "preprocess_ms": 1,
+     "encode_ms": 2,
+     "decode_ms": 3,
+     "boost_us": 7
+    },
+    "boost_active": true
+   }
+  },
+  "/vectors/no-usable-terms.f32": {
+   "expect_boost": {
+    "terms": [
+     "qqq"
+    ],
+    "weight": 5.0
+   },
+   "result": {
+    "tokens": [
+     {
+      "id": 0,
+      "text": "▁hej",
+      "start": 0.0,
+      "duration": 0.08,
+      "confidence": 0.98
+     },
+     {
+      "id": 1,
+      "text": "san",
+      "start": 0.16,
+      "duration": 0.08,
+      "confidence": 0.5
+     }
+    ],
+    "audio_s": 0.5,
+    "timings": {
+     "preprocess_ms": 1,
+     "encode_ms": 2,
+     "decode_ms": 3,
+     "boost_us": 9
+    },
+    "boost_active": false,
+    "boost_reason": "no_usable_terms"
+   }
+  },
+  "/vectors/hold.f32": {
+   "hold": true
+  },
+  "/vectors/busy.f32": {
+   "error": {
+    "code": "busy",
+    "message": "All engine slots are busy",
+    "retryable": true
+   }
+  },
+  "/vectors/engine-failure.f32": {
+   "error": {
+    "code": "engine",
+    "message": "Decoder failed",
+    "retryable": false
+   }
+  },
+  "/vectors/internal.f32": {
+   "error": {
+    "code": "internal",
+    "message": "Unexpected engine state",
+    "retryable": false
+   }
+  }
+ }
+}
