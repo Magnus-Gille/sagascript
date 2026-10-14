@@ -17,22 +17,31 @@
 //!   also loses its incidental self-cleaning property (a retried download
 //!   used to just overwrite its own leftover), so `download_to_path`
 //!   opportunistically sweeps stale `.tmp` files from the destination
-//!   directory before it starts.
+//!   directory before it starts;
+//! - the temp file is fsynced before the rename and the directory after it
+//!   (unix), so a crash cannot leave the installed name (and a durable
+//!   verification stamp) over unwritten data or lose the rename, and every
+//!   blocking filesystem step runs on Tokio's blocking pool rather than on an
+//!   async executor thread (#368).
 
+use std::fs::File;
 use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant, SystemTime};
 
 #[cfg(unix)]
 use std::collections::HashMap;
 #[cfg(unix)]
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
 
 use futures_util::StreamExt;
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt;
 
 use crate::error::DictationError;
+use crate::sync::lock_or_recover;
 
 /// whisper.cpp's `GGML_FILE_MAGIC` (`0x67676d6c`, mnemonic "ggml") as it
 /// actually appears on disk: the constant is written out as a little-endian
@@ -166,42 +175,435 @@ pub async fn download_to_path_with_limits(
     limits: DownloadLimits,
     progress_callback: impl Fn(u64, u64) + Send + 'static,
 ) -> Result<(), DictationError> {
-    if let Some(dir) = dest.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| {
-            DictationError::ModelDownloadFailed(format!("Failed to create models directory: {e}"))
-        })?;
-        sweep_orphaned_tmp_files(dir);
+    download_with(
+        url,
+        dest,
+        tmp_ext,
+        integrity,
+        expected_magic,
+        progress_callback,
+        &DownloadEnv::production(limits),
+    )
+    .await
+}
+
+/// File operations of a download that tests need to observe (#368): creating
+/// the destination directory, making the temp file durable, the final rename
+/// and making that rename durable. [`RealFs`] is the only production
+/// implementation.
+trait DownloadFs: Send + Sync {
+    fn create_dir_all(&self, dir: &Path) -> std::io::Result<()>;
+    fn sync_file(&self, file: &std::fs::File, path: &Path) -> std::io::Result<()>;
+    fn rename(&self, from: &Path, to: &Path) -> std::io::Result<()>;
+    /// Flush the directory entry that `rename` created. Unix only: it exists so
+    /// that the verification stamp, written next, never vouches for a name
+    /// that a crash can still undo, and Windows writes no stamp
+    /// ([`write_verification_stamp`] is a no-op there), so it has nothing to
+    /// order.
+    fn sync_dir(&self, dir: &Path) -> std::io::Result<()>;
+}
+
+struct RealFs;
+
+impl DownloadFs for RealFs {
+    fn create_dir_all(&self, dir: &Path) -> std::io::Result<()> {
+        std::fs::create_dir_all(dir)
     }
 
+    fn sync_file(&self, file: &std::fs::File, _path: &Path) -> std::io::Result<()> {
+        sync_durably(file)
+    }
+
+    fn rename(&self, from: &Path, to: &Path) -> std::io::Result<()> {
+        std::fs::rename(from, to)
+    }
+
+    fn sync_dir(&self, dir: &Path) -> std::io::Result<()> {
+        #[cfg(unix)]
+        {
+            sync_durably(&File::open(dir)?)
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = dir;
+            Ok(())
+        }
+    }
+}
+
+/// Flush `file` to stable storage: `File::sync_all`, which is `fsync` on
+/// Linux and `FlushFileBuffers` on Windows. On Apple platforms std's
+/// `sync_all` is only `fcntl(F_FULLFSYNC)`, which SMB and NFS homes, macFUSE
+/// and some external drives reject, so there `fsync(2)` is the fallback. That
+/// differs from SQLite, which falls back on any `F_FULLFSYNC` failure: here
+/// only a failure of the unsupported class ([`sync_unsupported`]) falls back,
+/// and EIO, ENOSPC and EDQUOT stay fatal, on purpose.
+fn sync_durably(file: &File) -> std::io::Result<()> {
+    #[cfg(target_vendor = "apple")]
+    {
+        sync_with_fallback(|| file.sync_all(), || fsync(file))
+    }
+    #[cfg(not(target_vendor = "apple"))]
+    {
+        file.sync_all()
+    }
+}
+
+/// Run `plain` when `full` fails only because the file or volume cannot do
+/// that kind of sync ([`sync_unsupported`]); any other failure is real and is
+/// returned as it is.
+#[cfg(any(target_vendor = "apple", test))]
+fn sync_with_fallback(
+    full: impl FnOnce() -> std::io::Result<()>,
+    plain: impl FnOnce() -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    match full() {
+        Err(error) if sync_unsupported(&error) => {
+            tracing::debug!("Full sync rejected ({error}); falling back to the plain sync");
+            plain()
+        }
+        result => result,
+    }
+}
+
+/// `fsync(2)` without Apple's full-flush semantics.
+#[cfg(target_vendor = "apple")]
+fn fsync(file: &File) -> std::io::Result<()> {
+    use std::os::fd::AsRawFd;
+    loop {
+        // SAFETY: the descriptor stays open while `file` is borrowed, and
+        // `fsync` reads or writes no memory of ours.
+        if unsafe { libc::fsync(file.as_raw_fd()) } == 0 {
+            return Ok(());
+        }
+        let error = std::io::Error::last_os_error();
+        if error.kind() != std::io::ErrorKind::Interrupted {
+            return Err(error);
+        }
+    }
+}
+
+/// Network bounds and injectable side effects of one download.
+struct DownloadEnv {
+    limits: DownloadLimits,
+    clients: &'static ClientCache,
+    fs: Arc<dyn DownloadFs>,
+}
+
+impl DownloadEnv {
+    fn production(limits: DownloadLimits) -> Self {
+        Self {
+            limits,
+            clients: &SHARED_CLIENTS,
+            fs: Arc::new(RealFs),
+        }
+    }
+}
+
+static SHARED_CLIENTS: ClientCache = ClientCache::new(CLIENT_MAX_AGE);
+
+/// How long a built client is reused. A client snapshots the system proxy
+/// settings when it is built, so a proxy or VPN change applies to downloads
+/// started at most this long after it; within that window back-to-back
+/// downloads (the Pianissimo ONNX file set, a Whisper model and then its
+/// CoreML encoder, the two diarization models) share one client.
+const CLIENT_MAX_AGE: Duration = Duration::from_secs(60);
+
+/// Shared HTTP clients for model downloads (#368), instead of one per
+/// download: building a client loads the platform TLS configuration and the
+/// system proxy settings. Entries expire after `max_age` ([`CLIENT_MAX_AGE`]).
+///
+/// The clients keep no idle connections ([`build_client`]). The CLI runs
+/// downloads on short-lived Tokio runtimes (`download_vad_model` under a fresh
+/// runtime's `block_on`), and a pooled connection is driven by a task on the
+/// runtime that opened it, so a later runtime must never be handed one. A
+/// model download is one long transfer; pooling would at most save a
+/// reconnect between redirect hops to the same host.
+struct ClientCache {
+    /// At most one live client per connect timeout (production only uses the
+    /// default; tests add a short one). An update is a `retain` and a `push`
+    /// with no panic point between them, so the list stays consistent if a
+    /// panic poisons the lock (ADR 0005).
+    clients: Mutex<Vec<CachedClient>>,
+    max_age: Duration,
+    builds: AtomicUsize,
+}
+
+struct CachedClient {
+    connect_timeout: Duration,
+    built: Instant,
+    client: reqwest::Client,
+}
+
+impl CachedClient {
+    fn usable(&self, connect_timeout: Duration, max_age: Duration) -> bool {
+        self.connect_timeout == connect_timeout && self.built.elapsed() < max_age
+    }
+}
+
+impl ClientCache {
+    const fn new(max_age: Duration) -> Self {
+        Self {
+            clients: Mutex::new(Vec::new()),
+            max_age,
+            builds: AtomicUsize::new(0),
+        }
+    }
+
+    async fn client(&self, connect_timeout: Duration) -> Result<reqwest::Client, DictationError> {
+        if let Some(client) = self.cached(connect_timeout) {
+            return Ok(client);
+        }
+        // Loading the TLS configuration reads system files: off the executor.
+        let client = run_blocking(move || build_client(connect_timeout)).await?;
+        let mut clients = lock_or_recover(&self.clients, "download.http_clients");
+        // A concurrent download may have stored a fresh one meanwhile; keep it.
+        if let Some(fresh) = clients
+            .iter()
+            .find(|cached| cached.usable(connect_timeout, self.max_age))
+        {
+            return Ok(fresh.client.clone());
+        }
+        clients.retain(|cached| cached.connect_timeout != connect_timeout);
+        clients.push(CachedClient {
+            connect_timeout,
+            built: Instant::now(),
+            client: client.clone(),
+        });
+        let builds = self.builds.fetch_add(1, Ordering::Relaxed) + 1;
+        tracing::debug!(builds, "Built an HTTP client for model downloads");
+        Ok(client)
+    }
+
+    fn cached(&self, connect_timeout: Duration) -> Option<reqwest::Client> {
+        lock_or_recover(&self.clients, "download.http_clients")
+            .iter()
+            .find(|cached| cached.usable(connect_timeout, self.max_age))
+            .map(|cached| cached.client.clone())
+    }
+}
+
+async fn download_with(
+    url: &str,
+    dest: &Path,
+    tmp_ext: &str,
+    integrity: DownloadIntegrity,
+    expected_magic: Option<&[u8]>,
+    progress_callback: impl Fn(u64, u64) + Send + 'static,
+    env: &DownloadEnv,
+) -> Result<(), DictationError> {
+    if let Some(dir) = dest.parent() {
+        let (fs, dir) = (Arc::clone(&env.fs), dir.to_path_buf());
+        run_blocking(move || {
+            fs.create_dir_all(&dir).map_err(|e| {
+                DictationError::ModelDownloadFailed(format!(
+                    "Failed to create models directory: {e}"
+                ))
+            })?;
+            sweep_orphaned_tmp_files(&dir);
+            Ok(())
+        })
+        .await?;
+    }
+
+    let client = env.clients.client(env.limits.connect_timeout).await?;
     let tmp_path = unique_tmp_path(dest, tmp_ext);
     // The guard is created together with the file (inside the blocking
     // creation task), so it removes the file on error, cancellation, panic, or
-    // an abandoned creation; it is kept through the rename below.
-    let mut guard = fetch_to_tmp(
+    // an abandoned creation; it moves into the install step below.
+    let (file, guard) = fetch_to_tmp(
+        &client,
         url,
         &tmp_path,
         integrity,
         expected_magic,
-        limits,
+        env.limits,
         progress_callback,
     )
     .await?;
 
-    // The download itself was already validated; if only the final move fails
-    // (e.g. a cross-device rename) the guard still removes the temp file.
-    tokio::fs::rename(&tmp_path, dest).await.map_err(|e| {
+    let (fs, dest) = (Arc::clone(&env.fs), dest.to_path_buf());
+    run_blocking_cancellable(move |cancel| {
+        install_tmp_file(fs.as_ref(), file, guard, &dest, integrity, cancel)
+    })
+    .await
+}
+
+/// Make the validated temp file durable, then atomically move it into place,
+/// make the move durable and record its verification stamp.
+///
+/// The order is the point (#368): the data is fsynced *before* the rename, so
+/// a crash can never leave `dest` naming a file whose blocks were not written
+/// yet, and the directory is synced *after* it, before the stamp (written
+/// last), so a durable stamp never vouches for a name that a crash can still
+/// undo. If only the final move fails (e.g. a cross-device rename), or the
+/// download was cancelled before the rename started, `guard` removes the temp
+/// file. A cancellation that arrives once the rename has started installs the
+/// complete, verified and synced file.
+fn install_tmp_file(
+    fs: &dyn DownloadFs,
+    file: std::fs::File,
+    mut guard: TmpFileGuard,
+    dest: &Path,
+    integrity: DownloadIntegrity,
+    cancel: &CancelFlag,
+) -> Result<(), DictationError> {
+    if let Err(error) = cancel.check("Download") {
+        drop(file);
+        return Err(error);
+    }
+    let synced = fs.sync_file(&file, &guard.path);
+    // Close before the guard can unlink it or the rename moves it (Windows).
+    drop(file);
+    if let Err(e) = synced {
+        if !sync_unsupported(&e) {
+            return Err(DictationError::ModelDownloadFailed(format!(
+                "Failed to sync temp file: {e}"
+            )));
+        }
+        tracing::warn!(
+            "Cannot sync {} on this filesystem ({e}); installing it without a durability guarantee",
+            guard.path.display()
+        );
+    }
+    cancel.check("Download")?;
+    fs.rename(&guard.path, dest).map_err(|e| {
         DictationError::ModelDownloadFailed(format!("Failed to rename temp file: {e}"))
     })?;
     guard.disarm();
 
-    // The streamed bytes were verified immediately above. Cache that result
+    // Best effort: the file is installed and verified, so a directory that
+    // cannot be synced must not fail the download.
+    let dir = match dest.parent() {
+        Some(dir) if !dir.as_os_str().is_empty() => dir,
+        _ => Path::new("."),
+    };
+    if let Err(e) = fs.sync_dir(dir) {
+        if sync_unsupported(&e) {
+            tracing::debug!("Cannot sync {} on this filesystem ({e})", dir.display());
+        } else {
+            tracing::warn!(
+                "Could not sync {} after installing {}: {e}",
+                dir.display(),
+                dest.display()
+            );
+        }
+    }
+
+    // The streamed bytes were verified before the install. Cache that result
     // against the installed file's filesystem fingerprint so normal model
     // loads do not rehash multi-gigabyte artifacts. The cache
     // is also persisted as a verification stamp so later launches skip the hash
     // while the file's identity is unchanged.
     cache_verified_file(dest, integrity);
-
     Ok(())
+}
+
+/// Whether a failed sync only means that this file or filesystem cannot sync,
+/// rather than that written data may be lost. Some network, FUSE and external
+/// volumes reject Apple's `F_FULLFSYNC` (and then [`sync_durably`] has tried
+/// `fsync(2)` too), and some Windows redirectors reject `FlushFileBuffers`; a
+/// models directory there installs without the sync, as every download did
+/// before #368. I/O errors, a full disk or an exceeded quota stay fatal.
+fn sync_unsupported(error: &std::io::Error) -> bool {
+    use std::io::ErrorKind;
+    // ENOTTY is 25 everywhere; ENOTSUP/EOPNOTSUPP are 95 on Linux, 45 and 102
+    // on Apple platforms. std maps none of them to `Unsupported`. On Windows,
+    // `FlushFileBuffers` fails with ERROR_INVALID_FUNCTION (1) or
+    // ERROR_NOT_SUPPORTED (50), which std leaves uncategorized.
+    #[cfg(target_os = "linux")]
+    const NOT_SUPPORTED: &[i32] = &[25, 95];
+    #[cfg(target_vendor = "apple")]
+    const NOT_SUPPORTED: &[i32] = &[25, 45, 102];
+    #[cfg(windows)]
+    const NOT_SUPPORTED: &[i32] = &[1, 50];
+    #[cfg(not(any(target_os = "linux", target_vendor = "apple", windows)))]
+    const NOT_SUPPORTED: &[i32] = &[];
+    // EINVAL from fsync(2): the descriptor has no sync operation. On Windows
+    // `InvalidInput` is ERROR_INVALID_PARAMETER, which is a real bug.
+    #[cfg(unix)]
+    let no_sync_operation = error.kind() == ErrorKind::InvalidInput;
+    #[cfg(not(unix))]
+    let no_sync_operation = false;
+    error.kind() == ErrorKind::Unsupported
+        || no_sync_operation
+        || error
+            .raw_os_error()
+            .is_some_and(|code| NOT_SUPPORTED.contains(&code))
+}
+
+/// A sync that the volume cannot do is not an error; any other failure is.
+#[cfg(unix)]
+fn tolerate_unsupported(result: std::io::Result<()>) -> std::io::Result<()> {
+    match result {
+        Err(error) if sync_unsupported(&error) => Ok(()),
+        result => result,
+    }
+}
+
+/// Run blocking file work (directory scans, hashing, fsync, renames) on
+/// Tokio's blocking pool so it never stalls an async executor thread (#368).
+///
+/// Dropping the returned future does not stop `work`; a blocking closure runs
+/// to completion. Work that must notice cancellation uses
+/// [`run_blocking_cancellable`].
+pub(crate) async fn run_blocking<T, F>(work: F) -> Result<T, DictationError>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, DictationError> + Send + 'static,
+{
+    tokio::task::spawn_blocking(work).await.map_err(|e| {
+        DictationError::ModelDownloadFailed(format!("Background file task failed: {e}"))
+    })?
+}
+
+/// Set once the async caller of a blocking step has gone away (its future was
+/// dropped), so the blocking work can stop before an irreversible step.
+#[derive(Clone, Default)]
+struct CancelFlag(Arc<AtomicBool>);
+
+impl CancelFlag {
+    fn cancel(&self) {
+        self.0.store(true, Ordering::Release);
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.0.load(Ordering::Acquire)
+    }
+
+    /// `Err` once cancelled. Nobody awaits a cancelled step, so the message
+    /// (`what` names the step) only matters for logs and tests.
+    fn check(&self, what: &str) -> Result<(), DictationError> {
+        if self.is_cancelled() {
+            return Err(DictationError::ModelDownloadFailed(format!(
+                "{what} was cancelled"
+            )));
+        }
+        Ok(())
+    }
+}
+
+/// Sets the flag when dropped, i.e. when the awaiting future completes or is
+/// cancelled. Setting it after the work finished is harmless.
+struct CancelOnDrop(CancelFlag);
+
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        self.0.cancel();
+    }
+}
+
+/// [`run_blocking`] for work that should stop early when its caller is
+/// cancelled: `work` receives a [`CancelFlag`] that is set as soon as the
+/// returned future is dropped.
+async fn run_blocking_cancellable<T, F>(work: F) -> Result<T, DictationError>
+where
+    T: Send + 'static,
+    F: FnOnce(&CancelFlag) -> Result<T, DictationError> + Send + 'static,
+{
+    let cancel = CancelFlag::default();
+    let _cancel_on_drop = CancelOnDrop(cancel.clone());
+    run_blocking(move || work(&cancel)).await
 }
 
 /// Maximum number of HTTP redirects followed (matches reqwest's default).
@@ -248,70 +650,74 @@ fn total_err(limits: DownloadLimits, size: u64) -> DictationError {
     ))
 }
 
-/// Do the actual network fetch + stream-to-file + validate. The temp file is
-/// cleaned up by the caller's [`TmpFileGuard`]. The total deadline wraps every
-/// asynchronous step (headers, redirects, body, writes, flush) and is also
-/// checked explicitly between chunks and before validation, because the
-/// synchronous progress callback and hashing cannot be pre-empted.
+/// Do the actual network fetch + stream-to-file + validate. The returned
+/// [`TmpFileGuard`] owns the temp file, and removes it on every error inside
+/// this function. The total deadline wraps every asynchronous step (headers,
+/// redirects, body, writes, flush) and is also checked explicitly between
+/// chunks and before validation, because the synchronous progress callback
+/// and hashing cannot be pre-empted.
 async fn fetch_to_tmp(
+    client: &reqwest::Client,
     url: &str,
     tmp_path: &Path,
     integrity: DownloadIntegrity,
     expected_magic: Option<&[u8]>,
     limits: DownloadLimits,
     progress_callback: impl Fn(u64, u64) + Send + 'static,
-) -> Result<TmpFileGuard, DictationError> {
+) -> Result<(std::fs::File, TmpFileGuard), DictationError> {
     let deadline = tokio::time::Instant::now() + limits.total_deadline(integrity.size);
-    match tokio::time::timeout_at(
-        deadline,
-        fetch_inner(
-            url,
+    let fetch = async {
+        let response = open_response(client, url, limits).await?;
+        stream_to_tmp(
+            response,
             tmp_path,
             integrity,
             expected_magic,
             limits,
             deadline,
             progress_callback,
-        ),
-    )
-    .await
-    {
+        )
+        .await
+    };
+    match tokio::time::timeout_at(deadline, fetch).await {
         Ok(result) => result,
         Err(_) => Err(total_err(limits, integrity.size)),
     }
 }
 
-async fn fetch_inner(
-    url: &str,
-    tmp_path: &Path,
-    integrity: DownloadIntegrity,
-    expected_magic: Option<&[u8]>,
-    limits: DownloadLimits,
-    deadline: tokio::time::Instant,
-    // Called synchronously after every chunk; it must be cheap and
-    // non-blocking, since it holds up the transfer (and cannot be pre-empted).
-    progress_callback: impl Fn(u64, u64) + Send + 'static,
-) -> Result<TmpFileGuard, DictationError> {
-    let expired = || tokio::time::Instant::now() >= deadline;
-    let idle_err = || {
-        DictationError::ModelDownloadFailed(format!(
-            "Download stalled: no data received for {}s",
-            limits.idle_timeout.as_secs()
-        ))
-    };
-    let failed =
-        |e: reqwest::Error| DictationError::ModelDownloadFailed(format!("Download failed: {e}"));
+fn download_failed(e: reqwest::Error) -> DictationError {
+    DictationError::ModelDownloadFailed(format!("Download failed: {e}"))
+}
 
-    // Redirects are followed manually so the header-phase idle timeout applies
-    // per hop rather than to the whole chain; the total deadline is shared.
-    let client = reqwest::Client::builder()
+fn idle_err(limits: DownloadLimits) -> DictationError {
+    DictationError::ModelDownloadFailed(format!(
+        "Download stalled: no data received for {}s",
+        limits.idle_timeout.as_secs()
+    ))
+}
+
+/// HTTP client for model downloads. Redirects are followed manually (see
+/// [`open_response`]); no connection is kept idle (see [`ClientCache`]).
+fn build_client(connect_timeout: Duration) -> Result<reqwest::Client, DictationError> {
+    reqwest::Client::builder()
         // The platform TLS stack, whatever else in the binary enables
         // rustls (the macOS updater does); see this crate's Cargo.toml.
         .tls_backend_native()
-        .connect_timeout(limits.connect_timeout)
+        .connect_timeout(connect_timeout)
         .redirect(reqwest::redirect::Policy::none())
+        .pool_max_idle_per_host(0)
         .build()
-        .map_err(failed)?;
+        .map_err(download_failed)
+}
+
+/// Send the request and follow redirects up to a successful response.
+async fn open_response(
+    client: &reqwest::Client,
+    url: &str,
+    limits: DownloadLimits,
+) -> Result<reqwest::Response, DictationError> {
+    // Redirects are followed manually so the header-phase idle timeout applies
+    // per hop rather than to the whole chain; the total deadline is shared.
     let mut current = reqwest::Url::parse(url)
         .map_err(|e| DictationError::ModelDownloadFailed(format!("Invalid download URL: {e}")))?;
     let mut hops = 0;
@@ -319,8 +725,8 @@ async fn fetch_inner(
         let response =
             tokio::time::timeout(limits.idle_timeout, client.get(current.clone()).send())
                 .await
-                .map_err(|_| idle_err())?
-                .map_err(failed)?;
+                .map_err(|_| idle_err(limits))?
+                .map_err(download_failed)?;
         if !response.status().is_redirection() {
             break response;
         }
@@ -353,7 +759,23 @@ async fn fetch_inner(
             response.status()
         )));
     }
+    Ok(response)
+}
 
+/// Stream a successful response into a new temp file at `tmp_path` and
+/// validate it. Returns the open, flushed file and the guard that owns it.
+async fn stream_to_tmp(
+    response: reqwest::Response,
+    tmp_path: &Path,
+    integrity: DownloadIntegrity,
+    expected_magic: Option<&[u8]>,
+    limits: DownloadLimits,
+    deadline: tokio::time::Instant,
+    // Called synchronously after every chunk; it must be cheap and
+    // non-blocking, since it holds up the transfer (and cannot be pre-empted).
+    progress_callback: impl Fn(u64, u64) + Send + 'static,
+) -> Result<(std::fs::File, TmpFileGuard), DictationError> {
+    let expired = || tokio::time::Instant::now() >= deadline;
     let content_length = response.content_length();
     if let Some(len) = content_length {
         if len != integrity.size {
@@ -385,7 +807,7 @@ async fn fetch_inner(
     loop {
         let chunk = match tokio::time::timeout(limits.idle_timeout, stream.next())
             .await
-            .map_err(|_| idle_err())?
+            .map_err(|_| idle_err(limits))?
         {
             None => break,
             Some(c) => {
@@ -416,7 +838,7 @@ async fn fetch_inner(
     file.flush()
         .await
         .map_err(|e| DictationError::ModelDownloadFailed(format!("Flush error: {e}")))?;
-    drop(file);
+    let file = file.into_std().await;
     if expired() {
         return Err(total_err(limits, integrity.size));
     }
@@ -432,7 +854,7 @@ async fn fetch_inner(
     )
     .map_err(DictationError::ModelDownloadFailed)?;
 
-    Ok(guard)
+    Ok((file, guard))
 }
 
 /// Only these statuses are followed; any other 3xx is an error.
@@ -560,12 +982,12 @@ fn failure_into_error(failure: VerificationFailure) -> DictationError {
     }
 }
 
-/// Verify an app-managed artifact and remove it only when its bytes are proven
-/// not to match the immutable manifest. I/O failures and invalid manifest data
-/// are returned without touching the file.
-pub fn prepare_existing_artifact(
+/// The blocking body of [`prepare_existing_artifact_async`]; it must not run
+/// on an async executor thread.
+fn prepare_existing_artifact_with(
     path: &Path,
     integrity: DownloadIntegrity,
+    hasher: FileHasher<'_>,
 ) -> Result<ExistingArtifact, DictationError> {
     match std::fs::symlink_metadata(path) {
         Ok(_) => {}
@@ -580,7 +1002,7 @@ pub fn prepare_existing_artifact(
         }
     }
 
-    match verify_file_detailed(path, integrity) {
+    match verify_file_detailed_with(path, integrity, false, hasher) {
         Ok(()) => Ok(ExistingArtifact::Verified),
         Err(VerificationFailure::Other(error)) => Err(error),
         Err(VerificationFailure::IntegrityMismatch(message)) => {
@@ -600,6 +1022,35 @@ pub fn prepare_existing_artifact(
     }
 }
 
+/// Verify an app-managed artifact and remove it only when its bytes are proven
+/// not to match the immutable manifest. I/O failures and invalid manifest data
+/// are returned without touching the file.
+///
+/// Without a matching verification stamp this hashes the whole file, which can
+/// be gigabytes, so the check and the hash run on Tokio's blocking pool
+/// (#368). Dropping the future stops the hash before its next 1 MiB read; a
+/// hash stopped that way never deletes the file.
+pub async fn prepare_existing_artifact_async(
+    path: &Path,
+    integrity: DownloadIntegrity,
+) -> Result<ExistingArtifact, DictationError> {
+    prepare_existing_artifact_async_with(path.to_path_buf(), integrity, sha256_of_file_until).await
+}
+
+async fn prepare_existing_artifact_async_with<H>(
+    path: PathBuf,
+    integrity: DownloadIntegrity,
+    hasher: H,
+) -> Result<ExistingArtifact, DictationError>
+where
+    H: Fn(File, &Path, &CancelFlag) -> Result<String, VerificationFailure> + Send + 'static,
+{
+    run_blocking_cancellable(move |cancel| {
+        prepare_existing_artifact_with(&path, integrity, &|file, p| hasher(file, p, cancel))
+    })
+    .await
+}
+
 fn verify_file_detailed(
     path: &Path,
     integrity: DownloadIntegrity,
@@ -608,7 +1059,7 @@ fn verify_file_detailed(
 }
 
 /// Hashing is injected so tests can observe whether a verification hashed.
-type FileHasher<'a> = &'a dyn Fn(std::fs::File, &Path) -> Result<String, VerificationFailure>;
+type FileHasher<'a> = &'a dyn Fn(File, &Path) -> Result<String, VerificationFailure>;
 
 fn verify_file_detailed_with(
     path: &Path,
@@ -681,6 +1132,17 @@ fn verify_file_detailed_at(
 }
 
 fn sha256_of_file(file: std::fs::File, path: &Path) -> Result<String, VerificationFailure> {
+    sha256_of_file_until(file, path, &CancelFlag::default())
+}
+
+/// Hash `file`, giving up between reads once `cancel` is set. A cancelled
+/// hash is an `Other` failure, never an integrity mismatch, so it can never
+/// get the file deleted.
+fn sha256_of_file_until(
+    file: std::fs::File,
+    path: &Path,
+    cancel: &CancelFlag,
+) -> Result<String, VerificationFailure> {
     let mut reader = BufReader::new(file);
     let mut hasher = Sha256::new();
     // Keep the multi-megabyte artifact hash buffer off the thread stack. The
@@ -689,6 +1151,14 @@ fn sha256_of_file(file: std::fs::File, path: &Path) -> Result<String, Verificati
     // (especially on ARM64).
     let mut buffer = vec![0_u8; 1024 * 1024];
     loop {
+        if cancel.is_cancelled() {
+            return Err(VerificationFailure::Other(
+                DictationError::ModelDownloadFailed(format!(
+                    "Integrity verification of {} was cancelled",
+                    path.display()
+                )),
+            ));
+        }
         let read = reader.read(&mut buffer).map_err(|e| {
             VerificationFailure::Other(DictationError::ModelDownloadFailed(format!(
                 "Failed while hashing model {}: {e}",
@@ -909,7 +1379,8 @@ fn write_verification_stamp(
                 .mode(0o600)
                 .open(&tmp)?;
             file.write_all(&json)?;
-            file.sync_all()
+            // A volume that cannot sync still gets a stamp; it is only a cache.
+            tolerate_unsupported(sync_durably(&file))
         })();
         if let Err(error) = write.and_then(|()| std::fs::rename(&tmp, stamp_path)) {
             let _ = std::fs::remove_file(&tmp);
