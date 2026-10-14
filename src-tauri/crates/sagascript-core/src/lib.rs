@@ -11,6 +11,7 @@ pub mod diarization_report;
 pub mod diarization_strata;
 pub mod download;
 pub mod error;
+pub mod fsutil;
 pub mod meeting;
 pub mod meeting_media;
 pub mod meeting_reprocess;

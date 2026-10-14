@@ -3,8 +3,35 @@
 //! Planning only reads explicitly selected files. Execution returns a proposal,
 //! never replaces an active review, and never upgrades a selective cache miss
 //! to full inference. The backend boundary makes skipped expensive work testable.
+//!
+//! # Publication of the outputs (#342, ADR 0008)
+//!
+//! A run produces up to two new files: the proposal and, for a full
+//! recomputation that asked for one, a reusable cache. Neither is visible at
+//! its destination until the run is validated:
+//!
+//! 1. The cache is written privately beside its destination while inference
+//!    runs ([`StagedFile::reserve`]); the proposal stays in memory.
+//! 2. After every check (source, cache and plan revisions, cancellation) the
+//!    result is a [`StagedReprocessing`]. Dropping it, or any error, removes
+//!    the staged cache: nothing was published and the same command can run
+//!    again.
+//! 3. [`StagedReprocessing::stage_proposal`] serializes and stages the
+//!    proposal, so serialization and disk-full errors also come before the
+//!    first publication. The caller may run its own last checks.
+//! 4. [`PendingPublication::commit`] publishes the cache, then the proposal.
+//!    The proposal is the completion marker. Only a failure of the last step
+//!    leaves a partial result: [`CommitError::CacheOnly`], a complete cache
+//!    and no proposal, never the reverse. A selective run from that cache
+//!    recovers the proposal without recomputation.
+//!
+//! Every publication is no-replace ([`sagascript_core::fsutil`]); no existing
+//! file is overwritten or deleted. Callers whose proposal stays in memory (the
+//! desktop app) use [`StagedReprocessing::finish`], which publishes the cache.
 
-use std::path::Path;
+use std::fs;
+use std::io;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use sagascript_core::diarization::{
@@ -12,6 +39,7 @@ use sagascript_core::diarization::{
 };
 use sagascript_core::diarization_report::{AsrSegmentEvidence, DecoderEvidence};
 use sagascript_core::error::DictationError;
+use sagascript_core::fsutil::{Leftover, PublishFs, RealFs, StagedFile};
 use sagascript_core::meeting::MeetingTranscript;
 use sagascript_core::meeting_reprocess_plan::{
     ReprocessingContext, ReprocessingMode, ReprocessingPlan, RequiredWork,
@@ -27,6 +55,7 @@ use sha2::{Digest, Sha256};
 use crate::diarization_cache::{
     self, AnalysisIdentity, CacheIdentity, CacheLookup, DiarizationCache,
 };
+use crate::meeting_proposal;
 use crate::transcribe::{self, MeetingControl, MeetingPhase};
 
 pub struct ReprocessingInput<'a> {
@@ -93,8 +122,175 @@ fn plan_reprocessing_with_model_check(
     ReprocessingPlan::new(mode, prepared.context, threshold).map_err(plan_error)
 }
 
-/// Execute exactly the validated plan. A new cache output is opt-in and only
-/// supported for full recomputation; it never replaces an existing artifact.
+/// A validated run whose new cache, if one was requested, is still private.
+///
+/// Nothing exists at the requested cache destination yet; the cache sits in a
+/// staging file beside it and is removed if this value is dropped unpublished.
+#[derive(Debug)]
+pub struct StagedReprocessing {
+    pub result: ReprocessingResult,
+    cache: Option<StagedFile>,
+}
+
+/// The proposal (and cache) staged and ready to publish; see
+/// [`PendingPublication::commit`]. Dropping it removes both staging files.
+#[derive(Debug)]
+pub struct PendingPublication {
+    cache: Option<StagedFile>,
+    proposal: StagedFile,
+    required_work: RequiredWork,
+    timings: ReprocessingTimings,
+}
+
+/// What a successful [`PendingPublication::commit`] published.
+#[derive(Debug)]
+pub struct PublishReceipt {
+    pub proposal: PathBuf,
+    pub cache: Option<PathBuf>,
+    /// Private staging files that could not be removed after the publication;
+    /// every published file is complete regardless.
+    pub leftovers: Vec<Leftover>,
+    pub required_work: RequiredWork,
+    pub timings: ReprocessingTimings,
+}
+
+/// A commit that did not publish everything.
+#[derive(Debug)]
+pub enum CommitError {
+    /// Nothing was published and every staging file was removed (or reported
+    /// in the cause). The same command can run again.
+    NothingPublished(DictationError),
+    /// The cache was published and is complete; the proposal was not.
+    CacheOnly {
+        cache: PathBuf,
+        proposal: PathBuf,
+        cause: DictationError,
+    },
+}
+
+impl std::fmt::Display for CommitError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NothingPublished(cause) | Self::CacheOnly { cause, .. } => cause.fmt(formatter),
+        }
+    }
+}
+
+impl StagedReprocessing {
+    /// Publish the staged cache (if any) and return the result. For callers
+    /// whose proposal stays in memory, such as the desktop app: either the
+    /// cache is published and the result returned, or nothing is published.
+    ///
+    /// A staging file that could not be removed after the cache was published
+    /// is a warning in the log, not a failure: the cache is complete, and
+    /// failing the job would lose the validated proposal and make a retry hit
+    /// "cache output already exists".
+    pub fn finish(self) -> Result<ReprocessingResult, DictationError> {
+        self.finish_with(&RealFs)
+    }
+
+    /// [`finish`](Self::finish) on the given filesystem operations.
+    pub fn finish_with(self, ops: &dyn PublishFs) -> Result<ReprocessingResult, DictationError> {
+        let Self { result, cache } = self;
+        if let Some(cache) = cache {
+            let destination = cache.destination().to_path_buf();
+            let published = cache
+                .publish_with(ops)
+                .map_err(|error| diarization_cache::publish_error(&destination, &error))?;
+            if let Some(leftover) = published.leftover {
+                // The path is the user's, so the log carries the error kind alone.
+                tracing::warn!(
+                    kind = ?leftover.error.kind(),
+                    "a private cache staging file could not be removed"
+                );
+            }
+        }
+        Ok(result)
+    }
+
+    /// Serialize the proposal and stage it beside `output`, without publishing
+    /// anything. Errors here (serialization, a missing folder, a full disk)
+    /// come before any publication and remove the staged cache.
+    pub fn stage_proposal(self, output: &Path) -> Result<PendingPublication, DictationError> {
+        let Self { result, cache } = self;
+        if let Some(cache) = &cache {
+            ensure_distinct_outputs(output, cache.destination())?;
+        }
+        let proposal = meeting_proposal::stage_json_new(output, &result.proposal)?;
+        Ok(PendingPublication {
+            cache,
+            proposal,
+            required_work: result.required_work,
+            timings: result.timings,
+        })
+    }
+}
+
+impl PendingPublication {
+    /// Publish the cache, then the proposal; see [`commit_with`](Self::commit_with).
+    pub fn commit(self) -> Result<PublishReceipt, CommitError> {
+        self.commit_with(&RealFs)
+    }
+
+    /// Publish the cache, then the proposal, each without replacing anything.
+    ///
+    /// The proposal destination is checked once more before the cache is
+    /// published, so a file that appeared meanwhile publishes nothing. If the
+    /// cache cannot be published, nothing is published. Only when the
+    /// proposal cannot be published after the cache was is the result
+    /// [`CommitError::CacheOnly`].
+    pub fn commit_with(self, ops: &dyn PublishFs) -> Result<PublishReceipt, CommitError> {
+        let Self {
+            cache,
+            proposal,
+            required_work,
+            timings,
+        } = self;
+        let proposal_path = proposal.destination().to_path_buf();
+        meeting_proposal::ensure_output_absent(&proposal_path)
+            .map_err(CommitError::NothingPublished)?;
+        let mut leftovers = Vec::new();
+        let mut cache_path = None;
+        if let Some(cache) = cache {
+            let destination = cache.destination().to_path_buf();
+            match cache.publish_with(ops) {
+                Ok(published) => leftovers.extend(published.leftover),
+                Err(error) => {
+                    let cause = diarization_cache::publish_error(&destination, &error);
+                    return Err(CommitError::NothingPublished(cause));
+                }
+            }
+            cache_path = Some(destination);
+        }
+        match proposal.publish_with(ops) {
+            Ok(published) => leftovers.extend(published.leftover),
+            Err(error) => {
+                let cause = meeting_proposal::publish_error(&error);
+                return Err(match cache_path {
+                    Some(cache) => CommitError::CacheOnly {
+                        cache,
+                        proposal: proposal_path,
+                        cause,
+                    },
+                    None => CommitError::NothingPublished(cause),
+                });
+            }
+        }
+        Ok(PublishReceipt {
+            proposal: proposal_path,
+            cache: cache_path,
+            leftovers,
+            required_work,
+            timings,
+        })
+    }
+}
+
+/// Execute exactly the validated plan and publish a requested new cache once
+/// the run is validated, for callers whose proposal stays in memory. A new
+/// cache output is opt-in and only supported for full recomputation; it never
+/// replaces an existing artifact. See [`execute_reprocessing_staged`] to
+/// publish the proposal as well.
 #[allow(clippy::too_many_arguments)]
 pub fn execute_reprocessing(
     plan: &ReprocessingPlan,
@@ -105,6 +301,30 @@ pub fn execute_reprocessing(
     cache_output: Option<&Path>,
     control: Option<&MeetingControl<'_>>,
 ) -> Result<ReprocessingResult, DictationError> {
+    execute_reprocessing_staged(
+        plan,
+        expected_plan_revision,
+        input,
+        stored,
+        whisper,
+        cache_output,
+        control,
+    )?
+    .finish()
+}
+
+/// Execute exactly the validated plan, leaving a requested new cache staged
+/// and unpublished; see the module documentation for what to do next.
+#[allow(clippy::too_many_arguments)]
+pub fn execute_reprocessing_staged(
+    plan: &ReprocessingPlan,
+    expected_plan_revision: &str,
+    input: &ReprocessingInput<'_>,
+    stored: &Settings,
+    whisper: &WhisperBackend,
+    cache_output: Option<&Path>,
+    control: Option<&MeetingControl<'_>>,
+) -> Result<StagedReprocessing, DictationError> {
     execute_with_model_check(
         plan,
         expected_plan_revision,
@@ -116,7 +336,7 @@ pub fn execute_reprocessing(
     )
 }
 
-trait WorkBackend {
+pub(crate) trait WorkBackend {
     fn decode(
         &mut self,
         audio: &Path,
@@ -138,9 +358,9 @@ trait WorkBackend {
     ) -> Result<MeetingTranscript, DictationError>;
 }
 
-struct NativeBackend<'a> {
-    stored: &'a Settings,
-    whisper: &'a WhisperBackend,
+pub(crate) struct NativeBackend<'a> {
+    pub(crate) stored: &'a Settings,
+    pub(crate) whisper: &'a WhisperBackend,
 }
 
 impl WorkBackend for NativeBackend<'_> {
@@ -202,13 +422,14 @@ fn execute_with(
         control,
         || true,
         backend,
-    )
+    )?
+    .finish()
 }
 
 /// Testable execution seam. Production callers must use
-/// [`execute_reprocessing`], which supplies the real local-model availability
-/// check independently of planning.
-fn execute_with_model_check(
+/// [`execute_reprocessing`] or [`execute_reprocessing_staged`], which supply the
+/// real local-model availability check independently of planning.
+pub(crate) fn execute_with_model_check(
     plan: &ReprocessingPlan,
     expected_plan_revision: &str,
     input: &ReprocessingInput<'_>,
@@ -216,7 +437,7 @@ fn execute_with_model_check(
     control: Option<&MeetingControl<'_>>,
     models_available: impl FnOnce() -> bool,
     backend: &mut impl WorkBackend,
-) -> Result<ReprocessingResult, DictationError> {
+) -> Result<StagedReprocessing, DictationError> {
     let started = Instant::now();
     plan.validate().map_err(plan_error)?;
     ensure_rediarize_models(plan.mode, models_available)?;
@@ -225,6 +446,10 @@ fn execute_with_model_check(
             "a new cache output requires explicit full recomputation",
         ));
     }
+    // The requested cache is written to a private staging path while inference
+    // runs and is published only after the checks below; an early return drops
+    // the guard and removes it.
+    let staged_cache = cache_output.map(reserve_cache).transpose()?;
     let mut prepared = prepare(input, plan.mode, control)?;
     plan.revalidate(&prepared.context, expected_plan_revision)
         .map_err(plan_error)?;
@@ -246,9 +471,17 @@ fn execute_with_model_check(
                 input,
                 plan.threshold,
                 plan.speaker_hint,
-                cache_output,
+                staged_cache.as_ref().map(StagedFile::staged_path),
                 control,
             )?;
+            if staged_cache
+                .as_ref()
+                .is_some_and(|cache| !cache.is_staged())
+            {
+                return Err(failure(
+                    "full recomputation did not produce the requested cache; nothing was published",
+                ));
+            }
             timings.full_pipeline_seconds = phase.elapsed().as_secs_f64();
             transcript
         }
@@ -332,33 +565,89 @@ fn execute_with_model_check(
         }
     };
     let proposed = proposed.with_speaker_hint(plan.speaker_hint);
-    checkpoint(control, MeetingPhase::Finalizing)?;
-    transcribe::verify_meeting_source_unchanged(
-        input.audio,
-        &prepared.context.source_sha256,
-        control,
-    )?;
-    if let (Some(path), Some(expected)) = (input.cache, prepared.context.cache_sha256.as_ref()) {
-        if transcribe::stable_file_sha256(path, control)? != *expected {
-            return Err(failure(
-                "cache changed during reprocessing; request a new plan",
-            ));
-        }
-    }
-    if proposed.source_sha256 != prepared.context.source_sha256 {
-        return Err(failure("reprocessing returned a different source identity"));
-    }
+    verify_inputs_unchanged(input, &prepared.context, &proposed, control)?;
     let phase = Instant::now();
     let proposal = MeetingReprocessingProposal::new(input.previous.clone(), proposed)
         .map_err(|error| failure(&format!("proposal could not be created: {error}")))?;
     timings.proposal_seconds = phase.elapsed().as_secs_f64();
     check(control)?;
     timings.total_seconds = started.elapsed().as_secs_f64();
-    Ok(ReprocessingResult {
-        proposal,
-        required_work: plan.required_work.clone(),
-        timings,
+    Ok(StagedReprocessing {
+        result: ReprocessingResult {
+            proposal,
+            required_work: plan.required_work.clone(),
+            timings,
+        },
+        cache: staged_cache,
     })
+}
+
+/// The last checks before a result may be published: the source and the cache
+/// are what the plan was made for, and the run answered for that source.
+fn verify_inputs_unchanged(
+    input: &ReprocessingInput<'_>,
+    context: &ReprocessingContext,
+    proposed: &MeetingTranscript,
+    control: Option<&MeetingControl<'_>>,
+) -> Result<(), DictationError> {
+    checkpoint(control, MeetingPhase::Finalizing)?;
+    transcribe::verify_meeting_source_unchanged(input.audio, &context.source_sha256, control)?;
+    if let (Some(path), Some(expected)) = (input.cache, context.cache_sha256.as_ref()) {
+        if transcribe::stable_file_sha256(path, control)? != *expected {
+            return Err(failure(
+                "cache changed during reprocessing; request a new plan",
+            ));
+        }
+    }
+    if proposed.source_sha256 != context.source_sha256 {
+        return Err(failure("reprocessing returned a different source identity"));
+    }
+    Ok(())
+}
+
+/// Reserve the private staging path for a requested new cache, after checking
+/// that nothing exists at its destination yet (so a mistake costs no inference).
+fn reserve_cache(destination: &Path) -> Result<StagedFile, DictationError> {
+    match fs::symlink_metadata(destination) {
+        Ok(_) => {
+            return Err(DictationError::FileDecodeError(format!(
+                "Diarization cache output already exists: {}",
+                destination.display()
+            )))
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(DictationError::FileDecodeError(format!(
+                "Failed to inspect diarization cache output '{}': {error}",
+                destination.display()
+            )))
+        }
+    }
+    StagedFile::reserve(destination)
+        .map_err(|error| diarization_cache::publish_error(destination, &error))
+}
+
+/// The proposal and the cache are two files and must not be one path: the
+/// second publication would fail after the first succeeded.
+pub(crate) fn ensure_distinct_outputs(left: &Path, right: &Path) -> Result<(), DictationError> {
+    let left = output_identity(left);
+    let right = output_identity(right);
+    if left == right {
+        return Err(DictationError::SettingsError(
+            "meeting proposal and cache outputs must be different paths".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn output_identity(path: &Path) -> PathBuf {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let Some(filename) = path.file_name() else {
+        return path.to_path_buf();
+    };
+    fs::canonicalize(parent)
+        .map(|parent| parent.join(filename))
+        .unwrap_or_else(|_| path.to_path_buf())
 }
 
 fn prepare(

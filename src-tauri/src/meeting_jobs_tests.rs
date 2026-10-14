@@ -104,7 +104,7 @@ fn staging_files(path: &Path) -> Vec<PathBuf> {
             entry
                 .file_name()
                 .and_then(|name| name.to_str())
-                .is_some_and(|name| name.starts_with(".sagascript-export-"))
+                .is_some_and(|name| name.starts_with('.') && name.ends_with(".tmp"))
         })
         .collect()
 }
@@ -264,6 +264,25 @@ fn write_new_export_writes_exact_bytes_and_never_replaces_existing_files() {
         existing
     );
     assert!(staging_files(scratch.path()).is_empty());
+}
+
+#[test]
+fn write_new_export_succeeds_when_only_the_temporary_file_cannot_be_removed() {
+    use sagascript_core::test_support::FaultyFs;
+    let scratch = TempDir::new();
+    let destination = scratch.path().join("meeting.txt");
+
+    write_new_export_with(
+        &destination,
+        b"exact export",
+        &FaultyFs::new().failing_remove(),
+    )
+    .expect("the export is published, so the command succeeds");
+
+    assert_eq!(
+        std::fs::read(&destination).expect("read export"),
+        b"exact export"
+    );
 }
 
 #[cfg(unix)]
