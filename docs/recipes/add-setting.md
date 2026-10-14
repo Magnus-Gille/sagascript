@@ -99,7 +99,7 @@ awaits.
 | Where | What |
 |---|---|
 | `settings/manager_tests.rs` | Assert the default in `settings_default_values` and the round trip in `settings_serde_roundtrip`. |
-| `settings/store.rs` | Assert a file without the key loads the default (`partial_json_fills_defaults`). Migrations: test through the `*_at(path, …)` helpers on a temp file, never the real settings path. |
+| `settings/store_tests.rs` | Assert a file without the key loads the default (`partial_json_fills_defaults`). Migrations: test through the `*_at(path, …)` helpers on a `fake_settings()` file (`with_temp_settings`), never the real settings path. |
 | `config.rs` | Extend `get_setting_value_returns_serialized_values`; add a set/reset/reject test modeled on `engine_settings_can_be_set_reset_and_reject_bad_values`. |
 | `commands_tests.rs` | Unit-test any extracted setter logic. |
 | Frontend | New logic in a `.ts` module gets a `scripts/test-*.mjs` test. Do not add regex tests over `Settings.svelte` source ([ADR 0004](../adr/0004-test-strategy.md)). |

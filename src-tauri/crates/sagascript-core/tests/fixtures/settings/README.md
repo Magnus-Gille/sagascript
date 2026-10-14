@@ -50,7 +50,7 @@ values and the store's write path are unchanged.
   plugin-store files may have held other keys; only `hasCompletedOnboarding`
   is known to have been read back.
 - No release wrote an embedded `profile_glossaries` map: 1.1.0 added the
-  field and moved it to files in the same release. Unit tests in `store.rs`
+  field and moved it to files in the same release. Unit tests in `store_tests.rs`
   cover that shape. Likewise the `presenter` hotkey mode existed only in
   development builds between 1.1.3 and 1.2.0; a unit test covers it.
 - The release builds may have enabled serde_json's `preserve_order`, which
