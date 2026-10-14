@@ -164,7 +164,7 @@ over `src/`, and the Node scripts in `scripts/` and `tests/`. Prettier formats; 
 not.
 
 - `eslint-suppressions.json` records the 84 findings that existed when ESLint was introduced
-  (79 after #362 typed the event handlers), as counts per file and rule: 24 `no-explicit-any`
+  (76 as of #362, which typed the event handlers), as counts per file and rule: 21 `no-explicit-any`
   and most of the rest in the Settings,
   Onboarding, FileTranscription and meeting components, one in `profile-shortcuts.ts`, the
   others in `scripts/`. A new
