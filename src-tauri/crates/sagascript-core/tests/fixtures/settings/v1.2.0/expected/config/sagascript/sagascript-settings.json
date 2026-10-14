@@ -1,0 +1,41 @@
+{
+  "auto_paste": true,
+  "auto_select_model": false,
+  "beam_size": 0,
+  "engine_defaults_version": 1,
+  "engine_idle_unload_minutes": 60,
+  "engine_prewarm": "on_app_start",
+  "file_transcription_model": "auto",
+  "has_completed_onboarding": true,
+  "hotkey": "Option+Space",
+  "hotkey_mode": "push",
+  "hotkey_profiles": [
+    {
+      "id": "default",
+      "language": "sv",
+      "name": "Svenska",
+      "push_to_talk_shortcut": "Option+Space",
+      "shortcut": "Option+Space",
+      "toggle_shortcut": "Control+Option+Space"
+    },
+    {
+      "id": "suomi",
+      "language": "fi",
+      "name": "Suomi",
+      "shortcut": "Option+F"
+    }
+  ],
+  "language": "sv",
+  "model_lineup_version": 1,
+  "pianissimo_dictation": false,
+  "profile_glossary_migrated": true,
+  "profile_models": {
+    "default": "kb-whisper-medium",
+    "suomi": "auto"
+  },
+  "schema_version": 6,
+  "show_overlay": true,
+  "temperature_fallback": true,
+  "vad_enabled": false,
+  "whisper_model": "kb-whisper-medium"
+}

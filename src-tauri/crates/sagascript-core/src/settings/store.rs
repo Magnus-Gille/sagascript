@@ -6,9 +6,12 @@ use std::{
 
 use fs2::FileExt;
 
+use serde_json::Value;
+
 use crate::settings::{
-    FileModelPreference, LineupEnv, Settings, WhisperModel, ENGINE_DEFAULTS_VERSION,
-    MODEL_LINEUP_VERSION,
+    lenient,
+    migrations::{self, MachineProbe, Migration, Object},
+    FileModelPreference, LineupEnv, Settings, SCHEMA_VERSION,
 };
 
 const APP_IDENTIFIER: &str = "ai.gille.sagascript";
@@ -23,14 +26,6 @@ const XDG_CONFIG_HOME_ENV: &str = "XDG_CONFIG_HOME";
 /// When set, legacy settings migration is disabled so an isolated session can
 /// never import or mutate the user's normal application settings by accident.
 pub const SETTINGS_PATH_ENV: &str = "SAGASCRIPT_SETTINGS_PATH";
-const LEGACY_ONBOARDING_KEY: &str = "hasCompletedOnboarding";
-const ONBOARDING_KEY: &str = "has_completed_onboarding";
-
-fn canonicalize_legacy_keys(map: &mut serde_json::Map<String, serde_json::Value>) {
-    if let Some(legacy) = map.remove(LEGACY_ONBOARDING_KEY) {
-        map.entry(ONBOARDING_KEY.to_string()).or_insert(legacy);
-    }
-}
 
 /// Returns the application data directory (platform-specific).
 /// macOS: ~/Library/Application Support/ai.gille.sagascript/
@@ -162,7 +157,6 @@ fn copy_legacy_settings(source: &Path, destination: &Path) -> Result<bool, Strin
     let object = value
         .as_object_mut()
         .ok_or_else(|| "Legacy settings root is not an object".to_string())?;
-    canonicalize_legacy_keys(object);
 
     // Moving the current bundle's settings into the XDG directory preserves
     // its TCC identity. Older bundle identifiers and FlowDictate do not.
@@ -173,9 +167,7 @@ fn copy_legacy_settings(source: &Path, destination: &Path) -> Result<bool, Strin
             .and_then(Path::file_name)
             .and_then(|name| name.to_str())
             == Some(APP_IDENTIFIER);
-    if !same_bundle_settings {
-        object.insert("auto_paste".to_string(), serde_json::Value::Bool(false));
-    }
+    migrations::from_legacy_location(object, same_bundle_settings);
     let migrated = serde_json::to_string_pretty(&value)
         .map_err(|error| format!("Failed to serialize migrated settings: {error}"))?;
     atomic_write(destination, migrated.as_bytes(), "migrated settings")?;
@@ -213,130 +205,96 @@ fn migrate_legacy_identifier_settings_locked(
     }
 }
 
-/// Load settings from disk. Returns defaults if the file is missing or unreadable.
+/// The machine this process runs on. Probing it from the settings store is
+/// the `settings` → `transcription` module cycle that #372 removes.
+struct ThisMachine;
+
+impl MachineProbe for ThisMachine {
+    fn pianissimo_supported(&self) -> bool {
+        crate::transcription::pianissimo_backend::runtime_supported_on_this_os()
+    }
+
+    fn lineup_env(&self) -> LineupEnv<'_> {
+        LineupEnv {
+            pianissimo_supported: self.pianissimo_supported(),
+            pianissimo_downloaded: crate::transcription::pianissimo_model::is_downloaded(),
+            whisper_downloaded: &crate::transcription::model::is_model_downloaded,
+        }
+    }
+}
+
+/// Load settings from disk, migrating an older settings file (see
+/// [`migrations`]). Returns defaults if the file is missing or unreadable.
 /// Partial JSON files are handled by `#[serde(default)]` on Settings.
 pub fn load() -> Settings {
-    let path = settings_path();
-    let settings = load_at_with_legacy_sources(&path, legacy_settings_paths());
-    let mut settings = settings;
-    // Hot path: filesystem/OS probes only run while the one-time lineup
-    // migration is still pending.
-    if settings.model_lineup_version < MODEL_LINEUP_VERSION {
-        let whisper_downloaded =
-            |model: WhisperModel| crate::transcription::model::is_model_downloaded(model);
-        settings = migrate_lineup_at(
-            &path,
-            settings,
-            &LineupEnv {
-                pianissimo_supported:
-                    crate::transcription::pianissimo_backend::runtime_supported_on_this_os(),
-                pianissimo_downloaded: crate::transcription::pianissimo_model::is_downloaded(),
-                whisper_downloaded: &whisper_downloaded,
-            },
-        );
-    }
-    if settings.engine_defaults_version < ENGINE_DEFAULTS_VERSION {
-        settings = migrate_engine_defaults_at(&path, settings);
-    }
+    load_at_with_machine(&settings_path(), legacy_settings_paths(), &ThisMachine)
+}
+
+/// Test seam for `tests/settings_fixtures.rs`: [`load`] for an explicit
+/// settings file and legacy locations, with fixed machine state instead of
+/// probing this machine.
+#[doc(hidden)]
+pub fn load_at(path: &Path, legacy_sources: &[PathBuf], machine: &LineupEnv<'_>) -> Settings {
+    load_at_with_machine(path, legacy_sources.iter().cloned(), machine)
+}
+
+fn load_at_with_machine(
+    path: &Path,
+    legacy_sources: impl IntoIterator<Item = PathBuf>,
+    machine: &dyn MachineProbe,
+) -> Settings {
+    let mut settings = load_migrated(path, legacy_sources, machine);
     // A settings file copied from a supported machine must not select an engine
     // this system cannot run. In memory only: the file keeps the user's choice.
-    settings.demote_unsupported_pianissimo(
-        crate::transcription::pianissimo_backend::runtime_supported_on_this_os(),
-    );
+    settings.demote_unsupported_pianissimo(machine.pianissimo_supported());
     settings
 }
 
-/// Run the one-time engine warm-up defaults migration and persist it under the
-/// settings lock. Returns the settings to use.
-fn migrate_engine_defaults_at(path: &Path, loaded: Settings) -> Settings {
-    if loaded.engine_defaults_version >= ENGINE_DEFAULTS_VERSION {
-        return loaded;
-    }
-    if !path.exists() {
-        let mut fresh = loaded;
-        fresh.engine_defaults_version = ENGINE_DEFAULTS_VERSION;
-        return fresh;
-    }
-    with_settings_lock(path, || {
-        let mut settings = match load_from_checked(path) {
-            Ok(settings) => settings,
-            Err(error) => return Ok(unmigrated_defaults(path, &error, "engine defaults")),
-        };
-        if settings.migrate_engine_defaults() {
-            if let Err(error) = save_to(path, &settings) {
-                tracing::warn!(
-                    "Failed to persist the engine defaults migration to {}: {error}",
-                    path.display()
-                );
-            }
-        }
-        Ok(settings)
-    })
-    .unwrap_or(loaded)
-}
-
-/// Run the one-time Swedish model-lineup migration against the real machine
-/// state and persist it under the settings lock. Returns the settings to use.
-fn migrate_lineup_at(path: &Path, loaded: Settings, env: &LineupEnv<'_>) -> Settings {
-    if loaded.model_lineup_version >= MODEL_LINEUP_VERSION {
-        return loaded;
-    }
-    if !path.exists() {
-        // Nothing persisted yet: there is nothing to migrate.
-        let mut fresh = loaded;
-        fresh.model_lineup_version = MODEL_LINEUP_VERSION;
-        return fresh;
-    }
-    with_settings_lock(path, || {
-        let mut settings = match load_from_checked(path) {
-            Ok(settings) => settings,
-            Err(error) => return Ok(unmigrated_defaults(path, &error, "Swedish model lineup")),
-        };
-        if settings.migrate_swedish_lineup(env) {
-            if let Err(error) = save_to(path, &settings) {
-                tracing::warn!(
-                    "Failed to persist the Swedish model lineup migration to {}: {error}",
-                    path.display()
-                );
-            }
-        }
-        Ok(settings)
-    })
-    .unwrap_or(loaded)
-}
-
-fn load_at_with_legacy_sources(
+/// The startup load: copy settings from a legacy location on first use, run
+/// every pending migration and persist the result under the settings lock.
+/// A file with values that had to be reset is migrated in memory only: like
+/// a file that cannot be loaded at all, it is replaced only by an explicit
+/// save, which first preserves its bytes (see [`save_to`]).
+fn load_migrated(
     path: &Path,
     legacy_sources: impl IntoIterator<Item = PathBuf>,
+    machine: &dyn MachineProbe,
 ) -> Settings {
-    // Existing settings are installed with atomic rename, so an ordinary read
-    // needs no lock. Embedded dictionaries from older releases are the one
-    // exception: migrate those under the writer lock before returning.
-    if path.exists() && !has_embedded_glossary_fields(path) && !needs_profile_model_migration(path)
-    {
+    // Settings files are installed with atomic rename, so an ordinary read
+    // needs no lock. Only a file with a migration pending, or a missing one
+    // that a legacy location may provide, is loaded under the writer lock.
+    if !needs_startup_migration(path) {
         return load_from(path);
     }
     with_settings_lock(path, || {
         migrate_legacy_identifier_settings_locked(path, legacy_sources);
-        let settings = match load_from_checked(path) {
-            Ok(settings) => settings,
-            Err(error) => {
-                return Ok(unmigrated_defaults(
-                    path,
-                    &error,
-                    "profile settings and dictionaries",
-                ))
-            }
+        let loaded = match load_checked(path, Some(machine)) {
+            Ok(loaded) => loaded,
+            Err(error) => return Ok(unmigrated_defaults(path, &error)),
         };
-        if has_embedded_glossary_fields(path) || needs_profile_model_migration(path) {
-            if let Err(error) = save_to(path, &settings) {
-                tracing::warn!(
-                    "Failed to migrate profile settings and dictionaries from {}: {error}",
+        let migration = loaded.migration.filter(Migration::ran);
+        if let (Some(migration), false) = (migration, loaded.reset.is_empty()) {
+            tracing::info!(
+                "Settings file {} needs migrating from schema version {} to {}; it is migrated in memory only until a save, because it has values that had to be reset",
+                path.display(),
+                migration.from,
+                migration.to
+            );
+        } else if let Some(migration) = migration {
+            match save_to(path, &loaded.settings) {
+                Ok(()) => tracing::info!(
+                    "Migrated settings file {} from schema version {} to {}",
+                    path.display(),
+                    migration.from,
+                    migration.to
+                ),
+                Err(error) => tracing::warn!(
+                    "Failed to persist the settings migration to {}: {error}",
                     path.display()
-                );
+                ),
             }
         }
-        Ok(settings)
+        Ok(loaded.settings)
     })
     .unwrap_or_else(|error| {
         tracing::warn!(
@@ -347,12 +305,23 @@ fn load_at_with_legacy_sources(
     })
 }
 
+/// Whether the startup load needs the writer lock: the settings file is
+/// missing (a legacy location may provide it) or has a migration pending. A
+/// file that cannot be read or parsed is left to [`load_from`] to report.
+fn needs_startup_migration(path: &Path) -> bool {
+    match std::fs::read(path) {
+        Ok(contents) => parse_settings_object(&contents)
+            .is_ok_and(|object| migrations::starting_version(&object) < SCHEMA_VERSION),
+        Err(error) => error.kind() == std::io::ErrorKind::NotFound,
+    }
+}
+
 /// A startup migration never persists over a settings file it could not load.
 /// Warn once and use defaults in memory; the file stays as it is until an
 /// explicit save, which preserves its bytes first (see [`save_to`]).
-fn unmigrated_defaults(path: &Path, error: &SettingsLoadError, migration: &str) -> Settings {
+fn unmigrated_defaults(path: &Path, error: &SettingsLoadError) -> Settings {
     tracing::warn!(
-        "Settings file at {} could not be loaded ({error}); skipping the {migration} migration, which leaves the file untouched, and using defaults in memory",
+        "Settings file at {} could not be loaded ({error}); skipping its migrations, which leaves the file untouched, and using defaults in memory",
         path.display()
     );
     defaults_for(path)
@@ -372,12 +341,12 @@ impl std::fmt::Display for SettingsParseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Syntax(reason) => write!(f, "not a valid JSON settings object: {reason}"),
-            Self::Schema(reason) => write!(f, "invalid setting value: {reason}"),
+            Self::Schema(reason) => f.write_str(reason),
         }
     }
 }
 
-/// Why [`load_from_checked`] could not load an existing settings file.
+/// Why [`load_checked`] could not load an existing settings file.
 #[derive(Debug)]
 enum SettingsLoadError {
     /// Any read error other than a missing file.
@@ -400,24 +369,17 @@ impl std::fmt::Display for SettingsLoadError {
         match self {
             Self::Read(error) => write!(f, "read failed: {error}"),
             Self::Syntax(reason) => write!(f, "not a valid JSON settings object: {reason}"),
-            Self::Schema(reason) => write!(f, "invalid setting value: {reason}"),
+            Self::Schema(reason) => f.write_str(reason),
         }
     }
 }
 
-/// Parse the bytes of a settings file the way every load does.
-fn parse_settings(contents: &[u8]) -> Result<Settings, SettingsParseError> {
-    settings_from_object(parse_settings_object(contents)?, true)
-}
-
-/// Syntax stage of [`parse_settings`]: the bytes must be a UTF-8 JSON object.
-fn parse_settings_object(
-    contents: &[u8],
-) -> Result<serde_json::Map<String, serde_json::Value>, SettingsParseError> {
+/// Syntax stage of every load: the bytes must be a UTF-8 JSON object.
+fn parse_settings_object(contents: &[u8]) -> Result<Object, SettingsParseError> {
     let text = std::str::from_utf8(contents)
         .map_err(|error| SettingsParseError::Syntax(format!("not UTF-8 ({error})")))?;
     match serde_json::from_str(text) {
-        Ok(serde_json::Value::Object(map)) => Ok(map),
+        Ok(Value::Object(map)) => Ok(map),
         Ok(_) => Err(SettingsParseError::Syntax(
             "the top level is not a JSON object".to_string(),
         )),
@@ -425,80 +387,173 @@ fn parse_settings_object(
     }
 }
 
-/// Schema stage of [`parse_settings`]. Invalid profile-model entries are
-/// dropped rather than failing the whole file; `report_ignored` logs them.
-fn settings_from_object(
-    mut map: serde_json::Map<String, serde_json::Value>,
-    report_ignored: bool,
-) -> Result<Settings, SettingsParseError> {
-    canonicalize_legacy_keys(&mut map);
-    if let Some(models) = map.get_mut("profile_models") {
-        if let Some(entries) = models.as_object_mut() {
-            entries.retain(|id, model| {
-                let valid = validate_profile_file_id(id).is_ok()
-                    && model
-                        .as_str()
-                        .is_some_and(|id| FileModelPreference::parse_id(id).is_ok());
-                if !valid && report_ignored {
-                    tracing::warn!("Ignoring invalid profile model setting");
-                }
-                valid
-            });
-        } else {
-            if report_ignored {
-                tracing::warn!("Ignoring malformed profile model map");
-            }
-            map.remove("profile_models");
-        }
+const PROFILE_MODELS_KEY: &str = "profile_models";
+
+/// `profile_models` is lenient per entry (ADR 0007): an entry that does not
+/// read, such as a model id from a newer release, is dropped on its own, and
+/// a value that is not a map is dropped whole. Runs before the migrations,
+/// which give every profile left without a model the one its old selection
+/// implies. Returns whether anything was dropped, which [`decode_object`]
+/// counts as a reset of `profile_models`: like any reset value, the dropped
+/// entries stay in the file until a save, which first preserves its bytes.
+fn drop_invalid_profile_models(object: &mut Object) -> bool {
+    let Some(models) = object.get_mut(PROFILE_MODELS_KEY) else {
+        return false;
+    };
+    let Some(entries) = models.as_object_mut() else {
+        object.remove(PROFILE_MODELS_KEY);
+        return true;
+    };
+    let before = entries.len();
+    entries.retain(|id, model| {
+        validate_profile_file_id(id).is_ok()
+            && model
+                .as_str()
+                .is_some_and(|id| FileModelPreference::parse_id(id).is_ok())
+    });
+    entries.len() != before
+}
+
+/// [`lenient::decode`] of an object [`drop_invalid_profile_models`] ran on,
+/// with `profile_models` among the reset fields if it dropped anything.
+fn decode_object(
+    object: &Object,
+    dropped_profile_models: bool,
+) -> Result<lenient::Decoded, String> {
+    let mut decoded = lenient::decode(object)?;
+    if dropped_profile_models && !decoded.reset.iter().any(|key| key == PROFILE_MODELS_KEY) {
+        decoded.reset.push(PROFILE_MODELS_KEY.to_string());
+        decoded.reset.sort();
     }
-    serde_json::from_value(serde_json::Value::Object(map))
-        .map_err(|error| SettingsParseError::Schema(error.to_string()))
+    Ok(decoded)
+}
+
+/// Whether a settings file's object reads as [`Settings`] as it is, with
+/// no field reset. A save over a file that does not first preserves its
+/// bytes (see [`existing_settings_for_merge`]).
+fn check_settings_object(mut object: Object) -> Result<(), SettingsParseError> {
+    migrations::canonical_onboarding_key(&mut object);
+    let dropped_profile_models = drop_invalid_profile_models(&mut object);
+    match decode_object(&object, dropped_profile_models) {
+        Ok(decoded) if decoded.reset.is_empty() => Ok(()),
+        Ok(decoded) => Err(SettingsParseError::Schema(invalid_fields(&decoded.reset))),
+        Err(reason) => Err(SettingsParseError::Schema(format!(
+            "invalid settings: {reason}"
+        ))),
+    }
+}
+
+/// Names, never values: a settings value can be anything the user typed.
+fn invalid_fields(fields: &[String]) -> String {
+    let noun = if fields.len() == 1 { "value" } else { "values" };
+    format!("invalid {noun} for {}", fields.join(", "))
+}
+
+/// The settings a settings file's object holds: its personal dictionaries
+/// read in from their files and its pending migrations run. `machine`
+/// enables the steps that need machine state (the startup load and field
+/// updates). A field that does not decode takes its default (see
+/// [`lenient`]) and is reported.
+fn settings_from_file_object(
+    path: &Path,
+    mut object: Object,
+    machine: Option<&dyn MachineProbe>,
+) -> Result<FileSettings, SettingsParseError> {
+    // Taken before the dictionaries are read in: embedding them is a legacy shape.
+    let from = migrations::starting_version(&object);
+    read_dictionary_files(path, &mut object);
+    let dropped_profile_models = drop_invalid_profile_models(&mut object);
+    let migration = migrations::migrate(&mut object, from, machine)
+        .map_err(|error| SettingsParseError::Schema(error.to_string()))?;
+    let decoded = decode_object(&object, dropped_profile_models)
+        .map_err(|reason| SettingsParseError::Schema(format!("invalid settings: {reason}")))?;
+    if !decoded.reset.is_empty() {
+        tracing::warn!(
+            "Settings file {} has {}; ignoring what cannot be read. The file keeps it until the next save, which first saves a recovery copy of it",
+            path.display(),
+            invalid_fields(&decoded.reset)
+        );
+    }
+    Ok(FileSettings {
+        settings: decoded.settings,
+        migration,
+        reset: decoded.reset,
+    })
+}
+
+/// What [`settings_from_file_object`] made of a settings object.
+struct FileSettings {
+    settings: Settings,
+    migration: Migration,
+    /// Fields that did not decode and took their defaults.
+    reset: Vec<String>,
+}
+
+/// A settings file as loaded, what migrating it did (`None`: no file) and
+/// the fields that had to be reset.
+struct Loaded {
+    settings: Settings,
+    migration: Option<Migration>,
+    reset: Vec<String>,
 }
 
 /// Load settings from a specific path, reporting why an existing file could
 /// not be used. A missing file is not an error: it loads as defaults.
-fn load_from_checked(path: &Path) -> Result<Settings, SettingsLoadError> {
-    let mut settings = match std::fs::read(path) {
-        Ok(contents) => parse_settings(&contents)?,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Settings::default(),
+fn load_checked(
+    path: &Path,
+    machine: Option<&dyn MachineProbe>,
+) -> Result<Loaded, SettingsLoadError> {
+    let contents = match std::fs::read(path) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(Loaded {
+                settings: defaults_for(path),
+                migration: None,
+                reset: Vec::new(),
+            })
+        }
         Err(error) => return Err(SettingsLoadError::Read(error)),
     };
-    finish_loaded_settings(path, &mut settings);
-    Ok(settings)
-}
-
-/// Defaults with the same post-processing a successful load applies.
-fn defaults_for(path: &Path) -> Settings {
-    let mut settings = Settings::default();
-    finish_loaded_settings(path, &mut settings);
-    settings
-}
-
-fn finish_loaded_settings(path: &Path, settings: &mut Settings) {
-    settings.profile_glossaries.retain(|profile_id, _| {
-        if let Err(error) = validate_profile_file_id(profile_id) {
-            tracing::warn!("Ignoring embedded {error}");
-            false
-        } else {
-            true
-        }
-    });
-    load_external_glossaries(path, settings);
-    settings.materialize_profile_models();
-    settings.migrate_global_glossary_to_profiles();
-}
-
-/// Load settings from a specific path. Returns defaults if missing or unreadable.
-pub fn load_from(path: &Path) -> Settings {
-    load_from_checked(path).unwrap_or_else(|error| {
-        // One wrong-typed field resets ALL settings to defaults in memory.
-        // Saving over the file then preserves its bytes first (see `save_to`).
-        tracing::warn!(
-            "Failed to load settings file at {} ({error}) — falling back to defaults",
-            path.display()
-        );
-        defaults_for(path)
+    let object = parse_settings_object(&contents)?;
+    let loaded = settings_from_file_object(path, object, machine)?;
+    Ok(Loaded {
+        settings: loaded.settings,
+        migration: Some(loaded.migration),
+        reset: loaded.reset,
     })
+}
+
+/// Defaults as a load would return them: the personal dictionary files read
+/// in and the migrations without machine state run.
+fn defaults_for(path: &Path) -> Settings {
+    let defaults = Settings::default();
+    match serde_json::to_value(&defaults) {
+        Ok(Value::Object(object)) => {
+            settings_from_file_object(path, object, None).map_or(defaults, |loaded| loaded.settings)
+        }
+        _ => defaults,
+    }
+}
+
+/// Load settings from a specific path, without machine state: the steps
+/// that need it wait for a load that has it (see [`migrations`]). A value
+/// that cannot be read takes its default; a file that is missing or cannot
+/// be read or parsed at all loads as defaults. Saving over an invalid file
+/// preserves its bytes first (see [`save_to`]).
+pub fn load_from(path: &Path) -> Settings {
+    load_checked(path, None).map_or_else(
+        |error| defaults_after_failed_load(path, &error),
+        |loaded| loaded.settings,
+    )
+}
+
+/// The settings a load of a file [`load_checked`] could not load returns.
+fn defaults_after_failed_load(path: &Path, error: &SettingsLoadError) -> Settings {
+    tracing::warn!(
+        "Failed to load settings file at {} ({error}) — falling back to defaults",
+        path.display()
+    );
+    defaults_for(path)
 }
 
 /// Persist settings to disk using read-merge-write to preserve unknown or
@@ -521,8 +576,10 @@ pub fn update<F>(mutate: F) -> Result<Settings, String>
 where
     F: FnOnce(&mut Settings),
 {
-    let path = settings_path();
-    update_at_with_legacy_sources(&path, legacy_settings_paths(), mutate)
+    try_update(|settings| {
+        mutate(settings);
+        Ok(())
+    })
 }
 
 /// Like [`update`], but lets validation fail while the cross-process lock is
@@ -532,20 +589,41 @@ where
     F: FnOnce(&mut Settings) -> Result<(), String>,
 {
     let path = settings_path();
-    try_update_at_with_legacy_sources(&path, legacy_settings_paths(), mutate)
+    update_locked(&path, legacy_settings_paths(), &ThisMachine, mutate)
 }
 
+/// [`try_update`] of `path` (no legacy locations) on a machine with
+/// Pianissimo supported and every model downloaded.
 #[cfg(test)]
 fn try_update_at<F>(path: &Path, mutate: F) -> Result<Settings, String>
 where
     F: FnOnce(&mut Settings) -> Result<(), String>,
 {
-    try_update_at_with_legacy_sources(path, std::iter::empty(), mutate)
+    update_locked(path, std::iter::empty(), &tests::ready_machine(), mutate)
 }
 
-fn try_update_at_with_legacy_sources<F>(
+/// [`update`] as [`try_update_at`] runs it.
+#[cfg(test)]
+fn update_at<F>(path: &Path, mutate: F) -> Result<Settings, String>
+where
+    F: FnOnce(&mut Settings),
+{
+    try_update_at(path, |settings| {
+        mutate(settings);
+        Ok(())
+    })
+}
+
+/// A field update under the settings lock. The latest file is loaded as the
+/// startup load does, with every pending migration step, machine state
+/// included: the save records `schema_version` and the steps' markers, so a
+/// step left pending here would run at the next start over the value the
+/// user has just chosen. A file that cannot be loaded is updated from
+/// defaults, so the save first preserves its bytes (see [`save_over`]).
+fn update_locked<F>(
     path: &Path,
     sources: impl IntoIterator<Item = PathBuf>,
+    machine: &dyn MachineProbe,
     mutate: F,
 ) -> Result<Settings, String>
 where
@@ -553,34 +631,12 @@ where
 {
     with_settings_lock(path, || {
         migrate_legacy_identifier_settings_locked(path, sources);
-        let mut settings = load_from(path);
+        let (mut settings, load_failure) = match load_checked(path, Some(machine)) {
+            Ok(loaded) => (loaded.settings, None),
+            Err(error) => (defaults_after_failed_load(path, &error), Some(error)),
+        };
         mutate(&mut settings)?;
-        save_to(path, &settings)?;
-        Ok(settings)
-    })
-}
-
-#[cfg(test)]
-fn update_at<F>(path: &Path, mutate: F) -> Result<Settings, String>
-where
-    F: FnOnce(&mut Settings),
-{
-    update_at_with_legacy_sources(path, std::iter::empty(), mutate)
-}
-
-fn update_at_with_legacy_sources<F>(
-    path: &Path,
-    sources: impl IntoIterator<Item = PathBuf>,
-    mutate: F,
-) -> Result<Settings, String>
-where
-    F: FnOnce(&mut Settings),
-{
-    with_settings_lock(path, || {
-        migrate_legacy_identifier_settings_locked(path, sources);
-        let mut settings = load_from(path);
-        mutate(&mut settings);
-        save_to(path, &settings)?;
+        save_over(path, &settings, load_failure.as_ref())?;
         Ok(settings)
     })
 }
@@ -622,6 +678,18 @@ where
 /// Persist settings to a specific path. Test seam for `save`, which always
 /// targets `settings_path()`. Caller must hold the settings lock.
 fn save_to(path: &Path, settings: &Settings) -> Result<(), String> {
+    save_over(path, settings, None)
+}
+
+/// [`save_to`] for settings that come from a load of `path`. `load_failure`
+/// is why that load could not use the file: the file is then preserved
+/// before it is replaced even if it reads as valid settings (a migration
+/// step failed on it, say), because the settings written are defaults.
+fn save_over(
+    path: &Path,
+    settings: &Settings,
+    load_failure: Option<&SettingsLoadError>,
+) -> Result<(), String> {
     let dir = path
         .parent()
         .map(|p| p.to_path_buf())
@@ -633,7 +701,7 @@ fn save_to(path: &Path, settings: &Settings) -> Result<(), String> {
     // Read existing file to preserve non-settings keys. This is the one place
     // every settings write passes through, so it is also where an unreadable
     // or invalid file is protected before anything is replaced.
-    let (mut map, recovered) = existing_settings_for_merge(path)?;
+    let (mut map, recovered) = existing_settings_for_merge(path, load_failure)?;
     let written = merge_and_write(path, settings, &mut map);
     if let Some(recovered) = recovered {
         return match written {
@@ -662,7 +730,7 @@ fn merge_and_write(
     settings: &Settings,
     map: &mut serde_json::Map<String, serde_json::Value>,
 ) -> Result<(), String> {
-    canonicalize_legacy_keys(map);
+    migrations::canonical_onboarding_key(map);
 
     save_external_glossaries(path, settings)?;
 
@@ -699,13 +767,16 @@ struct RecoveredSettings {
 ///
 /// - Missing: an empty object.
 /// - Unreadable: an error, so the file is never replaced.
-/// - Valid settings: its object, so unknown keys survive.
+/// - Valid settings, unless `load_failure` says their load failed: its
+///   object, so unknown keys survive.
 /// - Invalid settings: its exact bytes are first preserved by
 ///   [`preserve_invalid_settings`] (an error if that fails, so nothing is
-///   written). Then its object for a schema error, so unknown keys survive, or
-///   an empty object for a syntax error, plus where the copy went.
+///   written). Then its object for a schema error or a failed load, so
+///   unknown keys survive, or an empty object for a syntax error, plus where
+///   the copy went.
 fn existing_settings_for_merge(
     path: &Path,
+    load_failure: Option<&SettingsLoadError>,
 ) -> Result<
     (
         serde_json::Map<String, serde_json::Value>,
@@ -725,13 +796,13 @@ fn existing_settings_for_merge(
             ))
         }
     };
-    // The same two stages as `parse_settings`; the load already reported any
-    // ignored profile-model entries.
+    // The load already reported any ignored profile-model entries.
     let (problem, merge_base) = match parse_settings_object(&contents) {
-        Err(problem) => (problem, serde_json::Map::new()),
-        Ok(object) => match settings_from_object(object.clone(), false) {
-            Ok(_) => return Ok((object, None)),
-            Err(problem) => (problem, object),
+        Err(problem) => (problem.to_string(), serde_json::Map::new()),
+        Ok(object) => match (check_settings_object(object.clone()), load_failure) {
+            (Ok(()), None) => return Ok((object, None)),
+            (Ok(()), Some(failure)) => (failure.to_string(), object),
+            (Err(problem), _) => (problem.to_string(), object),
         },
     };
     let recovery = preserve_invalid_settings(path, &contents).map_err(|error| {
@@ -743,7 +814,7 @@ fn existing_settings_for_merge(
     Ok((
         merge_base,
         Some(RecoveredSettings {
-            problem: problem.to_string(),
+            problem,
             copy: recovery,
         }),
     ))
@@ -863,52 +934,6 @@ impl Drop for FailRecoveryCopy {
     }
 }
 
-fn has_embedded_glossary_fields(path: &Path) -> bool {
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|contents| serde_json::from_str::<serde_json::Value>(&contents).ok())
-        .and_then(|value| value.as_object().cloned())
-        .is_some_and(|map| {
-            map.contains_key("initial_prompt") || map.contains_key("profile_glossaries")
-        })
-}
-
-fn needs_profile_model_migration(path: &Path) -> bool {
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|contents| serde_json::from_str::<serde_json::Value>(&contents).ok())
-        .and_then(|value| value.as_object().cloned())
-        .is_some_and(|map| {
-            if map.get("profile_glossary_migrated") != Some(&serde_json::Value::Bool(true)) {
-                return true;
-            }
-            let Some(profiles) = map
-                .get("hotkey_profiles")
-                .and_then(serde_json::Value::as_array)
-            else {
-                return true;
-            };
-            let Some(models) = map
-                .get("profile_models")
-                .and_then(serde_json::Value::as_object)
-            else {
-                return true;
-            };
-            profiles.is_empty()
-                || profiles.iter().any(|profile| {
-                    profile
-                        .get("id")
-                        .and_then(serde_json::Value::as_str)
-                        .is_some_and(|id| {
-                            models
-                                .get(id)
-                                .and_then(serde_json::Value::as_str)
-                                .is_none_or(|model| FileModelPreference::parse_id(model).is_err())
-                        })
-                })
-        })
-}
-
 fn config_dir_for_settings(path: &Path) -> PathBuf {
     path.parent()
         .map(Path::to_path_buf)
@@ -923,7 +948,7 @@ fn profile_glossary_dir_for_settings(path: &Path) -> PathBuf {
     config_dir_for_settings(path).join(PROFILE_GLOSSARY_DIRNAME)
 }
 
-fn validate_profile_file_id(profile_id: &str) -> Result<(), String> {
+pub(super) fn validate_profile_file_id(profile_id: &str) -> Result<(), String> {
     if profile_id.is_empty()
         || profile_id.len() > 32
         || !profile_id.starts_with(|character: char| character.is_ascii_alphanumeric())
@@ -959,10 +984,19 @@ fn glossary_file_contents(source: &str) -> String {
     }
 }
 
-fn load_external_glossaries(path: &Path, settings: &mut Settings) {
+/// Read the personal dictionaries, which live in their own files since 1.1.0,
+/// into the settings object as `initial_prompt` and `profile_glossaries`.
+/// A file wins over a value embedded in the settings file, which only
+/// releases before 1.1.0 wrote.
+fn read_dictionary_files(path: &Path, object: &mut Object) {
     let global_path = global_glossary_path_for_settings(path);
     match std::fs::read_to_string(&global_path) {
-        Ok(contents) => settings.initial_prompt = normalize_glossary_file(contents),
+        Ok(contents) => {
+            object.insert(
+                "initial_prompt".to_string(),
+                Value::String(normalize_glossary_file(contents)),
+            );
+        }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => tracing::warn!(
             "Failed to read global personal dictionary at {}: {error}",
@@ -983,6 +1017,7 @@ fn load_external_glossaries(path: &Path, settings: &mut Settings) {
         }
     };
 
+    let mut files = Vec::new();
     for entry in entries.flatten() {
         let entry_path = entry.path();
         if entry_path
@@ -1000,15 +1035,29 @@ fn load_external_glossaries(path: &Path, settings: &mut Settings) {
             continue;
         }
         match std::fs::read_to_string(&entry_path) {
-            Ok(contents) => {
-                settings
-                    .profile_glossaries
-                    .insert(profile_id.to_string(), normalize_glossary_file(contents));
-            }
+            Ok(contents) => files.push((profile_id.to_string(), normalize_glossary_file(contents))),
             Err(error) => tracing::warn!(
                 "Failed to read profile personal dictionary at {}: {error}",
                 entry_path.display()
             ),
+        }
+    }
+    if files.is_empty() {
+        return;
+    }
+    if !matches!(
+        object.get("profile_glossaries"),
+        None | Some(Value::Object(_))
+    ) {
+        tracing::warn!("Ignoring malformed embedded profile dictionaries");
+        object.remove("profile_glossaries");
+    }
+    if let Value::Object(dictionaries) = object
+        .entry("profile_glossaries")
+        .or_insert_with(|| Value::Object(Object::new()))
+    {
+        for (profile_id, contents) in files {
+            dictionaries.insert(profile_id, Value::String(contents));
         }
     }
 }
@@ -1263,10 +1312,31 @@ fn create_private_dir_all(path: &Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::settings::{EnginePrewarm, FileModelPreference, HotkeyMode, Language, WhisperModel};
+    use crate::settings::{
+        EnginePrewarm, FileModelPreference, HotkeyMode, Language, WhisperModel,
+        ENGINE_DEFAULTS_VERSION, MODEL_LINEUP_VERSION,
+    };
     use std::fs;
     use std::sync::mpsc;
     use std::thread;
+
+    fn every_model_ready(_: WhisperModel) -> bool {
+        true
+    }
+
+    /// Pianissimo supported and every model downloaded.
+    pub(super) fn ready_machine() -> LineupEnv<'static> {
+        LineupEnv {
+            pianissimo_supported: true,
+            pianissimo_downloaded: true,
+            whisper_downloaded: &every_model_ready,
+        }
+    }
+
+    /// The startup load of `path` (no legacy locations) on [`ready_machine`].
+    fn startup_load(path: &Path) -> Settings {
+        load_at_with_machine(path, std::iter::empty(), &ready_machine())
+    }
 
     /// Helper: create a temp dir and override settings_path for testing
     fn with_temp_settings<F: FnOnce(PathBuf)>(f: F) {
@@ -1281,7 +1351,7 @@ mod tests {
     fn legacy_global_model_selection_migrates_to_each_profile_without_losing_settings() {
         with_temp_settings(|path| {
             fs::write(&path, r#"{"language":"sv","hotkey":"Super+S","pianissimo_dictation":true,"auto_select_model":false,"whisper_model":"kb-whisper-small","hotkey_profiles":[{"id":"default","name":"Swedish","shortcut":"Super+S","language":"sv"},{"id":"english","name":"English","shortcut":"Super+E","language":"en"}]}"#).unwrap();
-            let migrated = load_at_with_legacy_sources(&path, std::iter::empty());
+            let migrated = startup_load(&path);
             assert_eq!(
                 migrated.profile_models["default"],
                 FileModelPreference::PianissimoOriginal
@@ -1303,7 +1373,7 @@ mod tests {
     fn engine_defaults_migration_persists_once_and_keeps_explicit_choices() {
         with_temp_settings(|path| {
             fs::write(&path, r#"{"language":"sv","engine_prewarm":"on_key_down","engine_idle_unload_minutes":10,"future_key":1}"#).unwrap();
-            let migrated = migrate_engine_defaults_at(&path, load_from(&path));
+            let migrated = startup_load(&path);
             assert_eq!(migrated.engine_prewarm, EnginePrewarm::OnAppStart);
             assert_eq!(migrated.engine_idle_unload_minutes, 60);
             let persisted: serde_json::Value =
@@ -1316,7 +1386,7 @@ mod tests {
             );
             assert_eq!(persisted["future_key"], 1);
             let before = fs::read_to_string(&path).unwrap();
-            migrate_engine_defaults_at(&path, load_from(&path));
+            startup_load(&path);
             assert_eq!(fs::read_to_string(&path).unwrap(), before);
 
             fs::write(
@@ -1324,7 +1394,7 @@ mod tests {
                 r#"{"engine_prewarm":"off","engine_idle_unload_minutes":10}"#,
             )
             .unwrap();
-            let off = migrate_engine_defaults_at(&path, load_from(&path));
+            let off = startup_load(&path);
             assert_eq!(off.engine_prewarm, EnginePrewarm::Off);
             assert_eq!(off.engine_idle_unload_minutes, 60);
         });
@@ -1340,11 +1410,7 @@ mod tests {
                 pianissimo_downloaded: true,
                 whisper_downloaded: &ready,
             };
-            let migrated = migrate_lineup_at(
-                &path,
-                load_at_with_legacy_sources(&path, std::iter::empty()),
-                &env,
-            );
+            let migrated = load_at_with_machine(&path, std::iter::empty(), &env);
             assert_eq!(
                 migrated.profile_models["default"],
                 FileModelPreference::PianissimoOriginal
@@ -1356,11 +1422,7 @@ mod tests {
 
             // A second load neither re-runs nor rewrites the migration.
             let before = fs::read_to_string(&path).unwrap();
-            let again = migrate_lineup_at(
-                &path,
-                load_at_with_legacy_sources(&path, std::iter::empty()),
-                &env,
-            );
+            let again = load_at_with_machine(&path, std::iter::empty(), &env);
             assert_eq!(again.profile_models, migrated.profile_models);
             assert_eq!(fs::read_to_string(&path).unwrap(), before);
         });
@@ -1376,11 +1438,7 @@ mod tests {
                 pianissimo_downloaded: true,
                 whisper_downloaded: &ready,
             };
-            let migrated = migrate_lineup_at(
-                &path,
-                load_at_with_legacy_sources(&path, std::iter::empty()),
-                &env,
-            );
+            let migrated = load_at_with_machine(&path, std::iter::empty(), &env);
             assert_eq!(
                 migrated.profile_models["default"],
                 FileModelPreference::PianissimoOriginal
@@ -1406,10 +1464,7 @@ mod tests {
                 pianissimo_downloaded: true,
                 whisper_downloaded: &ready,
             };
-            let mut loaded = load_at_with_legacy_sources(&path, std::iter::empty());
-            loaded.profile_models.remove("default");
-            loaded.model_lineup_version = 0;
-            let migrated = migrate_lineup_at(&path, loaded, &env);
+            let migrated = load_at_with_machine(&path, std::iter::empty(), &env);
             assert!(
                 !migrated.profile_models.contains_key("default")
                     || migrated.profile_models["default"] == FileModelPreference::Auto
@@ -1428,11 +1483,7 @@ mod tests {
                 pianissimo_downloaded: false,
                 whisper_downloaded: &only_base,
             };
-            let migrated = migrate_lineup_at(
-                &path,
-                load_at_with_legacy_sources(&path, std::iter::empty()),
-                &env,
-            );
+            let migrated = load_at_with_machine(&path, std::iter::empty(), &env);
             assert_eq!(
                 migrated.profile_models["default"],
                 FileModelPreference::Whisper(WhisperModel::KbWhisperBase)
@@ -1448,7 +1499,7 @@ mod tests {
     fn global_glossary_migrates_once_to_each_profile_without_deleting_rollback_source() {
         with_temp_settings(|path| {
             fs::write(&path, r#"{"language":"sv","hotkey":"Super+S","initial_prompt":"OpenRouter","hotkey_profiles":[{"id":"default","name":"Swedish","shortcut":"Super+S","language":"sv"},{"id":"english","name":"English","shortcut":"Super+E","language":"en"}],"profile_glossaries":{"default":"merge = merch"}}"#).unwrap();
-            let migrated = load_at_with_legacy_sources(&path, std::iter::empty());
+            let migrated = startup_load(&path);
             assert!(migrated.profile_glossary_migrated);
             assert!(migrated.profile_glossaries["default"].contains("OpenRouter"));
             assert!(migrated.profile_glossaries["english"].contains("OpenRouter"));
@@ -1457,7 +1508,7 @@ mod tests {
                 fs::read_to_string(global_glossary_path_for_settings(&path)).unwrap(),
                 "OpenRouter\n"
             );
-            let reloaded = load_at_with_legacy_sources(&path, std::iter::empty());
+            let reloaded = startup_load(&path);
             assert_eq!(reloaded.profile_glossaries, migrated.profile_glossaries);
             assert!(!reloaded
                 .effective_glossary_source(Some("english"))
@@ -1466,17 +1517,176 @@ mod tests {
     }
 
     #[test]
-    fn invalid_profile_model_does_not_reset_language_hotkey_or_other_settings() {
+    fn field_update_before_startup_runs_every_pending_step() {
         with_temp_settings(|path| {
-            fs::write(&path, r#"{"language":"sv","hotkey":"Super+S","profile_models":{"default":"not-a-model"}}"#).unwrap();
-            let loaded = load_at_with_legacy_sources(&path, std::iter::empty());
-            assert_eq!(loaded.default_profile().language, Language::Swedish);
-            assert_eq!(loaded.default_profile().shortcut, "Super+S");
-            assert_eq!(loaded.profile_models["default"], FileModelPreference::Auto);
-            let persisted: serde_json::Value =
+            // A 1.3 file, updated (say by the CLI) before the app starts:
+            // the update records the whole migration, machine steps included.
+            fs::write(&path, r#"{"language":"sv","auto_select_model":false,"whisper_model":"kb-whisper-small","engine_prewarm":"on_key_down","hotkey_profiles":[{"id":"default","name":"Swedish","shortcut":"Super+S","language":"sv"}]}"#).unwrap();
+            let updated = update_at(&path, |settings| settings.beam_size = 5).unwrap();
+            assert_eq!(updated.schema_version, SCHEMA_VERSION);
+            let raw: serde_json::Value =
                 serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
-            assert_eq!(persisted["profile_models"]["default"], "auto");
+            assert_eq!(raw["schema_version"], SCHEMA_VERSION);
+            assert_eq!(raw["beam_size"], 5);
+            assert_eq!(raw["profile_models"]["default"], "pianissimo-sv");
+            assert_eq!(raw["model_lineup_version"], MODEL_LINEUP_VERSION);
+            assert_eq!(raw["engine_prewarm"], "on_app_start");
+            assert_eq!(raw["engine_defaults_version"], ENGINE_DEFAULTS_VERSION);
+
+            // Nothing is left for the startup load to migrate or write.
+            let written = fs::read(&path).unwrap();
+            let loaded = startup_load(&path);
+            assert_eq!(loaded.beam_size, 5);
+            assert_file_bytes(&path, &written);
         });
+    }
+
+    #[test]
+    fn a_choice_made_between_repair_and_restart_survives_the_restart() {
+        with_temp_settings(|path| {
+            // A 1.4.0 file with one invalid value: the startup load repairs it
+            // and runs the pending lineup and engine steps in memory only.
+            let original: &[u8] = br#"{"language":"sv","auto_select_model":false,"whisper_model":"kb-whisper-small","engine_prewarm":"on_key_down","engine_idle_unload_minutes":10,"profile_glossary_migrated":true,"hotkey_profiles":[{"id":"default","name":"Swedish","shortcut":"Super+S","language":"sv"}],"profile_models":{"default":"kb-whisper-small"},"auto_paste":"invalid-bool"}"#;
+            fs::write(&path, original).unwrap();
+            let repaired = startup_load(&path);
+            assert_eq!(repaired.engine_prewarm, EnginePrewarm::OnAppStart);
+            assert_eq!(
+                repaired.profile_models["default"],
+                FileModelPreference::PianissimoOriginal
+            );
+            assert_file_bytes(&path, original);
+
+            // Before the next start, the user picks the values those steps
+            // move away from: one through `update`, one through `try_update`.
+            let updated = update_at(&path, |settings| {
+                settings.engine_prewarm = EnginePrewarm::OnKeyDown;
+            })
+            .unwrap();
+            // The update starts from what the startup load showed.
+            assert_eq!(
+                updated.profile_models["default"],
+                FileModelPreference::PianissimoOriginal
+            );
+            try_update_at(&path, |settings| {
+                settings.profile_models.insert(
+                    "default".into(),
+                    FileModelPreference::Whisper(WhisperModel::KbWhisperSmall),
+                );
+                Ok(())
+            })
+            .unwrap();
+            assert_file_bytes(recovery_copy_path(&path, 0), original);
+
+            // The next start (or the settings watcher's reload) keeps both.
+            let restarted = startup_load(&path);
+            assert_eq!(restarted.engine_prewarm, EnginePrewarm::OnKeyDown);
+            assert_eq!(
+                restarted.profile_models["default"],
+                FileModelPreference::Whisper(WhisperModel::KbWhisperSmall)
+            );
+            let raw: serde_json::Value =
+                serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+            assert_eq!(raw["schema_version"], SCHEMA_VERSION);
+            assert_eq!(raw["engine_prewarm"], "on_key_down");
+            assert_eq!(raw["profile_models"]["default"], "kb-whisper-small");
+        });
+    }
+
+    #[test]
+    fn current_file_without_schema_version_is_not_rewritten_at_startup() {
+        with_temp_settings(|path| {
+            // As 1.4.3 writes it: every legacy marker, no schema_version.
+            let written = br#"{"language":"sv","profile_glossary_migrated":true,"model_lineup_version":1,"engine_defaults_version":1,"hotkey_profiles":[{"id":"default","name":"Swedish","shortcut":"Super+S","language":"sv"}],"profile_models":{"default":"kb-whisper-small"},"future_key":7}"#;
+            fs::write(&path, written).unwrap();
+            let loaded = startup_load(&path);
+            assert_file_bytes(&path, written);
+            assert_eq!(loaded.schema_version, SCHEMA_VERSION);
+            assert_eq!(
+                loaded.profile_models["default"],
+                FileModelPreference::Whisper(WhisperModel::KbWhisperSmall)
+            );
+            // The next write records it, and keeps every other key.
+            update_at(&path, |settings| settings.beam_size = 2).unwrap();
+            let raw: serde_json::Value =
+                serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+            assert_eq!(raw["schema_version"], SCHEMA_VERSION);
+            assert_eq!(raw["future_key"], 7);
+            assert_eq!(raw["model_lineup_version"], MODEL_LINEUP_VERSION);
+            assert_eq!(raw["engine_defaults_version"], ENGINE_DEFAULTS_VERSION);
+            assert_eq!(raw["profile_glossary_migrated"], true);
+        });
+    }
+
+    #[test]
+    fn newer_release_file_is_read_as_is_and_written_as_this_version() {
+        with_temp_settings(|path| {
+            let written = br#"{"schema_version":9,"language":"sv","profile_glossary_migrated":true,"model_lineup_version":1,"engine_defaults_version":1,"hotkey_profiles":[{"id":"default","name":"Swedish","shortcut":"Super+S","language":"sv"}],"profile_models":{"default":"auto"},"newer_key":{"a":1}}"#;
+            fs::write(&path, written).unwrap();
+            assert_eq!(startup_load(&path).language, Language::Swedish);
+            assert_file_bytes(&path, written);
+            // This build only vouches for its own version, so the newer
+            // release checks the file again after this write.
+            update_at(&path, |settings| settings.beam_size = 2).unwrap();
+            let raw: serde_json::Value =
+                serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+            assert_eq!(raw["schema_version"], SCHEMA_VERSION);
+            assert_eq!(raw["newer_key"]["a"], 1);
+        });
+    }
+
+    #[test]
+    fn invalid_profile_model_is_reset_in_memory_and_preserved_before_any_rewrite() {
+        // A model id from a newer release, in an old file and in a current one.
+        let unversioned: &[u8] =
+            br#"{"language":"sv","hotkey":"Super+S","profile_models":{"default":"not-a-model"}}"#;
+        let current: &[u8] = br#"{"schema_version":6,"language":"sv","hotkey":"Super+S","profile_glossary_migrated":true,"model_lineup_version":1,"engine_defaults_version":1,"hotkey_profiles":[{"id":"default","name":"Swedish","shortcut":"Super+S","language":"sv"},{"id":"english","name":"English","shortcut":"Super+E","language":"en"}],"profile_models":{"default":"kb-whisper-small","english":"whisper-xl-2027"},"future_key":7}"#;
+        for original in [unversioned, current] {
+            with_temp_settings(|path| {
+                fs::write(&path, original).unwrap();
+                let problem = match parse_settings_object(original) {
+                    Ok(object) => check_settings_object(object).unwrap_err().to_string(),
+                    Err(error) => panic!("{error}"),
+                };
+                assert_eq!(problem, "invalid value for profile_models");
+
+                // Only the unreadable entry takes its default, in memory.
+                let loaded = startup_load(&path);
+                assert_eq!(loaded.default_profile().language, Language::Swedish);
+                assert_eq!(loaded.default_profile().shortcut, "Super+S");
+                let unreadable = if original == unversioned {
+                    "default"
+                } else {
+                    "english"
+                };
+                assert_eq!(loaded.profile_models[unreadable], FileModelPreference::Auto);
+                if original == current {
+                    assert_eq!(
+                        loaded.profile_models["default"],
+                        FileModelPreference::Whisper(WhisperModel::KbWhisperSmall)
+                    );
+                }
+                // The startup migration never rewrites a file it had to repair.
+                assert_file_bytes(&path, original);
+                assert!(!recovery_copy_path(&path, 0).exists());
+
+                // The next save first preserves the exact original bytes.
+                let updated = update_at(&path, |settings| settings.beam_size = 9).unwrap();
+                assert_eq!(
+                    updated.profile_models[unreadable],
+                    FileModelPreference::Auto
+                );
+                assert_file_bytes(recovery_copy_path(&path, 0), original);
+                let raw: serde_json::Value =
+                    serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+                assert_eq!(raw["beam_size"], 9);
+                assert_eq!(raw["language"], "sv");
+                assert_eq!(raw["profile_models"][unreadable], "auto");
+                if original == current {
+                    assert_eq!(raw["profile_models"]["default"], "kb-whisper-small");
+                    assert_eq!(raw["future_key"], 7);
+                }
+            });
+        }
     }
 
     #[test]
@@ -1655,7 +1865,7 @@ mod tests {
         )
         .unwrap();
 
-        let loaded = load_at_with_legacy_sources(&destination, [legacy.clone()]);
+        let loaded = load_at_with_machine(&destination, [legacy.clone()], &ready_machine());
 
         assert_eq!(loaded.language, Language::Swedish);
         assert!(loaded.auto_paste);
@@ -1701,7 +1911,7 @@ mod tests {
         )
         .unwrap();
 
-        let loaded = load_at_with_legacy_sources(&destination, std::iter::empty());
+        let loaded = startup_load(&destination);
 
         assert!(!loaded.profile_glossaries.contains_key("Bad/Id"));
         assert_eq!(
@@ -1791,9 +2001,15 @@ mod tests {
                 "migration must still hold the settings lock"
             );
             update_blocked_tx.send(()).unwrap();
-            update_at_with_legacy_sources(&update_destination, [update_legacy], |settings| {
-                settings.language = Language::Norwegian;
-            })
+            update_locked(
+                &update_destination,
+                [update_legacy],
+                &ready_machine(),
+                |settings| {
+                    settings.language = Language::Norwegian;
+                    Ok(())
+                },
+            )
         });
         update_blocked_rx.recv().unwrap();
         release_migration_tx.send(()).unwrap();
@@ -2295,17 +2511,206 @@ mod tests {
     }
 
     #[test]
-    fn load_from_invalid_enum_value_returns_defaults() {
+    fn load_from_invalid_enum_value_resets_that_field() {
         with_temp_settings(|path| {
             let dir = path.parent().unwrap();
             fs::create_dir_all(dir).unwrap();
             // "de" is not a valid Language variant
-            fs::write(&path, r#"{"language":"de"}"#).unwrap();
+            fs::write(&path, r#"{"language":"de","beam_size":4}"#).unwrap();
 
             let s = load_from(&path);
             let d = Settings::default();
-            // Should fall back to full defaults since deserialization fails
+            // Only the field that cannot be read takes its default.
             assert_eq!(s.language, d.language);
+            assert_eq!(s.beam_size, 4);
+        });
+    }
+
+    // -- lenient per-field parsing (#365) --
+
+    /// A current settings file with a non-default value in every field.
+    fn every_field_set() -> serde_json::Map<String, serde_json::Value> {
+        match serde_json::json!({
+            "schema_version": SCHEMA_VERSION,
+            "language": "sv",
+            "whisper_model": "kb-whisper-medium",
+            "file_transcription_model": "kb-whisper-large",
+            "pianissimo_dictation": false,
+            "engine_prewarm": "off",
+            "engine_idle_unload_minutes": 30,
+            "hotkey_mode": "toggle",
+            "show_overlay": false,
+            "auto_paste": false,
+            "auto_select_model": false,
+            "hotkey": "Option+Space",
+            "hotkey_profiles": [
+                {"id": "default", "name": "Svenska", "shortcut": "Option+Space", "language": "sv"},
+                {"id": "english", "name": "English", "shortcut": "Option+E", "language": "en"}
+            ],
+            "profile_models": {"default": "kb-whisper-medium", "english": "base.en"},
+            "profile_glossary_migrated": true,
+            "beam_size": 5,
+            "temperature_fallback": false,
+            "vad_enabled": true,
+            "has_completed_onboarding": true,
+            "model_lineup_version": MODEL_LINEUP_VERSION,
+            "engine_defaults_version": ENGINE_DEFAULTS_VERSION,
+            "future_key": {"keep": [1, 2]}
+        }) {
+            serde_json::Value::Object(map) => map,
+            _ => unreachable!(),
+        }
+    }
+
+    /// [`every_field_set`] with `field` replaced by `value`, as file bytes.
+    fn every_field_set_but(field: &str, value: serde_json::Value) -> Vec<u8> {
+        let mut map = every_field_set();
+        map.insert(field.to_string(), value);
+        serde_json::to_vec_pretty(&map).unwrap()
+    }
+
+    /// The settings [`every_field_set`] holds with `fields` at their defaults.
+    fn every_field_set_without(fields: &[&str]) -> serde_json::Value {
+        let mut map = every_field_set();
+        for field in fields {
+            map.remove(*field);
+        }
+        let settings: Settings = serde_json::from_value(serde_json::Value::Object(map)).unwrap();
+        serde_json::to_value(settings).unwrap()
+    }
+
+    #[track_caller]
+    fn assert_only_reset(loaded: &Settings, fields: &[&str]) {
+        assert_eq!(
+            serde_json::to_value(loaded).unwrap(),
+            every_field_set_without(fields)
+        );
+    }
+
+    #[test]
+    fn unknown_whisper_model_resets_only_that_field_and_an_update_loses_nothing_else() {
+        with_temp_settings(|path| {
+            // A model removed from WhisperModel, or one a newer release added.
+            let original = every_field_set_but("whisper_model", "kb-whisper-xl-2027".into());
+            fs::write(&path, &original).unwrap();
+
+            assert_only_reset(&load_from(&path), &["whisper_model"]);
+            // Startup uses it too, but never rewrites a file it had to repair.
+            assert_only_reset(&startup_load(&path), &["whisper_model"]);
+            assert_file_bytes(&path, &original);
+            assert!(!recovery_copy_path(&path, 0).exists());
+
+            let updated = update_at(&path, |settings| settings.beam_size = 9).unwrap();
+            assert_eq!(updated.beam_size, 9);
+            let raw: serde_json::Value =
+                serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+            let mut expected = every_field_set();
+            expected.insert("whisper_model".into(), "base".into());
+            expected.insert("beam_size".into(), 9.into());
+            assert_eq!(raw, serde_json::Value::Object(expected));
+            // The dropped value is recoverable from the exact original bytes.
+            assert_file_bytes(recovery_copy_path(&path, 0), &original);
+        });
+    }
+
+    #[test]
+    fn unknown_language_variant_resets_only_the_language() {
+        with_temp_settings(|path| {
+            fs::write(&path, every_field_set_but("language", "de".into())).unwrap();
+            let loaded = load_from(&path);
+            assert_only_reset(&loaded, &["language"]);
+            // The default profile keeps its own language.
+            assert_eq!(loaded.default_profile().language, Language::Swedish);
+        });
+    }
+
+    #[test]
+    fn wrong_typed_fields_each_reset_alone() {
+        with_temp_settings(|path| {
+            let mut map = every_field_set();
+            map.insert("show_overlay".into(), "no".into());
+            map.insert("beam_size".into(), "five".into());
+            fs::write(&path, serde_json::to_vec(&map).unwrap()).unwrap();
+            assert_only_reset(&load_from(&path), &["beam_size", "show_overlay"]);
+        });
+    }
+
+    #[test]
+    fn an_unreadable_profile_is_dropped_alone_and_preserved_before_a_save() {
+        with_temp_settings(|path| {
+            // A language a newer release added, in the second of two profiles.
+            let mut map = every_field_set();
+            map["hotkey_profiles"][1]["language"] = "de".into();
+            let original = serde_json::to_vec(&map).unwrap();
+            fs::write(&path, &original).unwrap();
+
+            let mut kept = every_field_set();
+            kept["hotkey_profiles"] = serde_json::json!([kept["hotkey_profiles"][0].clone()]);
+            let kept: Settings = serde_json::from_value(serde_json::Value::Object(kept)).unwrap();
+            let kept = serde_json::to_value(kept).unwrap();
+            assert_eq!(serde_json::to_value(load_from(&path)).unwrap(), kept);
+            assert_eq!(serde_json::to_value(startup_load(&path)).unwrap(), kept);
+            assert_file_bytes(&path, &original);
+
+            update_at(&path, |settings| settings.beam_size = 9).unwrap();
+            assert_file_bytes(recovery_copy_path(&path, 0), &original);
+            let raw: serde_json::Value =
+                serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+            assert_eq!(raw["hotkey_profiles"], kept["hotkey_profiles"]);
+            assert_eq!(raw["beam_size"], 9);
+        });
+    }
+
+    #[test]
+    fn an_unreadable_primary_profile_is_repaired_not_dropped() {
+        with_temp_settings(|path| {
+            // `hotkey` and `language` mirror the primary profile, whose
+            // language a newer release added.
+            let mut map = every_field_set();
+            map["hotkey_profiles"][0]["language"] = "tlh".into();
+            let original = serde_json::to_vec(&map).unwrap();
+            fs::write(&path, &original).unwrap();
+
+            for loaded in [load_from(&path), startup_load(&path)] {
+                // Only the unreadable language is reset, to `language`.
+                assert_only_reset(&loaded, &[]);
+                let bindings: Vec<String> = loaded
+                    .resolved_hotkey_bindings()
+                    .into_iter()
+                    .map(|(_, shortcut, _)| shortcut)
+                    .collect();
+                assert_eq!(bindings, ["Option+Space", "Option+E"]);
+                assert_eq!(loaded.default_profile().shortcut, loaded.hotkey);
+            }
+            assert_file_bytes(&path, &original);
+
+            update_at(&path, |settings| settings.beam_size = 9).unwrap();
+            assert_file_bytes(recovery_copy_path(&path, 0), &original);
+        });
+    }
+
+    #[test]
+    fn invalid_values_are_reported_by_field_name_only() {
+        let map = match serde_json::from_slice(SCHEMA_INVALID_SETTINGS).unwrap() {
+            serde_json::Value::Object(map) => map,
+            _ => unreachable!(),
+        };
+        let problem = check_settings_object(map).unwrap_err().to_string();
+        assert_eq!(problem, "invalid value for auto_paste");
+        assert_eq!(
+            invalid_fields(&["beam_size".into(), "language".into()]),
+            "invalid values for beam_size, language"
+        );
+    }
+
+    #[test]
+    fn a_strictly_valid_file_loads_unchanged() {
+        with_temp_settings(|path| {
+            let bytes = serde_json::to_vec_pretty(&every_field_set()).unwrap();
+            fs::write(&path, &bytes).unwrap();
+            assert_only_reset(&load_from(&path), &[]);
+            assert_only_reset(&startup_load(&path), &[]);
+            assert_file_bytes(&path, &bytes);
         });
     }
 
@@ -2551,26 +2956,55 @@ mod tests {
                     whisper_downloaded: &ready,
                 };
 
-                // The same sequence `load()` runs at startup.
-                let loaded = load_at_with_legacy_sources(&path, std::iter::empty());
-                let loaded = migrate_lineup_at(&path, loaded, &env);
-                let loaded = migrate_engine_defaults_at(&path, loaded);
-                assert_eq!(loaded.language, Settings::default().language);
-                // And with stale in-memory markers that force both migrations
-                // to consult the file under the lock.
-                let stale = Settings {
-                    model_lineup_version: 0,
-                    engine_defaults_version: 0,
-                    ..Default::default()
+                // What `load()` runs at startup. A schema error resets only
+                // the bad field in memory; a syntax error loads defaults.
+                let loaded = load_at_with_machine(&path, std::iter::empty(), &env);
+                let language = if original == schema_invalid {
+                    Language::Swedish
+                } else {
+                    Settings::default().language
                 };
-                let lineup = migrate_lineup_at(&path, stale.clone(), &env);
-                let engine = migrate_engine_defaults_at(&path, stale);
-                assert_eq!(lineup.language, Settings::default().language);
-                assert_eq!(engine.language, Settings::default().language);
+                assert_eq!(loaded.language, language);
 
                 assert_file_bytes(&path, original);
                 assert!(!recovery_copy_path(&path, 0).exists());
                 assert!(!global_glossary_path_for_settings(&path).exists());
+            });
+        }
+    }
+
+    #[test]
+    fn a_failing_migration_step_never_silently_replaces_the_file() {
+        // Strictly valid, with the profile-models step (3) pending.
+        let original: &[u8] =
+            br#"{"language":"sv","beam_size":3,"show_overlay":false,"future_key":1}"#;
+        for fallible in [false, true] {
+            with_temp_settings(|path| {
+                fs::write(&path, original).unwrap();
+                let _failing = migrations::FailStep::enable(3);
+
+                // The startup load uses defaults in memory and leaves the file alone.
+                assert_eq!(startup_load(&path).beam_size, Settings::default().beam_size);
+                assert_file_bytes(&path, original);
+                assert!(!recovery_copy_path(&path, 0).exists());
+
+                // A field update can only start from defaults, so it first
+                // preserves the file, like one that does not parse (#340).
+                let updated = if fallible {
+                    try_update_at(&path, |settings| {
+                        settings.beam_size = 9;
+                        Ok(())
+                    })
+                } else {
+                    update_at(&path, |settings| settings.beam_size = 9)
+                }
+                .unwrap();
+                assert_eq!(updated.beam_size, 9);
+                assert_file_bytes(recovery_copy_path(&path, 0), original);
+                let raw: serde_json::Value =
+                    serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+                assert_eq!(raw["beam_size"], 9);
+                assert_eq!(raw["future_key"], 1);
             });
         }
     }

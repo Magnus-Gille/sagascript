@@ -1,0 +1,27 @@
+{
+  "auto_paste": true,
+  "auto_select_model": false,
+  "beam_size": 0,
+  "has_completed_onboarding": true,
+  "hotkey": "Option+Space",
+  "hotkey_mode": "push",
+  "hotkey_profiles": [
+    {
+      "id": "default",
+      "language": "sv",
+      "name": "Svenska",
+      "shortcut": "Option+Space"
+    },
+    {
+      "id": "english",
+      "language": "en",
+      "name": "English",
+      "shortcut": "Option+E"
+    }
+  ],
+  "language": "sv",
+  "show_overlay": true,
+  "temperature_fallback": true,
+  "vad_enabled": true,
+  "whisper_model": "kb-whisper-small"
+}
