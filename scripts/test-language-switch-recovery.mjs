@@ -18,6 +18,7 @@ const names = [
   "readSettings",
   "confirmSettings",
   "markSettingsUnconfirmed",
+  "restampUnconfirmed",
   "saveSetting",
   "applySetting",
   "onLanguageChange",
@@ -60,7 +61,7 @@ function harness({
     let settings = structuredClone(stored);
     let settingsError = "", blockedLanguageChange = null, languageSaving = false, models = [];
     let settingsReadIssued = 0, settingsReadSettled = 0, settingsUnconfirmed = null;
-    let hotkeyError = "", fileModelError = "", profileModelErrors = {};
+    let hotkeyError = "", fileModelError = "", profileModelErrors = {}, rejectionWithoutPreview = "";
     const unconfirmedBlock = "This change was not sent: the window could not confirm the last saved change. Reload settings first.";
     let glossarySaving = false, glossaryScopeId = "english", glossaryDraft = "english draft";
     let glossaryEditBaseline = { scopeId: "english", source: "merge = merch", generation: 1 };
@@ -223,12 +224,14 @@ test("ordinary language change without dictionary succeeds without confirmation"
   assert.equal(await h.select(), "en");
   assert.equal(h.snapshot().blockedLanguageChange, null);
   assert.equal(h.snapshot().calls.length, 1);
+  assert.equal(h.snapshot().settingsError, "", "the helpers a language change goes through are all defined");
 });
 
 test("failed refresh after rejection reports uncertainty and restores the known saved selection", async () => {
   const h = harness({ rejectionRefreshFailure: true });
   assert.equal(await h.select(), "sv");
-  assert.match(h.snapshot().settingsError, /could not read the settings.*rejection read failed.*Select the language again to retry/);
+  // The rejection stays as the reason; the notice, not a second sentence, covers the failed read.
+  assert.equal(h.snapshot().settingsError, backendError);
   // Nothing was saved, but a read failed: the shown copy may be behind, so it is marked like any failed read.
   assert.deepEqual(h.snapshot().settingsUnconfirmed, { afterSave: false, detail: "rejection read failed" });
   assert.equal(h.snapshot().blockedLanguageChange, null);

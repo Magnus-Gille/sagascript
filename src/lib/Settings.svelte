@@ -139,6 +139,11 @@
   let settingsUnconfirmed: { afterSave: boolean; detail: string } | null = $state(null);
   const settingsLocked = $derived(settingsUnconfirmed !== null);
   let settingsReloading = $state(false);
+  // The rejection message of a language change whose preview read then failed. No
+  // preview follows it, so the read that confirms the settings lifts it too.
+  let rejectionWithoutPreview = "";
+  // Height of the sticky notice, so focus scrolling can leave room for it.
+  let unconfirmedNoticeHeight = $state(0);
   let reloadButtonEl: HTMLButtonElement | undefined = $state();
   let windowTitleEl: HTMLHeadingElement | undefined = $state();
   // Non-blocking notices: a profile's model was reset to Auto by a language change.
@@ -1314,7 +1319,8 @@
   function confirmSettings(): void {
     if (!settingsUnconfirmed) return;
     settingsUnconfirmed = null;
-    if (settingsError === unconfirmedBlock) settingsError = "";
+    if (settingsError === unconfirmedBlock || (rejectionWithoutPreview && settingsError === rejectionWithoutPreview)) settingsError = "";
+    rejectionWithoutPreview = "";
     if (hotkeyError === unconfirmedBlock) hotkeyError = "";
     if (fileModelError === unconfirmedBlock) fileModelError = "";
     profileModelErrors = Object.fromEntries(
@@ -1322,9 +1328,16 @@
     );
   }
 
-  /** The unconfirmed state as it is now, after awaits that earlier checks of it cannot see across. */
-  function currentUnconfirmed(): typeof settingsUnconfirmed {
-    return settingsUnconfirmed;
+  /**
+   * After a read that resolved: a newer read may have failed meanwhile and marked the
+   * copy, while this one was dropped. Then the change of ours that this read followed
+   * (`afterSave`) was saved but is still unconfirmed. Resolves whether the copy is unconfirmed.
+   */
+  function restampUnconfirmed(afterSave: boolean): boolean {
+    const unconfirmed = settingsUnconfirmed;
+    if (!unconfirmed) return false;
+    markSettingsUnconfirmed(unconfirmed.detail, afterSave);
+    return true;
   }
 
   function markSettingsUnconfirmed(error: unknown, afterSave: boolean): void {
@@ -1416,13 +1429,7 @@
       markSettingsUnconfirmed(error, true);
       return { saved: true, result, confirmed: false };
     }
-    // A newer read may have failed (and marked the copy) while this one was dropped:
-    // the saved change is then still unconfirmed.
-    const unconfirmed = currentUnconfirmed();
-    if (unconfirmed) {
-      markSettingsUnconfirmed(unconfirmed.detail, true);
-      return { saved: true, result, confirmed: false };
-    }
+    if (restampUnconfirmed(true)) return { saved: true, result, confirmed: false };
     return { saved: true, result, confirmed: true };
   }
 
@@ -1479,7 +1486,13 @@
       }
     } catch (error: any) {
       // The change was rejected, so nothing was saved; only the preview of the blocking dictionary is missing.
-      settingsError += `${settingsError ? " " : ""}The window could not read the settings to show the blocking dictionary (${errorText(error, "unknown error")}). Select the language again to retry.`;
+      if (restampUnconfirmed(false)) {
+        // The failed read locked the window and the notice says so; the language select is disabled
+        // until Reload settings, which also lifts the rejection message above.
+        rejectionWithoutPreview = settingsError;
+      } else {
+        settingsError += `${settingsError ? " " : ""}The window could not read the settings to show the blocking dictionary (${errorText(error, "unknown error")}). Select the language again to retry.`;
+      }
     } finally {
       // A saved language whose read-back failed is shown as chosen: `settings` is
       // the old copy then, and the notice says it may be out of date.
@@ -1524,6 +1537,7 @@
       try {
         const current = await readSettings();
         await refreshProfileModels(current.hotkey_profiles);
+        restampUnconfirmed(cleared);
       } catch (error: any) {
         // The notice says what happened and offers Reload settings.
         markSettingsUnconfirmed(error, cleared);
@@ -2248,7 +2262,7 @@
 
 </script>
 
-<div class="settings-window">
+<div class="settings-window" class:settings-locked={settingsLocked}>
   <header class="window-header">
     <h1 class="window-title" bind:this={windowTitleEl} tabindex="-1">Sagascript</h1>
     <div class="build-info" aria-label="Build information">
@@ -2273,7 +2287,7 @@
   </div>
 
   {#if settings}
-    <div class="content">
+    <div class="content" style:--notice-clearance={settingsUnconfirmed ? `${unconfirmedNoticeHeight + 12}px` : null}>
       {#if initError}
         <div class="transcribe-error">{initError}</div>
       {/if}
@@ -2284,12 +2298,13 @@
         <div class="transcribe-error" role={pendingGlossaryNavigation ? undefined : "alert"}>{settingsError}</div>
       {/if}
       {#if settingsUnconfirmed}
-        <section class="recovery-notice settings-unconfirmed" role="alert" aria-label="Settings not confirmed">
+        <section class="recovery-notice settings-unconfirmed" role="alert" aria-label="Settings not confirmed"
+          bind:offsetHeight={unconfirmedNoticeHeight}>
           <span>
             {settingsUnconfirmed.afterSave
               ? "Your change was saved, but could not be read back to confirm it"
-              : "Settings changed, but could not be reloaded"}
-            ({settingsUnconfirmed.detail}). Values shown may be out of date; reload before changing more.
+              : "The settings could not be re-read"}
+            ({settingsUnconfirmed.detail}). Values shown may be out of date; reload before changing anything.
           </span>
           <button class="secondary" type="button" bind:this={reloadButtonEl} aria-disabled={settingsReloading ? "true" : "false"}
             onclick={() => void reloadSettings()}>Reload settings</button>
@@ -2920,6 +2935,21 @@
     min-width: 0;
   }
 
+  /* While the settings are unconfirmed, the controls that save a setting are disabled;
+     make that visible. Only then: other disabled states keep their look. Placed before the
+     scoped :disabled rules below so those win where they set the same properties. */
+  .settings-locked button:disabled,
+  .settings-locked select:disabled,
+  .settings-locked input:disabled,
+  .settings-locked textarea:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .settings-locked .toggle:disabled.active {
+    background: var(--text-muted);
+  }
+
   .tabs {
     display: flex;
     padding: 12px 20px 0;
@@ -2979,7 +3009,11 @@
   }
 
   .content {
-    padding: 20px;
+    /* One value for the padding and for the sticky notice's offset inside it. */
+    --content-pad: 20px;
+    padding: var(--content-pad);
+    /* While the notice is shown, focus scrolling keeps a control clear of it. */
+    scroll-padding-top: var(--notice-clearance, 0px);
     flex: 1;
     overflow-y: auto;
     min-width: 0;
@@ -3564,12 +3598,12 @@
   .profile-model-notice span { flex: 1; color: var(--text-muted); }
 
   /* The notice must stay in view while the user scrolls to the control they changed.
-     `.content` pads its scroller by 20px, which sticky offsets are measured inside: -20px
+     Sticky offsets are measured inside the scroller's padding, so minus that padding
      sticks the notice flush with the scroller's top edge. The first shadow paints over
      the 12px margin below it, so scrolled content does not show in that gap. */
   .settings-unconfirmed {
     position: sticky;
-    top: -20px;
+    top: calc(-1 * var(--content-pad));
     z-index: 5;
     background: var(--bg);
     box-shadow: 0 12px 0 0 var(--bg), 0 18px 10px -6px rgba(0, 0, 0, 0.6);

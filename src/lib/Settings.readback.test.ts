@@ -459,6 +459,21 @@ describe("a saved change whose read-back fails", () => {
     expect(document.body).not.toHaveFocus();
   });
 
+  test("while the notice is shown, focus scrolling leaves room for it", async () => {
+    const file = settingsFile();
+    const { ipc } = await renderSettings(backend(file));
+    file.readFailure = readbackFailure;
+
+    ipc.emit("state-changed", "settings_reloaded");
+    const scroller = (await screen.findByRole("alert", { name: "Settings not confirmed" })).parentElement!;
+    expect(scroller.style.getPropertyValue("--notice-clearance")).toMatch(/^\d+(\.\d+)?px$/);
+
+    file.readFailure = null;
+    await userEvent.setup().click(screen.getByRole("button", { name: "Reload settings" }));
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+    expect(scroller.style.getPropertyValue("--notice-clearance")).toBe("");
+  });
+
   test("a notice that clears while the user is elsewhere does not take the focus", async () => {
     const file = settingsFile();
     const { ipc } = await renderSettings(backend(file));
@@ -733,9 +748,9 @@ describe("two answers that arrive out of order", () => {
   });
 });
 
-describe("a failed read that is not part of a save", () => {
-  const dictionaryBlock = "Profile 'default' has a personal dictionary; clear it first";
+const dictionaryBlock = "Profile 'default' has a personal dictionary; clear it first";
 
+describe("a failed read that is not part of a save", () => {
   /** Temperature fallback saved (its read-back is reads[0]), then a language the dictionary blocks (its preview read is reads[1]). */
   async function savedChangeThenBlockedLanguage() {
     const file = settingsFile({ profile_glossaries: { default: "merge = merch" } });
@@ -782,6 +797,64 @@ describe("a failed read that is not part of a save", () => {
     expect(notice).toHaveTextContent(/your change was saved/i);
     expect(screen.getByRole("switch", { name: "Temperature fallback" })).toBeDisabled();
     expect(ipc.callsTo("set_temperature_fallback")).toEqual([{ enabled: false }]);
+  });
+
+  test("a failed preview read after a rejected language change locks the window with one message", async () => {
+    const file = settingsFile({ profile_glossaries: { default: "merge = merch" } });
+    const { ipc } = await renderSettings(backend(file));
+    const user = await openSettingsTab();
+    ipc.handle("set_language", () => {
+      throw dictionaryBlock;
+    });
+    const language = screen.getByRole("combobox", { name: "Default profile language" });
+
+    file.readFailure = readbackFailure;
+    await user.selectOptions(language, "English");
+
+    const notice = await screen.findByRole("alert", { name: "Settings not confirmed" });
+    // Nothing was saved and nothing changed on disk: neutral wording, naming the failed read.
+    expect(notice).toHaveTextContent("The settings could not be re-read");
+    expect(notice).toHaveTextContent(readbackFailure);
+    expect(notice).not.toHaveTextContent(/settings changed|your change was saved/i);
+    // The rejection stays as the reason, without a second instruction to select the language again.
+    expect(screen.getByText(/has a personal dictionary/)).toBeInTheDocument();
+    expect(screen.queryByText(/Select the language again to retry/)).toBeNull();
+    expect(language).toBeDisabled();
+
+    // Reload settings lifts the lock and the rejection message, which no preview follows.
+    file.readFailure = null;
+    await user.click(screen.getByRole("button", { name: "Reload settings" }));
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+    expect(screen.queryByText(/has a personal dictionary/)).toBeNull();
+    expect(language).toBeEnabled();
+    expect(language).toHaveDisplayValue("Swedish");
+  });
+
+  test("a cleared dictionary whose read-back was dropped for a newer failed read is reported as saved", async () => {
+    const file = settingsFile({ profile_glossaries: { default: "merge = merch" } });
+    const { ipc } = await renderSettings(backend(file));
+    const user = await openSettingsTab();
+    ipc.handle("set_language", () => {
+      throw dictionaryBlock;
+    });
+    await user.selectOptions(screen.getByRole("combobox", { name: "Default profile language" }), "English");
+    const clear = await screen.findByRole("button", { name: "Clear default dictionary and switch to English" });
+    ipc.handle("set_language", () => []);
+    const reads = holdReads(ipc);
+
+    await user.click(clear);
+    await waitFor(() => expect(reads).toHaveLength(1));
+    ipc.emit("state-changed", "settings_reloaded");
+    await waitFor(() => expect(reads).toHaveLength(2));
+    reads[1].reject(readbackFailure);
+    await screen.findByRole("alert", { name: "Settings not confirmed" });
+    reads[0].resolve(settingsValue({ language: "en" }));
+    await settle();
+
+    const notice = unconfirmedNotice();
+    expect(notice).toHaveTextContent(readbackFailure);
+    expect(notice).toHaveTextContent(/your change was saved/i);
+    expect(ipc.callsTo("set_profile_glossary")).toHaveLength(1);
   });
 
   test("the first read answering after a newer read failed still shows the window, with the notice", async () => {

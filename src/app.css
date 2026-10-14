@@ -94,16 +94,6 @@ input:focus {
   border-color: var(--accent);
 }
 
-/* One look for anything that cannot be used right now. Components that style
-   their own disabled buttons (scoped rules) keep winning over these. */
-button:disabled,
-select:disabled,
-input:disabled,
-textarea:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
 label,
 .field-label {
   display: block;
@@ -150,10 +140,6 @@ label,
 
 .toggle.active {
   background: var(--accent);
-}
-
-.toggle:disabled.active {
-  background: var(--text-muted);
 }
 
 .toggle::after {
