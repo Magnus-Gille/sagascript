@@ -4,7 +4,7 @@
 use super::pipeline::CancelToken;
 use super::process::{crashed, Delivery, HostProcess, Pending};
 use super::{EngineHostError, Result};
-use crate::sync::{lock_or_recover_with, recover_poisoned};
+use crate::sync::{lock_or_recover, lock_or_recover_with, recover_poisoned};
 use sagascript_engine_protocol::{
     parse_result, Capabilities, ClientInfo, ErrorCode, HelloResult, HostInfo, LoadResult, Priority,
     RequestOp, StatusResult, TranscribeWindowResult, WindowTimings, WireToken, PROTOCOL_VERSION,
@@ -12,12 +12,14 @@ use sagascript_engine_protocol::{
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-use std::sync::mpsc::RecvTimeoutError;
+use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, TryLockError, Weak};
 use std::time::{Duration, Instant};
 
 const STATE_LOCK: &str = "engine_host_client.state";
 const LIFECYCLE_LOCK: &str = "engine_host_client.lifecycle";
+/// Recovered as-is: every critical section is one `Option` assignment or clone.
+const BOOST_LOCK: &str = "engine_host_client.boost";
 
 /// Identity announced in `hello`; compared with the host's build for a warning.
 #[derive(Debug, Clone)]
@@ -47,6 +49,28 @@ pub struct LoadSpec {
     pub compute_units: String,
 }
 
+/// Default [`Timeouts::wedge_grace`]: how long a host may take, after a
+/// timed-out window was cancelled, to send that window's terminal response
+/// before it counts as wedged and is killed.
+///
+/// A host honours `cancel` only between inference stages, and a stage can be
+/// uninterruptible: a Core ML prediction always runs to its end, and when the
+/// Neural Engine has evicted the compiled encoder the first prediction
+/// recompiles it, which took 11.5-16.7 s in #397. The grace must exceed the
+/// longest such legitimate stage with a wide margin; otherwise a healthy host
+/// is killed mid-compile, the compile is lost, the next dictation pays for it
+/// again and the kills use up the restart budget. Nobody waits on it: the
+/// caller gets its timeout at once, and a detached watcher thread keeps the
+/// window's slot until the host answers or is killed.
+pub const DEFAULT_WEDGE_GRACE: Duration = Duration::from_secs(30);
+
+/// Default [`EngineHostConfig::failed_cooldown`]. While failed, requests fail
+/// at once without spawning anything; the first request after the cooldown
+/// gets one fresh start (half-open). If that start or its model load fails
+/// the cooldown begins again; once the model has loaded the crash history is
+/// cleared.
+pub const DEFAULT_FAILED_COOLDOWN: Duration = Duration::from_secs(60);
+
 /// Request timeouts; injectable so tests do not wait for real ones.
 #[derive(Debug, Clone)]
 pub struct Timeouts {
@@ -59,6 +83,15 @@ pub struct Timeouts {
     pub transcribe_min: Duration,
     pub transcribe_factor: f64,
     pub shutdown_grace: Duration,
+    /// Upper bound for writing one request to the host's stdin. A host that
+    /// stops reading it is killed, and the request fails as crashed (like the
+    /// other requests in flight on that host).
+    pub write: Duration,
+    /// After a window times out and is cancelled, how long the host gets to
+    /// send that request's terminal response before it counts as wedged and
+    /// is killed (see [`DEFAULT_WEDGE_GRACE`]). The caller does not wait for
+    /// it; the window keeps its slot meanwhile.
+    pub wedge_grace: Duration,
 }
 
 impl Default for Timeouts {
@@ -72,6 +105,8 @@ impl Default for Timeouts {
             transcribe_min: Duration::from_secs(15),
             transcribe_factor: 3.0,
             shutdown_grace: Duration::from_secs(2),
+            write: super::process::DEFAULT_WRITE_TIMEOUT,
+            wedge_grace: DEFAULT_WEDGE_GRACE,
         }
     }
 }
@@ -140,6 +175,9 @@ pub struct EngineHostConfig {
     pub restart_backoff: Vec<Duration>,
     pub max_restarts: usize,
     pub restart_window: Duration,
+    /// How long the client stays failed after the restart budget is spent
+    /// (see [`DEFAULT_FAILED_COOLDOWN`]).
+    pub failed_cooldown: Duration,
     /// How often a window that was in flight during a crash is resubmitted.
     pub max_crash_retries: u32,
     pub busy_retries: u32,
@@ -172,6 +210,7 @@ impl EngineHostConfig {
             ],
             max_restarts: 3,
             restart_window: Duration::from_secs(300),
+            failed_cooldown: DEFAULT_FAILED_COOLDOWN,
             max_crash_retries: 1,
             busy_retries: 3,
             busy_retry_delay: Duration::from_millis(50),
@@ -217,6 +256,37 @@ struct LoadPending {
     deadline: Instant,
 }
 
+/// What [`Inner::plan_start_locked`] found.
+enum StartPlan {
+    Running(Arc<HostProcess>, Capabilities),
+    /// Spawn after `backoff`; `probing` is the one start after a failed cooldown.
+    Spawn {
+        backoff: Duration,
+        probing: bool,
+    },
+}
+
+/// Sleep `duration` in short slices; `Cancelled` as soon as `cancel` fires.
+fn sleep_unless_cancelled(duration: Duration, cancel: Option<&CancelToken>) -> Result<()> {
+    let end = Instant::now() + duration;
+    loop {
+        if cancel.is_some_and(CancelToken::is_cancelled) {
+            return Err(EngineHostError::Cancelled);
+        }
+        let now = Instant::now();
+        if now >= end {
+            return Ok(());
+        }
+        std::thread::sleep((end - now).min(Duration::from_millis(10)));
+    }
+}
+
+/// The restart budget was spent at `since`.
+struct Failure {
+    reason: String,
+    since: Instant,
+}
+
 struct State {
     proc: Option<Arc<HostProcess>>,
     /// Effective capabilities: `hello` capabilities bounded by the loaded
@@ -229,7 +299,10 @@ struct State {
     last_load: Option<LoadResult>,
     loaded: bool,
     crashes: VecDeque<Instant>,
-    failed: Option<String>,
+    failed: Option<Failure>,
+    /// `proc` is the one fresh start after a failed cooldown (half-open):
+    /// the failure is cleared once it has loaded the model, not at `hello`.
+    probing: bool,
     last_activity: Instant,
     /// Slots held (batch + interactive), so idle logic never fires mid-request.
     active: usize,
@@ -292,6 +365,7 @@ impl EngineHostClient {
                 loaded: false,
                 crashes: VecDeque::new(),
                 failed: None,
+                probing: false,
                 last_activity: Instant::now(),
                 active: 0,
                 batch_in_flight: 0,
@@ -327,7 +401,7 @@ impl EngineHostClient {
 
     /// Set (or clear) the context-biasing dictionary for later jobs.
     pub fn set_boost(&self, boost: Option<BoostSpec>) {
-        *self.inner.boost.lock().unwrap_or_else(|e| e.into_inner()) = boost.map(Arc::new);
+        *lock_or_recover(&self.inner.boost, BOOST_LOCK) = boost.map(Arc::new);
     }
 
     /// What happened to the dictionary on the windows sent so far.
@@ -341,11 +415,7 @@ impl EngineHostClient {
     }
 
     pub fn boost(&self) -> Option<Arc<BoostSpec>> {
-        self.inner
-            .boost
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone()
+        lock_or_recover(&self.inner.boost, BOOST_LOCK).clone()
     }
 
     /// Start the host and load the model now (pre-warm). Returns its capabilities.
@@ -374,7 +444,7 @@ impl EngineHostClient {
         HostSnapshot {
             running: st.proc.as_ref().is_some_and(|p| p.is_alive()),
             loaded: st.loaded && st.proc.as_ref().is_some_and(|p| p.is_alive()),
-            failed: st.failed.clone(),
+            failed: st.failed.as_ref().map(|f| f.reason.clone()),
             pid: st.proc.as_ref().filter(|p| p.is_alive()).map(|p| p.pid()),
             crashes_in_window: st.crashes.len(),
             capabilities: st.caps.clone(),
@@ -389,16 +459,20 @@ impl EngineHostClient {
     /// model (diagnostics). The returned snapshot carries the host identity.
     pub fn connect(&self) -> Result<HostSnapshot> {
         {
-            let _g = self.inner.lock_lifecycle_blocking();
-            self.inner.ensure_started_locked()?;
+            let guard = self.inner.lock_lifecycle_blocking();
+            // A pending restart backoff is slept with the lock released.
+            let _guard = self.inner.wait_restart_backoff(guard, None)?;
+            self.inner.ensure_started_locked(None)?;
         }
         Ok(self.snapshot())
     }
 
-    /// Clear the `Failed` state and the crash history.
+    /// Clear the `Failed` state and the crash history now, without waiting
+    /// for [`EngineHostConfig::failed_cooldown`].
     pub fn reset(&self) {
         let mut st = self.inner.lock_state();
         st.failed = None;
+        st.probing = false;
         st.crashes.clear();
     }
 
@@ -518,7 +592,7 @@ impl EngineHostClient {
             started: Instant::now(),
             busy_attempts: 0,
             reloaded: false,
-            _slot: slot,
+            slot: Some(slot),
         }))
     }
 }
@@ -653,7 +727,8 @@ pub struct WindowTicket {
     busy_attempts: u32,
     /// The window was already resent once after a `not_loaded` answer.
     reloaded: bool,
-    _slot: Slot,
+    /// `None` only after a timeout handed it to a [`WedgeWatch`].
+    slot: Option<Slot>,
 }
 
 impl WindowTicket {
@@ -670,8 +745,12 @@ impl WindowTicket {
             }
             let now = Instant::now();
             if now >= self.deadline {
-                self.abandon();
-                self.inner.after_timeout(&self.proc);
+                if let Some(pending) = self.pending.take() {
+                    // Returns at once; the host's late answer (or its kill) is
+                    // awaited on a detached thread.
+                    self.inner
+                        .watch_timed_out_window(self.proc.clone(), pending, self.slot.take());
+                }
                 return Err(EngineHostError::Timeout {
                     op: "transcribe_window",
                     after: self.timeout,
@@ -762,14 +841,21 @@ impl Drop for WindowTicket {
 }
 
 /// Scheduling slot; releasing it wakes queued batch windows.
+///
+/// Holds the client weakly: a slot kept by a [`WedgeWatch`] must not keep a
+/// dropped client, and so its host, alive. Once the client is gone there is
+/// no count left to update.
 struct Slot {
-    inner: Arc<Inner>,
+    inner: Weak<Inner>,
     priority: Priority,
 }
 
 impl Drop for Slot {
     fn drop(&mut self) {
-        let mut st = self.inner.lock_state();
+        let Some(inner) = self.inner.upgrade() else {
+            return;
+        };
+        let mut st = inner.lock_state();
         st.active -= 1;
         match self.priority {
             Priority::Batch => st.batch_in_flight -= 1,
@@ -777,7 +863,72 @@ impl Drop for Slot {
         }
         st.last_activity = Instant::now();
         drop(st);
-        self.inner.cv.notify_all();
+        inner.cv.notify_all();
+    }
+}
+
+/// A timed-out window whose terminal response is still outstanding. It keeps
+/// the window's slot until the host answers or is killed, because the host
+/// really is still busy with it.
+///
+/// It holds the client weakly, so dropping the last client handle shuts the
+/// host down at once instead of after the grace.
+struct WedgeWatch {
+    inner: Weak<Inner>,
+    proc: Arc<HostProcess>,
+    pending: Pending,
+    grace: Duration,
+    _slot: Option<Slot>,
+}
+
+impl WedgeWatch {
+    /// Cancel the window and give the host `grace` to send its terminal
+    /// response (`cancelled` or a late result). Without one the host is
+    /// wedged on that request, which keeps its slot forever although `ping`
+    /// is still answered inline, so count a crash and kill it; the next
+    /// request restarts it. The slot is released when this returns.
+    fn run(self) {
+        if self.proc.is_alive() {
+            // The answer to the cancel itself is not needed.
+            let _ = self.proc.send(&RequestOp::Cancel {
+                target: self.pending.id,
+            });
+        }
+        let deadline = Instant::now() + self.grace;
+        loop {
+            let now = Instant::now();
+            if now >= deadline {
+                break;
+            }
+            match self.pending.recv_timeout(deadline - now) {
+                Ok(Delivery::Event { .. }) | Err(RecvTimeoutError::Timeout) => {}
+                // Answered: the host is responsive and has freed the slot.
+                Ok(Delivery::Response(_)) | Err(RecvTimeoutError::Disconnected) => return,
+                Ok(Delivery::Closed(info)) => {
+                    if !info.expected {
+                        self.record_crash();
+                    }
+                    return;
+                }
+            }
+        }
+        self.proc.forget(self.pending.id);
+        tracing::warn!(
+            pid = self.proc.pid(),
+            grace_ms = self.grace.as_millis() as u64,
+            "engine host did not finish a timed-out window after cancel; killing it"
+        );
+        self.record_crash();
+        self.proc.terminate(Duration::from_millis(200), false);
+    }
+
+    fn record_crash(&self) {
+        if !self.proc.claim_crash() {
+            return;
+        }
+        if let Some(inner) = self.inner.upgrade() {
+            Inner::record_crash(&mut inner.lock_state());
+        }
     }
 }
 
@@ -953,7 +1104,7 @@ impl Inner {
         st.active += 1;
         st.interactive_active += 1;
         Slot {
-            inner: self.clone(),
+            inner: Arc::downgrade(self),
             priority: Priority::Interactive,
         }
     }
@@ -974,7 +1125,7 @@ impl Inner {
                 st.active += 1;
                 st.batch_in_flight += 1;
                 return Ok(Some(Slot {
-                    inner: self.clone(),
+                    inner: Arc::downgrade(self),
                     priority: Priority::Batch,
                 }));
             }
@@ -1024,12 +1175,15 @@ impl Inner {
                 }
             }
         }
-        let _g = self.lock_lifecycle(cancel)?;
+        let guard = self.lock_lifecycle(cancel)?;
         if cancel.is_some_and(CancelToken::is_cancelled) {
             return Err(EngineHostError::Cancelled);
         }
         self.notify_load(LoadEvent::Started);
-        let result = self.start_and_load_locked(cancel);
+        let (result, _guard) = match self.wait_restart_backoff(guard, cancel) {
+            Ok(guard) => (self.start_and_load_locked(cancel), Some(guard)),
+            Err(e) => (Err(e), None),
+        };
         match &result {
             Ok((_, load_ms)) => self.notify_load(LoadEvent::Ready { load_ms: *load_ms }),
             Err(EngineHostError::Cancelled) => self.notify_load(LoadEvent::Cancelled),
@@ -1040,6 +1194,28 @@ impl Inner {
         st.last_activity = Instant::now();
         let caps = st.caps.clone().expect("caps set with proc");
         Ok((proc, caps))
+    }
+
+    /// Sleep a pending restart backoff (up to 5 s by default) with the
+    /// lifecycle lock released, so shutdown, unload and the idle supervisor
+    /// are not held up behind it; `Cancelled` as soon as `cancel` fires.
+    /// Returns with the lock held again.
+    fn wait_restart_backoff<'a>(
+        &'a self,
+        mut guard: MutexGuard<'a, ()>,
+        cancel: Option<&CancelToken>,
+    ) -> Result<MutexGuard<'a, ()>> {
+        loop {
+            let backoff = match self.plan_start_locked() {
+                Ok(StartPlan::Spawn { backoff, .. }) if !backoff.is_zero() => backoff,
+                // Running, nothing to wait for, or an error the start reports.
+                _ => return Ok(guard),
+            };
+            drop(guard);
+            tracing::info!(?backoff, "delaying engine host restart");
+            sleep_unless_cancelled(backoff, cancel)?;
+            guard = self.lock_lifecycle(cancel)?;
+        }
     }
 
     fn notify_load(&self, event: LoadEvent) {
@@ -1055,16 +1231,12 @@ impl Inner {
         cancel: Option<&CancelToken>,
     ) -> Result<(Arc<HostProcess>, u64)> {
         let started = Instant::now();
-        let (proc, _) = self.ensure_started_locked()?;
+        let (proc, _) = self.ensure_started_locked(cancel)?;
         let loaded = self.lock_state().loaded;
         if !loaded {
-            let r = self.load_locked(&proc, cancel)?;
-            tracing::info!(model_id = %r.model_id, load_ms = r.load_ms, window_s = r.window_s, compiled = r.compiled, "engine host model loaded");
-            let mut st = self.lock_state();
-            let base = st.base_caps.clone().expect("base caps set with proc");
-            st.caps = Some(effective_capabilities(&base, r.window_s)?);
-            st.loaded = true;
-            st.last_load = Some(r);
+            let outcome = self.load_and_apply_locked(&proc, cancel);
+            self.settle_probe(outcome.as_ref().err());
+            outcome?;
         }
         Ok((
             proc,
@@ -1072,17 +1244,92 @@ impl Inner {
         ))
     }
 
+    /// `load` the model on `proc` and adopt its window limits (lifecycle lock held).
+    fn load_and_apply_locked(
+        &self,
+        proc: &Arc<HostProcess>,
+        cancel: Option<&CancelToken>,
+    ) -> Result<()> {
+        let r = self.load_locked(proc, cancel)?;
+        tracing::info!(model_id = %r.model_id, load_ms = r.load_ms, window_s = r.window_s, compiled = r.compiled, "engine host model loaded");
+        let mut st = self.lock_state();
+        let base = st.base_caps.clone().expect("base caps set with proc");
+        st.caps = Some(effective_capabilities(&base, r.window_s)?);
+        st.loaded = true;
+        st.last_load = Some(r);
+        Ok(())
+    }
+
+    /// After a model load on a half-open start (see [`State::probing`]):
+    /// success closes the breaker and clears the crash history. A failure
+    /// starts another cooldown and retires the probe host if it is still
+    /// alive (the load was refused or timed out): the failed state is only
+    /// checked when no host runs, so a live one would otherwise get `load`
+    /// again on every request. A host that starts but cannot load is thus
+    /// tried once per cooldown instead of earning a new restart budget. A
+    /// cancelled wait settles nothing: the load goes on for the next caller.
+    /// Lifecycle lock held; the host is terminated outside the state lock.
+    fn settle_probe(&self, load_error: Option<&EngineHostError>) {
+        let retired = {
+            let mut st = self.lock_state();
+            if !st.probing {
+                return;
+            }
+            match load_error {
+                None => {
+                    tracing::info!("engine host recovered after the failed cooldown");
+                    st.probing = false;
+                    st.failed = None;
+                    st.crashes.clear();
+                    None
+                }
+                Some(EngineHostError::Cancelled) => None,
+                Some(error) => {
+                    st.probing = false;
+                    st.failed = Some(Failure {
+                        reason: format!(
+                            "model load after the cooldown failed: {}",
+                            first_line(error)
+                        ),
+                        since: Instant::now(),
+                    });
+                    // A dead host stays for `plan_start_locked`, which
+                    // accounts for its exit.
+                    if st.proc.as_ref().is_some_and(|p| p.is_alive()) {
+                        st.caps = None;
+                        st.base_caps = None;
+                        st.load_pending = None;
+                        st.loaded = false;
+                        st.proc.take()
+                    } else {
+                        None
+                    }
+                }
+            }
+        };
+        if let Some(proc) = retired {
+            tracing::warn!(
+                pid = proc.pid(),
+                "engine host cannot load the model after the failed cooldown; stopping it"
+            );
+            proc.terminate(self.cfg.timeouts.shutdown_grace, true);
+        }
+    }
+
     fn record_crash(st: &mut State) {
         st.crashes.push_back(Instant::now());
     }
 
-    fn ensure_started_locked(&self) -> Result<(Arc<HostProcess>, Capabilities)> {
-        // Inspect the current process; account for an unexpected exit.
-        let (backoff, dead) = {
+    /// Inspect the current process (lifecycle lock held): account for an
+    /// unexpected exit, apply the failed state and the crash budget, and work
+    /// out the restart backoff. Calling it again changes nothing further.
+    fn plan_start_locked(&self) -> Result<StartPlan> {
+        let (plan, dead) = {
             let mut st = self.lock_state();
             if let Some(p) = &st.proc {
                 if p.is_alive() {
-                    return Ok((p.clone(), st.caps.clone().expect("caps set with proc")));
+                    let caps = st.caps.clone().expect("caps set with proc");
+                    return Ok(StartPlan::Running(p.clone(), caps));
                 }
             }
             let dead = st.proc.take();
@@ -1090,44 +1337,82 @@ impl Inner {
             st.base_caps = None;
             st.load_pending = None;
             st.loaded = false;
+            st.probing = false;
             if let Some((info, p)) = dead.as_ref().and_then(|p| p.closed().map(|i| (i, p))) {
                 if !info.expected && p.claim_crash() {
                     tracing::warn!(status = %info.status, "engine host exited unexpectedly");
                     Self::record_crash(&mut st);
                 }
             }
-            if let Some(reason) = &st.failed {
-                return Err(EngineHostError::Failed(reason.clone()));
+            (self.plan_spawn(&mut st), dead)
+        };
+        // Reap the old process outside the state lock, also when failing.
+        drop(dead);
+        plan
+    }
+
+    /// Whether and when to spawn, with no live process (state lock held).
+    fn plan_spawn(&self, st: &mut State) -> Result<StartPlan> {
+        // Failed, but only for the cooldown: afterwards one fresh start
+        // (half-open), without a restart backoff (the cooldown was one).
+        if let Some(failure) = &st.failed {
+            let waited = failure.since.elapsed();
+            if waited < self.cfg.failed_cooldown {
+                return Err(failed_error(failure, self.cfg.failed_cooldown - waited));
             }
-            let window = self.cfg.restart_window;
-            st.crashes.retain(|t| t.elapsed() <= window);
-            let n = st.crashes.len();
-            if n > self.cfg.max_restarts {
-                let reason = format!(
+            return Ok(StartPlan::Spawn {
+                backoff: Duration::ZERO,
+                probing: true,
+            });
+        }
+        let window = self.cfg.restart_window;
+        st.crashes.retain(|t| t.elapsed() <= window);
+        let n = st.crashes.len();
+        if n > self.cfg.max_restarts {
+            let failure = Failure {
+                reason: format!(
                     "{n} crashes within {:?}, limit is {} restarts",
                     window, self.cfg.max_restarts
-                );
-                st.failed = Some(reason.clone());
-                return Err(EngineHostError::Failed(reason));
-            }
-            let backoff = if n == 0 {
-                Duration::ZERO
-            } else {
-                let i = (n - 1).min(self.cfg.restart_backoff.len().saturating_sub(1));
-                let want = self.cfg.restart_backoff.get(i).copied().unwrap_or_default();
-                let since = st.crashes.back().map_or(Duration::MAX, |t| t.elapsed());
-                want.saturating_sub(since)
+                ),
+                since: Instant::now(),
             };
-            (backoff, dead)
+            let error = failed_error(&failure, self.cfg.failed_cooldown);
+            tracing::warn!(%error, "engine host marked failed");
+            st.failed = Some(failure);
+            return Err(error);
+        }
+        Ok(StartPlan::Spawn {
+            backoff: self.restart_backoff(st, n),
+            probing: false,
+        })
+    }
+
+    /// Start the host if it is not running (lifecycle lock held). Callers
+    /// normally slept the backoff already ([`Self::wait_restart_backoff`]);
+    /// what is left is slept here, and a cancelled caller stops waiting.
+    fn ensure_started_locked(
+        &self,
+        cancel: Option<&CancelToken>,
+    ) -> Result<(Arc<HostProcess>, Capabilities)> {
+        let probing = match self.plan_start_locked()? {
+            StartPlan::Running(proc, caps) => return Ok((proc, caps)),
+            StartPlan::Spawn { backoff, probing } => {
+                if !backoff.is_zero() {
+                    tracing::info!(?backoff, "delaying engine host restart");
+                    sleep_unless_cancelled(backoff, cancel)?;
+                }
+                probing
+            }
         };
-        drop(dead); // reap the old process outside the state lock
-        if !backoff.is_zero() {
-            tracing::info!(?backoff, "delaying engine host restart");
-            std::thread::sleep(backoff);
+        if probing {
+            tracing::info!("engine host failed earlier; trying a fresh start after the cooldown");
         }
         match self.start_and_handshake() {
             Ok((proc, caps, host_info)) => {
                 let mut st = self.lock_state();
+                // The failure is cleared once this host has loaded the model
+                // (`settle_probe`), not at the handshake.
+                st.probing = probing;
                 st.proc = Some(proc.clone());
                 st.caps = Some(caps.clone());
                 st.base_caps = Some(caps.clone());
@@ -1138,10 +1423,29 @@ impl Inner {
                 Ok((proc, caps))
             }
             Err(e) => {
-                Self::record_crash(&mut self.lock_state());
+                let mut st = self.lock_state();
+                Self::record_crash(&mut st);
+                if probing {
+                    // The fresh start failed too: fail fast for another cooldown.
+                    st.failed = Some(Failure {
+                        reason: format!("start after the cooldown failed: {}", first_line(&e)),
+                        since: Instant::now(),
+                    });
+                }
                 Err(e)
             }
         }
+    }
+
+    /// Delay before the next start after `n` crashes in the restart window.
+    fn restart_backoff(&self, st: &State, n: usize) -> Duration {
+        if n == 0 {
+            return Duration::ZERO;
+        }
+        let i = (n - 1).min(self.cfg.restart_backoff.len().saturating_sub(1));
+        let want = self.cfg.restart_backoff.get(i).copied().unwrap_or_default();
+        let since = st.crashes.back().map_or(Duration::MAX, |t| t.elapsed());
+        want.saturating_sub(since)
     }
 
     fn start_and_handshake(&self) -> Result<(Arc<HostProcess>, Capabilities, HostInfo)> {
@@ -1150,7 +1454,8 @@ impl Inner {
         let n = self.spawns.fetch_add(1, Ordering::Relaxed) + 1;
         // No paths: the persistent log must not carry the user's home directory.
         tracing::info!(spawn_count = n, "engine host: spawning");
-        let proc = HostProcess::spawn(&self.cfg.host_path, &args, &self.cfg.env)?;
+        let proc = HostProcess::spawn(&self.cfg.host_path, &args, &self.cfg.env)?
+            .with_write_timeout(self.cfg.timeouts.write);
         let id = &self.cfg.identity;
         let v = proc.request(
             &RequestOp::Hello {
@@ -1197,6 +1502,7 @@ impl Inner {
             st.caps = None;
             st.base_caps = None;
             st.load_pending = None;
+            st.probing = false;
             st.proc.take()
         };
         if let Some(p) = proc {
@@ -1204,26 +1510,46 @@ impl Inner {
         }
     }
 
-    /// A window timed out: if the host no longer answers `ping`, it is hung, so
-    /// count a crash and kill it (the next request restarts it).
-    fn after_timeout(&self, proc: &Arc<HostProcess>) {
-        if !proc.is_alive() {
-            return;
-        }
-        if proc
-            .request(&RequestOp::Ping, self.cfg.timeouts.ping)
-            .is_ok()
-        {
-            return;
-        }
-        tracing::warn!(
-            pid = proc.pid(),
-            "engine host unresponsive after timeout; killing"
-        );
-        if proc.claim_crash() {
-            Self::record_crash(&mut self.lock_state());
-        }
-        proc.terminate(Duration::from_millis(200), false);
+    /// A window timed out: hand it to a detached [`WedgeWatch`] so the caller
+    /// gets its timeout at once. If no thread can be started, the watch runs
+    /// here (the caller then waits up to the wedge grace, as a fallback).
+    fn watch_timed_out_window(
+        self: &Arc<Self>,
+        proc: Arc<HostProcess>,
+        pending: Pending,
+        slot: Option<Slot>,
+    ) {
+        let watch = WedgeWatch {
+            inner: Arc::downgrade(self),
+            proc,
+            pending,
+            grace: self.cfg.timeouts.wedge_grace,
+            _slot: slot,
+        };
+        // Passed over a channel so the watch is still ours when the thread
+        // cannot be started (or ends before receiving it).
+        let (tx, rx) = mpsc::channel::<WedgeWatch>();
+        let spawned = std::thread::Builder::new()
+            .name("engine-host-wedge-watch".into())
+            .spawn(move || {
+                if let Ok(watch) = rx.recv() {
+                    watch.run();
+                }
+            });
+        let watch = match spawned {
+            Ok(_) => match tx.send(watch) {
+                Ok(()) => return,
+                Err(mpsc::SendError(watch)) => watch,
+            },
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "could not start the engine host wedge watcher; waiting on this thread"
+                );
+                watch
+            }
+        };
+        watch.run();
     }
 
     fn idle_check(&self) {
@@ -1292,6 +1618,24 @@ fn supervise_loop(weak: Weak<Inner>, tick: Duration) {
     }
 }
 
+/// First line of an error, for a one-line failure reason.
+fn first_line(error: &EngineHostError) -> String {
+    error
+        .to_string()
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .to_string()
+}
+
+fn failed_error(failure: &Failure, retry_in: Duration) -> EngineHostError {
+    EngineHostError::Failed(format!(
+        "{}; next attempt in {} s",
+        failure.reason,
+        retry_in.as_secs_f64().ceil() as u64
+    ))
+}
+
 /// Validate a `hello` result and return the usable capabilities.
 pub fn validate_hello(hello: &HelloResult, client: &ClientIdentity) -> Result<Capabilities> {
     if hello.protocol != PROTOCOL_VERSION {
@@ -1342,7 +1686,7 @@ mod poison_tests {
         std::thread::scope(|scope| {
             let panicked = scope
                 .spawn(|| {
-                    let _guard = mutex.lock().unwrap();
+                    let _guard = mutex.lock().expect("not poisoned yet");
                     panic!("injected panic while holding the lock (#359)");
                 })
                 .join();
@@ -1371,14 +1715,14 @@ mod poison_tests {
     #[test]
     fn poisoned_state_is_recovered_and_forces_host_revalidation() {
         let client = client();
-        client.inner.state.lock().unwrap().loaded = true;
+        client.inner.state.lock().expect("not poisoned yet").loaded = true;
         poison(&client.inner.state);
 
         let snapshot = client.snapshot();
         assert!(!snapshot.running);
         assert!(!client.inner.state.is_poisoned());
         assert!(
-            !client.inner.state.lock().unwrap().loaded,
+            !client.inner.state.lock().expect("recovered").loaded,
             "recovery must force the next request through the readiness check"
         );
 
@@ -1387,7 +1731,7 @@ mod poison_tests {
         poison(&client.inner.state);
         let dropped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(reservation)));
         assert!(dropped.is_ok(), "Reservation::drop must not panic");
-        assert_eq!(client.inner.state.lock().unwrap().active, 0);
+        assert_eq!(client.inner.state.lock().expect("recovered").active, 0);
     }
 
     #[test]

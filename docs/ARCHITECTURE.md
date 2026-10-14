@@ -251,7 +251,7 @@ sequenceDiagram
     Host-->>Client: tokens, merged in window order
     Note over Client,Host: supervisor thread unloads after idle_unload, shuts down after idle_shutdown
     Host--xClient: crash or EOF
-    Client->>Host: respawn with backoff, more than max_restarts in restart_window marks Failed
+    Client->>Host: respawn with backoff, more than max_restarts in restart_window marks Failed for failed_cooldown
     Caller->>PB: shutdown_shared_client at app exit or CLI end
     PB->>Host: shutdown, 2 s grace, then kill
 ```
@@ -267,9 +267,20 @@ sequenceDiagram
   resolved from the bundle (`Resources/EngineHost/sagascript-engine-host`,
   `engine-host\sagascript-engine-host-ort.exe`); `SAGASCRIPT_ENGINE_HOST` only in development
   builds (`dev-overrides`).
-- `Failed` is permanent: `EngineHostClient::reset()` has no production caller. **Planned:**
-  [#366](https://github.com/Magnus-Gille/sagascript/issues/366) (recovering supervision),
-  [#367](https://github.com/Magnus-Gille/sagascript/issues/367) (machine-checked protocol).
+- Recovery ([#366](https://github.com/Magnus-Gille/sagascript/issues/366)): `Failed` lasts
+  `failed_cooldown` (60 s), then one fresh start (half-open); a window that times out returns at
+  once, and a detached `engine-host-wedge-watch` thread kills the host if it sends no terminal
+  response within `wedge_grace` (30 s) after `cancel`; stdin writes are bounded
+  (`Timeouts::write`); the restart backoff is slept unlocked and is cancel-aware.
+  `EngineHostClient::reset()` clears `Failed` at once but has no production caller: settings that
+  change the engine (host, model, compute units, idle policy) already replace the shared client
+  (`shared_client`), model deletion shuts it down, and the CLI `engine doctor` uses its own client.
+- PCM temp dirs hold a locked `owner.lock`; `pipeline::sweep_stale_pcm_dirs` (app startup and
+  shared-client creation, background, once per process; `engine doctor` on demand) removes the
+  dirs of dead owners, and dirs whose owner cannot be proven dead (pre-#366, or on a file system
+  that cannot lock) once untouched for 24 h.
+- **Planned:** [#367](https://github.com/Magnus-Gille/sagascript/issues/367) (machine-checked
+  protocol).
 
 ## 3. Threads and locks
 
@@ -278,7 +289,7 @@ sequenceDiagram
 | Main (UI) thread | Tauri setup, tray/window/overlay APIs, global-shortcut callbacks on macOS (and key-down on Windows), `macos_bare` callbacks, `run_on_main_thread` closures (macOS paste, AppKit focus calls), sync (non-`async`) Tauri commands. |
 | Tokio runtime | `async` Tauri commands, tasks from `tauri::async_runtime::spawn` (dictation stop pipeline, update flow). |
 | Blocking pool | `spawn_blocking`: inference, paste on Windows/Linux, focus-restore wait, recovery file I/O. |
-| Dedicated threads | Settings watcher, startup model warm-up, engine-host reader/stderr/supervisor threads, audio capture worker and cpal callback, `global-hotkey` event thread (Linux) and key-up polling thread (Windows). |
+| Dedicated threads | Settings watcher, startup model warm-up, engine-host reader/stderr/stdin-writer/supervisor/wedge-watch threads and the PCM temp dir sweep, audio capture worker and cpal callback, `global-hotkey` event thread (Linux) and key-up polling thread (Windows). |
 | CLI | `sagascript_cli::run` builds its own Tokio runtime; inference commands run on a worker thread (16 MiB stack on Windows, `run_inference_command`). |
 
 | Lock | Where | Notes |
@@ -291,7 +302,7 @@ sequenceDiagram
 | Job slots (`MeetingJobs`, `SharedMeetingAudio`, `PlainFileJobs` fields) | `meeting_jobs.rs`, `meeting_media.rs`, `plain_file_jobs.rs` | One active job each. |
 | `LoggingService` (`log_file`, `dictation_session_id`) | `logging/service.rs` | Taken inside controller methods. |
 | `WhisperBackend` (`load_lock`, `state`, `context`, `loaded_runtime`, `cached_runtime`) | `transcription/whisper_backend.rs` | `load_lock` and `state` are taken with a bounded wait (`lock_load_bounded`, `lock_state_bounded`, `WARM_STATE_GRACE`), returning `ModelBusy` instead of blocking. |
-| Engine host (`lifecycle`, `state`; process `routing`, `stdin`, `child`) | `engine_host/client.rs`, `process.rs` | `lifecycle` serializes start/load/unload/shutdown. |
+| Engine host (`lifecycle`, `state`, `boost`; process `routing`, `stdin`, `child`) | `engine_host/client.rs`, `process.rs` | `lifecycle` serializes start/load/unload/shutdown; it is released while a restart backoff is slept. `stdin` only guards the writer thread's queue, never a write. |
 | Pianissimo `shared_slot` and load-state statics | `pianissimo_backend.rs` | Process-global client. |
 | Others | `AudioCaptureService` buffers (`audio/capture.rs`), `GLOBAL_DICTATION` (`logging/service.rs`), the download `verification_cache` (`download.rs`), `LiveDictationBackend.active_job`, `PianissimoBackend.active`, `HostProcess` `stderr_tail`/`reader`, the CLI `Canceller` (`cancel.rs`) | Leaf locks. The capture buffers are taken under `SharedController` by start/stop and without it by the capture worker and cpal callback. |
 
