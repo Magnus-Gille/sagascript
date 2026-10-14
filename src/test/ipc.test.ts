@@ -1,7 +1,7 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, SERIALIZE_TO_IPC_FN } from "@tauri-apps/api/core";
 import { emit, listen, once } from "@tauri-apps/api/event";
 import { describe, expect, test } from "vitest";
-import { getPlatform, getSettings, setLanguage, setProfileGlossary, type Settings } from "../lib/api";
+import { getPlatform, getSettings, setHotkeyProfiles, setLanguage, setProfileGlossary, type Settings } from "../lib/api";
 import { COMMAND_NAMES, isCommandName, mockIpc, resetIpcMock, type EventMap } from "./ipc";
 
 const settings: Settings = {
@@ -54,13 +54,45 @@ describe("commands", () => {
     expect((await getSettings()).language).toBe("sv");
   });
 
-  test("an optional wrapper argument is recorded as sent", async () => {
+  test("an omitted optional argument is dropped, as JSON over the IPC boundary drops it", async () => {
     const ipc = mockIpc({ set_profile_glossary: () => undefined });
     await setProfileGlossary("default", "words");
     await setProfileGlossary("default", "more words", "words");
     expect(ipc.callsTo("set_profile_glossary")).toStrictEqual([
-      { profileId: "default", source: "words", expectedSource: undefined },
+      { profileId: "default", source: "words" },
       { profileId: "default", source: "more words", expectedSource: "words" },
+    ]);
+  });
+
+  test("reactive Svelte state is sent as its plain JSON value", async () => {
+    // Components pass $state proxies, which structuredClone rejects.
+    const profiles = new Proxy([{ id: "default", name: "Svenska", shortcut: "Super+S", language: "sv" as const }], {});
+    expect(() => structuredClone(profiles)).toThrow();
+    const ipc = mockIpc({ set_hotkey_profiles: () => [] });
+    await setHotkeyProfiles(profiles);
+    expect(ipc.callsTo("set_hotkey_profiles")).toStrictEqual([
+      { profiles: [{ id: "default", name: "Svenska", shortcut: "Super+S", language: "sv" }] },
+    ]);
+  });
+
+  test("Maps, byte buffers and IPC-serializable objects are converted as Tauri's serializer does", async () => {
+    const ipc = mockIpc({ set_hotkey_profiles: () => [] });
+    // Raw invoke: the typed wrappers never send these, but the boundary would.
+    // They sit under the one argument `set_hotkey_profiles` reads, since the
+    // mock rejects keys the Rust command does not have.
+    await invoke("set_hotkey_profiles", {
+      profiles: {
+        labels: new Map([["s1", "Talare 1"]]),
+        bytes: new Uint8Array([1, 2, 255]),
+        buffer: new Uint8Array([7, 8]).buffer,
+        channel: { [SERIALIZE_TO_IPC_FN]: () => "__CHANNEL__:42" },
+      },
+    });
+    expect(ipc.calls).toStrictEqual([
+      {
+        command: "set_hotkey_profiles",
+        args: { profiles: { labels: { s1: "Talare 1" }, bytes: [1, 2, 255], buffer: [7, 8], channel: "__CHANNEL__:42" } },
+      },
     ]);
   });
 

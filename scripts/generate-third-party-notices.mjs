@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { appPackageReferences, npmLicenseError, shippedNpmClosure } from "./lib/npm-license-policy.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const outputPath = join(root, "THIRD_PARTY_NOTICES.md");
@@ -28,6 +29,24 @@ function npmInstallationError(pkg, installedVersion, directoryExists) {
     return `npm dependency version mismatch for ${pkg.name}: lockfile requires ${pkg.version}, installed ${installedVersion} in ${path} (run npm ci)`;
   }
   return null;
+}
+
+/** The inventory record for one `packages` entry of package-lock.json (v3). */
+function npmPackageFromLock(path, entry, shipped) {
+  const name = path.slice(path.lastIndexOf("node_modules/") + "node_modules/".length);
+  return {
+    ecosystem: "npm",
+    name,
+    version: entry.version,
+    license: entry.license,
+    source: componentSource({ ...entry, name }, "npm"),
+    directory: join(root, path),
+    optional: entry.optional === true,
+    devOnly: entry.dev === true,
+    // In the closure of what the app bundle can contain (see
+    // scripts/lib/npm-license-policy.mjs: "dev" does not mean "not shipped").
+    shipped: shipped.has(path),
+  };
 }
 
 if (mode === "--test-sort") {
@@ -77,9 +96,78 @@ if (mode === "--test-newline-normalization") {
   process.exit(0);
 }
 
+if (mode === "--test-dev-only-licenses") {
+  // A synthetic package-lock.json (v3). The project depends on runtime-dep,
+  // which needs nested (installed under it) and hoisted; app code under src/
+  // imports entities, a dev dependency (as svelte is); tooling is a dev
+  // dependency nothing imports; opt is devOptional; vite injects its
+  // module-preload polyfill but its own dependencies stay build-time only.
+  const packages = {
+    "": { dependencies: { "runtime-dep": "^1.0.0" }, devDependencies: { entities: "^7.0.0", tooling: "^1.0.0", vite: "^6.0.0" } },
+    "node_modules/runtime-dep": { version: "1.0.0", license: "MIT", dependencies: { nested: "^2.0.0", hoisted: "^1.0.0" } },
+    "node_modules/runtime-dep/node_modules/nested": { version: "2.0.0", license: "BlueOak-1.0.0" },
+    "node_modules/nested": { version: "1.0.0", license: "BSD-2-Clause", dev: true },
+    "node_modules/hoisted": { version: "1.0.0", license: "BSD-2-Clause" },
+    "node_modules/entities": { version: "7.0.1", license: "BSD-2-Clause", dev: true },
+    "node_modules/tooling": { version: "1.0.0", license: "BSD-2-Clause", dev: true, dependencies: { "tooling-dep": "^1.0.0" } },
+    "node_modules/tooling-dep": { version: "1.0.0", license: "BlueOak-1.0.0", dev: true },
+    "node_modules/opt": { version: "1.0.0", license: "BSD-2-Clause", devOptional: true, optional: true },
+    "node_modules/vite": { version: "6.4.3", license: "MIT", dev: true, dependencies: { rollup: "^4.0.0" } },
+    "node_modules/rollup": { version: "4.0.0", license: "BlueOak-1.0.0", dev: true },
+    "node_modules/gpl-tool": { version: "1.0.0", license: "GPL-3.0-only", dev: true },
+    "node_modules/compound": { version: "1.0.0", license: "BSD-2-Clause OR MIT", dev: true },
+    "node_modules/unlicensed": { version: "1.0.0", dev: true },
+  };
+  const shipped = shippedNpmClosure(packages, ["entities"]);
+  const expectedShipped = [
+    "node_modules/entities",
+    "node_modules/hoisted",
+    "node_modules/runtime-dep",
+    "node_modules/runtime-dep/node_modules/nested",
+    "node_modules/vite",
+  ];
+  if ([...shipped].sort().join("\n") !== expectedShipped.join("\n")) {
+    throw new Error(`Unexpected shipped closure: ${[...shipped].sort().join(", ")}`);
+  }
+  const shippedError = (id, license) =>
+    `npm ${id} has license ${license}, which is reviewed for dev-only tooling only; the app bundle can contain this package (src/ or a runtime dependency reaches it)`;
+  const expected = {
+    "node_modules/runtime-dep": null,
+    "node_modules/runtime-dep/node_modules/nested": shippedError("nested@2.0.0", "BlueOak-1.0.0"),
+    "node_modules/nested": null,
+    "node_modules/hoisted": shippedError("hoisted@1.0.0", "BSD-2-Clause"),
+    // Imported by app code: shipped, although "dev": true.
+    "node_modules/entities": shippedError("entities@7.0.1", "BSD-2-Clause"),
+    "node_modules/tooling": null,
+    "node_modules/tooling-dep": null,
+    "node_modules/opt":
+      "npm opt@1.0.0 has license BSD-2-Clause, which is reviewed for dev-only tooling only; this package is not a dev dependency",
+    "node_modules/vite": null,
+    "node_modules/rollup": null,
+    "node_modules/gpl-tool": "npm gpl-tool@1.0.0 has unreviewed license: GPL-3.0-only",
+    "node_modules/compound": "npm compound@1.0.0 has unreviewed license: BSD-2-Clause OR MIT",
+    "node_modules/unlicensed": "npm unlicensed@1.0.0 has no SPDX license",
+  };
+  for (const [path, error] of Object.entries(expected)) {
+    const actual = npmLicenseError(npmPackageFromLock(path, packages[path], shipped));
+    if (actual !== error) throw new Error(`Unexpected npm license result for ${path}: ${actual}`);
+  }
+  let unresolved = null;
+  try {
+    shippedNpmClosure(packages, [{ file: "src/main.ts", package: "not-installed", specifier: "not-installed/x.css" }]);
+  } catch (error) {
+    unresolved = error.message;
+  }
+  if (!unresolved?.startsWith('src/main.ts references npm package not-installed ("not-installed/x.css"), which package-lock.json')) {
+    throw new Error(`An app reference missing from the lockfile must fail and name its file: ${unresolved}`);
+  }
+  console.log("dev-only npm license policy passed");
+  process.exit(0);
+}
+
 if (!new Set(["--check", "--write"]).has(mode)) {
   console.error(
-    "Usage: node scripts/generate-third-party-notices.mjs --check|--write|--test-sort|--test-npm-installation|--test-newline-normalization",
+    "Usage: node scripts/generate-third-party-notices.mjs --check|--write|--test-sort|--test-npm-installation|--test-newline-normalization|--test-dev-only-licenses",
   );
   process.exit(2);
 }
@@ -124,8 +212,6 @@ const reviewedRustLicenses = new Set([
   "Zlib",
   "Zlib OR Apache-2.0 OR MIT",
 ]);
-
-const reviewedNpmLicenses = new Set(["0BSD", "Apache-2.0", "Apache-2.0 OR MIT", "BSD-3-Clause", "ISC", "MIT", "MIT OR Apache-2.0"]);
 
 function cargoMetadata(target, manifestPath = "src-tauri/Cargo.toml") {
   return JSON.parse(
@@ -194,20 +280,18 @@ const rustPackages = [...rustById.values()]
   .sort((a, b) => compareCodeUnits(a.name, b.name) || compareCodeUnits(a.version, b.version));
 
 const lock = JSON.parse(readFileSync(join(root, "package-lock.json"), "utf8"));
+const errors = [];
+let shippedNpm;
+try {
+  shippedNpm = shippedNpmClosure(lock.packages, appPackageReferences(root));
+} catch (error) {
+  // Reported with the other errors; until fixed, nothing counts as shipped.
+  errors.push(error.message);
+  shippedNpm = new Set();
+}
 const lockedNpmPackages = Object.entries(lock.packages)
   .filter(([path]) => path.includes("node_modules/"))
-  .map(([path, pkg]) => {
-    const name = path.slice(path.lastIndexOf("node_modules/") + "node_modules/".length);
-    return {
-      ecosystem: "npm",
-      name,
-      version: pkg.version,
-      license: pkg.license,
-      source: componentSource({ ...pkg, name }, "npm"),
-      directory: join(root, path),
-      optional: pkg.optional === true,
-    };
-  })
+  .map(([path, entry]) => npmPackageFromLock(path, entry, shippedNpm))
   .sort((a, b) => compareCodeUnits(a.name, b.name) || compareCodeUnits(a.version, b.version));
 // Keep every locked npm package in the inventory so output is identical on
 // Apple Silicon and Intel CI. Platform-specific optional packages are not
@@ -215,7 +299,6 @@ const lockedNpmPackages = Object.entries(lock.packages)
 // their local license file is deliberately excluded from the text appendix.
 const npmPackages = lockedNpmPackages;
 
-const errors = [];
 for (const pkg of rustPackages) {
   if (!pkg.license) errors.push(`Rust ${pkg.name}@${pkg.version} has no SPDX license`);
   else if (!reviewedRustLicenses.has(pkg.license)) {
@@ -223,10 +306,8 @@ for (const pkg of rustPackages) {
   }
 }
 for (const pkg of lockedNpmPackages) {
-  if (!pkg.license) errors.push(`npm ${pkg.name}@${pkg.version} has no SPDX license`);
-  else if (!reviewedNpmLicenses.has(pkg.license)) {
-    errors.push(`npm ${pkg.name}@${pkg.version} has unreviewed license: ${pkg.license}`);
-  }
+  const licenseError = npmLicenseError(pkg);
+  if (licenseError) errors.push(licenseError);
   const directoryExists = existsSync(pkg.directory);
   let installedVersion;
   if (directoryExists) {

@@ -35,8 +35,9 @@ Known problems on this branch:
 
 1. **Layers.** Rust unit tests (inline or sibling `*_tests.rs`) for logic; Rust integration
    tests for process boundaries (CLI binary, fake engine host); Vitest for frontend modules
-   (`src/lib/<module>.test.ts`, IPC through the typed mock in `src/test/ipc.ts`; component
-   tests with testing-library follow in #361; [docs/testing/frontend.md](../testing/frontend.md));
+   and components (`src/lib/<module>.test.ts`, `src/lib/<Component>.test.ts` with
+   testing-library in happy-dom, IPC through the typed mock in `src/test/ipc.ts`;
+   [docs/testing/frontend.md](../testing/frontend.md));
    Playwright (`scripts/qa-*.mjs`, mocked IPC) for user flows; Swift tests for the Core ML host; Python `unittest` for evaluation tooling; CLI
    smoke in CI for the release binary. Test each fact at the lowest layer that can see it.
 2. **Behaviour, not source text.** No new test reads `.svelte` or other source as text to
