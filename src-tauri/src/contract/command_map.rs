@@ -9,7 +9,10 @@
 //!   it);
 //! - `State`, `AppHandle` and window parameters are injected by Tauri;
 //! - an `Option<T>` parameter may be omitted or `null`;
-//! - the command resolves with `T` of its `Result<T, String>`.
+//! - the command resolves with `T` of its `Result<T, E>`, and rejects with
+//!   `E`: a string for `Result<T, String>`, or a `BackendError`
+//!   (src/lib/errors.ts) for `Result<T, CommandError>` (ADR 0006). Any other
+//!   error type fails here until the generator learns it.
 //!
 //! Rust types map to TypeScript type *names* through [`TYPESCRIPT_NAMES`]
 //! and [`JSON_VALUES`]; an unmapped type fails the test. The shapes behind the
@@ -158,12 +161,22 @@ struct Param {
     ts: TsType,
 }
 
+/// What a command rejects with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ErrorType {
+    /// `Result<T, String>`: the error string.
+    Text,
+    /// `Result<T, CommandError>`: a `BackendError` object.
+    Backend,
+}
+
 struct Command {
     module: String,
     name: String,
     params: Vec<Param>,
     rust_result: String,
     result: TsType,
+    error: ErrorType,
 }
 
 /// Everything the generator learned, and every problem it found.
@@ -373,19 +386,22 @@ impl Generation {
             return Err("commands return a value; `()` is `Result<(), String>`".into());
         };
         let rust_result = rust_type(output);
-        let value = match last_segment(output) {
+        let (value, error) = match last_segment(output) {
             Some(segment) if segment.ident == "Result" => {
                 match type_arguments(&segment.arguments).as_slice() {
-                    [value, error] if rust_type(error) == "String" => *value,
+                    [value, error] if rust_type(error) == "String" => (*value, ErrorType::Text),
+                    [value, error] if rust_type(error) == "CommandError" => {
+                        (*value, ErrorType::Backend)
+                    }
                     _ => {
                         return Err(format!(
-                            "result `{rust_result}`: only `Result<T, String>` is mapped yet \
-                             (typed errors are #360)"
+                            "result `{rust_result}`: only `Result<T, String>` and \
+                             `Result<T, CommandError>` are mapped"
                         ))
                     }
                 }
             }
-            _ => output.as_ref(),
+            _ => (output.as_ref(), ErrorType::Text),
         };
         let result = self.ts_type(value, &name, "result")?;
         Ok(Command {
@@ -394,6 +410,7 @@ impl Generation {
             params,
             rust_result,
             result,
+            error,
         })
     }
 }
@@ -604,6 +621,9 @@ fn render(commands: &[Command]) -> String {
             imports.entry(module).or_default().insert(name);
         }
     }
+    let typed_errors = commands
+        .iter()
+        .any(|command| command.error == ErrorType::Backend);
     let mut out = String::new();
     out.push_str(
         "// Generated from the Rust command signatures by src-tauri/src/contract/command_map.rs\n\
@@ -618,6 +638,9 @@ fn render(commands: &[Command]) -> String {
             names.join(", ")
         ));
     }
+    if typed_errors {
+        out.push_str("import type { BackendError } from \"./errors\";\n");
+    }
     out.push_str(
         "\n/** No arguments. */\n\
          type NoArgs = Record<string, never>;\n\
@@ -626,8 +649,10 @@ fn render(commands: &[Command]) -> String {
          * Every command the backend registers (`tauri::generate_handler!` in\n \
          * src-tauri/src/main.rs): the argument object the frontend sends, keyed by\n \
          * the Rust parameter names in camelCase (an `Option` parameter may be\n \
-         * omitted or null), and the value the command resolves with. A command\n \
-         * that fails rejects with its error string.\n \
+         * omitted or null), the value the command resolves with, and what it rejects\n \
+         * with: its error string, or a `BackendError` for a command that returns\n \
+         * `Result<T, CommandError>` (ADR 0006). Match a `BackendError` by `code`\n \
+         * only (`isBackendError`, src/lib/errors.ts), never by its message.\n \
          */\n\
          export interface CommandMap {\n",
     );
@@ -661,8 +686,12 @@ fn render(commands: &[Command]) -> String {
                 .collect();
             format!("{{ {} }}", fields.join("; "))
         };
+        let error = match command.error {
+            ErrorType::Text => "string",
+            ErrorType::Backend => "BackendError",
+        };
         out.push_str(&format!(
-            "  {}: {{ args: {args}; result: {} }};\n",
+            "  {}: {{ args: {args}; result: {}; error: {error} }};\n",
             command.name, command.result.text
         ));
     }
@@ -670,6 +699,20 @@ fn render(commands: &[Command]) -> String {
         "}\n\n/** The registered command names, sorted. */\nexport const COMMAND_NAMES = [\n",
     );
     for command in commands {
+        out.push_str(&format!("  \"{}\",\n", command.name));
+    }
+    out.push_str("] as const satisfies readonly (keyof CommandMap)[];\n");
+    out.push_str(
+        "\n/**\n \
+         * The commands that reject with a `BackendError` (`Result<T, CommandError>`);\n \
+         * every other command rejects with a string.\n \
+         */\n\
+         export const BACKEND_ERROR_COMMANDS = [\n",
+    );
+    for command in commands
+        .iter()
+        .filter(|command| command.error == ErrorType::Backend)
+    {
         out.push_str(&format!("  \"{}\",\n", command.name));
     }
     out.push_str("] as const satisfies readonly (keyof CommandMap)[];\n");
@@ -811,14 +854,85 @@ fn signatures_map_or_fail_with_a_fix() {
     assert_eq!(command.params[0].ts.text, "string | null");
     assert_eq!(command.result.text, "WhisperModel[]");
 
+    // A command rejects with a string, or with a `BackendError` when it returns
+    // `Result<T, CommandError>` (ADR 0006); any other error type is not mapped.
     let function: ItemFn = syn::parse_quote! {
         #[tauri::command]
         pub async fn example() -> Result<(), CommandError> { todo!() }
     };
-    assert!(generation.command("commands", &function).is_err());
+    let typed = generation
+        .command("commands", &function)
+        .expect("a CommandError result maps");
+    assert_eq!(typed.error, ErrorType::Backend);
+    assert_eq!(typed.result.text, "void");
+    let function: ItemFn = syn::parse_quote! {
+        #[tauri::command]
+        pub async fn example() -> Result<String, String> { todo!() }
+    };
+    let text = generation
+        .command("commands", &function)
+        .expect("a String result maps");
+    assert_eq!(text.error, ErrorType::Text);
+    let function: ItemFn = syn::parse_quote! {
+        #[tauri::command]
+        pub async fn example() -> Result<(), std::io::Error> { todo!() }
+    };
+    let error = generation
+        .command("commands", &function)
+        .err()
+        .expect("another error type is not mapped");
+    assert!(
+        error.contains("only `Result<T, String>` and `Result<T, CommandError>`"),
+        "{error}"
+    );
 
     let renamed: syn::Attribute = syn::parse_quote!(#[tauri::command(rename_all = "snake_case")]);
     assert!(command_attribute(&renamed).is_err());
     let asynchronous: syn::Attribute = syn::parse_quote!(#[tauri::command(async)]);
     assert_eq!(command_attribute(&asynchronous), Ok(true));
+}
+
+#[test]
+fn the_generated_map_types_each_commands_error() {
+    let mut generation = Generation::default();
+    let text: ItemFn = syn::parse_quote! {
+        #[tauri::command]
+        pub async fn get_state() -> Result<String, String> { todo!() }
+    };
+    let typed: ItemFn = syn::parse_quote! {
+        #[tauri::command]
+        pub async fn set_profile_glossary(profile_id: String) -> Result<(), CommandError> { todo!() }
+    };
+    let commands = vec![
+        generation.command("commands", &text).expect("maps"),
+        generation.command("commands", &typed).expect("maps"),
+    ];
+    let rendered = render(&commands);
+    assert!(
+        rendered.contains("get_state: { args: NoArgs; result: string; error: string };"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains(
+            "set_profile_glossary: { args: { profileId: string }; result: void; error: BackendError };"
+        ),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("import type { BackendError } from \"./errors\";"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains(
+            "export const BACKEND_ERROR_COMMANDS = [\n  \"set_profile_glossary\",\n] as const"
+        ),
+        "{rendered}"
+    );
+
+    // Without a typed command the module does not import the error type.
+    let only_text = render(&commands[..1]);
+    assert!(
+        !only_text.contains("import type { BackendError }"),
+        "{only_text}"
+    );
 }

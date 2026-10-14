@@ -4375,6 +4375,7 @@ dependencies = [
  "tauri-plugin-global-shortcut",
  "tauri-plugin-single-instance",
  "tauri-plugin-updater",
+ "thiserror 2.0.18",
  "tokio",
  "tracing",
  "tracing-subscriber",

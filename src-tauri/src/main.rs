@@ -15,6 +15,7 @@ extern crate objc;
 mod logging;
 
 mod app_controller;
+mod command_error;
 mod commands;
 #[cfg(test)]
 mod contract;
@@ -2230,7 +2231,8 @@ fn stop_recording_and_transcribe(
         };
         let audio = match outcome {
             StopRecordingOutcome::NotRecording => return,
-            StopRecordingOutcome::Failed(msg) => {
+            StopRecordingOutcome::Failed(failure) => {
+                let msg = failure.to_string();
                 error!("Recording stop failed: {msg}");
                 dispatch_to_main(&app_handle, |app| {
                     overlay::hide(app);
@@ -2409,9 +2411,9 @@ fn stop_recording_and_transcribe(
                     }
                     r
                 }
-                Ok(Err(e)) => Err(sagascript_core::error::DictationError::TranscriptionFailed(
-                    format!("Task join error: {e}"),
-                )),
+                Ok(Err(e)) => Err(sagascript_core::error::DictationError::TaskFailed(format!(
+                    "Task join error: {e}"
+                ))),
                 Err(_) => {
                     warn!("Transcription timed out after {TRANSCRIPTION_TIMEOUT_SECS}s — requesting abort");
                     live_backend.request_abort();
@@ -2429,9 +2431,11 @@ fn stop_recording_and_transcribe(
                              will report ModelBusy rather than block forever"
                         ),
                     }
-                    Err(sagascript_core::error::DictationError::TranscriptionFailed(
-                        format!("Transcription timed out after {TRANSCRIPTION_TIMEOUT_SECS}s (inference aborted)"),
-                    ))
+                    Err(
+                        sagascript_core::error::DictationError::TranscriptionTimedOut(format!(
+                            "Transcription timed out after {TRANSCRIPTION_TIMEOUT_SECS}s (inference aborted)"
+                        )),
+                    )
                 }
             }
         };

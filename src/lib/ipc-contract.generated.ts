@@ -6,6 +6,7 @@ import type { AppState, BuildInfo, EngineLoadState, EngineStatus, GlossarySugges
 import type { MeetingReprocessingProposal, ProposalState, ReprocessingMode, ReprocessingRequest, SelectedReprocessingPlan } from "./meeting-reprocessing-types";
 import type { CorrectionFile, CorrectionOperation, MeetingAudioAttachment, MeetingExportFormat, MeetingReview, MeetingReviewState, MeetingTranscript } from "./meeting-types";
 import type { UpdateRecoveryPayload } from "./update-recovery";
+import type { BackendError } from "./errors";
 
 /** No arguments. */
 type NoArgs = Record<string, never>;
@@ -14,186 +15,188 @@ type NoArgs = Record<string, never>;
  * Every command the backend registers (`tauri::generate_handler!` in
  * src-tauri/src/main.rs): the argument object the frontend sends, keyed by
  * the Rust parameter names in camelCase (an `Option` parameter may be
- * omitted or null), and the value the command resolves with. A command
- * that fails rejects with its error string.
+ * omitted or null), the value the command resolves with, and what it rejects
+ * with: its error string, or a `BackendError` for a command that returns
+ * `Result<T, CommandError>` (ADR 0006). Match a `BackendError` by `code`
+ * only (`isBackendError`, src/lib/errors.ts), never by its message.
  */
 export interface CommandMap {
   /** `meeting_reprocessing_commands::accept_meeting_proposal(proposal: MeetingReprocessingProposal, current_review: MeetingReview) -> Result<ReviewState, String>` */
-  accept_meeting_proposal: { args: { proposal: MeetingReprocessingProposal; currentReview: MeetingReview }; result: MeetingReviewState };
+  accept_meeting_proposal: { args: { proposal: MeetingReprocessingProposal; currentReview: MeetingReview }; result: MeetingReviewState; error: string };
   /** `commands::acknowledge_update_result(expected_text: String) -> Result<bool, String>` */
-  acknowledge_update_result: { args: { expectedText: string }; result: boolean };
+  acknowledge_update_result: { args: { expectedText: string }; result: boolean; error: string };
   /** `meeting_review_commands::apply_meeting_corrections(review: MeetingReview, corrections: CorrectionFile) -> Result<ReviewState, String>` */
-  apply_meeting_corrections: { args: { review: MeetingReview; corrections: CorrectionFile }; result: MeetingReviewState };
-  /** `commands::apply_training_glossary(heard: String, corrected: String, profile_id: String, accepted: Vec<GlossarySuggestion>) -> Result<(), String>` */
-  apply_training_glossary: { args: { heard: string; corrected: string; profileId: string; accepted: GlossarySuggestion[] }; result: void };
+  apply_meeting_corrections: { args: { review: MeetingReview; corrections: CorrectionFile }; result: MeetingReviewState; error: string };
+  /** `commands::apply_training_glossary(heard: String, corrected: String, profile_id: String, accepted: Vec<GlossarySuggestion>) -> Result<(), CommandError>` */
+  apply_training_glossary: { args: { heard: string; corrected: string; profileId: string; accepted: GlossarySuggestion[] }; result: void; error: BackendError };
   /** `meeting_media::attach_meeting_audio(source_sha256: String) -> Result<Option<AudioAttachment>, String>` */
-  attach_meeting_audio: { args: { sourceSha256: string }; result: MeetingAudioAttachment | null };
+  attach_meeting_audio: { args: { sourceSha256: string }; result: MeetingAudioAttachment | null; error: string };
   /** `meeting_jobs::begin_meeting_file(file_path: String, prompt: Option<String>, profile_id: Option<String>) -> Result<String, String>` */
-  begin_meeting_file: { args: { filePath: string; prompt?: string | null; profileId?: string | null }; result: string };
+  begin_meeting_file: { args: { filePath: string; prompt?: string | null; profileId?: string | null }; result: string; error: string };
   /** `meeting_jobs::begin_meeting_reprocessing(file_path: String, prompt: Option<String>, profile_id: Option<String>, request: ReprocessingRequest) -> Result<String, String>` */
-  begin_meeting_reprocessing: { args: { filePath: string; prompt?: string | null; profileId?: string | null; request: ReprocessingRequest }; result: string };
+  begin_meeting_reprocessing: { args: { filePath: string; prompt?: string | null; profileId?: string | null; request: ReprocessingRequest }; result: string; error: string };
   /** `commands::cancel_file_transcription(run_id: String) -> Result<bool, String>` */
-  cancel_file_transcription: { args: { runId: string }; result: boolean };
+  cancel_file_transcription: { args: { runId: string }; result: boolean; error: string };
   /** `meeting_jobs::cancel_meeting_job(job_id: String) -> Result<bool, String>` */
-  cancel_meeting_job: { args: { jobId: string }; result: boolean };
+  cancel_meeting_job: { args: { jobId: string }; result: boolean; error: string };
   /** `commands::cancel_recording() -> Result<(), String>` */
-  cancel_recording: { args: NoArgs; result: void };
+  cancel_recording: { args: NoArgs; result: void; error: string };
   /** `commands::check_accessibility_permission() -> Result<bool, String>` */
-  check_accessibility_permission: { args: NoArgs; result: boolean };
+  check_accessibility_permission: { args: NoArgs; result: boolean; error: string };
   /** `commands::clear_update_recovery() -> Result<(), String>` */
-  clear_update_recovery: { args: NoArgs; result: void };
+  clear_update_recovery: { args: NoArgs; result: void; error: string };
   /** `commands::complete_update_preparation(nonce: String, error: Option<String>) -> Result<(), String>` */
-  complete_update_preparation: { args: { nonce: string; error?: string | null }; result: void };
+  complete_update_preparation: { args: { nonce: string; error?: string | null }; result: void; error: string };
   /** `commands::copy_transcription_text(text: String) -> Result<(), String>` */
-  copy_transcription_text: { args: { text: string }; result: void };
+  copy_transcription_text: { args: { text: string }; result: void; error: string };
   /** `meeting_review_commands::create_meeting_review(transcript: MeetingTranscript) -> Result<ReviewState, String>` */
-  create_meeting_review: { args: { transcript: MeetingTranscript }; result: MeetingReviewState };
+  create_meeting_review: { args: { transcript: MeetingTranscript }; result: MeetingReviewState; error: string };
   /** `meeting_media::detach_meeting_audio(token: String) -> Result<(), String>` */
-  detach_meeting_audio: { args: { token: string }; result: void };
+  detach_meeting_audio: { args: { token: string }; result: void; error: string };
   /** `commands::download_model(whisper_model: WhisperModel) -> Result<(), String>` */
-  download_model: { args: { whisperModel: string }; result: void };
+  download_model: { args: { whisperModel: string }; result: void; error: string };
   /** `commands::download_pianissimo_model() -> Result<(), String>` */
-  download_pianissimo_model: { args: NoArgs; result: void };
+  download_pianissimo_model: { args: NoArgs; result: void; error: string };
   /** `commands::engine_status() -> Result<EngineStatus, String>` */
-  engine_status: { args: NoArgs; result: EngineStatus };
+  engine_status: { args: NoArgs; result: EngineStatus; error: string };
   /** `commands::get_active_hotkey_profile() -> Result<Option<HotkeyProfile>, String>` */
-  get_active_hotkey_profile: { args: NoArgs; result: HotkeyProfile | null };
+  get_active_hotkey_profile: { args: NoArgs; result: HotkeyProfile | null; error: string };
   /** `commands::get_auto_file_model_info(language: Language) -> Result<ModelInfo, String>` */
-  get_auto_file_model_info: { args: { language: Language }; result: WhisperModel };
+  get_auto_file_model_info: { args: { language: Language }; result: WhisperModel; error: string };
   /** `commands::get_build_info() -> Result<BuildInfo, String>` */
-  get_build_info: { args: NoArgs; result: BuildInfo };
+  get_build_info: { args: NoArgs; result: BuildInfo; error: string };
   /** `commands::get_dictation_model_info(language: Language) -> Result<ModelInfo, String>` */
-  get_dictation_model_info: { args: { language: Language }; result: WhisperModel };
+  get_dictation_model_info: { args: { language: Language }; result: WhisperModel; error: string };
   /** `commands::get_effective_model_info(language: Language) -> Result<ModelInfo, String>` */
-  get_effective_model_info: { args: { language: Language }; result: WhisperModel };
+  get_effective_model_info: { args: { language: Language }; result: WhisperModel; error: string };
   /** `commands::get_engine_load_state() -> Result<serde_json::Value, String>` */
-  get_engine_load_state: { args: NoArgs; result: EngineLoadState };
+  get_engine_load_state: { args: NoArgs; result: EngineLoadState; error: string };
   /** `commands::get_file_model_options(language: Language, include: Option<String>) -> Result<Vec<ModelInfo>, String>` */
-  get_file_model_options: { args: { language: Language; include?: string | null }; result: WhisperModel[] };
+  get_file_model_options: { args: { language: Language; include?: string | null }; result: WhisperModel[]; error: string };
   /** `commands::get_last_error() -> Result<Option<String>, String>` */
-  get_last_error: { args: NoArgs; result: string | null };
+  get_last_error: { args: NoArgs; result: string | null; error: string };
   /** `commands::get_last_transcription() -> Result<Option<String>, String>` */
-  get_last_transcription: { args: NoArgs; result: string | null };
+  get_last_transcription: { args: NoArgs; result: string | null; error: string };
   /** `commands::get_loaded_model() -> Result<LoadedModelInfo, String>` */
-  get_loaded_model: { args: NoArgs; result: LoadedModelInfo };
+  get_loaded_model: { args: NoArgs; result: LoadedModelInfo; error: string };
   /** `meeting_jobs::get_meeting_job(job_id: String) -> Result<MeetingSnapshot, String>` */
-  get_meeting_job: { args: { jobId: string }; result: MeetingJobSnapshot };
+  get_meeting_job: { args: { jobId: string }; result: MeetingJobSnapshot; error: string };
   /** `commands::get_model_info() -> Result<Vec<ModelInfo>, String>` */
-  get_model_info: { args: NoArgs; result: WhisperModel[] };
+  get_model_info: { args: NoArgs; result: WhisperModel[]; error: string };
   /** `commands::get_platform() -> Result<String, String>` */
-  get_platform: { args: NoArgs; result: string };
+  get_platform: { args: NoArgs; result: string; error: string };
   /** `commands::get_profile_model_info(profile_id: String) -> Result<ModelInfo, String>` */
-  get_profile_model_info: { args: { profileId: string }; result: WhisperModel };
+  get_profile_model_info: { args: { profileId: string }; result: WhisperModel; error: string };
   /** `commands::get_settings() -> Result<Settings, String>` */
-  get_settings: { args: NoArgs; result: Settings };
+  get_settings: { args: NoArgs; result: Settings; error: string };
   /** `commands::get_state() -> Result<AppState, String>` */
-  get_state: { args: NoArgs; result: AppState };
+  get_state: { args: NoArgs; result: AppState; error: string };
   /** `commands::get_supported_formats() -> Result<Vec<String>, String>` */
-  get_supported_formats: { args: NoArgs; result: string[] };
+  get_supported_formats: { args: NoArgs; result: string[]; error: string };
   /** `commands::get_update_result_pending(result_id: String) -> Result<bool, String>` */
-  get_update_result_pending: { args: { resultId: string }; result: boolean };
+  get_update_result_pending: { args: { resultId: string }; result: boolean; error: string };
   /** `commands::hotkey_status() -> Result<HotkeyStatus, String>` */
-  hotkey_status: { args: NoArgs; result: HotkeyStatus };
+  hotkey_status: { args: NoArgs; result: HotkeyStatus; error: string };
   /** `commands::is_model_downloaded(whisper_model: WhisperModel) -> Result<bool, String>` */
-  is_model_downloaded: { args: { whisperModel: string }; result: boolean };
+  is_model_downloaded: { args: { whisperModel: string }; result: boolean; error: string };
   /** `commands::is_model_ready() -> Result<bool, String>` */
-  is_model_ready: { args: NoArgs; result: boolean };
+  is_model_ready: { args: NoArgs; result: boolean; error: string };
   /** `commands::load_update_recovery() -> Result<Option<serde_json::Value>, String>` */
-  load_update_recovery: { args: NoArgs; result: UpdateRecoveryPayload | null };
+  load_update_recovery: { args: NoArgs; result: UpdateRecoveryPayload | null; error: string };
   /** `meeting_jobs::merge_meeting_speakers(transcript: MeetingTranscript, from_id: String, into_id: String) -> Result<MeetingTranscript, String>` */
-  merge_meeting_speakers: { args: { transcript: MeetingTranscript; fromId: string; intoId: string }; result: MeetingTranscript };
+  merge_meeting_speakers: { args: { transcript: MeetingTranscript; fromId: string; intoId: string }; result: MeetingTranscript; error: string };
   /** `commands::microphone_status() -> Result<String, String>` */
-  microphone_status: { args: NoArgs; result: string };
+  microphone_status: { args: NoArgs; result: string; error: string };
   /** `commands::open_accessibility_settings() -> Result<(), String>` */
-  open_accessibility_settings: { args: NoArgs; result: void };
+  open_accessibility_settings: { args: NoArgs; result: void; error: string };
   /** `meeting_reprocessing_commands::open_meeting_proposal() -> Result<Option<ProposalState>, String>` */
-  open_meeting_proposal: { args: NoArgs; result: ProposalState | null };
+  open_meeting_proposal: { args: NoArgs; result: ProposalState | null; error: string };
   /** `meeting_review_commands::open_meeting_review() -> Result<Option<ReviewState>, String>` */
-  open_meeting_review: { args: NoArgs; result: MeetingReviewState | null };
+  open_meeting_review: { args: NoArgs; result: MeetingReviewState | null; error: string };
   /** `commands::open_microphone_settings() -> Result<(), String>` */
-  open_microphone_settings: { args: NoArgs; result: void };
+  open_microphone_settings: { args: NoArgs; result: void; error: string };
   /** `meeting_reprocessing_commands::plan_meeting_reprocessing(previous: MeetingReview, mode: ReprocessingMode, threshold: f32, save_cache: bool, prompt: Option<String>, profile_id: Option<String>) -> Result<Option<SelectedReprocessingPlan>, String>` */
-  plan_meeting_reprocessing: { args: { previous: MeetingReview; mode: ReprocessingMode; threshold: number; saveCache: boolean; prompt?: string | null; profileId?: string | null }; result: SelectedReprocessingPlan | null };
+  plan_meeting_reprocessing: { args: { previous: MeetingReview; mode: ReprocessingMode; threshold: number; saveCache: boolean; prompt?: string | null; profileId?: string | null }; result: SelectedReprocessingPlan | null; error: string };
   /** `meeting_reprocessing_commands::preview_meeting_proposal(proposal: MeetingReprocessingProposal) -> Result<ProposalState, String>` */
-  preview_meeting_proposal: { args: { proposal: MeetingReprocessingProposal }; result: ProposalState };
+  preview_meeting_proposal: { args: { proposal: MeetingReprocessingProposal }; result: ProposalState; error: string };
   /** `meeting_jobs::rename_meeting_speaker(transcript: MeetingTranscript, speaker_id: String, label: String) -> Result<MeetingTranscript, String>` */
-  rename_meeting_speaker: { args: { transcript: MeetingTranscript; speakerId: string; label: string }; result: MeetingTranscript };
+  rename_meeting_speaker: { args: { transcript: MeetingTranscript; speakerId: string; label: string }; result: MeetingTranscript; error: string };
   /** `commands::request_accessibility_permission() -> Result<(), String>` */
-  request_accessibility_permission: { args: NoArgs; result: void };
+  request_accessibility_permission: { args: NoArgs; result: void; error: string };
   /** `commands::request_microphone_access() -> Result<String, String>` */
-  request_microphone_access: { args: NoArgs; result: string };
+  request_microphone_access: { args: NoArgs; result: string; error: string };
   /** `meeting_review_commands::reset_meeting_review(review: MeetingReview, expected_revision: String) -> Result<ReviewState, String>` */
-  reset_meeting_review: { args: { review: MeetingReview; expectedRevision: string }; result: MeetingReviewState };
+  reset_meeting_review: { args: { review: MeetingReview; expectedRevision: string }; result: MeetingReviewState; error: string };
   /** `meeting_reprocessing_commands::resolve_meeting_proposal(proposal: MeetingReprocessingProposal, expected_revision: String, index: usize, operations: Vec<CorrectionOperation>) -> Result<ProposalState, String>` */
-  resolve_meeting_proposal: { args: { proposal: MeetingReprocessingProposal; expectedRevision: string; index: number; operations: CorrectionOperation[] }; result: ProposalState };
-  /** `commands::retry_hotkey_registration() -> Result<(), String>` */
-  retry_hotkey_registration: { args: NoArgs; result: void };
+  resolve_meeting_proposal: { args: { proposal: MeetingReprocessingProposal; expectedRevision: string; index: number; operations: CorrectionOperation[] }; result: ProposalState; error: string };
+  /** `commands::retry_hotkey_registration() -> Result<(), CommandError>` */
+  retry_hotkey_registration: { args: NoArgs; result: void; error: BackendError };
   /** `meeting_jobs::save_meeting_export(transcript: MeetingTranscript, format: ExportFormat) -> Result<bool, String>` */
-  save_meeting_export: { args: { transcript: MeetingTranscript; format: MeetingExportFormat }; result: boolean };
+  save_meeting_export: { args: { transcript: MeetingTranscript; format: MeetingExportFormat }; result: boolean; error: string };
   /** `meeting_reprocessing_commands::save_meeting_proposal(proposal: MeetingReprocessingProposal) -> Result<bool, String>` */
-  save_meeting_proposal: { args: { proposal: MeetingReprocessingProposal }; result: boolean };
+  save_meeting_proposal: { args: { proposal: MeetingReprocessingProposal }; result: boolean; error: string };
   /** `meeting_review_commands::save_meeting_review(review: MeetingReview, format: ExportFormat) -> Result<bool, String>` */
-  save_meeting_review: { args: { review: MeetingReview; format: MeetingExportFormat }; result: boolean };
+  save_meeting_review: { args: { review: MeetingReview; format: MeetingExportFormat }; result: boolean; error: string };
   /** `commands::save_transcription_text(text: String, file_name: String, directory: Option<String>) -> Result<bool, String>` */
-  save_transcription_text: { args: { text: string; fileName: string; directory?: string | null }; result: boolean };
+  save_transcription_text: { args: { text: string; fileName: string; directory?: string | null }; result: boolean; error: string };
   /** `commands::save_update_recovery(payload: serde_json::Value) -> Result<(), String>` */
-  save_update_recovery: { args: { payload: UpdateRecoveryPayload }; result: void };
+  save_update_recovery: { args: { payload: UpdateRecoveryPayload }; result: void; error: string };
   /** `commands::set_auto_paste(enabled: bool) -> Result<(), String>` */
-  set_auto_paste: { args: { enabled: boolean }; result: void };
+  set_auto_paste: { args: { enabled: boolean }; result: void; error: string };
   /** `commands::set_auto_select_model(enabled: bool) -> Result<(), String>` */
-  set_auto_select_model: { args: { enabled: boolean }; result: void };
+  set_auto_select_model: { args: { enabled: boolean }; result: void; error: string };
   /** `commands::set_beam_size(beam_size: u32) -> Result<(), String>` */
-  set_beam_size: { args: { beamSize: number }; result: void };
+  set_beam_size: { args: { beamSize: number }; result: void; error: string };
   /** `commands::set_engine_idle_unload_minutes(minutes: u32) -> Result<(), String>` */
-  set_engine_idle_unload_minutes: { args: { minutes: number }; result: void };
+  set_engine_idle_unload_minutes: { args: { minutes: number }; result: void; error: string };
   /** `commands::set_engine_prewarm(mode: String) -> Result<(), String>` */
-  set_engine_prewarm: { args: { mode: string }; result: void };
+  set_engine_prewarm: { args: { mode: string }; result: void; error: string };
   /** `commands::set_file_transcription_model(model_id: String) -> Result<(), String>` */
-  set_file_transcription_model: { args: { modelId: string }; result: void };
-  /** `commands::set_hotkey(shortcut: String) -> Result<(), String>` */
-  set_hotkey: { args: { shortcut: string }; result: void };
-  /** `commands::set_hotkey_mode(mode: HotkeyMode) -> Result<(), String>` */
-  set_hotkey_mode: { args: { mode: HotkeyMode }; result: void };
-  /** `commands::set_hotkey_profiles(profiles: Vec<HotkeyProfile>) -> Result<Vec<String>, String>` */
-  set_hotkey_profiles: { args: { profiles: HotkeyProfile[] }; result: string[] };
-  /** `commands::set_initial_prompt(prompt: String, expected_source: Option<String>) -> Result<(), String>` */
-  set_initial_prompt: { args: { prompt: string; expectedSource?: string | null }; result: void };
+  set_file_transcription_model: { args: { modelId: string }; result: void; error: string };
+  /** `commands::set_hotkey(shortcut: String) -> Result<(), CommandError>` */
+  set_hotkey: { args: { shortcut: string }; result: void; error: BackendError };
+  /** `commands::set_hotkey_mode(mode: HotkeyMode) -> Result<(), CommandError>` */
+  set_hotkey_mode: { args: { mode: HotkeyMode }; result: void; error: BackendError };
+  /** `commands::set_hotkey_profiles(profiles: Vec<HotkeyProfile>) -> Result<Vec<String>, CommandError>` */
+  set_hotkey_profiles: { args: { profiles: HotkeyProfile[] }; result: string[]; error: BackendError };
+  /** `commands::set_initial_prompt(prompt: String, expected_source: Option<String>) -> Result<(), CommandError>` */
+  set_initial_prompt: { args: { prompt: string; expectedSource?: string | null }; result: void; error: BackendError };
   /** `commands::set_language(language: Language) -> Result<Vec<String>, String>` */
-  set_language: { args: { language: Language }; result: string[] };
+  set_language: { args: { language: Language }; result: string[]; error: string };
   /** `commands::set_onboarding_completed() -> Result<(), String>` */
-  set_onboarding_completed: { args: NoArgs; result: void };
+  set_onboarding_completed: { args: NoArgs; result: void; error: string };
   /** `commands::set_pianissimo_dictation(enabled: bool) -> Result<(), String>` */
-  set_pianissimo_dictation: { args: { enabled: boolean }; result: void };
-  /** `commands::set_profile_glossary(profile_id: String, source: String, expected_source: Option<String>) -> Result<(), String>` */
-  set_profile_glossary: { args: { profileId: string; source: string; expectedSource?: string | null }; result: void };
+  set_pianissimo_dictation: { args: { enabled: boolean }; result: void; error: string };
+  /** `commands::set_profile_glossary(profile_id: String, source: String, expected_source: Option<String>) -> Result<(), CommandError>` */
+  set_profile_glossary: { args: { profileId: string; source: string; expectedSource?: string | null }; result: void; error: BackendError };
   /** `commands::set_profile_model(profile_id: String, model_id: String) -> Result<(), String>` */
-  set_profile_model: { args: { profileId: string; modelId: string }; result: void };
+  set_profile_model: { args: { profileId: string; modelId: string }; result: void; error: string };
   /** `commands::set_show_overlay(enabled: bool) -> Result<(), String>` */
-  set_show_overlay: { args: { enabled: boolean }; result: void };
+  set_show_overlay: { args: { enabled: boolean }; result: void; error: string };
   /** `commands::set_temperature_fallback(enabled: bool) -> Result<(), String>` */
-  set_temperature_fallback: { args: { enabled: boolean }; result: void };
+  set_temperature_fallback: { args: { enabled: boolean }; result: void; error: string };
   /** `commands::set_update_result_pending(result_id: String, pending: bool) -> Result<(), String>` */
-  set_update_result_pending: { args: { resultId: string; pending: boolean }; result: void };
+  set_update_result_pending: { args: { resultId: string; pending: boolean }; result: void; error: string };
   /** `commands::set_vad_enabled(enabled: bool) -> Result<(), String>` */
-  set_vad_enabled: { args: { enabled: boolean }; result: void };
+  set_vad_enabled: { args: { enabled: boolean }; result: void; error: string };
   /** `commands::set_whisper_model(model: WhisperModel) -> Result<(), String>` */
-  set_whisper_model: { args: { model: string }; result: void };
-  /** `commands::start_recording() -> Result<(), String>` */
-  start_recording: { args: NoArgs; result: void };
-  /** `commands::start_training_recording(profile_id: String) -> Result<(), String>` */
-  start_training_recording: { args: { profileId: string }; result: void };
-  /** `commands::stop_and_transcribe() -> Result<String, String>` */
-  stop_and_transcribe: { args: NoArgs; result: string };
-  /** `commands::stop_and_transcribe_training() -> Result<TrainingTranscript, String>` */
-  stop_and_transcribe_training: { args: NoArgs; result: TrainingTranscript };
-  /** `commands::suggest_training_glossary(heard: String, corrected: String, profile_id: String) -> Result<Vec<GlossarySuggestion>, String>` */
-  suggest_training_glossary: { args: { heard: string; corrected: string; profileId: string }; result: GlossarySuggestion[] };
-  /** `commands::transcribe_file(file_path: String, prompt: Option<String>, diarize: Option<bool>, profile_id: Option<String>, run_id: Option<String>, auto_paste: Option<bool>) -> Result<String, String>` */
-  transcribe_file: { args: { filePath: string; prompt?: string | null; diarize?: boolean | null; profileId?: string | null; runId?: string | null; autoPaste?: boolean | null }; result: string };
-  /** `commands::transcribe_training_file(file_path: String, profile_id: String) -> Result<TrainingTranscript, String>` */
-  transcribe_training_file: { args: { filePath: string; profileId: string }; result: TrainingTranscript };
+  set_whisper_model: { args: { model: string }; result: void; error: string };
+  /** `commands::start_recording() -> Result<(), CommandError>` */
+  start_recording: { args: NoArgs; result: void; error: BackendError };
+  /** `commands::start_training_recording(profile_id: String) -> Result<(), CommandError>` */
+  start_training_recording: { args: { profileId: string }; result: void; error: BackendError };
+  /** `commands::stop_and_transcribe() -> Result<String, CommandError>` */
+  stop_and_transcribe: { args: NoArgs; result: string; error: BackendError };
+  /** `commands::stop_and_transcribe_training() -> Result<TrainingTranscript, CommandError>` */
+  stop_and_transcribe_training: { args: NoArgs; result: TrainingTranscript; error: BackendError };
+  /** `commands::suggest_training_glossary(heard: String, corrected: String, profile_id: String) -> Result<Vec<GlossarySuggestion>, CommandError>` */
+  suggest_training_glossary: { args: { heard: string; corrected: string; profileId: string }; result: GlossarySuggestion[]; error: BackendError };
+  /** `commands::transcribe_file(file_path: String, prompt: Option<String>, diarize: Option<bool>, profile_id: Option<String>, run_id: Option<String>, auto_paste: Option<bool>) -> Result<String, CommandError>` */
+  transcribe_file: { args: { filePath: string; prompt?: string | null; diarize?: boolean | null; profileId?: string | null; runId?: string | null; autoPaste?: boolean | null }; result: string; error: BackendError };
+  /** `commands::transcribe_training_file(file_path: String, profile_id: String) -> Result<TrainingTranscript, CommandError>` */
+  transcribe_training_file: { args: { filePath: string; profileId: string }; result: TrainingTranscript; error: BackendError };
   /** `meeting_review_commands::undo_meeting_review(review: MeetingReview, expected_revision: String) -> Result<ReviewState, String>` */
-  undo_meeting_review: { args: { review: MeetingReview; expectedRevision: string }; result: MeetingReviewState };
+  undo_meeting_review: { args: { review: MeetingReview; expectedRevision: string }; result: MeetingReviewState; error: string };
 }
 
 /** The registered command names, sorted. */
@@ -286,6 +289,27 @@ export const COMMAND_NAMES = [
   "transcribe_file",
   "transcribe_training_file",
   "undo_meeting_review",
+] as const satisfies readonly (keyof CommandMap)[];
+
+/**
+ * The commands that reject with a `BackendError` (`Result<T, CommandError>`);
+ * every other command rejects with a string.
+ */
+export const BACKEND_ERROR_COMMANDS = [
+  "apply_training_glossary",
+  "retry_hotkey_registration",
+  "set_hotkey",
+  "set_hotkey_mode",
+  "set_hotkey_profiles",
+  "set_initial_prompt",
+  "set_profile_glossary",
+  "start_recording",
+  "start_training_recording",
+  "stop_and_transcribe",
+  "stop_and_transcribe_training",
+  "suggest_training_glossary",
+  "transcribe_file",
+  "transcribe_training_file",
 ] as const satisfies readonly (keyof CommandMap)[];
 
 /**

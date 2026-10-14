@@ -1,0 +1,52 @@
+{
+  "busy": {
+    "code": "busy",
+    "message": "Cannot start recording while Sagascript is busy. Stop the current recording or wait for transcription to finish.",
+    "retryable": true
+  },
+  "cancelled": {
+    "code": "cancelled",
+    "message": "Transcription cancelled.",
+    "retryable": false
+  },
+  "dictionary_changed_elsewhere": {
+    "code": "dictionary_changed_elsewhere",
+    "message": "Dictionary changed elsewhere: the persisted source no longer matches the editor baseline",
+    "retryable": false
+  },
+  "engine_busy": {
+    "code": "engine_busy",
+    "message": "Pianissimo engine: queue full",
+    "retryable": true
+  },
+  "engine_model_load_failed": {
+    "code": "engine_model_load_failed",
+    "message": "Pianissimo engine: Failed to load model at <path>/foo.mlmodelc: The file couldn't be opened.",
+    "retryable": false
+  },
+  "file_not_found": {
+    "code": "file_not_found",
+    "message": "File decode error: Failed to open file: No such file or directory (os error 2)",
+    "retryable": false
+  },
+  "model_busy": {
+    "code": "model_busy",
+    "message": "Transcription engine is busy — a previous transcription may still be running. Please try again in a moment.",
+    "retryable": true
+  },
+  "not_recording": {
+    "code": "not_recording",
+    "message": "No training recording is active",
+    "retryable": false
+  },
+  "transcription_timed_out": {
+    "code": "transcription_timed_out",
+    "message": "Transcription timed out after 60s (inference aborted)",
+    "retryable": true
+  },
+  "unclassified": {
+    "code": "unclassified",
+    "message": "Unknown dictation profile 'x'",
+    "retryable": false
+  }
+}

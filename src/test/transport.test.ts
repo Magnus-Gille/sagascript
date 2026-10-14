@@ -8,12 +8,14 @@
 // svelte-check.
 import { describe, expect, expectTypeOf, test } from "vitest";
 import type { MeetingJobSnapshot, Settings } from "../lib/api";
+import { backendErrorRecovery, isBackendError, toErrorMessage, type BackendError } from "../lib/errors";
 import type { EventMap, EventName } from "../lib/events";
 import { pollMeetingJob } from "../lib/meeting-job-client";
 import { meetingPhases } from "../lib/meeting-progress";
 import { initialMeetingDrafts, reconcileMeetingDrafts, type CorrectionOperation } from "../lib/meeting-types";
 import { initialOverlayState, reduceOverlay, type OverlayState } from "../lib/overlay-state";
 import { acceptRunProgress, startStages, type StageState } from "../lib/transcribe-stages";
+import commandErrorsFixture from "../../contracts/transport/command_errors.json";
 import eventsFixture from "../../contracts/transport/events.json";
 import meetingJobFixture from "../../contracts/transport/get_meeting_job.json";
 import settingsFixture from "../../contracts/transport/get_settings.json";
@@ -38,12 +40,52 @@ test("each schema is exactly the frontend type it mirrors", () => {
   // TypeScript type without the schema, or the reverse, is an error here.
   expectTypeOf<Infer<typeof schemas.settings>>().toEqualTypeOf<Settings>();
   expectTypeOf<Infer<typeof schemas.meetingJobSnapshot>>().toEqualTypeOf<MeetingJobSnapshot>();
+  expectTypeOf<Infer<typeof schemas.backendError>>().toEqualTypeOf<BackendError>();
   expectTypeOf<{ [E in keyof EventPayloadSchemas]: Infer<EventPayloadSchemas[E]> }>().toEqualTypeOf<EventMap>();
 });
 
 test("the suite reads every shared fixture", () => {
   const onDisk = Object.keys(import.meta.glob("../../contracts/transport/*.json")).map((path) => path.split("/").at(-1));
-  expect(onDisk.sort()).toEqual(["events.json", "get_meeting_job.json", "get_settings.json"]);
+  expect(onDisk.sort()).toEqual(["command_errors.json", "events.json", "get_meeting_job.json", "get_settings.json"]);
+});
+
+describe("command_errors", () => {
+  const fixture: Record<string, unknown> = commandErrorsFixture;
+  const variants = variantsOf(fixture, schemas.backendError, "command_errors.json");
+
+  test.each(Object.keys(fixture))("%s parses as BackendError", (variant) => {
+    const error = schemas.backendError.parse(fixture[variant], `command_errors.json:${variant}`);
+    expect(isBackendError(error, variant)).toBe(true);
+  });
+
+  test("a code is stable snake_case and each fixture is named after its own", () => {
+    for (const [variant, error] of variants()) {
+      expect(error.code, variant).toBe(variant);
+      expect(error.code, variant).toMatch(/^[a-z][a-z0-9]*(_[a-z0-9]+)*$/);
+    }
+  });
+
+  test("no message that reaches the window carries an absolute path", () => {
+    for (const [variant, error] of variants()) {
+      expect(toErrorMessage(error), variant).not.toMatch(/\/Users\/|\/home\/|\/private\/var\/|\/var\/folders\/|[A-Za-z]:\\/);
+    }
+    // The Swift host's `Failed to load model at /Users/x/…/foo.mlmodelc`, as Rust sent it.
+    const swift = variants().get("engine_model_load_failed")!;
+    expect(toErrorMessage(swift)).toBe("Pianissimo engine: Failed to load model at <path>/foo.mlmodelc: The file couldn't be opened.");
+    expect(swift.retryable).toBe(false);
+  });
+
+  test("the retry and download choices follow the code and the retry hint", () => {
+    const recovery = (variant: string) => backendErrorRecovery(variants().get(variant));
+    expect(recovery("engine_model_load_failed")).toBe("download_model");
+    for (const retryable of ["busy", "model_busy", "engine_busy", "transcription_timed_out"]) {
+      expect(variants().get(retryable)!.retryable, retryable).toBe(true);
+      expect(recovery(retryable), retryable).toBe("retry");
+    }
+    for (const final of ["not_recording", "cancelled", "dictionary_changed_elsewhere", "file_not_found", "unclassified"]) {
+      expect(recovery(final), final).toBeNull();
+    }
+  });
 });
 
 describe("get_settings", () => {

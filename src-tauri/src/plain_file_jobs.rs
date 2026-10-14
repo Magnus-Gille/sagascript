@@ -1,6 +1,7 @@
 //! Plain imports own one warm backend, separate from live dictation/training.
 //! A lease stays alive until the actual worker exits; Stop never targets an
 //! unrelated inference or a later import.
+use crate::command_error::CommandError;
 use crate::commands::FileTranscriptionContext;
 use crate::events::{EmitEvent, PlainPhase, PlainTranscriptionProgress};
 use sagascript_core::sync::lock_or_recover;
@@ -64,13 +65,15 @@ impl Drop for Lease {
     }
 }
 impl PlainFileJobs {
-    fn begin(self: &Arc<Self>, id: String) -> Result<Arc<Lease>, String> {
+    fn begin(self: &Arc<Self>, id: String) -> Result<Arc<Lease>, CommandError> {
         if id.is_empty() || id.len() > 128 {
             return Err("Invalid transcription run ID.".into());
         }
         let mut active = lock_or_recover(&self.active, ACTIVE_LOCK);
         if active.is_some() {
-            return Err("A file transcription is still running or stopping.".into());
+            return Err(CommandError::Busy(
+                "A file transcription is still running or stopping.".into(),
+            ));
         }
         let mut pending = lock_or_recover(&self.pending_cancels, PENDING_CANCELS_LOCK);
         pending.retain(|(_, time)| time.elapsed() < Duration::from_secs(30));
@@ -114,10 +117,14 @@ impl PlainFileJobs {
         }
         true
     }
-    fn finish(&self, lease: &Lease, result: Result<String, String>) -> Result<String, String> {
+    fn finish(
+        &self,
+        lease: &Lease,
+        result: Result<String, CommandError>,
+    ) -> Result<String, CommandError> {
         let mut active = lock_or_recover(&self.active, ACTIVE_LOCK);
         let result = if lease.control.cancelled.load(Ordering::SeqCst) {
-            Err("Transcription cancelled.".into())
+            Err(CommandError::Cancelled)
         } else {
             result
         };
@@ -137,10 +144,10 @@ pub async fn transcribe_pianissimo(
     run_id: String,
     file_path: String,
     glossary: Glossary,
-) -> Result<String, String> {
+) -> Result<String, CommandError> {
     let lease = jobs.begin(run_id)?;
     let worker_lease = lease.clone();
-    let mut worker = tokio::task::spawn_blocking(move || -> Result<String, String> {
+    let mut worker = tokio::task::spawn_blocking(move || -> Result<String, CommandError> {
         let run = &worker_lease.control;
         let progress = |phase: PlainPhase, percent| {
             let _ = app.emit_event(
@@ -185,7 +192,7 @@ pub async fn transcribe_pianissimo(
             progress(PlainPhase::Finalizing, None);
             Ok(crate::commands::apply_glossary(result.text, &glossary))
         };
-        let result = work().map_err(|error| error.to_string());
+        let result = work().map_err(CommandError::from);
         *lock_or_recover(
             &worker_lease.jobs.pianissimo_backend,
             PIANISSIMO_BACKEND_LOCK,
@@ -196,7 +203,9 @@ pub async fn transcribe_pianissimo(
     let mut timed_out = false;
     let result = loop {
         tokio::select! {
-            result = &mut worker => break result.unwrap_or_else(|error| Err(format!("Transcription worker failed: {error}"))),
+            result = &mut worker => break result.unwrap_or_else(|error| {
+                Err(DictationError::TaskFailed(format!("Transcription worker failed: {error}")).into())
+            }),
             _ = tick.tick() => {
                 if lock_or_recover(&lease.control.deadline, DEADLINE_LOCK).is_some_and(|end| Instant::now() >= end) {
                     timed_out = true;
@@ -212,7 +221,10 @@ pub async fn transcribe_pianissimo(
     };
     let result = jobs.finish(&lease, result);
     if timed_out {
-        Err("Transcription timed out and has stopped.".into())
+        Err(DictationError::TranscriptionTimedOut(
+            "Transcription timed out and has stopped.".into(),
+        )
+        .into())
     } else {
         result
     }
@@ -220,9 +232,7 @@ pub async fn transcribe_pianissimo(
 impl RunControl {
     fn check(&self) -> Result<(), DictationError> {
         if self.cancelled.load(Ordering::SeqCst) {
-            return Err(DictationError::TranscriptionFailed(
-                "Transcription cancelled.".into(),
-            ));
+            return Err(DictationError::Cancelled);
         }
         Ok(())
     }
@@ -234,10 +244,10 @@ pub async fn transcribe(
     run_id: String,
     file_path: String,
     context: FileTranscriptionContext,
-) -> Result<String, String> {
+) -> Result<String, CommandError> {
     let lease = jobs.begin(run_id)?;
     let worker_lease = lease.clone();
-    let mut worker = tokio::task::spawn_blocking(move || -> Result<String, String> {
+    let mut worker = tokio::task::spawn_blocking(move || -> Result<String, CommandError> {
         let run = &worker_lease.control;
         let backend = &worker_lease.jobs.backend;
         let progress = |phase: PlainPhase, percent| {
@@ -308,13 +318,15 @@ pub async fn transcribe(
             progress(PlainPhase::Finalizing, None);
             Ok(crate::commands::apply_glossary(text, &context.glossary))
         };
-        work().map_err(|error| error.to_string())
+        work().map_err(CommandError::from)
     });
     let mut tick = tokio::time::interval(Duration::from_millis(100));
     let mut timed_out = false;
     let result = loop {
         tokio::select! {
-            result = &mut worker => break result.unwrap_or_else(|error| Err(format!("Transcription worker failed: {error}"))),
+            result = &mut worker => break result.unwrap_or_else(|error| {
+                Err(DictationError::TaskFailed(format!("Transcription worker failed: {error}")).into())
+            }),
             _ = tick.tick() => {
                 if lock_or_recover(&lease.control.deadline, DEADLINE_LOCK).is_some_and(|end| Instant::now() >= end) {
                     timed_out = true;
@@ -327,7 +339,10 @@ pub async fn transcribe(
     // Never detach native work and claim idle. Finish only after actual join.
     let result = jobs.finish(&lease, result);
     if timed_out {
-        Err("Transcription timed out and has stopped.".into())
+        Err(DictationError::TranscriptionTimedOut(
+            "Transcription timed out and has stopped.".into(),
+        )
+        .into())
     } else {
         result
     }
@@ -341,7 +356,10 @@ mod tests {
         let jobs = Arc::new(PlainFileJobs::default());
         assert!(!jobs.cancel("early"));
         let run = jobs.begin("early".into()).unwrap();
-        assert!(run.control.check().is_err());
+        assert!(matches!(
+            run.control.check(),
+            Err(DictationError::Cancelled)
+        ));
         drop(run);
         for i in 0..100 {
             jobs.cancel(&format!("pending-{i}"));
@@ -353,12 +371,20 @@ mod tests {
         let jobs = Arc::new(PlainFileJobs::default());
         assert!(!jobs.cancel("missing"));
         let first = jobs.begin("first".into()).unwrap();
-        assert!(jobs.begin("second".into()).is_err());
+        let refused = jobs
+            .begin("second".into())
+            .err()
+            .expect("one run at a time");
+        assert_eq!(refused.code(), "busy");
         assert!(!jobs.cancel("wrong"));
         assert!(first.control.check().is_ok());
         assert!(jobs.cancel("first"));
         assert!(first.control.check().is_err());
-        assert!(jobs.finish(&first, Ok("partial".into())).is_err());
+        let finished = jobs.finish(&first, Ok("partial".into()));
+        assert!(
+            matches!(finished, Err(CommandError::Cancelled)),
+            "a cancelled run never returns its partial text: {finished:?}"
+        );
         let second = jobs.begin("second".into()).unwrap();
         drop(first);
         assert!(!jobs.cancel("first"));

@@ -70,6 +70,9 @@ notify = { version = "7", default-features = false }
 # unification. Each client names its backend; see src/updates.rs.
 reqwest = { version = "0.13", default-features = false, features = ["native-tls-no-alpn", "system-proxy", "json"] }
 semver = "1"
+# `CommandError` derives Error like core's DictationError (same major; already
+# in the tree through sagascript-core).
+thiserror = "2"
 
 # Test-only helpers (#363): shared fixtures and core's `test-support` module.
 [dev-dependencies]
