@@ -38,6 +38,8 @@
 //!                                                       an error object without `message`/`retryable`,
 //!                                                       a line with neither `ok` nor `event`, or a
 //!                                                       success whose result lacks `blank_id`
+//!   FAKE_MALFORMED_FIRST_WINDOW=1                       the first window received answers (result or cancelled)
+//!                                                       with an error object without `message`/`retryable`
 //!   FAKE_LOG=<path>                                     append "<op> <id>" lines
 
 use sagascript_engine_protocol::{
@@ -487,6 +489,18 @@ fn run_window(
     }
     host.cv.notify_all();
     host.cancels.lock().unwrap().remove(&id);
+    if nth == 0 && env_flag("FAKE_MALFORMED_FIRST_WINDOW") {
+        let code = if result.is_err() {
+            "cancelled"
+        } else {
+            "engine"
+        };
+        host.write(&format!(
+            "{}\n",
+            json!({"id": id, "ok": false, "error": {"code": code}})
+        ));
+        return;
+    }
     match result {
         Err(()) => host.write(&encode_err(id, ErrorCode::Cancelled, "cancelled", false)),
         Ok(Err(msg)) => host.write(&encode_err(id, ErrorCode::Engine, &msg, false)),

@@ -389,6 +389,48 @@ fn window_timeout_is_reported_and_host_stays_usable() {
     assert_eq!(f.client.snapshot().pid, pid);
 }
 
+/// A timed-out window the host answers after `cancel` with a malformed line
+/// (here an error object without `message`/`retryable`) has been answered: the
+/// wedge watcher frees its slot and keeps the host, as for a well-formed answer,
+/// instead of killing it after the grace as a wedged host (#367 with #366).
+#[test]
+fn malformed_late_answer_to_a_timed_out_window_is_an_answer_not_a_wedge() {
+    let f = fixture_with(
+        &[
+            ("FAKE_FIRST_SLOW_MS", "5000"),
+            ("FAKE_MALFORMED_FIRST_WINDOW", "1"),
+        ],
+        |c| {
+            c.timeouts.transcribe_min = Duration::from_millis(300);
+            c.timeouts.wedge_grace = Duration::from_millis(500);
+        },
+    );
+    f.client.warm().unwrap();
+    let pid = f.client.snapshot().pid;
+    match f
+        .client
+        .transcribe_dictation(&pcm(1.0), &CancelToken::new())
+    {
+        Err(EngineHostError::Timeout {
+            op: "transcribe_window",
+            ..
+        }) => {}
+        other => panic!("{other:?}"),
+    }
+    // Well past the grace: a watcher that missed the answer would have killed the host.
+    std::thread::sleep(Duration::from_millis(1500));
+    let snap = f.client.snapshot();
+    assert!(snap.running);
+    assert_eq!(snap.pid, pid, "the host was killed as wedged");
+    assert_eq!(snap.crashes_in_window, 0);
+    let out = f
+        .client
+        .transcribe_dictation(&pcm(1.0), &CancelToken::new())
+        .unwrap();
+    assert_eq!(out.tokens.len(), 2);
+    assert_eq!(f.client.snapshot().pid, pid);
+}
+
 /// A host that never answers a timed-out window, even after `cancel`, is
 /// killed after the wedge grace although it still answers `ping`.
 #[test]
