@@ -271,9 +271,12 @@ fn explicit_language_keeps_region_redetection_fast_path_disabled() {
         Language::Finnish,
     ] {
         assert!(language_window_plan(one_hour, language).is_empty());
-        let result = detect_language_regions_with(&vec![0.1; 60 * 16_000], language, |_| {
-            panic!("explicit language must not invoke region detection")
-        })
+        let result = detect_language_regions_with(
+            &Out::capture().0,
+            &vec![0.1; 60 * 16_000],
+            language,
+            |_| panic!("explicit language must not invoke region detection"),
+        )
         .unwrap();
         assert!(result.is_none());
     }
@@ -290,16 +293,17 @@ fn auto_language_region_detection_is_bounded_and_skips_silence() {
     audio[40 * 16_000..60 * 16_000].fill(0.0);
     let detections = ["en", "en", "sv", "sv"];
     let mut call_index = 0usize;
-    let diagnostics = detect_language_regions_with(&audio, Language::Auto, |_| {
-        let language = detections[call_index];
-        call_index += 1;
-        Ok(Some(LanguageDetection {
-            language: language.to_string(),
-            probability: 0.97,
-        }))
-    })
-    .unwrap()
-    .expect("long auto-language audio enables region detection");
+    let diagnostics =
+        detect_language_regions_with(&Out::capture().0, &audio, Language::Auto, |_| {
+            let language = detections[call_index];
+            call_index += 1;
+            Ok(Some(LanguageDetection {
+                language: language.to_string(),
+                probability: 0.97,
+            }))
+        })
+        .unwrap()
+        .expect("long auto-language audio enables region detection");
 
     assert_eq!(call_index, 4, "silent window must not be classified");
     assert_eq!(diagnostics.regions.len(), 2);
@@ -518,6 +522,7 @@ fn cached_transcribe_uses_coarse_coverage_across_threshold_sweep() {
             &[],
             None,
             CachePolicy::Normal,
+            &Out::capture().0,
         )
         .unwrap()
         .json

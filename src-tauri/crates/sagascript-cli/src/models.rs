@@ -7,6 +7,7 @@ use sagascript_core::transcription::model;
 use sagascript_core::transcription::pianissimo_model;
 
 use super::transcribe::{model_id_string, parse_language, parse_model};
+use crate::output::{errln, outln, Out};
 
 #[derive(Args)]
 pub struct ListModelsArgs {
@@ -118,7 +119,7 @@ fn format_table(rows: &[ModelRow]) -> Vec<String> {
     lines
 }
 
-pub fn list(args: ListModelsArgs) -> Result<(), DictationError> {
+pub fn list(args: ListModelsArgs, out: &Out) -> Result<(), DictationError> {
     let languages: Vec<Language> = if let Some(lang_str) = &args.language {
         vec![parse_language(lang_str)?]
     } else {
@@ -173,7 +174,7 @@ pub fn list(args: ListModelsArgs) -> Result<(), DictationError> {
     }
 
     for line in format_table(&rows) {
-        println!("{line}");
+        outln!(out, "{line}")?;
     }
 
     Ok(())
@@ -185,16 +186,20 @@ pub struct DeleteModelArgs {
     pub model: String,
 }
 
-pub fn delete(args: DeleteModelArgs) -> Result<(), DictationError> {
+pub fn delete(args: DeleteModelArgs, out: &Out) -> Result<(), DictationError> {
     if args.model == "pianissimo-sv" {
         pianissimo_model::delete()?;
-        eprintln!("Deleted Pianissimo (model files and any legacy NeMo/GGUF files)");
+        errln!(
+            out,
+            "Deleted Pianissimo (model files and any legacy NeMo/GGUF files)"
+        );
         return Ok(());
     }
     let whisper_model = parse_model(&args.model)?;
 
     if !model::is_model_downloaded(whisper_model) {
-        eprintln!(
+        errln!(
+            out,
             "Model '{}' is not downloaded.",
             whisper_model.display_name()
         );
@@ -211,7 +216,8 @@ pub fn delete(args: DeleteModelArgs) -> Result<(), DictationError> {
 
     sagascript_core::download::remove_verification_stamp(&path);
 
-    eprintln!(
+    errln!(
+        out,
         "Deleted {} ({})",
         whisper_model.display_name(),
         path.display()
@@ -276,15 +282,17 @@ pub(crate) struct DownloadProgress {
     state: std::sync::Mutex<(ProgressThrottle, bool)>, // (throttle, drew in place)
     start: std::time::Instant,
     is_tty: bool,
+    out: Out,
 }
 
 impl DownloadProgress {
-    pub(crate) fn new() -> std::sync::Arc<Self> {
+    pub(crate) fn new(out: &Out) -> std::sync::Arc<Self> {
         use std::io::IsTerminal;
         std::sync::Arc::new(Self {
             state: std::sync::Mutex::new((ProgressThrottle::default(), false)),
             start: std::time::Instant::now(),
             is_tty: std::io::stderr().is_terminal(),
+            out: out.clone(),
         })
     }
 
@@ -309,41 +317,42 @@ impl DownloadProgress {
         };
         match action {
             ProgressAction::Redraw => {
-                eprint!("\r{text}");
+                self.out.err_text(&format!("\r{text}"));
                 state.1 = true;
             }
-            _ => eprintln!("{text}"),
+            _ => errln!(self.out, "{text}"),
         }
     }
 
     /// Terminate an in-place TTY line.
     pub(crate) fn finish(&self) {
         if self.state.lock().unwrap_or_else(|e| e.into_inner()).1 {
-            eprintln!();
+            errln!(self.out);
         }
     }
 }
 
-pub async fn download(args: DownloadModelArgs) -> Result<(), DictationError> {
+pub async fn download(args: DownloadModelArgs, out: &Out) -> Result<(), DictationError> {
     if args.model == "pianissimo-sv" {
         if !sagascript_core::transcription::pianissimo_backend::runtime_supported_on_this_os() {
             return Err(DictationError::TranscriptionFailed(
                 sagascript_core::transcription::pianissimo_backend::UNSUPPORTED_MESSAGE.into(),
             ));
         }
-        eprintln!(
+        errln!(
+            out,
             "Downloading Pianissimo model (~{} MB, CC BY 4.0, Klang AI AB)...",
             pianissimo_model::download_size_bytes() / 1_048_576
         );
-        let progress = DownloadProgress::new();
+        let progress = DownloadProgress::new(out);
         let cb_progress = progress.clone();
         let path = pianissimo_model::download(move |downloaded, total| {
             cb_progress.report(downloaded, total);
         })
         .await?;
         progress.finish();
-        eprintln!("Pianissimo model ready.");
-        println!("{}", path.display());
+        errln!(out, "Pianissimo model ready.");
+        outln!(out, "{}", path.display())?;
         return Ok(());
     }
     // Try diarization model IDs first (when feature is enabled)
@@ -354,29 +363,30 @@ pub async fn download(args: DownloadModelArgs) -> Result<(), DictationError> {
         // "diarization" meta-ID downloads both models
         if DiarizationModel::is_meta_id(&args.model) {
             for &m in DiarizationModel::ALL {
-                download_diarization_model(m).await?;
+                download_diarization_model(m, out).await?;
             }
             return Ok(());
         }
 
         if let Some(diar) = DiarizationModel::from_id(&args.model) {
-            return download_diarization_model(diar).await;
+            return download_diarization_model(diar, out).await;
         }
     }
 
     let whisper_model = parse_model(&args.model)?;
     let was_present = model::is_model_downloaded(whisper_model);
     if was_present {
-        eprintln!("Verifying {}...", whisper_model.display_name());
+        errln!(out, "Verifying {}...", whisper_model.display_name());
     } else {
-        eprintln!(
+        errln!(
+            out,
             "Downloading {} (~{} MB)...",
             whisper_model.display_name(),
             whisper_model.size_mb()
         );
     }
 
-    let progress = DownloadProgress::new();
+    let progress = DownloadProgress::new(out);
     let cb_progress = progress.clone();
     let path = model::download_model(whisper_model, move |downloaded, total| {
         cb_progress.report(downloaded, total);
@@ -384,28 +394,30 @@ pub async fn download(args: DownloadModelArgs) -> Result<(), DictationError> {
     .await?;
 
     progress.finish();
-    eprintln!("Model ready.");
-    println!("{}", path.display());
+    errln!(out, "Model ready.");
+    outln!(out, "{}", path.display())?;
     Ok(())
 }
 
 #[cfg(feature = "diarization")]
 async fn download_diarization_model(
     model: sagascript_core::diarization::model::DiarizationModel,
+    out: &Out,
 ) -> Result<(), DictationError> {
     use sagascript_core::diarization::model as diar_model;
 
     if diar_model::is_model_downloaded(model) {
-        eprintln!("Verifying {}...", model.display_name());
+        errln!(out, "Verifying {}...", model.display_name());
     } else {
-        eprintln!(
+        errln!(
+            out,
             "Downloading {} (~{} MB)...",
             model.display_name(),
             model.size_mb()
         );
     }
 
-    let progress = DownloadProgress::new();
+    let progress = DownloadProgress::new(out);
     let cb_progress = progress.clone();
     let path = diar_model::download_model(model, move |downloaded, total| {
         cb_progress.report(downloaded, total);
@@ -413,8 +425,8 @@ async fn download_diarization_model(
     .await?;
 
     progress.finish();
-    eprintln!("Model ready.");
-    println!("{}", path.display());
+    errln!(out, "Model ready.");
+    outln!(out, "{}", path.display())?;
     Ok(())
 }
 

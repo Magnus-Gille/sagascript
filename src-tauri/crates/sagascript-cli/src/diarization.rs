@@ -6,13 +6,16 @@
 
 use std::collections::BTreeSet;
 use std::fs::File;
-use std::io::{self, Read, Write};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use clap::{Args, Subcommand, ValueEnum};
 use serde::Serialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+
+use crate::exit::CliError;
+use crate::output::{ignore_closed, outln, Out};
 
 use sagascript_core::diarization_evaluation::{
     evaluate, EvaluationOptions, ScoringRegion, SpeakerTurn,
@@ -227,7 +230,10 @@ struct EvaluationReceipt<'a> {
     reasons: Vec<String>,
 }
 
-pub fn run(args: DiarizationArgs) -> Result<(), DictationError> {
+/// Writes the command's report on stdout. `reference-qualify` for a reference
+/// that is not ready is a failed check (exit 3) after its report; every other
+/// failure exits 1 without one.
+pub fn run(args: DiarizationArgs, out: &Out) -> Result<(), CliError> {
     let output = match args.action {
         DiarizationAction::ReferenceValidate { input } => reference_validate(&input)?,
         DiarizationAction::ReferenceExport { input, format } => reference_export(&input, format)?,
@@ -247,9 +253,12 @@ pub fn run(args: DiarizationArgs) -> Result<(), DictationError> {
                 expected_policy_version.as_deref(),
                 expected_split_sha256.as_deref(),
             )?;
-            write_stdout(&output)?;
+            // The verdict does not depend on a reader: a closed stdout keeps exit 3.
+            ignore_closed(outln!(out, "{output}"))?;
             if !ready {
-                return Err(cli_error("reference qualification is not ready"));
+                return Err(CliError::CheckFailed(cli_error(
+                    "reference qualification is not ready",
+                )));
             }
             return Ok(());
         }
@@ -286,7 +295,7 @@ pub fn run(args: DiarizationArgs) -> Result<(), DictationError> {
             expected_split_sha256.as_deref(),
         )?,
     };
-    write_stdout(&output)
+    Ok(write_stdout(&output, out)?)
 }
 
 fn reference_validate(path: &Path) -> Result<String, DictationError> {
@@ -1232,17 +1241,15 @@ fn cli_error(message: impl Into<String>) -> DictationError {
     DictationError::TranscriptionFailed(message.into())
 }
 
-fn write_stdout(output: &str) -> Result<(), DictationError> {
-    let mut stdout = io::BufWriter::new(io::stdout().lock());
-    stdout
-        .write_all(output.as_bytes())
-        .and_then(|_| stdout.write_all(b"\n"))
-        .map_err(|error| cli_error(format!("could not write output: {error}")))
+fn write_stdout(output: &str, out: &Out) -> Result<(), DictationError> {
+    Ok(outln!(out, "{output}")?)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::exit::Exit;
+    use std::io::Write;
     use tempfile::NamedTempFile;
 
     fn write(value: &str) -> NamedTempFile {
@@ -1592,17 +1599,78 @@ mod tests {
             report["manifest_file_sha256"],
             hex_digest(&std::fs::read(manifest_file.path()).unwrap())
         );
-        let result = run(DiarizationArgs {
-            action: DiarizationAction::ReferenceQualify {
-                input: reference_file.path().to_owned(),
-                manifest: manifest_file.path().to_owned(),
-                minimum_coverage: 0.9,
-                expected_policy_id: None,
-                expected_policy_version: None,
-                expected_split_sha256: None,
+        // The command writes the same report, then fails as a check that did
+        // not pass (exit 3), not as a command failure (exit 1).
+        let (out, captured) = Out::capture();
+        let error = run(
+            DiarizationArgs {
+                action: DiarizationAction::ReferenceQualify {
+                    input: reference_file.path().to_owned(),
+                    manifest: manifest_file.path().to_owned(),
+                    minimum_coverage: 0.9,
+                    expected_policy_id: None,
+                    expected_policy_version: None,
+                    expected_split_sha256: None,
+                },
             },
-        });
-        assert!(result.is_err());
+            &out,
+        )
+        .unwrap_err();
+        assert_eq!(error.exit(), Exit::CheckFailed);
+        assert_eq!(
+            error.to_string(),
+            "Transcription failed: reference qualification is not ready"
+        );
+        assert_eq!(captured.stdout(), format!("{output}\n"));
+    }
+
+    #[test]
+    fn a_closed_stdout_does_not_change_the_qualification_verdict() {
+        use crate::output::test_writers::ClosedPipe;
+        let (reference, mut manifest) = qualified_fixture();
+        manifest["windows"] = Value::String("invalid".into());
+        let reference_file = write(&serde_json::to_string(&reference).unwrap());
+        let manifest_file = write(&serde_json::to_string(&manifest).unwrap());
+        let (out, _captured) = Out::capture_stderr(ClosedPipe);
+        let error = run(
+            DiarizationArgs {
+                action: DiarizationAction::ReferenceQualify {
+                    input: reference_file.path().to_owned(),
+                    manifest: manifest_file.path().to_owned(),
+                    minimum_coverage: 0.9,
+                    expected_policy_id: None,
+                    expected_policy_version: None,
+                    expected_split_sha256: None,
+                },
+            },
+            &out,
+        )
+        .unwrap_err();
+        assert_eq!(error.exit(), Exit::CheckFailed);
+    }
+
+    #[test]
+    fn a_ready_qualification_succeeds_with_its_report() {
+        let (reference, manifest) = qualified_fixture();
+        let reference_file = write(&serde_json::to_string(&reference).unwrap());
+        let manifest_file = write(&serde_json::to_string(&manifest).unwrap());
+        let (out, captured) = Out::capture();
+        run(
+            DiarizationArgs {
+                action: DiarizationAction::ReferenceQualify {
+                    input: reference_file.path().to_owned(),
+                    manifest: manifest_file.path().to_owned(),
+                    minimum_coverage: 0.9,
+                    expected_policy_id: None,
+                    expected_policy_version: None,
+                    expected_split_sha256: None,
+                },
+            },
+            &out,
+        )
+        .unwrap();
+        let report: Value = serde_json::from_str(&captured.stdout()).unwrap();
+        assert_eq!(report["ready_for_quality_adoption"], true);
     }
 
     #[test]

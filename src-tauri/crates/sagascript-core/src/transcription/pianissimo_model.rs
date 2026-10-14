@@ -25,8 +25,8 @@ use std::path::{Path, PathBuf};
 use tracing::{info, warn};
 
 use crate::download::{
-    download_to_path, prepare_existing_artifact, verify_file_with_stamp, DownloadIntegrity,
-    ExistingArtifact,
+    download_to_path, prepare_existing_artifact_async, run_blocking, verify_file_with_stamp,
+    DownloadIntegrity, ExistingArtifact,
 };
 use crate::error::DictationError;
 use crate::transcription::model::models_dir;
@@ -729,7 +729,9 @@ pub fn install_staged_files_in(
 
 /// Download every file of a file-list manifest into a fresh staging directory,
 /// then verify and install it. `fetch(url, dest, integrity, progress)` downloads
-/// one file (injectable for tests); progress is aggregated across files.
+/// one file (injectable for tests); progress is aggregated across files. The
+/// directory work and the verification (a full hash of every file) run on the
+/// blocking pool.
 async fn download_files_in<F, Fut>(
     manifest: &ModelManifest,
     models: &Path,
@@ -740,14 +742,28 @@ where
     F: Fn(String, PathBuf, DownloadIntegrity, Box<dyn Fn(u64, u64) + Send>) -> Fut,
     Fut: std::future::Future<Output = Result<(), DictationError>>,
 {
-    std::fs::create_dir_all(models)
-        .map_err(|e| install_err(format!("Failed to create models directory: {e}")))?;
+    let manifest = *manifest;
+    let models = models.to_path_buf();
     let staging = models.join(format!("{STAGING_PREFIX}{}", uuid::Uuid::new_v4()));
+    run_blocking({
+        let models = models.clone();
+        move || {
+            std::fs::create_dir_all(&models)
+                .map_err(|e| install_err(format!("Failed to create models directory: {e}")))
+        }
+    })
+    .await?;
     let total = manifest.download_size();
     let progress = std::sync::Arc::new(std::sync::Mutex::new(progress_callback));
     let result = async {
-        std::fs::create_dir(&staging)
-            .map_err(|e| install_err(format!("Cannot create staging directory: {e}")))?;
+        run_blocking({
+            let staging = staging.clone();
+            move || {
+                std::fs::create_dir(&staging)
+                    .map_err(|e| install_err(format!("Cannot create staging directory: {e}")))
+            }
+        })
+        .await?;
         let mut done: u64 = 0;
         for file in manifest.files {
             let url = manifest
@@ -768,14 +784,24 @@ where
                 }),
             )
             .await?;
-            // The download helper leaves a verification stamp beside the file.
-            crate::download::remove_verification_stamp(&dest);
             done += file.size;
         }
-        install_staged_files_in(manifest, &staging, models)
+        let (staging, models) = (staging.clone(), models.clone());
+        run_blocking(move || {
+            for file in manifest.files {
+                // The download helper leaves a verification stamp beside each file.
+                crate::download::remove_verification_stamp(&staging.join(file.path));
+            }
+            install_staged_files_in(&manifest, &staging, &models)
+        })
+        .await
     }
     .await;
-    let _ = std::fs::remove_dir_all(&staging);
+    let _ = run_blocking(move || {
+        let _ = std::fs::remove_dir_all(&staging);
+        Ok(())
+    })
+    .await;
     result
 }
 
@@ -791,7 +817,12 @@ pub async fn download(
             "Using {MODEL_DIR_ENV}={}; nothing to download",
             dir.display()
         );
-        return if override_is_usable(manifest, &dir) {
+        let usable = run_blocking({
+            let dir = dir.clone();
+            move || Ok(override_is_usable(manifest, &dir))
+        })
+        .await?;
+        return if usable {
             Ok(dir)
         } else {
             Err(install_err(format!(
@@ -801,20 +832,30 @@ pub async fn download(
             )))
         };
     }
-    download_in(manifest, &models_dir(), free_space_bytes, progress_callback).await
+    let models = run_blocking(|| Ok(models_dir())).await?;
+    download_in(manifest, &models, free_space_bytes, progress_callback).await
 }
 
-async fn download_in(
-    manifest: &'static ModelManifest,
+/// What [`prepare_download`] found.
+enum Preparation {
+    /// A verified install is already in place.
+    Installed(PathBuf),
+    /// Nothing usable is installed and there is room for a download.
+    Download,
+}
+
+/// The blocking part of [`download_in`] before any network access: create the
+/// models directory, recover an interrupted promotion, accept a verified
+/// existing install (hashing files that have no stamp), and check free space.
+fn prepare_download(
+    manifest: &ModelManifest,
     models: &Path,
     free_space: impl Fn(&Path) -> Option<u64>,
-    progress_callback: impl Fn(u64, u64) + Send + 'static,
-) -> Result<PathBuf, DictationError> {
-    let models = models.to_path_buf();
-    std::fs::create_dir_all(&models)
+) -> Result<Preparation, DictationError> {
+    std::fs::create_dir_all(models)
         .map_err(|e| install_err(format!("Failed to create models directory: {e}")))?;
-    recover_in(manifest, &models);
-    let destination = installed_dir_in(manifest, &models);
+    recover_in(manifest, models);
+    let destination = installed_dir_in(manifest, models);
 
     if is_downloaded_in(manifest, &destination) && verify_in(manifest, &destination, false).is_ok()
     {
@@ -822,16 +863,34 @@ async fn download_in(
             "Pianissimo model already exists at {}",
             destination.display()
         );
-        cleanup_superseded(manifest, &models);
-        return Ok(destination);
+        cleanup_superseded(manifest, models);
+        return Ok(Preparation::Installed(destination));
     }
     if manifest.is_placeholder() {
         return Err(install_err(
             "The Pianissimo model has not been published yet (manifest placeholder)",
         ));
     }
-    remove_stale_staging(&models, STALE_STAGING_AGE);
-    ensure_free_space(required_space(manifest), free_space(&models))?;
+    remove_stale_staging(models, STALE_STAGING_AGE);
+    ensure_free_space(required_space(manifest), free_space(models))?;
+    Ok(Preparation::Download)
+}
+
+async fn download_in(
+    manifest: &'static ModelManifest,
+    models: &Path,
+    free_space: impl Fn(&Path) -> Option<u64> + Send + 'static,
+    progress_callback: impl Fn(u64, u64) + Send + 'static,
+) -> Result<PathBuf, DictationError> {
+    let models = models.to_path_buf();
+    let preparation = run_blocking({
+        let models = models.clone();
+        move || prepare_download(manifest, &models, free_space)
+    })
+    .await?;
+    if let Preparation::Installed(destination) = preparation {
+        return Ok(destination);
+    }
 
     let installed = match manifest.source {
         ModelSource::Files { .. } => {
@@ -850,7 +909,9 @@ async fn download_in(
             archive: integrity,
         } => {
             let archive = models.join(format!("{}.zip", manifest.versioned_id()));
-            if prepare_existing_artifact(&archive, integrity)? != ExistingArtifact::Verified {
+            if prepare_existing_artifact_async(&archive, integrity).await?
+                != ExistingArtifact::Verified
+            {
                 info!("Downloading Pianissimo model from {url}");
                 download_to_path(
                     url,
@@ -863,19 +924,32 @@ async fn download_in(
                 .await?;
             }
             let installed = tokio::task::spawn_blocking({
-                let archive = archive.clone();
                 let models = models.clone();
-                move || install_archive_in(manifest, &archive, &models)
+                move || {
+                    let installed = install_archive_in(manifest, &archive, &models);
+                    crate::download::remove_verification_stamp(&archive);
+                    let _ = std::fs::remove_file(&archive);
+                    installed
+                }
             })
             .await
             .map_err(|e| install_err(format!("Model install task failed: {e}")))?;
-            crate::download::remove_verification_stamp(&archive);
-            let _ = std::fs::remove_file(&archive);
             installed?
         }
     };
 
-    cleanup_superseded(manifest, &models);
+    // Best effort: the install itself already succeeded.
+    if let Err(error) = run_blocking({
+        let models = models.clone();
+        move || {
+            cleanup_superseded(manifest, &models);
+            Ok(())
+        }
+    })
+    .await
+    {
+        warn!("Could not clean up superseded Pianissimo files: {error}");
+    }
     info!("Pianissimo model installed: {}", installed.display());
     Ok(installed)
 }
@@ -1329,7 +1403,7 @@ mod tests {
                 if corrupt == Some(name.as_str()) {
                     bytes[0] ^= 0xff;
                 }
-                std::fs::write(&dest, &bytes).unwrap();
+                tokio::fs::write(&dest, &bytes).await.unwrap();
                 progress(bytes.len() as u64, bytes.len() as u64);
                 Ok(())
             },
@@ -1608,6 +1682,45 @@ mod tests {
         assert!(!models
             .join(format!("{}.zip", manifest.versioned_id()))
             .exists());
+    }
+
+    /// `#[tokio::test]` runs a current-thread runtime, so preparation done
+    /// inline would call the free-space probe on this very thread. The probe
+    /// runs after directory creation, crash recovery and the check of an
+    /// existing install, in the same blocking step.
+    #[tokio::test]
+    async fn download_preparation_runs_off_the_async_executor() {
+        let executor = std::thread::current().id();
+        let root = tmp();
+        let models = root.path().join("Models");
+        let archive = build_zip(root.path(), &FIXTURE);
+        let manifest: &'static ModelManifest =
+            Box::leak(Box::new(manifest_for(&FIXTURE, &archive)));
+        let probed_on = std::sync::Arc::new(std::sync::Mutex::new(None));
+
+        let result = download_in(
+            manifest,
+            &models,
+            {
+                let probed_on = probed_on.clone();
+                move |_: &Path| {
+                    *probed_on.lock().unwrap() = Some(std::thread::current().id());
+                    Some(1)
+                }
+            },
+            |_, _| {},
+        )
+        .await;
+
+        assert!(result.is_err(), "one free byte cannot fit the model");
+        let probed_on = probed_on
+            .lock()
+            .unwrap()
+            .expect("free space was never probed");
+        assert_ne!(
+            probed_on, executor,
+            "download preparation ran on the async executor thread"
+        );
     }
 
     #[test]
