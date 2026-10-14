@@ -955,14 +955,17 @@
     return selectedTranscribeProfile()?.language ?? "auto";
   }
 
-  // The file model lineup depends on these two values alone. Read them as
-  // derived primitives: the effect below must not run again for every new
-  // `settings` object (a Voice activity detection toggle, say).
+  // The file model lineup depends on these two values and on what is on disk.
+  // Read the first two as derived primitives: the effect below must not run
+  // again for every new `settings` object (a Voice activity detection toggle,
+  // say). A download that finishes elsewhere in the window bumps the third.
   const fileModelLanguage = $derived.by(() => (settings ? transcribeLanguage() : null));
   const fileModelSelection = $derived.by(() => settings?.file_transcription_model);
+  let fileModelDiskRevision = $state(0);
 
   $effect(() => {
     const language = fileModelLanguage;
+    void fileModelDiskRevision;
     if (language === null) return;
     let stale = false;
     const selected = fileModelSelection;
@@ -1687,6 +1690,7 @@
     profileModelErrors = { ...profileModelErrors, [profile.id]: "" };
     try {
       await downloadModelById(model.id);
+      fileModelDiskRevision += 1;
       await refreshProfileModels(settings?.hotkey_profiles ?? []);
     } catch (e: any) {
       profileModelErrors = {
@@ -1712,11 +1716,13 @@
     if (!target || downloads.busy || dictationModelSaving) return;
     profileModelErrors = { ...profileModelErrors, [profile.id]: "" };
     dictationModelSaving = true;
+    let downloaded = false;
     try {
       // Download first: the old model keeps dictating until the new one is ready.
       if (!target.downloaded) {
         downloads.start(target.id, target.display_name);
         await downloadModelById(target.id);
+        downloaded = true;
       }
       await setProfileModel(profile.id, target.id);
       settings = await getSettings();
@@ -1729,6 +1735,8 @@
     } finally {
       downloads.finish();
       dictationModelSaving = false;
+      // The Transcribe tab's lineup follows what is on disk, also after a failed switch.
+      if (downloaded) fileModelDiskRevision += 1;
     }
   }
 
