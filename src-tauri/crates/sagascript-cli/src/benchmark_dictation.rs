@@ -14,6 +14,7 @@ use sagascript_core::transcription::TranscribeOptions;
 use super::benchmark_config;
 use super::benchmark_quality;
 use super::transcribe::{model_id_string, parse_language};
+use crate::output::Out;
 
 const SAMPLE_RATE_HZ: f64 = 16_000.0;
 
@@ -146,7 +147,7 @@ struct SampleTiming {
     total_ms: f64,
 }
 
-pub fn run(args: BenchmarkDictationArgs) -> Result<(), DictationError> {
+pub fn run(args: BenchmarkDictationArgs, out: &Out) -> Result<(), DictationError> {
     if args.allow_empty && args.quality_output.is_none() {
         return Err(DictationError::SettingsError(
             "--allow-empty requires --quality-output".to_string(),
@@ -355,10 +356,7 @@ pub fn run(args: BenchmarkDictationArgs) -> Result<(), DictationError> {
         benchmark_quality::write_private_new(path, &quality_report)?;
     }
 
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&output).expect("benchmark output serializes")
-    );
+    out.json(&output)?;
 
     if let Some((iteration, elapsed_ms, max_ms)) = budget_exceeded {
         return Err(DictationError::TranscriptionFailed(format!(
@@ -714,18 +712,21 @@ mod tests {
 
     #[test]
     fn empty_expect_word_is_rejected_before_model_or_input_access() {
-        let result = run(BenchmarkDictationArgs {
-            input: PathBuf::from("missing-fixture.wav"),
-            language: "en".to_string(),
-            iterations: 2,
-            max_warm_ms: None,
-            expect_word: Some(" \t".to_string()),
-            model: None,
-            beam_size: None,
-            disable_temperature_fallback: false,
-            quality_output: None,
-            allow_empty: false,
-        });
+        let result = run(
+            BenchmarkDictationArgs {
+                input: PathBuf::from("missing-fixture.wav"),
+                language: "en".to_string(),
+                iterations: 2,
+                max_warm_ms: None,
+                expect_word: Some(" \t".to_string()),
+                model: None,
+                beam_size: None,
+                disable_temperature_fallback: false,
+                quality_output: None,
+                allow_empty: false,
+            },
+            &Out::capture().0,
+        );
 
         assert!(matches!(
             result,

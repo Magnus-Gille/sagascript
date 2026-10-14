@@ -6,13 +6,15 @@
 
 use std::collections::BTreeSet;
 use std::fs::File;
-use std::io::{self, Read, Write};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use clap::{Args, Subcommand, ValueEnum};
 use serde::Serialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+
+use crate::output::{outln, Out};
 
 use sagascript_core::diarization_evaluation::{
     evaluate, EvaluationOptions, ScoringRegion, SpeakerTurn,
@@ -227,7 +229,7 @@ struct EvaluationReceipt<'a> {
     reasons: Vec<String>,
 }
 
-pub fn run(args: DiarizationArgs) -> Result<(), DictationError> {
+pub fn run(args: DiarizationArgs, out: &Out) -> Result<(), DictationError> {
     let output = match args.action {
         DiarizationAction::ReferenceValidate { input } => reference_validate(&input)?,
         DiarizationAction::ReferenceExport { input, format } => reference_export(&input, format)?,
@@ -247,7 +249,7 @@ pub fn run(args: DiarizationArgs) -> Result<(), DictationError> {
                 expected_policy_version.as_deref(),
                 expected_split_sha256.as_deref(),
             )?;
-            write_stdout(&output)?;
+            write_stdout(&output, out)?;
             if !ready {
                 return Err(cli_error("reference qualification is not ready"));
             }
@@ -286,7 +288,7 @@ pub fn run(args: DiarizationArgs) -> Result<(), DictationError> {
             expected_split_sha256.as_deref(),
         )?,
     };
-    write_stdout(&output)
+    write_stdout(&output, out)
 }
 
 fn reference_validate(path: &Path) -> Result<String, DictationError> {
@@ -1232,17 +1234,14 @@ fn cli_error(message: impl Into<String>) -> DictationError {
     DictationError::TranscriptionFailed(message.into())
 }
 
-fn write_stdout(output: &str) -> Result<(), DictationError> {
-    let mut stdout = io::BufWriter::new(io::stdout().lock());
-    stdout
-        .write_all(output.as_bytes())
-        .and_then(|_| stdout.write_all(b"\n"))
-        .map_err(|error| cli_error(format!("could not write output: {error}")))
+fn write_stdout(output: &str, out: &Out) -> Result<(), DictationError> {
+    Ok(outln!(out, "{output}")?)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
     use tempfile::NamedTempFile;
 
     fn write(value: &str) -> NamedTempFile {
@@ -1592,16 +1591,19 @@ mod tests {
             report["manifest_file_sha256"],
             hex_digest(&std::fs::read(manifest_file.path()).unwrap())
         );
-        let result = run(DiarizationArgs {
-            action: DiarizationAction::ReferenceQualify {
-                input: reference_file.path().to_owned(),
-                manifest: manifest_file.path().to_owned(),
-                minimum_coverage: 0.9,
-                expected_policy_id: None,
-                expected_policy_version: None,
-                expected_split_sha256: None,
+        let result = run(
+            DiarizationArgs {
+                action: DiarizationAction::ReferenceQualify {
+                    input: reference_file.path().to_owned(),
+                    manifest: manifest_file.path().to_owned(),
+                    minimum_coverage: 0.9,
+                    expected_policy_id: None,
+                    expected_policy_version: None,
+                    expected_split_sha256: None,
+                },
             },
-        });
+            &Out::capture().0,
+        );
         assert!(result.is_err());
     }
 

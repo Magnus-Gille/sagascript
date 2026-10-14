@@ -15,6 +15,9 @@ use sagascript_core::transcription::engine_host::{
 use sagascript_core::transcription::{pianissimo_backend, pianissimo_model};
 use serde_json::{json, Value};
 
+use crate::exit::CliError;
+use crate::output::{errln, outln, Out, WriteError};
+
 #[derive(Args)]
 pub struct EngineArgs {
     #[command(subcommand)]
@@ -84,28 +87,36 @@ benchmarking warm latency or smoke-testing a signed build.",
     },
 }
 
-pub fn run(args: EngineArgs) -> Result<(), DictationError> {
+pub fn run(args: EngineArgs, out: &Out) -> Result<(), CliError> {
     match args.action {
         EngineAction::Status { json } => {
             let probe = Probe::detect();
             let report = status_report(&probe);
-            print_status(&report, json);
+            print_status(&report, json, out)?;
             Ok(())
         }
         EngineAction::Doctor { json, verify_model } => {
             let probe = Probe::detect();
-            let report = doctor_report(&probe, verify_model);
-            print_doctor(&report, json);
-            if report.ok {
-                Ok(())
-            } else {
-                Err(DictationError::TranscriptionFailed(format!(
-                    "engine doctor failed at step '{}'",
-                    report.failed_step.as_deref().unwrap_or("unknown")
-                )))
-            }
+            doctor(&probe, verify_model, json, out)
         }
-        EngineAction::Warm { seconds } => warm(seconds),
+        EngineAction::Warm { seconds } => Ok(warm(seconds, out)?),
+    }
+}
+
+/// Runs the doctor and prints its report. A failing step is a failed check
+/// (exit 3) after the full report.
+fn doctor(probe: &Probe, verify_model: bool, json: bool, out: &Out) -> Result<(), CliError> {
+    let report = doctor_report(probe, verify_model);
+    print_doctor(&report, json, out)?;
+    if report.ok {
+        Ok(())
+    } else {
+        Err(CliError::CheckFailed(DictationError::TranscriptionFailed(
+            format!(
+                "engine doctor failed at step '{}'",
+                report.failed_step.as_deref().unwrap_or("unknown")
+            ),
+        )))
     }
 }
 
@@ -259,60 +270,65 @@ pub fn status_report(probe: &Probe) -> Value {
     })
 }
 
-fn print_status(report: &Value, json: bool) {
+fn print_status(report: &Value, json: bool, out: &Out) -> Result<(), WriteError> {
     if json {
-        println!("{}", serde_json::to_string_pretty(report).unwrap());
-        return;
+        return out.json(report);
     }
     let text = |v: &Value| v.as_str().unwrap_or("-").to_string();
-    println!(
+    outln!(
+        out,
         "Engine (Pianissimo, {})",
         if cfg!(windows) {
             "ONNX Runtime"
         } else {
             "Core ML"
         }
-    );
+    )?;
     if report["supported"] == true {
-        println!(
+        outln!(
+            out,
             "  Platform:    supported ({} {})",
             text(&report["os"]),
             text(&report["arch"])
-        );
+        )?;
     } else {
-        println!(
+        outln!(
+            out,
             "  Platform:    NOT supported on {} {} ({})",
             text(&report["os"]),
             text(&report["arch"]),
             text(&report["requirement"])
-        );
+        )?;
     }
     let build = &report["cli_build"];
-    println!(
+    outln!(
+        out,
         "  CLI build:   {} (git {}, built {})",
         text(&build["version"]),
         text(&build["git"]),
         text(&build["built"])
-    );
-    println!("  Protocol:    {}", report["protocol"]);
+    )?;
+    outln!(out, "  Protocol:    {}", report["protocol"])?;
     let host = &report["host"];
-    println!(
+    outln!(
+        out,
         "  Host:        {} (source: {})",
         text(&host["path"]),
         text(&host["source"])
-    );
+    )?;
     if let Some(hello) = host["hello"].as_object().filter(|h| !h.is_empty()) {
-        println!(
+        outln!(
+            out,
             "  Host build:  {} {} git {} engine {} {}",
             hello["name"].as_str().unwrap_or("-"),
             hello["version"].as_str().unwrap_or("-"),
             hello["git_sha"].as_str().unwrap_or("-"),
             hello["engine"].as_str().unwrap_or("-"),
             hello["engine_version"].as_str().unwrap_or("")
-        );
+        )?;
     }
     if let Some(error) = host["error"].as_str() {
-        println!("  Host error:  {error}");
+        outln!(out, "  Host error:  {error}")?;
     }
     let model = &report["model"];
     let state = match (&model["installed"], &model["verified"]) {
@@ -320,8 +336,8 @@ fn print_status(report: &Value, json: bool) {
         (_, Value::Bool(true)) => "installed, verified".to_string(),
         (_, other) => format!("installed, verification FAILED: {other}"),
     };
-    println!("  Model:       {} {}", text(&model["id"]), state);
-    println!("  Model dir:   {}", text(&model["dir"]));
+    outln!(out, "  Model:       {} {}", text(&model["id"]), state)?;
+    outln!(out, "  Model dir:   {}", text(&model["dir"]))
 }
 
 // ---- doctor ---------------------------------------------------------------
@@ -548,24 +564,22 @@ fn finish(steps: Vec<Value>, failed: Option<String>) -> DoctorReport {
     }
 }
 
-fn print_doctor(report: &DoctorReport, json: bool) {
+fn print_doctor(report: &DoctorReport, json: bool, out: &Out) -> Result<(), WriteError> {
     if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&report.to_json()).unwrap()
-        );
-        return;
+        return out.json(&report.to_json());
     }
     for step in &report.steps {
-        println!(
+        outln!(
+            out,
             "[{}] {:<15} {} ({} ms)",
             if step["ok"] == true { " ok " } else { "FAIL" },
             step["step"].as_str().unwrap_or("?"),
             step["detail"].as_str().unwrap_or(""),
             step["ms"]
-        );
+        )?;
     }
-    println!(
+    outln!(
+        out,
         "{}{}",
         pcm_sweep_line(&report.pcm_sweep),
         if report.ok {
@@ -573,12 +587,12 @@ fn print_doctor(report: &DoctorReport, json: bool) {
         } else {
             "Engine check FAILED."
         }
-    );
+    )
 }
 
 // ---- warm -----------------------------------------------------------------
 
-fn warm(seconds: Option<u64>) -> Result<(), DictationError> {
+fn warm(seconds: Option<u64>, out: &Out) -> Result<(), DictationError> {
     let config = pianissimo_backend::engine_config()?;
     pianissimo_model::verify_downloaded()?;
     let client = quiet(&config);
@@ -587,7 +601,8 @@ fn warm(seconds: Option<u64>) -> Result<(), DictationError> {
         .warm()
         .map_err(|e| DictationError::TranscriptionFailed(e.to_string()))?;
     let snapshot = client.snapshot();
-    eprintln!(
+    errln!(
+        out,
         "Engine warm in {:.2} s (host pid {}). {}",
         started.elapsed().as_secs_f64(),
         snapshot.pid.map_or("?".into(), |p| p.to_string()),
@@ -829,6 +844,29 @@ mod tests {
             false,
         );
         assert_eq!(report.failed_step.as_deref(), Some("host"));
+    }
+
+    #[test]
+    fn a_failing_doctor_is_a_failed_check_after_its_full_report() {
+        let probe = probe(PathBuf::from("/nonexistent/host"), false, true);
+        let (out, captured) = Out::capture();
+        let error = doctor(&probe, false, true, &out).unwrap_err();
+        assert_eq!(error.exit(), crate::exit::Exit::CheckFailed);
+        assert_eq!(
+            error.to_string(),
+            "Transcription failed: engine doctor failed at step 'platform'"
+        );
+        let report: Value = serde_json::from_str(&captured.stdout()).unwrap();
+        assert_eq!(report["ok"], false);
+        assert_eq!(report["failed_step"], "platform");
+
+        let (out, captured) = Out::capture();
+        doctor(&probe, false, false, &out).unwrap_err();
+        assert!(
+            captured.stdout().ends_with("Engine check FAILED.\n"),
+            "{}",
+            captured.stdout()
+        );
     }
 
     #[test]
