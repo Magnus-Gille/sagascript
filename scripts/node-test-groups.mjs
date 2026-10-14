@@ -43,6 +43,7 @@ export const TEST_GROUPS = {
   ],
   ci: [
     "scripts/diarization_sv/test_reference_review.mjs",
+    "scripts/test-browser-mock-commands.mjs",
     "scripts/test-ci-build-identity.mjs",
     "scripts/test-ci-cli-feature-coverage.mjs",
     "scripts/test-ci-cohort-timings.mjs",

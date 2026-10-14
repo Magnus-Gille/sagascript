@@ -13,3 +13,14 @@ allow-print-in-tests = true
 
 too-many-lines-threshold = 150
 cognitive-complexity-threshold = 30
+
+# Backend → frontend events go through the typed catalogue in src/events.rs
+# (`EmitEvent::emit_event`), which checks the name and payload type (#347).
+disallowed-methods = [
+  { path = "tauri::Emitter::emit", reason = "emit a catalogue event with crate::events::EmitEvent::emit_event (src/events.rs, #347)" },
+  { path = "tauri::Emitter::emit_to", reason = "emit a catalogue event with crate::events::EmitEvent::emit_event_to (src/events.rs, #347)" },
+  { path = "tauri::Emitter::emit_filter", reason = "add a method to crate::events::EmitEvent instead (src/events.rs, #347)" },
+  { path = "tauri::Emitter::emit_str", reason = "emit a catalogue event with crate::events::EmitEvent::emit_event (src/events.rs, #347)" },
+  { path = "tauri::Emitter::emit_str_to", reason = "emit a catalogue event with crate::events::EmitEvent::emit_event_to (src/events.rs, #347)" },
+  { path = "tauri::Emitter::emit_str_filter", reason = "add a method to crate::events::EmitEvent instead (src/events.rs, #347)" },
+]

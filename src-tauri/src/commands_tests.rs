@@ -969,3 +969,104 @@ mod macos_mic_tests {
         );
     }
 }
+
+/// The `get_settings` payload as the shared fixture
+/// contracts/transport/get_settings.json (#347): Rust writes it, the
+/// frontend's `Settings` type parses it (src/test/transport.test.ts).
+#[cfg(test)]
+mod transport_contract_tests {
+    use super::*;
+    use crate::contract;
+    use sagascript_core::settings::{
+        EnginePrewarm, FileModelPreference, HotkeyMode, HotkeyProfile, WhisperModel,
+    };
+    use serde_json::{json, Value};
+
+    /// Non-default values in every field the frontend reads, one profile with
+    /// explicit push-to-talk and toggle shortcuts and one without, and every
+    /// form of profile model.
+    fn customised() -> Settings {
+        Settings {
+            language: Language::Swedish,
+            whisper_model: WhisperModel::KbWhisperSmall,
+            file_transcription_model: FileModelPreference::PianissimoOriginal,
+            pianissimo_dictation: true,
+            engine_prewarm: EnginePrewarm::OnKeyDown,
+            engine_idle_unload_minutes: 0,
+            hotkey_mode: HotkeyMode::Toggle,
+            show_overlay: false,
+            auto_paste: false,
+            auto_select_model: false,
+            hotkey: "F13".into(),
+            hotkey_profiles: vec![
+                HotkeyProfile {
+                    id: "swedish".into(),
+                    name: "Svenska".into(),
+                    shortcut: "F13".into(),
+                    language: Language::Swedish,
+                    push_to_talk_shortcut: Some("F13".into()),
+                    toggle_shortcut: Some("F14".into()),
+                },
+                HotkeyProfile {
+                    id: "finnish".into(),
+                    name: "Suomi".into(),
+                    shortcut: "Control+Shift+F".into(),
+                    language: Language::Finnish,
+                    push_to_talk_shortcut: None,
+                    toggle_shortcut: None,
+                },
+            ],
+            profile_models: [
+                (
+                    "swedish".to_string(),
+                    FileModelPreference::Whisper(WhisperModel::KbWhisperMedium),
+                ),
+                ("finnish".to_string(), FileModelPreference::Auto),
+            ]
+            .into(),
+            initial_prompt: "Astrid, Grimnir".into(),
+            profile_glossaries: [("swedish".to_string(), "mergea = mördsa".to_string())].into(),
+            profile_glossary_migrated: true,
+            beam_size: 5,
+            temperature_fallback: false,
+            vad_enabled: true,
+            has_completed_onboarding: true,
+            ..Settings::default()
+        }
+    }
+
+    /// `{ variant: payload }`. `default` is a fresh install, whose implicit
+    /// legacy profile `get_settings` makes explicit.
+    fn fixture() -> Value {
+        json!({
+            "default": contract::to_value(settings_for_frontend(Settings::default())),
+            "customised": contract::to_value(settings_for_frontend(customised())),
+        })
+    }
+
+    #[test]
+    fn transport_contract_get_settings() {
+        contract::assert_fixture("get_settings.json", &fixture());
+    }
+
+    /// Rust reads the fixture back unchanged: nothing in it is a value the
+    /// frontend could send back that Rust would drop or rewrite.
+    #[test]
+    fn transport_contract_get_settings_reads_back() {
+        if contract::blessing() {
+            return; // the fixture is being rewritten; the next run reads it
+        }
+        let fixture = contract::read_fixture("get_settings.json");
+        let variants = fixture.as_object().expect("variants by name");
+        assert!(variants.contains_key("default") && variants.contains_key("customised"));
+        for (name, payload) in variants {
+            let settings: Settings = serde_json::from_value(payload.clone())
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            assert_eq!(
+                &contract::to_value(settings_for_frontend(settings)),
+                payload,
+                "{name}"
+            );
+        }
+    }
+}

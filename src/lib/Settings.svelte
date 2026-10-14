@@ -1127,13 +1127,8 @@
     let disposed = false;
     let recoveryStop: (() => void) | null = null;
     let recoveryAbortStop: (() => void) | null = null;
-    const recoveryListener = listen<unknown>("update-preparing", (event) => {
-      const payload = event.payload;
-      const nonce = typeof payload === "string"
-        ? payload
-        : payload && typeof payload === "object" && "nonce" in payload && typeof payload.nonce === "string"
-          ? payload.nonce
-          : null;
+    const recoveryListener = listen<string>("update-preparing", (event) => {
+      const nonce = event.payload;
       if (nonce && !disposed) {
         activePreparationNonce = nonce;
         updatePreparing = true;

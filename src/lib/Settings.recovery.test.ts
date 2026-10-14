@@ -19,6 +19,9 @@ import { deferred, settle } from "../test/deferred";
 import type { CommandHandlers, IpcMock } from "../test/ipc";
 import { renderSettings, settingsBackend } from "../test/settings";
 
+/** The `update-aborted` payload Rust sends: the error message (events.rs). */
+const UPDATE_FAILED = "The update could not be installed";
+
 const transcript: MeetingTranscript = {
   schema_version: 1,
   source_sha256: "meeting-source",
@@ -372,7 +375,7 @@ describe("preparing for an update", () => {
     // Aborted while it waits for the backend.
     ipc.emit("update-preparing", "nonce-1");
     await waitFor(() => expect(editor()).toBeDisabled());
-    ipc.emit("update-aborted", null);
+    ipc.emit("update-aborted", UPDATE_FAILED);
     await waitFor(() => expect(editor()).toBeEnabled());
     nativeRead.resolve(null);
     await settle();
@@ -383,7 +386,7 @@ describe("preparing for an update", () => {
     const secondRead = deferred<string | null>();
     ipc.handle("get_last_transcription", () => secondRead.promise);
     ipc.emit("update-preparing", "nonce-2");
-    ipc.emit("update-preparing", { nonce: "nonce-3" });
+    ipc.emit("update-preparing", "nonce-3");
     secondRead.resolve(null);
     await waitFor(() => expect(ipc.callsTo("complete_update_preparation")).toEqual([{ nonce: "nonce-3", error: null }]));
     await settle();
@@ -404,7 +407,7 @@ describe("preparing for an update", () => {
 
     ipc.emit("update-preparing", "nonce-1");
     await waitFor(() => expect(ipc.callsTo("get_update_result_pending")).toHaveLength(1));
-    ipc.emit("update-aborted", null);
+    ipc.emit("update-aborted", UPDATE_FAILED);
     const before = ipc.calls.length;
     ipc.handle("load_update_recovery", () => file.current);
     reread.resolve(file.current);
@@ -424,7 +427,7 @@ describe("preparing for an update", () => {
 
     ipc.emit("update-preparing", "nonce-1");
     await waitFor(() => expect(ipc.callsTo("save_update_recovery")).toHaveLength(1));
-    ipc.emit("update-aborted", null);
+    ipc.emit("update-aborted", UPDATE_FAILED);
     write.resolve();
     await settle();
     expect(ipc.callsTo("complete_update_preparation")).toEqual([]);
@@ -467,7 +470,7 @@ describe("preparing for an update", () => {
     ipc.handle("save_update_recovery", () => write.promise);
     ipc.emit("update-preparing", "nonce-2");
     await waitFor(() => expect(ipc.callsTo("save_update_recovery")).toHaveLength(2));
-    ipc.emit("update-aborted", null);
+    ipc.emit("update-aborted", UPDATE_FAILED);
     write.reject("disk full");
     await settle();
     expect(ipc.callsTo("complete_update_preparation")).toEqual([{ nonce: "nonce-1", error: "disk full" }]);
@@ -498,7 +501,7 @@ describe("replacing a stored dictation", () => {
     expect(await prepareForUpdate(ipc, "nonce-1")).toEqual({ nonce: "nonce-1", error: null });
     expect(file.current).toEqual(snapshot({ dictation: { text: "Återställd och ändrad" } }));
 
-    ipc.emit("update-aborted", null);
+    ipc.emit("update-aborted", UPDATE_FAILED);
     await waitFor(() => expect(editor()).toBeEnabled());
     await user.type(editor(), " igen");
     await user.click(screen.getByRole("button", { name: "Copy result" }));

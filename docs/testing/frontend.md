@@ -41,8 +41,9 @@ a real `vite build` bundles, emits or reads) and `npm run licenses:check` (relea
 ## Mocking IPC
 
 `src/test/ipc.ts` wraps `mockIPC` from `@tauri-apps/api/mocks`. Handlers are keyed by
-command name; arguments and results are typed from the wrappers in `src/lib/api.ts` and
-`meeting-reprocessing-api.ts` (`CommandMap`, until #347 generates it from Rust).
+command name; arguments and results are typed by `CommandMap`, which is generated from the
+Rust command signatures (`src/lib/ipc-contract.generated.ts`, #347), so a handler cannot use
+an argument key or result shape the backend does not have.
 
 ```ts
 import { mockIpc } from "../test/ipc";
@@ -65,9 +66,17 @@ ipc.handle("get_platform", () => "windows"); // change an answer mid-test
   values, a `Map` as an object and a `Uint8Array` as an array of numbers.
 - A command without a handler rejects, and `setup.ts` fails the test afterwards even if the
   code under test swallowed the rejection. Never touch real settings or recordings.
-- A new command: add it to `CommandMap` and `COMMANDS` in `ipc.ts` and a row to
-  `src/lib/api.test.ts`, which checks every wrapper's command name and argument object.
-  Plugin commands (`plugin:dialog|open`, …) are not mapped yet.
+- Every call to a registered command is also checked against the Rust parameters
+  (`COMMAND_ARGUMENTS` in the generated file): a missing required key or a key that is no
+  parameter rejects the call and fails the test the same way. A wrapper that still sends an
+  argument key Rust renamed therefore fails Vitest, not only svelte-check. An `Option`
+  parameter may be left out.
+- A new command: regenerate `CommandMap` (`SAGASCRIPT_BLESS_CONTRACTS=1 cargo test -p
+  sagascript contract` in `src-tauri/`), then add the wrapper and its row in
+  `src/lib/api.test.ts`, which checks every wrapper's command name, argument object and
+  result type against `CommandMap`. A registered command without a wrapper must be listed in
+  `COMMANDS_WITHOUT_A_CALLER` there. Plugin commands (`plugin:dialog|open`, …) are not mapped
+  yet.
 
 ## Events
 
@@ -79,8 +88,20 @@ expect(ipc.listenerCount("state-changed")).toBe(1);
 ```
 
 `emit` throws when nothing listens, which usually means the test emitted before an
-asynchronous `listen()` resolved. `EventMap` lists the events the frontend listens for with
-the payload its listeners read (TODO #347: generate from `src-tauri/src/events.rs`).
+asynchronous `listen()` resolved. `EventMap` (`src/lib/events.ts`) lists the events the
+frontend listens for with their payloads; `src/test/transport.test.ts` checks it against the
+Rust event catalogue and its sample payloads.
+
+## Transport contract
+
+Payloads that cross IPC are pinned by shared fixtures ([contracts/README.md](../../contracts/README.md)):
+Rust writes `contracts/transport/*.json` from real payloads, and `src/test/transport.test.ts`
+parses each with a schema (`src/test/transport-schemas.ts`, built from `src/test/schema.ts`)
+that `expectTypeOf` proves equal to the frontend type. Use those fixtures in tests of code
+that reads a payload (as the meeting-job, transcribe-stages and overlay tests there do)
+instead of hand-written payloads that may not match what Rust sends. To change a payload type:
+change the TypeScript type and its schema together; svelte-check fails while they differ, and
+Vitest fails while the fixture does not parse.
 
 ## Component tests
 

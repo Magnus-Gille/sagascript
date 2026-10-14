@@ -73,7 +73,11 @@ awaits.
   when the CLI edits the file, so a plain value read at use time from `ctrl.settings()` needs
   nothing there. It does not replay setter side effects: if your setter has one (recreate a
   window, download a model), add it to the watcher too.
-- Register `commands::set_example_flag` in `tauri::generate_handler![...]` in `main()`.
+- Register `commands::set_example_flag` in `tauri::generate_handler![...]` in `main()`, then
+  regenerate the shared contract: `SAGASCRIPT_BLESS_CONTRACTS=1 cargo test -p sagascript
+  contract` in `src-tauri/` adds the command to the generated `CommandMap` and the new field
+  to `contracts/transport/get_settings.json` ([contracts/README.md](../../contracts/README.md)).
+  Set a non-default value in `customised()` in `commands_tests.rs` so the fixture shows it.
 - Setter logic goes in a plain function with a test in `commands_tests.rs`
   (`apply_language_selection` / `language_selection_tests`, `effective_auto_paste` /
   `auto_paste_tests`).
@@ -81,7 +85,9 @@ awaits.
 ## 4. Frontend: `src/lib/api.ts`, `src/lib/Settings.svelte`
 
 1. `api.ts`: add `example_flag: boolean;` to `interface Settings` (enum: a string-literal union
-   like `EnginePrewarm`) and a wrapper:
+   like `EnginePrewarm`) and the same field to `settings` in `src/test/transport-schemas.ts`
+   (svelte-check fails while they differ; Vitest fails while the fixture has a field the
+   type lacks), and a wrapper:
    `export async function setExampleFlag(enabled: boolean): Promise<void> { return invoke("set_example_flag", { enabled }); }`
    (Rust parameter names arrive as camelCase keys).
 2. `Settings.svelte`: import the wrapper; add a handler next to `onTemperatureFallbackToggle`
@@ -134,8 +140,9 @@ npx svelte-check --tsconfig ./tsconfig.json && npm run test:unit && npm run test
 npx playwright install chromium && npm run test:browser   # you touched Settings.svelte and the mock
 ```
 
-No test catches a missing `generate_handler!` entry or a mismatched `invoke` name/parameter
-(they fail only at runtime in the GUI), hence the three-way `grep`.
+The app crate's tests fail on a `#[tauri::command]` missing from `generate_handler!`, and
+`src/lib/api.test.ts` type-checks the wrapper's command name and argument keys against the
+generated `CommandMap` (add its row there); the `grep` is a quick look at all three.
 
 Parity: with the same `SAGASCRIPT_SETTINGS_PATH` exported, run `cargo tauri dev`, toggle the
 setting in the UI and check the file holds what `config set` writes; then `config set` while
@@ -143,5 +150,4 @@ the app runs and check the UI follows (watcher → `settings_reloaded`). Without
 session (a headless agent), say so in the PR and leave this step to a reviewer with a Mac.
 Finish with `npm run verify` ([CONTRIBUTING.md](../../CONTRIBUTING.md#running-tests)). Planned:
 [#373](https://github.com/Magnus-Gille/sagascript/issues/373) (automated CLI/app parity table,
-table-driven key registry), [#347](https://github.com/Magnus-Gille/sagascript/issues/347)
-(Rust/TypeScript `Settings` contract test).
+table-driven key registry).
