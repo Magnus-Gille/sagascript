@@ -93,4 +93,4 @@ cd .. && npx svelte-check --tsconfig ./tsconfig.json && npm run test:frontend
 npm run test:browser              # if a qa flow covers the event
 ```
 
-Then the full list in [CONTRIBUTING.md](../../CONTRIBUTING.md#running-tests).
+Then `npm run verify` ([CONTRIBUTING.md](../../CONTRIBUTING.md#running-tests)).
