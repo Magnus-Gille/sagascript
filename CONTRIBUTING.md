@@ -56,7 +56,7 @@ common changes, follow the recipes in [docs/recipes/](docs/recipes/README.md).
 check (command, working directory, platforms, prerequisites, time budget, CI lanes).
 
 ```bash
-npm run verify:fast                      # inner loop: rustfmt, app clippy, svelte-check, Prettier, unit and UI node tests
+npm run verify:fast                      # inner loop: rustfmt, app clippy, svelte-check, Prettier, ESLint, unit and UI node tests
 npm run verify                           # before a PR: every default check for this OS
 npm run verify -- --keep-going           # report every failure instead of stopping at the first
 npm run verify -- --only clippy,node-ui  # checks or whole areas, including opt-in checks
@@ -87,16 +87,17 @@ npm run verify -- --list                 # every check with its commands, budget
 | `rust-test` | `test-workspace`, `test-cli-lean` | `cargo test --workspace`; `cargo test -p sagascript-cli --no-default-features` | Rust; Linux libraries; `dist/` (workspace) | workspace: test-macos, test-windows (`cargo test` and per crate); lean CLI: test-macos, test-linux |
 | `core-features` | `core-clippy`, `core-clippy-diarization`, `core-test`, `core-test-record`, `core-test-diarization` | `cargo clippy`/`cargo test -p sagascript-core` without features, with `record`, with `diarization` | Rust | test-macos, test-linux, test-windows |
 | `engine-protocol` | `engine-protocol` | `cargo test -p sagascript-engine-protocol` | Rust | test-linux |
-| `ort-host` | `ort-host-clippy`, `ort-host-test` | `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked` (`src-tauri/engine-host/ort`) | Rust | test-linux |
+| `ort-host` | `ort-host-clippy`, `ort-host-test` | `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked` (`src-tauri/engine-host/ort`) | Rust | test-linux; tests also test-windows |
 | `deps` | `deny`, `npm-audit` | `cargo deny --locked --workspace check` and the same for the ORT host (`src-tauri`; policy and what to do about a new advisory: `src-tauri/deny.toml`); `npm audit --audit-level=high` (root lockfile). Both fetch advisory data over the network | `cargo install --locked cargo-deny --version 0.20.2` | deny: test-linux; audit: test-macos |
 | `release-guard` | `release-guard` | `cargo test --release -p sagascript-core --lib dev_overrides` | Rust | test-linux |
 | `svelte-check` | `svelte-check` | `npx svelte-check --tsconfig ./tsconfig.json` | `npm ci` | test-macos |
 | `format` | `format` | `npm run format:check` (Prettier over src/, scripts/, tests/; scope in `.prettierignore`; `npm run format` fixes) | `npm ci` | test-macos, test-windows |
-| `unit` | `unit` | `npm run test:unit` (Vitest, `src/**/*.test.ts`; see [docs/testing/frontend.md](docs/testing/frontend.md)) | `npm ci` | test-macos, test-windows |
+| `lint` | `lint` | `npm run lint` (ESLint over src/, scripts/, tests/; `eslint.config.js`; findings that predate it are counted in `eslint-suppressions.json`) | `npm ci` | test-macos |
+| `unit` | `unit` | `npm run test:unit` (Vitest unit and component tests, `src/**/*.test.ts`; see [docs/testing/frontend.md](docs/testing/frontend.md)) | `npm ci` | test-macos, test-windows |
 | `node` | `node-ui`, `node-ci`, `node-release` | `npm run test:ui`, `npm run test:ci`, `npm run test:release` | `npm ci` (ui) | test-macos, test-windows (`npm run test:frontend`) |
 | `code-health` | `code-health` | `npm run test:code-health` | Node | `code-health.yml`; also in `test:frontend` |
 | `python` | `python-dictation-eval`, `python-diarization-reference`; `python-diarization` (opt-in) | `python -m unittest discover -s scripts/dictation_eval -p 'test_*.py'`; `scripts/diarization_sv` reference tests; opt-in: the full suite against a freshly built lean CLI | Python 3.10+; opt-in: `pip install -r scripts/diarization_sv/requirements-evaluation.txt` | all three; diarization: test-macos, test-linux |
-| `swift` | `swift` (macOS) | `./scripts/build-engine-host.sh` (generates `BuildInfo.swift`), `./scripts/check-engine-host-identity.sh` on the built host against `git rev-parse HEAD`, then `swift test` (`src-tauri/engine-host/coreml`); CI also pins `DEVELOPER_DIR` to the newest Xcode, verify uses the selected one | Xcode 16+ | test-macos |
+| `swift` | `swift`, `engine-host-conformance` (macOS) | `swift`: `./scripts/build-engine-host.sh` (generates `BuildInfo.swift`), `./scripts/check-engine-host-identity.sh` on the built host against `git rev-parse HEAD`, then `swift test` (`src-tauri/engine-host/coreml`, including the golden-transcript replay); CI also pins `DEVELOPER_DIR` to the newest Xcode, verify uses the selected one. `engine-host-conformance`: `./scripts/stage-engine-host.sh`, then `python scripts/engine-host-conformance.py build/engine-host/sagascript-engine-host --no-model` (the model-free subset against the real host process; the full run with a model is in the release gate, see [RELEASING.md](RELEASING.md#automated-draft-verification)) | Xcode 16+; Python 3 (conformance) | test-macos |
 | `msrv` | `msrv` (opt-in; run it for dependency bumps or newer language features) | `cargo check --workspace --locked`, the lean CLI and the ORT host on the `rust-version` toolchain | `rustup toolchain install 1.88 --profile minimal`; `dist/` | msrv-linux |
 | `browser` | `browser` (opt-in) | `npm run test:browser` (Playwright against the mocked IPC) | `npx playwright install chromium` | test-macos |
 
@@ -134,7 +135,7 @@ cargo test -p sagascript-cli --no-default-features
 ```
 
 From the repo root: `npx svelte-check --tsconfig ./tsconfig.json`, `npm run test:unit`,
-`npm run format:check` and `npm run test:frontend`.
+`npm run format:check`, `npm run lint` and `npm run test:frontend`.
 
 #### Example: a typical feature
 
@@ -159,7 +160,7 @@ feature gate, the lean-CLI checks code that compiles only with default features,
 
 - **Rust:** Prefer clarity over cleverness. Keep modules small and testable. Run `cargo fmt --all` (plus `cargo fmt --manifest-path engine-host/ort/Cargo.toml --all` for the separate ORT host workspace) before committing; CI rejects unformatted code (`src-tauri/rustfmt.toml`).
 - **Svelte 5:** Use runes (`$state`, `$effect`), not legacy stores.
-- **TypeScript and Node scripts:** Run `npm run format` (Prettier, `prettier.config.js`) before committing; CI rejects unformatted files in `src/`, `scripts/` and `tests/` (`.svelte` files follow once #361 replaces the source-text tests).
+- **TypeScript and Node scripts:** Run `npm run format` (Prettier, `prettier.config.js`) before committing; CI rejects unformatted files in `src/`, `scripts/` and `tests/` (`.svelte` files follow once #361 replaces the source-text tests). `npm run lint` (ESLint, `eslint.config.js`) must pass too: no new `any`, no unused variables; [docs/testing/frontend.md](docs/testing/frontend.md#lint) explains `eslint-suppressions.json`.
 - **No hardcoded secrets** -- ever.
 
 ### Clippy policy lints

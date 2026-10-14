@@ -124,6 +124,7 @@ test("selection: default, fast, --only by check or area, --skip and platform ski
     "fmt-ort",
     "svelte-check",
     "format",
+    "lint",
     "unit",
     "node-ui",
     "clippy-app",

@@ -31,7 +31,7 @@ private final class FakeCompiler {
     func compile(_ package: URL) throws -> URL {
         let name = package.deletingPathExtension().lastPathComponent
         lock.lock(); compiled.append(name); lock.unlock()
-        if name == failOn { throw EngineHostError(code: "x", message: "boom \(name)") }
+        if name == failOn { throw EngineHostError(code: .modelLoadFailed, message: "boom \(name)") }
         let output = FileManager.default.temporaryDirectory
             .appendingPathComponent("fake-compile-\(UUID().uuidString)/\(name).mlmodelc", isDirectory: true)
         try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)

@@ -503,17 +503,18 @@ export function filterSwiftCoverageReport(report, { packageRoot, sourcePackageRo
   return { report: { ...report, data }, excludedPaths };
 }
 
-export function prepareSwiftCoverageInputs({ sourcePackageRoot, packageRoot, tempRoot, sharedFixturePath } = {}) {
-  if ([sourcePackageRoot, packageRoot, tempRoot, sharedFixturePath].some((value) => typeof value !== "string" || value.length === 0)) {
+export function prepareSwiftCoverageInputs({ sourcePackageRoot, packageRoot, tempRoot, sharedFixtureRoot } = {}) {
+  if ([sourcePackageRoot, packageRoot, tempRoot, sharedFixtureRoot].some((value) => typeof value !== "string" || value.length === 0)) {
     throw new TypeError("Swift coverage source input is malformed");
   }
   cpSync(sourcePackageRoot, packageRoot, {
     recursive: true,
     filter: (path) => !path.split(sep).some((part) => [".build", "recordings", "transcripts"].includes(part)),
   });
-  const fixtureDestination = join(tempRoot, "test-vectors", "context-biasing.json");
-  mkdirSync(dirname(fixtureDestination), { recursive: true });
-  cpSync(sharedFixturePath, fixtureDestination);
+  // The tests read the shared vectors (context biasing, golden protocol transcripts) from the
+  // package's sibling directory, as in the repository.
+  const fixtureDestination = join(tempRoot, "test-vectors");
+  cpSync(sharedFixtureRoot, fixtureDestination, { recursive: true });
   return fixtureDestination;
 }
 
@@ -529,7 +530,7 @@ export function collectSwiftCoverage(tempRoot) {
       sourcePackageRoot,
       packageRoot,
       tempRoot,
-      sharedFixturePath: join(REPO_ROOT, "src-tauri/engine-host/test-vectors/context-biasing.json"),
+      sharedFixtureRoot: join(REPO_ROOT, "src-tauri/engine-host/test-vectors"),
     });
     const versionText = JSON.parse(readFileSync(join(REPO_ROOT, "src-tauri/tauri.conf.json"), "utf8")).version;
     const buildInfo = [
@@ -590,7 +591,7 @@ export function collectSwiftCoverage(tempRoot) {
         "swift test --enable-code-coverage --jobs 2 --scratch-path <task-temporary-directory>; swift test --show-codecov-path --scratch-path <task-temporary-directory>",
       scope_policy: {
         ...config.coverage.swift,
-        shared_test_fixture: "src-tauri/engine-host/test-vectors/context-biasing.json",
+        shared_test_fixture: "src-tauri/engine-host/test-vectors/",
         inventory_construction: "tracked Swift sources under the registered source root, excluding configured generated files",
       },
     };

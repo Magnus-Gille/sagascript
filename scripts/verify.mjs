@@ -113,6 +113,18 @@ export const CHECKS = [
     lanes: ["test-macos", "test-windows"],
   },
   {
+    id: "lint",
+    area: "lint",
+    title: "ESLint (src/, scripts/, tests/; existing findings baselined in eslint-suppressions.json)",
+    steps: [step("npm run lint", undefined, { argv: ["npx", "eslint", "."] })],
+    sets: ["default", "fast"],
+    platforms: ALL,
+    requires: ["npm:eslint", "npm:@eslint/js", "npm:typescript-eslint", "npm:eslint-plugin-svelte", "npm:globals"],
+    timeoutMinutes: 5,
+    ci: [ci("npm run lint")],
+    lanes: ["test-macos"],
+  },
+  {
     id: "unit",
     area: "unit",
     title: "Vitest unit tests (src/**/*.test.ts)",
@@ -143,7 +155,8 @@ export const CHECKS = [
     steps: [nodeTests("ci")],
     sets: ["default"],
     platforms: ALL,
-    requires: [],
+    // The npm license policy test parses src/ with TypeScript and runs a vite build of the app.
+    requires: ["npm:vite", "npm:@sveltejs/vite-plugin-svelte", "npm:svelte", "npm:typescript"],
     timeoutMinutes: 15,
     ci: [ci("npm run test:frontend")],
     lanes: ["test-macos", "test-windows"],
@@ -415,7 +428,7 @@ export const CHECKS = [
     requires: ["rust"],
     timeoutMinutes: 30,
     ci: [ci("cargo test --locked", "src-tauri/engine-host/ort")],
-    lanes: ["test-linux"],
+    lanes: ["test-linux", "test-windows"],
   },
   {
     id: "release-guard",
@@ -456,6 +469,24 @@ export const CHECKS = [
     ci: [
       ci('./scripts/check-engine-host-identity.sh build/engine-host/sagascript-engine-host "$GITHUB_SHA"'),
       ci("swift test", "src-tauri/engine-host/coreml"),
+    ],
+    lanes: ["test-macos"],
+  },
+  {
+    id: "engine-host-conformance",
+    area: "swift",
+    title: "Engine-host conformance, model-free subset, against the staged Core ML host",
+    steps: [
+      step("./scripts/stage-engine-host.sh"),
+      step("python scripts/engine-host-conformance.py build/engine-host/sagascript-engine-host --no-model"),
+    ],
+    sets: ["default"],
+    platforms: MACOS,
+    requires: ["swift", "python"],
+    timeoutMinutes: 30,
+    ci: [
+      ci("./scripts/stage-engine-host.sh"),
+      ci("python scripts/engine-host-conformance.py build/engine-host/sagascript-engine-host --no-model"),
     ],
     lanes: ["test-macos"],
   },

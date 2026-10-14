@@ -1,0 +1,110 @@
+{
+  "scripts/ci-build-identity.mjs": {
+    "preserve-caught-error": {
+      "count": 3
+    }
+  },
+  "scripts/ci-cohort-timings.mjs": {
+    "preserve-caught-error": {
+      "count": 1
+    }
+  },
+  "scripts/ci-run-timings.mjs": {
+    "@typescript-eslint/no-unused-vars": {
+      "count": 2
+    },
+    "preserve-caught-error": {
+      "count": 1
+    }
+  },
+  "scripts/code-health-produce.mjs": {
+    "@typescript-eslint/no-unused-vars": {
+      "count": 2
+    },
+    "no-control-regex": {
+      "count": 1
+    }
+  },
+  "scripts/lib/code-health-producer.mjs": {
+    "@typescript-eslint/no-unused-vars": {
+      "count": 3
+    }
+  },
+  "scripts/qa-update-recovery.mjs": {
+    "@typescript-eslint/no-unused-vars": {
+      "count": 9
+    }
+  },
+  "scripts/test-ci-parallel-gates.mjs": {
+    "no-useless-escape": {
+      "count": 4
+    }
+  },
+  "scripts/test-code-health-producer.mjs": {
+    "no-control-regex": {
+      "count": 1
+    }
+  },
+  "scripts/test-verify-runner.mjs": {
+    "no-empty": {
+      "count": 1
+    },
+    "no-useless-escape": {
+      "count": 6
+    }
+  },
+  "src/lib/FileTranscription.svelte": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    },
+    "@typescript-eslint/no-unused-vars": {
+      "count": 3
+    }
+  },
+  "src/lib/MeetingReprocessing.svelte": {
+    "@typescript-eslint/no-unused-vars": {
+      "count": 1
+    },
+    "svelte/require-each-key": {
+      "count": 5
+    }
+  },
+  "src/lib/MeetingReview.svelte": {
+    "svelte/prefer-svelte-reactivity": {
+      "count": 1
+    }
+  },
+  "src/lib/Onboarding.svelte": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 10
+    },
+    "@typescript-eslint/no-unused-vars": {
+      "count": 2
+    },
+    "svelte/require-each-key": {
+      "count": 2
+    }
+  },
+  "src/lib/Settings.svelte": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 18
+    },
+    "@typescript-eslint/no-unused-vars": {
+      "count": 2
+    },
+    "no-useless-assignment": {
+      "count": 1
+    },
+    "svelte/no-useless-mustaches": {
+      "count": 1
+    },
+    "svelte/require-each-key": {
+      "count": 2
+    }
+  },
+  "src/lib/profile-shortcuts.ts": {
+    "@typescript-eslint/no-unused-vars": {
+      "count": 1
+    }
+  }
+}

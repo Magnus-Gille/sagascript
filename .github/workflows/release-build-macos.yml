@@ -80,7 +80,7 @@ jobs:
       - name: Build and stage Core ML engine host
         run: |
           ./scripts/stage-engine-host.sh
-          ./scripts/check-engine-host-identity.sh build/engine-host/sagascript-engine-host "$GITHUB_SHA"
+          ./scripts/check-engine-host-identity.sh --release build/engine-host/sagascript-engine-host "$GITHUB_SHA"
 
       - name: Verify release metadata and tag
         env:
@@ -113,7 +113,13 @@ jobs:
           : "${APPLE_SIGNING_IDENTITY:?APPLE_SIGNING_IDENTITY secret is required}"
           codesign --force --options runtime --timestamp --sign "$APPLE_SIGNING_IDENTITY" build/engine-host/sagascript-engine-host
           codesign --verify --strict --verbose=2 build/engine-host/sagascript-engine-host
-          ./scripts/check-engine-host-identity.sh build/engine-host/sagascript-engine-host "$GITHUB_SHA"
+          ./scripts/check-engine-host-identity.sh --release build/engine-host/sagascript-engine-host "$GITHUB_SHA"
+
+      # Engine-host protocol conformance (#367), model-free subset, against the
+      # signed hardened-runtime host that is bundled next. The full run with the
+      # Pianissimo model follows the installed-app smoke below.
+      - name: Engine-host conformance, model-free subset (signed Core ML host)
+        run: python3 scripts/engine-host-conformance.py build/engine-host/sagascript-engine-host --no-model
 
       - name: Prepare notarization credentials and build metadata
         env:
@@ -187,7 +193,7 @@ jobs:
           app="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sagascript.app"
           dmg=$(find src-tauri/target/aarch64-apple-darwin/release/bundle/dmg -name '*.dmg' -print -quit)
           [[ -n "$dmg" ]]
-          ./scripts/verify-macos-release.sh "$app" "$dmg" "$version" "$GITHUB_SHA"
+          ./scripts/verify-macos-release.sh --release "$app" "$dmg" "$version" "$GITHUB_SHA"
           updater_bundle="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sagascript.app.tar.gz"
           updater_signature="$updater_bundle.sig"
           tar -czf "$updater_bundle" -C "$(dirname "$app")" "$(basename "$app")"
@@ -230,6 +236,14 @@ jobs:
 
       - name: Gate signed Pianissimo through /usr/local/bin/sagascript
         run: ./scripts/smoke-pianissimo-installed.sh /usr/local/bin/sagascript test-audio/swedish-fleurs-hongkong.wav hongkong
+
+      # Engine-host protocol conformance (#367), full run, on every release path
+      # (prebuild and fallback): the host inside the installed signed app, with the
+      # Pianissimo model the previous step downloaded.
+      - name: Gate engine-host conformance, full run (installed signed host)
+        run: |
+          model_dir=$(/usr/local/bin/sagascript engine status --json | python3 -c 'import json, sys; print(json.load(sys.stdin)["model"]["dir"])')
+          python3 scripts/engine-host-conformance.py /Applications/Sagascript.app/Contents/Resources/EngineHost/sagascript-engine-host --model-dir "$model_dir"
 
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
