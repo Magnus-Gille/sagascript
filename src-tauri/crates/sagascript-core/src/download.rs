@@ -195,8 +195,11 @@ trait DownloadFs: Send + Sync {
     fn create_dir_all(&self, dir: &Path) -> std::io::Result<()>;
     fn sync_file(&self, file: &std::fs::File, path: &Path) -> std::io::Result<()>;
     fn rename(&self, from: &Path, to: &Path) -> std::io::Result<()>;
-    /// Flush the directory entry that `rename` created. Unix only; elsewhere
-    /// there is nothing to do (Windows cannot open a directory to sync it).
+    /// Flush the directory entry that `rename` created. Unix only: it exists so
+    /// that the verification stamp, written next, never vouches for a name
+    /// that a crash can still undo, and Windows writes no stamp
+    /// ([`write_verification_stamp`] is a no-op there), so it has nothing to
+    /// order.
     fn sync_dir(&self, dir: &Path) -> std::io::Result<()>;
 }
 
@@ -231,8 +234,10 @@ impl DownloadFs for RealFs {
 /// Flush `file` to stable storage: `File::sync_all`, which is `fsync` on
 /// Linux and `FlushFileBuffers` on Windows. On Apple platforms std's
 /// `sync_all` is only `fcntl(F_FULLFSYNC)`, which SMB and NFS homes, macFUSE
-/// and some external drives reject, so there `fsync(2)` is the fallback, as in
-/// SQLite.
+/// and some external drives reject, so there `fsync(2)` is the fallback. That
+/// differs from SQLite, which falls back on any `F_FULLFSYNC` failure: here
+/// only a failure of the unsupported class ([`sync_unsupported`]) falls back,
+/// and EIO, ENOSPC and EDQUOT stay fatal, on purpose.
 fn sync_durably(file: &File) -> std::io::Result<()> {
     #[cfg(target_vendor = "apple")]
     {
@@ -253,7 +258,10 @@ fn sync_with_fallback(
     plain: impl FnOnce() -> std::io::Result<()>,
 ) -> std::io::Result<()> {
     match full() {
-        Err(error) if sync_unsupported(&error) => plain(),
+        Err(error) if sync_unsupported(&error) => {
+            tracing::debug!("Full sync rejected ({error}); falling back to the plain sync");
+            plain()
+        }
         result => result,
     }
 }

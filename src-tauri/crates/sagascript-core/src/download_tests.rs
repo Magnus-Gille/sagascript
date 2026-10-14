@@ -1588,6 +1588,34 @@ fn fallback_sync_runs_only_when_the_full_sync_is_unsupported() {
     assert!(plain_ran.get());
 }
 
+/// F_FULLFSYNC succeeds on APFS, so no download test reaches the `fsync(2)`
+/// fallback; call it directly.
+#[cfg(target_vendor = "apple")]
+#[test]
+fn plain_fsync_flushes_a_regular_file() {
+    use std::io::Write;
+    let dir = TempDir::new();
+    let mut file = std::fs::File::create(dir.join("synced")).unwrap();
+    file.write_all(b"data").unwrap();
+
+    fsync(&file).unwrap();
+}
+
+/// A descriptor with no sync operation fails with an unsupported-class errno
+/// (EINVAL, or ENOTSUP on XNU), which the caller turns into a warning rather
+/// than a failed download.
+#[cfg(target_vendor = "apple")]
+#[test]
+fn plain_fsync_reports_a_descriptor_that_cannot_sync() {
+    use std::os::fd::OwnedFd;
+    let (socket, _peer) = std::os::unix::net::UnixStream::pair().unwrap();
+    let file = std::fs::File::from(OwnedFd::from(socket));
+
+    let error = fsync(&file).unwrap_err();
+
+    assert!(sync_unsupported(&error), "{error:?}");
+}
+
 #[cfg(unix)]
 #[test]
 fn unsupported_sync_is_tolerated_but_real_failures_are_not() {
