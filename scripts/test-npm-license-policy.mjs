@@ -9,9 +9,9 @@
 // (licenses:check runs only in the release gate).
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, posix as posixPath } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { build } from "vite";
@@ -31,7 +31,9 @@ import {
   svelteBlocks,
 } from "./lib/npm-license-policy.mjs";
 
-const root = fileURLToPath(new URL("..", import.meta.url));
+// Canonical paths (symlinks resolved, Windows long names) as Vite sees them:
+// a root that differs only in form makes Vite emit relative file names.
+const root = realpathSync.native(fileURLToPath(new URL("..", import.meta.url)));
 const lock = JSON.parse(readFileSync(join(root, "package-lock.json"), "utf8"));
 const packageName = (path) => path.slice(path.lastIndexOf("node_modules/") + "node_modules/".length);
 // Computed on first use, so a bad reference under src/ fails only the tests
@@ -45,7 +47,9 @@ const sq = (specifier) => `'${specifier}'`;
 
 /** A throwaway project: `files` maps paths to contents; node_modules is the repository's. */
 function fixtureProject(files) {
-  const project = mkdtempSync(join(tmpdir(), "sagascript-license-"));
+  // macOS's temp dir is behind the /var -> /private/var symlink, Windows's may
+  // use a short (RUNNER~1) name.
+  const project = realpathSync.native(mkdtempSync(join(tmpdir(), "sagascript-license-")));
   for (const [path, content] of Object.entries(files)) {
     mkdirSync(dirname(join(project, path)), { recursive: true });
     writeFileSync(join(project, path), content);
@@ -326,7 +330,8 @@ function classifyBuildInput(id, { projectRoot, modulesRoot = projectRoot }) {
     path = virtual;
   }
   // Emitted assets name their original file relative to the project.
-  if (!/^([a-z]:)?\//i.test(path)) path = posix(resolve(projectRoot, path));
+  // (Joined as POSIX paths: path.resolve would add the current drive on Windows.)
+  if (!/^([a-z]:)?\//i.test(path)) path = posixPath.normalize(`${posix(projectRoot)}/${path}`);
   for (const base of [modulesRoot, projectRoot]) {
     const relativePath = relativeTo(path, base);
     if (relativePath?.startsWith("node_modules/")) return { kind: "package", lockPath: lockPathOfModule(relativePath) };
