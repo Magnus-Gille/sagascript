@@ -25,7 +25,7 @@ use std::path::{Path, PathBuf};
 use tracing::{info, warn};
 
 use crate::download::{
-    download_to_path, prepare_existing_artifact, verify_file_with_stamp, DownloadIntegrity,
+    download_to_path, prepare_existing_artifact_async, verify_file_with_stamp, DownloadIntegrity,
     ExistingArtifact,
 };
 use crate::error::DictationError;
@@ -850,7 +850,9 @@ async fn download_in(
             archive: integrity,
         } => {
             let archive = models.join(format!("{}.zip", manifest.versioned_id()));
-            if prepare_existing_artifact(&archive, integrity)? != ExistingArtifact::Verified {
+            if prepare_existing_artifact_async(&archive, integrity).await?
+                != ExistingArtifact::Verified
+            {
                 info!("Downloading Pianissimo model from {url}");
                 download_to_path(
                     url,

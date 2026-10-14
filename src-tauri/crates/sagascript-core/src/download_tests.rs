@@ -1410,3 +1410,103 @@ async fn cancelling_while_the_temp_file_syncs_installs_nothing() {
     .await
     .expect("test exceeded its hard timeout");
 }
+
+// -- verifying an existing artifact from async code (#368) --
+
+/// `#[tokio::test]` runs a current-thread runtime: a hash done inline would
+/// run on this very thread.
+#[tokio::test]
+async fn existing_artifact_is_hashed_off_the_async_executor() {
+    let executor = std::thread::current().id();
+    let dir = TempDir::new();
+    let path = dir.join("model.bin");
+    std::fs::write(&path, b"verified model").unwrap();
+    let hashed_on = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+
+    let result = prepare_existing_artifact_async_with(path.clone(), pinned(14), {
+        let hashed_on = hashed_on.clone();
+        move |file, p: &Path, cancel: &CancelFlag| {
+            hashed_on.lock().unwrap().push(std::thread::current().id());
+            sha256_of_file_until(file, p, cancel)
+        }
+    })
+    .await;
+
+    assert_eq!(result.unwrap(), ExistingArtifact::Verified);
+    let hashed_on = hashed_on.lock().unwrap().clone();
+    assert_eq!(hashed_on.len(), 1, "expected exactly one hash");
+    assert_ne!(
+        hashed_on[0], executor,
+        "the existing artifact was hashed on the async executor thread"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cancelling_verification_stops_the_hash_and_keeps_the_file() {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let dir = TempDir::new();
+        let path = dir.join("model.bin");
+        // Same size as the pinned artifact, wrong bytes: a completed hash
+        // would delete it.
+        std::fs::write(&path, b"tampered model").unwrap();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (saw_cancel_tx, saw_cancel_rx) = std::sync::mpsc::channel();
+        let started_tx = std::sync::Mutex::new(started_tx);
+        let saw_cancel_tx = std::sync::Mutex::new(saw_cancel_tx);
+
+        let task = tokio::spawn(prepare_existing_artifact_async_with(
+            path.clone(),
+            pinned(14),
+            move |file, p: &Path, cancel: &CancelFlag| {
+                started_tx.lock().unwrap().send(()).unwrap();
+                let give_up = std::time::Instant::now() + Duration::from_secs(5);
+                while !cancel.is_cancelled() && std::time::Instant::now() < give_up {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                let _ = saw_cancel_tx.lock().unwrap().send(cancel.is_cancelled());
+                sha256_of_file_until(file, p, cancel)
+            },
+        ));
+        tokio::task::spawn_blocking(move || started_rx.recv_timeout(Duration::from_secs(10)))
+            .await
+            .unwrap()
+            .expect("the hash never started");
+
+        task.abort();
+        let _ = task.await;
+        let saw_cancel = tokio::task::spawn_blocking(move || {
+            saw_cancel_rx.recv_timeout(Duration::from_secs(10))
+        })
+        .await
+        .unwrap()
+        .expect("the hash never finished");
+
+        assert!(saw_cancel, "dropping the future did not cancel the hash");
+        // The hash gives up as an I/O-style failure, so nothing is deleted.
+        assert!(
+            eventually(Duration::from_secs(2), || path.exists()).await
+                && std::fs::read(&path).unwrap() == b"tampered model",
+            "a cancelled verification removed the artifact"
+        );
+    })
+    .await
+    .expect("test exceeded its hard timeout");
+}
+
+#[test]
+fn cancelled_hash_is_not_an_integrity_mismatch() {
+    let dir = TempDir::new();
+    let path = dir.join("model.bin");
+    std::fs::write(&path, b"tampered model").unwrap();
+    let cancel = CancelFlag::default();
+    cancel.cancel();
+
+    let err = prepare_existing_artifact_with(&path, pinned(14), &|file, p| {
+        sha256_of_file_until(file, p, &cancel)
+    })
+    .unwrap_err()
+    .to_string();
+
+    assert!(err.contains("was cancelled"), "{err}");
+    assert_eq!(std::fs::read(&path).unwrap(), b"tampered model");
+}

@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use tracing::info;
 
 use crate::download::{
-    download_to_path, prepare_existing_artifact, DownloadIntegrity, ExistingArtifact,
+    download_to_path, prepare_existing_artifact_async, DownloadIntegrity, ExistingArtifact,
 };
 use crate::error::DictationError;
 
@@ -123,7 +123,9 @@ pub async fn download_model(
 ) -> Result<PathBuf, DictationError> {
     let path = model_path(model);
 
-    if prepare_existing_artifact(&path, model.download_integrity())? == ExistingArtifact::Verified {
+    if prepare_existing_artifact_async(&path, model.download_integrity()).await?
+        == ExistingArtifact::Verified
+    {
         info!(
             "Diarization model {} already exists at {}",
             model.display_name(),

@@ -739,9 +739,47 @@ fn failure_into_error(failure: VerificationFailure) -> DictationError {
 /// Verify an app-managed artifact and remove it only when its bytes are proven
 /// not to match the immutable manifest. I/O failures and invalid manifest data
 /// are returned without touching the file.
+///
+/// Blocking: without a matching verification stamp this hashes the whole
+/// file, which can be gigabytes. Async code uses
+/// [`prepare_existing_artifact_async`].
 pub fn prepare_existing_artifact(
     path: &Path,
     integrity: DownloadIntegrity,
+) -> Result<ExistingArtifact, DictationError> {
+    prepare_existing_artifact_with(path, integrity, &sha256_of_file)
+}
+
+/// [`prepare_existing_artifact`] for async callers (#368): the check, and the
+/// hash it may need, run on Tokio's blocking pool. Dropping the future stops
+/// the hash at its next 1 MiB read and leaves the file untouched.
+pub async fn prepare_existing_artifact_async(
+    path: &Path,
+    integrity: DownloadIntegrity,
+) -> Result<ExistingArtifact, DictationError> {
+    prepare_existing_artifact_async_with(path.to_path_buf(), integrity, sha256_of_file_until).await
+}
+
+async fn prepare_existing_artifact_async_with<H>(
+    path: PathBuf,
+    integrity: DownloadIntegrity,
+    hasher: H,
+) -> Result<ExistingArtifact, DictationError>
+where
+    H: Fn(std::fs::File, &Path, &CancelFlag) -> Result<String, VerificationFailure>
+        + Send
+        + 'static,
+{
+    run_blocking_cancellable(move |cancel| {
+        prepare_existing_artifact_with(&path, integrity, &|file, p| hasher(file, p, cancel))
+    })
+    .await
+}
+
+fn prepare_existing_artifact_with(
+    path: &Path,
+    integrity: DownloadIntegrity,
+    hasher: FileHasher<'_>,
 ) -> Result<ExistingArtifact, DictationError> {
     match std::fs::symlink_metadata(path) {
         Ok(_) => {}
@@ -756,7 +794,7 @@ pub fn prepare_existing_artifact(
         }
     }
 
-    match verify_file_detailed(path, integrity) {
+    match verify_file_detailed_with(path, integrity, false, hasher) {
         Ok(()) => Ok(ExistingArtifact::Verified),
         Err(VerificationFailure::Other(error)) => Err(error),
         Err(VerificationFailure::IntegrityMismatch(message)) => {
@@ -857,6 +895,17 @@ fn verify_file_detailed_at(
 }
 
 fn sha256_of_file(file: std::fs::File, path: &Path) -> Result<String, VerificationFailure> {
+    sha256_of_file_until(file, path, &CancelFlag::default())
+}
+
+/// Hash `file`, giving up between reads once `cancel` is set. A cancelled
+/// hash is an `Other` failure, never an integrity mismatch, so it can never
+/// get the file deleted.
+fn sha256_of_file_until(
+    file: std::fs::File,
+    path: &Path,
+    cancel: &CancelFlag,
+) -> Result<String, VerificationFailure> {
     let mut reader = BufReader::new(file);
     let mut hasher = Sha256::new();
     // Keep the multi-megabyte artifact hash buffer off the thread stack. The
@@ -865,6 +914,14 @@ fn sha256_of_file(file: std::fs::File, path: &Path) -> Result<String, Verificati
     // (especially on ARM64).
     let mut buffer = vec![0_u8; 1024 * 1024];
     loop {
+        if cancel.is_cancelled() {
+            return Err(VerificationFailure::Other(
+                DictationError::ModelDownloadFailed(format!(
+                    "Integrity verification of {} was cancelled",
+                    path.display()
+                )),
+            ));
+        }
         let read = reader.read(&mut buffer).map_err(|e| {
             VerificationFailure::Other(DictationError::ModelDownloadFailed(format!(
                 "Failed while hashing model {}: {e}",

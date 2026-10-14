@@ -5,8 +5,8 @@ use std::time::{Duration, SystemTime};
 use tracing::info;
 
 use crate::download::{
-    download_to_path, prepare_existing_artifact, verify_file, DownloadIntegrity, ExistingArtifact,
-    GGML_MAGIC,
+    download_to_path, prepare_existing_artifact_async, verify_file, DownloadIntegrity,
+    ExistingArtifact, GGML_MAGIC,
 };
 use crate::error::DictationError;
 use crate::settings::WhisperModel;
@@ -138,7 +138,9 @@ pub async fn download_vad_model(
     progress_callback: impl Fn(u64, u64) + Send + 'static,
 ) -> Result<PathBuf, DictationError> {
     let path = vad_model_path();
-    if prepare_existing_artifact(&path, VAD_MODEL_INTEGRITY)? == ExistingArtifact::Verified {
+    if prepare_existing_artifact_async(&path, VAD_MODEL_INTEGRITY).await?
+        == ExistingArtifact::Verified
+    {
         return Ok(path);
     }
 
@@ -188,7 +190,9 @@ pub async fn download_model(
     let dir = models_dir();
     let path = dir.join(model.ggml_filename());
 
-    if prepare_existing_artifact(&path, model.download_integrity())? == ExistingArtifact::Verified {
+    if prepare_existing_artifact_async(&path, model.download_integrity()).await?
+        == ExistingArtifact::Verified
+    {
         info!(
             "Model {} already exists at {}",
             model.display_name(),
