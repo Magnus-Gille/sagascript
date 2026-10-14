@@ -1085,6 +1085,12 @@ async fn cancelling_while_file_creation_is_queued_leaves_no_file() {
         // Saturate the blocking pool is impractical; instead cancel right
         // after the response arrives, racing creation. Whatever the
         // interleaving, no file may remain once creation has settled.
+        // Build the shared HTTP client first, so the first round races file
+        // creation rather than the one-off client build.
+        SHARED_CLIENTS
+            .client(limits(5000, 20_000).connect_timeout)
+            .await
+            .unwrap();
         for _ in 0..20 {
             let dir = TempDir::new();
             let (url, server) = serve_scripts(vec![vec![
@@ -1509,4 +1515,91 @@ fn cancelled_hash_is_not_an_integrity_mismatch() {
 
     assert!(err.contains("was cancelled"), "{err}");
     assert_eq!(std::fs::read(&path).unwrap(), b"tampered model");
+}
+
+// -- one shared HTTP client (#368) --
+
+fn own_client_cache() -> &'static ClientCache {
+    Box::leak(Box::new(ClientCache::new()))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn downloads_share_one_http_client() {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let clients = own_client_cache();
+        let env = DownloadEnv {
+            clients,
+            ..DownloadEnv::production(fast_limits())
+        };
+        let model = || vec![ok_head(Some(14)), Step::Write(b"verified model".to_vec())];
+        let (url, server) = serve_scripts(vec![model(), model()]);
+        let dir = TempDir::new();
+
+        for name in ["first.bin", "second.bin"] {
+            download_with(
+                &url,
+                &dir.join(name),
+                "bin",
+                pinned(14),
+                None,
+                |_, _| {},
+                &env,
+            )
+            .await
+            .unwrap();
+        }
+
+        assert_eq!(
+            clients.builds.load(Ordering::Relaxed),
+            1,
+            "every download built its own HTTP client"
+        );
+        join_server(server).await;
+    })
+    .await
+    .expect("test exceeded its hard timeout");
+}
+
+/// The shared client must not pool connections (see `ClientCache`). The
+/// server keeps the first connection open after its response without reading
+/// from it again, so a client that reused it would get no answer.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shared_client_opens_a_new_connection_per_download() {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let env = DownloadEnv {
+            clients: own_client_cache(),
+            ..DownloadEnv::production(limits(3000, 20_000))
+        };
+        let keep_alive = Step::Write(b"HTTP/1.1 200 OK\r\nContent-Length: 14\r\n\r\n".to_vec());
+        let (url, server) = serve_scripts(vec![
+            vec![
+                keep_alive,
+                Step::Write(b"verified model".to_vec()),
+                Step::Sleep(Duration::from_millis(1500)),
+            ],
+            vec![ok_head(Some(14)), Step::Write(b"verified model".to_vec())],
+        ]);
+        let dir = TempDir::new();
+
+        for name in ["first.bin", "second.bin"] {
+            if let Err(error) = download_with(
+                &url,
+                &dir.join(name),
+                "bin",
+                pinned(14),
+                None,
+                |_, _| {},
+                &env,
+            )
+            .await
+            {
+                panic!("{name}: {error}");
+            }
+        }
+
+        let errors = join_server(server).await;
+        assert!(errors.is_empty(), "{errors:?}");
+    })
+    .await
+    .expect("test exceeded its hard timeout");
 }

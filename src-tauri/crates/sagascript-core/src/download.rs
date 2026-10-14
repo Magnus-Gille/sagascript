@@ -25,20 +25,21 @@
 
 use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 #[cfg(unix)]
 use std::collections::HashMap;
 #[cfg(unix)]
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
 
 use futures_util::StreamExt;
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt;
 
 use crate::error::DictationError;
+use crate::sync::lock_or_recover;
 
 /// whisper.cpp's `GGML_FILE_MAGIC` (`0x67676d6c`, mnemonic "ggml") as it
 /// actually appears on disk: the constant is written out as a little-endian
@@ -212,6 +213,7 @@ impl DownloadFs for RealFs {
 /// Network bounds and injectable side effects of one download.
 struct DownloadEnv {
     limits: DownloadLimits,
+    clients: &'static ClientCache,
     fs: Arc<dyn DownloadFs>,
 }
 
@@ -219,8 +221,61 @@ impl DownloadEnv {
     fn production(limits: DownloadLimits) -> Self {
         Self {
             limits,
+            clients: &SHARED_CLIENTS,
             fs: Arc::new(RealFs),
         }
+    }
+}
+
+static SHARED_CLIENTS: ClientCache = ClientCache::new();
+
+/// One HTTP client per process for model downloads (#368), instead of one
+/// per download: building a client loads the platform TLS configuration and
+/// the system proxy settings.
+///
+/// The client keeps no idle connections ([`build_client`]). The CLI runs
+/// downloads on short-lived Tokio runtimes (`download_vad_model` under a fresh
+/// runtime's `block_on`), and a pooled connection is driven by a task on the
+/// runtime that opened it, so a later runtime must never be handed one. Each
+/// model download is one long transfer, so pooling would save nothing anyway.
+struct ClientCache {
+    /// One client per connect timeout (production only uses the default;
+    /// tests add a short one). Each update is a single `push`, so the list
+    /// stays consistent if a panic poisons the lock (ADR 0005).
+    clients: Mutex<Vec<(Duration, reqwest::Client)>>,
+    builds: AtomicUsize,
+}
+
+impl ClientCache {
+    const fn new() -> Self {
+        Self {
+            clients: Mutex::new(Vec::new()),
+            builds: AtomicUsize::new(0),
+        }
+    }
+
+    async fn client(&self, connect_timeout: Duration) -> Result<reqwest::Client, DictationError> {
+        if let Some(client) = self.cached(connect_timeout) {
+            return Ok(client);
+        }
+        // Loading the TLS configuration reads system files: off the executor.
+        let client = run_blocking(move || build_client(connect_timeout)).await?;
+        let mut clients = lock_or_recover(&self.clients, "download.http_clients");
+        // A concurrent first download may have stored one meanwhile; keep it.
+        if let Some((_, existing)) = clients.iter().find(|(t, _)| *t == connect_timeout) {
+            return Ok(existing.clone());
+        }
+        clients.push((connect_timeout, client.clone()));
+        let builds = self.builds.fetch_add(1, Ordering::Relaxed) + 1;
+        tracing::debug!(builds, "Built an HTTP client for model downloads");
+        Ok(client)
+    }
+
+    fn cached(&self, connect_timeout: Duration) -> Option<reqwest::Client> {
+        lock_or_recover(&self.clients, "download.http_clients")
+            .iter()
+            .find(|(timeout, _)| *timeout == connect_timeout)
+            .map(|(_, client)| client.clone())
     }
 }
 
@@ -247,11 +302,13 @@ async fn download_with(
         .await?;
     }
 
+    let client = env.clients.client(env.limits.connect_timeout).await?;
     let tmp_path = unique_tmp_path(dest, tmp_ext);
     // The guard is created together with the file (inside the blocking
     // creation task), so it removes the file on error, cancellation, panic, or
     // an abandoned creation; it moves into the install step below.
     let (file, guard) = fetch_to_tmp(
+        &client,
         url,
         &tmp_path,
         integrity,
@@ -412,6 +469,7 @@ fn total_err(limits: DownloadLimits, size: u64) -> DictationError {
 /// checked explicitly between chunks and before validation, because the
 /// synchronous progress callback and hashing cannot be pre-empted.
 async fn fetch_to_tmp(
+    client: &reqwest::Client,
     url: &str,
     tmp_path: &Path,
     integrity: DownloadIntegrity,
@@ -421,8 +479,7 @@ async fn fetch_to_tmp(
 ) -> Result<(std::fs::File, TmpFileGuard), DictationError> {
     let deadline = tokio::time::Instant::now() + limits.total_deadline(integrity.size);
     let fetch = async {
-        let client = build_client(limits.connect_timeout)?;
-        let response = open_response(&client, url, limits).await?;
+        let response = open_response(client, url, limits).await?;
         stream_to_tmp(
             response,
             tmp_path,
@@ -452,7 +509,7 @@ fn idle_err(limits: DownloadLimits) -> DictationError {
 }
 
 /// HTTP client for model downloads. Redirects are followed manually (see
-/// [`open_response`]).
+/// [`open_response`]); no connection is kept idle (see [`ClientCache`]).
 fn build_client(connect_timeout: Duration) -> Result<reqwest::Client, DictationError> {
     reqwest::Client::builder()
         // The platform TLS stack, whatever else in the binary enables
@@ -460,6 +517,7 @@ fn build_client(connect_timeout: Duration) -> Result<reqwest::Client, DictationE
         .tls_backend_native()
         .connect_timeout(connect_timeout)
         .redirect(reqwest::redirect::Policy::none())
+        .pool_max_idle_per_host(0)
         .build()
         .map_err(download_failed)
 }
