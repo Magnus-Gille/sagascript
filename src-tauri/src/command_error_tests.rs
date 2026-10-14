@@ -58,11 +58,13 @@ fn dictation_errors_keep_their_code_and_retry_hint() {
             "retryable": false,
         })
     );
+    let timed_out = wire(DictationError::TranscriptionTimedOut(
+        "Transcription timed out after 60s (inference aborted)".into(),
+    ));
+    assert_eq!(timed_out["code"], "transcription_timed_out");
     assert_eq!(
-        wire(DictationError::TranscriptionTimedOut(
-            "Transcription timed out after 60s (inference aborted)".into()
-        ))["code"],
-        "transcription_timed_out"
+        timed_out["retryable"], false,
+        "a timeout is not offered as a retry: the same input times out again"
     );
 }
 

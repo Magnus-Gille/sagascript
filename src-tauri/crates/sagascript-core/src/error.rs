@@ -163,14 +163,15 @@ impl DictationError {
         }
     }
 
-    /// Whether doing the same thing again can succeed: the engine or model was
-    /// busy or not ready yet, nothing was captured, or the work timed out.
+    /// Whether the user's action may be repeated (record again, run the file
+    /// again) and is expected to succeed: the engine or model was busy or not
+    /// ready yet, or nothing was captured. It does not mean the same call can
+    /// be repeated: the audio of a stopped recording is consumed. A timeout is
+    /// not retryable, because the same input under the same budget tends to
+    /// time out again (ADR 0006).
     pub fn retryable(&self) -> bool {
         match self {
-            Self::ModelBusy
-            | Self::ModelNotLoaded
-            | Self::NoAudioCaptured
-            | Self::TranscriptionTimedOut(_) => true,
+            Self::ModelBusy | Self::ModelNotLoaded | Self::NoAudioCaptured => true,
             Self::Engine(failure) => failure.retryable(),
             _ => false,
         }
@@ -380,7 +381,10 @@ mod tests {
         assert!(DictationError::ModelBusy.retryable());
         assert!(DictationError::ModelNotLoaded.retryable());
         assert!(DictationError::NoAudioCaptured.retryable());
-        assert!(DictationError::TranscriptionTimedOut("x".into()).retryable());
+        // A timeout is not offered as a retry: the same input under the same
+        // budget tends to time out again, and a file that always exceeds it
+        // would be retried forever (ADR 0006).
+        assert!(!DictationError::TranscriptionTimedOut("x".into()).retryable());
         assert!(!DictationError::TranscriptionFailed("x".into()).retryable());
         assert!(!DictationError::FileNotFound("x".into()).retryable());
         assert!(!DictationError::MicrophonePermissionDenied.retryable());

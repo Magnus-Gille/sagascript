@@ -729,7 +729,8 @@ fn engine_code(error: &EngineHostError) -> (&'static str, bool) {
         }
         // A restart is attempted on the next request, within the crash budget.
         EngineHostError::Crashed { .. } => ("engine_crashed", true),
-        EngineHostError::Timeout { .. } => ("engine_timeout", true),
+        // Like a transcription timeout: the same input tends to time out again.
+        EngineHostError::Timeout { .. } => ("engine_timeout", false),
         EngineHostError::Spawn { .. }
         | EngineHostError::Handshake(_)
         | EngineHostError::Failed(_)
@@ -1012,7 +1013,7 @@ mod tests {
         });
         assert_eq!(
             (timeout.code(), timeout.retryable()),
-            ("engine_timeout", true)
+            ("engine_timeout", false)
         );
         for unavailable in [
             EngineHostError::NotRunning,

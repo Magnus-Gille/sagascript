@@ -42,7 +42,7 @@
   "transcription_timed_out": {
     "code": "transcription_timed_out",
     "message": "Transcription timed out after 60s (inference aborted)",
-    "retryable": true
+    "retryable": false
   },
   "unclassified": {
     "code": "unclassified",

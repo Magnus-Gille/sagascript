@@ -11,7 +11,10 @@
  * The error object of a command that returns `Result<T, CommandError>`
  * (src-tauri/src/command_error.rs). `code` is stable snake_case,
  * `message` is English text for the user without absolute paths, and
- * `retryable` says whether trying the same action again can succeed.
+ * `retryable` says whether the user's action may be repeated (record again, run
+ * the file again) and is expected to succeed. It does not say that the same
+ * `invoke` may be repeated: `stop_and_transcribe` has consumed the audio, so a
+ * second call resolves with an empty text. A timeout is not retryable.
  */
 export interface BackendError {
   code: string;
@@ -52,8 +55,10 @@ export type BackendErrorRecovery = "retry" | "download_model";
 /**
  * The offered way out of an error: download the model again when the engine's
  * model is missing or cannot be loaded (trying again would fail the same way),
- * try again when the backend says the action can succeed on a second attempt,
- * otherwise nothing (`null`).
+ * try again when the backend says the user's action may be repeated, otherwise
+ * nothing (`null`). "Try again" must restart the user's action (record again,
+ * run the file again), never re-invoke the failed command: a repeated
+ * `stop_and_transcribe` finds no recording and resolves with an empty text.
  */
 export function backendErrorRecovery(error: unknown): BackendErrorRecovery | null {
   if (!isBackendError(error)) return null;

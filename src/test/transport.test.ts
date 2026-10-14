@@ -78,11 +78,19 @@ describe("command_errors", () => {
   test("the retry and download choices follow the code and the retry hint", () => {
     const recovery = (variant: string) => backendErrorRecovery(variants().get(variant));
     expect(recovery("engine_model_load_failed")).toBe("download_model");
-    for (const retryable of ["busy", "model_busy", "engine_busy", "transcription_timed_out"]) {
+    for (const retryable of ["busy", "model_busy", "engine_busy"]) {
       expect(variants().get(retryable)!.retryable, retryable).toBe(true);
       expect(recovery(retryable), retryable).toBe("retry");
     }
-    for (const final of ["not_recording", "cancelled", "dictionary_changed_elsewhere", "file_not_found", "unclassified"]) {
+    // A timeout is not retryable: the same input under the same budget times out again (ADR 0006).
+    for (const final of [
+      "not_recording",
+      "cancelled",
+      "dictionary_changed_elsewhere",
+      "file_not_found",
+      "transcription_timed_out",
+      "unclassified",
+    ]) {
       expect(recovery(final), final).toBeNull();
     }
   });

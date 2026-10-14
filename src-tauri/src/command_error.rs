@@ -14,7 +14,9 @@
 //!   this enum adds the ones only a command can have.
 //! - `message` is English text for the user, with absolute paths removed
 //!   ([`sagascript_core::path_scrub`]) however the error was built.
-//! - `retryable` says whether trying the same action again can succeed.
+//! - `retryable` says whether the user's action may be repeated (record again,
+//!   run the file again) and is expected to succeed; not that the same call
+//!   may be repeated (ADR 0006).
 //!
 //! The command domains the GUI matched on message text are converted: dictation
 //! and transcription, hotkeys, the dictionary and file transcription. The rest
