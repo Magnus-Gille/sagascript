@@ -191,6 +191,20 @@ describe("events", () => {
     expect(seen).toEqual(["a:transcribing", "b:transcribing"]);
   });
 
+  test("listeners() names every active registration, including events the map does not know", async () => {
+    const ipc = mockIpc();
+    expect(ipc.listeners()).toEqual([]);
+    const unlistenState = await listen("state-changed", () => undefined);
+    await listen("state-changed", () => undefined);
+    await listen("tauri://drag-drop", () => undefined);
+    await listen("error", () => undefined);
+    expect(ipc.listeners()).toEqual(["error", "state-changed", "state-changed", "tauri://drag-drop"]);
+
+    unlistenState();
+    await Promise.resolve();
+    expect(ipc.listeners()).toEqual(["error", "state-changed", "tauri://drag-drop"]);
+  });
+
   test("once() receives one event and then unlistens by the event's id", async () => {
     // @tauri-apps/api's once() unlistens with `event.id` from inside the
     // handler: the id the mock delivers must be the one listen() returned.
