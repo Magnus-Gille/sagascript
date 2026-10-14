@@ -7,6 +7,19 @@ import Onboarding from "./Onboarding.svelte";
 import { mockIpc, type CommandHandlers } from "../test/ipc";
 import { pianissimo, settingsValue } from "../test/settings";
 
+// The real wait polls once a second; these tests poll every few milliseconds.
+vi.mock("./permissions", async (importOriginal) => {
+  const real = await importOriginal<typeof import("./permissions")>();
+  return {
+    ...real,
+    waitForAccessibility: (options = {}) => real.waitForAccessibility({ intervalMs: 5, ...options }),
+    requestAccessibility: (options = {}) => real.requestAccessibility({ intervalMs: 5, ...options }),
+  };
+});
+
+/** The commands in order, a poll's repeated checks counting once. */
+const sequence = (commands: string[]) => commands.filter((command, index) => command !== commands[index - 1]);
+
 /** macOS with the microphone granted, so the flow reaches the Accessibility step. */
 function backend(overrides: CommandHandlers = {}): CommandHandlers {
   return {
@@ -37,7 +50,6 @@ async function reachAccessibilityStep(handlers: CommandHandlers) {
   return { ipc, user, view };
 }
 
-const POLL = { timeout: 4000 };
 const accessibilityCommands = (ipc: ReturnType<typeof mockIpc>) =>
   ipc.calls
     .map((call) => call.command)
@@ -59,9 +71,9 @@ describe("the Accessibility step", () => {
     expect(ipc.callsTo("request_accessibility_permission")).toHaveLength(1);
     granted = true;
 
-    expect(await screen.findByText("Accessibility granted", {}, POLL)).toBeInTheDocument();
+    expect(await screen.findByText("Accessibility granted")).toBeInTheDocument();
     await waitFor(() => expect(ipc.callsTo("retry_hotkey_registration")).toHaveLength(1));
-    expect(ipc.calls.slice(before).map((call) => call.command)).toEqual([
+    expect(sequence(ipc.calls.slice(before).map((call) => call.command))).toEqual([
       "request_accessibility_permission",
       "check_accessibility_permission",
       "retry_hotkey_registration",
@@ -107,10 +119,10 @@ describe("the Accessibility step", () => {
     await user.click(screen.getByRole("button", { name: "Open System Settings" }));
     failing = true;
 
-    expect(await screen.findByRole("alert", {}, POLL)).toHaveTextContent("TCC database unavailable");
+    expect(await screen.findByRole("alert")).toHaveTextContent("TCC database unavailable");
     expect(screen.getByRole("button", { name: "Open System Settings" })).toBeInTheDocument();
     const checks = ipc.callsTo("check_accessibility_permission").length;
-    await new Promise((resolve) => setTimeout(resolve, 1300));
+    await new Promise((resolve) => setTimeout(resolve, 60));
     expect(ipc.callsTo("check_accessibility_permission")).toHaveLength(checks);
   });
 
@@ -127,7 +139,7 @@ describe("the Accessibility step", () => {
     await user.click(screen.getByRole("button", { name: "Open System Settings" }));
     granted = true;
 
-    expect(await screen.findByRole("alert", {}, POLL)).toHaveTextContent(
+    expect(await screen.findByRole("alert")).toHaveTextContent(
       "Accessibility was granted, but the saved dictation shortcut could not be registered: shortcut in use",
     );
     expect(screen.getByText("Accessibility granted")).toBeInTheDocument();
@@ -140,7 +152,7 @@ describe("the Accessibility step", () => {
     await waitFor(() => expect(ipc.callsTo("set_auto_paste")).toEqual([{ enabled: false }]));
     const checks = ipc.callsTo("check_accessibility_permission").length;
 
-    await new Promise((resolve) => setTimeout(resolve, 1300));
+    await new Promise((resolve) => setTimeout(resolve, 60));
 
     expect(ipc.callsTo("check_accessibility_permission")).toHaveLength(checks);
     expect(accessibilityCommands(ipc).at(-1)).toBe("set_auto_paste");
@@ -153,7 +165,7 @@ describe("the Accessibility step", () => {
 
     view.unmount();
     const checks = ipc.callsTo("check_accessibility_permission").length;
-    await new Promise((resolve) => setTimeout(resolve, 1300));
+    await new Promise((resolve) => setTimeout(resolve, 60));
 
     expect(ipc.callsTo("check_accessibility_permission")).toHaveLength(checks);
   });

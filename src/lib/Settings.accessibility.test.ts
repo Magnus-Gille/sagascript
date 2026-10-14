@@ -3,9 +3,22 @@
 // macOS to report it and only then retry the hotkey registration and save.
 import { fireEvent, screen, waitFor } from "@testing-library/svelte";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import type { CommandHandlers } from "../test/ipc";
 import { renderSettings, settingsBackend } from "../test/settings";
+
+// The real wait polls once a second; these tests poll every few milliseconds.
+vi.mock("./permissions", async (importOriginal) => {
+  const real = await importOriginal<typeof import("./permissions")>();
+  return {
+    ...real,
+    waitForAccessibility: (options = {}) => real.waitForAccessibility({ intervalMs: 5, ...options }),
+    requestAccessibility: (options = {}) => real.requestAccessibility({ intervalMs: 5, ...options }),
+  };
+});
+
+/** The commands in order, a poll's repeated checks counting once. */
+const sequence = (commands: string[]) => commands.filter((command, index) => command !== commands[index - 1]);
 
 function macBackend(overrides: CommandHandlers = {}): CommandHandlers {
   return settingsBackend({
@@ -18,8 +31,6 @@ function macBackend(overrides: CommandHandlers = {}): CommandHandlers {
     ...overrides,
   });
 }
-
-const POLL = { timeout: 4000 };
 
 describe("Auto-paste on macOS", () => {
   test("an already granted permission needs no prompt", async () => {
@@ -46,8 +57,8 @@ describe("Auto-paste on macOS", () => {
     expect(screen.getByRole("switch", { name: "Auto-paste transcription" })).toBeDisabled();
     granted = true;
 
-    await waitFor(() => expect(ipc.callsTo("set_auto_paste")).toEqual([{ enabled: true }]), POLL);
-    const commands = ipc.calls.slice(before).map((call) => call.command);
+    await waitFor(() => expect(ipc.callsTo("set_auto_paste")).toEqual([{ enabled: true }]));
+    const commands = sequence(ipc.calls.slice(before).map((call) => call.command));
     expect(commands.slice(0, 4)).toEqual([
       "check_accessibility_permission",
       "request_accessibility_permission",
@@ -89,8 +100,8 @@ describe("a bare F13 shortcut on macOS", () => {
     await waitFor(() => expect(ipc.callsTo("request_accessibility_permission")).toHaveLength(1));
     granted = true;
 
-    await waitFor(() => expect(ipc.callsTo("set_hotkey_profiles")).toHaveLength(1), POLL);
-    const commands = ipc.calls.slice(before).map((call) => call.command);
+    await waitFor(() => expect(ipc.callsTo("set_hotkey_profiles")).toHaveLength(1));
+    const commands = sequence(ipc.calls.slice(before).map((call) => call.command));
     expect(commands.slice(0, 4)).toEqual([
       "check_accessibility_permission",
       "request_accessibility_permission",
