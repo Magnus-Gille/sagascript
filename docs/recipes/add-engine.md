@@ -106,7 +106,8 @@ the model catalogue (`list-models`, `get_model_info`), settings (see
 [add-setting.md](add-setting.md) for the enum rules), the CLI `--model` parsing and the UI
 model pickers. Plan it with an issue first. Planned:
 [#378](https://github.com/Magnus-Gille/sagascript/issues/378) introduces a `SpeechEngine`
-trait and one cancellation model; [#366](https://github.com/Magnus-Gille/sagascript/issues/366)
-makes host supervision recover from `Failed`.
+trait and one cancellation model. Host supervision already recovers from `Failed`
+([#366](https://github.com/Magnus-Gille/sagascript/issues/366); see
+[ARCHITECTURE.md §2.4](../ARCHITECTURE.md#24-engine-host-process-lifecycle)).
 
 Finish with `npm run verify` ([CONTRIBUTING.md](../../CONTRIBUTING.md#running-tests)).
