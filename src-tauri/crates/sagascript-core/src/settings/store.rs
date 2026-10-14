@@ -592,28 +592,6 @@ where
     update_locked(&path, legacy_settings_paths(), &ThisMachine, mutate)
 }
 
-/// [`try_update`] of `path` (no legacy locations) on a machine with
-/// Pianissimo supported and every model downloaded.
-#[cfg(test)]
-fn try_update_at<F>(path: &Path, mutate: F) -> Result<Settings, String>
-where
-    F: FnOnce(&mut Settings) -> Result<(), String>,
-{
-    update_locked(path, std::iter::empty(), &tests::ready_machine(), mutate)
-}
-
-/// [`update`] as [`try_update_at`] runs it.
-#[cfg(test)]
-fn update_at<F>(path: &Path, mutate: F) -> Result<Settings, String>
-where
-    F: FnOnce(&mut Settings),
-{
-    try_update_at(path, |settings| {
-        mutate(settings);
-        Ok(())
-    })
-}
-
 /// A field update under the settings lock. The latest file is loaded as the
 /// startup load does, with every pending migration step, machine state
 /// included: the save records `schema_version` and the steps' markers, so a
@@ -833,7 +811,7 @@ const MAX_RECOVERY_COPIES: usize = 1000;
 /// directory, before this returns.
 fn preserve_invalid_settings(path: &Path, contents: &[u8]) -> Result<PathBuf, String> {
     #[cfg(test)]
-    if FAIL_RECOVERY_COPY.with(std::cell::Cell::get) {
+    if tests::FAIL_RECOVERY_COPY.with(std::cell::Cell::get) {
         return Err("injected recovery copy failure".to_string());
     }
 
@@ -908,30 +886,6 @@ fn create_new_private_file(path: &Path) -> std::io::Result<std::fs::File> {
         options.mode(0o600);
     }
     options.open(path)
-}
-
-#[cfg(test)]
-thread_local! {
-    static FAIL_RECOVERY_COPY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
-/// Test-only fault injection: while alive, recovery copies on this thread fail.
-#[cfg(test)]
-struct FailRecoveryCopy;
-
-#[cfg(test)]
-impl FailRecoveryCopy {
-    fn enable() -> Self {
-        FAIL_RECOVERY_COPY.with(|fail| fail.set(true));
-        Self
-    }
-}
-
-#[cfg(test)]
-impl Drop for FailRecoveryCopy {
-    fn drop(&mut self) {
-        FAIL_RECOVERY_COPY.with(|fail| fail.set(false));
-    }
 }
 
 fn config_dir_for_settings(path: &Path) -> PathBuf {

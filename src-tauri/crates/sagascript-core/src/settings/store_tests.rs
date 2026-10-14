@@ -13,7 +13,7 @@ fn every_model_ready(_: WhisperModel) -> bool {
 }
 
 /// Pianissimo supported and every model downloaded.
-pub(super) fn ready_machine() -> LineupEnv<'static> {
+fn ready_machine() -> LineupEnv<'static> {
     LineupEnv {
         pianissimo_supported: true,
         pianissimo_downloaded: true,
@@ -24,6 +24,52 @@ pub(super) fn ready_machine() -> LineupEnv<'static> {
 /// The startup load of `path` (no legacy locations) on [`ready_machine`].
 fn startup_load(path: &Path) -> Settings {
     load_at_with_machine(path, std::iter::empty(), &ready_machine())
+}
+
+/// [`try_update`] of `path` (no legacy locations) on a machine with
+/// Pianissimo supported and every model downloaded.
+#[cfg(test)]
+fn try_update_at<F>(path: &Path, mutate: F) -> Result<Settings, String>
+where
+    F: FnOnce(&mut Settings) -> Result<(), String>,
+{
+    update_locked(path, std::iter::empty(), &ready_machine(), mutate)
+}
+
+/// [`update`] as [`try_update_at`] runs it.
+#[cfg(test)]
+fn update_at<F>(path: &Path, mutate: F) -> Result<Settings, String>
+where
+    F: FnOnce(&mut Settings),
+{
+    try_update_at(path, |settings| {
+        mutate(settings);
+        Ok(())
+    })
+}
+
+#[cfg(test)]
+thread_local! {
+    pub(super) static FAIL_RECOVERY_COPY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Test-only fault injection: while alive, recovery copies on this thread fail.
+#[cfg(test)]
+struct FailRecoveryCopy;
+
+#[cfg(test)]
+impl FailRecoveryCopy {
+    fn enable() -> Self {
+        FAIL_RECOVERY_COPY.with(|fail| fail.set(true));
+        Self
+    }
+}
+
+#[cfg(test)]
+impl Drop for FailRecoveryCopy {
+    fn drop(&mut self) {
+        FAIL_RECOVERY_COPY.with(|fail| fail.set(false));
+    }
 }
 
 /// Runs `f` on a settings file of its own ([`fake_settings`]), whose
