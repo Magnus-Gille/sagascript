@@ -5,7 +5,7 @@ import { screen, waitFor } from "@testing-library/svelte";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, test } from "vitest";
 import { deferred } from "../test/deferred";
-import { kbWhisperMedium, pianissimo, renderSettings, settingsBackend, settingsValue } from "../test/settings";
+import { kbWhisperMedium, pianissimo, renderSettings, settingsBackend, settingsValue, whisperModel } from "../test/settings";
 
 const missing = (model: typeof pianissimo) => ({ ...model, downloaded: false });
 
@@ -118,5 +118,54 @@ describe("the file transcription model download", () => {
 
     expect(await screen.findByRole("alert")).toHaveTextContent("Download interrupted");
     expect(screen.getByRole("button", { name: "Download selected model" })).toBeEnabled();
+  });
+});
+
+describe("a download on the Dictate tab updates what the Transcribe tab offers", () => {
+  // Auto resolves to Pianissimo for Swedish files. Once it is on disk the
+  // Transcribe tab must stop offering to download it.
+  async function renderWithPianissimoMissing(profileHandlers: (lineup: () => typeof pianissimo) => Parameters<typeof settingsBackend>[0]) {
+    let onDisk = false;
+    const lineup = () => (onDisk ? pianissimo : missing(pianissimo));
+    await renderSettings(
+      settingsBackend({
+        get_file_model_options: () => [lineup(), kbWhisperMedium],
+        get_effective_model_info: () => lineup(),
+        download_pianissimo_model: () => {
+          onDisk = true;
+        },
+        ...profileHandlers(lineup),
+      }),
+    );
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Transcribe" }));
+    expect(await screen.findByRole("button", { name: "Download Pianissimo" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Dictate" }));
+    return user;
+  }
+
+  test("downloading a profile's speech engine", async () => {
+    const user = await renderWithPianissimoMissing((lineup) => ({ get_profile_model_info: () => lineup() }));
+
+    await user.click(await screen.findByRole("button", { name: "Download speech engine" }));
+    await waitFor(() => expect(screen.queryByText("Downloading Pianissimo...")).toBeNull());
+    await user.click(screen.getByRole("button", { name: "Transcribe" }));
+
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Download Pianissimo" })).toBeNull());
+  });
+
+  test("switching a retired model to the recommended one downloads it first", async () => {
+    const kbWhisperSmall = whisperModel("kb-whisper-small", "KB-Whisper Small", { size_mb: 466 });
+    const user = await renderWithPianissimoMissing(() => ({
+      get_settings: () => settingsValue({ profile_models: { default: "kb-whisper-small" } }),
+      get_profile_model_info: () => kbWhisperSmall,
+      set_profile_model: () => undefined,
+    }));
+
+    await user.click(await screen.findByRole("button", { name: "Switch to Pianissimo (download 640 MB)" }));
+    await waitFor(() => expect(screen.queryByText("Downloading Pianissimo...")).toBeNull());
+    await user.click(screen.getByRole("button", { name: "Transcribe" }));
+
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Download Pianissimo" })).toBeNull());
   });
 });
