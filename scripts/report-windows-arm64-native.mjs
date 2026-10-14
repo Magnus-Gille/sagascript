@@ -1,12 +1,7 @@
 #!/usr/bin/env node
 import { lstat, readFile, readdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
-const profiles = [
-  ["debug"],
-  ["release"],
-  ["aarch64-pc-windows-msvc", "debug"],
-  ["aarch64-pc-windows-msvc", "release"],
-];
+const profiles = [["debug"], ["release"], ["aarch64-pc-windows-msvc", "debug"], ["aarch64-pc-windows-msvc", "release"]];
 async function isDirectory(path) {
   try {
     const info = await lstat(path);
@@ -64,7 +59,12 @@ async function findCaches(targetRoot) {
 }
 function inspectNinja(ninja) {
   const lines = ninja.split(/\r?\n/).filter((line) => /^\s*FLAGS\s*=/.test(line));
-  const tokens = lines.flatMap((line) => line.trim().split(/\s+/).flatMap((token) => token.split(",")));
+  const tokens = lines.flatMap((line) =>
+    line
+      .trim()
+      .split(/\s+/)
+      .flatMap((token) => token.split(",")),
+  );
   const mcpu = [...new Set(tokens.map(cleanToken).filter((token) => /^-mcpu=/i.test(token)))].sort();
   if (mcpu.length === 0) throw new Error("no actual -mcpu= flag in Ninja FLAGS lines");
   for (const flag of mcpu) {

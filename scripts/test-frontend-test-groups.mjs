@@ -159,7 +159,10 @@ test("an unclassified test file is an error before anything runs", async (t) => 
   const result = await runTests(root, ["--group", "ui"]);
   assert.equal(result.code, 2);
   assert.match(result.stderr, /scripts\/node-test-groups\.mjs does not match the test files on disk/);
-  assert.match(result.stderr, /scripts\/test-new\.mjs is not classified; add it to one group in scripts\/node-test-groups\.mjs \(ui, ci, codeHealth\)/);
+  assert.match(
+    result.stderr,
+    /scripts\/test-new\.mjs is not classified; add it to one group in scripts\/node-test-groups\.mjs \(ui, ci, codeHealth\)/,
+  );
   assert.match(result.stderr, /scripts\/tools\/test_other\.mjs is not classified/);
   assert.deepEqual(result.ran, []);
 });

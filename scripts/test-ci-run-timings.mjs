@@ -31,8 +31,14 @@ test("summarizes jobs and steps with numeric ordering", () => {
       job(2, time(0, 1), time(0, 2)),
     ],
   });
-  assert.deepEqual(result.jobs.map(({ id }) => id), [2, 10]);
-  assert.deepEqual(result.jobs[1].steps.map(({ number }) => number), [2, 10]);
+  assert.deepEqual(
+    result.jobs.map(({ id }) => id),
+    [2, 10],
+  );
+  assert.deepEqual(
+    result.jobs[1].steps.map(({ number }) => number),
+    [2, 10],
+  );
   assert.equal(result.wallSeconds, 3);
   assert.equal(result.runnerSeconds, 4);
 });
@@ -97,7 +103,10 @@ test("missing optional metadata becomes null", () => {
 });
 
 test("rejects invalid dates, negative intervals, duplicate IDs, and invalid shapes", () => {
-  assert.throws(() => summarizeRun({ databaseId: 1, jobs: [{ databaseId: 2, steps: [], startedAt: "nope" }] }), /startedAt is not a valid timestamp/);
+  assert.throws(
+    () => summarizeRun({ databaseId: 1, jobs: [{ databaseId: 2, steps: [], startedAt: "nope" }] }),
+    /startedAt is not a valid timestamp/,
+  );
   assert.throws(() => summarizeRun({ databaseId: 1, jobs: [job(2, time(1, 0), time(0, 0))] }), /negative interval/);
   assert.throws(() => summarizeRun({ databaseId: 1, jobs: [job(2, null, null), job(2, null, null)] }), /duplicate job databaseId/);
   assert.throws(() => summarizeRun({ databaseId: 1, jobs: [{ databaseId: 2, steps: null }] }), /steps must be an array/);
@@ -114,7 +123,7 @@ test("CLI prints formatted JSON for valid input", () => {
 });
 
 test("CLI reports malformed, invalid, and empty input on stderr without creating output files", () => {
-  for (const input of ["{bad", "{\"databaseId\":1,\"jobs\":null}", ""]) {
+  for (const input of ["{bad", '{"databaseId":1,"jobs":null}', ""]) {
     const result = spawnSync(process.execPath, [cli], { input, encoding: "utf8" });
     assert.equal(result.status, 1);
     assert.equal(result.stdout, "");

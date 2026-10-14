@@ -1,7 +1,7 @@
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
 fn bare_extended_function_key_number(shortcut: &str) -> Option<u8> {
-    // Strict parity with src/lib/hotkey.js canUseBareHotkey (/^F(\d{1,2})$/i):
+    // Strict parity with src/lib/hotkey.ts canUseBareHotkey (/^F(\d{1,2})$/i):
     // at most two ASCII digits, so "F013" or "F1a" never qualify.
     let normalized = shortcut.trim().to_ascii_lowercase();
     let digits = normalized.strip_prefix('f')?;

@@ -8,11 +8,7 @@ import type {
   MeetingTranscript,
   DiarizationReport,
 } from "./meeting-types";
-import type {
-  MeetingReprocessingProposal,
-  MigrationStep,
-  ProposalState,
-} from "./meeting-reprocessing-types";
+import type { MeetingReprocessingProposal, MigrationStep, ProposalState } from "./meeting-reprocessing-types";
 
 /** The persisted shape used when an update must restart the application. */
 export const UPDATE_RECOVERY_SCHEMA_VERSION = 1;
@@ -66,9 +62,7 @@ export interface UpdateRecoveryPayload {
 type UnknownRecord = Record<string, unknown>;
 
 function record(value: unknown): UnknownRecord | null {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? value as UnknownRecord
-    : null;
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as UnknownRecord) : null;
 }
 
 function stringValue(value: unknown, maximum: number, allowEmpty = true): string | null {
@@ -93,16 +87,11 @@ function strictStringValue(value: unknown, maximum: number, allowEmpty = true): 
 }
 
 function validDiarizationId(value: unknown): value is string {
-  return typeof value === "string"
-    && value.length > 0
-    && utf8ByteLength(value, 128) <= 128
-    && !/[\p{White_Space}\p{Cc}]/u.test(value);
+  return typeof value === "string" && value.length > 0 && utf8ByteLength(value, 128) <= 128 && !/[\p{White_Space}\p{Cc}]/u.test(value);
 }
 
 function finiteNumber(value: unknown, minimum: number, maximum: number): number | null {
-  return typeof value === "number" && Number.isFinite(value) && value >= minimum && value <= maximum
-    ? value
-    : null;
+  return typeof value === "number" && Number.isFinite(value) && value >= minimum && value <= maximum ? value : null;
 }
 
 function integerNumber(value: unknown, minimum: number, maximum: number): value is number {
@@ -127,8 +116,7 @@ function hasKeyDeep(value: unknown, key: string, depth = 0): boolean {
   if (Array.isArray(value)) return value.slice(0, 1_000).some((item) => hasKeyDeep(item, key, depth + 1));
   const source = record(value);
   if (source === null) return false;
-  return Object.hasOwn(source, key)
-    || Object.values(source).some((item) => hasKeyDeep(item, key, depth + 1));
+  return Object.hasOwn(source, key) || Object.values(source).some((item) => hasKeyDeep(item, key, depth + 1));
 }
 
 function normalizeRecord(value: unknown, maximumEntries: number): Record<string, string> {
@@ -170,12 +158,28 @@ function normalizeSegment(value: unknown): MeetingSegment | null {
 function normalizeDiarization(value: unknown): DiarizationReport | null {
   const source = record(value);
   if (!source) return null;
-  if (!hasOnlyKeys(source, [
-    "schema_version", "source_sha256", "duration_seconds", "build_revision", "build_version",
-    "segmentation_model_sha256", "embedding_model_sha256", "decoder", "diagnostics_included",
-    "speaker_hint", "speaker_hint_outcome", "asr_segments", "transcript_modified", "parameters",
-    "activity", "regions", "attributions",
-  ])) return null;
+  if (
+    !hasOnlyKeys(source, [
+      "schema_version",
+      "source_sha256",
+      "duration_seconds",
+      "build_revision",
+      "build_version",
+      "segmentation_model_sha256",
+      "embedding_model_sha256",
+      "decoder",
+      "diagnostics_included",
+      "speaker_hint",
+      "speaker_hint_outcome",
+      "asr_segments",
+      "transcript_modified",
+      "parameters",
+      "activity",
+      "regions",
+      "attributions",
+    ])
+  )
+    return null;
   const sourceSha = strictStringValue(source.source_sha256, 64, false);
   const buildRevision = validDiarizationId(source.build_revision) ? source.build_revision : null;
   const buildVersion = validDiarizationId(source.build_version) ? source.build_version : null;
@@ -185,48 +189,55 @@ function normalizeDiarization(value: unknown): DiarizationReport | null {
   const attributions = boundedArray(source.attributions, UPDATE_RECOVERY_LIMITS.maxDiarizationItems);
   const hasAsrSegments = Object.hasOwn(source, "asr_segments");
   const hasTranscriptModified = Object.hasOwn(source, "transcript_modified");
-  const asrSegments = hasAsrSegments
-    ? boundedArray(source.asr_segments, UPDATE_RECOVERY_LIMITS.maxDiarizationItems)
-    : [];
+  const asrSegments = hasAsrSegments ? boundedArray(source.asr_segments, UPDATE_RECOVERY_LIMITS.maxDiarizationItems) : [];
   const transcriptModified = hasTranscriptModified ? source.transcript_modified : false;
-  const asrSegmentsExceedLimit = Array.isArray(source.asr_segments)
-    && source.asr_segments.length > UPDATE_RECOVERY_LIMITS.maxDiarizationItems;
+  const asrSegmentsExceedLimit =
+    Array.isArray(source.asr_segments) && source.asr_segments.length > UPDATE_RECOVERY_LIMITS.maxDiarizationItems;
   const maxSupportEntries = 64;
   if (
-    source.schema_version !== 1
-    || sourceSha === null
-    || sha256Value(source.source_sha256) === null
-    || buildRevision === null
-    || buildVersion === null
-    || duration === null
-    || !Array.isArray(source.activity)
-    || !Array.isArray(source.regions)
-    || !Array.isArray(source.attributions)
-    || (hasAsrSegments && !Array.isArray(source.asr_segments))
-    || source.activity.length > UPDATE_RECOVERY_LIMITS.maxDiarizationItems
-    || source.regions.length > UPDATE_RECOVERY_LIMITS.maxDiarizationItems
-    || source.attributions.length > UPDATE_RECOVERY_LIMITS.maxDiarizationItems
-    || asrSegmentsExceedLimit
-    || (hasTranscriptModified && typeof transcriptModified !== "boolean")
-    || (source.diagnostics_included !== undefined && typeof source.diagnostics_included !== "boolean")
-    || !record(source.parameters)
-  ) return null;
+    source.schema_version !== 1 ||
+    sourceSha === null ||
+    sha256Value(source.source_sha256) === null ||
+    buildRevision === null ||
+    buildVersion === null ||
+    duration === null ||
+    !Array.isArray(source.activity) ||
+    !Array.isArray(source.regions) ||
+    !Array.isArray(source.attributions) ||
+    (hasAsrSegments && !Array.isArray(source.asr_segments)) ||
+    source.activity.length > UPDATE_RECOVERY_LIMITS.maxDiarizationItems ||
+    source.regions.length > UPDATE_RECOVERY_LIMITS.maxDiarizationItems ||
+    source.attributions.length > UPDATE_RECOVERY_LIMITS.maxDiarizationItems ||
+    asrSegmentsExceedLimit ||
+    (hasTranscriptModified && typeof transcriptModified !== "boolean") ||
+    (source.diagnostics_included !== undefined && typeof source.diagnostics_included !== "boolean") ||
+    !record(source.parameters)
+  )
+    return null;
 
   const parameters = source.parameters as UnknownRecord;
-  if (!hasOnlyKeys(parameters, [
-    "threshold", "min_segment_seconds", "min_gap_seconds", "min_speaker_seconds",
-    "absorb_max_distance", "hint_merge_max_distance", "exclusive_speech_embeddings",
-  ])) return null;
   if (
-    finiteNumber(parameters.threshold, 0, 2) === null
-    || finiteNumber(parameters.min_segment_seconds, 0, 14_400) === null
-    || finiteNumber(parameters.min_gap_seconds, 0, 14_400) === null
-    || finiteNumber(parameters.min_speaker_seconds, 0, 14_400) === null
-    || finiteNumber(parameters.absorb_max_distance, 0, 2) === null
-    || finiteNumber(parameters.hint_merge_max_distance, 0, 2) === null
-    || (parameters.exclusive_speech_embeddings !== undefined
-      && typeof parameters.exclusive_speech_embeddings !== "boolean")
-  ) return null;
+    !hasOnlyKeys(parameters, [
+      "threshold",
+      "min_segment_seconds",
+      "min_gap_seconds",
+      "min_speaker_seconds",
+      "absorb_max_distance",
+      "hint_merge_max_distance",
+      "exclusive_speech_embeddings",
+    ])
+  )
+    return null;
+  if (
+    finiteNumber(parameters.threshold, 0, 2) === null ||
+    finiteNumber(parameters.min_segment_seconds, 0, 14_400) === null ||
+    finiteNumber(parameters.min_gap_seconds, 0, 14_400) === null ||
+    finiteNumber(parameters.min_speaker_seconds, 0, 14_400) === null ||
+    finiteNumber(parameters.absorb_max_distance, 0, 2) === null ||
+    finiteNumber(parameters.hint_merge_max_distance, 0, 2) === null ||
+    (parameters.exclusive_speech_embeddings !== undefined && typeof parameters.exclusive_speech_embeddings !== "boolean")
+  )
+    return null;
 
   for (const hash of [source.segmentation_model_sha256, source.embedding_model_sha256]) {
     if (hash !== undefined && hash !== null && sha256Value(hash) === null) return null;
@@ -235,162 +246,198 @@ function normalizeDiarization(value: unknown): DiarizationReport | null {
   if (hint !== undefined && hint !== null) {
     const hintRecord = record(hint);
     if (
-      !hintRecord
-      || normalizeSpeakerHint(hint) === null
-      || !hasOnlyKeys(hintRecord, ["exact", "min", "max", "force"])
-      || (hintRecord.exact !== undefined && !integerNumber(hintRecord.exact, 1, 1_000))
-      || (hintRecord.min !== undefined && !integerNumber(hintRecord.min, 1, 1_000))
-      || (hintRecord.max !== undefined && !integerNumber(hintRecord.max, 1, 1_000))
-      || (hintRecord.force !== undefined && typeof hintRecord.force !== "boolean")
-    ) return null;
+      !hintRecord ||
+      normalizeSpeakerHint(hint) === null ||
+      !hasOnlyKeys(hintRecord, ["exact", "min", "max", "force"]) ||
+      (hintRecord.exact !== undefined && !integerNumber(hintRecord.exact, 1, 1_000)) ||
+      (hintRecord.min !== undefined && !integerNumber(hintRecord.min, 1, 1_000)) ||
+      (hintRecord.max !== undefined && !integerNumber(hintRecord.max, 1, 1_000)) ||
+      (hintRecord.force !== undefined && typeof hintRecord.force !== "boolean")
+    )
+      return null;
   }
   const hintOutcome = source.speaker_hint_outcome;
   if (hintOutcome !== undefined && hintOutcome !== null) {
     const outcomeRecord = record(hintOutcome);
     if (
-      (hint === undefined || hint === null)
-      || !outcomeRecord
-      || !hasOnlyKeys(outcomeRecord, ["satisfied", "delivered"])
-      || typeof outcomeRecord.satisfied !== "boolean"
-      || !integerNumber(outcomeRecord.delivered, 0, 1_000_000)
-    ) return null;
+      hint === undefined ||
+      hint === null ||
+      !outcomeRecord ||
+      !hasOnlyKeys(outcomeRecord, ["satisfied", "delivered"]) ||
+      typeof outcomeRecord.satisfied !== "boolean" ||
+      !integerNumber(outcomeRecord.delivered, 0, 1_000_000)
+    )
+      return null;
   }
 
   const decoder = source.decoder;
   if (decoder !== undefined && decoder !== null) {
     const decoderRecord = record(decoder);
     if (
-      !decoderRecord
-      || !hasOnlyKeys(decoderRecord, [
-        "strategy", "beam_size", "temperature_fallback", "vad_enabled", "vad_threshold",
-        "vad_min_silence_duration_ms", "vad_speech_pad_ms", "vad_samples_overlap", "timestamp_method",
-      ])
-      || strictStringValue(decoderRecord.strategy, UPDATE_RECOVERY_LIMITS.maxIdLength, false) === null
-      || typeof decoderRecord.beam_size !== "number"
-      || !Number.isInteger(decoderRecord.beam_size)
-      || typeof decoderRecord.temperature_fallback !== "boolean"
-      || typeof decoderRecord.vad_enabled !== "boolean"
-      || decoderRecord.beam_size < 0
-      || decoderRecord.beam_size > 8
-      || (decoderRecord.beam_size === 1)
-      || ((decoderRecord.beam_size < 2) !== (decoderRecord.strategy === "greedy"))
-      || (decoderRecord.beam_size >= 2 && decoderRecord.strategy !== "beam_search")
-      || finiteNumber(decoderRecord.vad_threshold, 0, 1) === null
-      || !integerNumber(decoderRecord.vad_min_silence_duration_ms, 0, 14_400_000)
-      || !integerNumber(decoderRecord.vad_speech_pad_ms, 0, 14_400_000)
-      || finiteNumber(decoderRecord.vad_samples_overlap, 0, 1) === null
-      || decoderRecord.timestamp_method !== "source_mapped_segments"
-        && decoderRecord.timestamp_method !== "dtw_words_with_segment_fallback"
-    ) return null;
+      !decoderRecord ||
+      !hasOnlyKeys(decoderRecord, [
+        "strategy",
+        "beam_size",
+        "temperature_fallback",
+        "vad_enabled",
+        "vad_threshold",
+        "vad_min_silence_duration_ms",
+        "vad_speech_pad_ms",
+        "vad_samples_overlap",
+        "timestamp_method",
+      ]) ||
+      strictStringValue(decoderRecord.strategy, UPDATE_RECOVERY_LIMITS.maxIdLength, false) === null ||
+      typeof decoderRecord.beam_size !== "number" ||
+      !Number.isInteger(decoderRecord.beam_size) ||
+      typeof decoderRecord.temperature_fallback !== "boolean" ||
+      typeof decoderRecord.vad_enabled !== "boolean" ||
+      decoderRecord.beam_size < 0 ||
+      decoderRecord.beam_size > 8 ||
+      decoderRecord.beam_size === 1 ||
+      decoderRecord.beam_size < 2 !== (decoderRecord.strategy === "greedy") ||
+      (decoderRecord.beam_size >= 2 && decoderRecord.strategy !== "beam_search") ||
+      finiteNumber(decoderRecord.vad_threshold, 0, 1) === null ||
+      !integerNumber(decoderRecord.vad_min_silence_duration_ms, 0, 14_400_000) ||
+      !integerNumber(decoderRecord.vad_speech_pad_ms, 0, 14_400_000) ||
+      finiteNumber(decoderRecord.vad_samples_overlap, 0, 1) === null ||
+      (decoderRecord.timestamp_method !== "source_mapped_segments" && decoderRecord.timestamp_method !== "dtw_words_with_segment_fallback")
+    )
+      return null;
   }
 
   let previousActivityEnd = 0;
   const validActivity = activity.every((item) => {
     const span = record(item);
     const speakers = span ? boundedArray(span.speakers, UPDATE_RECOVERY_LIMITS.maxDiarizationSpeakers) : [];
-    const valid = span !== null
-      && hasOnlyKeys(span, ["start", "end", "speakers"])
-      && finiteNumber(span.start, 0, duration) !== null
-      && finiteNumber(span.end, 0, duration) !== null
-      && finiteNumber(span.start, 0, duration)! < finiteNumber(span.end, 0, duration)!
-      && finiteNumber(span.start, 0, duration)! >= previousActivityEnd
-      && Array.isArray(span.speakers)
-      && span.speakers.length > 0
-      && span.speakers.length <= UPDATE_RECOVERY_LIMITS.maxDiarizationSpeakers
-      && new Set(speakers).size === speakers.length
-      && speakers.every((speaker) => validDiarizationId(speaker));
+    const valid =
+      span !== null &&
+      hasOnlyKeys(span, ["start", "end", "speakers"]) &&
+      finiteNumber(span.start, 0, duration) !== null &&
+      finiteNumber(span.end, 0, duration) !== null &&
+      finiteNumber(span.start, 0, duration)! < finiteNumber(span.end, 0, duration)! &&
+      finiteNumber(span.start, 0, duration)! >= previousActivityEnd &&
+      Array.isArray(span.speakers) &&
+      span.speakers.length > 0 &&
+      span.speakers.length <= UPDATE_RECOVERY_LIMITS.maxDiarizationSpeakers &&
+      new Set(speakers).size === speakers.length &&
+      speakers.every((speaker) => validDiarizationId(speaker));
     if (valid) previousActivityEnd = finiteNumber(span!.end, 0, duration)!;
     return valid;
   });
   const validRegions = regions.every((item, index) => {
     const region = record(item);
     const status = region?.embedding_status;
-    return region !== null
-      && hasOnlyKeys(region, [
-        "index", "start", "end", "track", "speaker", "embedding_status",
-        "assigned_centroid_distance", "nearest_other_centroid_distance", "used_track_fallback",
-        "active_speech_seconds", "overlapping_speech_seconds",
-      ])
-      && typeof region.index === "number"
-      && Number.isInteger(region.index)
-      && region.index >= 0
-      && region.index === index
-      && finiteNumber(region.start, 0, duration) !== null
-      && finiteNumber(region.end, 0, duration) !== null
-      && finiteNumber(region.start, 0, duration)! <= finiteNumber(region.end, 0, duration)!
-      && validDiarizationId(region.speaker)
-      && (status === "usable" || status === "missing" || status === "degenerate")
-      && typeof region.track === "number"
-      && Number.isInteger(region.track)
-      && region.track >= 0
-      && typeof region.used_track_fallback === "boolean"
-      && region.used_track_fallback === (status !== "usable")
-      && [region.assigned_centroid_distance, region.nearest_other_centroid_distance]
-        .every((distance) => distance === undefined || distance === null || finiteNumber(distance, 0, 2) !== null)
-      && [region.active_speech_seconds, region.overlapping_speech_seconds]
-        .every((seconds) => seconds === undefined || seconds === null
-          || (typeof seconds === "number" && finiteNumber(seconds, 0, 14_400) !== null
+    return (
+      region !== null &&
+      hasOnlyKeys(region, [
+        "index",
+        "start",
+        "end",
+        "track",
+        "speaker",
+        "embedding_status",
+        "assigned_centroid_distance",
+        "nearest_other_centroid_distance",
+        "used_track_fallback",
+        "active_speech_seconds",
+        "overlapping_speech_seconds",
+      ]) &&
+      typeof region.index === "number" &&
+      Number.isInteger(region.index) &&
+      region.index >= 0 &&
+      region.index === index &&
+      finiteNumber(region.start, 0, duration) !== null &&
+      finiteNumber(region.end, 0, duration) !== null &&
+      finiteNumber(region.start, 0, duration)! <= finiteNumber(region.end, 0, duration)! &&
+      validDiarizationId(region.speaker) &&
+      (status === "usable" || status === "missing" || status === "degenerate") &&
+      typeof region.track === "number" &&
+      Number.isInteger(region.track) &&
+      region.track >= 0 &&
+      typeof region.used_track_fallback === "boolean" &&
+      region.used_track_fallback === (status !== "usable") &&
+      [region.assigned_centroid_distance, region.nearest_other_centroid_distance].every(
+        (distance) => distance === undefined || distance === null || finiteNumber(distance, 0, 2) !== null,
+      ) &&
+      [region.active_speech_seconds, region.overlapping_speech_seconds].every(
+        (seconds) =>
+          seconds === undefined ||
+          seconds === null ||
+          (typeof seconds === "number" &&
+            finiteNumber(seconds, 0, 14_400) !== null &&
             // Match Rust's discrete 16kHz activity duration quantization bound.
-            && seconds <= finiteNumber(region.end, 0, duration)! - finiteNumber(region.start, 0, duration)! + 1 / 16_000 + 1e-9));
+            seconds <= finiteNumber(region.end, 0, duration)! - finiteNumber(region.start, 0, duration)! + 1 / 16_000 + 1e-9),
+      )
+    );
   });
   const validRegionKeys = regions.every((item) => {
     const region = record(item);
-    return region !== null
-      && typeof region.index === "number"
-      && Number.isInteger(region.index)
-      && region.index >= 0
-      && region.index < regions.length;
+    return (
+      region !== null &&
+      typeof region.index === "number" &&
+      Number.isInteger(region.index) &&
+      region.index >= 0 &&
+      region.index < regions.length
+    );
   });
   const validAttributions = attributions.every((item, index) => {
     const attribution = record(item);
     const support = attribution === null ? [] : boundedArray(attribution.support, maxSupportEntries);
-    return attribution !== null
-      && hasOnlyKeys(attribution, ["index", "start", "end", "speaker", "reason", "support", "margin_seconds", "gap_seconds"])
-      && typeof attribution.index === "number"
-      && Number.isInteger(attribution.index)
-      && attribution.index >= 0
-      && attribution.index === index
-      && finiteNumber(attribution.start, 0, duration) !== null
-      && finiteNumber(attribution.end, 0, duration) !== null
-      && finiteNumber(attribution.start, 0, duration)! <= finiteNumber(attribution.end, 0, duration)!
-      && validDiarizationId(attribution.speaker)
-      && ["temporal_overlap", "tied_overlap", "nearest_gap", "no_speaker_evidence", "invalid_timestamp"].includes(String(attribution.reason))
-      && Array.isArray(attribution.support)
-      && attribution.support.length <= maxSupportEntries
-      && new Set(support.map((entry) => record(entry)?.speaker)).size === support.length
-      && support.every((entry) => {
+    return (
+      attribution !== null &&
+      hasOnlyKeys(attribution, ["index", "start", "end", "speaker", "reason", "support", "margin_seconds", "gap_seconds"]) &&
+      typeof attribution.index === "number" &&
+      Number.isInteger(attribution.index) &&
+      attribution.index >= 0 &&
+      attribution.index === index &&
+      finiteNumber(attribution.start, 0, duration) !== null &&
+      finiteNumber(attribution.end, 0, duration) !== null &&
+      finiteNumber(attribution.start, 0, duration)! <= finiteNumber(attribution.end, 0, duration)! &&
+      validDiarizationId(attribution.speaker) &&
+      ["temporal_overlap", "tied_overlap", "nearest_gap", "no_speaker_evidence", "invalid_timestamp"].includes(
+        String(attribution.reason),
+      ) &&
+      Array.isArray(attribution.support) &&
+      attribution.support.length <= maxSupportEntries &&
+      new Set(support.map((entry) => record(entry)?.speaker)).size === support.length &&
+      support.every((entry) => {
         const item = record(entry);
         const overlapSeconds = item === null ? null : finiteNumber(item.overlap_seconds, 0, 14_400);
-        return item !== null
-          && hasOnlyKeys(item, ["speaker", "overlap_seconds"])
-          && validDiarizationId(item.speaker)
-          && overlapSeconds !== null
-          && overlapSeconds <= finiteNumber(attribution.end, 0, duration)! - finiteNumber(attribution.start, 0, duration)! + 1e-9;
-      })
-      && (attribution.margin_seconds === undefined
-        || attribution.margin_seconds === null
-        || finiteNumber(attribution.margin_seconds, 0, 14_400) !== null)
-      && (attribution.gap_seconds === undefined
-        || attribution.gap_seconds === null
-        || finiteNumber(attribution.gap_seconds, 0, 14_400) !== null);
+        return (
+          item !== null &&
+          hasOnlyKeys(item, ["speaker", "overlap_seconds"]) &&
+          validDiarizationId(item.speaker) &&
+          overlapSeconds !== null &&
+          overlapSeconds <= finiteNumber(attribution.end, 0, duration)! - finiteNumber(attribution.start, 0, duration)! + 1e-9
+        );
+      }) &&
+      (attribution.margin_seconds === undefined ||
+        attribution.margin_seconds === null ||
+        finiteNumber(attribution.margin_seconds, 0, 14_400) !== null) &&
+      (attribution.gap_seconds === undefined ||
+        attribution.gap_seconds === null ||
+        finiteNumber(attribution.gap_seconds, 0, 14_400) !== null)
+    );
   });
   const validEvidence = validRegionKeys && validRegions && validAttributions;
   const validAsr = asrSegments.every((item) => {
     const segment = record(item);
-    return segment !== null
-      && hasOnlyKeys(segment, ["start", "end", "avg_logprob", "no_speech_prob"])
-      && finiteNumber(segment.start, 0, duration) !== null
-      && finiteNumber(segment.end, 0, duration) !== null
-      && finiteNumber(segment.start, 0, duration)! <= finiteNumber(segment.end, 0, duration)!
-      && (segment.avg_logprob === undefined
-        || segment.avg_logprob === null
-        || (typeof segment.avg_logprob === "number" && Number.isFinite(segment.avg_logprob)))
-      && (segment.no_speech_prob === undefined
-        || segment.no_speech_prob === null
-        || (typeof segment.no_speech_prob === "number"
-          && Number.isFinite(segment.no_speech_prob)
-          && segment.no_speech_prob >= 0
-          && segment.no_speech_prob <= 1));
+    return (
+      segment !== null &&
+      hasOnlyKeys(segment, ["start", "end", "avg_logprob", "no_speech_prob"]) &&
+      finiteNumber(segment.start, 0, duration) !== null &&
+      finiteNumber(segment.end, 0, duration) !== null &&
+      finiteNumber(segment.start, 0, duration)! <= finiteNumber(segment.end, 0, duration)! &&
+      (segment.avg_logprob === undefined ||
+        segment.avg_logprob === null ||
+        (typeof segment.avg_logprob === "number" && Number.isFinite(segment.avg_logprob))) &&
+      (segment.no_speech_prob === undefined ||
+        segment.no_speech_prob === null ||
+        (typeof segment.no_speech_prob === "number" &&
+          Number.isFinite(segment.no_speech_prob) &&
+          segment.no_speech_prob >= 0 &&
+          segment.no_speech_prob <= 1))
+    );
   });
   if (!validActivity || !validEvidence || !validAsr) return null;
 
@@ -403,16 +450,17 @@ function normalizeSpeakerHint(value: unknown): Record<string, unknown> | null {
   const source = record(value);
   if (!source) return null;
   if (
-    !hasOnlyKeys(source, ["exact", "min", "max", "force"])
-    || (source.exact === undefined && source.min === undefined && source.max === undefined)
-    || (source.exact !== undefined && !integerNumber(source.exact, 1, 1_000))
-    || (source.min !== undefined && !integerNumber(source.min, 1, 1_000))
-    || (source.max !== undefined && !integerNumber(source.max, 1, 1_000))
-    || (source.force !== undefined && typeof source.force !== "boolean")
-    || (source.exact !== undefined && (source.min !== undefined || source.max !== undefined))
-    || (source.force === true && source.exact === undefined)
-    || (typeof source.min === "number" && typeof source.max === "number" && source.min > source.max)
-  ) return null;
+    !hasOnlyKeys(source, ["exact", "min", "max", "force"]) ||
+    (source.exact === undefined && source.min === undefined && source.max === undefined) ||
+    (source.exact !== undefined && !integerNumber(source.exact, 1, 1_000)) ||
+    (source.min !== undefined && !integerNumber(source.min, 1, 1_000)) ||
+    (source.max !== undefined && !integerNumber(source.max, 1, 1_000)) ||
+    (source.force !== undefined && typeof source.force !== "boolean") ||
+    (source.exact !== undefined && (source.min !== undefined || source.max !== undefined)) ||
+    (source.force === true && source.exact === undefined) ||
+    (typeof source.min === "number" && typeof source.max === "number" && source.min > source.max)
+  )
+    return null;
   return source;
 }
 
@@ -430,25 +478,36 @@ function normalizeTranscript(value: unknown): MeetingTranscript | null {
   const model = stringValue(source.model, UPDATE_RECOVERY_LIMITS.maxModelLength);
   if (sourceSha === null || language === null || model === null) return null;
   const schemaVersion = integerValue(source.schema_version, 0, 100);
-  const diarization = source.diarization === undefined || source.diarization === null
-    ? source.diarization === null ? null : undefined
-    : normalizeDiarization(source.diarization);
+  const diarization =
+    source.diarization === undefined || source.diarization === null
+      ? source.diarization === null
+        ? null
+        : undefined
+      : normalizeDiarization(source.diarization);
   if (source.diarization !== undefined && source.diarization !== null && diarization === null) return null;
   if ((schemaVersion === 2) !== (diarization !== undefined && diarization !== null)) return null;
-  if (diarization !== undefined && diarization !== null
-    && (diarization.source_sha256 !== sourceSha || diarization.duration_seconds !== numberValue(source.duration_seconds, 0, 7 * 24 * 60 * 60))) return null;
-  const speakerHint = source.speaker_hint === undefined || source.speaker_hint === null
-    ? source.speaker_hint === null ? null : undefined
-    : normalizeSpeakerHint(source.speaker_hint);
+  if (
+    diarization !== undefined &&
+    diarization !== null &&
+    (diarization.source_sha256 !== sourceSha || diarization.duration_seconds !== numberValue(source.duration_seconds, 0, 7 * 24 * 60 * 60))
+  )
+    return null;
+  const speakerHint =
+    source.speaker_hint === undefined || source.speaker_hint === null
+      ? source.speaker_hint === null
+        ? null
+        : undefined
+      : normalizeSpeakerHint(source.speaker_hint);
   if (source.speaker_hint !== undefined && source.speaker_hint !== null && speakerHint === null) return null;
   const hintSatisfied = source.speaker_hint_satisfied;
   const hintDelivered = source.speaker_hint_delivered;
   if (
-    (hintSatisfied !== undefined && hintSatisfied !== null && typeof hintSatisfied !== "boolean")
-    || (hintDelivered !== undefined && hintDelivered !== null && !integerNumber(hintDelivered, 0, 1_000_000))
-    || ((hintSatisfied !== undefined && hintSatisfied !== null) !== (hintDelivered !== undefined && hintDelivered !== null))
-    || ((hintSatisfied !== undefined && hintSatisfied !== null) && (speakerHint === undefined || speakerHint === null))
-  ) return null;
+    (hintSatisfied !== undefined && hintSatisfied !== null && typeof hintSatisfied !== "boolean") ||
+    (hintDelivered !== undefined && hintDelivered !== null && !integerNumber(hintDelivered, 0, 1_000_000)) ||
+    (hintSatisfied !== undefined && hintSatisfied !== null) !== (hintDelivered !== undefined && hintDelivered !== null) ||
+    (hintSatisfied !== undefined && hintSatisfied !== null && (speakerHint === undefined || speakerHint === null))
+  )
+    return null;
   const normalized: MeetingTranscript = {
     schema_version: schemaVersion,
     source_sha256: sourceSha,
@@ -554,12 +613,13 @@ function normalizeProposal(value: unknown): MeetingReprocessingProposal | null {
   const proposed = normalizeTranscript(source.proposed);
   const revision = stringValue(source.revision, UPDATE_RECOVERY_LIMITS.maxRevisionLength);
   if (previous === null || proposed === null || revision === null) return null;
-  const resolutions = boundedArray(source.resolutions, UPDATE_RECOVERY_LIMITS.maxResolutions)
-    .map((resolution) => resolution === null
+  const resolutions = boundedArray(source.resolutions, UPDATE_RECOVERY_LIMITS.maxResolutions).map((resolution) =>
+    resolution === null
       ? null
       : boundedArray(resolution, UPDATE_RECOVERY_LIMITS.maxOperations)
-        .map(normalizeCorrection)
-        .filter((item): item is CorrectionOperation => item !== null));
+          .map(normalizeCorrection)
+          .filter((item): item is CorrectionOperation => item !== null),
+  );
   return {
     schema_version: integerValue(source.schema_version, 0, 100),
     previous,
@@ -599,8 +659,7 @@ function normalizeMeeting(value: unknown): UpdateRecoveryMeeting | null {
   };
   const jobId = stringValue(source.job_id, UPDATE_RECOVERY_LIMITS.maxIdLength, false);
   if (jobId === null) return null;
-  const path = stringValue(source.path, UPDATE_RECOVERY_LIMITS.maxPathLength, false)
-    ?? `Meeting ${jobId}`;
+  const path = stringValue(source.path, UPDATE_RECOVERY_LIMITS.maxPathLength, false) ?? `Meeting ${jobId}`;
   return { job_id: jobId, path, review, editor_draft, proposal: normalizeProposalState(source.proposal) };
 }
 
@@ -647,21 +706,25 @@ function normalizePayload(value: unknown): UpdateRecoveryPayload | null {
 }
 
 function isDiarizationReportRecord(value: UnknownRecord): boolean {
-  return Object.hasOwn(value, "activity")
-    && Object.hasOwn(value, "regions")
-    && Object.hasOwn(value, "attributions")
-    && Object.hasOwn(value, "parameters")
-    && Object.hasOwn(value, "build_revision")
-    && Object.hasOwn(value, "build_version");
+  return (
+    Object.hasOwn(value, "activity") &&
+    Object.hasOwn(value, "regions") &&
+    Object.hasOwn(value, "attributions") &&
+    Object.hasOwn(value, "parameters") &&
+    Object.hasOwn(value, "build_revision") &&
+    Object.hasOwn(value, "build_version")
+  );
 }
 
 function sameNormalizedValue(input: unknown, normalized: unknown): boolean {
   if (Object.is(input, normalized)) return true;
   if (Array.isArray(input) || Array.isArray(normalized)) {
-    return Array.isArray(input)
-      && Array.isArray(normalized)
-      && input.length === normalized.length
-      && input.every((item, index) => sameNormalizedValue(item, normalized[index]));
+    return (
+      Array.isArray(input) &&
+      Array.isArray(normalized) &&
+      input.length === normalized.length &&
+      input.every((item, index) => sameNormalizedValue(item, normalized[index]))
+    );
   }
   const inputRecord = record(input);
   const normalizedRecord = record(normalized);
@@ -670,23 +733,28 @@ function sameNormalizedValue(input: unknown, normalized: unknown): boolean {
     // Rust serializes Option fields as null. For edit operations, null is the
     // wire representation of an absent optional value, which normalization
     // intentionally omits from the TypeScript shape.
-    return !(inputRecord.kind === "edit_segment"
-      && normalizedRecord.kind === "edit_segment"
-      && (key === "text" || key === "speaker_id")
-      && inputRecord[key] === null
-      && !Object.hasOwn(normalizedRecord, key));
+    return !(
+      inputRecord.kind === "edit_segment" &&
+      normalizedRecord.kind === "edit_segment" &&
+      (key === "text" || key === "speaker_id") &&
+      inputRecord[key] === null &&
+      !Object.hasOwn(normalizedRecord, key)
+    );
   });
   const normalizedKeys = Object.keys(normalizedRecord).filter((key) => {
     if (Object.hasOwn(inputRecord, key)) return true;
     // Rust omits these optional report fields when they carry their native
     // defaults. The normalizer materializes those defaults for consumers.
     if (!isDiarizationReportRecord(normalizedRecord)) return true;
-    return !((key === "asr_segments" && Array.isArray(normalizedRecord[key]) && normalizedRecord[key].length === 0)
-      || (key === "transcript_modified" && normalizedRecord[key] === false));
+    return !(
+      (key === "asr_segments" && Array.isArray(normalizedRecord[key]) && normalizedRecord[key].length === 0) ||
+      (key === "transcript_modified" && normalizedRecord[key] === false)
+    );
   });
-  return inputKeys.length === normalizedKeys.length
-    && inputKeys.every((key) => Object.hasOwn(normalizedRecord, key)
-      && sameNormalizedValue(inputRecord[key], normalizedRecord[key]));
+  return (
+    inputKeys.length === normalizedKeys.length &&
+    inputKeys.every((key) => Object.hasOwn(normalizedRecord, key) && sameNormalizedValue(inputRecord[key], normalizedRecord[key]))
+  );
 }
 
 function assertLosslessNormalization(
@@ -705,10 +773,13 @@ function utf8ByteLength(value: string, maximum: number): number {
     const code = value.charCodeAt(index);
     if (code <= 0x7f) bytes += 1;
     else if (code <= 0x7ff) bytes += 2;
-    else if (code >= 0xd800 && code <= 0xdbff
-      && index + 1 < value.length
-      && value.charCodeAt(index + 1) >= 0xdc00
-      && value.charCodeAt(index + 1) <= 0xdfff) {
+    else if (
+      code >= 0xd800 &&
+      code <= 0xdbff &&
+      index + 1 < value.length &&
+      value.charCodeAt(index + 1) >= 0xdc00 &&
+      value.charCodeAt(index + 1) <= 0xdfff
+    ) {
       bytes += 4;
       index += 1;
     } else bytes += 3;
@@ -743,8 +814,11 @@ export function serializeUpdateRecoveryPayload(payload: UpdateRecoveryPayload): 
 /** Parse and normalize untrusted JSON. Invalid top-level data returns null. */
 export function parseUpdateRecoveryPayload(input: string | unknown): UpdateRecoveryPayload | null {
   if (typeof input === "string") {
-    if (input.length > UPDATE_RECOVERY_LIMITS.maxPayloadBytes
-      || utf8ByteLength(input, UPDATE_RECOVERY_LIMITS.maxPayloadBytes) > UPDATE_RECOVERY_LIMITS.maxPayloadBytes) return null;
+    if (
+      input.length > UPDATE_RECOVERY_LIMITS.maxPayloadBytes ||
+      utf8ByteLength(input, UPDATE_RECOVERY_LIMITS.maxPayloadBytes) > UPDATE_RECOVERY_LIMITS.maxPayloadBytes
+    )
+      return null;
     try {
       return normalizePayload(JSON.parse(input));
     } catch {
@@ -760,8 +834,10 @@ export function readPersistedUpdateRecoveryPayload(input: unknown): UpdateRecove
   const errorMessage = "Persisted recovery drafts cannot be read without discarding data.";
   let decoded: unknown = input;
   if (typeof input === "string") {
-    if (input.length > UPDATE_RECOVERY_LIMITS.maxPayloadBytes
-      || utf8ByteLength(input, UPDATE_RECOVERY_LIMITS.maxPayloadBytes) > UPDATE_RECOVERY_LIMITS.maxPayloadBytes) {
+    if (
+      input.length > UPDATE_RECOVERY_LIMITS.maxPayloadBytes ||
+      utf8ByteLength(input, UPDATE_RECOVERY_LIMITS.maxPayloadBytes) > UPDATE_RECOVERY_LIMITS.maxPayloadBytes
+    ) {
       throw new RangeError(errorMessage);
     }
     try {

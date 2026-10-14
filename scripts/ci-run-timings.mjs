@@ -92,13 +92,9 @@ export function summarizeRun(run) {
   jobs.sort((left, right) => left.id - right.id);
   const completeJobs = jobs.length > 0 && jobs.every((job) => job.durationSeconds !== null);
   const wallSeconds = completeJobs
-    ? (Math.max(...jobs.map((job) => job._endMilliseconds)) -
-        Math.min(...jobs.map((job) => job._startMilliseconds))) /
-      1000
+    ? (Math.max(...jobs.map((job) => job._endMilliseconds)) - Math.min(...jobs.map((job) => job._startMilliseconds))) / 1000
     : null;
-  const runnerSeconds = completeJobs
-    ? jobs.reduce((total, job) => total + job.durationSeconds, 0)
-    : null;
+  const runnerSeconds = completeJobs ? jobs.reduce((total, job) => total + job.durationSeconds, 0) : null;
   return {
     id,
     headSha: optionalString(run.headSha, "run.headSha"),

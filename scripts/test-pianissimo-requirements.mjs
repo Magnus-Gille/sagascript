@@ -78,12 +78,20 @@ test("CI builds the host, runs swift test, and checks the revision", () => {
 
 test("Pianissimo smoke covers status, download, doctor and transcribe", () => {
   const content = read("scripts/smoke-pianissimo-installed.sh");
-  for (const step of ["engine status --json", "download-model pianissimo-sv", "engine doctor --json", "transcribe --language sv --model pianissimo-sv --json"]) {
+  for (const step of [
+    "engine status --json",
+    "download-model pianissimo-sv",
+    "engine doctor --json",
+    "transcribe --language sv --model pianissimo-sv --json",
+  ]) {
     assert(content.includes(step), `smoke script runs ${step}`);
   }
   assert.match(content, /EXPECT_WORD/, "smoke script can assert an expected word");
   for (const path of [".github/workflows/test-build.yml", ".github/workflows/release-build-macos.yml"]) {
-    assert.match(read(path), /smoke-pianissimo-installed\.sh[^\n]*test-audio\/swedish-fleurs-hongkong\.wav hongkong/,
-      `${path} smokes Pianissimo on the Swedish FLEURS sample and expects "hongkong"`);
+    assert.match(
+      read(path),
+      /smoke-pianissimo-installed\.sh[^\n]*test-audio\/swedish-fleurs-hongkong\.wav hongkong/,
+      `${path} smokes Pianissimo on the Swedish FLEURS sample and expects "hongkong"`,
+    );
   }
 });

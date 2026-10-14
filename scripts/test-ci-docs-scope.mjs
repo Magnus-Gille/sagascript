@@ -151,9 +151,11 @@ test("malformed NUL output and empty records fail closed", () => {
   assert.throws(() => parseNameStatusZ(Buffer.from("R100\0old.md\0")), /incomplete/);
 });
 
-
 test("renames across the allowlist and unusual filenames remain conservative", () => {
-  for (const paths of [["src/app.md", "docs/research/app.md"], ["docs/research/app.md", "src/app.md"]]) {
+  for (const paths of [
+    ["src/app.md", "docs/research/app.md"],
+    ["docs/research/app.md", "src/app.md"],
+  ]) {
     assert.equal(classifyRecords([{ status: "R100", paths }]).docs_only, false);
   }
   const record = parseNameStatusZ(Buffer.from("M\0docs/research/line\nwith spaces.md\0"));

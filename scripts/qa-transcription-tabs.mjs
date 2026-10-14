@@ -7,21 +7,33 @@ import { join } from "node:path";
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || "playwright");
 const outputDir = process.env.QA_OUTPUT_DIR || tmpdir();
 await mkdir(outputDir, { recursive: true });
-const outputPath = name => join(outputDir, name);
+const outputPath = (name) => join(outputDir, name);
 const browser = await chromium.launch({ headless: true });
 const context = await browser.newContext({ viewport: { width: 760, height: 960 } });
 const page = await context.newPage();
 const errors = [];
-page.on("pageerror", error => errors.push(error.message));
+page.on("pageerror", (error) => errors.push(error.message));
 const mock = await readFile(new URL("./fixtures/transcription-browser-mock.js", import.meta.url), "utf8");
 const url = process.env.QA_URL || "http://127.0.0.1:5242/?tab=transcribe";
-await page.route(url, route => route.fulfill({ contentType: "text/html",
-  body: `<html><head><title>Transcription QA</title><link rel="stylesheet" href="/src/app.css"></head><body><div id="app"></div><script type="module">${mock}</script></body></html>` }));
+await page.route(url, (route) =>
+  route.fulfill({
+    contentType: "text/html",
+    body: `<html><head><title>Transcription QA</title><link rel="stylesheet" href="/src/app.css"></head><body><div id="app"></div><script type="module">${mock}</script></body></html>`,
+  }),
+);
 const status = (name, state) => page.getByRole("tab", { name: `${name} ${state}`, exact: true });
-async function waitStatus(name, state) { await status(name, state).waitFor(); }
-async function drop(paths) { await page.evaluate(paths => window.qa.drop(paths), paths); }
-async function finish(path, error = null) { await page.evaluate(([path, error]) => window.qa.finish(path, error), [path, error]); }
-async function meeting(path, state = "completed") { await page.evaluate(([path, state]) => window.qa.finishMeeting(path, state), [path, state]); }
+async function waitStatus(name, state) {
+  await status(name, state).waitFor();
+}
+async function drop(paths) {
+  await page.evaluate((paths) => window.qa.drop(paths), paths);
+}
+async function finish(path, error = null) {
+  await page.evaluate(([path, error]) => window.qa.finish(path, error), [path, error]);
+}
+async function meeting(path, state = "completed") {
+  await page.evaluate(([path, state]) => window.qa.finishMeeting(path, state), [path, state]);
+}
 async function assertSummary(expected) {
   const summary = page.getByRole("status", { name: "File transcription status", exact: true });
   await summary.waitFor();
@@ -31,7 +43,10 @@ async function assertSummary(expected) {
 }
 async function writeFailureDiagnostics(error) {
   const message = error instanceof Error ? error.stack || error.message : String(error);
-  const body = await page.locator("body").innerText({ timeout: 5000 }).catch(() => "<body unavailable>");
+  const body = await page
+    .locator("body")
+    .innerText({ timeout: 5000 })
+    .catch(() => "<body unavailable>");
   await Promise.allSettled([
     page.screenshot({ path: outputPath("transcription-tabs-failure.png"), fullPage: true, timeout: 5000 }),
     writeFile(outputPath("transcription-tabs-failure.body.txt"), body),
@@ -49,20 +64,31 @@ try {
   assert.equal(await englishModelChoice.inputValue(), "base.en");
   // Swedish lineup: Recommended (= Pianissimo), Pianissimo, KB-Whisper Large. The
   // retired KB-Whisper Tiny/Base/Small are hidden.
-  assert.deepEqual(await profileModelChoice.locator("option").allTextContents(),
-    ["Recommended for Swedish", "Pianissimo", "KB-Whisper Large"]);
+  assert.deepEqual(await profileModelChoice.locator("option").allTextContents(), [
+    "Recommended for Swedish",
+    "Pianissimo",
+    "KB-Whisper Large",
+  ]);
   assert.equal(await profileModelChoice.inputValue(), "auto");
   await page.getByText("Pianissimo required", { exact: true }).waitFor();
   // Expand the list so the shot shows the choices a native dropdown would.
   const swedishSelect = page.locator('select[aria-label="Model for Swedish"]');
-  await swedishSelect.evaluate(select => { select.size = 3; });
+  await swedishSelect.evaluate((select) => {
+    select.size = 3;
+  });
   const lineupShot = process.env.QA_LINEUP_SHOT;
   if (lineupShot) await page.locator(".profile-model-field").first().screenshot({ path: lineupShot });
-  await swedishSelect.evaluate(select => { select.removeAttribute("size"); });
+  await swedishSelect.evaluate((select) => {
+    select.removeAttribute("size");
+  });
   await profileModelChoice.selectOption("pianissimo-sv");
-  await page.waitForFunction(() => window.qa.calls.some(call => call.cmd === "set_profile_model" && call.args.profileId === "swedish" && call.args.modelId === "pianissimo-sv"));
+  await page.waitForFunction(() =>
+    window.qa.calls.some(
+      (call) => call.cmd === "set_profile_model" && call.args.profileId === "swedish" && call.args.modelId === "pianissimo-sv",
+    ),
+  );
   await page.getByRole("button", { name: "Download speech engine" }).click();
-  await page.waitForFunction(() => window.qa.calls.some(call => call.cmd === "download_pianissimo_model"));
+  await page.waitForFunction(() => window.qa.calls.some((call) => call.cmd === "download_pianissimo_model"));
   await page.getByText("Pianissimo · Ready", { exact: true }).waitFor();
   assert.equal(await englishModelChoice.inputValue(), "base.en", "Swedish model changes cannot rewrite another profile");
   await page.getByRole("button", { name: "Transcribe", exact: true }).click();
@@ -74,12 +100,15 @@ try {
   await page.getByText("Pianissimo required", { exact: true }).waitFor();
   await page.evaluate(() => window.qa.holdNextPianissimoDownload());
   await page.getByRole("button", { name: "Download speech engine" }).click();
-  await page.waitForFunction(() => window.qa.calls.filter(call => call.cmd === "download_pianissimo_model").length === 2);
-  assert.equal(await page.locator('.test-record-btn').isDisabled(), true,
-    'model-ready must not re-enable recording before the download command settles');
+  await page.waitForFunction(() => window.qa.calls.filter((call) => call.cmd === "download_pianissimo_model").length === 2);
+  assert.equal(
+    await page.locator(".test-record-btn").isDisabled(),
+    true,
+    "model-ready must not re-enable recording before the download command settles",
+  );
   await page.evaluate(() => window.qa.releasePianissimo());
-  await profileModelChoice.waitFor({ state: 'visible' });
-  await page.waitForFunction(() => !document.querySelector('.test-record-btn').disabled);
+  await profileModelChoice.waitFor({ state: "visible" });
+  await page.waitForFunction(() => !document.querySelector(".test-record-btn").disabled);
   await page.getByText("Pianissimo · Ready", { exact: true }).waitFor();
   await page.screenshot({ path: outputPath("sagascript-pianissimo-dictation.png"), fullPage: true });
   // Engine host identity sits next to the build identity.
@@ -88,7 +117,10 @@ try {
   await page.evaluate(() => window.qa.setPianissimoSize(321));
   await page.evaluate(() => window.qa.removePianissimo());
   await page.getByText("Pianissimo required · 321 MB", { exact: true }).waitFor();
-  await page.evaluate(() => { window.qa.setPianissimoSize(0); window.qa.removePianissimo(); });
+  await page.evaluate(() => {
+    window.qa.setPianissimoSize(0);
+    window.qa.removePianissimo();
+  });
   await page.getByText("Pianissimo required", { exact: true }).waitFor();
   assert.equal(await page.getByText(/714|Q8|macOS 13/).count(), 0, "No outdated Pianissimo strings");
   await page.getByRole("button", { name: "Settings", exact: true }).click();
@@ -99,41 +131,59 @@ try {
   await page.locator("details.advanced-section > summary").click();
   const prewarm = page.getByLabel("Prepare Pianissimo when");
   assert.equal(await prewarm.inputValue(), "on_key_down");
-  assert.deepEqual(await prewarm.locator("option").allTextContents(),
-    ["When Sagascript starts (recommended)", "When I press the dictation key", "Only when needed"]);
+  assert.deepEqual(await prewarm.locator("option").allTextContents(), [
+    "When Sagascript starts (recommended)",
+    "When I press the dictation key",
+    "Only when needed",
+  ]);
   await prewarm.selectOption("off");
-  await page.waitForFunction(() => window.qa.calls.some(call => call.cmd === "set_engine_prewarm" && call.args.mode === "off"));
+  await page.waitForFunction(() => window.qa.calls.some((call) => call.cmd === "set_engine_prewarm" && call.args.mode === "off"));
   const idle = page.getByLabel("Unload after idle");
   assert.equal(await idle.inputValue(), "10");
-  assert.deepEqual(await idle.locator("option").allTextContents(),
-    ["5 minutes", "10 minutes", "30 minutes", "60 minutes", "Never"]);
+  assert.deepEqual(await idle.locator("option").allTextContents(), ["5 minutes", "10 minutes", "30 minutes", "60 minutes", "Never"]);
   await idle.selectOption("0");
-  await page.waitForFunction(() => window.qa.calls.some(call => call.cmd === "set_engine_idle_unload_minutes" && call.args.minutes === 0));
+  await page.waitForFunction(() =>
+    window.qa.calls.some((call) => call.cmd === "set_engine_idle_unload_minutes" && call.args.minutes === 0),
+  );
   await page.getByText("first word faster", { exact: false }).waitFor();
   await page.screenshot({ path: outputPath("sagascript-pianissimo-engine-settings.png"), fullPage: true });
   await page.getByRole("button", { name: "Dictate", exact: true }).click();
   await profileModelChoice.selectOption("kb-whisper-large");
-  await page.waitForFunction(() => window.qa.calls.some(call => call.cmd === "set_profile_model" && call.args.modelId === "kb-whisper-large"));
+  await page.waitForFunction(() =>
+    window.qa.calls.some((call) => call.cmd === "set_profile_model" && call.args.modelId === "kb-whisper-large"),
+  );
   // An upgraded profile still on a retired model keeps working, stays selectable
   // and gets a one-click switch that downloads the recommendation first.
-  await page.evaluate(() => { window.qa.setPianissimoSize(608); window.qa.removePianissimo(); window.qa.pinSwedishProfile("kb-whisper-base"); });
+  await page.evaluate(() => {
+    window.qa.setPianissimoSize(608);
+    window.qa.removePianissimo();
+    window.qa.pinSwedishProfile("kb-whisper-base");
+  });
   // Any profile-model change refreshes every profile's engine state.
   await englishModelChoice.selectOption("base.en");
   const switchButton = page.getByRole("button", { name: "Switch to Pianissimo (download 608 MB)", exact: true });
   await switchButton.waitFor();
   assert.equal(await profileModelChoice.inputValue(), "kb-whisper-base");
-  assert.deepEqual(await profileModelChoice.locator("option").allTextContents(),
-    ["Recommended for Swedish", "Pianissimo", "KB-Whisper Large", "KB-Whisper Base"]);
+  assert.deepEqual(await profileModelChoice.locator("option").allTextContents(), [
+    "Recommended for Swedish",
+    "Pianissimo",
+    "KB-Whisper Large",
+    "KB-Whisper Base",
+  ]);
   await page.getByText("KB-Whisper Base · Ready", { exact: true }).waitFor();
   await switchButton.click();
-  await page.waitForFunction(() => window.qa.calls.some(call => call.cmd === "set_profile_model" && call.args.profileId === "swedish" && call.args.modelId === "pianissimo-sv"));
+  await page.waitForFunction(() =>
+    window.qa.calls.some(
+      (call) => call.cmd === "set_profile_model" && call.args.profileId === "swedish" && call.args.modelId === "pianissimo-sv",
+    ),
+  );
   await page.getByText("Pianissimo · Ready", { exact: true }).waitFor();
   assert.equal(await switchButton.count(), 0, "No suggestion once on the recommended model");
   await page.getByRole("button", { name: "Transcribe", exact: true }).click();
-  const optionsBox = await page.locator('.transcribe-options').boundingBox();
-  const dropBox = await page.locator('.drop-zone').boundingBox();
-  assert.ok(optionsBox.y + optionsBox.height + 7 <= dropBox.y, 'settings must stay above the drop zone with spacing');
-  assert.equal(await page.getByText('No profile keeps the selected language and global hint context.', { exact: true }).count(), 0);
+  const optionsBox = await page.locator(".transcribe-options").boundingBox();
+  const dropBox = await page.locator(".drop-zone").boundingBox();
+  assert.ok(optionsBox.y + optionsBox.height + 7 <= dropBox.y, "settings must stay above the drop zone with spacing");
+  assert.equal(await page.getByText("No profile keeps the selected language and global hint context.", { exact: true }).count(), 0);
   await drop(["/fixtures/one.wav", "/fixtures/two.wav", "/fixtures/three.wav"]);
   await waitStatus("one.wav", "running");
   await waitStatus("two.wav", "queued");
@@ -144,7 +194,11 @@ try {
   // A second drop while busy must append, never disappear behind a busy guard.
   await drop(["/fixtures/four.wav"]);
   await waitStatus("four.wav", "queued");
-  assert.equal(await status("one.wav", "completed").getAttribute("aria-selected"), "true", "appending while busy must keep the viewed result selected");
+  assert.equal(
+    await status("one.wav", "completed").getAttribute("aria-selected"),
+    "true",
+    "appending while busy must keep the viewed result selected",
+  );
   await finish("/fixtures/two.wav", "Synthetic decode failure");
   await waitStatus("two.wav", "failed");
   await waitStatus("three.wav", "running");
@@ -154,7 +208,10 @@ try {
   await waitStatus("four.wav", "completed");
   for (const name of ["one", "three", "four"]) {
     await status(`${name}.wav`, "completed").click();
-    assert.equal(await page.locator('[role="tabpanel"]:visible textarea.transcribe-result').inputValue(), `Transcript for /fixtures/${name}.wav`);
+    assert.equal(
+      await page.locator('[role="tabpanel"]:visible textarea.transcribe-result').inputValue(),
+      `Transcript for /fixtures/${name}.wav`,
+    );
   }
   await status("two.wav", "failed").click();
   await page.getByText("Synthetic decode failure", { exact: true }).waitFor();
@@ -164,7 +221,10 @@ try {
   await page.screenshot({ path: outputPath("sagascript-242-results.png"), fullPage: true });
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page.getByRole("button", { name: "Transcribe", exact: true }).click();
-  assert.equal(await page.locator('[role="tabpanel"]:visible textarea.transcribe-result').inputValue(), "Transcript for /fixtures/three.wav");
+  assert.equal(
+    await page.locator('[role="tabpanel"]:visible textarea.transcribe-result').inputValue(),
+    "Transcript for /fixtures/three.wav",
+  );
   // Keyboard navigation follows the tab pattern.
   await status("three.wav", "completed").focus();
   await page.keyboard.press("Home");
@@ -197,17 +257,29 @@ try {
   await meetingProgress.getByText("Elapsed: 02:07", { exact: true }).waitFor();
   await page.clock.runFor(11500);
   await meetingProgress.getByText(/No status response for/).waitFor();
-  assert.equal(await meetingBar.locator(".progress-indicator").evaluate(node => getComputedStyle(node).animationPlayState), "paused",
-    "a missing response must pause the activity animation");
+  assert.equal(
+    await meetingBar.locator(".progress-indicator").evaluate((node) => getComputedStyle(node).animationPlayState),
+    "paused",
+    "a missing response must pause the activity animation",
+  );
   const heldElapsed = await meetingProgress.locator(".elapsed").innerText();
   await page.evaluate(() => window.qa.releasePoll("/fixtures/meeting-one.wav"));
   await page.clock.runFor(1000);
   await meetingProgress.getByText("Status checked just now", { exact: true }).waitFor();
-  assert.equal(await meetingBar.locator(".progress-indicator").evaluate(node => getComputedStyle(node).animationPlayState), "running",
-    "successful polling resumes the activity animation");
-  const elapsedSeconds = text => text.replace("Elapsed: ", "").split(":").reduce((sum, value) => sum * 60 + Number(value), 0);
-  assert.ok(elapsedSeconds(await meetingProgress.locator(".elapsed").innerText()) >= elapsedSeconds(heldElapsed),
-    "delayed active snapshots must not move elapsed backwards");
+  assert.equal(
+    await meetingBar.locator(".progress-indicator").evaluate((node) => getComputedStyle(node).animationPlayState),
+    "running",
+    "successful polling resumes the activity animation",
+  );
+  const elapsedSeconds = (text) =>
+    text
+      .replace("Elapsed: ", "")
+      .split(":")
+      .reduce((sum, value) => sum * 60 + Number(value), 0);
+  assert.ok(
+    elapsedSeconds(await meetingProgress.locator(".elapsed").innerText()) >= elapsedSeconds(heldElapsed),
+    "delayed active snapshots must not move elapsed backwards",
+  );
   await page.evaluate(() => window.qa.meetingProgress("/fixtures/meeting-one.wav", "clustering", 145000, 1000));
   await page.clock.runFor(1000);
   await meetingProgress.getByText("This stage: 00:01", { exact: true }).waitFor();
@@ -247,35 +319,45 @@ try {
   // Browser radio groups must remain independent across mounted result panels.
   await status("meeting-one.wav", "completed").click();
   await page.getByRole("textbox", { name: "Rename Speaker 1", exact: true }).fill("Speaker 1");
-  const modeRadios = page.locator('input[type="radio"][value="recluster"], input[type="radio"][value="rediarize"], input[type="radio"][value="full"]');
-  const modeNames = await modeRadios.evaluateAll(nodes => nodes.map(node => node.name));
+  const modeRadios = page.locator(
+    'input[type="radio"][value="recluster"], input[type="radio"][value="rediarize"], input[type="radio"][value="full"]',
+  );
+  const modeNames = await modeRadios.evaluateAll((nodes) => nodes.map((node) => node.name));
   assert.equal(modeNames.length, 9);
   assert.equal(new Set(modeNames).size, 3, "each meeting review needs its own radio group");
   await page.locator('input[type="radio"][value="full"]:visible').check();
   await status("meeting-two.wav", "completed").click();
   await page.locator('input[type="radio"][value="rediarize"]:visible').check();
   await status("meeting-one.wav", "completed").click();
-  assert.equal(await page.locator('input[type="radio"][value="full"]:visible').isChecked(), true,
-    "changing B must not clear the radio selected in A");
+  assert.equal(
+    await page.locator('input[type="radio"][value="full"]:visible').isChecked(),
+    true,
+    "changing B must not clear the radio selected in A",
+  );
 
   // Exercise polling recovery for a reprocessing job on an already completed tab.
   await page.getByRole("button", { name: "Plan reprocessing", exact: true }).click();
   await page.getByRole("button", { name: "Execute selected Full recomputation plan", exact: true }).waitFor();
   await page.getByRole("button", { name: "Execute selected Full recomputation plan", exact: true }).click();
-  await page.waitForFunction(() => window.qa.calls.some(call => call.cmd === "begin_meeting_reprocessing"));
+  await page.waitForFunction(() => window.qa.calls.some((call) => call.cmd === "begin_meeting_reprocessing"));
   await status("meeting-two.wav", "completed").click();
   await page.evaluate(() => window.qa.failPoll("/fixtures/meeting-one.wav"));
   await waitStatus("meeting-one.wav", "needs retry");
   await assertSummary({ "needs retry": 1 });
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await assertSummary({ "needs retry": 1 });
-  await page.locator(".content").evaluate(node => { node.scrollTop = 0; });
+  await page.locator(".content").evaluate((node) => {
+    node.scrollTop = 0;
+  });
   await page.screenshot({ path: outputPath("sagascript-243-attention.png"), fullPage: true });
   await page.getByRole("button", { name: "Show meeting-one.wav", exact: true }).click();
   await page.getByRole("button", { name: "Retry status check", exact: true }).click();
   await meeting("/fixtures/meeting-one.wav");
   await waitStatus("meeting-one.wav", "completed");
-  await page.getByRole("status", { name: "File transcription status" }).filter({ hasText: /0 running/ }).waitFor();
+  await page
+    .getByRole("status", { name: "File transcription status" })
+    .filter({ hasText: /0 running/ })
+    .waitFor();
 
   // Cancellation must release the queue only after its terminal status is read.
   await drop(["/fixtures/meeting-cancel.wav", "/fixtures/meeting-after.wav"]);
@@ -310,30 +392,51 @@ try {
   assert.equal(await nameInput.inputValue(), "Unsaved Bob");
   await status("meeting-one.wav", "completed").click();
   assert.equal(await nameInput.inputValue(), "Unsaved Alice");
-  assert.deepEqual(await page.evaluate(() => {
-    const ids = [...document.querySelectorAll("[id]")].map(node => node.id);
-    return ids.filter((id, index) => ids.indexOf(id) !== index);
-  }), []);
+  assert.deepEqual(
+    await page.evaluate(() => {
+      const ids = [...document.querySelectorAll("[id]")].map((node) => node.id);
+      return ids.filter((id, index) => ids.indexOf(id) !== index);
+    }),
+    [],
+  );
   assert.equal(await page.evaluate(() => window.qa.maximum()), 1, "transcriptions must never overlap");
-  const paths = await page.evaluate(() => window.qa.calls.filter(call => ["transcribe_file", "begin_meeting_file"].includes(call.cmd)).map(call => call.args.filePath));
-  assert.deepEqual(paths, ["/fixtures/one.wav", "/fixtures/two.wav", "/fixtures/three.wav", "/fixtures/four.wav", "/fixtures/picked.wav", "/fixtures/meeting-one.wav", "/fixtures/meeting-two.wav", "/fixtures/meeting-three.wav", "/fixtures/meeting-cancel.wav", "/fixtures/meeting-after.wav"]);
+  const paths = await page.evaluate(() =>
+    window.qa.calls.filter((call) => ["transcribe_file", "begin_meeting_file"].includes(call.cmd)).map((call) => call.args.filePath),
+  );
+  assert.deepEqual(paths, [
+    "/fixtures/one.wav",
+    "/fixtures/two.wav",
+    "/fixtures/three.wav",
+    "/fixtures/four.wav",
+    "/fixtures/picked.wav",
+    "/fixtures/meeting-one.wav",
+    "/fixtures/meeting-two.wav",
+    "/fixtures/meeting-three.wav",
+    "/fixtures/meeting-cancel.wav",
+    "/fixtures/meeting-after.wav",
+  ]);
   await assertSummary({ completed: 8, failed: 1, cancelled: 1, queued: 0, running: 0, "needs retry": 0 });
-  assert.equal(await page.evaluate(() => window.qa.calls.filter(call => call.cmd === 'transcribe_file').every(call => call.args.autoPaste === false)), true);
+  assert.equal(
+    await page.evaluate(() =>
+      window.qa.calls.filter((call) => call.cmd === "transcribe_file").every((call) => call.args.autoPaste === false),
+    ),
+    true,
+  );
   // Polish must remain per-file after extraction: a recent selection cannot
   // change Save's source, and re-run queues alongside the retained review.
   await status("one.wav", "completed").click();
   await page.getByRole("combobox", { name: "Recent files to re-run (last 5, this session)" }).selectOption("/fixtures/meeting-two.wav");
   await page.getByRole("button", { name: "Copy", exact: true }).click();
   await page.getByRole("button", { name: "Save…", exact: true }).click();
-  const saved = await page.evaluate(() => window.qa.calls.filter(call => call.cmd === "save_transcription_text").at(-1));
+  const saved = await page.evaluate(() => window.qa.calls.filter((call) => call.cmd === "save_transcription_text").at(-1));
   assert.deepEqual(saved.args, { text: "Transcript for /fixtures/one.wav", fileName: "one.txt", directory: "/fixtures" });
   await page.getByRole("checkbox", { name: "Speaker diarization" }).uncheck();
   await drop(["/fixtures/cancel-plain.wav", "/fixtures/after-plain.wav"]);
   await waitStatus("cancel-plain.wav", "running");
-  const runId = await page.evaluate(() => window.qa.calls.filter(call => call.cmd === "transcribe_file").at(-1).args.runId);
+  const runId = await page.evaluate(() => window.qa.calls.filter((call) => call.cmd === "transcribe_file").at(-1).args.runId);
   assert.ok(runId);
   await page.evaluate(() => window.qa.progress("wrong-run", "transcribing", 90));
-  await page.evaluate(runId => window.qa.progress(runId, "resampling", 60), runId);
+  await page.evaluate((runId) => window.qa.progress(runId, "resampling", 60), runId);
   await page.getByText("Converting to 16 kHz mono", { exact: true }).waitFor();
   await page.getByRole("button", { name: "Stop transcription", exact: true }).click();
   await waitStatus("after-plain.wav", "queued");
@@ -347,7 +450,12 @@ try {
   await finish("/fixtures/after-plain.wav");
   await waitStatus("cancel-plain.wav", "running");
   await finish("/fixtures/cancel-plain.wav");
-  await page.waitForFunction(() => [...document.querySelectorAll('[role="tab"]')].filter(tab => tab.textContent.includes("cancel-plain.wav") && tab.textContent.includes("completed")).length === 2);
+  await page.waitForFunction(
+    () =>
+      [...document.querySelectorAll('[role="tab"]')].filter(
+        (tab) => tab.textContent.includes("cancel-plain.wav") && tab.textContent.includes("completed"),
+      ).length === 2,
+  );
   assert.equal(await page.evaluate(() => window.qa.maximum()), 1);
   await page.getByRole("button", { name: "What is speaker diarization?", exact: true }).click();
   await page.getByRole("dialog", { name: "What is speaker diarization?", exact: true }).waitFor();
@@ -358,14 +466,22 @@ try {
   await nameInput.scrollIntoViewIfNeeded();
   await page.screenshot({ path: outputPath("sagascript-242-meetings.png"), fullPage: true });
   await page.getByRole("checkbox", { name: "Speaker diarization" }).check();
-  await page.evaluate(() => { window.qaFailMeetingStart = true; window.qa.drop(["/fixtures/start-fails.wav"]); });
+  await page.evaluate(() => {
+    window.qaFailMeetingStart = true;
+    window.qa.drop(["/fixtures/start-fails.wav"]);
+  });
   await waitStatus("start-fails.wav", "failed");
   await status("start-fails.wav", "failed").click();
   await page.getByText("Finish the current dictation before importing a meeting.", { exact: true }).waitFor();
-  assert.equal(await page.locator('[role="tabpanel"]:visible .meeting-progress').count(), 0,
-    "a failed start has no native worker duration to present");
+  assert.equal(
+    await page.locator('[role="tabpanel"]:visible .meeting-progress').count(),
+    0,
+    "a failed start has no native worker duration to present",
+  );
   assert.deepEqual(errors, []);
-  console.log("PASS: real Svelte UI queue, retained results, failure continuation, append, keyboard tabs, picker, serialized meetings, poll retry, cancellation, independent drafts, unique IDs; no browser errors.");
+  console.log(
+    "PASS: real Svelte UI queue, retained results, failure continuation, append, keyboard tabs, picker, serialized meetings, poll retry, cancellation, independent drafts, unique IDs; no browser errors.",
+  );
 } catch (error) {
   await writeFailureDiagnostics(error);
   throw error;

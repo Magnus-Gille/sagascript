@@ -31,7 +31,10 @@ test("manifest records version, commit, tree and per-file hashes", () => {
   assert.equal(manifest.version, "1.2.3");
   assert.equal(manifest.sha, SHA);
   assert.equal(manifest.tree_sha, TREE);
-  assert.deepEqual(manifest.files.map((f) => f.name), ["macos-bundle/Sagascript.dmg", "windows-arm64-unsigned-candidate/setup.exe"]);
+  assert.deepEqual(
+    manifest.files.map((f) => f.name),
+    ["macos-bundle/Sagascript.dmg", "windows-arm64-unsigned-candidate/setup.exe"],
+  );
   assert.match(manifest.files[0].sha256, /^[0-9a-f]{64}$/);
   assert.equal(manifest.files[0].size, 3);
 });
@@ -51,7 +54,10 @@ test("verification rejects tampering, missing or extra files, and identity misma
   writeFileSync(join(dir, "macos-bundle", "Sagascript.dmg"), "DMG");
   assert.match(verifyManifest(expect).join("\n"), /Sagascript\.dmg: sha256/);
   writeFileSync(join(dir, "macos-bundle", "gone.txt"), "");
-  const missing = { ...expect, manifest: { ...expect.manifest, files: [...expect.manifest.files, { name: "nope.exe", sha256: "0".repeat(64), size: 1 }] } };
+  const missing = {
+    ...expect,
+    manifest: { ...expect.manifest, files: [...expect.manifest.files, { name: "nope.exe", sha256: "0".repeat(64), size: 1 }] },
+  };
   assert.match(verifyManifest(missing).join("\n"), /nope\.exe: ENOENT/);
 });
 
@@ -140,7 +146,11 @@ test("no workflow uses secrets: inherit; the signing callee declares exactly the
 test("rust-toolchain is pinned by full SHA with an explicit toolchain in the release workflows", () => {
   const channel = /^channel = "([0-9]+\.[0-9]+\.[0-9]+)"$/m.exec(read("rust-toolchain.toml"))[1];
   for (const name of ["release-build-macos", "release-quality-gate"]) {
-    assert.match(workflows[name], new RegExp(`uses: dtolnay/rust-toolchain@[0-9a-f]{40} # .*\\n\\s+with:\\n\\s+toolchain: ${channel.replaceAll(".", "\\.")}\\n`), name);
+    assert.match(
+      workflows[name],
+      new RegExp(`uses: dtolnay/rust-toolchain@[0-9a-f]{40} # .*\\n\\s+with:\\n\\s+toolchain: ${channel.replaceAll(".", "\\.")}\\n`),
+      name,
+    );
     assert.doesNotMatch(workflows[name], /rust-toolchain@stable/);
   }
 });
@@ -186,7 +196,11 @@ test("signing lives in exactly one reusable workflow behind the updater-signing 
   for (const name of ["release", "prebuild-release", "windows-package", "release-quality-gate"]) {
     // Callers may only forward secrets as `secrets:` inputs to the signing workflow; never consume them.
     const consumed = workflows[name].replace(/^ {6}([A-Z0-9_]+): \$\{\{ secrets\.\1 \}\}\n/gm, "");
-    assert.doesNotMatch(consumed, /APPLE_CERTIFICATE|secrets\.TAURI_SIGNING|environment: updater-signing/, `${name} must not hold signing material`);
+    assert.doesNotMatch(
+      consumed,
+      /APPLE_CERTIFICATE|secrets\.TAURI_SIGNING|environment: updater-signing/,
+      `${name} must not hold signing material`,
+    );
   }
 });
 
@@ -243,5 +257,6 @@ test("draft verification script covers the release checklist", () => {
     "hongkong",
     "windows-acceptance-ps51.json",
     "GITHUB_STEP_SUMMARY",
-  ]) assert.ok(s.includes(needle), `verify-release-draft.sh covers ${needle}`);
+  ])
+    assert.ok(s.includes(needle), `verify-release-draft.sh covers ${needle}`);
 });

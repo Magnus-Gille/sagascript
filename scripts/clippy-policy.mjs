@@ -237,15 +237,16 @@ function pad(value, width, right = false) {
 
 export function renderTable(rows) {
   const shown = rows.filter((row) => row.baseline > 0 || row.now > 0);
-  const total = shown.reduce(
-    (sum, row) => ({ baseline: sum.baseline + row.baseline, now: sum.now + row.now }),
-    { baseline: 0, now: 0 },
-  );
+  const total = shown.reduce((sum, row) => ({ baseline: sum.baseline + row.baseline, now: sum.now + row.now }), { baseline: 0, now: 0 });
   const header = ["lint", "crate", "baseline", "now", "delta"];
   const body = shown.map((row) => [row.lint, row.crate, row.baseline, row.now, formatDelta(row.delta)]);
   body.push(["total", "", total.baseline, total.now, formatDelta(total.now - total.baseline)]);
   const widths = header.map((title, index) => Math.max(title.length, ...body.map((cells) => String(cells[index]).length)));
-  const line = (cells) => cells.map((cell, index) => pad(cell, widths[index], index >= 2)).join("  ").trimEnd();
+  const line = (cells) =>
+    cells
+      .map((cell, index) => pad(cell, widths[index], index >= 2))
+      .join("  ")
+      .trimEnd();
   return [line(header), line(widths.map((width) => "-".repeat(width))), ...body.map(line)].join("\n");
 }
 
@@ -345,10 +346,7 @@ export function main(args = process.argv.slice(2), { log = console.log, error = 
 
   let text;
   try {
-    text =
-      options.inputs.length > 0
-        ? options.inputs.map((input) => readFileSync(input, "utf8")).join("\n")
-        : runClippy({ log, error });
+    text = options.inputs.length > 0 ? options.inputs.map((input) => readFileSync(input, "utf8")).join("\n") : runClippy({ log, error });
   } catch (problem) {
     error(`clippy-policy: ${problem.message}`);
     return problem.exitCode ?? 2;
@@ -426,7 +424,7 @@ export function main(args = process.argv.slice(2), { log = console.log, error = 
       if (located.length > 50) error(`    … and ${located.length - 50} more`);
     }
     error(
-      "\nFix the new findings (CONTRIBUTING.md, \"Clippy policy lints\"). If an increase is truly intended, " +
+      '\nFix the new findings (CONTRIBUTING.md, "Clippy policy lints"). If an increase is truly intended, ' +
         "run `node scripts/clippy-policy.mjs --update --allow-increase` and justify it in the pull request.",
     );
     return 1;

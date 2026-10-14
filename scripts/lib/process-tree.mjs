@@ -238,10 +238,13 @@ export function runProcessTree({
     child.once("close", (code, signal) => finish(exitOutcome ?? { code, signal }));
 
     if (timeoutMs !== undefined && timeoutMs !== null) {
-      timer = setTimeout(() => {
-        timedOut = true;
-        terminate();
-      }, Math.max(0, timeoutMs));
+      timer = setTimeout(
+        () => {
+          timedOut = true;
+          terminate();
+        },
+        Math.max(0, timeoutMs),
+      );
     }
     if (abortSignal) {
       if (abortSignal.aborted) onAbort();

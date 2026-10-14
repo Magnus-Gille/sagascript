@@ -1,6 +1,7 @@
 # EditorConfig — https://editorconfig.org
 # Mirrors the conventions already in the tree; formatters (rustfmt, and Prettier
-# once #361 lands) remain the source of truth for code layout.
+# for the paths in .prettierignore's scope) remain the source of truth for code
+# layout.
 root = true
 
 [*]

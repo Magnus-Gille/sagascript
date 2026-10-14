@@ -7,10 +7,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
-const scriptPath = resolve(
-  dirname(fileURLToPath(import.meta.url)),
-  "verify-windows-x64-cpu-policy.ps1",
-);
+const scriptPath = resolve(dirname(fileURLToPath(import.meta.url)), "verify-windows-x64-cpu-policy.ps1");
 const pwsh = process.env.PWSH ?? "pwsh";
 const pwshProbeDirectory = mkdtempSync(join(tmpdir(), "sagascript-pwsh-probe-"));
 let pwshProbe;
@@ -25,9 +22,8 @@ try {
 }
 const pwshAvailable = pwshProbe.status === 0;
 const windowsHost = process.platform === "win32" || process.env.OS === "Windows_NT";
-const testWindows = pwshAvailable || windowsHost
-  ? test
-  : (name, fn) => test(name, { skip: "pwsh unavailable; Windows-only verifier tests" }, fn);
+const testWindows =
+  pwshAvailable || windowsHost ? test : (name, fn) => test(name, { skip: "pwsh unavailable; Windows-only verifier tests" }, fn);
 
 const baseline = {
   GGML_NATIVE: "OFF",
@@ -50,17 +46,12 @@ const baseline = {
   GGML_LLAMAFILE: "OFF",
 };
 
-const flagTypes = Object.fromEntries(
-  Object.keys(baseline).map((name) => [name, "BOOL"]),
-);
+const flagTypes = Object.fromEntries(Object.keys(baseline).map((name) => [name, "BOOL"]));
 
-function makeCache(policyPath, {
-  projectName = "whisper.cpp",
-  includeValue = policyPath,
-  omit = [],
-  overrides = {},
-  duplicate = null,
-} = {}) {
+function makeCache(
+  policyPath,
+  { projectName = "whisper.cpp", includeValue = policyPath, omit = [], overrides = {}, duplicate = null } = {},
+) {
   const values = {
     CMAKE_PROJECT_NAME: projectName,
     CMAKE_PROJECT_INCLUDE: includeValue,
@@ -96,20 +87,10 @@ async function runVerifier({ caches, unrelated = [], expectedStatus = 0, configu
     await writeFile(path, spec.content ?? makeCache(policyPath, spec), "utf8");
     cacheFiles.push(path);
   }
-  const before = new Map(
-    await Promise.all(cacheFiles.map(async (path) => [path, await readFile(path, "utf8")])),
-  );
+  const before = new Map(await Promise.all(cacheFiles.map(async (path) => [path, await readFile(path, "utf8")])));
 
   try {
-    const args = [
-      "-NoProfile",
-      "-File",
-      scriptPath,
-      "-TargetRoot",
-      targetRoot,
-      "-PolicyFile",
-      policyPath,
-    ];
+    const args = ["-NoProfile", "-File", scriptPath, "-TargetRoot", targetRoot, "-PolicyFile", policyPath];
     const result = spawnSync(pwsh, args, {
       cwd: directory,
       encoding: "utf8",
@@ -120,22 +101,15 @@ async function runVerifier({ caches, unrelated = [], expectedStatus = 0, configu
     if (configure) configure({ output, targetRoot, policyPath });
     return { output, targetRoot, policyPath };
   } finally {
-    await Promise.all(
-      cacheFiles.map(async (path) => assert.equal(await readFile(path, "utf8"), before.get(path))),
-    );
+    await Promise.all(cacheFiles.map(async (path) => assert.equal(await readFile(path, "utf8"), before.get(path))));
     await rm(directory, { recursive: true, force: true });
   }
 }
 
 testWindows("verifies debug and explicit-target whisper.cpp caches", async () => {
   await runVerifier({
-    caches: [
-      { relative: "debug/whisper-rs-sys/CMakeCache.txt" },
-      { relative: "explicit-target/CMakeCache.txt" },
-    ],
-    unrelated: [
-      { relative: "other/CMakeCache.txt", content: "foreign cache is ignored\n" },
-    ],
+    caches: [{ relative: "debug/whisper-rs-sys/CMakeCache.txt" }, { relative: "explicit-target/CMakeCache.txt" }],
+    unrelated: [{ relative: "other/CMakeCache.txt", content: "foreign cache is ignored\n" }],
     configure: ({ output }) => {
       assert.match(output, /Verified 2 whisper\.cpp CMake cache\(s\)/);
       assert.equal((output.match(/Policy pass:/g) ?? []).length, 2);

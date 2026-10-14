@@ -1,12 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import {
-  existsSync,
-  readFileSync,
-  readdirSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -25,9 +19,7 @@ function normalizeNewlines(text) {
 function npmInstallationError(pkg, installedVersion, directoryExists) {
   const path = relative(root, pkg.directory);
   if (!directoryExists) {
-    return pkg.optional
-      ? null
-      : `npm dependency directory is missing: ${path} (run npm ci)`;
+    return pkg.optional ? null : `npm dependency directory is missing: ${path} (run npm ci)`;
   }
   if (typeof installedVersion !== "string") {
     return `npm dependency manifest has no version: ${path}/package.json (run npm ci)`;
@@ -61,15 +53,9 @@ if (mode === "--test-npm-installation") {
       npmInstallationError(pkg, "1.0.0", true),
       "npm dependency version mismatch for example: lockfile requires 2.0.0, installed 1.0.0 in node_modules/example (run npm ci)",
     ],
-    [
-      npmInstallationError(pkg, undefined, false),
-      "npm dependency directory is missing: node_modules/example (run npm ci)",
-    ],
+    [npmInstallationError(pkg, undefined, false), "npm dependency directory is missing: node_modules/example (run npm ci)"],
     [npmInstallationError({ ...pkg, optional: true }, undefined, false), null],
-    [
-      npmInstallationError(pkg, undefined, true),
-      "npm dependency manifest has no version: node_modules/example/package.json (run npm ci)",
-    ],
+    [npmInstallationError(pkg, undefined, true), "npm dependency manifest has no version: node_modules/example/package.json (run npm ci)"],
   ];
   for (const [actual, expected] of cases) {
     if (actual !== expected) {
@@ -139,37 +125,16 @@ const reviewedRustLicenses = new Set([
   "Zlib OR Apache-2.0 OR MIT",
 ]);
 
-const reviewedNpmLicenses = new Set([
-  "0BSD",
-  "Apache-2.0",
-  "Apache-2.0 OR MIT",
-  "BSD-3-Clause",
-  "ISC",
-  "MIT",
-  "MIT OR Apache-2.0",
-]);
+const reviewedNpmLicenses = new Set(["0BSD", "Apache-2.0", "Apache-2.0 OR MIT", "BSD-3-Clause", "ISC", "MIT", "MIT OR Apache-2.0"]);
 
 function cargoMetadata(target, manifestPath = "src-tauri/Cargo.toml") {
   return JSON.parse(
-    execFileSync(
-      "cargo",
-      [
-        "metadata",
-        "--format-version",
-        "1",
-        "--locked",
-        "--filter-platform",
-        target,
-        "--manifest-path",
-        manifestPath,
-      ],
-      {
-        cwd: root,
-        encoding: "utf8",
-        maxBuffer: 64 * 1024 * 1024,
-        stdio: ["ignore", "pipe", "inherit"],
-      },
-    ),
+    execFileSync("cargo", ["metadata", "--format-version", "1", "--locked", "--filter-platform", target, "--manifest-path", manifestPath], {
+      cwd: root,
+      encoding: "utf8",
+      maxBuffer: 64 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "inherit"],
+    }),
   );
 }
 
@@ -323,10 +288,7 @@ function table(packages) {
   return [
     "| Component | Version | Declared license | Source |",
     "|---|---:|---|---|",
-    ...packages.map(
-      (pkg) =>
-        `| ${pkg.name.replaceAll("|", "\\|")} | ${pkg.version} | ${pkg.license} | [upstream](${pkg.source}) |`,
-    ),
+    ...packages.map((pkg) => `| ${pkg.name.replaceAll("|", "\\|")} | ${pkg.version} | ${pkg.license} | [upstream](${pkg.source}) |`),
   ].join("\n");
 }
 

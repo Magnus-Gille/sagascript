@@ -1,13 +1,13 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
   import { listen } from "@tauri-apps/api/event";
-  import { hotkeyKeyLabel } from "./hotkey.js";
+  import { hotkeyKeyLabel } from "./hotkey";
   import {
     adoptDownloadListeners,
     awaitDownloadCompletion,
     completedDownloadState,
     registerDownloadListeners,
-  } from "./onboarding-download-state.js";
+  } from "./onboarding-download-state";
   import {
     getPlatform,
     getSettings,

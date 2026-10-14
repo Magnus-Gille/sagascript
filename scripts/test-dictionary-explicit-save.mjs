@@ -4,19 +4,14 @@ import test from "node:test";
 import ts from "typescript";
 import vm from "node:vm";
 
-const settingsSource = await readFile(
-  new URL("../src/lib/Settings.svelte", import.meta.url),
-  "utf8",
-);
+const settingsSource = await readFile(new URL("../src/lib/Settings.svelte", import.meta.url), "utf8");
 const scriptSource = settingsSource.match(/<script lang="ts">([\s\S]*?)<\/script>/)?.[1];
 assert.ok(scriptSource, "Settings.svelte should have a TypeScript script block");
 
 function functionSource(name) {
   const plainStart = scriptSource.indexOf(`function ${name}`);
   const asyncStart = scriptSource.indexOf(`async function ${name}`);
-  const start = asyncStart >= 0 && (plainStart < 0 || asyncStart < plainStart)
-    ? asyncStart
-    : plainStart;
+  const start = asyncStart >= 0 && (plainStart < 0 || asyncStart < plainStart) ? asyncStart : plainStart;
   assert.ok(start >= 0, `Settings.svelte should define ${name}`);
   let brace = scriptSource.indexOf("{", start);
   assert.ok(brace >= 0, `${name} should have a body`);
@@ -59,7 +54,7 @@ function functionSource(name) {
       i += 1;
       continue;
     }
-    if (ch === "\"" || ch === "'" || ch === "`") {
+    if (ch === '"' || ch === "'" || ch === "`") {
       quote = ch;
       continue;
     }
@@ -94,7 +89,9 @@ function createHarness({ failure = null } = {}) {
     "discardAndFinishGlossaryNavigation",
     "stayOnGlossaryDraft",
     "requestTabChange",
-  ].map(functionSource).join("\n");
+  ]
+    .map(functionSource)
+    .join("\n");
   const harness = `
     let settings = {
       profile_glossaries: { default: "global saved", english: "english saved", swedish: "swedish saved" },
@@ -279,12 +276,14 @@ test("Save persists the active scope with its edit baseline as expected_source",
   const exercise = createHarness();
   input(exercise, "global draft");
   assert.equal(await exercise.saveGlossary(), true);
-  assert.deepEqual(JSON.parse(JSON.stringify(exercise.snapshot().calls)), [{
-    command: "setProfileGlossary",
-    scopeId: "default",
-    value: "global draft",
-    expectedSource: "global saved",
-  }]);
+  assert.deepEqual(JSON.parse(JSON.stringify(exercise.snapshot().calls)), [
+    {
+      command: "setProfileGlossary",
+      scopeId: "default",
+      value: "global draft",
+      expectedSource: "global saved",
+    },
+  ]);
 
   exercise.commitGlossaryScopeChange("english");
   input(exercise, "english draft");
@@ -308,20 +307,10 @@ test("Discard restores the saved source without persisting", () => {
 });
 
 test("clean dictionary action buttons do not advertise an active wait", () => {
-  const disabledActionRule = settingsSource.match(
-    /\.dictionary-actions button:disabled,[\s\S]*?opacity:\s*0\.6;/,
-  )?.[0];
+  const disabledActionRule = settingsSource.match(/\.dictionary-actions button:disabled,[\s\S]*?opacity:\s*0\.6;/)?.[0];
   assert.ok(disabledActionRule, "dictionary disabled-button styling should remain explicit");
-  assert.match(
-    disabledActionRule,
-    /cursor:\s*default/,
-    "a clean disabled Save button must not show macOS's spinning wait cursor",
-  );
-  assert.doesNotMatch(
-    disabledActionRule,
-    /cursor:\s*wait/,
-    "the disabled state is also used when no save is in progress",
-  );
+  assert.match(disabledActionRule, /cursor:\s*default/, "a clean disabled Save button must not show macOS's spinning wait cursor");
+  assert.doesNotMatch(disabledActionRule, /cursor:\s*wait/, "the disabled state is also used when no save is in progress");
 });
 
 test("dirty scope navigation offers Save, Discard, and Stay", async () => {
@@ -401,12 +390,14 @@ test("dictionary Save proceeds without a meeting review confirmation", async () 
   assert.equal(state.activeTab, "dictate");
   assert.equal(state.glossaryDraft, "global draft");
   assert.equal(state.glossaryEditBaseline, null);
-  assert.deepEqual(JSON.parse(JSON.stringify(state.calls)), [{
-    command: "setProfileGlossary",
-    scopeId: "default",
-    value: "global draft",
-    expectedSource: "global saved",
-  }]);
+  assert.deepEqual(JSON.parse(JSON.stringify(state.calls)), [
+    {
+      command: "setProfileGlossary",
+      scopeId: "default",
+      value: "global draft",
+      expectedSource: "global saved",
+    },
+  ]);
 });
 
 for (const failure of ["write failed", "Dictionary changed elsewhere: current source"]) {

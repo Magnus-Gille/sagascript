@@ -29,9 +29,14 @@ const producerSource = readFileSync(join(root, "scripts/code-health-produce.mjs"
 const config = JSON.parse(readFileSync(join(root, "docs/code-health-producer-v1.json"), "utf8"));
 const tooling = JSON.parse(readFileSync(join(root, "tooling/code-health/package.json"), "utf8"));
 const toolingLock = JSON.parse(readFileSync(join(root, "tooling/code-health/package-lock.json"), "utf8"));
-const modeScriptMatch = workflow.match(/- name: Select collection mode[\s\S]*?\n        run: \|\n((?:          .*\n?)+?)(?=\n      - name:)/);
+const modeScriptMatch = workflow.match(
+  /- name: Select collection mode[\s\S]*?\n        run: \|\n((?:          .*\n?)+?)(?=\n      - name:)/,
+);
 assert.ok(modeScriptMatch, "collection mode selection script is missing");
-const modeScript = modeScriptMatch[1].split("\n").map(line => line.slice(10)).join("\n");
+const modeScript = modeScriptMatch[1]
+  .split("\n")
+  .map((line) => line.slice(10))
+  .join("\n");
 
 function runModeSelection({ eventName, eventSchedule = "", dispatchMode = "" }) {
   const outputDir = mkdtempSync(join(tmpdir(), "sagascript-mode-selection-test-"));
@@ -52,15 +57,28 @@ function runModeSelection({ eventName, eventSchedule = "", dispatchMode = "" }) 
 }
 
 test("workflow-level first-attempt failure cannot be replaced by a successful rerun", () => {
-  const run = { id: 42, head_sha: "a".repeat(40), run_attempt: 2, event: "push", head_branch: "main", status: "completed", conclusion: "success" };
-  const first = firstAttemptRunContext(run, url => {
+  const run = {
+    id: 42,
+    head_sha: "a".repeat(40),
+    run_attempt: 2,
+    event: "push",
+    head_branch: "main",
+    status: "completed",
+    conclusion: "success",
+  };
+  const first = firstAttemptRunContext(run, (url) => {
     assert.match(url, /\/runs\/42\/attempts\/1$/);
     return { ...run, run_attempt: 1, conclusion: "startup_failure" };
   });
   assert.deepEqual(first, { status: "completed", conclusion: "startup_failure" });
-  const missing = () => { throw Object.assign(new Error("missing"), { status: 404 }); };
+  const missing = () => {
+    throw Object.assign(new Error("missing"), { status: 404 });
+  };
   assert.deepEqual(firstAttemptRunContext(run, missing), { status: null, conclusion: null });
-  assert.deepEqual(firstAttemptRunContext({ ...run, run_attempt: 1, conclusion: "failure" }, missing), { status: "completed", conclusion: "failure" });
+  assert.deepEqual(firstAttemptRunContext({ ...run, run_attempt: 1, conclusion: "failure" }, missing), {
+    status: "completed",
+    conclusion: "failure",
+  });
   assert.throws(() => firstAttemptRunContext(run, () => ({ ...run })), /identity does not match/);
 });
 
@@ -71,9 +89,15 @@ test("producer modes separate weekly static collection from CI-only snapshots", 
   assert.throws(() => parseProducerOptions(["--mode", "ci-only", "--ci"]), /cannot be combined/);
   assert.deepEqual(parseProducerOptions(["--ci"]).includeCi, true);
 
-  const ciOnly = createObjective(config.scopes.find(scope => scope.name === "rust-core"), {
-    commitSha: "a".repeat(40), observedAt: "2026-10-09T00:00:00Z", runRef: "ref:collection-run", attempt: 1,
-  });
+  const ciOnly = createObjective(
+    config.scopes.find((scope) => scope.name === "rust-core"),
+    {
+      commitSha: "a".repeat(40),
+      observedAt: "2026-10-09T00:00:00Z",
+      runRef: "ref:collection-run",
+      attempt: 1,
+    },
+  );
   assert.equal(ciOnly.metrics.complex_functions.status, "unknown");
   assert.equal(ciOnly.metrics.complex_functions.reason, "not-collected");
   assert.equal(ciOnly.metrics.coverage.status, "unknown");
@@ -98,7 +122,10 @@ test("static GitHub collection binds exact repo, checkout, run and attempt witho
   assert.throws(() => workflowRunContext({ ...env, GITHUB_RUN_ID: "0" }, commitSha, "/checkout/sagascript"), /run identity/);
   assert.throws(() => workflowRunContext({ ...env, GITHUB_RUN_ID: "1e2" }, commitSha, "/checkout/sagascript"), /run identity/);
   assert.throws(() => workflowRunContext({ ...env, GITHUB_RUN_ATTEMPT: "two" }, commitSha, "/checkout/sagascript"), /run identity/);
-  assert.throws(() => workflowRunContext({ ...env, GITHUB_REPOSITORY: "someone/else" }, commitSha, "/checkout/sagascript"), /repository identity/);
+  assert.throws(
+    () => workflowRunContext({ ...env, GITHUB_REPOSITORY: "someone/else" }, commitSha, "/checkout/sagascript"),
+    /repository identity/,
+  );
   assert.throws(() => workflowRunContext({ ...env, GITHUB_SHA: "c".repeat(40) }, commitSha, "/checkout/sagascript"), /commit identity/);
   assert.throws(() => workflowRunContext({ ...env, GITHUB_WORKSPACE: "/checkout/other" }, commitSha, "/checkout/sagascript"), /workspace/);
 });
@@ -139,45 +166,63 @@ test("Swift runs coverage tests before querying the generated codecov report", (
       },
     });
     const sharedArgs = [
-      "--cache-path", join(tempRoot, "swiftpm-cache"),
-      "--config-path", join(tempRoot, "swiftpm-config"),
-      "--security-path", join(tempRoot, "swiftpm-security"),
-      "--scratch-path", scratchPath,
+      "--cache-path",
+      join(tempRoot, "swiftpm-cache"),
+      "--config-path",
+      join(tempRoot, "swiftpm-config"),
+      "--security-path",
+      join(tempRoot, "swiftpm-security"),
+      "--scratch-path",
+      scratchPath,
     ];
-    assert.deepEqual(calls.map(call => call.args), [
-      ["test", "--enable-code-coverage", "--jobs", "2", ...sharedArgs],
-      ["test", "--show-codecov-path", ...sharedArgs],
-    ]);
-    assert.deepEqual(calls.map(call => call.options.env), [
-      {
-        TMPDIR: tempRoot,
-        CLANG_MODULE_CACHE_PATH: join(tempRoot, "clang-module-cache"),
-        SWIFT_MODULECACHE_PATH: join(tempRoot, "swift-module-cache"),
-      },
-      {
-        TMPDIR: tempRoot,
-        CLANG_MODULE_CACHE_PATH: join(tempRoot, "clang-module-cache"),
-        SWIFT_MODULECACHE_PATH: join(tempRoot, "swift-module-cache"),
-      },
-    ]);
+    assert.deepEqual(
+      calls.map((call) => call.args),
+      [
+        ["test", "--enable-code-coverage", "--jobs", "2", ...sharedArgs],
+        ["test", "--show-codecov-path", ...sharedArgs],
+      ],
+    );
+    assert.deepEqual(
+      calls.map((call) => call.options.env),
+      [
+        {
+          TMPDIR: tempRoot,
+          CLANG_MODULE_CACHE_PATH: join(tempRoot, "clang-module-cache"),
+          SWIFT_MODULECACHE_PATH: join(tempRoot, "swift-module-cache"),
+        },
+        {
+          TMPDIR: tempRoot,
+          CLANG_MODULE_CACHE_PATH: join(tempRoot, "clang-module-cache"),
+          SWIFT_MODULECACHE_PATH: join(tempRoot, "swift-module-cache"),
+        },
+      ],
+    );
     assert.equal(actual, reportPath);
 
     const failedCalls = [];
-    assert.throws(() => runSwiftCoverageSteps({
-      scratchPath,
-      tempRoot,
-      runCommand: args => {
-        failedCalls.push(args);
-        throw new Error("swift test failed");
-      },
-    }), /swift test failed/);
+    assert.throws(
+      () =>
+        runSwiftCoverageSteps({
+          scratchPath,
+          tempRoot,
+          runCommand: (args) => {
+            failedCalls.push(args);
+            throw new Error("swift test failed");
+          },
+        }),
+      /swift test failed/,
+    );
     assert.equal(failedCalls.length, 1);
     assert.ok(!failedCalls[0].includes("--show-codecov-path"));
-    assert.throws(() => runSwiftCoverageSteps({
-      scratchPath,
-      tempRoot,
-      runCommand: args => args.includes("--show-codecov-path") ? "/tmp/outside/coverage.json" : "",
-    }), /outside task-local scratch/);
+    assert.throws(
+      () =>
+        runSwiftCoverageSteps({
+          scratchPath,
+          tempRoot,
+          runCommand: (args) => (args.includes("--show-codecov-path") ? "/tmp/outside/coverage.json" : ""),
+        }),
+      /outside task-local scratch/,
+    );
   } finally {
     rmSync(rootPath, { recursive: true, force: true });
   }
@@ -187,19 +232,34 @@ test("Swift coverage filters external and generated exports while retaining sour
   const packageRoot = resolve(join("/tmp/swift-task", "swift-package"));
   const sourcePackageRoot = resolve(join("/repo", "src-tauri/engine-host/coreml"));
   const report = {
-    data: [{ files: [
-      { filename: join(packageRoot, "Sources/EngineHostCore/Engine.swift"), summary: { lines: { count: 10, covered: 7 } } },
-      { filename: join(packageRoot, "Sources/EngineHostCore/BuildInfo.swift"), summary: { lines: { count: 4, covered: 4 } } },
-      { filename: join(packageRoot, "Tests/EngineHostCoreTests/ContextBiasingTests.swift"), summary: { lines: { count: 20, covered: 20 } } },
-      { filename: join(packageRoot, ".build/out/Intermediates.noindex/test_entry_point.swift"), summary: { lines: { count: 5, covered: 5 } } },
-      { filename: "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/Swift.swiftmodule/Swift.swiftinterface", summary: { lines: { count: 100, covered: 100 } } },
-    ] }],
+    data: [
+      {
+        files: [
+          { filename: join(packageRoot, "Sources/EngineHostCore/Engine.swift"), summary: { lines: { count: 10, covered: 7 } } },
+          { filename: join(packageRoot, "Sources/EngineHostCore/BuildInfo.swift"), summary: { lines: { count: 4, covered: 4 } } },
+          {
+            filename: join(packageRoot, "Tests/EngineHostCoreTests/ContextBiasingTests.swift"),
+            summary: { lines: { count: 20, covered: 20 } },
+          },
+          {
+            filename: join(packageRoot, ".build/out/Intermediates.noindex/test_entry_point.swift"),
+            summary: { lines: { count: 5, covered: 5 } },
+          },
+          {
+            filename:
+              "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/Swift.swiftmodule/Swift.swiftinterface",
+            summary: { lines: { count: 100, covered: 100 } },
+          },
+        ],
+      },
+    ],
   };
 
   const filtered = filterSwiftCoverageReport(report, { packageRoot, sourcePackageRoot });
-  assert.deepEqual(filtered.report.data[0].files.map(file => file.filename), [
-    join(sourcePackageRoot, "Sources/EngineHostCore/Engine.swift"),
-  ]);
+  assert.deepEqual(
+    filtered.report.data[0].files.map((file) => file.filename),
+    [join(sourcePackageRoot, "Sources/EngineHostCore/Engine.swift")],
+  );
   assert.deepEqual(filtered.excludedPaths, [
     { path: "Sources/EngineHostCore/BuildInfo.swift", reason: "generated-build-info" },
     { path: "Tests/EngineHostCoreTests/ContextBiasingTests.swift", reason: "outside-source-root" },
@@ -247,14 +307,21 @@ test("workflow collection schedule and manual dispatch are explicit and informat
   assert.match(workflow, /pull_request:\s*\n\s*branches: \[main\]/);
   assert.match(workflow, /- cron: "17 5 \* \* \*"[^\n]*Daily first-attempt CI cohort/);
   assert.match(workflow, /- cron: "29 5 \* \* 1"[^\n]*Weekly static measurements/);
-  assert.match(workflow, /workflow_dispatch:\s*\n\s*inputs:\s*\n\s*mode:\s*\n\s*description: Collection mode for this manual run\s*\n\s*required: false\s*\n\s*default: static\s*\n\s*type: choice\s*\n\s*options:\s*\n\s*- static\s*\n\s*- ci-only/);
+  assert.match(
+    workflow,
+    /workflow_dispatch:\s*\n\s*inputs:\s*\n\s*mode:\s*\n\s*description: Collection mode for this manual run\s*\n\s*required: false\s*\n\s*default: static\s*\n\s*type: choice\s*\n\s*options:\s*\n\s*- static\s*\n\s*- ci-only/,
+  );
   assert.match(workflow, /pull_request\) mode=conformance/);
   assert.match(workflow, /DISPATCH_MODE: \$\{\{ inputs\.mode \}\}/);
   assert.match(workflow, /workflow_dispatch\)[\s\S]*?''\|static\) mode=static/);
   assert.match(workflow, /workflow_dispatch\)[\s\S]*?ci-only\) mode=ci-only/);
   assert.match(workflow, /Unsupported manual mode: \$DISPATCH_MODE/);
   assert.doesNotMatch(workflow, /workflow_dispatch\) mode=\$\{\{/);
-  for (const [dispatchMode, expected] of [["", "static"], ["static", "static"], ["ci-only", "ci-only"]]) {
+  for (const [dispatchMode, expected] of [
+    ["", "static"],
+    ["static", "static"],
+    ["ci-only", "ci-only"],
+  ]) {
     const result = runModeSelection({ eventName: "workflow_dispatch", dispatchMode });
     assert.equal(result.status, 0, result.stderr);
     assert.equal(result.output.trim(), `mode=${expected}`);
@@ -289,12 +356,18 @@ test("workflow collection schedule and manual dispatch are explicit and informat
   assert.match(workflow, /persist-credentials: false/);
   assert.match(workflow, /actions: read\s*\n\s*contents: read/);
   assert.match(workflow, /- name: Initialize collection status artifact[\s\S]*?workflow-setup-not-completed/);
-  assert.match(workflow, /- name: Finalize workflow phase and collection budgets[\s\S]*?preupload_elapsed_seconds[\s\S]*?metadata_over_budget/);
+  assert.match(
+    workflow,
+    /- name: Finalize workflow phase and collection budgets[\s\S]*?preupload_elapsed_seconds[\s\S]*?metadata_over_budget/,
+  );
   assert.match(workflow, /collector_failures[\s\S]*?status=partial[\s\S]*?phase_elapsed_seconds/);
   assert.match(workflow, /CONFORMANCE_OUTCOME: \$\{\{ steps\.conformance\.outcome \}\}/);
   assert.match(workflow, /timeout-minutes: 3[\s\S]*?name: code-health-v1/);
   assert.match(workflow, /- name: Test code-health contracts and workflow\s*\n\s*id: conformance\s*\n\s*run: npm run test:code-health/);
-  assert.match(workflow, /if: always\(\)[\s\S]*?uses: actions\/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9[\s\S]*?name: code-health-v1[\s\S]*?if-no-files-found: error[\s\S]*?retention-days: 30/);
+  assert.match(
+    workflow,
+    /if: always\(\)[\s\S]*?uses: actions\/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9[\s\S]*?name: code-health-v1[\s\S]*?if-no-files-found: error[\s\S]*?retention-days: 30/,
+  );
   assert.doesNotMatch(workflow, /secrets\.(?!github_token)|HEIMDALL|MUNIN/i);
   assert.match(producerSource, /local_or_ci: workflowContext \? "github-actions" : "local"/);
   assert.doesNotMatch(producerSource, /local_or_ci: includeCi/);
@@ -314,19 +387,28 @@ test("workflow collection schedule and manual dispatch are explicit and informat
 test("GitHub metadata requests share an injectable monotonic deadline across pagination", () => {
   let now = 0;
   const requests = [];
-  const request = createMetadataTransport((url, timeoutMs) => {
-    requests.push({ url, timeoutMs });
-    now += 8;
-    const page = Number(new URL(url).searchParams.get("page"));
-    return { total_count: 101, entries: Array.from({ length: page === 1 ? 100 : 1 }, (_, index) => index) };
-  }, { budgetMs: 30, now: () => now });
+  const request = createMetadataTransport(
+    (url, timeoutMs) => {
+      requests.push({ url, timeoutMs });
+      now += 8;
+      const page = Number(new URL(url).searchParams.get("page"));
+      return { total_count: 101, entries: Array.from({ length: page === 1 ? 100 : 1 }, (_, index) => index) };
+    },
+    { budgetMs: 30, now: () => now },
+  );
   const result = paginate("https://api.github.com/repos/acme/app/runs", "entries", 200, request);
   assert.equal(result.length, 101);
-  assert.deepEqual(requests.map(item => item.timeoutMs), [30, 22]);
+  assert.deepEqual(
+    requests.map((item) => item.timeoutMs),
+    [30, 22],
+  );
   request("https://api.github.com/next?page=3");
   request("https://api.github.com/next?page=4");
   assert.throws(() => request("https://api.github.com/next?page=5"), /30-second budget/);
-  assert.deepEqual(requests.map(item => item.timeoutMs), [30, 22, 14, 6]);
+  assert.deepEqual(
+    requests.map((item) => item.timeoutMs),
+    [30, 22, 14, 6],
+  );
 });
 
 test("GitHub REST transport sends credentials only on stdin, rejects redirects, and has no redirect following", () => {
@@ -334,10 +416,14 @@ test("GitHub REST transport sends credentials only on stdin, rejects redirects, 
   process.env.GH_TOKEN = "test-token-value-not-a-real-credential";
   let captured;
   try {
-    assert.throws(() => restJson("https://api.github.com/repos/acme/app", 1250, (_command, args, options) => {
-      captured = { args, input: options.input };
-      return { error: null, status: 0, stdout: '{"message":"redirect"}\n__HTTP_STATUS__302' };
-    }), /HTTP 302/);
+    assert.throws(
+      () =>
+        restJson("https://api.github.com/repos/acme/app", 1250, (_command, args, options) => {
+          captured = { args, input: options.input };
+          return { error: null, status: 0, stdout: '{"message":"redirect"}\n__HTTP_STATUS__302' };
+        }),
+      /HTTP 302/,
+    );
   } finally {
     if (previous === undefined) delete process.env.GH_TOKEN;
     else process.env.GH_TOKEN = previous;
@@ -381,10 +467,7 @@ test("Rust CLI coverage is a separate no-default-features profile", () => {
     command: "cargo +1.93.1 llvm-cov -p sagascript-cli --no-default-features --tests --json --output-path <task-temporary-report>",
     target: "isolated task-local CARGO_TARGET_DIR",
     includes_inline_tests: true,
-    source_roots: [
-      "src-tauri/crates/sagascript-cli/src/",
-      "src-tauri/crates/sagascript-cli/tests/",
-    ],
+    source_roots: ["src-tauri/crates/sagascript-cli/src/", "src-tauri/crates/sagascript-cli/tests/"],
     inventory: "exported-only",
     features: "no-default-features",
   });

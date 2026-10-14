@@ -15,11 +15,7 @@ export interface FileJobOptions {
   profileId: string | null;
 }
 
-export function createFileJobs(
-  paths: readonly string[],
-  options: FileJobOptions,
-  idFactory: () => string,
-): FileJob[] {
+export function createFileJobs(paths: readonly string[], options: FileJobOptions, idFactory: () => string): FileJob[] {
   return paths
     .filter((path) => path.length > 0)
     .map((path) => ({
@@ -37,19 +33,12 @@ export function nextQueuedFile(jobs: readonly FileJob[], busy: boolean): FileJob
   return jobs.find((job) => job.status === "queued") ?? null;
 }
 
-export function updateFileJob(
-  jobs: readonly FileJob[],
-  id: string,
-  status: FileJobStatus,
-): FileJob[] {
+export function updateFileJob(jobs: readonly FileJob[], id: string, status: FileJobStatus): FileJob[] {
   return jobs.map((job) => (job.id === id ? { ...job, status } : job));
 }
 
 export function fileJobName(path: string): string {
   const withoutTrailingSeparators = path.replace(/[\\/]+$/, "");
-  const separator = Math.max(
-    withoutTrailingSeparators.lastIndexOf("/"),
-    withoutTrailingSeparators.lastIndexOf("\\"),
-  );
+  const separator = Math.max(withoutTrailingSeparators.lastIndexOf("/"), withoutTrailingSeparators.lastIndexOf("\\"));
   return withoutTrailingSeparators.slice(separator + 1);
 }

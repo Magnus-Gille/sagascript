@@ -66,9 +66,7 @@ function runVerify(args, { config, env = {}, onSpawn, script = verifyScript } = 
     child.stderr.on("data", (chunk) => (stderr += chunk));
     child.once("error", reject);
     child.once("exit", () => (exitedMs = Date.now() - started));
-    child.once("close", (code, signal) =>
-      resolveRun({ code, signal, stdout, stderr, elapsedMs: Date.now() - started, exitedMs }),
-    );
+    child.once("close", (code, signal) => resolveRun({ code, signal, stdout, stderr, elapsedMs: Date.now() - started, exitedMs }));
     onSpawn?.(child);
   });
 }
@@ -125,6 +123,8 @@ test("selection: default, fast, --only by check or area, --skip and platform ski
     "fmt",
     "fmt-ort",
     "svelte-check",
+    "format",
+    "unit",
     "node-ui",
     "clippy-app",
   ]);
@@ -205,7 +205,10 @@ export const checks = [
   assert.equal(result.code, 2, result.stdout + result.stderr);
   assert.equal(result.stderr.match(/preflight failed/g)?.length, 1, "exactly one preflight error");
   assert.match(result.stderr, /3 prerequisites are missing/);
-  assert.match(result.stderr, /npm packages svelte-check, svelte, typescript \(node_modules\)\n\s+needed by: svelte-check, node-ui\n\s+fix: +npm ci/);
+  assert.match(
+    result.stderr,
+    /npm packages svelte-check, svelte, typescript \(node_modules\)\n\s+needed by: svelte-check, node-ui\n\s+fix: +npm ci/,
+  );
   assert.match(result.stderr, /dist\/index\.html[^\n]*\n\s+needed by: clippy-workspace\n\s+fix: +npm run build/);
   assert.match(result.stderr, /fake-tool 9 \(synthetic\)\n\s+needed by: synthetic\n\s+fix: +brew install fake-tool/);
   assert.match(result.stderr, /Nothing was installed and no check ran/);
@@ -415,10 +418,13 @@ export const checks = [
   assert.match(result.stdout, /^progress before the hang$/m);
 });
 
-test("a detached grandchild holding the captured pipe does not keep a finished check running", { skip: isWindows && "POSIX sessions" }, async (t) => {
-  const directory = fixture(t);
-  const pidFile = join(directory, "grandchild.pid");
-  const root = `
+test(
+  "a detached grandchild holding the captured pipe does not keep a finished check running",
+  { skip: isWindows && "POSIX sessions" },
+  async (t) => {
+    const directory = fixture(t);
+    const pidFile = join(directory, "grandchild.pid");
+    const root = `
 const { spawn } = require("node:child_process");
 const { writeFileSync } = require("node:fs");
 // setsid: outside the check's process group, and it inherits stdout (the pipe).
@@ -427,23 +433,24 @@ grandchild.unref();
 writeFileSync(${JSON.stringify(pidFile)}, String(grandchild.pid));
 console.log("guard ... ok");
 `;
-  t.after(() => {
-    try {
-      process.kill(Number(readFileSync(pidFile, "utf8")), "SIGKILL");
-    } catch {}
-  });
-  const config = writeConfig(
-    directory,
-    `
+    t.after(() => {
+      try {
+        process.kill(Number(readFileSync(pidFile, "utf8")), "SIGKILL");
+      } catch {}
+    });
+    const config = writeConfig(
+      directory,
+      `
 export const root = ${JSON.stringify(directory)};
 export const checks = [{ id: "quick", timeoutMs: 3000, steps: [{ run: "x", argv: ["node", "-e", ${JSON.stringify(root)}], requireOutput: { pattern: /guard \.\.\. ok/, message: "guard did not run" } }] }];
 `,
-  );
-  const result = await runVerify([], { config });
-  assert.equal(result.code, 0, result.stdout + result.stderr);
-  assert.match(summaryRow(result.stdout, "quick"), /^quick +pass /);
-  assert.ok(result.exitedMs < 3000, `verify finished without waiting for the pipe (${result.exitedMs} ms)`);
-});
+    );
+    const result = await runVerify([], { config });
+    assert.equal(result.code, 0, result.stdout + result.stderr);
+    assert.match(summaryRow(result.stdout, "quick"), /^quick +pass /);
+    assert.ok(result.exitedMs < 3000, `verify finished without waiting for the pipe (${result.exitedMs} ms)`);
+  },
+);
 
 test("running the scripts through a symlink still runs them", { skip: isWindows && "symlinks need privileges" }, async (t) => {
   const directory = fixture(t);

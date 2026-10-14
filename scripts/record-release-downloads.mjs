@@ -4,8 +4,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const ISO_TIMESTAMP =
-  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/;
+const ISO_TIMESTAMP = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/;
 
 const compareStrings = (left, right) => (left < right ? -1 : left > right ? 1 : 0);
 
@@ -23,9 +22,7 @@ function isoTimestamp(value, label) {
   const [, year, month, day, hour, minute, second] = parts.map(Number);
   const calendarDate = new Date(Date.UTC(year, month - 1, day));
   const validCalendarDate =
-    calendarDate.getUTCFullYear() === year &&
-    calendarDate.getUTCMonth() === month - 1 &&
-    calendarDate.getUTCDate() === day;
+    calendarDate.getUTCFullYear() === year && calendarDate.getUTCMonth() === month - 1 && calendarDate.getUTCDate() === day;
   if (!validCalendarDate || hour > 23 || minute > 59 || second > 59) {
     throw new TypeError(`${label} must be a valid ISO 8601 timestamp`);
   }
@@ -123,11 +120,7 @@ export function createSnapshot(input, repository, capturedAt = new Date().toISOS
   const releases = input
     .filter((release) => release?.draft === false)
     .map(normalizeRelease)
-    .sort(
-      (left, right) =>
-        compareStrings(left.published_at, right.published_at) ||
-        compareStrings(left.tag_name, right.tag_name),
-    );
+    .sort((left, right) => compareStrings(left.published_at, right.published_at) || compareStrings(left.tag_name, right.tag_name));
 
   return {
     schema_version: 1,
@@ -164,11 +157,7 @@ function main() {
   const inputPath = arguments_.get("--input");
   const outputPath = arguments_.get("--output");
   const input = JSON.parse(readFileSync(inputPath, "utf8"));
-  const snapshot = createSnapshot(
-    input,
-    arguments_.get("--repository"),
-    arguments_.get("--captured-at") ?? new Date().toISOString(),
-  );
+  const snapshot = createSnapshot(input, arguments_.get("--repository"), arguments_.get("--captured-at") ?? new Date().toISOString());
 
   mkdirSync(dirname(outputPath), { recursive: true });
   writeFileSync(outputPath, `${JSON.stringify(snapshot, null, 2)}\n`, "utf8");

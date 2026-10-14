@@ -4,14 +4,7 @@ export type PlainTranscriptionCancelState = {
   cancellingPlain: boolean;
 };
 
-const MISSING_FILE_HINTS = [
-  "no such file",
-  "enoent",
-  "does not exist",
-  "cannot find",
-  "os error 2",
-  "os error 3",
-];
+const MISSING_FILE_HINTS = ["no such file", "enoent", "does not exist", "cannot find", "os error 2", "os error 3"];
 
 /**
  * Display name for the one-click re-run button (#235 follow-up): just the
@@ -50,12 +43,7 @@ export function transcribePhaseFloor(phase: TranscribePhase): number {
 }
 
 export function parseTranscribePhase(value: unknown): TranscribePhase {
-  return value === "decoding" ||
-    value === "loading" ||
-    value === "preparing" ||
-    value === "encoding"
-    ? value
-    : null;
+  return value === "decoding" || value === "loading" || value === "preparing" || value === "encoding" ? value : null;
 }
 
 /**
@@ -73,11 +61,7 @@ export function clampDecodePct(value: unknown): number | null {
  * through model load + warmup. Floor at the current phase (≥1%) while a run
  * is in flight and reset to 0 when idle.
  */
-export function displayTranscribeProgress(
-  reported: number,
-  transcribing: boolean,
-  phase: TranscribePhase = null,
-): number {
+export function displayTranscribeProgress(reported: number, transcribing: boolean, phase: TranscribePhase = null): number {
   if (!transcribing) return 0;
   const floor = transcribePhaseFloor(phase);
   if (!Number.isFinite(reported)) return floor;
@@ -136,7 +120,7 @@ export function canRetryTranscribeFile(
  * Used to forget the remembered file gracefully without crashing.
  */
 export function isMissingTranscribeFileError(error: unknown): boolean {
-  const message = typeof error === "string" ? error : (error as Error)?.message ?? "";
+  const message = typeof error === "string" ? error : ((error as Error)?.message ?? "");
   const lowered = message.toLowerCase();
   return lowered.includes("failed to open file:") && MISSING_FILE_HINTS.some((hint) => lowered.includes(hint));
 }

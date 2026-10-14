@@ -14,7 +14,7 @@
     proposalIsFullyApplied,
     proposalWasExported,
     selectedPlanIsCurrent,
-  } from "./meeting-reprocessing-state.js";
+  } from "./meeting-reprocessing-state";
 
   interface Props {
     idPrefix?: string;

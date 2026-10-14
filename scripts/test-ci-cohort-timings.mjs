@@ -39,22 +39,43 @@ test("groups by workflow, event, and attempt and computes parallel timing", () =
   const result = summarizeCohorts([
     run(1, 0, 10, {
       jobs: [
-        job(11, 2, 10, "build", [{ number: 1, name: "compile", status: "completed", conclusion: "success", startedAt: at(3), completedAt: at(8) }]),
-        job(12, 4, 7, "test", [{ number: 1, name: "unit", status: "completed", conclusion: "skipped", startedAt: at(4), completedAt: at(6) }]),
+        job(11, 2, 10, "build", [
+          { number: 1, name: "compile", status: "completed", conclusion: "success", startedAt: at(3), completedAt: at(8) },
+        ]),
+        job(12, 4, 7, "test", [
+          { number: 1, name: "unit", status: "completed", conclusion: "skipped", startedAt: at(4), completedAt: at(6) },
+        ]),
       ],
     }),
     run(2, 0, 20),
   ]);
   assert.equal(result.cohorts.length, 1);
   const cohort = result.cohorts[0];
-  assert.deepEqual(cohort.counts, { total: 2, eligible: 2, incomplete: 0, success: 2, inProgress: 0, noConclusion: 0, outcomes: { success: 2 } });
+  assert.deepEqual(cohort.counts, {
+    total: 2,
+    eligible: 2,
+    incomplete: 0,
+    success: 2,
+    inProgress: 0,
+    noConclusion: 0,
+    outcomes: { success: 2 },
+  });
   assert.deepEqual(cohort.elapsedSeconds, { n: 2, p50: 15, p90: 20, min: 10, max: 20 });
   assert.deepEqual(cohort.initialWaitSeconds, { n: 2, p50: 2, p90: 2, min: 2, max: 2 });
   assert.deepEqual(cohort.wallSeconds, { n: 2, p50: 13, p90: 18, min: 8, max: 18 });
   assert.deepEqual(cohort.runnerSeconds, { n: 2, p50: 14.5, p90: 18, min: 11, max: 18 });
-  assert.deepEqual(cohort.jobs.find((entry) => entry.name === "build"), { name: "build", n: 1, p50: 8, p90: 8, min: 8, max: 8 });
-  assert.deepEqual(cohort.steps.find((entry) => entry.name === "compile"), { jobName: "build", name: "compile", number: 1, n: 1, p50: 5, p90: 5, min: 5, max: 5 });
-  assert.equal(cohort.steps.find((entry) => entry.name === "unit"), undefined);
+  assert.deepEqual(
+    cohort.jobs.find((entry) => entry.name === "build"),
+    { name: "build", n: 1, p50: 8, p90: 8, min: 8, max: 8 },
+  );
+  assert.deepEqual(
+    cohort.steps.find((entry) => entry.name === "compile"),
+    { jobName: "build", name: "compile", number: 1, n: 1, p50: 5, p90: 5, min: 5, max: 5 },
+  );
+  assert.equal(
+    cohort.steps.find((entry) => entry.name === "unit"),
+    undefined,
+  );
 });
 
 test("uses median for p50 and nearest rank for p90", () => {
@@ -69,14 +90,25 @@ test("keeps mixed outcomes and incomplete successes in the ledger", () => {
     run(3, 0, null, { status: "in_progress", conclusion: null }),
     run(4, null, null),
   ]).cohorts[0];
-  assert.deepEqual(result.counts, { total: 4, eligible: 1, incomplete: 1, success: 2, inProgress: 1, noConclusion: 1, outcomes: { failure: 1, none: 1, success: 2 } });
+  assert.deepEqual(result.counts, {
+    total: 4,
+    eligible: 1,
+    incomplete: 1,
+    success: 2,
+    inProgress: 1,
+    noConclusion: 1,
+    outcomes: { failure: 1, none: 1, success: 2 },
+  });
   assert.equal(result.elapsedSeconds.n, 1);
-  assert.deepEqual(result.ledger.map(({ id, eligible, incomplete, reason }) => ({ id, eligible, incomplete, reason })), [
-    { id: 1, eligible: true, incomplete: false, reason: null },
-    { id: 2, eligible: false, incomplete: false, reason: "unsuccessful" },
-    { id: 3, eligible: false, incomplete: false, reason: "unsuccessful" },
-    { id: 4, eligible: false, incomplete: true, reason: "incomplete-timing" },
-  ]);
+  assert.deepEqual(
+    result.ledger.map(({ id, eligible, incomplete, reason }) => ({ id, eligible, incomplete, reason })),
+    [
+      { id: 1, eligible: true, incomplete: false, reason: null },
+      { id: 2, eligible: false, incomplete: false, reason: "unsuccessful" },
+      { id: 3, eligible: false, incomplete: false, reason: "unsuccessful" },
+      { id: 4, eligible: false, incomplete: true, reason: "incomplete-timing" },
+    ],
+  );
 });
 
 test("separates attempts and rejects duplicate run/attempt identities", () => {
@@ -90,24 +122,41 @@ test("keeps architecture-specific jobs and steps separate and splits workflow/ev
   const architectureRuns = [
     run(10, 0, 8, {
       jobs: [
-        job(101, 1, 8, "build-x64", [{ number: 1, name: "compile", status: "completed", conclusion: "success", startedAt: at(2), completedAt: at(7) }]),
-        job(102, 1, 6, "build-arm64", [{ number: 1, name: "compile", status: "completed", conclusion: "success", startedAt: at(2), completedAt: at(5) }]),
+        job(101, 1, 8, "build-x64", [
+          { number: 1, name: "compile", status: "completed", conclusion: "success", startedAt: at(2), completedAt: at(7) },
+        ]),
+        job(102, 1, 6, "build-arm64", [
+          { number: 1, name: "compile", status: "completed", conclusion: "success", startedAt: at(2), completedAt: at(5) },
+        ]),
       ],
     }),
     run(11, 0, 9, {
       jobs: [
-        job(111, 1, 9, "build-x64", [{ number: 1, name: "compile", status: "completed", conclusion: "success", startedAt: at(2), completedAt: at(8) }]),
-        job(112, 1, 7, "build-arm64", [{ number: 1, name: "compile", status: "completed", conclusion: "success", startedAt: at(2), completedAt: at(6) }]),
+        job(111, 1, 9, "build-x64", [
+          { number: 1, name: "compile", status: "completed", conclusion: "success", startedAt: at(2), completedAt: at(8) },
+        ]),
+        job(112, 1, 7, "build-arm64", [
+          { number: 1, name: "compile", status: "completed", conclusion: "success", startedAt: at(2), completedAt: at(6) },
+        ]),
       ],
     }),
   ];
   const sameCohort = summarizeCohorts(architectureRuns).cohorts[0];
-  assert.deepEqual(sameCohort.jobs.map(({ name }) => name), ["build-arm64", "build-x64"]);
-  assert.deepEqual(sameCohort.steps.map(({ jobName, name, number }) => ({ jobName, name, number })), [
-    { jobName: "build-arm64", name: "compile", number: 1 },
-    { jobName: "build-x64", name: "compile", number: 1 },
-  ]);
-  assert.deepEqual(sameCohort.steps.map(({ n }) => n), [2, 2]);
+  assert.deepEqual(
+    sameCohort.jobs.map(({ name }) => name),
+    ["build-arm64", "build-x64"],
+  );
+  assert.deepEqual(
+    sameCohort.steps.map(({ jobName, name, number }) => ({ jobName, name, number })),
+    [
+      { jobName: "build-arm64", name: "compile", number: 1 },
+      { jobName: "build-x64", name: "compile", number: 1 },
+    ],
+  );
+  assert.deepEqual(
+    sameCohort.steps.map(({ n }) => n),
+    [2, 2],
+  );
 
   const split = summarizeCohorts([
     ...architectureRuns,
@@ -115,7 +164,10 @@ test("keeps architecture-specific jobs and steps separate and splits workflow/ev
     run(13, 0, 3, { event: "pull_request" }),
   ]);
   assert.equal(split.cohorts.length, 3);
-  assert.deepEqual(split.cohorts.map(({ workflowName, event }) => `${workflowName}/${event}`), ["CI/pull_request", "CI/push", "Release/push"]);
+  assert.deepEqual(
+    split.cohorts.map(({ workflowName, event }) => `${workflowName}/${event}`),
+    ["CI/pull_request", "CI/push", "Release/push"],
+  );
 });
 
 test("validates required semantics, malformed timestamps, and negative intervals", () => {

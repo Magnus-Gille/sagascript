@@ -10,19 +10,12 @@ const [cliManifest, coreManifest, ciWorkflow] = await Promise.all([
 
 function macosWorkflowFor(workflow) {
   const normalized = workflow.replace(/\r\n/g, "\n");
-  return normalized.slice(
-    normalized.indexOf("  test-macos:"),
-    normalized.indexOf("  build-macos:"),
-  );
+  return normalized.slice(normalized.indexOf("  test-macos:"), normalized.indexOf("  build-macos:"));
 }
 
 function assertMacosDiarizationCoverage(workflow) {
   const macosWorkflow = macosWorkflowFor(workflow);
-  assert.match(
-    cliManifest,
-    /default\s*=\s*\[\s*"record"\s*,\s*"diarization"\s*\]/,
-    "CLI default features must include diarization",
-  );
+  assert.match(cliManifest, /default\s*=\s*\[\s*"record"\s*,\s*"diarization"\s*\]/, "CLI default features must include diarization");
   assert.match(coreManifest, /default\s*=\s*\[\s*\]/, "core must retain its no-feature default");
 
   assert.match(macosWorkflow, /run: cargo test -p sagascript-cli\n/);

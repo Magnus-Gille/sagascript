@@ -65,7 +65,7 @@ onMount(() => {
 });
 ```
 
-`src/lib/onboarding-download-state.js` shows the same ownership rules as a tested helper.
+`src/lib/onboarding-download-state.ts` shows the same ownership rules as a tested helper.
 Several older listeners in `Settings.svelte` drop the unlisten promise; do not copy them.
 Keep payload interpretation in a DOM-free `src/lib/*.ts` module (for example the reducer in
 `overlay-state.ts`) so it can be unit-tested. Planned:
@@ -78,7 +78,7 @@ typed event catalogue and contract test.
 | Layer | What |
 |---|---|
 | Rust | The `events.rs` tests (name format, uniqueness). Unit-test the code that builds the payload. |
-| Frontend logic | `scripts/test-*.mjs` for the module that interprets the payload (see `scripts/test-overlay-state.mjs`). |
+| Frontend logic | `src/lib/<module>.test.ts` (Vitest) for the module that interprets the payload (see `src/lib/overlay-state.test.ts`); add the event to `EventMap` in `src/test/ipc.ts` so tests can `emit()` it. |
 | Browser | Add a helper to `window.qa` in `scripts/fixtures/transcription-browser-mock.js` that calls `emit("example-progress", {...})` (like `dictationResult`), and drive it from a `scripts/qa-*.mjs` flow. Emits reach `listen` only because the mock installs `mockIPC(..., { shouldMockEvents: true })`; keep that option. |
 
 No regex tests over `.svelte` source ([ADR 0004](../adr/0004-test-strategy.md)).
@@ -89,7 +89,7 @@ No regex tests over `.svelte` source ([ADR 0004](../adr/0004-test-strategy.md)).
 npm run build && cd src-tauri
 cargo test events                 # app crate: events.rs tests
 cargo clippy --workspace --all-targets -- -D warnings
-cd .. && npx svelte-check --tsconfig ./tsconfig.json && npm run test:frontend
+cd .. && npx svelte-check --tsconfig ./tsconfig.json && npm run test:unit && npm run test:frontend
 npm run test:browser              # if a qa flow covers the event
 ```
 

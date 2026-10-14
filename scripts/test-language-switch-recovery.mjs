@@ -13,19 +13,43 @@ const backendError = core.match(/"(Profile 'default' has a personal dictionary;[
 test("language recovery classifier matches the actual backend guard", () => {
   assert.ok(backendError.includes(defaultDictionaryLanguageBlock));
 });
-const names = ["applySetting", "onLanguageChange", "clearDictionaryAndSwitchLanguage",
-  "glossaryHasUnsavedChanges", "rememberGlossaryRecovery", "discardGlossaryChanges"];
-const functions = names.map((name) => {
-  const declaration = parsed.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === name);
-  assert.ok(declaration, `Missing ${name}`);
-  return declaration.getText(parsed);
-}).join("\n");
+const names = [
+  "applySetting",
+  "onLanguageChange",
+  "clearDictionaryAndSwitchLanguage",
+  "glossaryHasUnsavedChanges",
+  "rememberGlossaryRecovery",
+  "discardGlossaryChanges",
+];
+const functions = names
+  .map((name) => {
+    const declaration = parsed.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === name);
+    assert.ok(declaration, `Missing ${name}`);
+    return declaration.getText(parsed);
+  })
+  .join("\n");
 
-function harness({ clearFailure = "", retryFailure = "", refreshFailure = false, rejectionRefreshFailure = false, concurrentClear = false, empty = false } = {}) {
+function harness({
+  clearFailure = "",
+  retryFailure = "",
+  refreshFailure = false,
+  rejectionRefreshFailure = false,
+  concurrentClear = false,
+  empty = false,
+} = {}) {
   let release;
-  const context = vm.createContext({ options: { clearFailure, retryFailure, refreshFailure, rejectionRefreshFailure, concurrentClear, empty }, backendError, defaultDictionaryLanguageBlock,
-    pauseClear: () => new Promise((resolve) => { release = resolve; }) });
-  vm.runInContext(ts.transpileModule(`
+  const context = vm.createContext({
+    options: { clearFailure, retryFailure, refreshFailure, rejectionRefreshFailure, concurrentClear, empty },
+    backendError,
+    defaultDictionaryLanguageBlock,
+    pauseClear: () =>
+      new Promise((resolve) => {
+        release = resolve;
+      }),
+  });
+  vm.runInContext(
+    ts.transpileModule(
+      `
     let stored = { language: "sv", initial_prompt: "global hints", hotkey_profiles: [],
       profile_glossaries: { default: options.empty ? "" : "mergea = mördsa", english: "merge = merch" } };
     let settings = structuredClone(stored);
@@ -74,8 +98,11 @@ function harness({ clearFailure = "", retryFailure = "", refreshFailure = false,
       snapshot: () => JSON.parse(JSON.stringify({ stored, settings, settingsError, blockedLanguageChange,
         languageSaving, calls, glossaryDraft, glossaryEditBaseline, recoveredGlossaryDrafts })),
     };
-  `, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } }).outputText,
-  vm.createContext(Object.assign(context, { structuredClone })));
+  `,
+      { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } },
+    ).outputText,
+    vm.createContext(Object.assign(context, { structuredClone })),
+  );
   return { ...context.exercise, snapshot: () => JSON.parse(JSON.stringify(context.exercise.snapshot())), release: () => release() };
 }
 

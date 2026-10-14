@@ -6,8 +6,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
-const read = (path) =>
-  readFileSync(fileURLToPath(new URL(`../${path}`, import.meta.url)), "utf8").replace(/\r\n?/g, "\n");
+const read = (path) => readFileSync(fileURLToPath(new URL(`../${path}`, import.meta.url)), "utf8").replace(/\r\n?/g, "\n");
 
 const toolchainFile = read("rust-toolchain.toml");
 const channel = /^channel = "([^"]+)"\s*(?:#.*)?$/m.exec(toolchainFile)?.[1];

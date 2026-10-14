@@ -12,8 +12,8 @@ dictation keeps its existing auto-paste preference. File-specific profile,
 context and diarization choices are captured; model/language/dictionary settings
 are resolved when a job starts, not frozen for the whole queue.
 
-Run `npm run test:frontend` and `npm run check` for queue helpers, existing review
-and reprocessing regressions, and Svelte diagnostics.
+Run `npm run test:unit` (queue and recovery helpers), `npm run test:frontend` (existing
+review and reprocessing regressions) and `npm run check` (Svelte diagnostics).
 
 Run the full browser regression in an isolated worktree:
 

@@ -4,19 +4,14 @@ import test from "node:test";
 import ts from "typescript";
 import vm from "node:vm";
 
-const fileTranscriptionSource = await readFile(
-  new URL("../src/lib/FileTranscription.svelte", import.meta.url),
-  "utf8",
-);
+const fileTranscriptionSource = await readFile(new URL("../src/lib/FileTranscription.svelte", import.meta.url), "utf8");
 const scriptSource = fileTranscriptionSource.match(/<script lang="ts">([\s\S]*?)<\/script>/)?.[1];
 assert.ok(scriptSource, "FileTranscription.svelte should have a TypeScript script block");
 
 function functionSource(name) {
   const plainStart = scriptSource.indexOf(`function ${name}`);
   const asyncStart = scriptSource.indexOf(`async function ${name}`);
-  const start = asyncStart >= 0 && (plainStart < 0 || asyncStart < plainStart)
-    ? asyncStart
-    : plainStart;
+  const start = asyncStart >= 0 && (plainStart < 0 || asyncStart < plainStart) ? asyncStart : plainStart;
   assert.ok(start >= 0, `FileTranscription.svelte should define ${name}`);
   const brace = scriptSource.indexOf("{", start);
   assert.ok(brace >= 0, `${name} should have a body`);
@@ -77,7 +72,9 @@ function transpile(source) {
 
 function deferred() {
   let resolve;
-  const promise = new Promise((nextResolve) => { resolve = nextResolve; });
+  const promise = new Promise((nextResolve) => {
+    resolve = nextResolve;
+  });
   return { promise, resolve };
 }
 
@@ -126,7 +123,9 @@ function createHarness(controls) {
     "acceptCurrentMeetingProposal",
     "retryCurrentMeetingProposalPreview",
     "saveCurrentMeetingProposal",
-  ].map(functionSource).join("\n");
+  ]
+    .map(functionSource)
+    .join("\n");
   const harness = `
     let meetingReview = controls.initialReview;
     let meetingTranscript = controls.initialTranscript;
@@ -259,7 +258,10 @@ for (const [label, invalidate] of [
     const exercise = createHarness(controls);
     const pending = exercise.acceptCurrentMeetingProposal();
     await tick();
-    assert.deepEqual(controls.calls.map((call) => call.kind), ["accept"]);
+    assert.deepEqual(
+      controls.calls.map((call) => call.kind),
+      ["accept"],
+    );
 
     invalidate(exercise);
     gate.resolve();
@@ -308,19 +310,24 @@ test("planning stores its selection without replacing the active review", async 
   const state = exercise.snapshot();
   assert.equal(state.meetingReview.id, "active-review");
   assert.equal(state.meetingReprocessingPlan.id, "selected-plan");
-  assert.deepEqual(controls.calls.map((call) => call.kind), ["plan"]);
+  assert.deepEqual(
+    controls.calls.map((call) => call.kind),
+    ["plan"],
+  );
 });
 
 test("completed reprocessing stores a proposal beside, not over, the active review", async () => {
   const controls = makeControls({
-    snapshots: [{
-      id: "job-reprocess",
-      status: "completed",
-      phase: "done",
-      error: null,
-      transcript: null,
-      reprocessing: { id: "result-1", proposal: { revision: 9 } },
-    }],
+    snapshots: [
+      {
+        id: "job-reprocess",
+        status: "completed",
+        phase: "done",
+        error: null,
+        transcript: null,
+        reprocessing: { id: "result-1", proposal: { revision: 9 } },
+      },
+    ],
     initialPlan: { id: "old-plan" },
   });
   controls.previewResult = { proposal: { revision: 9 }, steps: [{ status: "Applied" }] };
@@ -333,7 +340,10 @@ test("completed reprocessing stores a proposal beside, not over, the active revi
   assert.deepEqual(state.meetingProposal, controls.previewResult);
   assert.deepEqual(state.meetingReprocessingResult, controls.snapshots[0].reprocessing);
   assert.equal(state.meetingReprocessingPlan, null);
-  assert.deepEqual(controls.calls.map((call) => call.kind), ["preview"]);
+  assert.deepEqual(
+    controls.calls.map((call) => call.kind),
+    ["preview"],
+  );
 });
 
 test("a failed preview preserves the completed proposal for recovery", async () => {

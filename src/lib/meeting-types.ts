@@ -212,9 +212,7 @@ export function reconcileMeetingDrafts(
     const previous = previousTranscript.speakers.find((candidate) => candidate.id === speaker.id);
     const previousDraft = previousDrafts.labels[speaker.id];
     labels[speaker.id] =
-      affectedLabels.has(speaker.id) || !previous || previousDraft === previous.label
-        ? speaker.label
-        : previousDraft ?? speaker.label;
+      affectedLabels.has(speaker.id) || !previous || previousDraft === previous.label ? speaker.label : (previousDraft ?? speaker.label);
   }
 
   const texts: Record<string, string> = {};
@@ -226,11 +224,11 @@ export function reconcileMeetingDrafts(
     texts[segment.id] =
       affectedTexts.has(segment.id) || !previous || previousTextDraft === previous.text
         ? segment.text
-        : previousTextDraft ?? segment.text;
+        : (previousTextDraft ?? segment.text);
     speakers[segment.id] =
       affectedSpeakers.has(segment.id) || !previous || previousSpeakerDraft === previous.speaker
         ? segment.speaker
-        : previousSpeakerDraft ?? segment.speaker;
+        : (previousSpeakerDraft ?? segment.speaker);
   }
 
   const speakerIds = new Set(nextTranscript.speakers.map((speaker) => speaker.id));

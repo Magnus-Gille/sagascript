@@ -176,10 +176,11 @@ test("an increase, a new crate and a new lint are all reported as increases", ()
     dbg_macro: { "sagascript-core": 1 },
   };
   const { increased, decreased } = compareCounts(baseline, current);
-  assert.deepEqual(
-    increased.map(({ lint, crate, baseline: before, now }) => `${lint}/${crate} ${before}->${now}`).sort(),
-    ["dbg_macro/sagascript-core 0->1", "unwrap_used/sagascript-cli 0->1", "unwrap_used/sagascript-core 2->3"],
-  );
+  assert.deepEqual(increased.map(({ lint, crate, baseline: before, now }) => `${lint}/${crate} ${before}->${now}`).sort(), [
+    "dbg_macro/sagascript-core 0->1",
+    "unwrap_used/sagascript-cli 0->1",
+    "unwrap_used/sagascript-core 2->3",
+  ]);
   assert.deepEqual(decreased, []);
 });
 
@@ -189,8 +190,14 @@ test("a decrease is not an increase and reports cells that reached zero", () => 
     { unwrap_used: { a: 1, b: 0 }, panic: { a: 1 } },
   );
   assert.deepEqual(increased, []);
-  assert.deepEqual(decreased.map((row) => `${row.lint}/${row.crate}`), ["unwrap_used/a", "unwrap_used/b"]);
-  assert.deepEqual(reachedZero.map((row) => `${row.lint}/${row.crate}`), ["unwrap_used/b"]);
+  assert.deepEqual(
+    decreased.map((row) => `${row.lint}/${row.crate}`),
+    ["unwrap_used/a", "unwrap_used/b"],
+  );
+  assert.deepEqual(
+    reachedZero.map((row) => `${row.lint}/${row.crate}`),
+    ["unwrap_used/b"],
+  );
 });
 
 test("--update refuses to raise a count unless explicitly allowed", () => {
@@ -198,7 +205,10 @@ test("--update refuses to raise a count unless explicitly allowed", () => {
   const current = { unwrap_used: { a: 2 }, expect_used: { a: 4 } };
   const refused = planUpdate(baseline, current);
   assert.equal(refused.ok, false);
-  assert.deepEqual(refused.increased.map((row) => `${row.lint}/${row.crate}`), ["unwrap_used/a"]);
+  assert.deepEqual(
+    refused.increased.map((row) => `${row.lint}/${row.crate}`),
+    ["unwrap_used/a"],
+  );
 
   const allowed = planUpdate(baseline, current, { allowIncrease: true });
   assert.equal(allowed.ok, true);
@@ -289,7 +299,12 @@ test("CLI: usage errors and an empty measurement fail loudly", () => {
 
   // A run that did not compile a baseline crate must not pass or lower it.
   const partial = join(dir, "partial.jsonl");
-  writeFileSync(partial, BASE_RUN.split("\n").filter((line) => !line.includes("sagascript-cli")).join("\n"));
+  writeFileSync(
+    partial,
+    BASE_RUN.split("\n")
+      .filter((line) => !line.includes("sagascript-cli"))
+      .join("\n"),
+  );
   for (const extra of [[], ["--update"]]) {
     const partialRun = runScript(["--input", partial, "--baseline", baseline, ...extra]);
     assert.equal(partialRun.status, 2);
@@ -346,7 +361,10 @@ test("the policy runs measure production code in both CLI feature sets", () => {
     assert.ok(!args.includes("--all-targets"), "test builds of a lib are indistinguishable in cargo's JSON");
     const lintArgs = args.slice(args.indexOf("--") + 1);
     assert.deepEqual(lintArgs.slice(0, 2), ["-A", "clippy::all"]);
-    assert.deepEqual(lintArgs.slice(2), POLICY_LINTS.flatMap((lint) => ["-W", `clippy::${lint}`]));
+    assert.deepEqual(
+      lintArgs.slice(2),
+      POLICY_LINTS.flatMap((lint) => ["-W", `clippy::${lint}`]),
+    );
   }
   assert.ok(RUNS.some((run) => run.args.includes("--workspace")));
   assert.ok(RUNS.some((run) => run.args.join(" ") === "-p sagascript-cli --no-default-features"));
@@ -365,8 +383,14 @@ test("engine-protocol is at zero and denies every policy lint", () => {
   for (const lint of POLICY_LINTS) assert.equal(baseline[lint]["sagascript-engine-protocol"], 0, lint);
   const lib = read("src-tauri/crates/sagascript-engine-protocol/src/lib.rs");
   const deny = /^#!\[deny\(([^\]]*)\)\]$/m.exec(lib)?.[1] ?? "";
-  const denied = deny.split(",").map((item) => item.trim()).filter(Boolean);
-  assert.deepEqual(denied, POLICY_LINTS.map((lint) => `clippy::${lint}`));
+  const denied = deny
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+  assert.deepEqual(
+    denied,
+    POLICY_LINTS.map((lint) => `clippy::${lint}`),
+  );
 });
 
 test("clippy.toml exempts tests and sets the size thresholds", () => {

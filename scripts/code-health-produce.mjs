@@ -40,7 +40,7 @@ const schema = JSON.parse(readFileSync(SCHEMA_PATH, "utf8"));
 const sourceRefs = new Map();
 const evidenceRefs = {};
 const evidenceFiles = {};
-const measurementsByScope = Object.fromEntries(config.scopes.map(scope => [scope.name, {}]));
+const measurementsByScope = Object.fromEntries(config.scopes.map((scope) => [scope.name, {}]));
 const collectionStatus = { producer_version: "1.0", collectors: {} };
 
 export function parseProducerOptions(argv) {
@@ -51,8 +51,7 @@ export function parseProducerOptions(argv) {
     else if (arg === "--mode" && argv[index + 1]) {
       parsed.mode = argv[++index];
       if (!["static", "ci-only"].includes(parsed.mode)) throw new Error("--mode must be static or ci-only");
-    }
-    else if (arg === "--ci") parsed.includeCi = true;
+    } else if (arg === "--ci") parsed.includeCi = true;
     else if (arg === "--help" || arg === "-h") parsed.help = true;
     else throw new Error(`unknown or incomplete argument: ${arg}`);
   }
@@ -98,7 +97,10 @@ function safeDiagnostic(value, maximumLength = 1600) {
 export function safeFailureDiagnostic(stdout, stderr) {
   const lines = [];
   let collectingFailures = false;
-  for (const [stream, value] of [["stdout", stdout], ["stderr", stderr]]) {
+  for (const [stream, value] of [
+    ["stdout", stdout],
+    ["stderr", stderr],
+  ]) {
     if (typeof value !== "string") continue;
     for (const rawLine of value.split(/\r?\n/)) {
       const line = rawLine.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "").trim();
@@ -142,7 +144,7 @@ function git(args) {
 
 function gitTracked(prefix, extensions = null) {
   const paths = git(["ls-files", "-z", "--", prefix]).split("\0").filter(Boolean);
-  return paths.filter(path => !extensions || extensions.some(extension => path.endsWith(extension))).sort();
+  return paths.filter((path) => !extensions || extensions.some((extension) => path.endsWith(extension))).sort();
 }
 
 function utcNow() {
@@ -192,7 +194,10 @@ function recordCollector(name, actualVersion, work) {
 }
 
 function toolVersion(executable, args, options = {}) {
-  return safeDiagnostic(command(executable, args, options)).replace(/\s+/g, " ").trim().slice(0, 160);
+  return safeDiagnostic(command(executable, args, options))
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 160);
 }
 
 function setFailure(scopeName, metricName, reason = "producer-error") {
@@ -213,7 +218,7 @@ function addSourceInventoryEvidence(name, paths) {
 function collectRustComplexity(scopeName, files, executable, actualVersion) {
   const result = recordCollector(`complexity-${scopeName}`, actualVersion, () => {
     if (!files.length) throw new Error("selected complexity source inventory is empty");
-    const reports = files.map(path => {
+    const reports = files.map((path) => {
       const stdout = command(executable, ["-p", path, "-m", "-F", "-O", "json", "--pr"]);
       const parsed = JSON.parse(stdout);
       const roots = Array.isArray(parsed) ? parsed : [parsed];
@@ -224,15 +229,19 @@ function collectRustComplexity(scopeName, files, executable, actualVersion) {
     });
     const payload = parseRustComplexity(reports, config.complexity.threshold);
     if (payload.functions.length > 1000) throw new Error("selected complexity inventory exceeds the contract reference limit");
-    const refs = [...new Set(payload.functions.map(item => refForSource(item.path, item.start_line)))];
+    const refs = [...new Set(payload.functions.map((item) => refForSource(item.path, item.start_line)))];
     const inventory = addSourceInventoryEvidence(scopeName, files);
     const functionEvidencePath = `evidence/functions-${scopeName}.json`;
-    addEvidenceFile(functionEvidencePath, {
-      algorithm: payload.algorithm,
-      threshold: payload.threshold,
-      source_inventory_ref: inventory.ref,
-      functions: payload.functions,
-    }, evidenceRef(`functions-${scopeName}`));
+    addEvidenceFile(
+      functionEvidencePath,
+      {
+        algorithm: payload.algorithm,
+        threshold: payload.threshold,
+        source_inventory_ref: inventory.ref,
+        functions: payload.functions,
+      },
+      evidenceRef(`functions-${scopeName}`),
+    );
     return {
       payload: {
         algorithm: payload.algorithm,
@@ -273,10 +282,22 @@ function collectRustCoverage(tempRoot, cargoVersion, llvmCovVersion, rustVersion
   delete env.CARGO_ENCODED_RUSTFLAGS;
   const result = recordCollector("coverage-rust-core", `${rustVersion}; ${cargoVersion}; ${llvmCovVersion}`, () => {
     const toolchainArgs = useNamedToolchain ? ["+1.93.1"] : [];
-    command("cargo", [
-      ...toolchainArgs, "llvm-cov", "-p", "sagascript-core", "--no-default-features", "--lib", "--tests",
-      "--json", "--output-path", coveragePath,
-    ], { cwd: packageRoot, env });
+    command(
+      "cargo",
+      [
+        ...toolchainArgs,
+        "llvm-cov",
+        "-p",
+        "sagascript-core",
+        "--no-default-features",
+        "--lib",
+        "--tests",
+        "--json",
+        "--output-path",
+        coveragePath,
+      ],
+      { cwd: packageRoot, env },
+    );
     const raw = JSON.parse(readFileSync(coveragePath, "utf8"));
     const inventory = [
       ...gitTracked("src-tauri/crates/sagascript-core/src/", [".rs"]),
@@ -286,10 +307,7 @@ function collectRustCoverage(tempRoot, cargoVersion, llvmCovVersion, rustVersion
     const parsed = parseExportedCoverage(raw, {
       repoRoot: REPO_ROOT,
       inventoryPaths: inventory,
-      sourceRoots: [
-        "src-tauri/crates/sagascript-core/src/",
-        "src-tauri/crates/sagascript-core/tests/",
-      ],
+      sourceRoots: ["src-tauri/crates/sagascript-core/src/", "src-tauri/crates/sagascript-core/tests/"],
       excludedPaths: ["src-tauri/crates/sagascript-core/src/generated/BuildInfo.rs"],
       includesInlineTests: true,
     });
@@ -297,21 +315,25 @@ function collectRustCoverage(tempRoot, cargoVersion, llvmCovVersion, rustVersion
       throw new Error("coverage path inventory exceeds the contract reference limit");
     }
     const inventoryEvidence = addSourceInventoryEvidence("rust-core-no-default", inventory);
-    const includedRefs = parsed.included_paths.map(path => refForSource(path, 1, "coverage"));
-    const excludedRefs = parsed.not_emitted_paths.map(path => refForSource(path, 1, "coverage-excluded"));
+    const includedRefs = parsed.included_paths.map((path) => refForSource(path, 1, "coverage"));
+    const excludedRefs = parsed.not_emitted_paths.map((path) => refForSource(path, 1, "coverage-excluded"));
     const profilePath = "evidence/profile-rust-core-no-default-inline.json";
-    addEvidenceFile(profilePath, {
-      profile: "sagascript-core no-default-features; --lib --tests; inline tests included",
-      tool: { rustc: rustVersion, cargo_llvm_cov: llvmCovVersion },
-      inventory_ref: inventoryEvidence.ref,
-      measure: parsed.measure,
-      covered: parsed.covered,
-      eligible: parsed.eligible,
-      emitted_source_files: parsed.emitted_source_files,
-      included_paths: parsed.included_paths,
-      not_emitted_paths: parsed.not_emitted_paths,
-      excluded_report_paths: parsed.excluded_report_paths,
-    }, profileRef);
+    addEvidenceFile(
+      profilePath,
+      {
+        profile: "sagascript-core no-default-features; --lib --tests; inline tests included",
+        tool: { rustc: rustVersion, cargo_llvm_cov: llvmCovVersion },
+        inventory_ref: inventoryEvidence.ref,
+        measure: parsed.measure,
+        covered: parsed.covered,
+        eligible: parsed.eligible,
+        emitted_source_files: parsed.emitted_source_files,
+        included_paths: parsed.included_paths,
+        not_emitted_paths: parsed.not_emitted_paths,
+        excluded_report_paths: parsed.excluded_report_paths,
+      },
+      profileRef,
+    );
     return {
       payload: parsed,
       included_refs: includedRefs,
@@ -346,10 +368,11 @@ export function collectRustCliCoverage(tempRoot, cargoVersion, llvmCovVersion, r
   env.CARGO_ENCODED_RUSTFLAGS = "";
   const result = recordCollector("coverage-rust-cli", `${rustVersion}; ${cargoVersion}; ${llvmCovVersion}`, () => {
     const toolchainArgs = useNamedToolchain ? ["+1.93.1"] : [];
-    runCommand("cargo", [
-      ...toolchainArgs, "llvm-cov", "-p", "sagascript-cli", "--no-default-features", "--tests",
-      "--json", "--output-path", coveragePath,
-    ], { cwd: packageRoot, env });
+    runCommand(
+      "cargo",
+      [...toolchainArgs, "llvm-cov", "-p", "sagascript-cli", "--no-default-features", "--tests", "--json", "--output-path", coveragePath],
+      { cwd: packageRoot, env },
+    );
     const raw = JSON.parse(readFileSync(coveragePath, "utf8"));
     const inventory = [
       ...gitTracked("src-tauri/crates/sagascript-cli/src/", [".rs"]),
@@ -359,31 +382,32 @@ export function collectRustCliCoverage(tempRoot, cargoVersion, llvmCovVersion, r
     const parsed = parseExportedCoverage(raw, {
       repoRoot: REPO_ROOT,
       inventoryPaths: inventory,
-      sourceRoots: [
-        "src-tauri/crates/sagascript-cli/src/",
-        "src-tauri/crates/sagascript-cli/tests/",
-      ],
+      sourceRoots: ["src-tauri/crates/sagascript-cli/src/", "src-tauri/crates/sagascript-cli/tests/"],
       includesInlineTests: true,
     });
     if (parsed.included_paths.length > 1000 || parsed.not_emitted_paths.length > 1000) {
       throw new Error("coverage path inventory exceeds the contract reference limit");
     }
     const inventoryEvidence = addSourceInventoryEvidence("rust-cli-no-default", inventory);
-    const includedRefs = parsed.included_paths.map(path => refForSource(path, 1, "coverage"));
-    const excludedRefs = parsed.not_emitted_paths.map(path => refForSource(path, 1, "coverage-excluded"));
+    const includedRefs = parsed.included_paths.map((path) => refForSource(path, 1, "coverage"));
+    const excludedRefs = parsed.not_emitted_paths.map((path) => refForSource(path, 1, "coverage-excluded"));
     const profilePath = "evidence/profile-rust-cli-no-default-inline.json";
-    addEvidenceFile(profilePath, {
-      profile: "sagascript-cli no-default-features; --tests; inline tests included",
-      tool: { rustc: rustVersion, cargo_llvm_cov: llvmCovVersion },
-      inventory_ref: inventoryEvidence.ref,
-      measure: parsed.measure,
-      covered: parsed.covered,
-      eligible: parsed.eligible,
-      emitted_source_files: parsed.emitted_source_files,
-      included_paths: parsed.included_paths,
-      not_emitted_paths: parsed.not_emitted_paths,
-      excluded_report_paths: parsed.excluded_report_paths,
-    }, profileRef);
+    addEvidenceFile(
+      profilePath,
+      {
+        profile: "sagascript-cli no-default-features; --tests; inline tests included",
+        tool: { rustc: rustVersion, cargo_llvm_cov: llvmCovVersion },
+        inventory_ref: inventoryEvidence.ref,
+        measure: parsed.measure,
+        covered: parsed.covered,
+        eligible: parsed.eligible,
+        emitted_source_files: parsed.emitted_source_files,
+        included_paths: parsed.included_paths,
+        not_emitted_paths: parsed.not_emitted_paths,
+        excluded_report_paths: parsed.excluded_report_paths,
+      },
+      profileRef,
+    );
     return {
       payload: parsed,
       included_refs: includedRefs,
@@ -413,10 +437,14 @@ export function runSwiftCoverageSteps({ scratchPath, tempRoot, runCommand } = {}
   mkdirSync(configPath, { recursive: true });
   mkdirSync(securityPath, { recursive: true });
   const sharedArgs = [
-    "--cache-path", cachePath,
-    "--config-path", configPath,
-    "--security-path", securityPath,
-    "--scratch-path", scratchPath,
+    "--cache-path",
+    cachePath,
+    "--config-path",
+    configPath,
+    "--security-path",
+    securityPath,
+    "--scratch-path",
+    scratchPath,
   ];
   const options = {
     env: {
@@ -447,16 +475,14 @@ export function filterSwiftCoverageReport(report, { packageRoot, sourcePackageRo
   const resolvedSourcePackageRoot = resolve(sourcePackageRoot);
   const sourceRoot = resolve(resolvedPackageRoot, "Sources/EngineHostCore");
   const excludedPaths = [];
-  const data = report.data.map(datum => {
+  const data = report.data.map((datum) => {
     if (!datum || !Array.isArray(datum.files)) throw new TypeError("Swift coverage report file list is malformed");
     const files = [];
     for (const file of datum.files) {
       if (!file || typeof file.filename !== "string" || !file.summary?.lines) {
         throw new TypeError("Swift coverage report contains a malformed file record");
       }
-      const exportedPath = isAbsolute(file.filename)
-        ? resolve(file.filename)
-        : resolve(resolvedPackageRoot, file.filename);
+      const exportedPath = isAbsolute(file.filename) ? resolve(file.filename) : resolve(resolvedPackageRoot, file.filename);
       if (!isWithinDirectory(resolvedPackageRoot, exportedPath)) {
         excludedPaths.push({ path: null, reason: "outside-temporary-package" });
         continue;
@@ -478,12 +504,12 @@ export function filterSwiftCoverageReport(report, { packageRoot, sourcePackageRo
 }
 
 export function prepareSwiftCoverageInputs({ sourcePackageRoot, packageRoot, tempRoot, sharedFixturePath } = {}) {
-  if ([sourcePackageRoot, packageRoot, tempRoot, sharedFixturePath].some(value => typeof value !== "string" || value.length === 0)) {
+  if ([sourcePackageRoot, packageRoot, tempRoot, sharedFixturePath].some((value) => typeof value !== "string" || value.length === 0)) {
     throw new TypeError("Swift coverage source input is malformed");
   }
   cpSync(sourcePackageRoot, packageRoot, {
     recursive: true,
-    filter: path => !path.split(sep).some(part => [".build", "recordings", "transcripts"].includes(part)),
+    filter: (path) => !path.split(sep).some((part) => [".build", "recordings", "transcripts"].includes(part)),
   });
   const fixtureDestination = join(tempRoot, "test-vectors", "context-biasing.json");
   mkdirSync(dirname(fixtureDestination), { recursive: true });
@@ -524,8 +550,9 @@ export function collectSwiftCoverage(tempRoot) {
     });
     const raw = JSON.parse(readFileSync(codecovPath, "utf8"));
     const filtered = filterSwiftCoverageReport(raw, { packageRoot, sourcePackageRoot });
-    const inventory = gitTracked("src-tauri/engine-host/coreml/Sources/EngineHostCore/", [".swift"])
-      .filter(path => basename(path) !== "BuildInfo.swift");
+    const inventory = gitTracked("src-tauri/engine-host/coreml/Sources/EngineHostCore/", [".swift"]).filter(
+      (path) => basename(path) !== "BuildInfo.swift",
+    );
     const profileRef = evidenceRef("profile-swift-coreml-source-only");
     const parsed = parseExportedCoverage(filtered.report, {
       repoRoot: REPO_ROOT,
@@ -535,27 +562,32 @@ export function collectSwiftCoverage(tempRoot) {
     });
     parsed.excluded_report_paths.push(...filtered.excludedPaths);
     const inventoryEvidence = addSourceInventoryEvidence("swift-coreml-source-only", inventory);
-    const includedRefs = parsed.included_paths.map(path => refForSource(path, 1, "coverage"));
-    const excludedRefs = parsed.not_emitted_paths.map(path => refForSource(path, 1, "coverage-excluded"));
-    addEvidenceFile("evidence/profile-swift-coreml-source-only.json", {
-      profile: "Swift Core ML host; source-only; generated BuildInfo and test bundle excluded",
-      tool: { swift: swiftVersion },
-      inventory_ref: inventoryEvidence.ref,
-      measure: parsed.measure,
-      covered: parsed.covered,
-      eligible: parsed.eligible,
-      emitted_source_files: parsed.emitted_source_files,
-      included_paths: parsed.included_paths,
-      not_emitted_paths: parsed.not_emitted_paths,
-      excluded_report_paths: parsed.excluded_report_paths,
-    }, profileRef);
+    const includedRefs = parsed.included_paths.map((path) => refForSource(path, 1, "coverage"));
+    const excludedRefs = parsed.not_emitted_paths.map((path) => refForSource(path, 1, "coverage-excluded"));
+    addEvidenceFile(
+      "evidence/profile-swift-coreml-source-only.json",
+      {
+        profile: "Swift Core ML host; source-only; generated BuildInfo and test bundle excluded",
+        tool: { swift: swiftVersion },
+        inventory_ref: inventoryEvidence.ref,
+        measure: parsed.measure,
+        covered: parsed.covered,
+        eligible: parsed.eligible,
+        emitted_source_files: parsed.emitted_source_files,
+        included_paths: parsed.included_paths,
+        not_emitted_paths: parsed.not_emitted_paths,
+        excluded_report_paths: parsed.excluded_report_paths,
+      },
+      profileRef,
+    );
     return {
       payload: parsed,
       included_refs: includedRefs,
       excluded_refs: excludedRefs,
       profile_ref: profileRef,
       tool: { name: "swift", version: swiftVersion },
-      command: "swift test --enable-code-coverage --jobs 2 --scratch-path <task-temporary-directory>; swift test --show-codecov-path --scratch-path <task-temporary-directory>",
+      command:
+        "swift test --enable-code-coverage --jobs 2 --scratch-path <task-temporary-directory>; swift test --show-codecov-path --scratch-path <task-temporary-directory>",
       scope_policy: {
         ...config.coverage.swift,
         shared_test_fixture: "src-tauri/engine-host/test-vectors/context-biasing.json",
@@ -587,16 +619,20 @@ function collectKnip(tempRoot, knipPath) {
     const inventory = gitTracked("src/", language === "svelte" ? [".svelte"] : [".ts", ".tsx"]);
     const parsed = recordCollector(`unused-candidates-${scopeName}`, `knip ${config.tools.knip}`, () => {
       const candidates = parseKnipCandidates(versionResult.value.report, { repoRoot: REPO_ROOT, language });
-      const scopedCandidates = candidates.filter(candidate => inventory.includes(candidate.path));
+      const scopedCandidates = candidates.filter((candidate) => inventory.includes(candidate.path));
       const candidatesPath = `evidence/knip-candidates-${scopeName}.json`;
       const candidateRef = evidenceRef(`knip-candidates-${scopeName}`);
-      addEvidenceFile(candidatesPath, {
-        tool: { name: "knip", version: versionResult.value.version },
-        language,
-        graph_status: "unqualified",
-        candidates: scopedCandidates,
-        note: "Every candidate is uncertain until owner validation; this evidence grants no deletion authority.",
-      }, candidateRef);
+      addEvidenceFile(
+        candidatesPath,
+        {
+          tool: { name: "knip", version: versionResult.value.version },
+          language,
+          graph_status: "unqualified",
+          candidates: scopedCandidates,
+          note: "Every candidate is uncertain until owner validation; this evidence grants no deletion authority.",
+        },
+        candidateRef,
+      );
       const inventoryEvidence = addSourceInventoryEvidence(`knip-${scopeName}`, inventory);
       return {
         payload: {
@@ -636,7 +672,7 @@ export function createMetadataTransport(transport, { budgetMs = CI_METADATA_BUDG
     if (remaining <= 0) throw new Error("GitHub Actions metadata phase exceeded its 30-second budget");
     return remaining;
   };
-  const request = url => transport(url, remainingMs());
+  const request = (url) => transport(url, remainingMs());
   request.remainingMs = remainingMs;
   return request;
 }
@@ -652,10 +688,11 @@ export function restJson(url, timeoutMs = CI_METADATA_BUDGET_MS, spawn = spawnSy
     `header = "Authorization: Bearer ${token}"`,
     "",
   ].join("\n");
-  const response = spawn("curl", [
-    "--config", "-", "--silent", "--show-error", "--max-time", String(timeoutMs / 1000),
-    "--write-out", "\n__HTTP_STATUS__%{http_code}",
-  ], { input: curlConfig, encoding: "utf8", maxBuffer: 8 * 1024 * 1024, windowsHide: true });
+  const response = spawn(
+    "curl",
+    ["--config", "-", "--silent", "--show-error", "--max-time", String(timeoutMs / 1000), "--write-out", "\n__HTTP_STATUS__%{http_code}"],
+    { input: curlConfig, encoding: "utf8", maxBuffer: 8 * 1024 * 1024, windowsHide: true },
+  );
   if (response.error || response.status !== 0) throw new Error("GitHub Actions API request failed");
   const httpResult = /\n__HTTP_STATUS__(\d{3})\s*$/.exec(response.stdout);
   if (!httpResult) throw new Error("GitHub Actions API response status is missing");
@@ -668,7 +705,11 @@ export function restJson(url, timeoutMs = CI_METADATA_BUDGET_MS, spawn = spawnSy
   }
   if (httpStatus < 200 || httpStatus >= 300) throw new Error(`GitHub Actions API returned HTTP ${httpStatus}`);
   let value;
-  try { value = JSON.parse(responseBody); } catch { throw new Error("GitHub Actions API returned invalid JSON"); }
+  try {
+    value = JSON.parse(responseBody);
+  } catch {
+    throw new Error("GitHub Actions API returned invalid JSON");
+  }
   return value;
 }
 
@@ -704,9 +745,16 @@ function ciWindow(observedAt) {
 
 export function firstAttemptRunContext(apiRun, request) {
   try {
-    const first = request(`https://api.github.com/repos/${config.repository.owner}/${config.repository.name}/actions/runs/${apiRun.id}/attempts/1`);
-    if (first.id !== apiRun.id || first.run_attempt !== 1 || first.head_sha !== apiRun.head_sha
-      || first.event !== apiRun.event || first.head_branch !== apiRun.head_branch) {
+    const first = request(
+      `https://api.github.com/repos/${config.repository.owner}/${config.repository.name}/actions/runs/${apiRun.id}/attempts/1`,
+    );
+    if (
+      first.id !== apiRun.id ||
+      first.run_attempt !== 1 ||
+      first.head_sha !== apiRun.head_sha ||
+      first.event !== apiRun.event ||
+      first.head_branch !== apiRun.head_branch
+    ) {
       throw new Error("GitHub Actions attempt-1 workflow identity does not match its enumerated run");
     }
     return { status: first.status ?? null, conclusion: first.conclusion ?? null };
@@ -740,14 +788,23 @@ function collectCi(observedAt) {
     const excludedWorkflowRuns = [];
     const runInventoryRows = [];
     for (const apiRun of apiRuns) {
-      if (!Number.isSafeInteger(apiRun.id) || !Number.isSafeInteger(apiRun.run_attempt) || !/^[a-f0-9]{40}$/.test(apiRun.head_sha)
-        || typeof apiRun.created_at !== "string" || !Number.isFinite(Date.parse(apiRun.created_at))) {
+      if (
+        !Number.isSafeInteger(apiRun.id) ||
+        !Number.isSafeInteger(apiRun.run_attempt) ||
+        !/^[a-f0-9]{40}$/.test(apiRun.head_sha) ||
+        typeof apiRun.created_at !== "string" ||
+        !Number.isFinite(Date.parse(apiRun.created_at))
+      ) {
         throw new Error("GitHub Actions workflow run inventory contains a malformed identity or timestamp");
       }
       const sha = apiRun.head_sha;
       const createdAt = Date.parse(apiRun.created_at);
-      if (apiRun.event !== "push" || apiRun.head_branch !== "main"
-        || createdAt < Date.parse(windowStart) || createdAt >= Date.parse(windowEnd)) {
+      if (
+        apiRun.event !== "push" ||
+        apiRun.head_branch !== "main" ||
+        createdAt < Date.parse(windowStart) ||
+        createdAt >= Date.parse(windowEnd)
+      ) {
         normalizedInputs.push({
           id: apiRun.id,
           head_sha: sha,
@@ -827,7 +884,7 @@ function collectCi(observedAt) {
         created_at: apiRun.created_at,
         workflow_path: config.ci.workflow,
         workflow_config_digest: historicalDigest,
-        attempt1_jobs: attempt1Jobs.map(job => ({
+        attempt1_jobs: attempt1Jobs.map((job) => ({
           id: job.id,
           name: job.name,
           status: job.status,
@@ -871,18 +928,22 @@ function collectCi(observedAt) {
       runInventoryRef: evidenceRef("ci-main-push-28-day-runs"),
     });
     const runInventoryPath = "evidence/ci-main-push-28-day-runs.json";
-    addEvidenceFile(runInventoryPath, {
-      source: "GitHub Actions REST API",
-      workflow_path: config.ci.workflow,
-      workflow_config_digest: currentWorkflowDigest,
-      filter: { branch: "main", event: "push", window_start: windowStart, window_end: windowEnd },
-      scope_version: "main-push-current-config-ci-v2",
-      denominator_policy: "current-configuration included runs only; no current-configuration runs is not-collected",
-      api_total_count: apiRuns.length,
-      workflow_runs: runInventoryRows,
-      included_run_ids: cohort.runs.map(run => Number(run.run_ref.match(/ci-run-(\d+)-attempt-1/)[1])).sort((a, b) => a - b),
-      excluded_runs: cohort.excluded_runs,
-    }, payload.run_inventory_ref);
+    addEvidenceFile(
+      runInventoryPath,
+      {
+        source: "GitHub Actions REST API",
+        workflow_path: config.ci.workflow,
+        workflow_config_digest: currentWorkflowDigest,
+        filter: { branch: "main", event: "push", window_start: windowStart, window_end: windowEnd },
+        scope_version: "main-push-current-config-ci-v2",
+        denominator_policy: "current-configuration included runs only; no current-configuration runs is not-collected",
+        api_total_count: apiRuns.length,
+        workflow_runs: runInventoryRows,
+        included_run_ids: cohort.runs.map((run) => Number(run.run_ref.match(/ci-run-(\d+)-attempt-1/)[1])).sort((a, b) => a - b),
+        excluded_runs: cohort.excluded_runs,
+      },
+      payload.run_inventory_ref,
+    );
     Object.assign(evidenceRefs, runEvidence);
     const workflowRef = "ref:workflow-ci-main-push";
     const workflowPath = "evidence/ci-workflow.json";
@@ -901,7 +962,7 @@ function collectCi(observedAt) {
       run_id: Number(process.env.GITHUB_RUN_ID),
       attempt: Number(process.env.GITHUB_RUN_ATTEMPT ?? 1),
     };
-    const timingRows = cohort.timing_runs.map(run => ({
+    const timingRows = cohort.timing_runs.map((run) => ({
       databaseId: run.databaseId,
       headSha: run.headSha,
       workflowName: run.workflowName,
@@ -910,7 +971,7 @@ function collectCi(observedAt) {
       status: run.status,
       conclusion: run.conclusion,
       createdAt: run.createdAt,
-      jobs: run.jobs.map(job => ({
+      jobs: run.jobs.map((job) => ({
         databaseId: job.databaseId,
         name: job.name,
         status: job.status,
@@ -920,8 +981,10 @@ function collectCi(observedAt) {
         steps: job.steps,
       })),
     }));
-    const timingRunSummaries = timingRows.map(run => summarizeRun(run));
-    const timingCohorts = timingRows.length ? summarizeCohorts(timingRows) : { cohorts: [], note: "No CI runs fell in the closed cohort window." };
+    const timingRunSummaries = timingRows.map((run) => summarizeRun(run));
+    const timingCohorts = timingRows.length
+      ? summarizeCohorts(timingRows)
+      : { cohorts: [], note: "No CI runs fell in the closed cohort window." };
     addEvidenceFile("evidence/ci-attempt1-timings.json", {
       source: "scripts/ci-run-timings.mjs and scripts/ci-cohort-timings.mjs",
       attempt_policy: "attempt 1 only",
@@ -956,12 +1019,12 @@ function collectCi(observedAt) {
   if (result.status === "measured" && result.value.unavailable) {
     const collector = collectionStatus.collectors["ci-first-attempt"];
     collector.status = result.value.reason === "not-collected" ? "not-collected" : "failed";
-    collector.error = result.value.reason === "not-collected"
-      ? "no current-configuration CI runs fell in the 28-day cohort"
-      : "workflow failure has unresolved attempt-1 jobs";
+    collector.error =
+      result.value.reason === "not-collected"
+        ? "no current-configuration CI runs fell in the 28-day cohort"
+        : "workflow failure has unresolved attempt-1 jobs";
     measurementsByScope[scopeName].ci_first_attempt = ciUnavailableMeasurement(result.value.reason);
-  }
-  else if (result.status === "measured") setMeasured(scopeName, "ci_first_attempt", result.value);
+  } else if (result.status === "measured") setMeasured(scopeName, "ci_first_attempt", result.value);
   else setFailure(scopeName, "ci_first_attempt", "incomplete-input");
 }
 
@@ -992,14 +1055,16 @@ export function workflowRunContext(env, commitSha, repoRoot) {
   if (!/^[a-f0-9]{40}$/.test(commitSha) || env.GITHUB_SHA !== commitSha) {
     throw new Error("GitHub commit identity does not match the checked-out revision");
   }
-  if (typeof env.GITHUB_WORKSPACE !== "string" || !isAbsolute(env.GITHUB_WORKSPACE)
-    || resolve(env.GITHUB_WORKSPACE) !== resolve(repoRoot)) {
+  if (
+    typeof env.GITHUB_WORKSPACE !== "string" ||
+    !isAbsolute(env.GITHUB_WORKSPACE) ||
+    resolve(env.GITHUB_WORKSPACE) !== resolve(repoRoot)
+  ) {
     throw new Error("GitHub workspace does not match the producer checkout");
   }
-  const runId = typeof env.GITHUB_RUN_ID === "string" && /^[1-9]\d*$/.test(env.GITHUB_RUN_ID)
-    ? Number(env.GITHUB_RUN_ID) : NaN;
-  const attempt = typeof env.GITHUB_RUN_ATTEMPT === "string" && /^[1-9]\d*$/.test(env.GITHUB_RUN_ATTEMPT)
-    ? Number(env.GITHUB_RUN_ATTEMPT) : NaN;
+  const runId = typeof env.GITHUB_RUN_ID === "string" && /^[1-9]\d*$/.test(env.GITHUB_RUN_ID) ? Number(env.GITHUB_RUN_ID) : NaN;
+  const attempt =
+    typeof env.GITHUB_RUN_ATTEMPT === "string" && /^[1-9]\d*$/.test(env.GITHUB_RUN_ATTEMPT) ? Number(env.GITHUB_RUN_ATTEMPT) : NaN;
   if (!Number.isSafeInteger(runId) || runId < 1 || !Number.isSafeInteger(attempt) || attempt < 1) {
     throw new Error("GitHub run identity is missing or malformed");
   }
@@ -1049,7 +1114,7 @@ function main() {
       const namedToolchainInstalled = recordCollector("toolchain-rustup-name", config.tools.rust_toolchain, () => {
         const installed = command("rustup", ["toolchain", "list"]);
         const escaped = config.tools.rust_toolchain.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-        return installed.split(/\r?\n/).some(line => new RegExp(`^${escaped}(?:[-\\s]|$)`).test(line));
+        return installed.split(/\r?\n/).some((line) => new RegExp(`^${escaped}(?:[-\\s]|$)`).test(line));
       });
       const useNamedToolchain = namedToolchainInstalled.status === "measured" && namedToolchainInstalled.value;
       const cargoVersion = recordCollector("tool-cargo-llvm-cov", config.tools.cargo_llvm_cov, () => {
@@ -1093,8 +1158,14 @@ function main() {
       attempt = ciRuntime.attempt;
       collectCi(observedAt);
     }
-    addEvidenceFile("evidence/ci-workflow.json", evidenceFiles["evidence/ci-workflow.json"]
-      ?? { path: config.ci.workflow, digest: { algorithm: "sha256", value: sha256(readFileSync(join(REPO_ROOT, config.ci.workflow))) }, expected_job_ids: config.ci.expected_job_ids });
+    addEvidenceFile(
+      "evidence/ci-workflow.json",
+      evidenceFiles["evidence/ci-workflow.json"] ?? {
+        path: config.ci.workflow,
+        digest: { algorithm: "sha256", value: sha256(readFileSync(join(REPO_ROOT, config.ci.workflow))) },
+        expected_job_ids: config.ci.expected_job_ids,
+      },
+    );
 
     const elapsedSeconds = Number(((performance.now() - started) / 1000).toFixed(3));
     addEvidenceFile("evidence/collection-overhead.json", {
@@ -1121,7 +1192,8 @@ function main() {
     });
     for (const snapshot of bundle.snapshots) {
       const validation = validateObjective(schema, snapshot);
-      if (!validation.valid) throw new Error(`objective snapshot ${snapshot.snapshot_id} failed schema or semantic conformance: ${JSON.stringify(validation)}`);
+      if (!validation.valid)
+        throw new Error(`objective snapshot ${snapshot.snapshot_id} failed schema or semantic conformance: ${JSON.stringify(validation)}`);
     }
     assertNoAbsoluteArtifactPaths(bundle);
     mkdirSync(outputDir, { recursive: true, mode: 0o700 });
@@ -1132,7 +1204,9 @@ function main() {
       writeJson(join(outputDir, bundle.snapshotFiles[index]), bundle.snapshots[index]);
     }
     for (const [path, value] of bundle.files) writeJson(join(outputDir, path), value);
-    process.stdout.write(`${JSON.stringify({ report_dir: outputDir, snapshots: bundle.manifest.snapshots.length, elapsed_seconds: elapsedSeconds, collectors: Object.keys(collectionStatus.collectors).length })}\n`);
+    process.stdout.write(
+      `${JSON.stringify({ report_dir: outputDir, snapshots: bundle.manifest.snapshots.length, elapsed_seconds: elapsedSeconds, collectors: Object.keys(collectionStatus.collectors).length })}\n`,
+    );
   } finally {
     if (process.env.CODE_HEALTH_KEEP_TEMP !== "1") rmSync(tempRoot, { recursive: true, force: true });
   }
@@ -1143,8 +1217,9 @@ function isDirectEntry() {
 }
 
 if (isDirectEntry()) {
-  try { main(); }
-  catch (error) {
+  try {
+    main();
+  } catch (error) {
     process.stderr.write(`code-health-produce: ${safeDiagnostic(error?.message ?? error)}\n`);
     process.exitCode = 1;
   }

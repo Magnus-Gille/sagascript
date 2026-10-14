@@ -6,31 +6,13 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
-const scriptPath = resolve(
-  dirname(fileURLToPath(import.meta.url)),
-  "report-windows-arm64-native.mjs",
-);
-const profiles = [
-  ["debug"],
-  ["release"],
-  ["aarch64-pc-windows-msvc", "debug"],
-  ["aarch64-pc-windows-msvc", "release"],
-];
+const scriptPath = resolve(dirname(fileURLToPath(import.meta.url)), "report-windows-arm64-native.mjs");
+const profiles = [["debug"], ["release"], ["aarch64-pc-windows-msvc", "debug"], ["aarch64-pc-windows-msvc", "release"]];
 
 async function writeBuild(targetRoot, profile, suffix, flags, project = "whisper.cpp") {
-  const buildRoot = join(
-    targetRoot,
-    ...profile,
-    "build",
-    `whisper-rs-sys-${suffix}`,
-    "out",
-    "build",
-  );
+  const buildRoot = join(targetRoot, ...profile, "build", `whisper-rs-sys-${suffix}`, "out", "build");
   await mkdir(buildRoot, { recursive: true });
-  await writeFile(
-    join(buildRoot, "CMakeCache.txt"),
-    `CMAKE_PROJECT_NAME:STATIC=${project}\nCMAKE_GENERATOR:INTERNAL=Ninja\n`,
-  );
+  await writeFile(join(buildRoot, "CMakeCache.txt"), `CMAKE_PROJECT_NAME:STATIC=${project}\nCMAKE_GENERATOR:INTERNAL=Ninja\n`);
   await writeFile(
     join(buildRoot, "build.ninja"),
     `rule CXX_COMPILER\n  command = clang++ $FLAGS\nbuild object.o: CXX_COMPILER source.cc\n  FLAGS = ${flags}\n`,
@@ -60,12 +42,7 @@ async function runReporter(setup) {
 test("reports unique ARM64 compiler evidence from the four allowed profiles", async () => {
   const result = await runReporter(async (targetRoot) => {
     for (const [index, profile] of profiles.entries()) {
-      await writeBuild(
-        targetRoot,
-        profile,
-        `fixture-${index}`,
-        "-mcpu=native+dotprod+i8mm+nosve+nosme",
-      );
+      await writeBuild(targetRoot, profile, `fixture-${index}`, "-mcpu=native+dotprod+i8mm+nosve+nosme");
     }
     await writeBuild(targetRoot, ["debug"], "foreign", "-mcpu=host+dotprod+nosve+nosme", "other-project");
   });
@@ -82,9 +59,7 @@ test("rejects positive SVE and SME flags, including versioned forms", async () =
     "-mcpu=native+dotprod+i8mm+nosve+sme",
     "-mcpu=native+dotprod+i8mm+nosve+sme2",
   ]) {
-    const result = await runReporter((targetRoot) =>
-      writeBuild(targetRoot, ["debug"], "positive", positive),
-    );
+    const result = await runReporter((targetRoot) => writeBuild(targetRoot, ["debug"], "positive", positive));
     assert.notEqual(result.status, 0, result.output);
     assert.match(result.output, /positive (?:sve|sme)/i);
   }
@@ -97,9 +72,7 @@ test("rejects evidence missing native or explicit no-SVE/no-SME flags", async ()
     "-mcpu=native+dotprod+i8mm+nosve",
     "-mcpu=native+dotprod+i8mm+nosve -mcpu=native+dotprod+i8mm+nosme",
   ]) {
-    const result = await runReporter((targetRoot) =>
-      writeBuild(targetRoot, ["release"], "missing", flags),
-    );
+    const result = await runReporter((targetRoot) => writeBuild(targetRoot, ["release"], "missing", flags));
     assert.notEqual(result.status, 0, result.output);
     assert.match(result.output, /(?:no actual -mcpu|required \+(?:native|nosve|nosme))/i);
   }
