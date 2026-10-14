@@ -1,0 +1,28 @@
+{"send":{"v":1,"id":1,"op":"hello","client":{"name":"sagascript","version":"1.4.4","git_sha":"0123456789abcdef0123456789abcdef01234567"}}}
+{"expect":{"id":1,"ok":true,"protocol":1,"host":{"name":"sagascript-engine-host","version":"<string>","git_sha":"<sha40>","build_dirty":"<bool>","engine":"<string>","engine_version":"<string>"},"capabilities":{"sample_rate":16000,"max_window_s":1.0,"preferred_window_s":1.0,"preferred_overlap_s":0.2,"max_in_flight":2,"token_timestamps":true,"languages":["sv"],"compute_units":["ane","gpu","cpu","all"],"min_macos":"14.0","context_biasing":true}}}
+{"note":"load validates its parameters before touching the engine."}
+{"send":{"v":1,"id":2,"op":"load","model_dir":"vectors/model","model_id":"vectors-model","compute_units":"ane"}}
+{"expect":{"id":2,"ok":false,"error":{"code":"bad_request","message":"<string>","retryable":false}}}
+{"send":{"v":1,"id":3,"op":"load","model_dir":"/vectors/model","model_id":"vectors-model"}}
+{"expect":{"id":3,"ok":false,"error":{"code":"bad_request","message":"<string>","retryable":false}}}
+{"send":{"v":1,"id":4,"op":"load","model_dir":"/vectors/model","model_id":"","compute_units":"ane"}}
+{"expect":{"id":4,"ok":false,"error":{"code":"bad_request","message":"<string>","retryable":false}}}
+{"send":{"v":1,"id":5,"op":"load","model_dir":"/vectors/model","model_id":"vectors-model","compute_units":4}}
+{"expect":{"id":5,"ok":false,"error":{"code":"bad_request","message":"<string>","retryable":false}}}
+{"note":"Engine errors pass through with their code, message and retryable flag."}
+{"send":{"v":1,"id":6,"op":"load","model_dir":"/vectors/missing-model","model_id":"vectors-model","compute_units":"ane"}}
+{"expect":{"id":6,"ok":false,"error":{"code":"model_missing","message":"Model directory does not exist: /vectors/missing-model","retryable":false}}}
+{"send":{"v":1,"id":7,"op":"load","model_dir":"/vectors/broken-model","model_id":"vectors-model","compute_units":"ane"}}
+{"expect":{"id":7,"ok":false,"error":{"code":"model_load_failed","message":"Encoder cannot be loaded","retryable":false}}}
+{"send":{"v":1,"id":8,"op":"status"}}
+{"expect":{"id":8,"ok":true,"state":"idle","model_id":null,"in_flight":0,"rss_bytes":"<uint>","uptime_s":"<number>"}}
+{"send":{"v":1,"id":9,"op":"load","model_dir":"/vectors/model","model_id":"vectors-model","compute_units":"ane"}}
+{"expect":{"id":9,"ok":true,"model_id":"vectors-model","load_ms":4,"compiled":false,"window_s":1.0,"frame_s":0.08,"vocab_size":3,"blank_id":2}}
+{"send":{"v":1,"id":10,"op":"status"}}
+{"expect":{"id":10,"ok":true,"state":"ready","model_id":"vectors-model","in_flight":0,"rss_bytes":"<uint>","uptime_s":"<number>"}}
+{"send":{"v":1,"id":11,"op":"unload"}}
+{"expect":{"id":11,"ok":true}}
+{"send":{"v":1,"id":12,"op":"status"}}
+{"expect":{"id":12,"ok":true,"state":"idle","model_id":null,"in_flight":0,"rss_bytes":"<uint>","uptime_s":"<number>"}}
+{"send":{"v":1,"id":13,"op":"load","model_dir":"/vectors/model","model_id":"vectors-model-2","compute_units":"ane"}}
+{"expect":{"id":13,"ok":true,"model_id":"vectors-model-2","load_ms":4,"compiled":false,"window_s":1.0,"frame_s":0.08,"vocab_size":3,"blank_id":2}}

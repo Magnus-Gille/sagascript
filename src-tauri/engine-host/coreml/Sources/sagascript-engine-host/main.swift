@@ -46,7 +46,7 @@ if let cacheDirectory {
 let engine = CoreMLEngine(cacheDirectory: cacheDirectory)
 let server = EngineHostServer(engine: engine, output: { object in
     do {
-        let data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+        let data = try WireProtocol.encode(object)
         FileHandle.standardOutput.write(data)
         FileHandle.standardOutput.write(Data([0x0a]))
     } catch {

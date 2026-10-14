@@ -53,6 +53,7 @@ export const TEST_GROUPS = {
     "scripts/test-ci-unrun-suites.mjs",
     "scripts/test-clippy-policy.mjs",
     "scripts/test-dependency-policy.mjs",
+    "scripts/test-engine-host-identity.mjs",
     "scripts/test-frontend-test-groups.mjs",
     "scripts/test-npm-license-policy.mjs",
     "scripts/test-pipeline-cache.mjs",

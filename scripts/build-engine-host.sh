@@ -6,23 +6,11 @@ REPO_ROOT=$(cd "$SCRIPT_DIR/.." && pwd)
 PACKAGE_DIR="$REPO_ROOT/src-tauri/engine-host/coreml"
 BUILD_INFO="$PACKAGE_DIR/Sources/EngineHostCore/BuildInfo.swift"
 
-version=$(sed -n 's/^[[:space:]]*"version":[[:space:]]*"\([^"]*\)".*/\1/p' "$REPO_ROOT/src-tauri/tauri.conf.json" | head -n 1)
-if [[ -z "$version" ]]; then
-  echo "Could not read version from src-tauri/tauri.conf.json" >&2
-  exit 1
-fi
-git_sha=$(git -C "$REPO_ROOT" rev-parse HEAD)
-if [[ ! "$git_sha" =~ ^[0-9a-f]{40}$ ]]; then
-  echo "git rev-parse HEAD did not return a full SHA" >&2
-  exit 1
-fi
-
-dirty=false
-if git -C "$REPO_ROOT" status --porcelain=v1 --untracked-files=all \
-    | sed '/src-tauri\/engine-host\/coreml\/Sources\/EngineHostCore\/BuildInfo\.swift/d' \
-    | grep -q .; then
-  dirty=true
-fi
+# version, git_sha and dirty: the shared engine-host identity (#367).
+identity=$("$SCRIPT_DIR/engine-host-identity.sh")
+version=$(sed -n 's/^version=//p' <<<"$identity")
+git_sha=$(sed -n 's/^git_sha=//p' <<<"$identity")
+dirty=$(sed -n 's/^dirty=//p' <<<"$identity")
 
 mkdir -p "$(dirname "$BUILD_INFO")"
 printf '%s\n' \

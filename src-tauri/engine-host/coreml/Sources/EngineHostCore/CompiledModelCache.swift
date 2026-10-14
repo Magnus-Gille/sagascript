@@ -64,7 +64,7 @@ struct CompiledModelCache {
             let target = modelURL(key: key, name: name)
             if Self.isCompiledModel(target) { continue }
             guard let package = packages[name] else {
-                throw EngineHostError(code: "model_load_failed", message: "No package to compile for missing \(name).mlmodelc")
+                throw EngineHostError(code: .modelLoadFailed, message: "No package to compile for missing \(name).mlmodelc")
             }
             // Anything at `target` is not a whole model (e.g. a legacy partial copy).
             try? fileManager.removeItem(at: target)
@@ -73,12 +73,12 @@ struct CompiledModelCache {
         }
 
         guard required.allSatisfy({ Self.isCompiledModel(modelURL(key: key, name: $0)) }) else {
-            throw EngineHostError(code: "model_load_failed", message: "Compiled model cache is incomplete at \(directory.path)")
+            throw EngineHostError(code: .modelLoadFailed, message: "Compiled model cache is incomplete at \(directory.path)")
         }
         do {
             try Data("ok\n".utf8).write(to: marker, options: .atomic)
         } catch {
-            throw EngineHostError(code: "model_load_failed", message: "Cannot mark CoreML cache complete: \(error.localizedDescription)")
+            throw EngineHostError(code: .modelLoadFailed, message: "Cannot mark CoreML cache complete: \(error.localizedDescription)")
         }
         return Result(directory: directory, compiled: didCompile)
     }
@@ -96,7 +96,7 @@ struct CompiledModelCache {
             // same-volume rename.
             try fileManager.moveItem(at: compiled, to: staged)
             guard Self.isCompiledModel(staged) else {
-                throw EngineHostError(code: "model_load_failed", message: "CoreML compilation of \(name) produced no model")
+                throw EngineHostError(code: .modelLoadFailed, message: "CoreML compilation of \(name) produced no model")
             }
             do {
                 try fileManager.moveItem(at: staged, to: target)
@@ -107,7 +107,7 @@ struct CompiledModelCache {
         } catch let error as EngineHostError {
             throw error
         } catch {
-            throw EngineHostError(code: "model_load_failed", message: "CoreML compilation failed for \(name): \(error.localizedDescription)")
+            throw EngineHostError(code: .modelLoadFailed, message: "CoreML compilation failed for \(name): \(error.localizedDescription)")
         }
     }
 
