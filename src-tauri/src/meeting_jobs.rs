@@ -10,6 +10,7 @@ use tauri::{Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
 use crate::commands::{file_transcription_context, lock_controller, SharedController};
+#[cfg(feature = "diarization")]
 use crate::events::{EmitEvent, UiState};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
