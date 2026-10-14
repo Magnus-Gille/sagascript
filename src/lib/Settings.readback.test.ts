@@ -514,12 +514,18 @@ describe("a saved change whose read-back fails", () => {
     file.readFailure = readbackFailure;
     await user.selectOptions(picker, "pianissimo-sv");
     await screen.findByRole("alert", { name: "Settings not confirmed" });
+    // The failed read-back did not touch the models.
+    const before = ipc.callsTo("get_profile_model_info").length;
 
     file.readFailure = null;
     ipc.emit("state-changed", "settings_reloaded");
 
     await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
     expect(picker).toHaveValue("pianissimo-sv");
+    // The settings the window shows changed, so the models it offers are queried again, once.
+    await waitFor(() => expect(ipc.callsTo("get_profile_model_info").length).toBe(before + 1));
+    await settle();
+    expect(ipc.callsTo("get_profile_model_info").length).toBe(before + 1);
   });
 
   test("a settings-changed event that cannot be read says the window may be out of date", async () => {
@@ -911,6 +917,9 @@ describe("the models the window offers stay filled after a confirmed change", ()
     await user.selectOptions(screen.getByRole("combobox", { name: "Default profile language" }), "English");
 
     await waitFor(() => expect(ipc.callsTo("get_profile_model_info").length).toBe(before + 1));
+    // Leave time for a second query to follow: it must not.
+    await settle();
+    expect(ipc.callsTo("get_profile_model_info").length).toBe(before + 1);
     expect(screen.queryByRole("alert")).toBeNull();
     expect(screen.getByRole("combobox", { name: "Default profile language" })).toHaveValue("en");
   });
