@@ -14,7 +14,8 @@ verification commands, [docs/recipes/](recipes/README.md) for step-by-step chang
 | `src/` | Svelte 5 frontend (runes). `App.svelte` picks the view from the URL: `?overlay`, `?onboarding`, otherwise Settings. |
 | `src/lib/api.ts`, `src/lib/meeting-reprocessing-api.ts` | The only `invoke` wrappers, plus hand-written TypeScript copies of Rust DTOs (`Settings`, `HotkeyProfile`, …). |
 | `src/lib/*.svelte` | `Settings.svelte` (Dictate / Transcribe / Settings tabs), `Onboarding.svelte`, `Overlay.svelte`, `FileTranscription.svelte`, `Meeting*.svelte`, `TranscriptionStages.svelte`. |
-| `src/lib/*.ts`, `src/lib/*.js` | DOM-free logic (reducers, queues, update recovery) tested by `scripts/test-*.mjs`. |
+| `src/lib/*.ts`, `src/lib/*.js` | DOM-free logic (reducers, queues, update recovery), tested by Vitest next to the module and by the remaining `scripts/test-*.mjs`. |
+| `src/lib/tauri-events.svelte.ts`, `models.svelte.ts`, `permissions.ts`, `platform.ts` | Shared by the windows. Tauri events are only listened to through `useTauriEvent`/`useDragDropEvent`/`subscribeTauriEvent` (they own the unlisten; ESLint forbids raw `listen()` in `src/`) and the `EventMap` there; `models.svelte.ts` holds `PIANISSIMO_ID` and `downloadModelById`; `permissions.ts` the macOS Accessibility request and wait; `platform.ts` one `get_platform` lookup per window. |
 | `src-tauri/src/` | App crate `sagascript`: CLI dispatch, Tauri shell, tray, hotkeys, paste, overlay, updater, Tauri commands. |
 | `src-tauri/crates/sagascript-core/` | Library: audio decode/resample/capture, Whisper and Pianissimo transcription, engine-host client, settings store, model downloads, diarization, meeting documents. |
 | `src-tauri/crates/sagascript-cli/` | Library + headless `sagascript` binary: every clap subcommand. Also holds meeting/diarization pipelines that the app imports. |
