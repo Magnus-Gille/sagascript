@@ -360,6 +360,9 @@ jobs:
             > "$RUNNER_TEMP/transcription-smoke.jsonl" 2> "$RUNNER_TEMP/transcription-smoke-jsonl.stderr"
           python3 scripts/verify-json-cli-streams.py --jsonl \
             "$RUNNER_TEMP/transcription-smoke.jsonl" "$RUNNER_TEMP/transcription-smoke-jsonl.stderr"
+          # A smoke check with the real model (pipefail turns a panic or a failing exit into
+          # a red step). The deterministic check of the closed-pipe contract is
+          # `run_into_closed_pipe` in src-tauri/crates/sagascript-cli/tests/output_contract.rs.
           $BINARY transcribe --jsonl --language no --model nb-whisper-tiny "$INPUTS" | head -1 > /dev/null
           STATUS=0
           $BINARY transcribe --json --language no --model nb-whisper-tiny "$RUNNER_TEMP/missing.wav" \

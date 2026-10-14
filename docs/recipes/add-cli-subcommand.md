@@ -50,7 +50,8 @@ Put the domain logic in `sagascript-core` when the GUI needs it too.
    builds a runtime and calls `block_on(...)` like `DownloadModel`.
 4. If the command has `--json`/`--jsonl`, add it to `json_output` in `lib.rs` (pretty or
    compact, matching what the command writes), so a failure before any output still writes the
-   error object below.
+   error object below. A command whose stdout is always JSON has no such flag and stays out
+   (see "Output conventions").
 
 ## 3. Output conventions
 
@@ -66,17 +67,26 @@ to stderr, `out.json(&value)?` a pretty document, `out.jsonl(&value)?` a compact
   `scripts/verify-json-cli-streams.py` (`--json`, `--jsonl`, `--error`) checks this contract
   for `transcribe` in CI.
 - Propagate stdout write errors with `?`. When the reader closes stdout (`… | head -1`) every
-  later write fails fast and `run_with` ends the run quietly with exit 0; other write failures
-  end it with `Error: could not write to stdout: …` and exit 1. Only a run whose own outcome is
+  later write fails fast and `run_with` ends the run quietly with exit 0. A stdout that is not
+  open at all (`>&-`) also exits 0: the write fails with `EBADF`, which std swallows. Only a
+  real I/O error (a full disk, `> /dev/full`) ends the run with
+  `Error: could not write to stdout: …` and exit 1. Only a run whose own outcome is
   the closed write (or that succeeded) ends quietly: a command that failed for another reason
   keeps its failure and status. A check that owes a verdict (exit 3) writes its report through
   `output::ignore_closed(…)`, so a reader that left cannot turn a failed check into exit 0.
 - A `--json`/`--jsonl` run that fails before writing anything to stdout gets one error object
   there, `{"status":"error","code":"settings_error","error":"Settings error: …"}`, pretty or
   compact like the command's own output (`exit::conclude`). `code` is the `DictationError`
-  variant in snake_case (`cancelled`, `check_failed` and `usage` for those exits). A run that
+  variant in snake_case (`cancelled` and `check_failed` for those exits). A run that
   already wrote its report, or some `--jsonl` items, keeps stdout as it is. A single-file
   `transcribe --json` whose file fails writes that object with a `source` key.
+- A command whose stdout is always JSON, with no `--json` flag (for example `latency-report`,
+  `benchmark-dictation`, `diarization *`, `meeting proposal inspect`/`preview` and
+  `transcribe --meeting-json`), stays out of `json_output` on purpose: when it fails before it
+  has a report, stdout stays empty and only the `Error: …` line on stderr says why.
+  `latency_budget_cli::missing_input_fails_without_echoing_private_path` requires this ("input
+  errors must not emit JSON"). Only an explicit `--json`/`--jsonl` flag opts a run into the
+  error object.
 - Never write transcripts, audio or personal paths to logs
   ([ADR 0002](../adr/0002-privacy-first.md)).
 
@@ -90,7 +100,7 @@ Commands return `Result<(), DictationError>` or, to choose the status, `Result<(
 | 0 | `Success` | The command returned `Ok`. |
 | 0 | `StdoutClosed` | The reader closed stdout (`… \| head -1`) and the command had no other failure; nothing is printed on stderr. |
 | 1 | `Failure` | Any other `Err` (printed as `Error: …` on stderr), or stdout could not be written. |
-| 2 | `Usage` | clap usage errors; the headless binary without a subcommand; `CliError::Usage`. |
+| 2 | `Usage` | clap usage errors; the headless binary without a subcommand. |
 | 3 | `CheckFailed` | A check ran, wrote its report and did not pass (`CliError::CheckFailed`): `latency-report` budget, `engine doctor`, `benchmark-dictation` (`--max-warm-ms` or an `--expect-word`/empty-text check) and `diarization reference-qualify`. |
 | 130 / 143 | `Cancelled` | Cancelled by SIGINT / SIGTERM (`cancel.rs`); `Cancelled` on stderr. |
 

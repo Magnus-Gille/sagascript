@@ -627,7 +627,10 @@ pub fn run_with(cli: Cli, out: &Out) -> Exit {
 
 /// The framing of the command's machine-readable stdout, when it was asked
 /// for one with `--json`/`--jsonl`. A failure before any output then writes a
-/// structured error object (`exit::conclude`).
+/// structured error object (`exit::conclude`). A command whose stdout is
+/// always JSON has no such flag and is deliberately absent: when it fails
+/// before it has a report, stdout stays empty (`latency-report`,
+/// `benchmark-dictation`, `diarization *`, `transcribe --meeting-json`).
 fn json_output(command: &Command) -> Option<JsonOutput> {
     match command {
         Command::Transcribe(args) if args.jsonl => Some(JsonOutput::Compact),

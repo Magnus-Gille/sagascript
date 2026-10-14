@@ -310,7 +310,9 @@ existing object shape; when that file fails it is one error object,
 `--json`/`--jsonl` run that fails before any result (unknown profile, model not
 downloaded) writes the same kind of object without `source`, so stdout is never
 empty. A reader that stops early (`sagascript transcribe --jsonl dir/ | head -1`)
-ends the run quietly with exit 0.
+ends the run quietly with exit 0, and so does a closed stdout (`>&-`), which the
+standard library treats as a successful write. A write that really fails (a full
+disk, `> /dev/full`) prints `Error: could not write to stdout: …` and exits 1.
 
 Press Ctrl-C (or send SIGTERM) to cancel a running `transcribe`. Whisper
 decoding (including parallel chunks and the gap re-decode pass) and Pianissimo

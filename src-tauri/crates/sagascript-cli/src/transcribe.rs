@@ -844,6 +844,10 @@ fn transcribe_meeting_file_inner(
     let mut model_loaded = false;
     // The pipeline's progress lines go to the process's stderr, as they did
     // before the output layer; the meeting document is the return value.
+    // This private `Out` must never write stdout: it is not the run's `Out`,
+    // so a stdout write here would escape its closed-pipe handling and the
+    // error-object bookkeeping of `exit::conclude`. `transcribe_file` writes
+    // it with `errln!` only.
     let output = transcribe_file(
         &args,
         file,

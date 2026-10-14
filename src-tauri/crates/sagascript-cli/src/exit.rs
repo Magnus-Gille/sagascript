@@ -26,8 +26,8 @@ pub enum Exit {
     StdoutClosed,
     /// 1: the command failed.
     Failure,
-    /// 2: the invocation is invalid. clap's own usage errors exit 2 before a
-    /// command runs.
+    /// 2: the invocation is invalid: clap's own usage errors (before a command
+    /// runs) and a bare invocation without a subcommand.
     Usage,
     /// 3: a check ran to completion, wrote its report, and did not pass
     /// (`latency-report` budget, `engine doctor`, `benchmark-dictation`'s
@@ -67,8 +67,6 @@ impl std::process::Termination for Exit {
 pub enum CliError {
     /// The command failed (exit 1).
     Failed(DictationError),
-    /// The invocation is invalid in a way clap cannot express (exit 2).
-    Usage(String),
     /// A check completed and did not pass (exit 3). Its report is already on
     /// stdout; the error is the `Error: …` line for stderr.
     CheckFailed(DictationError),
@@ -83,7 +81,6 @@ impl CliError {
     pub fn exit(&self) -> Exit {
         match self {
             Self::Failed(_) => Exit::Failure,
-            Self::Usage(_) => Exit::Usage,
             Self::CheckFailed(_) => Exit::CheckFailed,
             Self::StdoutClosed => Exit::StdoutClosed,
         }
@@ -93,7 +90,6 @@ impl CliError {
     pub fn code(&self) -> String {
         match self {
             Self::Failed(error) => dictation_error_code(error),
-            Self::Usage(_) => "usage".to_string(),
             Self::CheckFailed(_) => "check_failed".to_string(),
             Self::StdoutClosed => "stdout_closed".to_string(),
         }
@@ -104,7 +100,6 @@ impl fmt::Display for CliError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Failed(error) | Self::CheckFailed(error) => error.fmt(f),
-            Self::Usage(message) => f.write_str(message),
             Self::StdoutClosed => WriteError::Closed.fmt(f),
         }
     }
@@ -286,7 +281,6 @@ mod tests {
             CliError::CheckFailed(DictationError::SettingsError("x".into())).code(),
             "check_failed"
         );
-        assert_eq!(CliError::Usage("x".into()).code(), "usage");
     }
 
     #[test]

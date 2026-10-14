@@ -11,7 +11,10 @@
 //!   `failed printing to stdout` panic (exit 101) of `println!`. A command
 //!   that failed for another reason keeps its failure and status, and a check
 //!   writes its report through [`ignore_closed`] so a reader that left cannot
-//!   hide its verdict;
+//!   hide its verdict. A stdout that is not open at all (`>&-`) is neither: the
+//!   write fails with `EBADF`, which std swallows, so the command exits 0. Only
+//!   a real I/O error (a full disk) prints `Error: could not write to stdout`
+//!   and exits 1;
 //! - remembers whether stdout was used, so a failed `--json`/`--jsonl` run can
 //!   still report a structured error object ([`crate::exit`]);
 //! - lets tests run a command in-process and read both streams
