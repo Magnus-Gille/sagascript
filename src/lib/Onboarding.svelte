@@ -2,6 +2,7 @@
   import { onMount, onDestroy } from "svelte";
   import { hotkeyKeyLabel } from "./hotkey";
   import { downloadModelById } from "./models.svelte";
+  import { waitForAccessibility } from "./permissions";
   import { awaitDownloadCompletion, completedDownloadState } from "./onboarding-download-state";
   import { useTauriEvent } from "./tauri-events.svelte";
   import {
@@ -215,38 +216,41 @@
 
   async function grantAccessibility() {
     const generation = beginPollOperation();
+    const isCancelled = () => !isPollCurrent(generation);
     accessibilityError = null;
     accessibilityChecking = true;
     try {
       await requestAccessibilityPermission();
-      if (!isPollCurrent(generation)) return;
-      startPoll(generation, async (isCurrent) => {
-        try {
-          const granted = await checkAccessibilityPermission();
-          if (!isCurrent()) return;
-          if (granted) {
-            accessibilityGranted = true;
-            accessibilityChecking = false;
-            stopPoll();
-            try {
-              await retryHotkeyRegistration();
-            } catch (e: any) {
-              accessibilityError = `Accessibility was granted, but the saved dictation shortcut could not be registered: ${typeof e === "string" ? e : e?.message ?? "unknown error"}`;
-            }
-          }
-        } catch (e: any) {
-          if (!isCurrent()) return;
-          stopPoll();
-          accessibilityChecking = false;
-          accessibilityError =
-            typeof e === "string" ? e : e?.message ?? "Failed to check Accessibility permission. Please try again.";
-        }
-      });
     } catch (e: any) {
-      if (!isPollCurrent(generation)) return;
+      if (isCancelled()) return;
       accessibilityError =
         typeof e === "string" ? e : e?.message ?? "Failed to request Accessibility permission. Please try again.";
       accessibilityChecking = false;
+      return;
+    }
+    if (isCancelled()) return;
+
+    let granted: boolean;
+    try {
+      // Until the user decides or leaves the step: `stopPoll()` cancels the wait.
+      granted = await waitForAccessibility({ attempts: Infinity, isCancelled });
+    } catch (e: any) {
+      if (isCancelled()) return;
+      stopPoll();
+      accessibilityChecking = false;
+      accessibilityError =
+        typeof e === "string" ? e : e?.message ?? "Failed to check Accessibility permission. Please try again.";
+      return;
+    }
+    if (!granted) return;
+
+    accessibilityGranted = true;
+    accessibilityChecking = false;
+    stopPoll();
+    try {
+      await retryHotkeyRegistration();
+    } catch (e: any) {
+      accessibilityError = `Accessibility was granted, but the saved dictation shortcut could not be registered: ${typeof e === "string" ? e : e?.message ?? "unknown error"}`;
     }
   }
 

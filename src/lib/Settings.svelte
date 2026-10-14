@@ -39,7 +39,6 @@
     getSupportedFormats,
     getPlatform,
     checkAccessibilityPermission,
-    requestAccessibilityPermission,
     retryHotkeyRegistration,
     startRecording,
     stopAndTranscribe,
@@ -63,6 +62,7 @@
   } from "./api";
   import { open } from "@tauri-apps/plugin-dialog";
   import { PIANISSIMO_ID, downloadModelById, useModelDownloads } from "./models.svelte";
+  import { requestAccessibility } from "./permissions";
   import { useDragDropEvent, useTauriEvent } from "./tauri-events.svelte";
   import {
     dictateButtonAction,
@@ -1348,8 +1348,7 @@
     try {
       accessibilityGranted = await checkAccessibilityPermission();
       if (!accessibilityGranted) {
-        await requestAccessibilityPermission();
-        accessibilityGranted = await waitForAccessibilityPermission();
+        accessibilityGranted = await requestAccessibility({ onGranted: refreshHotkeyRegistration });
       }
 
       if (accessibilityGranted) {
@@ -1364,19 +1363,6 @@
     } finally {
       accessibilityChecking = false;
     }
-  }
-
-  async function waitForAccessibilityPermission(): Promise<boolean> {
-    // System Settings can take a while to update TCC. Recheck for at most one
-    // minute; no unbounded timer survives after this explicit attempt.
-    for (let attempt = 0; attempt < 60; attempt += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-      if (await checkAccessibilityPermission()) {
-        await refreshHotkeyRegistration();
-        return true;
-      }
-    }
-    return false;
   }
 
   // Non-blocking hint when a configured shortcut is bare F14/F15 on macOS.
@@ -1893,8 +1879,7 @@
       try {
         accessibilityGranted = await checkAccessibilityPermission();
         if (!accessibilityGranted) {
-          await requestAccessibilityPermission();
-          accessibilityGranted = await waitForAccessibilityPermission();
+          accessibilityGranted = await requestAccessibility({ onGranted: refreshHotkeyRegistration });
         }
       } catch (error: any) {
         hotkeyError = typeof error === "string" ? error : error?.message || "Failed to check Accessibility permission.";
