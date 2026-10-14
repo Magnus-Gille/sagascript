@@ -866,6 +866,8 @@ fn failure_into_error(failure: VerificationFailure) -> DictationError {
     }
 }
 
+/// The blocking body of [`prepare_existing_artifact_async`]; it must not run
+/// on an async executor thread.
 fn prepare_existing_artifact_with(
     path: &Path,
     integrity: DownloadIntegrity,
@@ -908,20 +910,10 @@ fn prepare_existing_artifact_with(
 /// not to match the immutable manifest. I/O failures and invalid manifest data
 /// are returned without touching the file.
 ///
-/// Blocking: without a matching verification stamp this hashes the whole
-/// file, which can be gigabytes. Async code uses
-/// [`prepare_existing_artifact_async`].
-pub fn prepare_existing_artifact(
-    path: &Path,
-    integrity: DownloadIntegrity,
-) -> Result<ExistingArtifact, DictationError> {
-    prepare_existing_artifact_with(path, integrity, &sha256_of_file)
-}
-
-/// [`prepare_existing_artifact`] for async callers (#368): the check, and the
-/// hash it may need, run on Tokio's blocking pool. Dropping the future stops
-/// the hash before its next 1 MiB read; a hash stopped that way never deletes
-/// the file.
+/// Without a matching verification stamp this hashes the whole file, which can
+/// be gigabytes, so the check and the hash run on Tokio's blocking pool
+/// (#368). Dropping the future stops the hash before its next 1 MiB read; a
+/// hash stopped that way never deletes the file.
 pub async fn prepare_existing_artifact_async(
     path: &Path,
     integrity: DownloadIntegrity,

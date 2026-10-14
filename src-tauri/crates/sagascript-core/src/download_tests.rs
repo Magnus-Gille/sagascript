@@ -1507,6 +1507,14 @@ async fn download_sweeps_stale_temp_files_first() {
     .expect("test exceeded its hard timeout");
 }
 
+/// The blocking check, for tests that need no runtime.
+fn prepare_existing_artifact(
+    path: &Path,
+    integrity: DownloadIntegrity,
+) -> Result<ExistingArtifact, DictationError> {
+    prepare_existing_artifact_with(path, integrity, &sha256_of_file)
+}
+
 // -- verifying an existing artifact from async code (#368) --
 
 /// `#[tokio::test]` runs a current-thread runtime: a hash done inline would
