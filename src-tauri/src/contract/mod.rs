@@ -4,7 +4,8 @@
 //! payloads by the tests that own each payload (`events_tests.rs`,
 //! `commands_tests.rs`, `meeting_jobs_tests.rs`) and parsed by the frontend's
 //! Vitest suite against its TypeScript types (src/test/transport.test.ts).
-//! After an intended change, regenerate them with
+//! `command_map` generates the frontend's `CommandMap` from the registered
+//! command signatures. After an intended change, regenerate both with
 //!
 //! ```text
 //! SAGASCRIPT_BLESS_CONTRACTS=1 cargo test -p sagascript contract
@@ -12,6 +13,8 @@
 //!
 //! in src-tauri/ and review the diff: a changed fixture is a changed wire
 //! format the frontend must accept.
+
+mod command_map;
 
 use std::fs;
 use std::path::{Path, PathBuf};

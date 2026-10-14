@@ -23,6 +23,14 @@ export interface ReprocessingPlan {
   required_work: RequiredWork;
   revision: string;
 }
+/** The `request` argument of `begin_meeting_reprocessing` (Rust `ReprocessingRequest`). */
+export interface ReprocessingRequest {
+  plan: ReprocessingPlan;
+  expected_revision: string;
+  previous: MeetingReview;
+  cache_path: string | null;
+  cache_output: string | null;
+}
 export interface SelectedReprocessingPlan {
   plan: ReprocessingPlan;
   file_path: string;

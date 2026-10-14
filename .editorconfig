@@ -27,7 +27,7 @@ trim_trailing_whitespace = false
 # Reference data, golden fixtures and generated files (schemas, icons,
 # THIRD_PARTY_NOTICES.md) are byte-for-byte inputs: never let an editor
 # normalise them.
-[{docs/benchmarks/data/**,test-audio/**,**/testdata/**,**/fixtures/**,**/test-vectors/**,contracts/transport/**,src-tauri/gen/**,src-tauri/icons/**,THIRD_PARTY_NOTICES.md}]
+[{docs/benchmarks/data/**,test-audio/**,**/testdata/**,**/fixtures/**,**/test-vectors/**,contracts/transport/**,src/lib/ipc-contract.generated.ts,src-tauri/gen/**,src-tauri/icons/**,THIRD_PARTY_NOTICES.md}]
 charset = unset
 end_of_line = unset
 insert_final_newline = unset

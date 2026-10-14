@@ -16,6 +16,10 @@
 # otherwise break on pure reformatting. prettier-plugin-svelte is configured.
 *.svelte
 
+# Generated from the Rust command signatures (src-tauri/src/contract/
+# command_map.rs, #347); the app crate's tests compare it byte for byte.
+/src/lib/ipc-contract.generated.ts
+
 # Byte-exact inputs, as in .editorconfig.
 **/fixtures/**
 **/testdata/**

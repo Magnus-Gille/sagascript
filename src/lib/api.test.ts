@@ -1,7 +1,8 @@
 // The IPC contract of the frontend's command wrappers: which command each
-// wrapper invokes and with which argument object. Runs against the typed mock
-// in src/test/ipc.ts, so a renamed command or argument key fails here and
-// CommandMap cannot drift from the wrappers it describes.
+// wrapper invokes and with which argument object. CommandMap is generated from
+// the Rust command signatures (src/lib/ipc-contract.generated.ts, #347), so a
+// command or argument renamed on either side fails here: the `args` below are
+// type-checked against Rust, and each wrapper must send exactly them.
 import { describe, expect, test } from "vitest";
 import * as api from "./api";
 import * as reprocessing from "./meeting-reprocessing-api";
