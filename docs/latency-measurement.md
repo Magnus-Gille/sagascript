@@ -70,14 +70,14 @@ Only successful, warm, successfully auto-pasted samples of the selected length
 are eligible. Every eligible configuration group must have at least the
 requested numeric samples and p95 at or below the explicit threshold. No
 eligible groups or incomplete eligible metrics fails the check. Emit the JSON
-report even on a budget failure, then exit nonzero. The budget object also
+report even on a budget failure, then exit 3 (a failed check). The budget object also
 reports `excludedWarmSuccessSamples`: the number of selected-length samples
 with a successful warm transcription but a non-success paste outcome. These
 samples are excluded from eligibility and do not prevent a pass when all
 eligible groups satisfy the requested budget. Other cohorts are reported but
-are not claimed to meet that selected budget. Invalid input or arguments exit
-nonzero without emitting JSON; a failed explicit budget is the exception and
-emits its JSON report before exiting nonzero.
+are not claimed to meet that selected budget. Invalid input or arguments exit 1
+without emitting JSON; a failed explicit budget is the exception and emits its
+JSON report before exiting 3.
 
 ## Remaining physical acceptance
 

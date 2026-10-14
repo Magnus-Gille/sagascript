@@ -63,6 +63,16 @@ without a subcommand. `target/<profile>/sagascript` is whichever was built last.
 builds `sagascript-fake-engine-host` (`crates/sagascript-core/tests/support/fake_engine_host.rs`)
 for tests.
 
+**CLI output and exit:** both binaries call `sagascript_cli::run(cli) -> ExitCode` and return
+it from `main`. `run_with(cli, &Out)` dispatches the subcommand and returns an `exit::Exit`
+without exiting the process, so unit tests call it with `Out::capture()`. Every command writes
+through `output::Out` (`outln!`/`errln!`, `Out::json`/`jsonl`; the crate denies
+`println!`/`eprintln!`): a closed stdout pipe ends the run quietly with exit 0, and
+`exit::conclude` maps the result to the exit status and, for a `--json`/`--jsonl` run that
+failed before writing anything, writes one `{"status":"error","code","error"}` object on
+stdout. `transcribe`'s three output modes live in one `BatchSink`. The statuses are listed in
+[add-cli-subcommand.md](recipes/add-cli-subcommand.md#4-exit-codes).
+
 **Build facts that bite:**
 
 - Bare `cargo build/test/clippy` in `src-tauri/` covers only the app (`default-members = ["."]`);
@@ -414,8 +424,10 @@ replaces the remaining source-text tests in the `ui` group with component tests.
   carries `settings_reloaded`. **Planned:** [#347](https://github.com/Magnus-Gille/sagascript/issues/347).
 - Commands return `Result<_, String>` and the frontend matches on message text. **Planned:**
   [#360](https://github.com/Magnus-Gille/sagascript/issues/360) (ADR 0006).
-- CLI output goes through `println!`/`eprintln!` and `run()` ends in `process::exit`.
-  **Planned:** [#364](https://github.com/Magnus-Gille/sagascript/issues/364).
+- Only some CLI subcommands offer `--json` (`list-models`, `config list`, `glossary list`,
+  `formats` and `config profiles list` do not), `--progress-json` events share stderr with prose
+  and `tracing`, and a second Ctrl-C still force-quits from the signal thread
+  (`cancel.rs`). Follow-ups of [#364](https://github.com/Magnus-Gille/sagascript/issues/364).
 - Whisper and Pianissimo are selected by hand (`LiveDictationBackend::new(whisper, pianissimo)`);
   there is no engine trait. **Planned:** [#378](https://github.com/Magnus-Gille/sagascript/issues/378).
 - `main.rs` and `commands.rs` will be split by domain

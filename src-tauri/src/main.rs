@@ -1009,7 +1009,7 @@ fn handle_hotkey_event(app: &tauri::AppHandle, shortcut: &str, state: hotkey::Ba
         }
     }
 }
-fn main() {
+fn main() -> std::process::ExitCode {
     // Remember panic messages so a lock recovered after a panic can name the
     // cause in its error log (ADR 0005); the default stderr report is kept.
     sagascript_core::sync::install_panic_recorder();
@@ -1035,8 +1035,7 @@ fn main() {
                 )))
                 .with_writer(std::io::stderr)
                 .init();
-            sagascript_cli::run(parsed);
-            return;
+            return sagascript_cli::run(parsed);
         }
     }
 
@@ -1695,6 +1694,7 @@ fn main() {
                 _ => {}
             }
         });
+    std::process::ExitCode::SUCCESS
 }
 
 /// Match the key AppKit uses to persist a named status item's menu-bar slot.

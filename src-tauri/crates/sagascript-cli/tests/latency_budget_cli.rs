@@ -416,3 +416,30 @@ fn missing_input_fails_without_echoing_private_path() {
     assert!(!stderr.contains(sentinel), "stderr echoed private sentinel");
     assert!(stdout.trim().is_empty(), "input errors must not emit JSON");
 }
+
+#[test]
+fn a_failed_budget_exits_with_the_check_failed_code() {
+    let mut entries = Vec::new();
+    for index in 0..20 {
+        sample_events(&mut entries, index, 1_000, 200, true, "succeeded");
+    }
+    let fixture = fixture(entries);
+    let failed = run_report(
+        &fixture.input,
+        &["--budget-length", "short", "--max-warm-p95-ms", "100"],
+    );
+    assert_eq!(failed.status.code(), Some(3), "stderr={:?}", failed.stderr);
+    assert_budget(&failed, false);
+    assert_eq!(
+        String::from_utf8_lossy(&failed.stderr),
+        "Error: Settings error: latency budget check failed\n"
+    );
+
+    let root = TempDir::new();
+    let missing = run_report(&root.join("missing-events.jsonl"), &[]);
+    assert_eq!(
+        missing.status.code(),
+        Some(1),
+        "input errors stay runtime failures"
+    );
+}

@@ -7,6 +7,8 @@ use sagascript_core::settings::{
 };
 use sagascript_core::transcription::Glossary;
 
+use crate::output::{errln, outln, Out};
+
 #[derive(Args)]
 pub struct ConfigArgs {
     #[command(subcommand)]
@@ -210,24 +212,30 @@ const VALID_KEYS: &[&str] = &[
     "engine_idle_unload_minutes",
 ];
 
-pub fn run(args: ConfigArgs) -> Result<(), DictationError> {
+pub fn run(args: ConfigArgs, out: &Out) -> Result<(), DictationError> {
     match args.action {
-        ConfigAction::List => cmd_list(),
-        ConfigAction::Get { key } => cmd_get(&key),
-        ConfigAction::Set { key, value } => cmd_set(&key, &value),
-        ConfigAction::Reset { key } => cmd_reset(key.as_deref()),
-        ConfigAction::Path => cmd_path(),
-        ConfigAction::Profiles { action } => cmd_profiles(action),
+        ConfigAction::List => cmd_list(out),
+        ConfigAction::Get { key } => cmd_get(&key, out),
+        ConfigAction::Set { key, value } => cmd_set(&key, &value, out),
+        ConfigAction::Reset { key } => cmd_reset(key.as_deref(), out),
+        ConfigAction::Path => cmd_path(out),
+        ConfigAction::Profiles { action } => cmd_profiles(action, out),
     }
 }
 
-fn cmd_profiles(action: ProfileAction) -> Result<(), DictationError> {
+fn cmd_profiles(action: ProfileAction, out: &Out) -> Result<(), DictationError> {
     match action {
         ProfileAction::List => {
-            println!(
+            outln!(
+                out,
                 "{:<16} {:<20} {:<28} {:<28} {:<28} {:<12} MODEL",
-                "ID", "NAME", "LEGACY", "PUSH-TO-TALK", "TOGGLE", "LANGUAGE"
-            );
+                "ID",
+                "NAME",
+                "LEGACY",
+                "PUSH-TO-TALK",
+                "TOGGLE",
+                "LANGUAGE"
+            )?;
             let settings = settings::store::load();
             for profile in settings.resolved_hotkey_profiles() {
                 let model = settings
@@ -238,7 +246,8 @@ fn cmd_profiles(action: ProfileAction) -> Result<(), DictationError> {
                 let model_id = serde_json::to_value(model)
                     .and_then(serde_json::from_value::<String>)
                     .map_err(|error| DictationError::SettingsError(error.to_string()))?;
-                println!(
+                outln!(
+                    out,
                     "{:<16} {:<20} {:<28} {:<28} {:<28} {:<12} {}",
                     profile.id,
                     profile.name,
@@ -247,7 +256,7 @@ fn cmd_profiles(action: ProfileAction) -> Result<(), DictationError> {
                     profile.toggle_shortcut.as_deref().unwrap_or("-"),
                     format_language(profile.language),
                     model_id,
-                );
+                )?;
             }
             Ok(())
         }
@@ -300,17 +309,17 @@ fn cmd_profiles(action: ProfileAction) -> Result<(), DictationError> {
                 push_to_talk_shortcut,
                 toggle_shortcut,
             });
-            print_notices(&persist_profiles(
-                profiles,
-                model.map(|choice| (id.as_str(), choice)),
-            )?);
-            eprintln!("Created profile {id}");
+            print_notices(
+                &persist_profiles(profiles, model.map(|choice| (id.as_str(), choice)))?,
+                out,
+            );
+            errln!(out, "Created profile {id}");
             for warning in hotkey_warnings
                 .into_iter()
                 .flatten()
                 .collect::<std::collections::HashSet<_>>()
             {
-                eprintln!("Warning: {warning}");
+                errln!(out, "Warning: {warning}");
             }
             Ok(())
         }
@@ -378,17 +387,17 @@ fn cmd_profiles(action: ProfileAction) -> Result<(), DictationError> {
             if let Some(language) = language {
                 profile.language = language;
             }
-            print_notices(&persist_profiles(
-                profiles,
-                model.map(|choice| (id.as_str(), choice)),
-            )?);
-            eprintln!("Updated profile {id}");
+            print_notices(
+                &persist_profiles(profiles, model.map(|choice| (id.as_str(), choice)))?,
+                out,
+            );
+            errln!(out, "Updated profile {id}");
             for warning in hotkey_warnings
                 .into_iter()
                 .flatten()
                 .collect::<std::collections::HashSet<_>>()
             {
-                eprintln!("Warning: {warning}");
+                errln!(out, "Warning: {warning}");
             }
             Ok(())
         }
@@ -407,9 +416,10 @@ fn cmd_profiles(action: ProfileAction) -> Result<(), DictationError> {
                 )));
             }
             persist_profiles(profiles, None)?;
-            eprintln!("Removed profile {id}");
+            errln!(out, "Removed profile {id}");
             if dictionary_kept {
-                eprintln!(
+                errln!(
+                    out,
                     "Its personal dictionary was kept. Inspect it with `sagascript glossary list --profile {id}` or remove it with `sagascript glossary clear --profile {id}`."
                 );
             }
@@ -456,108 +466,135 @@ fn persist_profiles(
     Ok(notices)
 }
 
-fn print_notices(notices: &[ModelResetNotice]) {
+fn print_notices(notices: &[ModelResetNotice], out: &Out) {
     for notice in notices {
-        eprintln!("Notice: {}", notice.message);
+        errln!(out, "Notice: {}", notice.message);
     }
 }
 
-fn cmd_list() -> Result<(), DictationError> {
+fn cmd_list(out: &Out) -> Result<(), DictationError> {
     let current = settings::store::load();
     let defaults = Settings::default();
 
-    println!("{:<20} {:<24} DEFAULT", "KEY", "CURRENT");
-    println!("{:<20} {:<24} -------", "---", "-------");
-    println!(
+    outln!(out, "{:<20} {:<24} DEFAULT", "KEY", "CURRENT")?;
+    outln!(out, "{:<20} {:<24} -------", "---", "-------")?;
+    outln!(
+        out,
         "{:<20} {:<24} {}",
         "language",
         get_setting_value(&current, "language"),
         get_setting_value(&defaults, "language")
-    );
-    println!(
+    )?;
+    outln!(
+        out,
         "{:<20} {:<24} {}",
         "whisper_model",
         get_setting_value(&current, "whisper_model"),
         get_setting_value(&defaults, "whisper_model")
-    );
-    println!(
+    )?;
+    outln!(
+        out,
         "{:<20} {:<24} {}",
         "file_transcription_model",
         format_file_model(current.file_transcription_model),
         format_file_model(defaults.file_transcription_model)
-    );
-    println!(
+    )?;
+    outln!(
+        out,
         "{:<20} {:<24} {}",
         "hotkey_mode",
         format_hotkey_mode(current.hotkey_mode),
         format_hotkey_mode(defaults.hotkey_mode)
-    );
-    println!(
+    )?;
+    outln!(
+        out,
         "{:<20} {:<24} {}",
-        "show_overlay", current.show_overlay, defaults.show_overlay
-    );
-    println!(
+        "show_overlay",
+        current.show_overlay,
+        defaults.show_overlay
+    )?;
+    outln!(
+        out,
         "{:<20} {:<24} {}",
-        "auto_paste", current.auto_paste, defaults.auto_paste
-    );
-    println!(
+        "auto_paste",
+        current.auto_paste,
+        defaults.auto_paste
+    )?;
+    outln!(
+        out,
         "{:<20} {:<24} {}",
         "auto_select_model",
         get_setting_value(&current, "auto_select_model"),
         get_setting_value(&defaults, "auto_select_model")
-    );
-    println!(
+    )?;
+    outln!(
+        out,
         "{:<20} {:<24} {}",
         "pianissimo_dictation",
         get_setting_value(&current, "pianissimo_dictation"),
         get_setting_value(&defaults, "pianissimo_dictation")
-    );
-    println!(
+    )?;
+    outln!(
+        out,
         "{:<20} {:<24} {}",
-        "hotkey", current.hotkey, defaults.hotkey
-    );
-    println!(
+        "hotkey",
+        current.hotkey,
+        defaults.hotkey
+    )?;
+    outln!(
+        out,
         "{:<20} {:<24} {}",
         "initial_prompt",
         get_setting_value(&current, "initial_prompt"),
         get_setting_value(&defaults, "initial_prompt")
-    );
-    println!(
+    )?;
+    outln!(
+        out,
         "{:<20} {:<24} {}",
-        "beam_size", current.beam_size, defaults.beam_size
-    );
-    println!(
+        "beam_size",
+        current.beam_size,
+        defaults.beam_size
+    )?;
+    outln!(
+        out,
         "{:<20} {:<24} {}",
-        "temperature_fallback", current.temperature_fallback, defaults.temperature_fallback
-    );
-    println!(
+        "temperature_fallback",
+        current.temperature_fallback,
+        defaults.temperature_fallback
+    )?;
+    outln!(
+        out,
         "{:<20} {:<24} {}",
-        "vad_enabled", current.vad_enabled, defaults.vad_enabled
-    );
-    println!(
+        "vad_enabled",
+        current.vad_enabled,
+        defaults.vad_enabled
+    )?;
+    outln!(
+        out,
         "{:<20} {:<24} {}",
         "engine_prewarm",
         current.engine_prewarm.id(),
         defaults.engine_prewarm.id()
-    );
-    println!(
+    )?;
+    outln!(
+        out,
         "{:<20} {:<24} {}",
         "engine_idle_unload_minutes",
         current.engine_idle_unload_minutes,
         defaults.engine_idle_unload_minutes
-    );
+    )?;
     Ok(())
 }
 
-fn cmd_get(key: &str) -> Result<(), DictationError> {
+fn cmd_get(key: &str, out: &Out) -> Result<(), DictationError> {
     validate_key(key)?;
     let settings = settings::store::load();
     let value = get_setting_value(&settings, key);
-    println!("{value}");
+    outln!(out, "{value}")?;
     Ok(())
 }
 
-fn cmd_set(key: &str, value: &str) -> Result<(), DictationError> {
+fn cmd_set(key: &str, value: &str, out: &Out) -> Result<(), DictationError> {
     validate_key(key)?;
     // Parse before acquiring the settings lock so invalid input never writes.
     let mut validation_target = settings::store::load();
@@ -578,10 +615,10 @@ fn cmd_set(key: &str, value: &str) -> Result<(), DictationError> {
     })
     .map_err(DictationError::SettingsError)?;
 
-    eprintln!("Set {key} = {}", get_setting_value(&settings, key));
-    print_notices(&notices);
+    errln!(out, "Set {key} = {}", get_setting_value(&settings, key));
+    print_notices(&notices, out);
     if let Some(warning) = setting_warning(key, &settings) {
-        eprintln!("Warning: {warning}");
+        errln!(out, "Warning: {warning}");
     }
     Ok(())
 }
@@ -777,7 +814,7 @@ fn append_legacy_hints(settings: &mut Settings, value: &str) -> Result<(), Dicta
     Ok(())
 }
 
-fn cmd_reset(key: Option<&str>) -> Result<(), DictationError> {
+fn cmd_reset(key: Option<&str>, out: &Out) -> Result<(), DictationError> {
     if let Some(key) = key {
         validate_key(key)?;
         let defaults = Settings::default();
@@ -789,7 +826,7 @@ fn cmd_reset(key: Option<&str>) -> Result<(), DictationError> {
                 .unwrap_or(0);
             profiles[index].shortcut = defaults.hotkey;
             persist_profiles(profiles, None)?;
-            eprintln!("Reset hotkey to {}", settings::store::load().hotkey);
+            errln!(out, "Reset hotkey to {}", settings::store::load().hotkey);
             return Ok(());
         }
         let mut notices = Vec::new();
@@ -801,15 +838,18 @@ fn cmd_reset(key: Option<&str>) -> Result<(), DictationError> {
             reset_setting_value(settings, key, &defaults)
         })
         .map_err(DictationError::SettingsError)?;
-        eprintln!("Reset {key} to {}", get_setting_value(&settings, key));
-        print_notices(&notices);
+        errln!(out, "Reset {key} to {}", get_setting_value(&settings, key));
+        print_notices(&notices, out);
     } else {
         settings::store::try_update(|current| {
             reset_all_settings(current)?;
             Ok(())
         })
         .map_err(DictationError::SettingsError)?;
-        eprintln!("All application settings reset to defaults; personal dictionaries preserved");
+        errln!(
+            out,
+            "All application settings reset to defaults; personal dictionaries preserved"
+        );
     }
     Ok(())
 }
@@ -915,8 +955,8 @@ fn reset_all_settings(current: &mut Settings) -> Result<(), String> {
     Ok(())
 }
 
-fn cmd_path() -> Result<(), DictationError> {
-    println!("{}", settings::store::settings_path().display());
+fn cmd_path(out: &Out) -> Result<(), DictationError> {
+    outln!(out, "{}", settings::store::settings_path().display())?;
     Ok(())
 }
 

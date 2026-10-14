@@ -32,8 +32,9 @@ const REPO_ROOT = fileURLToPath(new URL("..", import.meta.url));
 export const WORKSPACE_DIR = resolve(REPO_ROOT, "src-tauri");
 export const DEFAULT_BASELINE = resolve(WORKSPACE_DIR, "clippy-policy-baseline.json");
 
-// The policy. print_stdout/print_stderr will be allowed on the CLI output
-// layer (#364); until then the CLI's user-facing output is counted too.
+// The policy. The CLI writes its user-facing output through its output layer
+// (`sagascript_cli::output::Out`, #364), which uses `write!` rather than the
+// print macros, so print_stdout/print_stderr need no allow there.
 export const POLICY_LINTS = [
   "unwrap_used",
   "expect_used",
