@@ -1,0 +1,59 @@
+{
+  "description": "Clippy policy-lint findings in production code, per lint and crate (#356). CI fails when a count rises. Regenerate with `node scripts/clippy-policy.mjs --update` after lowering a count; see CONTRIBUTING.md.",
+  "counts": {
+    "unwrap_used": {
+      "sagascript": 0,
+      "sagascript-cli": 9,
+      "sagascript-core": 5,
+      "sagascript-engine-protocol": 0
+    },
+    "expect_used": {
+      "sagascript": 5,
+      "sagascript-cli": 40,
+      "sagascript-core": 26,
+      "sagascript-engine-protocol": 0
+    },
+    "panic": {
+      "sagascript": 0,
+      "sagascript-cli": 0,
+      "sagascript-core": 1,
+      "sagascript-engine-protocol": 0
+    },
+    "await_holding_lock": {
+      "sagascript": 0,
+      "sagascript-cli": 0,
+      "sagascript-core": 0,
+      "sagascript-engine-protocol": 0
+    },
+    "too_many_lines": {
+      "sagascript": 6,
+      "sagascript-cli": 7,
+      "sagascript-core": 6,
+      "sagascript-engine-protocol": 0
+    },
+    "cognitive_complexity": {
+      "sagascript": 0,
+      "sagascript-cli": 1,
+      "sagascript-core": 1,
+      "sagascript-engine-protocol": 0
+    },
+    "dbg_macro": {
+      "sagascript": 0,
+      "sagascript-cli": 0,
+      "sagascript-core": 0,
+      "sagascript-engine-protocol": 0
+    },
+    "print_stdout": {
+      "sagascript": 0,
+      "sagascript-cli": 62,
+      "sagascript-core": 0,
+      "sagascript-engine-protocol": 0
+    },
+    "print_stderr": {
+      "sagascript": 0,
+      "sagascript-cli": 94,
+      "sagascript-core": 6,
+      "sagascript-engine-protocol": 0
+    }
+  }
+}

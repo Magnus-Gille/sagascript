@@ -68,6 +68,10 @@ and website distribution.
 
 ### 2.1 Platform module — `src-tauri/src/platform/windows.rs`
 
+> **2026-10-12:** the stub module described here was never called and was removed in
+> [#356](https://github.com/Magnus-Gille/sagascript/issues/356); Windows code uses
+> `cfg(windows)` branches at the call sites instead. Kept as a historical plan.
+
 **Current state:** Empty file with two comment lines.
 
 **Required implementation:**

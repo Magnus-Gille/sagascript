@@ -82,7 +82,7 @@ npm run verify -- --list                 # every check with its commands, budget
 | Area (`--only`) | Checks | What runs (working directory) | Needs | CI lane |
 |---|---|---|---|---|
 | `fmt` | `fmt`, `fmt-ort` | `cargo fmt --all -- --check` and `cargo fmt --manifest-path engine-host/ort/Cargo.toml --all -- --check` (`src-tauri`) | Rust | test-linux |
-| `clippy` | `clippy-workspace`, `clippy-cli-lean`; `clippy-app` (fast set) | `cargo clippy --workspace --all-targets -- -D warnings`; `cargo clippy -p sagascript-cli --all-targets --no-default-features -- -D warnings` (`src-tauri`) | Rust; Linux libraries; `dist/` (workspace, app) | test-macos, test-linux, test-windows (per crate) |
+| `clippy` | `clippy-workspace`, `clippy-cli-lean`, `clippy-policy` (Linux); `clippy-app` (fast set) | `cargo clippy --workspace --all-targets -- -D warnings`; `cargo clippy -p sagascript-cli --all-targets --no-default-features -- -D warnings` (`src-tauri`); `node scripts/clippy-policy.mjs` (policy counts, see below) | Rust; Linux libraries; `dist/` (workspace, app, policy) | test-macos, test-linux, test-windows (per crate); policy: test-linux |
 | `rust-deps` | `cli-lean-deps` | `cargo tree -p sagascript-cli --no-default-features -e normal` contains no cpal/ALSA | Rust | test-linux |
 | `rust-test` | `test-workspace`, `test-cli-lean` | `cargo test --workspace`; `cargo test -p sagascript-cli --no-default-features` | Rust; Linux libraries; `dist/` (workspace) | workspace: test-macos, test-windows (`cargo test` and per crate); lean CLI: test-macos, test-linux |
 | `core-features` | `core-clippy`, `core-clippy-diarization`, `core-test`, `core-test-record`, `core-test-diarization` | `cargo clippy`/`cargo test -p sagascript-core` without features, with `record`, with `diarization` | Rust | test-macos, test-linux, test-windows |
@@ -151,6 +151,40 @@ feature gate, the lean-CLI checks code that compiles only with default features,
 - **Rust:** Prefer clarity over cleverness. Keep modules small and testable. Run `cargo fmt --all` (plus `cargo fmt --manifest-path engine-host/ort/Cargo.toml --all` for the separate ORT host workspace) before committing; CI rejects unformatted code (`src-tauri/rustfmt.toml`).
 - **Svelte 5:** Use runes (`$state`, `$effect`), not legacy stores.
 - **No hardcoded secrets** -- ever.
+
+### Clippy policy lints
+
+The clippy gate above (`-D warnings`) uses clippy's default lints. On top of it, CI counts a
+stricter set of policy lints in production code and fails when any count rises
+([#356](https://github.com/Magnus-Gille/sagascript/issues/356)): `unwrap_used`, `expect_used`,
+`panic`, `await_holding_lock`, `too_many_lines` (over 150 lines), `cognitive_complexity`
+(over 30), `dbg_macro`, `print_stdout` and `print_stderr`. They are not in
+`[workspace.lints]`, because the existing findings would fail the `-D warnings` gate.
+
+- **Check:** `node scripts/clippy-policy.mjs` from the repo root, or
+  `npm run verify -- --only clippy-policy` (CI: test-linux; verify runs it on Linux only). It runs
+  clippy with only these lints on the whole workspace and on the batch-only CLI
+  (`-p sagascript-cli --no-default-features`), prints a lint by crate table (baseline, now,
+  delta) and exits non-zero if a count is above `src-tauri/clippy-policy-baseline.json`,
+  listing where that lint currently fires in that crate. It also fails when clippy reports a
+  policy lint as renamed or unknown (a toolchain bump), instead of reading that as zero.
+- **What counts:** the lib and bin targets of the workspace crates; not tests, examples,
+  benches or build scripts. Each source location counts once. Only the platform it runs on is
+  measured, so code behind `cfg(target_os = "macos")` or `cfg(target_os = "windows")` is not
+  counted. `src-tauri/clippy.toml` sets the size thresholds and lets tests unwrap, expect,
+  panic and print.
+- **New code:** return or handle the error (`?`, `map_err`, a fallback) instead of `unwrap`
+  or `expect`, and split long functions. If an `expect` guards a real invariant, mark it
+  `#[expect(clippy::expect_used, reason = "...")]`; reviewers treat the reason like code.
+  The CLI's user-facing output will get a scoped allow for the print lints
+  ([#364](https://github.com/Magnus-Gille/sagascript/issues/364)).
+- **Lowering the baseline:** after removing findings, run
+  `node scripts/clippy-policy.mjs --update` and commit the baseline in the same PR. `--update`
+  refuses to raise a count; `--update --allow-increase` does, and the PR must say why.
+- **Zero means deny:** when a crate reaches zero for a lint, add the lint to the
+  `#![deny(...)]` list in its crate roots so the regular gate enforces it on every platform
+  (`sagascript-engine-protocol` denies all of them). Zero is measured on Linux only, so the
+  macOS and Windows clippy jobs confirm a new deny.
 
 ### CLI-first design rule
 

@@ -366,7 +366,8 @@ CI (`.github/workflows/ci.yml`) splits cargo per crate and feature set: test-lin
 `cargo fmt --check` gates, `cargo deny check` for both Cargo workspaces (`src-tauri/deny.toml`:
 advisories, licenses, a single `reqwest`, allowed sources), app `check`/`clippy`, the CLI with
 and without default features, core with no features and with `record`, the protocol crate, ORT
-host test/clippy, the release-profile guard and the no-ALSA tree check; msrv-linux runs `cargo
+host test/clippy, the release-profile guard, the no-ALSA tree check and the clippy policy
+counts (`scripts/clippy-policy.mjs`, which must not rise); msrv-linux runs `cargo
 check --workspace --locked`, the lean CLI and the ORT host on the `rust-version` toolchain
 (1.88), and check-linux requires it; test-macos runs `npm audit --audit-level=high`, app
 `check`/`test`/`clippy`, core with no features and with `diarization`, the CLI both ways, Swift

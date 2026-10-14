@@ -96,7 +96,7 @@ impl OperationalHotkey {
 
 /// Process-wide hotkey registration health.
 ///
-/// Deliberately NOT folded into `AppController`/`HotkeyService`: routing
+/// Deliberately NOT folded into `AppController`: routing
 /// registration outcomes through the controller mutex — which is already
 /// locked from the global-shortcut handler, the settings-watcher thread, and
 /// the `set_hotkey` command — would risk lock-ordering deadlocks for no real
