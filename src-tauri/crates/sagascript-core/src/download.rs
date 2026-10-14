@@ -255,56 +255,58 @@ async fn fetch_to_tmp(
     progress_callback: impl Fn(u64, u64) + Send + 'static,
 ) -> Result<TmpFileGuard, DictationError> {
     let deadline = tokio::time::Instant::now() + limits.total_deadline(integrity.size);
-    match tokio::time::timeout_at(
-        deadline,
-        fetch_inner(
-            url,
+    let fetch = async {
+        let client = build_client(limits.connect_timeout)?;
+        let response = open_response(&client, url, limits).await?;
+        stream_to_tmp(
+            response,
             tmp_path,
             integrity,
             expected_magic,
             limits,
             deadline,
             progress_callback,
-        ),
-    )
-    .await
-    {
+        )
+        .await
+    };
+    match tokio::time::timeout_at(deadline, fetch).await {
         Ok(result) => result,
         Err(_) => Err(total_err(limits, integrity.size)),
     }
 }
 
-async fn fetch_inner(
-    url: &str,
-    tmp_path: &Path,
-    integrity: DownloadIntegrity,
-    expected_magic: Option<&[u8]>,
-    limits: DownloadLimits,
-    deadline: tokio::time::Instant,
-    // Called synchronously after every chunk; it must be cheap and
-    // non-blocking, since it holds up the transfer (and cannot be pre-empted).
-    progress_callback: impl Fn(u64, u64) + Send + 'static,
-) -> Result<TmpFileGuard, DictationError> {
-    let expired = || tokio::time::Instant::now() >= deadline;
-    let idle_err = || {
-        DictationError::ModelDownloadFailed(format!(
-            "Download stalled: no data received for {}s",
-            limits.idle_timeout.as_secs()
-        ))
-    };
-    let failed =
-        |e: reqwest::Error| DictationError::ModelDownloadFailed(format!("Download failed: {e}"));
+fn download_failed(e: reqwest::Error) -> DictationError {
+    DictationError::ModelDownloadFailed(format!("Download failed: {e}"))
+}
 
-    // Redirects are followed manually so the header-phase idle timeout applies
-    // per hop rather than to the whole chain; the total deadline is shared.
-    let client = reqwest::Client::builder()
+fn idle_err(limits: DownloadLimits) -> DictationError {
+    DictationError::ModelDownloadFailed(format!(
+        "Download stalled: no data received for {}s",
+        limits.idle_timeout.as_secs()
+    ))
+}
+
+/// HTTP client for model downloads. Redirects are followed manually (see
+/// [`open_response`]).
+fn build_client(connect_timeout: Duration) -> Result<reqwest::Client, DictationError> {
+    reqwest::Client::builder()
         // The platform TLS stack, whatever else in the binary enables
         // rustls (the macOS updater does); see this crate's Cargo.toml.
         .tls_backend_native()
-        .connect_timeout(limits.connect_timeout)
+        .connect_timeout(connect_timeout)
         .redirect(reqwest::redirect::Policy::none())
         .build()
-        .map_err(failed)?;
+        .map_err(download_failed)
+}
+
+/// Send the request and follow redirects up to a successful response.
+async fn open_response(
+    client: &reqwest::Client,
+    url: &str,
+    limits: DownloadLimits,
+) -> Result<reqwest::Response, DictationError> {
+    // Redirects are followed manually so the header-phase idle timeout applies
+    // per hop rather than to the whole chain; the total deadline is shared.
     let mut current = reqwest::Url::parse(url)
         .map_err(|e| DictationError::ModelDownloadFailed(format!("Invalid download URL: {e}")))?;
     let mut hops = 0;
@@ -312,8 +314,8 @@ async fn fetch_inner(
         let response =
             tokio::time::timeout(limits.idle_timeout, client.get(current.clone()).send())
                 .await
-                .map_err(|_| idle_err())?
-                .map_err(failed)?;
+                .map_err(|_| idle_err(limits))?
+                .map_err(download_failed)?;
         if !response.status().is_redirection() {
             break response;
         }
@@ -346,7 +348,23 @@ async fn fetch_inner(
             response.status()
         )));
     }
+    Ok(response)
+}
 
+/// Stream a successful response into a new temp file at `tmp_path` and
+/// validate it. The returned guard owns the temp file.
+async fn stream_to_tmp(
+    response: reqwest::Response,
+    tmp_path: &Path,
+    integrity: DownloadIntegrity,
+    expected_magic: Option<&[u8]>,
+    limits: DownloadLimits,
+    deadline: tokio::time::Instant,
+    // Called synchronously after every chunk; it must be cheap and
+    // non-blocking, since it holds up the transfer (and cannot be pre-empted).
+    progress_callback: impl Fn(u64, u64) + Send + 'static,
+) -> Result<TmpFileGuard, DictationError> {
+    let expired = || tokio::time::Instant::now() >= deadline;
     let content_length = response.content_length();
     if let Some(len) = content_length {
         if len != integrity.size {
@@ -378,7 +396,7 @@ async fn fetch_inner(
     loop {
         let chunk = match tokio::time::timeout(limits.idle_timeout, stream.next())
             .await
-            .map_err(|_| idle_err())?
+            .map_err(|_| idle_err(limits))?
         {
             None => break,
             Some(c) => {
