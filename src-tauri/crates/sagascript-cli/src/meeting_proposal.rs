@@ -273,59 +273,19 @@ fn io_error(action: &str, error: io::Error) -> DictationError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sagascript_core::meeting::{MeetingSegmentInput, MeetingSpeaker};
     use sagascript_core::meeting_review::{CorrectionFile, MeetingReview, REVIEW_SCHEMA_VERSION};
+    use sagascript_core::test_support::meeting_transcript;
+    use sagascript_testsupport::TempDir;
     use serde_json::json;
 
-    struct TempDir {
-        path: PathBuf,
-    }
-
-    impl TempDir {
-        fn new() -> Self {
-            let nonce = uuid::Uuid::new_v4();
-            let path = std::env::temp_dir().join(format!("sagascript-proposal-{nonce}"));
-            fs::create_dir(&path).expect("temp dir");
-            Self { path }
-        }
-
-        fn path(&self, name: &str) -> PathBuf {
-            self.path.join(name)
-        }
-    }
-
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.path);
-        }
-    }
-
     fn transcript(source: &str, first_text: &str) -> MeetingTranscript {
-        MeetingTranscript::new(
-            source,
-            "en",
-            "tiny",
-            2.0,
-            vec![
-                MeetingSegmentInput {
-                    start: 0.0,
-                    end: 1.0,
-                    text: first_text.into(),
-                    speaker: "speaker-a".into(),
-                },
-                MeetingSegmentInput {
-                    start: 1.0,
-                    end: 2.0,
-                    text: "world".into(),
-                    speaker: "speaker-a".into(),
-                },
-            ],
-            vec![MeetingSpeaker {
-                id: "speaker-a".into(),
-                label: "Alice".into(),
-            }],
-        )
-        .expect("valid transcript")
+        meeting_transcript()
+            .source_sha256(source)
+            .duration(2.0)
+            .segment(0.0, 1.0, first_text, "speaker-a")
+            .segment(1.0, 2.0, "world", "speaker-a")
+            .speaker("speaker-a", "Alice")
+            .build()
     }
 
     fn edit(segment_id: &str, text: &str) -> CorrectionOperation {
@@ -356,13 +316,13 @@ mod tests {
     #[test]
     fn proposal_roundtrip_resolve_preview_and_accept() {
         let temp = TempDir::new();
-        let previous_path = temp.path("previous.json");
-        let proposed_path = temp.path("proposed.json");
-        let proposal_path = temp.path("proposal.json");
-        let resolved_path = temp.path("resolved.json");
-        let current_path = temp.path("current.json");
-        let accepted_path = temp.path("accepted.json");
-        let operations_path = temp.path("operations.json");
+        let previous_path = temp.join("previous.json");
+        let proposed_path = temp.join("proposed.json");
+        let proposal_path = temp.join("proposal.json");
+        let resolved_path = temp.join("resolved.json");
+        let current_path = temp.join("current.json");
+        let accepted_path = temp.join("accepted.json");
+        let operations_path = temp.join("operations.json");
 
         let previous = previous_review();
         let proposed = transcript(&"a".repeat(64), "hello");
@@ -426,9 +386,9 @@ mod tests {
             transcript(&"b".repeat(64), "hello"),
         )
         .expect("proposal");
-        let proposal_path = temp.path("proposal.json");
-        let current_path = temp.path("current.json");
-        let output_path = temp.path("accepted.json");
+        let proposal_path = temp.join("proposal.json");
+        let current_path = temp.join("current.json");
+        let output_path = temp.join("accepted.json");
         write_fixture(&proposal_path, &proposal);
         write_fixture(&current_path, &previous);
         let error = run(ProposalArgs {
@@ -455,7 +415,7 @@ mod tests {
         let resolved = proposal
             .resolve(&proposal.revision, 0, vec![edit("seg-000001", "explicit")])
             .expect("explicit resolution");
-        let resolved_path = temp.path("resolved.json");
+        let resolved_path = temp.join("resolved.json");
         write_fixture(&resolved_path, &resolved);
         write_fixture(&current_path, &changed);
         let error = run(ProposalArgs {
@@ -473,14 +433,14 @@ mod tests {
     #[test]
     fn existing_destination_and_hardlink_alias_are_unchanged() {
         let temp = TempDir::new();
-        let destination = temp.path("destination.json");
+        let destination = temp.join("destination.json");
         fs::write(&destination, b"keep me").expect("destination");
         let error = write_atomic_new(&destination, b"replace me").expect_err("existing");
         assert!(error.to_string().contains("already exists"));
         assert_eq!(fs::read(&destination).expect("read"), b"keep me");
 
-        let source = temp.path("source.json");
-        let alias = temp.path("alias.json");
+        let source = temp.join("source.json");
+        let alias = temp.join("alias.json");
         fs::write(&source, b"source").expect("source");
         fs::hard_link(&source, &alias).expect("hardlink");
         let error = write_atomic_new(&alias, b"new").expect_err("hardlink alias");
@@ -492,14 +452,14 @@ mod tests {
     #[test]
     fn io_failure_preserves_input_and_successful_output_is_private() {
         let temp = TempDir::new();
-        let input = temp.path("input.json");
-        let output = temp.path("missing").join("proposal.json");
+        let input = temp.join("input.json");
+        let output = temp.join("missing").join("proposal.json");
         fs::write(&input, b"unchanged").expect("input");
         let error = write_atomic_new(&output, b"output").expect_err("missing parent");
         assert!(error.to_string().contains("output folder"));
         assert_eq!(fs::read(&input).expect("input preserved"), b"unchanged");
 
-        let saved = temp.path("saved.json");
+        let saved = temp.join("saved.json");
         write_json_new(&saved, &json!({"ok": true})).expect("saved");
         #[cfg(unix)]
         {

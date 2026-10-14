@@ -122,31 +122,13 @@ pub(crate) fn write_private_new(path: &Path, value: &impl Serialize) -> Result<(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sagascript_testsupport::TempDir;
     use std::fs;
-    use std::path::PathBuf;
-
-    struct TestDirectory(PathBuf);
-
-    impl TestDirectory {
-        fn new() -> Self {
-            let path =
-                std::env::temp_dir().join(format!("sagascript-quality-{}", uuid::Uuid::new_v4()));
-            fs::create_dir(&path).unwrap();
-            Self(path)
-        }
-    }
-
-    impl Drop for TestDirectory {
-        fn drop(&mut self) {
-            fs::remove_dir_all(&self.0)
-                .expect("remove only this test's unique temporary directory");
-        }
-    }
 
     #[test]
     fn explicitly_requested_export_is_utf8_json_in_a_new_file() {
-        let directory = TestDirectory::new();
-        let path = directory.0.join("quality.json");
+        let directory = TempDir::new();
+        let path = directory.join("quality.json");
         let value = serde_json::json!({"text": "Åäö\nexample", "schema_version": 1});
         ensure_unused_destination(&path).unwrap();
         write_private_new(&path, &value).unwrap();
@@ -168,17 +150,17 @@ mod tests {
 
     #[test]
     fn existing_file_directory_and_symlink_are_never_overwritten() {
-        let directory = TestDirectory::new();
-        let path = directory.0.join("existing.json");
+        let directory = TempDir::new();
+        let path = directory.join("existing.json");
         fs::write(&path, b"preserve original bytes").unwrap();
         let value = serde_json::json!({"text": "replacement"});
         assert!(ensure_unused_destination(&path).is_err());
         assert!(write_private_new(&path, &value).is_err());
         assert_eq!(fs::read(&path).unwrap(), b"preserve original bytes");
-        assert!(write_private_new(&directory.0, &value).is_err());
+        assert!(write_private_new(&directory, &value).is_err());
         #[cfg(unix)]
         {
-            let link = directory.0.join("link.json");
+            let link = directory.join("link.json");
             std::os::unix::fs::symlink(&path, &link).unwrap();
             assert!(ensure_unused_destination(&link).is_err());
             assert!(write_private_new(&link, &value).is_err());
@@ -188,8 +170,8 @@ mod tests {
 
     #[test]
     fn file_created_after_preflight_is_preserved() {
-        let directory = TestDirectory::new();
-        let path = directory.0.join("raced.json");
+        let directory = TempDir::new();
+        let path = directory.join("raced.json");
         ensure_unused_destination(&path).unwrap();
         fs::write(&path, b"another writer won").unwrap();
         assert!(write_private_new(&path, &serde_json::json!({"text": "new"})).is_err());
@@ -198,8 +180,8 @@ mod tests {
 
     #[test]
     fn missing_parent_is_not_created_implicitly() {
-        let directory = TestDirectory::new();
-        let parent = directory.0.join("missing");
+        let directory = TempDir::new();
+        let parent = directory.join("missing");
         assert!(ensure_unused_destination(&parent.join("quality.json")).is_err());
         assert!(write_private_new(&parent.join("quality.json"), &serde_json::json!({})).is_err());
         assert!(!parent.exists());
@@ -207,8 +189,8 @@ mod tests {
 
     #[test]
     fn oversized_report_fails_before_creating_a_file() {
-        let directory = TestDirectory::new();
-        let path = directory.0.join("too-large.json");
+        let directory = TempDir::new();
+        let path = directory.join("too-large.json");
         let value = "x".repeat(MAX_REPORT_BYTES);
         assert!(write_private_new(&path, &value).is_err());
         assert!(!path.exists());
@@ -224,8 +206,8 @@ mod tests {
                 ))
             }
         }
-        let directory = TestDirectory::new();
-        let path = directory.0.join("invalid.json");
+        let directory = TempDir::new();
+        let path = directory.join("invalid.json");
         let error = write_private_new(&path, &Unserializable).unwrap_err();
         assert!(error
             .to_string()
@@ -235,9 +217,9 @@ mod tests {
 
     #[test]
     fn byte_digest_is_independent_of_file_name_and_detects_changes() {
-        let directory = TestDirectory::new();
-        let first = directory.0.join("a");
-        let second = directory.0.join("b");
+        let directory = TempDir::new();
+        let first = directory.join("a");
+        let second = directory.join("b");
         fs::write(&first, b"abc").unwrap();
         fs::write(&second, b"abc").unwrap();
         let digest = input_digest(&first).unwrap();

@@ -904,9 +904,8 @@ mod tests {
 
     #[test]
     fn manpage_renders_all_subcommands_to_dir() {
-        let dir =
-            std::env::temp_dir().join(format!("sagascript-man-test-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let temp = sagascript_testsupport::TempDir::new();
+        let dir = temp.path().to_path_buf();
 
         let cmd = Cli::command();
         render_manpage_tree(&cmd, &dir).expect("man page tree should render");
@@ -941,8 +940,6 @@ mod tests {
         for name in config_subs {
             assert!(dir.join(name).exists(), "missing config man page: {name}");
         }
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // -- Help text content --

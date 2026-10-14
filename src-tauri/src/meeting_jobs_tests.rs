@@ -2,60 +2,19 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use sagascript_core::meeting::{
-    MeetingExportFormat, MeetingSegmentInput, MeetingSpeaker, MeetingTranscript,
-};
+use sagascript_core::meeting::{MeetingExportFormat, MeetingTranscript};
+use sagascript_core::test_support::meeting_transcript;
+use sagascript_testsupport::TempDir;
 
 use super::*;
 
-struct ScratchDir {
-    path: PathBuf,
-}
-
-impl ScratchDir {
-    fn new() -> Self {
-        let path = std::env::temp_dir().join(format!(
-            "sagascript-meeting-jobs-test-{}",
-            uuid::Uuid::new_v4()
-        ));
-        std::fs::create_dir(&path).expect("create unique meeting test directory");
-        Self { path }
-    }
-
-    fn path(&self) -> &Path {
-        &self.path
-    }
-}
-
-impl Drop for ScratchDir {
-    fn drop(&mut self) {
-        let Some(name) = self.path.file_name().and_then(|name| name.to_str()) else {
-            return;
-        };
-        if name.starts_with("sagascript-meeting-jobs-test-") && self.path.is_dir() {
-            let _ = std::fs::remove_dir_all(&self.path);
-        }
-    }
-}
-
 fn valid_transcript() -> MeetingTranscript {
-    MeetingTranscript::new(
-        "a".repeat(64),
-        "en",
-        "whisper-base",
-        3.0,
-        vec![MeetingSegmentInput {
-            start: 0.0,
-            end: 1.0,
-            text: "Hello meeting".into(),
-            speaker: "speaker-1".into(),
-        }],
-        vec![MeetingSpeaker {
-            id: "speaker-1".into(),
-            label: "Speaker 1".into(),
-        }],
-    )
-    .expect("valid meeting fixture")
+    meeting_transcript()
+        .model("whisper-base")
+        .duration(3.0)
+        .segment(0.0, 1.0, "Hello meeting", "speaker-1")
+        .speaker("speaker-1", "Speaker 1")
+        .build()
 }
 
 fn snapshot(id: &str, status: JobStatus) -> MeetingSnapshot {
@@ -289,7 +248,7 @@ fn export_formats_use_the_core_format_mapping() {
 
 #[test]
 fn write_new_export_writes_exact_bytes_and_never_replaces_existing_files() {
-    let scratch = ScratchDir::new();
+    let scratch = TempDir::new();
     let destination = scratch.path().join("meeting.txt");
     let bytes = b"exact export\n\0bytes";
     write_new_export(&destination, bytes).expect("publish new export");
@@ -310,7 +269,7 @@ fn write_new_export_writes_exact_bytes_and_never_replaces_existing_files() {
 #[cfg(unix)]
 #[test]
 fn write_new_export_refuses_existing_symlink_without_changing_target_or_link() {
-    let scratch = ScratchDir::new();
+    let scratch = TempDir::new();
     let target = scratch.path().join("target.txt");
     let link = scratch.path().join("meeting.txt");
     std::fs::write(&target, b"target bytes").expect("create symlink target");
@@ -331,7 +290,7 @@ fn write_new_export_refuses_existing_symlink_without_changing_target_or_link() {
 
 #[test]
 fn write_new_export_leaves_no_partial_file_for_invalid_destinations() {
-    let scratch = ScratchDir::new();
+    let scratch = TempDir::new();
     let missing_parent = scratch.path().join("missing").join("meeting.txt");
     assert!(write_new_export(&missing_parent, b"bytes").is_err());
     assert!(!missing_parent.exists());

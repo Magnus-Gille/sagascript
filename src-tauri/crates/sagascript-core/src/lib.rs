@@ -25,3 +25,7 @@ pub mod transcription;
 
 #[cfg(feature = "diarization")]
 pub mod diarization;
+
+/// Test fixtures made of core types (#363); see the module documentation.
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support;
