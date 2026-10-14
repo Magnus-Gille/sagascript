@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use sagascript_core::diarization::{model::DiarizationModel, DiarizationAnalysis, DiarizeConfig};
 use sagascript_core::error::DictationError;
+use sagascript_core::fsutil::{self, PublishError, PublishErrorKind};
 use sagascript_core::transcription::diagnostics::{
     CoverageProfile, LanguageDetection, LanguageRegionDiagnostics,
 };
@@ -451,51 +452,59 @@ pub(crate) fn save(path: &Path, cache: &DiarizationCache) -> Result<(), Dictatio
     write_result
 }
 
-/// Persist a newly recomputed cache without ever replacing an existing path.
-/// The temporary file is created beside the destination, synced, then linked
-/// into place; hard-link creation is the no-replace commit point.
+/// Persist a newly recomputed cache without ever replacing an existing path:
+/// [`fsutil::publish_new`], so the file appears complete or not at all.
 pub(crate) fn save_new(path: &Path, cache: &DiarizationCache) -> Result<(), DictationError> {
-    let temp_path = cache_temp_path(path);
-    let write_result = (|| {
-        let mut options = OpenOptions::new();
-        options.create_new(true).write(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
-        }
-        let mut file = options
-            .open(&temp_path)
-            .map_err(|error| cache_error(path, "create new", error))?;
-        serde_json::to_writer(&mut file, cache).map_err(|error| {
-            DictationError::FileDecodeError(format!(
-                "Failed to serialize new diarization cache {}: {error}",
-                path.display()
-            ))
-        })?;
-        file.write_all(b"\n")
-            .map_err(|error| cache_error(path, "write new", error))?;
-        file.sync_all()
-            .map_err(|error| cache_error(path, "sync new", error))?;
-        match std::fs::hard_link(&temp_path, path) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                return Err(DictationError::FileDecodeError(format!(
-                    "Diarization cache output already exists: {}",
-                    path.display()
-                )));
-            }
-            Err(error) => return Err(cache_error(path, "commit new", error)),
-        }
-        std::fs::remove_file(&temp_path).map_err(|error| {
-            cache_error(path, "clean temporary (output was already saved)", error)
-        })?;
-        Ok(())
-    })();
-    if write_result.is_err() {
-        let _ = std::fs::remove_file(&temp_path);
+    let mut bytes = serde_json::to_vec(cache).map_err(|error| {
+        DictationError::FileDecodeError(format!(
+            "Failed to serialize new diarization cache {}: {error}",
+            path.display()
+        ))
+    })?;
+    bytes.push(b'\n');
+    let published =
+        fsutil::publish_new(path, &bytes).map_err(|error| publish_error(path, &error))?;
+    match published.leftover {
+        None => Ok(()),
+        // The cache is complete, but a private second name of it remains.
+        Some(leftover) => Err(DictationError::FileDecodeError(format!(
+            "Failed to clean temporary diarization cache {} (output was already saved): {}: {}",
+            path.display(),
+            leftover.path.display(),
+            leftover.error
+        ))),
     }
-    write_result
+}
+
+/// The error a failed [`save_new`] or cache publication reports; `path` is the
+/// destination the caller asked for.
+pub(crate) fn publish_error(path: &Path, error: &PublishError) -> DictationError {
+    let cleanup = match &error.leftover {
+        Some(leftover) => format!(
+            "; its private temporary file {} could not be removed: {}",
+            leftover.path.display(),
+            leftover.error
+        ),
+        None => String::new(),
+    };
+    match &error.kind {
+        PublishErrorKind::AlreadyExists => DictationError::FileDecodeError(format!(
+            "Diarization cache output already exists: {}{cleanup}",
+            path.display()
+        )),
+        PublishErrorKind::Commit(source) => DictationError::FileDecodeError(format!(
+            "Failed to commit new diarization cache {}: {source}{cleanup}",
+            path.display()
+        )),
+        PublishErrorKind::Stage(source) => DictationError::FileDecodeError(format!(
+            "Failed to write new diarization cache {}: {source}{cleanup}",
+            path.display()
+        )),
+        other => DictationError::FileDecodeError(format!(
+            "Failed to create new diarization cache {}: {other}{cleanup}",
+            path.display()
+        )),
+    }
 }
 
 fn sha256_file(path: &Path) -> Result<String, DictationError> {

@@ -104,7 +104,7 @@ fn staging_files(path: &Path) -> Vec<PathBuf> {
             entry
                 .file_name()
                 .and_then(|name| name.to_str())
-                .is_some_and(|name| name.starts_with(".sagascript-export-"))
+                .is_some_and(|name| name.starts_with('.') && name.ends_with(".tmp"))
         })
         .collect()
 }

@@ -4,12 +4,13 @@
 //! module only reads validated JSON and publishes user-selected outputs; it
 //! does not infer, select, or persist any work plan.
 
-use std::fs::{self, File, OpenOptions};
-use std::io::{self, Read, Write};
+use std::fs::{self, File};
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 use clap::{Args, Subcommand};
 use sagascript_core::error::DictationError;
+use sagascript_core::fsutil::{self, PublishError, PublishErrorKind};
 use sagascript_core::meeting::MeetingTranscript;
 use sagascript_core::meeting_reprocess_proposal::{
     MeetingReprocessingProposal, ProposalError, MAX_SERIALIZED_PROPOSAL_BYTES,
@@ -176,9 +177,14 @@ fn read_bounded(path: &Path, limit: usize, kind: &str) -> Result<Vec<u8>, Dictat
 }
 
 pub(crate) fn write_json_new<T: Serialize>(path: &Path, value: &T) -> Result<(), DictationError> {
+    write_atomic_new(path, &json_line(value)?)
+}
+
+/// The serialized document: compact JSON and a newline.
+fn json_line<T: Serialize>(value: &T) -> Result<Vec<u8>, DictationError> {
     let mut bytes = serde_json::to_vec(value).map_err(|_| serialization_error())?;
     bytes.push(b'\n');
-    write_atomic_new(path, &bytes)
+    Ok(bytes)
 }
 
 /// Read a validated proposal selected by a caller such as the desktop UI.
@@ -186,66 +192,59 @@ pub fn read_proposal(path: &Path) -> Result<MeetingReprocessingProposal, Dictati
     read_json(path, MAX_SERIALIZED_PROPOSAL_BYTES, "proposal")
 }
 
+/// Publish `bytes` as the new file `path` ([`fsutil::publish_new`]). A private
+/// temporary file that outlives a successful publication fails the call, as
+/// every single-file caller reports it rather than ignoring a stray copy.
 fn write_atomic_new(path: &Path, bytes: &[u8]) -> Result<(), DictationError> {
-    let parent = path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."));
-    let parent_metadata = fs::metadata(parent)
-        .map_err(|error| io_error("meeting output folder could not be inspected", error))?;
-    if !parent_metadata.is_dir() {
-        return Err(DictationError::FileDecodeError(
-            "meeting output folder must be a directory".into(),
-        ));
+    let published = fsutil::publish_new(path, bytes).map_err(|error| publish_error(&error))?;
+    match published.leftover {
+        None => Ok(()),
+        Some(leftover) => Err(DictationError::FileDecodeError(format!(
+            "meeting output was saved but its private temporary file {} could not be removed: {}",
+            leftover.path.display(),
+            truncated(&leftover.error)
+        ))),
     }
+}
 
-    let temporary = parent.join(format!(
-        ".sagascript-meeting-proposal-{}.tmp",
-        uuid::Uuid::new_v4()
-    ));
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-
-    let mut file = options
-        .open(&temporary)
-        .map_err(|error| io_error("meeting output could not be created", error))?;
-    let result = file
-        .write_all(bytes)
-        .and_then(|()| file.sync_all())
-        .and_then(|()| fs::hard_link(&temporary, path));
-    drop(file);
-    let cleanup = fs::remove_file(&temporary);
-    match (result, cleanup) {
-        (Ok(()), Ok(())) => Ok(()),
-        (Err(error), Ok(())) if error.kind() == io::ErrorKind::AlreadyExists => {
-            Err(DictationError::FileDecodeError(
-                "meeting output already exists; no existing file was changed".into(),
-            ))
+/// The error for a publication that did not happen; no existing file was
+/// changed, and a staging file that could not be removed is named.
+pub(crate) fn publish_error(error: &PublishError) -> DictationError {
+    let kind_message = match &error.kind {
+        PublishErrorKind::AlreadyExists => {
+            "meeting output already exists; no existing file was changed".to_string()
         }
-        (Err(error), Ok(())) => Err(io_error("meeting output could not be published", error)),
-        (Ok(()), Err(error)) => Err(io_error(
-            "meeting output was saved but its private temporary file could not be removed",
-            error,
-        )),
-        (Err(error), Err(cleanup_error)) => Err(io_error(
-            "meeting output could not be published or its private temporary file removed",
-            io::Error::new(
-                error.kind(),
-                format!("{}; cleanup: {}", error, cleanup_error),
-            ),
+        PublishErrorKind::NoFileName => {
+            "meeting output could not be created: the destination has no file name".to_string()
+        }
+        PublishErrorKind::ParentUnavailable(source) => {
+            io_context("meeting output folder could not be inspected", source)
+        }
+        PublishErrorKind::ParentNotDirectory => {
+            "meeting output folder must be a directory".to_string()
+        }
+        PublishErrorKind::Stage(source) => {
+            io_context("meeting output could not be created", source)
+        }
+        PublishErrorKind::NothingStaged => {
+            "meeting output could not be published: nothing was staged".to_string()
+        }
+        PublishErrorKind::Commit(source) => {
+            io_context("meeting output could not be published", source)
+        }
+    };
+    match &error.leftover {
+        None => DictationError::FileDecodeError(kind_message),
+        Some(leftover) => DictationError::FileDecodeError(format!(
+            "{kind_message}; its private temporary file {} could not be removed: {}",
+            leftover.path.display(),
+            truncated(&leftover.error)
         )),
     }
 }
 
 fn write_stdout_json<T: Serialize>(value: &T, out: &Out) -> Result<(), DictationError> {
-    let mut bytes = serde_json::to_vec(value).map_err(|_| serialization_error())?;
-    bytes.push(b'\n');
-    Ok(out.bytes(&bytes)?)
+    Ok(out.bytes(&json_line(value)?)?)
 }
 
 fn proposal_transform_error(_error: ProposalError) -> DictationError {
@@ -261,12 +260,19 @@ fn serialization_error() -> DictationError {
 }
 
 fn io_error(action: &str, error: io::Error) -> DictationError {
-    let context = error
+    DictationError::FileDecodeError(io_context(action, &error))
+}
+
+fn io_context(action: &str, error: &io::Error) -> String {
+    format!("{action}: {}", truncated(error))
+}
+
+fn truncated(error: &io::Error) -> String {
+    error
         .to_string()
         .chars()
         .take(MAX_IO_CONTEXT_CHARS)
-        .collect::<String>();
-    DictationError::FileDecodeError(format!("{action}: {context}"))
+        .collect()
 }
 
 #[cfg(test)]

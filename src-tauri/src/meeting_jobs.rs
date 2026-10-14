@@ -494,41 +494,45 @@ pub async fn save_meeting_export(
 }
 
 /// A user-selected NEW destination only; never truncate an existing recording
-/// or document, even if a native dialog offered replacement. Publish atomically.
+/// or document, even if a native dialog offered replacement. Published through
+/// [`sagascript_core::fsutil::publish_new`]: complete or not at all, never
+/// over an existing file.
 pub(crate) fn write_new_export(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
-    use std::io::Write;
-    let parent = path.parent().ok_or("Choose a local export folder.")?;
-    let temporary = parent.join(format!(".sagascript-export-{}.tmp", uuid::Uuid::new_v4()));
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options
-        .open(&temporary)
-        .map_err(|error| format!("Could not create export: {error}"))?;
-    let result = file
-        .write_all(bytes)
-        .and_then(|()| file.sync_all())
-        .and_then(|()| std::fs::hard_link(&temporary, path));
-    drop(file);
-    if let Err(error) = std::fs::remove_file(&temporary) {
-        let publication = if result.is_ok() {
+    use sagascript_core::fsutil::{publish_new, Leftover, PublishErrorKind};
+    let leftover_note = |saved: bool, leftover: &Leftover| {
+        let publication = if saved {
             "The export was saved"
         } else {
             "The export was not saved"
         };
-        return Err(format!("{publication}, but its private temporary file could not be removed: {} ({error}). Remove that temporary file manually.", temporary.display()));
-    }
-    result.map_err(|error| {
-        if error.kind() == std::io::ErrorKind::AlreadyExists {
-            "That file already exists. Choose a new name; no existing file was changed.".into()
-        } else {
-            format!("Export was not published. Choose a writable local folder supporting atomic file creation: {error}")
+        format!(
+            "{publication}, but its private temporary file could not be removed: {} ({}). Remove that temporary file manually.",
+            leftover.path.display(),
+            leftover.error
+        )
+    };
+    match publish_new(path, bytes) {
+        Ok(published) => match &published.leftover {
+            None => Ok(()),
+            Some(leftover) => Err(leftover_note(true, leftover)),
+        },
+        Err(error) => {
+            if let Some(leftover) = &error.leftover {
+                return Err(leftover_note(false, leftover));
+            }
+            Err(match &error.kind {
+                PublishErrorKind::AlreadyExists => {
+                    "That file already exists. Choose a new name; no existing file was changed."
+                        .into()
+                }
+                PublishErrorKind::NoFileName => "Choose a local export file.".into(),
+                PublishErrorKind::Commit(source) => format!(
+                    "Export was not published. Choose a writable local folder supporting atomic file creation: {source}"
+                ),
+                other => format!("Could not create export: {other}"),
+            })
         }
-    })
+    }
 }
 
 #[cfg(test)]
