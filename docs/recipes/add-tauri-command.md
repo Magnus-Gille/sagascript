@@ -38,9 +38,14 @@ pub async fn get_example_info(
   `#[tauri::command(async)]` on a plain `fn` moves it off the main thread, but into a task on
   the same Tokio runtime (tauri 2.10 `ipc/mod.rs`, `respond_async_serialized`), not onto the
   blocking pool; long blocking work still belongs in `spawn_blocking`.
-- Async commands that borrow (`State<'_, T>`) must return `Result`. Errors are `String` today
-  and the UI shows them. Planned: [#360](https://github.com/Magnus-Gille/sagascript/issues/360)
-  introduces a typed `CommandError` (ADR 0006).
+- Async commands that borrow (`State<'_, T>`) must return `Result`. Return
+  `Result<T, CommandError>` (`src-tauri/src/command_error.rs`, [ADR 0006](../adr/0006-typed-errors.md)):
+  the frontend receives `{ code, message, retryable }` and branches on `code` only. A new
+  failure the UI must tell apart gets a code (a `DictationError` variant or a `CommandError`
+  variant), a row in `command_errors.json` (`command_error_tests.rs`) and a test. A command
+  still returning `Result<T, String>` rejects with a string; a `String` converts into
+  `CommandError::Unclassified`, which part 2 of [#360](https://github.com/Magnus-Gille/sagascript/issues/360)
+  removes.
 - Managed state you can ask for: `State<'_, SharedController>`, `State<'_, SharedWhisper>`,
   `State<'_, Arc<UpdateActivity>>`, `State<'_, HotkeyHealth>`, job slots, plus
   `tauri::AppHandle`. See `.manage(...)` calls in `main()`.

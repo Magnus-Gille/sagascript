@@ -13,11 +13,8 @@ where the code shows them. The map of the code is [ARCHITECTURE.md](../ARCHITECT
 | [0003](0003-main-thread-native-apis.md) | Native input and UI APIs run on the main thread | Accepted |
 | [0004](0004-test-strategy.md) | Test strategy | Accepted |
 | [0005](0005-mutex-poison-policy.md) | Mutex poison policy: recover, log, restore a safe state | Accepted |
-| 0006 | Error types across boundaries | Proposed — decided in [#360](https://github.com/Magnus-Gille/sagascript/issues/360) |
+| [0006](0006-typed-errors.md) | Typed errors across boundaries: `{ code, message, retryable }`, match on `code`, scrub paths | Accepted |
 | [0007](0007-settings-file-evolution.md) | Settings file evolution: `schema_version`, ordered migrations, lenient fields | Accepted |
-
-0006 is a reserved number without a file: #360 will write it. Until then the commands keep
-returning `Result<_, String>`.
 
 ## Writing an ADR
 

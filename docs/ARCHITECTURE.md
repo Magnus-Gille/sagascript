@@ -430,8 +430,11 @@ replaces the remaining source-text tests in the `ui` group with component tests.
   `model-download-progress` `model` field is a Debug name for Whisper. Twenty registered
   commands have no frontend caller (`COMMANDS_WITHOUT_A_CALLER` in `src/lib/api.test.ts`);
   removing them is undecided.
-- Commands return `Result<_, String>` and the frontend matches on message text. **Planned:**
-  [#360](https://github.com/Magnus-Gille/sagascript/issues/360) (ADR 0006).
+- Commands for dictation, transcription, hotkeys, the dictionary and file transcription return
+  `Result<T, CommandError>` (`{ code, message, retryable }`, ADR 0006) and the frontend matches
+  on `code`. The other commands still return `Result<_, String>`, and one frontend check still
+  matches message text (`defaultDictionaryLanguageBlock` in `Settings.svelte`). **Planned:**
+  part 2 of [#360](https://github.com/Magnus-Gille/sagascript/issues/360).
 - Only some CLI subcommands offer `--json` (`list-models`, `config list`, `glossary list`,
   `formats` and `config profiles list` do not), `--progress-json` events share stderr with prose
   and `tracing`, and a second Ctrl-C still force-quits from the signal thread

@@ -306,7 +306,9 @@ Use `--fail-fast` to stop immediately. For machine consumers, multi-input
 `--json` returns an array of `{source,status,result|error}` objects and
 `--jsonl` emits the same objects one per line. Single-file `--json` retains its
 existing object shape; when that file fails it is one error object,
-`{"status":"error","code":"file_decode_error","source":…,"error":…}`. A
+`{"status":"error","code":"file_decode_error","source":…,"error":…}` (`file_not_found` when
+the file does not exist, `engine_*` for a Pianissimo engine failure, `cancelled`; the codes are
+the ones the app's errors carry, [ADR 0006](docs/adr/0006-typed-errors.md)). A
 `--json`/`--jsonl` run that fails before any result (unknown profile, model not
 downloaded) writes the same kind of object without `source`, so stdout is never
 empty. A reader that stops early (`sagascript transcribe --jsonl dir/ | head -1`)
