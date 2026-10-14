@@ -1210,6 +1210,7 @@ mod tests {
             "profile_glossary_migrated",
             "model_lineup_version",
             "engine_defaults_version",
+            "schema_version",
         ];
 
         let settings = Settings::default();

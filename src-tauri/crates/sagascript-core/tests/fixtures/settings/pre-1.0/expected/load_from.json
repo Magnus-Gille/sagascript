@@ -1,0 +1,36 @@
+{
+  "auto_paste": true,
+  "auto_select_model": true,
+  "beam_size": 0,
+  "engine_defaults_version": 0,
+  "engine_idle_unload_minutes": 60,
+  "engine_prewarm": "on_app_start",
+  "file_transcription_model": "auto",
+  "has_completed_onboarding": true,
+  "hotkey": "Control+Shift+Space",
+  "hotkey_mode": "push",
+  "hotkey_profiles": [
+    {
+      "id": "default",
+      "language": "en",
+      "name": "Default",
+      "shortcut": "Control+Shift+Space"
+    }
+  ],
+  "initial_prompt": "",
+  "language": "en",
+  "model_lineup_version": 0,
+  "pianissimo_dictation": false,
+  "profile_glossaries": {
+    "default": ""
+  },
+  "profile_glossary_migrated": true,
+  "profile_models": {
+    "default": "auto"
+  },
+  "schema_version": 4,
+  "show_overlay": false,
+  "temperature_fallback": true,
+  "vad_enabled": false,
+  "whisper_model": "base.en"
+}
