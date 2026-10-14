@@ -13,7 +13,7 @@ const backend = () =>
   settingsBackend({
     set_vad_enabled: () => undefined,
     set_show_overlay: () => undefined,
-    set_auto_paste: () => [],
+    set_auto_paste: () => undefined,
     set_beam_size: () => undefined,
     set_temperature_fallback: () => undefined,
     set_engine_prewarm: () => undefined,

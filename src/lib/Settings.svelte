@@ -955,11 +955,17 @@
     return selectedTranscribeProfile()?.language ?? "auto";
   }
 
+  // The file model lineup depends on these two values alone. Read them as
+  // derived primitives: the effect below must not run again for every new
+  // `settings` object (a Voice activity detection toggle, say).
+  const fileModelLanguage = $derived.by(() => (settings ? transcribeLanguage() : null));
+  const fileModelSelection = $derived.by(() => settings?.file_transcription_model);
+
   $effect(() => {
-    if (!settings) return;
-    const language = transcribeLanguage();
+    const language = fileModelLanguage;
+    if (language === null) return;
     let stale = false;
-    const selected = settings.file_transcription_model;
+    const selected = fileModelSelection;
     void Promise.all([
       getFileModelOptions(language, selected && selected !== "auto" ? selected : undefined),
       getAutoFileModelInfo(language),
@@ -1235,13 +1241,14 @@
     mutate: () => Promise<void | string[]>,
     errorSink?: { value: string },
     reportError = true,
+    refreshModels = true,
   ): Promise<boolean> {
     if (reportError) settingsError = "";
     try {
       const notices = await mutate();
       profileModelNotices = Array.isArray(notices) ? notices : [];
       settings = await getSettings();
-      await refreshProfileModels(settings.hotkey_profiles);
+      if (refreshModels) await refreshProfileModels(settings.hotkey_profiles);
       return true;
     } catch (e: any) {
       const message = typeof e === "string" ? e : e?.message || "Failed to save setting.";
@@ -1250,6 +1257,11 @@
       if (settings) settings = { ...settings };
       return false;
     }
+  }
+
+  /** `applySetting` for a setting no model depends on: the models are not queried again. */
+  function applyScalarSetting(mutate: () => Promise<void | string[]>): Promise<boolean> {
+    return applySetting(mutate, undefined, true, false);
   }
 
   async function onLanguageChange(e: Event) {
@@ -1324,7 +1336,7 @@
     if (!settings) return;
     const enabling = !settings.auto_paste;
     if (!enabling || platform !== "macos") {
-      await applySetting(() => setAutoPaste(enabling));
+      await applyScalarSetting(() => setAutoPaste(enabling));
       return;
     }
 
@@ -1341,13 +1353,13 @@
       }
 
       if (accessibilityGranted) {
-        await applySetting(() => setAutoPaste(true));
+        await applyScalarSetting(() => setAutoPaste(true));
       } else {
-        await applySetting(() => setAutoPaste(false));
+        await applyScalarSetting(() => setAutoPaste(false));
         settingsError = "Accessibility permission was not granted. Auto-paste remains off.";
       }
     } catch (e: any) {
-      await applySetting(() => setAutoPaste(false));
+      await applyScalarSetting(() => setAutoPaste(false));
       settingsError = typeof e === "string" ? e : e?.message || "Failed to check Accessibility permission.";
     } finally {
       accessibilityChecking = false;
@@ -1412,7 +1424,7 @@
   async function onShowOverlayToggle() {
     if (!settings) return;
     const next = !settings.show_overlay;
-    await applySetting(() => setShowOverlay(next));
+    await applyScalarSetting(() => setShowOverlay(next));
   }
 
   async function refreshDictionaryAfterConflict(primaryError: string, request: GlossarySaveRequest) {
@@ -1657,29 +1669,29 @@
 
   async function onBeamSizeChange(e: Event) {
     const value = Number((e.target as HTMLSelectElement).value);
-    await applySetting(() => setBeamSize(value));
+    await applyScalarSetting(() => setBeamSize(value));
   }
 
   async function onTemperatureFallbackToggle() {
     if (!settings) return;
     const next = !settings.temperature_fallback;
-    await applySetting(() => setTemperatureFallback(next));
+    await applyScalarSetting(() => setTemperatureFallback(next));
   }
 
   async function onEnginePrewarmChange(e: Event) {
     const value = (e.target as HTMLSelectElement).value as EnginePrewarm;
-    await applySetting(() => setEnginePrewarm(value));
+    await applyScalarSetting(() => setEnginePrewarm(value));
   }
 
   async function onEngineIdleChange(e: Event) {
     const value = Number((e.target as HTMLSelectElement).value);
-    await applySetting(() => setEngineIdleUnloadMinutes(value));
+    await applyScalarSetting(() => setEngineIdleUnloadMinutes(value));
   }
 
   async function onVadToggle() {
     if (!settings) return;
     const next = !settings.vad_enabled;
-    await applySetting(() => setVadEnabled(next));
+    await applyScalarSetting(() => setVadEnabled(next));
   }
 
   async function downloadProfileModel(profile: HotkeyProfile) {
