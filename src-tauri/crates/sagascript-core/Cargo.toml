@@ -49,6 +49,11 @@ ndarray = { version = "0.17", optional = true }
 
 # whisper-rs is declared per-target because macOS enables Metal/CoreML;
 # Windows and Linux use the CPU backend (Vulkan is a separate, currently-broken opt-in).
+# fsync(2) as the fallback for volumes that reject F_FULLFSYNC, which is all
+# std's `sync_all` does on Apple platforms (download.rs). Already in the graph.
+[target.'cfg(target_vendor = "apple")'.dependencies]
+libc = "0.2"
+
 [target.'cfg(target_os = "macos")'.dependencies]
 whisper-rs = { version = "0.15", features = ["coreml", "metal", "tracing_backend"] }
 

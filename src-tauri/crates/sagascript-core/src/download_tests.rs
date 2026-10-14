@@ -1193,6 +1193,7 @@ enum FsOp {
     CreateDir(PathBuf),
     Sync(PathBuf),
     Rename(PathBuf, PathBuf),
+    SyncDir(PathBuf),
 }
 
 type Gate = (
@@ -1207,6 +1208,12 @@ struct RecordingFs {
     /// `sync_file` fails with this error kind instead of syncing.
     sync_error: Option<std::io::ErrorKind>,
     fail_rename: bool,
+    /// `sync_dir` fails with this error kind instead of syncing.
+    sync_dir_error: Option<std::io::ErrorKind>,
+    /// The installed file and its verification stamp: whether each exists is
+    /// noted when the directory is synced.
+    probe: Option<(PathBuf, PathBuf)>,
+    present_at_dir_sync: std::sync::Mutex<Option<(bool, bool)>>,
     /// When set, `sync_file` reports that it started, then waits for a release.
     hold_sync: Option<Gate>,
 }
@@ -1262,6 +1269,17 @@ impl DownloadFs for RecordingFs {
         }
         RealFs.rename(from, to)
     }
+
+    fn sync_dir(&self, dir: &Path) -> std::io::Result<()> {
+        self.record(FsOp::SyncDir(dir.to_path_buf()));
+        if let Some((dest, stamp)) = &self.probe {
+            *self.present_at_dir_sync.lock().unwrap() = Some((dest.exists(), stamp.exists()));
+        }
+        if let Some(kind) = self.sync_dir_error {
+            return Err(std::io::Error::new(kind, "injected directory sync failure"));
+        }
+        RealFs.sync_dir(dir)
+    }
 }
 
 fn serve_valid_model() -> (String, std::thread::JoinHandle<Vec<std::io::Error>>) {
@@ -1306,13 +1324,15 @@ async fn temp_file_is_synced_before_it_is_renamed_into_place() {
         download_through(&url, &dest, fs.clone()).await.unwrap();
 
         let ops = fs.ops();
-        let [FsOp::CreateDir(created), FsOp::Sync(synced), FsOp::Rename(from, to)] = ops.as_slice()
+        let [FsOp::CreateDir(created), FsOp::Sync(synced), FsOp::Rename(from, to), FsOp::SyncDir(synced_dir)] =
+            ops.as_slice()
         else {
-            panic!("expected create_dir_all, sync, rename in that order, got {ops:?}");
+            panic!("expected create_dir_all, sync, rename, sync_dir in that order, got {ops:?}");
         };
         assert_eq!(created, dir.path());
         assert_eq!(synced, from, "the synced file is the one renamed");
         assert_eq!(to, &dest);
+        assert_eq!(synced_dir, dir.path(), "the directory that holds the rename");
         assert_eq!(std::fs::read(&dest).unwrap(), b"verified model");
         join_server(server).await;
     })
@@ -1367,7 +1387,7 @@ async fn download_file_operations_run_off_the_async_executor() {
         on_executor.is_empty(),
         "blocking file operations ran on the async executor thread: {on_executor:?}"
     );
-    assert_eq!(ops.len(), 3, "{ops:?}");
+    assert_eq!(ops.len(), 4, "{ops:?}");
     #[cfg(unix)]
     assert!(verification_stamp_path(&dest).exists());
     join_server(server).await;
@@ -1422,6 +1442,55 @@ async fn cancelling_while_the_temp_file_syncs_installs_nothing() {
     .expect("test exceeded its hard timeout");
 }
 
+/// The directory is synced after the rename and before the stamp is written,
+/// so a durable stamp never vouches for a name that a crash can undo.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn directory_is_synced_after_the_rename_and_before_the_stamp() {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let dir = TempDir::new();
+        let dest = dir.join("model.bin");
+        let (url, server) = serve_valid_model();
+        let fs = std::sync::Arc::new(RecordingFs {
+            probe: Some((dest.clone(), verification_stamp_path(&dest))),
+            ..RecordingFs::default()
+        });
+
+        download_through(&url, &dest, fs.clone()).await.unwrap();
+
+        assert_eq!(
+            *fs.present_at_dir_sync.lock().unwrap(),
+            Some((true, false)),
+            "installed, stamp not yet written"
+        );
+        assert!(verification_stamp_path(&dest).exists(), "stamp is written");
+        join_server(server).await;
+    })
+    .await
+    .expect("test exceeded its hard timeout");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn failed_directory_sync_does_not_fail_an_installed_download() {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let dir = TempDir::new();
+        let dest = dir.join("model.bin");
+        let (url, server) = serve_valid_model();
+        let fs = std::sync::Arc::new(RecordingFs {
+            sync_dir_error: Some(std::io::ErrorKind::StorageFull),
+            ..RecordingFs::default()
+        });
+
+        download_through(&url, &dest, fs.clone()).await.unwrap();
+
+        assert_eq!(std::fs::read(&dest).unwrap(), b"verified model");
+        assert!(fs.ops().contains(&FsOp::SyncDir(dir.path().to_path_buf())));
+        join_server(server).await;
+    })
+    .await
+    .expect("test exceeded its hard timeout");
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn filesystem_without_fsync_still_installs_the_model() {
     tokio::time::timeout(Duration::from_secs(30), async {
@@ -1447,14 +1516,86 @@ async fn filesystem_without_fsync_still_installs_the_model() {
 fn only_unsupported_syncs_are_tolerated() {
     use std::io::{Error, ErrorKind};
     assert!(sync_unsupported(&Error::from(ErrorKind::Unsupported)));
-    assert!(sync_unsupported(&Error::from(ErrorKind::InvalidInput)));
     assert!(!sync_unsupported(&Error::from(ErrorKind::StorageFull)));
     assert!(!sync_unsupported(&Error::other("I/O error")));
     #[cfg(unix)]
     {
+        assert!(
+            sync_unsupported(&Error::from(ErrorKind::InvalidInput)),
+            "EINVAL"
+        );
         assert!(sync_unsupported(&Error::from_raw_os_error(25)), "ENOTTY");
         assert!(!sync_unsupported(&Error::from_raw_os_error(5)), "EIO");
     }
+    #[cfg(windows)]
+    {
+        assert!(
+            sync_unsupported(&Error::from_raw_os_error(1)),
+            "ERROR_INVALID_FUNCTION"
+        );
+        assert!(
+            sync_unsupported(&Error::from_raw_os_error(50)),
+            "ERROR_NOT_SUPPORTED"
+        );
+        assert!(
+            !sync_unsupported(&Error::from_raw_os_error(87)),
+            "ERROR_INVALID_PARAMETER is a real bug"
+        );
+        assert!(!sync_unsupported(&Error::from(ErrorKind::InvalidInput)));
+        assert!(
+            !sync_unsupported(&Error::from_raw_os_error(5)),
+            "ERROR_ACCESS_DENIED"
+        );
+    }
+}
+
+#[test]
+fn fallback_sync_runs_only_when_the_full_sync_is_unsupported() {
+    use std::cell::Cell;
+    use std::io::{Error, ErrorKind};
+    let plain_ran = Cell::new(false);
+    let plain = |result: std::io::Result<()>| {
+        plain_ran.set(true);
+        result
+    };
+
+    // The full sync works: nothing to fall back to.
+    assert!(sync_with_fallback(|| Ok(()), || plain(Err(Error::other("unused")))).is_ok());
+    assert!(!plain_ran.get());
+
+    // A real failure is not retried with the weaker sync.
+    let error = sync_with_fallback(
+        || Err(Error::from(ErrorKind::StorageFull)),
+        || plain(Ok(())),
+    )
+    .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::StorageFull);
+    assert!(!plain_ran.get());
+
+    // An unsupported full sync falls back, and the fallback's result counts.
+    assert!(sync_with_fallback(
+        || Err(Error::from(ErrorKind::Unsupported)),
+        || plain(Ok(()))
+    )
+    .is_ok());
+    assert!(plain_ran.replace(false));
+    let error = sync_with_fallback(
+        || Err(Error::from(ErrorKind::Unsupported)),
+        || plain(Err(Error::other("I/O error"))),
+    )
+    .unwrap_err();
+    assert_eq!(error.to_string(), "I/O error");
+    assert!(plain_ran.get());
+}
+
+#[cfg(unix)]
+#[test]
+fn unsupported_sync_is_tolerated_but_real_failures_are_not() {
+    use std::io::{Error, ErrorKind};
+    assert!(tolerate_unsupported(Ok(())).is_ok());
+    assert!(tolerate_unsupported(Err(Error::from(ErrorKind::Unsupported))).is_ok());
+    assert!(tolerate_unsupported(Err(Error::from_raw_os_error(25))).is_ok());
+    assert!(tolerate_unsupported(Err(Error::from_raw_os_error(5))).is_err());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -18,10 +18,11 @@
 //!   used to just overwrite its own leftover), so `download_to_path`
 //!   opportunistically sweeps stale `.tmp` files from the destination
 //!   directory before it starts;
-//! - the temp file is fsynced before the rename, so a crash cannot leave the
-//!   installed name (and a durable verification stamp) over unwritten data,
-//!   and every blocking filesystem step runs on Tokio's blocking pool rather
-//!   than on an async executor thread (#368).
+//! - the temp file is fsynced before the rename and the directory after it
+//!   (unix), so a crash cannot leave the installed name (and a durable
+//!   verification stamp) over unwritten data or lose the rename, and every
+//!   blocking filesystem step runs on Tokio's blocking pool rather than on an
+//!   async executor thread (#368).
 
 use std::fs::File;
 use std::io::{BufReader, Read};
@@ -187,12 +188,16 @@ pub async fn download_to_path_with_limits(
 }
 
 /// File operations of a download that tests need to observe (#368): creating
-/// the destination directory, making the temp file durable and the final
-/// rename. [`RealFs`] is the only production implementation.
+/// the destination directory, making the temp file durable, the final rename
+/// and making that rename durable. [`RealFs`] is the only production
+/// implementation.
 trait DownloadFs: Send + Sync {
     fn create_dir_all(&self, dir: &Path) -> std::io::Result<()>;
     fn sync_file(&self, file: &std::fs::File, path: &Path) -> std::io::Result<()>;
     fn rename(&self, from: &Path, to: &Path) -> std::io::Result<()>;
+    /// Flush the directory entry that `rename` created. Unix only; elsewhere
+    /// there is nothing to do (Windows cannot open a directory to sync it).
+    fn sync_dir(&self, dir: &Path) -> std::io::Result<()>;
 }
 
 struct RealFs;
@@ -203,11 +208,70 @@ impl DownloadFs for RealFs {
     }
 
     fn sync_file(&self, file: &std::fs::File, _path: &Path) -> std::io::Result<()> {
-        file.sync_all()
+        sync_durably(file)
     }
 
     fn rename(&self, from: &Path, to: &Path) -> std::io::Result<()> {
         std::fs::rename(from, to)
+    }
+
+    fn sync_dir(&self, dir: &Path) -> std::io::Result<()> {
+        #[cfg(unix)]
+        {
+            sync_durably(&File::open(dir)?)
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = dir;
+            Ok(())
+        }
+    }
+}
+
+/// Flush `file` to stable storage: `File::sync_all`, which is `fsync` on
+/// Linux and `FlushFileBuffers` on Windows. On Apple platforms std's
+/// `sync_all` is only `fcntl(F_FULLFSYNC)`, which SMB and NFS homes, macFUSE
+/// and some external drives reject, so there `fsync(2)` is the fallback, as in
+/// SQLite.
+fn sync_durably(file: &File) -> std::io::Result<()> {
+    #[cfg(target_vendor = "apple")]
+    {
+        sync_with_fallback(|| file.sync_all(), || fsync(file))
+    }
+    #[cfg(not(target_vendor = "apple"))]
+    {
+        file.sync_all()
+    }
+}
+
+/// Run `plain` when `full` fails only because the file or volume cannot do
+/// that kind of sync ([`sync_unsupported`]); any other failure is real and is
+/// returned as it is.
+#[cfg(any(target_vendor = "apple", test))]
+fn sync_with_fallback(
+    full: impl FnOnce() -> std::io::Result<()>,
+    plain: impl FnOnce() -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    match full() {
+        Err(error) if sync_unsupported(&error) => plain(),
+        result => result,
+    }
+}
+
+/// `fsync(2)` without Apple's full-flush semantics.
+#[cfg(target_vendor = "apple")]
+fn fsync(file: &File) -> std::io::Result<()> {
+    use std::os::fd::AsRawFd;
+    loop {
+        // SAFETY: the descriptor stays open while `file` is borrowed, and
+        // `fsync` reads or writes no memory of ours.
+        if unsafe { libc::fsync(file.as_raw_fd()) } == 0 {
+            return Ok(());
+        }
+        let error = std::io::Error::last_os_error();
+        if error.kind() != std::io::ErrorKind::Interrupted {
+            return Err(error);
+        }
     }
 }
 
@@ -357,15 +421,16 @@ async fn download_with(
     .await
 }
 
-/// Make the validated temp file durable, then atomically move it into place
-/// and record its verification stamp.
+/// Make the validated temp file durable, then atomically move it into place,
+/// make the move durable and record its verification stamp.
 ///
 /// The order is the point (#368): the data is fsynced *before* the rename, so
 /// a crash can never leave `dest` naming a file whose blocks were not written
-/// yet, with a durable stamp (written last) vouching for it. If only the
-/// final move fails (e.g. a cross-device rename), or the download was
-/// cancelled before the rename started, `guard` removes the temp file. A
-/// cancellation that arrives once the rename has started installs the
+/// yet, and the directory is synced *after* it, before the stamp (written
+/// last), so a durable stamp never vouches for a name that a crash can still
+/// undo. If only the final move fails (e.g. a cross-device rename), or the
+/// download was cancelled before the rename started, `guard` removes the temp
+/// file. A cancellation that arrives once the rename has started installs the
 /// complete, verified and synced file.
 fn install_tmp_file(
     fs: &dyn DownloadFs,
@@ -399,6 +464,24 @@ fn install_tmp_file(
     })?;
     guard.disarm();
 
+    // Best effort: the file is installed and verified, so a directory that
+    // cannot be synced must not fail the download.
+    let dir = match dest.parent() {
+        Some(dir) if !dir.as_os_str().is_empty() => dir,
+        _ => Path::new("."),
+    };
+    if let Err(e) = fs.sync_dir(dir) {
+        if sync_unsupported(&e) {
+            tracing::debug!("Cannot sync {} on this filesystem ({e})", dir.display());
+        } else {
+            tracing::warn!(
+                "Could not sync {} after installing {}: {e}",
+                dir.display(),
+                dest.display()
+            );
+        }
+    }
+
     // The streamed bytes were verified before the install. Cache that result
     // against the installed file's filesystem fingerprint so normal model
     // loads do not rehash multi-gigabyte artifacts. The cache
@@ -408,28 +491,46 @@ fn install_tmp_file(
     Ok(())
 }
 
-/// Whether a failed fsync only means that this file or filesystem cannot
-/// sync, rather than that written data may be lost. On Apple platforms
-/// `File::sync_all` is `fcntl(F_FULLFSYNC)`, which some network, FUSE and
-/// external volumes reject; a models directory there installs without the
-/// sync, as every download did before #368. I/O errors, a full disk or an
-/// exceeded quota stay fatal.
+/// Whether a failed sync only means that this file or filesystem cannot sync,
+/// rather than that written data may be lost. Some network, FUSE and external
+/// volumes reject Apple's `F_FULLFSYNC` (and then [`sync_durably`] has tried
+/// `fsync(2)` too), and some Windows redirectors reject `FlushFileBuffers`; a
+/// models directory there installs without the sync, as every download did
+/// before #368. I/O errors, a full disk or an exceeded quota stay fatal.
 fn sync_unsupported(error: &std::io::Error) -> bool {
     use std::io::ErrorKind;
     // ENOTTY is 25 everywhere; ENOTSUP/EOPNOTSUPP are 95 on Linux, 45 and 102
-    // on Apple platforms. std maps none of them to `Unsupported`.
+    // on Apple platforms. std maps none of them to `Unsupported`. On Windows,
+    // `FlushFileBuffers` fails with ERROR_INVALID_FUNCTION (1) or
+    // ERROR_NOT_SUPPORTED (50), which std leaves uncategorized.
     #[cfg(target_os = "linux")]
     const NOT_SUPPORTED: &[i32] = &[25, 95];
     #[cfg(target_vendor = "apple")]
     const NOT_SUPPORTED: &[i32] = &[25, 45, 102];
-    #[cfg(not(any(target_os = "linux", target_vendor = "apple")))]
+    #[cfg(windows)]
+    const NOT_SUPPORTED: &[i32] = &[1, 50];
+    #[cfg(not(any(target_os = "linux", target_vendor = "apple", windows)))]
     const NOT_SUPPORTED: &[i32] = &[];
-    matches!(
-        error.kind(),
-        ErrorKind::Unsupported | ErrorKind::InvalidInput
-    ) || error
-        .raw_os_error()
-        .is_some_and(|code| NOT_SUPPORTED.contains(&code))
+    // EINVAL from fsync(2): the descriptor has no sync operation. On Windows
+    // `InvalidInput` is ERROR_INVALID_PARAMETER, which is a real bug.
+    #[cfg(unix)]
+    let no_sync_operation = error.kind() == ErrorKind::InvalidInput;
+    #[cfg(not(unix))]
+    let no_sync_operation = false;
+    error.kind() == ErrorKind::Unsupported
+        || no_sync_operation
+        || error
+            .raw_os_error()
+            .is_some_and(|code| NOT_SUPPORTED.contains(&code))
+}
+
+/// A sync that the volume cannot do is not an error; any other failure is.
+#[cfg(unix)]
+fn tolerate_unsupported(result: std::io::Result<()>) -> std::io::Result<()> {
+    match result {
+        Err(error) if sync_unsupported(&error) => Ok(()),
+        result => result,
+    }
 }
 
 /// Run blocking file work (directory scans, hashing, fsync, renames) on
@@ -1263,7 +1364,8 @@ fn write_verification_stamp(
                 .mode(0o600)
                 .open(&tmp)?;
             file.write_all(&json)?;
-            file.sync_all()
+            // A volume that cannot sync still gets a stamp; it is only a cache.
+            tolerate_unsupported(sync_durably(&file))
         })();
         if let Err(error) = write.and_then(|()| std::fs::rename(&tmp, stamp_path)) {
             let _ = std::fs::remove_file(&tmp);
