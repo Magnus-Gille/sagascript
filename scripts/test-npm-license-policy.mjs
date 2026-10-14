@@ -9,7 +9,7 @@
 // (licenses:check runs only in the release gate).
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, posix as posixPath } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -57,6 +57,16 @@ function fixtureProject(files) {
   // A junction needs no privileges on Windows; elsewhere it is a symlink.
   symlinkSync(join(root, "node_modules"), join(project, "node_modules"), "junction");
   return project;
+}
+
+function removeFixtureProject(project) {
+  // Remove the link itself first, so no recursive delete can ever walk into
+  // the repository's node_modules (rmdir removes a Windows junction, not its
+  // target).
+  const link = join(project, "node_modules");
+  if (process.platform === "win32") rmdirSync(link);
+  else unlinkSync(link);
+  rmSync(project, { recursive: true, force: true });
 }
 
 test("the generator's synthetic policy cases pass (also run by the release gate)", () => {
@@ -186,7 +196,7 @@ test("asset paths resolve as Vite does: a file next to the source first, then a 
     );
     assert.deepEqual(appImportedPackages(project), ["entities", "espree", "esrecurse", "estraverse", "lz-string", "svelte"]);
   } finally {
-    rmSync(project, { recursive: true, force: true });
+    removeFixtureProject(project);
   }
 });
 
@@ -198,7 +208,7 @@ test("a reference the lockfile cannot resolve names its file and what matched", 
       /^Error: src\/main\.ts references npm package lodash-es \("lodash-es"\), which package-lock\.json does not contain\./,
     );
   } finally {
-    rmSync(project, { recursive: true, force: true });
+    removeFixtureProject(project);
   }
 });
 
@@ -282,7 +292,7 @@ test("app code reaching a BSD-2-Clause dev package, by import or as an asset, fa
       );
     }
   } finally {
-    rmSync(project, { recursive: true, force: true });
+    removeFixtureProject(project);
   }
 });
 
@@ -459,6 +469,6 @@ test("the build check sees package files shipped as assets and CSS @import url()
       [],
     );
   } finally {
-    rmSync(project, { recursive: true, force: true });
+    removeFixtureProject(project);
   }
 });
