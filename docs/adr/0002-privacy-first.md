@@ -17,7 +17,7 @@ Evidence in the code:
 - In the Rust app and CLI, HTTP is confined to two files: `crates/sagascript-core/src/download.rs` (model
   downloads) and `src-tauri/src/updates.rs` (update checks, "deliberately only called from an
   explicit tray-menu action"), plus `tauri-plugin-updater` on the signed macOS update path.
-  The test `normal_gui_launches_never_check_for_updates_implicitly` in `main.rs` pins that.
+  The test `normal_gui_launches_never_check_for_updates_implicitly` in `main_tests.rs` pins that.
 - Engine hosts "never open network connections and never touch the microphone"
   ([engine-host-protocol.md](../engine-host-protocol.md)); release builds ignore
   `SAGASCRIPT_ENGINE_HOST` / `SAGASCRIPT_PIANISSIMO_MODEL_DIR` unless built with

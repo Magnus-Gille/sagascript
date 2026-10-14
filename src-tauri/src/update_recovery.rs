@@ -486,30 +486,23 @@ fn set_create_mode(_options: &mut OpenOptions, _mode: u32) {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sagascript_testsupport::TempDir;
     use std::fs;
 
-    fn test_directory(name: &str) -> PathBuf {
+    /// A unique directory for one test and its real path. Keep the `TempDir`
+    /// alive for the whole test; dropping it removes the directory.
+    fn test_directory() -> (TempDir, PathBuf) {
+        let temp = TempDir::new();
         // macOS exposes the temporary directory through `/var`, which is
         // commonly a symlink to `/private/var`. Use the real path so the
         // symlink guard tests only the path components supplied by the test.
-        let directory = std::fs::canonicalize(std::env::temp_dir())
-            .unwrap()
-            .join(format!(
-                "sagascript-update-recovery-{name}-{}-{}",
-                std::process::id(),
-                TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
-            ));
-        fs::create_dir_all(&directory).unwrap();
-        directory
-    }
-
-    fn remove_test_directory(directory: &Path) {
-        let _ = fs::remove_dir_all(directory);
+        let directory = fs::canonicalize(&temp).unwrap();
+        (temp, directory)
     }
 
     #[test]
     fn roundtrip_preserves_metadata_and_opaque_payload() {
-        let directory = test_directory("roundtrip");
+        let (_temp, directory) = test_directory();
         let path = directory.join("snapshot.json");
         let payload = serde_json::json!({
             "transcript": "opaque text",
@@ -522,36 +515,33 @@ mod tests {
         assert_eq!(loaded.schema_version, 3);
         assert_eq!(loaded.timestamp, 1_723_456_789);
         assert_eq!(loaded.payload, payload);
-        remove_test_directory(&directory);
     }
 
     #[test]
     fn rejects_payload_over_size_limit_without_creating_target() {
-        let directory = test_directory("size-limit");
+        let (_temp, directory) = test_directory();
         let path = directory.join("snapshot.json");
         let payload = Value::String("x".repeat(MAX_SERIALIZED_PAYLOAD_BYTES));
 
         let error = save(&path, 1, 1, &payload).unwrap_err();
         assert!(matches!(error, RecoveryError::PayloadTooLarge { .. }));
         assert!(!path.exists());
-        remove_test_directory(&directory);
     }
 
     #[test]
     fn corrupt_json_returns_explicit_error() {
-        let directory = test_directory("corrupt");
+        let (_temp, directory) = test_directory();
         let path = directory.join("snapshot.json");
         fs::write(&path, b"{not json").unwrap();
 
         let error = load(&path).unwrap_err();
         assert!(matches!(error, RecoveryError::Corrupt { .. }));
-        remove_test_directory(&directory);
     }
 
     #[cfg(windows)]
     #[test]
     fn canonical_windows_prefix_is_preserved_until_root_is_added() {
-        let directory = test_directory("windows-prefix");
+        let (_temp, directory) = test_directory();
         assert!(matches!(
             directory.components().next(),
             Some(Component::Prefix(_))
@@ -562,12 +552,11 @@ mod tests {
         let path = directory.join("snapshot.json");
         fs::write(&path, b"{not json").unwrap();
         assert!(matches!(load(&path), Err(RecoveryError::Corrupt { .. })));
-        remove_test_directory(&directory);
     }
 
     #[test]
     fn replacement_is_atomic_from_the_reader_perspective() {
-        let directory = test_directory("replacement");
+        let (_temp, directory) = test_directory();
         let path = directory.join("snapshot.json");
         save(&path, 1, 1, &serde_json::json!({"generation": 1})).unwrap();
         save(&path, 2, 2, &serde_json::json!({"generation": 2})).unwrap();
@@ -582,19 +571,17 @@ mod tests {
             .filter(|entry| entry.file_name().to_string_lossy().contains(".tmp-"))
             .count();
         assert_eq!(temporary_files, 0);
-        remove_test_directory(&directory);
     }
 
     #[test]
     fn clear_is_explicit_and_idempotent() {
-        let directory = test_directory("clear");
+        let (_temp, directory) = test_directory();
         let path = directory.join("snapshot.json");
         save(&path, 1, 1, &serde_json::json!({"keep": true})).unwrap();
         assert!(path.exists());
         clear(&path).unwrap();
         assert!(!path.exists());
         clear(&path).unwrap();
-        remove_test_directory(&directory);
     }
 
     #[cfg(unix)]
@@ -602,7 +589,7 @@ mod tests {
     fn parent_and_file_are_private() {
         use std::os::unix::fs::PermissionsExt;
 
-        let directory = test_directory("permissions");
+        let (_temp, directory) = test_directory();
         let parent = directory.join("private");
         let path = parent.join("snapshot.json");
         save(&path, 1, 1, &serde_json::json!({"private": true})).unwrap();
@@ -615,7 +602,6 @@ mod tests {
             fs::metadata(&path).unwrap().permissions().mode() & 0o777,
             0o600
         );
-        remove_test_directory(&directory);
     }
 
     #[cfg(unix)]
@@ -623,7 +609,7 @@ mod tests {
     fn rejects_symlink_target_and_parent() {
         use std::os::unix::fs::symlink;
 
-        let directory = test_directory("symlink");
+        let (_temp, directory) = test_directory();
         let real_target = directory.join("real.json");
         fs::write(&real_target, b"sentinel").unwrap();
         let linked_target = directory.join("snapshot.json");
@@ -653,6 +639,5 @@ mod tests {
             save(&linked_path, 1, 1, &payload),
             Err(RecoveryError::PathContainsSymlink(_))
         ));
-        remove_test_directory(&directory);
     }
 }

@@ -45,6 +45,8 @@ Decisions and their reasons: `docs/adr/`.
 - `src-tauri/crates/sagascript-core/src/`: transcription, audio, settings, diarization, engine-host client.
 - `src-tauri/crates/sagascript-cli/src/`: canonical CLI commands.
 - `src-tauri/crates/sagascript-engine-protocol/`: engine-host JSON Lines wire types.
+- `src-tauri/crates/sagascript-testsupport/`: dev-only test helpers (`TempDir`, `sha256_hex`,
+  `isolated_cli_env`); fixtures made of core types are in `sagascript_core::test_support`.
 - `src-tauri/engine-host/`: `coreml/` Swift host, `ort/` ONNX host (separate Cargo workspace), shared `test-vectors/`.
 - The app crate and CLI crate both emit a binary named `sagascript`; `target/release/sagascript`
   is whichever one was built most recently.

@@ -54,7 +54,8 @@ Known problems on this branch:
    `SAGASCRIPT_SETTINGS_PATH` pointing into a temp directory (set on the `Command`, not with
    `std::env::set_var` in a parallel test process); in-process tests use the path-taking store
    helpers (`load_from`, the `*_at` functions) on temp files. Never write the real settings,
-   dictionaries, models or recordings. Fixtures are synthetic.
+   dictionaries, models or recordings. Fixtures are synthetic. `isolated_cli_env` and `TempDir`
+   in `sagascript-testsupport` do this for spawned CLIs and temp files.
 6. **Deterministic.** Wait on events or conditions instead of wall-clock thresholds; no
    automatic retries to hide flakes (#381).
 7. **Testable seams over Tauri.** Keep decisions in plain functions that take plain values

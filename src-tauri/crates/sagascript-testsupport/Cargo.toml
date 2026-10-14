@@ -1,0 +1,18 @@
+[package]
+name = "sagascript-testsupport"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "Test-only helpers shared by the Sagascript workspace: temporary directories, SHA-256, an isolated CLI environment"
+
+# Only ever a [dev-dependency]: nothing in a shipped binary links this crate.
+# It must not depend on sagascript-core (core's own unit tests use it; see
+# src/lib.rs). Both dependencies are already in Cargo.lock through core.
+[dependencies]
+sha2 = "0.10"
+tempfile = "3"
+
+[lints]
+workspace = true
