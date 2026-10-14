@@ -1,10 +1,9 @@
 name: CI
 
 # Shared parts live once, outside this file (#358): .github/actions/setup (toolchain preamble),
-# scripts/ci/cargo-gates.mjs (THE list of cargo gates, run by every lane; per-OS exclusions are
-# documented there), scripts/ci/smoke-cli.mjs (CLI smoke tests), scripts/ci/assert-lanes.mjs (the
-# check-* aggregators). Branch protection requires check-macos and check-windows by name: keep both
-# and keep them `needs:` every lane of their OS.
+# scripts/ci/cargo-gates.mjs (THE list of cargo gates; per-OS exclusions are documented there),
+# scripts/ci/smoke-cli.mjs and scripts/ci/assert-lanes.mjs (the check-* aggregators). Branch
+# protection requires check-macos and check-windows by name: keep both, `needs:` every lane of their OS.
 #
 # Windows tests have one owner per architecture: test-windows owns the x64 tests of every pull
 # request (the required lane). windows-package.yml does not repeat `cargo test --workspace` and
@@ -283,16 +282,16 @@ jobs:
             src-tauri/engine-host/ort
           npm-ci: "false"
       # Before npm ci, so a build identity regression fails before any npm or Cargo work.
-      - name: Test offline dictation evaluation tooling and Windows build identity gates
-        run: |
-          python -m unittest discover -s scripts/dictation_eval -p 'test_*.py'
-          node --test scripts/test-ci-build-identity.mjs scripts/test-windows-release-identity.mjs scripts/test-windows-package-workflow.mjs scripts/test-release-promotion.mjs
+      - name: Test Windows build identity gates
+        run: node --test scripts/test-ci-build-identity.mjs scripts/test-windows-release-identity.mjs scripts/test-windows-package-workflow.mjs scripts/test-release-promotion.mjs
       - name: Install npm dependencies
         run: npm ci
-      # The whole Node suite on a Windows checkout (#357). The checkout has CRLF line endings
-      # (core.autocrlf); prettier.config.js accepts them here, test-macos holds the repo to LF.
-      - name: Frontend checks (Node tests, unit tests, format)
+      # The whole Node suite on a Windows checkout (#357; CRLF line endings, which prettier.config.js
+      # accepts here). bash, not pwsh: pwsh would report only the LAST native command's exit code.
+      - name: Python and frontend checks (dictation tooling, Node tests, unit tests, format)
+        shell: bash
         run: |
+          python -m unittest discover -s scripts/dictation_eval -p 'test_*.py'
           npm run test:frontend
           npm run test:unit
           npm run format:check

@@ -245,10 +245,12 @@ test("windows-package.yml leaves the x64 Rust tests of a pull request to test-wi
   const names = windows.steps.map((step) => step.name);
   const tests = windows.steps[names.indexOf("Test and lint Rust workspace")];
   assert.equal(tests.condition, "github.event_name != 'pull_request' || matrix.architecture == 'arm64'");
-  // The debug lean CLI that the CPU policy checks read stays built on every architecture.
+  // The debug lean CLI that the CPU policy checks read stays built on every architecture: inside the
+  // step above where it runs, in a step of its own exactly where that step is skipped.
+  assert.ok(commandLines(tests).includes("cargo build -p sagascript-cli --no-default-features"));
   const build = windows.steps[names.indexOf("Build lean CLI (debug)")];
-  assert.ok(build, "the debug build is its own step");
-  assert.equal(build.condition, undefined);
+  assert.ok(build, "the debug build has a step of its own for the skipped case");
+  assert.equal(build.condition, "github.event_name == 'pull_request' && matrix.architecture == 'x64'");
   assert.deepEqual(commandLines(build), ["cargo build -p sagascript-cli --no-default-features"]);
   assert.ok(names.indexOf(build.name) > names.indexOf(tests.name));
   assert.ok(names.indexOf(build.name) < names.indexOf("Verify debug x64 inference CPU policy"));
@@ -263,4 +265,18 @@ test("the workflow parses the same with CRLF line endings, as on a Windows check
   assert.deepEqual(crlf.jobs, lf.jobs);
   const classify = crlf.job("scope").steps.find((step) => step.id === "classify");
   assert.ok(!classify.run.includes("\r"), "scripts stay free of carriage returns");
+});
+
+test("a multi-command step of a Windows lane runs under bash: pwsh reports only the last native command's exit code", () => {
+  // `npm run test:frontend` failing in front of a passing `npm run format:check` went green in a first draft of this file.
+  const windowsJobs = workflow.jobs.filter((job) => /^windows/.test(job.runsOn));
+  assert.deepEqual(windowsJobs.map((job) => job.id).sort(), ["build-windows", "test-windows"]);
+  for (const job of windowsJobs) {
+    for (const step of job.steps.filter((candidate) => candidate.run !== "")) {
+      if (commandLines(step).length > 1) assert.equal(step.shell, "bash", `${job.id}: "${step.name}" runs several commands`);
+    }
+  }
+  for (const step of loadAction("setup").steps.filter((candidate) => candidate.run !== "")) {
+    assert.equal(step.shell, "bash", `the setup action's "${step.name}" must name its shell (and runs on Windows)`);
+  }
 });

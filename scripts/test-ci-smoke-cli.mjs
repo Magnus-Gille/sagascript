@@ -88,17 +88,21 @@ test("the model tier downloads, transcribes and verifies the JSON, JSONL and err
   const failed = await runTier("model", harness, quiet);
   assert.deepEqual(failed, []);
   const model = "--language no --model nb-whisper-tiny";
-  assert.deepEqual(harness.calls, [
-    "download-model nb-whisper-tiny",
-    `transcribe ${model} test-audio/norwegian-short-3s.mp3`,
-    `transcribe ${model} --json test-audio/norwegian-short-3s.mp3`,
-    "verify --json",
-    `transcribe ${model} --jsonl /scratch/jsonl-inputs`,
-    "verify --jsonl",
-    `transcribe ${model} --jsonl /scratch/jsonl-inputs | head -1`,
-    `transcribe ${model} --json /scratch/missing.wav`,
-    "verify --error",
-  ]);
+  // A Windows path joins with backslashes; the commands are compared in one spelling.
+  assert.deepEqual(
+    harness.calls.map((call) => call.replaceAll("\\", "/")),
+    [
+      "download-model nb-whisper-tiny",
+      `transcribe ${model} test-audio/norwegian-short-3s.mp3`,
+      `transcribe ${model} --json test-audio/norwegian-short-3s.mp3`,
+      "verify --json",
+      `transcribe ${model} --jsonl /scratch/jsonl-inputs`,
+      "verify --jsonl",
+      `transcribe ${model} --jsonl /scratch/jsonl-inputs | head -1`,
+      `transcribe ${model} --json /scratch/missing.wav`,
+      "verify --error",
+    ],
+  );
 });
 
 test("every check of a tier runs even after one fails, and each failure is reported by name", async () => {
