@@ -688,10 +688,7 @@ fn concurrent_first_run_update_waits_for_atomic_migration() {
     let migration_legacy = legacy.clone();
     let migration = thread::spawn(move || {
         with_settings_lock(&migration_destination, || {
-            migrate_legacy_identifier_settings_locked(
-                &migration_destination,
-                [migration_legacy],
-            );
+            migrate_legacy_identifier_settings_locked(&migration_destination, [migration_legacy]);
             migration_locked_tx.send(()).unwrap();
             release_migration_rx.recv().unwrap();
             Ok(())
@@ -1482,8 +1479,8 @@ fn dir_names(dir: &Path) -> Vec<String> {
 #[track_caller]
 fn assert_file_bytes(path: impl AsRef<Path>, expected: &[u8]) {
     let path = path.as_ref();
-    let actual = fs::read(path)
-        .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
+    let actual =
+        fs::read(path).unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
     assert!(
         actual == expected,
         "{} holds:\n{}\nexpected exactly:\n{}",
@@ -1680,8 +1677,7 @@ fn startup_migrations_do_not_overwrite_an_invalid_file() {
 #[test]
 fn a_failing_migration_step_never_silently_replaces_the_file() {
     // Strictly valid, with the profile-models step (3) pending.
-    let original: &[u8] =
-        br#"{"language":"sv","beam_size":3,"show_overlay":false,"future_key":1}"#;
+    let original: &[u8] = br#"{"language":"sv","beam_size":3,"show_overlay":false,"future_key":1}"#;
     for fallible in [false, true] {
         with_temp_settings(|path| {
             fs::write(&path, original).unwrap();
@@ -1873,8 +1869,7 @@ mod private_atomic_write {
                 "injected",
             ))
         };
-        let error =
-            install_replacement(&path, dir.path(), b"new", "settings", &fail).unwrap_err();
+        let error = install_replacement(&path, dir.path(), b"new", "settings", &fail).unwrap_err();
         assert!(error.contains("preserve settings permissions"), "{error}");
         assert_eq!(fs::read(&path).unwrap(), b"original");
         assert_eq!(names(dir.path()), vec!["settings.json"]);
