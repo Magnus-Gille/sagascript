@@ -16,7 +16,13 @@
 // if the code under test swallowed that rejection.
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { SERIALIZE_TO_IPC_FN, type InvokeArgs } from "@tauri-apps/api/core";
-import { COMMAND_ARGUMENTS, COMMAND_NAMES as GENERATED_COMMAND_NAMES, type CommandMap } from "../lib/ipc-contract.generated";
+import {
+  BACKEND_ERROR_COMMANDS,
+  COMMAND_ARGUMENTS,
+  COMMAND_NAMES as GENERATED_COMMAND_NAMES,
+  type CommandMap,
+} from "../lib/ipc-contract.generated";
+import { isBackendError, type BackendError } from "../lib/errors";
 import type { EventMap, EventName } from "../lib/events";
 
 declare global {
@@ -38,11 +44,26 @@ export type { CommandMap };
 export type CommandName = keyof CommandMap;
 export type CommandArgs<C extends CommandName> = CommandMap[C]["args"];
 export type CommandResult<C extends CommandName> = CommandMap[C]["result"];
-/** Throw a string to mimic a Rust `Err(String)`; the wrapper rejects with it. */
+/**
+ * What a fake handler throws to mimic the command's Rust `Err`, which the
+ * wrapper rejects with: a string for `Result<T, String>`, a `BackendError`
+ * (`backendError()`) for `Result<T, CommandError>`; `CommandMap[C]["error"]`
+ * says which. The mock fails the test when the fake rejects with the other
+ * shape, so a fake cannot keep an error shape Rust no longer sends (ADR 0006).
+ */
 export type CommandHandler<C extends CommandName> = (args: CommandArgs<C>) => CommandResult<C> | Promise<CommandResult<C>>;
 export type CommandHandlers = { [C in CommandName]?: CommandHandler<C> };
 /** One recorded invocation; narrow on `command` to get typed `args`. */
 export type IpcCall = { [C in CommandName]: { command: C; args: CommandArgs<C> } }[CommandName];
+
+/**
+ * The error a command that returns `Result<T, CommandError>` rejects with, in
+ * the wire shape Rust serializes (contracts/transport/command_errors.json).
+ * `retryable` is false unless given.
+ */
+export function backendError(code: string, message: string, retryable = false): BackendError {
+  return { code, message, retryable };
+}
 
 /** Every registered command name, sorted. */
 export const COMMAND_NAMES: readonly CommandName[] = GENERATED_COMMAND_NAMES;
@@ -139,6 +160,32 @@ function ipcReplacer(_key: string, value: unknown): unknown {
   return value;
 }
 
+const BACKEND_ERROR_SET: ReadonlySet<string> = new Set(BACKEND_ERROR_COMMANDS);
+
+function describeRejection(error: unknown): string {
+  if (typeof error === "string") return "a string";
+  if (typeof error === "object" && error !== null) return "an error object";
+  return String(error);
+}
+
+/**
+ * Why a fake's rejection is not what the Rust command rejects with (a string,
+ * or a `BackendError` for `Result<T, CommandError>`), or null. `Error`
+ * instances are tolerated for commands that still reject with strings: Rust
+ * never sends one, but tests use them for failures that are not a command's.
+ */
+export function rejectionProblem(command: CommandName, error: unknown): string | null {
+  if (BACKEND_ERROR_SET.has(command)) {
+    if (isBackendError(error)) return null;
+    return (
+      `IPC command "${command}" returns Result<_, CommandError>: its fake must reject with backendError(code, message) ` +
+      `from src/test/ipc.ts, not with ${describeRejection(error)}`
+    );
+  }
+  if (typeof error === "string" || error instanceof Error) return null;
+  return `IPC command "${command}" returns Result<_, String>: its fake must reject with a string, not with ${describeRejection(error)}`;
+}
+
 function record(state: ActiveMock, command: CommandName, args: unknown): void {
   // The command name and the argument shape belong together: the wrapper
   // that sent them is typed by CommandMap.
@@ -206,7 +253,16 @@ export function mockIpc(handlers: CommandHandlers = {}): IpcMock {
           `Rust command must first be in the generated CommandMap (contracts/README.md).`,
       );
     }
-    return copy(await handler(copy(args ?? {})));
+    try {
+      return copy(await handler(copy(args ?? {})));
+    } catch (error) {
+      if (isCommandName(command)) {
+        const problem = rejectionProblem(command, error);
+        if (problem) state.invalid.push(problem);
+      }
+      // An error object crosses the IPC boundary as JSON, like a result.
+      throw error instanceof Error ? error : copy(error);
+    }
   });
 
   return {

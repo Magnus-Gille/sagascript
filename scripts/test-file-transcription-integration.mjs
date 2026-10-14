@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import ts from "typescript";
+import { frontendErrorsSource, inlineFrontendErrors } from "./lib/frontend-errors-source.mjs";
 
 const fileSource = await readFile(new URL("../src/lib/FileTranscription.svelte", import.meta.url), "utf8");
 const settingsSource = await readFile(new URL("../src/lib/Settings.svelte", import.meta.url), "utf8");
@@ -14,7 +15,7 @@ const compile = (source) =>
   }).outputText;
 async function load(name) {
   const source = await readFile(new URL(`../src/lib/${name}.ts`, import.meta.url), "utf8");
-  return import(`data:text/javascript;base64,${Buffer.from(compile(source)).toString("base64")}`);
+  return import(`data:text/javascript;base64,${Buffer.from(compile(inlineFrontendErrors(source))).toString("base64")}`);
 }
 const stages = await load("transcribe-stages");
 const ui = await load("transcribe-ui-state");
@@ -78,7 +79,8 @@ function fileHarness(path, overrides = {}) {
     let plainRunId = null, meetingJobStatus = null, meetingPollGeneration = 0, meetingDocumentRevision = 0;
     let meetingError = '', transcriptionProgress = 0, transcribeError = '', transcriptionResult = '';
     let resultActionMessage = '', transcribeElapsedSec = 0, plainStages = initialStages();
-    ${functions(fileSource, ["handleFileTranscription", "cancelPlainTranscription", "copyTranscriptionResult", "saveTranscriptionResult", "meetingFailureText"])}
+    ${frontendErrorsSource}
+    ${functions(fileSource, ["handleFileTranscription", "cancelPlainTranscription", "copyTranscriptionResult", "saveTranscriptionResult"])}
     return { start: () => handleFileTranscription(job.path), cancel: cancelPlainTranscription,
       copy: copyTranscriptionResult, save: saveTranscriptionResult,
       state: () => ({transcribing, cancellingPlain, plainStages, transcribeError, transcriptionResult, resultActionMessage}) };`;
@@ -179,9 +181,21 @@ test("accepted cancellation discards partial output and missing sources notify o
   const missing = fileHarness("/audio/missing.wav");
   const attempt = missing.start();
   await flush();
-  missing.native.reject(new Error("Failed to open file: No such file or directory"));
+  // The backend says so by code; the text is not what decides.
+  missing.native.reject({
+    code: "file_not_found",
+    message: "File decode error: Failed to open file: No such file or directory (os error 2)",
+    retryable: false,
+  });
   await attempt;
   assert.ok(missing.calls.some((call) => call[0] === "missing" && call[1] === "/audio/missing.wav"));
+  assert.match(missing.state().transcribeError, /No such file or directory/);
+  const looksMissing = fileHarness("/audio/other.wav");
+  const otherAttempt = looksMissing.start();
+  await flush();
+  looksMissing.native.reject("File decode error: Failed to open file: No such file or directory (os error 2)");
+  await otherAttempt;
+  assert.ok(!looksMissing.calls.some((call) => call[0] === "missing"), "message text alone must not forget the file");
 });
 
 test("each result saves and copies its own output and source even while another file is busy", async () => {

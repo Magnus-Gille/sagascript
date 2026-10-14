@@ -1,5 +1,6 @@
 <script lang="ts">
   import { drainUpdateWork } from "./update-preparation";
+  import { toErrorMessage } from "./errors";
   import MeetingReprocessing from "./MeetingReprocessing.svelte";
   import {
     planMeetingReprocessing, beginMeetingReprocessing, previewMeetingProposal,
@@ -222,10 +223,6 @@
     stopMeetingClock();
   });
 
-  function meetingFailureText(value: unknown, fallback: string): string {
-    return typeof value === "string" ? value : value instanceof Error ? value.message : fallback;
-  }
-
   function updateMeetingClock(now = performance.now()): void {
     const sinceSnapshot = Math.max(0, now - meetingClockBaseAt);
     meetingElapsedMs = meetingElapsedBase + sinceSnapshot;
@@ -324,7 +321,7 @@
         isCurrent: () => generation === meetingPollGeneration,
         onFailure: (error: unknown) => {
           meetingPollingFailed = true;
-          meetingError = meetingFailureText(error, "Could not check meeting progress.")
+          meetingError = toErrorMessage(error, "Could not check meeting progress.")
             + " Retry the status check to continue.";
         },
         onSnapshot: (snapshot: MeetingJobSnapshot) => {
@@ -353,7 +350,7 @@
                 })
                 .catch((error) => {
                   if (generation === meetingPollGeneration) {
-                    meetingError = meetingFailureText(error, "Could not preview the proposal. The previous review is unchanged.");
+                    meetingError = toErrorMessage(error, "Could not preview the proposal. The previous review is unchanged.");
                   }
                 })
                 .finally(() => { if (generation === meetingPollGeneration) meetingReviewInit = null; });
@@ -361,7 +358,7 @@
               meetingReviewInit = initializeMeetingReview(snapshot.transcript, generation)
                 .catch((error) => {
                   if (generation === meetingPollGeneration) {
-                    meetingError = meetingFailureText(error, "Could not initialize the meeting review.");
+                    meetingError = toErrorMessage(error, "Could not initialize the meeting review.");
                   }
                 })
                 .finally(() => {
@@ -398,7 +395,7 @@
       try {
         await setMeetingResultPending(false);
       } catch (error) {
-        meetingError = meetingFailureText(error, "Could not preserve the current meeting result.");
+        meetingError = toErrorMessage(error, "Could not preserve the current meeting result.");
         return;
       }
     }
@@ -435,7 +432,7 @@
       meetingPhase = "Failed";
       updateMeetingClock();
       stopMeetingClock();
-      meetingError = meetingFailureText(error, "Could not start meeting import.");
+      meetingError = toErrorMessage(error, "Could not start meeting import.");
     }
   }
 
@@ -487,10 +484,10 @@
       transcribeError = "";
       plainStages = finishStages(plainStages, "completed");
       if (transcriptionResult.trim()) void revealTranscriptionResult();
-    } catch (error: any) {
+    } catch (error) {
       if (isMissingTranscribeFileError(error)) onMissingFile(filePath);
       plainStages = finishStages(plainStages, cancellingPlain ? "cancelled" : "failed");
-      transcribeError = cancellingPlain ? "Transcription was cancelled." : meetingFailureText(error, "Transcription failed");
+      transcribeError = cancellingPlain ? "Transcription was cancelled." : toErrorMessage(error, "Transcription failed");
     } finally {
       stopProgress?.();
       clearInterval(timer);
@@ -513,7 +510,7 @@
       // Backend success remains authoritative if Stop lost the race.
     } catch (error) {
       if (plainRunId !== runId) return;
-      if (transcribing && !transcribeError) transcribeError = meetingFailureText(error, "Could not request cancellation. The transcription is still running.");
+      if (transcribing && !transcribeError) transcribeError = toErrorMessage(error, "Could not request cancellation. The transcription is still running.");
       cancellingPlain = false;
     }
   }
@@ -525,7 +522,7 @@
       await setUpdateResultPending(job.id, false);
       onFileRecoveryChange(null);
       resultActionMessage = "Copied to clipboard.";
-    } catch (error) { resultActionMessage = meetingFailureText(error, "Could not copy."); }
+    } catch (error) { resultActionMessage = toErrorMessage(error, "Could not copy."); }
   }
 
   async function saveTranscriptionResult(): Promise<void> {
@@ -538,7 +535,7 @@
         onFileRecoveryChange(null);
       }
       resultActionMessage = saved ? "Saved." : "Save cancelled — nothing was written.";
-    } catch (error) { resultActionMessage = meetingFailureText(error, "Could not save."); }
+    } catch (error) { resultActionMessage = toErrorMessage(error, "Could not save."); }
   }
 
   async function cancelMeetingImport(): Promise<void> {
@@ -556,7 +553,7 @@
       }
     } catch (error) {
       if (generation !== meetingPollGeneration || meetingJobId !== jobId) return;
-      meetingError = meetingFailureText(error, "Could not request cancellation. The meeting is still running.");
+      meetingError = toErrorMessage(error, "Could not request cancellation. The meeting is still running.");
     }
   }
 
@@ -677,7 +674,7 @@
       if (meetingResultId) await setMeetingResultPending(false);
       meetingResultId = null;
     } catch (error) {
-      if (generation === meetingPollGeneration) meetingError = meetingFailureText(error, "Could not open the meeting review.");
+      if (generation === meetingPollGeneration) meetingError = toErrorMessage(error, "Could not open the meeting review.");
     }
   }
 
@@ -723,7 +720,7 @@
       transcribing = false;
       meetingJobId = null;
       meetingJobStatus = "failed";
-      meetingError = meetingFailureText(error, "Reprocessing failed; the previous review is unchanged.");
+      meetingError = toErrorMessage(error, "Reprocessing failed; the previous review is unchanged.");
       updateMeetingClock();
       stopMeetingClock();
       throw error;
@@ -775,7 +772,7 @@
       const state = await previewMeetingProposal(result.proposal);
       if (generation === meetingPollGeneration && meetingReprocessingResult === result) meetingProposal = state;
     } catch (error) {
-      meetingError = meetingFailureText(error, "Could not preview the proposal. Save it to retry later; the previous review is unchanged.");
+      meetingError = toErrorMessage(error, "Could not preview the proposal. Save it to retry later; the previous review is unchanged.");
     } finally { meetingReprocessingBusy = false; }
   }
 
@@ -857,7 +854,7 @@
                 <button class="btn btn-secondary" disabled={otherBusy || transcribing || meetingReprocessingBusy || meetingReviewInit !== null}
                   onclick={() => void retryCurrentMeetingProposalPreview()}>Retry proposal preview</button>
                 <button class="btn btn-secondary" disabled={otherBusy || transcribing || meetingReprocessingBusy || meetingReviewInit !== null}
-                  onclick={() => void saveCurrentMeetingProposal().catch((error) => { meetingError = meetingFailureText(error, "Could not save the proposal."); })}>Save retained proposal</button>
+                  onclick={() => void saveCurrentMeetingProposal().catch((error) => { meetingError = toErrorMessage(error, "Could not save the proposal."); })}>Save retained proposal</button>
               </div>
             {/if}
             <MeetingReprocessing

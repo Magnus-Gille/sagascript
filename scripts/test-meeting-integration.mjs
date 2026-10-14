@@ -57,7 +57,7 @@ test("polling is serialized, stale generations are ignored, and cancellation wai
     /\+\+meetingDocumentRevision|meetingDocumentRevision\s*\+=/,
     "starting or failing an import must not remount the previous review's unsaved drafts",
   );
-  assert.match(fileTranscriptionSource, /meetingFailureText\(error, "Could not check meeting progress\."\)/);
+  assert.match(fileTranscriptionSource, /toErrorMessage\(error, "Could not check meeting progress\."\)/);
   assert.match(fileTranscriptionSource, /generation !== meetingPollGeneration \|\| meetingJobId !== jobId/);
 });
 

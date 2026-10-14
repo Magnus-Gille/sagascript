@@ -11,7 +11,7 @@ import { describe, expect, test } from "vitest";
 import type { EnginePrewarm, HotkeyProfile, Settings as SettingsValue } from "./api";
 import Settings from "./Settings.svelte";
 import { deferred, settle, type Deferred } from "../test/deferred";
-import { mockIpc, type CommandHandlers } from "../test/ipc";
+import { backendError, mockIpc, type CommandHandlers } from "../test/ipc";
 import {
   kbWhisperMedium,
   pianissimo,
@@ -24,7 +24,10 @@ import {
 
 /**
  * The settings file in memory. `readFailure` makes get_settings reject and
- * `writeFailure` makes every setter reject, each with a Rust `Err(String)`.
+ * `writeFailure` makes every setter reject, each with what its Rust command
+ * rejects with: an `Err(String)`, or for a command that returns
+ * `Result<_, CommandError>` (set_profile_glossary, set_hotkey_profiles) a
+ * backend error with the given code.
  */
 function settingsFile(initial: Partial<SettingsValue> = {}) {
   const file = {
@@ -35,9 +38,9 @@ function settingsFile(initial: Partial<SettingsValue> = {}) {
   };
   /** A setter: rejects while `writeFailure` is set, otherwise changes the file and answers `answer`. */
   const setter =
-    <A, R = undefined>(change: (args: A) => Partial<SettingsValue>, answer?: R) =>
+    <A, R = undefined>(change: (args: A) => Partial<SettingsValue>, answer?: R, errorCode?: string) =>
     (args: A): R => {
-      if (file.writeFailure !== null) throw file.writeFailure;
+      if (file.writeFailure !== null) throw errorCode === undefined ? file.writeFailure : backendError(errorCode, file.writeFailure);
       file.current = { ...file.current, ...change(args) };
       return answer as R;
     };
@@ -49,9 +52,13 @@ function settingsFile(initial: Partial<SettingsValue> = {}) {
     set_file_transcription_model: setter(({ modelId }) => ({ file_transcription_model: modelId })),
     set_language: setter(({ language }) => ({ language }), [] as string[]),
     set_beam_size: setter(({ beamSize }) => ({ beam_size: beamSize })),
-    set_profile_glossary: setter(({ profileId, source }) => ({
-      profile_glossaries: { ...file.current.profile_glossaries, [profileId]: source },
-    })),
+    set_profile_glossary: setter(
+      ({ profileId, source }) => ({
+        profile_glossaries: { ...file.current.profile_glossaries, [profileId]: source },
+      }),
+      undefined,
+      "unclassified",
+    ),
     // The command takes a plain string; the settings file stores the parsed mode.
     set_engine_prewarm: setter(({ mode }) => ({ engine_prewarm: mode as EnginePrewarm })),
     set_engine_idle_unload_minutes: setter(({ minutes }) => ({ engine_idle_unload_minutes: minutes })),
@@ -59,7 +66,7 @@ function settingsFile(initial: Partial<SettingsValue> = {}) {
     set_profile_model: setter(({ profileId, modelId }) => ({
       profile_models: { ...file.current.profile_models, [profileId]: modelId },
     })),
-    set_hotkey_profiles: setter(({ profiles }) => ({ hotkey_profiles: profiles }), [] as string[]),
+    set_hotkey_profiles: setter(({ profiles }) => ({ hotkey_profiles: profiles }), [] as string[], "hotkey_change_failed"),
   };
   return file;
 }

@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import ts from "typescript";
 import vm from "node:vm";
+import { frontendErrorsSource } from "./lib/frontend-errors-source.mjs";
 
 const settingsSource = await readFile(new URL("../src/lib/Settings.svelte", import.meta.url), "utf8");
 const scriptSource = settingsSource.match(/<script lang="ts">([\s\S]*?)<\/script>/)?.[1];
@@ -76,6 +77,7 @@ function transpile(source) {
 
 function createHarness({ failure = null } = {}) {
   const functions = [
+    "isDictionaryConflictShown",
     "glossaryHasUnsavedChanges",
     "saveGlossary",
     "onGlossaryInput",
@@ -119,8 +121,10 @@ function createHarness({ failure = null } = {}) {
     let glossaryConflictScopeId = null;
     class HTMLElement {}
     const calls = [];
-    const dictionaryConflictPrefix = "Dictionary changed elsewhere:";
+    const dictionaryConflictCode = "dictionary_changed_elsewhere";
+    let dictionaryConflictMessage = null;
     const failure = ${JSON.stringify(failure)};
+    ${frontendErrorsSource}
 
     function explicitProfiles(source = settings) {
       return source?.hotkey_profiles ?? [];
@@ -154,7 +158,8 @@ function createHarness({ failure = null } = {}) {
     async function refreshProfileModels() {}
     async function setProfileGlossary(scopeId, value, expectedSource) {
       calls.push({ command: "setProfileGlossary", scopeId, value, expectedSource });
-      if (failure) throw new Error(failure);
+      // What a command that returns Result<_, CommandError> rejects with.
+      if (failure) throw { ...failure, retryable: false };
       settings = {
         ...settings,
         profile_glossaries: { ...settings.profile_glossaries, [scopeId]: value },
@@ -168,9 +173,12 @@ function createHarness({ failure = null } = {}) {
         await refreshProfileModels(settings.hotkey_profiles);
         return true;
       } catch (error) {
-        const message = typeof error === "string" ? error : error?.message || "Failed to save setting.";
+        const message = toErrorMessage(error, "Failed to save setting.");
         if (reportError) settingsError = message;
-        if (errorSink) errorSink.value = message;
+        if (errorSink) {
+          errorSink.value = message;
+          errorSink.code = isBackendError(error) ? error.code : null;
+        }
         return false;
       }
     }
@@ -400,8 +408,15 @@ test("dictionary Save proceeds without a meeting review confirmation", async () 
   ]);
 });
 
-for (const failure of ["write failed", "Dictionary changed elsewhere: current source"]) {
-  test(`failed or conflict save retains the draft and blocks navigation (${failure})`, async () => {
+const conflictFailure = { code: "dictionary_changed_elsewhere", message: "Dictionary changed elsewhere: current source" };
+const failures = [
+  { code: "unclassified", message: "write failed" },
+  conflictFailure,
+  // The code decides, never the text: this is not a conflict.
+  { code: "unclassified", message: "Dictionary changed elsewhere: only the text says so" },
+];
+for (const failure of failures) {
+  test(`failed or conflict save retains the draft and blocks navigation (${failure.code}: ${failure.message})`, async () => {
     const exercise = createHarness({ failure });
     input(exercise, "draft that must survive");
     assert.equal(await exercise.saveGlossary(), false);
@@ -413,9 +428,11 @@ for (const failure of ["write failed", "Dictionary changed elsewhere: current so
     assert.equal(blocked.activeTab, "settings");
     assert.equal(blocked.pendingGlossaryNavigation.kind, "tab");
     assert.equal(blocked.pendingGlossaryNavigation.tab, "dictate");
-    if (failure.startsWith("Dictionary")) {
+    if (failure.code === "dictionary_changed_elsewhere") {
       assert.equal(blocked.glossaryConflictScopeId, "default");
       assert.match(blocked.settingsError, /^Dictionary changed elsewhere:/);
+    } else {
+      assert.equal(blocked.glossaryConflictScopeId, null);
     }
   });
 }

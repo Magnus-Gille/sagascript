@@ -54,9 +54,6 @@
     }
   },
   "src/lib/FileTranscription.svelte": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 1
-    },
     "@typescript-eslint/no-unused-vars": {
       "count": 3
     }
@@ -75,9 +72,6 @@
     }
   },
   "src/lib/Onboarding.svelte": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 10
-    },
     "@typescript-eslint/no-unused-vars": {
       "count": 2
     },
@@ -86,9 +80,6 @@
     }
   },
   "src/lib/Settings.svelte": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 15
-    },
     "@typescript-eslint/no-unused-vars": {
       "count": 2
     },
