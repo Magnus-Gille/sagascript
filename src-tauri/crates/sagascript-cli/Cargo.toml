@@ -53,4 +53,6 @@ dev-overrides = ["sagascript-core/dev-overrides"]
 workspace = true
 
 [dev-dependencies]
+sagascript-core = { path = "../sagascript-core", features = ["test-support"] }
+sagascript-testsupport = { path = "../sagascript-testsupport" }
 tempfile = "3"

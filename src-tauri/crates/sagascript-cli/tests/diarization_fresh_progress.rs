@@ -23,9 +23,8 @@ mod fresh_progress {
     use std::path::{Path, PathBuf};
     use std::process::{Command, Output};
 
+    use sagascript_testsupport::{isolated_cli_env, sha256_hex, TempDir};
     use serde_json::{json, Value};
-    use sha2::{Digest, Sha256};
-    use tempfile::tempdir;
 
     const REQUIRED_PHASES: [&str; 8] = [
         "decoding",
@@ -36,25 +35,6 @@ mod fresh_progress {
         "clustering",
         "finalizing",
         "completed",
-    ];
-
-    // Keep ordinary OS paths for provisioned local models and the Windows loader;
-    // exclude provider/application credentials. Only settings are redirected.
-    const ORDINARY_OS_ENV: [&str; 14] = [
-        "HOME",
-        "USER",
-        "LOGNAME",
-        "PATH",
-        "LANG",
-        "TMPDIR",
-        "SystemRoot",
-        "WINDIR",
-        "TEMP",
-        "TMP",
-        "USERPROFILE",
-        "APPDATA",
-        "LOCALAPPDATA",
-        "XDG_DATA_HOME",
     ];
 
     #[test]
@@ -70,8 +50,8 @@ mod fresh_progress {
         sagascript_core::transcription::model::verify_vad_model(&vad)
             .expect("fresh regression requires the pinned local VAD model before CLI start");
 
-        let root = tempdir().expect("create isolated settings directory");
-        let settings = root.path().join("settings.json");
+        let root = TempDir::new();
+        let settings = root.join("settings.json");
         std::fs::write(&settings, b"{}\n").expect("write isolated settings");
 
         for output_kind in [OutputKind::Json, OutputKind::MeetingJson] {
@@ -127,14 +107,9 @@ mod fresh_progress {
         output_kind: OutputKind,
     ) -> Output {
         let mut command = Command::new(env!("CARGO_BIN_EXE_sagascript"));
-        command.env_clear();
-        for name in ORDINARY_OS_ENV {
-            if let Some(value) = std::env::var_os(name) {
-                command.env(name, value);
-            }
-        }
-        command
-            .env("SAGASCRIPT_SETTINGS_PATH", settings)
+        // Keep ordinary OS paths for provisioned local models and the Windows loader;
+        // exclude provider/application credentials. Only settings are redirected.
+        isolated_cli_env(&mut command, settings)
             .args([
                 "transcribe",
                 fixture.to_str().expect("fixture path is UTF-8"),
@@ -276,9 +251,5 @@ mod fresh_progress {
             "fixture bytes changed during run"
         );
         assert_eq!(sha256_hex(&source_after), source_sha256);
-    }
-
-    fn sha256_hex(bytes: &[u8]) -> String {
-        format!("{:x}", Sha256::digest(bytes))
     }
 }

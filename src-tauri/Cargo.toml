@@ -3,9 +3,11 @@
 # Cargo.lock, target/, and every CI path keep working unchanged.
 #
 # Members:
-#   .                        — this package: the desktop app (Tauri GUI + CLI dispatch)
-#   crates/sagascript-core   — lib: audio, transcription, settings, diarization, error
-#   crates/sagascript-cli    — lib + headless `sagascript` bin (no Tauri)
+#   .                                 — this package: the desktop app (Tauri GUI + CLI dispatch)
+#   crates/sagascript-core            — lib: audio, transcription, settings, diarization, error
+#   crates/sagascript-cli             — lib + headless `sagascript` bin (no Tauri)
+#   crates/sagascript-engine-protocol — lib: engine-host JSON Lines wire types
+#   crates/sagascript-testsupport     — lib: test-only helpers, only ever a dev-dependency
 #
 # Bare `cargo build/test/clippy` here operates on the app package only (root
 # package default; `default-members` documents it). Use `--workspace` or `-p`
@@ -68,6 +70,11 @@ notify = { version = "7", default-features = false }
 # unification. Each client names its backend; see src/updates.rs.
 reqwest = { version = "0.13", default-features = false, features = ["native-tls-no-alpn", "system-proxy", "json"] }
 semver = "1"
+
+# Test-only helpers (#363): shared fixtures and core's `test-support` module.
+[dev-dependencies]
+sagascript-core = { path = "crates/sagascript-core", features = ["test-support"] }
+sagascript-testsupport = { path = "crates/sagascript-testsupport" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # notify 7 requires one native macOS backend feature even when this app uses

@@ -2,12 +2,13 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use sagascript_core::diarization::DiarizationAnalysis;
-use sagascript_core::meeting::{MeetingSegmentInput, MeetingSpeaker, MeetingTranscript};
+use sagascript_core::meeting::MeetingTranscript;
 use sagascript_core::meeting_reprocess_plan::ReprocessingMode;
 use sagascript_core::meeting_review::MeetingReview;
 use sagascript_core::settings::{Language, WhisperModel};
+use sagascript_core::test_support::meeting_transcript;
 use sagascript_core::transcription::Glossary;
-use sha2::{Digest, Sha256};
+use sagascript_testsupport::{sha256_hex, TempDir};
 
 use super::{
     execute_with, execute_with_model_check, plan_reprocessing, plan_reprocessing_with_model_check,
@@ -88,7 +89,7 @@ impl WorkBackend for CountingBackend {
 }
 
 struct Fixture {
-    root: PathBuf,
+    _root: TempDir,
     audio: PathBuf,
     cache: PathBuf,
     previous: MeetingReview,
@@ -97,34 +98,20 @@ struct Fixture {
 
 impl Fixture {
     fn new(with_cache: bool) -> Self {
-        let root = std::env::temp_dir().join(format!(
-            "sagascript-meeting-reprocessing-tests-{}",
-            uuid::Uuid::new_v4()
-        ));
-        std::fs::create_dir_all(&root).expect("create synthetic fixture directory");
+        let root = TempDir::new();
         let audio = root.join("synthetic-audio.bin");
         let cache = root.join("diarization-cache.json");
         std::fs::write(&audio, b"synthetic audio bytes").expect("write synthetic audio");
 
-        let source_sha256 = sha256_file(&audio);
+        let source_sha256 = sha256_hex(std::fs::read(&audio).expect("read synthetic audio"));
         let previous = MeetingReview::new(
-            MeetingTranscript::new(
-                source_sha256.clone(),
-                "en",
-                "base",
-                1.0,
-                vec![MeetingSegmentInput {
-                    start: 0.0,
-                    end: 1.0,
-                    text: "cached transcript".to_string(),
-                    speaker: "SPEAKER_0".to_string(),
-                }],
-                vec![MeetingSpeaker {
-                    id: "SPEAKER_0".to_string(),
-                    label: "SPEAKER_0".to_string(),
-                }],
-            )
-            .expect("synthetic transcript is valid"),
+            meeting_transcript()
+                .source_sha256(source_sha256.clone())
+                .model("base")
+                .duration(1.0)
+                .segment(0.0, 1.0, "cached transcript", "SPEAKER_0")
+                .speaker("SPEAKER_0", "SPEAKER_0")
+                .build(),
         )
         .expect("synthetic review is valid");
 
@@ -148,7 +135,7 @@ impl Fixture {
         }
 
         Self {
-            root,
+            _root: root,
             audio,
             cache,
             previous,
@@ -166,19 +153,6 @@ impl Fixture {
             glossary: &self.glossary,
         }
     }
-}
-
-impl Drop for Fixture {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.root);
-    }
-}
-
-fn sha256_file(path: &Path) -> String {
-    format!(
-        "{:x}",
-        Sha256::digest(std::fs::read(path).expect("read synthetic audio"))
-    )
 }
 
 fn assert_counts(backend: &CountingBackend, decode: usize, analyze: usize, full: usize) {

@@ -544,13 +544,7 @@ fn cache_error(path: &Path, action: &str, error: std::io::Error) -> DictationErr
 mod tests {
     use super::*;
     use sagascript_core::transcription::diagnostics::{LanguageRegion, TranscriptionWarning};
-
-    fn temp_dir() -> PathBuf {
-        std::env::temp_dir().join(format!(
-            "sagascript-diarization-cache-{}",
-            uuid::Uuid::new_v4()
-        ))
-    }
+    use sagascript_testsupport::TempDir;
 
     fn identity(input: &Path) -> CacheIdentity {
         identity_for(input, "sv", "kb-whisper-large", Some("Grimnir"))
@@ -597,8 +591,7 @@ mod tests {
 
     #[test]
     fn identity_serialization_has_explicit_fields_and_no_threshold() {
-        let dir = temp_dir();
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new();
         let input = dir.join("audio.m4a");
         std::fs::write(&input, b"audio").unwrap();
 
@@ -621,14 +614,11 @@ mod tests {
         );
         assert_eq!(object["schema_version"], serde_json::json!(6));
         assert!(!object.contains_key("threshold"));
-
-        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
     fn freshly_recomputed_identity_reuses_cached_intermediates() {
-        let dir = temp_dir();
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new();
         let input = dir.join("audio.m4a");
         std::fs::write(&input, b"audio").unwrap();
         let cache_path = dir.join("analysis.json");
@@ -651,14 +641,11 @@ mod tests {
             serde_json::to_value(&hit.analysis).unwrap(),
             expected_analysis
         );
-
-        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
     fn cache_round_trip_preserves_analysis_and_word_timestamp_bits() {
-        let dir = temp_dir();
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new();
         let input = dir.join("synthetic.wav");
         let cache_path = dir.join("analysis.json");
         std::fs::write(&input, b"synthetic source bytes").unwrap();
@@ -749,14 +736,11 @@ mod tests {
         }
         assert_eq!(hit.transcript[0].0.to_bits(), transcript[0].0.to_bits());
         assert_eq!(hit.transcript[0].1.to_bits(), transcript[0].1.to_bits());
-
-        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
     fn empty_and_missing_prompt_are_the_same_identity() {
-        let dir = temp_dir();
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new();
         let input = dir.join("audio.m4a");
         std::fs::write(&input, b"audio").unwrap();
         let cache_path = dir.join("analysis.json");
@@ -768,14 +752,11 @@ mod tests {
             load(&cache_path, &empty_prompt).unwrap(),
             CacheLookup::Hit(_)
         ));
-
-        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
     fn decoder_and_vad_changes_miss_but_threshold_is_not_in_identity() {
-        let dir = temp_dir();
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new();
         let input = dir.join("audio.m4a");
         let cache_path = dir.join("analysis.json");
         std::fs::write(&input, b"audio").unwrap();
@@ -832,13 +813,11 @@ mod tests {
                 CacheLookup::Miss(_)
             ));
         }
-        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
     fn language_model_and_prompt_changes_miss_without_reason_matching() {
-        let dir = temp_dir();
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new();
         let input = dir.join("audio.m4a");
         std::fs::write(&input, b"audio").unwrap();
         let cache_path = dir.join("analysis.json");
@@ -901,14 +880,11 @@ mod tests {
             load(&cache_path, &baseline).unwrap(),
             CacheLookup::Hit(_)
         ));
-
-        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
     fn round_trip_and_reject_changed_identity() {
-        let dir = temp_dir();
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new();
         let input = dir.join("audio.m4a");
         std::fs::write(&input, b"audio").unwrap();
         let cache_path = dir.join("analysis.json");
@@ -986,13 +962,11 @@ mod tests {
             load_for_rediarization(&cache_path, &changed).unwrap(),
             CacheLookup::Miss(_)
         ));
-        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
     fn schema4_json_without_coarse_field_is_a_normal_cache_miss() {
-        let dir = temp_dir();
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new();
         let input = dir.join("audio.m4a");
         std::fs::write(&input, b"audio").unwrap();
         let cache_path = dir.join("analysis.json");
@@ -1042,13 +1016,11 @@ mod tests {
             load_for_rediarization(&cache_path, &old_identity).unwrap(),
             CacheLookup::Miss(_)
         ));
-        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
     fn current_schema_without_coarse_coverage_is_a_cache_miss() {
-        let dir = temp_dir();
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new();
         let input = dir.join("audio.m4a");
         std::fs::write(&input, b"audio").unwrap();
         let cache_path = dir.join("analysis.json");
@@ -1068,14 +1040,11 @@ mod tests {
             load_for_rediarization(&cache_path, &expected).unwrap(),
             CacheLookup::Miss("coarse coverage segments are missing")
         ));
-
-        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
     fn unknown_analysis_parameters_are_cache_misses_not_reused_or_parse_errors() {
-        let dir = temp_dir();
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new();
         let input = dir.join("audio.m4a");
         std::fs::write(&input, b"audio").unwrap();
         let cache_path = dir.join("analysis.json");
@@ -1093,13 +1062,11 @@ mod tests {
             load_for_rediarization(&cache_path, &expected).unwrap(),
             CacheLookup::Miss(_)
         ));
-        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
     fn stale_analysis_identity_misses_normal_reuse_and_rediarization_without_policy() {
-        let dir = temp_dir();
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new();
         let input = dir.join("audio.m4a");
         std::fs::write(&input, b"audio").unwrap();
         let cache_path = dir.join("analysis.json");
@@ -1123,14 +1090,11 @@ mod tests {
             load_for_rediarization(&cache_path, &expected).unwrap(),
             CacheLookup::Miss(_)
         ));
-
-        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
     fn exclusive_speech_policy_changes_analysis_identity() {
-        let dir = temp_dir();
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new();
         let input = dir.join("audio.m4a");
         let cache_path = dir.join("analysis.json");
         std::fs::write(&input, b"audio").unwrap();
@@ -1149,13 +1113,11 @@ mod tests {
             load_with_analysis_policy(&cache_path, &expected, true).unwrap(),
             CacheLookup::Hit(_)
         ));
-        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
     fn every_stale_analysis_dependency_misses_normal_reuse_but_rediarizes() {
-        let dir = temp_dir();
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new();
         let input = dir.join("audio.m4a");
         std::fs::write(&input, b"audio").unwrap();
         let cache_path = dir.join("analysis.json");
@@ -1192,14 +1154,11 @@ mod tests {
                 CacheLookup::Hit(_)
             ));
         }
-
-        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
     fn missing_or_malformed_analysis_identity_never_hits() {
-        let dir = temp_dir();
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new();
         let input = dir.join("audio.m4a");
         std::fs::write(&input, b"audio").unwrap();
         let cache_path = dir.join("analysis.json");
@@ -1261,14 +1220,11 @@ mod tests {
             load_for_rediarization(&cache_path, &expected),
             Ok(CacheLookup::Hit(_))
         ));
-
-        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
     fn corrupt_payload_is_rejected_by_both_loaders() {
-        let dir = temp_dir();
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new();
         let input = dir.join("audio.m4a");
         std::fs::write(&input, b"audio").unwrap();
         let cache_path = dir.join("analysis.json");
@@ -1311,14 +1267,11 @@ mod tests {
         std::fs::write(&cache_path, b"{").unwrap();
         assert!(load(&cache_path, &expected).is_err());
         assert!(load_for_rediarization(&cache_path, &expected).is_err());
-
-        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
     fn malformed_cache_errors_do_not_echo_payload_text() {
-        let dir = temp_dir();
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new();
         let input = dir.join("audio.m4a");
         std::fs::write(&input, b"audio").unwrap();
         let cache_path = dir.join("analysis.json");
@@ -1341,14 +1294,11 @@ mod tests {
             assert!(error.to_string().contains("invalid JSON"));
             assert!(!error.to_string().contains(marker));
         }
-
-        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
     fn loaders_reject_oversized_and_non_regular_cache_paths() {
-        let dir = temp_dir();
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new();
         let input = dir.join("audio.m4a");
         std::fs::write(&input, b"audio").unwrap();
         let expected = identity(&input);
@@ -1380,14 +1330,11 @@ mod tests {
             };
             assert!(error.to_string().contains("not a regular file"));
         }
-
-        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
     fn save_new_refuses_existing_destination_without_replacing_it() {
-        let dir = temp_dir();
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new();
         let input = dir.join("audio.m4a");
         std::fs::write(&input, b"audio").unwrap();
         let cache_path = dir.join("analysis.json");
@@ -1405,14 +1352,11 @@ mod tests {
                 .to_string_lossy()
                 .starts_with(".analysis.json."))
         );
-
-        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
     fn save_new_refuses_hardlinked_input_without_overwriting_either_link() {
-        let dir = temp_dir();
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new();
         let input = dir.join("audio.m4a");
         let output = dir.join("analysis.json");
         std::fs::write(&input, b"input must survive").unwrap();
@@ -1430,14 +1374,11 @@ mod tests {
         assert!(error.to_string().contains("output already exists"));
         assert_eq!(std::fs::read(&input).unwrap(), b"input must survive");
         assert_eq!(std::fs::read(&output).unwrap(), b"input must survive");
-
-        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
     fn save_new_uses_private_permissions() {
-        let dir = temp_dir();
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new();
         let input = dir.join("audio.m4a");
         let output = dir.join("analysis.json");
         std::fs::write(&input, b"audio").unwrap();
@@ -1459,7 +1400,5 @@ mod tests {
                 0o600
             );
         }
-
-        let _ = std::fs::remove_dir_all(dir);
     }
 }

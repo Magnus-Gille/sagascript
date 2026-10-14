@@ -72,7 +72,13 @@ test("a workflow that installs a different Rust release overrides the toolchain 
 test("the MSRV is declared once, inherited by every crate and checked in CI", () => {
   assert.match(msrv ?? "", /^\d+\.\d+(\.\d+)?$/);
   assert.equal(rustVersion("src-tauri/engine-host/ort/Cargo.toml"), msrv, "ORT host must declare the same MSRV");
-  for (const crate of ["src-tauri", "src-tauri/crates/sagascript-core", "src-tauri/crates/sagascript-cli", "src-tauri/crates/sagascript-engine-protocol"]) {
+  // Every workspace member: the app package and each crate under crates/ (the
+  // workspace's `members = [".", "crates/*"]`), including test-only ones.
+  const members = readdirSync(fileURLToPath(new URL("../src-tauri/crates/", import.meta.url)), { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => `src-tauri/crates/${entry.name}`);
+  assert.ok(members.includes("src-tauri/crates/sagascript-core"), "crates/ must list the member crates");
+  for (const crate of ["src-tauri", ...members]) {
     assert.match(read(`${crate}/Cargo.toml`), /^rust-version\.workspace = true$/m, `${crate} must inherit rust-version`);
   }
   const ci = workflows["ci.yml"];

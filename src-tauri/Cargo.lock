@@ -4363,6 +4363,7 @@ dependencies = [
  "reqwest",
  "sagascript-cli",
  "sagascript-core",
+ "sagascript-testsupport",
  "semver",
  "serde",
  "serde_json",
@@ -4391,6 +4392,7 @@ dependencies = [
  "ctrlc",
  "indicatif",
  "sagascript-core",
+ "sagascript-testsupport",
  "serde",
  "serde_json",
  "sha2",
@@ -4419,6 +4421,7 @@ dependencies = [
  "rubato",
  "rustfft",
  "sagascript-engine-protocol",
+ "sagascript-testsupport",
  "serde",
  "serde_json",
  "sha2",
@@ -4440,6 +4443,14 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "sagascript-testsupport"
+version = "1.4.4"
+dependencies = [
+ "sha2",
+ "tempfile",
 ]
 
 [[package]]
