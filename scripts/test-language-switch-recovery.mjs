@@ -14,6 +14,10 @@ test("language recovery classifier matches the actual backend guard", () => {
   assert.ok(backendError.includes(defaultDictionaryLanguageBlock));
 });
 const names = [
+  "errorText",
+  "readSettings",
+  "markSettingsUnconfirmed",
+  "saveSetting",
   "applySetting",
   "onLanguageChange",
   "clearDictionaryAndSwitchLanguage",
@@ -54,6 +58,8 @@ function harness({
       profile_glossaries: { default: options.empty ? "" : "mergea = mördsa", english: "merge = merch" } };
     let settings = structuredClone(stored);
     let settingsError = "", blockedLanguageChange = null, languageSaving = false, models = [];
+    let settingsReadIssued = 0, settingsReadShown = 0, settingsUnconfirmed = null;
+    const unconfirmedBlock = "This change was not sent: the window could not confirm the last saved change. Reload settings first.";
     let glossarySaving = false, glossaryScopeId = "english", glossaryDraft = "english draft";
     let glossaryEditBaseline = { scopeId: "english", source: "merge = merch", generation: 1 };
     let glossaryConflictScopeId = null, glossaryDraftGeneration = 1, glossaryDraftInitialized = true;

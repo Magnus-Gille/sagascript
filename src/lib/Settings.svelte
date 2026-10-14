@@ -125,6 +125,16 @@
   // Initial data-fetch + settings-mutation error states
   let initError: string = $state("");
   let settingsError: string = $state("");
+  // Reads of the persisted settings carry a ticket in the order they are issued
+  // (#341). An answer is shown only when no read issued after it has been shown,
+  // so answers that arrive out of order cannot put an older copy over a newer one.
+  let settingsReadIssued = 0;
+  let settingsReadShown = 0;
+  // Set while `settings` is known to be behind what the backend holds: a change was
+  // saved (or the file changed) and the read that should confirm it failed. Until a
+  // read succeeds the window says so and sends no further change.
+  let settingsUnconfirmed: { afterSave: boolean; detail: string } | null = $state(null);
+  let settingsReloading = $state(false);
   // Non-blocking notices: a profile's model was reset to Auto by a language change.
   let profileModelNotices: string[] = $state([]);
   let blockedLanguageChange: { language: Language; source: string } | null = $state(null);
@@ -982,15 +992,22 @@
 
   async function onFileModelChange(event: Event): Promise<void> {
     if (!settings || fileModelSaving) return;
-    const id = (event.target as HTMLSelectElement).value;
+    // Read before the first await: currentTarget is gone once the handler yields.
+    const select = event.currentTarget as HTMLSelectElement;
+    const id = select.value;
     fileModelSaving = true;
     fileModelError = "";
     try {
-      await setFileTranscriptionModel(id);
-      settings = await getSettings();
+      const outcome = await saveSetting(() => setFileTranscriptionModel(id));
+      if (!outcome.saved) {
+        // Nothing was saved. A one-way bound native select keeps the rejected
+        // choice unless it is put back by hand.
+        if (settings) select.value = settings.file_transcription_model;
+        fileModelError = typeof outcome.error === "string" ? outcome.error : String(outcome.error);
+        return;
+      }
+      // Saved, whether or not the read-back could confirm it.
       if (id === "pianissimo-sv") { transcribeDiarize = false; transcribePrompt = ""; }
-    } catch (error) {
-      fileModelError = typeof error === "string" ? error : String(error);
     } finally { fileModelSaving = false; }
   }
 
@@ -1156,8 +1173,7 @@
     listen("state-changed", async (event: any) => {
       const nextState = event.payload;
       if (nextState === "settings_reloaded") {
-        settings = await getSettings();
-        await refreshProfileModels(settings.hotkey_profiles);
+        await syncSettings();
         return;
       }
 
@@ -1209,8 +1225,8 @@
         console.warn("Failed to load engine status", error);
       });
       try {
-        settings = await getSettings();
-        await refreshProfileModels(settings.hotkey_profiles);
+        const loaded = await readSettings();
+        await refreshProfileModels(loaded.hotkey_profiles);
         platform = await getPlatform();
         if (platform === "macos") {
           accessibilityGranted = await checkAccessibilityPermission();
@@ -1246,12 +1262,113 @@
     };
   });
 
+  function errorText(error: unknown, fallback: string): string {
+    if (typeof error === "string") return error;
+    if (typeof error === "object" && error !== null && "message" in error && typeof error.message === "string" && error.message) {
+      return error.message;
+    }
+    return fallback;
+  }
+
+  /**
+   * Read the persisted settings and show them; showing a copy confirms it.
+   * Resolves with the copy now shown. An answer that a read issued after it has
+   * already been replaced is dropped, and so is its failure; any other failure
+   * rejects and leaves the shown copy as it was.
+   */
+  async function readSettings(): Promise<Settings> {
+    const ticket = ++settingsReadIssued;
+    let fresh: Settings;
+    try {
+      fresh = await getSettings();
+    } catch (error) {
+      if (ticket < settingsReadShown && settings) return settings;
+      throw error;
+    }
+    if (ticket > settingsReadShown) {
+      settingsReadShown = ticket;
+      settings = fresh;
+      settingsUnconfirmed = null;
+    }
+    return settings ?? fresh;
+  }
+
+  function markSettingsUnconfirmed(error: unknown, afterSave: boolean): void {
+    settingsUnconfirmed = {
+      afterSave: afterSave || (settingsUnconfirmed?.afterSave ?? false),
+      detail: errorText(error, "unknown error"),
+    };
+  }
+
+  /**
+   * Read the settings again and refresh what depends on them, for the
+   * settings-changed event and the Reload settings button. A failed read keeps
+   * the notice, with the newest reason.
+   */
+  async function syncSettings(): Promise<void> {
+    try {
+      const current = await readSettings();
+      await refreshProfileModels(current.hotkey_profiles);
+    } catch (error) {
+      markSettingsUnconfirmed(error, false);
+    }
+  }
+
+  async function reloadSettings(): Promise<void> {
+    if (settingsReloading) return;
+    settingsReloading = true;
+    try {
+      await syncSettings();
+    } finally {
+      settingsReloading = false;
+    }
+  }
+
+  /** Why a change was not sent while the window cannot tell what is saved. */
+  const unconfirmedBlock = "This change was not sent: the window could not confirm the last saved change. Reload settings first.";
+
+  type SaveOutcome<T> =
+    | { saved: false; error: unknown }
+    | { saved: true; result: T; confirmed: boolean };
+
+  /**
+   * One settings change followed by its read-back, kept apart (#341):
+   * - `saved: false`: the backend rejected the change (or the window held it
+   *   back, see below). Nothing was saved and nothing was read.
+   * - `saved: true`: the change is saved; it is never repeated. `confirmed` says
+   *   whether the read-back showed the saved state. When it failed, the window
+   *   keeps the old copy, marks it unconfirmed and shows the notice that offers
+   *   Reload settings; it does not claim the save failed.
+   * While unconfirmed, no change is sent: it could be built from the old copy
+   * (a toggle, a whole profile list, a dictionary save) and overwrite what was
+   * saved. `afterSave` runs as soon as the change is saved, before the read-back.
+   */
+  async function saveSetting<T>(mutate: () => Promise<T>, afterSave?: (result: T) => void): Promise<SaveOutcome<T>> {
+    if (settingsUnconfirmed) return { saved: false, error: unconfirmedBlock };
+    let result: T;
+    try {
+      result = await mutate();
+    } catch (error) {
+      return { saved: false, error };
+    }
+    afterSave?.(result);
+    try {
+      await readSettings();
+    } catch (error) {
+      markSettingsUnconfirmed(error, true);
+      return { saved: true, result, confirmed: false };
+    }
+    return { saved: true, result, confirmed: true };
+  }
+
   /**
    * Shared wrapper for the common "mutate then refresh settings" pattern.
-   * On failure: records a visible error and forces bound controls back to
-   * last-known-good by reassigning `settings` to a fresh object (one-way
-   * bindings re-render from state, so a native control that already shows
-   * the rejected value snaps back). Never re-throws.
+   * Resolves true when the change is saved, even if the read-back that should
+   * confirm it failed (then the unconfirmed notice is shown, see saveSetting).
+   * When it is rejected: records a visible error, reassigns `settings` so
+   * rendered values come from the last known copy, and resolves false. A native
+   * select or input keeps the rejected value on its own: callers put the saved
+   * one back by hand. Never re-throws.
    */
   async function applySetting(
     mutate: () => Promise<void | string[]>,
@@ -1259,19 +1376,18 @@
     reportError = true,
   ): Promise<boolean> {
     if (reportError) settingsError = "";
-    try {
-      const notices = await mutate();
+    const outcome = await saveSetting(mutate, (notices) => {
       profileModelNotices = Array.isArray(notices) ? notices : [];
-      settings = await getSettings();
-      await refreshProfileModels(settings.hotkey_profiles);
-      return true;
-    } catch (e: any) {
-      const message = typeof e === "string" ? e : e?.message || "Failed to save setting.";
+    });
+    if (!outcome.saved) {
+      const message = errorText(outcome.error, "Failed to save setting.");
       if (reportError) settingsError = message;
       if (errorSink) errorSink.value = message;
       if (settings) settings = { ...settings };
       return false;
     }
+    if (outcome.confirmed && settings) await refreshProfileModels(settings.hotkey_profiles);
+    return true;
   }
 
   async function onLanguageChange(e: Event) {
@@ -1284,13 +1400,14 @@
     if (languageSaving || glossarySaving) return;
     blockedLanguageChange = null;
     languageSaving = true;
+    let saved = false;
     try {
       const ok = await applySetting(() => setLanguage(value));
+      saved = ok;
       if (!ok && settingsError.includes(defaultDictionaryLanguageBlock)) {
         // Show the actual blocking dictionary, not whichever editor scope is
         // selected. Freeze the preview for the existing compare-and-swap API.
-        const current = await getSettings();
-        settings = current;
+        const current = await readSettings();
         const source = current.profile_glossaries.default ?? "";
         if (source.trim()) blockedLanguageChange = { language: value, source };
         else settingsError = "The blocking dictionary was cleared elsewhere. Select the language again to retry.";
@@ -1298,7 +1415,9 @@
     } catch (error: any) {
       settingsError += `${settingsError ? " " : ""}Could not refresh language settings; reopen Settings to confirm the saved language: ${typeof error === "string" ? error : error?.message || "Unknown error"}`;
     } finally {
-      select.value = settings.language;
+      // A saved language whose read-back failed is shown as chosen: `settings` is
+      // the old copy then, and the notice says it may be out of date.
+      select.value = saved && settingsUnconfirmed ? value : settings.language;
       languageSaving = false;
       if (!blockedLanguageChange) void restoreLanguageFocus();
     }
@@ -1332,9 +1451,10 @@
       blockedLanguageChange = null;
     } finally {
       try {
-        settings = await getSettings();
-        await refreshProfileModels(settings.hotkey_profiles);
+        const current = await readSettings();
+        await refreshProfileModels(current.hotkey_profiles);
       } catch (error: any) {
+        markSettingsUnconfirmed(error, cleared);
         settingsError += `${settingsError ? " " : ""}Could not refresh settings; reopen Settings to confirm the saved language: ${typeof error === "string" ? error : error?.message || "Unknown error"}`;
       }
       languageSaving = false;
@@ -1419,8 +1539,8 @@
 
   async function refreshHotkeyRegistration(): Promise<void> {    try {
       await retryHotkeyRegistration();
-      settings = await getSettings();
-      await refreshProfileModels(settings.hotkey_profiles);
+      const current = await readSettings();
+      await refreshProfileModels(current.hotkey_profiles);
     } catch (error) {
       // The registration-health response below contains the backend's full
       // diagnostic and keeps the failure visible in Settings.
@@ -1439,7 +1559,7 @@
 
   async function refreshDictionaryAfterConflict(primaryError: string, request: GlossarySaveRequest) {
     try {
-      settings = await getSettings();
+      await readSettings();
     } catch (error) {
       console.warn("Could not refresh the dictionary after a concurrent change", error);
     }
@@ -1678,8 +1798,10 @@
   }
 
   async function onBeamSizeChange(e: Event) {
-    const value = Number((e.target as HTMLSelectElement).value);
-    await applySetting(() => setBeamSize(value));
+    const select = e.currentTarget as HTMLSelectElement;
+    const value = Number(select.value);
+    const saved = await applySetting(() => setBeamSize(value));
+    if (!saved && settings) select.value = String(settings.beam_size);
   }
 
   async function onTemperatureFallbackToggle() {
@@ -1689,13 +1811,17 @@
   }
 
   async function onEnginePrewarmChange(e: Event) {
-    const value = (e.target as HTMLSelectElement).value as EnginePrewarm;
-    await applySetting(() => setEnginePrewarm(value));
+    const select = e.currentTarget as HTMLSelectElement;
+    const value = select.value as EnginePrewarm;
+    const saved = await applySetting(() => setEnginePrewarm(value));
+    if (!saved && settings) select.value = settings.engine_prewarm;
   }
 
   async function onEngineIdleChange(e: Event) {
-    const value = Number((e.target as HTMLSelectElement).value);
-    await applySetting(() => setEngineIdleUnloadMinutes(value));
+    const select = e.currentTarget as HTMLSelectElement;
+    const value = Number(select.value);
+    const saved = await applySetting(() => setEngineIdleUnloadMinutes(value));
+    if (!saved && settings) select.value = String(settings.engine_idle_unload_minutes);
   }
 
   async function onVadToggle() {
@@ -1749,9 +1875,9 @@
         if (target.id === "pianissimo-sv") await downloadPianissimoModel();
         else await downloadModel(target.id);
       }
-      await setProfileModel(profile.id, target.id);
-      settings = await getSettings();
-      await refreshProfileModels(settings.hotkey_profiles);
+      const outcome = await saveSetting(() => setProfileModel(profile.id, target.id));
+      if (!outcome.saved) throw outcome.error;
+      if (outcome.confirmed && settings) await refreshProfileModels(settings.hotkey_profiles);
     } catch (e: any) {
       profileModelErrors = {
         ...profileModelErrors,
@@ -1771,12 +1897,13 @@
     dictationModelSaving = true;
     profileModelErrors = { ...profileModelErrors, [profile.id]: "" };
     try {
-      await setProfileModel(profile.id, select.value);
-      settings = await getSettings();
-      await refreshProfileModels(settings.hotkey_profiles);
-    } catch (error: any) {
-      select.value = previous;
-      profileModelErrors = { ...profileModelErrors, [profile.id]: typeof error === "string" ? error : error?.message || "Could not change profile model." };
+      const outcome = await saveSetting(() => setProfileModel(profile.id, select.value));
+      if (!outcome.saved) {
+        select.value = previous;
+        profileModelErrors = { ...profileModelErrors, [profile.id]: errorText(outcome.error, "Could not change profile model.") };
+      } else if (outcome.confirmed && settings) {
+        await refreshProfileModels(settings.hotkey_profiles);
+      }
     } finally {
       dictationModelSaving = false;
     }
@@ -1946,17 +2073,13 @@
         ? profileWithShortcut(profile, slot, shortcut, currentSettings.hotkey_mode)
         : profile
     );
-    setHotkeyProfiles(profiles)
-      .then(async () => {
-        recordingProfileId = null;
-        recordingShortcutSlot = null;
-        draftProfileId = null;
-        settings = await getSettings();
-        await refreshProfileModels(settings.hotkey_profiles);
-      })
-      .catch((err: any) => {
-        hotkeyError = typeof err === "string" ? err : err.message || "Failed to set hotkey";
-      });
+    const outcome = await saveSetting(() => setHotkeyProfiles(profiles), () => {
+      recordingProfileId = null;
+      recordingShortcutSlot = null;
+      draftProfileId = null;
+    });
+    if (!outcome.saved) hotkeyError = errorText(outcome.error, "Failed to set hotkey");
+    else if (outcome.confirmed && settings) await refreshProfileModels(settings.hotkey_profiles);
   }
 
   async function clearProfileShortcut(profileId: string, slot: ExplicitShortcutSlot) {
@@ -1976,17 +2099,32 @@
     if (!saved && settingsError) hotkeyError = settingsError;
   }
 
-  async function updateProfile(profileId: string, changes: Partial<HotkeyProfile>) {
-    if (!settings) return;
+  /** Resolves true when the change is kept (saved, or applied to a profile that is still a draft). */
+  async function updateProfile(profileId: string, changes: Partial<HotkeyProfile>): Promise<boolean> {
+    if (!settings) return false;
     const profiles = settings.hotkey_profiles.map((profile) =>
       profile.id === profileId ? { ...profile, ...changes } : profile
     );
     if (profileId === draftProfileId) {
       settings = { ...settings, hotkey_profiles: profiles };
       await refreshProfileModels(profiles);
-      return;
+      return true;
     }
-    await applySetting(() => setHotkeyProfiles(profiles));
+    return applySetting(() => setHotkeyProfiles(profiles));
+  }
+
+  async function onProfileLanguageChange(event: Event, profile: HotkeyProfile) {
+    const select = event.currentTarget as HTMLSelectElement;
+    const saved = await updateProfile(profile.id, { language: select.value as Language });
+    if (!saved) select.value = profileForId(profile.id)?.language ?? profile.language;
+  }
+
+  async function onProfileNameBlur(event: Event, profile: HotkeyProfile) {
+    const input = event.currentTarget as HTMLInputElement;
+    // Leaving an untouched field sends nothing while the window cannot confirm what is saved.
+    if (settingsUnconfirmed && input.value === profile.name) return;
+    const saved = await updateProfile(profile.id, { name: input.value });
+    if (!saved) input.value = profileForId(profile.id)?.name ?? profile.name;
   }
 
   function addProfile() {
@@ -2074,6 +2212,18 @@
       {#if settingsError}
         <div class="transcribe-error" role={pendingGlossaryNavigation ? undefined : "alert"}>{settingsError}</div>
       {/if}
+      {#if settingsUnconfirmed}
+        <section class="recovery-notice" role="alert" aria-label="Settings not confirmed">
+          <span>
+            {settingsUnconfirmed.afterSave
+              ? "Your change was saved, but the window could not read the settings back to confirm it"
+              : "Settings changed, but the window could not reload them"}
+            ({settingsUnconfirmed.detail}). The values shown may be out of date.
+          </span>
+          <button class="secondary" type="button" disabled={settingsReloading}
+            onclick={() => void reloadSettings()}>Reload settings</button>
+        </section>
+      {/if}
       {#if recoveredDraftsNotice}
         <section class="recovery-notice" role="status" aria-label="Recovered drafts">
           <strong>Recovered drafts</strong>
@@ -2123,12 +2273,12 @@
                   class="profile-name"
                   aria-label="Profile name"
                   value={profile.name}
-                  onblur={(event) => updateProfile(profile.id, { name: (event.target as HTMLInputElement).value })}
+                  onblur={(event) => onProfileNameBlur(event, profile)}
                 />
                 <select
                   aria-label={`${profile.name} language`}
                   value={profile.language}
-                  onchange={(event) => updateProfile(profile.id, { language: (event.target as HTMLSelectElement).value as Language })}
+                  onchange={(event) => onProfileLanguageChange(event, profile)}
                 >
                   <option value="en">English</option>
                   <option value="sv">Swedish</option>
