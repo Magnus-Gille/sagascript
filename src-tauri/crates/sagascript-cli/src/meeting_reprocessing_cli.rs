@@ -341,9 +341,9 @@ fn parse_threshold(value: &str) -> Result<f32, String> {
 mod tests {
     use super::*;
     use clap::Parser;
-    use sagascript_core::meeting::{MeetingSegmentInput, MeetingSpeaker, MeetingTranscript};
     use sagascript_core::meeting_review::MeetingReview;
-    use sha2::{Digest, Sha256};
+    use sagascript_core::test_support::meeting_transcript;
+    use sagascript_testsupport::{sha256_hex, TempDir};
 
     #[derive(Debug, Parser)]
     struct TestCli {
@@ -399,34 +399,15 @@ mod tests {
 
     fn synthetic_review(source: &str, text: &str) -> MeetingReview {
         MeetingReview::new(
-            MeetingTranscript::new(
-                source,
-                "en",
-                "base",
-                1.0,
-                vec![MeetingSegmentInput {
-                    start: 0.0,
-                    end: 1.0,
-                    text: text.to_string(),
-                    speaker: "speaker-a".to_string(),
-                }],
-                vec![MeetingSpeaker {
-                    id: "speaker-a".to_string(),
-                    label: "Alice".to_string(),
-                }],
-            )
-            .expect("synthetic transcript"),
+            meeting_transcript()
+                .source_sha256(source)
+                .model("base")
+                .duration(1.0)
+                .segment(0.0, 1.0, text, "speaker-a")
+                .speaker("speaker-a", "Alice")
+                .build(),
         )
         .expect("synthetic review")
-    }
-
-    fn temp_dir() -> PathBuf {
-        let path = std::env::temp_dir().join(format!(
-            "sagascript-reprocessing-cli-{}",
-            uuid::Uuid::new_v4()
-        ));
-        fs::create_dir_all(&path).expect("synthetic temp directory");
-        path
     }
 
     #[test]
@@ -468,10 +449,10 @@ mod tests {
 
     #[test]
     fn synthetic_full_plan_is_provenance_only() {
-        let root = temp_dir();
+        let root = TempDir::new();
         let audio = root.join("audio.bin");
         fs::write(&audio, b"synthetic audio bytes").expect("audio");
-        let source = format!("{:x}", Sha256::digest(b"synthetic audio bytes"));
+        let source = sha256_hex(b"synthetic audio bytes");
         let review = synthetic_review(&source, "hello");
         let glossary = Glossary::default();
         let input = ReprocessingInput {
@@ -489,12 +470,11 @@ mod tests {
         assert_eq!(plan.context.source_sha256, source);
         assert_eq!(plan.context.cache_sha256, None);
         assert!(plan.required_work.transcription);
-        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
     fn existing_output_is_rejected_before_input_work() {
-        let root = temp_dir();
+        let root = TempDir::new();
         let output = root.join("existing.json");
         fs::write(&output, b"keep me").expect("existing output");
         let args = PlanArgs {
@@ -519,23 +499,21 @@ mod tests {
             fs::read(&output).expect("existing output remains"),
             b"keep me"
         );
-        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
     fn proposal_and_cache_outputs_cannot_alias() {
-        let root = temp_dir();
+        let root = TempDir::new();
         let proposal = root.join("proposal.json");
         let cache = root.join(".").join("proposal.json");
         let error = ensure_distinct_outputs(&proposal, &cache)
             .expect_err("aliased output paths must fail before inference");
         assert!(error.to_string().contains("different paths"));
-        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
     fn stale_previous_revision_is_rejected_before_publication() {
-        let root = temp_dir();
+        let root = TempDir::new();
         let review_path = root.join("review.json");
         let old = synthetic_review(&"a".repeat(64), "old");
         let new = synthetic_review(&"a".repeat(64), "new");
@@ -553,6 +531,5 @@ mod tests {
                 .revision,
             new.revision
         );
-        let _ = fs::remove_dir_all(root);
     }
 }

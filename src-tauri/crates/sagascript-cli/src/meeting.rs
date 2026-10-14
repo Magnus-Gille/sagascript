@@ -407,40 +407,26 @@ fn io_error(action: &str, error: io::Error) -> DictationError {
 mod tests {
     use super::*;
     use clap::Parser;
-    use sagascript_core::meeting::{MeetingSegmentInput, MeetingSpeaker};
+    use sagascript_core::test_support::meeting_transcript;
+    use sagascript_testsupport::{sha256_hex, TempDir};
     use serde_json::{json, Value};
-    use sha2::{Digest, Sha256};
 
     use crate::Cli;
 
     #[test]
     fn meeting_input_requires_a_regular_file_before_reading() {
-        let directory =
-            std::env::temp_dir().join(format!("sagascript-meeting-input-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir(&directory).unwrap();
+        let directory = TempDir::new();
         let result = read_input(&directory);
-        std::fs::remove_dir(&directory).unwrap();
         assert!(result.unwrap_err().to_string().contains("regular file"));
     }
 
     fn document() -> MeetingTranscript {
-        MeetingTranscript::new(
-            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-            "en",
-            "model",
-            4.0,
-            vec![MeetingSegmentInput {
-                start: 0.0,
-                end: 1.0,
-                text: "hello".into(),
-                speaker: "speaker-1".into(),
-            }],
-            vec![MeetingSpeaker {
-                id: "speaker-1".into(),
-                label: "Chair".into(),
-            }],
-        )
-        .expect("fixture is valid")
+        meeting_transcript()
+            .source_sha256("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+            .model("model")
+            .segment(0.0, 1.0, "hello", "speaker-1")
+            .speaker("speaker-1", "Chair")
+            .build()
     }
 
     #[test]
@@ -605,21 +591,16 @@ mod tests {
 
     #[test]
     fn malformed_document_is_content_free_and_oversized_input_is_rejected() {
-        let malformed_path = std::env::temp_dir().join(format!(
-            "sagascript-meeting-malformed-{}.json",
-            uuid::Uuid::new_v4()
-        ));
+        let directory = TempDir::new();
+        let malformed_path = directory.join("malformed.json");
         std::fs::write(&malformed_path, b"{\"secret\":\"do-not-echo\"}").expect("fixture write");
         let error = read_document(&malformed_path).unwrap_err();
-        let _ = std::fs::remove_file(&malformed_path);
         assert!(error.to_string().contains("invalid JSON"));
         assert!(!error.to_string().contains("do-not-echo"));
 
-        let path =
-            std::env::temp_dir().join(format!("sagascript-meeting-{}.json", uuid::Uuid::new_v4()));
+        let path = directory.join("oversized.json");
         std::fs::write(&path, vec![b'x'; MAX_INPUT_BYTES + 1]).expect("fixture write");
         let error = read_input(&path).unwrap_err();
-        let _ = std::fs::remove_file(&path);
         assert!(error.to_string().contains("24 MiB limit"));
     }
 
@@ -650,15 +631,6 @@ mod tests {
             .to_string()
             .contains("meeting operation rejected"));
         assert_eq!(document, original);
-    }
-
-    fn temp_directory(name: &str) -> PathBuf {
-        let directory = std::env::temp_dir().join(format!(
-            "sagascript-meeting-review-cli-{name}-{}",
-            uuid::Uuid::new_v4()
-        ));
-        std::fs::create_dir(&directory).expect("fixture directory");
-        directory
     }
 
     fn review_value(json: &str) -> Value {
@@ -712,24 +684,12 @@ mod tests {
         let audio = synthetic_wav();
         let audio_path = directory.join("recording.wav");
         std::fs::write(&audio_path, &audio).expect("write audio");
-        let source_sha256 = format!("{:x}", Sha256::digest(&audio));
-        let transcript = MeetingTranscript::new(
-            source_sha256,
-            "en",
-            "model",
-            4.0,
-            vec![MeetingSegmentInput {
-                start: 0.0,
-                end: 1.0,
-                text: "hello".into(),
-                speaker: "speaker-1".into(),
-            }],
-            vec![MeetingSpeaker {
-                id: "speaker-1".into(),
-                label: "Chair".into(),
-            }],
-        )
-        .expect("audio fixture is valid");
+        let transcript = meeting_transcript()
+            .source_sha256(sha256_hex(&audio))
+            .model("model")
+            .segment(0.0, 1.0, "hello", "speaker-1")
+            .speaker("speaker-1", "Chair")
+            .build();
         let transcript_path = directory.join("audio-machine.json");
         std::fs::write(
             &transcript_path,
@@ -751,7 +711,7 @@ mod tests {
 
     #[test]
     fn review_round_trip_supports_unicode_edit_undo_and_reset() {
-        let directory = temp_directory("round-trip");
+        let directory = TempDir::new();
         let (_transcript_path, review_path, initial) = new_review_fixture(&directory);
         let corrections_path = directory.join("corrections.json");
         write_json(
@@ -838,13 +798,11 @@ mod tests {
         assert!(reset["batches"].as_array().expect("batches").is_empty());
         assert_eq!(reset["generation"], 2);
         assert_ne!(reset["revision"], initial["revision"]);
-
-        let _ = std::fs::remove_dir_all(directory);
     }
 
     #[test]
     fn review_rejects_wrong_revision_invalid_ids_and_tampering_without_writes() {
-        let directory = temp_directory("fail-closed");
+        let directory = TempDir::new();
         let (_transcript_path, review_path, initial) = new_review_fixture(&directory);
         let original_review_bytes = std::fs::read(&review_path).expect("read review");
         let corrections_path = directory.join("invalid-corrections.json");
@@ -916,13 +874,11 @@ mod tests {
             std::fs::read(&tampered_path).expect("tampered bytes"),
             serde_json::to_vec(&tampered_review).expect("tampered JSON")
         );
-
-        let _ = std::fs::remove_dir_all(directory);
     }
 
     #[test]
     fn review_audio_info_and_bounded_range_require_matching_source() {
-        let directory = temp_directory("audio");
+        let directory = TempDir::new();
         let (review_path, audio_path, audio) = new_audio_review_fixture(&directory);
         let review_bytes = std::fs::read(&review_path).expect("review bytes");
         let audio_bytes = std::fs::read(&audio_path).expect("audio bytes");
@@ -974,7 +930,5 @@ mod tests {
             std::fs::read(&audio_path).expect("audio bytes"),
             audio_bytes
         );
-
-        let _ = std::fs::remove_dir_all(directory);
     }
 }

@@ -37,10 +37,12 @@ any order; correlate by `id`. Unknown fields are ignored (forward compatibility)
 (including an empty one) fails with `unsupported`. Breaking changes bump `protocol`.
 
 Error codes: `protocol` (e.g. op before `hello`, bad envelope), `bad_request`, `unsupported`,
-`not_loaded`, `model_missing`, `model_load_failed`, `busy` (retryable), `cancelled`, `engine`,
-`internal`. `retryable` is true for `busy` only; the client retries `busy` only when it is set.
-Engine errors (`not_loaded`, `model_missing`, `model_load_failed`, `busy`, `engine`, `internal`)
-reach the client with the host's code, message and `retryable` unchanged.
+`not_loaded`, `model_missing`, `model_load_failed`, `busy` (retryable; **reserved**: no host sends
+it, both queue requests beyond `max_in_flight` instead; the client still retries it a few times),
+`cancelled`, `engine`, `internal`. `retryable` is true for `busy` only; the client retries `busy`
+only when it is set. Engine errors (`not_loaded`, `model_missing`, `model_load_failed`, `busy`,
+`engine`, `internal`) reach the client with the host's code, message and `retryable` unchanged;
+the golden transcripts pin that pass-through for `busy` too, although no engine reports it today.
 
 Envelope errors are `protocol` errors. A line that is not a JSON object, or has no integer
 `id` ≥ 1, is answered with `id` 0; a line with a usable `id` but a missing or non-string `op`, or
@@ -93,7 +95,9 @@ Request: `{"model_dir":"<abs path>","model_id":"pianissimo-sv-coreml-<rev>","com
 A relative `model_dir` or an empty `model_id` is `bad_request`.
 Result: `{"model_id","load_ms","compiled":<bool: first-time device compile happened>,
 "window_s","frame_s","vocab_size","blank_id"}`, all required (`blank_id` 0 is a real token id, so
-a missing one must never read as 0). May emit `{"event":"load_progress","phase":"compiling"}`.
+a missing one must never read as 0). **Reserved:** `{"event":"load_progress","phase":"compiling"}`;
+no host emits it, and the client ignores events, so the `load` deadline (180 s) is fixed and never
+extended.
 `compiled` is true only when this load compiled at least one `.mlpackage`; a load served from the
 compiled-model cache (`~/Library/Caches/Sagascript/EngineHost/<key>/<Name>.mlmodelc`, valid once its
 `.complete` marker exists) reports false. The host loads from that stable path so the OS Neural
@@ -113,7 +117,8 @@ Request:
  "format":"f32le","priority":"batch"}
 ```
 - `pcm_path` is a raw little-endian float32 mono file written by the client (0600, private temp
-  dir, deleted by the client). The host reads `num_samples` starting at `offset_samples`.
+  dir, deleted by the client; see "PCM temp dirs" below). The host reads `num_samples` starting at
+  `offset_samples`.
 - `num_samples ≤ max_window_s × sample_rate`, else `bad_request`. Shorter windows are padded
   internally; tokens beyond the real audio are dropped. `num_samples` must be at least 1,
   `pcm_path` absolute, `format` `f32le` and `sample_rate` the host's `capabilities.sample_rate`;
@@ -192,6 +197,18 @@ On stdin EOF the host fails queued windows with `cancelled`, cancels running one
 
 - Timeouts: `hello` 10 s, `load` 180 s (first-time ANE compile), `ping` 2 s, `transcribe_window`
   max(15 s, 3 × window seconds); `shutdown` grace 2 s, then kill.
+- Writes to the host's stdin go through a writer thread and are bounded (5 s, and never longer
+  than the request's own timeout). A host that stops reading stdin is killed (counted as a crash)
+  and the request fails as crashed, like every other request in flight on that host, so a job
+  resubmits it once on a fresh host; shutdown never waits on a blocked write.
+- Wedged window: when a `transcribe_window` times out, the caller gets the timeout at once. A
+  detached watcher sends `cancel` and waits up to 30 s (the wedge grace) for that request's
+  terminal response; the window keeps its slot meanwhile. Without one the host is stuck in an
+  uninterruptible call (a Core ML prediction cannot be cancelled, yet `ping` is still answered),
+  so it is killed (counted as a crash) and the next request starts a fresh host. The grace exceeds
+  the longest legitimate uninterruptible stage with margin: a Neural Engine recompile of the
+  encoder took 11.5-16.7 s (#397), and killing a host mid-compile throws the compile away.
+  `status.in_flight` is not used for this: it also counts healthy windows of other jobs.
 - Long audio: decode to 16 kHz mono f32 once, write one PCM file, plan windows with
   `chunk_merge::plan_windows(preferred_window_s, preferred_overlap_s)` with the effective window
   (see `load`), keep at most `max_in_flight − 1` batch windows in flight (`max_in_flight` when it
@@ -225,7 +242,23 @@ On stdin EOF the host fails queued windows with `cancelled`, cancels running one
   one warning) and use the bundled host and the manifest-verified model.
 - Lifecycle: lazy start, optional pre-warm, idle `unload` then `shutdown`, crash detection with
   bounded restart backoff. A request that was in flight when the host crashed fails with the
-  stderr tail; it is not silently retried more than once.
+  stderr tail; it is not silently retried more than once. The backoff (0, 1, 5 s) is slept without
+  holding the lifecycle lock and ends early when the caller cancels.
+- Failed: more than 3 crashes (or failed starts) within 300 s mark the client failed for a 60 s
+  cooldown, in which requests fail at once. The first request after it gets one fresh start: once
+  that host has loaded the model the crash history is cleared; if its start or its model load
+  fails the cooldown starts again, and a host that started but cannot load is stopped, so it is
+  tried once per cooldown.
+- PCM temp dirs (`sagascript-pcm-<12 letters/digits>`) contain `owner.lock`, exclusively locked by
+  the owning process for the dir's lifetime. The app at startup and each process when it creates
+  its shared engine client remove, in the background, dirs whose lock can be taken (the owner was
+  killed before it could clean up); a running app or CLI keeps its lock, so its dir is never
+  touched. Where the temp dir's file system cannot lock, a dir is used unlocked and without the
+  owner marker (logged once): transcription works, and the sweep removes such a dir only after
+  24 h. Dirs whose owner cannot be proven dead (no marker, or from before #366:
+  `sagascript-pcm-<6 letters/digits>` without `owner.lock`) are removed once neither the dir nor
+  anything in it changed for 24 h. `sagascript engine doctor` runs the same sweep and
+  reports how many dirs it removed and how many are in use.
 
 ## Engine hosts
 

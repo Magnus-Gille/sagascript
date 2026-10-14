@@ -432,7 +432,7 @@ mod tests {
     /// not the renamed .1.log, and the fresh file must have 0o600 perms.
     #[test]
     fn rotate_reopens_file_so_writes_continue_in_fresh_log() {
-        let dir = std::env::temp_dir().join(format!("sagascript-log-test-{}", Uuid::new_v4()));
+        let dir = sagascript_testsupport::TempDir::new();
         let log_path = dir.join("sagascript.log");
         let svc = LoggingService::new_with_path(log_path.clone());
 
@@ -491,7 +491,5 @@ mod tests {
             size_after_second_write > size_before_second_write,
             "second write after rotation should grow the fresh log file"
         );
-
-        let _ = fs::remove_dir_all(&dir);
     }
 }

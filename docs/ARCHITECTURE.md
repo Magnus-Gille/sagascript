@@ -19,6 +19,7 @@ verification commands, [docs/recipes/](recipes/README.md) for step-by-step chang
 | `src-tauri/crates/sagascript-core/` | Library: audio decode/resample/capture, Whisper and Pianissimo transcription, engine-host client, settings store, model downloads, diarization, meeting documents. |
 | `src-tauri/crates/sagascript-cli/` | Library + headless `sagascript` binary: every clap subcommand. Also holds meeting/diarization pipelines that the app imports. |
 | `src-tauri/crates/sagascript-engine-protocol/` | Wire types for the engine-host JSON Lines protocol ([spec](engine-host-protocol.md)); used by the core client, the ORT host and the fake host. |
+| `src-tauri/crates/sagascript-testsupport/` | Dev-only test helpers shared by core, CLI and app tests: `TempDir` (unique, removed on drop), `sha256_hex`, `isolated_cli_env` (spawned CLI without inherited credentials, with `SAGASCRIPT_SETTINGS_PATH`). Never linked into a shipped binary. |
 | `src-tauri/engine-host/coreml/` | Swift package: Core ML host `sagascript-engine-host` (Pianissimo on macOS 14+ Apple silicon). |
 | `src-tauri/engine-host/ort/` | Standalone Cargo workspace (own `Cargo.lock`): ONNX Runtime CPU host `sagascript-engine-host-ort`, shipped for Windows on ARM. |
 | `src-tauri/engine-host/test-vectors/` | Vectors shared by both hosts' unit tests: `protocol/` (the golden JSONL transcripts and the scripted `fake-engine.json` that define the wire contract, also decoded by `sagascript-engine-protocol`; [spec](engine-host-protocol.md#golden-transcripts)) and `context-biasing.json`. |
@@ -50,6 +51,11 @@ App crate modules (`src-tauri/src/`):
 `sagascript_cli::meeting_reprocessing`, `sagascript_cli::meeting_proposal`).
 **Planned:** [#374](https://github.com/Magnus-Gille/sagascript/issues/374) moves those
 pipelines into core.
+
+`sagascript-testsupport` is only a dev-dependency (of core, the CLI and the app) and depends
+on none of them; fixtures made of core types (`meeting_transcript()`) live in
+`sagascript_core::test_support` behind `cfg(test)` or core's `test-support` feature, which
+the CLI and the app enable as a dev-dependency.
 
 **Binaries:** the app crate and the CLI crate both build `sagascript`; a bare app invocation
 starts the GUI, a subcommand runs the CLI and exits. The headless CLI prints help and exits 2
@@ -245,7 +251,7 @@ sequenceDiagram
     Host-->>Client: tokens, merged in window order
     Note over Client,Host: supervisor thread unloads after idle_unload, shuts down after idle_shutdown
     Host--xClient: crash or EOF
-    Client->>Host: respawn with backoff, more than max_restarts in restart_window marks Failed
+    Client->>Host: respawn with backoff, more than max_restarts in restart_window marks Failed for failed_cooldown
     Caller->>PB: shutdown_shared_client at app exit or CLI end
     PB->>Host: shutdown, 2 s grace, then kill
 ```
@@ -261,9 +267,20 @@ sequenceDiagram
   resolved from the bundle (`Resources/EngineHost/sagascript-engine-host`,
   `engine-host\sagascript-engine-host-ort.exe`); `SAGASCRIPT_ENGINE_HOST` only in development
   builds (`dev-overrides`).
-- `Failed` is permanent: `EngineHostClient::reset()` has no production caller. **Planned:**
-  [#366](https://github.com/Magnus-Gille/sagascript/issues/366) (recovering supervision),
-  [#367](https://github.com/Magnus-Gille/sagascript/issues/367) (machine-checked protocol).
+- Recovery ([#366](https://github.com/Magnus-Gille/sagascript/issues/366)): `Failed` lasts
+  `failed_cooldown` (60 s), then one fresh start (half-open); a window that times out returns at
+  once, and a detached `engine-host-wedge-watch` thread kills the host if it sends no terminal
+  response within `wedge_grace` (30 s) after `cancel`; stdin writes are bounded
+  (`Timeouts::write`); the restart backoff is slept unlocked and is cancel-aware.
+  `EngineHostClient::reset()` clears `Failed` at once but has no production caller: settings that
+  change the engine (host, model, compute units, idle policy) already replace the shared client
+  (`shared_client`), model deletion shuts it down, and the CLI `engine doctor` uses its own client.
+- PCM temp dirs hold a locked `owner.lock`; `pipeline::sweep_stale_pcm_dirs` (app startup and
+  shared-client creation, background, once per process; `engine doctor` on demand) removes the
+  dirs of dead owners, and dirs whose owner cannot be proven dead (pre-#366, or on a file system
+  that cannot lock) once untouched for 24 h.
+- **Planned:** [#367](https://github.com/Magnus-Gille/sagascript/issues/367) (machine-checked
+  protocol).
 
 ## 3. Threads and locks
 
@@ -272,7 +289,7 @@ sequenceDiagram
 | Main (UI) thread | Tauri setup, tray/window/overlay APIs, global-shortcut callbacks on macOS (and key-down on Windows), `macos_bare` callbacks, `run_on_main_thread` closures (macOS paste, AppKit focus calls), sync (non-`async`) Tauri commands. |
 | Tokio runtime | `async` Tauri commands, tasks from `tauri::async_runtime::spawn` (dictation stop pipeline, update flow). |
 | Blocking pool | `spawn_blocking`: inference, paste on Windows/Linux, focus-restore wait, recovery file I/O. |
-| Dedicated threads | Settings watcher, startup model warm-up, engine-host reader/stderr/supervisor threads, audio capture worker and cpal callback, `global-hotkey` event thread (Linux) and key-up polling thread (Windows). |
+| Dedicated threads | Settings watcher, startup model warm-up, engine-host reader/stderr/stdin-writer/supervisor/wedge-watch threads and the PCM temp dir sweep, audio capture worker and cpal callback, `global-hotkey` event thread (Linux) and key-up polling thread (Windows). |
 | CLI | `sagascript_cli::run` builds its own Tokio runtime; inference commands run on a worker thread (16 MiB stack on Windows, `run_inference_command`). |
 
 | Lock | Where | Notes |
@@ -285,7 +302,7 @@ sequenceDiagram
 | Job slots (`MeetingJobs`, `SharedMeetingAudio`, `PlainFileJobs` fields) | `meeting_jobs.rs`, `meeting_media.rs`, `plain_file_jobs.rs` | One active job each. |
 | `LoggingService` (`log_file`, `dictation_session_id`) | `logging/service.rs` | Taken inside controller methods. |
 | `WhisperBackend` (`load_lock`, `state`, `context`, `loaded_runtime`, `cached_runtime`) | `transcription/whisper_backend.rs` | `load_lock` and `state` are taken with a bounded wait (`lock_load_bounded`, `lock_state_bounded`, `WARM_STATE_GRACE`), returning `ModelBusy` instead of blocking. |
-| Engine host (`lifecycle`, `state`; process `routing`, `stdin`, `child`) | `engine_host/client.rs`, `process.rs` | `lifecycle` serializes start/load/unload/shutdown. |
+| Engine host (`lifecycle`, `state`, `boost`; process `routing`, `stdin`, `child`) | `engine_host/client.rs`, `process.rs` | `lifecycle` serializes start/load/unload/shutdown; it is released while a restart backoff is slept. `stdin` only guards the writer thread's queue, never a write. |
 | Pianissimo `shared_slot` and load-state statics | `pianissimo_backend.rs` | Process-global client. |
 | Others | `AudioCaptureService` buffers (`audio/capture.rs`), `GLOBAL_DICTATION` (`logging/service.rs`), the download `verification_cache` (`download.rs`), `LiveDictationBackend.active_job`, `PianissimoBackend.active`, `HostProcess` `stderr_tail`/`reader`, the CLI `Canceller` (`cancel.rs`) | Leaf locks. The capture buffers are taken under `SharedController` by start/stop and without it by the capture worker and cpal callback. |
 
@@ -346,10 +363,14 @@ contains no cpal/ALSA.
 
 ## 5. Where tests live and how CI runs them
 
+Shared fixtures: `sagascript_testsupport` (`TempDir`, `sha256_hex`, `isolated_cli_env`) and
+`sagascript_core::test_support::meeting_transcript()`; use them instead of hand-written
+`std::env::temp_dir()` paths, cleanup guards or env-scrub loops.
+
 | Layer | Location | Local command | CI |
 |---|---|---|---|
-| Rust unit, app | inline `#[cfg(test)]` in `src-tauri/src/**`; sibling files via `#[path]` (`meeting_jobs_tests.rs`, `paste/windows_clipboard_tests.rs`) | `cargo test` (app only) | macOS, Windows |
-| Rust unit, core/CLI/protocol | inline; `sagascript-cli/src/meeting_reprocessing_tests.rs`; `sagascript-engine-protocol/src/tests.rs` | `cargo test -p <crate>`; release-only guard: `cargo test --release -p sagascript-core --lib dev_overrides` | per-crate steps; protocol and the release guard in test-linux |
+| Rust unit, app | sibling `foo_tests.rs` files, declared last in `foo.rs` as `#[cfg(test)] #[path = "foo_tests.rs"] mod tests;` (`commands_tests.rs`, `main_tests.rs`, `meeting_jobs_tests.rs`, `paste/windows_clipboard_tests.rs`); inline `#[cfg(test)]` modules in smaller files | `cargo test` (app only) | macOS, Windows |
+| Rust unit, core/CLI/protocol | inline, or sibling `foo_tests.rs` as in the app: core `download_tests.rs`, `settings/manager_tests.rs`, `transcription/whisper_backend_tests.rs`; CLI `transcribe_tests.rs`, `meeting_reprocessing_tests.rs`; `sagascript-engine-protocol/src/tests.rs` | `cargo test -p <crate>`; release-only guard: `cargo test --release -p sagascript-core --lib dev_overrides` | per-crate steps; protocol and the release guard in test-linux |
 | Rust integration | `sagascript-core/tests/*.rs` (engine host against the fake host, chunk-merge golden, Pianissimo adapter); `sagascript-cli/tests/*.rs` (spawn `CARGO_BIN_EXE_sagascript`) | `cargo test -p sagascript-core`, `-p sagascript-cli` | macOS, Linux, Windows |
 | ORT host | `src-tauri/engine-host/ort/src/**` | `cargo test` and `cargo clippy --all-targets -- -D warnings` in `engine-host/ort/` | test-linux (fmt, test, clippy); test-windows (test) |
 | Engine-host protocol | golden transcripts `src-tauri/engine-host/test-vectors/protocol/*.jsonl` with the scripted `fake-engine.json` ([contract](engine-host-protocol.md#golden-transcripts)); replayed by `sagascript-engine-protocol/src/vector_tests.rs`, `engine-host/ort/src/server/golden_tests.rs` and `ProtocolServerTests.swift` | `cargo test -p sagascript-engine-protocol`; `cargo test --locked` in `engine-host/ort/`; `swift test` | test-linux (Rust, ORT host); test-windows (ORT host); test-macos (Swift) |

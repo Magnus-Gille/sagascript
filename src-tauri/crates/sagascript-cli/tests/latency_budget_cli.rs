@@ -1,39 +1,18 @@
+use sagascript_testsupport::TempDir;
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
-
-static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);
 
 struct Fixture {
-    root: PathBuf,
+    _root: TempDir,
     input: PathBuf,
 }
 
-impl Drop for Fixture {
-    fn drop(&mut self) {
-        if let Err(error) = fs::remove_dir_all(&self.root) {
-            eprintln!("latency fixture cleanup failed: {:?}", error.kind());
-        }
-    }
-}
-
 fn fixture(entries: Vec<Value>) -> Fixture {
-    let id = NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed);
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or(0);
-    let root = std::env::temp_dir().join(format!(
-        "sagascript-latency-budget-{}-{timestamp}-{id}",
-        std::process::id(),
-    ));
-    fs::create_dir(&root)
-        .unwrap_or_else(|error| panic!("create fixture directory: {:?}", error.kind()));
+    let root = TempDir::new();
     let input = root.join("events.jsonl");
-    let fixture = Fixture { root, input };
+    let fixture = Fixture { _root: root, input };
     let contents = entries
         .into_iter()
         .map(|entry| serde_json::to_string(&entry).expect("serialize fixture event"))
@@ -426,9 +405,8 @@ fn empty_input_is_valid_json_but_cannot_pass_a_budget() {
 #[test]
 fn missing_input_fails_without_echoing_private_path() {
     let sentinel = "PRIVATE_LATENCY_SENTINEL_9f0c";
-    let missing = std::env::temp_dir()
-        .join(sentinel)
-        .join("missing-events.jsonl");
+    let root = TempDir::new();
+    let missing = root.join(sentinel).join("missing-events.jsonl");
     let output = run_report(&missing, &[]);
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);

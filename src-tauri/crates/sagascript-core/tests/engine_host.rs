@@ -41,6 +41,8 @@ fn config(env: &[(&str, &str)], tmp: &Path) -> EngineHostConfig {
         transcribe_min: Duration::from_secs(5),
         transcribe_factor: 0.0,
         shutdown_grace: Duration::from_millis(500),
+        write: Duration::from_secs(2),
+        wedge_grace: Duration::from_millis(500),
     };
     cfg.idle_unload = None;
     cfg.idle_shutdown = None;
@@ -354,9 +356,12 @@ fn out_of_order_responses_are_routed_by_id() {
 
 #[test]
 fn window_timeout_is_reported_and_host_stays_usable() {
-    let f = fixture_with(&[("FAKE_HANG", "1")], |c| {
+    // Slow first window that honours cancel: a responsive host, not a wedged one.
+    let f = fixture_with(&[("FAKE_FIRST_SLOW_MS", "5000")], |c| {
         c.timeouts.transcribe_min = Duration::from_millis(300)
     });
+    f.client.warm().unwrap();
+    let pid = f.client.snapshot().pid;
     let t = Instant::now();
     match f
         .client
@@ -369,9 +374,48 @@ fn window_timeout_is_reported_and_host_stays_usable() {
         other => panic!("{other:?}"),
     }
     assert!(t.elapsed() < Duration::from_secs(3));
-    // The host still answers ping, so it is not killed.
-    assert!(f.client.snapshot().running);
+    // The host answered the cancelled window within the wedge grace, so it is
+    // kept: same process, no crash, and the next window runs on it.
+    let snap = f.client.snapshot();
+    assert!(snap.running);
+    assert_eq!(snap.pid, pid);
+    assert_eq!(snap.crashes_in_window, 0);
     f.client.ping().unwrap();
+    let out = f
+        .client
+        .transcribe_dictation(&pcm(1.0), &CancelToken::new())
+        .unwrap();
+    assert_eq!(out.tokens.len(), 2);
+    assert_eq!(f.client.snapshot().pid, pid);
+}
+
+/// A host that never answers a timed-out window, even after `cancel`, is
+/// killed after the wedge grace although it still answers `ping`.
+#[test]
+fn host_that_never_answers_a_timed_out_window_is_killed() {
+    let f = fixture_with(&[("FAKE_HANG", "1")], |c| {
+        c.timeouts.transcribe_min = Duration::from_millis(300);
+        c.timeouts.wedge_grace = Duration::from_millis(300);
+    });
+    f.client.warm().unwrap();
+    let pid = f.client.snapshot().pid.unwrap();
+    let r = f
+        .client
+        .transcribe_dictation(&pcm(1.0), &CancelToken::new());
+    assert!(
+        matches!(
+            r,
+            Err(EngineHostError::Timeout {
+                op: "transcribe_window",
+                ..
+            })
+        ),
+        "{r:?}"
+    );
+    wait_until("hung host killed", Duration::from_secs(2), || {
+        !pid_alive(pid)
+    });
+    assert_eq!(f.client.snapshot().crashes_in_window, 1);
 }
 
 #[test]
@@ -670,17 +714,39 @@ fn no_orphan_host_after_drop() {
     );
 }
 
+/// Dropping the client while the host still hangs on a timed-out request
+/// (its wedge grace still running) ends the host at once: the watcher that
+/// waits for the late answer does not keep the client or its host alive.
 #[test]
 fn no_orphan_host_when_dropped_with_hung_request() {
     let f = fixture_with(&[("FAKE_HANG", "1")], |c| {
-        c.timeouts.transcribe_min = Duration::from_millis(200)
+        c.timeouts.transcribe_min = Duration::from_millis(200);
+        // Far away: the watchdog must not be what ends the host here.
+        c.timeouts.wedge_grace = Duration::from_secs(60);
     });
-    let _ = f
+    f.client.warm().unwrap();
+    let pid = f.client.snapshot().pid.unwrap();
+    let r = f
         .client
         .transcribe_dictation(&pcm(1.0), &CancelToken::new());
-    let pid = f.client.snapshot().pid.unwrap();
-    drop(f.client);
-    assert!(!pid_alive(pid));
+    assert!(
+        matches!(
+            r,
+            Err(EngineHostError::Timeout {
+                op: "transcribe_window",
+                ..
+            })
+        ),
+        "{r:?}"
+    );
+    assert!(pid_alive(pid), "the hung request is still within its grace");
+    let client = f.client;
+    let ((), elapsed) = run_bounded(Duration::from_secs(10), move || drop(client));
+    assert!(elapsed < Duration::from_secs(3), "{elapsed:?}");
+    assert!(
+        !pid_alive(pid),
+        "host {pid} still running after client drop"
+    );
 }
 
 // --------------------------------------------------- long-audio pipeline
@@ -1278,4 +1344,665 @@ fn newline_less_flood_kills_the_host_and_fails_in_flight_requests() {
     );
     assert!(t.elapsed() < Duration::from_secs(4), "{:?}", t.elapsed());
     wait_until("host killed", Duration::from_secs(3), || !pid_alive(pid));
+}
+
+// ------------------------------------------------- recovery (#366)
+
+use sagascript_core::transcription::engine_host::pipeline::{
+    sweep_stale_pcm_dirs, sweep_stale_pcm_dirs_in_background, PcmFile,
+};
+use sagascript_core::transcription::engine_host::BoostSpec;
+use std::path::PathBuf;
+
+/// Run `job` on its own thread and fail the test (instead of hanging it) when
+/// it has not finished within `limit`. Returns the result and how long it took.
+fn run_bounded<T: Send + 'static>(
+    limit: Duration,
+    job: impl FnOnce() -> T + Send + 'static,
+) -> (T, Duration) {
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let started = Instant::now();
+        let out = job();
+        let _ = tx.send((out, started.elapsed()));
+    });
+    rx.recv_timeout(limit)
+        .unwrap_or_else(|_| panic!("still blocked after {limit:?}"))
+}
+
+/// (a) Repeated start failures mark the host failed for a cooldown only: the
+/// first request after it gets one fresh attempt (a failed attempt re-opens the
+/// cooldown), so a host that is healthy again works without an app restart.
+#[test]
+fn failed_host_gets_a_fresh_attempt_after_the_cooldown() {
+    let marker = tempfile::tempdir().unwrap();
+    let crash = marker.path().join("crash");
+    std::fs::write(&crash, b"crash").unwrap();
+    // Long enough that two back-to-back calls never straddle it on a loaded runner.
+    let cooldown = Duration::from_secs(1);
+    let f = fixture_with(
+        &[("FAKE_CRASH_ON_START_FILE", crash.to_str().unwrap())],
+        |c| c.failed_cooldown = cooldown,
+    );
+    for _ in 0..4 {
+        let r = f.client.warm();
+        assert!(matches!(r, Err(EngineHostError::Crashed { .. })), "{r:?}");
+    }
+    assert!(matches!(f.client.warm(), Err(EngineHostError::Failed(_))));
+    let opened = Instant::now();
+    assert_eq!(f.client.snapshot().spawns, 4);
+
+    // Within the cooldown: fail fast without spawning anything.
+    assert!(matches!(f.client.warm(), Err(EngineHostError::Failed(_))));
+    assert_eq!(f.client.snapshot().spawns, 4);
+
+    // After it: exactly one attempt, which fails here and re-opens the cooldown.
+    std::thread::sleep(cooldown.saturating_sub(opened.elapsed()) + Duration::from_millis(50));
+    let r = f.client.warm();
+    assert!(matches!(r, Err(EngineHostError::Crashed { .. })), "{r:?}");
+    assert_eq!(f.client.snapshot().spawns, 5);
+    match f.client.warm() {
+        Err(EngineHostError::Failed(m)) => assert!(m.contains("next attempt in"), "{m}"),
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(f.client.snapshot().spawns, 5);
+
+    // The host is healthy again: the next attempt after the cooldown succeeds.
+    std::fs::remove_file(&crash).unwrap();
+    wait_until(
+        "recovery after the cooldown",
+        Duration::from_secs(5),
+        || f.client.warm().is_ok(),
+    );
+    let snap = f.client.snapshot();
+    assert!(snap.failed.is_none(), "{:?}", snap.failed);
+    assert_eq!(snap.crashes_in_window, 0);
+    assert_eq!(snap.spawns, 6);
+    let out = f
+        .client
+        .transcribe_dictation(&pcm(1.0), &CancelToken::new())
+        .unwrap();
+    assert_eq!(out.tokens.len(), 2);
+}
+
+/// The fresh start after the cooldown counts as a recovery only once the
+/// model has loaded: a host that starts but crashes on `load` re-opens the
+/// cooldown instead of earning a new crash budget (4 more spawn/crash rounds).
+#[test]
+fn failed_cooldown_recovers_only_after_a_successful_load() {
+    let marker = tempfile::tempdir().unwrap();
+    let crash = marker.path().join("crash");
+    std::fs::write(&crash, b"crash").unwrap();
+    let cooldown = Duration::from_secs(1);
+    let f = fixture_with(
+        &[("FAKE_CRASH_ON_LOAD_FILE", crash.to_str().unwrap())],
+        |c| c.failed_cooldown = cooldown,
+    );
+    for _ in 0..4 {
+        let r = f.client.warm();
+        assert!(matches!(r, Err(EngineHostError::Crashed { .. })), "{r:?}");
+    }
+    assert!(matches!(f.client.warm(), Err(EngineHostError::Failed(_))));
+    let opened = Instant::now();
+    assert_eq!(f.client.snapshot().spawns, 4);
+
+    // After the cooldown: one start whose handshake succeeds but whose load crashes.
+    std::thread::sleep(cooldown.saturating_sub(opened.elapsed()) + Duration::from_millis(50));
+    let r = f.client.warm();
+    assert!(matches!(r, Err(EngineHostError::Crashed { .. })), "{r:?}");
+    assert_eq!(f.client.snapshot().spawns, 5);
+    // That re-opened the cooldown: failed again, without another spawn.
+    match f.client.warm() {
+        Err(EngineHostError::Failed(m)) => {
+            assert!(m.contains("load after the cooldown failed"), "{m}")
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(f.client.snapshot().spawns, 5);
+
+    // Healthy again: the next attempt after the cooldown loads and recovers.
+    std::fs::remove_file(&crash).unwrap();
+    wait_until(
+        "recovery after the cooldown",
+        Duration::from_secs(5),
+        || f.client.warm().is_ok(),
+    );
+    let snap = f.client.snapshot();
+    assert!(snap.failed.is_none(), "{:?}", snap.failed);
+    assert_eq!(snap.crashes_in_window, 0);
+    assert_eq!(snap.spawns, 6);
+}
+
+/// A half-open start whose host survives but cannot load the model (here the
+/// load is refused) re-opens the cooldown, and the cooldown is enforced: that
+/// host is retired, so the next request fails fast instead of sending `load`
+/// to it again (and pushing the cooldown out on every request).
+#[test]
+fn failed_probe_load_on_a_live_host_enforces_the_new_cooldown() {
+    let marker = tempfile::tempdir().unwrap();
+    let crash = marker.path().join("crash");
+    std::fs::write(&crash, b"crash").unwrap();
+    let log = marker.path().join("ops.log");
+    let cooldown = Duration::from_secs(1);
+    let f = fixture_with(
+        &[
+            ("FAKE_CRASH_ON_START_FILE", crash.to_str().unwrap()),
+            ("FAKE_LOG", log.to_str().unwrap()),
+        ],
+        |c| {
+            c.failed_cooldown = cooldown;
+            c.load.model_dir = "/models/missing".into();
+        },
+    );
+    for _ in 0..4 {
+        let r = f.client.warm();
+        assert!(matches!(r, Err(EngineHostError::Crashed { .. })), "{r:?}");
+    }
+    assert!(matches!(f.client.warm(), Err(EngineHostError::Failed(_))));
+    let opened = Instant::now();
+    std::fs::remove_file(&crash).unwrap();
+
+    // After the cooldown: one start, whose handshake succeeds and whose load is refused.
+    std::thread::sleep(cooldown.saturating_sub(opened.elapsed()) + Duration::from_millis(50));
+    let r = f.client.warm();
+    assert!(
+        matches!(
+            r,
+            Err(EngineHostError::Remote {
+                code: ErrorCode::ModelMissing,
+                ..
+            })
+        ),
+        "{r:?}"
+    );
+    let loads = || ops_of(&log).iter().filter(|o| *o == "load").count();
+    assert_eq!(loads(), 1);
+    let snap = f.client.snapshot();
+    assert_eq!(snap.spawns, 5);
+    assert!(!snap.running, "the probe host that cannot load is retired");
+
+    // Within the new cooldown: fail fast, no new host, no second `load`.
+    match f.client.warm() {
+        Err(EngineHostError::Failed(m)) => {
+            assert!(m.contains("load after the cooldown failed"), "{m}")
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(loads(), 1, "{:?}", ops_of(&log));
+    let snap = f.client.snapshot();
+    assert_eq!(snap.spawns, 5);
+    assert!(snap.failed.is_some());
+}
+
+/// (b) A window that ignores cancel keeps its host slot while the host still
+/// answers `ping` (a Core ML prediction cannot be interrupted). Within the
+/// request timeout plus the wedge grace the client kills that host, and the
+/// next window succeeds on a fresh one.
+#[test]
+fn host_wedged_on_a_timed_out_window_is_restarted_and_the_next_window_succeeds() {
+    let marker = tempfile::tempdir().unwrap();
+    let wedge = marker.path().join("wedge");
+    let timeout = Duration::from_millis(300);
+    let grace = Duration::from_millis(300);
+    let f = fixture_with(
+        &[
+            ("FAKE_WEDGE_ONCE_FILE", wedge.to_str().unwrap()),
+            ("FAKE_MAX_IN_FLIGHT", "1"),
+        ],
+        |c| {
+            c.timeouts.transcribe_min = timeout;
+            c.timeouts.wedge_grace = grace;
+        },
+    );
+    f.client.warm().unwrap();
+    let pid = f.client.snapshot().pid.unwrap();
+    let samples = pcm(1.0);
+    let pcm_file = PcmFile::write(&samples, Some(f.tmp.path())).unwrap();
+    let cancel = CancelToken::new();
+    let started = Instant::now();
+    let ticket = f
+        .client
+        .submit_window(
+            &WindowRequest {
+                pcm_path: pcm_file.path().to_path_buf(),
+                offset_samples: 0,
+                num_samples: samples.len() as u64,
+                sample_rate: 16_000,
+                priority: Priority::Interactive,
+                boost: None,
+            },
+            &cancel,
+            Duration::from_secs(1),
+        )
+        .unwrap()
+        .unwrap();
+    wait_until("window wedged in the host", Duration::from_secs(2), || {
+        f.client.status().is_ok_and(|s| s.in_flight == 1)
+    });
+    f.client.ping().expect("a wedged host still answers ping");
+
+    let r = ticket.wait(&cancel);
+    assert!(
+        matches!(
+            r,
+            Err(EngineHostError::Timeout {
+                op: "transcribe_window",
+                ..
+            })
+        ),
+        "{r:?}"
+    );
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed < timeout + grace + Duration::from_millis(1500),
+        "{elapsed:?}"
+    );
+    wait_until("wedged host killed", Duration::from_secs(2), || {
+        !pid_alive(pid)
+    });
+
+    let out = f
+        .client
+        .transcribe_dictation(&pcm(2.0), &CancelToken::new())
+        .unwrap();
+    assert_eq!(
+        out.tokens.iter().map(|t| t.id).collect::<Vec<_>>(),
+        expected_ids(2 * SR)
+    );
+    let snap = f.client.snapshot();
+    assert_ne!(snap.pid, Some(pid));
+    assert_eq!(snap.spawns, 2);
+    assert_eq!(
+        snap.crashes_in_window, 1,
+        "the wedge counts against the budget"
+    );
+}
+
+/// #397: a healthy host can spend longer than the window timeout in one
+/// uninterruptible call (the Neural Engine recompiling the encoder took
+/// 11.5-16.7 s). The caller gets its timeout at once, not after the wedge
+/// grace; the host answers the cancelled window late but within the grace, so
+/// it is not killed, no crash is counted and later requests keep using it
+/// (killing it would throw the compile away and the next dictation would pay
+/// for it again).
+#[test]
+fn slow_uninterruptible_window_times_out_promptly_and_keeps_the_host() {
+    let timeout = Duration::from_millis(300);
+    // Longer than the 5 s grace used before #397 was addressed.
+    let stall = Duration::from_secs(6);
+    let stall_ms = stall.as_millis().to_string();
+    let f = fixture_with(
+        &[("FAKE_FIRST_UNINTERRUPTIBLE_MS", stall_ms.as_str())],
+        |c| {
+            c.timeouts.transcribe_min = timeout;
+            c.timeouts.wedge_grace = Timeouts::default().wedge_grace;
+        },
+    );
+    f.client.warm().unwrap();
+    let pid = f.client.snapshot().pid.unwrap();
+
+    let started = Instant::now();
+    let r = f
+        .client
+        .transcribe_dictation(&pcm(1.0), &CancelToken::new());
+    let elapsed = started.elapsed();
+    assert!(
+        matches!(
+            r,
+            Err(EngineHostError::Timeout {
+                op: "transcribe_window",
+                ..
+            })
+        ),
+        "{r:?}"
+    );
+    assert!(
+        elapsed < timeout + Duration::from_secs(1),
+        "the caller waited for the wedge grace: {elapsed:?}"
+    );
+
+    // The host is busy, not broken: the next dictation runs on it meanwhile.
+    let out = f
+        .client
+        .transcribe_dictation(&pcm(1.0), &CancelToken::new())
+        .unwrap();
+    assert_eq!(out.tokens.len(), 2);
+    assert_eq!(f.client.snapshot().pid, Some(pid));
+
+    // The stalled window ends and answers its cancel within the grace.
+    wait_until(
+        "late answer to the timed-out window",
+        stall + Duration::from_secs(5),
+        || f.client.status().is_ok_and(|s| s.in_flight == 0),
+    );
+    assert!(started.elapsed() >= stall, "{:?}", started.elapsed());
+    assert!(pid_alive(pid), "a host that answered late was killed");
+    let snap = f.client.snapshot();
+    assert_eq!(snap.pid, Some(pid));
+    assert_eq!(snap.crashes_in_window, 0);
+    assert_eq!(snap.spawns, 1);
+    let out = f
+        .client
+        .transcribe_dictation(&pcm(2.0), &CancelToken::new())
+        .unwrap();
+    assert_eq!(out.tokens.len(), 4);
+    assert_eq!(f.client.snapshot().pid, Some(pid));
+}
+
+/// 500 terms of 64 four-byte characters: each window request line is about
+/// 125 KB, more than an OS pipe buffer holds.
+fn pipe_filling_boost() -> BoostSpec {
+    let terms = (0..500).map(|i| format!("{i:03}{}", "\u{1F600}".repeat(61)));
+    let boost = BoostSpec::new(terms, 5.0).unwrap();
+    assert_eq!(boost.terms.len(), 500);
+    boost
+}
+
+/// A host that reads the first window and then stops reading stdin, with a
+/// batch lane of two so the second window's write fills the pipe.
+fn stop_reading_fixture(
+    marker: &Path,
+    log: &Path,
+    write_timeout: Duration,
+    max_crash_retries: u32,
+) -> Fixture {
+    let marker = marker.join("stop-reading");
+    let f = fixture_with(
+        &[
+            ("FAKE_STOP_READING_ONCE_FILE", marker.to_str().unwrap()),
+            ("FAKE_MAX_IN_FLIGHT", "3"),
+            ("FAKE_WINDOW_S", "10"),
+            ("FAKE_OVERLAP_S", "4"),
+            ("FAKE_LOG", log.to_str().unwrap()),
+        ],
+        |c| {
+            c.timeouts.write = write_timeout;
+            c.max_crash_retries = max_crash_retries;
+        },
+    );
+    f.client.set_boost(Some(pipe_filling_boost()));
+    f.client.warm().unwrap();
+    f
+}
+
+/// (c) A host that stops reading stdin: the blocked write is bounded instead
+/// of hanging forever, and that host is killed. It fails the request like a
+/// crash, the error says why, and the next job runs on a fresh host.
+#[test]
+fn blocked_stdin_write_times_out_instead_of_hanging() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("ops.log");
+    let f = stop_reading_fixture(dir.path(), &log, Duration::from_millis(300), 0);
+    let pid = f.client.snapshot().pid.unwrap();
+    let client = f.client.clone();
+    let (r, elapsed) = run_bounded(Duration::from_secs(20), move || {
+        client
+            .transcribe_file_samples(&pcm(16.0), &CancelToken::new(), None)
+            .map(|o| o.tokens.len())
+    });
+    match r {
+        Err(EngineHostError::Crashed { status, .. }) => assert!(
+            status.contains("stopped reading requests")
+                && status.contains("`transcribe_window` could not be written within 300ms"),
+            "{status}"
+        ),
+        other => panic!("{other:?}"),
+    }
+    assert!(elapsed < Duration::from_secs(5), "{elapsed:?}");
+    wait_until(
+        "host that stopped reading killed",
+        Duration::from_secs(3),
+        || !pid_alive(pid),
+    );
+
+    let samples = pcm(16.0);
+    let out = f
+        .client
+        .transcribe_file_samples(&samples, &CancelToken::new(), None)
+        .unwrap();
+    assert_eq!(
+        out.tokens.iter().map(|t| t.id).collect::<Vec<_>>(),
+        expected_ids(samples.len())
+    );
+    let snap = f.client.snapshot();
+    assert_eq!(snap.spawns, 2);
+    assert_eq!(snap.crashes_in_window, 1);
+}
+
+/// The window whose write timed out is resubmitted like the other windows
+/// that were in flight on the killed host, so the job still completes.
+#[test]
+fn job_survives_a_host_that_stopped_reading_stdin() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("ops.log");
+    let f = stop_reading_fixture(dir.path(), &log, Duration::from_millis(300), 1);
+    let pid = f.client.snapshot().pid.unwrap();
+    let client = f.client.clone();
+    let samples = pcm(16.0);
+    let n = samples.len();
+    let (r, elapsed) = run_bounded(Duration::from_secs(20), move || {
+        client
+            .transcribe_file_samples(&samples, &CancelToken::new(), None)
+            .map(|o| o.tokens.iter().map(|t| t.id).collect::<Vec<_>>())
+    });
+    assert_eq!(r.unwrap(), expected_ids(n));
+    assert!(elapsed < Duration::from_secs(5), "{elapsed:?}");
+    assert!(!pid_alive(pid));
+    let snap = f.client.snapshot();
+    assert_eq!(snap.spawns, 2);
+    assert_eq!(snap.crashes_in_window, 1);
+}
+
+/// (c) Shutting the host down does not wait for a stdin write that cannot
+/// complete (the write timeout is far away here): it returns within its grace.
+#[test]
+fn shutdown_is_not_blocked_by_a_stdin_write_that_cannot_complete() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("ops.log");
+    let f = stop_reading_fixture(dir.path(), &log, Duration::from_secs(30), 1);
+    let pid = f.client.snapshot().pid.unwrap();
+    let job = {
+        let client = f.client.clone();
+        std::thread::spawn(move || {
+            client
+                .transcribe_file_samples(&pcm(16.0), &CancelToken::new(), None)
+                .map(|o| o.tokens.len())
+        })
+    };
+    wait_until("host stopped reading", Duration::from_secs(5), || {
+        ops_of(&log).iter().any(|o| o == "transcribe_window")
+    });
+    std::thread::sleep(Duration::from_millis(300)); // the second window's write is blocked now
+    let client = f.client.clone();
+    let ((), elapsed) = run_bounded(Duration::from_secs(10), move || client.shutdown());
+    assert!(elapsed < Duration::from_secs(2), "{elapsed:?}");
+    wait_until("host gone", Duration::from_secs(3), || !pid_alive(pid));
+    wait_until("blocked job released", Duration::from_secs(10), || {
+        job.is_finished()
+    });
+}
+
+/// The restart backoff is slept with the lifecycle lock released (shutdown is
+/// not held up) and a cancelled caller stops waiting at once.
+#[test]
+fn restart_backoff_is_cancellable_and_does_not_block_shutdown() {
+    let f = fixture_with(&[("FAKE_CRASH_ON_START", "1")], |c| {
+        c.restart_backoff = vec![Duration::from_secs(5)]
+    });
+    let r = f.client.warm();
+    assert!(matches!(r, Err(EngineHostError::Crashed { .. })), "{r:?}");
+    let cancel = CancelToken::new();
+    let waiter = {
+        let client = f.client.clone();
+        let cancel = cancel.clone();
+        std::thread::spawn(move || {
+            let started = Instant::now();
+            let r = client.warm_with_cancel(&cancel).map(|_| ());
+            (r, started.elapsed())
+        })
+    };
+    std::thread::sleep(Duration::from_millis(200)); // the waiter is in the 5 s backoff
+    let client = f.client.clone();
+    let ((), elapsed) = run_bounded(Duration::from_secs(10), move || client.shutdown());
+    assert!(
+        elapsed < Duration::from_secs(1),
+        "shutdown waited for the restart backoff: {elapsed:?}"
+    );
+    cancel.cancel();
+    wait_until("cancelled waiter returns", Duration::from_secs(2), || {
+        waiter.is_finished()
+    });
+    let (r, waited) = waiter.join().unwrap();
+    assert!(matches!(r, Err(EngineHostError::Cancelled)), "{r:?}");
+    assert!(waited < Duration::from_secs(2), "{waited:?}");
+    assert_eq!(f.client.snapshot().spawns, 1, "no restart after the cancel");
+}
+
+/// `connect` (`engine status` / `engine doctor`) sleeps a pending restart
+/// backoff with the lifecycle lock released as well.
+#[test]
+fn connect_sleeps_the_restart_backoff_without_blocking_shutdown() {
+    let backoff = Duration::from_millis(2500);
+    let f = fixture_with(&[("FAKE_CRASH_ON_START", "1")], |c| {
+        c.restart_backoff = vec![backoff]
+    });
+    let r = f.client.warm();
+    assert!(matches!(r, Err(EngineHostError::Crashed { .. })), "{r:?}");
+    let connecting = {
+        let client = f.client.clone();
+        std::thread::spawn(move || client.connect().map(|_| ()))
+    };
+    std::thread::sleep(Duration::from_millis(200)); // connect is in the backoff
+    let client = f.client.clone();
+    let ((), elapsed) = run_bounded(Duration::from_secs(10), move || client.shutdown());
+    assert!(
+        elapsed < Duration::from_millis(1200),
+        "shutdown waited for connect's restart backoff: {elapsed:?}"
+    );
+    let r = connecting.join().unwrap();
+    assert!(matches!(r, Err(EngineHostError::Crashed { .. })), "{r:?}");
+}
+
+const PCM_OWNER_PARENT: &str = "SAGASCRIPT_TEST_PCM_OWNER_PARENT";
+
+/// Helper process for `startup_sweep_removes_only_pcm_dirs_of_dead_owners`:
+/// re-run with `PCM_OWNER_PARENT` set, it owns a live PCM dir until killed.
+/// A no-op as a normal test.
+#[test]
+fn pcm_dir_owner_process() {
+    let Some(parent) = std::env::var_os(PCM_OWNER_PARENT) else {
+        return;
+    };
+    let file = PcmFile::write(&pcm(0.1), Some(Path::new(&parent))).unwrap();
+    let name = file
+        .dir()
+        .file_name()
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    println!("\nPCM_DIR={name}");
+    std::io::Write::flush(&mut std::io::stdout()).unwrap();
+    std::thread::sleep(Duration::from_secs(60));
+}
+
+fn spawn_pcm_owner(parent: &Path) -> (std::process::Child, PathBuf) {
+    use std::io::BufRead;
+    let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "pcm_dir_owner_process",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(PCM_OWNER_PARENT, parent)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let stdout = child.stdout.take().unwrap();
+    let mut lines = std::io::BufReader::new(stdout).lines();
+    let name = loop {
+        let line = lines
+            .next()
+            .expect("owner process exited before creating its dir")
+            .unwrap();
+        if let Some(name) = line.split("PCM_DIR=").nth(1) {
+            break name.trim().to_string();
+        }
+    };
+    (child, parent.join(name))
+}
+
+/// (d) PCM temp dirs left behind by a killed process are removed by the
+/// startup sweep; dirs owned by a live process (another one, or this one) and
+/// entries that do not match exactly are kept.
+#[test]
+fn startup_sweep_removes_only_pcm_dirs_of_dead_owners() {
+    let parent = tempfile::tempdir().unwrap();
+    let (mut dead, dead_dir) = spawn_pcm_owner(parent.path());
+    let (mut live, live_dir) = spawn_pcm_owner(parent.path());
+    let ours = PcmFile::write(&pcm(0.1), Some(parent.path())).unwrap();
+    dead.kill().unwrap(); // no destructor runs: the dir stays behind
+    dead.wait().unwrap();
+    assert!(dead_dir.join("audio.f32le").is_file());
+    // Windows may release a killed process's file lock with a delay; the
+    // startup sweep below runs once, so wait until the lock is free.
+    wait_until("dead owner's lock released", Duration::from_secs(5), || {
+        std::fs::File::open(dead_dir.join("owner.lock"))
+            .is_ok_and(|f| fs2::FileExt::try_lock_exclusive(&f).is_ok())
+    });
+
+    // Entries the sweep must leave alone: a non-matching name and a dir in
+    // the pre-#366 format, whose owner cannot be proven dead.
+    let unrelated = parent.path().join("sagascript-pcm-notes");
+    std::fs::create_dir(&unrelated).unwrap();
+    let legacy = parent.path().join("sagascript-pcm-AbC123");
+    std::fs::create_dir(&legacy).unwrap();
+    std::fs::write(legacy.join("audio.f32le"), b"old").unwrap();
+    // A symlink named like a PCM dir is never followed.
+    #[cfg(unix)]
+    let outside = {
+        // A copy of the stale dir: it would be removed if the link were followed.
+        let outside = tempfile::tempdir().unwrap();
+        for entry in std::fs::read_dir(&dead_dir).unwrap() {
+            let entry = entry.unwrap();
+            std::fs::copy(entry.path(), outside.path().join(entry.file_name())).unwrap();
+        }
+        std::os::unix::fs::symlink(
+            outside.path(),
+            parent.path().join("sagascript-pcm-symlinkABCDE"),
+        )
+        .unwrap();
+        outside
+    };
+
+    sweep_stale_pcm_dirs_in_background(parent.path().to_path_buf());
+    wait_until("stale PCM dir removed", Duration::from_secs(5), || {
+        !dead_dir.exists()
+    });
+    assert!(
+        live_dir.join("audio.f32le").is_file(),
+        "live owner's dir kept"
+    );
+    assert!(ours.path().is_file(), "this process's dir kept");
+    assert!(unrelated.is_dir() && legacy.join("audio.f32le").is_file());
+    #[cfg(unix)]
+    assert!(
+        outside.path().join("audio.f32le").is_file(),
+        "symlink followed"
+    );
+
+    live.kill().unwrap();
+    live.wait().unwrap();
+    let mut removed = 0;
+    // Windows may release a killed process's file lock with a delay.
+    wait_until("second owner's dir removed", Duration::from_secs(5), || {
+        let swept = sweep_stale_pcm_dirs(parent.path()).unwrap();
+        removed += swept.removed;
+        assert!(swept.kept >= 1, "{swept:?}");
+        !live_dir.exists()
+    });
+    assert_eq!(removed, 1);
+    assert!(ours.path().is_file());
 }

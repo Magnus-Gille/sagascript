@@ -651,6 +651,7 @@ fn decode_audio_file_inner(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sagascript_testsupport::TempDir;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -731,10 +732,8 @@ mod tests {
 
     #[test]
     fn controlled_decode_can_cancel_after_a_decoded_packet() {
-        let path = std::env::temp_dir().join(format!(
-            "sagascript-controlled-decode-{}.wav",
-            uuid::Uuid::new_v4()
-        ));
+        let dir = TempDir::new();
+        let path = dir.join("controlled-decode.wav");
         let samples = vec![0.0_f32; 16_000];
         std::fs::write(&path, crate::audio::wav::encode_wav(&samples))
             .expect("write controlled decode fixture");
@@ -751,7 +750,6 @@ mod tests {
             }
         };
         let result = decode_audio_file_with_control(&path, &checkpoint);
-        let _ = std::fs::remove_file(&path);
 
         assert!(matches!(
             result,
@@ -788,12 +786,11 @@ mod tests {
         let wav_bytes = crate::audio::wav::encode_wav(&original_samples);
 
         // Write to temp file
-        let tmp = std::env::temp_dir().join("sagascript_test_decode.wav");
+        let dir = TempDir::new();
+        let tmp = dir.join("decode.wav");
         std::fs::write(&tmp, &wav_bytes).unwrap();
 
         let result = decode_audio_file(&tmp);
-        // Clean up
-        let _ = std::fs::remove_file(&tmp);
 
         let decoded = result.unwrap();
         // Should be approximately 16000 samples (at 16kHz, same rate → no resampling)
@@ -928,8 +925,8 @@ mod tests {
     #[test]
     fn conversion_progress_is_not_suppressed_by_decode_reaching_99() {
         use std::cell::RefCell;
-        let path =
-            std::env::temp_dir().join(format!("sagascript-stages-{}.wav", uuid::Uuid::new_v4()));
+        let dir = TempDir::new();
+        let path = dir.join("stages.wav");
         let mut wav = crate::audio::wav::encode_wav(&vec![0.1; 88_200]);
         wav[24..28].copy_from_slice(&44_100u32.to_le_bytes());
         wav[28..32].copy_from_slice(&88_200u32.to_le_bytes());
@@ -941,7 +938,6 @@ mod tests {
             &|pct| events.borrow_mut().push(("decoding", pct)),
             &|pct| events.borrow_mut().push(("resampling", pct)),
         );
-        std::fs::remove_file(path).unwrap();
         assert!(!result.unwrap().is_empty());
         let events = events.borrow();
         let boundary = events.iter().position(|e| *e == ("resampling", 0)).unwrap();
@@ -1143,8 +1139,8 @@ mod tests {
 
     #[test]
     fn invalid_media_fails_promptly_through_both_entry_points() {
-        let path =
-            std::env::temp_dir().join(format!("sagascript-invalid-{}.mp3", uuid::Uuid::new_v4()));
+        let dir = TempDir::new();
+        let path = dir.join("invalid.mp3");
         let garbage: Vec<u8> = [0xFFu8, 0xFB, 0x90, 0x00]
             .into_iter()
             .cycle()
@@ -1159,7 +1155,6 @@ mod tests {
             let _ = tx.send((plain, controlled));
         });
         let outcome = rx.recv_timeout(std::time::Duration::from_secs(10));
-        let _ = std::fs::remove_file(&path);
         let (plain, controlled) = outcome.expect("decode of invalid media must not hang");
         for result in [plain, controlled] {
             match result {
@@ -1660,8 +1655,7 @@ mod tests {
 
     #[test]
     fn streaming_decode_is_bitwise_identical_to_the_previous_pipeline() {
-        let dir = std::env::temp_dir().join(format!("sagascript-bitwise-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new();
         let mut checked = 0;
         for (rate, ch, bits, float, frames) in [
             (16_000u32, 1u16, 16u16, false, 5_037usize),
@@ -1689,7 +1683,6 @@ mod tests {
             assert!(want.iter().any(|v| *v != 0.0));
             checked += 1;
         }
-        std::fs::remove_dir_all(&dir).unwrap();
         assert_eq!(checked, 9);
     }
 
@@ -1708,8 +1701,7 @@ mod tests {
             }
             h
         }
-        let dir = std::env::temp_dir().join(format!("sagascript-frozen-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new();
         for (rate, ch, bits, float, frames, len, hash) in [
             (
                 44_100u32,
@@ -1734,6 +1726,5 @@ mod tests {
                 assert_eq!(fnv(&got), hash, "{rate} Hz {ch} ch {bits}-bit");
             }
         }
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

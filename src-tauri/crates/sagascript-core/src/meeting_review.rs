@@ -627,40 +627,15 @@ impl fmt::Display for CorrectionOperation {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::meeting::{MeetingSegmentInput, MeetingSpeaker};
+    use crate::test_support::meeting_transcript;
 
     fn transcript() -> MeetingTranscript {
-        MeetingTranscript::new(
-            "a".repeat(64),
-            "en",
-            "tiny",
-            4.0,
-            vec![
-                MeetingSegmentInput {
-                    start: 0.0,
-                    end: 1.0,
-                    text: "hello".into(),
-                    speaker: "a".into(),
-                },
-                MeetingSegmentInput {
-                    start: 1.0,
-                    end: 2.0,
-                    text: "world".into(),
-                    speaker: "b".into(),
-                },
-            ],
-            vec![
-                MeetingSpeaker {
-                    id: "a".into(),
-                    label: "Alice".into(),
-                },
-                MeetingSpeaker {
-                    id: "b".into(),
-                    label: "Bob".into(),
-                },
-            ],
-        )
-        .expect("valid transcript")
+        meeting_transcript()
+            .segment(0.0, 1.0, "hello", "a")
+            .segment(1.0, 2.0, "world", "b")
+            .speaker("a", "Alice")
+            .speaker("b", "Bob")
+            .build()
     }
 
     fn file(review: &MeetingReview, operations: Vec<CorrectionOperation>) -> CorrectionFile {
