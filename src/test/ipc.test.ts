@@ -78,16 +78,20 @@ describe("commands", () => {
   test("Maps, byte buffers and IPC-serializable objects are converted as Tauri's serializer does", async () => {
     const ipc = mockIpc({ set_hotkey_profiles: () => [] });
     // Raw invoke: the typed wrappers never send these, but the boundary would.
+    // They sit under the one argument `set_hotkey_profiles` reads, since the
+    // mock rejects keys the Rust command does not have.
     await invoke("set_hotkey_profiles", {
-      labels: new Map([["s1", "Talare 1"]]),
-      bytes: new Uint8Array([1, 2, 255]),
-      buffer: new Uint8Array([7, 8]).buffer,
-      channel: { [SERIALIZE_TO_IPC_FN]: () => "__CHANNEL__:42" },
+      profiles: {
+        labels: new Map([["s1", "Talare 1"]]),
+        bytes: new Uint8Array([1, 2, 255]),
+        buffer: new Uint8Array([7, 8]).buffer,
+        channel: { [SERIALIZE_TO_IPC_FN]: () => "__CHANNEL__:42" },
+      },
     });
     expect(ipc.calls).toStrictEqual([
       {
         command: "set_hotkey_profiles",
-        args: { labels: { s1: "Talare 1" }, bytes: [1, 2, 255], buffer: [7, 8], channel: "__CHANNEL__:42" },
+        args: { profiles: { labels: { s1: "Talare 1" }, bytes: [1, 2, 255], buffer: [7, 8], channel: "__CHANNEL__:42" } },
       },
     ]);
   });
@@ -120,6 +124,18 @@ describe("commands", () => {
     ]);
     // What src/test/setup.ts runs after every test:
     expect(() => resetIpcMock()).toThrow("Unmocked IPC commands were invoked: get_platform");
+  });
+
+  test("arguments the Rust command does not read reject and fail the test", async () => {
+    const ipc = mockIpc({ set_language: () => [] });
+    // A wrapper that drifted from the Rust signature (`language: Language`).
+    await expect(invoke("set_language", { lang: "fi" })).rejects.toThrow(
+      'IPC command "set_language" was invoked with arguments the Rust command does not read: missing language; no parameter lang (parameters: language)',
+    );
+    // Optional parameters (Rust `Option`) may be left out.
+    await expect(invoke("get_file_model_options", { language: "sv" })).rejects.toThrow(/has no mock handler/);
+    expect(ipc.calls).toEqual([{ command: "get_file_model_options", args: { language: "sv" } }]);
+    expect(() => resetIpcMock()).toThrow("missing language; no parameter lang");
   });
 
   test("a new mock replaces the previous one", async () => {
@@ -189,6 +205,20 @@ describe("events", () => {
     await listen<string>("error", (event) => seen.push(`error:${event.payload}`));
     expect(ipc.emit("state-changed", "transcribing")).toBe(2);
     expect(seen).toEqual(["a:transcribing", "b:transcribing"]);
+  });
+
+  test("listeners() names every active registration, including events the map does not know", async () => {
+    const ipc = mockIpc();
+    expect(ipc.listeners()).toEqual([]);
+    const unlistenState = await listen("state-changed", () => undefined);
+    await listen("state-changed", () => undefined);
+    await listen("tauri://drag-drop", () => undefined);
+    await listen("error", () => undefined);
+    expect(ipc.listeners()).toEqual(["error", "state-changed", "state-changed", "tauri://drag-drop"]);
+
+    unlistenState();
+    await Promise.resolve();
+    expect(ipc.listeners()).toEqual(["error", "state-changed", "tauri://drag-drop"]);
   });
 
   test("once() receives one event and then unlistens by the event's id", async () => {

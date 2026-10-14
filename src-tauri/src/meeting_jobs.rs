@@ -6,10 +6,12 @@ use std::time::{Duration, Instant};
 use sagascript_core::meeting::{MeetingExportFormat, MeetingTranscript};
 use sagascript_core::transcription::WhisperBackend;
 use serde::{Deserialize, Serialize};
-use tauri::{Emitter, Manager, State};
+use tauri::{Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
 use crate::commands::{file_transcription_context, lock_controller, SharedController};
+#[cfg(feature = "diarization")]
+use crate::events::{EmitEvent, UiState};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -83,6 +85,16 @@ impl MeetingJob {
             self.phase_started_at = now;
         }
     }
+}
+
+/// The snapshot's `phase`: the closed enum's wire name, never text or a
+/// source path. The frontend labels these in src/lib/meeting-progress.ts.
+#[cfg(any(feature = "diarization", test))]
+fn phase_name(phase: sagascript_cli::transcribe::MeetingPhase) -> String {
+    serde_json::to_value(phase)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_else(|| "processing".into())
 }
 
 #[derive(Default)]
@@ -186,7 +198,7 @@ async fn begin_job(
 
         let state = jobs.inner().clone();
         let worker_id = id.clone();
-        let _ = app.emit(crate::events::event::STATE_CHANGED, "transcribing");
+        let _ = app.emit_event(crate::events::event::STATE_CHANGED, UiState::Transcribing);
         tauri::async_runtime::spawn(async move {
             let processing_state = state.clone();
             let processing_id = worker_id.clone();
@@ -202,12 +214,7 @@ async fn begin_job(
                             slot.as_mut().filter(|job| job.snapshot.id == processing_id)
                         {
                             if job.snapshot.status == JobStatus::Running {
-                                // Serialize the closed enum, never text or a source path.
-                                let phase = serde_json::to_value(phase)
-                                    .ok()
-                                    .and_then(|value| value.as_str().map(str::to_owned))
-                                    .unwrap_or_else(|| "processing".into());
-                                job.set_phase(phase, Instant::now());
+                                job.set_phase(phase_name(phase), Instant::now());
                             }
                         }
                     }
@@ -312,7 +319,7 @@ async fn begin_job(
                 }
             }
             if released {
-                let _ = app.emit(crate::events::event::STATE_CHANGED, "idle");
+                let _ = app.emit_event(crate::events::event::STATE_CHANGED, UiState::Idle);
             } else {
                 tracing::error!(
                     "Meeting worker exited but its controller lease could not be released"

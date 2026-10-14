@@ -205,8 +205,8 @@
   function operationSummary(operation: CorrectionOperation): string {
     if (operation.kind === "edit_segment") {
       const changes: string[] = [];
-      if (operation.text !== undefined) changes.push(`text → “${operation.text}”`);
-      if (operation.speaker_id !== undefined) changes.push(`speaker → ${operation.speaker_id}`);
+      if (operation.text != null) changes.push(`text → “${operation.text}”`);
+      if (operation.speaker_id != null) changes.push(`speaker → ${operation.speaker_id}`);
       return `Edit segment ${operation.segment_id || "(target not selected)"}: ${changes.join(", ") || "no fields selected"}`;
     }
     if (operation.kind === "rename_speaker") {
@@ -220,8 +220,8 @@
       return {
         kind: "edit_segment",
         segment_id: "",
-        ...(operation.text !== undefined ? { text: operation.text } : {}),
-        ...(operation.speaker_id !== undefined ? { speaker_id: operation.speaker_id } : {}),
+        ...(operation.text != null ? { text: operation.text } : {}),
+        ...(operation.speaker_id != null ? { speaker_id: operation.speaker_id } : {}),
       };
     }
     if (operation.kind === "rename_speaker") {
@@ -262,8 +262,8 @@
       return rows.every((row) =>
         row.kind === "edit_segment"
         && segmentIds.has(row.segment_id)
-        && (row.text !== undefined || row.speaker_id !== undefined)
-        && (row.speaker_id === undefined || speakerIds.has(row.speaker_id))
+        && (row.text != null || row.speaker_id != null)
+        && (row.speaker_id == null || speakerIds.has(row.speaker_id))
       ) && new Set(targetIds).size === targetIds.length;
     }
     if (original.kind === "rename_speaker") {
@@ -500,16 +500,16 @@
                           </select>
                         </label>
                         <label class="field wide">
-                          <span>Replacement text {operation.text === undefined ? "(unchanged)" : ""}</span>
+                          <span>Replacement text {operation.text == null ? "(unchanged)" : ""}</span>
                           <input type="text" value={operation.text ?? ""} oninput={(event) => updateResolution(index, rowIndex, { ...operation, text: (event.currentTarget as HTMLInputElement).value })} />
                         </label>
                         <label class="field wide">
-                          <span>Speaker {operation.speaker_id === undefined ? "(unchanged)" : ""}</span>
+                          <span>Speaker {operation.speaker_id == null ? "(unchanged)" : ""}</span>
                           <select
                             value={operation.speaker_id ?? ""}
                             onchange={(event) => {
                               const speakerId = (event.currentTarget as HTMLSelectElement).value;
-                              updateResolution(index, rowIndex, speakerId ? { ...operation, speaker_id: speakerId } : { kind: "edit_segment", segment_id: operation.segment_id, ...(operation.text !== undefined ? { text: operation.text } : {}) });
+                              updateResolution(index, rowIndex, speakerId ? { ...operation, speaker_id: speakerId } : { kind: "edit_segment", segment_id: operation.segment_id, ...(operation.text != null ? { text: operation.text } : {}) });
                             }}
                           >
                             <option value="">Keep candidate speaker</option>

@@ -110,9 +110,11 @@ export interface MeetingJobSnapshot {
   reprocessing?: import("./meeting-reprocessing-types").ReprocessingResult | null;
 }
 
+/** Built by `pianissimo_backend::load_state_payload` (command and `engine-load-state` event). */
 export interface EngineLoadState {
-  state: string;
-  source?: string;
+  state: "unknown" | "loading" | "ready" | "failed";
+  /** `warm`: a background pre-load; its failure is not a dictation error. */
+  source?: "warm" | "request";
   loadMs?: number;
   message?: string;
 }
@@ -142,10 +144,6 @@ export async function setLanguage(language: Language): Promise<string[]> {
   return invoke("set_language", { language });
 }
 
-export async function setWhisperModel(model: string): Promise<void> {
-  return invoke("set_whisper_model", { model });
-}
-
 export async function setFileTranscriptionModel(modelId: string): Promise<void> {
   return invoke("set_file_transcription_model", { modelId });
 }
@@ -161,18 +159,6 @@ export async function getFileModelOptions(language: Language, include?: string):
 
 export async function downloadPianissimoModel(): Promise<void> {
   return invoke("download_pianissimo_model");
-}
-
-export async function setAutoSelectModel(enabled: boolean): Promise<void> {
-  return invoke("set_auto_select_model", { enabled });
-}
-
-export async function setHotkeyMode(mode: HotkeyMode): Promise<void> {
-  return invoke("set_hotkey_mode", { mode });
-}
-
-export async function setHotkey(shortcut: string): Promise<void> {
-  return invoke("set_hotkey", { shortcut });
 }
 
 /** Resolves with notices about profile models reset to Auto by a language change. */
@@ -205,10 +191,6 @@ export async function retryHotkeyRegistration(): Promise<void> {
 
 export async function setAutoPaste(enabled: boolean): Promise<void> {
   return invoke("set_auto_paste", { enabled });
-}
-
-export async function setInitialPrompt(prompt: string, expectedSource?: string): Promise<void> {
-  return invoke("set_initial_prompt", { prompt, expectedSource });
 }
 
 export async function setProfileGlossary(profileId: string, source: string, expectedSource?: string): Promise<void> {
@@ -252,10 +234,6 @@ export async function setVadEnabled(enabled: boolean): Promise<void> {
   return invoke("set_vad_enabled", { enabled });
 }
 
-export async function getModelInfo(): Promise<WhisperModel[]> {
-  return invoke("get_model_info");
-}
-
 export async function getEffectiveModelInfo(language: Language): Promise<WhisperModel> {
   return invoke("get_effective_model_info", { language });
 }
@@ -263,18 +241,6 @@ export async function getEffectiveModelInfo(language: Language): Promise<Whisper
 /** The model an Auto file-transcription preference resolves to right now. */
 export async function getAutoFileModelInfo(language: Language): Promise<WhisperModel> {
   return invoke("get_auto_file_model_info", { language });
-}
-
-export async function getLoadedModel(): Promise<LoadedModelInfo> {
-  return invoke("get_loaded_model");
-}
-
-export async function isModelReady(): Promise<boolean> {
-  return invoke("is_model_ready");
-}
-
-export async function isModelDownloaded(whisperModel: string): Promise<boolean> {
-  return invoke("is_model_downloaded", { whisperModel });
 }
 
 export async function downloadModel(whisperModel: string): Promise<void> {
@@ -353,18 +319,6 @@ export async function cancelMeetingJob(jobId: string): Promise<boolean> {
   return invoke("cancel_meeting_job", { jobId });
 }
 
-export async function renameMeetingSpeaker(transcript: MeetingTranscript, speakerId: string, label: string): Promise<MeetingTranscript> {
-  return invoke("rename_meeting_speaker", { transcript, speakerId, label });
-}
-
-export async function mergeMeetingSpeakers(transcript: MeetingTranscript, fromId: string, intoId: string): Promise<MeetingTranscript> {
-  return invoke("merge_meeting_speakers", { transcript, fromId, intoId });
-}
-
-export async function saveMeetingExport(transcript: MeetingTranscript, format: MeetingExportFormat): Promise<boolean> {
-  return invoke("save_meeting_export", { transcript, format });
-}
-
 export async function createMeetingReview(transcript: MeetingTranscript): Promise<MeetingReviewState> {
   return invoke("create_meeting_review", { transcript });
 }
@@ -405,37 +359,8 @@ export async function startRecording(): Promise<void> {
   return invoke("start_recording");
 }
 
-export async function startTrainingRecording(profileId: string): Promise<void> {
-  return invoke("start_training_recording", { profileId });
-}
-
-export async function cancelRecording(): Promise<void> {
-  return invoke("cancel_recording");
-}
-
 export async function stopAndTranscribe(): Promise<string> {
   return invoke("stop_and_transcribe");
-}
-
-export async function stopAndTranscribeTraining(): Promise<TrainingTranscript> {
-  return invoke("stop_and_transcribe_training");
-}
-
-export async function transcribeTrainingFile(filePath: string, profileId: string): Promise<TrainingTranscript> {
-  return invoke("transcribe_training_file", { filePath, profileId });
-}
-
-export async function suggestTrainingGlossary(heard: string, corrected: string, profileId: string): Promise<GlossarySuggestion[]> {
-  return invoke("suggest_training_glossary", { heard, corrected, profileId });
-}
-
-export async function applyTrainingGlossary(
-  heard: string,
-  corrected: string,
-  profileId: string,
-  accepted: GlossarySuggestion[],
-): Promise<void> {
-  return invoke("apply_training_glossary", { heard, corrected, profileId, accepted });
 }
 
 // -- Permission / platform queries (for onboarding) --
@@ -470,12 +395,4 @@ export async function getPlatform(): Promise<string> {
 
 export async function setOnboardingCompleted(): Promise<void> {
   return invoke("set_onboarding_completed");
-}
-
-export async function setPianissimoDictation(enabled: boolean): Promise<void> {
-  return invoke("set_pianissimo_dictation", { enabled });
-}
-
-export async function getDictationModelInfo(language: Language): Promise<WhisperModel> {
-  return invoke("get_dictation_model_info", { language });
 }

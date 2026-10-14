@@ -26,9 +26,9 @@ a real `vite build` bundles, emits or reads) and `npm run licenses:check` (relea
 
 - `src/lib/<module>.test.ts` tests `src/lib/<module>.ts` (or `.svelte.ts`); component tests
   are `src/lib/<Component>.test.ts` (or `<Component>.<topic>.test.ts`, such as
-  `Settings.recovery.test.ts`). Name tests after the behaviour they pin.
+  `Settings.recovery.test.ts` and `Settings.readback.test.ts`). Name tests after the behaviour they pin.
 - Shared test code lives in `src/test/`: `setup.ts` (runs before every file), `ipc.ts`,
-  `deferred.ts` and backends for rendering components (`settings.ts`). Nothing in the app
+  `deferred.ts`, `EventProbe.svelte` and backends for rendering components (`settings.ts`). Nothing in the app
   imports it, so it is never bundled; `svelte-check` type-checks tests like app code.
 - Import `describe`/`test`/`expect` from `"vitest"` (no globals). Every file runs in happy-dom
   (a DOM in Node) with Svelte's browser runtime; logic modules stay DOM-free by design, not by
@@ -41,8 +41,9 @@ a real `vite build` bundles, emits or reads) and `npm run licenses:check` (relea
 ## Mocking IPC
 
 `src/test/ipc.ts` wraps `mockIPC` from `@tauri-apps/api/mocks`. Handlers are keyed by
-command name; arguments and results are typed from the wrappers in `src/lib/api.ts` and
-`meeting-reprocessing-api.ts` (`CommandMap`, until #347 generates it from Rust).
+command name; arguments and results are typed by `CommandMap`, which is generated from the
+Rust command signatures (`src/lib/ipc-contract.generated.ts`, #347), so a handler cannot use
+an argument key or result shape the backend does not have.
 
 ```ts
 import { mockIpc } from "../test/ipc";
@@ -65,9 +66,17 @@ ipc.handle("get_platform", () => "windows"); // change an answer mid-test
   values, a `Map` as an object and a `Uint8Array` as an array of numbers.
 - A command without a handler rejects, and `setup.ts` fails the test afterwards even if the
   code under test swallowed the rejection. Never touch real settings or recordings.
-- A new command: add it to `CommandMap` and `COMMANDS` in `ipc.ts` and a row to
-  `src/lib/api.test.ts`, which checks every wrapper's command name and argument object.
-  Plugin commands (`plugin:dialog|open`, …) are not mapped yet.
+- Every call to a registered command is also checked against the Rust parameters
+  (`COMMAND_ARGUMENTS` in the generated file): a missing required key or a key that is no
+  parameter rejects the call and fails the test the same way. A wrapper that still sends an
+  argument key Rust renamed therefore fails Vitest, not only svelte-check. An `Option`
+  parameter may be left out.
+- A new command: regenerate `CommandMap` (`SAGASCRIPT_BLESS_CONTRACTS=1 cargo test -p
+  sagascript contract` in `src-tauri/`), then add the wrapper and its row in
+  `src/lib/api.test.ts`, which checks every wrapper's command name, argument object and
+  result type against `CommandMap`. A registered command without a wrapper must be listed in
+  `COMMANDS_WITHOUT_A_CALLER` there. Plugin commands (`plugin:dialog|open`, …) are not mapped
+  yet.
 
 ## Events
 
@@ -79,8 +88,35 @@ expect(ipc.listenerCount("state-changed")).toBe(1);
 ```
 
 `emit` throws when nothing listens, which usually means the test emitted before an
-asynchronous `listen()` resolved. `EventMap` lists the events the frontend listens for with
-the payload its listeners read (TODO #347: generate from `src-tauri/src/events.rs`).
+asynchronous `listen()` resolved. `EventMap` (`src/lib/events.ts`) lists the events the
+frontend listens for with their payloads; `src/test/transport.test.ts` checks it against the
+Rust event catalogue and its sample payloads.
+
+`ipc.listeners()` names every registration that is still active, including the webview's own
+`tauri://drag-*` events. A component that unmounted must leave none:
+
+```ts
+view.unmount();
+await waitFor(() => expect(ipc.listeners()).toEqual([]));
+```
+
+Components never call `listen()`: they use `useTauriEvent(name, handler)` and
+`useDragDropEvent(handler)` from `src/lib/tauri-events.svelte.ts` while they initialize, or
+`subscribeTauriEvent` and `dispose()` for a listener with its own lifetime. The helpers type
+the payload from `EventMap`. ESLint rejects the raw imports in `src/` (tests and the helper
+excepted). `src/lib/listeners.test.ts` pins that every window unlistens;
+`src/test/EventProbe.svelte` is a component for testing the helper.
+
+## Transport contract
+
+Payloads that cross IPC are pinned by shared fixtures ([contracts/README.md](../../contracts/README.md)):
+Rust writes `contracts/transport/*.json` from real payloads, and `src/test/transport.test.ts`
+parses each with a schema (`src/test/transport-schemas.ts`, built from `src/test/schema.ts`)
+that `expectTypeOf` proves equal to the frontend type. Use those fixtures in tests of code
+that reads a payload (as the meeting-job, transcribe-stages and overlay tests there do)
+instead of hand-written payloads that may not match what Rust sends. To change a payload type:
+change the TypeScript type and its schema together; svelte-check fails while they differ, and
+Vitest fails while the fixture does not parse.
 
 ## Component tests
 
@@ -127,8 +163,9 @@ typescript-eslint (including `no-explicit-any` and `no-unused-vars`) and eslint-
 over `src/`, and the Node scripts in `scripts/` and `tests/`. Prettier formats; ESLint does
 not.
 
-- `eslint-suppressions.json` records the 84 findings that existed when ESLint was introduced,
-  as counts per file and rule: 29 `no-explicit-any` and most of the rest in the Settings,
+- `eslint-suppressions.json` records the 84 findings that existed when ESLint was introduced
+  (76 as of #362, which typed the event handlers), as counts per file and rule: 21 `no-explicit-any`
+  and most of the rest in the Settings,
   Onboarding, FileTranscription and meeting components, one in `profile-shortcuts.ts`, the
   others in `scripts/`. A new
   finding fails, also in a listed file. Fixing one makes ESLint ask for
@@ -149,6 +186,13 @@ Tests reach logic through modules, not through component source:
 3. Move first, behaviour unchanged, in its own commit (ADR 0004 §4); keep the component wired
    to the moved code. Example: MeetingReview.svelte's `<script module>` became
    `src/lib/meeting-review-drafts.ts`.
+
+Code that more than one component needs lives in shared modules (#362), each with its own
+unit tests: `tauri-events.svelte.ts` (listeners, above), `models.svelte.ts` (`PIANISSIMO_ID`,
+`downloadModelById`, `ModelDownloads`), `permissions.ts` (`requestAccessibility`,
+`waitForAccessibility`) and `platform.ts` (`loadPlatform`, one lookup per window; the test
+setup forgets it after every test). The Pianissimo id appears once in `src/`; a component
+asks `downloadModelById(id)` instead of choosing the command.
 
 ## Rules for new and converted tests
 

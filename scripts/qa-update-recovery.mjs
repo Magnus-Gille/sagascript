@@ -1,10 +1,11 @@
 // Isolated visual smoke for update recovery. No native app, audio, or user data.
 import assert from "node:assert/strict";
 import { readFile, mkdir } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || "playwright");
-const outputDir = process.env.QA_OUTPUT_DIR || "/private/tmp/sagascript-255-qa";
+const outputDir = process.env.QA_OUTPUT_DIR || join(tmpdir(), "sagascript-255-qa");
 await mkdir(outputDir, { recursive: true });
 const browser = await chromium.launch({ headless: true });
 const context = await browser.newContext({ viewport: { width: 760, height: 960 } });

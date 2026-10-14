@@ -5,6 +5,7 @@
 import { mockWindows } from "@tauri-apps/api/mocks";
 import { render, waitFor } from "@testing-library/svelte";
 import { expect } from "vitest";
+import { PIANISSIMO_ID } from "../lib/models.svelte";
 import Settings from "../lib/Settings.svelte";
 import type { BuildInfo, EngineStatus, HotkeyProfile, HotkeyStatus, Settings as SettingsValue, WhisperModel } from "../lib/api";
 import { mockIpc, type CommandHandlers, type IpcMock } from "./ipc";
@@ -24,7 +25,7 @@ export function whisperModel(id: string, displayName: string, overrides: Partial
   return { id, display_name: displayName, description: "", size_mb: 0, downloaded: true, active: false, ...overrides };
 }
 
-export const pianissimo = whisperModel("pianissimo-sv", "Pianissimo", { size_mb: 640 });
+export const pianissimo = whisperModel(PIANISSIMO_ID, "Pianissimo", { size_mb: 640 });
 export const kbWhisperMedium = whisperModel("kb-whisper-medium", "KB-Whisper Medium", { size_mb: 1530 });
 
 export const swedishProfile: HotkeyProfile = {

@@ -1,84 +1,86 @@
 # Recipe: add an event
 
-Events carry backend → frontend notifications (state changes, progress, results). The name
-is a string on both sides; only the Rust side has constants. Example: `example-progress`
-with payload `{ percent: number }`.
+Events carry backend → frontend notifications (state changes, progress, results). Both
+sides declare each event once: the Rust catalogue in `src-tauri/src/events.rs` (name, payload
+type, producer, consumer) and `EventMap` in `src/lib/events.ts`; the shared fixture
+`contracts/transport/events.json` ties them together ([contracts/README.md](../../contracts/README.md)).
+Example: `example-progress` with payload `{ percent: number }`.
 
-## 1. Name constant: `src-tauri/src/events.rs`
+## 1. Catalogue entry: `src-tauri/src/events.rs`
 
-1. Add to `pub mod event`, with a doc comment that states the payload shape and who listens:
+1. Declare the payload type next to the others (`#[derive(Clone, Serialize)]`; borrow with a
+   lifetime when the emit site has the data borrowed, like `PlainTranscriptionProgress<'a>`).
+2. Add an entry to the `catalogue!` block in `pub mod event`, with a doc comment that names the
+   producer and the consumer:
 
    ```rust
-   /// Example job progress. Payload: `{ percent: number }`.
-   pub const EXAMPLE_PROGRESS: &str = "example-progress";
+   /// Example job progress. Producer: example.rs. Consumer: Example.svelte.
+   EXAMPLE_PROGRESS: ExampleProgressEvent = "example-progress",
+       payload<'a> = ExampleProgress,
+       consumer = Consumer::Gui,
+       scope = None;
    ```
 
-2. Add the constant to both arrays in the test module: `event_names_are_kebab_case` and
-   `event_names_are_unique`. Names are kebab-case.
-3. Do not emit raw string literals. Existing exceptions are debt, not precedent:
-   `update-preparing`, `update-aborted`, `navigate_tab` (in `main.rs`) and
-   `transcription-progress` (raw in `commands.rs`). `ENGINE_LOAD_STATE` is missing from the
-   uniqueness array.
+   `scope = Some("runId")` names the payload field that ties an event to one job or run.
+   `Consumer::Internal("reason")` marks an event nothing in the frontend listens for (a named
+   legacy exception); it needs no listener. Names are kebab-case; the uniqueness and
+   kebab-case tests cover every entry by construction.
+3. Add sample payloads to `all_samples()` in `src-tauri/src/events_tests.rs`, built with the
+   same types and builders as the emit site; a sample of the wrong type does not compile.
 4. Do not put non-state values on `state-changed`; it already carries `settings_reloaded`
    besides dictation states. Give a new concern its own event.
 
 ## 2. Emit from Rust
 
 ```rust
-use tauri::Emitter;
+use crate::events::{event, EmitEvent, ExampleProgress};
 
-#[derive(Clone, serde::Serialize)]
-struct ExampleProgress { percent: u8 }
-
-let _ = app.emit(crate::events::event::EXAMPLE_PROGRESS, ExampleProgress { percent });
+let _ = app.emit_event(event::EXAMPLE_PROGRESS, ExampleProgress { percent });
 ```
 
-- `app.emit(...)` broadcasts to every webview (Settings, overlay, onboarding);
-  `app.emit_to("settings", ...)` targets one window label (see `prepare_update_recovery`).
+- `emit_event` broadcasts to every webview (Settings, overlay, onboarding);
+  `emit_event_to("settings", …)` targets one window label (see `prepare_update_recovery`).
+  The compiler checks the payload type. `tauri::Emitter::emit*` is a clippy error
+  (`disallowed-methods` in `src-tauri/clippy.toml`), so a raw name cannot slip in.
 - Emitting is thread-safe and needs no main-thread hop; touching tray, overlay or windows does
   (`dispatch_to_main`, [ADR 0003](../adr/0003-main-thread-native-apis.md)).
-- Payloads must be `Serialize + Clone`. Keep field names stable; the frontend reads them by
-  name. Do not put transcripts into payloads that are logged
-  ([ADR 0002](../adr/0002-privacy-first.md)).
+- Keep field names stable; the frontend reads them by name. Do not put transcripts into
+  payloads that are logged ([ADR 0002](../adr/0002-privacy-first.md)).
 - Emit after state is committed (after the controller lock is released), so a listener that
   calls back into a command sees the new state.
+- Regenerate the shared fixture and review it:
+  `cd src-tauri && SAGASCRIPT_BLESS_CONTRACTS=1 cargo test -p sagascript contract`.
 
 ## 3. Listen in the frontend
 
-Declare the payload type next to the related wrappers in `src/lib/api.ts` (or the area's
-types module) and listen inside `onMount`, cleaning up on unmount. `listen` resolves
-asynchronously, so a component can unmount before the unlisten function arrives; handle that.
-The pattern in `src/lib/Overlay.svelte`:
+Add the event to `EventMap` in `src/lib/events.ts` (payload type next to it) and its schema
+to `eventPayloads` in `src/test/transport-schemas.ts`; `src/test/transport.test.ts` then
+parses the Rust samples with it. Listen through `useTauriEvent` from
+`src/lib/tauri-events.svelte.ts`, typed by `EventMap`; it owns the unlisten, so a component
+that unmounts before the registration resolved leaves no listener behind (ESLint forbids a
+raw `listen()` in `src/`). Call it while the component initializes, not inside `onMount`:
 
 ```ts
-import { onMount } from "svelte";
-import { listen } from "@tauri-apps/api/event";
+import { useTauriEvent } from "./tauri-events.svelte";
 
-onMount(() => {
-  let disposed = false;
-  const stops: Array<() => void> = [];
-  const remember = (stop: () => void) => (disposed ? stop() : stops.push(stop));
-  listen<ExampleProgress>("example-progress", (event) => {
-    progress = event.payload.percent;
-  }).then(remember);
-  return () => { disposed = true; stops.forEach((stop) => stop()); };
+useTauriEvent("example-progress", (payload) => {
+  progress = payload.percent;
 });
 ```
 
-`src/lib/onboarding-download-state.ts` shows the same ownership rules as a tested helper.
-Several older listeners in `Settings.svelte` drop the unlisten promise; do not copy them.
-Keep payload interpretation in a DOM-free `src/lib/*.ts` module (for example the reducer in
-`overlay-state.ts`) so it can be unit-tested. Planned:
-[#362](https://github.com/Magnus-Gille/sagascript/issues/362) adds a shared
-`useTauriEvent` helper; [#347](https://github.com/Magnus-Gille/sagascript/issues/347) adds a
-typed event catalogue and contract test.
+It returns a subscription whose `ready` promise settles once the listener is active; use it
+to order work that must not start before the listener. A listener with its own lifetime (one
+run, one request) uses `subscribeTauriEvent(name, handler)` and calls `dispose()` when done;
+`src/lib/FileTranscription.svelte` is the example. Keep payload interpretation in a DOM-free
+`src/lib/*.ts` module (for example the reducer in `overlay-state.ts`) so it can be unit-tested.
 
 ## 4. Tests
 
 | Layer | What |
 |---|---|
-| Rust | The `events.rs` tests (name format, uniqueness). Unit-test the code that builds the payload. |
-| Frontend logic | `src/lib/<module>.test.ts` (Vitest) for the module that interprets the payload (see `src/lib/overlay-state.test.ts`); add the event to `EventMap` in `src/test/ipc.ts` so tests can `emit()` it. |
+| Rust | `events_tests.rs`: name format, uniqueness, and `transport_contract_events` against `contracts/transport/events.json`. Unit-test the code that builds the payload. |
+| Contract | `src/test/transport.test.ts` parses every sample with the `EventMap` schema; feed the samples to the module that interprets them there. |
+| Frontend logic | `src/lib/<module>.test.ts` (Vitest) for the module that interprets the payload (see `src/lib/overlay-state.test.ts`); `ipc.emit()` is typed by `EventMap`. |
 | Browser | Add a helper to `window.qa` in `scripts/fixtures/transcription-browser-mock.js` that calls `emit("example-progress", {...})` (like `dictationResult`), and drive it from a `scripts/qa-*.mjs` flow. Emits reach `listen` only because the mock installs `mockIPC(..., { shouldMockEvents: true })`; keep that option. |
 
 No regex tests over `.svelte` source ([ADR 0004](../adr/0004-test-strategy.md)).
@@ -87,7 +89,7 @@ No regex tests over `.svelte` source ([ADR 0004](../adr/0004-test-strategy.md)).
 
 ```bash
 npm run build && cd src-tauri
-cargo test events                 # app crate: events.rs tests
+cargo test -- events contract     # app crate: catalogue tests and the shared fixture
 cargo clippy --workspace --all-targets -- -D warnings
 cd .. && npx svelte-check --tsconfig ./tsconfig.json && npm run test:unit && npm run test:frontend
 npm run test:browser              # if a qa flow covers the event

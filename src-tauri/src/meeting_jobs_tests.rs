@@ -354,3 +354,428 @@ fn finished_meeting_releases_its_lease_from_a_poisoned_controller() {
         "the next import can start"
     );
 }
+
+/// The `get_meeting_job` payload as the shared fixture
+/// contracts/transport/get_meeting_job.json (#347): one snapshot per job
+/// status, produced by the job's own transitions (`snapshot_at`, `cancel_job`,
+/// `finish_snapshot`), and parsed by the frontend's `MeetingJobSnapshot`
+/// type (src/test/transport.test.ts).
+mod transport_contract {
+    use sagascript_cli::transcribe::MeetingPhase;
+    use sagascript_core::diarization_report::{
+        ActivitySpan, AsrSegmentEvidence, AttributionEvidence, AttributionReason, DecoderEvidence,
+        DiarizationParameters, DiarizationReport, EmbeddingStatus, RegionEvidence, SpeakerSupport,
+    };
+    use sagascript_core::meeting::{MeetingSegmentInput, MeetingSpeaker};
+    use sagascript_core::speaker_hint::{SpeakerCountHint, SpeakerHintOutcome};
+    use serde_json::{Map, Value};
+
+    use super::*;
+    use crate::contract;
+
+    const SOURCE: &str = "3b1f6c0f9a8e2d4c5b7a6e9d8c0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b";
+    const DURATION: f64 = 6.0;
+
+    /// Diarization evidence with every optional field both present and
+    /// absent somewhere; it passes `DiarizationReport::validate`.
+    fn report() -> DiarizationReport {
+        DiarizationReport {
+            schema_version: 1,
+            source_sha256: SOURCE.into(),
+            duration_seconds: DURATION,
+            build_revision: "abc1234".into(),
+            build_version: "1.4.4".into(),
+            diagnostics_included: true,
+            speaker_hint: Some(SpeakerCountHint::exact(2)),
+            speaker_hint_outcome: Some(SpeakerHintOutcome {
+                satisfied: true,
+                delivered: 2,
+            }),
+            segmentation_model_sha256: Some("a".repeat(64)),
+            embedding_model_sha256: None,
+            decoder: Some(DecoderEvidence {
+                strategy: "beam_search".into(),
+                beam_size: 5,
+                temperature_fallback: true,
+                vad_enabled: true,
+                vad_threshold: 0.5,
+                vad_min_silence_duration_ms: 100,
+                vad_speech_pad_ms: 30,
+                vad_samples_overlap: 0.1,
+                timestamp_method: "source_mapped_segments".into(),
+            }),
+            asr_segments: vec![
+                AsrSegmentEvidence {
+                    start: 0.0,
+                    end: 2.5,
+                    avg_logprob: Some(-0.25),
+                    no_speech_prob: Some(0.01),
+                },
+                AsrSegmentEvidence {
+                    start: 2.5,
+                    end: 6.0,
+                    avg_logprob: None,
+                    no_speech_prob: None,
+                },
+            ],
+            transcript_modified: false,
+            parameters: DiarizationParameters {
+                threshold: 0.7,
+                min_segment_seconds: 0.5,
+                min_gap_seconds: 0.25,
+                min_speaker_seconds: 1.0,
+                absorb_max_distance: 0.5,
+                hint_merge_max_distance: 0.75,
+                exclusive_speech_embeddings: false,
+            },
+            activity: vec![
+                ActivitySpan {
+                    start: 0.0,
+                    end: 2.5,
+                    speakers: vec!["s1".into()],
+                },
+                ActivitySpan {
+                    start: 2.5,
+                    end: 3.0,
+                    speakers: vec!["s1".into(), "s2".into()],
+                },
+                ActivitySpan {
+                    start: 3.0,
+                    end: 6.0,
+                    speakers: vec!["s2".into()],
+                },
+            ],
+            regions: vec![
+                RegionEvidence {
+                    index: 0,
+                    start: 0.0,
+                    end: 3.0,
+                    track: 0,
+                    speaker: "s1".into(),
+                    embedding_status: EmbeddingStatus::Usable,
+                    assigned_centroid_distance: Some(0.25),
+                    nearest_other_centroid_distance: Some(0.75),
+                    used_track_fallback: false,
+                    active_speech_seconds: Some(2.75),
+                    overlapping_speech_seconds: Some(0.5),
+                },
+                RegionEvidence {
+                    index: 1,
+                    start: 2.5,
+                    end: 6.0,
+                    track: 1,
+                    speaker: "s2".into(),
+                    embedding_status: EmbeddingStatus::Missing,
+                    assigned_centroid_distance: None,
+                    nearest_other_centroid_distance: None,
+                    used_track_fallback: true,
+                    active_speech_seconds: None,
+                    overlapping_speech_seconds: None,
+                },
+            ],
+            attributions: vec![
+                AttributionEvidence {
+                    index: 0,
+                    start: 0.0,
+                    end: 2.0,
+                    speaker: "s1".into(),
+                    reason: AttributionReason::TemporalOverlap,
+                    support: vec![SpeakerSupport {
+                        speaker: "s1".into(),
+                        overlap_seconds: 2.0,
+                    }],
+                    margin_seconds: Some(2.0),
+                    gap_seconds: None,
+                },
+                AttributionEvidence {
+                    index: 1,
+                    start: 3.5,
+                    end: 5.5,
+                    speaker: "s2".into(),
+                    reason: AttributionReason::NearestGap,
+                    support: vec![],
+                    margin_seconds: None,
+                    gap_seconds: Some(0.5),
+                },
+            ],
+        }
+    }
+
+    /// A diarized transcript with a speaker hint and its outcome.
+    fn diarized_transcript() -> MeetingTranscript {
+        let segment = |start: f64, end: f64, text: &str, speaker: &str| MeetingSegmentInput {
+            start,
+            end,
+            text: text.into(),
+            speaker: speaker.into(),
+        };
+        let speaker = |id: &str, label: &str| MeetingSpeaker {
+            id: id.into(),
+            label: label.into(),
+        };
+        MeetingTranscript::new(
+            SOURCE,
+            "sv",
+            "kb-whisper-small",
+            DURATION,
+            vec![
+                segment(0.0, 2.5, "Hej och välkomna.", "s1"),
+                segment(3.0, 6.0, "Tack, då börjar vi.", "s2"),
+            ],
+            vec![speaker("s1", "Talare 1"), speaker("s2", "Talare 2")],
+        )
+        .expect("valid synthetic transcript")
+        .with_speaker_hint(Some(SpeakerCountHint::exact(2)))
+        .with_speaker_hint_outcome(Some(SpeakerHintOutcome {
+            satisfied: true,
+            delivered: 2,
+        }))
+        .with_diarization(report())
+        .expect("valid synthetic diarization")
+    }
+
+    /// A finished reprocessing run: a reviewed meeting (two correction
+    /// operations, the first already resolved) and its re-clustered proposal.
+    #[cfg(feature = "diarization")]
+    fn reprocessing() -> sagascript_cli::meeting_reprocessing::ReprocessingResult {
+        use sagascript_core::meeting_reprocess_proposal::MeetingReprocessingProposal;
+        use sagascript_core::meeting_review::{CorrectionFile, CorrectionOperation, MeetingReview};
+
+        let original = diarized_transcript();
+        let review = MeetingReview::new(original.clone()).expect("valid review");
+        let rename = CorrectionOperation::RenameSpeaker {
+            speaker_id: "s1".into(),
+            label: "Astrid".into(),
+        };
+        let edit = CorrectionOperation::EditSegment {
+            segment_id: original.segments[1].id.clone(),
+            text: Some("Tack, då börjar vi nu.".into()),
+            speaker_id: None,
+        };
+        let review = review
+            .apply_corrections(&CorrectionFile {
+                schema_version: 1,
+                source_sha256: SOURCE.into(),
+                original_revision: review.original_revision.clone(),
+                expected_revision: review.revision.clone(),
+                operations: vec![rename.clone(), edit],
+            })
+            .expect("valid corrections");
+        let proposal = MeetingReprocessingProposal::new(review, original).expect("valid proposal");
+        let proposal = proposal
+            .resolve(&proposal.revision.clone(), 0, vec![rename])
+            .expect("valid resolution");
+        sagascript_cli::meeting_reprocessing::ReprocessingResult {
+            proposal,
+            required_work: sagascript_core::meeting_reprocess_plan::RequiredWork {
+                decode_audio: false,
+                transcription: false,
+                language_detection: false,
+                segmentation: false,
+                embeddings: false,
+                clustering: true,
+            },
+            timings: sagascript_cli::meeting_reprocessing::ReprocessingTimings {
+                validation_seconds: 0.25,
+                decode_seconds: 0.0,
+                analysis_seconds: 0.0,
+                clustering_seconds: 0.5,
+                full_pipeline_seconds: 0.0,
+                proposal_seconds: 0.125,
+                total_seconds: 0.875,
+            },
+        }
+    }
+
+    /// Every meeting phase; the match fails to compile when one is added.
+    fn meeting_phases() -> Vec<MeetingPhase> {
+        let all = vec![
+            MeetingPhase::Preparing,
+            MeetingPhase::Decoding,
+            MeetingPhase::LoadingModel,
+            MeetingPhase::Analyzing,
+            MeetingPhase::Clustering,
+            MeetingPhase::Finalizing,
+        ];
+        for phase in &all {
+            match phase {
+                MeetingPhase::Preparing
+                | MeetingPhase::Decoding
+                | MeetingPhase::LoadingModel
+                | MeetingPhase::Analyzing
+                | MeetingPhase::Clustering
+                | MeetingPhase::Finalizing => {}
+            }
+        }
+        all
+    }
+
+    fn running_job() -> MeetingJob {
+        let started_at = Instant::now();
+        MeetingJob {
+            snapshot: MeetingSnapshot {
+                id: "job-1".into(),
+                status: JobStatus::Running,
+                phase: "preparing".into(),
+                elapsed_ms: 0,
+                phase_elapsed_ms: 0,
+                error: None,
+                transcript: None,
+                #[cfg(feature = "diarization")]
+                reprocessing: None,
+            },
+            started_at,
+            phase_started_at: started_at,
+            cancelled: Arc::new(AtomicBool::new(false)),
+            backend: None,
+        }
+    }
+
+    /// The snapshot `get_meeting_job` returns after the worker finished.
+    fn finished(result: Result<JobOutput, String>, cancelled: bool) -> MeetingSnapshot {
+        let job = running_job();
+        let mut snapshot = job.snapshot_at(job.started_at + Duration::from_millis(4200));
+        finish_snapshot(&mut snapshot, result, cancelled, false);
+        snapshot
+    }
+
+    /// `{ variant: payload }`: every job status, a transcript with and
+    /// without optional evidence, and (diarization builds) a reprocessing
+    /// result.
+    fn fixture() -> Value {
+        let mut variants = Map::new();
+        let mut add = |name: &str, snapshot: MeetingSnapshot| {
+            variants.insert(name.into(), contract::to_value(snapshot));
+        };
+
+        for phase in meeting_phases() {
+            let mut running = running_job();
+            running.set_phase(
+                phase_name(phase),
+                running.started_at + Duration::from_millis(500),
+            );
+            let snapshot = running.snapshot_at(running.started_at + Duration::from_millis(1500));
+            add(&format!("running_{}", snapshot.phase), snapshot);
+        }
+
+        let mut analyzing = running_job();
+        analyzing.set_phase(
+            phase_name(MeetingPhase::Analyzing),
+            analyzing.started_at + Duration::from_millis(500),
+        );
+        let mut slot = Some(analyzing);
+        assert_eq!(cancel_job(&mut slot, "job-1"), Ok(true));
+        let cancelling = slot.expect("the job stays in its slot");
+        add(
+            "cancelling",
+            cancelling.snapshot_at(cancelling.started_at + Duration::from_millis(2000)),
+        );
+
+        add(
+            "completed",
+            finished(
+                Ok(JobOutput::Import(Box::new(diarized_transcript()))),
+                false,
+            ),
+        );
+        add(
+            "completed_plain",
+            finished(
+                Ok(JobOutput::Import(Box::new(super::valid_transcript()))),
+                false,
+            ),
+        );
+        add(
+            "cancelled",
+            finished(Err("Meeting transcription cancelled".into()), true),
+        );
+        add(
+            "failed",
+            finished(Err("No audio decoded from file".into()), false),
+        );
+        #[cfg(feature = "diarization")]
+        add(
+            "reprocessing",
+            finished(Ok(JobOutput::Reprocessing(Box::new(reprocessing()))), false),
+        );
+        Value::Object(variants)
+    }
+
+    #[cfg(feature = "diarization")]
+    #[test]
+    fn transport_contract_get_meeting_job() {
+        contract::assert_fixture("get_meeting_job.json", &fixture());
+    }
+
+    /// Without diarization the `reprocessing` field and variant do not exist;
+    /// everything else is identical, so the frontend must treat the field as
+    /// optional (it does: `reprocessing?:`).
+    #[cfg(not(feature = "diarization"))]
+    #[test]
+    fn transport_contract_get_meeting_job() {
+        assert!(
+            !contract::blessing(),
+            "bless the fixtures from a diarization build (the default features)"
+        );
+        let mut expected = contract::read_fixture("get_meeting_job.json");
+        let variants = expected.as_object_mut().expect("variants by name");
+        variants.remove("reprocessing");
+        for snapshot in variants.values_mut() {
+            snapshot
+                .as_object_mut()
+                .expect("a snapshot object")
+                .remove("reprocessing");
+        }
+        assert_eq!(fixture(), expected);
+    }
+
+    /// Rust reads the nested documents back unchanged.
+    #[test]
+    fn transport_contract_get_meeting_job_documents_read_back() {
+        if contract::blessing() {
+            return; // the fixture is being rewritten; the next run reads it
+        }
+        let fixture = contract::read_fixture("get_meeting_job.json");
+        let variants = fixture.as_object().expect("variants by name");
+        for (name, snapshot) in variants {
+            if let Some(transcript) = snapshot.get("transcript").filter(|value| !value.is_null()) {
+                let document: MeetingTranscript = serde_json::from_value(transcript.clone())
+                    .unwrap_or_else(|error| panic!("{name}: {error}"));
+                assert_eq!(&contract::to_value(document), transcript, "{name}");
+            }
+            if let Some(result) = snapshot
+                .get("reprocessing")
+                .filter(|value| !value.is_null())
+            {
+                let proposal: sagascript_core::meeting_reprocess_proposal::MeetingReprocessingProposal =
+                    serde_json::from_value(result["proposal"].clone())
+                        .unwrap_or_else(|error| panic!("{name}: {error}"));
+                assert_eq!(contract::to_value(proposal), result["proposal"], "{name}");
+            }
+        }
+        let statuses: std::collections::BTreeSet<_> = variants
+            .values()
+            .map(|snapshot| snapshot["status"].as_str().expect("a status").to_string())
+            .collect();
+        let all: std::collections::BTreeSet<_> = [
+            JobStatus::Running,
+            JobStatus::Cancelling,
+            JobStatus::Completed,
+            JobStatus::Cancelled,
+            JobStatus::Failed,
+        ]
+        .into_iter()
+        .map(|status| match status {
+            JobStatus::Running
+            | JobStatus::Cancelling
+            | JobStatus::Completed
+            | JobStatus::Cancelled
+            | JobStatus::Failed => contract::to_value(status)
+                .as_str()
+                .expect("a status string")
+                .to_string(),
+        })
+        .collect();
+        assert_eq!(statuses, all, "the fixture covers every job status");
+    }
+}

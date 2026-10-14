@@ -13,8 +13,10 @@ verification commands, [docs/recipes/](recipes/README.md) for step-by-step chang
 |---|---|
 | `src/` | Svelte 5 frontend (runes). `App.svelte` picks the view from the URL: `?overlay`, `?onboarding`, otherwise Settings. |
 | `src/lib/api.ts`, `src/lib/meeting-reprocessing-api.ts` | The only `invoke` wrappers, plus hand-written TypeScript copies of Rust DTOs (`Settings`, `HotkeyProfile`, …). |
+| `src/lib/ipc-contract.generated.ts`, `src/lib/events.ts` | The IPC surface: `CommandMap`, generated from the Rust command signatures, and `EventMap`, the payload of every event the frontend listens for ([contracts/README.md](../contracts/README.md)). |
 | `src/lib/*.svelte` | `Settings.svelte` (Dictate / Transcribe / Settings tabs), `Onboarding.svelte`, `Overlay.svelte`, `FileTranscription.svelte`, `Meeting*.svelte`, `TranscriptionStages.svelte`. |
-| `src/lib/*.ts`, `src/lib/*.js` | DOM-free logic (reducers, queues, update recovery) tested by `scripts/test-*.mjs`. |
+| `src/lib/*.ts`, `src/lib/*.js` | DOM-free logic (reducers, queues, update recovery), tested by Vitest next to the module and by the remaining `scripts/test-*.mjs`. |
+| `src/lib/tauri-events.svelte.ts`, `models.svelte.ts`, `permissions.ts`, `platform.ts` | Shared by the windows. Tauri events are only listened to through `useTauriEvent`/`useDragDropEvent`/`subscribeTauriEvent` (they own the unlisten; ESLint forbids raw `listen()` in `src/`) and take their payload types from `EventMap` in `events.ts`; `models.svelte.ts` holds `PIANISSIMO_ID` and `downloadModelById`; `permissions.ts` the macOS Accessibility request and wait; `platform.ts` one `get_platform` lookup per window. |
 | `src-tauri/src/` | App crate `sagascript`: CLI dispatch, Tauri shell, tray, hotkeys, paste, overlay, updater, Tauri commands. |
 | `src-tauri/crates/sagascript-core/` | Library: audio decode/resample/capture, Whisper and Pianissimo transcription, engine-host client, settings store, model downloads, diarization, meeting documents, `fsutil` (publish a new file without ever replacing one, [ADR 0008](adr/0008-publishing-new-files.md)). |
 | `src-tauri/crates/sagascript-cli/` | Library + headless `sagascript` binary: every clap subcommand. Also holds meeting/diarization pipelines that the app imports. |
@@ -27,6 +29,7 @@ verification commands, [docs/recipes/](recipes/README.md) for step-by-step chang
 | Meeting modules | Core `meeting.rs`, `meeting_media.rs`, `meeting_review.rs`, `meeting_reprocess*.rs`; CLI `meeting.rs`, `meeting_proposal.rs`, `meeting_reprocessing*.rs` and the meeting part of `transcribe.rs`; app `meeting_jobs.rs`, `meeting_media*.rs`, `meeting_review_commands.rs`, `meeting_reprocessing_commands.rs`. Docs: `docs/meeting-*.md`. |
 | `scripts/` | Build/release/CI helpers (`*.sh`, `*.mjs`, `*.ps1`), Node tests `test-*.mjs`, Playwright suites `qa-*.mjs`, browser IPC mock `fixtures/transcription-browser-mock.js`, Python tooling `dictation_eval/` and `diarization_sv/`, Core ML conversion `pianissimo-coreml/`. |
 | `tests/` | Code-health contract tests (`tests/scripts/`) and fixtures (`tests/fixtures/code-health/`). |
+| `contracts/` | The Rust–TypeScript transport contract: shared payload fixtures in `transport/` that Rust writes and Vitest parses ([README](../contracts/README.md), #347). |
 | `tooling/code-health/` | Pinned `knip`/TypeScript used by `.github/workflows/code-health.yml`. |
 | `site/` | Separate marketing site (React, vinext, Cloudflare `wrangler`); no workflow builds or lints it. |
 | `test-audio/` | Small audio fixtures for smoke tests and benchmarks. |
@@ -38,7 +41,8 @@ App crate modules (`src-tauri/src/`):
 | `main.rs` | `main()`: CLI dispatch, Tauri builder and `.setup`, tray and update menu, signed updater, live dictation pipeline, settings watcher, window handling. |
 | `commands.rs` | Most `#[tauri::command]`s, `SharedController` / `SharedWhisper`, Dictate test recording, file transcription, permissions. |
 | `app_controller.rs` | `AppController`: dictation state (`AppState`), audio capture, in-memory `Settings` copy, session logging. |
-| `events.rs` | Event-name constants (`events::event::*`). |
+| `events.rs` | Event catalogue: every event's name, payload type, producer and consumer (`events::event::*`); emit with `EmitEvent::emit_event`, since a raw `tauri::Emitter::emit` is a clippy error. |
+| `contract/` | Tests only: the shared fixture helper and the `CommandMap` generator (`command_map.rs`, parses `generate_handler!` and the command signatures with `syn`). |
 | `hotkey/` | Shortcut registration, `HotkeyHealth`, bare F-key monitor `macos_bare.rs`. |
 | `paste/` | `PasteService` (clipboard + simulated paste: enigo on macOS/Windows, `xdotool` on Linux). `paste/completion.rs` (completion wait) is mounted from `main.rs` via `#[path]` as `crate::paste_completion`. |
 | `platform/`, `overlay.rs`, `focus_diag.rs`, `logging/` | Per-OS helpers, recording indicator window, focus diagnostics, app log file. |
@@ -181,7 +185,7 @@ sequenceDiagram
 | Store | `crates/sagascript-core/src/settings/store.rs` | `load`, `load_from`, `save`, `update`, `try_update`; cross-process `fs2` lock on `<file>.json.lock`; read-merge-write keeps unknown keys; atomic rename. |
 | AppController | `app_controller.rs` | In-memory copy: `settings()`, `settings_mut()`, `update_settings()`. Dictation reads it at use time. |
 | Watcher | `start_settings_watcher` in `main.rs` | `PollWatcher` on macOS, `RecommendedWatcher` elsewhere; filter `configuration_event_may_affect`; waits while a dictation records (`acquire_hotkey_configuration`). Fires for the app's own writes too (harmless reload). |
-| Frontend | `getSettings()` / setters in `src/lib/api.ts`; `applySetting()` and the `settings_reloaded` listener in `Settings.svelte` | Always re-reads after a write. |
+| Frontend | `getSettings()` / setters in `src/lib/api.ts`; `saveSetting()`, `applySetting()` and the `settings_reloaded` listener in `Settings.svelte` | Re-reads after a write. A rejected setter saved nothing; a saved change whose re-read fails is reported as saved, never repeated and never rolled back: the window shows a Reload settings notice, disables the controls that save a setting and sends no further change until a read succeeds. Reads are settled in the order they were issued, so a late answer, success or failure, cannot replace or hide a newer one ([#341](https://github.com/Magnus-Gille/sagascript/issues/341)). |
 
 Rules: write through `store::update`/`try_update` (never `save()` a possibly stale clone);
 release the file lock before taking the controller lock; the watcher replays only hotkey
@@ -390,6 +394,7 @@ Shared fixtures: `sagascript_testsupport` (`TempDir`, `fake_settings`, `sha256_h
 | Browser | `scripts/qa-*.mjs` with the mocked IPC in `scripts/fixtures/transcription-browser-mock.js` | `npx playwright install chromium && npm run test:browser` | test-macos |
 | Python | `scripts/dictation_eval/test_*.py`, `scripts/diarization_sv/test_*.py` | `python -m unittest discover -s scripts/dictation_eval -p 'test_*.py'` | all OS (dictation_eval); Linux and macOS (diarization_sv) |
 | Types | Svelte/TS, including the Vitest files | `npx svelte-check --tsconfig ./tsconfig.json` | test-macos |
+| Transport contract | Rust: `transport_contract*` tests in `events_tests.rs`, `commands_tests.rs`, `meeting_jobs_tests.rs` and `contract/` write or compare `contracts/transport/*.json` and `src/lib/ipc-contract.generated.ts`; TS: `src/test/transport.test.ts`, `src/lib/api.test.ts` ([contracts/README.md](../contracts/README.md)) | `cargo test contract` in `src-tauri/` (`SAGASCRIPT_BLESS_CONTRACTS=1` regenerates), `npm run test:unit`, svelte-check | with the app tests and the frontend suites |
 | Formatting | Prettier over `src/`, `scripts/`, `tests/` (not `.svelte` yet; `.prettierignore`) | `npm run format:check` (`npm run format` fixes) | test-macos, test-windows |
 | Lint | ESLint over `src/` (TypeScript, Svelte), `scripts/`, `tests/` (`eslint.config.js`, baseline in `eslint-suppressions.json`) | `npm run lint` | test-macos |
 | CLI smoke | release binary in `ci.yml` build jobs: help, `config`, `list-models`, `formats`, completions, download + transcribe, `--json` streams (`scripts/verify-json-cli-streams.py`) | — | build-macos, build-windows |
@@ -419,9 +424,13 @@ replaces the remaining source-text tests in the `ui` group with component tests.
 
 ## 6. Known drift and planned changes
 
-- Raw event strings bypass `events.rs`: `update-preparing`, `update-aborted` and
-  `navigate_tab` in `main.rs`, `transcription-progress` in `commands.rs`; `state-changed` also
-  carries `settings_reloaded`. **Planned:** [#347](https://github.com/Magnus-Gille/sagascript/issues/347).
+- Event and payload exceptions are named in the catalogue rather than removed
+  ([#347](https://github.com/Magnus-Gille/sagascript/issues/347), [contracts/README.md](../contracts/README.md)):
+  `state-changed` also carries `settings_reloaded`; `navigate_tab` is snake_case;
+  `transcription-progress` and `transcription-phase` have no GUI listener; the
+  `model-download-progress` `model` field is a Debug name for Whisper. Twenty registered
+  commands have no frontend caller (`COMMANDS_WITHOUT_A_CALLER` in `src/lib/api.test.ts`);
+  removing them is undecided.
 - Commands return `Result<_, String>` and the frontend matches on message text. **Planned:**
   [#360](https://github.com/Magnus-Gille/sagascript/issues/360) (ADR 0006).
 - Only some CLI subcommands offer `--json` (`list-models`, `config list`, `glossary list`,
