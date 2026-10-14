@@ -78,7 +78,7 @@ jobs:
       - name: Cache pinned LLVM for ARM64 bindgen
         id: llvm-cache
         if: matrix.architecture == 'arm64'
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: C:\sagascript-tools\llvm-20.1.8
           key: windows-arm64-llvm-20.1.8-7c4ac97eb2ae6b960ca5f9caf3ff6124c8d2a18cc07a7840a4d2ea15537bad8e
@@ -219,7 +219,7 @@ jobs:
       # manifest before using it; this path contains models only, never app
       # settings or logs.
       - name: Cache downloaded models
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~\AppData\Roaming\Sagascript\Models
           key: windows-models-package-${{ matrix.architecture }}-${{ hashFiles('src-tauri/crates/sagascript-core/src/settings/manager.rs', 'src-tauri/crates/sagascript-core/src/transcription/model.rs', 'src-tauri/crates/sagascript-core/src/diarization/model.rs') }}
