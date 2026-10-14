@@ -126,15 +126,21 @@
   let initError: string = $state("");
   let settingsError: string = $state("");
   // Reads of the persisted settings carry a ticket in the order they are issued
-  // (#341). An answer is shown only when no read issued after it has been shown,
-  // so answers that arrive out of order cannot put an older copy over a newer one.
+  // (#341). `settingsReadSettled` is the highest ticket that has answered, with a
+  // copy or with a failure. An answer older than that is dropped, so answers that
+  // arrive out of order cannot put an older copy over a newer one, nor hide a
+  // newer failure.
   let settingsReadIssued = 0;
-  let settingsReadShown = 0;
+  let settingsReadSettled = 0;
   // Set while `settings` is known to be behind what the backend holds: a change was
   // saved (or the file changed) and the read that should confirm it failed. Until a
-  // read succeeds the window says so and sends no further change.
+  // read succeeds the window says so, disables the controls that save a setting and
+  // sends no further change.
   let settingsUnconfirmed: { afterSave: boolean; detail: string } | null = $state(null);
+  const settingsLocked = $derived(settingsUnconfirmed !== null);
   let settingsReloading = $state(false);
+  let reloadButtonEl: HTMLButtonElement | undefined = $state();
+  let windowTitleEl: HTMLHeadingElement | undefined = $state();
   // Non-blocking notices: a profile's model was reset to Auto by a language change.
   let profileModelNotices: string[] = $state([]);
   let blockedLanguageChange: { language: Language; source: string } | null = $state(null);
@@ -1272,9 +1278,9 @@
 
   /**
    * Read the persisted settings and show them; showing a copy confirms it.
-   * Resolves with the copy now shown. An answer that a read issued after it has
-   * already been replaced is dropped, and so is its failure; any other failure
-   * rejects and leaves the shown copy as it was.
+   * Resolves with the copy now shown. A read that a later-issued read has
+   * already answered is dropped, whether it succeeds or fails: that answer
+   * stands. Any other failure rejects and leaves the shown copy as it was.
    */
   async function readSettings(): Promise<Settings> {
     const ticket = ++settingsReadIssued;
@@ -1282,15 +1288,29 @@
     try {
       fresh = await getSettings();
     } catch (error) {
-      if (ticket < settingsReadShown && settings) return settings;
+      const superseded = ticket < settingsReadSettled;
+      settingsReadSettled = Math.max(settingsReadSettled, ticket);
+      if (superseded && settings) return settings;
       throw error;
     }
-    if (ticket > settingsReadShown) {
-      settingsReadShown = ticket;
+    if (ticket > settingsReadSettled) {
+      settingsReadSettled = ticket;
       settings = fresh;
-      settingsUnconfirmed = null;
+      confirmSettings();
     }
     return settings ?? fresh;
+  }
+
+  /** A read showed the saved state: lift the notice and the messages that only said a change was held back. */
+  function confirmSettings(): void {
+    if (!settingsUnconfirmed) return;
+    settingsUnconfirmed = null;
+    if (settingsError === unconfirmedBlock) settingsError = "";
+    if (hotkeyError === unconfirmedBlock) hotkeyError = "";
+    if (fileModelError === unconfirmedBlock) fileModelError = "";
+    profileModelErrors = Object.fromEntries(
+      Object.entries(profileModelErrors).map(([id, message]) => [id, message === unconfirmedBlock ? "" : message]),
+    );
   }
 
   function markSettingsUnconfirmed(error: unknown, afterSave: boolean): void {
@@ -1317,10 +1337,16 @@
   async function reloadSettings(): Promise<void> {
     if (settingsReloading) return;
     settingsReloading = true;
+    const hadFocus = document.activeElement === reloadButtonEl;
     try {
       await syncSettings();
     } finally {
       settingsReloading = false;
+    }
+    // The button leaves with the notice: keep a keyboard user's place in the window.
+    if (hadFocus && !settingsUnconfirmed) {
+      await tick();
+      windowTitleEl?.focus();
     }
   }
 
@@ -1341,7 +1367,9 @@
    *   Reload settings; it does not claim the save failed.
    * While unconfirmed, no change is sent: it could be built from the old copy
    * (a toggle, a whole profile list, a dictionary save) and overwrite what was
-   * saved. `afterSave` runs as soon as the change is saved, before the read-back.
+   * saved. The controls that save a setting are disabled then (`settingsLocked`),
+   * so this hold only catches what stays enabled, such as the dictionary Save.
+   * `afterSave` runs as soon as the change is saved, before the read-back.
    */
   async function saveSetting<T>(mutate: () => Promise<T>, afterSave?: (result: T) => void): Promise<SaveOutcome<T>> {
     if (settingsUnconfirmed) return { saved: false, error: unconfirmedBlock };
@@ -1413,7 +1441,8 @@
         else settingsError = "The blocking dictionary was cleared elsewhere. Select the language again to retry.";
       }
     } catch (error: any) {
-      settingsError += `${settingsError ? " " : ""}Could not refresh language settings; reopen Settings to confirm the saved language: ${typeof error === "string" ? error : error?.message || "Unknown error"}`;
+      // The change was rejected, so nothing was saved; only the preview of the blocking dictionary is missing.
+      settingsError += `${settingsError ? " " : ""}The window could not read the settings to show the blocking dictionary (${errorText(error, "unknown error")}). Select the language again to retry.`;
     } finally {
       // A saved language whose read-back failed is shown as chosen: `settings` is
       // the old copy then, and the notice says it may be out of date.
@@ -1423,6 +1452,11 @@
     }
   }
 
+  // Calls the setters directly, past the unconfirmed hold of saveSetting: the
+  // dictionary clear is a compare-and-swap against the preview's `expectedSource`,
+  // so an old copy cannot overwrite a changed dictionary, and the language change
+  // sends only the language. The language select that opens it is disabled while
+  // unconfirmed, so this runs only from a preview shown before that.
   async function clearDictionaryAndSwitchLanguage(): Promise<void> {
     if (!settings || !blockedLanguageChange || languageSaving || glossarySaving) return;
     const request = blockedLanguageChange;
@@ -1454,8 +1488,8 @@
         const current = await readSettings();
         await refreshProfileModels(current.hotkey_profiles);
       } catch (error: any) {
+        // The notice says what happened and offers Reload settings.
         markSettingsUnconfirmed(error, cleared);
-        settingsError += `${settingsError ? " " : ""}Could not refresh settings; reopen Settings to confirm the saved language: ${typeof error === "string" ? error : error?.message || "Unknown error"}`;
       }
       languageSaving = false;
       void restoreLanguageFocus();
@@ -2179,7 +2213,7 @@
 
 <div class="settings-window">
   <header class="window-header">
-    <h1 class="window-title">Sagascript</h1>
+    <h1 class="window-title" bind:this={windowTitleEl} tabindex="-1">Sagascript</h1>
     <div class="build-info" aria-label="Build information">
       {#if buildInfo}
         Version {buildInfo.version} · Build {buildInfo.git_hash} · {buildInfo.build_date}{engineHostIdentity ? ` · ${engineHostIdentity}` : ""}
@@ -2218,9 +2252,9 @@
             {settingsUnconfirmed.afterSave
               ? "Your change was saved, but the window could not read the settings back to confirm it"
               : "Settings changed, but the window could not reload them"}
-            ({settingsUnconfirmed.detail}). The values shown may be out of date.
+            ({settingsUnconfirmed.detail}). The values shown may be out of date; settings cannot be changed until they are reloaded.
           </span>
-          <button class="secondary" type="button" disabled={settingsReloading}
+          <button class="secondary" type="button" bind:this={reloadButtonEl} aria-disabled={settingsReloading ? "true" : "false"}
             onclick={() => void reloadSettings()}>Reload settings</button>
         </section>
       {/if}
@@ -2256,7 +2290,7 @@
         <div class="field profile-field">
           <div class="profile-heading">
             <span class="field-label">Dictation profiles · shortcut, language, model</span>
-            <button class="link-btn" onclick={addProfile}>+ Add profile</button>
+            <button class="link-btn" onclick={addProfile} disabled={settingsLocked}>+ Add profile</button>
           </div>
           {#if profileModelNotices.length}
             <div class="profile-model-notice" role="status">
@@ -2274,11 +2308,13 @@
                   aria-label="Profile name"
                   value={profile.name}
                   onblur={(event) => onProfileNameBlur(event, profile)}
+                  disabled={settingsLocked}
                 />
                 <select
                   aria-label={`${profile.name} language`}
                   value={profile.language}
                   onchange={(event) => onProfileLanguageChange(event, profile)}
+                  disabled={settingsLocked}
                 >
                   <option value="en">English</option>
                   <option value="sv">Swedish</option>
@@ -2293,7 +2329,7 @@
                   aria-label={`Model for ${profile.name}`}
                   value={settings.profile_models[profile.id] ?? "auto"}
                   onchange={(event) => changeProfileModel(profile, event)}
-                  disabled={profile.id === draftProfileId || dictationModelSaving || backendDictationState !== "idle"}
+                  disabled={profile.id === draftProfileId || dictationModelSaving || backendDictationState !== "idle" || settingsLocked}
                 >
                   <option value="auto">Recommended for {languageLabel(profile.language)}</option>
                   {#each profileModelOptions[profile.id] ?? [] as option (option.id)}
@@ -2318,6 +2354,7 @@
                         class="hotkey-recorder"
                         aria-label={`${profile.name} ${shortcutControl.label} shortcut`}
                         onclick={() => beginHotkeyCapture(profile.id, shortcutControl.slot)}
+                        disabled={settingsLocked}
                       >{formatHotkeyDisplay(displayProfileShortcut(profile, shortcutControl.slot, settings.hotkey_mode) || "Not set")}</button>
                     {/if}
                     <div class="shortcut-helper">{shortcutControl.helper}</div>
@@ -2327,13 +2364,14 @@
                         class="shortcut-clear"
                         aria-label={`Clear ${shortcutControl.label} shortcut for ${profile.name}`}
                         onclick={() => clearProfileShortcut(profile.id, shortcutControl.slot)}
+                        disabled={settingsLocked}
                       >Clear</button>
                     {/if}
                   </div>
                 {/each}
               </div>
               {#if settings.hotkey_profiles.length > 1}
-                <button class="profile-remove" aria-label={`Remove ${profile.name}`} onclick={() => removeProfile(profile.id)}>Remove</button>
+                <button class="profile-remove" aria-label={`Remove ${profile.name}`} onclick={() => removeProfile(profile.id)} disabled={settingsLocked}>Remove</button>
               {/if}
               {#if profileModels[profile.id]}
                 <div class="profile-engine" class:missing={!profileModels[profile.id].downloaded}>
@@ -2361,7 +2399,7 @@
                     <button
                       class="link-btn profile-engine-action"
                       onclick={() => switchProfileToRecommended(profile)}
-                      disabled={downloading !== null || dictationModelSaving}
+                      disabled={downloading !== null || dictationModelSaving || settingsLocked}
                     >
                       {downloading === suggested.id
                         ? `Downloading ${Math.round(downloadProgress)}%`
@@ -2400,12 +2438,12 @@
             role="switch"
             aria-checked={settings.auto_paste}
             aria-label="Auto-paste transcription"
-            disabled={accessibilityChecking}
+            disabled={accessibilityChecking || settingsLocked}
           ></button>
         </div>
         <div class="hotkey-hint">Automatically paste dictated text into the active app when transcription finishes.</div>
         {#if platform === "macos" && !accessibilityGranted && (settings.auto_paste || accessibilityRequested)}
-          <div class="hotkey-error">Requires Accessibility permission. Auto-paste remains off until approved. <button class="link-btn" onclick={onAutoPasteToggle} disabled={accessibilityChecking}>{accessibilityChecking ? "Checking…" : "Open System Settings"}</button></div>
+          <div class="hotkey-error">Requires Accessibility permission. Auto-paste remains off until approved. <button class="link-btn" onclick={onAutoPasteToggle} disabled={accessibilityChecking || settingsLocked}>{accessibilityChecking ? "Checking…" : "Open System Settings"}</button></div>
         {/if}
 
         <div class="test-section">
@@ -2474,7 +2512,7 @@
             <label for="file-model">File transcription model</label>
             <select id="file-model" value={settings.file_transcription_model}
               onchange={(event) => void onFileModelChange(event)}
-              disabled={transcribing || fileModelSaving || downloading !== null}>
+              disabled={transcribing || fileModelSaving || downloading !== null || settingsLocked}>
               <option value="auto">Auto — {fileAutoModel?.display_name ?? "loading…"}{fileAutoModel && fileRecommendedModel && fileAutoModel.id !== fileRecommendedModel.id ? " (downloaded)" : " (recommended)"}</option>
               {#if settings.file_transcription_model !== "auto" && !fileModelOptions.some((model) => model.id === settings?.file_transcription_model)}
                 <option value={settings.file_transcription_model}>Current choice is incompatible with {languageLabel(transcribeLanguage())}</option>
@@ -2592,7 +2630,7 @@
         <div class="field">
           <label for="language">Default profile language</label>
           <div class="hotkey-hint">This edits the default profile in Dictate. Other profiles keep their own language and model.</div>
-          <select id="language" bind:this={languageSelectEl} value={settings.language} onchange={onLanguageChange} disabled={languageSaving || glossarySaving}>
+          <select id="language" bind:this={languageSelectEl} value={settings.language} onchange={onLanguageChange} disabled={languageSaving || glossarySaving || settingsLocked}>
             <option value="en">English</option>
             <option value="sv">Swedish</option>
             <option value="no">Norwegian</option>
@@ -2626,6 +2664,7 @@
             role="switch"
             aria-checked={settings.show_overlay}
             aria-label="Show recording overlay"
+            disabled={settingsLocked}
           ></button>
         </div>
 
@@ -2708,7 +2747,7 @@
 
             <div class="field advanced-field">
               <label for="beam-size">Decoding mode</label>
-              <select id="beam-size" value={settings.beam_size} onchange={onBeamSizeChange}>
+              <select id="beam-size" value={settings.beam_size} onchange={onBeamSizeChange} disabled={settingsLocked}>
                 <option value={0}>Greedy (fast)</option>
                 <option value={5}>Beam search (accurate)</option>
               </select>
@@ -2724,6 +2763,7 @@
                 role="switch"
                 aria-checked={settings.temperature_fallback}
                 aria-label="Temperature fallback"
+                disabled={settingsLocked}
               ></button>
             </div>
             <div class="hotkey-hint">Re-decode hard segments; off is faster but less robust.</div>
@@ -2731,7 +2771,7 @@
             {#if engineStatus?.supported}
               <div class="field advanced-field">
                 <label for="engine-prewarm">Prepare Pianissimo when</label>
-                <select id="engine-prewarm" value={settings.engine_prewarm} onchange={onEnginePrewarmChange}>
+                <select id="engine-prewarm" value={settings.engine_prewarm} onchange={onEnginePrewarmChange} disabled={settingsLocked}>
                   <option value="on_app_start">When Sagascript starts (recommended)</option>
                   <option value="on_key_down">When I press the dictation key</option>
                   <option value="off">Only when needed</option>
@@ -2741,7 +2781,7 @@
 
               <div class="field advanced-field">
                 <label for="engine-idle">Unload after idle</label>
-                <select id="engine-idle" value={settings.engine_idle_unload_minutes} onchange={onEngineIdleChange}>
+                <select id="engine-idle" value={settings.engine_idle_unload_minutes} onchange={onEngineIdleChange} disabled={settingsLocked}>
                   {#each engineIdleChoices as minutes}
                     <option value={minutes}>{minutes === 0 ? "Never" : `${minutes} minutes`}</option>
                   {/each}
@@ -2763,6 +2803,7 @@
                 role="switch"
                 aria-checked={settings.vad_enabled}
                 aria-label="Voice activity detection"
+                disabled={settingsLocked}
               ></button>
             </div>
             <div class="hotkey-hint">Skip silence; downloads a small model on first enable.</div>

@@ -16,6 +16,7 @@ test("language recovery classifier matches the actual backend guard", () => {
 const names = [
   "errorText",
   "readSettings",
+  "confirmSettings",
   "markSettingsUnconfirmed",
   "saveSetting",
   "applySetting",
@@ -58,7 +59,8 @@ function harness({
       profile_glossaries: { default: options.empty ? "" : "mergea = mördsa", english: "merge = merch" } };
     let settings = structuredClone(stored);
     let settingsError = "", blockedLanguageChange = null, languageSaving = false, models = [];
-    let settingsReadIssued = 0, settingsReadShown = 0, settingsUnconfirmed = null;
+    let settingsReadIssued = 0, settingsReadSettled = 0, settingsUnconfirmed = null;
+    let hotkeyError = "", fileModelError = "", profileModelErrors = {};
     const unconfirmedBlock = "This change was not sent: the window could not confirm the last saved change. Reload settings first.";
     let glossarySaving = false, glossaryScopeId = "english", glossaryDraft = "english draft";
     let glossaryEditBaseline = { scopeId: "english", source: "merge = merch", generation: 1 };
@@ -101,7 +103,7 @@ function harness({
       selectDefaultDraft: () => { glossaryScopeId = "default"; glossaryDraft = "default draft";
         glossaryEditBaseline = { scopeId: "default", source: stored.profile_glossaries.default, generation: 1 }; },
       hold: () => { holdClear = true; },
-      snapshot: () => JSON.parse(JSON.stringify({ stored, settings, settingsError, blockedLanguageChange,
+      snapshot: () => JSON.parse(JSON.stringify({ stored, settings, settingsError, settingsUnconfirmed, blockedLanguageChange,
         languageSaving, calls, glossaryDraft, glossaryEditBaseline, recoveredGlossaryDrafts })),
     };
   `,
@@ -198,7 +200,9 @@ test("refresh failure after successful mutation is reported without offering ano
   assert.equal(state.stored.language, "en");
   assert.equal(state.blockedLanguageChange, null);
   assert.equal(state.languageSaving, false);
-  assert.match(state.settingsError, /reopen Settings to confirm the saved language/);
+  // One message: the notice offers Reload settings and says the change was saved.
+  assert.equal(state.settingsError, "");
+  assert.deepEqual(state.settingsUnconfirmed, { afterSave: true, detail: "read failed" });
 });
 
 test("duplicate recovery and language selections are blocked while clearing", async () => {
@@ -224,7 +228,8 @@ test("ordinary language change without dictionary succeeds without confirmation"
 test("failed refresh after rejection reports uncertainty and restores the known saved selection", async () => {
   const h = harness({ rejectionRefreshFailure: true });
   assert.equal(await h.select(), "sv");
-  assert.match(h.snapshot().settingsError, /reopen Settings to confirm the saved language.*rejection read failed/);
+  assert.match(h.snapshot().settingsError, /could not read the settings.*rejection read failed.*Select the language again to retry/);
+  assert.equal(h.snapshot().settingsUnconfirmed, null, "a rejected change leaves nothing unconfirmed");
   assert.equal(h.snapshot().blockedLanguageChange, null);
   assert.equal(h.snapshot().languageSaving, false);
 });

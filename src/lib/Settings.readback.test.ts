@@ -39,6 +39,9 @@ function settingsFile(initial: Partial<SettingsValue> = {}) {
     set_file_transcription_model: setter(({ modelId }) => ({ file_transcription_model: modelId })),
     set_language: setter(({ language }) => ({ language }), [] as string[]),
     set_beam_size: setter(({ beamSize }) => ({ beam_size: beamSize })),
+    set_profile_glossary: setter(({ profileId, source }) => ({
+      profile_glossaries: { ...file.current.profile_glossaries, [profileId]: source },
+    })),
     set_engine_prewarm: setter(({ mode }) => ({ engine_prewarm: mode })),
     set_engine_idle_unload_minutes: setter(({ minutes }) => ({ engine_idle_unload_minutes: minutes })),
     set_temperature_fallback: setter(({ enabled }) => ({ temperature_fallback: enabled })),
@@ -51,6 +54,11 @@ function settingsFile(initial: Partial<SettingsValue> = {}) {
 }
 
 const readbackFailure = "settings read timed out";
+
+/** Auto resolves to KB-Whisper Medium here, so the saved Pianissimo choice reads differently from Auto. */
+function backend(file: ReturnType<typeof settingsFile>) {
+  return settingsBackend({ ...file.handlers, get_auto_file_model_info: () => kbWhisperMedium });
+}
 
 /** The notice the window shows while it cannot confirm what was saved. */
 function unconfirmedNotice(): HTMLElement {
@@ -90,7 +98,7 @@ function holdReads(ipc: { handle: (command: "get_settings", handler: () => Promi
 describe("a saved change whose read-back fails", () => {
   test("the file model is reported as saved, the read-back as failed, and nothing is saved twice", async () => {
     const file = settingsFile();
-    const { ipc } = await renderSettings(settingsBackend(file.handlers));
+    const { ipc } = await renderSettings(backend(file));
     const { user, picker } = await openTranscribeTab();
 
     file.readFailure = readbackFailure;
@@ -108,12 +116,13 @@ describe("a saved change whose read-back fails", () => {
 
   test("Reload settings reads again without saving again and shows what was saved", async () => {
     const file = settingsFile();
-    const { ipc } = await renderSettings(settingsBackend(file.handlers));
+    const { ipc } = await renderSettings(backend(file));
     const { user, picker } = await openTranscribeTab();
     file.readFailure = readbackFailure;
     await user.selectOptions(picker, "pianissimo-sv");
     await screen.findByRole("alert", { name: "Settings not confirmed" });
-    expect(screen.getByText(/Effective model: Pianissimo/)).toBeInTheDocument();
+    // What the window still holds is the old copy, which the notice says may be out of date.
+    expect(screen.getByText(/Effective model: KB-Whisper Medium/)).toBeInTheDocument();
 
     file.readFailure = null;
     await user.click(screen.getByRole("button", { name: "Reload settings" }));
@@ -121,12 +130,13 @@ describe("a saved change whose read-back fails", () => {
     await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
     expect(picker).toHaveValue("pianissimo-sv");
     expect(picker).toBeEnabled();
+    expect(screen.getByText(/Effective model: Pianissimo/)).toBeInTheDocument();
     expect(ipc.callsTo("set_file_transcription_model")).toHaveLength(1);
   });
 
   test("a saved Pianissimo choice still clears the options it does not support", async () => {
     const file = settingsFile();
-    await renderSettings(settingsBackend(file.handlers));
+    await renderSettings(backend(file));
     const { user, picker } = await openTranscribeTab();
     const diarize = screen.getByRole("checkbox", { name: /Speaker diarization/ });
     await user.click(diarize);
@@ -141,7 +151,7 @@ describe("a saved change whose read-back fails", () => {
 
   test("a changed setting is reported the same way, and the old value is not presented as confirmed", async () => {
     const file = settingsFile();
-    const { ipc } = await renderSettings(settingsBackend(file.handlers));
+    const { ipc } = await renderSettings(backend(file));
     const user = await openAdvancedSettings();
 
     file.readFailure = readbackFailure;
@@ -164,7 +174,7 @@ describe("a saved change whose read-back fails", () => {
 
   test("a saved language stays selected and is reported as saved, not rolled back", async () => {
     const file = settingsFile();
-    const { ipc } = await renderSettings(settingsBackend(file.handlers));
+    const { ipc } = await renderSettings(backend(file));
     const user = await openSettingsTab();
     const language = screen.getByRole("combobox", { name: "Default profile language" });
     expect(language).toHaveDisplayValue("Swedish");
@@ -186,7 +196,7 @@ describe("a saved change whose read-back fails", () => {
 
   test("a changed speech model for a profile is reported as saved, not as a failed change", async () => {
     const file = settingsFile();
-    const { ipc } = await renderSettings(settingsBackend(file.handlers));
+    const { ipc } = await renderSettings(backend(file));
     const picker = await screen.findByRole("combobox", { name: "Model for Svenska" });
     await waitFor(() => expect(picker).toHaveDisplayValue(/Recommended for Swedish/));
 
@@ -203,7 +213,7 @@ describe("a saved change whose read-back fails", () => {
 
   test("a shortcut that was saved leaves capture mode and is reported as saved", async () => {
     const file = settingsFile();
-    const { ipc } = await renderSettings(settingsBackend(file.handlers));
+    const { ipc } = await renderSettings(backend(file));
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "Svenska Press to start/stop shortcut" }));
 
@@ -223,30 +233,147 @@ describe("a saved change whose read-back fails", () => {
     expect(file.current.hotkey_profiles[0].toggle_shortcut).toBe("Control+K");
   });
 
-  test("another change waits until the settings are confirmed, so a stale copy cannot overwrite the saved one", async () => {
+  test("a saved file model stays selected, and no other change can be chosen until the settings are confirmed", async () => {
     const file = settingsFile();
-    const { ipc } = await renderSettings(settingsBackend(file.handlers));
-    const user = await openAdvancedSettings();
+    const { ipc } = await renderSettings(backend(file));
+    const { user, picker } = await openTranscribeTab();
     file.readFailure = readbackFailure;
-    await user.click(screen.getByRole("switch", { name: "Temperature fallback" }));
+    await user.selectOptions(picker, "pianissimo-sv");
     await screen.findByRole("alert", { name: "Settings not confirmed" });
 
-    await user.selectOptions(screen.getByRole("combobox", { name: "Decoding mode" }), "Greedy (fast)");
-    await settle();
-    expect(ipc.callsTo("set_beam_size")).toEqual([]);
-    expect(screen.getByRole("combobox", { name: "Decoding mode" })).toHaveDisplayValue("Beam search (accurate)");
-    expect(screen.getByText(/This change was not sent: .* Reload settings first\./)).toBeInTheDocument();
+    // The saved choice is still shown, not the old copy, and a second pick cannot be made.
+    expect(picker).toHaveValue("pianissimo-sv");
+    expect(picker).toBeDisabled();
+    expect(ipc.callsTo("set_file_transcription_model")).toEqual([{ modelId: "pianissimo-sv" }]);
 
     file.readFailure = null;
     await user.click(screen.getByRole("button", { name: "Reload settings" }));
-    await waitFor(() => expect(screen.queryByRole("alert", { name: "Settings not confirmed" })).toBeNull());
-    await user.selectOptions(screen.getByRole("combobox", { name: "Decoding mode" }), "Greedy (fast)");
-    await waitFor(() => expect(ipc.callsTo("set_beam_size")).toEqual([{ beamSize: 0 }]));
+    await waitFor(() => expect(picker).toBeEnabled());
+    expect(picker).toHaveValue("pianissimo-sv");
+    await user.selectOptions(picker, "kb-whisper-medium");
+    await waitFor(() => expect(ipc.callsTo("set_file_transcription_model")).toHaveLength(2));
+    expect(picker).toHaveValue("kb-whisper-medium");
+  });
+
+  test("every control that saves a setting is disabled until the settings are confirmed", async () => {
+    const file = settingsFile();
+    const { ipc } = await renderSettings(backend(file));
+    const user = userEvent.setup();
+    const controls = async () => {
+      const found: HTMLElement[] = [];
+      await user.click(screen.getByRole("button", { name: "Dictate" }));
+      found.push(
+        screen.getByRole("combobox", { name: "Model for Svenska" }),
+        screen.getByRole("combobox", { name: "Svenska language" }),
+        screen.getByRole("textbox", { name: "Profile name" }),
+        screen.getByRole("button", { name: "+ Add profile" }),
+        screen.getByRole("button", { name: "Svenska Hold to record shortcut" }),
+        screen.getByRole("switch", { name: "Auto-paste transcription" }),
+      );
+      await user.click(screen.getByRole("button", { name: "Transcribe" }));
+      found.push(screen.getByRole("combobox", { name: "File transcription model" }));
+      await user.click(screen.getByRole("button", { name: "Settings" }));
+      if (!screen.queryByRole("combobox", { name: "Decoding mode" })) await user.click(await screen.findByText("Advanced"));
+      found.push(
+        screen.getByRole("combobox", { name: "Default profile language" }),
+        screen.getByRole("switch", { name: "Show recording overlay" }),
+        screen.getByRole("combobox", { name: "Decoding mode" }),
+        screen.getByRole("switch", { name: "Temperature fallback" }),
+        screen.getByRole("combobox", { name: "Prepare Pianissimo when" }),
+        screen.getByRole("combobox", { name: "Unload after idle" }),
+        screen.getByRole("switch", { name: "Voice activity detection" }),
+      );
+      return found;
+    };
+    expect((await controls()).filter((control) => control.hasAttribute("disabled"))).toEqual([]);
+
+    file.readFailure = readbackFailure;
+    ipc.emit("state-changed", "settings_reloaded");
+    await screen.findByRole("alert", { name: "Settings not confirmed" });
+    expect((await controls()).filter((control) => !control.hasAttribute("disabled"))).toEqual([]);
+
+    file.readFailure = null;
+    await user.click(screen.getByRole("button", { name: "Reload settings" }));
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+    expect((await controls()).filter((control) => control.hasAttribute("disabled"))).toEqual([]);
+    expect(ipc.calls.filter((call) => call.command.startsWith("set_"))).toEqual([]);
+  });
+
+  test("a dictionary save is held while unconfirmed, says so, and works after a reload", async () => {
+    const file = settingsFile();
+    const { ipc } = await renderSettings(backend(file));
+    const user = await openSettingsTab();
+    await user.type(screen.getByRole("textbox", { name: "Personal dictionary" }), "merge = merch");
+    file.readFailure = readbackFailure;
+    ipc.emit("state-changed", "settings_reloaded");
+    await screen.findByRole("alert", { name: "Settings not confirmed" });
+
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+
+    expect(await screen.findByText(/This change was not sent: .* Reload settings first\./)).toBeInTheDocument();
+    expect(ipc.callsTo("set_profile_glossary")).toEqual([]);
+
+    file.readFailure = null;
+    await user.click(screen.getByRole("button", { name: "Reload settings" }));
+    // The held-back message is gone with the notice, and the draft is still there to save.
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+    expect(screen.queryByText(/This change was not sent/)).toBeNull();
+    expect(screen.getByRole("textbox", { name: "Personal dictionary" })).toHaveValue("merge = merch");
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(ipc.callsTo("set_profile_glossary")).toHaveLength(1));
+    expect(file.current.profile_glossaries.default).toBe("merge = merch");
+  });
+
+  test("Reload settings keeps the keyboard focus in the window, before and after it succeeds", async () => {
+    const file = settingsFile();
+    const { ipc } = await renderSettings(backend(file));
+    const { user, picker } = await openTranscribeTab();
+    file.readFailure = readbackFailure;
+    await user.selectOptions(picker, "pianissimo-sv");
+    const reload = await screen.findByRole("button", { name: "Reload settings" });
+    reload.focus();
+    const reads = holdReads(ipc);
+
+    await user.click(reload);
+    await waitFor(() => expect(reads).toHaveLength(1));
+    // Busy but still focusable, and a second press does not read twice.
+    expect(reload).toHaveAttribute("aria-disabled", "true");
+    expect(reload).toHaveFocus();
+    await user.click(reload);
+    expect(reads).toHaveLength(1);
+
+    reads[0].reject("backend still unreachable");
+    await waitFor(() => expect(unconfirmedNotice()).toHaveTextContent("backend still unreachable"));
+    await waitFor(() => expect(reload).toHaveAttribute("aria-disabled", "false"));
+    expect(reload).toHaveFocus();
+
+    await user.click(reload);
+    await waitFor(() => expect(reads).toHaveLength(2));
+    reads[1].resolve(settingsValue({ file_transcription_model: "pianissimo-sv" }));
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Sagascript" })).toHaveFocus());
+    expect(document.body).not.toHaveFocus();
+  });
+
+  test("a notice that clears while the user is elsewhere does not take the focus", async () => {
+    const file = settingsFile();
+    const { ipc } = await renderSettings(backend(file));
+    const { user, picker } = await openTranscribeTab();
+    file.readFailure = readbackFailure;
+    await user.selectOptions(picker, "pianissimo-sv");
+    await screen.findByRole("alert", { name: "Settings not confirmed" });
+    screen.getByRole("button", { name: "Transcribe" }).focus();
+
+    file.readFailure = null;
+    ipc.emit("state-changed", "settings_reloaded");
+
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+    expect(screen.getByRole("button", { name: "Transcribe" })).toHaveFocus();
   });
 
   test("a failed Reload settings keeps the notice and says why", async () => {
     const file = settingsFile();
-    await renderSettings(settingsBackend(file.handlers));
+    await renderSettings(backend(file));
     const { user, picker } = await openTranscribeTab();
     file.readFailure = readbackFailure;
     await user.selectOptions(picker, "pianissimo-sv");
@@ -257,12 +384,12 @@ describe("a saved change whose read-back fails", () => {
 
     await waitFor(() => expect(unconfirmedNotice()).toHaveTextContent("backend still unreachable"));
     expect(unconfirmedNotice()).toHaveTextContent(/saved/i);
-    expect(screen.getByRole("button", { name: "Reload settings" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Reload settings" })).toHaveAttribute("aria-disabled", "false");
   });
 
   test("a later settings-changed event that reads back successfully confirms the saved state", async () => {
     const file = settingsFile();
-    const { ipc } = await renderSettings(settingsBackend(file.handlers));
+    const { ipc } = await renderSettings(backend(file));
     const { user, picker } = await openTranscribeTab();
     file.readFailure = readbackFailure;
     await user.selectOptions(picker, "pianissimo-sv");
@@ -277,7 +404,7 @@ describe("a saved change whose read-back fails", () => {
 
   test("a settings-changed event that cannot be read says the window may be out of date", async () => {
     const file = settingsFile();
-    const { ipc } = await renderSettings(settingsBackend(file.handlers));
+    const { ipc } = await renderSettings(backend(file));
     file.readFailure = readbackFailure;
 
     ipc.emit("state-changed", "settings_reloaded");
@@ -292,7 +419,7 @@ describe("a saved change whose read-back fails", () => {
 describe("a rejected change", () => {
   test("the file model control goes back to the saved choice and the error says so", async () => {
     const file = settingsFile();
-    const { ipc } = await renderSettings(settingsBackend(file.handlers));
+    const { ipc } = await renderSettings(backend(file));
     const { user, picker } = await openTranscribeTab();
 
     file.writeFailure = "disk full";
@@ -307,7 +434,7 @@ describe("a rejected change", () => {
 
   test("a setting's control goes back to the saved value", async () => {
     const file = settingsFile();
-    await renderSettings(settingsBackend(file.handlers));
+    await renderSettings(backend(file));
     const user = await openAdvancedSettings();
     const decoding = screen.getByRole("combobox", { name: "Decoding mode" });
     expect(decoding).toHaveDisplayValue("Beam search (accurate)");
@@ -325,7 +452,7 @@ describe("a rejected change", () => {
     { control: "Unload after idle", choice: "Never", saved: "10 minutes" },
   ])("the $control control goes back to the saved choice", async ({ control, choice, saved }) => {
     const file = settingsFile();
-    await renderSettings(settingsBackend(file.handlers));
+    await renderSettings(backend(file));
     const user = await openAdvancedSettings();
     const select = screen.getByRole("combobox", { name: control });
     expect(select).toHaveDisplayValue(saved);
@@ -339,7 +466,7 @@ describe("a rejected change", () => {
 
   test("a profile's language and name go back to the saved ones", async () => {
     const file = settingsFile();
-    const { ipc } = await renderSettings(settingsBackend(file.handlers));
+    const { ipc } = await renderSettings(backend(file));
     const user = userEvent.setup();
     const language = screen.getByRole("combobox", { name: "Svenska language" });
     const name = screen.getByRole("textbox", { name: "Profile name" });
@@ -360,7 +487,7 @@ describe("a rejected change", () => {
 
   test("a profile's model control goes back to the saved model", async () => {
     const file = settingsFile();
-    await renderSettings(settingsBackend(file.handlers));
+    await renderSettings(backend(file));
     const picker = await screen.findByRole("combobox", { name: "Model for Svenska" });
     await waitFor(() => expect(picker).toHaveDisplayValue(/Recommended for Swedish/));
 
@@ -375,7 +502,7 @@ describe("a rejected change", () => {
 describe("two answers that arrive out of order", () => {
   test("the older read of a file model change cannot replace a newer settings-changed read", async () => {
     const file = settingsFile();
-    const { ipc } = await renderSettings(settingsBackend(file.handlers));
+    const { ipc } = await renderSettings(backend(file));
     const { user, picker } = await openTranscribeTab();
     const reads = holdReads(ipc);
 
@@ -385,6 +512,7 @@ describe("two answers that arrive out of order", () => {
     await waitFor(() => expect(reads).toHaveLength(2));
 
     // The second read answers first; the first one answers with the older state.
+    expect(screen.getByText(/Effective model: KB-Whisper Medium/)).toBeInTheDocument();
     reads[1].resolve(settingsValue({ file_transcription_model: "pianissimo-sv" }));
     await waitFor(() => expect(screen.getByText(/Effective model: Pianissimo/)).toBeInTheDocument());
     reads[0].resolve(settingsValue({ file_transcription_model: "auto" }));
@@ -393,11 +521,12 @@ describe("two answers that arrive out of order", () => {
     expect(picker).toHaveValue("pianissimo-sv");
     expect(picker).toBeEnabled();
     expect(screen.getByText(/Effective model: Pianissimo/)).toBeInTheDocument();
+    expect(screen.queryByText(/Effective model: KB-Whisper Medium/)).toBeNull();
   });
 
   test("the older read of a setting cannot replace the read of the later change", async () => {
     const file = settingsFile();
-    const { ipc } = await renderSettings(settingsBackend(file.handlers));
+    const { ipc } = await renderSettings(backend(file));
     const user = await openAdvancedSettings();
     const decoding = screen.getByRole("combobox", { name: "Decoding mode" });
     const reads = holdReads(ipc);
@@ -418,7 +547,7 @@ describe("two answers that arrive out of order", () => {
 
   test("answers in order leave the newest state", async () => {
     const file = settingsFile();
-    const { ipc } = await renderSettings(settingsBackend(file.handlers));
+    const { ipc } = await renderSettings(backend(file));
     const user = await openAdvancedSettings();
     const decoding = screen.getByRole("combobox", { name: "Decoding mode" });
     const reads = holdReads(ipc);
@@ -438,7 +567,7 @@ describe("two answers that arrive out of order", () => {
 
   test("an older read that fails after a newer one was shown reports nothing", async () => {
     const file = settingsFile();
-    const { ipc } = await renderSettings(settingsBackend(file.handlers));
+    const { ipc } = await renderSettings(backend(file));
     const { user, picker } = await openTranscribeTab();
     const reads = holdReads(ipc);
 
@@ -459,7 +588,7 @@ describe("two answers that arrive out of order", () => {
 
   test("the latest read failing is reported even when an older one succeeds first", async () => {
     const file = settingsFile();
-    const { ipc } = await renderSettings(settingsBackend(file.handlers));
+    const { ipc } = await renderSettings(backend(file));
     const { user, picker } = await openTranscribeTab();
     const reads = holdReads(ipc);
 
@@ -473,6 +602,30 @@ describe("two answers that arrive out of order", () => {
     reads[1].reject(readbackFailure);
 
     expect(await screen.findByRole("alert", { name: "Settings not confirmed" })).toHaveTextContent(readbackFailure);
+  });
+
+  test("the latest read failing is reported even when an older one succeeds later", async () => {
+    const file = settingsFile();
+    const { ipc } = await renderSettings(backend(file));
+    const user = await openAdvancedSettings();
+    const decoding = screen.getByRole("combobox", { name: "Decoding mode" });
+    const reads = holdReads(ipc);
+
+    await user.selectOptions(decoding, "Greedy (fast)");
+    await waitFor(() => expect(reads).toHaveLength(1));
+    await user.selectOptions(decoding, "Beam search (accurate)");
+    await waitFor(() => expect(reads).toHaveLength(2));
+    expect(ipc.callsTo("set_beam_size")).toEqual([{ beamSize: 0 }, { beamSize: 5 }]);
+
+    reads[1].reject(readbackFailure);
+    await screen.findByRole("alert", { name: "Settings not confirmed" });
+    // The older read answers now with the state before the second change.
+    reads[0].resolve(settingsValue({ beam_size: 0 }));
+    await settle();
+
+    expect(unconfirmedNotice()).toHaveTextContent(readbackFailure);
+    expect(decoding).toHaveDisplayValue("Beam search (accurate)");
+    expect(decoding).toBeDisabled();
   });
 });
 
