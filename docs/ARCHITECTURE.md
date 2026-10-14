@@ -421,3 +421,8 @@ replaces the remaining source-text tests in the `ui` group with component tests.
 - `main.rs` and `commands.rs` will be split by domain
   ([#369](https://github.com/Magnus-Gille/sagascript/issues/369),
   [#370](https://github.com/Magnus-Gille/sagascript/issues/370)); update this map when files move.
+- Most `async` Tauri commands in `commands.rs` have no `.await` and call synchronous helpers
+  that write the settings file (`store::update`, under the settings file lock) on a Tokio
+  worker. Model downloads and Pianissimo installs already do their file work on the blocking
+  pool ([#368](https://github.com/Magnus-Gille/sagascript/issues/368)). **Planned:** the setters
+  become plain `fn`s or `spawn_blocking` writes together with `persist_and_sync` in #370.
