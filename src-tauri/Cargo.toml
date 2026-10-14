@@ -75,6 +75,9 @@ semver = "1"
 [dev-dependencies]
 sagascript-core = { path = "crates/sagascript-core", features = ["test-support"] }
 sagascript-testsupport = { path = "crates/sagascript-testsupport" }
+# Parses the command signatures to generate the frontend's CommandMap
+# (src/contract/command_map.rs, #347). Already in the tree via serde_derive.
+syn = { version = "2", features = ["full", "visit"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # notify 7 requires one native macOS backend feature even when this app uses

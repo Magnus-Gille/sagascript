@@ -8,7 +8,7 @@ import { mockWindows } from "@tauri-apps/api/mocks";
 import { fireEvent, render, screen, waitFor } from "@testing-library/svelte";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, test } from "vitest";
-import type { HotkeyProfile, Settings as SettingsValue } from "./api";
+import type { EnginePrewarm, HotkeyProfile, Settings as SettingsValue } from "./api";
 import Settings from "./Settings.svelte";
 import { deferred, settle, type Deferred } from "../test/deferred";
 import { mockIpc, type CommandHandlers } from "../test/ipc";
@@ -52,7 +52,8 @@ function settingsFile(initial: Partial<SettingsValue> = {}) {
     set_profile_glossary: setter(({ profileId, source }) => ({
       profile_glossaries: { ...file.current.profile_glossaries, [profileId]: source },
     })),
-    set_engine_prewarm: setter(({ mode }) => ({ engine_prewarm: mode })),
+    // The command takes a plain string; the settings file stores the parsed mode.
+    set_engine_prewarm: setter(({ mode }) => ({ engine_prewarm: mode as EnginePrewarm })),
     set_engine_idle_unload_minutes: setter(({ minutes }) => ({ engine_idle_unload_minutes: minutes })),
     set_temperature_fallback: setter(({ enabled }) => ({ temperature_fallback: enabled })),
     set_profile_model: setter(({ profileId, modelId }) => ({

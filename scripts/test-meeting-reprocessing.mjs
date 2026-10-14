@@ -24,7 +24,7 @@ test("proposal conflicts stay explicit, ordered, and nonempty", () => {
   assert.match(source, /No correction is silently dropped/);
   assert.match(source, /function validResolution\(index: number, original: CorrectionOperation\): boolean/);
   assert.match(source, /if \(rows\.length === 0\) return false/);
-  assert.match(source, /row\.text !== undefined \|\| row\.speaker_id !== undefined/);
+  assert.match(source, /row\.text != null \|\| row\.speaker_id != null/);
   assert.match(source, /Add another candidate target/);
   assert.match(source, /Mapped disposition/);
 });

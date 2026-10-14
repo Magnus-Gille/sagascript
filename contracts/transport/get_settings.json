@@ -1,0 +1,79 @@
+{
+  "customised": {
+    "auto_paste": false,
+    "auto_select_model": false,
+    "beam_size": 5,
+    "engine_defaults_version": 1,
+    "engine_idle_unload_minutes": 0,
+    "engine_prewarm": "on_key_down",
+    "file_transcription_model": "pianissimo-sv",
+    "has_completed_onboarding": true,
+    "hotkey": "F13",
+    "hotkey_mode": "toggle",
+    "hotkey_profiles": [
+      {
+        "id": "swedish",
+        "language": "sv",
+        "name": "Svenska",
+        "push_to_talk_shortcut": "F13",
+        "shortcut": "F13",
+        "toggle_shortcut": "F14"
+      },
+      {
+        "id": "finnish",
+        "language": "fi",
+        "name": "Suomi",
+        "shortcut": "Control+Shift+F"
+      }
+    ],
+    "initial_prompt": "Astrid, Grimnir",
+    "language": "sv",
+    "model_lineup_version": 1,
+    "pianissimo_dictation": true,
+    "profile_glossaries": {
+      "swedish": "mergea = mördsa"
+    },
+    "profile_glossary_migrated": true,
+    "profile_models": {
+      "finnish": "auto",
+      "swedish": "kb-whisper-medium"
+    },
+    "schema_version": 6,
+    "show_overlay": false,
+    "temperature_fallback": false,
+    "vad_enabled": true,
+    "whisper_model": "kb-whisper-small"
+  },
+  "default": {
+    "auto_paste": true,
+    "auto_select_model": true,
+    "beam_size": 0,
+    "engine_defaults_version": 1,
+    "engine_idle_unload_minutes": 60,
+    "engine_prewarm": "on_app_start",
+    "file_transcription_model": "auto",
+    "has_completed_onboarding": false,
+    "hotkey": "Control+Shift+Space",
+    "hotkey_mode": "push",
+    "hotkey_profiles": [
+      {
+        "id": "default",
+        "language": "en",
+        "name": "Default",
+        "shortcut": "Control+Shift+Space"
+      }
+    ],
+    "initial_prompt": "",
+    "language": "en",
+    "model_lineup_version": 1,
+    "pianissimo_dictation": false,
+    "profile_glossaries": {},
+    "profile_glossary_migrated": false,
+    "profile_models": {},
+    "schema_version": 6,
+    "show_overlay": true,
+    "temperature_fallback": true,
+    "vad_enabled": false,
+    "whisper_model": "base"
+  }
+}

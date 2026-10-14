@@ -1,0 +1,211 @@
+{
+  "active-hotkey-profile-changed": {
+    "consumer": "gui",
+    "samples": [
+      {
+        "id": "swedish",
+        "language": "sv",
+        "name": "Profile swedish",
+        "push_to_talk_shortcut": "F13",
+        "shortcut": "F13",
+        "toggle_shortcut": "F14"
+      },
+      {
+        "id": "english",
+        "language": "en",
+        "name": "Profile english",
+        "shortcut": "Control+Shift+Space"
+      }
+    ]
+  },
+  "engine-load-state": {
+    "consumer": "gui",
+    "samples": [
+      {
+        "source": "request",
+        "state": "unknown"
+      },
+      {
+        "source": "warm",
+        "state": "loading"
+      },
+      {
+        "loadMs": 1250,
+        "source": "request",
+        "state": "ready"
+      },
+      {
+        "message": "Model failed to load",
+        "source": "request",
+        "state": "failed"
+      },
+      {
+        "source": "warm",
+        "state": "unknown"
+      }
+    ]
+  },
+  "error": {
+    "consumer": "gui",
+    "samples": [
+      "Recording failed: no audio input device"
+    ]
+  },
+  "hotkey-registration-changed": {
+    "consumer": "gui",
+    "samples": [
+      {
+        "error": null,
+        "ok": true,
+        "settings_watcher": {
+          "recovered_panics": 0,
+          "running": false
+        },
+        "shortcut": "Control+Shift+Space",
+        "shortcuts": [
+          "Control+Shift+Space",
+          "F13"
+        ]
+      },
+      {
+        "error": "failed to register hotkey 'F13': already in use",
+        "ok": false,
+        "settings_watcher": {
+          "recovered_panics": 0,
+          "running": false
+        },
+        "shortcut": "F13",
+        "shortcuts": [
+          "F13"
+        ]
+      }
+    ]
+  },
+  "model-download-progress": {
+    "consumer": "gui",
+    "samples": [
+      {
+        "downloaded": 0,
+        "model": "KbWhisperLarge",
+        "progress": 0,
+        "total": 0
+      },
+      {
+        "downloaded": 512,
+        "model": "pianissimo-sv",
+        "progress": 25,
+        "total": 2048
+      }
+    ]
+  },
+  "model-ready": {
+    "consumer": "gui",
+    "samples": [
+      null
+    ]
+  },
+  "navigate_tab": {
+    "consumer": "gui",
+    "samples": [
+      "dictate",
+      "transcribe"
+    ]
+  },
+  "plain-transcription-progress": {
+    "consumer": "gui",
+    "samples": [
+      {
+        "percent": 0,
+        "phase": "decoding",
+        "runId": "run-1"
+      },
+      {
+        "percent": 100,
+        "phase": "decoding",
+        "runId": "run-1"
+      },
+      {
+        "percent": 60,
+        "phase": "resampling",
+        "runId": "run-1"
+      },
+      {
+        "percent": null,
+        "phase": "loading",
+        "runId": "run-1"
+      },
+      {
+        "percent": null,
+        "phase": "preparing",
+        "runId": "run-1"
+      },
+      {
+        "percent": null,
+        "phase": "encoding",
+        "runId": "run-1"
+      },
+      {
+        "percent": 40,
+        "phase": "transcribing",
+        "runId": "run-1"
+      },
+      {
+        "percent": null,
+        "phase": "finalizing",
+        "runId": "run-1"
+      },
+      {
+        "percent": 90,
+        "phase": "transcribing",
+        "runId": "run-2"
+      }
+    ],
+    "scope": "runId"
+  },
+  "state-changed": {
+    "consumer": "gui",
+    "samples": [
+      "idle",
+      "recording",
+      "loading_model",
+      "transcribing",
+      "error",
+      "settings_reloaded"
+    ]
+  },
+  "transcription-phase": {
+    "consumer": "internal",
+    "reason": "legacy: only the legacy diarized transcribe_file path sends it; the GUI imports meetings through the meeting-job API",
+    "samples": [
+      "loading",
+      "preparing",
+      "encoding"
+    ]
+  },
+  "transcription-progress": {
+    "consumer": "internal",
+    "reason": "legacy: training and the legacy diarized transcribe_file path still report it; plain imports use plain-transcription-progress and meetings are polled",
+    "samples": [
+      1,
+      42
+    ]
+  },
+  "transcription-result": {
+    "consumer": "gui",
+    "samples": [
+      "Hej, det här är en diktering."
+    ]
+  },
+  "update-aborted": {
+    "consumer": "gui",
+    "samples": [
+      "Settings closed before recovery drafts were saved."
+    ]
+  },
+  "update-preparing": {
+    "consumer": "gui",
+    "samples": [
+      "8f14e45f-ceea-4e67-a0d9-9c0f8c5d1b2a"
+    ]
+  }
+}

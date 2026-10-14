@@ -113,8 +113,9 @@ export type CorrectionOperation =
   | {
       kind: "edit_segment";
       segment_id: string;
-      text?: string;
-      speaker_id?: string;
+      /** Absent or null: the edit leaves this field unchanged (Rust sends null). */
+      text?: string | null;
+      speaker_id?: string | null;
     }
   | {
       kind: "rename_speaker";
@@ -192,8 +193,8 @@ export function reconcileMeetingDrafts(
 
   for (const operation of operations) {
     if (operation.kind === "edit_segment") {
-      if (operation.text !== undefined) affectedTexts.add(operation.segment_id);
-      if (operation.speaker_id !== undefined) affectedSpeakers.add(operation.segment_id);
+      if (operation.text != null) affectedTexts.add(operation.segment_id);
+      if (operation.speaker_id != null) affectedSpeakers.add(operation.segment_id);
     } else if (operation.kind === "rename_speaker") {
       affectedLabels.add(operation.speaker_id);
       clearedMergeTargets.add(operation.speaker_id);

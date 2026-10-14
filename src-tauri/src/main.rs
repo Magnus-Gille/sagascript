@@ -16,6 +16,8 @@ mod logging;
 
 mod app_controller;
 mod commands;
+#[cfg(test)]
+mod contract;
 mod events;
 mod focus_diag;
 mod hotkey;
@@ -51,10 +53,11 @@ const ABORT_GRACE_SECS: u64 = 5;
 /// blocking worker. A lost callback must not leave dictation stuck processing.
 const PASTE_COMPLETION_TIMEOUT_MS: u64 = paste_completion::COMPLETION_TIMEOUT_MS;
 
+use events::{EmitEvent, UiState};
 use tauri::{
     menu::{Menu, MenuItem, Submenu},
     tray::TrayIconBuilder,
-    Emitter, Manager,
+    Manager,
 };
 use tauri_plugin_global_shortcut::ShortcutState;
 use tracing::{error, info, warn};
@@ -487,7 +490,7 @@ async fn prepare_update_recovery(app: &tauri::AppHandle) -> Result<(), String> {
     if app.get_webview_window("settings").is_some() {
         let preparation: tauri::State<'_, update_activity::UpdatePreparation> = app.state();
         let (nonce, response) = preparation.begin();
-        if let Err(error) = app.emit_to("settings", "update-preparing", nonce.clone()) {
+        if let Err(error) = app.emit_event_to("settings", events::event::UPDATE_PREPARING, &nonce) {
             preparation.cancel(&nonce);
             return Err(format!(
                 "Could not ask Settings to save recovery drafts: {error}"
@@ -634,7 +637,7 @@ async fn install_signed_update(
                 );
                 if let Err(error) = prepare_update_recovery(&app).await {
                     warn!("Could not safely prepare update: {error}");
-                    let _ = app.emit_to("settings", "update-aborted", &error);
+                    let _ = app.emit_event_to("settings", events::event::UPDATE_ABORTED, &error);
                     drop(update_permit);
                     set_update_menu(
                         &app,
@@ -654,7 +657,11 @@ async fn install_signed_update(
                 );
                 if let Err(error) = update.install(&bytes) {
                     warn!("Signed updater installation failed: {error}");
-                    let _ = app.emit_to("settings", "update-aborted", error.to_string());
+                    let _ = app.emit_event_to(
+                        "settings",
+                        events::event::UPDATE_ABORTED,
+                        &error.to_string(),
+                    );
                     drop(update_permit);
                     set_update_menu(
                         &app,
@@ -813,7 +820,7 @@ fn forward_engine_load_state(app: &tauri::AppHandle) {
             "engine_load_state_event",
             serde_json::json!({ "origin": "load_listener" }),
         );
-        let _ = app.emit(events::event::ENGINE_LOAD_STATE, payload);
+        let _ = app.emit_event(events::event::ENGINE_LOAD_STATE, payload);
     });
 }
 
@@ -825,7 +832,7 @@ fn reemit_engine_load_state(app: &tauri::AppHandle) {
         "engine_load_state_event",
         serde_json::json!({ "origin": "reemit_after_overlay" }),
     );
-    let _ = app.emit(events::event::ENGINE_LOAD_STATE, payload);
+    let _ = app.emit_event(events::event::ENGINE_LOAD_STATE, payload);
 }
 
 /// Warm the engine for `trigger` (wake, app start) when settings call for it.
@@ -923,7 +930,7 @@ fn handle_hotkey_event(app: &tauri::AppHandle, shortcut: &str, state: hotkey::Ba
                             }
                             Err(error) => {
                                 error!("Hotkey down error: {error}");
-                                let _ = app.emit(events::event::ERROR, error.to_string());
+                                let _ = app.emit_event(events::event::ERROR, &error.to_string());
                                 HotkeyDownResult::NoOp
                             }
                         }
@@ -943,7 +950,7 @@ fn handle_hotkey_event(app: &tauri::AppHandle, shortcut: &str, state: hotkey::Ba
                             }
                             Err(error) => {
                                 error!("Hotkey down error: {error}");
-                                let _ = app.emit(events::event::ERROR, error.to_string());
+                                let _ = app.emit_event(events::event::ERROR, &error.to_string());
                                 HotkeyDownResult::NoOp
                             }
                         }
@@ -968,10 +975,11 @@ fn handle_hotkey_event(app: &tauri::AppHandle, shortcut: &str, state: hotkey::Ba
                         let c = lock_controller(&ctrl);
                         c.settings().show_overlay
                     };
-                    let _ = app.emit(events::event::STATE_CHANGED, "recording");
+                    let _ = app.emit_event(events::event::STATE_CHANGED, UiState::Recording);
                     if let Some(profile) = active_profile {
                         select_profile_menu(app, &profile);
-                        let _ = app.emit(events::event::ACTIVE_HOTKEY_PROFILE_CHANGED, profile);
+                        let _ =
+                            app.emit_event(events::event::ACTIVE_HOTKEY_PROFILE_CHANGED, &profile);
                     }
                     update_tray_status(app, "recording");
                     if show_overlay {
@@ -1245,7 +1253,7 @@ fn main() -> std::process::ExitCode {
             };
             let change = health.record(&requested_primary, health_error, operational_hotkey);
             if change.changed {
-                let _ = app.emit(events::event::HOTKEY_REGISTRATION_CHANGED, &change.status);
+                let _ = app.emit_event(events::event::HOTKEY_REGISTRATION_CHANGED, &change.status);
             }
 
             // Build tray menu
@@ -2102,7 +2110,7 @@ fn try_open_settings_window(app: &tauri::AppHandle, tab: Option<&str>) -> Result
     if let Some(window) = app.get_webview_window("settings") {
         // If switching tab on existing window, emit an event
         if let Some(t) = tab {
-            if let Err(error) = window.emit("navigate_tab", t) {
+            if let Err(error) = window.emit_event(events::event::NAVIGATE_TAB, t) {
                 warn!("Failed to navigate main window to '{t}': {error}");
             }
         }
@@ -2228,8 +2236,8 @@ fn stop_recording_and_transcribe(
                     overlay::hide(app);
                     update_tray_status(app, "idle");
                 });
-                let _ = app_handle.emit(events::event::ERROR, msg);
-                let _ = app_handle.emit(events::event::STATE_CHANGED, "idle");
+                let _ = app_handle.emit_event(events::event::ERROR, &msg);
+                let _ = app_handle.emit_event(events::event::STATE_CHANGED, UiState::Idle);
                 return;
             }
             StopRecordingOutcome::Stopped(audio) => {
@@ -2249,7 +2257,7 @@ fn stop_recording_and_transcribe(
         dispatch_to_main(&app_handle, |app| {
             update_tray_status(app, "transcribing");
         });
-        let _ = app_handle.emit(events::event::STATE_CHANGED, "transcribing");
+        let _ = app_handle.emit_event(events::event::STATE_CHANGED, UiState::Transcribing);
 
         if audio.is_empty() {
             {
@@ -2270,7 +2278,7 @@ fn stop_recording_and_transcribe(
                 overlay::hide(app);
                 update_tray_status(app, "idle");
             });
-            let _ = app_handle.emit(events::event::STATE_CHANGED, "idle");
+            let _ = app_handle.emit_event(events::event::STATE_CHANGED, UiState::Idle);
             return;
         }
 
@@ -2316,8 +2324,8 @@ fn stop_recording_and_transcribe(
                     overlay::hide(app);
                     update_tray_status(app, "idle");
                 });
-                let _ = app_handle.emit(events::event::STATE_CHANGED, "idle");
-                let _ = app_handle.emit(events::event::ERROR, error);
+                let _ = app_handle.emit_event(events::event::STATE_CHANGED, UiState::Idle);
+                let _ = app_handle.emit_event(events::event::ERROR, &error);
                 return;
             }
         };
@@ -2344,7 +2352,7 @@ fn stop_recording_and_transcribe(
 
         // Show model loading status in tray
         if !model_was_warm {
-            let _ = app_handle.emit(events::event::STATE_CHANGED, "loading_model");
+            let _ = app_handle.emit_event(events::event::STATE_CHANGED, UiState::LoadingModel);
             dispatch_to_main(&app_handle, |app| update_tray_status(app, "loading_model"));
         }
 
@@ -2461,7 +2469,7 @@ fn stop_recording_and_transcribe(
                     }));
                     c.on_no_speech_detected();
                     drop(c);
-                    let _ = app_handle.emit(events::event::STATE_CHANGED, "idle");
+                    let _ = app_handle.emit_event(events::event::STATE_CHANGED, UiState::Idle);
                     dispatch_to_main(&app_handle, |app| {
                         overlay::hide(app);
                         update_tray_status(app, "idle");
@@ -2587,9 +2595,9 @@ fn stop_recording_and_transcribe(
                         "result_emitted_to_ui",
                         serde_json::json!({ "outcome": "paste_error", "pasteOutcome": paste_outcome }),
                     );
-                    let _ = app_handle.emit(events::event::TRANSCRIPTION_RESULT, &text);
-                    let _ = app_handle.emit(events::event::ERROR, message);
-                    let _ = app_handle.emit(events::event::STATE_CHANGED, "idle");
+                    let _ = app_handle.emit_event(events::event::TRANSCRIPTION_RESULT, &text);
+                    let _ = app_handle.emit_event(events::event::ERROR, &message);
+                    let _ = app_handle.emit_event(events::event::STATE_CHANGED, UiState::Idle);
                     let open_copy_fallback =
                         paste_completion::should_open_copy_fallback(paste_outcome);
                     dispatch_to_main(&app_handle, move |app| {
@@ -2613,8 +2621,8 @@ fn stop_recording_and_transcribe(
                 }
                 drop(c);
 
-                let _ = app_handle.emit(events::event::TRANSCRIPTION_RESULT, &text);
-                let _ = app_handle.emit(events::event::STATE_CHANGED, "idle");
+                let _ = app_handle.emit_event(events::event::TRANSCRIPTION_RESULT, &text);
+                let _ = app_handle.emit_event(events::event::STATE_CHANGED, UiState::Idle);
                 let text_for_tray = text.clone();
                 dispatch_to_main(&app_handle, move |app| {
                     overlay::hide(app);
@@ -2644,10 +2652,10 @@ fn stop_recording_and_transcribe(
                 }));
                 c.on_transcription_error(&e.to_string());
                 drop(c);
-                let _ = app_handle.emit(events::event::ERROR, e.to_string());
+                let _ = app_handle.emit_event(events::event::ERROR, &e.to_string());
                 // Let the overlay show its error state briefly before hiding.
-                let _ = app_handle.emit(events::event::STATE_CHANGED, "error");
-                let _ = app_handle.emit(events::event::STATE_CHANGED, "idle");
+                let _ = app_handle.emit_event(events::event::STATE_CHANGED, UiState::Error);
+                let _ = app_handle.emit_event(events::event::STATE_CHANGED, UiState::Idle);
                 dispatch_to_main(&app_handle, |app| update_tray_status(app, "idle"));
                 hide_overlay_after_error(app_handle.clone());
                 info!("Error flow complete, app should remain running");
@@ -2888,7 +2896,8 @@ fn start_settings_watcher(app: tauri::AppHandle) {
                     }
                 };
                 if change.changed {
-                    let _ = app.emit(events::event::HOTKEY_REGISTRATION_CHANGED, &change.status);
+                    let _ =
+                        app.emit_event(events::event::HOTKEY_REGISTRATION_CHANGED, &change.status);
                 }
             }
 
@@ -2915,7 +2924,7 @@ fn start_settings_watcher(app: tauri::AppHandle) {
             update_profiles_menu(&app, &profiles);
 
             // Notify frontend so UI reflects external changes
-            let _ = app.emit(events::event::STATE_CHANGED, "settings_reloaded");
+            let _ = app.emit_event(events::event::STATE_CHANGED, UiState::SettingsReloaded);
 
             info!("Settings hot-reloaded from disk");
         });

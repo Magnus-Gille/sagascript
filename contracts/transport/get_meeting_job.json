@@ -1,0 +1,705 @@
+{
+  "cancelled": {
+    "elapsed_ms": 4200,
+    "error": null,
+    "id": "job-1",
+    "phase": "preparing",
+    "phase_elapsed_ms": 4200,
+    "reprocessing": null,
+    "status": "cancelled",
+    "transcript": null
+  },
+  "cancelling": {
+    "elapsed_ms": 2000,
+    "error": null,
+    "id": "job-1",
+    "phase": "analyzing",
+    "phase_elapsed_ms": 1500,
+    "reprocessing": null,
+    "status": "cancelling",
+    "transcript": null
+  },
+  "completed": {
+    "elapsed_ms": 4200,
+    "error": null,
+    "id": "job-1",
+    "phase": "preparing",
+    "phase_elapsed_ms": 4200,
+    "reprocessing": null,
+    "status": "completed",
+    "transcript": {
+      "diarization": {
+        "activity": [
+          {
+            "end": 2.5,
+            "speakers": [
+              "s1"
+            ],
+            "start": 0.0
+          },
+          {
+            "end": 3.0,
+            "speakers": [
+              "s1",
+              "s2"
+            ],
+            "start": 2.5
+          },
+          {
+            "end": 6.0,
+            "speakers": [
+              "s2"
+            ],
+            "start": 3.0
+          }
+        ],
+        "asr_segments": [
+          {
+            "avg_logprob": -0.25,
+            "end": 2.5,
+            "no_speech_prob": 0.009999999776482582,
+            "start": 0.0
+          },
+          {
+            "avg_logprob": null,
+            "end": 6.0,
+            "no_speech_prob": null,
+            "start": 2.5
+          }
+        ],
+        "attributions": [
+          {
+            "end": 2.0,
+            "gap_seconds": null,
+            "index": 0,
+            "margin_seconds": 2.0,
+            "reason": "temporal_overlap",
+            "speaker": "s1",
+            "start": 0.0,
+            "support": [
+              {
+                "overlap_seconds": 2.0,
+                "speaker": "s1"
+              }
+            ]
+          },
+          {
+            "end": 5.5,
+            "gap_seconds": 0.5,
+            "index": 1,
+            "margin_seconds": null,
+            "reason": "nearest_gap",
+            "speaker": "s2",
+            "start": 3.5,
+            "support": []
+          }
+        ],
+        "build_revision": "abc1234",
+        "build_version": "1.4.4",
+        "decoder": {
+          "beam_size": 5,
+          "strategy": "beam_search",
+          "temperature_fallback": true,
+          "timestamp_method": "source_mapped_segments",
+          "vad_enabled": true,
+          "vad_min_silence_duration_ms": 100,
+          "vad_samples_overlap": 0.10000000149011612,
+          "vad_speech_pad_ms": 30,
+          "vad_threshold": 0.5
+        },
+        "diagnostics_included": true,
+        "duration_seconds": 6.0,
+        "embedding_model_sha256": null,
+        "parameters": {
+          "absorb_max_distance": 0.5,
+          "exclusive_speech_embeddings": false,
+          "hint_merge_max_distance": 0.75,
+          "min_gap_seconds": 0.25,
+          "min_segment_seconds": 0.5,
+          "min_speaker_seconds": 1.0,
+          "threshold": 0.699999988079071
+        },
+        "regions": [
+          {
+            "active_speech_seconds": 2.75,
+            "assigned_centroid_distance": 0.25,
+            "embedding_status": "usable",
+            "end": 3.0,
+            "index": 0,
+            "nearest_other_centroid_distance": 0.75,
+            "overlapping_speech_seconds": 0.5,
+            "speaker": "s1",
+            "start": 0.0,
+            "track": 0,
+            "used_track_fallback": false
+          },
+          {
+            "active_speech_seconds": null,
+            "assigned_centroid_distance": null,
+            "embedding_status": "missing",
+            "end": 6.0,
+            "index": 1,
+            "nearest_other_centroid_distance": null,
+            "overlapping_speech_seconds": null,
+            "speaker": "s2",
+            "start": 2.5,
+            "track": 1,
+            "used_track_fallback": true
+          }
+        ],
+        "schema_version": 1,
+        "segmentation_model_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "source_sha256": "3b1f6c0f9a8e2d4c5b7a6e9d8c0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b",
+        "speaker_hint": {
+          "exact": 2
+        },
+        "speaker_hint_outcome": {
+          "delivered": 2,
+          "satisfied": true
+        },
+        "transcript_modified": false
+      },
+      "duration_seconds": 6.0,
+      "language": "sv",
+      "model": "kb-whisper-small",
+      "schema_version": 2,
+      "segments": [
+        {
+          "end": 2.5,
+          "id": "seg-000001",
+          "speaker": "s1",
+          "start": 0.0,
+          "text": "Hej och välkomna."
+        },
+        {
+          "end": 6.0,
+          "id": "seg-000002",
+          "speaker": "s2",
+          "start": 3.0,
+          "text": "Tack, då börjar vi."
+        }
+      ],
+      "source_sha256": "3b1f6c0f9a8e2d4c5b7a6e9d8c0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b",
+      "speaker_hint": {
+        "exact": 2
+      },
+      "speaker_hint_delivered": 2,
+      "speaker_hint_satisfied": true,
+      "speakers": [
+        {
+          "id": "s1",
+          "label": "Talare 1"
+        },
+        {
+          "id": "s2",
+          "label": "Talare 2"
+        }
+      ]
+    }
+  },
+  "completed_plain": {
+    "elapsed_ms": 4200,
+    "error": null,
+    "id": "job-1",
+    "phase": "preparing",
+    "phase_elapsed_ms": 4200,
+    "reprocessing": null,
+    "status": "completed",
+    "transcript": {
+      "duration_seconds": 3.0,
+      "language": "en",
+      "model": "whisper-base",
+      "schema_version": 1,
+      "segments": [
+        {
+          "end": 1.0,
+          "id": "seg-000001",
+          "speaker": "speaker-1",
+          "start": 0.0,
+          "text": "Hello meeting"
+        }
+      ],
+      "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "speakers": [
+        {
+          "id": "speaker-1",
+          "label": "Speaker 1"
+        }
+      ]
+    }
+  },
+  "failed": {
+    "elapsed_ms": 4200,
+    "error": "No audio decoded from file",
+    "id": "job-1",
+    "phase": "preparing",
+    "phase_elapsed_ms": 4200,
+    "reprocessing": null,
+    "status": "failed",
+    "transcript": null
+  },
+  "reprocessing": {
+    "elapsed_ms": 4200,
+    "error": null,
+    "id": "job-1",
+    "phase": "preparing",
+    "phase_elapsed_ms": 4200,
+    "reprocessing": {
+      "proposal": {
+        "generation": 1,
+        "previous": {
+          "batches": [
+            {
+              "operations": [
+                {
+                  "kind": "rename_speaker",
+                  "label": "Astrid",
+                  "speaker_id": "s1"
+                },
+                {
+                  "kind": "edit_segment",
+                  "segment_id": "seg-000002",
+                  "speaker_id": null,
+                  "text": "Tack, då börjar vi nu."
+                }
+              ]
+            }
+          ],
+          "generation": 1,
+          "original": {
+            "diarization": {
+              "activity": [
+                {
+                  "end": 2.5,
+                  "speakers": [
+                    "s1"
+                  ],
+                  "start": 0.0
+                },
+                {
+                  "end": 3.0,
+                  "speakers": [
+                    "s1",
+                    "s2"
+                  ],
+                  "start": 2.5
+                },
+                {
+                  "end": 6.0,
+                  "speakers": [
+                    "s2"
+                  ],
+                  "start": 3.0
+                }
+              ],
+              "asr_segments": [
+                {
+                  "avg_logprob": -0.25,
+                  "end": 2.5,
+                  "no_speech_prob": 0.009999999776482582,
+                  "start": 0.0
+                },
+                {
+                  "avg_logprob": null,
+                  "end": 6.0,
+                  "no_speech_prob": null,
+                  "start": 2.5
+                }
+              ],
+              "attributions": [
+                {
+                  "end": 2.0,
+                  "gap_seconds": null,
+                  "index": 0,
+                  "margin_seconds": 2.0,
+                  "reason": "temporal_overlap",
+                  "speaker": "s1",
+                  "start": 0.0,
+                  "support": [
+                    {
+                      "overlap_seconds": 2.0,
+                      "speaker": "s1"
+                    }
+                  ]
+                },
+                {
+                  "end": 5.5,
+                  "gap_seconds": 0.5,
+                  "index": 1,
+                  "margin_seconds": null,
+                  "reason": "nearest_gap",
+                  "speaker": "s2",
+                  "start": 3.5,
+                  "support": []
+                }
+              ],
+              "build_revision": "abc1234",
+              "build_version": "1.4.4",
+              "decoder": {
+                "beam_size": 5,
+                "strategy": "beam_search",
+                "temperature_fallback": true,
+                "timestamp_method": "source_mapped_segments",
+                "vad_enabled": true,
+                "vad_min_silence_duration_ms": 100,
+                "vad_samples_overlap": 0.10000000149011612,
+                "vad_speech_pad_ms": 30,
+                "vad_threshold": 0.5
+              },
+              "diagnostics_included": true,
+              "duration_seconds": 6.0,
+              "embedding_model_sha256": null,
+              "parameters": {
+                "absorb_max_distance": 0.5,
+                "exclusive_speech_embeddings": false,
+                "hint_merge_max_distance": 0.75,
+                "min_gap_seconds": 0.25,
+                "min_segment_seconds": 0.5,
+                "min_speaker_seconds": 1.0,
+                "threshold": 0.699999988079071
+              },
+              "regions": [
+                {
+                  "active_speech_seconds": 2.75,
+                  "assigned_centroid_distance": 0.25,
+                  "embedding_status": "usable",
+                  "end": 3.0,
+                  "index": 0,
+                  "nearest_other_centroid_distance": 0.75,
+                  "overlapping_speech_seconds": 0.5,
+                  "speaker": "s1",
+                  "start": 0.0,
+                  "track": 0,
+                  "used_track_fallback": false
+                },
+                {
+                  "active_speech_seconds": null,
+                  "assigned_centroid_distance": null,
+                  "embedding_status": "missing",
+                  "end": 6.0,
+                  "index": 1,
+                  "nearest_other_centroid_distance": null,
+                  "overlapping_speech_seconds": null,
+                  "speaker": "s2",
+                  "start": 2.5,
+                  "track": 1,
+                  "used_track_fallback": true
+                }
+              ],
+              "schema_version": 1,
+              "segmentation_model_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "source_sha256": "3b1f6c0f9a8e2d4c5b7a6e9d8c0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b",
+              "speaker_hint": {
+                "exact": 2
+              },
+              "speaker_hint_outcome": {
+                "delivered": 2,
+                "satisfied": true
+              },
+              "transcript_modified": false
+            },
+            "duration_seconds": 6.0,
+            "language": "sv",
+            "model": "kb-whisper-small",
+            "schema_version": 2,
+            "segments": [
+              {
+                "end": 2.5,
+                "id": "seg-000001",
+                "speaker": "s1",
+                "start": 0.0,
+                "text": "Hej och välkomna."
+              },
+              {
+                "end": 6.0,
+                "id": "seg-000002",
+                "speaker": "s2",
+                "start": 3.0,
+                "text": "Tack, då börjar vi."
+              }
+            ],
+            "source_sha256": "3b1f6c0f9a8e2d4c5b7a6e9d8c0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b",
+            "speaker_hint": {
+              "exact": 2
+            },
+            "speaker_hint_delivered": 2,
+            "speaker_hint_satisfied": true,
+            "speakers": [
+              {
+                "id": "s1",
+                "label": "Talare 1"
+              },
+              {
+                "id": "s2",
+                "label": "Talare 2"
+              }
+            ]
+          },
+          "original_revision": "7201d4801197c586ca6dafaa51ca6d40509b4646142653870f937ec9a7c38253",
+          "revision": "0887f808b4b2e60be8ee4d21fd31e175007d59f905acd2cb329661affeef9efc",
+          "schema_version": 1
+        },
+        "proposed": {
+          "diarization": {
+            "activity": [
+              {
+                "end": 2.5,
+                "speakers": [
+                  "s1"
+                ],
+                "start": 0.0
+              },
+              {
+                "end": 3.0,
+                "speakers": [
+                  "s1",
+                  "s2"
+                ],
+                "start": 2.5
+              },
+              {
+                "end": 6.0,
+                "speakers": [
+                  "s2"
+                ],
+                "start": 3.0
+              }
+            ],
+            "asr_segments": [
+              {
+                "avg_logprob": -0.25,
+                "end": 2.5,
+                "no_speech_prob": 0.009999999776482582,
+                "start": 0.0
+              },
+              {
+                "avg_logprob": null,
+                "end": 6.0,
+                "no_speech_prob": null,
+                "start": 2.5
+              }
+            ],
+            "attributions": [
+              {
+                "end": 2.0,
+                "gap_seconds": null,
+                "index": 0,
+                "margin_seconds": 2.0,
+                "reason": "temporal_overlap",
+                "speaker": "s1",
+                "start": 0.0,
+                "support": [
+                  {
+                    "overlap_seconds": 2.0,
+                    "speaker": "s1"
+                  }
+                ]
+              },
+              {
+                "end": 5.5,
+                "gap_seconds": 0.5,
+                "index": 1,
+                "margin_seconds": null,
+                "reason": "nearest_gap",
+                "speaker": "s2",
+                "start": 3.5,
+                "support": []
+              }
+            ],
+            "build_revision": "abc1234",
+            "build_version": "1.4.4",
+            "decoder": {
+              "beam_size": 5,
+              "strategy": "beam_search",
+              "temperature_fallback": true,
+              "timestamp_method": "source_mapped_segments",
+              "vad_enabled": true,
+              "vad_min_silence_duration_ms": 100,
+              "vad_samples_overlap": 0.10000000149011612,
+              "vad_speech_pad_ms": 30,
+              "vad_threshold": 0.5
+            },
+            "diagnostics_included": true,
+            "duration_seconds": 6.0,
+            "embedding_model_sha256": null,
+            "parameters": {
+              "absorb_max_distance": 0.5,
+              "exclusive_speech_embeddings": false,
+              "hint_merge_max_distance": 0.75,
+              "min_gap_seconds": 0.25,
+              "min_segment_seconds": 0.5,
+              "min_speaker_seconds": 1.0,
+              "threshold": 0.699999988079071
+            },
+            "regions": [
+              {
+                "active_speech_seconds": 2.75,
+                "assigned_centroid_distance": 0.25,
+                "embedding_status": "usable",
+                "end": 3.0,
+                "index": 0,
+                "nearest_other_centroid_distance": 0.75,
+                "overlapping_speech_seconds": 0.5,
+                "speaker": "s1",
+                "start": 0.0,
+                "track": 0,
+                "used_track_fallback": false
+              },
+              {
+                "active_speech_seconds": null,
+                "assigned_centroid_distance": null,
+                "embedding_status": "missing",
+                "end": 6.0,
+                "index": 1,
+                "nearest_other_centroid_distance": null,
+                "overlapping_speech_seconds": null,
+                "speaker": "s2",
+                "start": 2.5,
+                "track": 1,
+                "used_track_fallback": true
+              }
+            ],
+            "schema_version": 1,
+            "segmentation_model_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "source_sha256": "3b1f6c0f9a8e2d4c5b7a6e9d8c0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b",
+            "speaker_hint": {
+              "exact": 2
+            },
+            "speaker_hint_outcome": {
+              "delivered": 2,
+              "satisfied": true
+            },
+            "transcript_modified": false
+          },
+          "duration_seconds": 6.0,
+          "language": "sv",
+          "model": "kb-whisper-small",
+          "schema_version": 2,
+          "segments": [
+            {
+              "end": 2.5,
+              "id": "seg-000001",
+              "speaker": "s1",
+              "start": 0.0,
+              "text": "Hej och välkomna."
+            },
+            {
+              "end": 6.0,
+              "id": "seg-000002",
+              "speaker": "s2",
+              "start": 3.0,
+              "text": "Tack, då börjar vi."
+            }
+          ],
+          "source_sha256": "3b1f6c0f9a8e2d4c5b7a6e9d8c0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b",
+          "speaker_hint": {
+            "exact": 2
+          },
+          "speaker_hint_delivered": 2,
+          "speaker_hint_satisfied": true,
+          "speakers": [
+            {
+              "id": "s1",
+              "label": "Talare 1"
+            },
+            {
+              "id": "s2",
+              "label": "Talare 2"
+            }
+          ]
+        },
+        "resolutions": [
+          [
+            {
+              "kind": "rename_speaker",
+              "label": "Astrid",
+              "speaker_id": "s1"
+            }
+          ],
+          null
+        ],
+        "revision": "95d76a2cd9f1a219ead7b407b60fd8173299f95851e827244caa87633c31bef4",
+        "schema_version": 1
+      },
+      "required_work": {
+        "clustering": true,
+        "decode_audio": false,
+        "embeddings": false,
+        "language_detection": false,
+        "segmentation": false,
+        "transcription": false
+      },
+      "timings": {
+        "analysis_seconds": 0.0,
+        "clustering_seconds": 0.5,
+        "decode_seconds": 0.0,
+        "full_pipeline_seconds": 0.0,
+        "proposal_seconds": 0.125,
+        "total_seconds": 0.875,
+        "validation_seconds": 0.25
+      }
+    },
+    "status": "completed",
+    "transcript": null
+  },
+  "running_analyzing": {
+    "elapsed_ms": 1500,
+    "error": null,
+    "id": "job-1",
+    "phase": "analyzing",
+    "phase_elapsed_ms": 1000,
+    "reprocessing": null,
+    "status": "running",
+    "transcript": null
+  },
+  "running_clustering": {
+    "elapsed_ms": 1500,
+    "error": null,
+    "id": "job-1",
+    "phase": "clustering",
+    "phase_elapsed_ms": 1000,
+    "reprocessing": null,
+    "status": "running",
+    "transcript": null
+  },
+  "running_decoding": {
+    "elapsed_ms": 1500,
+    "error": null,
+    "id": "job-1",
+    "phase": "decoding",
+    "phase_elapsed_ms": 1000,
+    "reprocessing": null,
+    "status": "running",
+    "transcript": null
+  },
+  "running_finalizing": {
+    "elapsed_ms": 1500,
+    "error": null,
+    "id": "job-1",
+    "phase": "finalizing",
+    "phase_elapsed_ms": 1000,
+    "reprocessing": null,
+    "status": "running",
+    "transcript": null
+  },
+  "running_loading_model": {
+    "elapsed_ms": 1500,
+    "error": null,
+    "id": "job-1",
+    "phase": "loading_model",
+    "phase_elapsed_ms": 1000,
+    "reprocessing": null,
+    "status": "running",
+    "transcript": null
+  },
+  "running_preparing": {
+    "elapsed_ms": 1500,
+    "error": null,
+    "id": "job-1",
+    "phase": "preparing",
+    "phase_elapsed_ms": 1500,
+    "reprocessing": null,
+    "status": "running",
+    "transcript": null
+  }
+}

@@ -15,6 +15,7 @@ const TRANSCRIPTION_TIMEOUT_SECS: u64 = 60;
 const ABORT_GRACE_SECS: u64 = 5;
 
 use crate::app_controller::{AppController, AppState, StopRecordingOutcome};
+use crate::events::{EmitEvent, PlainPhase, UiState};
 use crate::hotkey::configuration::HotkeyChange;
 use crate::hotkey::{HotkeyHealth, HotkeyStatus, OperationalHotkey};
 use sagascript_core::audio::decoder;
@@ -196,12 +197,18 @@ pub async fn get_engine_load_state() -> Result<serde_json::Value, String> {
 
 #[tauri::command]
 pub async fn get_settings(controller: State<'_, SharedController>) -> Result<Settings, String> {
-    let ctrl = lock_controller(&controller);
-    let mut settings = ctrl.settings().clone();
+    let settings = lock_controller(&controller).settings().clone();
+    Ok(settings_for_frontend(settings))
+}
+
+/// What `get_settings` sends: the settings with a legacy file's implicit
+/// default profile made explicit, so the frontend always sees one. The
+/// shared fixture contracts/transport/get_settings.json pins its shape (#347).
+pub(crate) fn settings_for_frontend(mut settings: Settings) -> Settings {
     if settings.hotkey_profiles.is_empty() {
         settings.hotkey_profiles = settings.resolved_hotkey_profiles();
     }
-    Ok(settings)
+    settings
 }
 
 #[tauri::command]
@@ -470,7 +477,6 @@ fn apply_hotkey_change(
     health: State<'_, HotkeyHealth>,
     update: HotkeyChange,
 ) -> Result<Vec<String>, String> {
-    use tauri::Emitter;
     let _transition = health.transition_guard();
     let _recording_lease = acquire_hotkey_configuration(&controller)?;
     let old_settings = lock_controller(&controller).settings().clone();
@@ -498,7 +504,7 @@ fn apply_hotkey_change(
         lock_controller(&controller).update_settings(persisted.clone());
         let change = health.record(&new_primary, None, old_operational);
         if change.changed {
-            let _ = app.emit(
+            let _ = app.emit_event(
                 crate::events::event::HOTKEY_REGISTRATION_CHANGED,
                 &change.status,
             );
@@ -518,7 +524,7 @@ fn apply_hotkey_change(
                 OperationalHotkey::Unknown,
             );
             if change.changed {
-                let _ = app.emit(
+                let _ = app.emit_event(
                     crate::events::event::HOTKEY_REGISTRATION_CHANGED,
                     &change.status,
                 );
@@ -535,7 +541,7 @@ fn apply_hotkey_change(
                 OperationalHotkey::Unknown,
             );
             if change.changed {
-                let _ = app.emit(
+                let _ = app.emit_event(
                     crate::events::event::HOTKEY_REGISTRATION_CHANGED,
                     &change.status,
                 );
@@ -563,7 +569,7 @@ fn apply_hotkey_change(
             OperationalHotkey::Unknown => unreachable!("unknown state returned above"),
         };
         if change.changed {
-            let _ = app.emit(
+            let _ = app.emit_event(
                 crate::events::event::HOTKEY_REGISTRATION_CHANGED,
                 &change.status,
             );
@@ -614,7 +620,7 @@ fn apply_hotkey_change(
                 });
             let change = health.record(&old_shortcut, health_error, restored_operational);
             if change.changed {
-                let _ = app.emit(
+                let _ = app.emit_event(
                     crate::events::event::HOTKEY_REGISTRATION_CHANGED,
                     &change.status,
                 );
@@ -635,7 +641,7 @@ fn apply_hotkey_change(
         OperationalHotkey::registered_many(&new_shortcuts),
     );
     if change.changed {
-        let _ = app.emit(
+        let _ = app.emit_event(
             crate::events::event::HOTKEY_REGISTRATION_CHANGED,
             &change.status,
         );
@@ -918,8 +924,6 @@ pub async fn transcribe_training_file(
     file_path: String,
     profile_id: String,
 ) -> Result<TrainingTranscript, String> {
-    use tauri::Emitter;
-
     let _work_lease = activity.begin_work()?;
 
     let path = std::path::PathBuf::from(file_path);
@@ -952,9 +956,9 @@ pub async fn transcribe_training_file(
     };
 
     if use_pianissimo || whisper.needs_reload(effective_model) {
-        let _ = app.emit(crate::events::event::STATE_CHANGED, "loading_model");
+        let _ = app.emit_event(crate::events::event::STATE_CHANGED, UiState::LoadingModel);
     }
-    let _ = app.emit(crate::events::event::STATE_CHANGED, "transcribing");
+    let _ = app.emit_event(crate::events::event::STATE_CHANGED, UiState::Transcribing);
 
     let live_backend = std::sync::Arc::new(
         sagascript_core::transcription::live_dictation::LiveDictationBackend::new(
@@ -983,7 +987,8 @@ pub async fn transcribe_training_file(
                 language,
                 &opts,
                 move |progress| {
-                    let _ = progress_app.emit("transcription-progress", progress);
+                    let _ = progress_app
+                        .emit_event(crate::events::event::TRANSCRIPTION_PROGRESS, progress);
                 },
                 None,
             )
@@ -1002,7 +1007,7 @@ pub async fn transcribe_training_file(
             ))
         }
     };
-    let _ = app.emit(crate::events::event::STATE_CHANGED, "idle");
+    let _ = app.emit_event(crate::events::event::STATE_CHANGED, UiState::Idle);
 
     result.map(|raw_text| TrainingTranscript {
         effective_text: apply_glossary(raw_text.clone(), &glossary),
@@ -1131,20 +1136,19 @@ pub async fn get_profile_model_info(
 
 #[tauri::command]
 pub async fn download_pianissimo_model(app: tauri::AppHandle) -> Result<(), String> {
-    use tauri::Emitter;
     if !sagascript_core::transcription::pianissimo_backend::runtime_supported_on_this_os() {
         return Err(sagascript_core::transcription::pianissimo_backend::UNSUPPORTED_MESSAGE.into());
     }
     let progress_app = app.clone();
     pianissimo_model::download(move |downloaded, total| {
-        let _ = progress_app.emit(crate::events::event::MODEL_DOWNLOAD_PROGRESS, serde_json::json!({
-            "model": "pianissimo-sv",
-            "downloaded": downloaded,
-            "total": total,
-            "progress": if total > 0 { (downloaded as f64 / total as f64 * 100.0) as u32 } else { 0 },
-        }));
-    }).await.map_err(|error| error.to_string())?;
-    let _ = app.emit(crate::events::event::MODEL_READY, ());
+        let _ = progress_app.emit_event(
+            crate::events::event::MODEL_DOWNLOAD_PROGRESS,
+            crate::events::ModelDownloadProgress::new("pianissimo-sv".into(), downloaded, total),
+        );
+    })
+    .await
+    .map_err(|error| error.to_string())?;
+    let _ = app.emit_event(crate::events::event::MODEL_READY, ());
     Ok(())
 }
 
@@ -1196,28 +1200,22 @@ pub async fn download_model(
     app: tauri::AppHandle,
     whisper_model: WhisperModel,
 ) -> Result<(), String> {
-    use tauri::Emitter;
     let app_handle = app.clone();
     model::download_model(whisper_model, move |downloaded, total| {
-        let progress = if total > 0 {
-            (downloaded as f64 / total as f64 * 100.0) as u32
-        } else {
-            0
-        };
-        let _ = app_handle.emit(
+        let _ = app_handle.emit_event(
             crate::events::event::MODEL_DOWNLOAD_PROGRESS,
-            serde_json::json!({
-                "model": format!("{:?}", whisper_model),
-                "downloaded": downloaded,
-                "total": total,
-                "progress": progress,
-            }),
+            // The Debug name is a legacy quirk the frontend ignores (#347).
+            crate::events::ModelDownloadProgress::new(
+                format!("{whisper_model:?}"),
+                downloaded,
+                total,
+            ),
         );
     })
     .await
     .map_err(|e| e.to_string())?;
 
-    let _ = app.emit(crate::events::event::MODEL_READY, ());
+    let _ = app.emit_event(crate::events::event::MODEL_READY, ());
     Ok(())
 }
 
@@ -1933,8 +1931,6 @@ pub async fn transcribe_file(
     run_id: Option<String>,
     auto_paste: Option<bool>,
 ) -> Result<String, String> {
-    use tauri::Emitter;
-
     let activity = activity.inner().clone();
     let _work_lease = activity.begin_work()?;
     let result_id = run_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
@@ -2045,8 +2041,11 @@ pub async fn transcribe_file(
 
     // Show model loading status if the exact model/profile runtime is not warm.
     if whisper.needs_reload_with_profile(effective_model, context_profile) {
-        let _ = app.emit(crate::events::event::STATE_CHANGED, "loading_model");
-        let _ = app.emit(crate::events::event::TRANSCRIPTION_PHASE, "loading");
+        let _ = app.emit_event(crate::events::event::STATE_CHANGED, UiState::LoadingModel);
+        let _ = app.emit_event(
+            crate::events::event::TRANSCRIPTION_PHASE,
+            PlainPhase::Loading,
+        );
     }
 
     // Diarization path — runs both diarization and timestamped transcription in parallel,
@@ -2066,12 +2065,12 @@ pub async fn transcribe_file(
         // a silent startup download.
         for diarization_model in DiarizationModel::ALL {
             if let Err(error) = download_diarization_model(*diarization_model, |_, _| {}).await {
-                let _ = app.emit(crate::events::event::STATE_CHANGED, "idle");
+                let _ = app.emit_event(crate::events::event::STATE_CHANGED, UiState::Idle);
                 return Err(error.to_string());
             }
         }
 
-        let _ = app.emit(crate::events::event::STATE_CHANGED, "transcribing");
+        let _ = app.emit_event(crate::events::event::STATE_CHANGED, UiState::Transcribing);
 
         let whisper_ref = whisper.inner().clone();
         // Profile-scoped dictionary hints are already frozen in the glossary;
@@ -2108,11 +2107,11 @@ pub async fn transcribe_file(
         {
             Ok((Ok(Ok(spk)), Ok(Ok(trx)))) => (spk, trx),
             Ok((Ok(Err(e)), _)) | Ok((_, Ok(Err(e)))) => {
-                let _ = app.emit(crate::events::event::STATE_CHANGED, "idle");
+                let _ = app.emit_event(crate::events::event::STATE_CHANGED, UiState::Idle);
                 return Err(e.to_string());
             }
             Ok((Err(e), _)) | Ok((_, Err(e))) => {
-                let _ = app.emit(crate::events::event::STATE_CHANGED, "idle");
+                let _ = app.emit_event(crate::events::event::STATE_CHANGED, UiState::Idle);
                 return Err(format!("Task join error: {e}"));
             }
             Err(_) => {
@@ -2139,7 +2138,7 @@ pub async fn transcribe_file(
                          will report ModelBusy rather than block forever"
                     ),
                 }
-                let _ = app.emit(crate::events::event::STATE_CHANGED, "idle");
+                let _ = app.emit_event(crate::events::event::STATE_CHANGED, UiState::Idle);
                 return Err(format!(
                     "Transcription timed out after {}s (inference aborted)",
                     timeout.as_secs()
@@ -2171,7 +2170,7 @@ pub async fn transcribe_file(
 
         info!("Diarized file transcription complete: {} chars", text.len());
 
-        let _ = app.emit(crate::events::event::STATE_CHANGED, "idle");
+        let _ = app.emit_event(crate::events::event::STATE_CHANGED, UiState::Idle);
 
         // Auto-paste if enabled
         let should_paste = {
@@ -2197,10 +2196,10 @@ pub async fn transcribe_file(
     // beam search (quality over latency).
     opts.parallel_chunks =
         recommended_parallel_chunks(audio.len(), effective_model, opts.beam_size);
-    let _ = app.emit(crate::events::event::STATE_CHANGED, "transcribing");
+    let _ = app.emit_event(crate::events::event::STATE_CHANGED, UiState::Transcribing);
     // Leave 0% immediately (#237): model load inside the blocking task is
     // silent, so report "started" now; inference re-reports 1% itself.
-    let _ = app.emit(crate::events::event::TRANSCRIPTION_PROGRESS, 1);
+    let _ = app.emit_event(crate::events::event::TRANSCRIPTION_PROGRESS, 1);
     let whisper_ref = whisper.inner().clone();
     let app_progress = app.clone();
     // Borrowed handle (`&mut fut`) so the timeout path can await the task's
@@ -2209,23 +2208,30 @@ pub async fn transcribe_file(
         // State prep (lock, chunk states) is silent work before the first
         // progress callback — name it so the UI never shows a frozen 1%.
         let phase = if whisper_ref.needs_reload_with_profile(effective_model, context_profile) {
-            "loading"
+            PlainPhase::Loading
         } else {
-            "preparing"
+            PlainPhase::Preparing
         };
-        let _ = app_progress.emit(crate::events::event::TRANSCRIPTION_PHASE, phase);
+        let _ = app_progress.emit_event(crate::events::event::TRANSCRIPTION_PHASE, phase);
         whisper_ref.with_model(effective_model, context_profile, |backend| {
-            let _ = app_progress.emit(crate::events::event::TRANSCRIPTION_PHASE, "preparing");
+            let _ = app_progress.emit_event(
+                crate::events::event::TRANSCRIPTION_PHASE,
+                PlainPhase::Preparing,
+            );
             let encode_app = app_progress.clone();
             let on_encode_start = move || {
-                let _ = encode_app.emit(crate::events::event::TRANSCRIPTION_PHASE, "encoding");
+                let _ = encode_app.emit_event(
+                    crate::events::event::TRANSCRIPTION_PHASE,
+                    PlainPhase::Encoding,
+                );
             };
             backend.transcribe_sync_with_gap_recovery_text(
                 &audio,
                 language,
                 &opts,
                 move |pct| {
-                    let _ = app_progress.emit(crate::events::event::TRANSCRIPTION_PROGRESS, pct);
+                    let _ =
+                        app_progress.emit_event(crate::events::event::TRANSCRIPTION_PROGRESS, pct);
                 },
                 Some(&on_encode_start),
             )
@@ -2236,7 +2242,7 @@ pub async fn transcribe_file(
     let result = match tokio::time::timeout(timeout, &mut fut).await {
         Ok(Ok(r)) => r,
         Ok(Err(e)) => {
-            let _ = app.emit(crate::events::event::STATE_CHANGED, "idle");
+            let _ = app.emit_event(crate::events::event::STATE_CHANGED, UiState::Idle);
             return Err(format!("Transcription task failed: {e}"));
         }
         Err(_) => {
@@ -2255,7 +2261,7 @@ pub async fn transcribe_file(
                      will report ModelBusy rather than block forever"
                 ),
             }
-            let _ = app.emit(crate::events::event::STATE_CHANGED, "idle");
+            let _ = app.emit_event(crate::events::event::STATE_CHANGED, UiState::Idle);
             return Err(format!(
                 "Transcription timed out after {}s (inference aborted)",
                 timeout.as_secs()
@@ -2263,7 +2269,7 @@ pub async fn transcribe_file(
         }
     };
 
-    let _ = app.emit(crate::events::event::STATE_CHANGED, "idle");
+    let _ = app.emit_event(crate::events::event::STATE_CHANGED, UiState::Idle);
 
     match result {
         Ok(text) => {

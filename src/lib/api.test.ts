@@ -1,7 +1,8 @@
 // The IPC contract of the frontend's command wrappers: which command each
-// wrapper invokes and with which argument object. Runs against the typed mock
-// in src/test/ipc.ts, so a renamed command or argument key fails here and
-// CommandMap cannot drift from the wrappers it describes.
+// wrapper invokes and with which argument object. CommandMap is generated from
+// the Rust command signatures (src/lib/ipc-contract.generated.ts, #347), so a
+// command or argument renamed on either side fails here: the `args` below are
+// type-checked against Rust, and each wrapper must send exactly them.
 import { describe, expect, test } from "vitest";
 import * as api from "./api";
 import * as reprocessing from "./meeting-reprocessing-api";
@@ -77,12 +78,6 @@ const recoveryPayload: UpdateRecoveryPayload = {
   meetings: [],
 };
 const profile: api.HotkeyProfile = { id: "default", name: "Default", shortcut: "Super+S", language: "sv" };
-const suggestion: api.GlossarySuggestion = {
-  observed: "mergea",
-  canonical: "mördsa",
-  kind: "alias",
-  context: "mergea",
-};
 
 interface Contract {
   name: string;
@@ -118,7 +113,6 @@ const contracts: Contract[] = [
   contract(api.getLastTranscription, [], "get_last_transcription", {}),
   contract(api.getSettings, [], "get_settings", {}),
   contract(api.setLanguage, ["fi"], "set_language", { language: "fi" }),
-  contract(api.setWhisperModel, ["kb-whisper-large"], "set_whisper_model", { model: "kb-whisper-large" }),
   contract(api.setFileTranscriptionModel, ["auto"], "set_file_transcription_model", { modelId: "auto" }),
   contract(api.getFileModelOptions, ["sv"], "get_file_model_options", { language: "sv", include: null }),
   contract(api.getFileModelOptions, ["sv", "kb-whisper-medium"], "get_file_model_options", {
@@ -126,9 +120,6 @@ const contracts: Contract[] = [
     include: "kb-whisper-medium",
   }),
   contract(api.downloadPianissimoModel, [], "download_pianissimo_model", {}),
-  contract(api.setAutoSelectModel, [false], "set_auto_select_model", { enabled: false }),
-  contract(api.setHotkeyMode, ["toggle"], "set_hotkey_mode", { mode: "toggle" }),
-  contract(api.setHotkey, ["Super+S"], "set_hotkey", { shortcut: "Super+S" }),
   contract(api.setHotkeyProfiles, [[profile]], "set_hotkey_profiles", { profiles: [profile] }),
   contract(api.setProfileModel, ["default", "auto"], "set_profile_model", { profileId: "default", modelId: "auto" }),
   contract(api.getProfileModelInfo, ["default"], "get_profile_model_info", { profileId: "default" }),
@@ -136,7 +127,6 @@ const contracts: Contract[] = [
   contract(api.hotkeyStatus, [], "hotkey_status", {}),
   contract(api.retryHotkeyRegistration, [], "retry_hotkey_registration", {}),
   contract(api.setAutoPaste, [true], "set_auto_paste", { enabled: true }),
-  contract(api.setInitialPrompt, ["names", "old"], "set_initial_prompt", { prompt: "names", expectedSource: "old" }),
   contract(api.setProfileGlossary, ["default", "a = b", "old"], "set_profile_glossary", {
     profileId: "default",
     source: "a = b",
@@ -149,12 +139,8 @@ const contracts: Contract[] = [
   contract(api.setEngineIdleUnloadMinutes, [30], "set_engine_idle_unload_minutes", { minutes: 30 }),
   contract(api.getEngineStatus, [], "engine_status", {}),
   contract(api.setVadEnabled, [false], "set_vad_enabled", { enabled: false }),
-  contract(api.getModelInfo, [], "get_model_info", {}),
   contract(api.getEffectiveModelInfo, ["no"], "get_effective_model_info", { language: "no" }),
   contract(api.getAutoFileModelInfo, ["en"], "get_auto_file_model_info", { language: "en" }),
-  contract(api.getLoadedModel, [], "get_loaded_model", {}),
-  contract(api.isModelReady, [], "is_model_ready", {}),
-  contract(api.isModelDownloaded, ["base"], "is_model_downloaded", { whisperModel: "base" }),
   contract(api.downloadModel, ["base"], "download_model", { whisperModel: "base" }),
   contract(api.getBuildInfo, [], "get_build_info", {}),
   contract(api.transcribeFile, ["/audio/a.wav"], "transcribe_file", {
@@ -200,17 +186,6 @@ const contracts: Contract[] = [
   }),
   contract(api.getMeetingJob, ["job-1"], "get_meeting_job", { jobId: "job-1" }),
   contract(api.cancelMeetingJob, ["job-1"], "cancel_meeting_job", { jobId: "job-1" }),
-  contract(api.renameMeetingSpeaker, [transcript, "s1", "Alice"], "rename_meeting_speaker", {
-    transcript,
-    speakerId: "s1",
-    label: "Alice",
-  }),
-  contract(api.mergeMeetingSpeakers, [transcript, "s2", "s1"], "merge_meeting_speakers", {
-    transcript,
-    fromId: "s2",
-    intoId: "s1",
-  }),
-  contract(api.saveMeetingExport, [transcript, "srt"], "save_meeting_export", { transcript, format: "srt" }),
   contract(api.createMeetingReview, [transcript], "create_meeting_review", { transcript }),
   contract(api.applyMeetingCorrections, [review, corrections], "apply_meeting_corrections", { review, corrections }),
   contract(api.undoMeetingReview, [review, "review-1"], "undo_meeting_review", {
@@ -227,25 +202,7 @@ const contracts: Contract[] = [
   contract(api.detachMeetingAudio, ["token"], "detach_meeting_audio", { token: "token" }),
   contract(api.getSupportedFormats, [], "get_supported_formats", {}),
   contract(api.startRecording, [], "start_recording", {}),
-  contract(api.startTrainingRecording, ["default"], "start_training_recording", { profileId: "default" }),
-  contract(api.cancelRecording, [], "cancel_recording", {}),
   contract(api.stopAndTranscribe, [], "stop_and_transcribe", {}),
-  contract(api.stopAndTranscribeTraining, [], "stop_and_transcribe_training", {}),
-  contract(api.transcribeTrainingFile, ["/audio/t.wav", "default"], "transcribe_training_file", {
-    filePath: "/audio/t.wav",
-    profileId: "default",
-  }),
-  contract(api.suggestTrainingGlossary, ["mergea", "mördsa", "default"], "suggest_training_glossary", {
-    heard: "mergea",
-    corrected: "mördsa",
-    profileId: "default",
-  }),
-  contract(api.applyTrainingGlossary, ["mergea", "mördsa", "default", [suggestion]], "apply_training_glossary", {
-    heard: "mergea",
-    corrected: "mördsa",
-    profileId: "default",
-    accepted: [suggestion],
-  }),
   contract(api.checkAccessibilityPermission, [], "check_accessibility_permission", {}),
   contract(api.requestAccessibilityPermission, [], "request_accessibility_permission", {}),
   contract(api.openAccessibilitySettings, [], "open_accessibility_settings", {}),
@@ -254,8 +211,6 @@ const contracts: Contract[] = [
   contract(api.openMicrophoneSettings, [], "open_microphone_settings", {}),
   contract(api.getPlatform, [], "get_platform", {}),
   contract(api.setOnboardingCompleted, [], "set_onboarding_completed", {}),
-  contract(api.setPianissimoDictation, [true], "set_pianissimo_dictation", { enabled: true }),
-  contract(api.getDictationModelInfo, ["sv"], "get_dictation_model_info", { language: "sv" }),
   contract(reprocessing.planMeetingReprocessing, [review, "recluster", 0.5, true, "names", "default"], "plan_meeting_reprocessing", {
     previous: review,
     mode: "recluster",
@@ -313,7 +268,41 @@ test("every exported wrapper has a contract", () => {
   expect(exported.filter((wrapper) => !covered.has(wrapper)).map((wrapper) => wrapper.name)).toEqual([]);
 });
 
-test("every command in the mock's command map is invoked by a wrapper", () => {
+/**
+ * Registered commands the frontend never calls, classified on a69d5d1 (#347).
+ * They keep their Rust implementation (and CLI equivalents) until removing
+ * them is decided; a wrapper is added only with a caller.
+ */
+const COMMANDS_WITHOUT_A_CALLER: Partial<Record<CommandName, string>> = {
+  // Settings now set per profile (set_hotkey_profiles, set_profile_model,
+  // set_profile_glossary); `sagascript config set` still covers these keys.
+  set_whisper_model: "superseded by per-profile models",
+  set_auto_select_model: "superseded by per-profile models",
+  set_pianissimo_dictation: "superseded by per-profile models",
+  set_hotkey_mode: "superseded by per-profile push-to-talk and toggle shortcuts",
+  set_hotkey: "superseded by set_hotkey_profiles",
+  set_initial_prompt: "superseded by set_profile_glossary",
+  // Model queries no view shows.
+  get_model_info: "no view lists every model",
+  get_loaded_model: "no view shows the loaded model",
+  is_model_ready: "always false: nothing sets the controller's model_ready",
+  is_model_downloaded: "views read ModelInfo.downloaded",
+  get_dictation_model_info: "views use get_profile_model_info",
+  // Meeting edits before the review document existed.
+  rename_meeting_speaker: "superseded by apply_meeting_corrections",
+  merge_meeting_speakers: "superseded by apply_meeting_corrections",
+  save_meeting_export: "superseded by save_meeting_review",
+  // The dictionary training flow has no view.
+  start_training_recording: "training flow without a view",
+  stop_and_transcribe_training: "training flow without a view",
+  transcribe_training_file: "training flow without a view",
+  suggest_training_glossary: "training flow without a view",
+  apply_training_glossary: "training flow without a view",
+  cancel_recording: "no view cancels a test or training recording",
+};
+
+test("every registered command has a wrapper, or is named as having no caller", () => {
   const invoked = new Set(contracts.map((entry) => entry.command));
-  expect(COMMAND_NAMES.filter((name) => !invoked.has(name))).toEqual([]);
+  const uncalled = Object.keys(COMMANDS_WITHOUT_A_CALLER).sort();
+  expect(COMMAND_NAMES.filter((name) => !invoked.has(name))).toEqual(uncalled);
 });

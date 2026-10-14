@@ -1127,12 +1127,7 @@
   // data fetch in onMount: they don't depend on it, so a rejected invoke in
   // the fetch sequence must never prevent them from wiring up (e.g. a
   // stuck-at-0% download).
-  useTauriEvent("update-preparing", (payload) => {
-    const nonce = typeof payload === "string"
-      ? payload
-      : payload && typeof payload === "object" && "nonce" in payload && typeof payload.nonce === "string"
-        ? payload.nonce
-        : null;
+  useTauriEvent("update-preparing", (nonce) => {
     if (nonce) {
       activePreparationNonce = nonce;
       updatePreparing = true;

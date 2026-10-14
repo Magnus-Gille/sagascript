@@ -42,7 +42,7 @@ describe("unmounting removes every event listener", () => {
     const ipc = mockIpc({
       get_active_hotkey_profile: () => settingsValue().hotkey_profiles[0],
       get_state: () => "idle",
-      get_engine_load_state: () => ({ state: "idle" }),
+      get_engine_load_state: () => ({ state: "unknown" }),
     });
     const view = render(Overlay);
     await waitFor(() => expect(ipc.listeners()).toEqual(["active-hotkey-profile-changed", "engine-load-state", "state-changed"]));
