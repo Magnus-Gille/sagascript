@@ -1,6 +1,6 @@
 // The one way the frontend listens to Tauri events (#362).
 //
-//   // In a component's script: registered now, removed when it is destroyed.
+//   // In a component's script: registered when it mounts, removed when it is destroyed.
 //   useTauriEvent("hotkey-registration-changed", (status) => (hotkeyOk = status.ok));
 //
 //   // For a listener with its own lifetime (one run, one request):
@@ -17,7 +17,7 @@
 // resolves has nothing left to call. A subscription owns the registration from
 // the start: `dispose()` before or after it settles ends in one `unlisten()`,
 // and the handler never runs once the subscription is disposed.
-import { onDestroy } from "svelte";
+import { untrack } from "svelte";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview, type DragDropEvent } from "@tauri-apps/api/webview";
 import type { EngineLoadState, HotkeyProfile, HotkeyStatus } from "./api";
@@ -127,20 +127,53 @@ export function subscribeDragDrop(handler: (payload: DragDropEvent) => void): Su
 }
 
 /**
+ * Run `start` in the component's mount effect and stop it when the effect is
+ * cleaned up. Starting at init and stopping in `onDestroy` would leak when the
+ * component is destroyed before its first effect flush: `onDestroy` is itself
+ * an effect, so its cleanup never exists. `ready` is available at once; it
+ * settles once the effect started the subscription and stays pending when the
+ * component is destroyed before that.
+ */
+function forTheLifeOfTheComponent(start: () => Subscription): Subscription {
+  let settle!: { resolve: () => void; reject: (reason: unknown) => void };
+  const ready = new Promise<void>((resolve, reject) => {
+    settle = { resolve, reject };
+  });
+  ready.catch(() => undefined);
+  let current: Subscription | null = null;
+  let disposed = false;
+
+  $effect(() => {
+    if (disposed) return;
+    // Nothing the registration reads is a dependency of this effect.
+    const subscription = untrack(start);
+    current = subscription;
+    subscription.ready.then(settle.resolve, settle.reject);
+    return subscription.dispose;
+  });
+
+  return {
+    ready,
+    dispose() {
+      disposed = true;
+      current?.dispose();
+    },
+  };
+}
+
+/**
  * Listen to a backend event for the life of the component. Call it while the
  * component initializes (its script, not an `onMount` callback); the listener
- * is removed when the component is destroyed, also when that happens before
- * the registration finished. Use `ready` to order work after the listener.
+ * registers in the component's mount effect, before its own `onMount`
+ * callbacks, and is removed when the component is destroyed, also when that
+ * happens before the registration finished or before the component mounted.
+ * Use `ready` to order work after the listener.
  */
 export function useTauriEvent<E extends EventName>(name: E, handler: (payload: EventMap[E]) => void): Subscription {
-  const subscription = subscribeTauriEvent(name, handler);
-  onDestroy(subscription.dispose);
-  return subscription;
+  return forTheLifeOfTheComponent(() => subscribeTauriEvent(name, handler));
 }
 
 /** `useTauriEvent` for files dragged over and dropped on the window. */
 export function useDragDropEvent(handler: (payload: DragDropEvent) => void): Subscription {
-  const subscription = subscribeDragDrop(handler);
-  onDestroy(subscription.dispose);
-  return subscription;
+  return forTheLifeOfTheComponent(() => subscribeDragDrop(handler));
 }
