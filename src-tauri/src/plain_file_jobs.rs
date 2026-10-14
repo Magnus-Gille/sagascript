@@ -2,6 +2,7 @@
 //! A lease stays alive until the actual worker exits; Stop never targets an
 //! unrelated inference or a later import.
 use crate::commands::FileTranscriptionContext;
+use crate::events::{EmitEvent, PlainPhase, PlainTranscriptionProgress};
 use sagascript_core::sync::lock_or_recover;
 use sagascript_core::transcription::{pianissimo_backend::PianissimoBackend, Glossary};
 use sagascript_core::{
@@ -15,7 +16,6 @@ use std::sync::{
     Arc, Mutex,
 };
 use std::time::{Duration, Instant};
-use tauri::Emitter;
 
 // Recovered as-is after a panic (ADR 0005): every critical section is a single
 // `Option`/`VecDeque` update, so the data stays valid, and `Lease::drop` runs
@@ -142,10 +142,10 @@ pub async fn transcribe_pianissimo(
     let worker_lease = lease.clone();
     let mut worker = tokio::task::spawn_blocking(move || -> Result<String, String> {
         let run = &worker_lease.control;
-        let progress = |phase: &str, percent| {
-            let _ = app.emit(
+        let progress = |phase: PlainPhase, percent| {
+            let _ = app.emit_event(
                 crate::events::event::PLAIN_TRANSCRIPTION_PROGRESS,
-                Progress {
+                PlainTranscriptionProgress {
                     run_id: &run.id,
                     phase,
                     percent,
@@ -154,16 +154,16 @@ pub async fn transcribe_pianissimo(
         };
         let work = || -> Result<String, DictationError> {
             run.check()?;
-            progress("decoding", Some(0));
+            progress(PlainPhase::Decoding, Some(0));
             let audio = decoder::decode_audio_file_with_stage_progress(
                 std::path::Path::new(&file_path),
                 Some(&|| run.check()),
-                &|pct| progress("decoding", Some(pct)),
-                &|pct| progress("resampling", Some(pct)),
+                &|pct| progress(PlainPhase::Decoding, Some(pct)),
+                &|pct| progress(PlainPhase::Resampling, Some(pct)),
             )?;
             run.check()?;
             let timeout = Duration::from_secs(((audio.len() / 16_000) as u64 * 10).max(180));
-            progress("loading", None);
+            progress(PlainPhase::Loading, None);
             let backend = Arc::new(PianissimoBackend::start_with_cancel(&run.cancelled)?);
             *lock_or_recover(
                 &worker_lease.jobs.pianissimo_backend,
@@ -175,14 +175,14 @@ pub async fn transcribe_pianissimo(
             backend.warm_up_with_cancel(&run.cancelled)?;
             run.check()?;
             *lock_or_recover(&run.deadline, DEADLINE_LOCK) = Some(Instant::now() + timeout);
-            progress("transcribing", Some(0));
+            progress(PlainPhase::Transcribing, Some(0));
             let result = backend.transcribe_with_cancel(
                 &audio,
-                |pct| progress("transcribing", Some(pct)),
+                |pct| progress(PlainPhase::Transcribing, Some(pct)),
                 &run.cancelled,
             )?;
             run.check()?;
-            progress("finalizing", None);
+            progress(PlainPhase::Finalizing, None);
             Ok(crate::commands::apply_glossary(result.text, &glossary))
         };
         let result = work().map_err(|error| error.to_string());
@@ -228,14 +228,6 @@ impl RunControl {
     }
 }
 
-#[derive(Clone, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct Progress<'a> {
-    run_id: &'a str,
-    phase: &'a str,
-    percent: Option<u8>,
-}
-
 pub async fn transcribe(
     app: tauri::AppHandle,
     jobs: SharedPlainFileJobs,
@@ -248,10 +240,10 @@ pub async fn transcribe(
     let mut worker = tokio::task::spawn_blocking(move || -> Result<String, String> {
         let run = &worker_lease.control;
         let backend = &worker_lease.jobs.backend;
-        let progress = |phase: &str, percent| {
-            let _ = app.emit(
+        let progress = |phase: PlainPhase, percent| {
+            let _ = app.emit_event(
                 crate::events::event::PLAIN_TRANSCRIPTION_PROGRESS,
-                Progress {
+                PlainTranscriptionProgress {
                     run_id: &run.id,
                     phase,
                     percent,
@@ -260,12 +252,12 @@ pub async fn transcribe(
         };
         let work = || -> Result<String, DictationError> {
             run.check()?;
-            progress("decoding", Some(0));
+            progress(PlainPhase::Decoding, Some(0));
             let audio = decoder::decode_audio_file_with_stage_progress(
                 std::path::Path::new(&file_path),
                 Some(&|| run.check()),
-                &|pct| progress("decoding", Some(pct)),
-                &|pct| progress("resampling", Some(pct)),
+                &|pct| progress(PlainPhase::Decoding, Some(pct)),
+                &|pct| progress(PlainPhase::Resampling, Some(pct)),
             )?;
             run.check()?;
             let timeout = Duration::from_secs(((audio.len() / 16_000) as u64 * 6).max(60));
@@ -275,23 +267,23 @@ pub async fn transcribe(
                 recommended_parallel_chunks(audio.len(), context.model, options.beam_size);
             progress(
                 if backend.needs_reload(context.model) {
-                    "loading"
+                    PlainPhase::Loading
                 } else {
-                    "preparing"
+                    PlainPhase::Preparing
                 },
                 None,
             );
             let text =
                 backend.with_model(context.model, ContextProfile::FlashAttention, |backend| {
                     run.check()?; // cancellation during model loading must not start inference
-                    progress("preparing", None);
+                    progress(PlainPhase::Preparing, None);
                     let encode_start = || {
                         // Warm-state acquisition clears old abort flags. Reassert
                         // this run's sticky cancellation after acquiring the lock.
                         if run.cancelled.load(Ordering::SeqCst) {
                             backend.request_abort();
                         }
-                        progress("encoding", None);
+                        progress(PlainPhase::Encoding, None);
                     };
                     let progress_app = app.clone();
                     let id = run.id.clone();
@@ -300,11 +292,11 @@ pub async fn transcribe(
                         context.language,
                         &options,
                         move |pct| {
-                            let _ = progress_app.emit(
+                            let _ = progress_app.emit_event(
                                 crate::events::event::PLAIN_TRANSCRIPTION_PROGRESS,
-                                Progress {
+                                PlainTranscriptionProgress {
                                     run_id: &id,
-                                    phase: "transcribing",
+                                    phase: PlainPhase::Transcribing,
                                     percent: Some(pct.clamp(0, 100) as u8),
                                 },
                             );
@@ -313,7 +305,7 @@ pub async fn transcribe(
                     )
                 })?;
             run.check()?;
-            progress("finalizing", None);
+            progress(PlainPhase::Finalizing, None);
             Ok(crate::commands::apply_glossary(text, &context.glossary))
         };
         work().map_err(|error| error.to_string())

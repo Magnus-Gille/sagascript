@@ -6,10 +6,11 @@ use std::time::{Duration, Instant};
 use sagascript_core::meeting::{MeetingExportFormat, MeetingTranscript};
 use sagascript_core::transcription::WhisperBackend;
 use serde::{Deserialize, Serialize};
-use tauri::{Emitter, Manager, State};
+use tauri::{Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
 use crate::commands::{file_transcription_context, lock_controller, SharedController};
+use crate::events::{EmitEvent, UiState};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -186,7 +187,7 @@ async fn begin_job(
 
         let state = jobs.inner().clone();
         let worker_id = id.clone();
-        let _ = app.emit(crate::events::event::STATE_CHANGED, "transcribing");
+        let _ = app.emit_event(crate::events::event::STATE_CHANGED, UiState::Transcribing);
         tauri::async_runtime::spawn(async move {
             let processing_state = state.clone();
             let processing_id = worker_id.clone();
@@ -312,7 +313,7 @@ async fn begin_job(
                 }
             }
             if released {
-                let _ = app.emit(crate::events::event::STATE_CHANGED, "idle");
+                let _ = app.emit_event(crate::events::event::STATE_CHANGED, UiState::Idle);
             } else {
                 tracing::error!(
                     "Meeting worker exited but its controller lease could not be released"
