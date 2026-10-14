@@ -5,8 +5,10 @@ on:
     - cron: "17 5 * * *"
   workflow_dispatch:
 
+# Least privilege (#354): read-only by default; only the snapshot job below
+# gets a write token, to push to the metrics/downloads branch.
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: download-metrics
@@ -16,15 +18,17 @@ jobs:
   snapshot:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    permissions:
+      contents: write # git push of the snapshot to metrics/downloads
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
       - name: Install Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
-          node-version: 20
+          node-version: 22
 
       - name: Test snapshot normalizer
         run: node --test scripts/test-record-release-downloads.mjs

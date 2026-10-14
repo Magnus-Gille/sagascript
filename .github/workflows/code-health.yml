@@ -93,7 +93,7 @@ jobs:
         id: setup_node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 20
+          node-version: 22
 
       - name: Test code-health contracts and workflow
         id: conformance
@@ -109,6 +109,11 @@ jobs:
           rustup toolchain install 1.93.1 --profile minimal
           rustup default 1.93.1
           rustup component add llvm-tools-preview --toolchain 1.93.1
+          # rust-toolchain.toml (#353) overrides `rustup default` inside the
+          # checkout; the producer requires rustc 1.93.1, so pin this job's
+          # measurement cohort explicitly for this and every later step.
+          export RUSTUP_TOOLCHAIN=1.93.1
+          echo "RUSTUP_TOOLCHAIN=1.93.1" >> "$GITHUB_ENV"
           mkdir -p "$TOOL_ROOT"
           cargo install --locked --jobs 2 --root "$TOOL_ROOT" cargo-llvm-cov --version 0.9.1
           cargo install --locked --jobs 2 --root "$TOOL_ROOT" rust-code-analysis-cli --version 0.0.25

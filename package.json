@@ -3,10 +3,16 @@
   "private": true,
   "version": "1.4.4",
   "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "dev": "vite",
     "build": "node scripts/build-frontend.mjs",
     "test:frontend": "node scripts/run-frontend-tests.mjs",
+    "test:ui": "node scripts/run-frontend-tests.mjs --group ui",
+    "test:ci": "node scripts/run-frontend-tests.mjs --group ci",
+    "test:release": "node scripts/run-frontend-tests.mjs --group release",
     "test:code-health": "node --test scripts/test-code-health-producer.mjs scripts/test-code-health-workflow.mjs && node tests/scripts/test-code-health-contract-provenance.mjs && node tests/scripts/validate-code-health-objective.mjs && node tests/scripts/test-code-health-policy.mjs",
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.json",
@@ -14,7 +20,9 @@
     "licenses:generate": "node scripts/generate-third-party-notices.mjs --write",
     "licenses:check": "node scripts/generate-third-party-notices.mjs --check",
     "tauri": "tauri",
-    "test:browser": "node scripts/run-transcription-browser-tests.mjs"
+    "test:browser": "node scripts/run-transcription-browser-tests.mjs",
+    "verify": "node scripts/verify.mjs",
+    "verify:fast": "node scripts/verify.mjs --fast"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^5.0.0",

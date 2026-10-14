@@ -116,8 +116,8 @@ standalone `-CLI.exe` and `-Portable.exe` files are single files without `engine
 
 **All platforms:**
 
-- Rust 1.75+ (`curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh` or [rustup.rs](https://rustup.rs))
-- Node.js 20+ (`brew install node` on macOS, or [nodejs.org](https://nodejs.org) on Windows)
+- Rust 1.88+ via rustup (`curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh` or [rustup.rs](https://rustup.rs)); rustup installs the development toolchain pinned in `rust-toolchain.toml` automatically
+- Node.js 22+ (`brew install node` on macOS, or [nodejs.org](https://nodejs.org) on Windows)
 - Tauri CLI (`cargo install tauri-cli`)
 
 **macOS additional:**

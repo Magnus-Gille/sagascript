@@ -290,7 +290,7 @@ mockIPC(async (cmd, args = {}) => {
     case "get_platform": return "macos";
     case "check_accessibility_permission": return true;
     case "get_supported_formats": return ["wav", "mp3", "m4a"];
-    case "hotkey_status": return { ok: true, error: null, shortcut: "Control+Shift+Space", shortcuts: [] };
+    case "hotkey_status": return { ok: true, error: null, shortcut: "Control+Shift+Space", shortcuts: [], settings_watcher: { running: true, recovered_panics: 0 } };
     case "transcribe_file":
       active++; maximum = Math.max(maximum, active);
       return new Promise((resolve, reject) => pending.set(args.filePath, { resolve, reject, runId: args.runId }));

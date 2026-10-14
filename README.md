@@ -211,8 +211,8 @@ not measured.
 - **macOS**: macOS 13.0+ on Apple Silicon (Pianissimo needs 14.0+; Intel Macs are not supported by the v1 binary release)
 - **Windows beta**: Windows 11 on x64 or ARM64; unsigned preview, not an official stable release
 - **Linux** (experimental): X11 session; GTK/WebKit dev libraries + `xdotool` — see [Linux notes](docs/linux-notes.md)
-- Rust 1.75+ (`curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`)
-- Node.js 20+ (`brew install node` on macOS, or download from [nodejs.org](https://nodejs.org) on Windows)
+- Rust 1.88+ via rustup (`curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`); rustup installs the development toolchain pinned in `rust-toolchain.toml` automatically
+- Node.js 22+ (`brew install node` on macOS, or download from [nodejs.org](https://nodejs.org) on Windows)
 - Tauri CLI (`cargo install tauri-cli`)
 
 ### Build and run

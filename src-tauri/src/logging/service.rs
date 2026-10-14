@@ -4,12 +4,19 @@ use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
 use chrono::Utc;
+use sagascript_core::sync::lock_or_recover;
 use serde::Serialize;
 use tracing::warn;
 use uuid::Uuid;
 
 const MAX_FILE_SIZE: u64 = 5_000_000; // 5MB
 const MAX_FILES: u32 = 5;
+
+// Recovered as-is after a panic (ADR 0005): a session id or an open file
+// handle is valid whatever a panic interrupted, and logging runs under the
+// controller lock, so a panic here must not cascade into every command.
+const DICTATION_SESSION_LOCK: &str = "logging.dictation_session";
+const LOG_FILE_LOCK: &str = "logging.log_file";
 
 /// Process-wide handle so window/focus code with no access to the
 /// `AppController` (which sits behind a mutex) can log into the same file
@@ -173,7 +180,7 @@ impl LoggingService {
     /// Start a new dictation session, returns session ID
     pub fn start_dictation_session(&self) -> String {
         let id = format!("dict-{}", &Uuid::new_v4().to_string()[..8]);
-        *self.dictation_session_id.lock().unwrap() = Some(id.clone());
+        *lock_or_recover(&self.dictation_session_id, DICTATION_SESSION_LOCK) = Some(id.clone());
         if let Ok(mut global) = GLOBAL_DICTATION.lock() {
             *global = Some(id.clone());
         }
@@ -182,7 +189,7 @@ impl LoggingService {
 
     /// End the current dictation session
     pub fn end_dictation_session(&self) {
-        *self.dictation_session_id.lock().unwrap() = None;
+        *lock_or_recover(&self.dictation_session_id, DICTATION_SESSION_LOCK) = None;
         if let Ok(mut global) = GLOBAL_DICTATION.lock() {
             *global = None;
         }
@@ -203,7 +210,8 @@ impl LoggingService {
             ts: Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
             level,
             app_session: self.app_session_id.clone(),
-            dictation_session: self.dictation_session_id.lock().unwrap().clone(),
+            dictation_session: lock_or_recover(&self.dictation_session_id, DICTATION_SESSION_LOCK)
+                .clone(),
             category,
             event: event.to_string(),
             data,
@@ -213,7 +221,7 @@ impl LoggingService {
     }
 
     fn write_entry(&self, entry: &LogEntry) {
-        let mut file_guard = self.log_file.lock().unwrap();
+        let mut file_guard = lock_or_recover(&self.log_file, LOG_FILE_LOCK);
         if let Some(ref mut file) = *file_guard {
             self.rotate_if_needed(file);
 

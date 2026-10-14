@@ -9,12 +9,22 @@ use tracing::{error, info};
 
 use super::resample::{resample_to_16khz, TARGET_SAMPLE_RATE};
 use crate::error::DictationError;
+use crate::sync::lock_or_recover;
 
 /// Maximum recording length: 15 minutes. Capped in device-rate samples while
 /// recording (the buffer holds raw mono at the device rate), then resampled to
 /// 16 kHz on stop.
 const MAX_BUFFER_SECONDS: usize = 60 * 15;
 const STREAM_NOT_READY: u64 = u64::MAX;
+
+// Poisoned capture locks are recovered as-is (ADR 0005): each critical section
+// is one push/extend/clear/take of a sample `Vec`, a `bool` store or an
+// `Option` swap, so the data is valid whatever a panic interrupted, and every
+// capture starts by clearing the buffer, stop signal and worker error. A panic
+// here instead would kill the realtime audio callback or the next recording.
+const BUFFER_LOCK: &str = "audio_capture.buffer";
+const STOP_SIGNAL_LOCK: &str = "audio_capture.stop_signal";
+const WORKER_ERROR_LOCK: &str = "audio_capture.worker_error";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AudioCaptureMetrics {
@@ -48,8 +58,6 @@ pub struct AudioCaptureService {
     worker_error: Arc<Mutex<Option<DictationError>>>,
     capture_thread: Option<thread::JoinHandle<()>>,
     stop_timings: (Duration, Duration),
-    /// Retained audio from last capture for retry
-    last_captured: Option<Vec<f32>>,
 }
 
 // AudioCaptureService is Send+Sync because it doesn't hold cpal::Stream directly
@@ -73,7 +81,6 @@ impl AudioCaptureService {
             worker_error: Arc::new(Mutex::new(None)),
             capture_thread: None,
             stop_timings: (Duration::ZERO, Duration::ZERO),
-            last_captured: None,
         }
     }
 
@@ -81,11 +88,11 @@ impl AudioCaptureService {
     pub fn start_capture(&mut self) -> Result<(), DictationError> {
         // Clear previous buffer and stop signal
         {
-            let mut buf = self.buffer.lock().unwrap();
+            let mut buf = lock_or_recover(&self.buffer, BUFFER_LOCK);
             buf.clear();
         }
         {
-            let mut stop = self.stop_signal.lock().unwrap();
+            let mut stop = lock_or_recover(&self.stop_signal, STOP_SIGNAL_LOCK);
             *stop = false;
         }
 
@@ -124,7 +131,7 @@ impl AudioCaptureService {
 
         // Initialization failures are often known by now. Return them to the
         // caller while retaining the error for stop_capture as well.
-        let startup_error = { self.worker_error.lock().unwrap().clone() };
+        let startup_error = { lock_or_recover(&self.worker_error, WORKER_ERROR_LOCK).clone() };
         if let Some(error) = startup_error {
             if let Some(handle) = self.capture_thread.take() {
                 let _ = handle.join();
@@ -146,7 +153,7 @@ impl AudioCaptureService {
         let started = Instant::now();
         // Signal the capture thread to stop
         {
-            let mut stop = self.stop_signal.lock().unwrap();
+            let mut stop = lock_or_recover(&self.stop_signal, STOP_SIGNAL_LOCK);
             *stop = true;
         }
 
@@ -162,13 +169,13 @@ impl AudioCaptureService {
         self.stop_timings.0 = started.elapsed();
         let conversion_started = Instant::now();
 
-        if let Some(error) = self.worker_error.lock().unwrap().take() {
+        if let Some(error) = lock_or_recover(&self.worker_error, WORKER_ERROR_LOCK).take() {
             error!("Audio capture failed: {error}");
             return Err(error);
         }
 
         let raw = {
-            let mut buf = self.buffer.lock().unwrap();
+            let mut buf = lock_or_recover(&self.buffer, BUFFER_LOCK);
             std::mem::take(&mut *buf)
         };
 
@@ -196,8 +203,6 @@ impl AudioCaptureService {
             device_rate
         );
 
-        // Retain for retry
-        self.last_captured = Some(samples.clone());
         self.stop_timings.1 = conversion_started.elapsed();
 
         Ok(samples)
@@ -206,17 +211,6 @@ impl AudioCaptureService {
     /// Durations for the most recent successful capture stop and conversion.
     pub fn stop_timings(&self) -> (Duration, Duration) {
         self.stop_timings
-    }
-
-    /// Get the last captured audio for retry
-    #[allow(dead_code)]
-    pub fn last_captured_audio(&self) -> Option<&Vec<f32>> {
-        self.last_captured.as_ref()
-    }
-
-    /// Clear retained audio after successful transcription
-    pub fn clear_last_captured(&mut self) {
-        self.last_captured = None;
     }
 
     pub fn metrics(&self) -> AudioCaptureMetrics {
@@ -337,7 +331,7 @@ fn run_capture(
     // Spin until stop signal (the stream callback fills the buffer)
     loop {
         thread::park_timeout(std::time::Duration::from_millis(10));
-        let stop = stop_signal.lock().unwrap();
+        let stop = lock_or_recover(&stop_signal, STOP_SIGNAL_LOCK);
         if *stop {
             break;
         }
@@ -348,14 +342,14 @@ fn run_capture(
 }
 
 fn clear_worker_error(error: &Arc<Mutex<Option<DictationError>>>) {
-    *error.lock().unwrap() = None;
+    *lock_or_recover(error, WORKER_ERROR_LOCK) = None;
 }
 
 fn record_first_worker_error(
     error_slot: &Arc<Mutex<Option<DictationError>>>,
     error: DictationError,
 ) {
-    let mut first_error = error_slot.lock().unwrap();
+    let mut first_error = lock_or_recover(error_slot, WORKER_ERROR_LOCK);
     if first_error.is_none() {
         *first_error = Some(error);
     }
@@ -381,7 +375,7 @@ fn process_samples(data: &[f32], channels: u16, device_rate: u32, buffer: &Arc<M
     let max_samples = (device_rate as usize).saturating_mul(MAX_BUFFER_SECONDS);
     let channels = channels.max(1) as usize;
 
-    let mut buf = buffer.lock().unwrap();
+    let mut buf = lock_or_recover(buffer, BUFFER_LOCK);
     if buf.len() >= max_samples {
         return;
     }
@@ -412,7 +406,7 @@ fn process_samples_i16(
     let max_samples = (device_rate as usize).saturating_mul(MAX_BUFFER_SECONDS);
     let channels = channels.max(1) as usize;
 
-    let mut buf = buffer.lock().unwrap();
+    let mut buf = lock_or_recover(buffer, BUFFER_LOCK);
     if buf.len() >= max_samples {
         return;
     }
@@ -677,6 +671,39 @@ mod tests {
         assert_ne!(timings, previous_timings);
         assert!(timings.0 < previous_timings.0);
         assert!(timings.1 < previous_timings.1);
+    }
+
+    fn poison<T: Send>(mutex: &Mutex<T>) {
+        thread::scope(|scope| {
+            let panicked = scope
+                .spawn(|| {
+                    let _guard = mutex.lock().unwrap();
+                    panic!("injected panic while holding the lock (#359)");
+                })
+                .join();
+            assert!(panicked.is_err());
+        });
+        assert!(mutex.is_poisoned());
+    }
+
+    /// A panic while a capture lock was held must not make every later
+    /// recording (or the realtime audio callback) panic.
+    #[test]
+    fn capture_recovers_locks_poisoned_by_an_earlier_panic() {
+        let mut svc = AudioCaptureService::new();
+        poison(&svc.buffer);
+        poison(&svc.stop_signal);
+        poison(&svc.worker_error);
+
+        // The realtime callback path appends to the recovered buffer.
+        process_samples(&[0.25, 0.5], 1, 16_000, &svc.buffer);
+        process_samples_i16(&[0], 1, 16_000, &svc.buffer);
+        clear_worker_error(&svc.worker_error);
+
+        let samples = svc
+            .stop_capture()
+            .expect("a poisoned capture lock must be recovered");
+        assert_eq!(samples, vec![0.25, 0.5, 0.0]);
     }
 
     #[test]

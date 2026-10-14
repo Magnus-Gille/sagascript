@@ -13,9 +13,26 @@ use whisper_rs::{DtwMode, DtwParameters};
 
 use crate::error::DictationError;
 use crate::settings::{Language, WhisperModel};
+use crate::sync::{lock_or_recover, recover_poisoned};
 use crate::transcription::chunking::{plan_chunks, AudioChunk};
 use crate::transcription::diagnostics::LanguageDetection;
 use crate::transcription::model;
+
+// Poison policy (ADR 0005). `state` holds the reusable whisper inference
+// state; a panic mid-inference leaves it mid-compute, so recovery discards it
+// (the same cleanup as an abort; it is rebuilt lazily). `context`,
+// `loaded_runtime` and `cached_runtime` each hold one `Option` that is only
+// replaced whole, so they are recovered as-is. The multi-lock runtime
+// transaction (load or cache swap) always runs under `load_lock`, whose
+// poison keeps failing closed with an actionable error (see
+// `lock_load_bounded`): those individual recoveries never resume a
+// half-finished swap. Progress locks only guard counters.
+const STATE_LOCK: &str = "whisper.state";
+const CONTEXT_LOCK: &str = "whisper.context";
+const LOADED_RUNTIME_LOCK: &str = "whisper.loaded_runtime";
+const CACHED_RUNTIME_LOCK: &str = "whisper.cached_runtime";
+const PROGRESS_LOCK: &str = "whisper.progress";
+const PARALLEL_PROGRESS_LOCK: &str = "whisper.parallel_progress";
 
 /// Default beam width for file (non-live) transcription. File transcription
 /// isn't latency-sensitive, so a wider beam trades speed for fewer repetition
@@ -863,7 +880,7 @@ impl WhisperBackend {
         }
 
         let is_multilingual = {
-            let guard = self.context.lock().unwrap();
+            let guard = lock_or_recover(&self.context, CONTEXT_LOCK);
             guard
                 .as_ref()
                 .ok_or(DictationError::ModelNotLoaded)?
@@ -1074,7 +1091,7 @@ impl WhisperBackend {
         // its weights are being opened. Keep the active runtime available for
         // rollback, but discard the secondary before allocating the new
         // context so transient memory remains bounded to two model contexts.
-        self.cached_runtime.lock().unwrap().take();
+        lock_or_recover(&self.cached_runtime, CACHED_RUNTIME_LOCK).take();
 
         let ctx = WhisperContext::new_with_params(
             model_path.to_str().ok_or_else(|| {
@@ -1098,8 +1115,8 @@ impl WhisperBackend {
         // switch forever behind a wedged transcription.
         {
             let mut state = self.lock_state_bounded(WARM_STATE_GRACE)?;
-            let mut context = self.context.lock().unwrap();
-            let mut loaded_runtime = self.loaded_runtime.lock().unwrap();
+            let mut context = lock_or_recover(&self.context, CONTEXT_LOCK);
+            let mut loaded_runtime = lock_or_recover(&self.loaded_runtime, LOADED_RUNTIME_LOCK);
             let previous = match (loaded_runtime.take(), context.take()) {
                 (Some(key), Some(context)) => Some(CachedWhisperRuntime {
                     key,
@@ -1114,7 +1131,7 @@ impl WhisperBackend {
             *loaded_runtime = Some(desired_key);
             *state = None;
 
-            let mut cached = self.cached_runtime.lock().unwrap();
+            let mut cached = lock_or_recover(&self.cached_runtime, CACHED_RUNTIME_LOCK);
             *cached = previous.filter(|runtime| can_cache_pair(desired_key, runtime.key));
         }
 
@@ -1127,21 +1144,18 @@ impl WhisperBackend {
 
     /// Get the currently loaded model
     pub fn loaded_model(&self) -> Option<WhisperModel> {
-        self.loaded_runtime.lock().unwrap().map(|key| key.model)
+        lock_or_recover(&self.loaded_runtime, LOADED_RUNTIME_LOCK).map(|key| key.model)
     }
 
     /// Get the immutable context profile of the active runtime.
     pub fn loaded_context_profile(&self) -> Option<ContextProfile> {
-        self.loaded_runtime.lock().unwrap().map(|key| key.profile)
+        lock_or_recover(&self.loaded_runtime, LOADED_RUNTIME_LOCK).map(|key| key.profile)
     }
 
     /// Models currently resident in memory, active first.
     pub fn resident_models(&self) -> Vec<WhisperModel> {
         let active = self.loaded_model();
-        let cached = self
-            .cached_runtime
-            .lock()
-            .unwrap()
+        let cached = lock_or_recover(&self.cached_runtime, CACHED_RUNTIME_LOCK)
             .as_ref()
             .map(|runtime| runtime.key.model);
         active.into_iter().chain(cached).collect()
@@ -1164,11 +1178,8 @@ impl WhisperBackend {
             model: desired_model,
             profile,
         };
-        let active = *self.loaded_runtime.lock().unwrap();
-        let cached = self
-            .cached_runtime
-            .lock()
-            .unwrap()
+        let active = *lock_or_recover(&self.loaded_runtime, LOADED_RUNTIME_LOCK);
+        let cached = lock_or_recover(&self.cached_runtime, CACHED_RUNTIME_LOCK)
             .as_ref()
             .map(|runtime| runtime.key);
         model_availability(active, cached, desired) == ModelAvailability::Missing
@@ -1218,11 +1229,8 @@ impl WhisperBackend {
             model: desired_model,
             profile,
         };
-        let active = *self.loaded_runtime.lock().unwrap();
-        let cached = self
-            .cached_runtime
-            .lock()
-            .unwrap()
+        let active = *lock_or_recover(&self.loaded_runtime, LOADED_RUNTIME_LOCK);
+        let cached = lock_or_recover(&self.cached_runtime, CACHED_RUNTIME_LOCK)
             .as_ref()
             .map(|runtime| runtime.key);
         match model_availability(active, cached, desired) {
@@ -1248,7 +1256,8 @@ impl WhisperBackend {
                     // not merely its unit payload. A panic can leave context,
                     // runtime identity or warm state partially updated/poisoned.
                     // Do not recover the guard and reuse potentially invalid
-                    // native state, or misreport a permanent fault as contention.
+                    // native state, or misreport a permanent fault as contention
+                    // (the fail-closed exception in ADR 0005).
                     return Err(DictationError::TranscriptionFailed(
                         "The transcription engine was interrupted and cannot safely resume; restart Sagascript before trying again.".into(),
                     ));
@@ -1335,9 +1344,9 @@ impl WhisperBackend {
     /// concurrently with this operation.
     fn activate_cached_profile(&self, desired: RuntimeKey) -> Result<(), DictationError> {
         let mut state = self.lock_state_bounded(WARM_STATE_GRACE)?;
-        let mut context = self.context.lock().unwrap();
-        let mut loaded_runtime = self.loaded_runtime.lock().unwrap();
-        let mut cached = self.cached_runtime.lock().unwrap();
+        let mut context = lock_or_recover(&self.context, CONTEXT_LOCK);
+        let mut loaded_runtime = lock_or_recover(&self.loaded_runtime, LOADED_RUNTIME_LOCK);
+        let mut cached = lock_or_recover(&self.cached_runtime, CACHED_RUNTIME_LOCK);
 
         if !activate_cached_runtime(
             desired,
@@ -1425,13 +1434,13 @@ impl WhisperBackend {
         }
 
         // No Drop guard is needed for the abort cleanup below: if `f` panics,
-        // the unwind poisons the state mutex and lock_state_bounded panics on
-        // poison for every later caller (fail-fast preserved), so a plain
-        // post-call check suffices.
+        // the unwind poisons the state mutex and the next lock_state_bounded
+        // recovers it by discarding the warm state (the same cleanup), so a
+        // plain post-call check suffices.
         let result = (|| {
             if state_guard.is_none() {
                 // Lock order state -> context, matching load_model()'s atomic swap.
-                let ctx_guard = self.context.lock().unwrap();
+                let ctx_guard = lock_or_recover(&self.context, CONTEXT_LOCK);
                 let ctx = ctx_guard.as_ref().ok_or(DictationError::ModelNotLoaded)?;
                 let st = ctx.create_state().map_err(|e| {
                     DictationError::TranscriptionFailed(format!(
@@ -1462,8 +1471,10 @@ impl WhisperBackend {
     /// or genuinely still running), rather than blocking forever like a plain
     /// `lock()` would.
     ///
-    /// A poisoned mutex still panics (as the previous `.lock().unwrap()` did) so
-    /// the poison signal is not silently masked.
+    /// A mutex poisoned by a panic mid-inference is recovered with its warm
+    /// state discarded (ADR 0005): the interrupted `WhisperState` may be
+    /// mid-compute, exactly like an aborted one, and is rebuilt lazily from the
+    /// active context. The recovery is logged, not masked.
     fn lock_state_bounded(
         &self,
         grace: Duration,
@@ -1472,9 +1483,10 @@ impl WhisperBackend {
         loop {
             match self.state.try_lock() {
                 Ok(guard) => return Ok(guard),
-                Err(TryLockError::Poisoned(e)) => {
-                    // Preserve fail-fast-on-poison; do not suppress the signal.
-                    panic!("whisper state mutex poisoned: {e}");
+                Err(TryLockError::Poisoned(poisoned)) => {
+                    let mut guard = recover_poisoned(&self.state, STATE_LOCK, poisoned);
+                    *guard = None;
+                    return Ok(guard);
                 }
                 Err(TryLockError::WouldBlock) => {
                     if Instant::now() >= deadline {
@@ -1670,7 +1682,7 @@ impl WhisperBackend {
         // text tokens have id < eot). Read in a short scope so the context
         // lock is released before with_warm_state re-acquires it.
         let token_eot = {
-            let guard = self.context.lock().unwrap();
+            let guard = lock_or_recover(&self.context, CONTEXT_LOCK);
             guard
                 .as_ref()
                 .ok_or(DictationError::ModelNotLoaded)?
@@ -1763,7 +1775,7 @@ impl WhisperBackend {
 
         self.with_warm_state(|warm_state| {
             let mut secondary_states = {
-                let context = self.context.lock().unwrap();
+                let context = lock_or_recover(&self.context, CONTEXT_LOCK);
                 let context = context.as_ref().ok_or(DictationError::ModelNotLoaded)?;
                 (1..chunks.len())
                     .map(|_| {
@@ -2152,7 +2164,7 @@ impl WhisperBackend {
     ) -> Result<DiarizationTranscription, DictationError> {
         let model = self.loaded_model().ok_or(DictationError::ModelNotLoaded)?;
         let token_eot = {
-            let guard = self.context.lock().unwrap();
+            let guard = lock_or_recover(&self.context, CONTEXT_LOCK);
             guard
                 .as_ref()
                 .ok_or(DictationError::ModelNotLoaded)?
@@ -2551,9 +2563,9 @@ where
         started: false,
     }));
     let begin_state = Arc::clone(&state);
-    let begin = move || begin_state.lock().unwrap().begin();
+    let begin = move || lock_or_recover(&begin_state, PROGRESS_LOCK).begin();
     let callback = move |percentage: i32| {
-        let mut state = state.lock().unwrap();
+        let mut state = lock_or_recover(&state, PROGRESS_LOCK);
         state.begin();
         let percentage = percentage.clamp(0, 100);
         if percentage > state.last {
@@ -2577,7 +2589,7 @@ fn parallel_progress_callback(
     chunk_index: usize,
 ) -> impl FnMut(i32) + Send + 'static {
     move |percentage| {
-        let mut progress = progress.lock().unwrap();
+        let mut progress = lock_or_recover(&progress, PARALLEL_PROGRESS_LOCK);
         progress.percentages[chunk_index] = percentage.clamp(0, 100);
         let weighted_sum = progress
             .percentages
@@ -3888,5 +3900,67 @@ mod warm_state_tests {
             "Transcription failed: Cancelled"
         );
         assert!(backend.is_cancel_requested());
+    }
+
+    /// A panic mid-inference poisons the warm-state lock (#359). The next
+    /// transcription must get a clean error or result, not a panic, and must
+    /// not reuse the interrupted warm state.
+    #[test]
+    fn warm_state_poisoned_by_a_panic_is_recovered_and_discarded() {
+        let backend = Arc::new(WhisperBackend::new());
+        let holder = Arc::clone(&backend);
+        let panicked = thread::spawn(move || {
+            let _state = holder.state.lock().unwrap();
+            let _context = holder.context.lock().unwrap();
+            panic!("injected panic mid-inference (#359)");
+        })
+        .join();
+        assert!(panicked.is_err());
+        assert!(backend.state.is_poisoned() && backend.context.is_poisoned());
+
+        let res = backend.with_warm_state_grace(Duration::from_millis(0), |_state| Ok(()));
+        assert!(
+            matches!(res, Err(DictationError::ModelNotLoaded)),
+            "expected a clean ModelNotLoaded after recovery, got {res:?}"
+        );
+        assert!(!backend.state.is_poisoned());
+        assert!(backend.state.lock().unwrap().is_none());
+        assert_eq!(backend.loaded_model(), None);
+    }
+
+    /// Pins the documented fail-closed exception (ADR 0005): dictation holds
+    /// `load_lock` across inference, so a panic mid-inference poisons it as
+    /// well as `state`. Every later dictation then returns the actionable
+    /// restart error; it neither panics nor resumes the interrupted runtime.
+    #[test]
+    fn panic_mid_dictation_keeps_failing_closed_with_the_restart_error() {
+        let backend = Arc::new(WhisperBackend::new());
+        let holder = Arc::clone(&backend);
+        let panicked = thread::spawn(move || {
+            let _load = holder.load_lock.lock().unwrap();
+            let _state = holder.state.lock().unwrap();
+            panic!("injected panic mid-inference (#359)");
+        })
+        .join();
+        assert!(panicked.is_err());
+        assert!(backend.load_lock.is_poisoned() && backend.state.is_poisoned());
+
+        for _ in 0..2 {
+            let mut timings = DictationTimings::default();
+            let result = backend.transcribe_dictation(
+                WhisperModel::Base,
+                &[0.0; 8_000],
+                Language::English,
+                &TranscribeOptions::default(),
+                &mut timings,
+            );
+            assert!(
+                matches!(result, Err(DictationError::TranscriptionFailed(ref message))
+                    if message.contains("restart Sagascript")),
+                "expected the fail-closed restart error, got {result:?}"
+            );
+            assert!(!timings.inference_started);
+        }
+        assert!(backend.load_lock.is_poisoned(), "fail-closed is sticky");
     }
 }

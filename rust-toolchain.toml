@@ -1,0 +1,13 @@
+# Pinned Rust toolchain for local development and CI (#353).
+#
+# rustup installs this automatically on the first `cargo` call in the repo.
+# Workflows install the same channel explicitly; scripts/test-rust-toolchain-pin.mjs
+# fails if they drift apart. To bump: change the channel here and in the
+# workflows, then rerun `cargo fmt --all -- --check` and the clippy gates.
+#
+# The minimum supported version is separate: `rust-version` in
+# src-tauri/Cargo.toml, checked by CI's msrv-linux job.
+[toolchain]
+channel = "1.99.0"
+components = ["clippy", "rustfmt"]
+profile = "minimal"

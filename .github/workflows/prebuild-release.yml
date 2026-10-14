@@ -25,12 +25,13 @@ concurrency:
 jobs:
   detect:
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     outputs:
       should_build: ${{ steps.detect.outputs.should_build }}
       version: ${{ steps.detect.outputs.version }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
       - name: Require main for manual dispatch
         if: github.event_name == 'workflow_dispatch'
@@ -130,24 +131,25 @@ jobs:
   manifest:
     needs: [detect, build-macos, build-windows]
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
       - name: Download macOS bundle
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: macos-bundle
           path: artifacts/macos-bundle
 
       - name: Download Windows x64 candidate
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: windows-x64-unsigned-candidate
           path: artifacts/windows-x64-unsigned-candidate
 
       - name: Download Windows arm64 candidate
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: windows-arm64-unsigned-candidate
           path: artifacts/windows-arm64-unsigned-candidate
@@ -172,7 +174,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload manifest
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: release-manifest
           path: manifest/release-manifest.json

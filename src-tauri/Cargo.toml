@@ -18,6 +18,10 @@ resolver = "2"
 [workspace.package]
 version = "1.4.4"
 edition = "2021"
+# Minimum supported Rust version (#353). The dependency tree (ort, time)
+# needs 1.88; CI's msrv-linux job keeps this claim true. Development and
+# the other CI lanes use the newer toolchain pinned in rust-toolchain.toml.
+rust-version = "1.88"
 license = "MIT"
 
 [workspace.lints.rust]
@@ -27,6 +31,7 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("cargo-cli
 name = "sagascript"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 description = "Low-latency macOS/Linux/Windows dictation app"
 build = "build.rs"
@@ -53,14 +58,24 @@ tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
 arboard = "3"
 dirs = "6"
 notify = { version = "7", default-features = false }
-reqwest = { version = "0.12", features = ["json"] }
+# One reqwest in the binary (#355): 0.13, the version tauri-plugin-updater
+# uses. reqwest 0.12's defaults gave the app's own requests the platform TLS
+# stack through native-tls (Security.framework, SChannel, OpenSSL) without
+# ALPN, so HTTP/1.1; 0.13 defaults to rustls+aws-lc and its `native-tls`
+# feature now adds ALPN, hence `default-features = false` and
+# `native-tls-no-alpn`. `http2` and `charset` were inert here (no ALPN, no
+# `text()`) and would leak into the updater's client through feature
+# unification. Each client names its backend; see src/updates.rs.
+reqwest = { version = "0.13", default-features = false, features = ["native-tls-no-alpn", "system-proxy", "json"] }
 semver = "1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # notify 7 requires one native macOS backend feature even when this app uses
 # PollWatcher explicitly for settings (see start_settings_watcher).
 notify = { version = "7", default-features = false, features = ["macos_fsevent"] }
-tauri-plugin-updater = "2"
+# `rustls-tls` is the plugin's default, named because check_signed_update
+# selects it explicitly (the shared reqwest also has native-tls).
+tauri-plugin-updater = { version = "2", features = ["rustls-tls"] }
 # enigo (auto-paste) and the objc FFI stack are desktop-GUI integrations.
 enigo = { version = "0.6", features = ["serde"] }
 core-foundation = "0.10"
@@ -116,8 +131,13 @@ codegen-units = 1
 # ISO section key (`IntlBackslash`, the `§` key left of `1` on Swedish, UK and
 # other Apple ISO keyboards; macOS virtual key 0x0A). Upstream added it in
 # tauri-apps/global-hotkey#216, which is merged on `dev` but unreleased, so this
-# pins that commit. Drop the patch once a release containing #216 is published
-# and `tauri-plugin-global-shortcut` depends on it.
+# pins a `dev` commit that contains it. Drop the patch once a release containing
+# #216 is published and `tauri-plugin-global-shortcut` depends on it.
+# Rechecked 2026-10-12 (#355): 0.8.0 is still the latest release and no
+# release tag contains #216. The release that ships it must also satisfy
+# tauri-plugin-global-shortcut's requirement (`global-hotkey = "0.8"` in the
+# locked 2.3.2), so a 0.9 release needs a plugin update first. The patch is
+# deny.toml's only allowed git source; remove that entry with it.
 #
 # Note: the same line of development (keyboard-types 0.8) reports the Command/
 # Win modifier as `meta` instead of `super` in shortcut events; the settings
