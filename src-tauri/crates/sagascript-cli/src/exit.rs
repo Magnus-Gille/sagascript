@@ -13,7 +13,7 @@ use std::process::ExitCode;
 use sagascript_core::error::DictationError;
 use serde::Serialize;
 
-use crate::output::{errln, Out, WriteError};
+use crate::output::{errln, is_closed_stdout, Out, WriteError};
 
 /// Every way a run ends, with its documented status
 /// (docs/recipes/add-cli-subcommand.md, "Exit codes").
@@ -21,7 +21,8 @@ use crate::output::{errln, Out, WriteError};
 pub enum Exit {
     /// 0: the command did its job.
     Success,
-    /// 0: stdout's reader went away (`… | head -1`); the run stopped quietly.
+    /// 0: stdout's reader went away (`… | head -1`) and the command had no
+    /// other failure; the run stopped quietly.
     StdoutClosed,
     /// 1: the command failed.
     Failure,
@@ -71,6 +72,11 @@ pub enum CliError {
     /// A check completed and did not pass (exit 3). Its report is already on
     /// stdout; the error is the `Error: …` line for stderr.
     CheckFailed(DictationError),
+    /// The command stopped because stdout's reader went away (`… | head -1`):
+    /// not a failure, so the run ends quietly with exit 0. Only a command
+    /// whose own outcome is this closed write ends that way; one that failed
+    /// for another reason keeps its failure ([`conclude`]).
+    StdoutClosed,
 }
 
 impl CliError {
@@ -79,6 +85,7 @@ impl CliError {
             Self::Failed(_) => Exit::Failure,
             Self::Usage(_) => Exit::Usage,
             Self::CheckFailed(_) => Exit::CheckFailed,
+            Self::StdoutClosed => Exit::StdoutClosed,
         }
     }
 
@@ -88,6 +95,7 @@ impl CliError {
             Self::Failed(error) => dictation_error_code(error),
             Self::Usage(_) => "usage".to_string(),
             Self::CheckFailed(_) => "check_failed".to_string(),
+            Self::StdoutClosed => "stdout_closed".to_string(),
         }
     }
 }
@@ -97,6 +105,7 @@ impl fmt::Display for CliError {
         match self {
             Self::Failed(error) | Self::CheckFailed(error) => error.fmt(f),
             Self::Usage(message) => f.write_str(message),
+            Self::StdoutClosed => WriteError::Closed.fmt(f),
         }
     }
 }
@@ -105,13 +114,20 @@ impl std::error::Error for CliError {}
 
 impl From<DictationError> for CliError {
     fn from(error: DictationError) -> Self {
-        Self::Failed(error)
+        if is_closed_stdout(&error) {
+            Self::StdoutClosed
+        } else {
+            Self::Failed(error)
+        }
     }
 }
 
 impl From<WriteError> for CliError {
     fn from(error: WriteError) -> Self {
-        Self::Failed(error.into())
+        match error {
+            WriteError::Closed => Self::StdoutClosed,
+            other => Self::Failed(other.into()),
+        }
     }
 }
 
@@ -185,12 +201,15 @@ impl<'a> ErrorObject<'a> {
 ///
 /// In order: a cancellation (`Cancelled`, 130/143) wins, because a Ctrl-C
 /// also ends the reader of a pipeline; then a closed stdout ends the run
-/// quietly with 0; then a stdout that could not be written fails it. A
-/// command error is reported as `Error: …` on stderr. With `--json`/`--jsonl`
-/// (`json`), a run that fails before writing anything to stdout also writes
-/// one [`ErrorObject`], so a consumer never has to parse an empty stream; a
-/// run that already wrote its report (a failed `engine doctor --json`) or
-/// some JSONL items keeps stdout as it is.
+/// quietly with 0 when that is the whole story (the command succeeded, or its
+/// own outcome is the closed write, [`CliError::StdoutClosed`]); a command that
+/// failed for another reason keeps its failure and status, so a failed check
+/// is not hidden by a reader that left. Then a stdout that could not be
+/// written fails the run. A command error is reported as `Error: …` on
+/// stderr. With `--json`/`--jsonl` (`json`), a run that fails before writing
+/// anything to stdout also writes one [`ErrorObject`], so a consumer never has
+/// to parse an empty stream; a run that already wrote its report (a failed
+/// `engine doctor --json`) or some JSONL items keeps stdout as it is.
 pub fn conclude(
     result: Result<(), CliError>,
     json: Option<JsonOutput>,
@@ -204,7 +223,7 @@ pub fn conclude(
         errln!(out, "Cancelled");
         return Exit::Cancelled(u8::try_from(signal_code).unwrap_or(130));
     }
-    if out.stdout_closed() {
+    if matches!(result, Err(CliError::StdoutClosed)) || (result.is_ok() && out.stdout_closed()) {
         return Exit::StdoutClosed;
     }
     if let Some(error) = out.stdout_error() {
@@ -344,6 +363,59 @@ mod tests {
         let exit = conclude(Err(error.into()), Some(JsonOutput::Compact), &out, None);
         assert_eq!(exit, Exit::StdoutClosed);
         assert_eq!(exit.code(), 0);
+        assert_eq!(captured.stderr(), "");
+    }
+
+    #[test]
+    fn a_closed_stdout_keeps_its_kind_through_every_conversion() {
+        let closed = DictationError::from(WriteError::Closed);
+        assert!(matches!(
+            CliError::from(WriteError::Closed),
+            CliError::StdoutClosed
+        ));
+        assert!(matches!(CliError::from(closed), CliError::StdoutClosed));
+        let io = WriteError::Io(std::io::Error::other("No space left on device"));
+        assert!(matches!(CliError::from(io), CliError::Failed(_)));
+        let other = DictationError::TranscriptionFailed("engine doctor failed".into());
+        assert!(matches!(CliError::from(other), CliError::Failed(_)));
+
+        assert_eq!(CliError::StdoutClosed.exit(), Exit::StdoutClosed);
+        assert_eq!(CliError::StdoutClosed.code(), "stdout_closed");
+        assert_eq!(
+            CliError::StdoutClosed.to_string(),
+            "stdout was closed by its reader"
+        );
+    }
+
+    #[test]
+    fn a_closed_stdout_does_not_hide_a_failed_check() {
+        let (out, captured) = Out::capture_stderr(ClosedPipe);
+        outln!(out, "report").unwrap_err();
+        let error = CliError::CheckFailed(DictationError::SettingsError("budget missed".into()));
+        let exit = conclude(Err(error), Some(JsonOutput::Compact), &out, None);
+        assert_eq!(exit, Exit::CheckFailed);
+        assert_eq!(
+            captured.stderr(),
+            "Error: Settings error: budget missed\n",
+            "the verdict is still reported; only the reader is gone"
+        );
+    }
+
+    #[test]
+    fn a_closed_stdout_does_not_hide_a_command_failure() {
+        let (out, captured) = Out::capture_stderr(ClosedPipe);
+        outln!(out, "first item").unwrap_err();
+        let error = DictationError::FileDecodeError("bad".into());
+        let exit = conclude(Err(error.into()), Some(JsonOutput::Compact), &out, None);
+        assert_eq!(exit, Exit::Failure);
+        assert_eq!(captured.stderr(), "Error: File decode error: bad\n");
+    }
+
+    #[test]
+    fn a_closed_stdout_after_a_successful_run_ends_quietly() {
+        let (out, captured) = Out::capture_stderr(ClosedPipe);
+        outln!(out, "result").unwrap_err();
+        assert_eq!(conclude(Ok(()), None, &out, None), Exit::StdoutClosed);
         assert_eq!(captured.stderr(), "");
     }
 

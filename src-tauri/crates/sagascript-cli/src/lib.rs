@@ -1856,6 +1856,41 @@ mod tests {
     }
 
     #[test]
+    fn run_with_keeps_a_failed_budget_when_stdout_is_closed() {
+        use crate::output::test_writers::ClosedPipe;
+        let temp = sagascript_testsupport::TempDir::new();
+        let input = temp.join("events.jsonl");
+        std::fs::write(&input, "").unwrap();
+        let cli = |extra: &[&str]| {
+            let mut args = vec![
+                "sagascript".to_owned(),
+                "latency-report".to_owned(),
+                "--input".to_owned(),
+                input.to_str().unwrap().to_owned(),
+            ];
+            args.extend(extra.iter().map(|arg| (*arg).to_owned()));
+            Cli::try_parse_from(args).unwrap()
+        };
+
+        // The reader leaving does not change whether the budget passed.
+        let (out, captured) = Out::capture_stderr(ClosedPipe);
+        let exit = run_with(
+            cli(&["--budget-length", "short", "--max-warm-p95-ms", "100"]),
+            &out,
+        );
+        assert_eq!(exit, Exit::CheckFailed);
+        assert_eq!(
+            captured.stderr(),
+            "Error: Settings error: latency budget check failed\n"
+        );
+
+        // Without a budget there is no verdict: a closed reader ends it quietly.
+        let (out, captured) = Out::capture_stderr(ClosedPipe);
+        assert_eq!(run_with(cli(&[]), &out), Exit::StdoutClosed);
+        assert_eq!(captured.stderr(), "");
+    }
+
+    #[test]
     fn run_with_fails_with_the_cause_when_stdout_cannot_be_written() {
         use crate::output::test_writers::FullDisk;
         let cli = Cli::try_parse_from(["sagascript", "formats"]).unwrap();

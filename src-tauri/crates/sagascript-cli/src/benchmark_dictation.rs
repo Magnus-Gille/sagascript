@@ -15,7 +15,7 @@ use super::benchmark_config;
 use super::benchmark_quality;
 use super::transcribe::{model_id_string, parse_language};
 use crate::exit::CliError;
-use crate::output::Out;
+use crate::output::{ignore_closed, Out};
 
 const SAMPLE_RATE_HZ: f64 = 16_000.0;
 
@@ -390,7 +390,8 @@ fn measure(args: BenchmarkDictationArgs, out: &Out) -> Result<Checks, DictationE
         benchmark_quality::write_private_new(path, &quality_report)?;
     }
 
-    out.json(&output)?;
+    // The verdict does not depend on a reader: a closed stdout keeps exit 3.
+    ignore_closed(out.json(&output))?;
     Ok(Checks {
         budget_exceeded,
         validation_error,

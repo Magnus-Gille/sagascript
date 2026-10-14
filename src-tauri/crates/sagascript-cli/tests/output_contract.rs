@@ -119,6 +119,34 @@ fn formats_into_a_closed_pipe_exits_zero_without_a_panic() {
     assert_quiet_exit_after_broken_pipe(&output, "formats");
 }
 
+/// A reader that leaves early does not change a check's verdict: `… | head -1`
+/// under `set -o pipefail` still sees the failed check (exit 3).
+#[test]
+fn a_failed_check_into_a_closed_pipe_still_exits_three() {
+    let sandbox = Sandbox::new();
+    let events = sandbox.root.join("events.jsonl");
+    std::fs::write(&events, "").expect("write empty event log");
+    let output = run_into_closed_pipe(sandbox.command(&[
+        "latency-report",
+        "--input",
+        events.to_str().expect("UTF-8 path"),
+        "--budget-length",
+        "short",
+        "--max-warm-p95-ms",
+        "100",
+    ]));
+    assert_eq!(
+        output.status.code(),
+        Some(3),
+        "stderr={}",
+        stderr_text(&output)
+    );
+    assert_eq!(
+        stderr_text(&output),
+        "Error: Settings error: latency budget check failed\n"
+    );
+}
+
 #[test]
 fn transcribe_json_for_a_missing_file_reports_an_error_object_on_stdout() {
     let sandbox = Sandbox::new();

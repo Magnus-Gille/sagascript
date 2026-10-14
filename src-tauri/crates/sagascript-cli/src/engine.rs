@@ -16,7 +16,7 @@ use sagascript_core::transcription::{pianissimo_backend, pianissimo_model};
 use serde_json::{json, Value};
 
 use crate::exit::CliError;
-use crate::output::{errln, outln, Out, WriteError};
+use crate::output::{errln, ignore_closed, outln, Out, WriteError};
 
 #[derive(Args)]
 pub struct EngineArgs {
@@ -107,7 +107,8 @@ pub fn run(args: EngineArgs, out: &Out) -> Result<(), CliError> {
 /// (exit 3) after the full report.
 fn doctor(probe: &Probe, verify_model: bool, json: bool, out: &Out) -> Result<(), CliError> {
     let report = doctor_report(probe, verify_model);
-    print_doctor(&report, json, out)?;
+    // The verdict does not depend on a reader: a closed stdout keeps exit 3.
+    ignore_closed(print_doctor(&report, json, out))?;
     if report.ok {
         Ok(())
     } else {
@@ -867,6 +868,17 @@ mod tests {
             "{}",
             captured.stdout()
         );
+    }
+
+    #[test]
+    fn a_failing_doctor_keeps_its_verdict_when_stdout_is_closed() {
+        use crate::output::test_writers::ClosedPipe;
+        let probe = probe(PathBuf::from("/nonexistent/host"), false, true);
+        for json in [false, true] {
+            let (out, _captured) = Out::capture_stderr(ClosedPipe);
+            let error = doctor(&probe, false, json, &out).unwrap_err();
+            assert_eq!(error.exit(), crate::exit::Exit::CheckFailed, "json={json}");
+        }
     }
 
     #[test]

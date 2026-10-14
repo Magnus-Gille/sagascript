@@ -15,7 +15,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 use crate::exit::CliError;
-use crate::output::{outln, Out};
+use crate::output::{ignore_closed, outln, Out};
 
 use sagascript_core::diarization_evaluation::{
     evaluate, EvaluationOptions, ScoringRegion, SpeakerTurn,
@@ -253,7 +253,8 @@ pub fn run(args: DiarizationArgs, out: &Out) -> Result<(), CliError> {
                 expected_policy_version.as_deref(),
                 expected_split_sha256.as_deref(),
             )?;
-            write_stdout(&output, out)?;
+            // The verdict does not depend on a reader: a closed stdout keeps exit 3.
+            ignore_closed(outln!(out, "{output}"))?;
             if !ready {
                 return Err(CliError::CheckFailed(cli_error(
                     "reference qualification is not ready",
@@ -1621,6 +1622,31 @@ mod tests {
             "Transcription failed: reference qualification is not ready"
         );
         assert_eq!(captured.stdout(), format!("{output}\n"));
+    }
+
+    #[test]
+    fn a_closed_stdout_does_not_change_the_qualification_verdict() {
+        use crate::output::test_writers::ClosedPipe;
+        let (reference, mut manifest) = qualified_fixture();
+        manifest["windows"] = Value::String("invalid".into());
+        let reference_file = write(&serde_json::to_string(&reference).unwrap());
+        let manifest_file = write(&serde_json::to_string(&manifest).unwrap());
+        let (out, _captured) = Out::capture_stderr(ClosedPipe);
+        let error = run(
+            DiarizationArgs {
+                action: DiarizationAction::ReferenceQualify {
+                    input: reference_file.path().to_owned(),
+                    manifest: manifest_file.path().to_owned(),
+                    minimum_coverage: 0.9,
+                    expected_policy_id: None,
+                    expected_policy_version: None,
+                    expected_split_sha256: None,
+                },
+            },
+            &out,
+        )
+        .unwrap_err();
+        assert_eq!(error.exit(), Exit::CheckFailed);
     }
 
     #[test]

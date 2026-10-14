@@ -11,7 +11,7 @@ use sagascript_core::error::DictationError;
 use sagascript_core::settings::{Language, WhisperModel};
 
 use crate::exit::CliError;
-use crate::output::{outln, Out};
+use crate::output::{ignore_closed, outln, Out};
 use crate::transcribe::model_id_string;
 
 mod percentile;
@@ -822,7 +822,8 @@ fn write_report(args: LatencyReportArgs, out: &Out) -> Result<Option<bool>, Dict
     let encoded = serde_json::to_string(&output).map_err(|_| {
         DictationError::TranscriptionFailed("latency report serialization failed".to_string())
     })?;
-    outln!(out, "{encoded}")?;
+    // The verdict does not depend on a reader: a closed stdout keeps exit 3.
+    ignore_closed(outln!(out, "{encoded}"))?;
 
     Ok(output
         .get("budget")

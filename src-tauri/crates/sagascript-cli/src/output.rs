@@ -8,7 +8,10 @@
 //!   stdout pipe makes every later stdout write fail fast with
 //!   [`WriteError::Closed`], the command unwinds through `?`, and
 //!   [`crate::run_with`] ends the run quietly with exit 0 instead of the
-//!   `failed printing to stdout` panic (exit 101) of `println!`;
+//!   `failed printing to stdout` panic (exit 101) of `println!`. A command
+//!   that failed for another reason keeps its failure and status, and a check
+//!   writes its report through [`ignore_closed`] so a reader that left cannot
+//!   hide its verdict;
 //! - remembers whether stdout was used, so a failed `--json`/`--jsonl` run can
 //!   still report a structured error object ([`crate::exit`]);
 //! - lets tests run a command in-process and read both streams
@@ -63,7 +66,8 @@ struct Shared {
 #[derive(Debug)]
 pub enum WriteError {
     /// The reader closed stdout (`… | head -1`). Not a failure of the
-    /// command: [`crate::run_with`] ends the run quietly with exit 0.
+    /// command: [`crate::run_with`] ends the run quietly with exit 0, unless
+    /// the command failed for another reason ([`crate::exit::conclude`]).
     Closed,
     /// Any other I/O failure; the run fails with exit 1.
     Io(io::Error),
@@ -71,10 +75,14 @@ pub enum WriteError {
     Encode(serde_json::Error),
 }
 
+/// What [`WriteError::Closed`] says, and what it reads as once `?` has turned
+/// it into a [`DictationError`].
+const CLOSED_MESSAGE: &str = "stdout was closed by its reader";
+
 impl fmt::Display for WriteError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Closed => f.write_str("stdout was closed by its reader"),
+            Self::Closed => f.write_str(CLOSED_MESSAGE),
             Self::Io(error) => write!(f, "could not write to stdout: {error}"),
             Self::Encode(error) => write!(f, "could not encode JSON output: {error}"),
         }
@@ -85,10 +93,30 @@ impl std::error::Error for WriteError {}
 
 /// Lets code that returns `DictationError` write with `?`. The message is
 /// never what the user sees for a closed or failing stdout: `run_with` reads
-/// those from the [`Out`] itself.
+/// those from the [`Out`] itself. [`DictationError`] is shared with the app and
+/// has no variant for a CLI's stdout, so a closed stdout stays recognizable by
+/// [`is_closed_stdout`] instead; `CliError::from` turns it back into
+/// `CliError::StdoutClosed`.
 impl From<WriteError> for DictationError {
     fn from(error: WriteError) -> Self {
         DictationError::TranscriptionFailed(error.to_string())
+    }
+}
+
+/// Whether `error` is a [`WriteError::Closed`] that `?` turned into a
+/// [`DictationError`]: the command stopped because nobody reads its stdout,
+/// not because it failed.
+pub(crate) fn is_closed_stdout(error: &DictationError) -> bool {
+    matches!(error, DictationError::TranscriptionFailed(message) if message == CLOSED_MESSAGE)
+}
+
+/// For the report of a check: a reader that left does not change the verdict,
+/// so a closed stdout is not an error here and the command still returns its
+/// own result (`CliError::CheckFailed`). Any other write failure stays one.
+pub(crate) fn ignore_closed(result: Result<(), WriteError>) -> Result<(), WriteError> {
+    match result {
+        Err(WriteError::Closed) => Ok(()),
+        other => other,
     }
 }
 
@@ -369,6 +397,28 @@ mod tests {
             out.stdout_error().as_deref(),
             Some("No space left on device")
         );
+    }
+
+    #[test]
+    fn a_closed_stdout_is_recognized_after_it_became_a_dictation_error() {
+        let error = DictationError::from(WriteError::Closed);
+        assert!(is_closed_stdout(&error));
+        assert!(!is_closed_stdout(&DictationError::TranscriptionFailed(
+            "engine doctor failed".into()
+        )));
+        assert!(!is_closed_stdout(&DictationError::from(WriteError::Io(
+            io::Error::other("No space left on device")
+        ))));
+    }
+
+    #[test]
+    fn ignore_closed_drops_only_a_closed_stdout() {
+        assert!(ignore_closed(Err(WriteError::Closed)).is_ok());
+        assert!(ignore_closed(Ok(())).is_ok());
+        assert!(matches!(
+            ignore_closed(Err(WriteError::Io(io::Error::other("disk full")))),
+            Err(WriteError::Io(_))
+        ));
     }
 
     #[test]

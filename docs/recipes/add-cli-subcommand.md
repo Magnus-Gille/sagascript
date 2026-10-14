@@ -67,7 +67,10 @@ to stderr, `out.json(&value)?` a pretty document, `out.jsonl(&value)?` a compact
   for `transcribe` in CI.
 - Propagate stdout write errors with `?`. When the reader closes stdout (`… | head -1`) every
   later write fails fast and `run_with` ends the run quietly with exit 0; other write failures
-  end it with `Error: could not write to stdout: …` and exit 1.
+  end it with `Error: could not write to stdout: …` and exit 1. Only a run whose own outcome is
+  the closed write (or that succeeded) ends quietly: a command that failed for another reason
+  keeps its failure and status. A check that owes a verdict (exit 3) writes its report through
+  `output::ignore_closed(…)`, so a reader that left cannot turn a failed check into exit 0.
 - A `--json`/`--jsonl` run that fails before writing anything to stdout gets one error object
   there, `{"status":"error","code":"settings_error","error":"Settings error: …"}`, pretty or
   compact like the command's own output (`exit::conclude`). `code` is the `DictationError`
@@ -85,7 +88,7 @@ Commands return `Result<(), DictationError>` or, to choose the status, `Result<(
 | Code | `exit::Exit` | When |
 |---|---|---|
 | 0 | `Success` | The command returned `Ok`. |
-| 0 | `StdoutClosed` | The reader closed stdout (`… \| head -1`); nothing is printed on stderr. |
+| 0 | `StdoutClosed` | The reader closed stdout (`… \| head -1`) and the command had no other failure; nothing is printed on stderr. |
 | 1 | `Failure` | Any other `Err` (printed as `Error: …` on stderr), or stdout could not be written. |
 | 2 | `Usage` | clap usage errors; the headless binary without a subcommand; `CliError::Usage`. |
 | 3 | `CheckFailed` | A check ran, wrote its report and did not pass (`CliError::CheckFailed`): `latency-report` budget, `engine doctor`, `benchmark-dictation` (`--max-warm-ms` or an `--expect-word`/empty-text check) and `diarization reference-qualify`. |
