@@ -389,10 +389,19 @@ impl Generation {
         let (value, error) = match last_segment(output) {
             Some(segment) if segment.ident == "Result" => {
                 match type_arguments(&segment.arguments).as_slice() {
-                    [value, error] if rust_type(error) == "String" => (*value, ErrorType::Text),
-                    [value, error] if rust_type(error) == "CommandError" => {
-                        (*value, ErrorType::Backend)
-                    }
+                    [value, error] => match last_segment(error)
+                        .map(|segment| segment.ident.to_string())
+                        .as_deref()
+                    {
+                        Some("String") => (*value, ErrorType::Text),
+                        Some("CommandError") => (*value, ErrorType::Backend),
+                        _ => {
+                            return Err(format!(
+                                "result `{rust_result}`: only `Result<T, String>` and \
+                                 `Result<T, CommandError>` are mapped"
+                            ))
+                        }
+                    },
                     _ => {
                         return Err(format!(
                             "result `{rust_result}`: only `Result<T, String>` and \
@@ -865,6 +874,23 @@ fn signatures_map_or_fail_with_a_fix() {
         .expect("a CommandError result maps");
     assert_eq!(typed.error, ErrorType::Backend);
     assert_eq!(typed.result.text, "void");
+    // The error type is matched by its last path segment, like `Result` is.
+    let function: ItemFn = syn::parse_quote! {
+        #[tauri::command]
+        pub async fn example() -> Result<(), crate::command_error::CommandError> { todo!() }
+    };
+    let qualified = generation
+        .command("commands", &function)
+        .expect("a qualified CommandError maps");
+    assert_eq!(qualified.error, ErrorType::Backend);
+    let function: ItemFn = syn::parse_quote! {
+        #[tauri::command]
+        pub async fn example() -> std::result::Result<(), std::string::String> { todo!() }
+    };
+    let qualified_text = generation
+        .command("commands", &function)
+        .expect("a qualified String maps");
+    assert_eq!(qualified_text.error, ErrorType::Text);
     let function: ItemFn = syn::parse_quote! {
         #[tauri::command]
         pub async fn example() -> Result<String, String> { todo!() }

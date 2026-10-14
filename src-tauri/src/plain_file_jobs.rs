@@ -160,15 +160,7 @@ pub async fn transcribe_pianissimo(
             );
         };
         let work = || -> Result<String, DictationError> {
-            run.check()?;
-            progress(PlainPhase::Decoding, Some(0));
-            let audio = decoder::decode_audio_file_with_stage_progress(
-                std::path::Path::new(&file_path),
-                Some(&|| run.check()),
-                &|pct| progress(PlainPhase::Decoding, Some(pct)),
-                &|pct| progress(PlainPhase::Resampling, Some(pct)),
-            )?;
-            run.check()?;
+            let audio = decode_for_run(run, std::path::Path::new(&file_path), &progress)?;
             let timeout = Duration::from_secs(((audio.len() / 16_000) as u64 * 10).max(180));
             progress(PlainPhase::Loading, None);
             let backend = Arc::new(PianissimoBackend::start_with_cancel(&run.cancelled)?);
@@ -229,6 +221,26 @@ pub async fn transcribe_pianissimo(
         result
     }
 }
+/// Decodes a run's input, announcing the decoding and resampling phases and
+/// stopping at a cancellation. A file that is gone is `FileNotFound`, which the
+/// command reports as `file_not_found`.
+fn decode_for_run(
+    run: &RunControl,
+    path: &std::path::Path,
+    progress: &dyn Fn(PlainPhase, Option<u8>),
+) -> Result<Vec<f32>, DictationError> {
+    run.check()?;
+    progress(PlainPhase::Decoding, Some(0));
+    let audio = decoder::decode_audio_file_with_stage_progress(
+        path,
+        Some(&|| run.check()),
+        &|pct| progress(PlainPhase::Decoding, Some(pct)),
+        &|pct| progress(PlainPhase::Resampling, Some(pct)),
+    )?;
+    run.check()?;
+    Ok(audio)
+}
+
 impl RunControl {
     fn check(&self) -> Result<(), DictationError> {
         if self.cancelled.load(Ordering::SeqCst) {
@@ -261,15 +273,7 @@ pub async fn transcribe(
             );
         };
         let work = || -> Result<String, DictationError> {
-            run.check()?;
-            progress(PlainPhase::Decoding, Some(0));
-            let audio = decoder::decode_audio_file_with_stage_progress(
-                std::path::Path::new(&file_path),
-                Some(&|| run.check()),
-                &|pct| progress(PlainPhase::Decoding, Some(pct)),
-                &|pct| progress(PlainPhase::Resampling, Some(pct)),
-            )?;
-            run.check()?;
+            let audio = decode_for_run(run, std::path::Path::new(&file_path), &progress)?;
             let timeout = Duration::from_secs(((audio.len() / 16_000) as u64 * 6).max(60));
             *lock_or_recover(&run.deadline, DEADLINE_LOCK) = Some(Instant::now() + timeout);
             let mut options = context.options;
@@ -366,6 +370,43 @@ mod tests {
         }
         assert_eq!(jobs.pending_cancels.lock().unwrap().len(), 32);
     }
+    /// A plain file job whose file is gone reports `file_not_found`, which the
+    /// window uses to forget the remembered file (ADR 0006), not a generic
+    /// failure; and a stopped run still reports `cancelled` before it reads the file.
+    #[test]
+    fn a_missing_file_fails_the_job_with_file_not_found() {
+        let jobs = Arc::new(PlainFileJobs::default());
+        let lease = jobs.begin("run-1".into()).unwrap();
+        let phases = Mutex::new(Vec::new());
+        let progress = |phase: PlainPhase, percent: Option<u8>| {
+            phases.lock().unwrap().push((phase, percent));
+        };
+        let missing = std::path::Path::new("/nonexistent/sagascript/missing-audio.wav");
+
+        let failure = decode_for_run(&lease.control, missing, &progress)
+            .map(|_| String::new())
+            .map_err(CommandError::from);
+        let failure = jobs.finish(&lease, failure).unwrap_err();
+
+        assert_eq!(failure.code(), "file_not_found");
+        assert!(!failure.retryable());
+        assert!(
+            !failure.message().contains("nonexistent"),
+            "the message names no path: {}",
+            failure.message()
+        );
+        assert_eq!(
+            phases.lock().unwrap().first(),
+            Some(&(PlainPhase::Decoding, Some(0))),
+            "decoding was announced before the file was opened"
+        );
+
+        let lease = jobs.begin("run-2".into()).unwrap();
+        assert!(jobs.cancel("run-2"));
+        let stopped = decode_for_run(&lease.control, missing, &progress).unwrap_err();
+        assert!(matches!(stopped, DictationError::Cancelled), "{stopped:?}");
+    }
+
     #[test]
     fn cancellation_targets_one_run_and_old_requests_cannot_stop_next_run() {
         let jobs = Arc::new(PlainFileJobs::default());

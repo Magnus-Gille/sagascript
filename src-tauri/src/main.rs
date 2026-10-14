@@ -45,6 +45,24 @@ use std::time::{Duration, Instant};
 /// Maximum time to wait for whisper inference before aborting (seconds)
 const TRANSCRIPTION_TIMEOUT_SECS: u64 = 60;
 
+/// The text the hotkey path reports for a failed dictation, in the `error`
+/// event and the controller's last error (main_tests.rs pins it; ADR 0006).
+fn dictation_failure_text(error: &sagascript_core::error::DictationError) -> String {
+    error.to_string()
+}
+
+/// The dictation outran [`TRANSCRIPTION_TIMEOUT_SECS`] and was aborted.
+fn dictation_timed_out() -> sagascript_core::error::DictationError {
+    sagascript_core::error::DictationError::TranscriptionTimedOut(format!(
+        "Transcription timed out after {TRANSCRIPTION_TIMEOUT_SECS}s (inference aborted)"
+    ))
+}
+
+/// The blocking transcription task ended abnormally (a join error).
+fn dictation_task_failed(error: impl std::fmt::Display) -> sagascript_core::error::DictationError {
+    sagascript_core::error::DictationError::TaskFailed(format!("Task join error: {error}"))
+}
+
 /// Grace after a timeout-triggered abort for the blocking inference to unwind and
 /// release the warm-state lock before we log it as still stuck.
 const ABORT_GRACE_SECS: u64 = 5;
@@ -2411,9 +2429,7 @@ fn stop_recording_and_transcribe(
                     }
                     r
                 }
-                Ok(Err(e)) => Err(sagascript_core::error::DictationError::TaskFailed(format!(
-                    "Task join error: {e}"
-                ))),
+                Ok(Err(e)) => Err(dictation_task_failed(e)),
                 Err(_) => {
                     warn!("Transcription timed out after {TRANSCRIPTION_TIMEOUT_SECS}s — requesting abort");
                     live_backend.request_abort();
@@ -2431,11 +2447,7 @@ fn stop_recording_and_transcribe(
                              will report ModelBusy rather than block forever"
                         ),
                     }
-                    Err(
-                        sagascript_core::error::DictationError::TranscriptionTimedOut(format!(
-                            "Transcription timed out after {TRANSCRIPTION_TIMEOUT_SECS}s (inference aborted)"
-                        )),
-                    )
+                    Err(dictation_timed_out())
                 }
             }
         };
@@ -2654,9 +2666,10 @@ fn stop_recording_and_transcribe(
                     "keyUpToPasteCompletedMs": null,
                     "totalMs": elapsed_ms(key_up_at),
                 }));
-                c.on_transcription_error(&e.to_string());
+                let failure = dictation_failure_text(&e);
+                c.on_transcription_error(&failure);
                 drop(c);
-                let _ = app_handle.emit_event(events::event::ERROR, &e.to_string());
+                let _ = app_handle.emit_event(events::event::ERROR, &failure);
                 // Let the overlay show its error state briefly before hiding.
                 let _ = app_handle.emit_event(events::event::STATE_CHANGED, UiState::Error);
                 let _ = app_handle.emit_event(events::event::STATE_CHANGED, UiState::Idle);
