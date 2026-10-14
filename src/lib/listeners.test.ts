@@ -24,8 +24,7 @@ describe("unmounting removes every event listener", () => {
           "model-download-progress",
           "model-ready",
           "navigate_tab",
-          "state-changed", // the Dictate result and the settings reload
-          "state-changed", // the Dictate button
+          "state-changed", // the Dictate button, its result and the settings reload
           "transcription-result",
           "update-aborted",
           "update-preparing",

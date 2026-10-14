@@ -697,19 +697,12 @@
     testResult = text;
     testError = "";
   });
-  const recordingEvents = useTauriEvent("state-changed", (state) => {
-    if (state === "recording") {
-      dictationEventRevision++;
-      liveDictationRevision++;
-      testError = "";
-    }
-  });
 
   onMount(() => {
     let disposed = false;
     // A failed background dictation may create this window after its event.
     // Recover the persisted-in-memory result without racing newer events.
-    Promise.all([errorEvents.ready, resultEvents.ready, recordingEvents.ready]).then(async () => {
+    Promise.all([errorEvents.ready, resultEvents.ready, stateEvents.ready]).then(async () => {
       const initialRevision = dictationEventRevision;
       await recoveryRestore.catch(() => undefined);
       const [error, text] = await Promise.all([getLastError(), getLastTranscription()]);
@@ -1142,7 +1135,15 @@
   // states were ignored, so the button still offered "Start recording"
   // while the backend was loading/transcribing and the next click produced
   // a misleading busy error.
-  useTauriEvent("state-changed", async (nextState) => {
+  const stateEvents = useTauriEvent("state-changed", async (nextState) => {
+    if (nextState === "recording") {
+      // A new dictation supersedes the restored result and error, and
+      // outdates the restore that waits for the listeners above.
+      dictationEventRevision++;
+      liveDictationRevision++;
+      testError = "";
+    }
+
     if (nextState === "settings_reloaded") {
       settings = await getSettings();
       await refreshProfileModels(settings.hotkey_profiles);
