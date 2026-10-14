@@ -10,9 +10,8 @@
 
 use std::process::Command;
 
+use sagascript_testsupport::{isolated_cli_env, sha256_hex, TempDir};
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
-use tempfile::tempdir;
 
 const SEGMENTATION_SHA256: &str =
     "220ad67ca923bef2fa91f2390c786097bf305bceb5e261d4af67b38e938e1079";
@@ -79,10 +78,10 @@ fn cached_meeting_progress_decoder_matches_final_report_for_greedy_beam_and_vad(
 }
 
 fn run_cache_hit_case(output_kind: OutputKind, decoder: DecoderCase) {
-    let root = tempdir().expect("create fixture directory");
-    let source = root.path().join("synthetic.wav");
-    let cache = root.path().join("synthetic-diarization-cache.json");
-    let settings = root.path().join("isolated-settings.json");
+    let root = TempDir::new();
+    let source = root.join("synthetic.wav");
+    let cache = root.join("synthetic-diarization-cache.json");
+    let settings = root.join("isolated-settings.json");
     let source_bytes = b"synthetic source bytes; cache hit must not decode this file\n";
     std::fs::write(&source, source_bytes).expect("write synthetic source");
     std::fs::write(&settings, b"{}\n").expect("write isolated settings");
@@ -90,29 +89,8 @@ fn run_cache_hit_case(output_kind: OutputKind, decoder: DecoderCase) {
     let cache_before = std::fs::read(&cache).expect("read fixture cache");
 
     let mut command = Command::new(env!("CARGO_BIN_EXE_sagascript"));
-    command.env_clear();
-    // Retain ordinary platform paths required by the Windows loader and directory
-    // lookup while excluding inherited provider and application credentials.
-    for key in [
-        "HOME",
-        "USER",
-        "LOGNAME",
-        "PATH",
-        "LANG",
-        "TMPDIR",
-        "SystemRoot",
-        "WINDIR",
-        "TEMP",
-        "TMP",
-        "USERPROFILE",
-        "APPDATA",
-        "LOCALAPPDATA",
-    ] {
-        if let Some(value) = std::env::var_os(key) {
-            command.env(key, value);
-        }
-    }
-    command.env("SAGASCRIPT_SETTINGS_PATH", &settings).args([
+    // Ordinary platform paths only (no inherited credentials) and isolated settings.
+    isolated_cli_env(&mut command, &settings).args([
         "transcribe",
         source.to_str().expect("source is UTF-8"),
         "--language",
@@ -323,8 +301,4 @@ fn write_cache(path: &std::path::Path, source: &[u8], decoder: DecoderCase) {
         serde_json::to_vec_pretty(&fixture).expect("fixture serializes"),
     )
     .expect("write cache fixture");
-}
-
-fn sha256_hex(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
 }

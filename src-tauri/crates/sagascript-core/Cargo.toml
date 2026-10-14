@@ -66,6 +66,13 @@ diarization = ["dep:ort", "dep:rustfft", "dep:kodama", "dep:ndarray"]
 # Honor SAGASCRIPT_ENGINE_HOST / SAGASCRIPT_PIANISSIMO_MODEL_DIR in a release build.
 # Off by default: signed builds must not trust the environment for the sidecar or model.
 dev-overrides = []
+# Test fixtures made of core types (`sagascript_core::test_support`, #363) for
+# the tests of the crates above core, which enable it as a dev-dependency.
+# Core's own unit tests get the module through cfg(test). Never in a release build.
+test-support = []
+
+[dev-dependencies]
+sagascript-testsupport = { path = "../sagascript-testsupport" }
 
 [lints]
 workspace = true

@@ -5,5 +5,8 @@
 # style: rustfmt the workspace (#352)
 a8769bfa45d8ff312000bc881cf182e452ae3a70
 
+# style: rustfmt the moved test files (#363)
+9ccdaa1ac0bf246669b991517680adbc1d69a271
+
 # style: format src/, scripts/ and tests/ with Prettier (#361)
 4ad172ad1566a29ee092ba873273bb288b6799dc

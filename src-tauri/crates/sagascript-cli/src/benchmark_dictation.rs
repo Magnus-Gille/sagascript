@@ -481,6 +481,7 @@ fn percentile_sorted(values: &[f64], quantile: f64) -> f64 {
 mod tests {
     use super::*;
     use clap::Parser;
+    use sagascript_testsupport::TempDir;
     use std::fs;
 
     #[derive(Debug, Parser)]
@@ -735,11 +736,7 @@ mod tests {
 
     #[test]
     fn quality_source_digest_reads_input_not_new_output_destination() {
-        let directory = std::env::temp_dir().join(format!(
-            "sagascript-benchmark-source-{}",
-            uuid::Uuid::new_v4()
-        ));
-        fs::create_dir(&directory).expect("temporary test directory should be unique");
+        let directory = TempDir::new();
         let input = directory.join("fixture.wav");
         let output = directory.join("quality.json");
         fs::write(&input, b"fixture bytes").expect("fixture should be writable");
@@ -770,8 +767,6 @@ mod tests {
             ..args
         };
         assert_eq!(initial_source_audio_sha256(&no_quality_args).unwrap(), None);
-
-        fs::remove_dir_all(directory).expect("remove only this test's unique directory");
     }
 
     #[test]

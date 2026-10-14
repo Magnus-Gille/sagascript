@@ -48,8 +48,9 @@ pub async fn get_example_info(
   [ARCHITECTURE.md §3](../ARCHITECTURE.md#3-threads-and-locks).
 - Native UI, enigo or AppKit calls go through `app.run_on_main_thread(...)`
   ([ADR 0003](../adr/0003-main-thread-native-apis.md)).
-- Put decisions in a plain function (`example_ready` above) and unit-test it in a
-  `#[cfg(test)]` module; see `apply_language_selection` and `language_selection_tests`.
+- Put decisions in a plain function (`example_ready` above) and unit-test it in
+  `commands_tests.rs`, the test file of `commands.rs`; see `apply_language_selection` and
+  `language_selection_tests`.
 - Settings writes follow [add-setting.md](add-setting.md) step 3.
 - App commands need no entry in `src-tauri/capabilities/default.json`; that file only lists
   plugin and core permissions (`build.rs` declares no app manifest).
@@ -92,7 +93,7 @@ depends on it. Calls are recorded in `window.qa.calls` for assertions.
 
 | Layer | Where |
 |---|---|
-| Rust logic | `#[cfg(test)]` module next to the command (pure function, no Tauri runtime). |
+| Rust logic | A test module in `commands_tests.rs`, the test file of `commands.rs` (pure function, no Tauri runtime). |
 | Frontend logic | Put non-trivial handling in a `src/lib/*.ts` module and test it with Vitest in `src/lib/<module>.test.ts` (see `src/lib/overlay-state.test.ts`). Add the command to `CommandMap` in `src/test/ipc.ts` and its wrapper to `src/lib/api.test.ts`. |
 | User flow | A `scripts/qa-*.mjs` Playwright check against the mock, run by `npm run test:browser`. |
 

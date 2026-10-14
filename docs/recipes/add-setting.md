@@ -75,8 +75,9 @@ awaits.
   nothing there. It does not replay setter side effects: if your setter has one (recreate a
   window, download a model), add it to the watcher too.
 - Register `commands::set_example_flag` in `tauri::generate_handler![...]` in `main()`.
-- Setter logic goes in a plain function with a `#[cfg(test)]` test (`apply_language_selection`
-  / `language_selection_tests`, `effective_auto_paste` / `auto_paste_tests`).
+- Setter logic goes in a plain function with a test in `commands_tests.rs`
+  (`apply_language_selection` / `language_selection_tests`, `effective_auto_paste` /
+  `auto_paste_tests`).
 
 ## 4. Frontend: `src/lib/api.ts`, `src/lib/Settings.svelte`
 
@@ -98,10 +99,10 @@ awaits.
 
 | Where | What |
 |---|---|
-| `settings/manager.rs` | Assert the default in `settings_default_values` and the round trip in `settings_serde_roundtrip`. |
+| `settings/manager_tests.rs` | Assert the default in `settings_default_values` and the round trip in `settings_serde_roundtrip`. |
 | `settings/store.rs` | Assert a file without the key loads the default (`partial_json_fills_defaults`). Migrations: test through the `*_at(path, …)` helpers on a temp file, never the real settings path. |
 | `config.rs` | Extend `get_setting_value_returns_serialized_values`; add a set/reset/reject test modeled on `engine_settings_can_be_set_reset_and_reject_bad_values`. |
-| `commands.rs` | Unit-test any extracted setter logic. |
+| `commands_tests.rs` | Unit-test any extracted setter logic. |
 | Frontend | New logic in a `.ts` module gets a `scripts/test-*.mjs` test. Do not add regex tests over `Settings.svelte` source ([ADR 0004](../adr/0004-test-strategy.md)). |
 
 ## 6. Verify, including CLI/GUI parity
