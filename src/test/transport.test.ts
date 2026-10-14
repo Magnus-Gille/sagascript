@@ -22,9 +22,15 @@ import * as schemas from "./transport-schemas";
 
 type EventPayloadSchemas = typeof schemas.eventPayloads;
 
-/** Parses every `{ variant: payload }` entry of a fixture. */
-function parseVariants<T>(fixture: Record<string, unknown>, schema: Schema<T>, name: string): Map<string, T> {
-  return new Map(Object.entries(fixture).map(([variant, payload]) => [variant, schema.parse(payload, `${name}:${variant}`)]));
+/**
+ * Parses every `{ variant: payload }` entry of a fixture on first use, so a
+ * mismatch fails each test that needs the payloads (with the JSON path)
+ * rather than the whole file.
+ */
+function variantsOf<T>(fixture: Record<string, unknown>, schema: Schema<T>, name: string): () => Map<string, T> {
+  let parsed: Map<string, T> | undefined;
+  return () =>
+    (parsed ??= new Map(Object.entries(fixture).map(([variant, payload]) => [variant, schema.parse(payload, `${name}:${variant}`)])));
 }
 
 test("each schema is exactly the frontend type it mirrors", () => {
@@ -41,14 +47,16 @@ test("the suite reads every shared fixture", () => {
 });
 
 describe("get_settings", () => {
-  const variants = parseVariants(settingsFixture, schemas.settings, "get_settings.json");
+  const fixture: Record<string, unknown> = settingsFixture;
+  const variants = variantsOf(fixture, schemas.settings, "get_settings.json");
 
-  test("every variant parses as Settings", () => {
-    expect([...variants.keys()].sort()).toEqual(["customised", "default"]);
+  test.each(Object.keys(fixture))("%s parses as Settings", (variant) => {
+    schemas.settings.parse(fixture[variant], `get_settings.json:${variant}`);
   });
 
   test("the fixtures cover optional and per-profile fields", () => {
-    const customised = variants.get("customised")!;
+    expect([...variants().keys()].sort()).toEqual(["customised", "default"]);
+    const customised = variants().get("customised")!;
     const [withShortcuts, withoutShortcuts] = customised.hotkey_profiles;
     expect(withShortcuts.push_to_talk_shortcut).toBeTypeOf("string");
     expect(withShortcuts.toggle_shortcut).toBeTypeOf("string");
@@ -56,40 +64,45 @@ describe("get_settings", () => {
     expect(withoutShortcuts).not.toHaveProperty("toggle_shortcut");
     expect(Object.keys(customised.profile_models).length).toBeGreaterThan(0);
     // A fresh install's implicit legacy profile arrives explicit.
-    expect(variants.get("default")!.hotkey_profiles).toHaveLength(1);
+    expect(variants().get("default")!.hotkey_profiles).toHaveLength(1);
   });
 });
 
 describe("get_meeting_job", () => {
-  const variants = parseVariants(meetingJobFixture, schemas.meetingJobSnapshot, "get_meeting_job.json");
-  const snapshots = [...variants.values()];
+  const fixture: Record<string, unknown> = meetingJobFixture;
+  const variants = variantsOf(fixture, schemas.meetingJobSnapshot, "get_meeting_job.json");
+  const snapshots = () => [...variants().values()];
+
+  test.each(Object.keys(fixture))("%s parses as MeetingJobSnapshot", (variant) => {
+    schemas.meetingJobSnapshot.parse(fixture[variant], `get_meeting_job.json:${variant}`);
+  });
 
   test("the fixtures cover every job status", () => {
-    expect(new Set(snapshots.map((snapshot) => snapshot.status))).toEqual(
+    expect(new Set(snapshots().map((snapshot) => snapshot.status))).toEqual(
       new Set(["running", "cancelling", "completed", "cancelled", "failed"]),
     );
   });
 
   test("the fixtures cover nullable fields both ways and the feature-gated reprocessing result", () => {
-    const completed = variants.get("completed")!;
+    const completed = variants().get("completed")!;
     expect(completed.transcript?.diarization).toBeTruthy();
     expect(completed.transcript?.speaker_hint).toEqual({ exact: 2 });
-    expect(variants.get("completed_plain")!.transcript).not.toHaveProperty("diarization");
-    expect(variants.get("failed")!.error).toBeTypeOf("string");
-    expect(variants.get("cancelled")!.error).toBeNull();
-    const reprocessing = variants.get("reprocessing")!;
+    expect(variants().get("completed_plain")!.transcript).not.toHaveProperty("diarization");
+    expect(variants().get("failed")!.error).toBeTypeOf("string");
+    expect(variants().get("cancelled")!.error).toBeNull();
+    const reprocessing = variants().get("reprocessing")!;
     expect(reprocessing.status).toBe("completed");
     expect(reprocessing.transcript).toBeNull();
     expect(reprocessing.reprocessing?.proposal.resolutions).toContainEqual(null);
-    expect(snapshots.filter((snapshot) => snapshot.reprocessing === null).length).toBeGreaterThan(0);
+    expect(snapshots().filter((snapshot) => snapshot.reprocessing === null).length).toBeGreaterThan(0);
   });
 
   test("every phase Rust reports has a label", () => {
-    for (const snapshot of snapshots) expect(meetingPhases).toContain(snapshot.phase);
+    for (const snapshot of snapshots()) expect(meetingPhases).toContain(snapshot.phase);
   });
 
   test("polling stops exactly at the terminal statuses", async () => {
-    for (const [variant, snapshot] of variants) {
+    for (const [variant, snapshot] of variants()) {
       let waits = 0;
       let polls = 0;
       await pollMeetingJob({
@@ -113,7 +126,7 @@ describe("get_meeting_job", () => {
   test("a correction field Rust sends as null is not part of the edit", () => {
     // Regression (#347): Rust serializes an unchanged EditSegment field as
     // null, and reconcileMeetingDrafts treated null as "edited".
-    const proposal = variants.get("reprocessing")!.reprocessing!.proposal;
+    const proposal = variants().get("reprocessing")!.reprocessing!.proposal;
     const operations: CorrectionOperation[] = proposal.previous.batches.at(-1)!.operations;
     const edit = operations.find((operation) => operation.kind === "edit_segment")!;
     expect(edit).toMatchObject({ speaker_id: null });
