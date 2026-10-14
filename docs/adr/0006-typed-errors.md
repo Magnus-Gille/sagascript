@@ -50,8 +50,9 @@
    macOS and Linux account folders, volumes and temporary folders, Windows drive and UNC
    paths, `file://` URLs and the current home directory become `<path>`, keeping the file name
    below the account folder (`<path>/foo.mlmodelc`). It runs where foreign text enters an error
-   type (`EngineFailure::new`) and again when `CommandError` is serialized, so a path that
-   arrives through a plain string is removed too. The Swift sources are unchanged.
+   type (`EngineFailure::new`), in the engine's log lines (load failure, host stderr, pre-warm
+   failure) and again when `CommandError` is serialized, so a path that arrives through a plain
+   string is removed too. The Swift sources are unchanged.
 6. **Retry or download** is decided from the error, not the text: `retryable` offers another
    attempt, `engine_model_missing` and `engine_model_load_failed` offer a model download
    (`backendErrorRecovery`).

@@ -19,6 +19,7 @@ use std::time::{Duration, Instant};
 use serde::Deserialize;
 
 use crate::error::DictationError;
+use crate::path_scrub::scrub_paths;
 use crate::settings::{EnginePrewarm, Settings};
 use crate::sync::lock_or_recover;
 use crate::transcription::dev_overrides::env_override;
@@ -670,7 +671,11 @@ pub fn warm_in_background(reason: &'static str) {
                     "Pianissimo engine pre-warmed"
                 ),
                 Ok(false) => tracing::debug!(reason, "Pianissimo engine already warm"),
-                Err(error) => tracing::warn!(reason, %error, "Pianissimo engine pre-warm failed"),
+                Err(error) => tracing::warn!(
+                    reason,
+                    error = %scrub_paths(&error),
+                    "Pianissimo engine pre-warm failed"
+                ),
             }
             IN_FLIGHT.store(false, Ordering::SeqCst);
         });

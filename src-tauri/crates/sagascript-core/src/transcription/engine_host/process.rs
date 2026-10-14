@@ -519,7 +519,11 @@ fn drain_stderr(stderr: impl Read, shared: &Shared) {
                     }
                 }
                 let line = String::from_utf8_lossy(&buf);
-                tracing::debug!(target: "engine_host::stderr", "{}", line.trim_end());
+                tracing::debug!(
+                    target: "engine_host::stderr",
+                    "{}",
+                    crate::path_scrub::scrub_paths(line.trim_end())
+                );
             }
         }
     }
