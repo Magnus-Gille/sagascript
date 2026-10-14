@@ -1,6 +1,7 @@
 // Regression for native completion preceding delivery to the Settings webview.
 import assert from "node:assert/strict";
 import { readFile, mkdir } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || "playwright");
 const browser = await chromium.launch({ headless: true });
@@ -133,7 +134,7 @@ try {
     "a failed update followed by Copy must be retryable",
   );
   assert.deepEqual(errors, []);
-  const output = process.env.QA_OUTPUT_DIR || "/private/tmp/sagascript-update-completion-qa";
+  const output = process.env.QA_OUTPUT_DIR || join(tmpdir(), "sagascript-update-completion-qa");
   await mkdir(output, { recursive: true });
   await page.screenshot({ path: join(output, "completion-recovered.png"), fullPage: true });
   console.log("PASS: update waits for completed meeting delivery and persists its result.");
