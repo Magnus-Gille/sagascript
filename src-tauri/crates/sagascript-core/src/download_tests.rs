@@ -1179,3 +1179,234 @@ fn sweep_tolerates_missing_directory() {
     let dir = TempDir::new();
     sweep_orphaned_tmp_files(&dir.join("missing"));
 }
+
+// -- install step (#368): fsync before the rename, off the executor --
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum FsOp {
+    CreateDir(PathBuf),
+    Sync(PathBuf),
+    Rename(PathBuf, PathBuf),
+}
+
+type Gate = (
+    std::sync::Mutex<std::sync::mpsc::Sender<()>>,
+    std::sync::Mutex<std::sync::mpsc::Receiver<()>>,
+);
+
+/// The real file operations, recording what ran, in order, and on which thread.
+#[derive(Default)]
+struct RecordingFs {
+    ops: std::sync::Mutex<Vec<(FsOp, std::thread::ThreadId)>>,
+    fail_sync: bool,
+    /// When set, `sync_file` reports that it started, then waits for a release.
+    hold_sync: Option<Gate>,
+}
+
+impl RecordingFs {
+    fn record(&self, op: FsOp) {
+        self.ops
+            .lock()
+            .unwrap()
+            .push((op, std::thread::current().id()));
+    }
+
+    fn ops(&self) -> Vec<FsOp> {
+        self.ops
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(op, _)| op.clone())
+            .collect()
+    }
+
+    fn renamed(&self) -> bool {
+        self.ops().iter().any(|op| matches!(op, FsOp::Rename(..)))
+    }
+}
+
+impl DownloadFs for RecordingFs {
+    fn create_dir_all(&self, dir: &Path) -> std::io::Result<()> {
+        self.record(FsOp::CreateDir(dir.to_path_buf()));
+        RealFs.create_dir_all(dir)
+    }
+
+    fn sync_file(&self, file: &std::fs::File, path: &Path) -> std::io::Result<()> {
+        self.record(FsOp::Sync(path.to_path_buf()));
+        if let Some((started, release)) = &self.hold_sync {
+            started.lock().unwrap().send(()).unwrap();
+            release
+                .lock()
+                .unwrap()
+                .recv_timeout(Duration::from_secs(10))
+                .unwrap();
+        }
+        if self.fail_sync {
+            return Err(std::io::Error::other("injected sync failure"));
+        }
+        RealFs.sync_file(file, path)
+    }
+
+    fn rename(&self, from: &Path, to: &Path) -> std::io::Result<()> {
+        self.record(FsOp::Rename(from.to_path_buf(), to.to_path_buf()));
+        RealFs.rename(from, to)
+    }
+}
+
+fn serve_valid_model() -> (String, std::thread::JoinHandle<Vec<std::io::Error>>) {
+    serve_scripts(vec![vec![
+        ok_head(Some(14)),
+        Step::Write(b"verified model".to_vec()),
+    ]])
+}
+
+async fn download_through(
+    url: &str,
+    dest: &Path,
+    fs: std::sync::Arc<RecordingFs>,
+) -> Result<(), DictationError> {
+    let env = DownloadEnv {
+        fs,
+        ..DownloadEnv::production(fast_limits())
+    };
+    download_with(url, dest, "bin", pinned(14), None, |_, _| {}, &env).await
+}
+
+/// Polls `condition` until it holds or `within` has passed.
+async fn eventually(within: Duration, condition: impl Fn() -> bool) -> bool {
+    let give_up = std::time::Instant::now() + within;
+    while !condition() {
+        if std::time::Instant::now() > give_up {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    true
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn temp_file_is_synced_before_it_is_renamed_into_place() {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let dir = TempDir::new();
+        let dest = dir.join("model.bin");
+        let (url, server) = serve_valid_model();
+        let fs = std::sync::Arc::new(RecordingFs::default());
+
+        download_through(&url, &dest, fs.clone()).await.unwrap();
+
+        let ops = fs.ops();
+        let [FsOp::CreateDir(created), FsOp::Sync(synced), FsOp::Rename(from, to)] = ops.as_slice()
+        else {
+            panic!("expected create_dir_all, sync, rename in that order, got {ops:?}");
+        };
+        assert_eq!(created, dir.path());
+        assert_eq!(synced, from, "the synced file is the one renamed");
+        assert_eq!(to, &dest);
+        assert_eq!(std::fs::read(&dest).unwrap(), b"verified model");
+        join_server(server).await;
+    })
+    .await
+    .expect("test exceeded its hard timeout");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn failed_temp_file_sync_installs_nothing() {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let dir = TempDir::new();
+        let dest = dir.join("model.bin");
+        let (url, server) = serve_valid_model();
+        let fs = std::sync::Arc::new(RecordingFs {
+            fail_sync: true,
+            ..RecordingFs::default()
+        });
+
+        let err = download_through(&url, &dest, fs.clone())
+            .await
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("Failed to sync temp file"), "{err}");
+        assert!(!fs.renamed(), "renamed after a failed sync: {:?}", fs.ops());
+        assert_empty(&dir, "a failed sync left a file");
+        join_server(server).await;
+    })
+    .await
+    .expect("test exceeded its hard timeout");
+}
+
+/// `#[tokio::test]` runs a current-thread runtime: file work done inline
+/// would run on this very thread.
+#[tokio::test]
+async fn download_file_operations_run_off_the_async_executor() {
+    let executor = std::thread::current().id();
+    let dir = TempDir::new();
+    let dest = dir.join("model.bin");
+    let (url, server) = serve_valid_model();
+    let fs = std::sync::Arc::new(RecordingFs::default());
+
+    download_through(&url, &dest, fs.clone()).await.unwrap();
+
+    let ops = fs.ops.lock().unwrap().clone();
+    let on_executor: Vec<_> = ops
+        .iter()
+        .filter(|(_, thread)| *thread == executor)
+        .map(|(op, _)| op)
+        .collect();
+    assert!(
+        on_executor.is_empty(),
+        "blocking file operations ran on the async executor thread: {on_executor:?}"
+    );
+    assert_eq!(ops.len(), 3, "{ops:?}");
+    #[cfg(unix)]
+    assert!(verification_stamp_path(&dest).exists());
+    join_server(server).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cancelling_while_the_temp_file_syncs_installs_nothing() {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let dir = TempDir::new();
+        let dest = dir.join("model.bin");
+        let (url, server) = serve_valid_model();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let fs = std::sync::Arc::new(RecordingFs {
+            hold_sync: Some((
+                std::sync::Mutex::new(started_tx),
+                std::sync::Mutex::new(release_rx),
+            )),
+            ..RecordingFs::default()
+        });
+        let task = tokio::spawn({
+            let (fs, dest) = (fs.clone(), dest.clone());
+            async move { download_through(&url, &dest, fs).await }
+        });
+        tokio::task::spawn_blocking(move || started_rx.recv_timeout(Duration::from_secs(10)))
+            .await
+            .unwrap()
+            .expect("the install step never synced the temp file");
+
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        release_tx.send(()).unwrap();
+
+        // The blocking install step finishes on its own after the release.
+        assert!(
+            eventually(Duration::from_secs(5), || std::fs::read_dir(&dir)
+                .unwrap()
+                .next()
+                .is_none())
+            .await,
+            "a download cancelled before its rename left {:?}",
+            std::fs::read_dir(&dir)
+                .unwrap()
+                .flatten()
+                .map(|e| e.file_name())
+                .collect::<Vec<_>>()
+        );
+        assert!(!fs.renamed(), "renamed after cancellation: {:?}", fs.ops());
+        join_server(server).await;
+    })
+    .await
+    .expect("test exceeded its hard timeout");
+}

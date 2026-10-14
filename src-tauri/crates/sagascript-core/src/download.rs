@@ -17,10 +17,16 @@
 //!   also loses its incidental self-cleaning property (a retried download
 //!   used to just overwrite its own leftover), so `download_to_path`
 //!   opportunistically sweeps stale `.tmp` files from the destination
-//!   directory before it starts.
+//!   directory before it starts;
+//! - the temp file is fsynced before the rename, so a crash cannot leave the
+//!   installed name (and a durable verification stamp) over unwritten data,
+//!   and every blocking filesystem step runs on Tokio's blocking pool rather
+//!   than on an async executor thread (#368).
 
 use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 #[cfg(unix)]
@@ -166,42 +172,201 @@ pub async fn download_to_path_with_limits(
     limits: DownloadLimits,
     progress_callback: impl Fn(u64, u64) + Send + 'static,
 ) -> Result<(), DictationError> {
+    download_with(
+        url,
+        dest,
+        tmp_ext,
+        integrity,
+        expected_magic,
+        progress_callback,
+        &DownloadEnv::production(limits),
+    )
+    .await
+}
+
+/// File operations of a download that tests need to observe (#368): creating
+/// the destination directory, making the temp file durable and the final
+/// rename. [`RealFs`] is the only production implementation.
+trait DownloadFs: Send + Sync {
+    fn create_dir_all(&self, dir: &Path) -> std::io::Result<()>;
+    fn sync_file(&self, file: &std::fs::File, path: &Path) -> std::io::Result<()>;
+    fn rename(&self, from: &Path, to: &Path) -> std::io::Result<()>;
+}
+
+struct RealFs;
+
+impl DownloadFs for RealFs {
+    fn create_dir_all(&self, dir: &Path) -> std::io::Result<()> {
+        std::fs::create_dir_all(dir)
+    }
+
+    fn sync_file(&self, file: &std::fs::File, _path: &Path) -> std::io::Result<()> {
+        file.sync_all()
+    }
+
+    fn rename(&self, from: &Path, to: &Path) -> std::io::Result<()> {
+        std::fs::rename(from, to)
+    }
+}
+
+/// Network bounds and injectable side effects of one download.
+struct DownloadEnv {
+    limits: DownloadLimits,
+    fs: Arc<dyn DownloadFs>,
+}
+
+impl DownloadEnv {
+    fn production(limits: DownloadLimits) -> Self {
+        Self {
+            limits,
+            fs: Arc::new(RealFs),
+        }
+    }
+}
+
+async fn download_with(
+    url: &str,
+    dest: &Path,
+    tmp_ext: &str,
+    integrity: DownloadIntegrity,
+    expected_magic: Option<&[u8]>,
+    progress_callback: impl Fn(u64, u64) + Send + 'static,
+    env: &DownloadEnv,
+) -> Result<(), DictationError> {
     if let Some(dir) = dest.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| {
-            DictationError::ModelDownloadFailed(format!("Failed to create models directory: {e}"))
-        })?;
-        sweep_orphaned_tmp_files(dir);
+        let (fs, dir) = (Arc::clone(&env.fs), dir.to_path_buf());
+        run_blocking(move || {
+            fs.create_dir_all(&dir).map_err(|e| {
+                DictationError::ModelDownloadFailed(format!(
+                    "Failed to create models directory: {e}"
+                ))
+            })?;
+            sweep_orphaned_tmp_files(&dir);
+            Ok(())
+        })
+        .await?;
     }
 
     let tmp_path = unique_tmp_path(dest, tmp_ext);
     // The guard is created together with the file (inside the blocking
     // creation task), so it removes the file on error, cancellation, panic, or
-    // an abandoned creation; it is kept through the rename below.
-    let mut guard = fetch_to_tmp(
+    // an abandoned creation; it moves into the install step below.
+    let (file, guard) = fetch_to_tmp(
         url,
         &tmp_path,
         integrity,
         expected_magic,
-        limits,
+        env.limits,
         progress_callback,
     )
     .await?;
 
-    // The download itself was already validated; if only the final move fails
-    // (e.g. a cross-device rename) the guard still removes the temp file.
-    tokio::fs::rename(&tmp_path, dest).await.map_err(|e| {
+    let (fs, dest) = (Arc::clone(&env.fs), dest.to_path_buf());
+    run_blocking_cancellable(move |cancel| {
+        install_tmp_file(fs.as_ref(), file, guard, &dest, integrity, cancel)
+    })
+    .await
+}
+
+/// Make the validated temp file durable, then atomically move it into place
+/// and record its verification stamp.
+///
+/// The order is the point (#368): the data is fsynced *before* the rename, so
+/// a crash can never leave `dest` naming a file whose blocks were not written
+/// yet, with a durable stamp (written last) vouching for it. If only the
+/// final move fails (e.g. a cross-device rename), or the download was
+/// cancelled before it, `guard` removes the temp file.
+fn install_tmp_file(
+    fs: &dyn DownloadFs,
+    file: std::fs::File,
+    mut guard: TmpFileGuard,
+    dest: &Path,
+    integrity: DownloadIntegrity,
+    cancel: &CancelFlag,
+) -> Result<(), DictationError> {
+    fs.sync_file(&file, &guard.path).map_err(|e| {
+        DictationError::ModelDownloadFailed(format!("Failed to sync temp file: {e}"))
+    })?;
+    drop(file);
+    // The last point at which a cancelled download still installs nothing.
+    cancel.check("Download")?;
+    fs.rename(&guard.path, dest).map_err(|e| {
         DictationError::ModelDownloadFailed(format!("Failed to rename temp file: {e}"))
     })?;
     guard.disarm();
 
-    // The streamed bytes were verified immediately above. Cache that result
+    // The streamed bytes were verified before the install. Cache that result
     // against the installed file's filesystem fingerprint so normal model
     // loads do not rehash multi-gigabyte artifacts. The cache
     // is also persisted as a verification stamp so later launches skip the hash
     // while the file's identity is unchanged.
     cache_verified_file(dest, integrity);
-
     Ok(())
+}
+
+/// Run blocking file work (directory scans, hashing, fsync, renames) on
+/// Tokio's blocking pool so it never stalls an async executor thread (#368).
+///
+/// Dropping the returned future does not stop `work`; a blocking closure runs
+/// to completion. Work that must notice cancellation uses
+/// [`run_blocking_cancellable`].
+pub(crate) async fn run_blocking<T, F>(work: F) -> Result<T, DictationError>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, DictationError> + Send + 'static,
+{
+    tokio::task::spawn_blocking(work).await.map_err(|e| {
+        DictationError::ModelDownloadFailed(format!("Background file task failed: {e}"))
+    })?
+}
+
+/// Set once the async caller of a blocking step has gone away (its future was
+/// dropped), so the blocking work can stop before an irreversible step.
+#[derive(Clone, Default)]
+pub(crate) struct CancelFlag(Arc<AtomicBool>);
+
+impl CancelFlag {
+    fn cancel(&self) {
+        self.0.store(true, Ordering::Release);
+    }
+
+    pub(crate) fn is_cancelled(&self) -> bool {
+        self.0.load(Ordering::Acquire)
+    }
+
+    /// `Err` once cancelled. Nobody awaits a cancelled step, so the message
+    /// (`what` names the step) only matters for logs and tests.
+    pub(crate) fn check(&self, what: &str) -> Result<(), DictationError> {
+        if self.is_cancelled() {
+            return Err(DictationError::ModelDownloadFailed(format!(
+                "{what} was cancelled"
+            )));
+        }
+        Ok(())
+    }
+}
+
+/// Sets the flag when dropped, i.e. when the awaiting future completes or is
+/// cancelled. Setting it after the work finished is harmless.
+struct CancelOnDrop(CancelFlag);
+
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        self.0.cancel();
+    }
+}
+
+/// [`run_blocking`] for work that should stop early when its caller is
+/// cancelled: `work` receives a [`CancelFlag`] that is set as soon as the
+/// returned future is dropped.
+pub(crate) async fn run_blocking_cancellable<T, F>(work: F) -> Result<T, DictationError>
+where
+    T: Send + 'static,
+    F: FnOnce(&CancelFlag) -> Result<T, DictationError> + Send + 'static,
+{
+    let cancel = CancelFlag::default();
+    let _cancel_on_drop = CancelOnDrop(cancel.clone());
+    run_blocking(move || work(&cancel)).await
 }
 
 /// Maximum number of HTTP redirects followed (matches reqwest's default).
@@ -253,7 +418,7 @@ async fn fetch_to_tmp(
     expected_magic: Option<&[u8]>,
     limits: DownloadLimits,
     progress_callback: impl Fn(u64, u64) + Send + 'static,
-) -> Result<TmpFileGuard, DictationError> {
+) -> Result<(std::fs::File, TmpFileGuard), DictationError> {
     let deadline = tokio::time::Instant::now() + limits.total_deadline(integrity.size);
     let fetch = async {
         let client = build_client(limits.connect_timeout)?;
@@ -352,7 +517,7 @@ async fn open_response(
 }
 
 /// Stream a successful response into a new temp file at `tmp_path` and
-/// validate it. The returned guard owns the temp file.
+/// validate it. Returns the open, flushed file and the guard that owns it.
 async fn stream_to_tmp(
     response: reqwest::Response,
     tmp_path: &Path,
@@ -363,7 +528,7 @@ async fn stream_to_tmp(
     // Called synchronously after every chunk; it must be cheap and
     // non-blocking, since it holds up the transfer (and cannot be pre-empted).
     progress_callback: impl Fn(u64, u64) + Send + 'static,
-) -> Result<TmpFileGuard, DictationError> {
+) -> Result<(std::fs::File, TmpFileGuard), DictationError> {
     let expired = || tokio::time::Instant::now() >= deadline;
     let content_length = response.content_length();
     if let Some(len) = content_length {
@@ -427,7 +592,7 @@ async fn stream_to_tmp(
     file.flush()
         .await
         .map_err(|e| DictationError::ModelDownloadFailed(format!("Flush error: {e}")))?;
-    drop(file);
+    let file = file.into_std().await;
     if expired() {
         return Err(total_err(limits, integrity.size));
     }
@@ -443,7 +608,7 @@ async fn stream_to_tmp(
     )
     .map_err(DictationError::ModelDownloadFailed)?;
 
-    Ok(guard)
+    Ok((file, guard))
 }
 
 /// Only these statuses are followed; any other 3xx is an error.
