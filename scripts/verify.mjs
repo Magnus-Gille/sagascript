@@ -539,7 +539,7 @@ export const CHECKS = [
     steps: [
       step("npm run test:browser", undefined, {
         argv: ["node", "scripts/run-transcription-browser-tests.mjs"],
-        // As in CI: the QA scripts otherwise write to /private/tmp (macOS only).
+        // As in CI: a fresh dir per run instead of the shared default under the OS temp dir.
         env: { QA_OUTPUT_DIR: "{freshTempDir}" },
       }),
     ],
