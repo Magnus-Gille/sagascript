@@ -124,6 +124,14 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
+      # npm advisories (#355): fail on a high or critical finding anywhere in
+      # the root package-lock.json, dev dependencies included, since they
+      # build the shipped frontend bundle. site/ and tooling/code-health/ have
+      # their own lockfiles; neither ships in the app and neither is audited
+      # here.
+      - name: Audit npm dependencies
+        run: npm audit --audit-level=high
+
       - name: Test frontend lifecycle helpers
         run: |
           npm run test:frontend
@@ -416,6 +424,20 @@ jobs:
             src-tauri
             src-tauri/engine-host/ort
           shared-key: sagascript-ci
+
+      # Dependency policy (#355), before any compilation: RustSec advisories,
+      # licenses, banned or duplicated crates and allowed sources, as set in
+      # src-tauri/deny.toml, for both Cargo workspaces. The advisory database
+      # is fetched at run time. rust-cache keeps the installed binary. The ORT
+      # host run allows the policy entries only the main workspace uses.
+      - name: Install cargo-deny
+        run: cargo install --locked cargo-deny --version 0.20.2
+
+      - name: Check Rust dependency policy (cargo-deny)
+        working-directory: src-tauri
+        run: |
+          cargo deny --locked --workspace check
+          cargo deny --locked --manifest-path engine-host/ort/Cargo.toml --workspace check -A license-not-encountered -A license-exception-not-encountered -A unmatched-source
 
       - name: Install npm dependencies
         run: npm ci

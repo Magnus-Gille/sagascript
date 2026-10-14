@@ -88,6 +88,7 @@ npm run verify -- --list                 # every check with its commands, budget
 | `core-features` | `core-clippy`, `core-clippy-diarization`, `core-test`, `core-test-record`, `core-test-diarization` | `cargo clippy`/`cargo test -p sagascript-core` without features, with `record`, with `diarization` | Rust | test-macos, test-linux, test-windows |
 | `engine-protocol` | `engine-protocol` | `cargo test -p sagascript-engine-protocol` | Rust | test-linux |
 | `ort-host` | `ort-host-clippy`, `ort-host-test` | `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked` (`src-tauri/engine-host/ort`) | Rust | test-linux |
+| `deps` | `deny`, `npm-audit` | `cargo deny --locked --workspace check` and the same for the ORT host (`src-tauri`; policy and what to do about a new advisory: `src-tauri/deny.toml`); `npm audit --audit-level=high` (root lockfile). Both fetch advisory data over the network | `cargo install --locked cargo-deny --version 0.20.2` | deny: test-linux; audit: test-macos |
 | `release-guard` | `release-guard` | `cargo test --release -p sagascript-core --lib dev_overrides` | Rust | test-linux |
 | `svelte-check` | `svelte-check` | `npx svelte-check --tsconfig ./tsconfig.json` | `npm ci` | test-macos |
 | `node` | `node-ui`, `node-ci`, `node-release` | `npm run test:ui`, `npm run test:ci`, `npm run test:release` | `npm ci` (ui) | test-macos, test-windows (`npm run test:frontend`) |

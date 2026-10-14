@@ -363,15 +363,17 @@ contains no cpal/ALSA.
 | Conformance | `scripts/engine-host-conformance.py <host> --model-dir <dir>` | manual, needs a model | not in CI |
 
 CI (`.github/workflows/ci.yml`) splits cargo per crate and feature set: test-linux runs both
-`cargo fmt --check` gates, app `check`/`clippy`, the CLI with and without default features,
-core with no features and with `record`, the protocol crate, ORT host test/clippy, the
-release-profile guard and the no-ALSA tree check; msrv-linux runs `cargo check --workspace
---locked`, the lean CLI and the ORT host on the `rust-version` toolchain (1.88), and
-check-linux requires it; test-macos runs app `check`/`test`/`clippy`, core with no features
-and with `diarization`, the CLI both ways, Swift tests and the frontend suites; test-windows
-runs the Node suite and app, core and CLI tests and clippy. `cargo test --workspace` runs in
-`windows-package.yml` (on PRs touching `src/`, `src-tauri/`, `scripts/`, package files,
-`.gitattributes` or the workflow itself) and `release-quality-gate.yml`. A PR that only touches
+`cargo fmt --check` gates, `cargo deny check` for both Cargo workspaces (`src-tauri/deny.toml`:
+advisories, licenses, a single `reqwest`, allowed sources), app `check`/`clippy`, the CLI with
+and without default features, core with no features and with `record`, the protocol crate, ORT
+host test/clippy, the release-profile guard and the no-ALSA tree check; msrv-linux runs `cargo
+check --workspace --locked`, the lean CLI and the ORT host on the `rust-version` toolchain
+(1.88), and check-linux requires it; test-macos runs `npm audit --audit-level=high`, app
+`check`/`test`/`clippy`, core with no features and with `diarization`, the CLI both ways, Swift
+tests and the frontend suites; test-windows runs the Node suite and app, core and CLI tests and
+clippy. `cargo test --workspace` runs in `windows-package.yml` (on PRs touching `src/`,
+`src-tauri/`, `scripts/`, package files, `.gitattributes` or the workflow itself) and
+`release-quality-gate.yml`. A PR that only touches
 `README.md`, `docs/release-readiness.md` or `docs/research/**/*.md` skips the native lanes
 (`scripts/ci-docs-scope.mjs`). Locally, `npm run verify` runs the test and lint suites above
 (`scripts/verify.mjs`, documented in [CONTRIBUTING.md](../CONTRIBUTING.md#running-tests));

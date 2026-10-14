@@ -219,7 +219,16 @@ test("dist/ is a prerequisite of exactly the checks that compile the app crate",
   const root = fixture(t);
   const present = { label: "present", probe: () => ({ ok: true }) };
   const prerequisites = { ...PREREQUISITES };
-  for (const id of ["rust", "linux-libs", "msrv-toolchain", "python", "python-eval-packages", "swift", "playwright-chromium"]) {
+  for (const id of [
+    "rust",
+    "linux-libs",
+    "msrv-toolchain",
+    "cargo-deny",
+    "python",
+    "python-eval-packages",
+    "swift",
+    "playwright-chromium",
+  ]) {
     prerequisites[id] = present;
   }
   const cargoChecks = CHECKS.filter((check) => check.steps.some((step) => step.run.startsWith("cargo ")));

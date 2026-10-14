@@ -63,6 +63,7 @@ export const TEST_GROUPS = {
     "scripts/test-ci-parallel-gates.mjs",
     "scripts/test-ci-run-timings.mjs",
     "scripts/test-ci-unrun-suites.mjs",
+    "scripts/test-dependency-policy.mjs",
     "scripts/test-frontend-test-groups.mjs",
     "scripts/test-pipeline-cache.mjs",
     "scripts/test-rust-toolchain-pin.mjs",
