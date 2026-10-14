@@ -12,7 +12,24 @@
 //! A path becomes [`PLACEHOLDER`], followed by its file name when the path goes
 //! deeper than the account folder: `/Users/x/Documents/a.m4a` is
 //! `<path>/a.m4a`, `/Users/x` is `<path>`. The file name stays because it is
-//! what the user (and a bug report) needs to tell which file failed.
+//! what the user (and a bug report) needs to tell which file failed; every
+//! folder before it, however many words its name has, is removed.
+//!
+//! Where a path ends is decided from the text alone: at a quote, bracket,
+//! comma, semicolon, line break, a colon followed by a space, or another
+//! path. A space continues the path while a later word, before the clause
+//! ends, still contains a separator (`Application Support/Sagascript`), so
+//! folder names with spaces are consumed whole.
+//!
+//! What it recognises, and so what the account name is guaranteed to be
+//! removed from: the roots in `ROOTS` (macOS `/Users`, `/Volumes`, `/private`,
+//! Linux `/home`, `/root`, `/var`, `/tmp`, matched ASCII case-insensitively
+//! because the macOS file system is), their `/System/Volumes/Data/…` spelling,
+//! `file://` and `file://localhost` URLs, Windows drive, UNC and `\\?\` /
+//! `\\.\` paths, and the home directory the process reports. Not recognised
+//! (non-goals): a path JSON-escaped as `\/Users\/zoe`, a percent-encoded
+//! `%2FUsers%2F`, `~zoe/…`, a relative path, and a home directory the
+//! process does not know about.
 
 use std::sync::OnceLock;
 
@@ -35,10 +52,10 @@ const ROOTS: &[(&str, usize)] = &[
 /// A drive-letter path (`C:\…`, `C:/…`) is user-specific on every drive.
 const DRIVE_DEPTH: usize = 3;
 
-/// How many whitespace-separated words after a space may still belong to the
-/// path, looking for the next separator: `Application Support/Sagascript`
-/// (1 word) and `Final Cut Pro Library/x` (3 words) stay one path.
-const MAX_WORDS_IN_SEGMENT: usize = 3;
+/// The macOS spelling of the folders below it: `/System/Volumes/Data/Users/x`
+/// is `/Users/x`, three components deeper.
+const FIRMLINK_PREFIX: &str = "/System/Volumes/Data";
+const FIRMLINK_DEPTH: usize = 3;
 
 /// `text` with every absolute path replaced as described in the module
 /// documentation. Idempotent. Recognises the macOS and Linux account folders,
@@ -68,10 +85,10 @@ pub fn scrub_paths_with_home(text: &str, home: Option<&str>) -> String {
             break;
         };
         match root_at(text, at, home) {
-            Some(depth) => {
-                let end = path_end(text, at, home);
+            Some(root) => {
+                let end = path_end(text, at + root.skip, home);
                 let (path, tail) = split_trailing_punctuation(&text[at..end]);
-                out.push_str(&replacement(path, depth));
+                out.push_str(&replacement(&path[root.skip.min(path.len())..], root.depth));
                 out.push_str(tail);
                 at = end;
             }
@@ -89,7 +106,7 @@ fn is_separator(c: char) -> bool {
 }
 
 /// Characters that end a path for good. A space only ends it when no further
-/// separator follows within [`MAX_WORDS_IN_SEGMENT`] words.
+/// separator follows before the clause ends (see the module documentation).
 fn is_hard_terminator(c: char) -> bool {
     c.is_control()
         || matches!(
@@ -116,43 +133,127 @@ fn is_hard_terminator(c: char) -> bool {
         )
 }
 
-/// Whether the text at `at` starts a path root, and how many leading
-/// components identify the user.
-fn root_at(text: &str, at: usize, home: Option<&str>) -> Option<usize> {
+/// A recognised root: how many leading components identify the user, and how
+/// many bytes at its start (`\\?\`, the slash of `/C:/`) are a prefix that is not
+/// part of the path proper.
+#[derive(Clone, Copy)]
+struct Root {
+    depth: usize,
+    skip: usize,
+}
+
+fn starts_with_ci(text: &str, prefix: &str) -> bool {
+    text.len() >= prefix.len()
+        && text.is_char_boundary(prefix.len())
+        && text[..prefix.len()].eq_ignore_ascii_case(prefix)
+}
+
+fn ends_with_ci(text: &str, suffix: &str) -> bool {
+    text.len() >= suffix.len()
+        && text.is_char_boundary(text.len() - suffix.len())
+        && text[text.len() - suffix.len()..].eq_ignore_ascii_case(suffix)
+}
+
+/// Whether the text at `at` starts a path root.
+fn root_at(text: &str, at: usize, home: Option<&str>) -> Option<Root> {
     let rest = &text[at..];
     let before = text[..at].chars().next_back();
-    let starts_word = match before {
-        None => true,
-        Some(c) if c.is_alphanumeric() || matches!(c, '.' | '-' | '_' | '~' | '%') => false,
-        // `file:///Users/…`: the root follows the URL's own slashes.
-        Some('/') => text[..at].ends_with("file://"),
-        Some(_) => true,
-    };
+    let after_file_url =
+        ends_with_ci(&text[..at], "file://") || ends_with_ci(&text[..at], "file://localhost");
+    let starts_word = after_file_url
+        || match before {
+            None => true,
+            Some(c) if c.is_alphanumeric() || matches!(c, '.' | '-' | '_' | '~' | '%') => false,
+            // `file:///Users/…` is handled above; any other slash continues a path.
+            Some('/') => false,
+            Some(_) => true,
+        };
     if !starts_word {
         return None;
     }
-    if let Some(home) = home {
-        if let Some(after) = rest.strip_prefix(home) {
-            if ends_component(after) {
-                let components = home.split(is_separator).filter(|part| !part.is_empty());
-                return Some(components.count());
+    if after_file_url {
+        // `file:///C:/Users/…`: the slash before the drive letter belongs to the URL.
+        let mut chars = rest.chars();
+        if let (Some('/'), Some(letter), Some(':'), Some(separator)) =
+            (chars.next(), chars.next(), chars.next(), chars.next())
+        {
+            if letter.is_ascii_alphabetic() && is_separator(separator) {
+                return Some(Root {
+                    depth: DRIVE_DEPTH,
+                    skip: 1,
+                });
             }
         }
     }
+    known_root(rest, home)
+}
+
+fn known_root(rest: &str, home: Option<&str>) -> Option<Root> {
+    let plain = |depth| Some(Root { depth, skip: 0 });
+    if let Some(home) = home {
+        if let Some(after) = rest.strip_prefix(home) {
+            if ends_component(after) {
+                return plain(
+                    home.split(is_separator)
+                        .filter(|part| !part.is_empty())
+                        .count(),
+                );
+            }
+        }
+    }
+    if starts_with_ci(rest, FIRMLINK_PREFIX) && rest[FIRMLINK_PREFIX.len()..].starts_with('/') {
+        let inner = known_root(&rest[FIRMLINK_PREFIX.len()..], home)?;
+        return Some(Root {
+            depth: inner.depth + FIRMLINK_DEPTH,
+            skip: 0,
+        });
+    }
     for (root, depth) in ROOTS {
-        if rest.starts_with(root) || (root.len() > 1 && rest == &root[..root.len() - 1]) {
-            return Some(*depth);
+        let bare = &root[..root.len() - 1];
+        if starts_with_ci(rest, root) || (rest.len() == bare.len() && starts_with_ci(rest, bare)) {
+            return plain(*depth);
         }
     }
     let mut chars = rest.chars();
     if let (Some(letter), Some(':'), Some(separator)) = (chars.next(), chars.next(), chars.next()) {
         if letter.is_ascii_alphabetic() && is_separator(separator) {
-            return Some(DRIVE_DEPTH);
+            return plain(DRIVE_DEPTH);
         }
     }
-    // UNC share: `\\server\share\…`.
-    if rest.starts_with("\\\\") && rest[2..].chars().next().is_some_and(|c| !is_separator(c)) {
-        return Some(3);
+    // The verbatim (`\\?\`) and device (`\\.\`) prefixes of the paths above.
+    for prefix in ["\\\\?\\", "\\\\.\\"] {
+        if let Some(after) = rest.strip_prefix(prefix) {
+            if after
+                .get(..4)
+                .is_some_and(|unc| unc.eq_ignore_ascii_case("UNC\\"))
+            {
+                // `\\?\UNC\server\share\…`: UNC, the server and the share identify it.
+                return Some(Root {
+                    depth: 3,
+                    skip: prefix.len(),
+                });
+            }
+            let mut chars = after.chars();
+            if let (Some(letter), Some(':'), Some(separator)) =
+                (chars.next(), chars.next(), chars.next())
+            {
+                if letter.is_ascii_alphabetic() && is_separator(separator) {
+                    return Some(Root {
+                        depth: DRIVE_DEPTH,
+                        skip: prefix.len(),
+                    });
+                }
+            }
+        }
+    }
+    // UNC share: `\\server\share\…` (the server and the share identify it).
+    if rest.starts_with("\\\\")
+        && rest[2..]
+            .chars()
+            .next()
+            .is_some_and(|c| !is_separator(c) && c != '?' && c != '.')
+    {
+        return plain(2);
     }
     None
 }
@@ -200,12 +301,13 @@ fn path_end(text: &str, start: usize, home: Option<&str>) -> usize {
     }
 }
 
-/// Whether the words after a space belong to the same path: one of the next
-/// [`MAX_WORDS_IN_SEGMENT`] words contains a separator and none of the words
-/// before it starts a path of its own (`a.bin to /Users/b/c`).
+/// Whether the words after a space belong to the same path: a later word of
+/// the clause contains a separator, and neither the words before it nor that
+/// word start a path of their own (`a.bin to /Users/b/c`) or end the clause
+/// (a word ending in a colon, `a.m4a: not found`).
 fn continues_after_space(rest: &str, home: Option<&str>) -> bool {
     let mut remaining = rest;
-    for _ in 0..=MAX_WORDS_IN_SEGMENT {
+    loop {
         let word_end = remaining
             .find(|c: char| c == ' ' || is_hard_terminator(c) || c.is_whitespace())
             .unwrap_or(remaining.len());
@@ -216,12 +318,14 @@ fn continues_after_space(rest: &str, home: Option<&str>) -> bool {
         if word.contains(is_separator) {
             return true;
         }
+        if word.ends_with(':') {
+            return false;
+        }
         match remaining[word_end..].strip_prefix(' ') {
             Some(next) => remaining = next,
             None => return false,
         }
     }
-    false
 }
 
 /// Splits sentence punctuation off the end of a path (`…/a.bin.`).
@@ -423,5 +527,99 @@ mod tests {
             scrub("The file “/Users/x/Library/Caches/a b/c.bin” couldn’t be opened."),
             "The file “<path>/c.bin” couldn’t be opened."
         );
+    }
+
+    #[test]
+    fn the_macos_firmlink_spelling_of_a_home_folder_is_a_home_folder() {
+        assert_eq!(
+            scrub("open /System/Volumes/Data/Users/zoe/Documents/x.bin: no"),
+            "open <path>/x.bin: no"
+        );
+        assert_eq!(
+            scrub("open /System/Volumes/Data/home/zoe/x.bin: no"),
+            "open <path>/x.bin: no"
+        );
+        assert_eq!(scrub("home /System/Volumes/Data/Users/zoe"), "home <path>");
+        // The Data volume's other folders are not user-specific roots.
+        assert_eq!(
+            scrub("open /System/Volumes/Data/Applications/x.app"),
+            "open /System/Volumes/Data/Applications/x.app"
+        );
+    }
+
+    #[test]
+    fn a_file_url_for_localhost_is_a_file_url() {
+        assert_eq!(
+            scrub("could not read file://localhost/Users/zoe/x.bin"),
+            "could not read file://localhost<path>/x.bin"
+        );
+        assert_eq!(
+            scrub("could not read file:///C:/Users/zoe/x.bin"),
+            "could not read file://<path>/x.bin"
+        );
+    }
+
+    #[test]
+    fn a_case_insensitive_file_system_can_spell_the_roots_in_lowercase() {
+        assert_eq!(scrub("open /users/zoe/x.wav: no"), "open <path>/x.wav: no");
+        assert_eq!(scrub("open /USERS/Zoe/x.wav: no"), "open <path>/x.wav: no");
+        assert_eq!(
+            scrub("open /volumes/Client Disk/a.wav"),
+            "open <path>/a.wav"
+        );
+        assert_eq!(
+            scrub("open /Private/Var/folders/zz/a/T/x.wav"),
+            "open <path>/x.wav"
+        );
+    }
+
+    #[test]
+    fn a_long_folder_name_is_not_kept_but_the_file_name_is() {
+        assert_eq!(
+            scrub("open /Users/zoe/Documents/My Audio Files With Many Words In Name/recording.m4a: no"),
+            "open <path>/recording.m4a: no"
+        );
+        // The path stops at the colon that ends the clause, not at a later slash.
+        assert_eq!(
+            scrub("open /Users/zoe/Documents/My Meeting.m4a: not found, see logs/app.log"),
+            "open <path>/My Meeting.m4a: not found, see logs/app.log"
+        );
+        assert_eq!(
+            scrub("copy /Users/a/in.wav to /Users/b/out.wav, then stop"),
+            "copy <path>/in.wav to <path>/out.wav, then stop"
+        );
+    }
+
+    #[test]
+    fn windows_verbatim_and_device_prefixes_are_part_of_the_path() {
+        assert_eq!(
+            scrub(r"open \\?\C:\Users\zoe\x.bin: no"),
+            "open <path>/x.bin: no"
+        );
+        assert_eq!(
+            scrub(r"open \\?\UNC\server\share\dir\x.bin: no"),
+            "open <path>/x.bin: no"
+        );
+        assert_eq!(
+            scrub(r"open \\.\C:\Users\zoe\x.bin: no"),
+            "open <path>/x.bin: no"
+        );
+        assert_eq!(scrub(r"home \\?\C:\Users\zoe"), "home <path>");
+    }
+
+    #[test]
+    fn the_account_name_is_gone_from_every_recognised_spelling() {
+        let user = "zoltan.kovacs";
+        for case in [
+            format!("/System/Volumes/Data/Users/{user}/a b/c.bin"),
+            format!("file://localhost/Users/{user}/Movies/x.mov"),
+            format!("/users/{user}/x.wav"),
+            format!(r"\\?\C:\Users\{user}\AppData\x.bin"),
+            format!("/Users/{user}/Documents/My Audio Files With Many Words In Name/r.m4a"),
+        ] {
+            let scrubbed = scrub(&format!("failed: {case}: no"));
+            assert!(!scrubbed.contains(user), "{case:?} -> {scrubbed:?}");
+            assert_eq!(scrub(&scrubbed), scrubbed, "idempotent: {scrubbed:?}");
+        }
     }
 }

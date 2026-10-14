@@ -1,6 +1,7 @@
 //! One spawned host process: JSON-Lines transport and response routing.
 
 use super::{EngineHostError, Result};
+use crate::path_scrub::scrub_paths;
 use crate::sync::{lock_or_recover, recover_poisoned};
 use sagascript_engine_protocol::{
     decode_incoming, encode_request, ErrorBody, Incoming, RequestOp, MAX_LINE_BYTES,
@@ -522,7 +523,7 @@ fn drain_stderr(stderr: impl Read, shared: &Shared) {
                 tracing::debug!(
                     target: "engine_host::stderr",
                     "{}",
-                    crate::path_scrub::scrub_paths(line.trim_end())
+                    scrub_paths(line.trim_end())
                 );
             }
         }
@@ -583,8 +584,8 @@ fn read_stdout(
                 }
             }
             Ok(Incoming::Malformed { id, error }) => {
-                let preview: String = line.trim().chars().take(200).collect();
-                tracing::warn!(pid, id, error = %error.message, line = %preview, "malformed engine host line; failing its request");
+                let preview = log_preview(&line);
+                tracing::warn!(pid, id, error = %scrub_paths(&error.message), line = %preview, "malformed engine host line; failing its request");
                 let w = lock_or_recover(&shared.routing, ROUTING_LOCK)
                     .waiters
                     .remove(&id);
@@ -593,8 +594,8 @@ fn read_stdout(
                 }
             }
             Err(e) => {
-                let preview: String = line.trim().chars().take(200).collect();
-                tracing::warn!(pid, error = %e, line = %preview, "ignoring malformed engine host line");
+                let preview = log_preview(&line);
+                tracing::warn!(pid, error = %scrub_paths(&e.to_string()), line = %preview, "ignoring malformed engine host line");
             }
         }
     }
@@ -633,9 +634,41 @@ fn read_stdout(
     }
 }
 
+/// The first 200 characters of a host line for the log, with absolute paths
+/// removed first so the cut cannot leave half of one (ADR 0006).
+fn log_preview(line: &str) -> String {
+    scrub_paths(line.trim()).chars().take(200).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A malformed line from the host is logged to find the protocol fault; the
+    /// preview must not carry an absolute path, also when the path starts just
+    /// before the cut (ADR 0006).
+    #[test]
+    fn the_log_preview_of_a_host_line_carries_no_path_and_is_bounded() {
+        let line = "{\"oops\": \"Failed to load model at /Users/zoe/Library/Application Support/Sagascript/models/foo.mlmodelc\"}\n";
+        let preview = log_preview(line);
+        assert!(!preview.contains("zoe"), "{preview}");
+        assert!(preview.contains("foo.mlmodelc"), "{preview}");
+
+        let at_the_cut = format!("{} /Users/zoe/Documents/a.bin", "x".repeat(190));
+        let preview = log_preview(&at_the_cut);
+        assert!(
+            !preview.contains("zoe") && !preview.contains("/Users"),
+            "{preview}"
+        );
+        assert!(
+            preview.chars().count() <= 200,
+            "{}",
+            preview.chars().count()
+        );
+
+        let long = "y".repeat(5_000);
+        assert_eq!(log_preview(&long).chars().count(), 200);
+    }
 
     #[test]
     fn bounded_line_reader_splits_lines_and_bounds_memory() {
