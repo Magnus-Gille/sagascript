@@ -20,6 +20,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use syn::ext::IdentExt;
 use syn::punctuated::Punctuated;
 use syn::visit::Visit;
 use syn::{FnArg, GenericArgument, ItemFn, Pat, PathArguments, ReturnType, Token, Type};
@@ -351,7 +352,9 @@ impl Generation {
             {
                 continue;
             }
-            let rust_name = ident.ident.to_string();
+            // Tauri names the argument after the identifier without `r#`, so a
+            // parameter `r#type` is sent as `type`.
+            let rust_name = ident.ident.unraw().to_string();
             if rust_name.starts_with('_') {
                 return Err(format!(
                     "parameter `{rust_name}` is not injected and starts with _"
@@ -751,6 +754,25 @@ fn argument_keys_are_tauri_camel_case() {
     assert_eq!(camel_case("source_sha256"), "sourceSha256");
     assert_eq!(camel_case("language"), "language");
     assert_eq!(camel_case("expected_revision"), "expectedRevision");
+}
+
+#[test]
+fn raw_identifier_parameters_are_sent_without_the_prefix() {
+    // Tauri derives the key from the identifier with `r#` removed (`unraw`).
+    let mut generation = Generation::default();
+    let function: ItemFn = syn::parse_quote! {
+        #[tauri::command]
+        pub async fn example(r#type: String, r#async: Option<bool>) -> Result<(), String> { todo!() }
+    };
+    let command = generation
+        .command("commands", &function)
+        .expect("raw identifiers map");
+    let keys: Vec<(&str, &str)> = command
+        .params
+        .iter()
+        .map(|param| (param.rust_name.as_str(), param.key.as_str()))
+        .collect();
+    assert_eq!(keys, [("type", "type"), ("async", "async")]);
 }
 
 #[test]
