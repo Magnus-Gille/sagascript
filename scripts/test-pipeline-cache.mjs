@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { allSteps, loadAction, loadWorkflow } from "./lib/ci-workflow.mjs";
 
 const rustCacheRef = "Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6";
 
-const [ciWorkflow, testBuildWorkflow, windowsWorkflow] = await Promise.all([
-  readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8"),
+const [testBuildWorkflow, windowsWorkflow] = await Promise.all([
   readFile(new URL("../.github/workflows/test-build.yml", import.meta.url), "utf8"),
   readFile(new URL("../.github/workflows/windows-package.yml", import.meta.url), "utf8"),
 ]);
@@ -18,12 +18,15 @@ function section(content, startMarker, endMarker) {
 }
 
 test("CI rust caches use the reviewed immutable action revision", () => {
-  const refs = ciWorkflow.match(/uses: Swatinem\/rust-cache@[^\s]+/g) ?? [];
-  // test-macos, build-macos, test-linux, msrv-linux (#353), test-windows, build-windows
-  assert.equal(refs.length, 6);
+  const cacheUses = (steps) => steps.map((step) => step.uses).filter((uses) => uses?.startsWith("Swatinem/rust-cache@"));
+  // The cache is part of the setup action (#358), the one place that names the revision; ci.yml's
+  // six lanes (test-macos, build-macos, test-linux, msrv-linux #353, test-windows, build-windows)
+  // reach it through the action, which scripts/test-ci-parallel-gates.mjs checks lane by lane.
+  assert.deepEqual(cacheUses(loadAction("setup").steps), [rustCacheRef]);
   assert.deepEqual(
-    refs,
-    Array.from({ length: 6 }, () => `uses: ${rustCacheRef}`),
+    cacheUses(allSteps(loadWorkflow()).map(({ step }) => step)),
+    [],
+    "a ci.yml lane that names its own rust-cache would bypass the shared setup",
   );
 });
 

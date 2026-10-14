@@ -1,0 +1,96 @@
+name: Set up the CI toolchain
+description: >-
+  The preamble of every ci.yml lane (#358): Python, the Rust toolchain, Node.js, the Rust
+  dependency cache, the downloaded-model cache of the native build lanes and `npm ci`. The job
+  checks out the repository first, so this action always comes from the revision under test.
+  The toolchain and Node versions are pinned here once; scripts/test-rust-toolchain-pin.mjs
+  holds them to rust-toolchain.toml and .nvmrc.
+
+inputs:
+  python:
+    description: Install Python 3.12 (the dictation and diarization tests, the JSON stream verifier).
+    default: "true"
+  rust:
+    description: >-
+      "true" installs the pinned Rust toolchain. "msrv" installs the one `rust-version` declares
+      (minimal profile) and exports RUSTUP_TOOLCHAIN for every later step (#353). "false" installs none.
+    default: "true"
+  rust-components:
+    description: Extra toolchain components, comma separated (clippy, rustfmt).
+    default: ""
+  cache-key:
+    description: Swatinem/rust-cache shared-key. Lanes that compile alike share one; rust-cache keeps OS and target entries apart.
+    required: true
+  cache-workspaces:
+    description: Cargo workspaces to cache, one per line. The standalone ORT engine host is its own workspace (#357).
+    default: src-tauri
+  models:
+    description: Cache the models the CLI smoke tests download (macOS and Windows build lanes).
+    default: "false"
+  linux-deps:
+    description: Install the Tauri system libraries and xdotool with apt (Linux lanes that compile the app crate).
+    default: "false"
+  npm-ci:
+    description: Run `npm ci`. test-windows turns it off to run its build identity gates first, then installs.
+    default: "true"
+
+runs:
+  using: composite
+  steps:
+    - if: ${{ inputs.linux-deps == 'true' }}
+      name: Install Tauri system dependencies
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libasound2-dev build-essential file xdotool
+
+    - if: ${{ inputs.python == 'true' }}
+      name: Select evaluation Python runtime
+      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+      with:
+        python-version: "3.12"
+
+    - if: ${{ inputs.rust == 'true' }}
+      name: Install Rust
+      uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # v1; toolchain must match rust-toolchain.toml
+      with:
+        toolchain: 1.99.0
+        components: ${{ inputs.rust-components }}
+
+    - if: ${{ inputs.rust == 'msrv' }}
+      name: Install the declared MSRV toolchain
+      shell: bash
+      run: |
+        msrv=$(sed -n 's/^rust-version = "\(.*\)"$/\1/p' src-tauri/Cargo.toml)
+        ort_msrv=$(sed -n 's/^rust-version = "\(.*\)"$/\1/p' src-tauri/engine-host/ort/Cargo.toml)
+        test -n "$msrv"
+        test "$msrv" = "$ort_msrv"
+        rustup toolchain install "$msrv" --profile minimal
+        echo "RUSTUP_TOOLCHAIN=$msrv" >> "$GITHUB_ENV"
+        echo "Checking against Rust $msrv"
+
+    - name: Install Node.js
+      uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+      with:
+        node-version: 22
+        cache: npm
+
+    - name: Cache Rust dependencies
+      uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      with:
+        workspaces: ${{ inputs.cache-workspaces }}
+        shared-key: ${{ inputs.cache-key }}
+
+    - if: ${{ inputs.models == 'true' }}
+      name: Cache downloaded models
+      uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+      with:
+        path: ${{ runner.os == 'Windows' && '~\AppData\Roaming\Sagascript\Models' || '~/Library/Application Support/Sagascript/Models' }}
+        key: ${{ runner.os == 'Windows' && 'windows' || 'macos' }}-models-${{ hashFiles('src-tauri/crates/sagascript-core/src/settings/manager.rs', 'src-tauri/crates/sagascript-core/src/transcription/model.rs', 'src-tauri/crates/sagascript-core/src/diarization/model.rs') }}
+        restore-keys: |
+          ${{ runner.os == 'Windows' && 'windows' || 'macos' }}-models-
+
+    - if: ${{ inputs.npm-ci == 'true' }}
+      name: Install npm dependencies
+      shell: bash
+      run: npm ci

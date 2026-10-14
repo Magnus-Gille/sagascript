@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, dirname, join } from "node:path";
+import { delimiter, dirname, join, posix } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { isProcessAlive } from "./lib/process-tree.mjs";
@@ -92,16 +92,25 @@ test("the real manifest classifies every Node test file exactly once", () => {
 test("each group declares the npm packages its tests import", () => {
   // Static, side-effect and dynamic imports of a bare package specifier.
   const bareImport = /\bfrom\s*["']([@a-z][\w@./:-]*)["']|\bimport\s*\(?\s*["']([@a-z][\w@./:-]*)["']/g;
+  const relativeImport = /\bfrom\s*["'](\.{1,2}\/[^"']+\.mjs)["']/g;
+  // A test needs the packages of the repository modules it imports as well (scripts/lib/ci-workflow.mjs
+  // reads the workflows with `yaml`, #358), so relative imports are followed.
+  function collect(file, imported, seen) {
+    if (seen.has(file)) return;
+    seen.add(file);
+    // Comments that mention imports (`import "name"`) are not imports.
+    const source = readFileSync(join(repoRoot, file), "utf8").replace(/\/\*[\s\S]*?\*\/|^\s*\/\/.*$/gm, "");
+    for (const match of source.matchAll(bareImport)) {
+      const specifier = match[1] ?? match[2];
+      if (specifier.startsWith("node:")) continue;
+      imported.add(specifier.startsWith("@") ? specifier.split("/").slice(0, 2).join("/") : specifier.split("/")[0]);
+    }
+    for (const match of source.matchAll(relativeImport))
+      collect(posix.normalize(posix.join(posix.dirname(file), match[1])), imported, seen);
+  }
   for (const [group, files] of Object.entries(TEST_GROUPS)) {
     const imported = new Set();
-    for (const file of files) {
-      const source = readFileSync(join(repoRoot, file), "utf8");
-      for (const match of source.matchAll(bareImport)) {
-        const specifier = match[1] ?? match[2];
-        if (specifier.startsWith("node:")) continue;
-        imported.add(specifier.startsWith("@") ? specifier.split("/").slice(0, 2).join("/") : specifier.split("/")[0]);
-      }
-    }
+    for (const file of files) collect(file, imported, new Set());
     assert.deepEqual([...imported].sort(), [...(GROUP_NPM_PACKAGES[group] ?? [])].sort(), `group ${group}`);
   }
 });

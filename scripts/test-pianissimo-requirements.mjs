@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { commandLines, loadWorkflow } from "./lib/ci-workflow.mjs";
 
 const read = (path) => readFileSync(fileURLToPath(new URL(`../${path}`, import.meta.url)), "utf8");
 const exists = (path) => existsSync(fileURLToPath(new URL(`../${path}`, import.meta.url)));
@@ -74,10 +75,23 @@ test("release verifier checks the bundled host", () => {
 });
 
 test("CI builds the host, runs swift test, and checks the revision", () => {
-  const content = read(".github/workflows/ci.yml");
-  assert.match(content, /scripts\/stage-engine-host\.sh/);
-  assert.match(content, /swift test/);
-  assert.match(content, /check-engine-host-identity\.sh[^\n]*GITHUB_SHA/);
+  const steps = loadWorkflow().job("test-macos").steps;
+  const stepWith = (predicate) => steps.findIndex((step) => commandLines(step).some(predicate));
+  const stage = stepWith((line) => line === "./scripts/stage-engine-host.sh");
+  const identity = stepWith(
+    (line) => line === './scripts/check-engine-host-identity.sh build/engine-host/sagascript-engine-host "$GITHUB_SHA"',
+  );
+  const swift = stepWith((line) => line === "swift test");
+  for (const [what, index] of [
+    ["stages the host", stage],
+    ["checks its revision against GITHUB_SHA", identity],
+    ["runs swift test", swift],
+  ]) {
+    assert.ok(index >= 0, `test-macos ${what}`);
+    assert.equal(steps[index].continueOnError, undefined, `test-macos ${what} and blocks on it`);
+  }
+  assert.ok(stage <= identity, "the host is staged before its revision is checked");
+  assert.equal(steps[swift].workingDirectory, "src-tauri/engine-host/coreml");
 });
 
 test("Pianissimo smoke covers status, download, doctor and transcribe", () => {

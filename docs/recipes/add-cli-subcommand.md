@@ -134,11 +134,13 @@ cargo run -q -p sagascript-cli -- example --json
 
 ## 6. CI smoke (model-free commands)
 
-If the command is cheap and needs no model, add it to the "Tier 1: CLI smoke tests" steps
-of `build-macos` (bash) and the matching steps of `build-windows` (PowerShell) in
-`.github/workflows/ci.yml`. Some `scripts/test-ci-*.mjs` files assert on `ci.yml` text, so
-run `npm run test:frontend` after editing it (tests in both the `ci` and `release` groups read
-workflow files).
+If the command is cheap and needs no model, add it to the `basic` tier of
+`scripts/ci/smoke-cli.mjs`: one cross-platform script that `build-macos` and `build-windows`
+in `.github/workflows/ci.yml` both run against the release binary (`node scripts/ci/smoke-cli.mjs
+basic --binary <path>` runs it locally). `scripts/test-ci-smoke-cli.mjs` lists the commands each
+tier runs, so extend it with the new one. The `scripts/test-ci-*.mjs` tests read the workflows as
+parsed YAML; run `npm run test:frontend` after editing a workflow (tests in both the `ci` and
+`release` groups read them).
 
 ## 7. Docs
 

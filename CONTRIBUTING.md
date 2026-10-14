@@ -82,12 +82,12 @@ npm run verify -- --list                 # every check with its commands, budget
 | Area (`--only`) | Checks | What runs (working directory) | Needs | CI lane |
 |---|---|---|---|---|
 | `fmt` | `fmt`, `fmt-ort` | `cargo fmt --all -- --check` and `cargo fmt --manifest-path engine-host/ort/Cargo.toml --all -- --check` (`src-tauri`) | Rust | test-linux |
-| `clippy` | `clippy-workspace`, `clippy-cli-lean`, `clippy-policy` (Linux); `clippy-app` (fast set) | `cargo clippy --workspace --all-targets -- -D warnings`; `cargo clippy -p sagascript-cli --all-targets --no-default-features -- -D warnings` (`src-tauri`); `node scripts/clippy-policy.mjs` (policy counts, see below) | Rust; Linux libraries; `dist/` (workspace, app, policy) | test-macos, test-linux, test-windows (per crate); policy: test-linux |
+| `clippy` | `clippy-workspace`, `clippy-cli-lean`, `clippy-policy` (Linux); `clippy-app` (fast set) | `cargo clippy --workspace --all-targets -- -D warnings`; `cargo clippy -p sagascript-cli --all-targets --no-default-features -- -D warnings` (`src-tauri`); `node scripts/clippy-policy.mjs` (policy counts, see below) | Rust; Linux libraries; `dist/` (workspace, app, policy) | workspace and lean CLI: test-macos, test-linux, test-windows; policy: test-linux |
 | `rust-deps` | `cli-lean-deps` | `cargo tree -p sagascript-cli --no-default-features -e normal` contains no cpal/ALSA | Rust | test-linux |
-| `rust-test` | `test-workspace`, `test-cli-lean` | `cargo test --workspace`; `cargo test -p sagascript-cli --no-default-features` | Rust; Linux libraries; `dist/` (workspace) | workspace: test-macos, test-windows (`cargo test` and per crate); lean CLI: test-macos, test-linux |
-| `core-features` | `core-clippy`, `core-clippy-diarization`, `core-test`, `core-test-record`, `core-test-diarization` | `cargo clippy`/`cargo test -p sagascript-core` without features, with `record`, with `diarization` | Rust | test-macos, test-linux, test-windows |
-| `engine-protocol` | `engine-protocol` | `cargo test -p sagascript-engine-protocol` | Rust | test-linux |
-| `ort-host` | `ort-host-clippy`, `ort-host-test` | `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked` (`src-tauri/engine-host/ort`) | Rust | test-linux; tests also test-windows |
+| `rust-test` | `test-workspace`, `test-cli-lean` | `cargo test --workspace`; `cargo test -p sagascript-cli --no-default-features` | Rust; Linux libraries; `dist/` (workspace) | workspace and lean CLI: test-macos, test-linux, test-windows |
+| `core-features` | `core-clippy`, `core-clippy-diarization`, `core-test`, `core-test-record`, `core-test-diarization` | `cargo clippy`/`cargo test -p sagascript-core` without features, with `record`, with `diarization` | Rust | without features: test-macos, test-linux, test-windows; with a feature: test-linux |
+| `engine-protocol` | `engine-protocol` | `cargo test -p sagascript-engine-protocol` | Rust | every test lane, through `cargo test --workspace` |
+| `ort-host` | `ort-host-clippy`, `ort-host-test` | `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked` (`src-tauri/engine-host/ort`) | Rust | test-linux, test-windows |
 | `deps` | `deny`, `npm-audit` | `cargo deny --locked --workspace check` and the same for the ORT host (`src-tauri`; policy and what to do about a new advisory: `src-tauri/deny.toml`); `npm audit --audit-level=high` (root lockfile). Both fetch advisory data over the network | `cargo install --locked cargo-deny --version 0.20.2` | deny: test-linux; audit: test-macos |
 | `release-guard` | `release-guard` | `cargo test --release -p sagascript-core --lib dev_overrides` | Rust | test-linux |
 | `svelte-check` | `svelte-check` | `npx svelte-check --tsconfig ./tsconfig.json` | `npm ci` | test-macos |
@@ -101,9 +101,10 @@ npm run verify -- --list                 # every check with its commands, budget
 | `msrv` | `msrv` (opt-in; run it for dependency bumps or newer language features) | `cargo check --workspace --locked`, the lean CLI and the ORT host on the `rust-version` toolchain | `rustup toolchain install 1.88 --profile minimal`; `dist/` | msrv-linux |
 | `browser` | `browser` (opt-in) | `npm run test:browser` (Playwright against the mocked IPC) | `npx playwright install chromium` | test-macos |
 
-CI splits the cargo commands per crate and feature set; `--list` shows which CI commands each
-check stands for, and `scripts/test-verify-ci-parity.mjs` fails when ci.yml's test lanes and
-this list drift apart. Not part of verify: release builds and CLI smoke tests (build-macos,
+CI keeps its cargo commands in one list, `scripts/ci/cargo-gates.mjs`, with a reason for every gate that
+is not run on all three OSes; `--list` shows which CI commands each check stands for, and
+`scripts/test-verify-ci-parity.mjs` fails when ci.yml's test lanes (gate list and setup action
+included) and this list drift apart. Not part of verify: release builds and CLI smoke tests (build-macos,
 build-windows), engine-host staging, the DER/JER cross-check against a downloaded scorer, and
 the release checks `npm run release:check` and `npm run licenses:check`. Where every suite
 lives is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#5-where-tests-live-and-how-ci-runs-them).

@@ -381,11 +381,11 @@ Shared fixtures: `sagascript_testsupport` (`TempDir`, `fake_settings`, `sha256_h
 
 | Layer | Location | Local command | CI |
 |---|---|---|---|
-| Rust unit, app | sibling `foo_tests.rs` files, declared last in `foo.rs` as `#[cfg(test)] #[path = "foo_tests.rs"] mod tests;` (`commands_tests.rs`, `main_tests.rs`, `meeting_jobs_tests.rs`, `paste/windows_clipboard_tests.rs`); inline `#[cfg(test)]` modules in smaller files | `cargo test` (app only) | macOS, Windows |
-| Rust unit, core/CLI/protocol | inline, or sibling `foo_tests.rs` as in the app: core `download_tests.rs`, `settings/manager_tests.rs`, `settings/store_tests.rs`, `transcription/whisper_backend_tests.rs`; CLI `transcribe_tests.rs`, `meeting_reprocessing_tests.rs`; `sagascript-engine-protocol/src/tests.rs` | `cargo test -p <crate>`; release-only guard: `cargo test --release -p sagascript-core --lib dev_overrides` | per-crate steps; protocol and the release guard in test-linux |
+| Rust unit, app | sibling `foo_tests.rs` files, declared last in `foo.rs` as `#[cfg(test)] #[path = "foo_tests.rs"] mod tests;` (`commands_tests.rs`, `main_tests.rs`, `meeting_jobs_tests.rs`, `paste/windows_clipboard_tests.rs`); inline `#[cfg(test)]` modules in smaller files | `cargo test` (app only), `cargo test --workspace` (everything) | every OS lane (`cargo test --workspace`) |
+| Rust unit, core/CLI/protocol | inline, or sibling `foo_tests.rs` as in the app: core `download_tests.rs`, `settings/manager_tests.rs`, `settings/store_tests.rs`, `transcription/whisper_backend_tests.rs`; CLI `transcribe_tests.rs`, `meeting_reprocessing_tests.rs`; `sagascript-engine-protocol/src/tests.rs` | `cargo test -p <crate>`; release-only guard: `cargo test --release -p sagascript-core --lib dev_overrides` | `cargo test --workspace` and the per-crate feature-subset gates on every OS; the release guard in test-linux |
 | Rust integration | `sagascript-core/tests/*.rs` (engine host against the fake host, chunk-merge golden, Pianissimo adapter); `sagascript-cli/tests/*.rs` (spawn `CARGO_BIN_EXE_sagascript`) | `cargo test -p sagascript-core`, `-p sagascript-cli` | macOS, Linux, Windows |
-| ORT host | `src-tauri/engine-host/ort/src/**` | `cargo test` and `cargo clippy --all-targets -- -D warnings` in `engine-host/ort/` | test-linux (fmt, test, clippy); test-windows (test) |
-| Engine-host protocol | golden transcripts `src-tauri/engine-host/test-vectors/protocol/*.jsonl` with the scripted `fake-engine.json` ([contract](engine-host-protocol.md#golden-transcripts)); replayed by `sagascript-engine-protocol/src/vector_tests.rs`, `engine-host/ort/src/server/golden_tests.rs` and `ProtocolServerTests.swift` | `cargo test -p sagascript-engine-protocol`; `cargo test --locked` in `engine-host/ort/`; `swift test` | test-linux (Rust, ORT host); test-windows (ORT host); test-macos (Swift) |
+| ORT host | `src-tauri/engine-host/ort/src/**` | `cargo test` and `cargo clippy --all-targets -- -D warnings` in `engine-host/ort/` | test-linux (fmt, test, clippy); test-windows (test, clippy) |
+| Engine-host protocol | golden transcripts `src-tauri/engine-host/test-vectors/protocol/*.jsonl` with the scripted `fake-engine.json` ([contract](engine-host-protocol.md#golden-transcripts)); replayed by `sagascript-engine-protocol/src/vector_tests.rs`, `engine-host/ort/src/server/golden_tests.rs` and `ProtocolServerTests.swift` | `cargo test -p sagascript-engine-protocol`; `cargo test --locked` in `engine-host/ort/`; `swift test` | `cargo test --workspace` in every OS lane (protocol crate); test-linux, test-windows (ORT host); test-macos (Swift) |
 | MSRV | whole workspace, lean CLI, ORT host | `RUSTUP_TOOLCHAIN=1.88 cargo check --workspace --locked` (see CONTRIBUTING.md) | msrv-linux |
 | Swift | `src-tauri/engine-host/coreml/Tests/EngineHostCoreTests/` | `scripts/build-engine-host.sh`, then `swift test` (`npm run verify -- --only swift`) | test-macos |
 | Frontend unit and component (Vitest) | `src/**/*.test.ts` next to the module or component, in happy-dom; typed IPC mock, setup and component backends in `src/test/` ([docs/testing/frontend.md](testing/frontend.md)) | `npm run test:unit` (`test:unit:coverage` for a report) | test-macos, test-windows; release-quality-gate, windows-package |
@@ -397,29 +397,38 @@ Shared fixtures: `sagascript_testsupport` (`TempDir`, `fake_settings`, `sha256_h
 | Transport contract | Rust: `transport_contract*` tests in `events_tests.rs`, `commands_tests.rs`, `meeting_jobs_tests.rs` and `contract/` write or compare `contracts/transport/*.json` and `src/lib/ipc-contract.generated.ts`; TS: `src/test/transport.test.ts`, `src/lib/api.test.ts` ([contracts/README.md](../contracts/README.md)) | `cargo test contract` in `src-tauri/` (`SAGASCRIPT_BLESS_CONTRACTS=1` regenerates), `npm run test:unit`, svelte-check | with the app tests and the frontend suites |
 | Formatting | Prettier over `src/`, `scripts/`, `tests/` (not `.svelte` yet; `.prettierignore`) | `npm run format:check` (`npm run format` fixes) | test-macos, test-windows |
 | Lint | ESLint over `src/` (TypeScript, Svelte), `scripts/`, `tests/` (`eslint.config.js`, baseline in `eslint-suppressions.json`) | `npm run lint` | test-macos |
-| CLI smoke | release binary in `ci.yml` build jobs: help, `config`, `list-models`, `formats`, completions, download + transcribe, `--json` streams (`scripts/verify-json-cli-streams.py`) | — | build-macos, build-windows |
+| CLI smoke | release binary in `ci.yml` build jobs, `scripts/ci/smoke-cli.mjs` (one script for every OS; `basic` tier without a model: help, `config`, `list-models`, `formats`, completions of every shell; `model` tier: download + transcribe, `--json`, `--jsonl`, a closed pipe and the error object through `scripts/verify-json-cli-streams.py`) | `node scripts/ci/smoke-cli.mjs basic --binary <path>` | build-macos, build-windows (Windows tolerates the `model` tier, #357) |
 | Conformance | `scripts/engine-host-conformance.py <host> --no-model` against a real host process; with `--model-dir <dir>` the full run | model-free: `npm run verify -- --only engine-host-conformance` (macOS); full run by hand with a downloaded model | model-free subset: the staged Core ML host in test-macos and the signed host in `release-build-macos.yml`; full run (release gate, each time right after a Pianissimo smoke): `release-build-macos.yml` against the host in the installed signed app (prebuild and fallback paths), `scripts/verify-release-draft.sh` against the host in the downloaded draft (promote path in CI, fallback path by hand) and the manual `test-build.yml` ([spec](engine-host-protocol.md#conformance)) |
 
-CI (`.github/workflows/ci.yml`) splits cargo per crate and feature set: test-linux runs both
-`cargo fmt --check` gates, `cargo deny check` for both Cargo workspaces (`src-tauri/deny.toml`:
-advisories, licenses, a single `reqwest`, allowed sources), app `check`/`clippy`, the CLI with
-and without default features, core with no features and with `record`, the protocol crate, ORT
-host test/clippy, the release-profile guard, the no-ALSA tree check and the clippy policy
-counts (`scripts/clippy-policy.mjs`, which must not rise); msrv-linux runs `cargo
-check --workspace --locked`, the lean CLI and the ORT host on the `rust-version` toolchain
-(1.88), and check-linux requires it; test-macos runs `npm audit --audit-level=high`, app
-`check`/`test`/`clippy`, core with no features and with `diarization`, the CLI both ways, Swift
-tests and the frontend suites (Prettier, ESLint, Vitest, Node); test-windows runs the same
-frontend suites except ESLint, app, core and CLI tests and clippy, and the ORT host tests.
-`cargo test --workspace` (and the Vitest suite) runs in `windows-package.yml` (on PRs touching
-`src/`, `src-tauri/`, `scripts/`, package files, `.gitattributes` or the workflow itself) and
-`release-quality-gate.yml`. A PR that only touches
+CI (`.github/workflows/ci.yml`) has a test lane per OS (test-macos, test-linux, test-windows), a native
+build lane with the CLI smoke tests on macOS and Windows, an MSRV lane on Linux, and the `check-*`
+aggregators that branch protection reads (`check-macos` and `check-windows` are required). The parts
+every lane shares live once, outside the workflow (#358): `.github/actions/setup` (Python, the pinned
+Rust toolchain, Node.js, the Rust cache, `npm ci`), `scripts/ci/cargo-gates.mjs` (the one list of cargo
+commands, run by every lane with `--os`; the MSRV lane runs its `msrv` profile), `scripts/ci/smoke-cli.mjs`
+and `scripts/ci/assert-lanes.mjs` (what an aggregator asserts about the lanes it needs). The same cargo
+commands run on every OS except the gates marked `os:` in the list, each with its reason: formatting,
+`cargo deny`, the core feature subsets (`diarization`, `record`), the lean-CLI build for the Python
+suites, the ALSA tree check and the release-profile guard run on Linux only, the ORT host gates on
+Linux and Windows. Everything else is `cargo clippy` and `cargo test` over the workspace, over core
+and over the lean CLI (`--no-default-features`). Besides the cargo gates test-linux runs the clippy policy
+counts (`scripts/clippy-policy.mjs`, which must not rise) and the offline diarization evaluation;
+msrv-linux runs `cargo check --workspace --locked`, the lean CLI and the ORT host on the `rust-version`
+toolchain (1.88), and check-linux requires it; test-macos runs `npm audit --audit-level=high`, the
+frontend suites (Prettier, ESLint, Vitest, Node), Svelte types, the Swift tests and the engine-host
+conformance subset; test-windows runs the same frontend suites except ESLint and the Windows build
+identity gates. test-windows owns the x64 Windows tests of every pull request: `windows-package.yml`
+(on PRs touching `src/`, `src-tauri/`, `scripts/`, package files, `.gitattributes` or the workflow
+itself) repeats `cargo test --workspace` and clippy only on its native ARM64 runner on a pull request,
+and on both architectures for releases (`prebuild-release.yml`) and manual runs;
+`release-quality-gate.yml` runs them for a release. A PR that only touches
 `README.md`, `docs/release-readiness.md` or `docs/research/**/*.md` skips the native lanes
 (`scripts/ci-docs-scope.mjs`). Locally, `npm run verify` runs the test and lint suites above
 (`scripts/verify.mjs`, documented in [CONTRIBUTING.md](../CONTRIBUTING.md#running-tests));
-`scripts/test-verify-ci-parity.mjs` keeps its check list in step with ci.yml's test lanes.
-**Planned:** [#358](https://github.com/Magnus-Gille/sagascript/issues/358) lets CI call the
-verify groups directly; [#361](https://github.com/Magnus-Gille/sagascript/issues/361) phase B
+`scripts/test-verify-ci-parity.mjs` keeps its check list in step with the commands the test lanes run,
+gate list and setup action included. The `scripts/test-ci-*.mjs` tests read the workflows as parsed
+YAML (`scripts/lib/ci-workflow.mjs`), not as text.
+**Planned:** [#361](https://github.com/Magnus-Gille/sagascript/issues/361) phase B
 replaces the remaining source-text tests in the `ui` group with component tests.
 
 ## 6. Known drift and planned changes
