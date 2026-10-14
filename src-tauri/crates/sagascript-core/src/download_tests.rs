@@ -628,6 +628,13 @@ fn assert_empty(dir: &Path, why: &str) {
     assert!(std::fs::read_dir(dir).unwrap().next().is_none(), "{why}");
 }
 
+fn dir_entries(dir: &Path) -> Vec<std::ffi::OsString> {
+    std::fs::read_dir(dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect()
+}
+
 /// Runs a download of `size` pinned bytes against `scripts`, returning the
 /// result, elapsed time and the (still existing) directory.
 async fn run_scripts(
@@ -1113,8 +1120,21 @@ async fn cancelling_while_file_creation_is_queued_leaves_no_file() {
             tokio::time::sleep(Duration::from_millis(30)).await;
             task.abort();
             let _ = task.await;
+            // Creation may still be queued on the blocking pool when the task
+            // is aborted, so give it a moment to land before looking at all
+            // (an immediate "empty" would prove nothing). Its abandoned result
+            // is then dropped, and the file removed, whenever that thread next
+            // runs, which on a loaded runner can be well after any fixed
+            // delay: poll for up to 5 s instead. A file still there then is a
+            // real leak, and the message names it.
             tokio::time::sleep(Duration::from_millis(100)).await;
-            assert_empty(&dir, "cancelled download left a file");
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            let mut left = dir_entries(&dir);
+            while !left.is_empty() && std::time::Instant::now() < deadline {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                left = dir_entries(&dir);
+            }
+            assert!(left.is_empty(), "cancelled download left {left:?}");
             join_server(server).await;
         }
     })

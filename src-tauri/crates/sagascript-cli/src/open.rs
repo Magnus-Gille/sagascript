@@ -1,4 +1,6 @@
 use sagascript_core::error::DictationError;
+
+use crate::output::Out;
 #[cfg(target_os = "windows")]
 use std::path::{Path, PathBuf};
 
@@ -19,27 +21,32 @@ pub const GUI_BACKGROUND_ARG: &str = "--background";
 /// Ask the operating system to launch or reactivate the installed desktop app.
 /// On macOS, Launch Services routes this to the existing signed bundle when it
 /// is already running, which in turn triggers the single-instance/reopen path.
-pub fn run() -> Result<(), DictationError> {
-    run_with_marker(GUI_OPEN_ARG, "Opening Sagascript...")
+pub fn run(out: &Out) -> Result<(), DictationError> {
+    run_with_marker(GUI_OPEN_ARG, "Opening Sagascript...", out)
 }
 
 /// Request an in-app update through the installed desktop app. The updater
 /// never downloads or installs from this CLI process.
-pub fn run_update() -> Result<(), DictationError> {
+pub fn run_update(out: &Out) -> Result<(), DictationError> {
     #[cfg(target_os = "macos")]
     {
-        run_with_marker(GUI_UPDATE_ARG, "Checking for a signed Sagascript update...")
+        run_with_marker(
+            GUI_UPDATE_ARG,
+            "Checking for a signed Sagascript update...",
+            out,
+        )
     }
 
     #[cfg(not(target_os = "macos"))]
     {
+        let _ = out;
         Err(DictationError::ApplicationLaunchError(
             "in-app updates are currently available on macOS only".to_string(),
         ))
     }
 }
 
-fn run_with_marker(marker: &str, message: &str) -> Result<(), DictationError> {
+fn run_with_marker(marker: &str, message: &str, out: &Out) -> Result<(), DictationError> {
     #[cfg(target_os = "macos")]
     {
         let status = launcher_command(marker).status().map_err(|error| {
@@ -49,7 +56,7 @@ fn run_with_marker(marker: &str, message: &str) -> Result<(), DictationError> {
         })?;
 
         if status.success() {
-            eprintln!("{message}");
+            crate::output::errln!(out, "{message}");
             Ok(())
         } else {
             Err(DictationError::ApplicationLaunchError(format!(
@@ -67,13 +74,13 @@ fn run_with_marker(marker: &str, message: &str) -> Result<(), DictationError> {
             )
         })?;
         launch_windows_app(&executable, marker)?;
-        eprintln!("{message}");
+        crate::output::errln!(out, "{message}");
         Ok(())
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
-        let _ = (marker, message);
+        let _ = (marker, message, out);
         Err(DictationError::ApplicationLaunchError(
             "the desktop recovery command is currently available only on macOS and Windows"
                 .to_string(),

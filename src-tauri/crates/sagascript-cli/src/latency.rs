@@ -10,6 +10,8 @@ use serde_json::Value;
 use sagascript_core::error::DictationError;
 use sagascript_core::settings::{Language, WhisperModel};
 
+use crate::exit::CliError;
+use crate::output::{ignore_closed, outln, Out};
 use crate::transcribe::model_id_string;
 
 mod percentile;
@@ -748,7 +750,20 @@ fn excluded_warm_success_samples(report: &Report, length: LengthBucket) -> usize
         .sum()
 }
 
-pub fn run(args: LatencyReportArgs) -> Result<(), DictationError> {
+/// Writes the report on stdout. A requested budget that does not pass is a
+/// failed check (exit 3) after the report; invalid input or arguments fail
+/// (exit 1) without one.
+pub fn run(args: LatencyReportArgs, out: &Out) -> Result<(), CliError> {
+    if write_report(args, out)? == Some(false) {
+        return Err(CliError::CheckFailed(DictationError::SettingsError(
+            "latency budget check failed".to_string(),
+        )));
+    }
+    Ok(())
+}
+
+/// Whether the requested budget passed (`None` without a budget).
+fn write_report(args: LatencyReportArgs, out: &Out) -> Result<Option<bool>, DictationError> {
     if args.min_samples == 0 {
         return Err(DictationError::SettingsError(
             "min-samples must be positive".to_string(),
@@ -807,19 +822,13 @@ pub fn run(args: LatencyReportArgs) -> Result<(), DictationError> {
     let encoded = serde_json::to_string(&output).map_err(|_| {
         DictationError::TranscriptionFailed("latency report serialization failed".to_string())
     })?;
-    println!("{encoded}");
+    // The verdict does not depend on a reader: a closed stdout keeps exit 3.
+    ignore_closed(outln!(out, "{encoded}"))?;
 
-    if output
+    Ok(output
         .get("budget")
         .and_then(|budget| budget.get("passed"))
-        .and_then(Value::as_bool)
-        == Some(false)
-    {
-        return Err(DictationError::SettingsError(
-            "latency budget check failed".to_string(),
-        ));
-    }
-    Ok(())
+        .and_then(Value::as_bool))
 }
 
 #[cfg(test)]
