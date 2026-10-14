@@ -20,7 +20,7 @@
 )]
 
 use std::ops::Deref;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use sha2::{Digest, Sha256};
@@ -121,6 +121,49 @@ pub fn isolated_cli_env<'a>(command: &'a mut Command, settings: &Path) -> &'a mu
     command.env("SAGASCRIPT_SETTINGS_PATH", settings)
 }
 
+/// The file name the app and the CLI give the settings file
+/// (`SETTINGS_FILENAME` in `sagascript-core`'s `settings/store.rs`; a test
+/// there keeps the two equal).
+pub const SETTINGS_FILE_NAME: &str = "sagascript-settings.json";
+
+/// A settings file of a test's own: [`SETTINGS_FILE_NAME`] in a fresh
+/// [`TempDir`], not created yet.
+///
+/// The directory is the settings file's alone, so what the store keeps beside
+/// the file (`glossary.txt`, `glossaries/`, the `.json.lock` file, `.bak`
+/// recovery copies) stays in it too. In-process tests pass [`path`](Self::path)
+/// to the store's path-taking functions (`load_from`, the `*_at` helpers); a
+/// spawned CLI gets it through [`isolated_cli_env`]. Either way nothing reads or
+/// writes the user's real settings (docs/adr/0004-test-strategy.md, rule 5).
+pub fn fake_settings() -> FakeSettings {
+    let dir = TempDir::new();
+    let path = dir.join(SETTINGS_FILE_NAME);
+    FakeSettings { dir, path }
+}
+
+/// A test's own settings file, from [`fake_settings`]. Dropping it removes the
+/// directory and everything in it.
+#[derive(Debug)]
+#[must_use = "the settings directory is removed as soon as the FakeSettings is dropped"]
+pub struct FakeSettings {
+    dir: TempDir,
+    path: PathBuf,
+}
+
+impl FakeSettings {
+    /// The settings file, `<dir>/sagascript-settings.json`. It does not exist
+    /// until something writes it.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// The directory that holds the settings file and the files the store
+    /// keeps beside it.
+    pub fn dir(&self) -> &Path {
+        self.dir.path()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -211,5 +254,30 @@ mod tests {
         assert!(outcome.is_err());
         let path = created.expect("the closure created the directory");
         assert!(!path.exists(), "{} survived the panic", path.display());
+    }
+
+    #[test]
+    fn fake_settings_is_an_unwritten_file_alone_in_its_own_directory() {
+        let settings = fake_settings();
+        let other = fake_settings();
+        assert_ne!(settings.dir(), other.dir());
+        assert_eq!(settings.path(), settings.dir().join(SETTINGS_FILE_NAME));
+        assert!(settings.dir().is_dir());
+        assert!(
+            !settings.path().exists(),
+            "the settings file is not created"
+        );
+        assert_eq!(std::fs::read_dir(settings.dir()).unwrap().count(), 0);
+
+        let dir = settings.dir().to_path_buf();
+        std::fs::write(settings.path(), b"{}").unwrap();
+        std::fs::write(dir.join("glossary.txt"), b"term\n").unwrap();
+        drop(settings);
+
+        assert!(!dir.exists(), "{} survived the drop", dir.display());
+        assert!(
+            other.dir().is_dir(),
+            "dropping one FakeSettings removed another"
+        );
     }
 }
