@@ -27,7 +27,7 @@ use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 #[cfg(unix)]
 use std::collections::HashMap;
@@ -227,29 +227,52 @@ impl DownloadEnv {
     }
 }
 
-static SHARED_CLIENTS: ClientCache = ClientCache::new();
+static SHARED_CLIENTS: ClientCache = ClientCache::new(CLIENT_MAX_AGE);
 
-/// One HTTP client per process for model downloads (#368), instead of one
-/// per download: building a client loads the platform TLS configuration and
-/// the system proxy settings.
+/// How long a built client is reused. A client snapshots the system proxy
+/// settings when it is built, so a proxy or VPN change applies to downloads
+/// started at most this long after it; within that window back-to-back
+/// downloads (the Pianissimo ONNX file set, a Whisper model and then its
+/// CoreML encoder, the two diarization models) share one client.
+const CLIENT_MAX_AGE: Duration = Duration::from_secs(60);
+
+/// Shared HTTP clients for model downloads (#368), instead of one per
+/// download: building a client loads the platform TLS configuration and the
+/// system proxy settings. Entries expire after `max_age` ([`CLIENT_MAX_AGE`]).
 ///
-/// The client keeps no idle connections ([`build_client`]). The CLI runs
+/// The clients keep no idle connections ([`build_client`]). The CLI runs
 /// downloads on short-lived Tokio runtimes (`download_vad_model` under a fresh
 /// runtime's `block_on`), and a pooled connection is driven by a task on the
-/// runtime that opened it, so a later runtime must never be handed one. Each
-/// model download is one long transfer, so pooling would save nothing anyway.
+/// runtime that opened it, so a later runtime must never be handed one. A
+/// model download is one long transfer; pooling would at most save a
+/// reconnect between redirect hops to the same host.
 struct ClientCache {
-    /// One client per connect timeout (production only uses the default;
-    /// tests add a short one). Each update is a single `push`, so the list
-    /// stays consistent if a panic poisons the lock (ADR 0005).
-    clients: Mutex<Vec<(Duration, reqwest::Client)>>,
+    /// At most one live client per connect timeout (production only uses the
+    /// default; tests add a short one). An update is a `retain` and a `push`
+    /// with no panic point between them, so the list stays consistent if a
+    /// panic poisons the lock (ADR 0005).
+    clients: Mutex<Vec<CachedClient>>,
+    max_age: Duration,
     builds: AtomicUsize,
 }
 
+struct CachedClient {
+    connect_timeout: Duration,
+    built: Instant,
+    client: reqwest::Client,
+}
+
+impl CachedClient {
+    fn usable(&self, connect_timeout: Duration, max_age: Duration) -> bool {
+        self.connect_timeout == connect_timeout && self.built.elapsed() < max_age
+    }
+}
+
 impl ClientCache {
-    const fn new() -> Self {
+    const fn new(max_age: Duration) -> Self {
         Self {
             clients: Mutex::new(Vec::new()),
+            max_age,
             builds: AtomicUsize::new(0),
         }
     }
@@ -261,11 +284,19 @@ impl ClientCache {
         // Loading the TLS configuration reads system files: off the executor.
         let client = run_blocking(move || build_client(connect_timeout)).await?;
         let mut clients = lock_or_recover(&self.clients, "download.http_clients");
-        // A concurrent first download may have stored one meanwhile; keep it.
-        if let Some((_, existing)) = clients.iter().find(|(t, _)| *t == connect_timeout) {
-            return Ok(existing.clone());
+        // A concurrent download may have stored a fresh one meanwhile; keep it.
+        if let Some(fresh) = clients
+            .iter()
+            .find(|cached| cached.usable(connect_timeout, self.max_age))
+        {
+            return Ok(fresh.client.clone());
         }
-        clients.push((connect_timeout, client.clone()));
+        clients.retain(|cached| cached.connect_timeout != connect_timeout);
+        clients.push(CachedClient {
+            connect_timeout,
+            built: Instant::now(),
+            client: client.clone(),
+        });
         let builds = self.builds.fetch_add(1, Ordering::Relaxed) + 1;
         tracing::debug!(builds, "Built an HTTP client for model downloads");
         Ok(client)
@@ -274,8 +305,8 @@ impl ClientCache {
     fn cached(&self, connect_timeout: Duration) -> Option<reqwest::Client> {
         lock_or_recover(&self.clients, "download.http_clients")
             .iter()
-            .find(|(timeout, _)| *timeout == connect_timeout)
-            .map(|(_, client)| client.clone())
+            .find(|cached| cached.usable(connect_timeout, self.max_age))
+            .map(|cached| cached.client.clone())
     }
 }
 

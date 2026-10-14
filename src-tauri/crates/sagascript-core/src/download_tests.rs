@@ -1520,7 +1520,7 @@ fn cancelled_hash_is_not_an_integrity_mismatch() {
 // -- one shared HTTP client (#368) --
 
 fn own_client_cache() -> &'static ClientCache {
-    Box::leak(Box::new(ClientCache::new()))
+    Box::leak(Box::new(ClientCache::new(CLIENT_MAX_AGE)))
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1555,6 +1555,27 @@ async fn downloads_share_one_http_client() {
             "every download built its own HTTP client"
         );
         join_server(server).await;
+    })
+    .await
+    .expect("test exceeded its hard timeout");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn expired_http_client_is_rebuilt() {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        // An expired client may carry stale proxy settings.
+        let clients: &'static ClientCache = Box::leak(Box::new(ClientCache::new(Duration::ZERO)));
+        let timeout = fast_limits().connect_timeout;
+
+        clients.client(timeout).await.unwrap();
+        clients.client(timeout).await.unwrap();
+
+        assert_eq!(clients.builds.load(Ordering::Relaxed), 2);
+        assert_eq!(
+            clients.clients.lock().unwrap().len(),
+            1,
+            "expired entries are replaced"
+        );
     })
     .await
     .expect("test exceeded its hard timeout");
