@@ -500,16 +500,16 @@
                           </select>
                         </label>
                         <label class="field wide">
-                          <span>Replacement text {operation.text === undefined ? "(unchanged)" : ""}</span>
+                          <span>Replacement text {operation.text == null ? "(unchanged)" : ""}</span>
                           <input type="text" value={operation.text ?? ""} oninput={(event) => updateResolution(index, rowIndex, { ...operation, text: (event.currentTarget as HTMLInputElement).value })} />
                         </label>
                         <label class="field wide">
-                          <span>Speaker {operation.speaker_id === undefined ? "(unchanged)" : ""}</span>
+                          <span>Speaker {operation.speaker_id == null ? "(unchanged)" : ""}</span>
                           <select
                             value={operation.speaker_id ?? ""}
                             onchange={(event) => {
                               const speakerId = (event.currentTarget as HTMLSelectElement).value;
-                              updateResolution(index, rowIndex, speakerId ? { ...operation, speaker_id: speakerId } : { kind: "edit_segment", segment_id: operation.segment_id, ...(operation.text !== undefined ? { text: operation.text } : {}) });
+                              updateResolution(index, rowIndex, speakerId ? { ...operation, speaker_id: speakerId } : { kind: "edit_segment", segment_id: operation.segment_id, ...(operation.text != null ? { text: operation.text } : {}) });
                             }}
                           >
                             <option value="">Keep candidate speaker</option>
