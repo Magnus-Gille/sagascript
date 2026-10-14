@@ -4,10 +4,12 @@
 //! Threading model: the API is **blocking** and thread-based, like
 //! `pianissimo_backend` and the Whisper backends (callers run it inside
 //! `spawn_blocking` / a worker thread). Per host process there is one stdout
-//! reader thread (routes responses to waiters by request id) and one stderr
-//! drain thread; per client there is one small supervisor thread for idle
-//! unload/shutdown. No async runtime is required, which keeps the CLI's lean
-//! build and test doubles simple.
+//! reader thread (routes responses to waiters by request id), one stderr
+//! drain thread and one stdin writer thread (bounded writes); per client
+//! there is one small supervisor thread for idle unload/shutdown, and each
+//! timed-out window gets a short-lived watcher thread that waits for the
+//! host's late answer (or kills a wedged host). No async runtime is required,
+//! which keeps the CLI's lean build and test doubles simple.
 //!
 //! Layers:
 //! - [`process`]: spawn, JSON-Lines transport, id routing, crash detection.
@@ -52,7 +54,9 @@ pub enum EngineHostError {
     Timeout { op: &'static str, after: Duration },
     #[error("engine host exited unexpectedly ({status}); stderr tail:\n{stderr_tail}")]
     Crashed { status: String, stderr_tail: String },
-    #[error("engine host is marked failed after repeated crashes ({0}); reset required")]
+    /// The restart budget is spent; requests fail fast until the cooldown
+    /// in the message has passed (or `EngineHostClient::reset`).
+    #[error("engine host is marked failed after repeated crashes: {0}")]
     Failed(String),
     #[error("engine host is not running")]
     NotRunning,

@@ -4,13 +4,13 @@
 //! hello, load, transcribe one second of silence) and fails loudly, `warm`
 //! loads the model and holds it (benchmarks, signed-build smoke tests).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use clap::{Args, Subcommand};
 use sagascript_core::error::DictationError;
 use sagascript_core::transcription::engine_host::{
-    CancelToken, EngineHostClient, EngineHostConfig,
+    pipeline, CancelToken, EngineHostClient, EngineHostConfig,
 };
 use sagascript_core::transcription::{pianissimo_backend, pianissimo_model};
 use serde_json::{json, Value};
@@ -54,7 +54,11 @@ one-second silence transcription. Exits non-zero on the first failing step \
 (after printing the report).
 
 --verify-model ignores cached verification stamps and re-hashes every model \
-file (slow on first run of a fresh install; use it after suspected corruption).",
+file (slow on first run of a fresh install; use it after suspected corruption).
+
+It also removes the PCM temp dirs that killed processes left behind (the sweep \
+the app runs at startup) and reports how many it removed and how many are in use \
+(`pcm_sweep` in the JSON output). The sweep never fails the check.",
         after_long_help = "EXAMPLES:\n  sagascript engine doctor\n  sagascript engine doctor --json --verify-model"
     )]
     Doctor {
@@ -326,15 +330,71 @@ pub struct DoctorReport {
     pub ok: bool,
     pub failed_step: Option<String>,
     pub steps: Vec<Value>,
+    /// The stale PCM temp dir sweep (see [`pcm_sweep_report`]); not a step,
+    /// because it never fails the check.
+    pub pcm_sweep: Value,
 }
 
 impl DoctorReport {
     fn to_json(&self) -> Value {
-        json!({ "ok": self.ok, "failed_step": self.failed_step, "steps": self.steps })
+        json!({
+            "ok": self.ok,
+            "failed_step": self.failed_step,
+            "steps": self.steps,
+            "pcm_sweep": self.pcm_sweep,
+        })
     }
 }
 
 pub fn doctor_report(probe: &Probe, verify_model: bool) -> DoctorReport {
+    let pcm_sweep = pcm_sweep_report(&pcm_temp_dir(probe));
+    DoctorReport {
+        pcm_sweep,
+        ..doctor_steps(probe, verify_model)
+    }
+}
+
+/// Where this engine configuration writes its PCM temp dirs.
+fn pcm_temp_dir(probe: &Probe) -> PathBuf {
+    probe
+        .config
+        .as_ref()
+        .and_then(|config| config.temp_dir.clone())
+        .unwrap_or_else(std::env::temp_dir)
+}
+
+/// Remove the PCM temp dirs that killed processes left behind in `dir` (the
+/// sweep the app runs at startup) and report the counts.
+fn pcm_sweep_report(dir: &Path) -> Value {
+    match pipeline::sweep_stale_pcm_dirs(dir) {
+        Ok(sweep) => json!({
+            "dir": dir.display().to_string(),
+            "removed": sweep.removed,
+            "kept": sweep.kept,
+        }),
+        Err(error) => json!({
+            "dir": dir.display().to_string(),
+            "error": error.to_string(),
+        }),
+    }
+}
+
+/// One text line (with its newline) for the sweep, or nothing.
+fn pcm_sweep_line(sweep: &Value) -> String {
+    let dir = sweep["dir"].as_str().unwrap_or("-");
+    if let Some(error) = sweep["error"].as_str() {
+        format!("PCM temp dirs in {dir}: sweep failed: {error}\n")
+    } else if let (Some(removed), Some(kept)) = (sweep["removed"].as_u64(), sweep["kept"].as_u64())
+    {
+        format!(
+            "PCM temp dirs in {dir}: removed {removed} left behind by killed processes, {kept} in use\n"
+        )
+    } else {
+        String::new()
+    }
+}
+
+fn doctor_steps(probe: &Probe, verify_model: bool) -> DoctorReport {
     let mut steps: Vec<Value> = Vec::new();
     let mut failed: Option<String> = None;
     let mut step = |name: &str, started: Instant, result: Result<String, String>| {
@@ -484,6 +544,7 @@ fn finish(steps: Vec<Value>, failed: Option<String>) -> DoctorReport {
         ok: failed.is_none(),
         failed_step: failed,
         steps,
+        pcm_sweep: Value::Null,
     }
 }
 
@@ -505,7 +566,8 @@ fn print_doctor(report: &DoctorReport, json: bool) {
         );
     }
     println!(
-        "{}",
+        "{}{}",
+        pcm_sweep_line(&report.pcm_sweep),
         if report.ok {
             "Engine OK."
         } else {
@@ -636,8 +698,24 @@ mod tests {
         assert_eq!(fake_host_executable_from_cargo_messages("not json"), None);
     }
 
-    fn probe(host: PathBuf, supported: bool, installed: bool) -> Probe {
-        let config = EngineHostConfig::new(
+    /// A [`Probe`] whose engine writes its PCM temp dirs into a private
+    /// temp dir (removed with this value), so the doctor's sweep never
+    /// touches the system temp dir.
+    struct TestProbe {
+        probe: Probe,
+        pcm_dir: tempfile::TempDir,
+    }
+
+    impl std::ops::Deref for TestProbe {
+        type Target = Probe;
+        fn deref(&self) -> &Probe {
+            &self.probe
+        }
+    }
+
+    fn probe(host: PathBuf, supported: bool, installed: bool) -> TestProbe {
+        let pcm_dir = tempfile::tempdir().unwrap();
+        let mut config = EngineHostConfig::new(
             host.clone(),
             LoadSpec {
                 model_dir: "/models/ok".into(),
@@ -645,7 +723,8 @@ mod tests {
                 compute_units: "cpu".into(),
             },
         );
-        Probe {
+        config.temp_dir = Some(pcm_dir.path().to_path_buf());
+        let probe = Probe {
             supported,
             os: "testos".into(),
             arch: "testarch".into(),
@@ -662,7 +741,8 @@ mod tests {
                     Ok(())
                 }
             },
-        }
+        };
+        TestProbe { probe, pcm_dir }
     }
 
     #[test]
@@ -759,6 +839,38 @@ mod tests {
         std::fs::write(&bogus, b"not a program").unwrap();
         let report = doctor_report(&probe(bogus, true, true), false);
         assert_eq!(report.failed_step.as_deref(), Some("host_start"));
+    }
+
+    /// `engine doctor` sweeps the PCM temp dirs of its configuration and
+    /// reports the counts as an additive JSON field and one text line.
+    #[test]
+    fn doctor_sweeps_stale_pcm_dirs_and_reports_the_counts() {
+        let probe = probe(fake_host(), false, true);
+        let tmp = probe.pcm_dir.path();
+        assert_eq!(pcm_temp_dir(&probe), tmp);
+        // A dir whose owner was killed: owner marker present, lock free.
+        let dead = tmp.join("sagascript-pcm-DeadOwner123");
+        std::fs::create_dir(&dead).unwrap();
+        std::fs::write(dead.join("owner.lock"), b"sagascript-pcm-owner pid=1\n").unwrap();
+        std::fs::write(dead.join("audio.f32le"), b"pcm").unwrap();
+        // A dir of a live owner (this process).
+        let live = pipeline::PcmFile::write(&[0.0; 16], Some(tmp)).unwrap();
+
+        let report = doctor_report(&probe, false);
+        // The sweep runs even when a step fails (here: the platform gate).
+        assert_eq!(report.failed_step.as_deref(), Some("platform"));
+        let json = report.to_json();
+        assert_eq!(json["pcm_sweep"]["removed"], 1, "{json}");
+        assert_eq!(json["pcm_sweep"]["kept"], 1, "{json}");
+        assert_eq!(json["pcm_sweep"]["dir"], tmp.display().to_string().as_str());
+        assert!(!dead.exists());
+        assert!(live.path().is_file());
+        let line = pcm_sweep_line(&json["pcm_sweep"]);
+        assert!(
+            line.contains("removed 1 left behind") && line.contains("1 in use"),
+            "{line}"
+        );
+        assert_eq!(pcm_sweep_line(&Value::Null), "");
     }
 
     #[test]

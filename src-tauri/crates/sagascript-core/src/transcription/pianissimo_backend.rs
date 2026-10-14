@@ -421,6 +421,10 @@ pub fn shared_client() -> Result<EngineHostClient, DictationError> {
     if let Some(old) = slot.take() {
         old.client.shutdown();
     }
+    // Audio a killed app or CLI left in the PCM temp dir (once per process).
+    super::engine_host::pipeline::sweep_stale_pcm_dirs_in_background(
+        config.temp_dir.clone().unwrap_or_else(std::env::temp_dir),
+    );
     let client = EngineHostClient::new(config);
     *slot = Some(Shared {
         key,
