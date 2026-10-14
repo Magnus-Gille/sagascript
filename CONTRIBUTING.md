@@ -30,26 +30,62 @@ npm install
 cargo tauri dev
 ```
 
+Two things a fresh clone needs before the checks below work:
+
+- `npm run build` creates `dist/`. Every cargo command that compiles the app crate (`cargo
+  check`, `test`, `clippy` in `src-tauri/`, including `--workspace`) fails in
+  `tauri::generate_context!` until it exists.
+- `swift test` in `src-tauri/engine-host/coreml` needs the gitignored `BuildInfo.swift`;
+  run `./scripts/build-engine-host.sh` once first (macOS).
+
+For how the code fits together, read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md); for
+common changes, follow the recipes in [docs/recipes/](docs/recipes/README.md).
+
 ### Running tests
 
-All checks must pass on both macOS and Windows (CI runs on both platforms).
+This is the canonical verification list; AGENTS.md and the PR template mirror it. All checks
+must pass on macOS, Linux and Windows (CI runs all three).
+
+Run before every PR (Rust commands from `src-tauri/`, after `npm run build`):
 
 ```bash
-# Rust unit tests — all workspace crates (app + sagascript-core + sagascript-cli).
-# NOTE: a bare `cargo test` covers only the app crate; use --workspace or -p.
-cd src-tauri && cargo test --workspace
+# Formatting (CI gate): the main workspace and the standalone ORT engine host
+cargo fmt --all -- --check
+cargo fmt --manifest-path engine-host/ort/Cargo.toml --all -- --check
 
-# Svelte/TypeScript type checking
+# Lints: the whole workspace, plus the lean batch CLI without default features
+cargo clippy --workspace --all-targets -- -D warnings
+cargo clippy -p sagascript-cli --all-targets --no-default-features -- -D warnings
+
+# Tests. NOTE: a bare `cargo test` covers only the app crate; use --workspace or -p.
+cargo test --workspace
+cargo test -p sagascript-cli --no-default-features
+
+# Frontend (from the repo root)
 npx svelte-check --tsconfig ./tsconfig.json
-
-# Rust formatting (CI gate): the main workspace and the standalone ORT host
-cd src-tauri && cargo fmt --all -- --check
-cd src-tauri && cargo fmt --manifest-path engine-host/ort/Cargo.toml --all -- --check
-
-# Rust lints (per crate; the member crates gate optional features)
-cd src-tauri && cargo clippy --workspace --all-targets -- -D warnings
-cd src-tauri && cargo clippy -p sagascript-cli --all-targets --no-default-features -- -D warnings
+npm run test:frontend
 ```
+
+Also run these when your change touches the area:
+
+| Area | Command |
+|---|---|
+| UI flows (Transcribe tab, update recovery) | `npx playwright install chromium` once, then `npm run test:browser` |
+| Feature-gated core code (`record`, `diarization`) | `cargo test -p sagascript-core`, `cargo test -p sagascript-core --features record`, `cargo test -p sagascript-core --features diarization`, `cargo clippy -p sagascript-core --all-targets -- -D warnings` |
+| Swift Core ML engine host | `./scripts/build-engine-host.sh`, then `swift test` in `src-tauri/engine-host/coreml` |
+| ORT engine host | `cargo test` and `cargo clippy --all-targets -- -D warnings` in `src-tauri/engine-host/ort/` (CI: test-linux) |
+| Dependency bumps or newer language features (MSRV, CI: msrv-linux) | `rustup toolchain install 1.88`, then from `src-tauri/`: `RUSTUP_TOOLCHAIN=1.88 cargo check --workspace --locked` and `RUSTUP_TOOLCHAIN=1.88 cargo check -p sagascript-cli --no-default-features --locked`; in `src-tauri/engine-host/ort/`: `RUSTUP_TOOLCHAIN=1.88 cargo check --locked` |
+| Python evaluation tooling | `python -m unittest discover -s scripts/dictation_eval -p 'test_*.py'`; for `scripts/diarization_sv`, see `.github/workflows/ci.yml` |
+| Code-health tooling | `npm run test:code-health` |
+| Release metadata, licenses | `npm run release:check`, `npm run licenses:check` |
+
+CI (`.github/workflows/ci.yml`) runs the same cargo checks split per crate and per feature
+set, so that the no-feature builds of `sagascript-core` and `sagascript-cli` stay honest; the
+workspace commands above are the closest single-machine equivalent. Where every suite lives
+and which CI lane runs it is described in
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#5-where-tests-live-and-how-ci-runs-them).
+Planned: `npm run verify` as one entry point for this list
+([#350](https://github.com/Magnus-Gille/sagascript/issues/350)).
 
 ## Code style
 
@@ -67,21 +103,9 @@ Default to local transcription. Remote/cloud features are always opt-in, never d
 
 ## Architecture overview
 
-```
-src/                            # Svelte 5 frontend (menu bar UI)
-src-tauri/                      # Rust workspace (root package = the Tauri app)
-  src/                          # App crate: GUI shell + desktop integrations
-    hotkey/                     # Global hotkey service
-    paste/                      # Paste-into-active-app service
-    platform/                   # Platform-specific code (macOS, Windows stubs)
-    logging/                    # Structured logging
-  crates/sagascript-core/       # Lib crate: the transcription engine
-    src/audio/                  # Audio capture (`record` feature), decode, resample
-    src/transcription/          # Whisper backend, model management
-    src/settings/               # Settings store (shared between CLI and GUI)
-    src/diarization/            # Speaker diarization (`diarization` feature)
-  crates/sagascript-cli/        # Lib + bin crate: CLI subcommands (clap)
-```
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) is the map: crates and packages, the dictation,
+settings, updater and engine-host flows, threads and locks, feature flags and test layout.
+Decisions behind the rules are in [docs/adr/](docs/adr/README.md).
 
 The workspace root package is the Tauri app, so bare `cargo build`/`test`/
 `clippy` in `src-tauri/` cover the app only — use `--workspace` or `-p` for the
@@ -94,7 +118,7 @@ immediately before using that path.
 
 ### macOS: threading caveat
 
-`enigo` (used for auto-paste) and other TIS/HIToolbox APIs **must run on the main thread**. From async contexts, use `app_handle.run_on_main_thread()`. Calling these APIs from a tokio worker thread will cause a SIGTRAP crash. This restriction does not apply on Windows.
+`enigo` (used for auto-paste) and other TIS/HIToolbox APIs **must run on the main thread**. From async contexts, use `app_handle.run_on_main_thread()`. Calling these APIs from a tokio worker thread will cause a SIGTRAP crash. This restriction does not apply on Windows. See [ADR 0003](docs/adr/0003-main-thread-native-apis.md).
 
 ### macOS: TCC permission reset for dev builds
 
@@ -133,7 +157,7 @@ should happen only for the identity transition, not on every update.
 
 1. Fork the repo and create a feature branch from `main`.
 2. Make your changes, following the code style guidelines above.
-3. Ensure tests pass (`cargo test --workspace`, `npx svelte-check`, `cargo clippy --workspace --all-targets -- -D warnings`).
+3. Run the checks in [Running tests](#running-tests). A bug fix includes a regression test that fails before the fix ([ADR 0004](docs/adr/0004-test-strategy.md)).
 4. Open a pull request with a clear description of what you changed and why.
 
 Keep PRs focused -- one feature or fix per PR. If you're planning a large change, open an issue first to discuss the approach.
