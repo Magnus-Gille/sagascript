@@ -5,8 +5,8 @@ use std::time::{Duration, SystemTime};
 use tracing::info;
 
 use crate::download::{
-    download_to_path, prepare_existing_artifact_async, verify_file, DownloadIntegrity,
-    ExistingArtifact, GGML_MAGIC,
+    download_to_path, prepare_existing_artifact_async, run_blocking, verify_file,
+    DownloadIntegrity, ExistingArtifact, GGML_MAGIC,
 };
 use crate::error::DictationError;
 use crate::settings::WhisperModel;
@@ -137,7 +137,8 @@ pub fn is_vad_model_downloaded() -> bool {
 pub async fn download_vad_model(
     progress_callback: impl Fn(u64, u64) + Send + 'static,
 ) -> Result<PathBuf, DictationError> {
-    let path = vad_model_path();
+    // `models_dir` may migrate the legacy directory: blocking pool (#368).
+    let path = run_blocking(|| Ok(vad_model_path())).await?;
     if prepare_existing_artifact_async(&path, VAD_MODEL_INTEGRITY).await?
         == ExistingArtifact::Verified
     {
@@ -173,7 +174,8 @@ pub fn verify_vad_model(path: &Path) -> Result<(), DictationError> {
 /// encoder, or if the encoder is already installed.
 #[cfg(target_os = "macos")]
 pub async fn backfill_coreml_encoder(model: WhisperModel) -> Result<(), DictationError> {
-    ensure_coreml_encoder(model, &models_dir()).await
+    let dir = run_blocking(|| Ok(models_dir())).await?;
+    ensure_coreml_encoder(model, &dir).await
 }
 
 /// Non-macOS stub (no CoreML).
@@ -187,7 +189,8 @@ pub async fn download_model(
     model: WhisperModel,
     progress_callback: impl Fn(u64, u64) + Send + 'static,
 ) -> Result<PathBuf, DictationError> {
-    let dir = models_dir();
+    // `models_dir` may migrate the legacy directory: blocking pool (#368).
+    let dir = run_blocking(|| Ok(models_dir())).await?;
     let path = dir.join(model.ggml_filename());
 
     if prepare_existing_artifact_async(&path, model.download_integrity()).await?
@@ -260,14 +263,22 @@ async fn ensure_coreml_encoder(
         return Ok(()); // this model has no CoreML encoder
     };
 
-    sweep_orphaned_coreml_extract_dirs(dir, &dirname);
-
     let dest = dir.join(&dirname);
-    if dest.exists() {
-        quarantine_unverified_coreml_encoder_at(&dest, integrity)?;
-        if dest.exists() {
-            return Ok(()); // verified install already present
+    // Directory scan, stats and a possible quarantine rename: blocking pool.
+    let installed = run_blocking({
+        let (dir, dirname, dest) = (dir.to_path_buf(), dirname.clone(), dest.clone());
+        move || {
+            sweep_orphaned_coreml_extract_dirs(&dir, &dirname);
+            if !dest.exists() {
+                return Ok(false);
+            }
+            quarantine_unverified_coreml_encoder_at(&dest, integrity)?;
+            Ok(dest.exists())
         }
+    })
+    .await?;
+    if installed {
+        return Ok(()); // verified install already present
     }
 
     info!(
@@ -297,11 +308,12 @@ async fn ensure_coreml_encoder(
     let install = match run_ditto(&zip_path, &extract_dir).await {
         Ok(()) => {
             let extracted = extract_dir.join(&dirname);
-            if extracted.exists() {
-                let marker = std::fs::write(
+            if tokio::fs::try_exists(&extracted).await.unwrap_or(false) {
+                let marker = tokio::fs::write(
                     extracted.join(COREML_INTEGRITY_MARKER),
                     format!("{}\n", integrity.sha256),
                 )
+                .await
                 .map_err(|e| {
                     DictationError::ModelDownloadFailed(format!(
                         "CoreML integrity marker write failed: {e}"
