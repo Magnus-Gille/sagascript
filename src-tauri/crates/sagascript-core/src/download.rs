@@ -380,20 +380,20 @@ where
 /// Set once the async caller of a blocking step has gone away (its future was
 /// dropped), so the blocking work can stop before an irreversible step.
 #[derive(Clone, Default)]
-pub(crate) struct CancelFlag(Arc<AtomicBool>);
+struct CancelFlag(Arc<AtomicBool>);
 
 impl CancelFlag {
     fn cancel(&self) {
         self.0.store(true, Ordering::Release);
     }
 
-    pub(crate) fn is_cancelled(&self) -> bool {
+    fn is_cancelled(&self) -> bool {
         self.0.load(Ordering::Acquire)
     }
 
     /// `Err` once cancelled. Nobody awaits a cancelled step, so the message
     /// (`what` names the step) only matters for logs and tests.
-    pub(crate) fn check(&self, what: &str) -> Result<(), DictationError> {
+    fn check(&self, what: &str) -> Result<(), DictationError> {
         if self.is_cancelled() {
             return Err(DictationError::ModelDownloadFailed(format!(
                 "{what} was cancelled"
@@ -416,7 +416,7 @@ impl Drop for CancelOnDrop {
 /// [`run_blocking`] for work that should stop early when its caller is
 /// cancelled: `work` receives a [`CancelFlag`] that is set as soon as the
 /// returned future is dropped.
-pub(crate) async fn run_blocking_cancellable<T, F>(work: F) -> Result<T, DictationError>
+async fn run_blocking_cancellable<T, F>(work: F) -> Result<T, DictationError>
 where
     T: Send + 'static,
     F: FnOnce(&CancelFlag) -> Result<T, DictationError> + Send + 'static,
@@ -810,7 +810,8 @@ pub fn prepare_existing_artifact(
 
 /// [`prepare_existing_artifact`] for async callers (#368): the check, and the
 /// hash it may need, run on Tokio's blocking pool. Dropping the future stops
-/// the hash at its next 1 MiB read and leaves the file untouched.
+/// the hash before its next 1 MiB read; a hash stopped that way never deletes
+/// the file.
 pub async fn prepare_existing_artifact_async(
     path: &Path,
     integrity: DownloadIntegrity,
