@@ -346,6 +346,28 @@ jobs:
             test-audio/norwegian-short-3s.mp3 > "$STDOUT" 2> "$STDERR"
           python3 scripts/verify-json-cli-streams.py "$STDOUT" "$STDERR"
 
+      # The output contract of #364 with a real model: JSONL items, a reader
+      # that stops after the first item, and the error object of a failed --json run.
+      - name: Smoke test — JSONL, closed pipe and JSON error object
+        run: |
+          set -o pipefail
+          BINARY=src-tauri/target/release/sagascript
+          INPUTS="$RUNNER_TEMP/jsonl-inputs"
+          mkdir -p "$INPUTS"
+          cp test-audio/norwegian-short-3s.mp3 "$INPUTS/a.mp3"
+          cp test-audio/norwegian-medium-8s.mp3 "$INPUTS/b.mp3"
+          $BINARY transcribe --jsonl --language no --model nb-whisper-tiny "$INPUTS" \
+            > "$RUNNER_TEMP/transcription-smoke.jsonl" 2> "$RUNNER_TEMP/transcription-smoke-jsonl.stderr"
+          python3 scripts/verify-json-cli-streams.py --jsonl \
+            "$RUNNER_TEMP/transcription-smoke.jsonl" "$RUNNER_TEMP/transcription-smoke-jsonl.stderr"
+          $BINARY transcribe --jsonl --language no --model nb-whisper-tiny "$INPUTS" | head -1 > /dev/null
+          STATUS=0
+          $BINARY transcribe --json --language no --model nb-whisper-tiny "$RUNNER_TEMP/missing.wav" \
+            > "$RUNNER_TEMP/transcription-error.json" 2> "$RUNNER_TEMP/transcription-error.stderr" || STATUS=$?
+          test "$STATUS" -eq 1
+          python3 scripts/verify-json-cli-streams.py --error \
+            "$RUNNER_TEMP/transcription-error.json" "$RUNNER_TEMP/transcription-error.stderr"
+
   check-macos:
     needs: [scope, test-macos, build-macos]
     if: ${{ always() }}
