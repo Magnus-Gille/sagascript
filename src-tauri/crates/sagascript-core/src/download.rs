@@ -229,7 +229,14 @@ impl TmpFileGuard {
 impl Drop for TmpFileGuard {
     fn drop(&mut self) {
         if self.armed {
-            let _ = std::fs::remove_file(&self.path);
+            match std::fs::remove_file(&self.path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => tracing::warn!(
+                    "Could not remove temporary download file {}: {error}",
+                    self.path.display()
+                ),
+            }
         }
     }
 }
