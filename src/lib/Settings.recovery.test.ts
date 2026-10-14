@@ -15,6 +15,7 @@ import {
   type UpdateRecoveryPayload,
 } from "./update-recovery";
 import type { MeetingTranscript } from "./meeting-types";
+import { PIANISSIMO_ID } from "./models.svelte";
 import { deferred, settle } from "../test/deferred";
 import type { CommandHandlers, IpcMock } from "../test/ipc";
 import { renderSettings, settingsBackend } from "../test/settings";
@@ -23,7 +24,7 @@ const transcript: MeetingTranscript = {
   schema_version: 1,
   source_sha256: "meeting-source",
   language: "sv",
-  model: "pianissimo-sv",
+  model: PIANISSIMO_ID,
   duration_seconds: 4,
   segments: [{ id: "seg-1", start: 0, end: 4, text: "Välkomna till mötet", speaker: "s1" }],
   speakers: [{ id: "s1", label: "Talare 1" }],

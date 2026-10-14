@@ -36,8 +36,6 @@
     getFileModelOptions,
     getEffectiveModelInfo,
     getAutoFileModelInfo,
-    downloadModel,
-    downloadPianissimoModel,
     getSupportedFormats,
     getPlatform,
     checkAccessibilityPermission,
@@ -64,6 +62,7 @@
     type HotkeyProfile,
   } from "./api";
   import { open } from "@tauri-apps/plugin-dialog";
+  import { PIANISSIMO_ID, downloadModelById, useModelDownloads } from "./models.svelte";
   import { useDragDropEvent, useTauriEvent } from "./tauri-events.svelte";
   import {
     dictateButtonAction,
@@ -95,7 +94,7 @@
   );
   let fileModelOptions: WhisperModel[] = $state([]);
   const pianissimoSizeMb = $derived(
-    fileModelOptions.find((model) => model.id === "pianissimo-sv")?.size_mb ?? 0,
+    fileModelOptions.find((model) => model.id === PIANISSIMO_ID)?.size_mb ?? 0,
   );
   // What Auto will use now (recommended if downloaded, else best downloaded) and what is recommended.
   let fileAutoModel: WhisperModel | null = $state(null);
@@ -104,9 +103,11 @@
   let fileModelSaving = $state(false);
   type SettingsTab = "dictate" | "transcribe" | "settings";
   let activeTab: SettingsTab = $state("dictate");
-  let downloading: string | null = $state(null);
-  let downloadingName: string = $state("");
-  let downloadProgress: number = $state(0);
+  // One download at a time; its progress follows the backend's events.
+  const downloads = useModelDownloads();
+  const downloading = $derived(downloads.id);
+  const downloadingName = $derived(downloads.name);
+  const downloadProgress = $derived(downloads.progress);
   let profileModels: Record<string, WhisperModel> = $state({});
   let profileModelOptions: Record<string, WhisperModel[]> = $state({});
   // What "Recommended" resolves to per profile (Pianissimo, or KB-Whisper Medium
@@ -985,7 +986,7 @@
     try {
       await setFileTranscriptionModel(id);
       settings = await getSettings();
-      if (id === "pianissimo-sv") { transcribeDiarize = false; transcribePrompt = ""; }
+      if (id === PIANISSIMO_ID) { transcribeDiarize = false; transcribePrompt = ""; }
     } catch (error) {
       fileModelError = typeof error === "string" ? error : String(error);
     } finally { fileModelSaving = false; }
@@ -995,15 +996,15 @@
     const preference = settings?.file_transcription_model;
     // "Auto" downloads the recommended model (it may currently use an older downloaded one).
     const id = preference === "auto" ? fileRecommendedModel?.id : preference;
-    if (!id || downloading !== null) return;
-    downloading = id;
-    downloadingName = fileModelOptions.find((model) => model.id === id)?.display_name
-      ?? (fileRecommendedModel?.id === id ? fileRecommendedModel.display_name : id);
-    downloadProgress = 0;
+    if (!id || downloads.busy) return;
+    downloads.start(
+      id,
+      fileModelOptions.find((model) => model.id === id)?.display_name
+        ?? (fileRecommendedModel?.id === id ? fileRecommendedModel.display_name : id),
+    );
     fileModelError = "";
     try {
-      if (id === "pianissimo-sv") await downloadPianissimoModel();
-      else await downloadModel(id);
+      await downloadModelById(id);
       const options = await getFileModelOptions(
         transcribeLanguage(),
         id !== "auto" ? id : undefined,
@@ -1016,7 +1017,7 @@
       ]);
     } catch (error) {
       fileModelError = typeof error === "string" ? error : String(error);
-    } finally { downloading = null; downloadProgress = 0; }
+    } finally { downloads.finish(); }
   }
 
   // Settings can be reloaded after hotkey/profile changes. Never leave a
@@ -1111,10 +1112,6 @@
   useTauriEvent("update-aborted", () => {
     activePreparationNonce = null;
     updatePreparing = false;
-  });
-
-  useTauriEvent("model-download-progress", ({ progress }) => {
-    downloadProgress = progress;
   });
 
   useTauriEvent("model-ready", async () => {
@@ -1687,14 +1684,11 @@
 
   async function downloadProfileModel(profile: HotkeyProfile) {
     const model = profileModels[profile.id];
-    if (!model || model.downloaded || downloading !== null) return;
-    downloading = model.id;
-    downloadingName = model.display_name;
-    downloadProgress = 0;
+    if (!model || model.downloaded || downloads.busy) return;
+    downloads.start(model.id, model.display_name);
     profileModelErrors = { ...profileModelErrors, [profile.id]: "" };
     try {
-      if (model.id === "pianissimo-sv") await downloadPianissimoModel();
-      else await downloadModel(model.id);
+      await downloadModelById(model.id);
       await refreshProfileModels(settings?.hotkey_profiles ?? []);
     } catch (e: any) {
       profileModelErrors = {
@@ -1702,8 +1696,7 @@
         [profile.id]: typeof e === "string" ? e : e?.message || "Speech engine download failed.",
       };
     } finally {
-      downloading = null;
-      downloadProgress = 0;
+      downloads.finish();
     }
   }
 
@@ -1718,17 +1711,14 @@
 
   async function switchProfileToRecommended(profile: HotkeyProfile) {
     const target = retiredModelSuggestion(profile);
-    if (!target || downloading !== null || dictationModelSaving) return;
+    if (!target || downloads.busy || dictationModelSaving) return;
     profileModelErrors = { ...profileModelErrors, [profile.id]: "" };
     dictationModelSaving = true;
     try {
       // Download first: the old model keeps dictating until the new one is ready.
       if (!target.downloaded) {
-        downloading = target.id;
-        downloadingName = target.display_name;
-        downloadProgress = 0;
-        if (target.id === "pianissimo-sv") await downloadPianissimoModel();
-        else await downloadModel(target.id);
+        downloads.start(target.id, target.display_name);
+        await downloadModelById(target.id);
       }
       await setProfileModel(profile.id, target.id);
       settings = await getSettings();
@@ -1739,8 +1729,7 @@
         [profile.id]: typeof e === "string" ? e : e?.message || `Could not switch to ${target.display_name}.`,
       };
     } finally {
-      downloading = null;
-      downloadProgress = 0;
+      downloads.finish();
       dictationModelSaving = false;
     }
   }
@@ -1764,7 +1753,7 @@
   }
 
   async function onTestRecord() {
-    if (updatePreparing || dictationModelSaving || downloading !== null) return;
+    if (updatePreparing || dictationModelSaving || downloads.busy) return;
     const action = dictateButtonAction(backendDictationState, testOwnsRecording);
     if (action === "blocked") return;
 
@@ -2328,7 +2317,7 @@
                 {downloading !== null ? `Downloading ${downloadingName}… ${downloadProgress}%` : settings.file_transcription_model === "auto" && fileRecommendedModel ? `Download ${fileRecommendedModel.display_name}` : "Download selected model"}
               </button>
             {/if}
-            {#if settings.file_transcription_model === "pianissimo-sv"}
+            {#if settings.file_transcription_model === PIANISSIMO_ID}
               <div class="hotkey-hint">Requires macOS 14+ on Apple Silicon or Windows on ARM (Snapdragon). Runs locally (Neural Engine on Mac, CPU on Windows){pianissimoSizeMb > 0 ? `; one-time download of about ${pianissimoSizeMb} MB` : "; downloaded once"}.</div>
             {/if}
             {#if fileModelError}<div class="transcribe-error" role="alert">{fileModelError}</div>{/if}
@@ -2337,7 +2326,7 @@
             <div class="hotkey-hint">This profile fixes the file language and uses its personal dictionary.</div>
           {/if}
           <div class="diarize-row"><label class="diarize-option">
-            <input type="checkbox" bind:checked={transcribeDiarize} disabled={transcribing || settings.file_transcription_model === "pianissimo-sv"} />
+            <input type="checkbox" bind:checked={transcribeDiarize} disabled={transcribing || settings.file_transcription_model === PIANISSIMO_ID} />
             Speaker diarization
           </label>
           <button class="info-dot" bind:this={diarizeInfoButton} aria-label="What is speaker diarization?"
@@ -2354,7 +2343,7 @@
           {/if}
           <textarea class="prompt-input" aria-label="Extra context for this file"
             placeholder="Extra context, e.g. names to listen for: Astrid, Grimnir (optional)"
-            bind:value={transcribePrompt} rows="2" disabled={transcribing || settings.file_transcription_model === "pianissimo-sv"}></textarea>
+            bind:value={transcribePrompt} rows="2" disabled={transcribing || settings.file_transcription_model === PIANISSIMO_ID}></textarea>
         </div>
 
         <div

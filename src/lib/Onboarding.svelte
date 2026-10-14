@@ -1,14 +1,13 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
   import { hotkeyKeyLabel } from "./hotkey";
+  import { downloadModelById } from "./models.svelte";
   import { awaitDownloadCompletion, completedDownloadState } from "./onboarding-download-state";
   import { useTauriEvent } from "./tauri-events.svelte";
   import {
     getPlatform,
     getSettings,
     setLanguage,
-    downloadModel,
-    downloadPianissimoModel,
     getEffectiveModelInfo,
     microphoneStatus,
     requestMicrophoneAccess,
@@ -96,8 +95,7 @@
     } catch {
       // Fall back to the static recommendation; the download reports real errors.
     }
-    if (id === "pianissimo-sv") await downloadPianissimoModel();
-    else await downloadModel(id);
+    await downloadModelById(id);
   }
 
   function getSteps(): Step[] {

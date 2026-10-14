@@ -6,6 +6,7 @@ import { screen, waitFor, within } from "@testing-library/svelte";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, test } from "vitest";
 import type { HotkeyProfile } from "./api";
+import { PIANISSIMO_ID } from "./models.svelte";
 import {
   engineStatus,
   kbWhisperMedium,
@@ -147,7 +148,7 @@ describe("Swedish model lineup", () => {
 
     const before = ipc.calls.length;
     await userEvent.setup().click(screen.getByRole("button", { name: "Switch to Pianissimo (download 640 MB)" }));
-    await waitFor(() => expect(ipc.callsTo("set_profile_model")).toEqual([{ profileId: "default", modelId: "pianissimo-sv" }]));
+    await waitFor(() => expect(ipc.callsTo("set_profile_model")).toEqual([{ profileId: "default", modelId: PIANISSIMO_ID }]));
     const switched = ipc.calls.slice(before).map((call) => call.command);
     expect(switched.slice(0, 3)).toEqual(["download_pianissimo_model", "set_profile_model", "get_settings"]);
     expect(ipc.callsTo("download_model")).toEqual([]);
@@ -165,7 +166,7 @@ describe("Swedish model lineup", () => {
     const switchButtons = await screen.findAllByRole("button", { name: /^Switch to / });
     expect(switchButtons.map((button) => button.textContent?.trim())).toEqual(["Switch to Pianissimo"]);
     await userEvent.setup().click(switchButtons[0]);
-    await waitFor(() => expect(ipc.callsTo("set_profile_model")).toEqual([{ profileId: "default", modelId: "pianissimo-sv" }]));
+    await waitFor(() => expect(ipc.callsTo("set_profile_model")).toEqual([{ profileId: "default", modelId: PIANISSIMO_ID }]));
     expect(ipc.callsTo("download_pianissimo_model")).toEqual([]);
   });
 
@@ -221,7 +222,7 @@ describe("Pianissimo engine controls", () => {
   });
 
   test("choosing Pianissimo for files states its platform requirement and download size", async () => {
-    await renderSettings(settingsBackend({ get_settings: () => settingsValue({ file_transcription_model: "pianissimo-sv" }) }));
+    await renderSettings(settingsBackend({ get_settings: () => settingsValue({ file_transcription_model: PIANISSIMO_ID }) }));
     await userEvent.setup().click(screen.getByRole("button", { name: "Transcribe" }));
     expect(
       await screen.findByText(
@@ -231,7 +232,7 @@ describe("Pianissimo engine controls", () => {
   });
 
   test("no tab shows outdated Pianissimo size, model or macOS version", async () => {
-    await renderSettings(settingsBackend({ get_settings: () => settingsValue({ file_transcription_model: "pianissimo-sv" }) }));
+    await renderSettings(settingsBackend({ get_settings: () => settingsValue({ file_transcription_model: PIANISSIMO_ID }) }));
     const seen: string[] = [document.body.textContent ?? ""];
     const user = await openSettingsTab();
     seen.push(document.body.textContent ?? "");
