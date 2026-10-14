@@ -5,6 +5,7 @@ import { render, screen, waitFor } from "@testing-library/svelte";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, test, vi } from "vitest";
 import Onboarding from "./Onboarding.svelte";
+import { deferred } from "../test/deferred";
 import { mockIpc, type CommandHandlers } from "../test/ipc";
 import { kbWhisperMedium, pianissimo, settingsValue } from "../test/settings";
 
@@ -47,6 +48,20 @@ describe("speech engine download", () => {
     expect(ipc.callsTo("download_pianissimo_model")).toEqual([{}]);
     expect(ipc.callsTo("download_model")).toEqual([]);
     expect(screen.getByText(/Preparing the local speech engine \(640 MB\)/)).toBeInTheDocument();
+  });
+
+  test("download events show the progress, and model-ready completes the step before the command settles", async () => {
+    const download = deferred<void>();
+    const { ipc, user } = await renderOnboarding(backend({ download_pianissimo_model: () => download.promise }));
+    await chooseSwedish(user);
+    await waitFor(() => expect(ipc.callsTo("download_pianissimo_model")).toHaveLength(1));
+
+    ipc.emit("model-download-progress", { progress: 42.4 });
+    expect(await screen.findByText("42%")).toBeInTheDocument();
+
+    ipc.emit("model-ready", null);
+    expect(await screen.findByText("Speech engine ready")).toBeInTheDocument();
+    download.resolve();
   });
 
   test("where the backend recommends KB-Whisper Medium, that model is downloaded", async () => {
