@@ -1316,6 +1316,7 @@ mod tests {
         EnginePrewarm, FileModelPreference, HotkeyMode, Language, WhisperModel,
         ENGINE_DEFAULTS_VERSION, MODEL_LINEUP_VERSION,
     };
+    use sagascript_testsupport::{fake_settings, TempDir};
     use std::fs;
     use std::sync::mpsc;
     use std::thread;
@@ -1338,13 +1339,11 @@ mod tests {
         load_at_with_machine(path, std::iter::empty(), &ready_machine())
     }
 
-    /// Helper: create a temp dir and override settings_path for testing
+    /// Runs `f` on a settings file of its own ([`fake_settings`]), whose
+    /// directory is removed afterwards, also when `f` panics.
     fn with_temp_settings<F: FnOnce(PathBuf)>(f: F) {
-        let dir = std::env::temp_dir().join(format!("sagascript-test-{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(&dir).unwrap();
-        let path = dir.join(SETTINGS_FILENAME);
-        f(path);
-        let _ = fs::remove_dir_all(&dir);
+        let settings = fake_settings();
+        f(settings.path().to_path_buf());
     }
 
     #[test]
@@ -1691,7 +1690,7 @@ mod tests {
 
     #[test]
     fn default_settings_path_uses_the_platform_config_directory() {
-        let root = std::env::temp_dir().join("sagascript-location-test");
+        let root = TempDir::new();
         let data_dir = root.join("application-support");
         let home_dir = root.join("home");
         let expected_base = default_config_base(&home_dir, &data_dir);
@@ -1705,7 +1704,7 @@ mod tests {
 
     #[test]
     fn explicit_settings_path_disables_legacy_migration_sources() {
-        let root = std::env::temp_dir().join("sagascript-location-test");
+        let root = TempDir::new();
         let isolated = root.join("isolated").join("settings.json");
         let (path, legacy) = settings_location(
             Some(isolated.clone().into_os_string()),
@@ -1720,7 +1719,7 @@ mod tests {
 
     #[test]
     fn empty_settings_path_override_uses_the_normal_location() {
-        let root = std::env::temp_dir().join("sagascript-location-test");
+        let root = TempDir::new();
         let data_dir = root.join("application-support");
         let home_dir = root.join("home");
         let expected_base = default_config_base(&home_dir, &data_dir);
@@ -1740,7 +1739,7 @@ mod tests {
 
     #[test]
     fn absolute_xdg_config_home_overrides_the_default() {
-        let root = std::env::temp_dir().join("sagascript-location-test");
+        let root = TempDir::new();
         let xdg_config_home = root.join("dotfiles-config");
         let (path, _) = settings_location(
             None,
@@ -1774,11 +1773,16 @@ mod tests {
     }
 
     #[test]
+    fn testsupport_settings_file_name_matches_the_store() {
+        assert_eq!(
+            sagascript_testsupport::SETTINGS_FILE_NAME,
+            SETTINGS_FILENAME
+        );
+    }
+
+    #[test]
     fn migration_copies_legacy_settings_without_overwriting_destination() {
-        let root = std::env::temp_dir().join(format!(
-            "sagascript-identifier-migration-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let root = TempDir::new();
         let legacy = root.join("legacy").join(SETTINGS_FILENAME);
         let destination = root.join("current").join(SETTINGS_FILENAME);
         fs::create_dir_all(legacy.parent().unwrap()).unwrap();
@@ -1800,15 +1804,11 @@ mod tests {
             fs::read_to_string(&destination).unwrap(),
             r#"{"language":"no"}"#
         );
-        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
     fn migration_disables_previously_enabled_auto_paste() {
-        let root = std::env::temp_dir().join(format!(
-            "sagascript-permission-migration-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let root = TempDir::new();
         let legacy = root.join("legacy").join(SETTINGS_FILENAME);
         let destination = root.join("current").join(SETTINGS_FILENAME);
         fs::create_dir_all(legacy.parent().unwrap()).unwrap();
@@ -1825,13 +1825,11 @@ mod tests {
         assert_eq!(migrated["has_completed_onboarding"], true);
         assert!(migrated.get("hasCompletedOnboarding").is_none());
         assert_eq!(migrated["future_key"]["x"], 1);
-        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
     fn xdg_move_preserves_auto_paste_for_the_same_bundle_identity() {
-        let root =
-            std::env::temp_dir().join(format!("sagascript-xdg-migration-{}", uuid::Uuid::new_v4()));
+        let root = TempDir::new();
         let legacy = root.join(APP_IDENTIFIER).join(SETTINGS_FILENAME);
         let destination = root.join("xdg").join(SETTINGS_FILENAME);
         fs::create_dir_all(legacy.parent().unwrap()).unwrap();
@@ -1841,15 +1839,11 @@ mod tests {
         let migrated: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&destination).unwrap()).unwrap();
         assert_eq!(migrated["auto_paste"], true);
-        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
     fn first_xdg_load_copies_settings_and_externalizes_embedded_glossaries() {
-        let root = std::env::temp_dir().join(format!(
-            "sagascript-first-xdg-load-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let root = TempDir::new();
         let legacy = root
             .join("application-support")
             .join(APP_IDENTIFIER)
@@ -1894,15 +1888,11 @@ mod tests {
             "merge = merch\n"
         );
         assert!(legacy.exists(), "rollback source must remain untouched");
-        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
     fn embedded_invalid_profile_dictionary_id_is_skipped_during_externalization() {
-        let root = std::env::temp_dir().join(format!(
-            "sagascript-invalid-embedded-glossary-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let root = TempDir::new();
         let destination = root.join(CONFIG_DIR_NAME).join(SETTINGS_FILENAME);
         fs::create_dir_all(destination.parent().unwrap()).unwrap();
         fs::write(
@@ -1921,7 +1911,6 @@ mod tests {
         let raw: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&destination).unwrap()).unwrap();
         assert!(raw.get("profile_glossaries").is_none());
-        let _ = fs::remove_dir_all(root);
     }
 
     #[cfg(unix)]
@@ -1929,10 +1918,7 @@ mod tests {
     fn migration_writes_through_a_dangling_settings_symlink() {
         use std::os::unix::fs::symlink;
 
-        let root = std::env::temp_dir().join(format!(
-            "sagascript-dangling-settings-link-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let root = TempDir::new();
         let legacy = root.join("legacy").join(SETTINGS_FILENAME);
         let target = root.join("dotfiles").join(SETTINGS_FILENAME);
         let destination = root.join("config").join(SETTINGS_FILENAME);
@@ -1949,15 +1935,11 @@ mod tests {
         let migrated: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&target).unwrap()).unwrap();
         assert_eq!(migrated["language"], "sv");
-        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
     fn concurrent_first_run_update_waits_for_atomic_migration() {
-        let root = std::env::temp_dir().join(format!(
-            "sagascript-concurrent-migration-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let root = TempDir::new();
         let legacy = root.join("legacy").join(SETTINGS_FILENAME);
         let destination = root.join("current").join(SETTINGS_FILENAME);
         fs::create_dir_all(legacy.parent().unwrap()).unwrap();
@@ -2025,14 +2007,12 @@ mod tests {
         assert_eq!(persisted["auto_paste"], false);
         assert_eq!(persisted["future_key"]["x"], 1);
         assert!(!destination.with_extension("json.tmp").exists());
-        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
     fn load_returns_defaults_when_file_missing() {
-        let nonexistent = std::env::temp_dir()
-            .join(format!("sagascript-test-{}", uuid::Uuid::new_v4()))
-            .join(SETTINGS_FILENAME);
+        let root = TempDir::new();
+        let nonexistent = root.join("missing").join(SETTINGS_FILENAME);
         let s = load_from(&nonexistent);
         let d = Settings::default();
         assert_eq!(s.language, d.language);
@@ -2273,10 +2253,7 @@ mod tests {
     fn newly_created_configuration_directory_is_private() {
         use std::os::unix::fs::PermissionsExt;
 
-        let root = std::env::temp_dir().join(format!(
-            "sagascript-private-config-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let root = TempDir::new();
         let path = root.join("config").join(SETTINGS_FILENAME);
         save_to(&path, &Settings::default()).unwrap();
         let mode = fs::metadata(path.parent().unwrap())
@@ -2285,7 +2262,6 @@ mod tests {
             .mode()
             & 0o777;
         assert_eq!(mode, 0o700);
-        let _ = fs::remove_dir_all(root);
     }
 
     #[cfg(unix)]
@@ -2293,13 +2269,9 @@ mod tests {
     fn unchanged_glossary_save_does_not_replace_the_file() {
         use std::os::unix::fs::MetadataExt;
 
-        let root = std::env::temp_dir().join(format!(
-            "sagascript-unchanged-glossary-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let root = TempDir::new();
         let settings_path = root.join(SETTINGS_FILENAME);
         let glossary_path = root.join(GLOBAL_GLOSSARY_FILENAME);
-        fs::create_dir_all(&root).unwrap();
         fs::write(&glossary_path, "OpenRouter = open router\n").unwrap();
         let original_inode = fs::metadata(&glossary_path).unwrap().ino();
         let settings = Settings {
@@ -2310,7 +2282,6 @@ mod tests {
         save_to(&settings_path, &settings).unwrap();
 
         assert_eq!(fs::metadata(&glossary_path).unwrap().ino(), original_inode);
-        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
