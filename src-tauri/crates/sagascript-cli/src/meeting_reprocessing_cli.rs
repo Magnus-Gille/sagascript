@@ -5,7 +5,6 @@
 //! orchestration API.  It never replaces an existing review or output file.
 
 use std::fs;
-use std::io;
 use std::path::{Path, PathBuf};
 
 use clap::{Args, Subcommand, ValueEnum};
@@ -16,9 +15,10 @@ use sagascript_core::settings::{FileModel, Language, Settings, WhisperModel};
 use sagascript_core::transcription::{Glossary, WhisperBackend};
 use serde_json::json;
 
-use crate::meeting_proposal::{read_json, write_json_new};
+use crate::meeting_proposal::{ensure_output_absent, read_json, write_json_new};
 use crate::meeting_reprocessing::{
-    execute_reprocessing, plan_reprocessing, ReprocessingInput, ReprocessingResult,
+    ensure_distinct_outputs, execute_with_model_check, plan_reprocessing, CommitError,
+    NativeBackend, PublishReceipt, ReprocessingInput, WorkBackend,
 };
 use crate::output::{errln, Out};
 use crate::speaker_args::SpeakerCountArgs;
@@ -168,11 +168,7 @@ fn run_plan(args: PlanArgs) -> Result<(), DictationError> {
 }
 
 fn run_execute(args: ExecuteArgs, out: &Out) -> Result<(), DictationError> {
-    ensure_output_absent(&args.output)?;
-    if let Some(cache_output) = args.cache_output.as_deref() {
-        ensure_output_absent(cache_output)?;
-        ensure_distinct_outputs(&args.output, cache_output)?;
-    }
+    ensure_outputs_ready(&args, out)?;
     let plan: ReprocessingPlan =
         read_json(&args.plan, MAX_REPROCESSING_JSON_BYTES, "reprocessing plan")?;
     let previous: MeetingReview = read_json(
@@ -192,33 +188,176 @@ fn run_execute(args: ExecuteArgs, out: &Out) -> Result<(), DictationError> {
     // Construction is cheap and does not load model weights.  The execution
     // API performs the lazy model load only when the validated plan needs it.
     let whisper = WhisperBackend::new();
-    let result = execute_reprocessing(
+    execute_and_publish(
+        &args,
         &plan,
-        &args.expected_revision,
         &input,
-        &runtime.stored,
-        &whisper,
-        args.cache_output.as_deref(),
-        None,
-    )?;
-    ensure_previous_revision_unchanged(&args.previous_review, &previous.revision)?;
-    publish_result(&args.output, result, out)
+        sagascript_core::diarization::model::all_models_downloaded,
+        &mut NativeBackend {
+            stored: &runtime.stored,
+            whisper: &whisper,
+        },
+        out,
+    )
 }
 
-fn publish_result(
-    path: &Path,
-    result: ReprocessingResult,
+/// The checks that cost nothing, before any input is read or inference starts:
+/// both outputs are free, distinct and in usable folders, and no earlier run
+/// was interrupted between its two publications.
+fn ensure_outputs_ready(args: &ExecuteArgs, out: &Out) -> Result<(), DictationError> {
+    let Some(cache_output) = args.cache_output.as_deref() else {
+        ensure_output_absent(&args.output)?;
+        check_output_folder(&args.output)?;
+        warn_about_staging_leftovers(&args.output, out);
+        return Ok(());
+    };
+    if exists(cache_output) && !exists(&args.output) {
+        return Err(interrupted_run_error(args, cache_output));
+    }
+    ensure_output_absent(&args.output)?;
+    ensure_output_absent(cache_output)?;
+    ensure_distinct_outputs(&args.output, cache_output)?;
+    check_output_folder(&args.output)?;
+    check_output_folder(cache_output)?;
+    warn_about_staging_leftovers(&args.output, out);
+    warn_about_staging_leftovers(cache_output, out);
+    Ok(())
+}
+
+fn exists(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok()
+}
+
+fn check_output_folder(path: &Path) -> Result<(), DictationError> {
+    sagascript_core::fsutil::check_destination_folder(path)
+        .map_err(|error| crate::meeting_proposal::publish_error(&error))
+}
+
+/// Private staging files are hidden siblings of an output that a killed run
+/// left behind. Nothing reads them, so they are only worth a warning.
+fn warn_about_staging_leftovers(output: &Path, out: &Out) {
+    let found = sagascript_core::fsutil::staging_leftovers(output);
+    if !found.is_empty() {
+        let list = found
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        errln!(
+            out,
+            "Warning: an interrupted run left private staging file(s) beside {}: {list}. \
+             Sagascript never reads them; delete them when you no longer need them.",
+            output.display()
+        );
+    }
+}
+
+/// How to continue from a cache that is published when its proposal is not.
+fn recovery_advice(args: &ExecuteArgs, cache: &Path) -> String {
+    format!(
+        "Recover without recomputing: plan a selective run from that cache, \
+         `sagascript meeting reprocess plan '{audio}' --previous-review '{review}' --mode recluster \
+         --cache '{cache}' --output NEW_PLAN`, then run `execute` on it with `--cache '{cache}'` and \
+         `--output '{proposal}'`, repeating your --language/--profile, --model and prompt options in both. \
+         Or choose new output paths to compute again. \
+         See docs/meeting-reprocessing.md, \"Interrupted publication\".",
+        audio = args.audio.display(),
+        review = args.previous_review.display(),
+        cache = cache.display(),
+        proposal = args.output.display(),
+    )
+}
+
+/// The cache output exists and the proposal does not: the state an interrupted
+/// run leaves, since the proposal is published last.
+fn interrupted_run_error(args: &ExecuteArgs, cache: &Path) -> DictationError {
+    let staged = sagascript_core::fsutil::staging_leftovers(&args.output);
+    let survivor = if staged.is_empty() {
+        String::new()
+    } else {
+        let list = staged
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!(
+            " A staged proposal survived ({list}); it was complete before the cache was published, \
+             so after `sagascript meeting proposal inspect` accepts it you can rename it to the proposal path."
+        )
+    };
+    DictationError::FileDecodeError(format!(
+        "the cache output {} already exists but the proposal output {} does not: an earlier run was \
+         probably interrupted before it published its proposal. Nothing was changed.{survivor} {}",
+        cache.display(),
+        args.output.display(),
+        recovery_advice(args, cache)
+    ))
+}
+
+/// Run the plan on `backend`, then publish the outputs: the new cache first,
+/// the proposal last. Everything that can fail (inference, the checks after it,
+/// serialization, writing both files) comes before the first publication, so a
+/// failure leaves no output and the same command can run again. Only a failure
+/// of the final publication leaves a complete cache without a proposal; see
+/// `meeting_reprocessing` and docs/meeting-reprocessing.md.
+fn execute_and_publish(
+    args: &ExecuteArgs,
+    plan: &ReprocessingPlan,
+    input: &ReprocessingInput<'_>,
+    models_available: impl FnOnce() -> bool,
+    backend: &mut impl WorkBackend,
     out: &Out,
 ) -> Result<(), DictationError> {
-    let ReprocessingResult {
-        proposal,
-        required_work,
-        timings,
-    } = result;
-    write_json_new(path, &proposal)?;
+    let staged = execute_with_model_check(
+        plan,
+        &args.expected_revision,
+        input,
+        args.cache_output.as_deref(),
+        None,
+        models_available,
+        backend,
+    )?;
+    let pending = staged.stage_proposal(&args.output)?;
+    ensure_previous_revision_unchanged(&args.previous_review, &input.previous.revision)?;
+    let receipt = pending
+        .commit()
+        .map_err(|error| publication_error(error, args))?;
+    report_receipt(receipt, out)
+}
+
+/// The error for a commit that did not publish everything.
+fn publication_error(error: CommitError, args: &ExecuteArgs) -> DictationError {
+    match error {
+        CommitError::NothingPublished(cause) => cause,
+        CommitError::CacheOnly {
+            cache,
+            proposal,
+            cause,
+        } => DictationError::FileDecodeError(format!(
+            "{cause}. The new cache WAS published at {} and is complete, but no proposal exists at {}; \
+             no existing file was changed. {}",
+            cache.display(),
+            proposal.display(),
+            recovery_advice(args, &cache)
+        )),
+    }
+}
+
+fn report_receipt(receipt: PublishReceipt, out: &Out) -> Result<(), DictationError> {
+    if let Some(cache) = &receipt.cache {
+        errln!(out, "Saved reusable diarization cache: {}", cache.display());
+    }
+    for leftover in &receipt.leftovers {
+        errln!(
+            out,
+            "Warning: the output was published, but its private temporary file {} could not be removed ({}); delete it.",
+            leftover.path.display(),
+            leftover.error
+        );
+    }
     let diagnostics = json!({
-        "required_work": required_work,
-        "timings": timings,
+        "required_work": receipt.required_work,
+        "timings": receipt.timings,
     });
     let serialized = serde_json::to_string(&diagnostics).map_err(|_| {
         DictationError::TranscriptionFailed(
@@ -283,40 +422,6 @@ fn resolve_runtime(args: &RuntimeArgs) -> Result<RuntimeInputs, DictationError> 
     })
 }
 
-fn ensure_output_absent(path: &Path) -> Result<(), DictationError> {
-    match fs::symlink_metadata(path) {
-        Ok(_) => Err(DictationError::FileDecodeError(
-            "meeting output already exists; no existing file was changed".to_string(),
-        )),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(DictationError::FileDecodeError(format!(
-            "meeting output could not be inspected: {}",
-            error
-        ))),
-    }
-}
-
-fn ensure_distinct_outputs(left: &Path, right: &Path) -> Result<(), DictationError> {
-    let left = output_identity(left);
-    let right = output_identity(right);
-    if left == right {
-        return Err(DictationError::SettingsError(
-            "meeting proposal and cache outputs must be different paths".to_string(),
-        ));
-    }
-    Ok(())
-}
-
-fn output_identity(path: &Path) -> PathBuf {
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    let Some(filename) = path.file_name() else {
-        return path.to_path_buf();
-    };
-    fs::canonicalize(parent)
-        .map(|parent| parent.join(filename))
-        .unwrap_or_else(|_| path.to_path_buf())
-}
-
 fn ensure_previous_revision_unchanged(
     path: &Path,
     expected_revision: &str,
@@ -345,6 +450,8 @@ fn parse_threshold(value: &str) -> Result<f32, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::meeting_reprocessing::{CommitError, WorkBackend};
+    use crate::transcribe::MeetingControl;
     use clap::Parser;
     use sagascript_core::meeting_review::MeetingReview;
     use sagascript_core::test_support::meeting_transcript;
@@ -514,6 +621,381 @@ mod tests {
         let error = ensure_distinct_outputs(&proposal, &cache)
             .expect_err("aliased output paths must fail before inference");
         assert!(error.to_string().contains("different paths"));
+    }
+
+    // The two outputs of `execute` (#342): what each way a run can end leaves on
+    // disk. The fake `full` saves the new cache where it is told to and then
+    // runs a hook, as the real pipeline does mid-inference.
+
+    struct FakeFull {
+        during_inference: Option<Box<dyn FnMut()>>,
+    }
+
+    impl WorkBackend for FakeFull {
+        fn decode(
+            &mut self,
+            _audio: &Path,
+            _control: Option<&MeetingControl<'_>>,
+        ) -> Result<Vec<f32>, DictationError> {
+            Err(DictationError::TranscriptionFailed("not used".into()))
+        }
+
+        fn analyze(
+            &mut self,
+            _audio: &[f32],
+            _config: &sagascript_core::diarization::DiarizeConfig,
+            _control: Option<&MeetingControl<'_>>,
+        ) -> Result<sagascript_core::diarization::DiarizationAnalysis, DictationError> {
+            Err(DictationError::TranscriptionFailed("not used".into()))
+        }
+
+        fn full(
+            &mut self,
+            input: &ReprocessingInput<'_>,
+            _threshold: f32,
+            _speaker_hint: Option<sagascript_core::speaker_hint::SpeakerCountHint>,
+            cache_output: Option<&Path>,
+            _control: Option<&MeetingControl<'_>>,
+        ) -> Result<sagascript_core::meeting::MeetingTranscript, DictationError> {
+            if let Some(path) = cache_output {
+                let identity = crate::diarization_cache::CacheIdentity::for_source_sha256(
+                    &input.previous.original.source_sha256,
+                    "en",
+                    "base",
+                    None,
+                )?;
+                let analysis = serde_json::from_str(r#"{"raw_segments":[],"embeddings":[]}"#)
+                    .expect("empty synthetic analysis");
+                let cache = crate::diarization_cache::DiarizationCache::new(
+                    identity,
+                    analysis,
+                    vec![(0.0, 1.0, "hello".to_string())],
+                    sagascript_core::transcription::diagnostics::CoverageProfile::from_audio(
+                        &[0.1; 16_000],
+                    ),
+                    None,
+                    None,
+                );
+                crate::diarization_cache::save_new(path, &cache)?;
+            }
+            if let Some(hook) = self.during_inference.as_mut() {
+                hook();
+            }
+            Ok(input.previous.original.clone())
+        }
+    }
+
+    struct ExecuteFixture {
+        root: TempDir,
+        review: MeetingReview,
+        plan: ReprocessingPlan,
+        args: ExecuteArgs,
+        glossary: Glossary,
+    }
+
+    impl ExecuteFixture {
+        fn new() -> Self {
+            let root = TempDir::new();
+            let audio = root.join("audio.bin");
+            fs::write(&audio, b"synthetic audio bytes").expect("audio");
+            let review = synthetic_review(&sha256_hex(b"synthetic audio bytes"), "hello");
+            let review_path = root.join("review.json");
+            fs::write(&review_path, serde_json::to_vec(&review).expect("review")).expect("write");
+            let glossary = Glossary::default();
+            let input = ReprocessingInput {
+                audio: &audio,
+                cache: None,
+                previous: &review,
+                language: Language::English,
+                model: WhisperModel::Base,
+                glossary: &glossary,
+            };
+            let plan = plan_reprocessing(&input, ReprocessingMode::Full, 0.75, None).expect("plan");
+            let args = ExecuteArgs {
+                plan: root.join("plan.json"),
+                audio,
+                previous_review: review_path,
+                expected_revision: plan.revision.clone(),
+                cache: None,
+                cache_output: Some(root.join("cache.json")),
+                runtime: RuntimeArgs {
+                    language: None,
+                    profile: None,
+                    model: None,
+                    prompt: None,
+                    prompt_file: None,
+                },
+                output: root.join("proposal.json"),
+            };
+            Self {
+                root,
+                review,
+                plan,
+                args,
+                glossary,
+            }
+        }
+
+        fn names(&self) -> Vec<String> {
+            let mut names = fs::read_dir(&self.root)
+                .expect("list")
+                .map(|entry| {
+                    entry
+                        .expect("entry")
+                        .file_name()
+                        .to_string_lossy()
+                        .into_owned()
+                })
+                .collect::<Vec<_>>();
+            names.sort();
+            names
+        }
+
+        /// `run_execute` without the settings lookup: its output checks, then the work
+        /// and the publication.
+        fn run(&self, backend: &mut FakeFull) -> (Result<(), DictationError>, String) {
+            let (out, captured) = Out::capture();
+            let result =
+                ensure_outputs_ready(&self.args, &out).and_then(|()| self.execute(backend, &out));
+            (result, captured.stderr())
+        }
+
+        /// The work and the publication, as `run` does after the output checks.
+        fn execute(&self, backend: &mut FakeFull, out: &Out) -> Result<(), DictationError> {
+            let input = ReprocessingInput {
+                audio: &self.args.audio,
+                cache: None,
+                previous: &self.review,
+                language: Language::English,
+                model: WhisperModel::Base,
+                glossary: &self.glossary,
+            };
+            execute_and_publish(&self.args, &self.plan, &input, || true, backend, out)
+        }
+    }
+
+    fn quiet() -> FakeFull {
+        FakeFull {
+            during_inference: None,
+        }
+    }
+
+    #[test]
+    fn success_publishes_the_cache_and_the_proposal_and_nothing_else() {
+        let fixture = ExecuteFixture::new();
+        let (result, stderr) = fixture.run(&mut quiet());
+        result.expect("execute");
+        assert_eq!(
+            fixture.names(),
+            ["audio.bin", "cache.json", "proposal.json", "review.json"]
+        );
+        let diagnostics: serde_json::Value =
+            serde_json::from_str(stderr.lines().last().expect("diagnostics line")).expect("json");
+        assert!(diagnostics.get("required_work").is_some());
+        assert!(diagnostics.get("timings").is_some());
+    }
+
+    #[test]
+    fn review_changed_during_inference_publishes_nothing() {
+        let fixture = ExecuteFixture::new();
+        let review_path = fixture.args.previous_review.clone();
+        let edited = synthetic_review(&"a".repeat(64), "edited meanwhile");
+        let edited_bytes = serde_json::to_vec(&edited).expect("edited review");
+        let expected = edited_bytes.clone();
+        let mut backend = FakeFull {
+            during_inference: Some(Box::new(move || {
+                fs::write(&review_path, &edited_bytes).expect("concurrent edit");
+            })),
+        };
+
+        let (result, _) = fixture.run(&mut backend);
+
+        let error = result.expect_err("the review changed");
+        assert!(
+            error.to_string().contains("changed during reprocessing"),
+            "{error}"
+        );
+        assert_eq!(fixture.names(), ["audio.bin", "review.json"]);
+        assert_eq!(
+            fs::read(&fixture.args.previous_review).expect("review"),
+            expected
+        );
+    }
+
+    #[test]
+    fn rerun_after_the_review_changed_reuses_the_same_output_names() {
+        let fixture = ExecuteFixture::new();
+        let review_path = fixture.args.previous_review.clone();
+        let original = fs::read(&review_path).expect("original review");
+        let restore = original.clone();
+        let mut backend = FakeFull {
+            during_inference: Some(Box::new({
+                let review_path = review_path.clone();
+                move || {
+                    let edited = synthetic_review(&"a".repeat(64), "edited meanwhile");
+                    fs::write(&review_path, serde_json::to_vec(&edited).expect("edited"))
+                        .expect("concurrent edit");
+                }
+            })),
+        };
+        fixture.run(&mut backend).0.expect_err("the review changed");
+        fs::write(&review_path, restore).expect("review is back as planned");
+
+        let (result, _) = fixture.run(&mut quiet());
+
+        result.expect("the identical command succeeds the second time");
+        assert_eq!(
+            fixture.names(),
+            ["audio.bin", "cache.json", "proposal.json", "review.json"]
+        );
+    }
+
+    #[test]
+    fn unwritable_proposal_destination_publishes_nothing() {
+        let mut fixture = ExecuteFixture::new();
+        fixture.args.output = fixture.root.join("missing-folder").join("proposal.json");
+
+        // Straight to the work: the early output checks are not what is tested.
+        let (out, _) = Out::capture();
+        let error = fixture
+            .execute(&mut quiet(), &out)
+            .expect_err("the proposal cannot be written");
+
+        assert!(error.to_string().contains("output folder"), "{error}");
+        assert_eq!(fixture.names(), ["audio.bin", "review.json"]);
+    }
+
+    #[test]
+    fn proposal_output_created_during_inference_is_never_overwritten() {
+        let fixture = ExecuteFixture::new();
+        let proposal_path = fixture.args.output.clone();
+        let mut backend = FakeFull {
+            during_inference: Some(Box::new({
+                let proposal_path = proposal_path.clone();
+                move || fs::write(&proposal_path, b"someone else's file").expect("their file")
+            })),
+        };
+
+        let (result, _) = fixture.run(&mut backend);
+
+        let error = result.expect_err("the destination appeared");
+        assert!(error.to_string().contains("already exists"), "{error}");
+        assert_eq!(
+            fs::read(&proposal_path).expect("kept"),
+            b"someone else's file"
+        );
+        assert_eq!(
+            fixture.names(),
+            ["audio.bin", "proposal.json", "review.json"]
+        );
+    }
+
+    #[test]
+    fn an_earlier_run_interrupted_between_its_publications_is_detected_before_any_work() {
+        let fixture = ExecuteFixture::new();
+        fs::write(fixture.args.cache_output.as_ref().expect("cache"), b"cache").expect("cache");
+        let (out, _) = Out::capture();
+
+        let error = ensure_outputs_ready(&fixture.args, &out).expect_err("interrupted run");
+
+        let message = error.to_string();
+        assert!(message.contains("probably interrupted"), "{message}");
+        assert!(message.contains("--mode recluster"), "{message}");
+        assert!(message.contains("cache.json"), "{message}");
+        assert!(!message.contains("survived"), "{message}");
+        assert_eq!(fixture.names(), ["audio.bin", "cache.json", "review.json"]);
+
+        // A staged proposal that outlived the run is pointed out.
+        let staged = sagascript_core::fsutil::StagedFile::create(&fixture.args.output, b"{}")
+            .expect("staged proposal");
+        std::mem::forget(staged);
+        let message = ensure_outputs_ready(&fixture.args, &out)
+            .expect_err("interrupted run")
+            .to_string();
+        assert!(message.contains("A staged proposal survived"), "{message}");
+    }
+
+    #[test]
+    fn both_outputs_existing_is_not_an_interrupted_run() {
+        let fixture = ExecuteFixture::new();
+        fs::write(fixture.args.cache_output.as_ref().expect("cache"), b"cache").expect("cache");
+        fs::write(&fixture.args.output, b"proposal").expect("proposal");
+        let (out, _) = Out::capture();
+
+        let message = ensure_outputs_ready(&fixture.args, &out)
+            .expect_err("exists")
+            .to_string();
+
+        assert!(message.contains("output already exists"), "{message}");
+        assert!(!message.contains("interrupted"), "{message}");
+    }
+
+    #[test]
+    fn unusable_output_folders_are_rejected_before_any_work() {
+        let mut fixture = ExecuteFixture::new();
+        let (out, _) = Out::capture();
+        fixture.args.output = fixture.root.join("missing").join("proposal.json");
+        let message = ensure_outputs_ready(&fixture.args, &out)
+            .expect_err("missing proposal folder")
+            .to_string();
+        assert!(message.contains("output folder"), "{message}");
+
+        fixture.args.output = fixture.root.join("proposal.json");
+        fixture.args.cache_output = Some(fixture.root.join("missing").join("cache.json"));
+        let message = ensure_outputs_ready(&fixture.args, &out)
+            .expect_err("missing cache folder")
+            .to_string();
+        assert!(message.contains("output folder"), "{message}");
+        assert_eq!(fixture.names(), ["audio.bin", "review.json"]);
+    }
+
+    #[test]
+    fn staging_files_left_by_a_killed_run_are_warned_about_not_fatal() {
+        let fixture = ExecuteFixture::new();
+        let staged = sagascript_core::fsutil::StagedFile::create(&fixture.args.output, b"{}")
+            .expect("staged proposal");
+        let survivor = staged.staged_path().to_path_buf();
+        std::mem::forget(staged);
+        let (out, captured) = Out::capture();
+
+        ensure_outputs_ready(&fixture.args, &out).expect("a stray staging file blocks nothing");
+
+        let stderr = captured.stderr();
+        assert!(
+            stderr.contains("interrupted run left private staging"),
+            "{stderr}"
+        );
+        assert!(stderr.contains(&survivor.display().to_string()), "{stderr}");
+    }
+
+    #[test]
+    fn a_failure_after_the_cache_was_published_names_the_cache_and_the_way_back() {
+        let fixture = ExecuteFixture::new();
+        let cache = fixture.root.join("cache.json");
+        let error = publication_error(
+            CommitError::CacheOnly {
+                cache: cache.clone(),
+                proposal: fixture.args.output.clone(),
+                cause: DictationError::FileDecodeError(
+                    "meeting output could not be published: boom".into(),
+                ),
+            },
+            &fixture.args,
+        );
+
+        let message = error.to_string();
+        assert!(message.contains("boom"), "{message}");
+        assert!(message.contains("WAS published"), "{message}");
+        assert!(message.contains(&cache.display().to_string()), "{message}");
+        assert!(
+            message.contains("no existing file was changed"),
+            "{message}"
+        );
+        assert!(message.contains("--mode recluster"), "{message}");
+        assert!(
+            message.contains(&format!("'{}'", fixture.args.audio.display())),
+            "{message}"
+        );
     }
 
     #[test]

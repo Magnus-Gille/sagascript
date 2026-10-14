@@ -63,6 +63,30 @@ Reusable artifacts are opt-in at an explicit path. They contain transcript and
 voice-derived data and require privacy/deletion documentation. Failed saves
 must not replace the old reviewed file. Proposal persistence and final review
 publication must use private, atomic create-new output, not remove-then-rename.
+Every such file is published with `sagascript_core::fsutil::publish_new`
+([ADR 0008](adr/0008-publishing-new-files.md)).
+
+### Publishing the outputs of one run (#342)
+
+One run publishes at most a proposal and a new cache. The contract, pinned by
+tests in `meeting_reprocessing_tests.rs` and `meeting_reprocessing_cli.rs`:
+
+- Neither output is visible at its destination until every check has passed:
+  validated plan, unchanged source, cache and previous-review revision, no
+  cancellation, proposal serialized and staged. The cache is staged privately
+  while inference runs; the proposal is built in memory.
+- Any failure before the first publication leaves no output file and no staging
+  file, so the same command can run again.
+- Publication order is cache, then proposal. The proposal is the completion
+  marker. Only a failed proposal publication leaves a partial result, a complete
+  cache without a proposal, and the error says so and how to recover. A selective
+  run from that cache recovers the proposal without inference. The reverse
+  partial state (a proposal without its cache) cannot arise.
+- No publication replaces or deletes an existing file; the only files removed are
+  staging names created by the run itself.
+- No cross-file atomicity is promised: a process killed between the two
+  publications leaves the same partial state, which the next run with the same
+  output paths detects and reports without changing anything.
 
 This implementation session uses synthetic fixtures and isolated UI checks.
 The separate release-testing agent owns installed apps, real recordings,

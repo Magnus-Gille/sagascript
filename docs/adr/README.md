@@ -15,6 +15,7 @@ where the code shows them. The map of the code is [ARCHITECTURE.md](../ARCHITECT
 | [0005](0005-mutex-poison-policy.md) | Mutex poison policy: recover, log, restore a safe state | Accepted |
 | 0006 | Error types across boundaries | Proposed — decided in [#360](https://github.com/Magnus-Gille/sagascript/issues/360) |
 | [0007](0007-settings-file-evolution.md) | Settings file evolution: `schema_version`, ordered migrations, lenient fields | Accepted |
+| [0008](0008-publishing-new-files.md) | Publishing new files without replacing, and related outputs | Accepted |
 
 0006 is a reserved number without a file: #360 will write it. Until then the commands keep
 returning `Result<_, String>`.

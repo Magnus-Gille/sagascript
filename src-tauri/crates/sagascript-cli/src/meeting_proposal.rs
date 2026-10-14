@@ -187,9 +187,37 @@ fn json_line<T: Serialize>(value: &T) -> Result<Vec<u8>, DictationError> {
     Ok(bytes)
 }
 
+/// Serialize `value` and stage it privately beside `path` without publishing
+/// anything. Serialization and write errors surface here, before a caller
+/// publishes any related artifact (#342).
+#[cfg(feature = "diarization")]
+pub(crate) fn stage_json_new<T: Serialize>(
+    path: &Path,
+    value: &T,
+) -> Result<fsutil::StagedFile, DictationError> {
+    fsutil::StagedFile::create(path, &json_line(value)?).map_err(|error| publish_error(&error))
+}
+
 /// Read a validated proposal selected by a caller such as the desktop UI.
 pub fn read_proposal(path: &Path) -> Result<MeetingReprocessingProposal, DictationError> {
     read_json(path, MAX_SERIALIZED_PROPOSAL_BYTES, "proposal")
+}
+
+/// Fail when anything, even a dangling symlink, exists at `path`: the cheap
+/// check before expensive work that ends in publishing a new file. Publication
+/// itself never replaces a file either way.
+#[cfg(feature = "diarization")]
+pub(crate) fn ensure_output_absent(path: &Path) -> Result<(), DictationError> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => Err(DictationError::FileDecodeError(
+            "meeting output already exists; no existing file was changed".to_string(),
+        )),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(DictationError::FileDecodeError(format!(
+            "meeting output could not be inspected: {}",
+            error
+        ))),
+    }
 }
 
 /// Publish `bytes` as the new file `path` ([`fsutil::publish_new`]). A private
