@@ -37,7 +37,6 @@
     getEffectiveModelInfo,
     getAutoFileModelInfo,
     getSupportedFormats,
-    getPlatform,
     checkAccessibilityPermission,
     retryHotkeyRegistration,
     startRecording,
@@ -63,6 +62,7 @@
   import { open } from "@tauri-apps/plugin-dialog";
   import { PIANISSIMO_ID, downloadModelById, useModelDownloads } from "./models.svelte";
   import { requestAccessibility } from "./permissions";
+  import { loadPlatform } from "./platform";
   import { useDragDropEvent, useTauriEvent } from "./tauri-events.svelte";
   import {
     dictateButtonAction,
@@ -1198,7 +1198,7 @@
       try {
         settings = await getSettings();
         await refreshProfileModels(settings.hotkey_profiles);
-        platform = await getPlatform();
+        platform = await loadPlatform();
         if (platform === "macos") {
           accessibilityGranted = await checkAccessibilityPermission();
         }

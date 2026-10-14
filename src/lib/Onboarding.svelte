@@ -3,10 +3,10 @@
   import { hotkeyKeyLabel } from "./hotkey";
   import { downloadModelById } from "./models.svelte";
   import { waitForAccessibility } from "./permissions";
+  import { loadPlatform } from "./platform";
   import { awaitDownloadCompletion, completedDownloadState } from "./onboarding-download-state";
   import { useTauriEvent } from "./tauri-events.svelte";
   import {
-    getPlatform,
     getSettings,
     setLanguage,
     getEffectiveModelInfo,
@@ -355,7 +355,7 @@
     if (componentDestroyed) return;
 
     try {
-      platform = await getPlatform();
+      platform = await loadPlatform();
     } catch (error) {
       // Never fall back to the macOS-only permission flow when platform
       // detection fails. "unknown" follows the portable onboarding path.
