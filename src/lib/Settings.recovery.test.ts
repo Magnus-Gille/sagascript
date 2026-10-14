@@ -386,9 +386,7 @@ describe("preparing for an update", () => {
     const secondRead = deferred<string | null>();
     ipc.handle("get_last_transcription", () => secondRead.promise);
     ipc.emit("update-preparing", "nonce-2");
-    // Rust sends the nonce string; Settings also tolerates `{ nonce }`, which
-    // it never sends, so that form is the one deliberate cast here.
-    ipc.emit("update-preparing", { nonce: "nonce-3" } as unknown as string);
+    ipc.emit("update-preparing", "nonce-3");
     secondRead.resolve(null);
     await waitFor(() => expect(ipc.callsTo("complete_update_preparation")).toEqual([{ nonce: "nonce-3", error: null }]));
     await settle();
