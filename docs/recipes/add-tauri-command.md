@@ -100,7 +100,8 @@ export async function getExampleInfo(profileId: string): Promise<ExampleInfo> {
 ## 4. Browser mock
 
 `scripts/fixtures/transcription-browser-mock.js` answers every `invoke` in the Playwright
-suites (`mockIPC` switch). Unknown commands return `null`. Add a `case "get_example_info":`
+suites (`mockIPC` switch). Unknown commands return `null`, and a `case` label must be a
+registered command (`scripts/test-browser-mock-commands.mjs`). Add a `case "get_example_info":`
 with realistic data if a view calls the command while loading or a `scripts/qa-*.mjs` flow
 depends on it. Calls are recorded in `window.qa.calls` for assertions.
 

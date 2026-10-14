@@ -238,8 +238,6 @@ mockIPC(async (cmd, args = {}) => {
         { id: "english", name: "English", language: "en", shortcut: "Control+Shift+E" },
       ], profile_models: { ...profileModels }, profile_glossaries: {}, profile_glossary_migrated: true, initial_prompt: "", beam_size: 0,
       temperature_fallback: true, vad_enabled: false, ...engineSettings, has_completed_onboarding: true };
-    case "get_model_info": return [{ id: "base.en", display_name: "Base English", description: "Fixture",
-      size_mb: 0, downloaded: true, active: true }];
     // Mirrors the backend lineup where Pianissimo is supported: Pianissimo and
     // KB-Whisper Large only. `include` keeps a selected retired model listed.
     case "get_file_model_options": {
