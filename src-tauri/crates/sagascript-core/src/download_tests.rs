@@ -1537,56 +1537,53 @@ async fn existing_artifact_is_hashed_off_the_async_executor() {
     );
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn cancelling_verification_stops_the_hash_and_keeps_the_file() {
-    tokio::time::timeout(Duration::from_secs(30), async {
-        let dir = TempDir::new();
-        let path = dir.join("model.bin");
-        // Same size as the pinned artifact, wrong bytes: a completed hash
-        // would delete it.
-        std::fs::write(&path, b"tampered model").unwrap();
-        let (started_tx, started_rx) = std::sync::mpsc::channel();
-        let (saw_cancel_tx, saw_cancel_rx) = std::sync::mpsc::channel();
-        let started_tx = std::sync::Mutex::new(started_tx);
-        let saw_cancel_tx = std::sync::Mutex::new(saw_cancel_tx);
+#[test]
+fn cancelling_verification_stops_the_hash_and_keeps_the_file() {
+    let dir = TempDir::new();
+    let path = dir.join("model.bin");
+    // Same size as the pinned artifact, wrong bytes: a completed hash would
+    // delete it.
+    std::fs::write(&path, b"tampered model").unwrap();
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let (saw_cancel_tx, saw_cancel_rx) = std::sync::mpsc::channel();
+    let started_tx = std::sync::Mutex::new(started_tx);
+    let saw_cancel_tx = std::sync::Mutex::new(saw_cancel_tx);
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .build()
+        .unwrap();
 
-        let task = tokio::spawn(prepare_existing_artifact_async_with(
-            path.clone(),
-            pinned(14),
-            move |file, p: &Path, cancel: &CancelFlag| {
-                started_tx.lock().unwrap().send(()).unwrap();
-                let give_up = std::time::Instant::now() + Duration::from_secs(5);
-                while !cancel.is_cancelled() && std::time::Instant::now() < give_up {
-                    std::thread::sleep(Duration::from_millis(5));
-                }
-                let _ = saw_cancel_tx.lock().unwrap().send(cancel.is_cancelled());
-                sha256_of_file_until(file, p, cancel)
-            },
-        ));
-        tokio::task::spawn_blocking(move || started_rx.recv_timeout(Duration::from_secs(10)))
-            .await
-            .unwrap()
-            .expect("the hash never started");
+    let task = runtime.spawn(prepare_existing_artifact_async_with(
+        path.clone(),
+        pinned(14),
+        move |file, p: &Path, cancel: &CancelFlag| {
+            started_tx.lock().unwrap().send(()).unwrap();
+            let give_up = std::time::Instant::now() + Duration::from_secs(5);
+            while !cancel.is_cancelled() && std::time::Instant::now() < give_up {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            let _ = saw_cancel_tx.lock().unwrap().send(cancel.is_cancelled());
+            sha256_of_file_until(file, p, cancel)
+        },
+    ));
+    started_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the hash never started");
+    task.abort();
+    // Dropping the runtime waits for its blocking pool, so the verification,
+    // and any delete it would make, has finished before the assertions.
+    drop(runtime);
 
-        task.abort();
-        let _ = task.await;
-        let saw_cancel = tokio::task::spawn_blocking(move || {
-            saw_cancel_rx.recv_timeout(Duration::from_secs(10))
-        })
-        .await
-        .unwrap()
-        .expect("the hash never finished");
-
-        assert!(saw_cancel, "dropping the future did not cancel the hash");
-        // The hash gives up as an I/O-style failure, so nothing is deleted.
-        assert!(
-            eventually(Duration::from_secs(2), || path.exists()).await
-                && std::fs::read(&path).unwrap() == b"tampered model",
-            "a cancelled verification removed the artifact"
-        );
-    })
-    .await
-    .expect("test exceeded its hard timeout");
+    assert!(
+        saw_cancel_rx.recv_timeout(Duration::ZERO).unwrap(),
+        "dropping the future did not cancel the hash"
+    );
+    // The hash gives up as an I/O-style failure, so nothing is deleted.
+    assert_eq!(
+        std::fs::read(&path).ok().as_deref(),
+        Some(&b"tampered model"[..]),
+        "a cancelled verification removed the artifact"
+    );
 }
 
 #[test]
