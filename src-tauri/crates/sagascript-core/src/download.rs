@@ -41,6 +41,9 @@ use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt;
 
 use crate::error::DictationError;
+#[cfg(unix)]
+use crate::fsutil::tolerate_unsupported;
+use crate::fsutil::{sync_durably, sync_unsupported};
 use crate::sync::lock_or_recover;
 
 /// whisper.cpp's `GGML_FILE_MAGIC` (`0x67676d6c`, mnemonic "ggml") as it
@@ -227,58 +230,6 @@ impl DownloadFs for RealFs {
         {
             let _ = dir;
             Ok(())
-        }
-    }
-}
-
-/// Flush `file` to stable storage: `File::sync_all`, which is `fsync` on
-/// Linux and `FlushFileBuffers` on Windows. On Apple platforms std's
-/// `sync_all` is only `fcntl(F_FULLFSYNC)`, which SMB and NFS homes, macFUSE
-/// and some external drives reject, so there `fsync(2)` is the fallback. That
-/// differs from SQLite, which falls back on any `F_FULLFSYNC` failure: here
-/// only a failure of the unsupported class ([`sync_unsupported`]) falls back,
-/// and EIO, ENOSPC and EDQUOT stay fatal, on purpose.
-fn sync_durably(file: &File) -> std::io::Result<()> {
-    #[cfg(target_vendor = "apple")]
-    {
-        sync_with_fallback(|| file.sync_all(), || fsync(file))
-    }
-    #[cfg(not(target_vendor = "apple"))]
-    {
-        file.sync_all()
-    }
-}
-
-/// Run `plain` when `full` fails only because the file or volume cannot do
-/// that kind of sync ([`sync_unsupported`]); any other failure is real and is
-/// returned as it is.
-#[cfg(any(target_vendor = "apple", test))]
-fn sync_with_fallback(
-    full: impl FnOnce() -> std::io::Result<()>,
-    plain: impl FnOnce() -> std::io::Result<()>,
-) -> std::io::Result<()> {
-    match full() {
-        Err(error) if sync_unsupported(&error) => {
-            tracing::debug!("Full sync rejected ({error}); falling back to the plain sync");
-            plain()
-        }
-        result => result,
-    }
-}
-
-/// `fsync(2)` without Apple's full-flush semantics.
-#[cfg(target_vendor = "apple")]
-fn fsync(file: &File) -> std::io::Result<()> {
-    use std::os::fd::AsRawFd;
-    loop {
-        // SAFETY: the descriptor stays open while `file` is borrowed, and
-        // `fsync` reads or writes no memory of ours.
-        if unsafe { libc::fsync(file.as_raw_fd()) } == 0 {
-            return Ok(());
-        }
-        let error = std::io::Error::last_os_error();
-        if error.kind() != std::io::ErrorKind::Interrupted {
-            return Err(error);
         }
     }
 }
@@ -497,48 +448,6 @@ fn install_tmp_file(
     // while the file's identity is unchanged.
     cache_verified_file(dest, integrity);
     Ok(())
-}
-
-/// Whether a failed sync only means that this file or filesystem cannot sync,
-/// rather than that written data may be lost. Some network, FUSE and external
-/// volumes reject Apple's `F_FULLFSYNC` (and then [`sync_durably`] has tried
-/// `fsync(2)` too), and some Windows redirectors reject `FlushFileBuffers`; a
-/// models directory there installs without the sync, as every download did
-/// before #368. I/O errors, a full disk or an exceeded quota stay fatal.
-fn sync_unsupported(error: &std::io::Error) -> bool {
-    use std::io::ErrorKind;
-    // ENOTTY is 25 everywhere; ENOTSUP/EOPNOTSUPP are 95 on Linux, 45 and 102
-    // on Apple platforms. std maps none of them to `Unsupported`. On Windows,
-    // `FlushFileBuffers` fails with ERROR_INVALID_FUNCTION (1) or
-    // ERROR_NOT_SUPPORTED (50), which std leaves uncategorized.
-    #[cfg(target_os = "linux")]
-    const NOT_SUPPORTED: &[i32] = &[25, 95];
-    #[cfg(target_vendor = "apple")]
-    const NOT_SUPPORTED: &[i32] = &[25, 45, 102];
-    #[cfg(windows)]
-    const NOT_SUPPORTED: &[i32] = &[1, 50];
-    #[cfg(not(any(target_os = "linux", target_vendor = "apple", windows)))]
-    const NOT_SUPPORTED: &[i32] = &[];
-    // EINVAL from fsync(2): the descriptor has no sync operation. On Windows
-    // `InvalidInput` is ERROR_INVALID_PARAMETER, which is a real bug.
-    #[cfg(unix)]
-    let no_sync_operation = error.kind() == ErrorKind::InvalidInput;
-    #[cfg(not(unix))]
-    let no_sync_operation = false;
-    error.kind() == ErrorKind::Unsupported
-        || no_sync_operation
-        || error
-            .raw_os_error()
-            .is_some_and(|code| NOT_SUPPORTED.contains(&code))
-}
-
-/// A sync that the volume cannot do is not an error; any other failure is.
-#[cfg(unix)]
-fn tolerate_unsupported(result: std::io::Result<()>) -> std::io::Result<()> {
-    match result {
-        Err(error) if sync_unsupported(&error) => Ok(()),
-        result => result,
-    }
 }
 
 /// Run blocking file work (directory scans, hashing, fsync, renames) on

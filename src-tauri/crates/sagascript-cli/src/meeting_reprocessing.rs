@@ -182,21 +182,27 @@ impl StagedReprocessing {
     /// cache is published and the result returned, or nothing is published.
     ///
     /// A staging file that could not be removed after the cache was published
-    /// is reported as an error because the job result has no warning channel;
-    /// the cache itself is complete then.
+    /// is a warning in the log, not a failure: the cache is complete, and
+    /// failing the job would lose the validated proposal and make a retry hit
+    /// "cache output already exists".
     pub fn finish(self) -> Result<ReprocessingResult, DictationError> {
+        self.finish_with(&RealFs)
+    }
+
+    /// [`finish`](Self::finish) on the given filesystem operations.
+    pub fn finish_with(self, ops: &dyn PublishFs) -> Result<ReprocessingResult, DictationError> {
         let Self { result, cache } = self;
         if let Some(cache) = cache {
             let destination = cache.destination().to_path_buf();
             let published = cache
-                .publish()
+                .publish_with(ops)
                 .map_err(|error| diarization_cache::publish_error(&destination, &error))?;
             if let Some(leftover) = published.leftover {
-                return Err(failure(&format!(
-                    "the reusable cache was saved, but its private temporary file {} could not be removed: {}",
-                    leftover.path.display(),
-                    leftover.error
-                )));
+                // The path is the user's, so the log carries the error kind alone.
+                tracing::warn!(
+                    kind = ?leftover.error.kind(),
+                    "a private cache staging file could not be removed"
+                );
             }
         }
         Ok(result)

@@ -80,7 +80,12 @@ tests in `meeting_reprocessing_tests.rs` and `meeting_reprocessing_cli.rs`:
 - Publication order is cache, then proposal. The proposal is the completion
   marker. Only a failed proposal publication leaves a partial result, a complete
   cache without a proposal, and the error says so and how to recover. A selective
-  run from that cache recovers the proposal without inference. The reverse
+  run from that cache recovers the proposal without inference, but only while
+  the decoder settings (beam size, VAD, temperature fallback) match what the
+  previous review recorded, because the full run wrote the cache with the stored
+  settings and a selective plan derives the expected cache identity from the
+  review. Otherwise the plan is refused safely and the recovery is a new full
+  run to new paths. The reverse
   partial state (a proposal without its cache) cannot arise.
 - No publication replaces or deletes an existing file; the only files removed are
   staging names created by the run itself.

@@ -498,27 +498,38 @@ pub async fn save_meeting_export(
 /// [`sagascript_core::fsutil::publish_new`]: complete or not at all, never
 /// over an existing file.
 pub(crate) fn write_new_export(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
-    use sagascript_core::fsutil::{publish_new, Leftover, PublishErrorKind};
-    let leftover_note = |saved: bool, leftover: &Leftover| {
-        let publication = if saved {
-            "The export was saved"
-        } else {
-            "The export was not saved"
-        };
+    write_new_export_with(path, bytes, &sagascript_core::fsutil::RealFs)
+}
+
+fn write_new_export_with(
+    path: &std::path::Path,
+    bytes: &[u8],
+    ops: &dyn sagascript_core::fsutil::PublishFs,
+) -> Result<(), String> {
+    use sagascript_core::fsutil::{publish_new_with, Leftover, PublishErrorKind};
+    let unsaved_note = |leftover: &Leftover| {
         format!(
-            "{publication}, but its private temporary file could not be removed: {} ({}). Remove that temporary file manually.",
+            "The export was not saved, but its private temporary file could not be removed: {} ({}). Remove that temporary file manually.",
             leftover.path.display(),
             leftover.error
         )
     };
-    match publish_new(path, bytes) {
-        Ok(published) => match &published.leftover {
-            None => Ok(()),
-            Some(leftover) => Err(leftover_note(true, leftover)),
-        },
+    match publish_new_with(path, bytes, ops) {
+        Ok(published) => {
+            if let Some(leftover) = &published.leftover {
+                // The export is complete; only a private second name of it
+                // remains. The path is the user's, so the log carries the
+                // error kind alone.
+                tracing::warn!(
+                    kind = ?leftover.error.kind(),
+                    "an export's private staging file could not be removed"
+                );
+            }
+            Ok(())
+        }
         Err(error) => {
             if let Some(leftover) = &error.leftover {
-                return Err(leftover_note(false, leftover));
+                return Err(unsaved_note(leftover));
             }
             Err(match &error.kind {
                 PublishErrorKind::AlreadyExists => {

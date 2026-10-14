@@ -6,6 +6,7 @@ use std::sync::{Arc, Barrier};
 use sagascript_testsupport::TempDir;
 
 use super::*;
+use crate::test_support::FaultyFs;
 
 /// Every entry of `dir`, hidden ones included, sorted.
 fn names(dir: &Path) -> Vec<String> {
@@ -21,33 +22,6 @@ fn names(dir: &Path) -> Vec<String> {
         .collect::<Vec<_>>();
     names.sort();
     names
-}
-
-/// The real filesystem with chosen operations failing.
-#[derive(Default)]
-struct FaultyFs {
-    fail_link: bool,
-    fail_remove: bool,
-}
-
-impl PublishFs for FaultyFs {
-    fn hard_link(&self, from: &Path, to: &Path) -> io::Result<()> {
-        if self.fail_link {
-            return Err(io::Error::other("injected link failure"));
-        }
-        RealFs.hard_link(from, to)
-    }
-
-    fn remove_file(&self, path: &Path) -> io::Result<()> {
-        if self.fail_remove {
-            return Err(io::Error::other("injected unlink failure"));
-        }
-        RealFs.remove_file(path)
-    }
-
-    fn sync_dir(&self, dir: &Path) -> io::Result<()> {
-        RealFs.sync_dir(dir)
-    }
 }
 
 #[test]
@@ -216,10 +190,7 @@ fn a_failed_commit_publishes_nothing_and_removes_the_staging_file() {
     let staged = StagedFile::create(&destination, b"bytes").expect("stage");
 
     let error = staged
-        .publish_with(&FaultyFs {
-            fail_link: true,
-            ..FaultyFs::default()
-        })
+        .publish_with(&FaultyFs::new().failing_link(1))
         .expect_err("the link fails");
 
     assert!(
@@ -238,10 +209,7 @@ fn a_staging_file_that_cannot_be_removed_after_a_commit_is_reported_not_failed()
     let staging_path = staged.staged_path().to_path_buf();
 
     let published = staged
-        .publish_with(&FaultyFs {
-            fail_remove: true,
-            ..FaultyFs::default()
-        })
+        .publish_with(&FaultyFs::new().failing_remove())
         .expect("the file is published");
 
     let leftover = published.leftover.expect("the leftover is reported");
@@ -257,10 +225,7 @@ fn a_failed_commit_and_a_failed_removal_report_the_leftover() {
     let staged = StagedFile::create(&destination, b"bytes").expect("stage");
 
     let error = staged
-        .publish_with(&FaultyFs {
-            fail_link: true,
-            fail_remove: true,
-        })
+        .publish_with(&FaultyFs::new().failing_link(1).failing_remove())
         .expect_err("the link fails");
 
     assert!(matches!(error.kind, PublishErrorKind::Commit(_)));
@@ -346,4 +311,210 @@ fn staging_leftovers_finds_what_a_killed_process_leaves_and_nothing_else() {
 
     assert_eq!(staging_leftovers(&destination), [survivor]);
     assert!(staging_leftovers(&dir.join("missing").join("x.json")).is_empty());
+}
+
+// Review follow-ups (#342): names, leftovers and nested staging names.
+
+#[test]
+fn a_long_non_ascii_destination_name_still_gets_a_valid_staging_name() {
+    let dir = TempDir::new();
+    // 80 characters are 240 bytes; a staging name built from them is over the
+    // 255-byte limit of common filesystems if the name is cut by characters.
+    let destination = dir.join(format!("{}.json", "漢".repeat(80)));
+
+    let staged = StagedFile::create(&destination, b"bytes").expect("stage");
+    let staging_name = staged
+        .staged_path()
+        .file_name()
+        .expect("name")
+        .to_string_lossy()
+        .into_owned();
+    assert!(staging_name.len() <= 255, "{} bytes", staging_name.len());
+    assert_eq!(staging_leftovers(&destination), [staged.staged_path()]);
+    staged.publish().expect("publish");
+
+    assert_eq!(fs::read(&destination).expect("read"), b"bytes");
+    assert_eq!(names(&dir).len(), 1);
+}
+
+#[test]
+fn a_staging_file_that_was_never_created_is_not_reported_as_a_leftover() {
+    // The creation fails and so does the removal that follows (a name that is
+    // too long, a read-only folder): nothing exists, so nothing is left over.
+    let dir = TempDir::new();
+    let ops = FaultyFs::new().failing_create().failing_remove();
+
+    let error = StagedFile::create_with(&dir.join("out.json"), b"x", &ops).expect_err("no file");
+
+    assert!(
+        matches!(error.kind, PublishErrorKind::Stage(_)),
+        "{error:?}"
+    );
+    assert!(error.leftover.is_none(), "{:?}", error.leftover);
+    assert_eq!(names(&dir), Vec::<String>::new());
+}
+
+#[test]
+fn a_filesystem_that_cannot_fsync_still_publishes() {
+    let dir = TempDir::new();
+    let destination = dir.join("out.json");
+    for kind in [io::ErrorKind::Unsupported, io::ErrorKind::InvalidInput] {
+        let _ = fs::remove_file(&destination);
+        let ops = FaultyFs::new().failing_sync_file(kind);
+
+        let published = publish_new_with(&destination, b"bytes", &ops);
+
+        // `InvalidInput` is the unsupported class (EINVAL) only on Unix.
+        let tolerated = kind == io::ErrorKind::Unsupported || cfg!(unix);
+        assert_eq!(published.is_ok(), tolerated, "{kind:?}: {published:?}");
+        if tolerated {
+            assert_eq!(fs::read(&destination).expect("read"), b"bytes");
+        }
+    }
+}
+
+#[test]
+fn a_real_fsync_failure_publishes_nothing() {
+    let dir = TempDir::new();
+    let destination = dir.join("out.json");
+    let ops = FaultyFs::new().failing_sync_file(io::ErrorKind::StorageFull);
+
+    let error = publish_new_with(&destination, b"bytes", &ops).expect_err("disk full");
+
+    assert!(
+        matches!(error.kind, PublishErrorKind::Stage(_)),
+        "{error:?}"
+    );
+    assert_eq!(names(&dir), Vec::<String>::new());
+}
+
+#[test]
+fn a_kill_inside_a_reserved_writer_leaves_a_staging_name_that_is_found() {
+    let dir = TempDir::new();
+    let destination = dir.join("cache.json");
+    let reserved = StagedFile::reserve(&destination).expect("reserve");
+    // The writer of a reserved path publishes it with `publish_new`; a kill
+    // between its staging and its link leaves a staging name of the staging name.
+    let inner = StagedFile::create(reserved.staged_path(), b"partial cache").expect("inner");
+    let inner_path = inner.staged_path().to_path_buf();
+    std::mem::forget(inner);
+
+    assert_eq!(staging_leftovers(&destination), [inner_path]);
+    // The reserved name itself is listed once it exists.
+    publish_new(reserved.staged_path(), b"cache bytes").expect("writer completes");
+    assert_eq!(staging_leftovers(&destination).len(), 2);
+}
+
+#[test]
+fn only_unsupported_syncs_are_tolerated() {
+    use std::io::{Error, ErrorKind};
+    assert!(sync_unsupported(&Error::from(ErrorKind::Unsupported)));
+    assert!(!sync_unsupported(&Error::from(ErrorKind::StorageFull)));
+    assert!(!sync_unsupported(&Error::other("I/O error")));
+    #[cfg(unix)]
+    {
+        assert!(
+            sync_unsupported(&Error::from(ErrorKind::InvalidInput)),
+            "EINVAL"
+        );
+        assert!(sync_unsupported(&Error::from_raw_os_error(25)), "ENOTTY");
+        assert!(!sync_unsupported(&Error::from_raw_os_error(5)), "EIO");
+    }
+    #[cfg(windows)]
+    {
+        assert!(
+            sync_unsupported(&Error::from_raw_os_error(1)),
+            "ERROR_INVALID_FUNCTION"
+        );
+        assert!(
+            sync_unsupported(&Error::from_raw_os_error(50)),
+            "ERROR_NOT_SUPPORTED"
+        );
+        assert!(
+            !sync_unsupported(&Error::from_raw_os_error(87)),
+            "ERROR_INVALID_PARAMETER is a real bug"
+        );
+        assert!(!sync_unsupported(&Error::from(ErrorKind::InvalidInput)));
+        assert!(
+            !sync_unsupported(&Error::from_raw_os_error(5)),
+            "ERROR_ACCESS_DENIED"
+        );
+    }
+}
+
+#[test]
+fn fallback_sync_runs_only_when_the_full_sync_is_unsupported() {
+    use std::cell::Cell;
+    use std::io::{Error, ErrorKind};
+    let plain_ran = Cell::new(false);
+    let plain = |result: std::io::Result<()>| {
+        plain_ran.set(true);
+        result
+    };
+
+    // The full sync works: nothing to fall back to.
+    assert!(sync_with_fallback(|| Ok(()), || plain(Err(Error::other("unused")))).is_ok());
+    assert!(!plain_ran.get());
+
+    // A real failure is not retried with the weaker sync.
+    let error = sync_with_fallback(
+        || Err(Error::from(ErrorKind::StorageFull)),
+        || plain(Ok(())),
+    )
+    .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::StorageFull);
+    assert!(!plain_ran.get());
+
+    // An unsupported full sync falls back, and the fallback's result counts.
+    assert!(sync_with_fallback(
+        || Err(Error::from(ErrorKind::Unsupported)),
+        || plain(Ok(()))
+    )
+    .is_ok());
+    assert!(plain_ran.replace(false));
+    let error = sync_with_fallback(
+        || Err(Error::from(ErrorKind::Unsupported)),
+        || plain(Err(Error::other("I/O error"))),
+    )
+    .unwrap_err();
+    assert_eq!(error.to_string(), "I/O error");
+    assert!(plain_ran.get());
+}
+
+/// F_FULLFSYNC succeeds on APFS, so no download test reaches the `fsync(2)`
+/// fallback; call it directly.
+#[cfg(target_vendor = "apple")]
+#[test]
+fn plain_fsync_flushes_a_regular_file() {
+    use std::io::Write;
+    let dir = TempDir::new();
+    let mut file = std::fs::File::create(dir.join("synced")).unwrap();
+    file.write_all(b"data").unwrap();
+
+    fsync(&file).unwrap();
+}
+
+/// A descriptor with no sync operation fails with an unsupported-class errno
+/// (EINVAL, or ENOTSUP on XNU), which the caller turns into a warning rather
+/// than a failed download.
+#[cfg(target_vendor = "apple")]
+#[test]
+fn plain_fsync_reports_a_descriptor_that_cannot_sync() {
+    use std::os::fd::OwnedFd;
+    let (socket, _peer) = std::os::unix::net::UnixStream::pair().unwrap();
+    let file = std::fs::File::from(OwnedFd::from(socket));
+
+    let error = fsync(&file).unwrap_err();
+
+    assert!(sync_unsupported(&error), "{error:?}");
+}
+
+#[cfg(unix)]
+#[test]
+fn unsupported_sync_is_tolerated_but_real_failures_are_not() {
+    use std::io::{Error, ErrorKind};
+    assert!(tolerate_unsupported(Ok(())).is_ok());
+    assert!(tolerate_unsupported(Err(Error::from(ErrorKind::Unsupported))).is_ok());
+    assert!(tolerate_unsupported(Err(Error::from_raw_os_error(25))).is_ok());
+    assert!(tolerate_unsupported(Err(Error::from_raw_os_error(5))).is_err());
 }

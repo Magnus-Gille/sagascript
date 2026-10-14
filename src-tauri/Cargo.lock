@@ -4399,6 +4399,7 @@ dependencies = [
  "signal-hook",
  "tempfile",
  "tokio",
+ "tracing",
  "tracing-subscriber",
  "unicode-width",
  "uuid",

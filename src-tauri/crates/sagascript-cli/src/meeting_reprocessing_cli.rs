@@ -136,12 +136,12 @@ struct RuntimeInputs {
 
 pub fn run(args: ReprocessingArgs, out: &Out) -> Result<(), DictationError> {
     match args.action {
-        ReprocessingAction::Plan(args) => run_plan(args),
+        ReprocessingAction::Plan(args) => run_plan(args, out),
         ReprocessingAction::Execute(args) => run_execute(args, out),
     }
 }
 
-fn run_plan(args: PlanArgs) -> Result<(), DictationError> {
+fn run_plan(args: PlanArgs, out: &Out) -> Result<(), DictationError> {
     ensure_output_absent(&args.output)?;
     let runtime = resolve_runtime(&args.runtime)?;
     let previous: MeetingReview = read_json(
@@ -164,7 +164,7 @@ fn run_plan(args: PlanArgs) -> Result<(), DictationError> {
     let plan = plan_reprocessing(&input, args.mode.into(), args.threshold, None)?
         .with_speaker_hint(speaker_hint)
         .map_err(|error| DictationError::SettingsError(error.to_string()))?;
-    write_json_new(&args.output, &plan)
+    write_json_new(&args.output, &plan, out)
 }
 
 fn run_execute(args: ExecuteArgs, out: &Out) -> Result<(), DictationError> {
@@ -253,14 +253,18 @@ fn warn_about_staging_leftovers(output: &Path, out: &Out) {
 }
 
 /// How to continue from a cache that is published when its proposal is not.
+/// The selective plan expects the decoder the previous review recorded, while
+/// the full run wrote the cache with the current settings, so the advice
+/// states that condition and the refusal that follows without it.
 fn recovery_advice(args: &ExecuteArgs, cache: &Path) -> String {
     format!(
-        "Recover without recomputing: plan a selective run from that cache, \
+        "If your language/profile, model and prompt options and your beam size, VAD and temperature \
+         settings are unchanged, recover without recomputing: plan a selective run from that cache, \
          `sagascript meeting reprocess plan '{audio}' --previous-review '{review}' --mode recluster \
          --cache '{cache}' --output NEW_PLAN`, then run `execute` on it with `--cache '{cache}'` and \
-         `--output '{proposal}'`, repeating your --language/--profile, --model and prompt options in both. \
-         Or choose new output paths to compute again. \
-         See docs/meeting-reprocessing.md, \"Interrupted publication\".",
+         `--output '{proposal}'`, repeating your options in both. If the plan is refused (selective \
+         cache miss, incompatible decoder provenance), or you changed those settings, choose new \
+         output paths to compute again. See docs/meeting-reprocessing.md, \"Interrupted publication\".",
         audio = args.audio.display(),
         review = args.previous_review.display(),
         cache = cache.display(),
@@ -347,12 +351,13 @@ fn report_receipt(receipt: PublishReceipt, out: &Out) -> Result<(), DictationErr
     if let Some(cache) = &receipt.cache {
         errln!(out, "Saved reusable diarization cache: {}", cache.display());
     }
-    for leftover in &receipt.leftovers {
+    if !receipt.leftovers.is_empty() {
         errln!(
             out,
-            "Warning: the output was published, but its private temporary file {} could not be removed ({}); delete it.",
-            leftover.path.display(),
-            leftover.error
+            "Warning: the outputs were published, but {} private temporary file(s) beside them (hidden \
+             .NAME.UUID.tmp files with the same content) could not be removed; delete them. The next \
+             `execute` with the same output paths lists them.",
+            receipt.leftovers.len()
         );
     }
     let diagnostics = json!({
@@ -605,7 +610,7 @@ mod tests {
             },
             output: output.clone(),
         };
-        let error = run_plan(args).expect_err("existing output must fail");
+        let error = run_plan(args, &Out::capture().0).expect_err("existing output must fail");
         assert!(error.to_string().contains("output already exists"));
         assert_eq!(
             fs::read(&output).expect("existing output remains"),
@@ -992,6 +997,15 @@ mod tests {
             "{message}"
         );
         assert!(message.contains("--mode recluster"), "{message}");
+        assert!(
+            message.contains("beam size, VAD and temperature"),
+            "{message}"
+        );
+        assert!(
+            message.contains("incompatible decoder provenance"),
+            "{message}"
+        );
+        assert!(!message.contains("rediarize"), "{message}");
         assert!(
             message.contains(&format!("'{}'", fixture.args.audio.display())),
             "{message}"

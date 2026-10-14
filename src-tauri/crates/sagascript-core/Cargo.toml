@@ -48,7 +48,7 @@ kodama = { version = "0.2", optional = true }
 ndarray = { version = "0.17", optional = true }
 
 # fsync(2) as the fallback for volumes that reject F_FULLFSYNC, which is all
-# std's `sync_all` does on Apple platforms (download.rs). Already in the graph.
+# std's `sync_all` does on Apple platforms (fsutil.rs). Already in the graph.
 [target.'cfg(target_vendor = "apple")'.dependencies]
 libc = "0.2"
 

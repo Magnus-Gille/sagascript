@@ -10,6 +10,8 @@ use sagascript_core::test_support::meeting_transcript;
 use sagascript_core::transcription::Glossary;
 use sagascript_testsupport::{sha256_hex, TempDir};
 
+use sagascript_core::test_support::FaultyFs;
+
 use super::{
     execute_with, execute_with_model_check, plan_reprocessing, plan_reprocessing_with_model_check,
     CommitError, PendingPublication, ReprocessingInput, WorkBackend,
@@ -705,45 +707,6 @@ fn existing_cache_output_is_refused_before_inference_and_left_untouched() {
     );
 }
 
-/// The real filesystem, except that the chosen call of `hard_link` (counting
-/// from 1) fails, and optionally every `remove_file`.
-struct FaultyDisk {
-    fail_link_number: usize,
-    fail_remove: bool,
-    links: std::cell::Cell<usize>,
-}
-
-impl FaultyDisk {
-    fn failing_link(number: usize) -> Self {
-        Self {
-            fail_link_number: number,
-            fail_remove: false,
-            links: std::cell::Cell::new(0),
-        }
-    }
-}
-
-impl sagascript_core::fsutil::PublishFs for FaultyDisk {
-    fn hard_link(&self, from: &Path, to: &Path) -> std::io::Result<()> {
-        self.links.set(self.links.get() + 1);
-        if self.links.get() == self.fail_link_number {
-            return Err(std::io::Error::other("injected disk failure"));
-        }
-        sagascript_core::fsutil::RealFs.hard_link(from, to)
-    }
-
-    fn remove_file(&self, path: &Path) -> std::io::Result<()> {
-        if self.fail_remove {
-            return Err(std::io::Error::other("injected unlink failure"));
-        }
-        sagascript_core::fsutil::RealFs.remove_file(path)
-    }
-
-    fn sync_dir(&self, dir: &Path) -> std::io::Result<()> {
-        sagascript_core::fsutil::RealFs.sync_dir(dir)
-    }
-}
-
 /// A full run on the fake pipeline, validated, with both outputs staged and
 /// nothing published yet.
 fn staged_full_run(fixture: &Fixture, cache_output: &Path, proposal: &Path) -> PendingPublication {
@@ -813,7 +776,7 @@ fn a_failed_first_publication_publishes_nothing() {
     let pending = staged_full_run(&fixture, &cache_output, &proposal);
 
     let error = pending
-        .commit_with(&FaultyDisk::failing_link(1))
+        .commit_with(&FaultyFs::new().failing_link(1))
         .expect_err("the cache link fails");
 
     assert!(
@@ -834,7 +797,7 @@ fn a_failed_second_publication_leaves_a_complete_cache_and_no_proposal() {
     let pending = staged_full_run(&fixture, &cache_output, &proposal);
 
     let error = pending
-        .commit_with(&FaultyDisk::failing_link(2))
+        .commit_with(&FaultyFs::new().failing_link(2))
         .expect_err("the proposal link fails");
 
     let CommitError::CacheOnly {
@@ -877,7 +840,7 @@ fn the_cache_left_by_a_failed_second_publication_recovers_the_proposal_without_i
     let cache_output = fixture.root().join("new-cache.json");
     let proposal = fixture.root().join("proposal.json");
     staged_full_run(&fixture, &cache_output, &proposal)
-        .commit_with(&FaultyDisk::failing_link(2))
+        .commit_with(&FaultyFs::new().failing_link(2))
         .expect_err("the proposal link fails");
 
     // The documented recovery: a selective plan from the published cache.
@@ -989,12 +952,7 @@ fn a_staging_file_that_cannot_be_removed_is_reported_and_both_outputs_are_publis
         &fixture.root().join("new-cache.json"),
         &fixture.root().join("proposal.json"),
     );
-    let disk = FaultyDisk {
-        fail_link_number: 0,
-        fail_remove: true,
-        links: std::cell::Cell::new(0),
-    };
-
+    let disk = FaultyFs::new().failing_remove();
     let receipt = pending.commit_with(&disk).expect("both are published");
 
     assert_eq!(receipt.leftovers.len(), 2);
@@ -1095,4 +1053,106 @@ fn a_run_that_produced_no_cache_publishes_nothing() {
         "{error}"
     );
     assert_eq!(directory_names(fixture.root()), ["synthetic-audio.bin"]);
+}
+
+#[test]
+fn finish_keeps_the_validated_result_when_only_the_staging_file_cannot_be_removed() {
+    use sagascript_core::test_support::FaultyFs;
+    let fixture = Fixture::new(false);
+    let input = fixture.input(None);
+    let plan = full_plan(&fixture);
+    let cache_output = fixture.root().join("new-cache.json");
+    let mut backend = CountingBackend {
+        write_cache: true,
+        ..Default::default()
+    };
+    let staged = execute_with_model_check(
+        &plan,
+        &plan.revision,
+        &input,
+        Some(&cache_output),
+        None,
+        || true,
+        &mut backend,
+    )
+    .expect("validated run");
+
+    let result = staged
+        .finish_with(&FaultyFs::new().failing_remove())
+        .expect("the cache is published, so the validated proposal is kept");
+
+    assert_eq!(result.proposal, receipt_proposal(&fixture));
+    let identity = CacheIdentity::for_source_sha256(
+        &fixture.previous.original.source_sha256,
+        "en",
+        "base",
+        None,
+    )
+    .expect("identity");
+    assert!(matches!(
+        diarization_cache::load_with_analysis_policy(&cache_output, &identity, false),
+        Ok(diarization_cache::CacheLookup::Hit(_))
+    ));
+    // The rerun with the same path is refused only because the cache exists now.
+    assert!(directory_names(fixture.root()).contains(&"new-cache.json".to_string()));
+}
+
+/// Everything `tracing` logs while `work` runs, as text.
+fn logged_while(work: impl FnOnce()) -> String {
+    use std::io::Write;
+    use std::sync::{Arc, Mutex};
+    #[derive(Clone, Default)]
+    struct Buffer(Arc<Mutex<Vec<u8>>>);
+    impl Write for Buffer {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().expect("log buffer").extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let buffer = Buffer::default();
+    let writer = buffer.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer(move || writer.clone())
+        .with_ansi(false)
+        .finish();
+    tracing::subscriber::with_default(subscriber, work);
+    let logged = buffer.0.lock().expect("log buffer").clone();
+    String::from_utf8_lossy(&logged).into_owned()
+}
+
+#[test]
+fn a_staging_file_left_after_finish_is_logged_without_the_users_path() {
+    use sagascript_core::test_support::FaultyFs;
+    let fixture = Fixture::new(false);
+    let input = fixture.input(None);
+    let plan = full_plan(&fixture);
+    let cache_output = fixture.root().join("new-cache.json");
+    let mut backend = CountingBackend {
+        write_cache: true,
+        ..Default::default()
+    };
+    let staged = execute_with_model_check(
+        &plan,
+        &plan.revision,
+        &input,
+        Some(&cache_output),
+        None,
+        || true,
+        &mut backend,
+    )
+    .expect("validated run");
+
+    let logged = logged_while(|| {
+        staged
+            .finish_with(&FaultyFs::new().failing_remove())
+            .expect("published");
+    });
+
+    assert!(logged.contains("WARN"), "{logged}");
+    assert!(logged.contains("could not be removed"), "{logged}");
+    let root = fixture.root().display().to_string();
+    assert!(!logged.contains(&root), "{logged}");
 }

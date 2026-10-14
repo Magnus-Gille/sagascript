@@ -18,7 +18,7 @@ use sagascript_core::meeting_reprocess_proposal::{
 use sagascript_core::meeting_review::{CorrectionOperation, MeetingReview};
 use serde::{de::DeserializeOwned, Serialize};
 
-use crate::output::Out;
+use crate::output::{errln, Out};
 
 const MAX_REVIEW_BYTES: usize = 24 * 1024 * 1024;
 const MAX_TRANSCRIPT_BYTES: usize = 24 * 1024 * 1024;
@@ -79,7 +79,7 @@ pub fn run(args: ProposalArgs, out: &Out) -> Result<(), DictationError> {
                 read_json(&proposed, MAX_TRANSCRIPT_BYTES, "transcript")?;
             let proposal = MeetingReprocessingProposal::new(previous, proposed)
                 .map_err(proposal_transform_error)?;
-            write_json_new(&output, &proposal)
+            write_json_new(&output, &proposal, out)
         }
         ProposalAction::Inspect { input } => {
             let proposal: MeetingReprocessingProposal =
@@ -106,7 +106,7 @@ pub fn run(args: ProposalArgs, out: &Out) -> Result<(), DictationError> {
             let next = proposal
                 .resolve(&expected_revision, index, operations)
                 .map_err(proposal_transform_error)?;
-            write_json_new(&output, &next)
+            write_json_new(&output, &next, out)
         }
         ProposalAction::Accept {
             input,
@@ -123,7 +123,7 @@ pub fn run(args: ProposalArgs, out: &Out) -> Result<(), DictationError> {
             let accepted = proposal
                 .accept(&current.revision)
                 .map_err(proposal_transform_error)?;
-            write_json_new(&output, &accepted)
+            write_json_new(&output, &accepted, out)
         }
     }
 }
@@ -176,8 +176,12 @@ fn read_bounded(path: &Path, limit: usize, kind: &str) -> Result<Vec<u8>, Dictat
     Ok(bytes)
 }
 
-pub(crate) fn write_json_new<T: Serialize>(path: &Path, value: &T) -> Result<(), DictationError> {
-    write_atomic_new(path, &json_line(value)?)
+pub(crate) fn write_json_new<T: Serialize>(
+    path: &Path,
+    value: &T,
+    out: &Out,
+) -> Result<(), DictationError> {
+    write_atomic_new(path, &json_line(value)?, out)
 }
 
 /// The serialized document: compact JSON and a newline.
@@ -221,18 +225,29 @@ pub(crate) fn ensure_output_absent(path: &Path) -> Result<(), DictationError> {
 }
 
 /// Publish `bytes` as the new file `path` ([`fsutil::publish_new`]). A private
-/// temporary file that outlives a successful publication fails the call, as
-/// every single-file caller reports it rather than ignoring a stray copy.
-fn write_atomic_new(path: &Path, bytes: &[u8]) -> Result<(), DictationError> {
-    let published = fsutil::publish_new(path, bytes).map_err(|error| publish_error(&error))?;
-    match published.leftover {
-        None => Ok(()),
-        Some(leftover) => Err(DictationError::FileDecodeError(format!(
-            "meeting output was saved but its private temporary file {} could not be removed: {}",
-            leftover.path.display(),
-            truncated(&leftover.error)
-        ))),
+/// staging file that cannot be removed afterwards is a warning on stderr, not a
+/// failure: the output is complete.
+fn write_atomic_new(path: &Path, bytes: &[u8], out: &Out) -> Result<(), DictationError> {
+    write_atomic_new_with(path, bytes, &fsutil::RealFs, out)
+}
+
+fn write_atomic_new_with(
+    path: &Path,
+    bytes: &[u8],
+    ops: &dyn fsutil::PublishFs,
+    out: &Out,
+) -> Result<(), DictationError> {
+    let published =
+        fsutil::publish_new_with(path, bytes, ops).map_err(|error| publish_error(&error))?;
+    if published.leftover.is_some() {
+        errln!(
+            out,
+            "Warning: {} was published, but a private temporary file beside it (a hidden \
+             .NAME.UUID.tmp with the same content) could not be removed; delete it.",
+            path.display()
+        );
     }
+    Ok(())
 }
 
 /// The error for a publication that did not happen; no existing file was
@@ -483,7 +498,8 @@ mod tests {
         let temp = TempDir::new();
         let destination = temp.join("destination.json");
         fs::write(&destination, b"keep me").expect("destination");
-        let error = write_atomic_new(&destination, b"replace me").expect_err("existing");
+        let error =
+            write_atomic_new(&destination, b"replace me", &Out::capture().0).expect_err("existing");
         assert!(error.to_string().contains("already exists"));
         assert_eq!(fs::read(&destination).expect("read"), b"keep me");
 
@@ -491,10 +507,32 @@ mod tests {
         let alias = temp.join("alias.json");
         fs::write(&source, b"source").expect("source");
         fs::hard_link(&source, &alias).expect("hardlink");
-        let error = write_atomic_new(&alias, b"new").expect_err("hardlink alias");
+        let error =
+            write_atomic_new(&alias, b"new", &Out::capture().0).expect_err("hardlink alias");
         assert!(error.to_string().contains("already exists"));
         assert_eq!(fs::read(&source).expect("source preserved"), b"source");
         assert_eq!(fs::read(&alias).expect("alias preserved"), b"source");
+    }
+
+    #[test]
+    fn a_temporary_file_that_cannot_be_removed_after_publication_is_a_warning_not_a_failure() {
+        use sagascript_core::test_support::FaultyFs;
+        let temp = TempDir::new();
+        let destination = temp.join("out.json");
+        let (out, captured) = Out::capture();
+
+        write_atomic_new_with(
+            &destination,
+            b"bytes",
+            &FaultyFs::new().failing_remove(),
+            &out,
+        )
+        .expect("the output is published, so the call succeeds");
+
+        assert_eq!(fs::read(&destination).expect("read"), b"bytes");
+        let stderr = captured.stderr();
+        assert!(stderr.contains("Warning"), "{stderr}");
+        assert!(stderr.contains("temporary file"), "{stderr}");
     }
 
     #[test]
@@ -503,12 +541,13 @@ mod tests {
         let input = temp.join("input.json");
         let output = temp.join("missing").join("proposal.json");
         fs::write(&input, b"unchanged").expect("input");
-        let error = write_atomic_new(&output, b"output").expect_err("missing parent");
+        let error =
+            write_atomic_new(&output, b"output", &Out::capture().0).expect_err("missing parent");
         assert!(error.to_string().contains("output folder"));
         assert_eq!(fs::read(&input).expect("input preserved"), b"unchanged");
 
         let saved = temp.join("saved.json");
-        write_json_new(&saved, &json!({"ok": true})).expect("saved");
+        write_json_new(&saved, &json!({"ok": true}), &Out::capture().0).expect("saved");
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;

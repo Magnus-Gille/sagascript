@@ -8,7 +8,9 @@
 //!
 //! 1. The bytes are written to a private staging file beside the destination
 //!    (`.<name>.<uuid>.tmp`, mode `0600` on Unix) and fsynced. The destination
-//!    name does not exist yet, so a reader never sees a partial file.
+//!    name does not exist yet, so a reader never sees a partial file. A
+//!    filesystem that cannot fsync (some network and external volumes) is
+//!    tolerated with a warning, as in `download.rs`; a real I/O error is not.
 //! 2. The staging file is hard-linked to the destination. Creating a hard link
 //!    fails when the destination exists, so this is the no-replace commit
 //!    point, atomic against concurrent publishers. `rename` is not used: it
@@ -20,7 +22,7 @@
 //!
 //! | Result | Destination | Staging file |
 //! |---|---|---|
-//! | `Ok` | holds exactly the bytes, complete | removed, or reported in [`Published::leftover`] |
+//! | `Ok` | holds exactly the bytes, complete | removed, or reported in [`Published::leftover`]: a warning for the caller, never a failure, because the artifact is complete |
 //! | [`PublishErrorKind::AlreadyExists`] | untouched: a file, directory or symlink of someone else | removed |
 //! | any other error | not created | removed, or reported in [`PublishError::leftover`] |
 //!
@@ -29,7 +31,7 @@
 //! one destination exactly one succeeds. A process killed mid-publication
 //! leaves at most a staging file, which nothing reads and
 //! [`staging_leftovers`] finds; it is complete if the process got past its
-//! fsync.
+//! fsync. A staging file is reported as left over only if it exists.
 //!
 //! The commit needs a filesystem with hard links (not FAT, exFAT or most
 //! network shares); there the publication fails cleanly and publishes nothing.
@@ -43,17 +45,27 @@
 //! other in an order it documents. Dropping a [`StagedFile`] removes it, so
 //! every early return is a clean "nothing published".
 
+use std::ffi::OsStr;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
-/// The longest destination file name copied into a staging name, so that
-/// `.<name>.<uuid>.tmp` stays below the 255-byte limit of common filesystems.
-const MAX_STAGING_NAME_CHARS: usize = 80;
+/// The longest part of a destination name copied into a staging name, in the
+/// unit the filesystem limits: UTF-8 bytes on Unix (255 per name), UTF-16 units
+/// elsewhere. `.<name>.<uuid>.tmp` is then at most 142, and a staging name of a
+/// staging name 179, of the 255 allowed.
+const MAX_STAGING_NAME_UNITS: usize = 100;
+/// The length of a hyphenated UUID.
+const ID_LEN: usize = 36;
 
 /// The filesystem operations of a publication: a seam so tests can inject the
-/// failures a real disk rarely produces (a failed link, a failed unlink).
+/// failures a real disk rarely produces (a failed link, a failed unlink, a
+/// volume that cannot fsync).
 pub trait PublishFs {
+    /// Create a new private file (mode `0600` on Unix); fails when it exists.
+    fn create_new(&self, path: &Path) -> io::Result<File>;
+    /// Flush a file's data to stable storage.
+    fn sync_file(&self, file: &File) -> io::Result<()>;
     /// Create `to` as a hard link of `from`; fails when `to` exists.
     fn hard_link(&self, from: &Path, to: &Path) -> io::Result<()>;
     /// Remove a file.
@@ -67,6 +79,21 @@ pub trait PublishFs {
 pub struct RealFs;
 
 impl PublishFs for RealFs {
+    fn create_new(&self, path: &Path) -> io::Result<File> {
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        options.open(path)
+    }
+
+    fn sync_file(&self, file: &File) -> io::Result<()> {
+        sync_durably(file)
+    }
+
     fn hard_link(&self, from: &Path, to: &Path) -> io::Result<()> {
         fs::hard_link(from, to)
     }
@@ -78,7 +105,7 @@ impl PublishFs for RealFs {
     fn sync_dir(&self, dir: &Path) -> io::Result<()> {
         #[cfg(unix)]
         {
-            File::open(dir)?.sync_all()
+            sync_durably(&File::open(dir)?)
         }
         #[cfg(not(unix))]
         {
@@ -148,7 +175,16 @@ pub struct Published {
 
 /// Publish `bytes` as the new file `destination`; see the module contract.
 pub fn publish_new(destination: &Path, bytes: &[u8]) -> Result<Published, PublishError> {
-    StagedFile::create(destination, bytes)?.publish()
+    publish_new_with(destination, bytes, &RealFs)
+}
+
+/// [`publish_new`] on the given filesystem operations.
+pub fn publish_new_with(
+    destination: &Path,
+    bytes: &[u8],
+    ops: &dyn PublishFs,
+) -> Result<Published, PublishError> {
+    StagedFile::create_with(destination, bytes, ops)?.publish_with(ops)
 }
 
 /// Check that `destination` names a file in an existing directory, the part of
@@ -157,7 +193,7 @@ pub fn check_destination_folder(destination: &Path) -> Result<(), PublishError> 
     destination_parts(destination).map(|_| ())
 }
 
-fn destination_parts(destination: &Path) -> Result<(&Path, &std::ffi::OsStr), PublishError> {
+fn destination_parts(destination: &Path) -> Result<(&Path, &OsStr), PublishError> {
     let name = destination
         .file_name()
         .ok_or_else(|| PublishError::new(PublishErrorKind::NoFileName))?;
@@ -173,11 +209,67 @@ fn destination_parts(destination: &Path) -> Result<(&Path, &std::ffi::OsStr), Pu
     Ok((parent, name))
 }
 
-/// The prefix of every staging name of `name`: `.<name>.`
-fn staging_prefix(name: &std::ffi::OsStr) -> String {
-    let name = name.to_string_lossy();
-    let name: String = name.chars().take(MAX_STAGING_NAME_CHARS).collect();
-    format!(".{name}.")
+/// The longest prefix of `name` that fits [`MAX_STAGING_NAME_UNITS`].
+fn truncated(name: &str) -> String {
+    let mut used = 0;
+    let mut kept = String::new();
+    for character in name.chars() {
+        #[cfg(unix)]
+        let width = character.len_utf8();
+        #[cfg(not(unix))]
+        let width = character.len_utf16();
+        if used + width > MAX_STAGING_NAME_UNITS {
+            break;
+        }
+        used += width;
+        kept.push(character);
+    }
+    kept
+}
+
+/// The stem every staging name of `name` starts with: `.<name>`.
+fn staging_stem(name: &OsStr) -> String {
+    format!(".{}", truncated(&name.to_string_lossy()))
+}
+
+/// Whether `text` ends in `.<uuid>`.
+fn ends_with_id(text: &str) -> bool {
+    text.len() > ID_LEN
+        && text
+            .get(text.len() - ID_LEN - 1..)
+            .is_some_and(|tail| tail.starts_with('.') && uuid::Uuid::parse_str(&tail[1..]).is_ok())
+}
+
+/// A fresh staging file name for the destination file `name`:
+/// `.<name>.<uuid>.tmp`. When `name` is itself a staging name (a reserved
+/// writer publishing its reserved path) the new id is appended to it, so the
+/// result is still attributable to the final destination.
+fn staging_file_name(name: &OsStr) -> String {
+    let lossy = name.to_string_lossy();
+    if let Some(base) = lossy
+        .strip_suffix(".tmp")
+        .filter(|base| base.starts_with('.') && ends_with_id(base))
+    {
+        return format!("{base}.{}.tmp", uuid::Uuid::new_v4());
+    }
+    format!("{}.{}.tmp", staging_stem(name), uuid::Uuid::new_v4())
+}
+
+/// Whether `file_name` is `<stem>.<uuid>.tmp`, or `<stem>.<uuid>.<uuid>.tmp`
+/// (the staging name of a reserved staging path).
+fn is_staging_name_of(file_name: &str, stem: &str) -> bool {
+    let Some(ids) = file_name
+        .strip_prefix(stem)
+        .and_then(|rest| rest.strip_suffix(".tmp"))
+        .and_then(|ids| ids.strip_prefix('.'))
+    else {
+        return false;
+    };
+    let parts = ids.split('.').collect::<Vec<_>>();
+    (1..=2).contains(&parts.len())
+        && parts
+            .iter()
+            .all(|part| part.len() == ID_LEN && uuid::Uuid::parse_str(part).is_ok())
 }
 
 /// A file written privately beside its destination, not yet published.
@@ -196,13 +288,21 @@ impl StagedFile {
     /// Write `bytes` to a private staging file beside `destination` and fsync
     /// them. Nothing is created at `destination`.
     pub fn create(destination: &Path, bytes: &[u8]) -> Result<Self, PublishError> {
+        Self::create_with(destination, bytes, &RealFs)
+    }
+
+    /// [`create`](Self::create) on the given filesystem operations.
+    pub fn create_with(
+        destination: &Path,
+        bytes: &[u8],
+        ops: &dyn PublishFs,
+    ) -> Result<Self, PublishError> {
         let staged = Self::reserve(destination)?;
-        let written = write_private(&staged.staged, bytes);
-        match written {
+        match write_private(ops, &staged.staged, bytes) {
             Ok(()) => Ok(staged),
             Err(error) => {
                 let mut failure = PublishError::new(PublishErrorKind::Stage(error));
-                failure.leftover = staged.discard_reporting();
+                failure.leftover = staged.discard_reporting(ops);
                 Err(failure)
             }
         }
@@ -211,15 +311,12 @@ impl StagedFile {
     /// Reserve a private staging path beside `destination` for a writer that
     /// creates the file itself, as a pipeline that produces a large artifact
     /// does. The writer must create it complete and atomically (for example
-    /// with [`publish_new`]) and never open it for writing again; whatever is
-    /// at the path when [`publish`](Self::publish) runs is published.
+    /// with [`publish_new`], whose own staging name then carries this one's
+    /// as a stem) and never open it for writing again; whatever is at the path
+    /// when [`publish`](Self::publish) runs is published.
     pub fn reserve(destination: &Path) -> Result<Self, PublishError> {
         let (parent, name) = destination_parts(destination)?;
-        let staged = parent.join(format!(
-            "{}{}.tmp",
-            staging_prefix(name),
-            uuid::Uuid::new_v4()
-        ));
+        let staged = parent.join(staging_file_name(name));
         Ok(Self {
             staged,
             destination: destination.to_path_buf(),
@@ -276,7 +373,11 @@ impl StagedFile {
         {
             if let Err(error) = ops.sync_dir(parent) {
                 // The file is published; only its durability is unconfirmed.
-                tracing::debug!(kind = ?error.kind(), "could not sync a published file's folder");
+                if sync_unsupported(&error) {
+                    tracing::debug!(kind = ?error.kind(), "this filesystem cannot sync a folder");
+                } else {
+                    tracing::warn!(kind = ?error.kind(), "could not sync a published file's folder");
+                }
             }
         }
         Ok(Published { leftover })
@@ -291,9 +392,9 @@ impl StagedFile {
         }
     }
 
-    fn discard_reporting(mut self) -> Option<Leftover> {
+    fn discard_reporting(mut self, ops: &dyn PublishFs) -> Option<Leftover> {
         self.live = false;
-        remove_staged(&RealFs, &self.staged)
+        remove_staged(ops, &self.staged)
     }
 }
 
@@ -311,10 +412,15 @@ impl Drop for StagedFile {
     }
 }
 
+/// Remove the staging file. A failure is a [`Leftover`] only if the file is
+/// still there: a staging file whose creation failed (a name that is too long,
+/// a read-only folder) does not exist, and removing it fails for that same
+/// reason.
 fn remove_staged(ops: &dyn PublishFs, staged: &Path) -> Option<Leftover> {
     match ops.remove_file(staged) {
         Ok(()) => None,
         Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(_) if fs::symlink_metadata(staged).is_err() => None,
         Err(error) => Some(Leftover {
             path: staged.to_path_buf(),
             error,
@@ -322,21 +428,26 @@ fn remove_staged(ops: &dyn PublishFs, staged: &Path) -> Option<Leftover> {
     }
 }
 
-fn write_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file: File = options.open(path)?;
+/// Create `path` privately and write `bytes` to it, fsynced. A volume that
+/// cannot fsync is tolerated with a warning; any other failure is returned.
+fn write_private(ops: &dyn PublishFs, path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let mut file = ops.create_new(path)?;
     file.write_all(bytes)?;
-    file.sync_all()
+    match ops.sync_file(&file) {
+        Err(error) if sync_unsupported(&error) => {
+            tracing::warn!(
+                kind = ?error.kind(),
+                "this filesystem cannot sync files; publishing without a durability guarantee"
+            );
+            Ok(())
+        }
+        result => result,
+    }
 }
 
 /// Staging files of `destination` that an interrupted process left behind:
-/// the siblings named `.<name>.<uuid>.tmp`. Nothing reads them; each is
+/// the siblings named `.<name>.<uuid>.tmp`, and `.<name>.<uuid>.<uuid>.tmp`
+/// (the staging file of a reserved staging path). Nothing reads them; each is
 /// complete when its writer got past its fsync, so a survivor of an
 /// interrupted run is worth inspecting before it is deleted. Unreadable
 /// folders give an empty list.
@@ -344,24 +455,113 @@ pub fn staging_leftovers(destination: &Path) -> Vec<PathBuf> {
     let Ok((parent, name)) = destination_parts(destination) else {
         return Vec::new();
     };
-    let prefix = staging_prefix(name);
+    let stem = staging_stem(name);
     let Ok(entries) = fs::read_dir(parent) else {
         return Vec::new();
     };
     let mut found = entries
         .flatten()
-        .filter(|entry| {
-            let file_name = entry.file_name();
-            let file_name = file_name.to_string_lossy();
-            file_name
-                .strip_prefix(&prefix)
-                .and_then(|rest| rest.strip_suffix(".tmp"))
-                .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok())
-        })
+        .filter(|entry| is_staging_name_of(&entry.file_name().to_string_lossy(), &stem))
         .map(|entry| entry.path())
         .collect::<Vec<_>>();
     found.sort();
     found
+}
+
+// The fsync policy of every publication and install (#368, #342).
+
+/// Flush `file` to stable storage: `File::sync_all`, which is `fsync` on
+/// Linux and `FlushFileBuffers` on Windows. On Apple platforms std's
+/// `sync_all` is only `fcntl(F_FULLFSYNC)`, which SMB and NFS homes, macFUSE
+/// and some external drives reject, so there `fsync(2)` is the fallback. That
+/// differs from SQLite, which falls back on any `F_FULLFSYNC` failure: here
+/// only a failure of the unsupported class ([`sync_unsupported`]) falls back,
+/// and EIO, ENOSPC and EDQUOT stay fatal, on purpose.
+pub(crate) fn sync_durably(file: &File) -> io::Result<()> {
+    #[cfg(target_vendor = "apple")]
+    {
+        sync_with_fallback(|| file.sync_all(), || fsync(file))
+    }
+    #[cfg(not(target_vendor = "apple"))]
+    {
+        file.sync_all()
+    }
+}
+
+/// Run `plain` when `full` fails only because the file or volume cannot do
+/// that kind of sync ([`sync_unsupported`]); any other failure is real and is
+/// returned as it is.
+#[cfg(any(target_vendor = "apple", test))]
+pub(crate) fn sync_with_fallback(
+    full: impl FnOnce() -> io::Result<()>,
+    plain: impl FnOnce() -> io::Result<()>,
+) -> io::Result<()> {
+    match full() {
+        Err(error) if sync_unsupported(&error) => {
+            tracing::debug!("Full sync rejected ({error}); falling back to the plain sync");
+            plain()
+        }
+        result => result,
+    }
+}
+
+/// `fsync(2)` without Apple's full-flush semantics.
+#[cfg(target_vendor = "apple")]
+pub(crate) fn fsync(file: &File) -> io::Result<()> {
+    use std::os::fd::AsRawFd;
+    loop {
+        // SAFETY: the descriptor stays open while `file` is borrowed, and
+        // `fsync` reads or writes no memory of ours.
+        if unsafe { libc::fsync(file.as_raw_fd()) } == 0 {
+            return Ok(());
+        }
+        let error = io::Error::last_os_error();
+        if error.kind() != io::ErrorKind::Interrupted {
+            return Err(error);
+        }
+    }
+}
+
+/// Whether a failed sync only means that this file or filesystem cannot sync,
+/// rather than that written data may be lost. Some network, FUSE and external
+/// volumes reject Apple's `F_FULLFSYNC` (and then [`sync_durably`] has tried
+/// `fsync(2)` too), and some Windows redirectors reject `FlushFileBuffers`; a
+/// models directory there installs without the sync, as every download did
+/// before #368. I/O errors, a full disk or an exceeded quota stay fatal.
+pub(crate) fn sync_unsupported(error: &io::Error) -> bool {
+    use io::ErrorKind;
+    // ENOTTY is 25 everywhere; ENOTSUP/EOPNOTSUPP are 95 on Linux, 45 and 102
+    // on Apple platforms. std maps none of them to `Unsupported`. On Windows,
+    // `FlushFileBuffers` fails with ERROR_INVALID_FUNCTION (1) or
+    // ERROR_NOT_SUPPORTED (50), which std leaves uncategorized.
+    #[cfg(target_os = "linux")]
+    const NOT_SUPPORTED: &[i32] = &[25, 95];
+    #[cfg(target_vendor = "apple")]
+    const NOT_SUPPORTED: &[i32] = &[25, 45, 102];
+    #[cfg(windows)]
+    const NOT_SUPPORTED: &[i32] = &[1, 50];
+    #[cfg(not(any(target_os = "linux", target_vendor = "apple", windows)))]
+    const NOT_SUPPORTED: &[i32] = &[];
+    // EINVAL from fsync(2): the descriptor has no sync operation. On Windows
+    // `InvalidInput` is ERROR_INVALID_PARAMETER, which is a real bug.
+    #[cfg(unix)]
+    let no_sync_operation = error.kind() == ErrorKind::InvalidInput;
+    #[cfg(not(unix))]
+    let no_sync_operation = false;
+    error.kind() == ErrorKind::Unsupported
+        || no_sync_operation
+        || error
+            .raw_os_error()
+            .is_some_and(|code| NOT_SUPPORTED.contains(&code))
+}
+
+/// A sync that the volume cannot do is not an error; any other failure is.
+#[cfg(unix)]
+pub(crate) fn tolerate_unsupported(result: io::Result<()>) -> io::Result<()> {
+    match result {
+        Err(error) if sync_unsupported(&error) => Ok(()),
+        result => result,
+    }
 }
 
 #[cfg(test)]

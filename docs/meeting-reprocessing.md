@@ -158,7 +158,7 @@ when `PROPOSAL` exists.
 | An output path appears while the run works | untouched (yours) or absent | untouched (yours) or absent | 1 | Nothing is published and nothing of theirs is changed; choose a free path. |
 | The cache cannot be published (first publication) | absent | absent | 1 | Run the same command again. |
 | The proposal cannot be published after the cache was | published, complete | absent | 1, with a receipt on stderr | [Recover from the cache](#interrupted-publication). |
-| A temporary file cannot be removed after a successful publication | published | published | 0, with a warning on stderr | Delete the file the warning names. |
+| A temporary file cannot be removed after a successful publication | published | published | 0, with a warning on stderr | Delete the hidden `.NAME.UUID.tmp` file beside the output; the next `execute` with the same paths lists it. |
 | The process is killed (SIGKILL, power loss) | published only if it got that far | absent | none | The next `execute` with the same paths detects it and says how to continue. |
 
 A repeated command is only refused while one of its outputs exists. After a
@@ -166,7 +166,7 @@ failure before publication none does, so retrying with the same `CACHE_OUT` and
 `PROPOSAL` works. The single-file commands (`plan`, `proposal new`, `resolve`,
 `accept`) publish one file the same way; a failed run leaves no file under its
 name, and a temporary file that cannot be removed after a successful
-publication is reported as an error naming it.
+publication is a warning on stderr (the file is complete; exit 0).
 
 #### Interrupted publication
 
@@ -174,7 +174,10 @@ If the cache exists and the proposal does not, an earlier `execute` published
 its cache and was then interrupted (or failed to publish the proposal, in which
 case its stderr already said so). `execute` with the same paths stops at once
 with this diagnosis and changes nothing. The cache was complete when it was
-published and is the only result of that run. Continue without recomputing:
+published and is the only result of that run. If your runtime selectors
+(`--language` or `--profile`, `--model`, `--prompt`, `--prompt-file`) and your
+beam size, VAD and temperature-fallback settings are unchanged, continue
+without recomputing:
 
 ```text
 sagascript meeting reprocess plan AUDIO \
@@ -191,10 +194,14 @@ sagascript meeting reprocess execute NEW_PLAN AUDIO \
   --output PROPOSAL
 ```
 
-If the cache is not accepted for a selective run (for example the review's
-decoder settings differ), plan `--mode rediarize`, delete `CACHE_OUT`
-yourself and run the full recomputation again, or choose new output paths.
-Sagascript never deletes `CACHE_OUT`.
+The condition is real: the full run wrote the cache with the decoder settings of
+your settings file at that time, while a selective plan expects the decoder the
+previous review recorded (a review without one: the defaults). If you changed
+beam size, VAD or temperature fallback since the review was made, `plan` refuses
+with "selective cache miss" or "saved decoder provenance is incompatible". That
+refusal is safe and `--mode rediarize` is refused the same way. Then delete
+`CACHE_OUT` yourself and run the full recomputation again, or choose new output
+paths. Sagascript never deletes `CACHE_OUT`.
 
 A killed run can also leave hidden `.NAME.UUID.tmp` files beside its outputs,
 which nothing reads. The next `execute` with the same output paths lists them.

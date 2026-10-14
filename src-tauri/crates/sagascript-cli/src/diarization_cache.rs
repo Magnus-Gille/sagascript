@@ -455,6 +455,14 @@ pub(crate) fn save(path: &Path, cache: &DiarizationCache) -> Result<(), Dictatio
 /// Persist a newly recomputed cache without ever replacing an existing path:
 /// [`fsutil::publish_new`], so the file appears complete or not at all.
 pub(crate) fn save_new(path: &Path, cache: &DiarizationCache) -> Result<(), DictationError> {
+    save_new_with(path, cache, &fsutil::RealFs)
+}
+
+fn save_new_with(
+    path: &Path,
+    cache: &DiarizationCache,
+    ops: &dyn fsutil::PublishFs,
+) -> Result<(), DictationError> {
     let mut bytes = serde_json::to_vec(cache).map_err(|error| {
         DictationError::FileDecodeError(format!(
             "Failed to serialize new diarization cache {}: {error}",
@@ -463,17 +471,16 @@ pub(crate) fn save_new(path: &Path, cache: &DiarizationCache) -> Result<(), Dict
     })?;
     bytes.push(b'\n');
     let published =
-        fsutil::publish_new(path, &bytes).map_err(|error| publish_error(path, &error))?;
-    match published.leftover {
-        None => Ok(()),
-        // The cache is complete, but a private second name of it remains.
-        Some(leftover) => Err(DictationError::FileDecodeError(format!(
-            "Failed to clean temporary diarization cache {} (output was already saved): {}: {}",
-            path.display(),
-            leftover.path.display(),
-            leftover.error
-        ))),
+        fsutil::publish_new_with(path, &bytes, ops).map_err(|error| publish_error(path, &error))?;
+    if let Some(leftover) = published.leftover {
+        // The cache is complete; only a private second name of it remains.
+        // The path is the user's, so the log carries the error kind alone.
+        tracing::warn!(
+            kind = ?leftover.error.kind(),
+            "a private cache staging file could not be removed"
+        );
     }
+    Ok(())
 }
 
 /// The error a failed [`save_new`] or cache publication reports; `path` is the
@@ -1383,6 +1390,30 @@ mod tests {
         assert!(error.to_string().contains("output already exists"));
         assert_eq!(std::fs::read(&input).unwrap(), b"input must survive");
         assert_eq!(std::fs::read(&output).unwrap(), b"input must survive");
+    }
+
+    #[test]
+    fn save_new_succeeds_when_only_the_temporary_file_cannot_be_removed() {
+        use sagascript_core::test_support::FaultyFs;
+        let dir = TempDir::new();
+        let input = dir.join("audio.m4a");
+        let output = dir.join("analysis.json");
+        std::fs::write(&input, b"audio").unwrap();
+        let cache = DiarizationCache::new(
+            identity(&input),
+            serde_json::from_str(r#"{"raw_segments":[],"embeddings":[]}"#).unwrap(),
+            Vec::new(),
+            CoverageProfile::from_audio(&[]),
+            None,
+            None,
+        );
+
+        save_new_with(&output, &cache, &FaultyFs::new().failing_remove())
+            .expect("the cache is published, so the call succeeds");
+
+        assert!(
+            serde_json::from_slice::<DiarizationCache>(&std::fs::read(&output).unwrap()).is_ok()
+        );
     }
 
     #[test]
