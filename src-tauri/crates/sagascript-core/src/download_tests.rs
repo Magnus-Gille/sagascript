@@ -1204,7 +1204,9 @@ type Gate = (
 #[derive(Default)]
 struct RecordingFs {
     ops: std::sync::Mutex<Vec<(FsOp, std::thread::ThreadId)>>,
-    fail_sync: bool,
+    /// `sync_file` fails with this error kind instead of syncing.
+    sync_error: Option<std::io::ErrorKind>,
+    fail_rename: bool,
     /// When set, `sync_file` reports that it started, then waits for a release.
     hold_sync: Option<Gate>,
 }
@@ -1247,14 +1249,17 @@ impl DownloadFs for RecordingFs {
                 .recv_timeout(Duration::from_secs(10))
                 .unwrap();
         }
-        if self.fail_sync {
-            return Err(std::io::Error::other("injected sync failure"));
+        if let Some(kind) = self.sync_error {
+            return Err(std::io::Error::new(kind, "injected sync failure"));
         }
         RealFs.sync_file(file, path)
     }
 
     fn rename(&self, from: &Path, to: &Path) -> std::io::Result<()> {
         self.record(FsOp::Rename(from.to_path_buf(), to.to_path_buf()));
+        if self.fail_rename {
+            return Err(std::io::Error::other("injected rename failure"));
+        }
         RealFs.rename(from, to)
     }
 }
@@ -1322,7 +1327,7 @@ async fn failed_temp_file_sync_installs_nothing() {
         let dest = dir.join("model.bin");
         let (url, server) = serve_valid_model();
         let fs = std::sync::Arc::new(RecordingFs {
-            fail_sync: true,
+            sync_error: Some(std::io::ErrorKind::StorageFull),
             ..RecordingFs::default()
         });
 
@@ -1411,6 +1416,91 @@ async fn cancelling_while_the_temp_file_syncs_installs_nothing() {
                 .collect::<Vec<_>>()
         );
         assert!(!fs.renamed(), "renamed after cancellation: {:?}", fs.ops());
+        join_server(server).await;
+    })
+    .await
+    .expect("test exceeded its hard timeout");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn filesystem_without_fsync_still_installs_the_model() {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let dir = TempDir::new();
+        let dest = dir.join("model.bin");
+        let (url, server) = serve_valid_model();
+        let fs = std::sync::Arc::new(RecordingFs {
+            sync_error: Some(std::io::ErrorKind::Unsupported),
+            ..RecordingFs::default()
+        });
+
+        download_through(&url, &dest, fs.clone()).await.unwrap();
+
+        assert!(fs.renamed(), "{:?}", fs.ops());
+        assert_eq!(std::fs::read(&dest).unwrap(), b"verified model");
+        join_server(server).await;
+    })
+    .await
+    .expect("test exceeded its hard timeout");
+}
+
+#[test]
+fn only_unsupported_syncs_are_tolerated() {
+    use std::io::{Error, ErrorKind};
+    assert!(sync_unsupported(&Error::from(ErrorKind::Unsupported)));
+    assert!(sync_unsupported(&Error::from(ErrorKind::InvalidInput)));
+    assert!(!sync_unsupported(&Error::from(ErrorKind::StorageFull)));
+    assert!(!sync_unsupported(&Error::other("I/O error")));
+    #[cfg(unix)]
+    {
+        assert!(sync_unsupported(&Error::from_raw_os_error(25)), "ENOTTY");
+        assert!(!sync_unsupported(&Error::from_raw_os_error(5)), "EIO");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn failed_rename_installs_nothing_and_removes_the_temp_file() {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let dir = TempDir::new();
+        let dest = dir.join("model.bin");
+        let (url, server) = serve_valid_model();
+        let fs = std::sync::Arc::new(RecordingFs {
+            fail_rename: true,
+            ..RecordingFs::default()
+        });
+
+        let err = download_through(&url, &dest, fs.clone())
+            .await
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("Failed to rename temp file"), "{err}");
+        assert_empty(&dir, "a failed rename left a file");
+        join_server(server).await;
+    })
+    .await
+    .expect("test exceeded its hard timeout");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn download_sweeps_stale_temp_files_first() {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let dir = TempDir::new();
+        let stale = dir.join("other.bin.tmp");
+        std::fs::write(&stale, b"leftover").unwrap();
+        let ancient = SystemTime::now() - (ORPHAN_TMP_MAX_AGE + Duration::from_secs(60));
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&stale)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(ancient))
+            .unwrap();
+        let (url, server) = serve_valid_model();
+
+        download_through(&url, &dir.join("model.bin"), Default::default())
+            .await
+            .unwrap();
+
+        assert!(!stale.exists(), "the stale temp file was not swept");
         join_server(server).await;
     })
     .await

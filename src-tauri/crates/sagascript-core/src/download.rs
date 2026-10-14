@@ -363,7 +363,9 @@ async fn download_with(
 /// a crash can never leave `dest` naming a file whose blocks were not written
 /// yet, with a durable stamp (written last) vouching for it. If only the
 /// final move fails (e.g. a cross-device rename), or the download was
-/// cancelled before it, `guard` removes the temp file.
+/// cancelled before the rename started, `guard` removes the temp file. A
+/// cancellation that arrives once the rename has started installs the
+/// complete, verified and synced file.
 fn install_tmp_file(
     fs: &dyn DownloadFs,
     file: std::fs::File,
@@ -372,11 +374,24 @@ fn install_tmp_file(
     integrity: DownloadIntegrity,
     cancel: &CancelFlag,
 ) -> Result<(), DictationError> {
-    fs.sync_file(&file, &guard.path).map_err(|e| {
-        DictationError::ModelDownloadFailed(format!("Failed to sync temp file: {e}"))
-    })?;
+    if let Err(error) = cancel.check("Download") {
+        drop(file);
+        return Err(error);
+    }
+    let synced = fs.sync_file(&file, &guard.path);
+    // Close before the guard can unlink it or the rename moves it (Windows).
     drop(file);
-    // The last point at which a cancelled download still installs nothing.
+    if let Err(e) = synced {
+        if !sync_unsupported(&e) {
+            return Err(DictationError::ModelDownloadFailed(format!(
+                "Failed to sync temp file: {e}"
+            )));
+        }
+        tracing::warn!(
+            "Cannot sync {} on this filesystem ({e}); installing it without a durability guarantee",
+            guard.path.display()
+        );
+    }
     cancel.check("Download")?;
     fs.rename(&guard.path, dest).map_err(|e| {
         DictationError::ModelDownloadFailed(format!("Failed to rename temp file: {e}"))
@@ -390,6 +405,30 @@ fn install_tmp_file(
     // while the file's identity is unchanged.
     cache_verified_file(dest, integrity);
     Ok(())
+}
+
+/// Whether a failed fsync only means that this file or filesystem cannot
+/// sync, rather than that written data may be lost. On Apple platforms
+/// `File::sync_all` is `fcntl(F_FULLFSYNC)`, which some network, FUSE and
+/// external volumes reject; a models directory there installs without the
+/// sync, as every download did before #368. I/O errors, a full disk or an
+/// exceeded quota stay fatal.
+fn sync_unsupported(error: &std::io::Error) -> bool {
+    use std::io::ErrorKind;
+    // ENOTTY is 25 everywhere; ENOTSUP/EOPNOTSUPP are 95 on Linux, 45 and 102
+    // on Apple platforms. std maps none of them to `Unsupported`.
+    #[cfg(target_os = "linux")]
+    const NOT_SUPPORTED: &[i32] = &[25, 95];
+    #[cfg(target_vendor = "apple")]
+    const NOT_SUPPORTED: &[i32] = &[25, 45, 102];
+    #[cfg(not(any(target_os = "linux", target_vendor = "apple")))]
+    const NOT_SUPPORTED: &[i32] = &[];
+    matches!(
+        error.kind(),
+        ErrorKind::Unsupported | ErrorKind::InvalidInput
+    ) || error
+        .raw_os_error()
+        .is_some_and(|code| NOT_SUPPORTED.contains(&code))
 }
 
 /// Run blocking file work (directory scans, hashing, fsync, renames) on
@@ -494,11 +533,12 @@ fn total_err(limits: DownloadLimits, size: u64) -> DictationError {
     ))
 }
 
-/// Do the actual network fetch + stream-to-file + validate. The temp file is
-/// cleaned up by the caller's [`TmpFileGuard`]. The total deadline wraps every
-/// asynchronous step (headers, redirects, body, writes, flush) and is also
-/// checked explicitly between chunks and before validation, because the
-/// synchronous progress callback and hashing cannot be pre-empted.
+/// Do the actual network fetch + stream-to-file + validate. The returned
+/// [`TmpFileGuard`] owns the temp file, and removes it on every error inside
+/// this function. The total deadline wraps every asynchronous step (headers,
+/// redirects, body, writes, flush) and is also checked explicitly between
+/// chunks and before validation, because the synchronous progress callback
+/// and hashing cannot be pre-empted.
 async fn fetch_to_tmp(
     client: &reqwest::Client,
     url: &str,
