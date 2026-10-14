@@ -14,6 +14,7 @@ use sagascript_core::transcription::TranscribeOptions;
 use super::benchmark_config;
 use super::benchmark_quality;
 use super::transcribe::{model_id_string, parse_language};
+use crate::exit::CliError;
 use crate::output::Out;
 
 const SAMPLE_RATE_HZ: f64 = 16_000.0;
@@ -147,7 +148,40 @@ struct SampleTiming {
     total_ms: f64,
 }
 
-pub fn run(args: BenchmarkDictationArgs, out: &Out) -> Result<(), DictationError> {
+/// Writes the benchmark report on stdout. A warm run over `--max-warm-ms` or a
+/// failed text check is a failed check (exit 3) after the report; anything
+/// that stops the run before it has a report fails with exit 1.
+pub fn run(args: BenchmarkDictationArgs, out: &Out) -> Result<(), CliError> {
+    measure(args, out)?.verdict()
+}
+
+/// What a run's checks found, decided once the report is on stdout.
+struct Checks {
+    /// The first warm run over `--max-warm-ms`: (run number, ms, limit).
+    budget_exceeded: Option<(u32, f64, f64)>,
+    /// The first text validation failure.
+    validation_error: Option<String>,
+}
+
+impl Checks {
+    fn verdict(self) -> Result<(), CliError> {
+        if let Some((iteration, elapsed_ms, max_ms)) = self.budget_exceeded {
+            return Err(CliError::CheckFailed(DictationError::TranscriptionFailed(
+                format!(
+                    "Warm run {iteration} exceeded --max-warm-ms ({elapsed_ms:.2} ms > {max_ms:.2} ms)"
+                ),
+            )));
+        }
+        if let Some(error) = self.validation_error {
+            return Err(CliError::CheckFailed(DictationError::TranscriptionFailed(
+                error,
+            )));
+        }
+        Ok(())
+    }
+}
+
+fn measure(args: BenchmarkDictationArgs, out: &Out) -> Result<Checks, DictationError> {
     if args.allow_empty && args.quality_output.is_none() {
         return Err(DictationError::SettingsError(
             "--allow-empty requires --quality-output".to_string(),
@@ -357,17 +391,10 @@ pub fn run(args: BenchmarkDictationArgs, out: &Out) -> Result<(), DictationError
     }
 
     out.json(&output)?;
-
-    if let Some((iteration, elapsed_ms, max_ms)) = budget_exceeded {
-        return Err(DictationError::TranscriptionFailed(format!(
-            "Warm run {iteration} exceeded --max-warm-ms ({elapsed_ms:.2} ms > {max_ms:.2} ms)"
-        )));
-    }
-    if let Some(error) = validation_error {
-        return Err(DictationError::TranscriptionFailed(error));
-    }
-
-    Ok(())
+    Ok(Checks {
+        budget_exceeded,
+        validation_error,
+    })
 }
 
 fn language_code(language: Language) -> &'static str {
@@ -478,6 +505,7 @@ fn percentile_sorted(values: &[f64], quantile: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::exit::Exit;
     use clap::Parser;
     use sagascript_testsupport::TempDir;
     use std::fs;
@@ -730,7 +758,7 @@ mod tests {
 
         assert!(matches!(
             result,
-            Err(DictationError::SettingsError(message))
+            Err(CliError::Failed(DictationError::SettingsError(message)))
                 if message == "--expect-word must not be empty"
         ));
     }
@@ -881,5 +909,51 @@ mod tests {
         assert_eq!(json["runs"][0]["iteration"], 0);
         assert_eq!(json["runs"][1]["kind"], "warm");
         assert_eq!(json["runs"][2]["iteration"], 2);
+    }
+
+    fn verdict(
+        budget_exceeded: Option<(u32, f64, f64)>,
+        validation_error: Option<&str>,
+    ) -> Result<(), CliError> {
+        Checks {
+            budget_exceeded,
+            validation_error: validation_error.map(str::to_owned),
+        }
+        .verdict()
+    }
+
+    #[test]
+    fn a_passing_run_has_no_verdict_error() {
+        assert!(verdict(None, None).is_ok());
+    }
+
+    #[test]
+    fn a_warm_run_over_the_budget_is_a_failed_check() {
+        let error = verdict(Some((2, 120.456, 100.0)), None).unwrap_err();
+        assert_eq!(error.exit(), Exit::CheckFailed);
+        assert_eq!(
+            error.to_string(),
+            "Transcription failed: Warm run 2 exceeded --max-warm-ms (120.46 ms > 100.00 ms)"
+        );
+    }
+
+    #[test]
+    fn a_failed_text_validation_is_a_failed_check() {
+        let error = verdict(None, Some("cold run returned empty text")).unwrap_err();
+        assert_eq!(error.exit(), Exit::CheckFailed);
+        assert_eq!(
+            error.to_string(),
+            "Transcription failed: cold run returned empty text"
+        );
+    }
+
+    #[test]
+    fn the_budget_is_reported_before_a_validation_failure() {
+        let error = verdict(Some((1, 9.0, 5.0)), Some("cold run returned empty text")).unwrap_err();
+        assert_eq!(error.exit(), Exit::CheckFailed);
+        assert!(
+            error.to_string().contains("exceeded --max-warm-ms"),
+            "{error}"
+        );
     }
 }

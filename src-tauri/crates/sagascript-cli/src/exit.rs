@@ -29,7 +29,8 @@ pub enum Exit {
     /// command runs.
     Usage,
     /// 3: a check ran to completion, wrote its report, and did not pass
-    /// (`latency-report` budget, `engine doctor`).
+    /// (`latency-report` budget, `engine doctor`, `benchmark-dictation`'s
+    /// limits and text checks, `diarization reference-qualify`).
     CheckFailed,
     /// 130 for SIGINT (and Ctrl-C on Windows), 143 for SIGTERM.
     Cancelled(u8),

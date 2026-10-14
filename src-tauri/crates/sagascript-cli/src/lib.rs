@@ -658,14 +658,14 @@ fn dispatch(command: Command, out: &Out) -> Result<(), CliError> {
         }
         Command::Transcribe(args) => {
             let out = out.clone();
-            run_inference_command("transcribe", move || transcribe::run(args, &out))?
+            run_inference_command("transcribe", move || Ok(transcribe::run(args, &out)?))?
         }
         Command::LatencyReport(args) => return latency::run(args, out),
         Command::Meeting(args) => meeting::run(args, out)?,
         #[cfg(feature = "record")]
         Command::Record(args) => {
             let out = out.clone();
-            run_inference_command("record", move || record::run(args, &out))?
+            run_inference_command("record", move || Ok(record::run(args, &out)?))?
         }
         Command::ListModels(args) => models::list(args, out)?,
         Command::DownloadModel(args) => tokio::runtime::Runtime::new()
@@ -702,8 +702,8 @@ fn dispatch(command: Command, out: &Out) -> Result<(), CliError> {
 #[cfg(target_os = "windows")]
 fn run_inference_command(
     command: &'static str,
-    task: impl FnOnce() -> Result<(), sagascript_core::error::DictationError> + Send + 'static,
-) -> Result<(), sagascript_core::error::DictationError> {
+    task: impl FnOnce() -> Result<(), CliError> + Send + 'static,
+) -> Result<(), CliError> {
     // MSVC executables start with a much smaller main-thread stack than the
     // worker threads used by the desktop app. Whisper inference exhausted it
     // with STATUS_STACK_OVERFLOW (0xC00000FD) in the real Windows CI gate.
@@ -727,8 +727,8 @@ fn run_inference_command(
 #[cfg(not(target_os = "windows"))]
 fn run_inference_command(
     _command: &'static str,
-    task: impl FnOnce() -> Result<(), sagascript_core::error::DictationError>,
-) -> Result<(), sagascript_core::error::DictationError> {
+    task: impl FnOnce() -> Result<(), CliError>,
+) -> Result<(), CliError> {
     task()
 }
 
@@ -1812,6 +1812,31 @@ mod tests {
         assert_eq!(
             captured.stderr(),
             "Error: Settings error: latency budget check failed\n"
+        );
+    }
+
+    #[test]
+    fn run_with_reports_an_unready_reference_qualification_with_exit_three() {
+        let temp = sagascript_testsupport::TempDir::new();
+        let reference = temp.join("reference.json");
+        let manifest = temp.join("manifest.json");
+        std::fs::write(&reference, "{\"not\":\"a reference\"}").unwrap();
+        std::fs::write(&manifest, "{\"not\":\"a manifest\"}").unwrap();
+        let (exit, captured) = run_captured(&[
+            "diarization",
+            "reference-qualify",
+            reference.to_str().unwrap(),
+            "--manifest",
+            manifest.to_str().unwrap(),
+        ]);
+        assert_eq!(exit, Exit::CheckFailed);
+        assert_eq!(exit.code(), 3);
+        let report: serde_json::Value =
+            serde_json::from_str(&captured.stdout()).expect("the report is on stdout");
+        assert_eq!(report["status"], "invalid-input");
+        assert_eq!(
+            captured.stderr(),
+            "Error: Transcription failed: reference qualification is not ready\n"
         );
     }
 

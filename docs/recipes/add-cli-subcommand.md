@@ -88,9 +88,11 @@ Commands return `Result<(), DictationError>` or, to choose the status, `Result<(
 | 0 | `StdoutClosed` | The reader closed stdout (`… \| head -1`); nothing is printed on stderr. |
 | 1 | `Failure` | Any other `Err` (printed as `Error: …` on stderr), or stdout could not be written. |
 | 2 | `Usage` | clap usage errors; the headless binary without a subcommand; `CliError::Usage`. |
-| 3 | `CheckFailed` | A check ran, wrote its report and did not pass: `latency-report` budget, `engine doctor` (`CliError::CheckFailed`). |
+| 3 | `CheckFailed` | A check ran, wrote its report and did not pass (`CliError::CheckFailed`): `latency-report` budget, `engine doctor`, `benchmark-dictation` (`--max-warm-ms` or an `--expect-word`/empty-text check) and `diarization reference-qualify`. |
 | 130 / 143 | `Cancelled` | Cancelled by SIGINT / SIGTERM (`cancel.rs`); `Cancelled` on stderr. |
 
+Exit 3 means the report is already on stdout: a command that fails before it has a report
+(bad input, a missing model, a `diarization evaluate` whose reference is not qualified) exits 1.
 `run_with` has unit tests for these statuses (`lib.rs`, `exit.rs`); test a new command's
 statuses the same way when it does not need a settings file, otherwise spawn the binary.
 
