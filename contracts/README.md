@@ -27,6 +27,8 @@ A change on one side fails a test:
   parameter …").
 - A `#[tauri::command]` missing from `generate_handler!`, a Rust type without a TypeScript
   mapping, or a raw event name: the app crate's tests or clippy fail.
+- A command the Playwright mock (`scripts/fixtures/transcription-browser-mock.js`) answers is
+  not registered any more: `scripts/test-browser-mock-commands.mjs` (`ci` group) fails.
 
 Everything runs in the existing gates, with no model, GUI or network: `cargo test` of the app
 crate (test-macos, test-windows; `npm run verify`'s `test-workspace`) compares the fixtures and
@@ -71,6 +73,10 @@ everything else is unchanged.
   download byte counts; the schemas list them as `ignored`.
 - **Registered commands without a caller** are listed with a reason in `src/lib/api.test.ts`
   (`COMMANDS_WITHOUT_A_CALLER`); they have no frontend wrapper.
+
+The `listen("…")` call sites in the components still take their event name and payload type
+from the component, not from `EventMap`; they become typed in
+[#362](https://github.com/Magnus-Gille/sagascript/issues/362).
 
 Errors are still strings (`Result<_, String>`); typed errors are
 [#360](https://github.com/Magnus-Gille/sagascript/issues/360) (ADR 0006), which extends the
