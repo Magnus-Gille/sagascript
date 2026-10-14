@@ -1,0 +1,12 @@
+{"send":{"v":1,"id":1,"op":"hello","client":{"name":"sagascript","version":"1.4.4","git_sha":"0123456789abcdef0123456789abcdef01234567"}}}
+{"expect":{"id":1,"ok":true,"protocol":1,"host":{"name":"sagascript-engine-host","version":"<string>","git_sha":"<sha40>","build_dirty":"<bool>","engine":"<string>","engine_version":"<string>"},"capabilities":{"sample_rate":16000,"max_window_s":1.0,"preferred_window_s":1.0,"preferred_overlap_s":0.2,"max_in_flight":2,"token_timestamps":true,"languages":["sv"],"compute_units":["ane","gpu","cpu","all"],"min_macos":"14.0","context_biasing":true}}}
+{"send":{"v":1,"id":2,"op":"load","model_dir":"/vectors/model","model_id":"vectors-model","compute_units":"ane"}}
+{"expect":{"id":2,"ok":true,"model_id":"vectors-model","load_ms":4,"compiled":false,"window_s":1.0,"frame_s":0.08,"vocab_size":3,"blank_id":2}}
+{"send":{"v":1,"id":3,"op":"transcribe_window","pcm_path":"/vectors/hold.f32","offset_samples":0,"num_samples":8000,"sample_rate":16000,"format":"f32le","priority":"batch"}}
+{"send":{"v":1,"id":4,"op":"transcribe_window","pcm_path":"/vectors/hold.f32","offset_samples":0,"num_samples":8000,"sample_rate":16000,"format":"f32le","priority":"batch"}}
+{"send":{"v":1,"id":5,"op":"transcribe_window","pcm_path":"/vectors/speech.f32","offset_samples":0,"num_samples":8000,"sample_rate":16000,"format":"f32le","priority":"batch"}}
+{"note":"stdin EOF (the client is gone): queued and running windows terminate with cancelled, and the process exits 0 (the conformance script checks the exit)."}
+{"eof":true}
+{"expect":{"id":5,"ok":false,"error":{"code":"cancelled","message":"<string>","retryable":false}}}
+{"expect":{"id":3,"ok":false,"error":{"code":"cancelled","message":"<string>","retryable":false}}}
+{"expect":{"id":4,"ok":false,"error":{"code":"cancelled","message":"<string>","retryable":false}}}

@@ -1,0 +1,33 @@
+{"send":{"v":1,"id":1,"op":"hello","client":{"name":"sagascript","version":"1.4.4","git_sha":"0123456789abcdef0123456789abcdef01234567"}}}
+{"expect":{"id":1,"ok":true,"protocol":1,"host":{"name":"sagascript-engine-host","version":"<string>","git_sha":"<sha40>","build_dirty":"<bool>","engine":"<string>","engine_version":"<string>"},"capabilities":{"sample_rate":16000,"max_window_s":1.0,"preferred_window_s":1.0,"preferred_overlap_s":0.2,"max_in_flight":2,"token_timestamps":true,"languages":["sv"],"compute_units":["ane","gpu","cpu","all"],"min_macos":"14.0","context_biasing":true}}}
+{"send":{"v":1,"id":2,"op":"load","model_dir":"/vectors/model","model_id":"vectors-model","compute_units":"ane"}}
+{"expect":{"id":2,"ok":true,"model_id":"vectors-model","load_ms":4,"compiled":false,"window_s":1.0,"frame_s":0.08,"vocab_size":3,"blank_id":2}}
+{"note":"A window with a dictionary reports boost_active (and timings.boost_us)."}
+{"send":{"v":1,"id":3,"op":"transcribe_window","pcm_path":"/vectors/boost.f32","offset_samples":0,"num_samples":8000,"sample_rate":16000,"format":"f32le","priority":"batch","boost_terms":["Gille","Magnus Gille"],"boost_weight":5.0}}
+{"expect":{"id":3,"ok":true,"tokens":[{"id":0,"text":"▁hej","start":0.0,"duration":0.08,"confidence":0.98},{"id":1,"text":"san","start":0.16,"duration":0.08,"confidence":0.25}],"audio_s":0.5,"timings":{"preprocess_ms":1,"encode_ms":2,"decode_ms":3,"boost_us":7},"boost_active":true}}
+{"send":{"v":1,"id":4,"op":"transcribe_window","pcm_path":"/vectors/no-usable-terms.f32","offset_samples":0,"num_samples":8000,"sample_rate":16000,"format":"f32le","priority":"batch","boost_terms":["qqq"],"boost_weight":5.0}}
+{"expect":{"id":4,"ok":true,"tokens":[{"id":0,"text":"▁hej","start":0.0,"duration":0.08,"confidence":0.98},{"id":1,"text":"san","start":0.16,"duration":0.08,"confidence":0.5}],"audio_s":0.5,"timings":{"preprocess_ms":1,"encode_ms":2,"decode_ms":3,"boost_us":9},"boost_active":false,"boost_reason":"no_usable_terms"}}
+{"note":"Terms without a positive weight, or a weight without terms, decode unboosted: the engine gets no dictionary and the result has no boost fields."}
+{"send":{"v":1,"id":5,"op":"transcribe_window","pcm_path":"/vectors/speech.f32","offset_samples":0,"num_samples":8000,"sample_rate":16000,"format":"f32le","priority":"batch","boost_terms":["Gille"]}}
+{"expect":{"id":5,"ok":true,"tokens":[{"id":0,"text":"▁hej","start":0.0,"duration":0.08,"confidence":0.98},{"id":1,"text":"san","start":0.16,"duration":0.08,"confidence":0.5}],"audio_s":0.5,"timings":{"preprocess_ms":1,"encode_ms":2,"decode_ms":3}}}
+{"send":{"v":1,"id":6,"op":"transcribe_window","pcm_path":"/vectors/speech.f32","offset_samples":0,"num_samples":8000,"sample_rate":16000,"format":"f32le","priority":"batch","boost_terms":["Gille"],"boost_weight":0}}
+{"expect":{"id":6,"ok":true,"tokens":[{"id":0,"text":"▁hej","start":0.0,"duration":0.08,"confidence":0.98},{"id":1,"text":"san","start":0.16,"duration":0.08,"confidence":0.5}],"audio_s":0.5,"timings":{"preprocess_ms":1,"encode_ms":2,"decode_ms":3}}}
+{"send":{"v":1,"id":7,"op":"transcribe_window","pcm_path":"/vectors/speech.f32","offset_samples":0,"num_samples":8000,"sample_rate":16000,"format":"f32le","priority":"batch","boost_terms":[],"boost_weight":5.0}}
+{"expect":{"id":7,"ok":true,"tokens":[{"id":0,"text":"▁hej","start":0.0,"duration":0.08,"confidence":0.98},{"id":1,"text":"san","start":0.16,"duration":0.08,"confidence":0.5}],"audio_s":0.5,"timings":{"preprocess_ms":1,"encode_ms":2,"decode_ms":3}}}
+{"note":"Malformed dictionaries are bad_request with fixed texts that never echo the terms (personal data), checked even when the other field is absent."}
+{"send":{"v":1,"id":8,"op":"transcribe_window","pcm_path":"/vectors/speech.f32","offset_samples":0,"num_samples":8000,"sample_rate":16000,"format":"f32le","priority":"batch","boost_terms":"Magnus Gille","boost_weight":5.0}}
+{"expect":{"id":8,"ok":false,"error":{"code":"bad_request","message":"boost_terms must be an array of at most 500 strings of at most 64 characters","retryable":false}}}
+{"send":{"v":1,"id":9,"op":"transcribe_window","pcm_path":"/vectors/speech.f32","offset_samples":0,"num_samples":8000,"sample_rate":16000,"format":"f32le","priority":"batch","boost_terms":["Magnus","ggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg"],"boost_weight":5.0}}
+{"expect":{"id":9,"ok":false,"error":{"code":"bad_request","message":"boost_terms must be an array of at most 500 strings of at most 64 characters","retryable":false}}}
+{"send":{"v":1,"id":10,"op":"transcribe_window","pcm_path":"/vectors/speech.f32","offset_samples":0,"num_samples":8000,"sample_rate":16000,"format":"f32le","priority":"batch","boost_terms":["Magnus",5],"boost_weight":5.0}}
+{"expect":{"id":10,"ok":false,"error":{"code":"bad_request","message":"boost_terms must be an array of at most 500 strings of at most 64 characters","retryable":false}}}
+{"send":{"v":1,"id":11,"op":"transcribe_window","pcm_path":"/vectors/speech.f32","offset_samples":0,"num_samples":8000,"sample_rate":16000,"format":"f32le","priority":"batch","boost_terms":null,"boost_weight":5.0}}
+{"expect":{"id":11,"ok":false,"error":{"code":"bad_request","message":"boost_terms must be an array of at most 500 strings of at most 64 characters","retryable":false}}}
+{"send":{"v":1,"id":12,"op":"transcribe_window","pcm_path":"/vectors/speech.f32","offset_samples":0,"num_samples":8000,"sample_rate":16000,"format":"f32le","priority":"batch","boost_weight":25}}
+{"expect":{"id":12,"ok":false,"error":{"code":"bad_request","message":"boost_weight must be a number within 0...20","retryable":false}}}
+{"send":{"v":1,"id":13,"op":"transcribe_window","pcm_path":"/vectors/speech.f32","offset_samples":0,"num_samples":8000,"sample_rate":16000,"format":"f32le","priority":"batch","boost_terms":["Gille"],"boost_weight":-1}}
+{"expect":{"id":13,"ok":false,"error":{"code":"bad_request","message":"boost_weight must be a number within 0...20","retryable":false}}}
+{"send":{"v":1,"id":14,"op":"transcribe_window","pcm_path":"/vectors/speech.f32","offset_samples":0,"num_samples":8000,"sample_rate":16000,"format":"f32le","priority":"batch","boost_terms":["Gille"],"boost_weight":"5"}}
+{"expect":{"id":14,"ok":false,"error":{"code":"bad_request","message":"boost_weight must be a number within 0...20","retryable":false}}}
+{"send":{"v":1,"id":15,"op":"transcribe_window","pcm_path":"/vectors/speech.f32","offset_samples":0,"num_samples":8000,"sample_rate":16000,"format":"f32le","priority":"batch","boost_terms":["Gille"],"boost_weight":true}}
+{"expect":{"id":15,"ok":false,"error":{"code":"bad_request","message":"boost_weight must be a number within 0...20","retryable":false}}}

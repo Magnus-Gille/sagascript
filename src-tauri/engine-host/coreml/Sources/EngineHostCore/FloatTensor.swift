@@ -116,7 +116,7 @@ func converted(_ array: MLMultiArray, to precision: TensorPrecision, feature: St
     if array.dataType == precision.dataType { return array }
     guard let source = TensorPrecision(array.dataType) else {
         throw EngineHostError(
-            code: "engine",
+            code: .engine,
             message: "\(feature): cannot convert \(describe(array)) to \(precision.rawValue)"
         )
     }
@@ -155,11 +155,11 @@ func constraint(_ model: MLModel, input name: String?, output: String?) -> MLMul
 private func floatPrecision(_ model: MLModel, modelName: String, kind: String, name: String, input: Bool) throws -> TensorPrecision {
     let found = input ? constraint(model, input: name, output: nil) : constraint(model, input: nil, output: name)
     guard let found else {
-        throw EngineHostError(code: "model_load_failed", message: "\(modelName) \(kind) '\(name)' is missing or is not a multi-array")
+        throw EngineHostError(code: .modelLoadFailed, message: "\(modelName) \(kind) '\(name)' is missing or is not a multi-array")
     }
     guard let precision = TensorPrecision(found.dataType) else {
         throw EngineHostError(
-            code: "model_load_failed",
+            code: .modelLoadFailed,
             message: "\(modelName) \(kind) '\(name)' has shape \(found.shape.map(\.intValue)) dtype \(dataTypeName(found.dataType)); expected float16 or float32"
         )
     }
@@ -176,6 +176,6 @@ func floatPrecision(of model: MLModel, output name: String, model modelName: Str
 
 func requireInt32(of model: MLModel, output name: String, model modelName: String) throws {
     guard let found = constraint(model, input: nil, output: name), found.dataType == .int32 else {
-        throw EngineHostError(code: "model_load_failed", message: "\(modelName) output '\(name)' is missing or is not int32")
+        throw EngineHostError(code: .modelLoadFailed, message: "\(modelName) output '\(name)' is missing or is not int32")
     }
 }

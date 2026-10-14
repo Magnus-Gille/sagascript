@@ -54,9 +54,9 @@ the newest installed versioned Xcode before Swift coverage, and records the resu
 version because Xcode supplies Swift. This matches the product CI's Swift Testing requirement and
 avoids relying on the macOS runner's default Xcode selection.
 
-Swift coverage prepares a temporary copy of the Core ML package and the single tracked shared
-`engine-host/test-vectors/context-biasing.json` fixture at the sibling path expected by its test
-source. Coverage exports are filtered to that temporary package's `Sources/EngineHostCore`
+Swift coverage prepares a temporary copy of the Core ML package and the tracked shared
+`engine-host/test-vectors/` fixtures (context biasing and the golden protocol transcripts) at the
+sibling path expected by its test sources. Coverage exports are filtered to that temporary package's `Sources/EngineHostCore`
 directory before source-only parsing. Generated build identity, test bundle, intermediate, and
 external toolchain files are excluded and recorded in `excluded_report_paths`; repository source
 files that Swift does not emit remain explicit in `not_emitted_paths`. This keeps isolated

@@ -28,6 +28,11 @@ ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "
 memory-stats = "1"
 libloading = "0.9"
 
+[dev-dependencies]
+# The golden protocol transcripts (src-tauri/engine-host/test-vectors/protocol/) and their replay
+# helpers, for server/golden_tests.rs.
+sagascript-engine-protocol = { path = "../../crates/sagascript-engine-protocol", features = ["golden"] }
+
 # Windows only: restrict the DLL search path (SetDefaultDllDirectories) and load the ONNX
 # Runtime DLLs by absolute path. 0.52 is already in Cargo.lock via other dependencies.
 [target.'cfg(windows)'.dependencies]

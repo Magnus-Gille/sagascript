@@ -1,51 +1,70 @@
 import Foundation
 
+/// Error codes of engine-host protocol v1. The raw values are the wire strings; this enum is the
+/// only place they are spelled out (docs/engine-host-protocol.md, Envelope).
+public enum WireErrorCode: String, CaseIterable, Sendable {
+    /// Envelope or sequencing error (bad JSON, missing id/op, wrong `v`, op before `hello`).
+    case protocolError = "protocol"
+    case badRequest = "bad_request"
+    case unsupported = "unsupported"
+    case notLoaded = "not_loaded"
+    case modelMissing = "model_missing"
+    case modelLoadFailed = "model_load_failed"
+    /// The only retryable code.
+    case busy = "busy"
+    case cancelled = "cancelled"
+    case engine = "engine"
+    case internalError = "internal"
+}
+
 public struct EngineHostError: Error, Equatable, Sendable {
-    public let code: String
+    public let code: WireErrorCode
     public let message: String
     public let retryable: Bool
 
-    public init(code: String, message: String, retryable: Bool = false) {
+    public init(code: WireErrorCode, message: String, retryable: Bool = false) {
         self.code = code
         self.message = message
         self.retryable = retryable
     }
 }
 
+/// What `hello` announces (`capabilities`). The defaults are the Core ML host's.
 public struct HostCapabilities: Sendable {
     public let sampleRate: Int
     public let maxWindowSeconds: Double
     public let preferredWindowSeconds: Double
     public let preferredOverlapSeconds: Double
     public let maxInFlight: Int
+    public let tokenTimestamps: Bool
+    public let languages: [String]
+    public let computeUnits: [String]
+    /// Omitted from `hello` when nil.
+    public let minMacOS: String?
+    public let contextBiasing: Bool
 
     public init(
         sampleRate: Int = 16_000,
         maxWindowSeconds: Double = 30,
         preferredWindowSeconds: Double = 15,
         preferredOverlapSeconds: Double = 2,
-        maxInFlight: Int = 1
+        maxInFlight: Int = 1,
+        tokenTimestamps: Bool = true,
+        languages: [String] = ["sv"],
+        computeUnits: [String] = ["ane", "gpu", "cpu", "all"],
+        minMacOS: String? = "14.0",
+        contextBiasing: Bool = true
     ) {
         self.sampleRate = sampleRate
         self.maxWindowSeconds = maxWindowSeconds
         self.preferredWindowSeconds = preferredWindowSeconds
         self.preferredOverlapSeconds = preferredOverlapSeconds
         self.maxInFlight = maxInFlight
-    }
-
-    public func jsonObject() -> [String: Any] {
-        [
-            "sample_rate": sampleRate,
-            "max_window_s": maxWindowSeconds,
-            "preferred_window_s": preferredWindowSeconds,
-            "preferred_overlap_s": preferredOverlapSeconds,
-            "max_in_flight": maxInFlight,
-            "token_timestamps": true,
-            "languages": ["sv"],
-            "compute_units": ["ane", "gpu", "cpu", "all"],
-            "min_macos": "14.0",
-            "context_biasing": true,
-        ]
+        self.tokenTimestamps = tokenTimestamps
+        self.languages = languages
+        self.computeUnits = computeUnits
+        self.minMacOS = minMacOS
+        self.contextBiasing = contextBiasing
     }
 }
 
@@ -57,18 +76,12 @@ public struct LoadResult: Sendable {
     public let frameSeconds: Double
     public let vocabularySize: Int
     public let blankID: Int
+}
 
-    public func jsonObject() -> [String: Any] {
-        [
-            "model_id": modelID,
-            "load_ms": Int(loadMilliseconds.rounded()),
-            "compiled": compiled,
-            "window_s": windowSeconds,
-            "frame_s": frameSeconds,
-            "vocab_size": vocabularySize,
-            "blank_id": blankID,
-        ]
-    }
+/// `transcribe_window` priority. A request without one is a `bad_request`, as in the Rust types.
+public enum WindowPriority: String, Sendable {
+    case interactive
+    case batch
 }
 
 public struct WindowRequest: Sendable {
@@ -77,7 +90,7 @@ public struct WindowRequest: Sendable {
     public let numSamples: Int
     public let sampleRate: Int
     public let format: String
-    public let priority: String
+    public let priority: WindowPriority
     public let boost: BoostConfig?
 
     public init(
@@ -86,7 +99,7 @@ public struct WindowRequest: Sendable {
         numSamples: Int,
         sampleRate: Int,
         format: String,
-        priority: String,
+        priority: WindowPriority,
         boost: BoostConfig? = nil
     ) {
         self.pcmPath = pcmPath
@@ -105,16 +118,6 @@ public struct TranscriptionToken: Sendable {
     public let start: Double
     public let duration: Double
     public let confidence: Double
-
-    public func jsonObject() -> [String: Any] {
-        [
-            "id": id,
-            "text": text,
-            "start": start,
-            "duration": duration,
-            "confidence": confidence,
-        ]
-    }
 }
 
 public struct WindowResult: Sendable {
@@ -129,26 +132,6 @@ public struct WindowResult: Sendable {
     public var boostReason: String? = nil
     /// Trie build time in microseconds (0 when cached or not requested).
     public var boostMicroseconds: Int = 0
-
-    public func jsonObject() -> [String: Any] {
-        var object: [String: Any] = [
-            "tokens": tokens.map { $0.jsonObject() },
-            "audio_s": audioSeconds,
-            "timings": [
-                "preprocess_ms": Int(preprocessMilliseconds.rounded()),
-                "encode_ms": Int(encodeMilliseconds.rounded()),
-                "decode_ms": Int(decodeMilliseconds.rounded()),
-            ],
-        ]
-        if let boostActive {
-            object["boost_active"] = boostActive
-            if let boostReason { object["boost_reason"] = boostReason }
-            var timings = object["timings"] as? [String: Any] ?? [:]
-            timings["boost_us"] = boostMicroseconds
-            object["timings"] = timings
-        }
-        return object
-    }
 }
 
 public protocol EngineBackend: AnyObject {
