@@ -670,6 +670,36 @@ fn render(commands: &[Command]) -> String {
         out.push_str(&format!("  \"{}\",\n", command.name));
     }
     out.push_str("] as const satisfies readonly (keyof CommandMap)[];\n");
+    out.push_str(
+        "\n/**\n \
+         * Each command's argument keys, for checks at run time: `required` must be\n \
+         * sent, `optional` (an `Option` parameter) may be.\n \
+         */\n\
+         export const COMMAND_ARGUMENTS: {\n  \
+         readonly [C in keyof CommandMap]: {\n    \
+         readonly required: readonly (keyof CommandMap[C][\"args\"])[];\n    \
+         readonly optional: readonly (keyof CommandMap[C][\"args\"])[];\n  \
+         };\n\
+         } = {\n",
+    );
+    for command in commands {
+        let keys = |optional: bool| -> String {
+            command
+                .params
+                .iter()
+                .filter(|param| param.optional == optional)
+                .map(|param| format!("\"{}\"", param.key))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        out.push_str(&format!(
+            "  {}: {{ required: [{}], optional: [{}] }},\n",
+            command.name,
+            keys(false),
+            keys(true)
+        ));
+    }
+    out.push_str("};\n");
     out
 }
 

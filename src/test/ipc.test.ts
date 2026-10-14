@@ -1,3 +1,4 @@
+import { invoke } from "@tauri-apps/api/core";
 import { emit, listen, once } from "@tauri-apps/api/event";
 import { describe, expect, test } from "vitest";
 import { getPlatform, getSettings, setLanguage, setProfileGlossary, type Settings } from "../lib/api";
@@ -91,6 +92,18 @@ describe("commands", () => {
     ]);
     // What src/test/setup.ts runs after every test:
     expect(() => resetIpcMock()).toThrow("Unmocked IPC commands were invoked: get_platform");
+  });
+
+  test("arguments the Rust command does not read reject and fail the test", async () => {
+    const ipc = mockIpc({ set_language: () => [] });
+    // A wrapper that drifted from the Rust signature (`language: Language`).
+    await expect(invoke("set_language", { lang: "fi" })).rejects.toThrow(
+      'IPC command "set_language" was invoked with arguments the Rust command does not read: missing language; no parameter lang (parameters: language)',
+    );
+    // Optional parameters (Rust `Option`) may be left out.
+    await expect(invoke("get_file_model_options", { language: "sv" })).rejects.toThrow(/has no mock handler/);
+    expect(ipc.calls).toEqual([{ command: "get_file_model_options", args: { language: "sv" } }]);
+    expect(() => resetIpcMock()).toThrow("missing language; no parameter lang");
   });
 
   test("a new mock replaces the previous one", async () => {

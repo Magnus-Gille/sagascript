@@ -16,7 +16,7 @@
 // if the code under test swallowed that rejection.
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import type { InvokeArgs } from "@tauri-apps/api/core";
-import { COMMAND_NAMES as GENERATED_COMMAND_NAMES, type CommandMap } from "../lib/ipc-contract.generated";
+import { COMMAND_ARGUMENTS, COMMAND_NAMES as GENERATED_COMMAND_NAMES, type CommandMap } from "../lib/ipc-contract.generated";
 import type { EventMap, EventName } from "../lib/events";
 
 declare global {
@@ -52,6 +52,29 @@ export function isCommandName(name: string): name is CommandName {
   return COMMAND_SET.has(name);
 }
 
+/**
+ * Why an argument object is not what the Rust command reads (a required
+ * parameter missing, or a key that is no parameter), or null. Checked on every
+ * mocked call, so a wrapper that drifted from the Rust signature fails at run
+ * time too, not only in svelte-check.
+ */
+export function argumentProblem(command: CommandName, args: InvokeArgs | undefined): string | null {
+  if (args !== undefined && (typeof args !== "object" || Array.isArray(args) || ArrayBuffer.isView(args) || args instanceof ArrayBuffer)) {
+    return null; // a raw binary body; no command takes one yet
+  }
+  const sent = (args ?? {}) as Record<string, unknown>;
+  const { required, optional } = COMMAND_ARGUMENTS[command] as { required: readonly string[]; optional: readonly string[] };
+  const missing = required.filter((key) => sent[key] === undefined);
+  const unknown = Object.keys(sent).filter((key) => !required.includes(key) && !optional.includes(key));
+  if (missing.length === 0 && unknown.length === 0) return null;
+  const parameters = [...required, ...optional.map((key) => `${key}?`)].join(", ") || "none";
+  const problems = [
+    ...(missing.length > 0 ? [`missing ${missing.join(", ")}`] : []),
+    ...(unknown.length > 0 ? [`no parameter ${unknown.join(", ")}`] : []),
+  ];
+  return `IPC command "${command}" was invoked with arguments the Rust command does not read: ${problems.join("; ")} (parameters: ${parameters})`;
+}
+
 // Events and their payloads: the frontend half of the event catalogue (#347).
 export type { EventMap, EventName } from "../lib/events";
 
@@ -82,6 +105,7 @@ interface Listener {
 interface ActiveMock {
   calls: IpcCall[];
   unmocked: string[];
+  invalid: string[];
   handlers: Map<string, (args: unknown) => unknown>;
   listeners: Listener[];
 }
@@ -132,11 +156,12 @@ function eventPlugin(state: ActiveMock, command: string, args: InvokeArgs | unde
 
 /**
  * Install the IPC mock for the current test. `src/test/setup.ts` removes it
- * after each test and fails the test if an unmocked command was invoked.
+ * after each test and fails the test if an unmocked command was invoked, or
+ * a command with arguments its Rust signature does not have.
  */
 export function mockIpc(handlers: CommandHandlers = {}): IpcMock {
   resetIpcMock();
-  const state: ActiveMock = { calls: [], unmocked: [], handlers: new Map(), listeners: [] };
+  const state: ActiveMock = { calls: [], unmocked: [], invalid: [], handlers: new Map(), listeners: [] };
   for (const [command, handler] of Object.entries(handlers)) {
     if (handler) state.handlers.set(command, handler as (args: unknown) => unknown);
   }
@@ -144,13 +169,20 @@ export function mockIpc(handlers: CommandHandlers = {}): IpcMock {
 
   mockIPC(async (command, args) => {
     if (command.startsWith("plugin:event|")) return eventPlugin(state, command, args);
-    if (isCommandName(command)) record(state, command, args);
+    if (isCommandName(command)) {
+      const problem = argumentProblem(command, args);
+      if (problem) {
+        state.invalid.push(problem);
+        throw new Error(problem);
+      }
+      record(state, command, args);
+    }
     const handler = state.handlers.get(command);
     if (!handler) {
       state.unmocked.push(command);
       throw new Error(
-        `IPC command "${command}" has no mock handler. Pass one to mockIpc({ ${command}: … }) ` +
-          `or add the command to CommandMap in src/test/ipc.ts.`,
+        `IPC command "${command}" has no mock handler. Pass one to mockIpc({ ${command}: … }); a new ` +
+          `Rust command must first be in the generated CommandMap (contracts/README.md).`,
       );
     }
     return copy(await handler(copy(args ?? {})));
@@ -184,12 +216,16 @@ export function mockIpc(handlers: CommandHandlers = {}): IpcMock {
 
 /**
  * Remove the active mock (called after every test by src/test/setup.ts).
- * Throws when the test invoked a command without a handler.
+ * Throws when the test invoked a command without a handler, or with
+ * arguments the Rust command does not read.
  */
 export function resetIpcMock(): void {
   const state = active;
   active = null;
   if (typeof window !== "undefined") clearMocks();
+  if (state && state.invalid.length > 0) {
+    throw new Error(state.invalid[0]);
+  }
   if (state && state.unmocked.length > 0) {
     throw new Error(`Unmocked IPC commands were invoked: ${[...new Set(state.unmocked)].join(", ")}`);
   }
