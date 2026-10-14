@@ -229,7 +229,8 @@ test("failed refresh after rejection reports uncertainty and restores the known 
   const h = harness({ rejectionRefreshFailure: true });
   assert.equal(await h.select(), "sv");
   assert.match(h.snapshot().settingsError, /could not read the settings.*rejection read failed.*Select the language again to retry/);
-  assert.equal(h.snapshot().settingsUnconfirmed, null, "a rejected change leaves nothing unconfirmed");
+  // Nothing was saved, but a read failed: the shown copy may be behind, so it is marked like any failed read.
+  assert.deepEqual(h.snapshot().settingsUnconfirmed, { afterSave: false, detail: "rejection read failed" });
   assert.equal(h.snapshot().blockedLanguageChange, null);
   assert.equal(h.snapshot().languageSaving, false);
 });

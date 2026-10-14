@@ -4,13 +4,23 @@
 // newer one. The window is rendered against an in-memory settings file;
 // setters change it, get_settings reads it. Other Settings tests:
 // Settings.test.ts, Settings.recovery.test.ts.
-import { fireEvent, screen, waitFor } from "@testing-library/svelte";
+import { mockWindows } from "@tauri-apps/api/mocks";
+import { fireEvent, render, screen, waitFor } from "@testing-library/svelte";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, test } from "vitest";
-import type { Settings as SettingsValue } from "./api";
+import type { HotkeyProfile, Settings as SettingsValue } from "./api";
+import Settings from "./Settings.svelte";
 import { deferred, settle, type Deferred } from "../test/deferred";
-import type { CommandHandlers } from "../test/ipc";
-import { kbWhisperMedium, pianissimo, renderSettings, settingsBackend, settingsValue } from "../test/settings";
+import { mockIpc, type CommandHandlers } from "../test/ipc";
+import {
+  kbWhisperMedium,
+  pianissimo,
+  renderSettings,
+  settingsBackend,
+  settingsValue,
+  swedishProfile,
+  whisperModel,
+} from "../test/settings";
 
 /**
  * The settings file in memory. `readFailure` makes get_settings reject and
@@ -297,6 +307,100 @@ describe("a saved change whose read-back fails", () => {
     await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
     expect((await controls()).filter((control) => control.hasAttribute("disabled"))).toEqual([]);
     expect(ipc.calls.filter((call) => call.command.startsWith("set_"))).toEqual([]);
+  });
+
+  test("the profile buttons and the Accessibility link are disabled while unconfirmed too", async () => {
+    const bothShortcuts: HotkeyProfile = { ...swedishProfile, toggle_shortcut: "Ctrl+Alt+S" };
+    const english: HotkeyProfile = {
+      id: "english",
+      name: "English",
+      shortcut: "Ctrl+Alt+E",
+      language: "en",
+      push_to_talk_shortcut: null,
+      toggle_shortcut: "Ctrl+Alt+E",
+    };
+    const file = settingsFile({
+      hotkey_profiles: [bothShortcuts, english],
+      profile_models: { default: "kb-whisper-small" },
+      auto_paste: true,
+    });
+    const { ipc } = await renderSettings(
+      settingsBackend({
+        ...file.handlers,
+        get_platform: () => "macos",
+        check_accessibility_permission: () => false,
+        get_profile_model_info: ({ profileId }) =>
+          profileId === "default" ? whisperModel("kb-whisper-small", "KB-Whisper Small", { size_mb: 466 }) : pianissimo,
+      }),
+    );
+    const buttons = async () => [
+      ...(await screen.findAllByRole("button", { name: /^Clear .* shortcut for Svenska$/ })),
+      screen.getByRole("button", { name: "Remove Svenska" }),
+      screen.getByRole("button", { name: "Remove English" }),
+      await screen.findByRole("button", { name: "Switch to Pianissimo" }),
+      screen.getByRole("button", { name: "Open System Settings" }),
+    ];
+    expect((await buttons()).filter((button) => button.hasAttribute("disabled"))).toEqual([]);
+
+    file.readFailure = readbackFailure;
+    ipc.emit("state-changed", "settings_reloaded");
+    await screen.findByRole("alert", { name: "Settings not confirmed" });
+    expect((await buttons()).filter((button) => !button.hasAttribute("disabled"))).toEqual([]);
+
+    file.readFailure = null;
+    await userEvent.setup().click(screen.getByRole("button", { name: "Reload settings" }));
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+    expect((await buttons()).filter((button) => button.hasAttribute("disabled"))).toEqual([]);
+  });
+
+  test("the button that clears the blocking dictionary is disabled while unconfirmed", async () => {
+    const file = settingsFile({ profile_glossaries: { default: "merge = merch" } });
+    const { ipc } = await renderSettings(backend(file));
+    const user = await openSettingsTab();
+    ipc.handle("set_language", () => {
+      throw "Profile 'default' has a personal dictionary; clear it first";
+    });
+    await user.selectOptions(screen.getByRole("combobox", { name: "Default profile language" }), "English");
+    const clear = await screen.findByRole("button", { name: "Clear default dictionary and switch to English" });
+    expect(clear).toBeEnabled();
+
+    file.readFailure = readbackFailure;
+    ipc.emit("state-changed", "settings_reloaded");
+    await screen.findByRole("alert", { name: "Settings not confirmed" });
+    expect(clear).toBeDisabled();
+
+    file.readFailure = null;
+    await user.click(screen.getByRole("button", { name: "Reload settings" }));
+    await waitFor(() => expect(clear).toBeEnabled());
+    expect(ipc.callsTo("set_profile_glossary")).toEqual([]);
+  });
+
+  test("when the lock engages while a control has focus, the focus goes to Reload settings", async () => {
+    const file = settingsFile();
+    await renderSettings(settingsBackend(file.handlers));
+    const user = await openAdvancedSettings();
+    const toggle = screen.getByRole("switch", { name: "Temperature fallback" });
+
+    file.readFailure = readbackFailure;
+    await user.click(toggle);
+
+    await waitFor(() => expect(toggle).toBeDisabled());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Reload settings" })).toHaveFocus());
+  });
+
+  test("an enabled control keeps the focus when the notice appears", async () => {
+    const file = settingsFile();
+    const { ipc } = await renderSettings(settingsBackend(file.handlers));
+    const user = await openSettingsTab();
+    const dictionary = screen.getByRole("textbox", { name: "Personal dictionary" });
+    await user.type(dictionary, "merge = merch");
+
+    file.readFailure = readbackFailure;
+    ipc.emit("state-changed", "settings_reloaded");
+    await screen.findByRole("alert", { name: "Settings not confirmed" });
+    await settle();
+
+    expect(dictionary).toHaveFocus();
   });
 
   test("a dictionary save is held while unconfirmed, says so, and works after a reload", async () => {
@@ -626,6 +730,96 @@ describe("two answers that arrive out of order", () => {
     expect(unconfirmedNotice()).toHaveTextContent(readbackFailure);
     expect(decoding).toHaveDisplayValue("Beam search (accurate)");
     expect(decoding).toBeDisabled();
+  });
+});
+
+describe("a failed read that is not part of a save", () => {
+  const dictionaryBlock = "Profile 'default' has a personal dictionary; clear it first";
+
+  /** Temperature fallback saved (its read-back is reads[0]), then a language the dictionary blocks (its preview read is reads[1]). */
+  async function savedChangeThenBlockedLanguage() {
+    const file = settingsFile({ profile_glossaries: { default: "merge = merch" } });
+    const { ipc } = await renderSettings(backend(file));
+    const user = await openAdvancedSettings();
+    ipc.handle("set_language", () => {
+      throw dictionaryBlock;
+    });
+    const reads = holdReads(ipc);
+
+    await user.click(screen.getByRole("switch", { name: "Temperature fallback" }));
+    await waitFor(() => expect(reads).toHaveLength(1));
+    await user.selectOptions(screen.getByRole("combobox", { name: "Default profile language" }), "English");
+    await waitFor(() => expect(reads).toHaveLength(2));
+    return { ipc, reads };
+  }
+
+  test("a failed preview read is reported even when the older read-back of a saved change then succeeds", async () => {
+    const { reads } = await savedChangeThenBlockedLanguage();
+
+    reads[1].reject(readbackFailure);
+    await screen.findByRole("alert", { name: "Settings not confirmed" });
+    // The older read answers with the saved toggle, but a newer read has failed since.
+    reads[0].resolve(settingsValue({ temperature_fallback: false }));
+    await settle();
+
+    const notice = unconfirmedNotice();
+    expect(notice).toHaveTextContent(readbackFailure);
+    expect(notice).toHaveTextContent(/your change was saved/i);
+    expect(screen.getByRole("switch", { name: "Temperature fallback" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Reload settings" })).toBeInTheDocument();
+  });
+
+  test("a failed preview read and a failed read-back are both reported, and the save is not called confirmed", async () => {
+    const { ipc, reads } = await savedChangeThenBlockedLanguage();
+
+    reads[1].reject(readbackFailure);
+    await screen.findByRole("alert", { name: "Settings not confirmed" });
+    reads[0].reject("the older read failed as well");
+    await settle();
+
+    const notice = unconfirmedNotice();
+    expect(notice).toHaveTextContent(readbackFailure);
+    expect(notice).toHaveTextContent(/your change was saved/i);
+    expect(screen.getByRole("switch", { name: "Temperature fallback" })).toBeDisabled();
+    expect(ipc.callsTo("set_temperature_fallback")).toEqual([{ enabled: false }]);
+  });
+
+  test("the first read answering after a newer read failed still shows the window, with the notice", async () => {
+    const reads: Deferred<SettingsValue>[] = [];
+    const ipc = mockIpc(
+      settingsBackend({
+        get_settings: () => {
+          const read = deferred<SettingsValue>();
+          reads.push(read);
+          return read.promise;
+        },
+      }),
+    );
+    mockWindows("main");
+    render(Settings);
+    await waitFor(() => {
+      expect(reads).toHaveLength(1);
+      expect(ipc.listenerCount("state-changed")).toBeGreaterThan(0);
+    });
+    expect(screen.getByText("Loading settings...")).toBeInTheDocument();
+
+    ipc.emit("state-changed", "settings_reloaded");
+    await waitFor(() => expect(reads).toHaveLength(2));
+    reads[1].reject(readbackFailure);
+    await settle();
+    reads[0].resolve(settingsValue());
+
+    const notice = await screen.findByRole("alert", { name: "Settings not confirmed" });
+    expect(notice).toHaveTextContent(readbackFailure);
+    expect(notice).not.toHaveTextContent(/your change was saved/i);
+    expect(screen.queryByText("Loading settings...")).toBeNull();
+
+    // Reload settings works from here.
+    await userEvent.setup().click(screen.getByRole("button", { name: "Reload settings" }));
+    await waitFor(() => expect(reads).toHaveLength(3));
+    reads[2].resolve(settingsValue());
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+    expect(screen.getByRole("button", { name: "Dictate" })).toBeInTheDocument();
   });
 });
 

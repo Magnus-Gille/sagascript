@@ -1280,9 +1280,12 @@
    * Read the persisted settings and show them; showing a copy confirms it.
    * Resolves with the copy now shown. A read that a later-issued read has
    * already answered is dropped, whether it succeeds or fails: that answer
-   * stands. Any other failure rejects and leaves the shown copy as it was.
+   * stands. Any other failure rejects. When a copy is already shown it also
+   * marks that copy unconfirmed, for every caller, because a read failed and
+   * the copy may be behind the saved state; `afterSave` says a change of ours
+   * was saved before this read, which the notice then states.
    */
-  async function readSettings(): Promise<Settings> {
+  async function readSettings(afterSave = false): Promise<Settings> {
     const ticket = ++settingsReadIssued;
     let fresh: Settings;
     try {
@@ -1291,12 +1294,18 @@
       const superseded = ticket < settingsReadSettled;
       settingsReadSettled = Math.max(settingsReadSettled, ticket);
       if (superseded && settings) return settings;
+      if (settings) markSettingsUnconfirmed(error, afterSave);
       throw error;
     }
     if (ticket > settingsReadSettled) {
       settingsReadSettled = ticket;
       settings = fresh;
       confirmSettings();
+    } else if (!settings) {
+      // A newer read failed before this older one answered. Nothing is shown
+      // yet, so nothing can go stale: show this copy rather than none. The
+      // newer failure's notice stays, with Reload settings.
+      settings = fresh;
     }
     return settings ?? fresh;
   }
@@ -1311,6 +1320,11 @@
     profileModelErrors = Object.fromEntries(
       Object.entries(profileModelErrors).map(([id, message]) => [id, message === unconfirmedBlock ? "" : message]),
     );
+  }
+
+  /** The unconfirmed state as it is now, after awaits that earlier checks of it cannot see across. */
+  function currentUnconfirmed(): typeof settingsUnconfirmed {
+    return settingsUnconfirmed;
   }
 
   function markSettingsUnconfirmed(error: unknown, afterSave: boolean): void {
@@ -1333,6 +1347,22 @@
       markSettingsUnconfirmed(error, false);
     }
   }
+
+  // When the lock engages, a focused control that just became disabled drops the
+  // keyboard focus; hand it to Reload settings, the one thing to do next.
+  let lockFocusHandled = false;
+  $effect(() => {
+    if (!settingsLocked) {
+      lockFocusHandled = false;
+      return;
+    }
+    if (lockFocusHandled) return;
+    lockFocusHandled = true;
+    void tick().then(() => {
+      const active = document.activeElement;
+      if (!active || active === document.body || active.matches(":disabled")) reloadButtonEl?.focus();
+    });
+  });
 
   async function reloadSettings(): Promise<void> {
     if (settingsReloading) return;
@@ -1381,9 +1411,16 @@
     }
     afterSave?.(result);
     try {
-      await readSettings();
+      await readSettings(true);
     } catch (error) {
       markSettingsUnconfirmed(error, true);
+      return { saved: true, result, confirmed: false };
+    }
+    // A newer read may have failed (and marked the copy) while this one was dropped:
+    // the saved change is then still unconfirmed.
+    const unconfirmed = currentUnconfirmed();
+    if (unconfirmed) {
+      markSettingsUnconfirmed(unconfirmed.detail, true);
       return { saved: true, result, confirmed: false };
     }
     return { saved: true, result, confirmed: true };
@@ -1455,8 +1492,8 @@
   // Calls the setters directly, past the unconfirmed hold of saveSetting: the
   // dictionary clear is a compare-and-swap against the preview's `expectedSource`,
   // so an old copy cannot overwrite a changed dictionary, and the language change
-  // sends only the language. The language select that opens it is disabled while
-  // unconfirmed, so this runs only from a preview shown before that.
+  // sends only the language. The language select that opens it and the button that
+  // starts it are both disabled while unconfirmed anyway.
   async function clearDictionaryAndSwitchLanguage(): Promise<void> {
     if (!settings || !blockedLanguageChange || languageSaving || glossarySaving) return;
     const request = blockedLanguageChange;
@@ -2247,12 +2284,12 @@
         <div class="transcribe-error" role={pendingGlossaryNavigation ? undefined : "alert"}>{settingsError}</div>
       {/if}
       {#if settingsUnconfirmed}
-        <section class="recovery-notice" role="alert" aria-label="Settings not confirmed">
+        <section class="recovery-notice settings-unconfirmed" role="alert" aria-label="Settings not confirmed">
           <span>
             {settingsUnconfirmed.afterSave
-              ? "Your change was saved, but the window could not read the settings back to confirm it"
-              : "Settings changed, but the window could not reload them"}
-            ({settingsUnconfirmed.detail}). The values shown may be out of date; settings cannot be changed until they are reloaded.
+              ? "Your change was saved, but could not be read back to confirm it"
+              : "Settings changed, but could not be reloaded"}
+            ({settingsUnconfirmed.detail}). Values shown may be out of date; reload before changing more.
           </span>
           <button class="secondary" type="button" bind:this={reloadButtonEl} aria-disabled={settingsReloading ? "true" : "false"}
             onclick={() => void reloadSettings()}>Reload settings</button>
@@ -2646,7 +2683,7 @@
               <p>To keep this dictionary, cancel and use or add a language profile in the Dictate tab.</p>
               <div class="dictionary-actions">
                 <button type="button" class="secondary" onclick={cancelLanguageChange} disabled={languageSaving}>Cancel</button>
-                <button type="button" class="danger" onclick={() => void clearDictionaryAndSwitchLanguage()} disabled={languageSaving || glossarySaving}>
+                <button type="button" class="danger" onclick={() => void clearDictionaryAndSwitchLanguage()} disabled={languageSaving || glossarySaving || settingsLocked}>
                   {languageSaving ? "Switching…" : `Clear default dictionary and switch to ${languageLabel(blockedLanguageChange.language)}`}
                 </button>
               </div>
@@ -2900,6 +2937,9 @@
     border-bottom: 1px solid var(--border);
     min-width: 0;
   }
+
+  /* Programmatic focus (after Reload settings) rings the title only for keyboard users. */
+  .window-title:focus:not(:focus-visible) { outline: none; }
 
   .window-title {
     min-width: 0;
@@ -3522,6 +3562,21 @@
   }
 
   .profile-model-notice span { flex: 1; color: var(--text-muted); }
+
+  /* The notice must stay in view while the user scrolls to the control they changed.
+     `.content` pads its scroller by 20px, which sticky offsets are measured inside: -20px
+     sticks the notice flush with the scroller's top edge. The first shadow paints over
+     the 12px margin below it, so scrolled content does not show in that gap. */
+  .settings-unconfirmed {
+    position: sticky;
+    top: -20px;
+    z-index: 5;
+    background: var(--bg);
+    box-shadow: 0 12px 0 0 var(--bg), 0 18px 10px -6px rgba(0, 0, 0, 0.6);
+    padding: 8px 12px;
+    font-size: 12px;
+    line-height: 1.4;
+  }
 
   .recovery-notice span { flex: 1; color: var(--text-muted); }
   .recovery-notice button { flex-shrink: 0; }
