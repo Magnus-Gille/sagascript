@@ -66,6 +66,11 @@ ipc.handle("get_platform", () => "windows"); // change an answer mid-test
   values, a `Map` as an object and a `Uint8Array` as an array of numbers.
 - A command without a handler rejects, and `setup.ts` fails the test afterwards even if the
   code under test swallowed the rejection. Never touch real settings or recordings.
+- Every call to a registered command is also checked against the Rust parameters
+  (`COMMAND_ARGUMENTS` in the generated file): a missing required key or a key that is no
+  parameter rejects the call and fails the test the same way. A wrapper that still sends an
+  argument key Rust renamed therefore fails Vitest, not only svelte-check. An `Option`
+  parameter may be left out.
 - A new command: regenerate `CommandMap` (`SAGASCRIPT_BLESS_CONTRACTS=1 cargo test -p
   sagascript contract` in `src-tauri/`), then add the wrapper and its row in
   `src/lib/api.test.ts`, which checks every wrapper's command name, argument object and

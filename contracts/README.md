@@ -11,7 +11,7 @@ used to reach the GUI unnoticed. This directory holds what both sides are tested
 |---|---|---|---|
 | Payload shapes | Tests that build real payloads with the producer's own code: `commands_tests.rs` (`get_settings`), `meeting_jobs_tests.rs` (`get_meeting_job`, every job status), `events_tests.rs` (every event) | `transport/*.json` (written by Rust) | `src/test/transport.test.ts` parses each fixture with a schema from `src/test/transport-schemas.ts`; each schema is proven equal to its frontend type (`Settings`, `MeetingJobSnapshot`, `EventMap`) |
 | Event names, consumers, scope | The catalogue in `src-tauri/src/events.rs`; emitting any other way is a clippy error (`disallowed-methods`) | `transport/events.json` | `EventMap` in `src/lib/events.ts` lists exactly the events the catalogue marks `gui` |
-| Command names, argument keys and types | `src-tauri/src/contract/command_map.rs` reads `generate_handler!` and every `#[tauri::command]` signature | `src/lib/ipc-contract.generated.ts` (`CommandMap`) | The IPC mock (`src/test/ipc.ts`) and `src/lib/api.test.ts`, which type-checks each wrapper's arguments and result against it |
+| Command names, argument keys and types | `src-tauri/src/contract/command_map.rs` reads `generate_handler!` and every `#[tauri::command]` signature | `src/lib/ipc-contract.generated.ts` (`CommandMap`, `COMMAND_ARGUMENTS`) | The IPC mock (`src/test/ipc.ts`) rejects a call whose argument keys Rust does not read, at run time in every test that goes through a wrapper; `src/lib/api.test.ts` type-checks each wrapper's arguments and result against `CommandMap` |
 
 A change on one side fails a test:
 
@@ -21,8 +21,10 @@ A change on one side fails a test:
   parse the fixture (`$.field: missing`, `… sent but not in the TypeScript type`, `expected
   one of …`), or svelte-check fails because a schema no longer equals its type.
 - A command's name, parameter or type changes: the app crate's tests fail until the generated
-  `CommandMap` is regenerated; svelte-check then flags every wrapper row in
-  `src/lib/api.test.ts` that no longer matches.
+  file is regenerated; then svelte-check flags every wrapper row in `src/lib/api.test.ts` that
+  no longer matches, and Vitest fails every test in which a wrapper still sends the old
+  argument key ("invoked with arguments the Rust command does not read: missing …; no
+  parameter …").
 - A `#[tauri::command]` missing from `generate_handler!`, a Rust type without a TypeScript
   mapping, or a raw event name: the app crate's tests or clippy fail.
 
