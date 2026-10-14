@@ -85,8 +85,10 @@ awaits.
    `export async function setExampleFlag(enabled: boolean): Promise<void> { return invoke("set_example_flag", { enabled }); }`
    (Rust parameter names arrive as camelCase keys).
 2. `Settings.svelte`: import the wrapper; add a handler next to `onTemperatureFallbackToggle`
-   that calls `applySetting(() => setExampleFlag(next))` (it re-reads `getSettings()` and shows
-   errors); copy the `.field-row` toggle markup of "Show recording overlay"
+   that calls `applySetting(() => setExampleFlag(next))` (it re-reads the settings and shows
+   errors; it resolves `true` once the change is saved, even if the re-read failed, which the
+   window reports separately; for a native `<select>` or `<input>` put the saved value back
+   when it resolves `false`, as `onBeamSizeChange` does); copy the `.field-row` toggle markup of "Show recording overlay"
    (`role="switch"`, `aria-checked`, `aria-label`, and the `hotkey-hint` line under it). Put it
    next to related settings: dictation and paste behaviour lives in the Dictate tab (next to
    the auto-paste toggle), general settings in `{#if activeTab === "settings"}`, tuning knobs

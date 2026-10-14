@@ -80,7 +80,7 @@ test("dictionary saves use the edit baseline and preserve concurrent conflicts",
   assert.match(settingsSource, /editBaseline\.generation <= draftGeneration/);
   assert.match(settingsSource, /setProfileGlossary\(scopeId, value, expectedSource\)/);
   assert.match(settingsSource, /async function refreshDictionaryAfterConflict\(primaryError: string, request: GlossarySaveRequest\)/);
-  assert.match(settingsSource, /settings = await getSettings\(\);[\s\S]*settingsError = primaryError/);
+  assert.match(settingsSource, /await readSettings\(\);[\s\S]*settingsError = primaryError/);
   assert.match(settingsSource, /const saveError = \{ value: "" \};/);
   assert.match(settingsSource, /const conflict = saveError\.value\.startsWith\(dictionaryConflictPrefix\)/);
   assert.match(settingsSource, /glossaryEditBaseline === editBaseline/);
