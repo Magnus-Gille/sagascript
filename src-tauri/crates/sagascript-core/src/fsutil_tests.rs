@@ -318,8 +318,8 @@ fn staging_leftovers_finds_what_a_killed_process_leaves_and_nothing_else() {
 #[test]
 fn a_long_non_ascii_destination_name_still_gets_a_valid_staging_name() {
     let dir = TempDir::new();
-    // 80 characters are 240 bytes; a staging name built from them is over the
-    // 255-byte limit of common filesystems if the name is cut by characters.
+    // 80 characters are 240 UTF-8 bytes; a staging name built from them is over
+    // the 255-byte limit of Unix filesystems if the name is cut by characters.
     let destination = dir.join(format!("{}.json", "漢".repeat(80)));
 
     let staged = StagedFile::create(&destination, b"bytes").expect("stage");
@@ -329,7 +329,12 @@ fn a_long_non_ascii_destination_name_still_gets_a_valid_staging_name() {
         .expect("name")
         .to_string_lossy()
         .into_owned();
-    assert!(staging_name.len() <= 255, "{} bytes", staging_name.len());
+    // The limit is 255 bytes of UTF-8 on Unix and 255 UTF-16 units on Windows.
+    #[cfg(unix)]
+    let units = staging_name.len();
+    #[cfg(not(unix))]
+    let units = staging_name.encode_utf16().count();
+    assert!(units <= 255, "{units} units");
     assert_eq!(staging_leftovers(&destination), [staged.staged_path()]);
     staged.publish().expect("publish");
 
