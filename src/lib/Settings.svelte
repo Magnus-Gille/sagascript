@@ -61,12 +61,10 @@
     type EngineStatus,
     type Language,
     type WhisperModel,
-    type HotkeyStatus,
     type HotkeyProfile,
   } from "./api";
-  import { listen } from "@tauri-apps/api/event";
   import { open } from "@tauri-apps/plugin-dialog";
-  import { getCurrentWebview } from "@tauri-apps/api/webview";
+  import { useDragDropEvent, useTauriEvent } from "./tauri-events.svelte";
   import {
     dictateButtonAction,
     retainTestRecordingOwnership,
@@ -680,42 +678,41 @@
     }
   }
 
+  let dictationEventRevision = 0;
+  const errorEvents = useTauriEvent("error", (message) => {
+    dictationEventRevision++;
+    testError = message;
+    requestTabChange("dictate");
+  });
+  const resultEvents = useTauriEvent("transcription-result", (text) => {
+    dictationEventRevision++;
+    liveDictationRevision++;
+    dictationEditorLineage++;
+    testResultRecoveryPending = true;
+    testResultEdited = false;
+    recoveredDictationActive = false;
+    observedNativeDictation = text;
+    nativeEditorOrigin = { text, lineage: dictationEditorLineage };
+    testResult = text;
+    testError = "";
+  });
+  const recordingEvents = useTauriEvent("state-changed", (state) => {
+    if (state === "recording") {
+      dictationEventRevision++;
+      liveDictationRevision++;
+      testError = "";
+    }
+  });
+
   onMount(() => {
     let disposed = false;
-    let revision = 0;
-    const stops: Array<() => void> = [];
-    const remember = (stop: () => void) => disposed ? stop() : stops.push(stop);
-    const errorListener = listen<string>("error", (event) => {
-      revision++;
-      testError = event.payload;
-      requestTabChange("dictate");
-    }).then(remember);
-    const resultListener = listen<string>("transcription-result", (event) => {
-      revision++;
-      liveDictationRevision++;
-      dictationEditorLineage++;
-      testResultRecoveryPending = true;
-      testResultEdited = false;
-      recoveredDictationActive = false;
-      observedNativeDictation = event.payload;
-      nativeEditorOrigin = { text: event.payload, lineage: dictationEditorLineage };
-      testResult = event.payload;
-      testError = "";
-    }).then(remember);
-    const stateListener = listen<string>("state-changed", (event) => {
-      if (event.payload === "recording") {
-        revision++;
-        liveDictationRevision++;
-        testError = "";
-      }
-    }).then(remember);
     // A failed background dictation may create this window after its event.
     // Recover the persisted-in-memory result without racing newer events.
-    Promise.all([errorListener, resultListener, stateListener]).then(async () => {
-      const initialRevision = revision;
+    Promise.all([errorEvents.ready, resultEvents.ready, recordingEvents.ready]).then(async () => {
+      const initialRevision = dictationEventRevision;
       await recoveryRestore.catch(() => undefined);
       const [error, text] = await Promise.all([getLastError(), getLastTranscription()]);
-      if (!disposed && revision === initialRevision) {
+      if (!disposed && dictationEventRevision === initialRevision) {
         // Native delivery has settled even if a different recovered draft is
         // already visible in the editor. Otherwise updater preparation waits
         // forever for an event that preceded listener registration.
@@ -734,7 +731,7 @@
     }).catch((error) => {
       console.warn("Could not restore the last dictation result", error);
     });
-    return () => { disposed = true; stops.forEach((stop) => stop()); };
+    return () => { disposed = true; };
   });
 
   // Transcribe tab state
@@ -1095,103 +1092,90 @@
     }
   }
 
-  onMount(() => {
-    let disposed = false;
-    let recoveryStop: (() => void) | null = null;
-    let recoveryAbortStop: (() => void) | null = null;
-    const recoveryListener = listen<unknown>("update-preparing", (event) => {
-      const payload = event.payload;
-      const nonce = typeof payload === "string"
-        ? payload
-        : payload && typeof payload === "object" && "nonce" in payload && typeof payload.nonce === "string"
-          ? payload.nonce
-          : null;
-      if (nonce && !disposed) {
-        activePreparationNonce = nonce;
-        updatePreparing = true;
-        void prepareForUpdate(nonce);
+  // The listeners below register as the component initializes, before the
+  // data fetch in onMount: they don't depend on it, so a rejected invoke in
+  // the fetch sequence must never prevent them from wiring up (e.g. a
+  // stuck-at-0% download).
+  useTauriEvent("update-preparing", (payload) => {
+    const nonce = typeof payload === "string"
+      ? payload
+      : payload && typeof payload === "object" && "nonce" in payload && typeof payload.nonce === "string"
+        ? payload.nonce
+        : null;
+    if (nonce) {
+      activePreparationNonce = nonce;
+      updatePreparing = true;
+      void prepareForUpdate(nonce);
+    }
+  });
+  useTauriEvent("update-aborted", () => {
+    activePreparationNonce = null;
+    updatePreparing = false;
+  });
+
+  useTauriEvent("model-download-progress", ({ progress }) => {
+    downloadProgress = progress;
+  });
+
+  useTauriEvent("model-ready", async () => {
+    // The event can arrive before the download command settles. Its caller
+    // owns the busy flag through its finally block so a second operation
+    // cannot start during the remaining selection or refresh work.
+    if (settings) await refreshProfileModels(settings.hotkey_profiles);
+  });
+
+  // Hotkey registration health can change at any time (settings-file
+  // hot-reload, a failed re-register racing a Spotlight/Raycast combo
+  // claim, etc.) — not just as a result of something this window did.
+  useTauriEvent("hotkey-registration-changed", (status) => {
+    hotkeyStatusOk = status.ok;
+    hotkeyStatusError = status.error ?? "";
+  });
+
+  // Keep Dictate synchronized with hotkey-driven work. Previously these
+  // states were ignored, so the button still offered "Start recording"
+  // while the backend was loading/transcribing and the next click produced
+  // a misleading busy error.
+  useTauriEvent("state-changed", async (nextState) => {
+    if (nextState === "settings_reloaded") {
+      settings = await getSettings();
+      await refreshProfileModels(settings.hotkey_profiles);
+      return;
+    }
+
+    if (!["idle", "recording", "loading_model", "transcribing"].includes(nextState)) return;
+    const acceptedState = nextState as BackendDictationState;
+    testOwnsRecording = retainTestRecordingOwnership(acceptedState, testOwnsRecording);
+    backendDictationState = acceptedState;
+    testRecording = nextState === "recording";
+    testTranscribing = nextState === "loading_model" || nextState === "transcribing";
+  });
+
+  // Listen for tab navigation from tray menu
+  useTauriEvent("navigate_tab", (t) => {
+    if (t === "dictate" || t === "transcribe" || t === "settings") {
+      requestTabChange(t);
+    }
+  });
+
+  // Listen for drag-and-drop events
+  useDragDropEvent((payload) => {
+    if (payload.type === "over") {
+      dragOver = true;
+    } else if (payload.type === "drop") {
+      dragOver = false;
+      const paths = payload.paths;
+      if (paths.length > 0 && !updatePreparing) {
+        requestTabChange("transcribe", () => handleFilesTranscription(paths));
       }
-    });
-    recoveryListener.then((stop) => {
-      if (disposed) stop();
-      else recoveryStop = stop;
-    }).catch((error) => console.warn("Could not listen for update preparation", error));
-    listen("update-aborted", () => {
-      activePreparationNonce = null;
-      updatePreparing = false;
-    }).then((stop) => {
-      if (disposed) stop();
-      else recoveryAbortStop = stop;
-    }).catch((error) => console.warn("Could not listen for update abort", error));
+    } else {
+      dragOver = false;
+    }
+  });
+
+  onMount(() => {
     recoveryRestore = restoreUpdateRecovery();
     void recoveryRestore.catch(() => undefined);
-
-    // Register listeners + drag-drop FIRST — they don't depend on the data
-    // fetched below, so a rejected invoke in the fetch sequence must never
-    // prevent them from wiring up (e.g. a stuck-at-0% download).
-    listen("model-download-progress", (event: any) => {
-      downloadProgress = event.payload.progress;
-    });
-
-    listen("model-ready", async () => {
-      // The event can arrive before the download command settles. Its caller
-      // owns the busy flag through its finally block so a second operation
-      // cannot start during the remaining selection or refresh work.
-      if (settings) await refreshProfileModels(settings.hotkey_profiles);
-    });
-
-    // Hotkey registration health can change at any time (settings-file
-    // hot-reload, a failed re-register racing a Spotlight/Raycast combo
-    // claim, etc.) — not just as a result of something this window did.
-    listen("hotkey-registration-changed", (event: any) => {
-      const status = event.payload as HotkeyStatus;
-      hotkeyStatusOk = status.ok;
-      hotkeyStatusError = status.error ?? "";
-    });
-
-    // Keep Dictate synchronized with hotkey-driven work. Previously these
-    // states were ignored, so the button still offered "Start recording"
-    // while the backend was loading/transcribing and the next click produced
-    // a misleading busy error.
-    listen("state-changed", async (event: any) => {
-      const nextState = event.payload;
-      if (nextState === "settings_reloaded") {
-        settings = await getSettings();
-        await refreshProfileModels(settings.hotkey_profiles);
-        return;
-      }
-
-      if (!["idle", "recording", "loading_model", "transcribing"].includes(nextState)) return;
-      const acceptedState = nextState as BackendDictationState;
-      testOwnsRecording = retainTestRecordingOwnership(acceptedState, testOwnsRecording);
-      backendDictationState = acceptedState;
-      testRecording = nextState === "recording";
-      testTranscribing = nextState === "loading_model" || nextState === "transcribing";
-    });
-
-    // Listen for tab navigation from tray menu
-    listen("navigate_tab", (event: any) => {
-      const t = event.payload;
-      if (t === "dictate" || t === "transcribe" || t === "settings") {
-        requestTabChange(t);
-      }
-    });
-
-    // Listen for drag-and-drop events
-    const webview = getCurrentWebview();
-    webview.onDragDropEvent((event) => {
-      if (event.payload.type === "over") {
-        dragOver = true;
-      } else if (event.payload.type === "drop") {
-        dragOver = false;
-        const paths = event.payload.paths;
-        if (paths.length > 0 && !updatePreparing) {
-          requestTabChange("transcribe", () => handleFilesTranscription(paths));
-        }
-      } else {
-        dragOver = false;
-      }
-    });
 
     // Fetch initial data. A rejection here surfaces as a visible inline
     // error instead of leaving a half-initialized window.
@@ -1239,10 +1223,7 @@
       }
     })();
     return () => {
-      disposed = true;
       activePreparationNonce = null;
-      recoveryStop?.();
-      recoveryAbortStop?.();
     };
   });
 

@@ -1,13 +1,8 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
-  import { listen } from "@tauri-apps/api/event";
   import { hotkeyKeyLabel } from "./hotkey";
-  import {
-    adoptDownloadListeners,
-    awaitDownloadCompletion,
-    completedDownloadState,
-    registerDownloadListeners,
-  } from "./onboarding-download-state";
+  import { awaitDownloadCompletion, completedDownloadState } from "./onboarding-download-state";
+  import { useTauriEvent } from "./tauri-events.svelte";
   import {
     getPlatform,
     getSettings,
@@ -62,10 +57,17 @@
   // Hotkey (read from settings)
   let hotkeyParts: string[] = $state(["Ctrl", "Shift", "Space"]);
 
-  // Cleanup for event listeners
-  let unlistenProgress: (() => void) | null = null;
-  let unlistenReady: (() => void) | null = null;
   let componentDestroyed = false;
+
+  // Registered as the component initializes, before any initialization invoke:
+  // the component is interactive while those awaits are pending, so listeners
+  // registered after them could miss a fast model-ready event.
+  const downloadEvents = [
+    useTauriEvent("model-download-progress", ({ progress }) => {
+      downloadProgress = progress;
+    }),
+    useTauriEvent("model-ready", markDownloadComplete),
+  ];
 
   const engineSize: Record<OnboardingLanguage, string> = {
     en: "142 MB",
@@ -345,29 +347,9 @@
   }
 
   onMount(async () => {
-    // Start listener registration before any initialization invokes. The
-    // component is interactive while awaits are pending, so registering these
-    // after permission/settings calls can miss a fast model-ready event.
-    let registeredListeners: [() => void, () => void] | null = null;
-    try {
-      registeredListeners = await registerDownloadListeners(
-        () => listen("model-download-progress", (event: any) => {
-          downloadProgress = event.payload.progress;
-        }),
-        () => listen("model-ready", markDownloadComplete),
-        () => componentDestroyed,
-      );
-    } catch (error) {
-      console.error("Failed to register onboarding download listeners", error);
-    }
-    adoptDownloadListeners(
-      registeredListeners,
-      () => componentDestroyed,
-      (progress, ready) => {
-        unlistenProgress = progress;
-        unlistenReady = ready;
-      },
-    );
+    // Failed registrations are already logged; the download still completes
+    // through its command result.
+    await Promise.allSettled(downloadEvents.map((events) => events.ready));
     if (componentDestroyed) return;
 
     try {
@@ -402,8 +384,6 @@
   onDestroy(() => {
     componentDestroyed = true;
     stopPoll();
-    unlistenProgress?.();
-    unlistenReady?.();
   });
 </script>
 
