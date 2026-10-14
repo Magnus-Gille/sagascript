@@ -1,0 +1,10 @@
+{
+  "auto_paste": true,
+  "auto_select_model": true,
+  "hasCompletedOnboarding": true,
+  "hotkey": "Control+Shift+Space",
+  "hotkey_mode": "push",
+  "language": "en",
+  "show_overlay": false,
+  "whisper_model": "base.en"
+}

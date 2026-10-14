@@ -10,7 +10,7 @@
     "expect_used": {
       "sagascript": 5,
       "sagascript-cli": 40,
-      "sagascript-core": 26,
+      "sagascript-core": 24,
       "sagascript-engine-protocol": 0
     },
     "panic": {

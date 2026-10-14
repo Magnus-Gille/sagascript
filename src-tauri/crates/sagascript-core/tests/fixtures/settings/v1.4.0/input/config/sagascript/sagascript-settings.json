@@ -1,0 +1,37 @@
+{
+  "auto_paste": true,
+  "auto_select_model": false,
+  "beam_size": 0,
+  "engine_idle_unload_minutes": 10,
+  "engine_prewarm": "on_key_down",
+  "file_transcription_model": "auto",
+  "has_completed_onboarding": true,
+  "hotkey": "Option+Space",
+  "hotkey_mode": "push",
+  "hotkey_profiles": [
+    {
+      "id": "default",
+      "language": "sv",
+      "name": "Svenska",
+      "shortcut": "Option+Space"
+    },
+    {
+      "id": "english",
+      "language": "en",
+      "name": "English",
+      "shortcut": "Option+E"
+    }
+  ],
+  "language": "sv",
+  "model_lineup_version": 1,
+  "pianissimo_dictation": false,
+  "profile_glossary_migrated": true,
+  "profile_models": {
+    "default": "pianissimo-sv",
+    "english": "base.en"
+  },
+  "show_overlay": true,
+  "temperature_fallback": true,
+  "vad_enabled": false,
+  "whisper_model": "kb-whisper-small"
+}

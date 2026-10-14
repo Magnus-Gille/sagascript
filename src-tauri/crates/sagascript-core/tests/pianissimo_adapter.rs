@@ -39,6 +39,8 @@ fn client(env: &[(&str, &str)], tmp: &Path) -> EngineHostClient {
         transcribe_min: Duration::from_secs(10),
         transcribe_factor: 0.0,
         shutdown_grace: Duration::from_millis(500),
+        write: Duration::from_secs(2),
+        wedge_grace: Duration::from_millis(500),
     };
     cfg.idle_unload = None;
     cfg.idle_shutdown = None;
