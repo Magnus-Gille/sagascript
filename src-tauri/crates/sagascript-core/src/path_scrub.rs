@@ -1227,9 +1227,11 @@ mod tests {
     }
 
     /// The engine host's stderr drain thread scrubs its lines; a stall there fills the
-    /// host's pipe and blocks it. Scrubbing is linear: each of these 1 MB inputs takes a
-    /// few milliseconds in a release build, and the bound here (2 s, debug build on a
-    /// shared CI machine) only catches a return of quadratic behaviour.
+    /// host's pipe and blocks it. Scrubbing is linear: each of these 1 MB inputs takes
+    /// 0.3-60 ms in a release build and up to 0.7 s in a debug build on a developer
+    /// machine (2.2 s on a loaded CI runner running other tests alongside). The bounds
+    /// (1 s release, 10 s debug) leave room for that noise and only catch quadratic
+    /// behaviour, which needs minutes for these inputs.
     #[test]
     fn scrubbing_is_linear_on_adversarial_input() {
         let megabyte = 1 << 20;
@@ -1259,6 +1261,7 @@ mod tests {
                 format!("/Users/zoe/a {}", "w: ".repeat(megabyte / 3)),
             ),
         ];
+        let bound = std::time::Duration::from_secs(if cfg!(debug_assertions) { 10 } else { 1 });
         for (name, input) in &inputs {
             let started = std::time::Instant::now();
             let output = scrub(input);
@@ -1268,7 +1271,7 @@ mod tests {
                 input.len() / 1024
             );
             assert!(
-                elapsed < std::time::Duration::from_secs(2),
+                elapsed < bound,
                 "{name}: {} bytes took {elapsed:?}",
                 input.len()
             );
