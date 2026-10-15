@@ -3,10 +3,9 @@
 // which inputs, and keeps passing when the file is reformatted, re-commented or reordered
 // within what the assertion states.
 //
-// The parser is the `yaml` package. It is not a dependency of this repository: it is vite's
-// optional peer, which npm installs from package-lock.json. The ci test group lists it in
-// GROUP_NPM_PACKAGES (scripts/node-test-groups.mjs), so a checkout where it is missing fails
-// once with a clear message. If vite ever drops it, add `yaml` to devDependencies.
+// The parser is the `yaml` package, a devDependency. The ci and release test groups list it in
+// GROUP_NPM_PACKAGES (scripts/node-test-groups.mjs), so a checkout without `npm ci` fails once
+// with a clear message instead of once per test file.
 //
 // Not for tests that run before `npm ci` (the Windows build identity gates in ci.yml's
 // test-windows): they must read text with node:fs only.

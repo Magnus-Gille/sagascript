@@ -26,8 +26,7 @@ export const GROUP_DESCRIPTIONS = {
 // failure per file. Groups not listed need nothing beyond Node itself.
 export const GROUP_NPM_PACKAGES = {
   ui: ["typescript"],
-  // `yaml` is vite's optional peer, which npm installs from the lockfile; scripts/lib/ci-workflow.mjs
-  // parses the workflows with it (#358).
+  // scripts/lib/ci-workflow.mjs parses the workflows with `yaml` (#358).
   ci: ["vite", "yaml"],
   release: ["yaml"],
 };
