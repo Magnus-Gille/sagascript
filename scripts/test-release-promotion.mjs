@@ -98,16 +98,16 @@ test("windows-package keeps the console CLI, installed-CLI and portable zip step
   assert.match(w, /Build and verify ARM64 portable zip/);
   assert.match(w, /Verify installers carry the console CLI/);
   // The steps that depend on the event are the Rust workspace test and the debug build that stands in
-  // for it (#358): ci.yml's test-windows owns the x64 tests of a pull request, so this workflow skips
-  // them for x64 there. Releases come in through workflow_call from a push or a dispatch, never a
-  // pull request, and still run them.
+  // for it (#358): ci.yml's test-windows owns the tests of a pull request, so this workflow skips them
+  // there. Releases come in through workflow_call from a push or a dispatch, never a pull request,
+  // and still run them.
   const conditional = w
     .split("\n      - name: ")
     .slice(1)
     .filter((step) => /if:[^\n]*github\.event_name/.test(step))
     .map((step) => step.split("\n")[0]);
   assert.deepEqual(conditional, ["Test and lint Rust workspace", "Build lean CLI (debug)"]);
-  assert.match(w, /if: github\.event_name != 'pull_request' \|\| matrix\.architecture == 'arm64'\n/);
+  assert.match(w, /if: github\.event_name != 'pull_request'\n/);
 });
 
 test("prebuild runs on main pushes only, never on pull requests, and never cancels", () => {

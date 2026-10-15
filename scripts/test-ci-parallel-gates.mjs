@@ -245,22 +245,24 @@ test("test-windows runs the build identity gates before npm ci and any Cargo wor
   }
 });
 
-test("windows-package.yml leaves the x64 Rust tests of a pull request to test-windows and keeps them for ARM64, releases and manual runs", () => {
+test("windows-package.yml leaves the Rust tests of a pull request to test-windows and keeps them for releases and manual runs", () => {
   const windows = loadWorkflow("windows-package.yml").jobs[0];
   const names = windows.steps.map((step) => step.name);
   const tests = windows.steps[names.indexOf("Test and lint Rust workspace")];
-  assert.equal(tests.condition, "github.event_name != 'pull_request' || matrix.architecture == 'arm64'");
-  // The debug lean CLI that the CPU policy checks read stays built on every architecture: inside the
-  // step above where it runs, in a step of its own exactly where that step is skipped.
+  assert.equal(tests.condition, "github.event_name != 'pull_request'");
+  // The debug lean CLI that the CPU policy checks read stays built: inside the step above where it runs,
+  // in a step of its own exactly where that step is skipped.
   assert.ok(commandLines(tests).includes("cargo build -p sagascript-cli --no-default-features"));
   const build = windows.steps[names.indexOf("Build lean CLI (debug)")];
   assert.ok(build, "the debug build has a step of its own for the skipped case");
-  assert.equal(build.condition, "github.event_name == 'pull_request' && matrix.architecture == 'x64'");
+  assert.equal(build.condition, "github.event_name == 'pull_request'");
   assert.deepEqual(commandLines(build), ["cargo build -p sagascript-cli --no-default-features"]);
   assert.ok(names.indexOf(build.name) > names.indexOf(tests.name));
   assert.ok(names.indexOf(build.name) < names.indexOf("Verify debug x64 inference CPU policy"));
-  // test-windows still runs the tests this one no longer repeats for x64.
+  assert.ok(names.indexOf(build.name) < names.indexOf("Verify debug ARM64 native CPU flags"));
+  // test-windows runs the tests this one no longer repeats on a pull request.
   assert.ok(gatesFor({ os: "windows" }).some((gate) => gate.args.join(" ") === "test --workspace"));
+  assert.ok(gatesFor({ os: "windows" }).some((gate) => gate.args.join(" ") === "clippy --workspace --all-targets -- -D warnings"));
 });
 
 test("the workflow parses the same with CRLF line endings, as on a Windows checkout", () => {

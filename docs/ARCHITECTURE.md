@@ -417,10 +417,10 @@ msrv-linux runs `cargo check --workspace --locked`, the lean CLI and the ORT hos
 toolchain (1.88), and check-linux requires it; test-macos runs `npm audit --audit-level=high`, the
 frontend suites (Prettier, ESLint, Vitest, Node), Svelte types, the Swift tests and the engine-host
 conformance subset; test-windows runs the same frontend suites except ESLint and the Windows build
-identity gates. test-windows owns the x64 Windows tests of every pull request: `windows-package.yml`
-(on PRs touching `src/`, `src-tauri/`, `scripts/`, package files, `.gitattributes` or the workflow
-itself) repeats `cargo test --workspace` and clippy only on its native ARM64 runner on a pull request,
-and on both architectures for releases (`prebuild-release.yml`) and manual runs;
+identity gates. test-windows owns the Windows tests of every pull request:
+`windows-package.yml` (on PRs touching `src/`, `src-tauri/`, `scripts/`, package files,
+`.gitattributes` or the workflow itself) repeats `cargo test --workspace` and clippy only for
+releases (`prebuild-release.yml`) and manual runs, on both architectures;
 `release-quality-gate.yml` runs them for a release. A PR that only touches
 `README.md`, `docs/release-readiness.md` or `docs/research/**/*.md` skips the native lanes
 (`scripts/ci-docs-scope.mjs`). Locally, `npm run verify` runs the test and lint suites above

@@ -5,10 +5,10 @@ name: CI
 # scripts/ci/smoke-cli.mjs and scripts/ci/assert-lanes.mjs (the check-* aggregators). Branch
 # protection requires check-macos and check-windows by name: keep both, `needs:` every lane of their OS.
 #
-# Windows tests have one owner per architecture: test-windows owns the x64 tests of every pull
-# request (the required lane). windows-package.yml does not repeat `cargo test --workspace` and
-# `cargo clippy --workspace` for x64 on pull requests; it keeps them for the native ARM64 runner
-# (the only place tests execute on ARM64), for releases and for manual runs.
+# Windows tests have one owner on a pull request: test-windows (x64), the required lane.
+# windows-package.yml does not repeat `cargo test --workspace` and `cargo clippy --workspace` there
+# (in its pwsh step a failure never failed the job); it keeps them for releases and manual runs,
+# the only place ARM64 tests run.
 
 on:
   push:

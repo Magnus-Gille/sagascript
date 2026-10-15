@@ -33,9 +33,9 @@ described as an official, signed, stable, or fully accepted Windows release.
 
 `.github/workflows/windows-package.yml` runs the release metadata, license,
 frontend, Rust, and real CPU-transcription gates on native `windows-latest`
-(x64) and `windows-11-arm` (ARM64) runners. (On a pull request the x64 Rust
+(x64) and `windows-11-arm` (ARM64) runners. (On a pull request the Rust
 tests and lints are `ci.yml`'s `test-windows`, a required check, so this
-workflow repeats them only on ARM64; releases and manual runs run them on both.) Each runner then
+workflow repeats them only for releases and manual runs, on both architectures.) Each runner then
 builds unsigned NSIS and MSI installers, a portable desktop executable, and a
 separate console CLI executable. It uploads them as one short-lived GitHub
 Actions artifact and never creates or modifies a GitHub Release. Its artifacts
