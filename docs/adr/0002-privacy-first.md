@@ -55,6 +55,7 @@ Evidence in the code:
 
 - Review checks every new `reqwest` use, URL constant or sidecar for an explicit trigger.
 - Some features cost more (larger local models, local diarization) or are not offered.
-- Error strings from native code can still carry paths, for example absolute paths in Swift
-  engine errors; [#360](https://github.com/Magnus-Gille/sagascript/issues/360) adds scrubbing
-  at the boundary (ADR 0006).
+- Error strings from native code can carry paths, for example absolute paths in Swift engine
+  errors. `scrub_paths` removes them where an engine error enters Rust and where a command
+  error is serialized ([ADR 0006](0006-typed-errors.md)); text from other sources is covered
+  by the second place only.

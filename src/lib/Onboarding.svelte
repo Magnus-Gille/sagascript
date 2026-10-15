@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
+  import { toErrorMessage } from "./errors";
   import { hotkeyKeyLabel } from "./hotkey";
   import { downloadModelById } from "./models.svelte";
   import { waitForAccessibility } from "./permissions";
@@ -128,8 +129,8 @@
       await setLanguage(selectedLanguage);
       nextStep();
       void startDownload();
-    } catch (e: any) {
-      languageError = typeof e === "string" ? e : e?.message ?? "Failed to save language. Please try again.";
+    } catch (e) {
+      languageError = toErrorMessage(e, "Failed to save language. Please try again.");
     } finally {
       languageSaving = false;
     }
@@ -158,9 +159,9 @@
       // The command result is authoritative. `model-ready` remains useful for
       // live progress, but a fast verification may emit it before listeners
       // finish registering.
-    } catch (e: any) {
+    } catch (e) {
       downloading = false;
-      downloadError = typeof e === "string" ? e : e?.message ?? "Download failed. Check your internet connection.";
+      downloadError = toErrorMessage(e, "Download failed. Check your internet connection.");
     }
   }
 
@@ -221,10 +222,10 @@
     accessibilityChecking = true;
     try {
       await requestAccessibilityPermission();
-    } catch (e: any) {
+    } catch (e) {
       if (isCancelled()) return;
       accessibilityError =
-        typeof e === "string" ? e : e?.message ?? "Failed to request Accessibility permission. Please try again.";
+        toErrorMessage(e, "Failed to request Accessibility permission. Please try again.");
       accessibilityChecking = false;
       return;
     }
@@ -234,12 +235,12 @@
     try {
       // Until the user decides or leaves the step: `stopPoll()` cancels the wait.
       granted = await waitForAccessibility({ attempts: Infinity, isCancelled });
-    } catch (e: any) {
+    } catch (e) {
       if (isCancelled()) return;
       stopPoll();
       accessibilityChecking = false;
       accessibilityError =
-        typeof e === "string" ? e : e?.message ?? "Failed to check Accessibility permission. Please try again.";
+        toErrorMessage(e, "Failed to check Accessibility permission. Please try again.");
       return;
     }
     if (!granted) return;
@@ -249,8 +250,8 @@
     stopPoll();
     try {
       await retryHotkeyRegistration();
-    } catch (e: any) {
-      accessibilityError = `Accessibility was granted, but the saved dictation shortcut could not be registered: ${typeof e === "string" ? e : e?.message ?? "unknown error"}`;
+    } catch (e) {
+      accessibilityError = `Accessibility was granted, but the saved dictation shortcut could not be registered: ${toErrorMessage(e, "unknown error")}`;
     }
   }
 
@@ -261,9 +262,9 @@
     try {
       // Reopen the pane without asking macOS to show its modal permission prompt again.
       await openAccessibilitySettings();
-    } catch (e: any) {
+    } catch (e) {
       accessibilityError =
-        typeof e === "string" ? e : e?.message ?? "Failed to open Accessibility settings. Please try again.";
+        toErrorMessage(e, "Failed to open Accessibility settings. Please try again.");
     } finally {
       accessibilityOpening = false;
     }
@@ -276,9 +277,9 @@
     try {
       await setAutoPaste(true);
       nextStep();
-    } catch (e: any) {
+    } catch (e) {
       accessibilityError =
-        typeof e === "string" ? e : e?.message ?? "Failed to enable auto-paste. Please try again.";
+        toErrorMessage(e, "Failed to enable auto-paste. Please try again.");
     } finally {
       accessibilityChecking = false;
     }
@@ -294,9 +295,9 @@
       // Persist it now so finishing onboarding cannot leave auto-paste enabled.
       await setAutoPaste(false);
       nextStep();
-    } catch (e: any) {
+    } catch (e) {
       accessibilityError =
-        typeof e === "string" ? e : e?.message ?? "Failed to disable auto-paste. Please try again.";
+        toErrorMessage(e, "Failed to disable auto-paste. Please try again.");
     } finally {
       savingManualPaste = false;
     }
@@ -339,8 +340,8 @@
       stopPoll();
       await setOnboardingCompleted();
       await oncomplete();
-    } catch (e: any) {
-      finishError = typeof e === "string" ? e : e?.message ?? "Failed to complete setup. Please try again.";
+    } catch (e) {
+      finishError = toErrorMessage(e, "Failed to complete setup. Please try again.");
     }
   }
 

@@ -32,10 +32,10 @@ pub enum StopRecordingOutcome {
     /// Recording stopped; carries the captured 16 kHz samples (may be empty if
     /// the mic produced only silence).
     Stopped(Vec<f32>),
-    /// The capture/resample failed. The controller has recorded the error and
-    /// returned to Idle; the message is returned so the caller can surface it
-    /// via the transcription-error event path.
-    Failed(String),
+    /// The capture/resample failed. The controller has recorded the error's
+    /// text and returned to Idle; the typed error is returned so the caller
+    /// can surface it (a command keeps its code, the hotkey path shows the text).
+    Failed(DictationError),
 }
 
 /// Application state machine
@@ -601,10 +601,9 @@ impl AppController {
             Ok(samples) => StopRecordingOutcome::Stopped(samples),
             Err(e) => {
                 warn!("Recording stop failed: {e}");
-                let msg = e.to_string();
                 // Records last_error and returns to Idle.
-                self.on_transcription_error(&msg);
-                StopRecordingOutcome::Failed(msg)
+                self.on_transcription_error(&e.to_string());
+                StopRecordingOutcome::Failed(e)
             }
         }
     }

@@ -246,7 +246,7 @@ fn batch_cancellation_stops_a_fake_decoder_emits_nothing_and_resets_state() {
     });
     assert!(started.elapsed() < std::time::Duration::from_secs(2));
     let error = outcome.unwrap_err();
-    assert_eq!(error.to_string(), "Transcription failed: Cancelled");
+    assert!(matches!(error, DictationError::Cancelled), "{error:?}");
     assert_eq!(visited, vec![PathBuf::from("long.wav")], "batch must stop");
     assert!(
         executions.is_empty(),
@@ -667,10 +667,7 @@ fn meeting_control_precancel_checks_before_file_or_model_access() {
         &control,
     )
     .expect_err("pre-cancelled job must fail");
-    assert_eq!(
-        error.to_string(),
-        "Transcription failed: Meeting transcription cancelled"
-    );
+    assert!(matches!(error, DictationError::Cancelled), "{error:?}");
     assert!(cancellation.load(Ordering::Acquire));
 }
 

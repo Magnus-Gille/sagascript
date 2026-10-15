@@ -19,12 +19,13 @@ use std::time::{Duration, Instant};
 use serde::Deserialize;
 
 use crate::error::DictationError;
+use crate::path_scrub::scrub_paths;
 use crate::settings::{EnginePrewarm, Settings};
 use crate::sync::lock_or_recover;
 use crate::transcription::dev_overrides::env_override;
 use crate::transcription::engine_host::{
-    CancelToken, ClientIdentity, EngineHostClient, EngineHostConfig, EngineHostError, LoadEvent,
-    LoadObserver, LoadSpec, Transcription, WindowTiming,
+    CancelToken, ClientIdentity, EngineHostClient, EngineHostConfig, EngineHostError, ErrorCode,
+    LoadEvent, LoadObserver, LoadSpec, Transcription, WindowTiming,
 };
 use crate::transcription::pianissimo_model;
 
@@ -670,7 +671,11 @@ pub fn warm_in_background(reason: &'static str) {
                     "Pianissimo engine pre-warmed"
                 ),
                 Ok(false) => tracing::debug!(reason, "Pianissimo engine already warm"),
-                Err(error) => tracing::warn!(reason, %error, "Pianissimo engine pre-warm failed"),
+                Err(error) => tracing::warn!(
+                    reason,
+                    error = %scrub_paths(&error),
+                    "Pianissimo engine pre-warm failed"
+                ),
             }
             IN_FLIGHT.store(false, Ordering::SeqCst);
         });
@@ -682,15 +687,59 @@ pub fn warm_in_background(reason: &'static str) {
 
 // ---- adapter --------------------------------------------------------------
 
+/// Maps an engine-host failure to the error the callers see. A cancellation
+/// stays a [`DictationError::Cancelled`]; anything else keeps the host's code
+/// and retry hint (`engine_*`, see [`engine_code`]) and its text with absolute
+/// paths removed: the Swift host names model files by absolute path
+/// (ADR 0006, #360).
 pub(crate) fn map_engine_error(error: EngineHostError) -> DictationError {
     if error.is_cancelled() {
         return cancelled_error();
     }
-    DictationError::TranscriptionFailed(format!("Pianissimo engine: {error}"))
+    let (code, retryable) = engine_code(&error);
+    DictationError::engine(code, retryable, &format!("Pianissimo engine: {error}"))
 }
 
 pub(crate) fn cancelled_error() -> DictationError {
-    DictationError::TranscriptionFailed("Pianissimo transcription cancelled".into())
+    DictationError::Cancelled
+}
+
+/// The stable wire code and retry hint of an engine-host failure. A remote
+/// error keeps the host's own code and flag (`busy` is the one the protocol
+/// marks retryable); the host-side failures have codes of their own. Unknown
+/// remote codes collapse to `engine_failed` so a newer host cannot put free
+/// text into a code.
+fn engine_code(error: &EngineHostError) -> (&'static str, bool) {
+    match error {
+        EngineHostError::Remote {
+            code, retryable, ..
+        } => {
+            let code = match code {
+                ErrorCode::Protocol => "engine_protocol",
+                ErrorCode::BadRequest => "engine_bad_request",
+                ErrorCode::Unsupported => "engine_unsupported",
+                ErrorCode::NotLoaded => "engine_not_loaded",
+                ErrorCode::ModelMissing => "engine_model_missing",
+                ErrorCode::ModelLoadFailed => "engine_model_load_failed",
+                ErrorCode::Busy => "engine_busy",
+                ErrorCode::Internal => "engine_internal",
+                ErrorCode::Cancelled | ErrorCode::Engine | ErrorCode::Unknown(_) => "engine_failed",
+            };
+            (code, *retryable)
+        }
+        // A restart is attempted on the next request, within the crash budget.
+        EngineHostError::Crashed { .. } => ("engine_crashed", true),
+        // Like a transcription timeout: the same input tends to time out again.
+        EngineHostError::Timeout { .. } => ("engine_timeout", false),
+        EngineHostError::Spawn { .. }
+        | EngineHostError::Handshake(_)
+        | EngineHostError::Failed(_)
+        | EngineHostError::NotRunning => ("engine_unavailable", false),
+        EngineHostError::Protocol(_) => ("engine_protocol", false),
+        EngineHostError::InvalidInput(_) => ("engine_bad_request", false),
+        EngineHostError::Io(_) => ("engine_io", false),
+        EngineHostError::Cancelled => ("engine_failed", false),
+    }
 }
 
 pub(crate) fn to_result(transcription: Transcription) -> PianissimoResult {
@@ -898,6 +947,126 @@ mod tests {
             },
             client: idle_client(),
         }
+    }
+
+    fn remote(code: ErrorCode, retryable: bool, message: &str) -> EngineHostError {
+        EngineHostError::Remote {
+            code,
+            message: message.into(),
+            retryable,
+        }
+    }
+
+    #[test]
+    fn cancellation_is_the_cancelled_error_not_a_string() {
+        assert!(matches!(cancelled_error(), DictationError::Cancelled));
+        assert!(matches!(
+            map_engine_error(EngineHostError::Cancelled),
+            DictationError::Cancelled
+        ));
+        assert!(matches!(
+            map_engine_error(remote(ErrorCode::Cancelled, false, "stopped")),
+            DictationError::Cancelled
+        ));
+    }
+
+    #[test]
+    fn engine_errors_keep_the_hosts_code_and_retry_hint() {
+        let cases = [
+            (ErrorCode::ModelMissing, false, "engine_model_missing"),
+            (
+                ErrorCode::ModelLoadFailed,
+                false,
+                "engine_model_load_failed",
+            ),
+            (ErrorCode::NotLoaded, false, "engine_not_loaded"),
+            (ErrorCode::Busy, true, "engine_busy"),
+            (ErrorCode::Unsupported, false, "engine_unsupported"),
+            (ErrorCode::BadRequest, false, "engine_bad_request"),
+            (ErrorCode::Protocol, false, "engine_protocol"),
+            (ErrorCode::Engine, false, "engine_failed"),
+            (ErrorCode::Internal, false, "engine_internal"),
+            (
+                ErrorCode::Unknown("quantum_flux".into()),
+                false,
+                "engine_failed",
+            ),
+        ];
+        for (code, retryable, expected) in cases {
+            let mapped = map_engine_error(remote(code.clone(), retryable, "text"));
+            assert_eq!(mapped.code(), expected, "{code:?}");
+            assert_eq!(mapped.retryable(), retryable, "{code:?}");
+            assert!(matches!(mapped, DictationError::Engine(_)), "{code:?}");
+        }
+    }
+
+    #[test]
+    fn host_side_failures_have_their_own_codes() {
+        let crash = map_engine_error(EngineHostError::Crashed {
+            status: "signal: 11".into(),
+            stderr_tail: "boom".into(),
+        });
+        assert_eq!((crash.code(), crash.retryable()), ("engine_crashed", true));
+        let timeout = map_engine_error(EngineHostError::Timeout {
+            op: "transcribe",
+            after: Duration::from_secs(5),
+        });
+        assert_eq!(
+            (timeout.code(), timeout.retryable()),
+            ("engine_timeout", false)
+        );
+        for unavailable in [
+            EngineHostError::NotRunning,
+            EngineHostError::Failed("restart budget spent".into()),
+            EngineHostError::Handshake("bad hello".into()),
+            EngineHostError::Spawn {
+                path: "/nonexistent/host".into(),
+                source: std::io::Error::other("denied"),
+            },
+        ] {
+            let mapped = map_engine_error(unavailable);
+            assert_eq!(
+                (mapped.code(), mapped.retryable()),
+                ("engine_unavailable", false)
+            );
+        }
+        assert_eq!(
+            map_engine_error(EngineHostError::Protocol("bad line".into())).code(),
+            "engine_protocol"
+        );
+        assert_eq!(
+            map_engine_error(EngineHostError::InvalidInput("empty".into())).code(),
+            "engine_bad_request"
+        );
+        assert_eq!(
+            map_engine_error(EngineHostError::Io(std::io::Error::other("pipe"))).code(),
+            "engine_io"
+        );
+    }
+
+    /// The Swift host formats `Failed to load model at <absolute path>: …`
+    /// (CoreMLEngine.swift, CompiledModelCache.swift). The text must reach the
+    /// UI and the log without the user's home directory (ADR 0006).
+    #[test]
+    fn a_swift_error_with_a_user_path_loses_the_path() {
+        let swift = "Failed to load model at /Users/x/Library/Application Support/Sagascript/models/foo.mlmodelc: The file couldn't be opened.";
+        let mapped = map_engine_error(remote(ErrorCode::ModelLoadFailed, false, swift));
+        let shown = mapped.to_string();
+        assert!(!shown.contains("/Users/x"), "{shown}");
+        assert!(shown.contains("foo.mlmodelc"), "{shown}");
+        assert!(shown.starts_with("Pianissimo engine: "), "{shown}");
+        assert!(!format!("{mapped:?}").contains("/Users/x"));
+
+        let crashed = map_engine_error(EngineHostError::Crashed {
+            status: "exit status: 1".into(),
+            stderr_tail:
+                "fatal: cannot open /Users/x/Library/Caches/Sagascript/a.bin\nat /home/x/b".into(),
+        });
+        let shown = crashed.to_string();
+        assert!(
+            !shown.contains("/Users/x") && !shown.contains("/home/x"),
+            "{shown}"
+        );
     }
 
     #[test]

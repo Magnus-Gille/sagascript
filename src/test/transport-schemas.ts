@@ -39,6 +39,10 @@ export const settings = object(
   { ignored: ["profile_glossary_migrated", "model_lineup_version", "engine_defaults_version", "schema_version"] },
 );
 
+// -- Command errors (`Result<T, CommandError>`, ADR 0006) --------------------------
+
+export const backendError = object({ code: string, message: string, retryable: boolean });
+
 // -- Meeting documents ----------------------------------------------------------
 
 const speakerCountHint = object({}, { optional: { exact: number, min: number, max: number, force: boolean } });

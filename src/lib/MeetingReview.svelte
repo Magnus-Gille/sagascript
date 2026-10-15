@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onDestroy, untrack } from "svelte";
+  import { toErrorMessage } from "./errors";
   import {
     createMeetingReviewDraftSnapshot,
     restoreMeetingDraftSnapshot,
@@ -243,11 +244,6 @@
     return minutes + ":" + remainder;
   }
 
-  function errorText(value: unknown): string {
-    if (typeof value === "string" && value.trim()) return value;
-    return value instanceof Error ? value.message : "The requested meeting action failed.";
-  }
-
   function disabled(): boolean {
     return busy || pendingAction !== null;
   }
@@ -260,7 +256,7 @@
     try {
       return (await action()) !== false;
     } catch (actionFailure) {
-      actionError = errorText(actionFailure);
+      actionError = toErrorMessage(actionFailure, "The requested meeting action failed.");
       return false;
     } finally {
       pendingAction = null;

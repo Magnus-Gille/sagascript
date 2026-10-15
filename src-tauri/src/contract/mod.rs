@@ -26,7 +26,12 @@ use serde_json::Value;
 pub const BLESS_ENV: &str = "SAGASCRIPT_BLESS_CONTRACTS";
 
 /// Every fixture in contracts/transport/, each written by one test.
-pub const FIXTURES: &[&str] = &["events.json", "get_meeting_job.json", "get_settings.json"];
+pub const FIXTURES: &[&str] = &[
+    "command_errors.json",
+    "events.json",
+    "get_meeting_job.json",
+    "get_settings.json",
+];
 
 pub fn blessing() -> bool {
     std::env::var_os(BLESS_ENV).is_some()

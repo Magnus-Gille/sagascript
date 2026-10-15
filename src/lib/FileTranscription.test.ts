@@ -5,6 +5,7 @@ import { screen, waitFor } from "@testing-library/svelte";
 import userEvent from "@testing-library/user-event";
 import { expect, test } from "vitest";
 import { deferred } from "../test/deferred";
+import { backendError } from "../test/ipc";
 import { renderSettings, settingsBackend } from "../test/settings";
 
 test("a plain transcription listens for progress while it runs, and stops when it ends", async () => {
@@ -38,7 +39,7 @@ test("a run that fails still releases its progress listener", async () => {
   const { ipc } = await renderSettings(
     settingsBackend({
       transcribe_file: () => {
-        throw "Could not decode the file";
+        throw backendError("file_decode_error", "Could not decode the file");
       },
       set_update_result_pending: () => undefined,
     }),

@@ -2,7 +2,8 @@ import { invoke, SERIALIZE_TO_IPC_FN } from "@tauri-apps/api/core";
 import { emit, listen, once } from "@tauri-apps/api/event";
 import { describe, expect, test } from "vitest";
 import { getPlatform, getSettings, setHotkeyProfiles, setLanguage, setProfileGlossary, type Settings } from "../lib/api";
-import { COMMAND_NAMES, isCommandName, mockIpc, resetIpcMock, type EventMap } from "./ipc";
+import { isBackendError } from "../lib/errors";
+import { backendError, COMMAND_NAMES, isCommandName, mockIpc, resetIpcMock, type EventMap } from "./ipc";
 
 const settings: Settings = {
   language: "sv",
@@ -103,6 +104,51 @@ describe("commands", () => {
       },
     });
     await expect(setLanguage("en")).rejects.toBe("Profile 'default' has a personal dictionary");
+  });
+
+  test("a command that returns Result<_, CommandError> rejects with a BackendError object", async () => {
+    mockIpc({
+      set_profile_glossary: () => {
+        throw backendError("dictionary_changed_elsewhere", "Dictionary changed elsewhere: the source moved");
+      },
+    });
+    const failure = await setProfileGlossary("default", "x", "y").then(
+      () => null,
+      (error: unknown) => error,
+    );
+    expect(failure).toEqual({
+      code: "dictionary_changed_elsewhere",
+      message: "Dictionary changed elsewhere: the source moved",
+      retryable: false,
+    });
+    expect(isBackendError(failure, "dictionary_changed_elsewhere")).toBe(true);
+    expect(() => resetIpcMock()).not.toThrow();
+  });
+
+  test("a typed command whose fake rejects with a string fails the test", async () => {
+    mockIpc({
+      set_profile_glossary: () => {
+        throw "Dictionary changed elsewhere: the source moved";
+      },
+    });
+    // The caller still sees what the fake threw ...
+    await expect(setProfileGlossary("default", "x", "y")).rejects.toBe("Dictionary changed elsewhere: the source moved");
+    // ... but the old wire shape is not what Rust sends any more.
+    expect(() => resetIpcMock()).toThrow(
+      'IPC command "set_profile_glossary" returns Result<_, CommandError>: its fake must reject with backendError(code, message) from src/test/ipc.ts, not with a string',
+    );
+  });
+
+  test("a command that is not typed yet fails the test when its fake rejects with an object", async () => {
+    mockIpc({
+      set_language: () => {
+        throw backendError("settings_error", "Profile 'default' has a personal dictionary");
+      },
+    });
+    await expect(setLanguage("en")).rejects.toMatchObject({ code: "settings_error" });
+    expect(() => resetIpcMock()).toThrow(
+      'IPC command "set_language" returns Result<_, String>: its fake must reject with a string, not with an error object',
+    );
   });
 
   test("handle() replaces a handler between steps", async () => {

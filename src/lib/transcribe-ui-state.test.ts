@@ -10,6 +10,8 @@ import {
   transcribePhaseFloor,
   transcribeSaveDefaults,
 } from "./transcribe-ui-state";
+import { backendError } from "../test/ipc";
+import commandErrors from "../../contracts/transport/command_errors.json";
 
 test("plain cancel is only available for non-diarized runs in flight", () => {
   expect(canCancelPlainTranscription({ transcribing: true, meetingJobStatus: null, cancellingPlain: false })).toBe(true);
@@ -28,11 +30,28 @@ test("retry needs a previous file and an idle UI", () => {
 });
 
 test("missing-file errors forget the remembered file gracefully", () => {
-  expect(isMissingTranscribeFileError("File decode error: Failed to open file: No such file or directory")).toBe(true);
-  expect(isMissingTranscribeFileError(new Error("Failed to open file: ENOENT"))).toBe(true);
-  expect(isMissingTranscribeFileError("Model not found")).toBe(false);
-  expect(isMissingTranscribeFileError("Failed to open file: Permission denied")).toBe(false);
-  expect(isMissingTranscribeFileError("Whisper inference failed: -6")).toBe(false);
+  // The backend says so by code (DictationError::FileNotFound, ADR 0006).
+  expect(
+    isMissingTranscribeFileError(
+      backendError("file_not_found", "File decode error: Failed to open file: No such file or directory (os error 2)"),
+    ),
+  ).toBe(true);
+  expect(isMissingTranscribeFileError(backendError("file_not_found", "Das war nicht zu finden"))).toBe(true);
+  // Other failures keep the file: the code decides, never the text.
+  expect(isMissingTranscribeFileError(backendError("file_decode_error", "Failed to open file: Permission denied"))).toBe(false);
+  expect(isMissingTranscribeFileError(backendError("transcription_failed", "Whisper inference failed: -6"))).toBe(false);
+  expect(
+    isMissingTranscribeFileError(backendError("unclassified", "File decode error: Failed to open file: No such file or directory")),
+  ).toBe(false);
+  expect(isMissingTranscribeFileError("File decode error: Failed to open file: No such file or directory")).toBe(false);
+  expect(isMissingTranscribeFileError(new Error("Failed to open file: ENOENT"))).toBe(false);
+  expect(isMissingTranscribeFileError(undefined)).toBe(false);
+});
+
+test("of the errors Rust sends, only file_not_found forgets the remembered file", () => {
+  for (const [variant, error] of Object.entries(commandErrors)) {
+    expect(isMissingTranscribeFileError(error), variant).toBe(variant === "file_not_found");
+  }
 });
 
 test("displayed progress floors at 1% while running and resets when idle", () => {

@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { CorrectionOperation, MeetingSegment, MeetingSpeaker } from "./meeting-types";
+  import { toErrorMessage } from "./errors";
   import type {
     MigrationStep,
     ProposalState,
@@ -101,12 +102,6 @@
     return busy || pendingAction !== null;
   }
 
-  function errorText(value: unknown): string {
-    if (typeof value === "string" && value.trim()) return value;
-    if (value instanceof Error && value.message) return value.message;
-    return "The requested meeting action failed. Your current review remains available.";
-  }
-
   async function runAction(name: string, action: () => Promise<boolean | void>): Promise<boolean> {
     if (isBusy()) return false;
     error = "";
@@ -115,7 +110,7 @@
     try {
       return (await action()) !== false;
     } catch (failure) {
-      error = errorText(failure);
+      error = toErrorMessage(failure, "The requested meeting action failed. Your current review remains available.");
       return false;
     } finally {
       pendingAction = null;

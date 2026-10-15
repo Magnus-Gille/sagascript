@@ -46,12 +46,16 @@ Rust command signatures (`src/lib/ipc-contract.generated.ts`, #347), so a handle
 an argument key or result shape the backend does not have.
 
 ```ts
-import { mockIpc } from "../test/ipc";
+import { backendError, mockIpc } from "../test/ipc";
 const ipc = mockIpc({
   get_settings: () => settings,
   set_language: ({ language }) => (language === "fi" ? ["Profile model reset to Auto"] : []),
   save_update_recovery: () => {
     throw "disk full"; // a Rust Err(String): the wrapper rejects with it
+  },
+  start_recording: () => {
+    // Result<T, CommandError> (ADR 0006): rejects with { code, message, retryable }
+    throw backendError("busy", "Sagascript is busy.", true);
   },
 });
 await runTheCodeUnderTest();
@@ -71,6 +75,11 @@ ipc.handle("get_platform", () => "windows"); // change an answer mid-test
   parameter rejects the call and fails the test the same way. A wrapper that still sends an
   argument key Rust renamed therefore fails Vitest, not only svelte-check. An `Option`
   parameter may be left out.
+- A fake rejects with what its Rust command rejects with: a string for `Result<T, String>`, a
+  `backendError(code, message)` for `Result<T, CommandError>` (`CommandMap[C]["error"]`,
+  `BACKEND_ERROR_COMMANDS`). The other shape fails the test, so a fake cannot keep an error
+  shape Rust no longer sends. The code under test branches on `isBackendError(error, code)`,
+  never on the message.
 - A new command: regenerate `CommandMap` (`SAGASCRIPT_BLESS_CONTRACTS=1 cargo test -p
   sagascript contract` in `src-tauri/`), then add the wrapper and its row in
   `src/lib/api.test.ts`, which checks every wrapper's command name, argument object and
@@ -164,10 +173,10 @@ over `src/`, and the Node scripts in `scripts/` and `tests/`. Prettier formats; 
 not.
 
 - `eslint-suppressions.json` records the 84 findings that existed when ESLint was introduced
-  (76 as of #362, which typed the event handlers), as counts per file and rule: 21 `no-explicit-any`
-  and most of the rest in the Settings,
-  Onboarding, FileTranscription and meeting components, one in `profile-shortcuts.ts`, the
-  others in `scripts/`. A new
+  (76 as of #362, which typed the event handlers; 55 as of #360, which removed the last
+  `any` annotations), as counts per file and rule: no `no-explicit-any` is left, and most of the
+  rest is in the Settings, Onboarding, FileTranscription and meeting components, one in
+  `profile-shortcuts.ts`, the others in `scripts/`. A new
   finding fails, also in a listed file. Fixing one makes ESLint ask for
   `npx eslint --prune-suppressions`; commit the smaller file. Do not run `--suppress-all`.
 - Two choices in the configuration itself: `no-regex-spaces` is off for `scripts/` and

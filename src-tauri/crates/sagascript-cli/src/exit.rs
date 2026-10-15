@@ -126,29 +126,12 @@ impl From<WriteError> for CliError {
     }
 }
 
-/// The error's variant in snake_case (`FileDecodeError` → `file_decode_error`),
-/// taken from the `kind` tag `DictationError` already serializes, so every
-/// variant has a code without a second list to keep in sync.
+/// The error's stable code, [`DictationError::code`]: the variant in
+/// snake_case (`FileDecodeError` → `file_decode_error`) or an engine failure's
+/// own `engine_*` code. The same function names the codes the GUI receives
+/// (ADR 0006), so there is one vocabulary and no second list to keep in sync.
 pub fn dictation_error_code(error: &DictationError) -> String {
-    let kind = serde_json::to_value(error)
-        .ok()
-        .and_then(|value| value.get("kind")?.as_str().map(str::to_owned))
-        .unwrap_or_default();
-    let mut code = String::with_capacity(kind.len() + 4);
-    for (index, character) in kind.chars().enumerate() {
-        if character.is_ascii_uppercase() {
-            if index > 0 {
-                code.push('_');
-            }
-            code.push(character.to_ascii_lowercase());
-        } else {
-            code.push(character);
-        }
-    }
-    if code.is_empty() {
-        code.push_str("error");
-    }
-    code
+    error.code().to_string()
 }
 
 /// How a command's machine-readable stdout is encoded, so an error object
@@ -277,6 +260,17 @@ mod tests {
             "microphone_permission_denied"
         );
         assert_eq!(code(DictationError::ModelBusy), "model_busy");
+        assert_eq!(code(DictationError::Cancelled), "cancelled");
+        assert_eq!(
+            code(DictationError::FileNotFound("x".into())),
+            "file_not_found"
+        );
+        // An engine failure reports the engine's own code, the one the app
+        // sends to the GUI (ADR 0006).
+        assert_eq!(
+            code(DictationError::engine("engine_model_missing", false, "x")),
+            "engine_model_missing"
+        );
         assert_eq!(
             CliError::CheckFailed(DictationError::SettingsError("x".into())).code(),
             "check_failed"
@@ -331,7 +325,7 @@ mod tests {
     fn cancellation_wins_and_keeps_its_signal_status() {
         for signal_code in [130, 143] {
             let (out, captured) = Out::capture();
-            let error = DictationError::TranscriptionFailed("Cancelled".into());
+            let error = DictationError::Cancelled;
             let exit = conclude(Err(error.into()), None, &out, Some(signal_code));
             assert_eq!(exit.code(), u8::try_from(signal_code).unwrap());
             assert_eq!(captured.stderr(), "Cancelled\n");

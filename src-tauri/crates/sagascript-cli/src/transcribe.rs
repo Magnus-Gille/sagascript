@@ -286,9 +286,7 @@ pub struct MeetingControl<'a> {
 impl MeetingControl<'_> {
     pub fn check(&self) -> Result<(), DictationError> {
         if self.cancellation.load(Ordering::Acquire) {
-            return Err(DictationError::TranscriptionFailed(
-                "Meeting transcription cancelled".to_string(),
-            ));
+            return Err(DictationError::Cancelled);
         }
         Ok(())
     }

@@ -15,10 +15,12 @@ const TRANSCRIPTION_TIMEOUT_SECS: u64 = 60;
 const ABORT_GRACE_SECS: u64 = 5;
 
 use crate::app_controller::{AppController, AppState, StopRecordingOutcome};
+use crate::command_error::CommandError;
 use crate::events::{EmitEvent, PlainPhase, UiState};
 use crate::hotkey::configuration::HotkeyChange;
 use crate::hotkey::{HotkeyHealth, HotkeyStatus, OperationalHotkey};
 use sagascript_core::audio::decoder;
+use sagascript_core::error::DictationError;
 use sagascript_core::settings::{
     validate_hotkey, FileModel, FileModelPreference, HotkeyMode, HotkeyProfile, Language, Settings,
     WhisperModel,
@@ -372,7 +374,8 @@ pub async fn set_profile_model(
     model_id: String,
 ) -> Result<(), String> {
     let preference = FileModelPreference::parse_id(&model_id)?;
-    let _recording_lease = acquire_hotkey_configuration(&controller)?;
+    let _recording_lease =
+        acquire_hotkey_configuration(&controller).map_err(|error| error.to_string())?;
     let persisted = sagascript_core::settings::store::try_update(|settings| {
         settings.set_profile_model(&profile_id, preference)
     })?;
@@ -419,7 +422,7 @@ pub async fn set_hotkey_mode(
     controller: State<'_, SharedController>,
     health: State<'_, HotkeyHealth>,
     mode: HotkeyMode,
-) -> Result<(), String> {
+) -> Result<(), CommandError> {
     apply_hotkey_change(app, controller, health, HotkeyChange::Mode(mode)).map(|_| ())
 }
 
@@ -429,8 +432,8 @@ pub async fn set_hotkey(
     controller: State<'_, SharedController>,
     health: State<'_, HotkeyHealth>,
     shortcut: String,
-) -> Result<(), String> {
-    validate_hotkey(&shortcut)?;
+) -> Result<(), CommandError> {
+    validate_hotkey(&shortcut).map_err(CommandError::HotkeyInvalid)?;
     let mut profiles = lock_controller(&controller)
         .settings()
         .resolved_hotkey_profiles();
@@ -450,7 +453,7 @@ pub async fn set_hotkey_profiles(
     controller: State<'_, SharedController>,
     health: State<'_, HotkeyHealth>,
     profiles: Vec<HotkeyProfile>,
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<String>, CommandError> {
     apply_hotkey_change(app, controller, health, HotkeyChange::Profiles(profiles))
 }
 
@@ -464,9 +467,11 @@ impl Drop for HotkeyConfigurationLease<'_> {
 
 pub(crate) fn acquire_hotkey_configuration(
     controller: &SharedController,
-) -> Result<HotkeyConfigurationLease<'_>, String> {
+) -> Result<HotkeyConfigurationLease<'_>, CommandError> {
     if !lock_controller(controller).begin_hotkey_configuration_change() {
-        return Err("Finish or cancel the active dictation before changing shortcuts".into());
+        return Err(CommandError::Busy(
+            "Finish or cancel the active dictation before changing shortcuts".into(),
+        ));
     }
     Ok(HotkeyConfigurationLease(controller))
 }
@@ -476,21 +481,22 @@ fn apply_hotkey_change(
     controller: State<'_, SharedController>,
     health: State<'_, HotkeyHealth>,
     update: HotkeyChange,
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<String>, CommandError> {
     let _transition = health.transition_guard();
     let _recording_lease = acquire_hotkey_configuration(&controller)?;
     let old_settings = lock_controller(&controller).settings().clone();
-    let (candidate, notices) =
-        update.prepare_with_notices(&sagascript_core::settings::store::load())?;
+    let (candidate, notices) = update
+        .prepare_with_notices(&sagascript_core::settings::store::load())
+        .map_err(CommandError::HotkeyInvalid)?;
     let new_shortcuts = candidate.resolved_shortcuts();
     let new_primary = candidate.hotkey.clone();
     let old_shortcut = old_settings.hotkey.clone();
     let old_operational = health.operational_hotkey();
     if old_operational == OperationalHotkey::Unknown {
-        return Err(
+        return Err(CommandError::HotkeyChangeFailed(
             "Hotkey registration state is unknown after an earlier OS error; restart Sagascript before changing profiles"
                 .to_string(),
-        );
+        ));
     }
 
     let old_shortcuts = old_settings.resolved_shortcuts();
@@ -500,7 +506,8 @@ fn apply_hotkey_change(
     {
         let persisted = sagascript_core::settings::store::try_update(|settings| {
             update.apply_registered(settings, &new_shortcuts)
-        })?;
+        })
+        .map_err(CommandError::HotkeyChangeFailed)?;
         lock_controller(&controller).update_settings(persisted.clone());
         let change = health.record(&new_primary, None, old_operational);
         if change.changed {
@@ -529,7 +536,9 @@ fn apply_hotkey_change(
                     &change.status,
                 );
             }
-            return Err(format!("Failed to unregister active hotkeys: {error}"));
+            return Err(CommandError::HotkeyChangeFailed(format!(
+                "Failed to unregister active hotkeys: {error}"
+            )));
         }
     }
 
@@ -546,9 +555,9 @@ fn apply_hotkey_change(
                     &change.status,
                 );
             }
-            return Err(format!(
+            return Err(CommandError::HotkeyChangeFailed(format!(
                 "Failed to register hotkey profiles: {error}; cleanup failed: {cleanup_error}"
-            ));
+            )));
         }
         let change = match &old_operational {
             OperationalHotkey::Registered(old_shortcuts) => match crate::hotkey::register_shortcuts(&app, old_shortcuts) {
@@ -574,7 +583,9 @@ fn apply_hotkey_change(
                 &change.status,
             );
         }
-        return Err(format!("Failed to register hotkey profiles: {error}"));
+        return Err(CommandError::HotkeyChangeFailed(format!(
+            "Failed to register hotkey profiles: {error}"
+        )));
     }
 
     health.record(
@@ -625,7 +636,9 @@ fn apply_hotkey_change(
                     &change.status,
                 );
             }
-            return Err(format!("Failed to persist hotkey profiles: {save_error}"));
+            return Err(CommandError::HotkeyChangeFailed(format!(
+                "Failed to persist hotkey profiles: {save_error}"
+            )));
         }
     };
 
@@ -672,7 +685,7 @@ pub async fn retry_hotkey_registration(
     app: tauri::AppHandle,
     controller: State<'_, SharedController>,
     health: State<'_, HotkeyHealth>,
-) -> Result<(), String> {
+) -> Result<(), CommandError> {
     #[cfg(target_os = "macos")]
     if !crate::hotkey::bare_function_key_monitor_installed() {
         let app_for_install = app.clone();
@@ -709,7 +722,7 @@ pub async fn hotkey_status(health: State<'_, HotkeyHealth>) -> Result<HotkeyStat
 // -- Recording --
 
 #[tauri::command]
-pub async fn start_recording(controller: State<'_, SharedController>) -> Result<(), String> {
+pub async fn start_recording(controller: State<'_, SharedController>) -> Result<(), CommandError> {
     let mut ctrl = lock_controller(&controller);
     gui_start_recording_result(ctrl.start_recording())
 }
@@ -718,7 +731,7 @@ pub async fn start_recording(controller: State<'_, SharedController>) -> Result<
 pub async fn start_training_recording(
     controller: State<'_, SharedController>,
     profile_id: String,
-) -> Result<(), String> {
+) -> Result<(), CommandError> {
     let mut ctrl = lock_controller(&controller);
     ensure_known_profile(ctrl.settings(), &profile_id)?;
     let profile = ctrl
@@ -730,16 +743,14 @@ pub async fn start_training_recording(
     gui_start_recording_result(ctrl.start_training_recording_for_profile(profile))
 }
 
-fn gui_start_recording_result(
-    result: Result<bool, sagascript_core::error::DictationError>,
-) -> Result<(), String> {
+fn gui_start_recording_result(result: Result<bool, DictationError>) -> Result<(), CommandError> {
     match result {
         Ok(true) => Ok(()),
-        Ok(false) => Err(
+        Ok(false) => Err(CommandError::Busy(
             "Cannot start recording while Sagascript is busy. Stop the current recording or wait for transcription to finish."
                 .to_string(),
-        ),
-        Err(error) => Err(error.to_string()),
+        )),
+        Err(error) => Err(error.into()),
     }
 }
 
@@ -747,7 +758,7 @@ fn gui_start_recording_result(
 pub async fn stop_and_transcribe(
     controller: State<'_, SharedController>,
     whisper: State<'_, SharedWhisper>,
-) -> Result<String, String> {
+) -> Result<String, CommandError> {
     stop_and_transcribe_impl(controller, whisper, true)
         .await
         .map(|transcript| transcript.effective_text)
@@ -763,18 +774,18 @@ pub struct TrainingTranscript {
 pub async fn stop_and_transcribe_training(
     controller: State<'_, SharedController>,
     whisper: State<'_, SharedWhisper>,
-) -> Result<TrainingTranscript, String> {
+) -> Result<TrainingTranscript, CommandError> {
     stop_and_transcribe_impl(controller, whisper, false).await
 }
 
-fn not_recording_result(allow_empty: bool) -> Result<TrainingTranscript, String> {
+fn not_recording_result(allow_empty: bool) -> Result<TrainingTranscript, CommandError> {
     if allow_empty {
         Ok(TrainingTranscript {
             raw_text: String::new(),
             effective_text: String::new(),
         })
     } else {
-        Err("No training recording is active".to_string())
+        Err(CommandError::NotRecording)
     }
 }
 
@@ -782,7 +793,7 @@ async fn stop_and_transcribe_impl(
     controller: State<'_, SharedController>,
     whisper: State<'_, SharedWhisper>,
     allow_empty_not_recording: bool,
-) -> Result<TrainingTranscript, String> {
+) -> Result<TrainingTranscript, CommandError> {
     let (audio, language, effective_model, opts, glossary, use_pianissimo) = {
         let mut ctrl = lock_controller(&controller);
         // A late/duplicate normal stop racing the hotkey path remains an
@@ -795,7 +806,7 @@ async fn stop_and_transcribe_impl(
             }
             // Capture/resample failure (finding 4): the controller already
             // recorded the error and returned to Idle; surface the real error.
-            StopRecordingOutcome::Failed(msg) => return Err(msg),
+            StopRecordingOutcome::Failed(error) => return Err(error.into()),
             StopRecordingOutcome::Stopped(audio) => audio,
         };
         let language = ctrl.language();
@@ -808,7 +819,7 @@ async fn stop_and_transcribe_impl(
                 Ok(choice) => choice,
                 Err(error) => {
                     let completion = ctrl.finish_transcription(Err(error.clone()));
-                    return Err(completion.err().unwrap_or(error));
+                    return Err(completion.err().unwrap_or(error).into());
                 }
             };
         let opts = build_transcribe_options_for_profile(ctrl.settings(), Some(&profile_id));
@@ -825,9 +836,11 @@ async fn stop_and_transcribe_impl(
     };
 
     if audio.is_empty() {
-        let error = "No audio captured".to_string();
-        let completion = lock_controller(&controller).finish_transcription(Err(error.clone()));
-        return Err(completion.err().unwrap_or(error));
+        let error = DictationError::NoAudioCaptured;
+        // The controller records the text and returns to Idle; the caller gets
+        // the typed error.
+        let _ = lock_controller(&controller).finish_transcription(Err(error.to_string()));
+        return Err(error.into());
     }
 
     // Every outcome after recording stops must flow through
@@ -874,9 +887,12 @@ async fn stop_and_transcribe_impl(
                         Duration::from_secs_f64(timings.inference_ms / 1000.0),
                     );
                 }
-                result.map_err(|error| error.to_string())
+                result.map_err(CommandError::from)
             }
-            Ok(Err(error)) => Err(format!("Transcription task failed: {error}")),
+            Ok(Err(error)) => Err(DictationError::TaskFailed(format!(
+                "Transcription task failed: {error}"
+            ))
+            .into()),
             Err(_) => {
                 warn!("Transcription timed out after {TRANSCRIPTION_TIMEOUT_SECS}s — requesting abort");
                 live_backend.request_abort();
@@ -891,9 +907,10 @@ async fn stop_and_transcribe_impl(
                          report ModelBusy rather than block forever"
                     ),
                 }
-                Err(format!(
+                Err(DictationError::TranscriptionTimedOut(format!(
                     "Transcription timed out after {TRANSCRIPTION_TIMEOUT_SECS}s (inference aborted)"
                 ))
+                .into())
             }
         }
     };
@@ -910,8 +927,10 @@ async fn stop_and_transcribe_impl(
     let completion = training_result
         .as_ref()
         .map(|transcript| transcript.effective_text.clone())
-        .map_err(Clone::clone);
-    lock_controller(&controller).finish_transcription(completion)?;
+        .map_err(ToString::to_string);
+    // The controller keeps the text for `get_last_error`; the caller gets the
+    // typed error (finish_transcription only echoes what it was given).
+    let _ = lock_controller(&controller).finish_transcription(completion);
     training_result
 }
 
@@ -923,16 +942,15 @@ pub async fn transcribe_training_file(
     activity: State<'_, Arc<crate::update_activity::UpdateActivity>>,
     file_path: String,
     profile_id: String,
-) -> Result<TrainingTranscript, String> {
+) -> Result<TrainingTranscript, CommandError> {
     let _work_lease = activity.begin_work()?;
 
     let path = std::path::PathBuf::from(file_path);
     let audio = tokio::task::spawn_blocking(move || decoder::decode_audio_file(&path))
         .await
-        .map_err(|error| format!("Decode task failed: {error}"))?
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| DictationError::TaskFailed(format!("Decode task failed: {error}")))??;
     if audio.is_empty() {
-        return Err("No audio decoded from file".to_string());
+        return Err(DictationError::FileDecodeError("No audio decoded from file".into()).into());
     }
 
     let (language, effective_model, opts, glossary, use_pianissimo) = {
@@ -996,15 +1014,18 @@ pub async fn transcribe_training_file(
     });
 
     let result = match tokio::time::timeout(timeout, &mut task).await {
-        Ok(Ok(result)) => result.map_err(|error| error.to_string()),
-        Ok(Err(error)) => Err(format!("Transcription task failed: {error}")),
+        Ok(Ok(result)) => result.map_err(CommandError::from),
+        Ok(Err(error)) => {
+            Err(DictationError::TaskFailed(format!("Transcription task failed: {error}")).into())
+        }
         Err(_) => {
             live_backend.request_abort();
             let _ = tokio::time::timeout(Duration::from_secs(ABORT_GRACE_SECS), &mut task).await;
-            Err(format!(
+            Err(DictationError::TranscriptionTimedOut(format!(
                 "Training transcription timed out after {}s",
                 timeout.as_secs()
             ))
+            .into())
         }
     };
     let _ = app.emit_event(crate::events::event::STATE_CHANGED, UiState::Idle);
@@ -1271,23 +1292,22 @@ pub async fn set_initial_prompt(
     controller: State<'_, SharedController>,
     prompt: String,
     expected_source: Option<String>,
-) -> Result<(), String> {
+) -> Result<(), CommandError> {
     let profile_id = lock_controller(&controller).settings().default_profile().id;
     set_profile_glossary(controller, profile_id, prompt, expected_source).await
 }
 
-const DICTIONARY_CHANGED_ELSEWHERE_PREFIX: &str = "Dictionary changed elsewhere:";
-
+/// Compare-and-set guard of a dictionary save: the stored source must still be
+/// the one the editor read. The frontend branches on this error's code
+/// (`dictionary_changed_elsewhere`), never on its text.
 fn ensure_expected_dictionary_source(
     current_source: &str,
     expected_source: Option<&str>,
-) -> Result<(), String> {
+) -> Result<(), CommandError> {
     if expected_source.is_some_and(|expected| {
         !sagascript_core::settings::store::glossary_sources_match(expected, current_source)
     }) {
-        return Err(format!(
-            "{DICTIONARY_CHANGED_ELSEWHERE_PREFIX} the persisted source no longer matches the editor baseline"
-        ));
+        return Err(CommandError::DictionaryChangedElsewhere);
     }
     Ok(())
 }
@@ -1367,7 +1387,7 @@ fn set_profile_glossary_in(
     profile_id: &str,
     source: String,
     expected_source: Option<&str>,
-) -> Result<(), String> {
+) -> Result<(), CommandError> {
     ensure_known_profile(settings, profile_id)?;
     let auto_language = settings
         .resolved_hotkey_profiles()
@@ -1401,9 +1421,12 @@ pub async fn set_profile_glossary(
     profile_id: String,
     source: String,
     expected_source: Option<String>,
-) -> Result<(), String> {
+) -> Result<(), CommandError> {
     let source_len = source.chars().count();
     let mut conflict_source = None;
+    // The settings store reports failures as strings (typed in #360 part 2), so
+    // the typed error is carried out of the closure beside the string.
+    let mut rejection: Option<CommandError> = None;
     let persisted = sagascript_core::settings::store::try_update(|settings| {
         let current_source = expected_source
             .as_ref()
@@ -1411,10 +1434,12 @@ pub async fn set_profile_glossary(
         match set_profile_glossary_in(settings, &profile_id, source, expected_source.as_deref()) {
             Ok(()) => Ok(()),
             Err(error) => {
-                if error.starts_with(DICTIONARY_CHANGED_ELSEWHERE_PREFIX) {
+                if matches!(error, CommandError::DictionaryChangedElsewhere) {
                     conflict_source = current_source;
                 }
-                Err(error)
+                let text = error.to_string();
+                rejection = Some(error);
+                Err(text)
             }
         }
     });
@@ -1436,7 +1461,7 @@ pub async fn set_profile_glossary(
                     persisted_source,
                 );
             }
-            Err(error)
+            Err(rejection.unwrap_or_else(|| CommandError::from(error)))
         }
     }
 }
@@ -1536,7 +1561,7 @@ pub async fn suggest_training_glossary(
     heard: String,
     corrected: String,
     profile_id: String,
-) -> Result<Vec<GlossarySuggestion>, String> {
+) -> Result<Vec<GlossarySuggestion>, CommandError> {
     let settings = sagascript_core::settings::store::load();
     ensure_learning_profile(&settings, &profile_id)?;
     let glossary = Glossary::parse(&settings.effective_glossary_source(Some(&profile_id)));
@@ -1550,9 +1575,9 @@ pub async fn apply_training_glossary(
     corrected: String,
     profile_id: String,
     accepted: Vec<GlossarySuggestion>,
-) -> Result<(), String> {
+) -> Result<(), CommandError> {
     if accepted.is_empty() {
-        return Err("Select at least one dictionary suggestion".to_string());
+        return Err("Select at least one dictionary suggestion".into());
     }
 
     let accepted_count = accepted.len();
@@ -1930,7 +1955,7 @@ pub async fn transcribe_file(
     profile_id: Option<String>,
     run_id: Option<String>,
     auto_paste: Option<bool>,
-) -> Result<String, String> {
+) -> Result<String, CommandError> {
     let activity = activity.inner().clone();
     let _work_lease = activity.begin_work()?;
     let result_id = run_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
@@ -2026,11 +2051,10 @@ pub async fn transcribe_file(
     // Legacy diarized command path. The GUI uses the meeting-job API instead.
     let audio = tokio::task::spawn_blocking(move || decoder::decode_audio_file(&path))
         .await
-        .map_err(|error| format!("Decode task failed: {error}"))?
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| DictationError::TaskFailed(format!("Decode task failed: {error}")))??;
 
     if audio.is_empty() {
-        return Err("No audio decoded from file".to_string());
+        return Err(DictationError::FileDecodeError("No audio decoded from file".into()).into());
     }
 
     // File transcription (beam search / diarization) is far slower than live
@@ -2066,7 +2090,7 @@ pub async fn transcribe_file(
         for diarization_model in DiarizationModel::ALL {
             if let Err(error) = download_diarization_model(*diarization_model, |_, _| {}).await {
                 let _ = app.emit_event(crate::events::event::STATE_CHANGED, UiState::Idle);
-                return Err(error.to_string());
+                return Err(error.into());
             }
         }
 
@@ -2108,11 +2132,11 @@ pub async fn transcribe_file(
             Ok((Ok(Ok(spk)), Ok(Ok(trx)))) => (spk, trx),
             Ok((Ok(Err(e)), _)) | Ok((_, Ok(Err(e)))) => {
                 let _ = app.emit_event(crate::events::event::STATE_CHANGED, UiState::Idle);
-                return Err(e.to_string());
+                return Err(e.into());
             }
             Ok((Err(e), _)) | Ok((_, Err(e))) => {
                 let _ = app.emit_event(crate::events::event::STATE_CHANGED, UiState::Idle);
-                return Err(format!("Task join error: {e}"));
+                return Err(DictationError::TaskFailed(format!("Task join error: {e}")).into());
             }
             Err(_) => {
                 // Real abort: releases the whisper warm-state lock so the next
@@ -2139,10 +2163,11 @@ pub async fn transcribe_file(
                     ),
                 }
                 let _ = app.emit_event(crate::events::event::STATE_CHANGED, UiState::Idle);
-                return Err(format!(
+                return Err(DictationError::TranscriptionTimedOut(format!(
                     "Transcription timed out after {}s (inference aborted)",
                     timeout.as_secs()
-                ));
+                ))
+                .into());
             }
         };
 
@@ -2243,7 +2268,9 @@ pub async fn transcribe_file(
         Ok(Ok(r)) => r,
         Ok(Err(e)) => {
             let _ = app.emit_event(crate::events::event::STATE_CHANGED, UiState::Idle);
-            return Err(format!("Transcription task failed: {e}"));
+            return Err(
+                DictationError::TaskFailed(format!("Transcription task failed: {e}")).into(),
+            );
         }
         Err(_) => {
             warn!(
@@ -2262,10 +2289,11 @@ pub async fn transcribe_file(
                 ),
             }
             let _ = app.emit_event(crate::events::event::STATE_CHANGED, UiState::Idle);
-            return Err(format!(
+            return Err(DictationError::TranscriptionTimedOut(format!(
                 "Transcription timed out after {}s (inference aborted)",
                 timeout.as_secs()
-            ));
+            ))
+            .into());
         }
     };
 
@@ -2297,7 +2325,7 @@ pub async fn transcribe_file(
 
             Ok(text)
         }
-        Err(e) => Err(e.to_string()),
+        Err(e) => Err(e.into()),
     }
 }
 
