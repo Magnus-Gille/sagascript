@@ -2,9 +2,10 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, dirname, join, posix } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { importGraph } from "./lib/import-graph.mjs";
 import { isProcessAlive } from "./lib/process-tree.mjs";
 import { GROUP_NPM_PACKAGES, TEST_GROUPS } from "./node-test-groups.mjs";
 import { classificationProblems, discoverTestFiles } from "./run-frontend-tests.mjs";
@@ -90,29 +91,22 @@ test("the real manifest classifies every Node test file exactly once", () => {
 });
 
 test("each group declares the npm packages its tests import", () => {
-  // Static, side-effect and dynamic imports of a bare package specifier.
-  const bareImport = /\bfrom\s*["']([@a-z][\w@./:-]*)["']|\bimport\s*\(?\s*["']([@a-z][\w@./:-]*)["']/g;
-  const relativeImport = /\bfrom\s*["'](\.{1,2}\/[^"']+\.mjs)["']/g;
   // A test needs the packages of the repository modules it imports as well (scripts/lib/ci-workflow.mjs
   // reads the workflows with `yaml`, #358), so relative imports are followed.
-  function collect(file, imported, seen) {
-    if (seen.has(file)) return;
-    seen.add(file);
-    // Comments that mention imports (`import "name"`) are not imports.
-    const source = readFileSync(join(repoRoot, file), "utf8").replace(/\/\*[\s\S]*?\*\/|^\s*\/\/.*$/gm, "");
-    for (const match of source.matchAll(bareImport)) {
-      const specifier = match[1] ?? match[2];
-      if (specifier.startsWith("node:")) continue;
-      imported.add(specifier.startsWith("@") ? specifier.split("/").slice(0, 2).join("/") : specifier.split("/")[0]);
-    }
-    for (const match of source.matchAll(relativeImport))
-      collect(posix.normalize(posix.join(posix.dirname(file), match[1])), imported, seen);
-  }
   for (const [group, files] of Object.entries(TEST_GROUPS)) {
-    const imported = new Set();
-    for (const file of files) collect(file, imported, new Set());
+    const imported = new Set(files.flatMap((file) => [...importGraph(file, repoRoot).packages]));
     assert.deepEqual([...imported].sort(), [...(GROUP_NPM_PACKAGES[group] ?? [])].sort(), `group ${group}`);
   }
+});
+
+test("the import graph follows relative imports through any depth, in every spelling, and ignores comments", () => {
+  // scripts/fixtures/import-graph: entry -> lib/one -> lib/two (dynamic import) -> lib/three (side-effect imports).
+  const root = join(repoRoot, "scripts/fixtures/import-graph");
+  const { packages, files } = importGraph("entry.mjs", root);
+  assert.deepEqual([...packages].sort(), ["@scope/pkg", "yaml"]);
+  assert.deepEqual([...files].sort(), ["entry.mjs", "lib/one.mjs", "lib/three.mjs", "lib/two.mjs"]);
+  // A cycle terminates, and a file with no package imports reaches none.
+  assert.deepEqual([...importGraph("cycle-b.mjs", root).packages], []);
 });
 
 test("npm run test:code-health runs exactly the codeHealth group from scripts/", () => {

@@ -4,6 +4,7 @@ name: CI
 # scripts/ci/cargo-gates.mjs (THE list of cargo gates; per-OS exclusions are documented there),
 # scripts/ci/smoke-cli.mjs and scripts/ci/assert-lanes.mjs (the check-* aggregators). Branch
 # protection requires check-macos and check-windows by name: keep both, `needs:` every lane of their OS.
+# assert-lanes.mjs comes from the PR checkout, at the trust level of this file itself (contents: read, no secrets).
 #
 # Windows tests have one owner on a pull request: test-windows (x64), the required lane.
 # windows-package.yml does not repeat `cargo test --workspace` and `cargo clippy --workspace` there
@@ -148,7 +149,7 @@ jobs:
         uses: ./.github/actions/setup
         with:
           cache-key: sagascript-ci-native
-          models: "true"
+          native-build: "true"
       - name: Build frontend
         run: npm run build
       # The smoke tests need the binary, not an installer (packaging: release.yml).
@@ -311,7 +312,7 @@ jobs:
         uses: ./.github/actions/setup
         with:
           cache-key: sagascript-ci-native
-          models: "true"
+          native-build: "true"
       - name: Build frontend
         run: npm run build
       # The smoke tests need the binary, not an installer; packaging stays gated in release.yml.

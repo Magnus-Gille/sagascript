@@ -6,10 +6,12 @@ import { fileURLToPath } from "node:url";
 import { actionInput, commandLines, gateInvocation, loadAction, loadWorkflow, parseWorkflow } from "./lib/ci-workflow.mjs";
 import { gatesFor } from "./ci/cargo-gates.mjs";
 import { laneProblems } from "./ci/assert-lanes.mjs";
+import { importGraph } from "./lib/import-graph.mjs";
 
 // The parallel lanes of ci.yml (#358): what each one needs, how the shared setup action and the
 // aggregators are wired, and that the aggregators fail closed. The workflow is parsed, not matched.
 
+const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 const workflow = loadWorkflow();
 const ASSERT_LANES = fileURLToPath(new URL("./ci/assert-lanes.mjs", import.meta.url));
 const SCOPE_CONDITION = "${{ needs.scope.result == 'success' && needs.scope.outputs.docs_only != 'true' }}";
@@ -178,22 +180,38 @@ test("every lane that runs Python selects the supported runtime first", () => {
   assert.equal(actionInput(action, setupStep(workflow.job("msrv-linux")), "python"), "false");
 });
 
-test("the Rust cache key follows the gate list: rust-cache saves only under a new key, so new gates need one to get cached", () => {
-  const cache = loadAction("setup").steps.find((step) => step.uses?.startsWith("Swatinem/rust-cache@"));
-  assert.equal(cache.with["shared-key"], "${{ inputs.cache-key }}-${{ hashFiles('scripts/ci/cargo-gates.mjs') }}");
+test("the Rust cache key follows the gate list for the lanes that run gates, and for no other lane", () => {
+  // rust-cache saves only under a new key, so a changed gate list needs one to get its artifacts cached; a lane
+  // that never runs the gates (the native build lanes) must not lose its cache to a gate change.
+  const action = loadAction("setup");
+  const cache = action.steps.find((step) => step.uses?.startsWith("Swatinem/rust-cache@"));
+  assert.equal(
+    cache.with["shared-key"],
+    "${{ inputs.cache-key }}${{ inputs.native-build != 'true' && format('-{0}', hashFiles('scripts/ci/cargo-gates.mjs')) || '' }}",
+  );
+  for (const id of LANES) {
+    const job = workflow.job(id);
+    const runsGates = job.steps.some((step) => gateInvocation(step));
+    const nativeBuild = actionInput(action, setupStep(job), "native-build") === "true";
+    assert.equal(
+      nativeBuild,
+      !runsGates,
+      `${id}: ${runsGates ? "runs the cargo gates, so its cache key must carry their hash" : "runs no gate, so its cache key must not"}`,
+    );
+  }
 });
 
 test("only the native build lanes cache downloaded models", () => {
   const action = loadAction("setup");
   for (const id of LANES) {
     assert.equal(
-      actionInput(action, setupStep(workflow.job(id)), "models"),
+      actionInput(action, setupStep(workflow.job(id)), "native-build"),
       id.startsWith("build-") ? "true" : "false",
-      `${id}: model cache`,
+      `${id}: native build`,
     );
   }
   const step = action.steps.find((candidate) => candidate.name === "Cache downloaded models");
-  assert.equal(step.condition, "${{ inputs.models == 'true' }}");
+  assert.equal(step.condition, "${{ inputs.native-build == 'true' }}");
   for (const source of ["settings/manager.rs", "transcription/model.rs", "diarization/model.rs"]) {
     assert.ok(step.with.key.includes(`sagascript-core/src/${source}`), `the model cache key hashes ${source}`);
   }
@@ -233,15 +251,19 @@ test("test-windows runs the build identity gates before npm ci and any Cargo wor
     "the action must not run npm ci ahead of the identity gates",
   );
   assert.ok(install > identity && gates > install, "npm ci follows the identity gates; Cargo work follows npm ci");
-  // They run before node_modules exists, so they and what they import must not need it.
-  for (const file of [
-    "test-ci-build-identity",
-    "test-windows-release-identity",
-    "test-windows-package-workflow",
-    "test-release-promotion",
-  ]) {
-    const source = readFileSync(new URL(`./${file}.mjs`, import.meta.url), "utf8");
-    assert.ok(!/from "yaml"|ci-workflow\.mjs/.test(source), `${file}.mjs runs before npm ci and must not import the YAML reader`);
+  // They run before node_modules exists, so neither they nor anything they import, however indirectly,
+  // may need an npm package (the YAML reader of scripts/lib/ci-workflow.mjs is one).
+  const files = commandLines(steps[identity])
+    .find((line) => line.startsWith("node --test "))
+    .split(/\s+/)
+    .slice(2);
+  assert.ok(
+    files.length >= 4 && files.every((file) => /^scripts\/test-[\w-]+\.mjs$/.test(file)),
+    `the identity step runs test files: ${files}`,
+  );
+  for (const file of files) {
+    const { packages } = importGraph(file, repoRoot);
+    assert.deepEqual([...packages], [], `${file} runs before npm ci but its imports reach npm packages`);
   }
 });
 

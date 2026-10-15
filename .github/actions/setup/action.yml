@@ -21,15 +21,18 @@ inputs:
   cache-key:
     description: >-
       Swatinem/rust-cache shared-key. Lanes that compile alike share one; rust-cache keeps OS and target
-      entries apart. The hash of scripts/ci/cargo-gates.mjs is appended: the cache holds what the gates
-      compile, and rust-cache saves only when its key is new, so a changed gate list needs a new key to
-      get its artifacts cached.
+      entries apart. Unless `native-build` is set, the hash of scripts/ci/cargo-gates.mjs is appended: the
+      cache holds what the gates compile, and rust-cache saves only when its key is new, so a changed gate
+      list needs a new key to get its artifacts cached.
     required: true
   cache-workspaces:
     description: Cargo workspaces to cache, one per line. The standalone ORT engine host is its own workspace (#357).
     default: src-tauri
-  models:
-    description: Cache the models the CLI smoke tests download (macOS and Windows build lanes).
+  native-build:
+    description: >-
+      The lane builds the native release binary and runs the CLI smoke tests (the macOS and Windows build
+      lanes): it caches the models they download, and its Rust cache key leaves out the gate list, which
+      such a lane never runs, so a gate change does not evict its cache.
     default: "false"
   linux-deps:
     description: Install the Tauri system libraries and xdotool with apt (Linux lanes that compile the app crate).
@@ -83,9 +86,9 @@ runs:
       uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       with:
         workspaces: ${{ inputs.cache-workspaces }}
-        shared-key: ${{ inputs.cache-key }}-${{ hashFiles('scripts/ci/cargo-gates.mjs') }}
+        shared-key: ${{ inputs.cache-key }}${{ inputs.native-build != 'true' && format('-{0}', hashFiles('scripts/ci/cargo-gates.mjs')) || '' }}
 
-    - if: ${{ inputs.models == 'true' }}
+    - if: ${{ inputs.native-build == 'true' }}
       name: Cache downloaded models
       uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
       with:
