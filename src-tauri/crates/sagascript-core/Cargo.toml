@@ -48,7 +48,7 @@ kodama = { version = "0.2", optional = true }
 ndarray = { version = "0.17", optional = true }
 
 # fsync(2) as the fallback for volumes that reject F_FULLFSYNC, which is all
-# std's `sync_all` does on Apple platforms (download.rs). Already in the graph.
+# std's `sync_all` does on Apple platforms (fsutil.rs). Already in the graph.
 [target.'cfg(target_vendor = "apple")'.dependencies]
 libc = "0.2"
 
@@ -78,6 +78,8 @@ test-support = []
 
 [dev-dependencies]
 sagascript-testsupport = { path = "../sagascript-testsupport" }
+# Captures the log lines a test expects (fsutil's warn-versus-debug choices).
+tracing-subscriber = "0.3"
 
 [lints]
 workspace = true

@@ -723,8 +723,10 @@ pub fn transcribe_meeting_file_with_control(
 }
 
 /// Run a full diarized meeting recomputation. This path never reads an
-/// existing cache; an optional output is committed only if its destination
-/// does not already exist.
+/// existing cache. An optional `cache_output` is written complete, and only if
+/// nothing exists there. It is a private staging path: the reprocessing
+/// orchestration publishes the cache at the user's destination after it has
+/// validated the run (#342), so this function never creates a user-visible file.
 #[cfg(feature = "diarization")]
 #[allow(clippy::too_many_arguments)]
 pub fn transcribe_meeting_file_full(
@@ -1951,13 +1953,21 @@ fn transcribe_file(
                             config.exclusive_speech_embeddings,
                         );
                     match cache_policy {
-                        CachePolicy::Normal => crate::diarization_cache::save(path, &cache)?,
+                        CachePolicy::Normal => {
+                            crate::diarization_cache::save(path, &cache)?;
+                            performance.cache_write_seconds =
+                                cache_write_started.elapsed().as_secs_f64();
+                            errln!(out, "Saved reusable diarization cache: {}", path.display());
+                        }
+                        // `path` is a private staging path: the reprocessing
+                        // caller publishes the cache (and says so) only after
+                        // validating the whole run (#342).
                         CachePolicy::RefreshNew => {
-                            crate::diarization_cache::save_new(path, &cache)?
+                            crate::diarization_cache::save_new(path, &cache)?;
+                            performance.cache_write_seconds =
+                                cache_write_started.elapsed().as_secs_f64();
                         }
                     }
-                    performance.cache_write_seconds = cache_write_started.elapsed().as_secs_f64();
-                    errln!(out, "Saved reusable diarization cache: {}", path.display());
                 }
 
                 (
