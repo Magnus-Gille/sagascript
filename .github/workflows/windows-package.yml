@@ -207,7 +207,7 @@ jobs:
           shared-key: windows-package-${{ matrix.architecture }}-${{ steps.windows-image.outputs.image_os }}-${{ steps.windows-image.outputs.image_version }}-${{ hashFiles('.github/workflows/windows-package.yml', 'scripts/cmake/windows-x64-portable.cmake', 'scripts/cmake/windows-arm64-native.cmake', 'scripts/verify-windows-x64-cpu-policy.ps1') }}
 
       - name: Install Node.js
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           cache: npm
