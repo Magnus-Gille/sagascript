@@ -1,6 +1,7 @@
 //! One spawned host process: JSON-Lines transport and response routing.
 
 use super::{EngineHostError, Result};
+use crate::path_scrub::scrub_paths;
 use crate::sync::{lock_or_recover, recover_poisoned};
 use sagascript_engine_protocol::{
     decode_incoming, encode_request, ErrorBody, Incoming, RequestOp, MAX_LINE_BYTES,
@@ -519,7 +520,7 @@ fn drain_stderr(stderr: impl Read, shared: &Shared) {
                     }
                 }
                 let line = String::from_utf8_lossy(&buf);
-                tracing::debug!(target: "engine_host::stderr", "{}", line.trim_end());
+                tracing::debug!(target: "engine_host::stderr", "{}", stderr_log_text(&line));
             }
         }
     }
@@ -579,8 +580,8 @@ fn read_stdout(
                 }
             }
             Ok(Incoming::Malformed { id, error }) => {
-                let preview: String = line.trim().chars().take(200).collect();
-                tracing::warn!(pid, id, error = %error.message, line = %preview, "malformed engine host line; failing its request");
+                let preview = log_preview(&line);
+                tracing::warn!(pid, id, error = %scrub_paths(&error.message), line = %preview, "malformed engine host line; failing its request");
                 let w = lock_or_recover(&shared.routing, ROUTING_LOCK)
                     .waiters
                     .remove(&id);
@@ -589,8 +590,8 @@ fn read_stdout(
                 }
             }
             Err(e) => {
-                let preview: String = line.trim().chars().take(200).collect();
-                tracing::warn!(pid, error = %e, line = %preview, "ignoring malformed engine host line");
+                let preview = log_preview(&line);
+                tracing::warn!(pid, error = %scrub_paths(&e.to_string()), line = %preview, "ignoring malformed engine host line");
             }
         }
     }
@@ -629,9 +630,90 @@ fn read_stdout(
     }
 }
 
+/// The first 200 characters of a host line for the log, with absolute paths
+/// removed first so the cut cannot leave half of one (ADR 0006). The scrubber
+/// reads the Swift JSON encoder's `\/` spelling of a slash too.
+fn log_preview(line: &str) -> String {
+    scrub_paths(line.trim()).chars().take(200).collect()
+}
+
+/// How much of one stderr line the drain thread scrubs and logs. A host that
+/// writes a line without end must not make the thread that keeps its pipe empty
+/// spend its time on it; the scrubber is linear, and this bounds the line.
+const STDERR_LOG_BYTES: usize = 4096;
+
+/// A stderr line for the debug log: cut to [`STDERR_LOG_BYTES`], then scrubbed
+/// of absolute paths (a path cut in the middle still starts with its root).
+fn stderr_log_text(line: &str) -> String {
+    let line = line.trim_end();
+    let mut end = line.len().min(STDERR_LOG_BYTES);
+    while !line.is_char_boundary(end) {
+        end -= 1;
+    }
+    scrub_paths(&line[..end])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A malformed line from the host is logged to find the protocol fault; the
+    /// preview must not carry an absolute path, also when the path starts just
+    /// before the cut (ADR 0006).
+    #[test]
+    fn the_log_preview_of_a_host_line_carries_no_path_and_is_bounded() {
+        // As the Swift host writes it: its JSON encoder escapes every slash.
+        let line = r#"{"error":{"message":"Failed to load model at \/Users\/zoe\/Library\/Application Support\/Sagascript\/models\/foo.mlmodelc"},"id":1}"#;
+        let preview = log_preview(line);
+        assert!(
+            !preview.contains("zoe") && !preview.contains("Users"),
+            "{preview}"
+        );
+        assert!(preview.contains("foo.mlmodelc"), "{preview}");
+        // The same line unescaped.
+        let plain = line.replace("\\/", "/");
+        let preview = log_preview(&plain);
+        assert!(!preview.contains("zoe"), "{preview}");
+
+        let at_the_cut = format!("{} /Users/zoe/Documents/a.bin", "x".repeat(190));
+        let preview = log_preview(&at_the_cut);
+        assert!(
+            !preview.contains("zoe") && !preview.contains("/Users"),
+            "{preview}"
+        );
+        assert!(
+            preview.chars().count() <= 200,
+            "{}",
+            preview.chars().count()
+        );
+
+        let long = "y".repeat(5_000);
+        assert_eq!(log_preview(&long).chars().count(), 200);
+    }
+
+    #[test]
+    fn a_stderr_line_is_bounded_scrubbed_and_cheap_when_it_is_huge() {
+        let swift = "error: cannot open /Users/zoe/Library/Application Support/Sagascript/models/foo.mlmodelc\n";
+        let text = stderr_log_text(swift);
+        assert_eq!(text, "error: cannot open <path>/foo.mlmodelc");
+
+        // Cut at a character boundary, also in the middle of a multibyte character.
+        let long = format!("/Users/zoe/{}", "日".repeat(10_000));
+        let text = stderr_log_text(&long);
+        assert!(text.len() <= STDERR_LOG_BYTES, "{}", text.len());
+        assert!(!text.contains("zoe"), "{text}");
+
+        // A path cut in the middle of its account name still starts with its root.
+        let cut = format!("{}/Users/zoe", "x ".repeat(STDERR_LOG_BYTES / 2 - 3));
+        assert!(!stderr_log_text(&cut).contains("zoe"));
+
+        // A line of megabytes costs about as much as its first 4 KB.
+        let huge = format!("/Users/zoe/a {}y/z", "x ".repeat(5_000_000));
+        let started = std::time::Instant::now();
+        let text = stderr_log_text(&huge);
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+        assert!(text.len() <= STDERR_LOG_BYTES);
+    }
 
     #[test]
     fn bounded_line_reader_splits_lines_and_bounds_memory() {

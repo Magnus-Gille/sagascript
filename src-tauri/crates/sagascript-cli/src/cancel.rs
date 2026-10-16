@@ -50,7 +50,7 @@ impl Canceller {
     /// Err when cancellation was requested.
     pub fn check(&self) -> Result<(), DictationError> {
         if self.is_cancelled() {
-            Err(DictationError::TranscriptionFailed("Cancelled".into()))
+            Err(DictationError::Cancelled)
         } else {
             Ok(())
         }
@@ -201,10 +201,10 @@ mod tests {
         assert!(canceller.request());
         assert!(!canceller.request(), "second request is reported as repeat");
         assert!(hits.load(Ordering::SeqCst));
-        assert_eq!(
-            canceller.check().unwrap_err().to_string(),
-            "Transcription failed: Cancelled"
-        );
+        assert!(matches!(
+            canceller.check().unwrap_err(),
+            DictationError::Cancelled
+        ));
     }
 
     #[test]

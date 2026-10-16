@@ -18,7 +18,7 @@ verification commands, [docs/recipes/](recipes/README.md) for step-by-step chang
 | `src/lib/*.ts`, `src/lib/*.js` | DOM-free logic (reducers, queues, update recovery), tested by Vitest next to the module and by the remaining `scripts/test-*.mjs`. |
 | `src/lib/tauri-events.svelte.ts`, `models.svelte.ts`, `permissions.ts`, `platform.ts` | Shared by the windows. Tauri events are only listened to through `useTauriEvent`/`useDragDropEvent`/`subscribeTauriEvent` (they own the unlisten; ESLint forbids raw `listen()` in `src/`) and take their payload types from `EventMap` in `events.ts`; `models.svelte.ts` holds `PIANISSIMO_ID` and `downloadModelById`; `permissions.ts` the macOS Accessibility request and wait; `platform.ts` one `get_platform` lookup per window. |
 | `src-tauri/src/` | App crate `sagascript`: CLI dispatch, Tauri shell, tray, hotkeys, paste, overlay, updater, Tauri commands. |
-| `src-tauri/crates/sagascript-core/` | Library: audio decode/resample/capture, Whisper and Pianissimo transcription, engine-host client, settings store, model downloads, diarization, meeting documents. |
+| `src-tauri/crates/sagascript-core/` | Library: audio decode/resample/capture, Whisper and Pianissimo transcription, engine-host client, settings store, model downloads, diarization, meeting documents, `fsutil` (publish a new file without ever replacing one, [ADR 0008](adr/0008-publishing-new-files.md)). |
 | `src-tauri/crates/sagascript-cli/` | Library + headless `sagascript` binary: every clap subcommand. Also holds meeting/diarization pipelines that the app imports. |
 | `src-tauri/crates/sagascript-engine-protocol/` | Wire types for the engine-host JSON Lines protocol ([spec](engine-host-protocol.md)); used by the core client, the ORT host and the fake host. |
 | `src-tauri/crates/sagascript-testsupport/` | Dev-only test helpers shared by core, CLI and app tests: `TempDir` (unique, removed on drop), `fake_settings` (a settings file alone in its own `TempDir`), `sha256_hex`, `isolated_cli_env` (spawned CLI without inherited credentials, with `SAGASCRIPT_SETTINGS_PATH`). Never linked into a shipped binary. |
@@ -440,8 +440,11 @@ replaces the remaining source-text tests in the `ui` group with component tests.
   `model-download-progress` `model` field is a Debug name for Whisper. Twenty registered
   commands have no frontend caller (`COMMANDS_WITHOUT_A_CALLER` in `src/lib/api.test.ts`);
   removing them is undecided.
-- Commands return `Result<_, String>` and the frontend matches on message text. **Planned:**
-  [#360](https://github.com/Magnus-Gille/sagascript/issues/360) (ADR 0006).
+- Commands for dictation, transcription, hotkeys, the dictionary and file transcription return
+  `Result<T, CommandError>` (`{ code, message, retryable }`, ADR 0006) and the frontend matches
+  on `code`. The other commands still return `Result<_, String>`, and one frontend check still
+  matches message text (`defaultDictionaryLanguageBlock` in `Settings.svelte`). **Planned:**
+  part 2 of [#360](https://github.com/Magnus-Gille/sagascript/issues/360).
 - Only some CLI subcommands offer `--json` (`list-models`, `config list`, `glossary list`,
   `formats` and `config profiles list` do not), `--progress-json` events share stderr with prose
   and `tracing`, and a second Ctrl-C still force-quits from the signal thread

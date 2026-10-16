@@ -29,6 +29,10 @@ Rust, Svelte 5, and local Whisper inference.
   in non-test code ([ADR 0005](docs/adr/0005-mutex-poison-policy.md)).
 - Tests: regression test for every bug, no regex tests over `.svelte` source, fixtures never
   touch real user settings (`SAGASCRIPT_SETTINGS_PATH`) — [ADR 0004](docs/adr/0004-test-strategy.md).
+- A typed command's failure (`Result<T, CommandError>`; the other commands reject with a string
+  until #360 part 2) crosses IPC as `{ code, message, retryable }`; the frontend branches on
+  `code` and never on message text, and error text from outside Rust is passed through
+  `scrub_paths` so it carries no absolute path (ADR 0006).
 - Signed builds need the audio-input entitlement. Set the signing identity through
   `APPLE_SIGNING_IDENTITY`, never in `tauri.conf.json`.
 - `cargo tauri dev` is unsigned and cannot validate TCC permission behavior. Use

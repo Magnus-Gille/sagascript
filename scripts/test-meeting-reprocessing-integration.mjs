@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import ts from "typescript";
 import vm from "node:vm";
+import { frontendErrorsSource } from "./lib/frontend-errors-source.mjs";
 
 const fileTranscriptionSource = await readFile(new URL("../src/lib/FileTranscription.svelte", import.meta.url), "utf8");
 const scriptSource = fileTranscriptionSource.match(/<script lang="ts">([\s\S]*?)<\/script>/)?.[1];
@@ -108,7 +109,6 @@ function makeControls(overrides = {}) {
 
 function createHarness(controls) {
   const functions = [
-    "meetingFailureText",
     "updateMeetingClock",
     "startMeetingClock",
     "stopMeetingClock",
@@ -156,6 +156,8 @@ function createHarness(controls) {
     let transcribePrompt = "";
     let otherBusy = false;
     const job = { prompt: null, profileId: null };
+
+    ${frontendErrorsSource}
 
     function selectedTranscribeProfile() { return null; }
 

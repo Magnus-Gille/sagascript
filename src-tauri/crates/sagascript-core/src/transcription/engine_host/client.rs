@@ -1186,8 +1186,7 @@ impl Inner {
         };
         match &result {
             Ok((_, load_ms)) => self.notify_load(LoadEvent::Ready { load_ms: *load_ms }),
-            Err(EngineHostError::Cancelled) => self.notify_load(LoadEvent::Cancelled),
-            Err(error) => self.notify_load(LoadEvent::Failed(error.to_string())),
+            Err(error) => self.notify_load(load_event_for(error)),
         }
         let (proc, _) = result?;
         let mut st = self.lock_state();
@@ -1628,6 +1627,16 @@ fn first_line(error: &EngineHostError) -> String {
         .to_string()
 }
 
+/// The load event for a failed load: a cancellation, or the failure with its
+/// text scrubbed of absolute paths (the Swift host names the model file by
+/// absolute path; the event is logged, ADR 0006).
+fn load_event_for(error: &EngineHostError) -> LoadEvent {
+    match error {
+        EngineHostError::Cancelled => LoadEvent::Cancelled,
+        other => LoadEvent::Failed(crate::path_scrub::scrub_paths(&other.to_string())),
+    }
+}
+
 fn failed_error(failure: &Failure, retry_in: Duration) -> EngineHostError {
     EngineHostError::Failed(format!(
         "{}; next attempt in {} s",
@@ -1858,5 +1867,33 @@ mod boost_spec_tests {
         assert_eq!(spec.truncated, 102); // 2 distinct short terms + 600 others, minus 500
         assert_eq!(&spec.terms[..2], ["Gille", "Magnus Gille"]);
         assert_eq!(spec.weight, 20.0);
+    }
+}
+
+#[cfg(test)]
+mod load_event_tests {
+    use super::*;
+    use sagascript_engine_protocol::ErrorCode;
+
+    /// A failed load is logged and forwarded to listeners: its text must not
+    /// carry the model path the Swift host reports (ADR 0006).
+    #[test]
+    fn a_failed_load_event_carries_no_absolute_path() {
+        let error = EngineHostError::Remote {
+            code: ErrorCode::ModelLoadFailed,
+            message: "Failed to load model at /Users/x/Library/Application Support/Sagascript/models/foo.mlmodelc: boom".into(),
+            retryable: false,
+        };
+        match load_event_for(&error) {
+            LoadEvent::Failed(text) => {
+                assert!(!text.contains("/Users/x"), "{text}");
+                assert!(text.contains("foo.mlmodelc"), "{text}");
+            }
+            other => panic!("expected Failed, got {other:?}"),
+        }
+        assert!(matches!(
+            load_event_for(&EngineHostError::Cancelled),
+            LoadEvent::Cancelled
+        ));
     }
 }

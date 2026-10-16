@@ -11,6 +11,7 @@ used to reach the GUI unnoticed. This directory holds what both sides are tested
 |---|---|---|---|
 | Payload shapes | Tests that build real payloads with the producer's own code: `commands_tests.rs` (`get_settings`), `meeting_jobs_tests.rs` (`get_meeting_job`, every job status), `events_tests.rs` (every event) | `transport/*.json` (written by Rust) | `src/test/transport.test.ts` parses each fixture with a schema from `src/test/transport-schemas.ts`; each schema is proven equal to its frontend type (`Settings`, `MeetingJobSnapshot`, `EventMap`) |
 | Event names, consumers, scope | The catalogue in `src-tauri/src/events.rs`; emitting any other way is a clippy error (`disallowed-methods`) | `transport/events.json` | `EventMap` in `src/lib/events.ts` lists exactly the events the catalogue marks `gui` |
+| Command errors | `src-tauri/src/command_error.rs`; `command_error_tests.rs` writes real serializations, including a Swift-style engine failure | `transport/command_errors.json` | `src/test/transport.test.ts` parses each with `BackendError`'s schema and checks the codes, the retry and download choices and that no message carries a path |
 | Command names, argument keys and types | `src-tauri/src/contract/command_map.rs` reads `generate_handler!` and every `#[tauri::command]` signature | `src/lib/ipc-contract.generated.ts` (`CommandMap`, `COMMAND_ARGUMENTS`) | The IPC mock (`src/test/ipc.ts`) rejects a call whose argument keys Rust does not read, at run time in every test that goes through a wrapper; `src/lib/api.test.ts` type-checks each wrapper's arguments and result against `CommandMap` |
 
 A change on one side fails a test:
@@ -78,6 +79,13 @@ The `listen("…")` call sites in the components still take their event name and
 from the component, not from `EventMap`; they become typed in
 [#362](https://github.com/Magnus-Gille/sagascript/issues/362).
 
-Errors are still strings (`Result<_, String>`); typed errors are
-[#360](https://github.com/Magnus-Gille/sagascript/issues/360) (ADR 0006), which extends the
-generated `CommandMap` with them.
+## Errors
+
+A command rejects with a string (`Result<T, String>`) or, when it is typed, with a `BackendError`
+`{ code, message, retryable }` (`Result<T, CommandError>`, [ADR 0006](../docs/adr/0006-typed-errors.md)).
+The generator reads the error type of each signature: `CommandMap[C]["error"]` is `string` or
+`BackendError`, and `BACKEND_ERROR_COMMANDS` lists the typed commands. The IPC fake
+(`src/test/ipc.ts`) rejects a test whose fake throws the other shape, so use `backendError(code,
+message)` for a typed command. The frontend matches on `code` only (`isBackendError`); the
+remaining `Result<_, String>` commands are the rest of
+[#360](https://github.com/Magnus-Gille/sagascript/issues/360).

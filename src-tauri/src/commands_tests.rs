@@ -19,7 +19,7 @@ fn set_initial_prompt_in(
     settings: &mut Settings,
     prompt: &str,
     expected_source: Option<&str>,
-) -> Result<(), String> {
+) -> Result<(), CommandError> {
     ensure_expected_dictionary_source(&settings.initial_prompt, expected_source)?;
     settings.initial_prompt = prompt.to_string();
     Ok(())
@@ -413,10 +413,11 @@ mod controller_poison_tests {
 
         let lease = acquire_hotkey_configuration(&controller)
             .expect("a poisoned controller must be recovered, not propagated");
-        assert!(
-            acquire_hotkey_configuration(&controller).is_err(),
-            "the recovered controller still enforces the single-change lease"
-        );
+        let refused = acquire_hotkey_configuration(&controller)
+            .err()
+            .expect("the recovered controller still enforces the single-change lease");
+        assert_eq!(refused.code(), "busy");
+        assert!(refused.retryable());
         drop(lease);
         assert!(acquire_hotkey_configuration(&controller).is_ok());
         assert!(!controller.is_poisoned(), "recovery clears the poison flag");
@@ -445,13 +446,25 @@ mod controller_poison_tests {
 #[cfg(test)]
 mod gui_recording_tests {
     use super::gui_start_recording_result;
+    use sagascript_core::error::DictationError;
 
     #[test]
     fn gui_start_while_transcribing_returns_busy_error() {
         let error = gui_start_recording_result(Ok(false)).unwrap_err();
 
-        assert!(error.contains("busy"));
-        assert!(error.contains("current recording"));
+        assert_eq!(error.code(), "busy");
+        assert!(error.retryable(), "waiting and trying again works");
+        let message = error.to_string();
+        assert!(message.contains("busy"));
+        assert!(message.contains("current recording"));
+    }
+
+    #[test]
+    fn a_failed_start_keeps_the_dictation_error_code() {
+        let error = gui_start_recording_result(Err(DictationError::MicrophonePermissionDenied))
+            .unwrap_err();
+        assert_eq!(error.code(), "microphone_permission_denied");
+        assert!(gui_start_recording_result(Ok(true)).is_ok());
     }
 }
 
@@ -469,7 +482,8 @@ mod training_stop_tests {
     #[test]
     fn training_stop_without_active_recording_is_an_error() {
         let error = not_recording_result(false).unwrap_err();
-        assert!(error.contains("No training recording"));
+        assert_eq!(error.code(), "not_recording");
+        assert!(error.to_string().contains("No training recording"));
     }
 }
 
@@ -501,6 +515,10 @@ mod dictionary_compare_and_set_tests {
             ensure_expected_dictionary_source("OpenRouter\nmerge", Some("OpenRouter merge"))
                 .is_err()
         );
+        let conflict =
+            ensure_expected_dictionary_source("remote", Some("old")).expect_err("a stale source");
+        assert!(matches!(conflict, CommandError::DictionaryChangedElsewhere));
+        assert_eq!(conflict.code(), "dictionary_changed_elsewhere");
     }
 
     fn profile_settings() -> Settings {
@@ -527,7 +545,10 @@ mod dictionary_compare_and_set_tests {
 
         let error = set_initial_prompt_in(&mut settings, "local", Some("old")).unwrap_err();
 
-        assert!(error.starts_with("Dictionary changed elsewhere:"));
+        assert_eq!(error.code(), "dictionary_changed_elsewhere");
+        assert!(error
+            .to_string()
+            .starts_with("Dictionary changed elsewhere:"));
         assert_eq!(settings.initial_prompt, before.initial_prompt);
         assert_eq!(settings.profile_glossaries, before.profile_glossaries);
     }
@@ -544,7 +565,7 @@ mod dictionary_compare_and_set_tests {
             set_profile_glossary_in(&mut settings, "english", "local".to_string(), Some("old"))
                 .unwrap_err();
 
-        assert!(error.starts_with("Dictionary changed elsewhere:"));
+        assert_eq!(error.code(), "dictionary_changed_elsewhere");
         assert_eq!(settings.initial_prompt, before.initial_prompt);
         assert_eq!(settings.profile_glossaries, before.profile_glossaries);
     }

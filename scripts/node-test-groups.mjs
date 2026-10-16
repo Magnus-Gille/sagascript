@@ -37,6 +37,7 @@ export const TEST_GROUPS = {
     "scripts/test-file-transcription-integration.mjs",
     "scripts/test-file-transcription-recovery.mjs",
     "scripts/test-finnish-language.mjs",
+    "scripts/test-frontend-errors-source.mjs",
     "scripts/test-language-glossary.mjs",
     "scripts/test-language-switch-recovery.mjs",
     "scripts/test-meeting-integration.mjs",

@@ -4,7 +4,7 @@ import { render, screen, waitFor } from "@testing-library/svelte";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, test, vi } from "vitest";
 import Onboarding from "./Onboarding.svelte";
-import { mockIpc, type CommandHandlers } from "../test/ipc";
+import { backendError, mockIpc, type CommandHandlers } from "../test/ipc";
 import { pianissimo, settingsValue } from "../test/settings";
 
 // The real wait polls once a second; these tests poll every few milliseconds.
@@ -132,7 +132,7 @@ describe("the Accessibility step", () => {
       backend({
         check_accessibility_permission: () => granted,
         retry_hotkey_registration: () => {
-          throw "shortcut in use";
+          throw backendError("hotkey_change_failed", "shortcut in use");
         },
       }),
     );

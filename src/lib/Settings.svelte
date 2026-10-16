@@ -59,6 +59,7 @@
     type WhisperModel,
     type HotkeyProfile,
   } from "./api";
+  import { isBackendError, toErrorMessage } from "./errors";
   import { open } from "@tauri-apps/plugin-dialog";
   import { PIANISSIMO_ID, downloadModelById, useModelDownloads } from "./models.svelte";
   import { requestAccessibility } from "./permissions";
@@ -266,7 +267,7 @@
   }
 
   function recoveryCleanupError(error: unknown): string {
-    const detail = recoveryErrorText(error).replace(/[.]$/, "");
+    const detail = toErrorMessage(error).replace(/[.]$/, "");
     return `Update recovery draft was retained after delivery. ${detail}. Back up or repair update-recovery.json in Sagascript's app data folder, then restart Sagascript before retrying the update.`;
   }
 
@@ -381,10 +382,6 @@
     updateMeetingRecovery(entry);
   }
 
-  function recoveryErrorText(error: unknown): string {
-    return typeof error === "string" ? error : error instanceof Error ? error.message : String(error);
-  }
-
   async function restoreUpdateRecovery(): Promise<void> {
     const dictationRevision = liveDictationRevision;
     const existingFileIds = new Set(fileJobs.map((job) => job.id));
@@ -455,7 +452,7 @@
       }
     } catch (error) {
       console.warn("Could not restore update recovery drafts", error);
-      recoveryReadError = `Update blocked: unreadable recovery drafts were retained. ${recoveryErrorText(error).replace(/[.]$/, "")}. Back up or repair update-recovery.json in Sagascript's app data folder, then restart Sagascript before retrying.`;
+      recoveryReadError = `Update blocked: unreadable recovery drafts were retained. ${toErrorMessage(error).replace(/[.]$/, "")}. Back up or repair update-recovery.json in Sagascript's app data folder, then restart Sagascript before retrying.`;
       throw error;
     }
   }
@@ -468,7 +465,7 @@
       recoveryCleanupWarning = false;
       recoveryReadError = "";
     } catch (error) {
-      settingsError = `Could not discard recovered drafts: ${recoveryErrorText(error)}`;
+      settingsError = `Could not discard recovered drafts: ${toErrorMessage(error)}`;
       return;
     }
 
@@ -588,7 +585,7 @@
       });
     } catch (error) {
       if (!isActivePreparation(nonce)) return;
-      const message = recoveryErrorText(error);
+      const message = toErrorMessage(error);
       updatePreparing = false;
       try {
         await enqueueRecoveryMutation(async () => {
@@ -612,7 +609,7 @@
         ? "Copied result. Another unsaved dictation is now shown."
         : "Copied to clipboard.";
     } catch (error) {
-      testResultActionMessage = typeof error === "string" ? error : String(error);
+      testResultActionMessage = toErrorMessage(error);
     }
   }
 
@@ -630,7 +627,7 @@
       }
       if (!saved) testResultActionMessage = "Save cancelled — nothing was written.";
     } catch (error) {
-      testResultActionMessage = typeof error === "string" ? error : String(error);
+      testResultActionMessage = toErrorMessage(error);
     }
   }
 
@@ -884,7 +881,16 @@
   let recoveredGlossaryDrafts: RecoveredGlossaryDraft[] = $state([]);
   let glossaryConflictScopeId: string | null = $state(null);
 
-  const dictionaryConflictPrefix = "Dictionary changed elsewhere:";
+  // The backend rejects a dictionary save whose baseline went stale with the
+  // code below (ADR 0006); the code decides, never the message text. The
+  // conflict is "shown" while `settingsError` still holds the message of that
+  // rejection; a different error replaces it.
+  const dictionaryConflictCode = "dictionary_changed_elsewhere";
+  let dictionaryConflictMessage: string | null = $state(null);
+
+  function isDictionaryConflictShown(): boolean {
+    return dictionaryConflictMessage !== null && settingsError === dictionaryConflictMessage;
+  }
 
   // The dictionary editor is intentionally local state. Settings reloads may
   // update the saved source, but must never replace a draft that differs from
@@ -895,7 +901,7 @@
     const draftChanged = baseline?.scopeId === glossaryScopeId
       && glossaryDraft !== baseline.source;
     const conflict = glossaryConflictScopeId === glossaryScopeId
-      && settingsError.startsWith(dictionaryConflictPrefix);
+      && isDictionaryConflictShown();
     return Boolean(draftChanged || conflict);
   }
 
@@ -996,7 +1002,7 @@
         }
       })
       .catch((error) => {
-        if (!stale) fileModelError = typeof error === "string" ? error : String(error);
+        if (!stale) fileModelError = toErrorMessage(error);
       });
     return () => { stale = true; };
   });
@@ -1014,7 +1020,7 @@
         // Nothing was saved. A one-way bound native select keeps the rejected
         // choice unless it is put back by hand.
         if (settings) select.value = settings.file_transcription_model;
-        fileModelError = typeof outcome.error === "string" ? outcome.error : String(outcome.error);
+        fileModelError = toErrorMessage(outcome.error);
         return;
       }
       // Saved, whether or not the read-back could confirm it.
@@ -1046,7 +1052,7 @@
         getEffectiveModelInfo(language),
       ]);
     } catch (error) {
-      fileModelError = typeof error === "string" ? error : String(error);
+      fileModelError = toErrorMessage(error);
     } finally { downloads.finish(); }
   }
 
@@ -1075,7 +1081,7 @@
         rememberGlossaryRecovery(
           currentScope,
           glossaryDraft,
-          glossaryConflictScopeId === currentScope && settingsError.startsWith(dictionaryConflictPrefix),
+          glossaryConflictScopeId === currentScope && isDictionaryConflictShown(),
         );
       }
        glossaryScopeGeneration += 1;
@@ -1116,9 +1122,9 @@
         profileModelOptions = Object.fromEntries(entries.map(([id, , options]) => [id, options]));
         profileRecommended = Object.fromEntries(entries.map(([id, , , recommended]) => [id, recommended]));
       }
-    } catch (e: any) {
+    } catch (e) {
       if (generation === profileModelRefresh) {
-        settingsError = typeof e === "string" ? e : e?.message || "Failed to check speech engines.";
+        settingsError = toErrorMessage(e, "Failed to check speech engines.");
       }
     }
   }
@@ -1247,22 +1253,14 @@
         if (tab === "dictate" || tab === "transcribe" || tab === "settings") {
           requestTabChange(tab);
         }
-      } catch (e: any) {
-        initError = typeof e === "string" ? e : e?.message || "Failed to load settings.";
+      } catch (e) {
+        initError = toErrorMessage(e, "Failed to load settings.");
       }
     })();
     return () => {
       activePreparationNonce = null;
     };
   });
-
-  function errorText(error: unknown, fallback: string): string {
-    if (typeof error === "string") return error;
-    if (typeof error === "object" && error !== null && "message" in error && typeof error.message === "string" && error.message) {
-      return error.message;
-    }
-    return fallback;
-  }
 
   /**
    * Read the persisted settings and show them; showing a copy confirms it.
@@ -1326,7 +1324,7 @@
   function markSettingsUnconfirmed(error: unknown, afterSave: boolean): void {
     settingsUnconfirmed = {
       afterSave: afterSave || (settingsUnconfirmed?.afterSave ?? false),
-      detail: errorText(error, "unknown error"),
+      detail: toErrorMessage(error, "unknown error"),
     };
   }
 
@@ -1427,7 +1425,7 @@
    */
   async function applySetting(
     mutate: () => Promise<void | string[]>,
-    errorSink?: { value: string },
+    errorSink?: { value: string; code: string | null },
     reportError = true,
     refreshModels = true,
   ): Promise<boolean> {
@@ -1436,9 +1434,12 @@
       profileModelNotices = Array.isArray(notices) ? notices : [];
     });
     if (!outcome.saved) {
-      const message = errorText(outcome.error, "Failed to save setting.");
+      const message = toErrorMessage(outcome.error, "Failed to save setting.");
       if (reportError) settingsError = message;
-      if (errorSink) errorSink.value = message;
+      if (errorSink) {
+        errorSink.value = message;
+        errorSink.code = isBackendError(outcome.error) ? outcome.error.code : null;
+      }
       if (settings) settings = { ...settings };
       return false;
     }
@@ -1473,14 +1474,14 @@
         if (source.trim()) blockedLanguageChange = { language: value, source };
         else settingsError = "The blocking dictionary was cleared elsewhere. Select the language again to retry.";
       }
-    } catch (error: any) {
+    } catch (error) {
       // The change was rejected, so nothing was saved; only the preview of the blocking dictionary is missing.
       if (restampUnconfirmed(false)) {
         // The failed read locked the window and the notice says so; the language select is disabled
         // until Reload settings, which also lifts the rejection message above.
         rejectionWithoutPreview = settingsError;
       } else {
-        settingsError += `${settingsError ? " " : ""}The window could not read the settings to show the blocking dictionary (${errorText(error, "unknown error")}). Select the language again to retry.`;
+        settingsError += `${settingsError ? " " : ""}The window could not read the settings to show the blocking dictionary (${toErrorMessage(error, "unknown error")}). Select the language again to retry.`;
       }
     } finally {
       // A saved language whose read-back failed is shown as chosen: `settings` is
@@ -1515,8 +1516,8 @@
       if (glossaryScopeId === "default") discardGlossaryChanges();
       const notices = await setLanguage(request.language);
       profileModelNotices = Array.isArray(notices) ? notices : [];
-    } catch (error: any) {
-      const message = typeof error === "string" ? error : error?.message || "Unknown error";
+    } catch (error) {
+      const message = toErrorMessage(error, "Unknown error");
       if (cleared) rememberGlossaryRecovery("default", request.source);
       settingsError = cleared
         ? `The default dictionary was cleared, but the language change failed: ${message}`
@@ -1527,7 +1528,7 @@
         const current = await readSettings();
         await refreshProfileModels(current.hotkey_profiles);
         restampUnconfirmed(cleared);
-      } catch (error: any) {
+      } catch (error) {
         // The notice says what happened and offers Reload settings.
         markSettingsUnconfirmed(error, cleared);
       }
@@ -1561,9 +1562,9 @@
         await applyScalarSetting(() => setAutoPaste(false));
         settingsError = "Accessibility permission was not granted. Auto-paste remains off.";
       }
-    } catch (e: any) {
+    } catch (e) {
       await applyScalarSetting(() => setAutoPaste(false));
-      settingsError = typeof e === "string" ? e : e?.message || "Failed to check Accessibility permission.";
+      settingsError = toErrorMessage(e, "Failed to check Accessibility permission.");
     } finally {
       accessibilityChecking = false;
     }
@@ -1658,15 +1659,16 @@
       return true;
     }
 
-    const saveError = { value: "" };
+    const saveError: { value: string; code: string | null } = { value: "", code: null };
     const operation = (async (): Promise<boolean> => {
       glossarySaving = true;
       settingsError = "";
       try {
         const saved = await applySetting(() => setProfileGlossary(scopeId, value, expectedSource), saveError, false);
-        const conflict = saveError.value.startsWith(dictionaryConflictPrefix);
+        const conflict = saveError.code === dictionaryConflictCode;
         let requestIsCurrent = isCurrentGlossaryRequest(request);
         if (conflict) {
+          dictionaryConflictMessage = saveError.value;
           await refreshDictionaryAfterConflict(saveError.value, request);
           requestIsCurrent = isCurrentGlossaryRequest(request);
         } else if (!saved && !requestIsCurrent) {
@@ -1732,7 +1734,7 @@
     glossaryEditBaseline = null;
     if (glossaryConflictScopeId === glossaryScopeId) {
       glossaryConflictScopeId = null;
-      if (settingsError.startsWith(dictionaryConflictPrefix)) settingsError = "";
+      if (isDictionaryConflictShown()) settingsError = "";
     }
   }
 
@@ -1742,7 +1744,7 @@
     glossaryDraftGeneration += 1;
     glossaryEditBaseline = null;
     glossaryConflictScopeId = null;
-    settingsError = settingsError.startsWith(dictionaryConflictPrefix) ? "" : settingsError;
+    settingsError = isDictionaryConflictShown() ? "" : settingsError;
     glossaryScopeId = nextScope;
     glossaryDraft = glossarySourceForScope(nextScope, settings);
     glossaryDraftInitialized = true;
@@ -1899,10 +1901,10 @@
       await downloadModelById(model.id);
       fileModelDiskRevision += 1;
       await refreshProfileModels(settings?.hotkey_profiles ?? []);
-    } catch (e: any) {
+    } catch (e) {
       profileModelErrors = {
         ...profileModelErrors,
-        [profile.id]: typeof e === "string" ? e : e?.message || "Speech engine download failed.",
+        [profile.id]: toErrorMessage(e, "Speech engine download failed."),
       };
     } finally {
       downloads.finish();
@@ -1934,10 +1936,10 @@
       const outcome = await saveSetting(() => setProfileModel(profile.id, target.id));
       if (!outcome.saved) throw outcome.error;
       if (outcome.confirmed && settings) await refreshProfileModels(settings.hotkey_profiles);
-    } catch (e: any) {
+    } catch (e) {
       profileModelErrors = {
         ...profileModelErrors,
-        [profile.id]: typeof e === "string" ? e : e?.message || `Could not switch to ${target.display_name}.`,
+        [profile.id]: toErrorMessage(e, `Could not switch to ${target.display_name}.`),
       };
     } finally {
       downloads.finish();
@@ -1957,7 +1959,7 @@
       const outcome = await saveSetting(() => setProfileModel(profile.id, select.value));
       if (!outcome.saved) {
         select.value = previous;
-        profileModelErrors = { ...profileModelErrors, [profile.id]: errorText(outcome.error, "Could not change profile model.") };
+        profileModelErrors = { ...profileModelErrors, [profile.id]: toErrorMessage(outcome.error, "Could not change profile model.") };
       } else if (outcome.confirmed && settings) {
         await refreshProfileModels(settings.hotkey_profiles);
       }
@@ -1984,8 +1986,8 @@
         nativeEditorOrigin = { text, lineage: dictationEditorLineage };
         testResultRecoveryPending = true;
         testResult = testResult ? testResult + " " + text : text;
-      } catch (e: any) {
-        testError = typeof e === "string" ? e : e.message || "Transcription failed";
+      } catch (e) {
+        testError = toErrorMessage(e, "Transcription failed");
       } finally {
         testTranscribing = false;
         backendDictationState = "idle";
@@ -1998,10 +2000,10 @@
         testOwnsRecording = true;
         testRecording = true;
         backendDictationState = "recording";
-      } catch (e: any) {
+      } catch (e) {
         testOwnsRecording = false;
         backendDictationState = "idle";
-        testError = typeof e === "string" ? e : e.message || "Failed to start recording";
+        testError = toErrorMessage(e, "Failed to start recording");
       }
     }
   }
@@ -2097,8 +2099,8 @@
         if (!accessibilityGranted) {
           accessibilityGranted = await requestAccessibility({ onGranted: refreshHotkeyRegistration });
         }
-      } catch (error: any) {
-        hotkeyError = typeof error === "string" ? error : error?.message || "Failed to check Accessibility permission.";
+      } catch (error) {
+        hotkeyError = toErrorMessage(error, "Failed to check Accessibility permission.");
         return;
       } finally {
         accessibilityChecking = false;
@@ -2134,7 +2136,7 @@
       recordingShortcutSlot = null;
       draftProfileId = null;
     });
-    if (!outcome.saved) hotkeyError = errorText(outcome.error, "Failed to set hotkey");
+    if (!outcome.saved) hotkeyError = toErrorMessage(outcome.error, "Failed to set hotkey");
     else if (outcome.confirmed && settings) await refreshProfileModels(settings.hotkey_profiles);
   }
 
@@ -2729,7 +2731,7 @@
           <div class="hotkey-hint glossary-migration">
             This profile owns its dictionary. Save changes explicitly; switching profiles never moves entries to another dictionary.
           </div>
-          {#if glossaryConflictScopeId === glossaryScopeId && settingsError.startsWith(dictionaryConflictPrefix)}
+          {#if glossaryConflictScopeId === glossaryScopeId && isDictionaryConflictShown()}
             <div class="hotkey-hint glossary-migration">
               This dictionary changed elsewhere. Your draft is preserved; copy it if needed, then switch scopes and reselect this scope to reload the saved value. If it still shows the old text, close and reopen Settings.
             </div>

@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import vm from "node:vm";
 import ts from "typescript";
+import { frontendErrorsSource } from "./lib/frontend-errors-source.mjs";
 
 const source = await readFile(new URL("../src/lib/Settings.svelte", import.meta.url), "utf8");
 const script = source.match(/<script lang="ts">([\s\S]*?)<\/script>/)[1];
@@ -14,7 +15,7 @@ test("language recovery classifier matches the actual backend guard", () => {
   assert.ok(backendError.includes(defaultDictionaryLanguageBlock));
 });
 const names = [
-  "errorText",
+  "isDictionaryConflictShown",
   "readSettings",
   "confirmSettings",
   "markSettingsUnconfirmed",
@@ -67,7 +68,11 @@ function harness({
     let glossaryEditBaseline = { scopeId: "english", source: "merge = merch", generation: 1 };
     let glossaryConflictScopeId = null, glossaryDraftGeneration = 1, glossaryDraftInitialized = true;
     let lastStoredGlossarySources = {}, recoveredGlossaryDrafts = [];
-    const dictionaryConflictPrefix = "Dictionary changed elsewhere:";
+    const dictionaryConflictCode = "dictionary_changed_elsewhere";
+    let dictionaryConflictMessage = null;
+    ${frontendErrorsSource}
+    // What a command that returns Result<_, CommandError> rejects with.
+    const commandError = (code, message) => ({ code, message, retryable: false });
     const calls = [];
     let holdClear = false, cleared = false;
     async function setLanguage(value) {
@@ -80,8 +85,8 @@ function harness({
     async function setProfileGlossary(id, value, expected) {
       calls.push(["dictionary", id, value, expected]);
       if (holdClear) await pauseClear();
-      if (options.clearFailure) throw options.clearFailure;
-      if (expected !== stored.profile_glossaries[id]) throw "Dictionary changed elsewhere: default";
+      if (options.clearFailure) throw commandError("unclassified", options.clearFailure);
+      if (expected !== stored.profile_glossaries[id]) throw commandError("dictionary_changed_elsewhere", "Dictionary changed elsewhere: default");
       stored.profile_glossaries[id] = value;
       cleared = true;
     }

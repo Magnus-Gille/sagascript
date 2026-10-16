@@ -1,10 +1,10 @@
+import { isBackendError } from "./errors";
+
 export type PlainTranscriptionCancelState = {
   transcribing: boolean;
   meetingJobStatus: string | null;
   cancellingPlain: boolean;
 };
-
-const MISSING_FILE_HINTS = ["no such file", "enoent", "does not exist", "cannot find", "os error 2", "os error 3"];
 
 /**
  * Display name for the one-click re-run button (#235 follow-up): just the
@@ -116,11 +116,10 @@ export function canRetryTranscribeFile(
 }
 
 /**
- * Whether a transcription failure looks like a missing/moved file (#235).
- * Used to forget the remembered file gracefully without crashing.
+ * Whether a transcription failed because the file is gone (#235): the backend's
+ * `file_not_found` code (ADR 0006), never the message text. Used to forget the
+ * remembered file gracefully without crashing.
  */
 export function isMissingTranscribeFileError(error: unknown): boolean {
-  const message = typeof error === "string" ? error : ((error as Error)?.message ?? "");
-  const lowered = message.toLowerCase();
-  return lowered.includes("failed to open file:") && MISSING_FILE_HINTS.some((hint) => lowered.includes(hint));
+  return isBackendError(error, "file_not_found");
 }

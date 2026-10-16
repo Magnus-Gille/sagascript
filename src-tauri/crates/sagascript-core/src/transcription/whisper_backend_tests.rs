@@ -1267,9 +1267,9 @@ mod warm_state_tests {
             Ok(())
         });
         assert!(!ran, "no inference may start after a sticky cancel");
-        assert_eq!(
-            res.unwrap_err().to_string(),
-            "Transcription failed: Cancelled"
+        assert!(
+            matches!(res, Err(DictationError::Cancelled)),
+            "a sticky cancel is the Cancelled error, got {res:?}"
         );
         assert!(backend.is_cancel_requested());
     }

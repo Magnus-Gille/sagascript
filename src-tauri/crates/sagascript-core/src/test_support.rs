@@ -7,7 +7,102 @@
 //! SHA-256, the isolated CLI environment) are in the `sagascript-testsupport`
 //! crate, which core's unit tests can use because it does not depend on core.
 
+use std::cell::Cell;
+use std::fs::File;
+use std::io;
+use std::path::Path;
+
+use crate::fsutil::{PublishFs, RealFs};
 use crate::meeting::{MeetingSegmentInput, MeetingSpeaker, MeetingTranscript};
+
+/// The real filesystem with chosen failures injected into a publication
+/// ([`PublishFs`], #342): the n-th hard link, every unlink, the creation of
+/// the staging file, the file fsync or the folder fsync. Build one with [`FaultyFs::new`] and
+/// the `failing_*` methods.
+#[derive(Debug, Default)]
+pub struct FaultyFs {
+    fail_link_number: usize,
+    fail_remove: bool,
+    fail_create: bool,
+    sync_file_error: Option<io::ErrorKind>,
+    sync_dir_error: Option<io::ErrorKind>,
+    links: Cell<usize>,
+}
+
+impl FaultyFs {
+    /// A filesystem that fails nothing.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Fail the `number`-th `hard_link` (counting from 1).
+    pub fn failing_link(mut self, number: usize) -> Self {
+        self.fail_link_number = number;
+        self
+    }
+
+    /// Fail every `remove_file`, so a staging file stays behind.
+    pub fn failing_remove(mut self) -> Self {
+        self.fail_remove = true;
+        self
+    }
+
+    /// Fail the creation of the staging file, which then does not exist.
+    pub fn failing_create(mut self) -> Self {
+        self.fail_create = true;
+        self
+    }
+
+    /// Fail every folder fsync with an error of this kind.
+    pub fn failing_sync_dir(mut self, kind: io::ErrorKind) -> Self {
+        self.sync_dir_error = Some(kind);
+        self
+    }
+
+    /// Fail every file fsync with an error of this kind.
+    pub fn failing_sync_file(mut self, kind: io::ErrorKind) -> Self {
+        self.sync_file_error = Some(kind);
+        self
+    }
+}
+
+impl PublishFs for FaultyFs {
+    fn create_new(&self, path: &Path) -> io::Result<File> {
+        if self.fail_create {
+            return Err(io::Error::other("injected create failure"));
+        }
+        RealFs.create_new(path)
+    }
+
+    fn sync_file(&self, file: &File) -> io::Result<()> {
+        match self.sync_file_error {
+            Some(kind) => Err(io::Error::new(kind, "injected sync failure")),
+            None => RealFs.sync_file(file),
+        }
+    }
+
+    fn hard_link(&self, from: &Path, to: &Path) -> io::Result<()> {
+        self.links.set(self.links.get() + 1);
+        if self.links.get() == self.fail_link_number {
+            return Err(io::Error::other("injected link failure"));
+        }
+        RealFs.hard_link(from, to)
+    }
+
+    fn remove_file(&self, path: &Path) -> io::Result<()> {
+        if self.fail_remove {
+            return Err(io::Error::other("injected unlink failure"));
+        }
+        RealFs.remove_file(path)
+    }
+
+    fn sync_dir(&self, dir: &Path) -> io::Result<()> {
+        match self.sync_dir_error {
+            Some(kind) => Err(io::Error::new(kind, "injected folder sync failure")),
+            None => RealFs.sync_dir(dir),
+        }
+    }
+}
 
 /// Starts a synthetic [`MeetingTranscript`]: source hash `"a" * 64`, language
 /// `"en"`, model `"tiny"`, 4 seconds, no segments and no speakers. Set what
