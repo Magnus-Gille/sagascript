@@ -6,6 +6,8 @@ from typing import Tuple
 
 import torch
 
+SUPPORTED_WINDOWS = (15, 30, 40)
+
 
 class DenseLocalAttention(torch.nn.Module):
     """Export NeMo local relative attention as dense fixed-shape attention.
@@ -17,14 +19,25 @@ class DenseLocalAttention(torch.nn.Module):
     ``matrix_bd``; the constant mask below is the same +/- context band.
     """
 
-    def __init__(self, source: torch.nn.Module, frames: int) -> None:
+    def __init__(self, source: torch.nn.Module, frames: int, rel_shift: str = "auto") -> None:
         super().__init__()
         self.source = source
         self.frames = int(frames)
+        if rel_shift not in ("auto", "gather", "skew"):
+            raise ValueError(f"rel_shift must be auto, gather or skew, got {rel_shift}")
         width = int(source.att_context_size[0])
         right = int(source.att_context_size[1])
         if width != 256 or right != 256:
             raise ValueError(f"Expected [256, 256] local attention, got {source.att_context_size}")
+
+        # "skew" replaces the per-layer gather of the relative-position scores with a
+        # reshape/slice (Transformer-XL rel-shift). Core ML places gather_along_axis on the
+        # CPU, so 24 gathers cost 24 Neural Engine <-> CPU round trips per window. The skew is
+        # exact inside the +/-256 band (the only entries the mask keeps) when 256 <= frames <= 512.
+        self.skew = rel_shift == "skew" or (rel_shift == "auto" and width <= self.frames <= 2 * width)
+        if self.skew and not width <= self.frames <= 2 * width:
+            raise ValueError("skew rel-shift needs 256 <= encoder frames <= 512")
+        self.pos_len = width + right + 1
 
         query = torch.arange(self.frames, dtype=torch.long).view(self.frames, 1)
         key = torch.arange(self.frames, dtype=torch.long).view(1, self.frames)
@@ -61,10 +74,21 @@ class DenseLocalAttention(torch.nn.Module):
 
         matrix_ac = torch.matmul(q_u, k.transpose(-2, -1))
         matrix_bd = torch.matmul(q_v, pos.transpose(-2, -1))
-        indices = self.relative_index.unsqueeze(0).unsqueeze(0).expand(
-            q.size(0), q.size(1), self.frames, self.frames
-        )
-        matrix_bd = torch.gather(matrix_bd, dim=-1, index=indices)
+        if self.skew:
+            if matrix_bd.size(-1) != self.pos_len:
+                raise RuntimeError(f"Unexpected relative-position length {matrix_bd.size(-1)}")
+            # element (i, j) of the skewed matrix is flat[256 + i * 512 + j] = P[i, j - i + 256]
+            batch, heads = matrix_bd.size(0), matrix_bd.size(1)
+            flat = matrix_bd.reshape(batch, heads, self.frames * self.pos_len)
+            span = self.frames * (self.pos_len - 1)
+            matrix_bd = flat[..., self.pos_len // 2 : self.pos_len // 2 + span].reshape(
+                batch, heads, self.frames, self.pos_len - 1
+            )[..., : self.frames]
+        else:
+            indices = self.relative_index.unsqueeze(0).unsqueeze(0).expand(
+                q.size(0), q.size(1), self.frames, self.frames
+            )
+            matrix_bd = torch.gather(matrix_bd, dim=-1, index=indices)
         scores = (matrix_ac + matrix_bd) / self.source.s_d_k
 
         # Conversion is for a fixed, full window.  The CoreML contract carries
@@ -82,7 +106,7 @@ class DenseLocalAttention(torch.nn.Module):
         return self.source.linear_out(x)
 
 
-def patch_local_attention(encoder: torch.nn.Module, frames: int) -> None:
+def patch_local_attention(encoder: torch.nn.Module, frames: int, rel_shift: str = "auto") -> None:
     """Replace every NeMo local attention module with the fixed dense form."""
 
     replaced = 0
@@ -91,7 +115,7 @@ def patch_local_attention(encoder: torch.nn.Module, frames: int) -> None:
             raise ValueError(
                 "Pianissimo checkpoint is not using rel_pos_local_attn in every encoder layer"
             )
-        layer.self_attn = DenseLocalAttention(layer.self_attn, frames)
+        layer.self_attn = DenseLocalAttention(layer.self_attn, frames, rel_shift)
         replaced += 1
     if replaced != 24:
         raise ValueError(f"Expected 24 patched attention layers, got {replaced}")
@@ -181,9 +205,13 @@ class JointDecisionV3(torch.nn.Module):
 
 
 def trace_inputs(window_s: int) -> Tuple[int, int, int]:
-    if window_s not in (15, 30):
-        raise ValueError("window_s must be 15 or 30")
+    """Fixed-window shapes: audio samples, mel frames, encoder frames."""
+    if window_s not in SUPPORTED_WINDOWS:
+        raise ValueError(f"window_s must be one of {SUPPORTED_WINDOWS}")
     samples = window_s * 16_000
-    mel_frames = 1501 if window_s == 15 else 3001
-    encoder_frames = 188 if window_s == 15 else 376
+    mel_frames = window_s * 100 + 1
+    # dw_striding x8: three stride-2 convs, each n -> floor((n + 2 - 3) / 2) + 1
+    encoder_frames = mel_frames
+    for _ in range(3):
+        encoder_frames = (encoder_frames - 1) // 2 + 1
     return samples, mel_frames, encoder_frames
