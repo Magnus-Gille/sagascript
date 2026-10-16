@@ -21,8 +21,9 @@ use sagascript_core::diarization_report::DecoderEvidence;
 use sagascript_core::error::DictationError;
 #[cfg(feature = "diarization")]
 use sagascript_core::meeting::{MeetingSegmentInput, MeetingSpeaker, MeetingTranscript};
+use sagascript_core::run_context::RunContext;
 use sagascript_core::settings::{
-    FileModel, FileModelPreference, HotkeyProfile, Language, Settings, WhisperModel,
+    FileModel, FileModelPreference, Language, Settings, WhisperModel,
 };
 use sagascript_core::transcription::diagnostics::{
     analyze_coverage, analyze_language_windows, analyze_repetition, language_mismatch_warning,
@@ -46,6 +47,7 @@ use sagascript_core::transcription::{
 
 use crate::exit::{dictation_error_code, ErrorObject, JsonOutput};
 use crate::output::{errln, outln, Out, WriteError};
+use crate::run_request::RunRequest;
 
 #[derive(Args)]
 pub struct TranscribeArgs {
@@ -204,6 +206,17 @@ pub struct TranscribeArgs {
     )]
     #[cfg_attr(feature = "diarization", arg(conflicts_with = "diarize"))]
     pub parallel: Option<usize>,
+}
+
+impl<'a> From<&'a TranscribeArgs> for RunRequest<'a> {
+    fn from(args: &'a TranscribeArgs) -> Self {
+        Self {
+            profile: args.profile.as_deref(),
+            language: args.language.as_deref(),
+            prompt: args.prompt.as_deref(),
+            prompt_file: args.prompt_file.as_deref(),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -924,35 +937,9 @@ fn run_inner(args: TranscribeArgs, out: &Out) -> Result<(), DictationError> {
     #[cfg(feature = "diarization")]
     speaker_hint_from_args(&args)?;
     let stored = sagascript_core::settings::store::load();
-    let profile = match args.profile.as_deref() {
-        Some(id) => resolve_profile(&stored, id)?,
-        None => {
-            let profiles = stored.resolved_hotkey_profiles();
-            profiles
-                .iter()
-                .find(|candidate| candidate.id == "default")
-                .unwrap_or(&profiles[0])
-                .clone()
-        }
-    };
-    let language = args
-        .language
-        .as_deref()
-        .map(parse_language)
-        .transpose()?
-        .unwrap_or(profile.language);
-
-    let glossary = if language == profile.language {
-        effective_glossary(
-            &stored,
-            Some(&profile.id),
-            args.prompt.as_deref(),
-            args.prompt_file.as_deref(),
-        )?
-    } else {
-        let hint = resolve_one_run_prompt(args.prompt.as_deref(), args.prompt_file.as_deref())?;
-        Glossary::parse(hint.as_deref().unwrap_or(""))
-    };
+    let RunContext {
+        language, glossary, ..
+    } = RunRequest::from(&args).resolve(&stored)?;
 
     let files = expand_inputs(&args.files, args.recursive)?;
     #[cfg(feature = "diarization")]
@@ -2940,20 +2927,6 @@ fn parse_parallel_chunks(s: &str) -> Result<usize, String> {
         return Err(format!("parallel must be between 1 and 4, got {value}"));
     }
     Ok(value)
-}
-
-pub(crate) fn resolve_profile(
-    settings: &Settings,
-    profile_id: &str,
-) -> Result<HotkeyProfile, DictationError> {
-    let profile = settings
-        .resolved_hotkey_profiles()
-        .into_iter()
-        .find(|profile| profile.id == profile_id)
-        .ok_or_else(|| {
-            DictationError::SettingsError(format!("Unknown dictation profile '{profile_id}'"))
-        })?;
-    Ok(profile)
 }
 
 pub fn parse_language(s: &str) -> Result<Language, DictationError> {

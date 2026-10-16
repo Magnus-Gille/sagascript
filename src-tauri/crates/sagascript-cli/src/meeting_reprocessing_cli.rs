@@ -13,6 +13,7 @@ use sagascript_core::error::DictationError;
 use sagascript_core::fsutil::{PublishFs, RealFs};
 use sagascript_core::meeting_reprocess_plan::{ReprocessingMode, ReprocessingPlan};
 use sagascript_core::meeting_review::MeetingReview;
+use sagascript_core::run_context::RunContext;
 use sagascript_core::settings::{FileModel, Language, Settings, WhisperModel};
 use sagascript_core::transcription::{Glossary, WhisperBackend};
 use serde_json::json;
@@ -23,6 +24,7 @@ use crate::meeting_reprocessing::{
     NativeBackend, PublishReceipt, ReprocessingInput, WorkBackend,
 };
 use crate::output::{errln, Out};
+use crate::run_request::RunRequest;
 use crate::speaker_args::SpeakerCountArgs;
 
 const MAX_REPROCESSING_JSON_BYTES: usize = 24 * 1024 * 1024;
@@ -108,6 +110,17 @@ pub struct RuntimeArgs {
     /// Read the one-run glossary prompt from a file.
     #[arg(long, conflicts_with = "prompt")]
     pub prompt_file: Option<PathBuf>,
+}
+
+impl<'a> From<&'a RuntimeArgs> for RunRequest<'a> {
+    fn from(args: &'a RuntimeArgs) -> Self {
+        Self {
+            profile: args.profile.as_deref(),
+            language: args.language.as_deref(),
+            prompt: args.prompt.as_deref(),
+            prompt_file: args.prompt_file.as_deref(),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -404,27 +417,22 @@ fn report_receipt(
 }
 
 fn resolve_runtime(args: &RuntimeArgs) -> Result<RuntimeInputs, DictationError> {
-    let stored = sagascript_core::settings::store::load();
-    let profile = match args.profile.as_deref() {
-        Some(id) => crate::transcribe::resolve_profile(&stored, id)?,
-        None => {
-            let profiles = stored.resolved_hotkey_profiles();
-            profiles
-                .iter()
-                .find(|candidate| candidate.id == "default")
-                .unwrap_or(&profiles[0])
-                .clone()
-        }
-    };
-    let language = args
-        .language
-        .as_deref()
-        .map(crate::transcribe::parse_language)
-        .transpose()?
-        .unwrap_or(profile.language);
+    resolve_runtime_from(args, sagascript_core::settings::store::load())
+}
+
+/// [`resolve_runtime`] against given settings, so tests resolve fixtures.
+fn resolve_runtime_from(
+    args: &RuntimeArgs,
+    stored: Settings,
+) -> Result<RuntimeInputs, DictationError> {
+    let request = RunRequest::from(args);
+    let selection = request.select(&stored)?;
+    // The model is this command's own choice: reprocessing decodes with
+    // Whisper only. It is resolved before the prompt file is read, so an
+    // unusable model is reported before an unreadable file.
     let model = match crate::transcribe::resolve_file_model_for_run(
         args.model.as_deref(),
-        language,
+        selection.language,
         &stored,
         true,
     )? {
@@ -435,20 +443,9 @@ fn resolve_runtime(args: &RuntimeArgs) -> Result<RuntimeInputs, DictationError> 
             ))
         }
     };
-    let glossary = if language == profile.language {
-        crate::transcribe::effective_glossary(
-            &stored,
-            Some(&profile.id),
-            args.prompt.as_deref(),
-            args.prompt_file.as_deref(),
-        )?
-    } else {
-        let hint = crate::transcribe::resolve_one_run_prompt(
-            args.prompt.as_deref(),
-            args.prompt_file.as_deref(),
-        )?;
-        Glossary::parse(hint.as_deref().unwrap_or(""))
-    };
+    let RunContext {
+        language, glossary, ..
+    } = request.finish(&stored, selection)?;
     Ok(RuntimeInputs {
         stored,
         language,
