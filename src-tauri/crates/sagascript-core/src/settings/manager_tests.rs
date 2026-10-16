@@ -1775,11 +1775,6 @@ fn finnish_uses_generic_default_and_optional_specialized_tiny() {
         assert!(model.is_compatible_with(Language::Finnish), "{model:?}");
     }
     assert!(WhisperModel::FinnishWhisperTiny.is_compatible_with(Language::Finnish));
-    #[cfg(feature = "diarization")]
-    assert!(matches!(
-        WhisperModel::FinnishWhisperTiny.dtw_preset(),
-        whisper_rs::DtwModelPreset::Tiny
-    ));
     for language in [
         Language::English,
         Language::Swedish,

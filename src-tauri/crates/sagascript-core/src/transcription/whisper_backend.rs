@@ -341,6 +341,36 @@ pub struct DiarizationTranscriptionTimings {
     pub word_timestamp_attribution_seconds: f64,
 }
 
+/// DTW model preset for accurate attention-based token timestamps.
+/// KB-Whisper and NB-Whisper are fine-tunes of the corresponding base architecture,
+/// so they use the same alignment heads.
+#[cfg(feature = "diarization")]
+fn dtw_preset(model: WhisperModel) -> whisper_rs::DtwModelPreset {
+    use whisper_rs::DtwModelPreset;
+    match model {
+        WhisperModel::TinyEn => DtwModelPreset::TinyEn,
+        WhisperModel::Tiny
+        | WhisperModel::FinnishWhisperTiny
+        | WhisperModel::KbWhisperTiny
+        | WhisperModel::NbWhisperTiny => DtwModelPreset::Tiny,
+        WhisperModel::BaseEn => DtwModelPreset::BaseEn,
+        WhisperModel::Base | WhisperModel::KbWhisperBase | WhisperModel::NbWhisperBase => {
+            DtwModelPreset::Base
+        }
+        WhisperModel::SmallEn => DtwModelPreset::SmallEn,
+        WhisperModel::Small | WhisperModel::KbWhisperSmall | WhisperModel::NbWhisperSmall => {
+            DtwModelPreset::Small
+        }
+        WhisperModel::MediumEn => DtwModelPreset::MediumEn,
+        WhisperModel::Medium | WhisperModel::KbWhisperMedium | WhisperModel::NbWhisperMedium => {
+            DtwModelPreset::Medium
+        }
+        WhisperModel::LargeV3Turbo | WhisperModel::LargeV3TurboQ8 => DtwModelPreset::LargeV3Turbo,
+        // KbWhisperLarge / NbWhisperLarge are large-v3 fine-tunes
+        WhisperModel::KbWhisperLarge | WhisperModel::NbWhisperLarge => DtwModelPreset::LargeV3,
+    }
+}
+
 /// Mean of per-token log-probabilities; `None` for an empty slice.
 fn mean_logprob(plogs: &[f32]) -> Option<f32> {
     if plogs.is_empty() {
@@ -995,7 +1025,7 @@ impl WhisperBackend {
                 #[cfg(feature = "diarization")]
                 ctx_params.dtw_parameters(DtwParameters {
                     mode: DtwMode::ModelPreset {
-                        model_preset: whisper_model.dtw_preset(),
+                        model_preset: dtw_preset(whisper_model),
                     },
                     ..DtwParameters::default()
                 });
