@@ -4,83 +4,59 @@ import { copyFileSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { REPO_ROOT, loadWorkflow, parseWorkflow } from "./lib/ci-workflow.mjs";
 
-const workflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
-function normalizeWorkflow(source) {
-  return source.replace(/\r\n?/g, "\n");
+// The docs-only scope gate of ci.yml and what the aggregators make of it. The workflow is parsed,
+// and the scripts under test are the ones its steps run.
+
+const workflow = loadWorkflow();
+const CHECKS = ["check-macos", "check-windows", "check-linux"];
+
+function stepRun(source, jobId, predicate) {
+  const step = source.job(jobId).steps.find(predicate);
+  assert.ok(step, `${jobId} has the step`);
+  return step.run;
 }
-function job(id, source = workflow) {
-  const normalized = normalizeWorkflow(source);
-  return normalized.split(`\n  ${id}:\n`)[1].split(/\n  [a-z][a-z0-9-]*:\n/)[0];
-}
-function script(id, source = workflow) {
-  return job(id, source)
-    .split("        run: |\n")[1]
-    .split(/\n      - /)[0]
-    .split("\n")
-    .map((line) => line.replace(/^          /, ""))
-    .join("\n");
-}
-function shell(command, env, cwd) {
-  return spawnSync("bash", ["-euo", "pipefail", "-c", command], {
-    cwd,
-    env: { ...process.env, ...env },
-    encoding: "utf8",
-  });
+const scopeScript = (source = workflow) => stepRun(source, "scope", (step) => step.id === "classify");
+const shell = (command, env, cwd) =>
+  spawnSync("bash", ["-euo", "pipefail", "-c", command], { cwd, env: { ...process.env, ...env }, encoding: "utf8" });
+
+// A check job's own step, run as the workflow runs it, against a needs context built from the
+// job's own `needs`.
+function runCheck(jobId, { docsOnly, trusted = "true", scope = "success", results }) {
+  const job = workflow.job(jobId);
+  const needs = { scope: { result: scope, outputs: { docs_only: docsOnly, scope_trusted: trusted, scope_classification: "x" } } };
+  const lanes = job.needs.filter((need) => need !== "scope");
+  lanes.forEach((lane, index) => (needs[lane] = { result: results[index] ?? results[0], outputs: {} }));
+  const step = job.steps.find((candidate) => candidate.run.startsWith("node scripts/ci/assert-lanes.mjs"));
+  assert.equal(job.env.NEEDS, "${{ toJSON(needs) }}", "the step reads the job's needs context");
+  return shell(step.run, { NEEDS: JSON.stringify(needs) }, REPO_ROOT);
 }
 
 test("required checks accept only successful full lanes or explicitly classified skipped docs lanes", () => {
-  const results = ["success", "failure", "cancelled", "skipped", ""];
-  for (const id of ["check-macos", "check-windows", "check-linux"]) {
-    const run = script(id);
-    assert.match(job(id), /if: \$\{\{ always\(\) \}\}/);
-    for (const docsOnly of ["true", "false", ""]) {
-      for (const first of results) {
-        for (const second of results) {
-          const env = {
-            SCOPE_RESULT: "success",
-            SCOPE_TRUSTED: "true",
-            DOCS_ONLY: docsOnly,
-            TEST_RESULT: first,
-            BUILD_RESULT: second,
-            LINUX_RESULT: first,
-            MSRV_RESULT: second,
-          };
-          const expected =
-            docsOnly === "true"
-              ? first === "skipped" && second === "skipped"
-              : docsOnly === "false" && first === "success" && second === "success";
-          assert.equal(shell(run, env).status === 0, expected, `${id}: ${JSON.stringify(env)}`);
+  // One process per case: the matrix of every result is in test-ci-parallel-gates.mjs, in-process.
+  for (const id of CHECKS) {
+    for (const docsOnly of ["true", "false"]) {
+      for (const first of ["success", "failure", "cancelled", "skipped"]) {
+        for (const second of ["success", "skipped"]) {
+          const expected = docsOnly === "true" ? first === "skipped" && second === "skipped" : first === "success" && second === "success";
+          assert.equal(
+            runCheck(id, { docsOnly, results: [first, second] }).status === 0,
+            expected,
+            `${id}: docs_only ${docsOnly}, ${first}/${second}`,
+          );
         }
       }
     }
-    for (const result of results.filter((value) => value !== "success")) {
-      assert.notEqual(
-        shell(run, {
-          SCOPE_RESULT: result,
-          SCOPE_TRUSTED: "true",
-          DOCS_ONLY: "true",
-          TEST_RESULT: "skipped",
-          BUILD_RESULT: "skipped",
-          LINUX_RESULT: "skipped",
-          MSRV_RESULT: "skipped",
-        }).status,
-        0,
-        `${id} rejects unsuccessful scope`,
-      );
+    assert.notEqual(runCheck(id, { docsOnly: "", results: ["success"] }).status, 0, `${id} rejects an empty docs_only`);
+    for (const scope of ["failure", "cancelled", "skipped"]) {
+      assert.notEqual(runCheck(id, { docsOnly: "true", scope, results: ["skipped"] }).status, 0, `${id} rejects scope ${scope}`);
     }
     for (const trusted of ["false", ""]) {
       assert.notEqual(
-        shell(run, {
-          SCOPE_RESULT: "success",
-          SCOPE_TRUSTED: trusted,
-          DOCS_ONLY: "true",
-          TEST_RESULT: "skipped",
-          BUILD_RESULT: "skipped",
-          LINUX_RESULT: "skipped",
-          MSRV_RESULT: "skipped",
-        }).status,
+        runCheck(id, { docsOnly: "true", trusted, results: ["skipped"] }).status,
         0,
+        `${id} rejects scope_trusted ${trusted}`,
       );
     }
   }
@@ -116,7 +92,7 @@ test("scope bootstrap and unavailable commits select full CI; known docs and pus
   const classify = (overrides = {}) => {
     writeFileSync(output, "");
     const result = shell(
-      script("scope"),
+      scopeScript(),
       {
         ...env,
         EVENT_NAME: "pull_request",
@@ -147,25 +123,28 @@ test("scope bootstrap and unavailable commits select full CI; known docs and pus
   assert.doesNotMatch(result.output, /docs_only=true/);
 });
 
-test("CRLF workflow text still parses and executes scope and aggregate scripts", () => {
-  const crlfWorkflow = normalizeWorkflow(workflow).replaceAll("\n", "\r\n");
-  const scope = script("scope", crlfWorkflow);
-  const aggregateEnvironment = {
-    SCOPE_RESULT: "success",
-    SCOPE_TRUSTED: "true",
-    DOCS_ONLY: "false",
-    TEST_RESULT: "success",
-    BUILD_RESULT: "success",
-    LINUX_RESULT: "success",
-    MSRV_RESULT: "success",
-  };
+test("the scope job needs no script file of the revision it classifies", () => {
+  // It checks out the PR base, which may predate scripts/ci/ (adoption): its own script must be inline.
+  const scope = workflow.job("scope");
+  assert.deepEqual(scope.needs, []);
+  const checkout = scope.steps[0];
+  assert.equal(checkout.with.ref, "${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.sha }}");
+  for (const step of scope.steps) assert.ok(!step.run.includes("scripts/ci/"), "scope must not depend on files added by the PR");
+});
 
-  const scopeResult = shell(scope, { EVENT_NAME: "push", GITHUB_OUTPUT: "" });
+test("CRLF workflow text still parses and executes scope and aggregate scripts", () => {
+  const crlfWorkflow = parseWorkflow(
+    readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8")
+      .replace(/\r\n?/g, "\n")
+      .replaceAll("\n", "\r\n"),
+  );
+  const scopeResult = shell(scopeScript(crlfWorkflow), { EVENT_NAME: "push", GITHUB_OUTPUT: "" });
   assert.equal(scopeResult.status, 0, scopeResult.stderr);
   assert.match(scopeResult.stdout, /push-event-requires-full-ci/);
-
-  for (const id of ["check-macos", "check-linux", "check-windows"]) {
-    const result = shell(script(id, crlfWorkflow), aggregateEnvironment);
+  for (const id of CHECKS) {
+    const result = runCheck(id, { docsOnly: "false", results: ["success"] });
     assert.equal(result.status, 0, `${id}: ${result.stderr}`);
+    const step = crlfWorkflow.job(id).steps.find((candidate) => candidate.run.startsWith("node scripts/ci/assert-lanes.mjs"));
+    assert.equal(step.run, "node scripts/ci/assert-lanes.mjs");
   }
 });

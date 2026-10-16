@@ -26,7 +26,9 @@ export const GROUP_DESCRIPTIONS = {
 // failure per file. Groups not listed need nothing beyond Node itself.
 export const GROUP_NPM_PACKAGES = {
   ui: ["typescript"],
-  ci: ["vite"],
+  // scripts/lib/ci-workflow.mjs parses the workflows with `yaml` (#358).
+  ci: ["vite", "yaml"],
+  release: ["yaml"],
 };
 
 export const TEST_GROUPS = {
@@ -46,12 +48,14 @@ export const TEST_GROUPS = {
     "scripts/diarization_sv/test_reference_review.mjs",
     "scripts/test-browser-mock-commands.mjs",
     "scripts/test-ci-build-identity.mjs",
+    "scripts/test-ci-cargo-gates.mjs",
     "scripts/test-ci-cli-feature-coverage.mjs",
     "scripts/test-ci-cohort-timings.mjs",
     "scripts/test-ci-docs-scope.mjs",
     "scripts/test-ci-docs-workflow.mjs",
     "scripts/test-ci-parallel-gates.mjs",
     "scripts/test-ci-run-timings.mjs",
+    "scripts/test-ci-smoke-cli.mjs",
     "scripts/test-ci-unrun-suites.mjs",
     "scripts/test-clippy-policy.mjs",
     "scripts/test-dependency-policy.mjs",
