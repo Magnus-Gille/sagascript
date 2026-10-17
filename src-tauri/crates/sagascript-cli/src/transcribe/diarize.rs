@@ -19,15 +19,18 @@ use super::args::TranscribeArgs;
 #[cfg(feature = "diarization")]
 use super::inference::InferenceBackend;
 
+/// What a diarized run does with `--diarize-cache`: `Normal` reads a matching
+/// cache and writes a miss over it; `RefreshNew` never reads and creates the
+/// cache only if nothing is there (reprocessing stages it, #342).
+#[cfg(feature = "diarization")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum CachePolicy {
     Normal,
-    #[cfg(feature = "diarization")]
     RefreshNew,
 }
 
+#[cfg(feature = "diarization")]
 impl CachePolicy {
-    #[cfg(feature = "diarization")]
     pub(super) fn reads_existing_cache(self) -> bool {
         matches!(self, Self::Normal)
     }

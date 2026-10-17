@@ -21,6 +21,7 @@ use serde_json::{json, Value};
 
 use super::language_detection::LanguageProbe;
 use super::*;
+use sagascript_core::transcription::{ContextProfile, TranscribeOptions, TranscriptSegment};
 
 // ---- the scripted backend -----------------------------------------------------
 
