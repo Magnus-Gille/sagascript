@@ -10,7 +10,7 @@
     },
     "expect_used": {
       "sagascript": 3,
-      "sagascript-cli": 31,
+      "sagascript-cli": 19,
       "sagascript-core": 24,
       "sagascript-engine-protocol": 0,
       "sagascript-testsupport": 0
@@ -31,14 +31,14 @@
     },
     "too_many_lines": {
       "sagascript": 6,
-      "sagascript-cli": 6,
+      "sagascript-cli": 5,
       "sagascript-core": 6,
       "sagascript-engine-protocol": 0,
       "sagascript-testsupport": 0
     },
     "cognitive_complexity": {
       "sagascript": 0,
-      "sagascript-cli": 1,
+      "sagascript-cli": 0,
       "sagascript-core": 1,
       "sagascript-engine-protocol": 0,
       "sagascript-testsupport": 0
