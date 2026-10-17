@@ -1487,11 +1487,15 @@ mod tests {
 
         let root = tmp();
         let models = root.path().join("Models");
-        // setuid + setgid + sticky + rwxr-xr-x on a regular file: none of it may
-        // reach the extracted file (the SUID/SGID class of RUSTSEC-2026-0367).
+        // setuid + setgid + sticky + rwxr-xr-x on a regular file (0o7755): none
+        // of it may reach the extracted file. zip 9's `unix_mode()` already
+        // clears the special bits (0o7000) of a Unix entry, so what this pins
+        // today is that the execute bits are not applied either; the 0o7000
+        // part of the mask only matters if a zip release stops clearing them
+        // (the SUID/SGID class of RUSTSEC-2026-0367).
         let mut entries: Vec<(&str, &[u8], u32)> =
             FIXTURE.iter().map(|(p, b)| (*p, *b, 0)).collect();
-        entries[4].2 = 0o107_755 | 0o1000;
+        entries[4].2 = 0o107_755;
         let archive = build_zip_with_modes(root.path(), &entries);
         let manifest = manifest_for(&FIXTURE, &archive);
 
