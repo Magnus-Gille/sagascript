@@ -19,7 +19,7 @@ import {
   parseRustComplexity,
   wholeSecondUtc,
 } from "./lib/code-health-producer.mjs";
-import { collectRustCliCoverage, safeFailureDiagnostic as safeProducerFailureDiagnostic } from "./code-health-produce.mjs";
+import { collectRustCliCoverage, command, safeFailureDiagnostic as safeProducerFailureDiagnostic } from "./code-health-produce.mjs";
 import { validateObjective, validateObjectiveSeries } from "./lib/code-health-objective.mjs";
 import { seriesKey } from "./lib/code-health-policy.mjs";
 import { summarizeCohorts } from "./ci-cohort-timings.mjs";
@@ -35,6 +35,33 @@ const observedAt = "2026-10-09T10:00:00Z";
 const digest = "b".repeat(64);
 const at = (offsetSeconds = 0) => new Date(Date.parse("2026-09-15T00:00:00Z") + offsetSeconds * 1000).toISOString().replace(".000Z", "Z");
 const expectedJobs = ["scope", "test-macos"];
+
+test("command floors fractional subprocess timeouts without passing invalid values to Node", () => {
+  assert.equal(command(process.execPath, ["-e", "process.stdout.write('spawn-ok')"], { timeout: 10_000.75 }), "spawn-ok");
+  assert.throws(
+    () => command(process.execPath, ["-e", "process.stdout.write('must-not-run')"], { timeout: 0.75 }),
+    /deadline has less than one millisecond remaining/,
+  );
+});
+
+test("failed commands report captured stream sizes and the platform-specific child termination", () => {
+  const expectedSignal = process.platform === "win32" ? "none" : "SIGTERM";
+  assert.throws(
+    () =>
+      command(
+        process.execPath,
+        [
+          "-e",
+          "require('node:fs').writeSync(1, 'stdout-probe'); require('node:fs').writeSync(2, 'stderr-probe'); process.kill(process.pid, 'SIGTERM')",
+        ],
+        { timeout: 10_000 },
+      ),
+    (error) => {
+      assert.match(error.message, new RegExp(`capture stdout_bytes=12 stderr_bytes=12 child_signal=${expectedSignal}`));
+      return true;
+    },
+  );
+});
 
 test("Swift compiler diagnostics keep the error message without leaking source paths or snippets", () => {
   const diagnostic = safeProducerFailureDiagnostic(
@@ -72,6 +99,48 @@ test("Rust failure diagnostics retain ANSI-colored test names and PID panic iden
   assert.match(diagnostic, /test result: FAILED/);
   assert.match(diagnostic, /<redacted-token>/);
   assert.doesNotMatch(diagnostic, /\u001b|38122136812|ghp_[a-zA-Z0-9_]{20,}|\/Users\/magnus/);
+});
+
+test("Rust command diagnostics retain only child exit causes and sanitize dyld loader errors", () => {
+  const diagnostic = safeProducerFailureDiagnostic(
+    "",
+    [
+      "process didn't exit successfully: `/private/tmp/private-cargo/bin/cargo test --secret-arg hidden` (signal: 9, SIGKILL)",
+      "process didn't exit successfully: `/private/tmp/private-cargo/bin/test-binary --test-filter hidden` (signal: 6, SIGABRT: process abort signal)",
+      "error: process didn't exit successfully: `/private/tmp/private-cargo/bin/cargo test --private-value hidden` (exit status: 101)",
+      "error: process didn't exit successfully: `/private/tmp/private-cargo/bin/cargo test --unknown-value hidden` (unrecognized cause)",
+      "Caused by:",
+      "exit status: 102",
+      "dyld[123]: Library not loaded: /Users/magnus/private/lib/libexample.dylib",
+    ].join("\n"),
+  );
+  assert.match(diagnostic, /child-signal: SIGKILL \(9\)/);
+  assert.match(diagnostic, /child-signal: SIGABRT \(6\)/);
+  assert.match(diagnostic, /child-exit: 101/);
+  assert.match(diagnostic, /child-exit: 102/);
+  assert.match(diagnostic, /dyld-loader: Library not loaded/);
+  assert.doesNotMatch(
+    diagnostic,
+    /private-cargo|secret-arg|private-value|test-binary|test-filter|abort signal|hidden|\/Users\/magnus|libexample\.dylib/,
+  );
+});
+
+test("dyld failures expose only the category regardless of library path", () => {
+  for (const path of [
+    "/Users/example/Library/Application Support/PRIVATE_PROJECT_SENTINEL/libexample.dylib",
+    "/srv/PRIVATE_PROJECT_SENTINEL/libexample.dylib",
+  ]) {
+    assert.equal(safeProducerFailureDiagnostic("", `dyld[123]: Library not loaded: ${path}`), "stderr dyld-loader: Library not loaded");
+  }
+});
+
+test("unknown process failures never fall through to generic permission diagnostics", () => {
+  for (const header of ["error: ", "Error: ", "Caused by: ", ""]) {
+    for (const suffix of ["ENOENT", "PermissionDenied", "EACCES"]) {
+      const line = `${header}process didn't exit successfully: \`/private/tmp/test-bin --private-value never-emit-this --filter ${suffix}\` (unrecognized cause)`;
+      assert.equal(safeProducerFailureDiagnostic("", line), "");
+    }
+  }
 });
 
 test("Rust complexity counts function-body complexity once and uses a strict threshold", () => {
@@ -595,6 +664,11 @@ test("CI workflow job inventory and pagination reject incomplete or duplicate ev
   assert.doesNotThrow(() => assertCompletePageCount(120, 120, 1000));
   assert.throws(() => assertCompletePageCount(100, 120, 1000), /does not match total_count/);
   assert.throws(() => assertCompletePageCount(1001, 1001, 1000), /exceeds the configured limit/);
+});
+
+test("pinned CI cohort job registry matches the current workflow inventory", () => {
+  const ciWorkflow = readFileSync(join(repoRoot, ".github/workflows/ci.yml"), "utf8");
+  assert.deepEqual(parseWorkflowJobIds(ciWorkflow), config.ci.expected_job_ids);
 });
 
 test("contract scope registry creates six exact-schema snapshots with distinct slot identities", () => {

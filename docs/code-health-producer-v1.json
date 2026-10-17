@@ -91,6 +91,7 @@
       "build-macos",
       "check-macos",
       "test-linux",
+      "msrv-linux",
       "check-linux",
       "test-windows",
       "build-windows",
