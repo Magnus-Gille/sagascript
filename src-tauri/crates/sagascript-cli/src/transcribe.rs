@@ -22,9 +22,7 @@ use sagascript_core::error::DictationError;
 #[cfg(feature = "diarization")]
 use sagascript_core::meeting::{MeetingSegmentInput, MeetingSpeaker, MeetingTranscript};
 use sagascript_core::run_context::RunContext;
-use sagascript_core::settings::{
-    FileModel, FileModelPreference, Language, Settings, WhisperModel,
-};
+use sagascript_core::settings::{FileModel, FileModelPreference, Language, Settings, WhisperModel};
 use sagascript_core::transcription::diagnostics::{
     analyze_coverage, analyze_language_windows, analyze_repetition, language_mismatch_warning,
     CoverageDiagnostics, LanguageDetection, LanguageRegionDiagnostics, LanguageWindow,

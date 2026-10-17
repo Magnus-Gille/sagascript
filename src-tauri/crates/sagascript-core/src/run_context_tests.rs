@@ -273,11 +273,7 @@ fn one_run_prompt_table() {
                     "swedish",
                     Swedish,
                     false,
-                    &[
-                        ("Grimmer", &[]),
-                        ("merge", &["merch"]),
-                        ("Grimnir", &[]),
-                    ],
+                    &[("Grimmer", &[]), ("merge", &["merch"]), ("Grimnir", &[])],
                 )),
             },
             Case {
@@ -337,7 +333,12 @@ fn legacy_settings_table() {
                 profile: Some("english"),
                 language: None,
                 prompt: None,
-                expect: Ok(("english", English, false, &[("merge", &[]), ("OpenRouter", &[])])),
+                expect: Ok((
+                    "english",
+                    English,
+                    false,
+                    &[("merge", &[]), ("OpenRouter", &[])],
+                )),
             },
             Case {
                 name: "a prompt replaces the saved global hint",
