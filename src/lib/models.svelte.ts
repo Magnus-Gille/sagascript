@@ -5,7 +5,7 @@ import { useTauriEvent } from "./tauri-events.svelte";
 /**
  * The id of the Pianissimo (Swedish) model on the wire: what the backend's
  * `FileModel::PianissimoOriginal` serializes to (sagascript-core
- * settings/manager.rs, pinned by its tests). `get_file_model_options`,
+ * `FileModel::PIANISSIMO_ID` in models/file_model.rs, pinned by its tests). `get_file_model_options`,
  * `profile_models` and `file_transcription_model` carry it.
  */
 export const PIANISSIMO_ID = "pianissimo-sv";
