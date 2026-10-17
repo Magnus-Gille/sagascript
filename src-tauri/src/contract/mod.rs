@@ -15,6 +15,7 @@
 //! format the frontend must accept.
 
 mod command_map;
+mod writers;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -35,11 +36,11 @@ pub const FIXTURES: &[&str] = &[
 
 /// The commands that write settings (they reach `persist_and_sync` or a sibling),
 /// and the functions that call the settings store's writers themselves.
-pub(crate) use command_map::SettingsWriters;
+pub(crate) use writers::SettingsWriters;
 
 /// See [`SettingsWriters`].
 pub(crate) fn settings_writers() -> SettingsWriters {
-    command_map::settings_writers()
+    writers::settings_writers()
 }
 
 /// The names of every command registered in `tauri::generate_handler!`.

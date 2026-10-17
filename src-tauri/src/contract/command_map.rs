@@ -188,11 +188,11 @@ struct Generation {
     used_json: BTreeSet<(&'static str, &'static str)>,
 }
 
-fn src_dir() -> PathBuf {
+pub(super) fn src_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("src")
 }
 
-fn parse_file(path: &Path) -> syn::File {
+pub(super) fn parse_file(path: &Path) -> syn::File {
     let text = fs::read_to_string(path)
         .unwrap_or_else(|error| panic!("cannot read {}: {error}", path.display()));
     syn::parse_file(&text)
@@ -426,7 +426,7 @@ impl Generation {
 
 /// Whether an attribute is `#[tauri::command]` (or `#[command]`); rejects
 /// arguments that would change the wire names.
-fn command_attribute(attribute: &syn::Attribute) -> Result<bool, String> {
+pub(super) fn command_attribute(attribute: &syn::Attribute) -> Result<bool, String> {
     let path: Vec<String> = attribute
         .path()
         .segments
@@ -511,7 +511,7 @@ impl Visit<'_> for Handlers {
 }
 
 /// Rust source files below `dir`, sorted.
-fn rust_files(dir: &Path) -> Vec<PathBuf> {
+pub(super) fn rust_files(dir: &Path) -> Vec<PathBuf> {
     let mut files = Vec::new();
     for entry in fs::read_dir(dir).expect("readable source directory") {
         let path = entry.expect("readable directory entry").path();
@@ -613,133 +613,6 @@ fn locate(files: &mut CommandFiles, module: &str, name: &str) -> Result<ItemFn, 
             owners.join(", ")
         )),
     }
-}
-
-/// The functions that write settings, found in the sources of `src/commands/`.
-#[derive(Debug, Default, PartialEq, Eq)]
-pub(crate) struct SettingsWriters {
-    /// `#[tauri::command]` functions that reach `persist_and_sync` or one of its
-    /// siblings, directly or through another function of those files.
-    pub commands: Vec<String>,
-    /// Functions that call the settings store's writers (`store::update`,
-    /// `try_update`, `save`) themselves. Only `persist.rs` may.
-    pub bypassing: Vec<String>,
-}
-
-/// The persist entry points of `commands/persist.rs`.
-const PERSIST_ENTRY_POINTS: &[&str] = &[
-    "persist_and_sync",
-    "try_persist_and_mirror",
-    "try_persist_and_replace",
-];
-const STORE_WRITERS: &[&str] = &["update", "try_update", "save"];
-
-/// What one function calls.
-#[derive(Default)]
-struct FunctionCalls {
-    is_command: bool,
-    callees: BTreeSet<String>,
-    store_writes: bool,
-}
-
-impl Visit<'_> for FunctionCalls {
-    fn visit_expr_call(&mut self, call: &syn::ExprCall) {
-        if let syn::Expr::Path(path) = call.func.as_ref() {
-            let segments: Vec<String> = path
-                .path
-                .segments
-                .iter()
-                .map(|segment| segment.ident.to_string())
-                .collect();
-            if let [.., store, name] = segments.as_slice() {
-                if store == "store" && STORE_WRITERS.contains(&name.as_str()) {
-                    self.store_writes = true;
-                }
-            }
-            if let Some(name) = segments.last() {
-                self.callees.insert(name.clone());
-            }
-        }
-        syn::visit::visit_expr_call(self, call);
-    }
-}
-
-/// Every free function of `files` by name, with what it calls.
-struct FunctionTable(BTreeMap<String, FunctionCalls>);
-
-impl Visit<'_> for FunctionTable {
-    fn visit_item_fn(&mut self, function: &ItemFn) {
-        let mut calls = FunctionCalls {
-            is_command: function
-                .attrs
-                .iter()
-                .any(|attribute| matches!(command_attribute(attribute), Ok(true))),
-            ..FunctionCalls::default()
-        };
-        calls.visit_block(&function.block);
-        let entry = self.0.entry(function.sig.ident.to_string()).or_default();
-        entry.is_command |= calls.is_command;
-        entry.store_writes |= calls.store_writes;
-        entry.callees.extend(calls.callees);
-    }
-}
-
-fn analyse_settings_writers(files: &[syn::File]) -> SettingsWriters {
-    let mut table = FunctionTable(BTreeMap::new());
-    for file in files {
-        table.visit_file(file);
-    }
-    let functions = table.0;
-    // A function writes settings when it calls an entry point or a function
-    // that does; commands call other commands (`set_whisper_model` calls
-    // `set_profile_model`).
-    let mut writers: BTreeSet<&str> = BTreeSet::new();
-    loop {
-        let before = writers.len();
-        for (name, calls) in &functions {
-            if calls.callees.iter().any(|callee| {
-                PERSIST_ENTRY_POINTS.contains(&callee.as_str()) || writers.contains(callee.as_str())
-            }) {
-                writers.insert(name);
-            }
-        }
-        if writers.len() == before {
-            break;
-        }
-    }
-    SettingsWriters {
-        commands: functions
-            .iter()
-            .filter(|(name, calls)| calls.is_command && writers.contains(name.as_str()))
-            .map(|(name, _)| name.clone())
-            .collect(),
-        bypassing: functions
-            .iter()
-            .filter(|(_, calls)| calls.store_writes)
-            .map(|(name, _)| name.clone())
-            .collect(),
-    }
-}
-
-/// The settings writers among the app's commands, for the `persist_and_sync`
-/// table test: a command that writes settings must have a row there, whatever
-/// it is called.
-pub(super) fn settings_writers() -> SettingsWriters {
-    let files: Vec<syn::File> = rust_files(&src_dir().join("commands"))
-        .iter()
-        .filter(|path| {
-            let name = path
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned());
-            // persist.rs is where the store is written; its entry points are
-            // recognised by name.
-            name.is_some_and(|name| {
-                !name.ends_with("_tests.rs") && name != "test_fixtures.rs" && name != "persist.rs"
-            })
-        })
-        .map(|path| parse_file(path))
-        .collect();
-    analyse_settings_writers(&files)
 }
 
 /// The names of the registered commands, for tests elsewhere that need to know
@@ -1276,43 +1149,6 @@ fn registered_paths_name_a_module_and_a_function() {
     assert!(registered_module_and_name(&empty)
         .unwrap_err()
         .contains("without segments"));
-}
-
-#[test]
-fn a_command_that_reaches_a_persist_entry_point_is_a_settings_writer() {
-    let file: syn::File = syn::parse_str(
-        r#"
-        #[tauri::command]
-        pub async fn set_direct() -> Result<(), String> { persist_and_sync(&c, |s| s.x = 1)?; Ok(()) }
-        #[tauri::command]
-        pub async fn apply_through_a_helper() -> Result<(), String> { helper(); Ok(()) }
-        fn helper() { crate::commands::try_persist_and_replace(&c, |_| Ok::<(), String>(())); }
-        #[tauri::command]
-        pub async fn toggle_through_a_command() -> Result<(), String> { set_direct().await }
-        #[tauri::command]
-        pub async fn get_something() -> Result<(), String> { read(); Ok(()) }
-        #[tauri::command]
-        pub async fn save_by_hand() -> Result<(), String> { sagascript_core::settings::store::update(|s| s.x = 2)?; Ok(()) }
-        fn not_a_command() { persist_and_sync(&c, |s| s.x = 3); }
-        "#,
-    )
-    .expect("test source parses");
-    let found = analyse_settings_writers(&[file]);
-    assert_eq!(
-        found.commands,
-        [
-            "apply_through_a_helper",
-            "set_direct",
-            "toggle_through_a_command"
-        ]
-    );
-    assert_eq!(found.bypassing, ["save_by_hand"]);
-}
-
-/// The real sources: every settings writer goes through persist.rs.
-#[test]
-fn no_command_writes_the_settings_store_directly() {
-    assert_eq!(settings_writers().bypassing, Vec::<String>::new());
 }
 
 #[test]

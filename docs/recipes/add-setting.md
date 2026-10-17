@@ -83,8 +83,16 @@ replaced the whole copy would install shortcuts the OS never registered.
 - Add a row to the table in `commands/persist_tests.rs` and say how the setter syncs
   (`Mirror::Field` with its fields, or `Mirror::Whole`): the test calls every setter, changes
   the file behind the controller, and checks that only those fields followed. It also fails
-  for a command that writes settings and has no row; the writers are found from the sources
-  (a command that reaches `persist_and_sync` or a sibling), not from the name.
+  for a command that writes settings and has no row. The writers are found from the sources
+  (`src-tauri/src/contract/writers.rs`), not from the name: a `#[tauri::command]` that reaches
+  `persist_and_sync` or a sibling counts, through any chain of functions, methods and other
+  commands in any file under `src/` (tests excepted), through a `use … as` rename, and from
+  inside a macro such as `dbg!`. What it cannot see: functions and methods are matched by
+  name across files (a same-named function can ask for a row you do not need), glob imports
+  (`use x::*`), `macro_rules!`-generated code, a turbofish call inside a macro, and calls
+  through a function pointer or closure kept in a variable. A second test fails when a
+  function other than the permission gate in `main.rs` calls `store::update`, `try_update`,
+  `update_with`, `try_update_with`, `save` or `machine::{update, try_update}` itself.
 - Side effects go after the persist call (`set_show_overlay`, `set_vad_enabled`). A setter that
   needs the `AppHandle` (the profiles menu, the overlay window) splits its persistence half into
   a plain function, as `persist_language` and `persist_show_overlay` do, so the table test can

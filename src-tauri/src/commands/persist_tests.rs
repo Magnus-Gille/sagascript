@@ -448,8 +448,10 @@ fn every_setter_syncs_the_controller_the_way_it_always_did() {
 
 /// The writers come from the sources, not from a naming convention: a command
 /// is a settings writer when it reaches `persist_and_sync` or a sibling,
-/// directly or through a helper or another command (contract/command_map.rs).
-/// `apply_*` or `toggle_*` writers are found as well as `set_*` ones.
+/// directly or through a helper, a method or another command anywhere under
+/// `src/`, through a renamed import, or from inside a macro. `apply_*` or
+/// `toggle_*` writers are found as well as `set_*` ones. The scan's limits are
+/// listed in contract/writers.rs and in the add-setting recipe.
 #[test]
 fn every_settings_writing_command_has_a_row() {
     let covered: BTreeSet<&str> = ROWS
