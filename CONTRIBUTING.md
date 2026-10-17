@@ -149,7 +149,7 @@ exact files and steps.
 2. **CLI first** (`src-tauri/crates/sagascript-cli/src/config.rs`): the `config get/set/reset`
    key. Focused: `cargo test -p sagascript-cli config`, then
    `npm run verify -- --only test-cli-lean,clippy-cli-lean` for the batch-only build.
-3. **GUI** (the setter in `src-tauri/src/commands.rs`, `src/lib/api.ts`, `Settings.svelte`, the
+3. **GUI** (the setter in `src-tauri/src/commands/settings.rs`, `src/lib/api.ts`, `Settings.svelte`, the
    browser mock): focused: `npm run verify:fast`; if the Settings flow changed visibly, also
    `npm run verify -- --only browser`. The recipe's CLI/GUI parity check is manual.
 

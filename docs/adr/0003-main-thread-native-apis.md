@@ -13,7 +13,7 @@ this in several places, with slightly different signal names:
 
 - AGENTS.md and CONTRIBUTING.md ("Calling these APIs from a tokio worker thread will cause a
   SIGTRAP crash").
-- `src-tauri/src/commands.rs`, Dictate test transcription: "enigo's macOS TIS APIs crash if
+- `src-tauri/src/commands/transcribe.rs`, Dictate test transcription: "enigo's macOS TIS APIs crash if
   called from a tokio worker thread (SIGTRAP in dispatch_assert_queue)".
 - `stop_recording_and_transcribe` in `src-tauri/src/dictation/pipeline.rs`: "Auto-paste MUST run on the main
   thread — enigo's macOS TIS APIs crash (SIGABRT) if called from a tokio worker thread."
@@ -47,8 +47,9 @@ the minimum-duration top-up in `stop_recording_and_transcribe`).
 ## Consequences
 
 - Async code cannot call `PasteService` directly; every paste path needs a dispatch and a
-  completion wait. Today there are several variants (the hardened live path in `dictation/pipeline.rs`, the
-  fire-and-forget `run_on_main_thread` paste after file transcription in `commands.rs`, and
+  completion wait. Today there are several variants (the hardened live path in
+  `dictation/pipeline.rs`, the fire-and-forget `run_on_main_thread` paste after file
+  transcription in `commands/transcribe_file.rs`, and
   the `on_main` helper). #344 consolidates them behind one adapter and makes the lifecycle
   testable with fakes; until then, copy the hardened path in `stop_recording_and_transcribe`.
 - Main-thread code paths cannot run in plain unit tests; keep decisions in pure functions

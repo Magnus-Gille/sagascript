@@ -42,9 +42,9 @@ CLI first ([ADR 0001](../adr/0001-cli-first.md)): every user setting gets a `con
    `VALID_KEYS`. Add the field to its `INTERNAL_FIELDS` list only if it is not user-facing
    (markers such as `engine_defaults_version`).
 
-## 3. App command: `src-tauri/src/commands.rs` and `src-tauri/src/main.rs`
+## 3. App command: `src-tauri/src/commands/settings.rs` and `src-tauri/src/main.rs`
 
-Copy `set_temperature_fallback` (`commands.rs`):
+Copy `set_temperature_fallback` (`commands/settings.rs`):
 
 ```rust
 #[tauri::command]
@@ -52,23 +52,52 @@ pub async fn set_example_flag(
     controller: State<'_, SharedController>,
     enabled: bool,
 ) -> Result<(), String> {
-    let persisted = sagascript_core::settings::store::update(|settings| {
+    persist_and_sync(&controller, |settings| {
         settings.example_flag = enabled;
-    })?;
-    let mut ctrl = lock_controller(&controller);
-    ctrl.settings_mut().example_flag = persisted.example_flag;
+    })
+    .map_err(|error| error.to_string())?;
     info!("Example flag: {enabled}");
     Ok(())
 }
 ```
 
-The guard is held only for the copy and dropped when the function returns; nothing after it
-awaits.
+`persist_and_sync` (`commands/persist.rs`) is the only way a command writes settings: it
+applies the change to the latest file under the settings lock and then the same change to
+the controller's copy, one writer at a time, so a setter cannot forget the second half. It
+returns the written `Settings`. A new setter uses this form: **the controller takes over only
+the field you set**. That matters: after a hot reload that could not register the file's
+shortcuts, the controller deliberately stays on the registered ones, and a setter that
+replaced the whole copy would install shortcuts the OS never registered.
 
-- Persist first with `store::update` (`store::try_update` when validation can fail), then copy
-  the persisted value into the controller. Never `store::save()` an in-memory clone; never hold
-  the controller lock across the store call or an `.await`.
-- Side effects go after the lock is released (`set_show_overlay`, `set_vad_enabled`). The
+- `try_persist_and_mirror(ctrl, change, |memory, written| …)` when the change can be refused
+  (validation runs under the settings lock; a typed `CommandError` stays typed) and the
+  controller should copy the written fields (`apply_training_glossary`).
+  `try_persist_and_replace` replaces the controller's whole copy; only the setters that
+  applied the settings they just wrote use it (`set_language`, `set_profile_model`,
+  `set_profile_glossary`, `persist_hotkey_change`), and it also returns the copy it replaced.
+  Never `store::save()` an in-memory clone, never write `ctrl.settings_mut()` (it exists in
+  tests only), never hold the controller lock across the store call or an `.await`. The
+  setter's error type stays `String` until
+  [#360](https://github.com/Magnus-Gille/sagascript/issues/360) part 2: map with
+  `.map_err(|error| error.to_string())`.
+- Add a row to the table in `commands/persist_tests.rs` and say how the setter syncs
+  (`Mirror::Field` with its fields, or `Mirror::Whole`): the test calls every setter, changes
+  the file behind the controller, and checks that only those fields followed. It also fails
+  for a command that writes settings and has no row. The writers are found from the sources
+  (`src-tauri/src/contract/writers.rs`), not from the name: a `#[tauri::command]` that reaches
+  `persist_and_sync` or a sibling counts, through any chain of functions, methods and other
+  commands in any file under `src/` (tests excepted), through a `use … as` rename, and from
+  inside a macro such as `dbg!`. What it cannot see: functions and methods are matched by
+  name across files (a same-named function can ask for a row you do not need), glob imports
+  (`use x::*`), `macro_rules!`-generated code, a turbofish call inside a macro, and calls
+  through a function pointer or closure kept in a variable. A second test fails when a
+  function other than the permission gate (`load_settings_with_permission_gate` in
+  `launch/settings.rs`) calls `store::update`, `try_update`,
+  `update_with`, `try_update_with`, `save` or `machine::{update, try_update}` itself.
+- Side effects go after the persist call (`set_show_overlay`, `set_vad_enabled`). A setter that
+  needs the `AppHandle` (the profiles menu, the overlay window) splits its persistence half into
+  a plain function, as `persist_language` and `persist_show_overlay` do, so the table test can
+  call it. The
   watcher (`start_settings_watcher` in `settings_watcher.rs`) reloads the **whole** `Settings` from disk
   when the CLI edits the file, so a plain value read at use time from `ctrl.settings()` needs
   nothing there. It does not replay setter side effects: if your setter has one (recreate a
@@ -77,8 +106,9 @@ awaits.
   regenerate the shared contract: `SAGASCRIPT_BLESS_CONTRACTS=1 cargo test -p sagascript
   contract` in `src-tauri/` adds the command to the generated `CommandMap` and the new field
   to `contracts/transport/get_settings.json` ([contracts/README.md](../../contracts/README.md)).
-  Set a non-default value in `customised()` in `commands_tests.rs` so the fixture shows it.
-- Setter logic goes in a plain function with a test in `commands_tests.rs`
+  Set a non-default value in `customised()` in `commands/settings_tests.rs` so the fixture
+  shows it.
+- Setter logic goes in a plain function with a test in `commands/settings_tests.rs`
   (`apply_language_selection` / `language_selection_tests`, `effective_auto_paste` /
   `auto_paste_tests`).
 
@@ -114,7 +144,7 @@ awaits.
 | `settings/manager_tests.rs` | Assert the default in `settings_default_values` and the round trip in `settings_serde_roundtrip`. |
 | `settings/store_tests.rs` | Assert a file without the key loads the default (`partial_json_fills_defaults`). Migrations: test through the `*_at(path, …)` helpers on a `fake_settings()` file (`with_temp_settings`), never the real settings path. |
 | `config.rs` | Extend `get_setting_value_returns_serialized_values`; add a set/reset/reject test modeled on `engine_settings_can_be_set_reset_and_reject_bad_values`. |
-| `commands_tests.rs` | Unit-test any extracted setter logic. |
+| `commands/settings_tests.rs`, `commands/persist_tests.rs` | Unit-test any extracted setter logic; add the setter's row to the `persist_and_sync` table. |
 | Frontend | New logic in a `.ts` module gets a Vitest test in `src/lib/<module>.test.ts`; what Settings shows or invokes gets a component test (`src/lib/Settings.test.ts`, [docs/testing/frontend.md](../testing/frontend.md)). Do not add regex tests over `Settings.svelte` source ([ADR 0004](../adr/0004-test-strategy.md)). |
 
 ## 6. Verify, including CLI/GUI parity
@@ -140,7 +170,7 @@ cli config list | grep example_flag             # the cmd_list row
 cli config set --help | grep example_flag       # the help text
 cli config reset example_flag && grep example_flag "$SAGASCRIPT_SETTINGS_PATH"  # key stays, now false
 cd ..
-grep -n set_example_flag src-tauri/src/commands.rs src-tauri/src/main.rs src/lib/api.ts  # all three
+grep -n set_example_flag src-tauri/src/commands/settings.rs src-tauri/src/main.rs src/lib/api.ts  # all three
 npx svelte-check --tsconfig ./tsconfig.json && npm run test:unit && npm run test:frontend
 npx playwright install chromium && npm run test:browser   # you touched Settings.svelte and the mock
 ```

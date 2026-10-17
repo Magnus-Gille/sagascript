@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import test from "node:test";
@@ -231,6 +231,23 @@ test("Rust complexity counts function-body complexity once and uses a strict thr
     () => parseRustComplexity([{ path: "broken.rs", ast: { spaces: [{ kind: "function", spaces: [] }] } }], 10),
     /score is missing/,
   );
+});
+
+test("the rust-cli complexity scope lists every production module of the transcribe command", () => {
+  // The scope names files, so a module added to transcribe/ would silently drop out of the
+  // measurement until someone remembers to list it. Test files (tests.rs, *_tests.rs) are not measured.
+  const directory = "src-tauri/crates/sagascript-cli/src/transcribe";
+  const modules = readdirSync(join(repoRoot, directory))
+    .filter((name) => name.endsWith(".rs") && !/(^|_)tests\.rs$/.test(name))
+    .map((name) => `${directory}/${name}`)
+    .sort();
+  const configured = config.complexity.scopes["rust-cli"];
+  assert.deepEqual(
+    configured.filter((path) => path.startsWith(`${directory}/`)).sort(),
+    modules,
+    "docs/code-health-producer-v1.json complexity.scopes.rust-cli must list exactly the production files of transcribe/",
+  );
+  for (const path of configured) assert.ok(existsSync(join(repoRoot, path)), `${path} is listed in the rust-cli scope but does not exist`);
 });
 
 test("Rust coverage labels inline tests and keeps inactive or non-emitted files out of the denominator", () => {

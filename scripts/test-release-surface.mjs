@@ -49,7 +49,7 @@ const [mainRsSource, ...moduleSources] = await Promise.all(
 );
 const mainSource = [mainRsSource, ...moduleSources].join("\n");
 const startupSource = await readFile(new URL("launch/startup.rs", appShellDirectory), "utf8");
-const commandsSource = await readFile(new URL("../src-tauri/src/commands.rs", import.meta.url), "utf8");
+const commandsSource = await readFile(new URL("../src-tauri/src/commands/settings.rs", import.meta.url), "utf8");
 const appSource = await readFile(new URL("../src/App.svelte", import.meta.url), "utf8");
 const brandMarkSource = await readFile(new URL("../assets/brand/sagascript-mark.svg", import.meta.url), "utf8");
 const appIconSource = await readFile(new URL("../assets/brand/sagascript-app-icon.svg", import.meta.url), "utf8");
