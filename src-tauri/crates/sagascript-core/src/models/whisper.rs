@@ -331,3 +331,7 @@ impl WhisperModel {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "whisper_tests.rs"]
+mod tests;

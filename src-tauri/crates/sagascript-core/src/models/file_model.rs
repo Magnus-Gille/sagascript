@@ -64,3 +64,7 @@ impl FileModel {
         models
     }
 }
+
+#[cfg(test)]
+#[path = "file_model_tests.rs"]
+mod tests;
