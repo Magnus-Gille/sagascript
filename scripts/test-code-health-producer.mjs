@@ -109,8 +109,20 @@ test("Rust command diagnostics retain only child exit causes and sanitize dyld l
   assert.match(diagnostic, /child-signal: SIGABRT \(6\)/);
   assert.match(diagnostic, /child-exit: 101/);
   assert.match(diagnostic, /child-exit: 102/);
-  assert.match(diagnostic, /dyld-loader: Library not loaded: <local-path>/);
+  assert.match(diagnostic, /dyld-loader: Library not loaded/);
   assert.doesNotMatch(diagnostic, /private-cargo|secret-arg|private-value|test-binary|test-filter|abort signal|hidden|\/Users\/magnus|libexample\.dylib/);
+});
+
+test("dyld failures expose only the category regardless of library path", () => {
+  for (const path of [
+    "/Users/example/Library/Application Support/PRIVATE_PROJECT_SENTINEL/libexample.dylib",
+    "/srv/PRIVATE_PROJECT_SENTINEL/libexample.dylib",
+  ]) {
+    assert.equal(
+      safeProducerFailureDiagnostic("", `dyld[123]: Library not loaded: ${path}`),
+      "stderr dyld-loader: Library not loaded",
+    );
+  }
 });
 
 test("unknown process failures never fall through to generic permission diagnostics", () => {

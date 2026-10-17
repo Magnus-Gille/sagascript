@@ -158,7 +158,7 @@ export function safeFailureDiagnostic(stdout, stderr) {
       else if (processFailureHeader) {
         // Unknown child causes must not expose argv through generic error fallbacks.
       } else if (dyldLoader) {
-        lines.push(`${stream} dyld-loader: ${safeDiagnostic(`Library not loaded: ${dyldLoader[1]}`).slice(0, 400)}`);
+        lines.push(`${stream} dyld-loader: Library not loaded`);
       } else if (section) lines.push(`${stream} test-failed: ${safeDiagnostic(section[1]).slice(0, 400)}`);
       else if (rustFailedTest) lines.push(`${stream} failed-test: ${safeDiagnostic(rustFailedTest[1]).slice(0, 400)}`);
       else if (swiftFailure) lines.push(`${stream} test-failed: ${safeDiagnostic(swiftFailure[1]).slice(0, 400)}`);
