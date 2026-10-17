@@ -223,13 +223,21 @@ test("second GUI launches are routed to the running instance", () => {
   assert.match(mainSource, /Second-instance launch requested Settings/);
   assert.doesNotMatch(mainSource, /Another Sagascript GUI instance is already running; exiting/);
   // The plugin is registered in main.rs before the setup hook runs; the backend is built only in
-  // that hook (launch/startup.rs: setup_app, whose first step is manage_app_state).
+  // that hook: launch/startup.rs, where setup_app calls manage_app_state exactly once.
   const singleInstanceInit = mainRsSource.indexOf("tauri_plugin_single_instance::init");
   const setupHook = mainRsSource.indexOf(".setup(move |app| setup_app(app, gui_launch_mode))");
   assert.ok(singleInstanceInit >= 0 && setupHook > singleInstanceInit);
   assert.equal(mainSource.split("WhisperBackend::new()").length - 1, 1, "the backend is built in one place");
   assert.ok(!mainRsSource.includes("WhisperBackend::new()"), "main.rs must not build the backend outside the setup hook");
-  assert.match(startupSource, /fn setup_app\([\s\S]*?\) -> Result<[^{]*\{[\s\S]*?manage_app_state\(app\);/);
+  assert.ok(!mainRsSource.includes("manage_app_state"), "main.rs must not call manage_app_state; the setup hook does");
+  assert.equal(startupSource.split("manage_app_state(app);").length - 1, 1, "manage_app_state has exactly one caller");
+  const setupStart = startupSource.indexOf("fn setup_app(");
+  const setupLength = startupSource.slice(setupStart).search(/\r?\n\}/);
+  assert.ok(setupStart >= 0 && setupLength > 0, "setup_app is not found or not closed");
+  assert.ok(
+    startupSource.slice(setupStart, setupStart + setupLength).includes("manage_app_state(app);"),
+    "the one manage_app_state call must be inside setup_app",
+  );
   assert.match(
     startupSource,
     /fn manage_app_state\(app: &tauri::App\) \{[\s\S]*?let whisper: SharedWhisper = Arc::new\(WhisperBackend::new\(\)\);[\s\S]*?app\.manage\(whisper\);/,
