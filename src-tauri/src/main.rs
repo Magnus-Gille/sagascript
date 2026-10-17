@@ -34,10 +34,7 @@ mod paste_completion;
 mod plain_file_jobs;
 mod platform;
 mod tray;
-mod update_activity;
-mod update_recovery;
 mod updater;
-mod updates;
 
 use tracing_subscriber::EnvFilter;
 
@@ -86,7 +83,11 @@ use tray::{
 // commands.rs reaches the profile menu refresh as `crate::update_profiles_menu`.
 pub(crate) use tray::update_profiles_menu;
 
+#[cfg(target_os = "macos")]
+use updater::updates;
 use updater::{check_for_updates_and_install, manage_update_menu_state};
+// commands.rs and app_controller.rs reach these under their old crate paths.
+pub(crate) use updater::{activity as update_activity, recovery as update_recovery};
 
 use app_controller::AppState;
 use app_controller::{AppController, HotkeyDownResult, StopRecordingOutcome};

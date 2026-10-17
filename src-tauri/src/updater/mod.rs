@@ -5,8 +5,11 @@
 //! The update task runs on the async runtime; every menu change goes through
 //! `dispatch_to_main` because tray calls belong on the main thread (ADR 0003).
 
+pub(crate) mod activity;
+pub(crate) mod recovery;
 #[cfg(any(target_os = "macos", test))]
 mod signed;
+pub(crate) mod updates;
 
 use std::sync::Mutex;
 
@@ -14,14 +17,13 @@ use sagascript_core::sync::lock_or_recover;
 use tauri::{menu::MenuItem, Manager};
 use tracing::{error, warn};
 
-use crate::{dispatch_to_main, focus_diag, updates};
+use crate::{dispatch_to_main, focus_diag};
 #[cfg(target_os = "macos")]
 use signed::{finish_update_check_error, install_signed_update};
 
 // Update menu bookkeeping is recovered as-is after a panic (ADR 0005), like the
 // tray's: it only holds menu handles and flags that the next menu update
 // overwrites.
-
 const UPDATE_MENU_LOCK: &str = "tray.update_menu";
 
 #[derive(Clone)]

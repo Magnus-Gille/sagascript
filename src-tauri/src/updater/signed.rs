@@ -11,13 +11,15 @@ use tauri::Manager;
 use tracing::warn;
 
 #[cfg(target_os = "macos")]
-use super::{set_update_menu, UpdateMenuMode};
+use super::{
+    activity as update_activity, recovery as update_recovery, set_update_menu, UpdateMenuMode,
+};
 #[cfg(target_os = "macos")]
 use crate::commands::{lock_controller, SharedController};
 #[cfg(target_os = "macos")]
-use crate::events::{self, EmitEvent};
+use crate::dispatch_to_main;
 #[cfg(target_os = "macos")]
-use crate::{dispatch_to_main, update_activity, update_recovery};
+use crate::events::{self, EmitEvent};
 
 #[cfg(target_os = "macos")]
 pub(super) fn finish_update_check_error(app: &tauri::AppHandle, error: String) {
