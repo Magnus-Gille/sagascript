@@ -14,6 +14,6 @@ mod language;
 mod sources;
 mod whisper;
 
-pub use file_model::FileModel;
+pub use file_model::{FileModel, PIANISSIMO_UNSUPPORTED_MESSAGE};
 pub use language::Language;
 pub use whisper::{UnknownModelId, WhisperModel};

@@ -42,3 +42,7 @@ impl MachineProbe for LineupEnv<'_> {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "probes_tests.rs"]
+mod tests;

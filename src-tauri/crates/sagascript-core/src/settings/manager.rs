@@ -12,14 +12,6 @@ use crate::glossary::Glossary;
 // callers import from `sagascript_core::models`.
 pub use crate::models::{FileModel, Language, WhisperModel};
 
-/// Real on-disk readiness of a file-transcription model.
-fn real_file_model_ready(model: FileModel) -> bool {
-    match model {
-        FileModel::Whisper(m) => crate::transcription::model::is_model_downloaded(m),
-        FileModel::PianissimoOriginal => crate::transcription::pianissimo_model::is_downloaded(),
-    }
-}
-
 /// Resolve an `Auto` file-model preference against what is downloaded.
 /// `allow_pianissimo` false yields Whisper models only.
 fn auto_file_model(
@@ -488,14 +480,8 @@ impl Settings {
 
     /// Resolve the live engine for one profile. Unmigrated settings retain
     /// their previous global selection until the profile migration is saved.
-    pub fn dictation_model_for_profile(&self, profile_id: &str) -> Result<FileModel, String> {
-        self.dictation_model_for_profile_gated(
-            profile_id,
-            crate::transcription::pianissimo_backend::runtime_supported_on_this_os(),
-        )
-    }
-
-    /// [`Self::dictation_model_for_profile`] with the Pianissimo platform gate supplied by the caller.
+    /// `pianissimo_supported` is the Pianissimo platform gate;
+    /// `Settings::dictation_model_for_profile` asks this machine.
     pub fn dictation_model_for_profile_gated(
         &self,
         profile_id: &str,
@@ -543,8 +529,15 @@ impl Settings {
         }
     }
 
-    pub fn live_model_for_profile(&self, profile_id: &str) -> Result<(WhisperModel, bool), String> {
-        match self.dictation_model_for_profile(profile_id)? {
+    /// [`Self::dictation_model_for_profile_gated`] as the Whisper model and
+    /// whether the profile uses Pianissimo instead.
+    /// `Settings::live_model_for_profile` asks this machine for the gate.
+    pub fn live_model_for_profile_gated(
+        &self,
+        profile_id: &str,
+        pianissimo_supported: bool,
+    ) -> Result<(WhisperModel, bool), String> {
+        match self.dictation_model_for_profile_gated(profile_id, pianissimo_supported)? {
             FileModel::Whisper(model) => Ok((model, false)),
             // The Whisper slot is unused when the flag is set; keep the Whisper
             // recommendation as a harmless placeholder.
@@ -554,32 +547,27 @@ impl Settings {
         }
     }
 
-    /// True when `profile_id`'s live dictation model is Pianissimo.
-    pub fn profile_uses_pianissimo(&self, profile_id: &str) -> bool {
-        self.live_model_for_profile(profile_id)
+    /// True when `profile_id`'s live dictation model is Pianissimo, given the
+    /// platform gate. `Settings::profile_uses_pianissimo` asks this machine.
+    pub fn profile_uses_pianissimo_gated(
+        &self,
+        profile_id: &str,
+        pianissimo_supported: bool,
+    ) -> bool {
+        self.live_model_for_profile_gated(profile_id, pianissimo_supported)
             .is_ok_and(|(_, pianissimo)| pianissimo)
     }
 
-    /// True when any dictation profile's live model is Pianissimo.
-    pub fn any_profile_uses_pianissimo(&self) -> bool {
+    /// True when any dictation profile's live model is Pianissimo, given the
+    /// platform gate. `Settings::any_profile_uses_pianissimo` asks this machine.
+    pub fn any_profile_uses_pianissimo_gated(&self, pianissimo_supported: bool) -> bool {
         self.resolved_hotkey_profiles()
             .iter()
-            .any(|profile| self.profile_uses_pianissimo(&profile.id))
+            .any(|profile| self.profile_uses_pianissimo_gated(&profile.id, pianissimo_supported))
     }
 
-    pub fn set_profile_model(
-        &mut self,
-        profile_id: &str,
-        preference: FileModelPreference,
-    ) -> Result<(), String> {
-        self.set_profile_model_gated(
-            profile_id,
-            preference,
-            crate::transcription::pianissimo_backend::runtime_supported_on_this_os(),
-        )
-    }
-
-    /// [`Self::set_profile_model`] with the Pianissimo platform gate supplied by the caller.
+    /// Choose a profile's live model; selecting Pianissimo is refused unless
+    /// `pianissimo_supported`. `Settings::set_profile_model` asks this machine.
     pub fn set_profile_model_gated(
         &mut self,
         profile_id: &str,
@@ -587,7 +575,7 @@ impl Settings {
         pianissimo_supported: bool,
     ) -> Result<(), String> {
         if preference == FileModelPreference::PianissimoOriginal && !pianissimo_supported {
-            return Err(crate::transcription::pianissimo_backend::UNSUPPORTED_MESSAGE.into());
+            return Err(crate::models::PIANISSIMO_UNSUPPORTED_MESSAGE.into());
         }
         let profile = self
             .resolved_hotkey_profiles()
@@ -645,9 +633,12 @@ impl Settings {
 
     /// Change the default profile's language. A model the new language cannot
     /// use is reset to Auto; the returned notices describe every such reset.
-    pub fn set_default_profile_language(
+    /// `pianissimo_supported` is the platform gate;
+    /// `Settings::set_default_profile_language` asks this machine.
+    pub fn set_default_profile_language_gated(
         &mut self,
         language: Language,
+        pianissimo_supported: bool,
     ) -> Result<Vec<ModelResetNotice>, String> {
         let mut candidate = self.clone();
         let mut profiles = candidate.resolved_hotkey_profiles();
@@ -656,7 +647,7 @@ impl Settings {
             .position(|profile| profile.id == "default")
             .unwrap_or(0);
         profiles[index].language = language;
-        let notices = candidate.replace_hotkey_profiles(profiles)?;
+        let notices = candidate.replace_hotkey_profiles_gated(profiles, pianissimo_supported)?;
         *self = candidate;
         Ok(notices)
     }
@@ -667,8 +658,8 @@ impl Settings {
     fn reset_models_incompatible_after_language_change(
         &mut self,
         previous: &[HotkeyProfile],
+        supported: bool,
     ) -> Vec<ModelResetNotice> {
-        let supported = crate::transcription::pianissimo_backend::runtime_supported_on_this_os();
         let mut notices = Vec::new();
         for profile in self.resolved_hotkey_profiles() {
             let changed = previous
@@ -800,19 +791,10 @@ impl Settings {
     }
 
     /// Resolve the model for file transcription without changing the live
-    /// dictation model preference. An `Auto` preference prefers the
-    /// recommended model when it is downloaded, else the best downloaded
-    /// compatible model (see [`Self::effective_file_model_for_gated`]).
-    pub fn effective_file_model_for(&self, language: Language) -> Result<FileModel, String> {
-        self.effective_file_model_for_gated(
-            language,
-            crate::transcription::pianissimo_backend::runtime_supported_on_this_os(),
-            &real_file_model_ready,
-        )
-    }
-
-    /// [`Self::effective_file_model_for`] with the Pianissimo platform gate and
-    /// the model-readiness probe supplied by the caller.
+    /// dictation model preference, given the Pianissimo platform gate and a
+    /// model-readiness probe (`Settings::effective_file_model_for` asks this
+    /// machine for both). An `Auto` preference prefers the recommended model
+    /// when it is downloaded, else the best downloaded compatible model.
     ///
     /// `Auto`: the recommended model if `is_ready`; otherwise the first ready
     /// model in the language's app lineup order, then other compatible Whisper
@@ -855,18 +837,12 @@ impl Settings {
         }
     }
 
-    /// Like [`Self::effective_file_model_for`], but for work that needs a
+    /// Like [`Self::effective_file_model_for_gated`], but for work that needs a
     /// Whisper model (meetings, diarization, decoder hints, beam search): an
     /// `Auto` preference never resolves to Pianissimo. An explicit Pianissimo
     /// choice is returned as-is so callers can report it clearly.
-    pub fn effective_whisper_file_model_for(
-        &self,
-        language: Language,
-    ) -> Result<FileModel, String> {
-        self.effective_whisper_file_model_for_gated(language, &real_file_model_ready)
-    }
-
-    /// [`Self::effective_whisper_file_model_for`] with the readiness probe supplied by the caller.
+    /// `Settings::effective_whisper_file_model_for` asks this machine for the
+    /// readiness probe.
     pub fn effective_whisper_file_model_for_gated(
         &self,
         language: Language,
@@ -1003,10 +979,12 @@ impl Settings {
 
     /// Replace the profile list. When a profile's language changes and its explicit
     /// model no longer fits, that profile's model is reset to Auto and a notice
-    /// is returned instead of an error.
-    pub fn replace_hotkey_profiles(
+    /// is returned instead of an error. `pianissimo_supported` is the platform
+    /// gate; `Settings::replace_hotkey_profiles` asks this machine.
+    pub fn replace_hotkey_profiles_gated(
         &mut self,
         profiles: Vec<HotkeyProfile>,
+        pianissimo_supported: bool,
     ) -> Result<Vec<ModelResetNotice>, String> {
         let mut profiles = profiles;
         for profile in &mut profiles {
@@ -1078,9 +1056,12 @@ impl Settings {
                 .entry(profile.id.clone())
                 .or_insert(FileModelPreference::Auto);
         }
-        let notices = candidate.reset_models_incompatible_after_language_change(&current_profiles);
+        let notices = candidate.reset_models_incompatible_after_language_change(
+            &current_profiles,
+            pianissimo_supported,
+        );
         for profile in &candidate.hotkey_profiles {
-            candidate.dictation_model_for_profile(&profile.id)?;
+            candidate.dictation_model_for_profile_gated(&profile.id, pianissimo_supported)?;
         }
         candidate.validate_shortcut_configuration()?;
         self.hotkey = candidate.hotkey;
@@ -1163,19 +1144,8 @@ impl Settings {
     /// startup. Pianissimo profiles are excluded. The primary remaining Whisper
     /// profile is always first and included. Additional distinct models must fit both
     /// the resident-entry limit and advertised model-size budget.
-    pub fn warm_model_plan(
-        &self,
-        max_models: usize,
-        max_total_mb: u32,
-    ) -> Vec<(WhisperModel, Language)> {
-        self.warm_model_plan_gated(
-            max_models,
-            max_total_mb,
-            crate::transcription::pianissimo_backend::runtime_supported_on_this_os(),
-        )
-    }
-
-    /// [`Self::warm_model_plan`] with the Pianissimo platform gate supplied by the caller.
+    /// `pianissimo_supported` is the platform gate; `Settings::warm_model_plan`
+    /// asks this machine.
     pub fn warm_model_plan_gated(
         &self,
         max_models: usize,

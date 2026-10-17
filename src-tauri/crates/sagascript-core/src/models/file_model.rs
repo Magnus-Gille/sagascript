@@ -1,6 +1,10 @@
 use super::whisper::UnknownModelId;
 use super::{Language, WhisperModel};
 
+/// Shown wherever Pianissimo is refused for platform reasons.
+pub const PIANISSIMO_UNSUPPORTED_MESSAGE: &str =
+    "Pianissimo requires macOS 14+ on Apple Silicon or Windows on ARM (Snapdragon)";
+
 /// A file-transcription model choice. Unlike [`WhisperModel`], this can also
 /// select the Swedish-only Pianissimo Original model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

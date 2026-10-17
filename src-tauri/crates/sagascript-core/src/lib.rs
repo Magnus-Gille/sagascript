@@ -13,6 +13,7 @@ pub mod download;
 pub mod error;
 pub mod fsutil;
 pub mod glossary;
+pub mod machine;
 pub mod meeting;
 pub mod meeting_media;
 pub mod meeting_reprocess;

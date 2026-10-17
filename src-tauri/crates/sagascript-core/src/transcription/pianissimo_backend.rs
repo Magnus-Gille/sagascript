@@ -29,9 +29,9 @@ use crate::transcription::engine_host::{
 };
 use crate::transcription::pianissimo_model;
 
-/// Shown wherever Pianissimo is refused for platform reasons.
-pub const UNSUPPORTED_MESSAGE: &str =
-    "Pianissimo requires macOS 14+ on Apple Silicon or Windows on ARM (Snapdragon)";
+/// Shown wherever Pianissimo is refused for platform reasons. Defined with the
+/// model catalog, which settings need too (#372).
+pub const UNSUPPORTED_MESSAGE: &str = crate::models::PIANISSIMO_UNSUPPORTED_MESSAGE;
 
 /// Environment override (development builds only): path of the `sagascript-engine-host` binary.
 pub const ENGINE_HOST_ENV: &str = "SAGASCRIPT_ENGINE_HOST";
