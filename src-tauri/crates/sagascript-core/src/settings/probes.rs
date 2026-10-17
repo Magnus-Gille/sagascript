@@ -21,7 +21,7 @@ pub struct LineupEnv<'a> {
 
 /// Machine state a migration step may need. Probed lazily: only a pending
 /// Swedish lineup step asks for [`MachineProbe::lineup_env`].
-pub trait MachineProbe {
+pub(crate) trait MachineProbe {
     /// `pianissimo_backend::runtime_supported_on_this_os()`.
     fn pianissimo_supported(&self) -> bool;
     /// What the Swedish model-lineup step needs to know about this machine.

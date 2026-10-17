@@ -213,7 +213,7 @@ fn migrate_legacy_identifier_settings_locked(
 /// (what is downloaded, whether Pianissimo runs): the store never probes it
 /// itself, so settings do not depend on the transcription code (#372).
 /// `crate::machine::load` is this with the probes of this machine.
-pub fn load_with(machine: &dyn MachineProbe) -> Settings {
+pub(crate) fn load_with(machine: &dyn MachineProbe) -> Settings {
     load_at_with_machine(&settings_path(), legacy_settings_paths(), machine)
 }
 
@@ -562,7 +562,7 @@ pub fn save(settings: &Settings) -> Result<(), String> {
 ///
 /// `machine` is the injected machine state of [`load_with`];
 /// `crate::machine::update` is this with the probes of this machine.
-pub fn update_with<F>(machine: &dyn MachineProbe, mutate: F) -> Result<Settings, String>
+pub(crate) fn update_with<F>(machine: &dyn MachineProbe, mutate: F) -> Result<Settings, String>
 where
     F: FnOnce(&mut Settings),
 {
@@ -575,7 +575,7 @@ where
 /// Like [`update_with`], but lets validation fail while the cross-process lock
 /// is held so read/validate/write profile mutations cannot race another writer.
 /// `crate::machine::try_update` is this with the probes of this machine.
-pub fn try_update_with<F>(machine: &dyn MachineProbe, mutate: F) -> Result<Settings, String>
+pub(crate) fn try_update_with<F>(machine: &dyn MachineProbe, mutate: F) -> Result<Settings, String>
 where
     F: FnOnce(&mut Settings) -> Result<(), String>,
 {

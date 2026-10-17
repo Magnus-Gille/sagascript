@@ -2,12 +2,12 @@
 //! entry points that use them (#372).
 //!
 //! `models` and `settings` never probe the machine: what is downloaded and
-//! whether Pianissimo can run here are injected, as a [`MachineProbe`] into the
+//! whether Pianissimo can run here are injected, as a `MachineProbe` into the
 //! store (`store::load_with`, `store::try_update_with`) and as plain values into
 //! the `*_gated` methods of [`Settings`]. This module sits above both settings
 //! and transcription and supplies the real answers from the transcription code:
 //!
-//! - [`ThisMachine`], the [`MachineProbe`] of this machine;
+//! - `ThisMachine`, the `MachineProbe` of this machine;
 //! - [`load`], [`update`] and [`try_update`], the store entry points with it;
 //! - the [`Settings`] methods without a `_gated` suffix (`dictation_model_for_profile`,
 //!   `set_profile_model`, `effective_file_model_for`, ...): each is its `_gated`
@@ -26,12 +26,12 @@ use crate::transcription::{model, pianissimo_backend, pianissimo_model};
 /// Whether Pianissimo can run on this machine: macOS 14+ on Apple Silicon, or
 /// Windows on ARM with the bundled host
 /// ([`pianissimo_backend::runtime_supported_on_this_os`]).
-pub fn pianissimo_supported() -> bool {
+pub(crate) fn pianissimo_supported() -> bool {
     pianissimo_backend::runtime_supported_on_this_os()
 }
 
 /// Whether the files of a file-transcription model are on disk here.
-pub fn file_model_ready(choice: FileModel) -> bool {
+pub(crate) fn file_model_ready(choice: FileModel) -> bool {
     match choice {
         FileModel::Whisper(whisper) => model::is_model_downloaded(whisper),
         FileModel::PianissimoOriginal => pianissimo_model::is_downloaded(),
@@ -41,7 +41,7 @@ pub fn file_model_ready(choice: FileModel) -> bool {
 /// The machine this process runs on. Probed lazily: the settings store asks
 /// for [`MachineProbe::lineup_env`] only while the Swedish lineup migration is
 /// pending.
-pub struct ThisMachine;
+pub(crate) struct ThisMachine;
 
 impl MachineProbe for ThisMachine {
     fn pianissimo_supported(&self) -> bool {
@@ -60,7 +60,7 @@ impl MachineProbe for ThisMachine {
 /// Load settings from disk, migrating an older settings file (see
 /// `settings::migrations`). Returns defaults if the file is missing or
 /// unreadable. Partial JSON files are handled by `#[serde(default)]` on
-/// `Settings`. [`store::load_with`] with the probes of this machine.
+/// `Settings`. `store::load_with` with the probes of this machine.
 pub fn load() -> Settings {
     store::load_with(&ThisMachine)
 }
@@ -70,7 +70,7 @@ pub fn load() -> Settings {
 ///
 /// GUI commands use this instead of saving their in-memory `Settings` clone,
 /// which may be stale when the CLI changed another field moments earlier.
-/// [`store::update_with`] with the probes of this machine.
+/// `store::update_with` with the probes of this machine.
 pub fn update<F>(mutate: F) -> Result<Settings, String>
 where
     F: FnOnce(&mut Settings),
@@ -80,7 +80,7 @@ where
 
 /// Like [`update`], but lets validation fail while the cross-process lock is
 /// held so read/validate/write profile mutations cannot race another writer.
-/// [`store::try_update_with`] with the probes of this machine.
+/// `store::try_update_with` with the probes of this machine.
 pub fn try_update<F>(mutate: F) -> Result<Settings, String>
 where
     F: FnOnce(&mut Settings) -> Result<(), String>,
