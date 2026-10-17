@@ -1,3 +1,4 @@
+use super::inputs::*;
 use super::*;
 use sagascript_core::settings::HotkeyProfile;
 use sagascript_testsupport::TempDir;
