@@ -436,3 +436,74 @@ fn file_runs_default_to_beam_search_unless_a_width_is_saved() {
         assert_eq!(file_beam_size(saved), used, "saved width {saved}");
     }
 }
+
+/// The expressions `Settings::default_profile()` replaces in the app
+/// (`app_controller.rs`: `start_recording`, `handle_hotkey_down`; `main.rs`:
+/// the first hotkey registration), copied as they were.
+fn old_find_default_or_first(settings: &Settings) -> HotkeyProfile {
+    settings
+        .resolved_hotkey_profiles()
+        .into_iter()
+        .find(|profile| profile.id == "default")
+        .or_else(|| settings.resolved_hotkey_profiles().into_iter().next())
+        .expect("resolved profiles always contains at least one profile")
+}
+
+fn old_find_default_or_index_zero(settings: &Settings) -> HotkeyProfile {
+    let profiles = settings.resolved_hotkey_profiles();
+    profiles
+        .iter()
+        .find(|profile| profile.id == "default")
+        .unwrap_or(&profiles[0])
+        .clone()
+}
+
+#[test]
+fn default_profile_equals_the_expressions_it_replaces_for_every_shape_of_profile_list() {
+    let with = |ids: &[&str]| Settings {
+        language: Language::Finnish,
+        hotkey: "Super+Legacy".to_string(),
+        hotkey_profiles: ids
+            .iter()
+            .enumerate()
+            .map(|(index, id)| profile(id, [Language::Swedish, Language::English][index % 2]))
+            .collect(),
+        ..Default::default()
+    };
+    let cases = [
+        ("no stored profiles: the legacy default", with(&[])),
+        ("one profile, not called default", with(&["swedish"])),
+        ("one profile, called default", with(&["default"])),
+        ("default first", with(&["default", "swedish", "english"])),
+        (
+            "default in the middle",
+            with(&["swedish", "default", "english"]),
+        ),
+        ("default last", with(&["swedish", "english", "default"])),
+        (
+            "no profile called default: the first",
+            with(&["swedish", "english"]),
+        ),
+        (
+            "a near miss is not the default",
+            with(&["Default", "defaults", "swedish"]),
+        ),
+        ("migrated fixture", migrated()),
+        ("legacy fixture", legacy()),
+        ("factory settings", Settings::default()),
+    ];
+    for (name, settings) in cases {
+        let new = settings.default_profile();
+        assert_eq!(new, old_find_default_or_first(&settings), "{name}");
+        assert_eq!(new, old_find_default_or_index_zero(&settings), "{name}");
+        assert_eq!(
+            new.shortcut,
+            old_find_default_or_index_zero(&settings).shortcut,
+            "{name}"
+        );
+    }
+    // The list is never empty, which is why the `.expect` was unreachable.
+    assert_eq!(with(&[]).resolved_hotkey_profiles().len(), 1);
+    assert_eq!(with(&[]).default_profile().language, Language::Finnish);
+    assert_eq!(with(&[]).default_profile().shortcut, "Super+Legacy");
+}

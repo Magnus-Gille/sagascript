@@ -1206,13 +1206,7 @@ fn main() -> std::process::ExitCode {
                 let c = lock_controller(&ctrl);
                 c.settings().clone()
             };
-            let profiles = requested_settings.resolved_hotkey_profiles();
-            let requested_primary = profiles
-                .iter()
-                .find(|profile| profile.id == "default")
-                .unwrap_or(&profiles[0])
-                .shortcut
-                .clone();
+            let requested_primary = requested_settings.default_profile().shortcut;
 
             // Register global shortcut. Failure here (combo already claimed by
             // Spotlight/Raycast/etc.) used to be log-only: the app would look
