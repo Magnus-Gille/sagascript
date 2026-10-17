@@ -21,7 +21,7 @@ use crate::hotkey::configuration::HotkeyChange;
 use crate::hotkey::{HotkeyHealth, HotkeyStatus, OperationalHotkey};
 use sagascript_core::audio::decoder;
 use sagascript_core::error::DictationError;
-use sagascript_core::run_context::file_beam_size;
+use sagascript_core::run_context::{file_beam_size, RunContext, RunOverrides, RunSelection};
 use sagascript_core::settings::{
     validate_hotkey, FileModel, FileModelPreference, HotkeyMode, HotkeyProfile, Language, Settings,
     WhisperModel,
@@ -93,25 +93,27 @@ pub(crate) struct FileTranscriptionContext {
 
 /// Freeze language, model and dictionary together before file decoding begins.
 /// A missing profile resolves the default profile; unknown IDs fail closed.
+///
+/// Profile, language and dictionary come from the shared run resolver (the CLI
+/// resolves them the same way, #346); the model is this path's own choice. The
+/// app offers no language override, so the language is always the profile's.
 pub(crate) fn file_transcription_context(
     settings: &Settings,
     profile_id: Option<&str>,
     prompt: Option<&str>,
 ) -> Result<FileTranscriptionContext, String> {
-    let language = file_transcription_language(settings, profile_id)?;
+    let selection = file_transcription_selection(settings, profile_id)?;
     // Meetings and diarization need Whisper: an Auto preference uses the
     // recommended Whisper model rather than Pianissimo.
-    let model = match settings.effective_whisper_file_model_for(language)? {
+    let model = match settings.effective_whisper_file_model_for(selection.language)? {
         FileModel::Whisper(model) => model,
         FileModel::PianissimoOriginal => return Err(
             "Pianissimo supports plain Swedish file transcription only; select a Whisper file model for meetings or diarization".into(),
         ),
     };
-    let default_id = settings.default_profile().id;
-    let glossary = Glossary::parse(
-        &settings
-            .effective_glossary_source_with_prompt(Some(profile_id.unwrap_or(&default_id)), prompt),
-    );
+    let RunContext {
+        language, glossary, ..
+    } = selection.into_context(settings, prompt);
     let mut options = build_file_transcribe_options(settings, prompt.map(str::to_owned));
     options.prompt = glossary.decoder_prompt();
     Ok(FileTranscriptionContext {
@@ -126,18 +128,26 @@ pub(crate) fn file_transcription_language(
     settings: &Settings,
     profile_id: Option<&str>,
 ) -> Result<Language, String> {
-    if let Some(id) = profile_id {
-        ensure_known_profile(settings, id)?;
-        let language = settings
-            .resolved_hotkey_profiles()
-            .into_iter()
-            .find(|profile| profile.id == id)
-            .ok_or_else(|| format!("Unknown dictation profile '{id}'"))?
-            .language;
-        Ok(language)
-    } else {
-        Ok(settings.default_profile().language)
-    }
+    file_transcription_selection(settings, profile_id).map(|selection| selection.language)
+}
+
+/// The profile a file run uses and its language. This command reports plain
+/// strings, so the resolver's settings error is unwrapped to its message.
+fn file_transcription_selection(
+    settings: &Settings,
+    profile_id: Option<&str>,
+) -> Result<RunSelection, String> {
+    RunSelection::resolve(
+        settings,
+        RunOverrides {
+            profile: profile_id,
+            language: None,
+        },
+    )
+    .map_err(|error| match error {
+        DictationError::SettingsError(message) => message,
+        other => other.to_string(),
+    })
 }
 
 pub(crate) fn apply_glossary(text: String, glossary: &Glossary) -> String {
