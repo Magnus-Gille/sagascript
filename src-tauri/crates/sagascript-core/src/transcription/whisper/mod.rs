@@ -927,7 +927,7 @@ impl WhisperBackend {
         // C-string conversion preserves emitted errors as valid UTF-8. Application
         // warnings remain visible. whisper-rs guards installation with `Once`, so
         // concurrent backend construction remains safe.
-        super::native_log::install();
+        crate::transcription::native_log::install();
 
         Self {
             context: Mutex::new(None),
@@ -1136,7 +1136,7 @@ impl WhisperBackend {
         // Fine-tunes have no Core ML encoder by design; whisper.cpp still
         // probes for one and logs an ERROR. Mark exactly that probe as expected.
         if let Some(dirname) = whisper_model.unsupported_coreml_probe_dirname() {
-            super::native_log::expect_missing_coreml_encoder(&dirname);
+            crate::transcription::native_log::expect_missing_coreml_encoder(&dirname);
         }
 
         info!(
@@ -1170,7 +1170,7 @@ impl WhisperBackend {
         // error. Guard that FFI boundary so headless/restricted processes fail
         // cleanly while normal CLI and GUI execution remain unchanged.
         #[cfg(target_os = "macos")]
-        super::metal_preflight::ensure_available()?;
+        crate::transcription::metal_preflight::ensure_available()?;
 
         // A third model must never overlap two already-resident runtimes while
         // its weights are being opened. Keep the active runtime available for
@@ -1599,7 +1599,7 @@ impl WhisperBackend {
             on_encode_start,
         )?;
         let transcript = assemble_transcript(&segments);
-        Ok(super::normalize_nonspeech_markers(
+        Ok(crate::transcription::normalize_nonspeech_markers(
             transcript.trim(),
             language,
         ))
@@ -1608,7 +1608,7 @@ impl WhisperBackend {
     /// Plain-file transcription with recovery of speech Whisper's windowing
     /// skipped (#273): runs [`Self::transcribe_sync_with_options_segments`],
     /// then re-decodes dense-speech uncovered spans once, within a bounded
-    /// budget (see [`super::gap_redecode`]). Shared by the CLI and the app's
+    /// budget (see [`crate::transcription::gap_redecode`]). Shared by the CLI and the app's
     /// plain file transcription; diarization and meeting paths do not use it.
     pub fn transcribe_sync_with_gap_recovery(
         &self,
@@ -1626,13 +1626,13 @@ impl WhisperBackend {
             on_encode_start,
         )?;
         let model = self.loaded_model().ok_or(DictationError::ModelNotLoaded)?;
-        let limits = super::gap_redecode::RedecodeLimits::for_audio(
+        let limits = crate::transcription::gap_redecode::RedecodeLimits::for_audio(
             audio.len() as f64 / 16_000.0,
             model.no_speech_threshold(),
         );
         let mut redecode_opts = opts.clone();
         redecode_opts.parallel_chunks = 1;
-        let recovered = super::gap_redecode::redecode_uncovered_speech_cancellable(
+        let recovered = crate::transcription::gap_redecode::redecode_uncovered_speech_cancellable(
             audio,
             segments,
             &limits,
@@ -1671,7 +1671,7 @@ impl WhisperBackend {
             on_encode_start,
         )?;
         let transcript = assemble_transcript(&segments);
-        Ok(super::normalize_nonspeech_markers(
+        Ok(crate::transcription::normalize_nonspeech_markers(
             transcript.trim(),
             language,
         ))
@@ -2721,5 +2721,5 @@ fn words_from_segments(segments: &[Vec<TokenTiming>]) -> Vec<(f64, f64, String)>
 }
 
 #[cfg(test)]
-#[path = "whisper_backend_tests.rs"]
+#[path = "mod_tests.rs"]
 mod tests;
