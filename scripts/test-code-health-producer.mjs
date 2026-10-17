@@ -134,6 +134,43 @@ test("dyld failures expose only the category regardless of library path", () => 
   }
 });
 
+test("runtime crash diagnostics expose fixed categories without paths, symbols, or allocator payloads", () => {
+  const secret = "PRIVATE_SECRET_SENTINEL";
+  const diagnostic = safeProducerFailureDiagnostic(
+    "",
+    [
+      `dyld[123]: symbol not found in flat namespace '_${secret}'`,
+      `dyld[123]: could not load inserted library: /Users/example/Library/Application Support/${secret}.dylib`,
+      `fatal runtime error: stack overflow in /private/tmp/${secret}.rs`,
+      `fatal runtime error: non-unwinding panic from ${secret}`,
+      `thread caused non-unwinding panic. aborting. (${secret})`,
+      `fatal runtime error: failed to initiate panic, error 5 (${secret})`,
+      `LLVM Profile Error: /srv/${secret}/default.profraw is malformed`,
+      `LLVM Profile Runtime: ${secret}`,
+      `LLVM ERROR: unable to profile ${secret}`,
+      `binary(123,0x${"a".repeat(16)}) /Users/example/Library/Application Support/${secret} malloc: *** error for object 0x${"a".repeat(16)}: pointer being freed was not allocated (${secret})`,
+      `binary(123,0x${"b".repeat(16)}) malloc: nano zone abandoned due to inability to preallocate reserved vm space (${secret})`,
+    ].join("\n"),
+  );
+  assert.equal(
+    diagnostic,
+    [
+      "stderr dyld-loader: symbol-not-found",
+      "stderr dyld-loader: other",
+      "stderr rust-fatal-runtime: stack-overflow",
+      "stderr rust-fatal-runtime: non-unwinding-panic",
+      "stderr rust-fatal-runtime: non-unwinding-panic",
+      "stderr rust-fatal-runtime: other",
+      "stderr llvm-profile: error",
+      "stderr llvm-runtime: fatal",
+      "stderr llvm: error",
+      "stderr malloc-allocator: fatal",
+      "stderr malloc-allocator: diagnostic",
+    ].join(" | "),
+  );
+  assert.doesNotMatch(diagnostic, /PRIVATE_SECRET_SENTINEL|Library\/Application Support|\/private\/tmp|\/srv\/|0x[a-f0-9]+|_PRIVATE/);
+});
+
 test("unknown process failures never fall through to generic permission diagnostics", () => {
   for (const header of ["error: ", "Error: ", "Caused by: ", ""]) {
     for (const suffix of ["ENOENT", "PermissionDenied", "EACCES"]) {
