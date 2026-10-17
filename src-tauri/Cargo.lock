@@ -2530,12 +2530,9 @@ dependencies = [
 
 [[package]]
 name = "kodama"
-version = "0.2.3"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7a44f3a71a44fbf49ce38152db7dc9adf959d4fe5c29344cd1858bdbda8d9091"
-dependencies = [
- "num-traits",
-]
+checksum = "f868feceed4703c842925c14232667c5f29c8059d0354154b2d06ec3bf9daf82"
 
 [[package]]
 name = "kqueue"
