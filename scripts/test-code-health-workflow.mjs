@@ -161,6 +161,7 @@ test("Swift runs coverage tests before querying the generated codecov report", (
     const actual = runSwiftCoverageSteps({
       scratchPath,
       tempRoot,
+      swiftDeveloperDir: "",
       runCommand: (args, options) => {
         calls.push({ args, options });
         return args.includes("--show-codecov-path") ? `${reportPath}\n` : "test run completed\n";
@@ -261,6 +262,43 @@ test("Swift selected developer directory is applied to every Swift subprocess wi
   } finally {
     rmSync(rootPath, { recursive: true, force: true });
   }
+});
+
+test("Swift coverage inherits the dedicated workflow selector without changing the parent developer directory", () => {
+  const selected = "/Applications/Selected-Xcode.app/Contents/Developer";
+  const inherited = "/Applications/Runner-Xcode.app/Contents/Developer";
+  const script = `
+    import assert from "node:assert/strict";
+    import { mkdtempSync, rmSync } from "node:fs";
+    import { join } from "node:path";
+    import { tmpdir } from "node:os";
+    import { runSwiftCoverageSteps, swiftCommandEnvironment } from ${JSON.stringify(new URL("./code-health-produce.mjs", import.meta.url).href)};
+    const tempRoot = mkdtempSync(join(tmpdir(), "saga-swift-inherited-selector-"));
+    const scratchPath = join(tempRoot, "scratch");
+    const selected = ${JSON.stringify(selected)};
+    const inherited = ${JSON.stringify(inherited)};
+    const calls = [];
+    try {
+      assert.equal(swiftCommandEnvironment(tempRoot).DEVELOPER_DIR, selected);
+      runSwiftCoverageSteps({
+        tempRoot, scratchPath,
+        runCommand: (args, options) => {
+          calls.push(options.env.DEVELOPER_DIR);
+          return args.includes("--show-codecov-path") ? join(scratchPath, "coverage.json") : "ok";
+        },
+      });
+      assert.deepEqual(calls, [selected, selected]);
+      assert.equal(process.env.DEVELOPER_DIR, inherited);
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  `;
+  const result = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
+    env: { ...process.env, SAGASCRIPT_CODE_HEALTH_SWIFT_DEVELOPER_DIR: selected, DEVELOPER_DIR: inherited },
+    encoding: "utf8",
+    timeout: 10_000,
+  });
+  assert.equal(result.status, 0, result.stderr);
 });
 
 test("Swift coverage filters external and generated exports while retaining source-only paths", () => {
