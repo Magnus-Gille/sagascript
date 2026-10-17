@@ -374,6 +374,20 @@ fn isolated(module: &str, test: &str, body: impl FnOnce() -> String) -> Option<S
     Some(report)
 }
 
+/// Moves the file ahead of the controller by `value` in a settings field the
+/// row's setter does not own, and returns that field's JSON key. Two fields
+/// take turns, so the idle-unload setter's row has a canary of its own too: a
+/// setter that wrongly replaced the whole copy would show in it.
+fn move_the_file_ahead(row: &Row, value: u32) -> Result<&'static str, String> {
+    if row.commands.contains(&"set_engine_idle_unload_minutes") {
+        store::update(|s| s.beam_size = value)?;
+        Ok("beam_size")
+    } else {
+        store::update(|s| s.engine_idle_unload_minutes = value)?;
+        Ok("engine_idle_unload_minutes")
+    }
+}
+
 /// The child's work for the table: every row against the fake settings file.
 fn run_table() -> String {
     let settings_file = fake_file();
@@ -384,9 +398,8 @@ fn run_table() -> String {
     for (index, row) in ROWS.iter().enumerate() {
         let name = row.commands.join("+");
         // The file moves on without the controller (a CLI call, a watcher that
-        // has not fired yet).
-        let canary = 40 + index as u32;
-        store::update(|s| s.engine_idle_unload_minutes = canary)
+        // has not fired yet), in a field the row's setter does not own.
+        let canary = move_the_file_ahead(row, 40 + index as u32)
             .unwrap_or_else(|error| panic!("{name}: cannot write the fake file: {error}"));
         (row.arrange)();
         let before = as_json(&lock_controller(&controller(&app)).settings().clone());
@@ -408,7 +421,7 @@ fn run_table() -> String {
             ),
             Mirror::Field(own) => {
                 assert_ne!(
-                    before["engine_idle_unload_minutes"], file["engine_idle_unload_minutes"],
+                    before[canary], file[canary],
                     "{name}: the harness did not move the file ahead of the controller"
                 );
                 let fields = after.as_object().expect("settings are an object");
