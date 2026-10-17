@@ -164,10 +164,10 @@ sequenceDiagram
     participant CLI as sagascript config
     participant W as Settings watcher thread
     UI->>Cmd: api.ts wrapper invokes set_x
-    Cmd->>Store: store::update or store::try_update
+    Cmd->>Store: persist_and_sync (one writer at a time) calls store::try_update
     Store->>Disk: lock json.lock, load and migrate, mutate, atomic save_to
     Store-->>Cmd: persisted Settings
-    Cmd->>Ctrl: lock, settings_mut().x = persisted.x
+    Cmd->>Ctrl: lock, the same change on the controller's copy (a few setters replace the whole copy)
     Cmd-->>UI: Ok, then applySetting calls get_settings
     CLI->>Store: config set uses store::try_update
     Store->>Disk: same lock and atomic write
@@ -184,7 +184,7 @@ sequenceDiagram
 | Disk | `${XDG_CONFIG_HOME:-~/.config}/sagascript/sagascript-settings.json`, `glossary.txt`, `glossaries/*.txt` | See [configuration.md](configuration.md). `SAGASCRIPT_SETTINGS_PATH` selects an exact file and disables legacy migration (tests, isolated CLI runs). |
 | Model | `Settings` in `crates/sagascript-core/src/settings/manager.rs` | `#[serde(default)]` on the struct: missing keys take `Default` values. |
 | Store | `crates/sagascript-core/src/settings/store.rs` | `load`, `load_from`, `save`, `update`, `try_update`; cross-process `fs2` lock on `<file>.json.lock`; read-merge-write keeps unknown keys; atomic rename. |
-| AppController | `app_controller.rs` | In-memory copy: `settings()`, `settings_mut()`, `update_settings()`. Dictation reads it at use time. |
+| AppController | `app_controller.rs` | In-memory copy: `settings()`, `update_settings()` (`settings_mut()` in tests only). Dictation reads it at use time. It can differ from the file on purpose: the watcher keeps the registered shortcuts after a failed reload, and a host that cannot run Pianissimo demotes a selection of it in this copy only. |
 | Watcher | `start_settings_watcher` in `main.rs` | `PollWatcher` on macOS, `RecommendedWatcher` elsewhere; filter `configuration_event_may_affect`; waits while a dictation records (`acquire_hotkey_configuration`). Fires for the app's own writes too (harmless reload). |
 | Frontend | `getSettings()` / setters in `src/lib/api.ts`; `saveSetting()`, `applySetting()` and the `settings_reloaded` listener in `Settings.svelte` | Re-reads after a write. A rejected setter saved nothing; a saved change whose re-read fails is reported as saved, never repeated and never rolled back: the window shows a Reload settings notice, disables the controls that save a setting and sends no further change until a read succeeds. Reads are settled in the order they were issued, so a late answer, success or failure, cannot replace or hide a newer one ([#341](https://github.com/Magnus-Gille/sagascript/issues/341)). |
 

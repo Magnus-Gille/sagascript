@@ -62,20 +62,29 @@ pub async fn set_example_flag(
 ```
 
 `persist_and_sync` (`commands/persist.rs`) is the only way a command writes settings: it
-applies the change to the latest file under the settings lock and then replaces the
-controller's copy with what was written, so a setter cannot forget the second half or copy
-only one field. It returns the written `Settings`.
+applies the change to the latest file under the settings lock and then the same change to
+the controller's copy, one writer at a time, so a setter cannot forget the second half. It
+returns the written `Settings`. A new setter uses this form: **the controller takes over only
+the field you set**. That matters: after a hot reload that could not register the file's
+shortcuts, the controller deliberately stays on the registered ones, and a setter that
+replaced the whole copy would install shortcuts the OS never registered.
 
-- Use `try_persist_and_sync` when the change can be refused (validation runs under the
-  settings lock; a typed `CommandError` stays typed), `try_persist_and_sync_replacing` when you
-  need the copy that was replaced too (`set_profile_model`). Never `store::save()` an in-memory
-  clone, never write `ctrl.settings_mut()` (it exists in tests only), never hold the controller
-  lock across the store call or an `.await`. The setter's error type stays `String` until
+- `try_persist_and_mirror(ctrl, change, |memory, written| …)` when the change can be refused
+  (validation runs under the settings lock; a typed `CommandError` stays typed) and the
+  controller should copy the written fields (`apply_training_glossary`).
+  `try_persist_and_replace` replaces the controller's whole copy; only the setters that
+  applied the settings they just wrote use it (`set_language`, `set_profile_model`,
+  `set_profile_glossary`, `persist_hotkey_change`), and it also returns the copy it replaced.
+  Never `store::save()` an in-memory clone, never write `ctrl.settings_mut()` (it exists in
+  tests only), never hold the controller lock across the store call or an `.await`. The
+  setter's error type stays `String` until
   [#360](https://github.com/Magnus-Gille/sagascript/issues/360) part 2: map with
   `.map_err(|error| error.to_string())`.
-- Add a row to the table in `commands/persist_tests.rs`: the test calls every setter, changes
-  the file behind the controller, and compares the controller with the file. It also fails
-  for a registered `set_*` command without a row.
+- Add a row to the table in `commands/persist_tests.rs` and say how the setter syncs
+  (`Mirror::Field` with its fields, or `Mirror::Whole`): the test calls every setter, changes
+  the file behind the controller, and checks that only those fields followed. It also fails
+  for a command that writes settings and has no row; the writers are found from the sources
+  (a command that reaches `persist_and_sync` or a sibling), not from the name.
 - Side effects go after the persist call (`set_show_overlay`, `set_vad_enabled`). A setter that
   needs the `AppHandle` (the profiles menu, the overlay window) splits its persistence half into
   a plain function, as `persist_language` and `persist_show_overlay` do, so the table test can

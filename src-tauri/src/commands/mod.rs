@@ -24,7 +24,7 @@
 //! | `update_recovery` | Update-result guard, recovery drafts, update preparation. |
 //! | `permissions` | Accessibility and microphone onboarding queries. |
 //! | `system` | Build info and host platform. |
-//! | `persist` | `persist_and_sync`: the only way a command writes settings (file and controller together). Not commands. |
+//! | `persist` | `persist_and_sync` and its siblings: the only way a command writes settings (file and controller together, one writer at a time). Not commands. |
 //! | `main_thread` | `await_main_thread`: a bounded, non-blocking wait for work handed to the main thread (macOS and tests). Not commands. |
 
 use std::sync::{Arc, Mutex, MutexGuard};

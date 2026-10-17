@@ -102,8 +102,8 @@ fn other_prewarm() -> EnginePrewarm {
         .expect("more than one prewarm mode")
 }
 
-/// One row per setter. A new `set_*` command needs a row here or a reason in
-/// [`NOT_SETTINGS`] (`every_setter_command_has_a_row_or_a_reason`).
+/// One row per settings-writing command. A new one needs a row here
+/// (`every_settings_writing_command_has_a_row`).
 ///
 /// The rows use Norwegian and its models. Pianissimo is Swedish-only, so no
 /// row can resolve a profile to it, and a profile change cannot start the
@@ -306,15 +306,6 @@ const ROWS: &[Row] = &[
         landed: |s| s.hotkey == "Control+Alt+D",
     },
 ];
-
-/// `set_*` commands that do not write the settings file, and why.
-const NOT_SETTINGS: &[(&str, &str)] = &[(
-    "set_update_result_pending",
-    "marks an update guard in process memory; no setting is involved",
-)];
-
-/// Commands that write settings without a `set_` name.
-const OTHER_WRITERS: &[&str] = &["apply_training_glossary", "retry_hotkey_registration"];
 
 fn as_json(settings: &Settings) -> serde_json::Value {
     serde_json::to_value(settings).expect("settings serialize")
@@ -630,34 +621,36 @@ fn wait_until(limit: Duration, mut condition: impl FnMut() -> bool) -> bool {
     condition()
 }
 
+/// The writers come from the sources, not from a naming convention: a command
+/// is a settings writer when it reaches `persist_and_sync` or a sibling,
+/// directly or through a helper or another command (contract/command_map.rs).
+/// `apply_*` or `toggle_*` writers are found as well as `set_*` ones.
 #[test]
-fn every_setter_command_has_a_row_or_a_reason() {
+fn every_settings_writing_command_has_a_row() {
     let covered: BTreeSet<&str> = ROWS
         .iter()
         .flat_map(|row| row.commands.iter().copied())
         .collect();
-    let registered = contract::registered_command_names();
-    for command in &registered {
-        let writes_settings =
-            command.starts_with("set_") || OTHER_WRITERS.contains(&command.as_str());
-        if !writes_settings {
-            continue;
-        }
-        let excused = NOT_SETTINGS.iter().any(|(name, _)| name == command);
+    let writers = contract::settings_writers().commands;
+    assert!(
+        writers.len() > 10,
+        "the scan found only {writers:?}; it is not seeing the sources"
+    );
+    for command in &writers {
         assert!(
-            covered.contains(command.as_str()) || excused,
-            "{command} writes settings but has no row in the persist_and_sync table: add one, \
-             or a reason to NOT_SETTINGS"
+            covered.contains(command.as_str()),
+            "{command} writes settings but has no row in the persist_and_sync table: add one"
         );
     }
-    for command in covered
-        .iter()
-        .copied()
-        .chain(NOT_SETTINGS.iter().map(|(name, _)| *name))
-    {
+    let registered = contract::registered_command_names();
+    for command in covered {
         assert!(
             registered.iter().any(|name| name == command),
             "the table names {command}, which is not a registered command"
+        );
+        assert!(
+            writers.iter().any(|name| name == command),
+            "the table has a row for {command}, which does not write settings (any more)"
         );
     }
 }

@@ -33,6 +33,15 @@ pub const FIXTURES: &[&str] = &[
     "get_settings.json",
 ];
 
+/// The commands that write settings (they reach `persist_and_sync` or a sibling),
+/// and the functions that call the settings store's writers themselves.
+pub(crate) use command_map::SettingsWriters;
+
+/// See [`SettingsWriters`].
+pub(crate) fn settings_writers() -> SettingsWriters {
+    command_map::settings_writers()
+}
+
 /// The names of every command registered in `tauri::generate_handler!`.
 pub fn registered_command_names() -> Vec<String> {
     command_map::registered_names()
