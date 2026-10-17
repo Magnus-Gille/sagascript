@@ -52,6 +52,65 @@ pub enum WhisperModel {
 }
 
 impl WhisperModel {
+    /// Every model, in catalog order.
+    pub const ALL: [WhisperModel; 21] = [
+        WhisperModel::TinyEn,
+        WhisperModel::Tiny,
+        WhisperModel::BaseEn,
+        WhisperModel::Base,
+        WhisperModel::FinnishWhisperTiny,
+        WhisperModel::KbWhisperTiny,
+        WhisperModel::KbWhisperBase,
+        WhisperModel::KbWhisperSmall,
+        WhisperModel::KbWhisperMedium,
+        WhisperModel::KbWhisperLarge,
+        WhisperModel::NbWhisperTiny,
+        WhisperModel::NbWhisperBase,
+        WhisperModel::NbWhisperSmall,
+        WhisperModel::NbWhisperMedium,
+        WhisperModel::NbWhisperLarge,
+        WhisperModel::SmallEn,
+        WhisperModel::Small,
+        WhisperModel::MediumEn,
+        WhisperModel::Medium,
+        WhisperModel::LargeV3Turbo,
+        WhisperModel::LargeV3TurboQ8,
+    ];
+
+    /// Stable identifier of this model: what the settings file stores
+    /// (`whisper_model`, `profile_models`), `sagascript config` accepts and the
+    /// frontend sends. Equal to the model's serde name, which a test pins.
+    pub fn id(self) -> &'static str {
+        match self {
+            WhisperModel::TinyEn => "tiny.en",
+            WhisperModel::Tiny => "tiny",
+            WhisperModel::BaseEn => "base.en",
+            WhisperModel::Base => "base",
+            WhisperModel::FinnishWhisperTiny => "fi-whisper-tiny",
+            WhisperModel::KbWhisperTiny => "kb-whisper-tiny",
+            WhisperModel::KbWhisperBase => "kb-whisper-base",
+            WhisperModel::KbWhisperSmall => "kb-whisper-small",
+            WhisperModel::KbWhisperMedium => "kb-whisper-medium",
+            WhisperModel::KbWhisperLarge => "kb-whisper-large",
+            WhisperModel::NbWhisperTiny => "nb-whisper-tiny",
+            WhisperModel::NbWhisperBase => "nb-whisper-base",
+            WhisperModel::NbWhisperSmall => "nb-whisper-small",
+            WhisperModel::NbWhisperMedium => "nb-whisper-medium",
+            WhisperModel::NbWhisperLarge => "nb-whisper-large",
+            WhisperModel::SmallEn => "small.en",
+            WhisperModel::Small => "small",
+            WhisperModel::MediumEn => "medium.en",
+            WhisperModel::Medium => "medium",
+            WhisperModel::LargeV3Turbo => "large-v3-turbo",
+            WhisperModel::LargeV3TurboQ8 => "large-v3-turbo-q8_0",
+        }
+    }
+
+    /// The model with this stable identifier, if any.
+    pub fn from_id(id: &str) -> Option<WhisperModel> {
+        WhisperModel::ALL.into_iter().find(|model| model.id() == id)
+    }
+
     pub fn display_name(&self) -> &'static str {
         match self {
             WhisperModel::TinyEn => "Whisper Tiny (EN)",
@@ -329,6 +388,26 @@ impl WhisperModel {
                 WhisperModel::LargeV3TurboQ8,
             ],
         }
+    }
+}
+
+/// A string that is no [`WhisperModel`] identifier.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnknownModelId(pub String);
+
+impl std::fmt::Display for UnknownModelId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Unknown model '{}'", self.0)
+    }
+}
+
+impl std::error::Error for UnknownModelId {}
+
+impl std::str::FromStr for WhisperModel {
+    type Err = UnknownModelId;
+
+    fn from_str(id: &str) -> Result<Self, Self::Err> {
+        WhisperModel::from_id(id).ok_or_else(|| UnknownModelId(id.to_owned()))
     }
 }
 

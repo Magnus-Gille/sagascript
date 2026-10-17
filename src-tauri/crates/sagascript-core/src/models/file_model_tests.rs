@@ -62,3 +62,30 @@ fn lineup_keeps_the_current_hidden_choice_selectable() {
         2
     );
 }
+
+#[test]
+fn file_model_ids_round_trip_and_extend_the_whisper_ids() {
+    let mut choices: Vec<FileModel> = WhisperModel::ALL
+        .into_iter()
+        .map(FileModel::Whisper)
+        .collect();
+    choices.push(FileModel::PianissimoOriginal);
+    for choice in &choices {
+        assert_eq!(FileModel::from_id(choice.id()), Some(*choice));
+        assert_eq!(choice.id().parse::<FileModel>(), Ok(*choice));
+    }
+    assert_eq!(FileModel::PianissimoOriginal.id(), "pianissimo-sv");
+    assert_eq!(FileModel::PIANISSIMO_ID, "pianissimo-sv");
+    assert_eq!(
+        FileModel::Whisper(WhisperModel::KbWhisperMedium).id(),
+        WhisperModel::KbWhisperMedium.id()
+    );
+    // `auto` is a preference, not a model.
+    for unknown in ["", "auto", "Pianissimo-sv", "large-v3"] {
+        assert_eq!(FileModel::from_id(unknown), None, "{unknown:?}");
+    }
+    assert_eq!(
+        "auto".parse::<FileModel>(),
+        Err(UnknownModelId("auto".to_owned()))
+    );
+}

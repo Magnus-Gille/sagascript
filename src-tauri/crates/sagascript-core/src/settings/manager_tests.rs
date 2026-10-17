@@ -1085,6 +1085,34 @@ fn file_model_preference_serde_roundtrip_and_unknown_ids() {
 }
 
 #[test]
+fn file_model_preference_ids_are_the_model_ids() {
+    for model in WhisperModel::ALL {
+        let expected = FileModelPreference::Whisper(model);
+        assert_eq!(FileModelPreference::parse_id(model.id()), Ok(expected));
+        assert_eq!(
+            serde_json::to_value(expected).unwrap(),
+            serde_json::Value::String(model.id().to_owned())
+        );
+    }
+    assert_eq!(
+        FileModelPreference::parse_id(FileModel::PianissimoOriginal.id()),
+        Ok(FileModelPreference::PianissimoOriginal)
+    );
+    assert_eq!(
+        serde_json::to_value(FileModelPreference::PianissimoOriginal).unwrap(),
+        serde_json::Value::String(FileModel::PIANISSIMO_ID.to_owned())
+    );
+    assert_eq!(
+        FileModelPreference::parse_id("auto"),
+        Ok(FileModelPreference::Auto)
+    );
+    assert_eq!(
+        FileModelPreference::parse_id("large-v3"),
+        Err("Unknown file model preference 'large-v3'".to_owned())
+    );
+}
+
+#[test]
 fn warm_model_plan_includes_swedish_and_english_base_models() {
     let mut settings = Settings {
         auto_select_model: false,

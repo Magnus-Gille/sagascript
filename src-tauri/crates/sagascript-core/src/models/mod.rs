@@ -16,4 +16,4 @@ mod whisper;
 
 pub use file_model::FileModel;
 pub use language::Language;
-pub use whisper::WhisperModel;
+pub use whisper::{UnknownModelId, WhisperModel};

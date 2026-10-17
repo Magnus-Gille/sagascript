@@ -1,3 +1,4 @@
+use super::whisper::UnknownModelId;
 use super::{Language, WhisperModel};
 
 /// A file-transcription model choice. Unlike [`WhisperModel`], this can also
@@ -9,6 +10,28 @@ pub enum FileModel {
 }
 
 impl FileModel {
+    /// Identifier of [`FileModel::PianissimoOriginal`] in the settings file, the
+    /// CLI and the frontend.
+    pub const PIANISSIMO_ID: &'static str = "pianissimo-sv";
+
+    /// Stable identifier of this choice: the Whisper model's [`WhisperModel::id`]
+    /// or [`Self::PIANISSIMO_ID`].
+    pub fn id(self) -> &'static str {
+        match self {
+            FileModel::Whisper(model) => model.id(),
+            FileModel::PianissimoOriginal => Self::PIANISSIMO_ID,
+        }
+    }
+
+    /// The choice with this stable identifier, if any.
+    pub fn from_id(id: &str) -> Option<FileModel> {
+        if id == Self::PIANISSIMO_ID {
+            Some(FileModel::PianissimoOriginal)
+        } else {
+            WhisperModel::from_id(id).map(FileModel::Whisper)
+        }
+    }
+
     /// The engine behind "Recommended for <language>": Pianissimo for Swedish
     /// where it runs (`pianissimo_supported`), otherwise the language's
     /// recommended Whisper model. Single source of truth for every automatic
@@ -62,6 +85,14 @@ impl FileModel {
             }
         }
         models
+    }
+}
+
+impl std::str::FromStr for FileModel {
+    type Err = UnknownModelId;
+
+    fn from_str(id: &str) -> Result<Self, Self::Err> {
+        FileModel::from_id(id).ok_or_else(|| UnknownModelId(id.to_owned()))
     }
 }
 

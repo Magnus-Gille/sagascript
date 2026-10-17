@@ -61,10 +61,10 @@ impl FileModelPreference {
     pub fn parse_id(id: &str) -> Result<Self, String> {
         match id {
             "auto" => Ok(Self::Auto),
-            "pianissimo-sv" => Ok(Self::PianissimoOriginal),
-            _ => serde_json::from_value::<WhisperModel>(serde_json::Value::String(id.to_owned()))
+            FileModel::PIANISSIMO_ID => Ok(Self::PianissimoOriginal),
+            _ => WhisperModel::from_id(id)
                 .map(Self::Whisper)
-                .map_err(|_| format!("Unknown file model preference '{id}'")),
+                .ok_or_else(|| format!("Unknown file model preference '{id}'")),
         }
     }
 }
@@ -77,7 +77,7 @@ impl Serialize for FileModelPreference {
         match self {
             Self::Auto => serializer.serialize_str("auto"),
             Self::Whisper(model) => model.serialize(serializer),
-            Self::PianissimoOriginal => serializer.serialize_str("pianissimo-sv"),
+            Self::PianissimoOriginal => serializer.serialize_str(FileModel::PIANISSIMO_ID),
         }
     }
 }

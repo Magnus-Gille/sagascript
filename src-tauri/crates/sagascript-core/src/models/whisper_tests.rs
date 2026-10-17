@@ -459,3 +459,80 @@ fn finnish_uses_generic_default_and_optional_specialized_tiny() {
         assert!(!model.is_compatible_with(Language::Finnish), "{model:?}");
     }
 }
+
+/// Exhaustive on purpose: adding a variant breaks this match until it is
+/// listed, which then fails `all_lists_every_model_exactly_once` until
+/// `WhisperModel::ALL` has it too.
+fn ordinal(model: WhisperModel) -> usize {
+    match model {
+        WhisperModel::TinyEn => 0,
+        WhisperModel::Tiny => 1,
+        WhisperModel::BaseEn => 2,
+        WhisperModel::Base => 3,
+        WhisperModel::FinnishWhisperTiny => 4,
+        WhisperModel::KbWhisperTiny => 5,
+        WhisperModel::KbWhisperBase => 6,
+        WhisperModel::KbWhisperSmall => 7,
+        WhisperModel::KbWhisperMedium => 8,
+        WhisperModel::KbWhisperLarge => 9,
+        WhisperModel::NbWhisperTiny => 10,
+        WhisperModel::NbWhisperBase => 11,
+        WhisperModel::NbWhisperSmall => 12,
+        WhisperModel::NbWhisperMedium => 13,
+        WhisperModel::NbWhisperLarge => 14,
+        WhisperModel::SmallEn => 15,
+        WhisperModel::Small => 16,
+        WhisperModel::MediumEn => 17,
+        WhisperModel::Medium => 18,
+        WhisperModel::LargeV3Turbo => 19,
+        WhisperModel::LargeV3TurboQ8 => 20,
+    }
+}
+
+#[test]
+fn all_lists_every_model_exactly_once() {
+    assert_eq!(WhisperModel::ALL.len(), 21);
+    for (index, model) in WhisperModel::ALL.into_iter().enumerate() {
+        assert_eq!(ordinal(model), index, "{model:?} is out of order in ALL");
+    }
+}
+
+#[test]
+fn ids_equal_the_serde_names_of_every_model() {
+    for model in WhisperModel::ALL {
+        assert_eq!(
+            serde_json::to_value(model).unwrap(),
+            serde_json::Value::String(model.id().to_owned()),
+            "{model:?}"
+        );
+    }
+}
+
+#[test]
+fn from_id_round_trips_every_model_and_agrees_with_serde_on_unknown_ids() {
+    let mut seen = std::collections::HashSet::new();
+    for model in WhisperModel::ALL {
+        assert!(seen.insert(model.id()), "duplicate id {}", model.id());
+        assert_eq!(WhisperModel::from_id(model.id()), Some(model));
+        assert_eq!(model.id().parse::<WhisperModel>(), Ok(model));
+    }
+    for unknown in [
+        "",
+        "Base",
+        " base",
+        "base ",
+        "large-v3",
+        "pianissimo-sv",
+        "auto",
+    ] {
+        assert_eq!(WhisperModel::from_id(unknown), None, "{unknown:?}");
+        assert!(
+            serde_json::from_value::<WhisperModel>(serde_json::Value::String(unknown.to_owned()))
+                .is_err(),
+            "serde accepts {unknown:?}"
+        );
+    }
+    let error = "large-v3".parse::<WhisperModel>().unwrap_err();
+    assert_eq!(error, UnknownModelId("large-v3".to_owned()));
+    assert_eq!(error.to_string(), "Unknown model 'large-v3'");
+}
