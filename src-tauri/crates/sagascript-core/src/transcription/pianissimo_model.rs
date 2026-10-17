@@ -29,6 +29,7 @@ use crate::download::{
     DownloadIntegrity, ExistingArtifact,
 };
 use crate::error::DictationError;
+use crate::path_scrub::scrub_paths;
 use crate::transcription::model::models_dir;
 
 /// Stable model family id; the installed directory and the id sent to the
@@ -1007,7 +1008,10 @@ async fn download_in(
     {
         warn!("Could not clean up superseded Pianissimo files: {error}");
     }
-    info!("Pianissimo model installed: {}", installed.display());
+    info!(
+        "Pianissimo model installed: {}",
+        scrub_paths(&installed.display().to_string())
+    );
     Ok(installed)
 }
 
