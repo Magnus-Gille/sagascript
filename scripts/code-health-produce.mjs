@@ -63,23 +63,44 @@ function toolPath(name) {
   return TOOL_DIR ? join(TOOL_DIR, name) : name;
 }
 
-function command(commandName, args, options = {}) {
+export function command(commandName, args, options = {}) {
   const commandEnv = { ...process.env, ...(options.env ?? {}) };
   if (TOOL_DIR) commandEnv.PATH = `${TOOL_DIR}${delimiter}${commandEnv.PATH ?? ""}`;
+  const timeout = options.timeout ?? MAX_COMMAND_MS;
+  // spawnSync requires integral milliseconds; flooring cannot extend a shared deadline.
+  const integerTimeout = Number.isFinite(timeout) ? Math.floor(timeout) : 0;
+  if (integerTimeout < 1) {
+    throw new Error("command deadline has less than one millisecond remaining");
+  }
   const result = spawnSync(commandName, args, {
     cwd: options.cwd ?? REPO_ROOT,
     env: commandEnv,
     encoding: "utf8",
     maxBuffer: MAX_CAPTURE_BYTES,
-    timeout: options.timeout ?? MAX_COMMAND_MS,
+    timeout: integerTimeout,
     windowsHide: true,
   });
-  if (result.error) throw new Error(`${commandName} could not run (${result.error.code ?? "spawn-error"})`);
+  const capture = commandCaptureMetadata(result);
+  if (result.error) {
+    throw new Error(`${commandName} could not run (${result.error.code ?? "spawn-error"}); ${capture}`);
+  }
   if (result.status !== 0) {
-    const diagnostic = safeFailureDiagnostic(result.stdout, result.stderr) || `exit ${result.status}`;
-    throw new Error(`${commandName} failed (${result.status ?? result.signal ?? "unknown"}): ${diagnostic}`);
+    const diagnostic = safeFailureDiagnostic(result.stdout, result.stderr) || `exit ${result.status ?? result.signal ?? "unknown"}`;
+    throw new Error(`${commandName} failed (${result.status ?? result.signal ?? "unknown"}): ${diagnostic}; ${capture}`);
   }
   return result.stdout;
+}
+
+function commandCaptureMetadata(result) {
+  const stdoutBytes = capturedByteLength(result.stdout);
+  const stderrBytes = capturedByteLength(result.stderr);
+  const childSignal = typeof result.signal === "string" && /^[A-Z0-9]+$/.test(result.signal) ? result.signal : "none";
+  return `capture stdout_bytes=${stdoutBytes} stderr_bytes=${stderrBytes} child_signal=${childSignal}`;
+}
+
+function capturedByteLength(output) {
+  if (typeof output === "string") return Buffer.byteLength(output, "utf8");
+  return Buffer.isBuffer(output) ? output.byteLength : 0;
 }
 
 function safeDiagnostic(value, maximumLength = 1600) {
@@ -97,6 +118,7 @@ function safeDiagnostic(value, maximumLength = 1600) {
 export function safeFailureDiagnostic(stdout, stderr) {
   const lines = [];
   let collectingFailures = false;
+  let awaitingProcessCause = false;
   for (const [stream, value] of [
     ["stdout", stdout],
     ["stderr", stderr],
@@ -106,15 +128,76 @@ export function safeFailureDiagnostic(stdout, stderr) {
       const line = rawLine.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "").trim();
       if (!line) {
         collectingFailures = false;
+        awaitingProcessCause = false;
         continue;
       }
+      const causeLine = line.replace(/^(?:error:\s*)?(?:Caused by:\s*)?/i, "");
+      const processFailureHeader = /^process didn't exit successfully:/i.test(causeLine);
+      const processSignal = /^process didn't exit successfully:.*\(signal:\s*(\d+)(?:,\s*|\s+\()([A-Z][A-Z0-9]+)(?::[^)]*)?\)?\)\s*$/.exec(
+        causeLine,
+      );
+      const processExit = /^process didn't exit successfully:.*\(exit status:\s*(\d+)\)\s*$/.exec(causeLine);
+      const continuationSignal = awaitingProcessCause && /^signal:\s*(\d+)(?:,\s*|\s+\()([A-Z][A-Z0-9]+)(?::[^)]*)?\)?\s*$/.exec(line);
+      const continuationExit = awaitingProcessCause && /^exit status:\s*(\d+)\s*$/.exec(line);
       const panic = /^thread '([^']+)'(?: \(\d+\))? panicked\b/.exec(line);
       const section = /^---- (.+?) (?:stdout|stderr) ----$/.exec(line);
       const rustFailedTest = /^test (.+?) \.\.\. FAILED$/.exec(line);
       const swiftFailure = /^(?:✘|X) Test (.+?)(?: recorded an issue| failed)/.exec(line);
       const swiftDiagnostic = /^.+:\d+:\d+(?::\d+)?:\s*error:\s*(.+)$/i.exec(line);
+      const dyldLoader = /^dyld(?:\[\d+\])?:\s+Library not loaded:\s*(.+)$/.exec(line);
+      const dyldSymbolNotFound = /^dyld(?:\[\d+\])?:\s+symbol not found(?:\b|:)/i.test(line);
+      const dyldLoaderOther = /^dyld(?:\[\d+\])?:\s+\S/i.test(line);
+      const rustStackOverflow = /^(?:fatal runtime error:\s*stack overflow\b|thread '.+' has overflowed its stack\b)/i.test(line);
+      const rustNonUnwindingPanic = /^(?:fatal runtime error:\s*non-unwinding panic\b|thread caused non-unwinding panic\b)/i.test(line);
+      const rustFatalRuntime = /^fatal runtime error:\s*/i.test(line);
+      const llvmProfileError = /^LLVM Profile Error:/i.test(line);
+      const llvmRuntimeFatal = /^LLVM Profile Runtime:/i.test(line);
+      const llvmError = /^LLVM ERROR:/i.test(line);
+      const mallocAllocatorFatal =
+        /\bmalloc:\s+(?:\*\*\*\s+)?(?:error|fatal|corruption|incorrect checksum|pointer being freed|heap corruption)\b/i.test(line);
+      const mallocAllocatorDiagnostic = /\bmalloc:\s+\S/i.test(line);
+      const nativeAssertionAbort = /^(?:Assertion failed:|GGML_ASSERT\b|ggml_abort:)/.test(line);
+      const libcxxAbiTermination = /^libc\+\+abi:/i.test(line);
+      const throwingTermination = /^terminate called after throwing\b/i.test(line);
       if (panic) lines.push(`${stream} test-failed: ${safeDiagnostic(panic[1]).slice(0, 400)}`);
-      else if (section) lines.push(`${stream} test-failed: ${safeDiagnostic(section[1]).slice(0, 400)}`);
+      else if (processSignal || continuationSignal) {
+        const match = processSignal ?? continuationSignal;
+        lines.push(`${stream} child-signal: ${match[2]} (${match[1]})`);
+      } else if (processExit || continuationExit) {
+        const match = processExit ?? continuationExit;
+        lines.push(`${stream} child-exit: ${match[1]}`);
+      } else if (/^Caused by:\s*$/.test(line)) awaitingProcessCause = true;
+      else if (processFailureHeader) {
+        // Unknown child causes must not expose argv through generic error fallbacks.
+      } else if (dyldLoader) {
+        lines.push(`${stream} dyld-loader: Library not loaded`);
+      } else if (dyldSymbolNotFound) {
+        lines.push(`${stream} dyld-loader: symbol-not-found`);
+      } else if (dyldLoaderOther) {
+        lines.push(`${stream} dyld-loader: other`);
+      } else if (rustStackOverflow) {
+        lines.push(`${stream} rust-fatal-runtime: stack-overflow`);
+      } else if (rustNonUnwindingPanic) {
+        lines.push(`${stream} rust-fatal-runtime: non-unwinding-panic`);
+      } else if (rustFatalRuntime) {
+        lines.push(`${stream} rust-fatal-runtime: other`);
+      } else if (llvmProfileError) {
+        lines.push(`${stream} llvm-profile: error`);
+      } else if (llvmRuntimeFatal) {
+        lines.push(`${stream} llvm-runtime: fatal`);
+      } else if (llvmError) {
+        lines.push(`${stream} llvm: error`);
+      } else if (mallocAllocatorFatal) {
+        lines.push(`${stream} malloc-allocator: fatal`);
+      } else if (mallocAllocatorDiagnostic) {
+        lines.push(`${stream} malloc-allocator: diagnostic`);
+      } else if (nativeAssertionAbort) {
+        lines.push(`${stream} native-assertion: failed`);
+      } else if (libcxxAbiTermination) {
+        lines.push(`${stream} native-termination: libcxxabi`);
+      } else if (throwingTermination) {
+        lines.push(`${stream} native-termination: throwing`);
+      } else if (section) lines.push(`${stream} test-failed: ${safeDiagnostic(section[1]).slice(0, 400)}`);
       else if (rustFailedTest) lines.push(`${stream} failed-test: ${safeDiagnostic(rustFailedTest[1]).slice(0, 400)}`);
       else if (swiftFailure) lines.push(`${stream} test-failed: ${safeDiagnostic(swiftFailure[1]).slice(0, 400)}`);
       else if (/^failures:$/.test(line)) {
@@ -131,6 +214,7 @@ export function safeFailureDiagnostic(stdout, stderr) {
       } else if (/\b(?:ENOENT|EACCES|EPERM|PermissionDenied|Operation not permitted|Permission denied)\b/i.test(line)) {
         lines.push(`${stream} ${safeDiagnostic(line).slice(0, 400)}`);
       }
+      if (!/^Caused by:\s*$/.test(line)) awaitingProcessCause = false;
       if (lines.length >= 80) break;
     }
     if (lines.length >= 80) break;
@@ -426,7 +510,17 @@ export function collectRustCliCoverage(tempRoot, cargoVersion, llvmCovVersion, r
   return result;
 }
 
-export function runSwiftCoverageSteps({ scratchPath, tempRoot, runCommand } = {}) {
+export function swiftCommandEnvironment(tempRoot, swiftDeveloperDir = process.env.SAGASCRIPT_CODE_HEALTH_SWIFT_DEVELOPER_DIR) {
+  const env = {
+    TMPDIR: tempRoot,
+    CLANG_MODULE_CACHE_PATH: join(tempRoot, "clang-module-cache"),
+    SWIFT_MODULECACHE_PATH: join(tempRoot, "swift-module-cache"),
+  };
+  if (typeof swiftDeveloperDir === "string" && swiftDeveloperDir.length > 0) env.DEVELOPER_DIR = swiftDeveloperDir;
+  return env;
+}
+
+export function runSwiftCoverageSteps({ scratchPath, tempRoot, runCommand, swiftDeveloperDir } = {}) {
   if (typeof scratchPath !== "string" || typeof tempRoot !== "string" || typeof runCommand !== "function") {
     throw new TypeError("Swift coverage command input is malformed");
   }
@@ -446,13 +540,7 @@ export function runSwiftCoverageSteps({ scratchPath, tempRoot, runCommand } = {}
     "--scratch-path",
     scratchPath,
   ];
-  const options = {
-    env: {
-      TMPDIR: tempRoot,
-      CLANG_MODULE_CACHE_PATH: join(tempRoot, "clang-module-cache"),
-      SWIFT_MODULECACHE_PATH: join(tempRoot, "swift-module-cache"),
-    },
-  };
+  const options = { env: swiftCommandEnvironment(tempRoot, swiftDeveloperDir) };
   runCommand(["test", "--enable-code-coverage", "--jobs", "2", ...sharedArgs], options);
   const output = runCommand(["test", "--show-codecov-path", ...sharedArgs], options);
   const codecovPath = output.trim().split(/\r?\n/).at(-1);
@@ -522,8 +610,9 @@ export function collectSwiftCoverage(tempRoot) {
   const sourcePackageRoot = join(REPO_ROOT, "src-tauri/engine-host/coreml");
   const packageRoot = join(tempRoot, "swift-package");
   const scratchPath = join(tempRoot, "swift-scratch");
+  const swiftDeveloperDir = process.env.SAGASCRIPT_CODE_HEALTH_SWIFT_DEVELOPER_DIR;
   const result = recordCollector("coverage-swift-coreml", "runner-provided", () => {
-    const versionOutput = toolVersion("swift", ["--version"]);
+    const versionOutput = toolVersion("swift", ["--version"], { env: swiftCommandEnvironment(tempRoot, swiftDeveloperDir) });
     const swiftVersion = /Apple Swift version\s+([0-9.]+)/.exec(versionOutput)?.[1];
     if (!swiftVersion) throw new Error("could not parse the active Swift compiler version");
     prepareSwiftCoverageInputs({
@@ -547,6 +636,7 @@ export function collectSwiftCoverage(tempRoot) {
     const codecovPath = runSwiftCoverageSteps({
       scratchPath,
       tempRoot,
+      swiftDeveloperDir,
       runCommand: (args, options) => command("swift", args, { cwd: packageRoot, ...options }),
     });
     const raw = JSON.parse(readFileSync(codecovPath, "utf8"));

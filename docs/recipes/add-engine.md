@@ -100,8 +100,8 @@ it too. New shared behaviour gets a new vector file used by every host.
 
 There is no engine trait today: Whisper and Pianissimo are chosen by hand in
 `live_dictation.rs` (`LiveDictationBackend::new(whisper, pianissimo)`), `plain_file_jobs.rs`
-and the CLI `transcribe.rs`, and the model choice is the enums `FileModel` (model catalog,
-`models/file_model.rs`) and `FileModelPreference` (settings, `settings/manager.rs`). Adding one therefore touches those call sites,
+and the CLI `transcribe/` (`run_inner` chooses, `pianissimo.rs` runs the engine host), and the model
+choice is the enums `FileModel` (model catalog, `models/file_model.rs`) and `FileModelPreference` (settings, `settings/manager.rs`). Adding one therefore touches those call sites,
 the model catalogue (`list-models`, `get_model_info`), settings (see
 [add-setting.md](add-setting.md) for the enum rules), the CLI `--model` parsing and the UI
 model pickers. Plan it with an issue first. Planned:
