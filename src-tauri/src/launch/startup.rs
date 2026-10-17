@@ -180,7 +180,30 @@ fn register_startup_hotkeys(app: &tauri::App) {
             registration_shortcuts.len()
         );
     }
-    let (health_error, operational_hotkey) = match (validation_error, registration_error, cleanup_error) {
+    let (health_error, operational_hotkey) = startup_hotkey_health(
+        validation_error,
+        registration_error,
+        cleanup_error,
+        registration_shortcuts,
+    );
+    let change = health.record(&requested_primary, health_error, operational_hotkey);
+    if change.changed {
+        let _ = app.emit_event(events::event::HOTKEY_REGISTRATION_CHANGED, &change.status);
+    }
+}
+
+/// What the hotkey health records after the startup registration: the error to
+/// show, if any, and what the OS now holds. `validation_error` is the saved
+/// profiles' validation failure (the safe fallback was tried instead),
+/// `registration_error` the failed registration and `cleanup_error` the failed
+/// cleanup of a partial registration.
+fn startup_hotkey_health(
+    validation_error: Option<String>,
+    registration_error: Option<String>,
+    cleanup_error: Option<String>,
+    registration_shortcuts: Vec<String>,
+) -> (Option<String>, hotkey::OperationalHotkey) {
+    match (validation_error, registration_error, cleanup_error) {
         (validation, Some(registration), Some(cleanup)) => (
             Some(format!("{}registration failed: {registration}; partial-registration cleanup failed: {cleanup}", validation.map(|error| format!("{error}; ")).unwrap_or_default())),
             hotkey::OperationalHotkey::Unknown,
@@ -210,10 +233,6 @@ fn register_startup_hotkeys(app: &tauri::App) {
             Some(format!("{}partial-registration cleanup failed without a registration error: {cleanup}", validation.map(|error| format!("{error}; ")).unwrap_or_default())),
             hotkey::OperationalHotkey::Unknown,
         ),
-    };
-    let change = health.record(&requested_primary, health_error, operational_hotkey);
-    if change.changed {
-        let _ = app.emit_event(events::event::HOTKEY_REGISTRATION_CHANGED, &change.status);
     }
 }
 
