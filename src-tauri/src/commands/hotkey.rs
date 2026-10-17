@@ -85,7 +85,7 @@ pub(crate) fn acquire_hotkey_configuration(
 /// The persistence half of a hotkey change, run once the new shortcuts are
 /// registered: the file and the controller, nothing else. A refusal or a failed
 /// write leaves both as they were.
-fn persist_hotkey_change(
+pub(super) fn persist_hotkey_change(
     controller: &SharedController,
     update: &HotkeyChange,
     shortcuts: &[String],
@@ -369,3 +369,7 @@ pub async fn retry_hotkey_registration(
 pub async fn hotkey_status(health: State<'_, HotkeyHealth>) -> Result<HotkeyStatus, String> {
     Ok(health.status())
 }
+
+#[cfg(test)]
+#[path = "hotkey_tests.rs"]
+mod tests;

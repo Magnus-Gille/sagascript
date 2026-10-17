@@ -41,7 +41,7 @@ pub async fn set_language(
 /// The persistence half of `set_language`: the file and the controller, with
 /// the notices about profile models the new language reset. The command adds
 /// the profiles menu, which needs the app handle.
-fn persist_language(
+pub(super) fn persist_language(
     controller: &SharedController,
     language: Language,
 ) -> Result<(Settings, Vec<String>), String> {
@@ -204,7 +204,10 @@ pub async fn set_show_overlay(
 
 /// The persistence half of `set_show_overlay`; the command adds the overlay
 /// window update, which needs the app handle.
-fn persist_show_overlay(controller: &SharedController, enabled: bool) -> Result<Settings, String> {
+pub(super) fn persist_show_overlay(
+    controller: &SharedController,
+    enabled: bool,
+) -> Result<Settings, String> {
     persist_and_sync(controller, |settings| {
         settings.show_overlay = enabled;
     })

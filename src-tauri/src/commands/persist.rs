@@ -89,3 +89,7 @@ pub(crate) fn correct_in_memory(
     correct(&mut settings);
     ctrl.update_settings(settings);
 }
+
+#[cfg(test)]
+#[path = "persist_tests.rs"]
+mod tests;

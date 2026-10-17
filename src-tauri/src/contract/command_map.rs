@@ -590,6 +590,22 @@ fn locate(files: &mut CommandFiles, module: &str, name: &str) -> Result<ItemFn, 
     }
 }
 
+/// The names of the registered commands, for tests elsewhere that need to know
+/// which commands exist (a setter that must be covered by a table test).
+pub(super) fn registered_names() -> Vec<String> {
+    let generation = generate();
+    assert!(
+        generation.errors.is_empty(),
+        "the CommandMap generator found problems:\n  {}",
+        generation.errors.join("\n  ")
+    );
+    generation
+        .commands
+        .into_iter()
+        .map(|command| command.name)
+        .collect()
+}
+
 fn generate() -> Generation {
     let mut generation = Generation::default();
     let mut handlers = Handlers::default();

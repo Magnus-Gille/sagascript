@@ -33,6 +33,11 @@ pub const FIXTURES: &[&str] = &[
     "get_settings.json",
 ];
 
+/// The names of every command registered in `tauri::generate_handler!`.
+pub fn registered_command_names() -> Vec<String> {
+    command_map::registered_names()
+}
+
 pub fn blessing() -> bool {
     std::env::var_os(BLESS_ENV).is_some()
 }
