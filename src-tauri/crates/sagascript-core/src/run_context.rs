@@ -21,6 +21,9 @@
 //!
 //! 1. [`RunSelection::resolve`]: profile and language.
 //! 2. [`RunSelection::into_context`]: the dictionary, given the one-run prompt.
+//!
+//! [`file_beam_size`] is here too: the beam width a file run defaults to, which
+//! the CLI's `transcribe` and the app's file transcription share.
 
 use crate::error::DictationError;
 use crate::settings::{HotkeyProfile, Language, Settings};
