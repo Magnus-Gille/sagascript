@@ -27,7 +27,7 @@ verification commands, [docs/recipes/](recipes/README.md) for step-by-step chang
 | `src-tauri/engine-host/test-vectors/` | Vectors shared by both hosts' unit tests: `protocol/` (the golden JSONL transcripts and the scripted `fake-engine.json` that define the wire contract, also decoded by `sagascript-engine-protocol`; [spec](engine-host-protocol.md#golden-transcripts)) and `context-biasing.json`. |
 | `src-tauri/tauri.conf.json`, `src-tauri/capabilities/` | App config (`frontendDist: ../dist`) and plugin permissions. |
 | Meeting modules | Core `meeting.rs`, `meeting_media.rs`, `meeting_review.rs`, `meeting_reprocess*.rs`; CLI `meeting.rs`, `meeting_proposal.rs`, `meeting_reprocessing*.rs` and the meeting part of `transcribe.rs`; app `meeting_jobs.rs`, `meeting_media*.rs`, `meeting_review_commands.rs`, `meeting_reprocessing_commands.rs`. Docs: `docs/meeting-*.md`. |
-| Run context (#346) | Which profile, language and dictionary a file, recording or reprocessing run uses: core `run_context.rs` (`RunSelection` = profile and language, `RunContext` = those plus the dictionary; pure, no I/O; also `file_beam_size`, the beam default of a file run) and CLI `run_request.rs` (`RunRequest`: `--profile`, `--language`, `--prompt`, `--prompt-file` as typed; parses the language, reads the prompt file). `transcribe`, `record`, `meeting reprocess` and the app's file transcription (`commands.rs` `file_transcription_context`, which has no language override) all use it. The model is not resolved there: each caller chooses its own from the resolved language, which also fixes its order of errors (`tests/run_context_cli.rs`). |
+| Run context (#346) | Which profile, language and dictionary a file, recording or reprocessing run uses: core `run_context.rs` (`RunSelection` = profile and language, `RunContext` = those plus the dictionary; pure, no I/O; also `file_beam_size`, the beam default of a file run) and CLI `run_request.rs` (`RunRequest`: `--profile`, `--language`, `--prompt`, `--prompt-file` as typed; parses the language, reads the prompt file). `transcribe`, `record`, `meeting reprocess` and the app's file transcription (`commands/files.rs` `file_transcription_context`, which has no language override) all use it. The model is not resolved there: each caller chooses its own from the resolved language, which also fixes its order of errors (`tests/run_context_cli.rs`). |
 | `scripts/` | Build/release/CI helpers (`*.sh`, `*.mjs`, `*.ps1`), Node tests `test-*.mjs`, Playwright suites `qa-*.mjs`, browser IPC mock `fixtures/transcription-browser-mock.js`, Python tooling `dictation_eval/` and `diarization_sv/`, Core ML conversion `pianissimo-coreml/`. |
 | `tests/` | Code-health contract tests (`tests/scripts/`) and fixtures (`tests/fixtures/code-health/`). |
 | `contracts/` | The Rust–TypeScript transport contract: shared payload fixtures in `transport/` that Rust writes and Vitest parses ([README](../contracts/README.md), #347). |
@@ -40,13 +40,13 @@ App crate modules (`src-tauri/src/`):
 | Module | Role |
 |---|---|
 | `main.rs` | `main()`: CLI dispatch, Tauri builder and `.setup`, tray and update menu, signed updater, live dictation pipeline, settings watcher, window handling. |
-| `commands.rs` | Most `#[tauri::command]`s, `SharedController` / `SharedWhisper`, Dictate test recording, file transcription, permissions. |
+| `commands/` | Most `#[tauri::command]`s, one file per domain (`settings`, `hotkey`, `state`, `transcribe`, `transcribe_file`, `files`, `models`, `dictionary`, `update_recovery`, `permissions`, `system`), re-exported by `mod.rs` so `generate_handler!` names `commands::name`. `mod.rs` also holds `SharedController` / `SharedWhisper` / `lock_controller`; `persist.rs` holds `persist_and_sync`, the only way a command writes settings (file and controller copy together); `main_thread.rs` waits for the main thread without blocking a worker. |
 | `app_controller.rs` | `AppController`: dictation state (`AppState`), audio capture, in-memory `Settings` copy, session logging. |
 | `events.rs` | Event catalogue: every event's name, payload type, producer and consumer (`events::event::*`); emit with `EmitEvent::emit_event`, since a raw `tauri::Emitter::emit` is a clippy error. |
-| `contract/` | Tests only: the shared fixture helper and the `CommandMap` generator (`command_map.rs`, parses `generate_handler!` and the command signatures with `syn`). |
+| `contract/` | Tests only: the shared fixture helper and the `CommandMap` generator (`command_map.rs`, parses `generate_handler!` and the command signatures with `syn`; a registered `commands::name` is looked up in `commands/mod.rs` and the files below it). |
 | `hotkey/` | Shortcut registration, `HotkeyHealth`, bare F-key monitor `macos_bare.rs`. |
 | `paste/` | `PasteService` (clipboard + simulated paste: enigo on macOS/Windows, `xdotool` on Linux). `paste/completion.rs` (completion wait) is mounted from `main.rs` via `#[path]` as `crate::paste_completion`. |
-| `platform/`, `overlay.rs`, `focus_diag.rs`, `logging/` | Per-OS helpers, recording indicator window, focus diagnostics, app log file. |
+| `platform/`, `overlay.rs`, `focus_diag.rs`, `logging/` | Per-OS helpers (`platform::mic_permission()`: the macOS microphone permission and its `unsafe` AVFoundation calls; `platform/macos.rs`), recording indicator window, focus diagnostics, app log file. |
 | `plain_file_jobs.rs`, `meeting_*.rs` | File-transcription and meeting job slots, cancel, deadlines. |
 | `updates.rs`, `update_activity.rs`, `update_recovery.rs` | Update checks, work/exclusivity accounting, recovery drafts. |
 
@@ -341,7 +341,7 @@ sequenceDiagram
 
 | Lock | Where | Notes |
 |---|---|---|
-| `SharedController = Mutex<AppController>` | `commands.rs`, managed in `main()` | Taken from commands, the hotkey handler, the watcher, the updater and meeting jobs, always via `lock_controller`. Audio start/stop and log writes happen under it. Never hold it across `.await` or inference; `SharedWhisper` lives outside it for that reason. |
+| `SharedController = Mutex<AppController>` | `commands/mod.rs`, managed in `main()` | Taken from commands, the hotkey handler, the watcher, the updater and meeting jobs, always via `lock_controller`. Audio start/stop and log writes happen under it. Never hold it across `.await` or inference; `SharedWhisper` lives outside it for that reason. |
 | `<settings>.json.lock` | `with_settings_lock` in `settings/store.rs` | Exclusive file lock shared by app and CLI processes, held for read-merge-write only. |
 | `HotkeyHealth { state, transition }` | `hotkey/health.rs` | `transition` serializes OS (un)registration between commands and the watcher; kept out of the controller on purpose (see its doc comment). |
 | `UpdateActivity`, `UpdatePreparation` | `update_activity.rs` | Work leases and the exclusive update permit. |
@@ -416,7 +416,7 @@ Shared fixtures: `sagascript_testsupport` (`TempDir`, `fake_settings`, `sha256_h
 
 | Layer | Location | Local command | CI |
 |---|---|---|---|
-| Rust unit, app | sibling `foo_tests.rs` files, declared last in `foo.rs` as `#[cfg(test)] #[path = "foo_tests.rs"] mod tests;` (`commands_tests.rs`, `main_tests.rs`, `meeting_jobs_tests.rs`, `paste/windows_clipboard_tests.rs`); inline `#[cfg(test)]` modules in smaller files | `cargo test` (app only), `cargo test --workspace` (everything) | every OS lane (`cargo test --workspace`) |
+| Rust unit, app | sibling `foo_tests.rs` files, declared last in `foo.rs` as `#[cfg(test)] #[path = "foo_tests.rs"] mod tests;` (`commands/settings_tests.rs` and the other `commands/*_tests.rs`, `main_tests.rs`, `meeting_jobs_tests.rs`, `paste/windows_clipboard_tests.rs`); inline `#[cfg(test)]` modules in smaller files | `cargo test` (app only), `cargo test --workspace` (everything) | every OS lane (`cargo test --workspace`) |
 | Rust unit, core/CLI/protocol | inline, or sibling `foo_tests.rs` as in the app: core `download_tests.rs`, `settings/manager_tests.rs`, `settings/store_tests.rs`, `transcription/whisper_backend_tests.rs`; CLI `transcribe_tests.rs`, `meeting_reprocessing_tests.rs`; `sagascript-engine-protocol/src/tests.rs` | `cargo test -p <crate>`; release-only guard: `cargo test --release -p sagascript-core --lib dev_overrides` | `cargo test --workspace` and the per-crate feature-subset gates on every OS; the release guard in test-linux |
 | Rust integration | `sagascript-core/tests/*.rs` (engine host against the fake host, chunk-merge golden, Pianissimo adapter); `sagascript-cli/tests/*.rs` (spawn `CARGO_BIN_EXE_sagascript`) | `cargo test -p sagascript-core`, `-p sagascript-cli` | macOS, Linux, Windows |
 | ORT host | `src-tauri/engine-host/ort/src/**` | `cargo test` and `cargo clippy --all-targets -- -D warnings` in `engine-host/ort/` | test-linux (fmt, test, clippy); test-windows (test, clippy) |
@@ -429,7 +429,7 @@ Shared fixtures: `sagascript_testsupport` (`TempDir`, `fake_settings`, `sha256_h
 | Browser | `scripts/qa-*.mjs` with the mocked IPC in `scripts/fixtures/transcription-browser-mock.js` | `npx playwright install chromium && npm run test:browser` | test-macos |
 | Python | `scripts/dictation_eval/test_*.py`, `scripts/diarization_sv/test_*.py` | `python -m unittest discover -s scripts/dictation_eval -p 'test_*.py'` | all OS (dictation_eval); Linux and macOS (diarization_sv) |
 | Types | Svelte/TS, including the Vitest files | `npx svelte-check --tsconfig ./tsconfig.json` | test-macos |
-| Transport contract | Rust: `transport_contract*` tests in `events_tests.rs`, `commands_tests.rs`, `meeting_jobs_tests.rs` and `contract/` write or compare `contracts/transport/*.json` and `src/lib/ipc-contract.generated.ts`; TS: `src/test/transport.test.ts`, `src/lib/api.test.ts` ([contracts/README.md](../contracts/README.md)) | `cargo test contract` in `src-tauri/` (`SAGASCRIPT_BLESS_CONTRACTS=1` regenerates), `npm run test:unit`, svelte-check | with the app tests and the frontend suites |
+| Transport contract | Rust: `transport_contract*` tests in `events_tests.rs`, `commands/settings_tests.rs`, `meeting_jobs_tests.rs` and `contract/` write or compare `contracts/transport/*.json` and `src/lib/ipc-contract.generated.ts`; TS: `src/test/transport.test.ts`, `src/lib/api.test.ts` ([contracts/README.md](../contracts/README.md)) | `cargo test contract` in `src-tauri/` (`SAGASCRIPT_BLESS_CONTRACTS=1` regenerates), `npm run test:unit`, svelte-check | with the app tests and the frontend suites |
 | Formatting | Prettier over `src/`, `scripts/`, `tests/` (not `.svelte` yet; `.prettierignore`) | `npm run format:check` (`npm run format` fixes) | test-macos, test-windows |
 | Lint | ESLint over `src/` (TypeScript, Svelte), `scripts/`, `tests/` (`eslint.config.js`, baseline in `eslint-suppressions.json`) | `npm run lint` | test-macos |
 | CLI smoke | release binary in `ci.yml` build jobs, `scripts/ci/smoke-cli.mjs` (one script for every OS; `basic` tier without a model: help, `config`, `list-models`, `formats`, completions of every shell; `model` tier: download + transcribe, `--json`, `--jsonl`, a closed pipe and the error object through `scripts/verify-json-cli-streams.py`) | `node scripts/ci/smoke-cli.mjs basic --binary <path>` | build-macos, build-windows (Windows tolerates the `model` tier, #357) |
@@ -486,11 +486,14 @@ replaces the remaining source-text tests in the `ui` group with component tests.
   (`cancel.rs`). Follow-ups of [#364](https://github.com/Magnus-Gille/sagascript/issues/364).
 - Whisper and Pianissimo are selected by hand (`LiveDictationBackend::new(whisper, pianissimo)`);
   there is no engine trait. **Planned:** [#378](https://github.com/Magnus-Gille/sagascript/issues/378).
-- `main.rs` and `commands.rs` will be split by domain
-  ([#369](https://github.com/Magnus-Gille/sagascript/issues/369),
-  [#370](https://github.com/Magnus-Gille/sagascript/issues/370)); update this map when files move.
-- Most `async` Tauri commands in `commands.rs` have no `.await` and call synchronous helpers
-  that write the settings file (`store::update`, under the settings file lock) on a Tokio
-  worker. Model downloads and Pianissimo installs already do their file work on the blocking
-  pool ([#368](https://github.com/Magnus-Gille/sagascript/issues/368)). **Planned:** the setters
-  become plain `fn`s or `spawn_blocking` writes together with `persist_and_sync` in #370.
+- `main.rs` will be split by domain
+  ([#369](https://github.com/Magnus-Gille/sagascript/issues/369)); update this map when files
+  move. `commands.rs` was split in [#370](https://github.com/Magnus-Gille/sagascript/issues/370).
+- Most `async` Tauri commands in `commands/` have no `.await` and call synchronous helpers
+  that write the settings file (`persist_and_sync` → `store::update`, under the settings file
+  lock) on a Tokio worker. Model downloads and Pianissimo installs already do their file work
+  on the blocking pool ([#368](https://github.com/Magnus-Gille/sagascript/issues/368)). **Not
+  done in #370:** the setters stay `async fn`s that write on the worker. They cannot become
+  plain `fn`s (a sync command runs on the main thread, ADR 0003), and `spawn_blocking` needs an
+  owned handle on the controller, which Tauri manages by reference, so moving the write off the
+  worker is a separate change.
