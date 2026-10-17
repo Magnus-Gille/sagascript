@@ -5,7 +5,10 @@ use sagascript_core::transcription::model;
 use tauri::State;
 use tracing::info;
 
-use super::{acquire_hotkey_configuration, lock_controller, SharedController};
+use super::{
+    acquire_hotkey_configuration, lock_controller, persist_and_sync, try_persist_and_sync,
+    try_persist_and_sync_replacing, SharedController,
+};
 
 #[tauri::command]
 pub async fn get_settings(controller: State<'_, SharedController>) -> Result<Settings, String> {
@@ -29,25 +32,26 @@ pub async fn set_language(
     controller: State<'_, SharedController>,
     language: Language,
 ) -> Result<Vec<String>, String> {
-    set_language_for_controller(&controller, &app, language)
-}
-
-fn set_language_for_controller(
-    controller: &State<'_, SharedController>,
-    app: &tauri::AppHandle,
-    language: Language,
-) -> Result<Vec<String>, String> {
-    let mut notices = Vec::new();
-    let persisted = sagascript_core::settings::store::try_update(|settings| {
-        notices = apply_language_selection(settings, language)?;
-        Ok(())
-    })?;
-    let mut ctrl = lock_controller(controller);
-    ctrl.update_settings(persisted.clone());
-    drop(ctrl);
-    crate::update_profiles_menu(app, &persisted.resolved_hotkey_profiles());
+    let (persisted, notices) = persist_language(&controller, language)?;
+    crate::update_profiles_menu(&app, &persisted.resolved_hotkey_profiles());
     info!("Language set to {:?}", language);
     Ok(notices)
+}
+
+/// The persistence half of `set_language`: the file and the controller, with
+/// the notices about profile models the new language reset. The command adds
+/// the profiles menu, which needs the app handle.
+fn persist_language(
+    controller: &SharedController,
+    language: Language,
+) -> Result<(Settings, Vec<String>), String> {
+    let mut notices = Vec::new();
+    let persisted = try_persist_and_sync(controller, |settings| {
+        notices = apply_language_selection(settings, language)?;
+        Ok::<(), String>(())
+    })
+    .map_err(|error| error.to_string())?;
+    Ok((persisted, notices))
 }
 
 // Keep profile/dictionary validation ahead of all preset mutations.
@@ -67,12 +71,10 @@ fn apply_language_selection(
 pub async fn set_onboarding_completed(
     controller: State<'_, SharedController>,
 ) -> Result<(), String> {
-    let persisted = sagascript_core::settings::store::update(|settings| {
+    persist_and_sync(&controller, |settings| {
         settings.has_completed_onboarding = true;
-    })?;
-    let mut ctrl = lock_controller(&controller);
-    ctrl.settings_mut().has_completed_onboarding = persisted.has_completed_onboarding;
-    drop(ctrl);
+    })
+    .map_err(|error| error.to_string())?;
 
     info!("Onboarding marked as completed");
     Ok(())
@@ -110,12 +112,10 @@ pub async fn set_file_transcription_model(
     model_id: String,
 ) -> Result<(), String> {
     let choice = FileModelPreference::parse_id(&model_id)?;
-    let persisted = sagascript_core::settings::store::update(|settings| {
+    persist_and_sync(&controller, |settings| {
         settings.file_transcription_model = choice;
-    })?;
-    lock_controller(&controller)
-        .settings_mut()
-        .file_transcription_model = persisted.file_transcription_model;
+    })
+    .map_err(|error| error.to_string())?;
     Ok(())
 }
 
@@ -128,18 +128,13 @@ pub async fn set_profile_model(
     let preference = FileModelPreference::parse_id(&model_id)?;
     let _recording_lease =
         acquire_hotkey_configuration(&controller).map_err(|error| error.to_string())?;
-    let persisted = sagascript_core::settings::store::try_update(|settings| {
+    let (previous, persisted) = try_persist_and_sync_replacing(&controller, |settings| {
         settings.set_profile_model(&profile_id, preference)
-    })?;
-    let warm = {
-        let mut ctrl = lock_controller(&controller);
-        let warm = sagascript_core::transcription::pianissimo_backend::profile_change_needs_warm(
-            ctrl.settings(),
-            &persisted,
-        );
-        ctrl.update_settings(persisted.clone());
-        warm
-    };
+    })
+    .map_err(|error| error.to_string())?;
+    let warm = sagascript_core::transcription::pianissimo_backend::profile_change_needs_warm(
+        &previous, &persisted,
+    );
     // Outside the controller lock: an unload talks to the engine host.
     sagascript_core::transcription::pianissimo_backend::unload_if_unused(&persisted);
     if warm {
@@ -183,11 +178,10 @@ pub async fn set_auto_paste(
     let permission_granted = true;
 
     let effective = effective_auto_paste(enabled, permission_granted);
-    let persisted = sagascript_core::settings::store::update(|settings| {
+    persist_and_sync(&controller, |settings| {
         settings.auto_paste = effective;
-    })?;
-    let mut ctrl = lock_controller(&controller);
-    ctrl.settings_mut().auto_paste = persisted.auto_paste;
+    })
+    .map_err(|error| error.to_string())?;
     info!("Auto-paste: {effective}");
     if enabled && !permission_granted {
         Err("Accessibility permission is required before auto-paste can be enabled".to_string())
@@ -202,15 +196,19 @@ pub async fn set_show_overlay(
     controller: State<'_, SharedController>,
     enabled: bool,
 ) -> Result<(), String> {
-    let persisted = sagascript_core::settings::store::update(|settings| {
-        settings.show_overlay = enabled;
-    })?;
-    let mut ctrl = lock_controller(&controller);
-    ctrl.settings_mut().show_overlay = persisted.show_overlay;
-    drop(ctrl);
+    let persisted = persist_show_overlay(&controller, enabled)?;
     crate::overlay::on_show_overlay_changed(&app, persisted.show_overlay);
     info!("Show overlay: {enabled}");
     Ok(())
+}
+
+/// The persistence half of `set_show_overlay`; the command adds the overlay
+/// window update, which needs the app handle.
+fn persist_show_overlay(controller: &SharedController, enabled: bool) -> Result<Settings, String> {
+    persist_and_sync(controller, |settings| {
+        settings.show_overlay = enabled;
+    })
+    .map_err(|error| error.to_string())
 }
 
 pub(super) fn ensure_known_profile(settings: &Settings, profile_id: &str) -> Result<(), String> {
@@ -227,11 +225,10 @@ pub async fn set_beam_size(
     controller: State<'_, SharedController>,
     beam_size: u32,
 ) -> Result<(), String> {
-    let persisted = sagascript_core::settings::store::update(|settings| {
+    persist_and_sync(&controller, |settings| {
         settings.beam_size = beam_size;
-    })?;
-    let mut ctrl = lock_controller(&controller);
-    ctrl.settings_mut().beam_size = persisted.beam_size;
+    })
+    .map_err(|error| error.to_string())?;
     info!("Beam size: {beam_size}");
     Ok(())
 }
@@ -241,11 +238,10 @@ pub async fn set_temperature_fallback(
     controller: State<'_, SharedController>,
     enabled: bool,
 ) -> Result<(), String> {
-    let persisted = sagascript_core::settings::store::update(|settings| {
+    persist_and_sync(&controller, |settings| {
         settings.temperature_fallback = enabled;
-    })?;
-    let mut ctrl = lock_controller(&controller);
-    ctrl.settings_mut().temperature_fallback = persisted.temperature_fallback;
+    })
+    .map_err(|error| error.to_string())?;
     info!("Temperature fallback: {enabled}");
     Ok(())
 }
@@ -255,13 +251,10 @@ pub async fn set_vad_enabled(
     controller: State<'_, SharedController>,
     enabled: bool,
 ) -> Result<(), String> {
-    let persisted = sagascript_core::settings::store::update(|settings| {
+    persist_and_sync(&controller, |settings| {
         settings.vad_enabled = enabled;
-    })?;
-    {
-        let mut ctrl = lock_controller(&controller);
-        ctrl.settings_mut().vad_enabled = persisted.vad_enabled;
-    }
+    })
+    .map_err(|error| error.to_string())?;
     // Fetch the Silero VAD model so it's ready for the next dictation. Done
     // after releasing the lock (no lock held across await).
     if enabled {
@@ -281,10 +274,10 @@ pub async fn set_engine_prewarm(
     mode: String,
 ) -> Result<(), String> {
     let mode = sagascript_core::settings::EnginePrewarm::parse_id(&mode)?;
-    let persisted = sagascript_core::settings::store::update(|settings| {
+    persist_and_sync(&controller, |settings| {
         settings.engine_prewarm = mode;
-    })?;
-    lock_controller(&controller).settings_mut().engine_prewarm = persisted.engine_prewarm;
+    })
+    .map_err(|error| error.to_string())?;
     info!("Engine prewarm: {}", mode.id());
     Ok(())
 }
@@ -297,12 +290,10 @@ pub async fn set_engine_idle_unload_minutes(
     controller: State<'_, SharedController>,
     minutes: u32,
 ) -> Result<(), String> {
-    let persisted = sagascript_core::settings::store::update(|settings| {
+    persist_and_sync(&controller, |settings| {
         settings.engine_idle_unload_minutes = minutes;
-    })?;
-    lock_controller(&controller)
-        .settings_mut()
-        .engine_idle_unload_minutes = persisted.engine_idle_unload_minutes;
+    })
+    .map_err(|error| error.to_string())?;
     info!("Engine idle unload: {minutes} min");
     Ok(())
 }

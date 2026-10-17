@@ -1,11 +1,11 @@
 //! Shortcut configuration: changing profiles and modes, retrying a failed
 //! registration, and reporting the registration health.
 
-use sagascript_core::settings::{validate_hotkey, HotkeyMode, HotkeyProfile};
+use sagascript_core::settings::{validate_hotkey, HotkeyMode, HotkeyProfile, Settings};
 use tauri::State;
 use tracing::{error, info};
 
-use super::{lock_controller, SharedController};
+use super::{lock_controller, try_persist_and_sync, SharedController};
 use crate::command_error::CommandError;
 use crate::events::EmitEvent;
 use crate::hotkey::configuration::HotkeyChange;
@@ -80,6 +80,40 @@ pub(crate) fn acquire_hotkey_configuration(
     Ok(HotkeyConfigurationLease(controller))
 }
 
+/// The persistence half of a hotkey change, run once the new shortcuts are
+/// registered: the file and the controller, nothing else. A refusal or a failed
+/// write leaves both as they were.
+fn persist_hotkey_change(
+    controller: &SharedController,
+    update: &HotkeyChange,
+    shortcuts: &[String],
+) -> Result<Settings, CommandError> {
+    try_persist_and_sync(controller, |settings| {
+        update.apply_registered(settings, shortcuts)
+    })
+}
+
+/// What a failed hotkey change does about the shortcuts registered before it.
+#[derive(Debug, PartialEq, Eq)]
+enum Rollback<'a> {
+    /// Register these again.
+    Restore(&'a [String]),
+    /// Nothing was registered, so there is nothing to put back.
+    NothingActive,
+    /// The previous state is unknown. A change is refused before it touches the
+    /// OS in that state, so a rollback does not start from here; if one ever
+    /// did, nothing is registered again and nothing is claimed about what is.
+    StateUnknown,
+}
+
+fn rollback_for(previous: &OperationalHotkey) -> Rollback<'_> {
+    match previous {
+        OperationalHotkey::Registered(shortcuts) => Rollback::Restore(shortcuts),
+        OperationalHotkey::Inactive => Rollback::NothingActive,
+        OperationalHotkey::Unknown => Rollback::StateUnknown,
+    }
+}
+
 fn apply_hotkey_change(
     app: tauri::AppHandle,
     controller: State<'_, SharedController>,
@@ -108,11 +142,8 @@ fn apply_hotkey_change(
         && old_operational.matches(&new_shortcuts)
         && !health.is_failed()
     {
-        let persisted = sagascript_core::settings::store::try_update(|settings| {
-            update.apply_registered(settings, &new_shortcuts)
-        })
-        .map_err(CommandError::HotkeyChangeFailed)?;
-        lock_controller(&controller).update_settings(persisted.clone());
+        let persisted = persist_hotkey_change(&controller, &update, &new_shortcuts)
+            .map_err(|error| CommandError::HotkeyChangeFailed(error.to_string()))?;
         let change = health.record(&new_primary, None, old_operational);
         if change.changed {
             let _ = app.emit_event(
@@ -163,8 +194,8 @@ fn apply_hotkey_change(
                 "Failed to register hotkey profiles: {error}; cleanup failed: {cleanup_error}"
             )));
         }
-        let change = match &old_operational {
-            OperationalHotkey::Registered(old_shortcuts) => match crate::hotkey::register_shortcuts(&app, old_shortcuts) {
+        let change = match rollback_for(&old_operational) {
+            Rollback::Restore(old_shortcuts) => match crate::hotkey::register_shortcuts(&app, old_shortcuts) {
                 Ok(()) => health.record(&old_shortcut, None, old_operational.clone()),
                 Err(rollback_error) => {
                     health.record(
@@ -174,12 +205,16 @@ fn apply_hotkey_change(
                     )
                 }
             },
-            OperationalHotkey::Inactive => health.record(
+            Rollback::NothingActive => health.record(
                 &old_shortcut,
                 Some("no previous hotkey was active".to_string()),
                 OperationalHotkey::Inactive,
             ),
-            OperationalHotkey::Unknown => unreachable!("unknown state returned above"),
+            Rollback::StateUnknown => health.record(
+                &old_shortcut,
+                Some(format!("new registration failed: {error}; the previous hotkey state was unknown")),
+                OperationalHotkey::Unknown,
+            ),
         };
         if change.changed {
             let _ = app.emit_event(
@@ -198,19 +233,16 @@ fn apply_hotkey_change(
         OperationalHotkey::registered_many(&new_shortcuts),
     );
 
-    let persisted = match sagascript_core::settings::store::try_update(|settings| {
-        update.apply_registered(settings, &new_shortcuts)
-    }) {
+    let persisted = match persist_hotkey_change(&controller, &update, &new_shortcuts) {
         Ok(settings) => settings,
         Err(save_error) => {
             let unregister_error = crate::hotkey::unregister_shortcuts(&app, &new_shortcuts).err();
             let rollback_error = if unregister_error.is_none() {
-                match &old_operational {
-                    OperationalHotkey::Registered(old_shortcuts) => {
+                match rollback_for(&old_operational) {
+                    Rollback::Restore(old_shortcuts) => {
                         crate::hotkey::register_shortcuts(&app, old_shortcuts).err()
                     }
-                    OperationalHotkey::Inactive => None,
-                    OperationalHotkey::Unknown => unreachable!("unknown state returned above"),
+                    Rollback::NothingActive | Rollback::StateUnknown => None,
                 }
             } else {
                 None
@@ -246,11 +278,7 @@ fn apply_hotkey_change(
         }
     };
 
-    {
-        let mut ctrl = lock_controller(&controller);
-        ctrl.update_settings(persisted.clone());
-        info!("Hotkey set to: {}", persisted.hotkey);
-    }
+    info!("Hotkey set to: {}", persisted.hotkey);
 
     let change = health.record(
         &new_primary,

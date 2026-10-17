@@ -8,7 +8,10 @@ use sagascript_core::transcription::{
 use tauri::State;
 use tracing::info;
 
-use super::{ensure_known_profile, lock_controller, SharedController};
+use super::{
+    correct_in_memory, ensure_known_profile, lock_controller, try_persist_and_sync,
+    SharedController,
+};
 use crate::command_error::CommandError;
 
 #[tauri::command]
@@ -139,28 +142,19 @@ pub async fn set_profile_glossary(
 ) -> Result<(), CommandError> {
     let source_len = source.chars().count();
     let mut conflict_source = None;
-    // The settings store reports failures as strings (typed in #360 part 2), so
-    // the typed error is carried out of the closure beside the string.
-    let mut rejection: Option<CommandError> = None;
-    let persisted = sagascript_core::settings::store::try_update(|settings| {
+    let saved = try_persist_and_sync(&controller, |settings| {
         let current_source = expected_source
             .as_ref()
             .map(|_| profile_dictionary_source_snapshot(settings, &profile_id));
-        match set_profile_glossary_in(settings, &profile_id, source, expected_source.as_deref()) {
-            Ok(()) => Ok(()),
-            Err(error) => {
+        set_profile_glossary_in(settings, &profile_id, source, expected_source.as_deref())
+            .inspect_err(|error| {
                 if matches!(error, CommandError::DictionaryChangedElsewhere) {
                     conflict_source = current_source;
                 }
-                let text = error.to_string();
-                rejection = Some(error);
-                Err(text)
-            }
-        }
+            })
     });
-    match persisted {
-        Ok(persisted) => {
-            lock_controller(&controller).update_settings(persisted);
+    match saved {
+        Ok(_) => {
             info!(source_len, "Profile personal dictionary updated");
             Ok(())
         }
@@ -168,15 +162,16 @@ pub async fn set_profile_glossary(
             if let (Some(expected), Some(persisted_source)) =
                 (expected_source.as_deref(), conflict_source.as_ref())
             {
-                let mut ctrl = lock_controller(&controller);
-                reconcile_profile_dictionary_after_conflict(
-                    ctrl.settings_mut(),
-                    &profile_id,
-                    expected,
-                    persisted_source,
-                );
+                correct_in_memory(&controller, |settings| {
+                    reconcile_profile_dictionary_after_conflict(
+                        settings,
+                        &profile_id,
+                        expected,
+                        persisted_source,
+                    );
+                });
             }
-            Err(rejection.unwrap_or_else(|| CommandError::from(error)))
+            Err(error)
         }
     }
 }
@@ -296,13 +291,9 @@ pub async fn apply_training_glossary(
     }
 
     let accepted_count = accepted.len();
-    let persisted = sagascript_core::settings::store::try_update(|settings| {
+    try_persist_and_sync(&controller, |settings| {
         apply_reviewed_training_candidates(settings, &heard, &corrected, &profile_id, &accepted)
     })?;
-
-    lock_controller(&controller)
-        .settings_mut()
-        .profile_glossaries = persisted.profile_glossaries;
     info!(accepted_count, profile_id = %profile_id, "Applied reviewed training glossary suggestions");
     Ok(())
 }
