@@ -10,7 +10,7 @@ const [api, settings, overlay, onboarding, transcribe, models, benchmark, benchm
     source("src/lib/Settings.svelte"),
     source("src/lib/overlay-state.ts"),
     source("src/lib/Onboarding.svelte"),
-    source("src-tauri/crates/sagascript-cli/src/transcribe/mod.rs"),
+    source("src-tauri/crates/sagascript-cli/src/transcribe/resolve.rs"),
     source("src-tauri/crates/sagascript-cli/src/models.rs"),
     source("src-tauri/crates/sagascript-cli/src/benchmark_dictation.rs"),
     source("src-tauri/crates/sagascript-cli/src/benchmark_config.rs"),
