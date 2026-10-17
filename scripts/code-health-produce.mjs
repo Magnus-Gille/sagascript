@@ -145,6 +145,20 @@ export function safeFailureDiagnostic(stdout, stderr) {
       const swiftFailure = /^(?:✘|X) Test (.+?)(?: recorded an issue| failed)/.exec(line);
       const swiftDiagnostic = /^.+:\d+:\d+(?::\d+)?:\s*error:\s*(.+)$/i.exec(line);
       const dyldLoader = /^dyld(?:\[\d+\])?:\s+Library not loaded:\s*(.+)$/.exec(line);
+      const dyldSymbolNotFound = /^dyld(?:\[\d+\])?:\s+symbol not found(?:\b|:)/i.test(line);
+      const dyldLoaderOther = /^dyld(?:\[\d+\])?:\s+\S/i.test(line);
+      const rustStackOverflow = /^(?:fatal runtime error:\s*stack overflow\b|thread '.+' has overflowed its stack\b)/i.test(line);
+      const rustNonUnwindingPanic = /^(?:fatal runtime error:\s*non-unwinding panic\b|thread caused non-unwinding panic\b)/i.test(line);
+      const rustFatalRuntime = /^fatal runtime error:\s*/i.test(line);
+      const llvmProfileError = /^LLVM Profile Error:/i.test(line);
+      const llvmRuntimeFatal = /^LLVM Profile Runtime:/i.test(line);
+      const llvmError = /^LLVM ERROR:/i.test(line);
+      const mallocAllocatorFatal =
+        /\bmalloc:\s+(?:\*\*\*\s+)?(?:error|fatal|corruption|incorrect checksum|pointer being freed|heap corruption)\b/i.test(line);
+      const mallocAllocatorDiagnostic = /\bmalloc:\s+\S/i.test(line);
+      const nativeAssertionAbort = /^(?:Assertion failed:|GGML_ASSERT\b|ggml_abort:)/.test(line);
+      const libcxxAbiTermination = /^libc\+\+abi:/i.test(line);
+      const throwingTermination = /^terminate called after throwing\b/i.test(line);
       if (panic) lines.push(`${stream} test-failed: ${safeDiagnostic(panic[1]).slice(0, 400)}`);
       else if (processSignal || continuationSignal) {
         const match = processSignal ?? continuationSignal;
@@ -157,6 +171,32 @@ export function safeFailureDiagnostic(stdout, stderr) {
         // Unknown child causes must not expose argv through generic error fallbacks.
       } else if (dyldLoader) {
         lines.push(`${stream} dyld-loader: Library not loaded`);
+      } else if (dyldSymbolNotFound) {
+        lines.push(`${stream} dyld-loader: symbol-not-found`);
+      } else if (dyldLoaderOther) {
+        lines.push(`${stream} dyld-loader: other`);
+      } else if (rustStackOverflow) {
+        lines.push(`${stream} rust-fatal-runtime: stack-overflow`);
+      } else if (rustNonUnwindingPanic) {
+        lines.push(`${stream} rust-fatal-runtime: non-unwinding-panic`);
+      } else if (rustFatalRuntime) {
+        lines.push(`${stream} rust-fatal-runtime: other`);
+      } else if (llvmProfileError) {
+        lines.push(`${stream} llvm-profile: error`);
+      } else if (llvmRuntimeFatal) {
+        lines.push(`${stream} llvm-runtime: fatal`);
+      } else if (llvmError) {
+        lines.push(`${stream} llvm: error`);
+      } else if (mallocAllocatorFatal) {
+        lines.push(`${stream} malloc-allocator: fatal`);
+      } else if (mallocAllocatorDiagnostic) {
+        lines.push(`${stream} malloc-allocator: diagnostic`);
+      } else if (nativeAssertionAbort) {
+        lines.push(`${stream} native-assertion: failed`);
+      } else if (libcxxAbiTermination) {
+        lines.push(`${stream} native-termination: libcxxabi`);
+      } else if (throwingTermination) {
+        lines.push(`${stream} native-termination: throwing`);
       } else if (section) lines.push(`${stream} test-failed: ${safeDiagnostic(section[1]).slice(0, 400)}`);
       else if (rustFailedTest) lines.push(`${stream} failed-test: ${safeDiagnostic(rustFailedTest[1]).slice(0, 400)}`);
       else if (swiftFailure) lines.push(`${stream} test-failed: ${safeDiagnostic(swiftFailure[1]).slice(0, 400)}`);
