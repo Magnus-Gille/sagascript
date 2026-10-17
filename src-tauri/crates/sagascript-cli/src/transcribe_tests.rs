@@ -5,6 +5,9 @@ use super::language_regions::*;
 use super::progress::*;
 use super::*;
 use sagascript_core::settings::{FileModelPreference, HotkeyProfile};
+use sagascript_core::transcription::diagnostics::LanguageDetection;
+#[cfg(feature = "diarization")]
+use sagascript_core::transcription::whisper_backend::contains_no_speech_marker;
 use sagascript_testsupport::TempDir;
 
 #[cfg(feature = "diarization")]

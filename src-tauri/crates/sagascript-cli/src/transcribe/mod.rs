@@ -22,10 +22,7 @@ use sagascript_core::error::DictationError;
 use sagascript_core::meeting::{MeetingSegmentInput, MeetingSpeaker, MeetingTranscript};
 use sagascript_core::run_context::{file_beam_size, RunContext};
 use sagascript_core::settings::{FileModel, Language, Settings, WhisperModel};
-use sagascript_core::transcription::diagnostics::{
-    analyze_coverage, analyze_repetition, language_mismatch_warning, CoverageDiagnostics,
-    LanguageDetection, TranscriptionWarning,
-};
+use sagascript_core::transcription::diagnostics::{analyze_coverage, analyze_repetition};
 #[cfg(feature = "diarization")]
 use sagascript_core::transcription::diagnostics::{analyze_coverage_profile, CoverageProfile};
 use sagascript_core::transcription::model;
@@ -33,27 +30,28 @@ use sagascript_core::transcription::pianissimo_backend::PianissimoBackend;
 use sagascript_core::transcription::pianissimo_model;
 use sagascript_core::transcription::whisper_backend::assemble_transcript;
 #[cfg(feature = "diarization")]
-use sagascript_core::transcription::whisper_backend::contains_no_speech_marker;
-#[cfg(feature = "diarization")]
 use sagascript_core::transcription::whisper_backend::validate_diarization_options;
 use sagascript_core::transcription::{
     normalize_nonspeech_markers, recommended_parallel_chunks, ContextProfile, Glossary,
     TranscribeOptions, TranscriptSegment, WhisperBackend,
 };
 
-use crate::exit::{dictation_error_code, ErrorObject, JsonOutput};
-use crate::output::{errln, outln, Out, WriteError};
+use crate::output::{errln, Out};
 use crate::run_request::RunRequest;
 
 mod args;
 mod inputs;
 mod language_detection;
 mod language_regions;
+mod output;
 mod progress;
 mod resolve;
 mod vocab_correction;
 
 pub use self::args::TranscribeArgs;
+pub use self::output::copy_to_clipboard;
+#[cfg(feature = "diarization")]
+pub(crate) use self::output::prepare_diarized_plain_segments;
 pub(crate) use self::resolve::{effective_glossary, resolve_one_run_prompt};
 pub use self::resolve::{
     model_id_string, parse_language, parse_model, resolve_effective_model, resolve_file_model,
@@ -68,17 +66,14 @@ use self::inputs::paths_refer_to_same_file;
 use self::language_detection::detect_file_language;
 use self::language_regions::detect_file_language_regions;
 #[cfg(feature = "diarization")]
+use self::output::assemble_diarized_plain_text;
+use self::output::{
+    combined_warnings, emit_warnings, BatchExecution, BatchSink, FileTranscription,
+};
+#[cfg(feature = "diarization")]
 use self::progress::{decoder_progress_value, emit_meeting_progress};
 use self::progress::{emit_progress, emit_progress_with_decoder};
 use self::vocab_correction::{apply_glossary_corrections, apply_hint_corrections};
-
-#[derive(Debug)]
-struct FileTranscription {
-    json: serde_json::Value,
-    plain: String,
-    #[cfg(feature = "diarization")]
-    meeting: Option<MeetingTranscript>,
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CachePolicy {
@@ -92,42 +87,6 @@ impl CachePolicy {
     fn reads_existing_cache(self) -> bool {
         matches!(self, Self::Normal)
     }
-}
-
-#[cfg(feature = "diarization")]
-fn assemble_diarized_plain_text(segments: &[DiarizedSegment]) -> String {
-    segments
-        .iter()
-        .filter(|segment| !contains_no_speech_marker(&segment.text))
-        .map(|segment| format!("[{}] {}", segment.speaker, segment.text.trim()))
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-#[cfg(feature = "diarization")]
-pub(crate) fn prepare_diarized_plain_segments(
-    segments: &[DiarizedSegment],
-    language: Language,
-    glossary: &Glossary,
-) -> Vec<DiarizedSegment> {
-    let filtered = segments
-        .iter()
-        .filter(|segment| !contains_no_speech_marker(&segment.text))
-        .cloned()
-        .collect::<Vec<_>>();
-    let mut consolidated = sagascript_core::diarization::merge::consolidate(&filtered);
-    for segment in &mut consolidated {
-        segment.text = normalize_nonspeech_markers(&segment.text, language);
-    }
-    let fragments = consolidated
-        .iter()
-        .map(|segment| segment.text.as_str())
-        .collect::<Vec<_>>();
-    let (corrected_fragments, _) = glossary.correct_fragments(&fragments);
-    for (segment, text) in consolidated.iter_mut().zip(corrected_fragments) {
-        segment.text = text;
-    }
-    consolidated
 }
 
 #[cfg(feature = "diarization")]
@@ -397,141 +356,6 @@ struct DiarizationPerformance {
     merge_diagnostics_seconds: f64,
     json_assembly_seconds: f64,
     total_seconds: f64,
-}
-
-#[derive(Debug)]
-struct BatchExecution {
-    source: PathBuf,
-    output: Result<FileTranscription, DictationError>,
-}
-
-/// One input's outcome in `--json` arrays and `--jsonl` lines:
-/// `{"status":"ok","source":…,"result":…}` or `{"status":"error","source":…,"error":…}`.
-#[derive(Debug, serde::Serialize)]
-#[serde(tag = "status", rename_all = "lowercase")]
-enum BatchItem {
-    Ok {
-        source: String,
-        result: serde_json::Value,
-    },
-    Error {
-        source: String,
-        error: String,
-        /// For the single-input `--json` error object only; batch items keep
-        /// their three keys.
-        #[serde(skip)]
-        code: String,
-    },
-}
-
-/// Where `transcribe` writes each input's outcome (#364). The Whisper and
-/// Pianissimo batches share it, so the three output modes are defined once:
-///
-/// - plain text: each transcript on stdout, under a `==> file <==` header when
-///   there are several inputs;
-/// - `--json`: one document after the batch: the result object for a single
-///   input (or its error object when it failed), otherwise an array of items;
-/// - `--jsonl`: one compact item per line, written as soon as the input is done.
-///
-/// A failed input is also reported as `Error transcribing …` on stderr.
-enum BatchSink {
-    Plain { headers: bool },
-    Json { single: bool, items: Vec<BatchItem> },
-    Jsonl,
-}
-
-impl BatchSink {
-    fn new(args: &TranscribeArgs, inputs: usize) -> Self {
-        if args.jsonl {
-            Self::Jsonl
-        } else if args.json {
-            Self::Json {
-                single: inputs == 1,
-                items: Vec::with_capacity(inputs),
-            }
-        } else {
-            Self::Plain {
-                headers: inputs > 1,
-            }
-        }
-    }
-
-    fn emit(
-        &mut self,
-        out: &Out,
-        args: &TranscribeArgs,
-        execution: BatchExecution,
-    ) -> Result<(), DictationError> {
-        let file = execution.source;
-        match execution.output {
-            Ok(output) => {
-                #[cfg(feature = "diarization")]
-                if args.meeting_json {
-                    let meeting = output.meeting.as_ref().ok_or_else(|| {
-                        DictationError::TranscriptionFailed(
-                            "meeting JSON was not produced by the diarized pipeline".to_string(),
-                        )
-                    })?;
-                    out.json(meeting)?;
-                    return Ok(());
-                }
-                if args.clipboard {
-                    copy_to_clipboard(&output.plain)?;
-                    errln!(out, "Copied to clipboard.");
-                }
-                let item = BatchItem::Ok {
-                    source: file.display().to_string(),
-                    result: output.json,
-                };
-                match self {
-                    Self::Jsonl => out.jsonl(&item)?,
-                    Self::Json { items, .. } => items.push(item),
-                    Self::Plain { headers } => {
-                        if *headers {
-                            outln!(out, "==> {} <==", file.display())?;
-                        }
-                        outln!(out, "{}", output.plain)?;
-                    }
-                }
-            }
-            Err(error) => {
-                errln!(out, "Error transcribing {}: {error}", file.display());
-                let item = BatchItem::Error {
-                    source: file.display().to_string(),
-                    error: error.to_string(),
-                    code: dictation_error_code(&error),
-                };
-                match self {
-                    Self::Jsonl => out.jsonl(&item)?,
-                    Self::Json { items, .. } => items.push(item),
-                    Self::Plain { .. } => {}
-                }
-            }
-        }
-        Ok(())
-    }
-
-    /// Writes the `--json` document once the batch is done.
-    fn finish(self, out: &Out) -> Result<(), WriteError> {
-        let Self::Json { single, mut items } = self else {
-            return Ok(());
-        };
-        if single && items.len() == 1 {
-            match items.pop() {
-                Some(BatchItem::Ok { result, .. }) => return out.json(&result),
-                Some(BatchItem::Error {
-                    source,
-                    error,
-                    code,
-                }) => {
-                    return ErrorObject::new(&code, Some(&source), &error)
-                        .write(out, JsonOutput::Pretty)
-                }
-                None => {}
-            }
-        }
-        out.json(&items)
-    }
 }
 
 /// Run the diarized file pipeline and return the validated shared meeting
@@ -2119,25 +1943,6 @@ fn canonicalize_coverage_segments(
         })
         .collect()
 }
-fn combined_warnings(
-    coverage: &CoverageDiagnostics,
-    configured_language: Language,
-    detected_language: Option<&LanguageDetection>,
-) -> Vec<TranscriptionWarning> {
-    let mut warnings = coverage.warnings.clone();
-    if let Some(detected) = detected_language {
-        if let Some(warning) = language_mismatch_warning(configured_language, detected) {
-            warnings.push(warning);
-        }
-    }
-    warnings
-}
-
-fn emit_warnings(out: &Out, warnings: &[TranscriptionWarning]) {
-    for warning in warnings {
-        errln!(out, "Warning [{}]: {}", warning.code, warning.message);
-    }
-}
 /// Resolve the diarization decoder independently from ordinary file defaults.
 /// Explicit CLI values win. Omitted flags preserve the legacy greedy/no-VAD,
 /// temperature-fallback decoding regardless of ordinary file settings.
@@ -2170,16 +1975,6 @@ fn effective_diarization_decoder_evidence(
         )?
         .into(),
     )
-}
-
-pub fn copy_to_clipboard(text: &str) -> Result<(), DictationError> {
-    use arboard::Clipboard;
-    let mut clipboard = Clipboard::new()
-        .map_err(|e| DictationError::PasteError(format!("Clipboard error: {e}")))?;
-    clipboard
-        .set_text(text)
-        .map_err(|e| DictationError::PasteError(format!("Clipboard error: {e}")))?;
-    Ok(())
 }
 
 #[cfg(test)]
