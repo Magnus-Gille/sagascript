@@ -67,7 +67,7 @@ notify = { version = "7", default-features = false }
 # feature now adds ALPN, hence `default-features = false` and
 # `native-tls-no-alpn`. `http2` and `charset` were inert here (no ALPN, no
 # `text()`) and would leak into the updater's client through feature
-# unification. Each client names its backend; see src/updates.rs.
+# unification. Each client names its backend; see src/updater/updates.rs.
 reqwest = { version = "0.13", default-features = false, features = ["native-tls-no-alpn", "system-proxy", "json"] }
 semver = "1"
 # `CommandError` derives Error like core's DictationError (same major; already

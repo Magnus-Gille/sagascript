@@ -15,10 +15,10 @@ this in several places, with slightly different signal names:
   SIGTRAP crash").
 - `src-tauri/src/commands.rs`, Dictate test transcription: "enigo's macOS TIS APIs crash if
   called from a tokio worker thread (SIGTRAP in dispatch_assert_queue)".
-- `stop_recording_and_transcribe` in `src-tauri/src/main.rs`: "Auto-paste MUST run on the main
+- `stop_recording_and_transcribe` in `src-tauri/src/dictation/pipeline.rs`: "Auto-paste MUST run on the main
   thread — enigo's macOS TIS APIs crash (SIGABRT) if called from a tokio worker thread."
 - `dispatch_to_main` in `main.rs`: "Native tray/window APIs must not be touched from a
-  transport or worker thread"; the single-instance callback queues its UI work the same way
+  transport or worker thread"; the single-instance callback (`launch/lifecycle.rs`) queues its UI work the same way
   because it "is not guaranteed to be the Tauri main thread (notably on macOS)".
 
 The opposite constraint matters as much: on macOS (and for key-down on Windows) the main
@@ -47,7 +47,7 @@ the minimum-duration top-up in `stop_recording_and_transcribe`).
 ## Consequences
 
 - Async code cannot call `PasteService` directly; every paste path needs a dispatch and a
-  completion wait. Today there are several variants (the hardened live path in `main.rs`, the
+  completion wait. Today there are several variants (the hardened live path in `dictation/pipeline.rs`, the
   fire-and-forget `run_on_main_thread` paste after file transcription in `commands.rs`, and
   the `on_main` helper). #344 consolidates them behind one adapter and makes the lifecycle
   testable with fakes; until then, copy the hardened path in `stop_recording_and_transcribe`.
@@ -62,7 +62,7 @@ the minimum-duration top-up in `stop_recording_and_transcribe`).
   target (main thread; the `hotkey/macos_bare.rs` NSEvent monitors are main-thread too); on
   Windows `Pressed` from `WM_HOTKEY` on the plugin's message window (main thread) but
   `Released` from a spawned `GetAsyncKeyState` polling thread; on Linux (X11) both from the
-  library's own event thread. So on Linux `handle_hotkey_event` in `main.rs` calls
+  library's own event thread. So on Linux `handle_hotkey_event` in `dictation/trigger.rs` calls
   `select_profile_menu`, `update_tray_status` and `overlay::show` off the main thread, and on
   Windows `handle_hotkey_release` runs on the polling thread (it locks the controller, logs and
   spawns a task, so this is harmless today). A fix routes those UI calls through

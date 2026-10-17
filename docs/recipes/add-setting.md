@@ -69,7 +69,7 @@ awaits.
   the persisted value into the controller. Never `store::save()` an in-memory clone; never hold
   the controller lock across the store call or an `.await`.
 - Side effects go after the lock is released (`set_show_overlay`, `set_vad_enabled`). The
-  watcher (`start_settings_watcher` in `main.rs`) reloads the **whole** `Settings` from disk
+  watcher (`start_settings_watcher` in `settings_watcher.rs`) reloads the **whole** `Settings` from disk
   when the CLI edits the file, so a plain value read at use time from `ctrl.settings()` needs
   nothing there. It does not replay setter side effects: if your setter has one (recreate a
   window, download a model), add it to the watcher too.
