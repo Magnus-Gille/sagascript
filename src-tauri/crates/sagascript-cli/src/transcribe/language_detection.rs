@@ -1,7 +1,11 @@
 //! The language check of a transcription (#343): what the model hears, set
-//! against the language the run was asked to use. Detectors are reached only
-//! through [`DetectorLoader`], which is how the check is kept from downloading
-//! anything.
+//! against the language the run was asked to use. The check asks for its
+//! detectors through [`DetectorLoader`], naming an [`EncoderPolicy`], and
+//! [`InstalledDetectors::load`] is the one place that touches the models
+//! directory; it loads local files only today. The types make a new policy a
+//! deliberate change (a variant, an exhaustive match, a test); they do not
+//! stop code inside the loader from fetching something, which review and
+//! `language_detection_never_downloads_an_encoder` have to catch.
 
 use sagascript_core::error::DictationError;
 use sagascript_core::settings::WhisperModel;
@@ -12,13 +16,13 @@ use sagascript_core::transcription::WhisperBackend;
 use crate::output::{errln, Out};
 
 /// What loading a model for a language check may do about its Core ML
-/// encoder (#343). Local mode makes no network request after setup, so a
-/// language check can ask for [`EncoderPolicy::NoDownload`] only: an encoder
-/// is used when `download-model` installed it and is never fetched here.
-/// A policy that fetches one would be a new variant, and then every `match`
-/// over this enum, [`InstalledDetectors::load`] and
-/// `language_detection_never_downloads_an_encoder` (in `transcribe_tests.rs`)
-/// have to change with it, on purpose.
+/// encoder (#343). Local mode makes no network request after setup, so the
+/// language check asks for [`EncoderPolicy::NoDownload`], the only policy
+/// there is: an encoder is used when `download-model` installed it, and
+/// nothing in the check fetches one. A policy that fetches one would be a new
+/// variant, and then every `match` over this enum, [`InstalledDetectors::load`]
+/// and `language_detection_never_downloads_an_encoder` (in
+/// `transcribe_tests.rs`) have to change with it, on purpose.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum EncoderPolicy {
     NoDownload,
