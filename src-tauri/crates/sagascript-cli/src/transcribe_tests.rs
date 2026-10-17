@@ -1,4 +1,5 @@
 use super::args::*;
+#[cfg(feature = "diarization")]
 use super::diarize::*;
 use super::inputs::*;
 use super::language_detection::*;
@@ -21,7 +22,9 @@ use sagascript_core::transcription::diagnostics::LanguageDetection;
 use sagascript_core::transcription::whisper_backend::assemble_transcript;
 #[cfg(feature = "diarization")]
 use sagascript_core::transcription::whisper_backend::contains_no_speech_marker;
-use sagascript_core::transcription::{TranscribeOptions, TranscriptSegment};
+#[cfg(feature = "diarization")]
+use sagascript_core::transcription::TranscribeOptions;
+use sagascript_core::transcription::TranscriptSegment;
 use sagascript_testsupport::TempDir;
 #[cfg(feature = "diarization")]
 use std::sync::atomic::Ordering;
