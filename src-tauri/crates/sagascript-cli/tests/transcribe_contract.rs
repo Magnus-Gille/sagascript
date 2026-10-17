@@ -19,9 +19,12 @@
 //! - everything that fails before inference (`preflight_*`, `model_selection_*`)
 //!   needs nothing at all.
 //!
-//! What cannot be reached without weights is a successful Whisper inference
-//! (the plain `--json` result object, `==> file <==` headers): the unit tests
-//! of the output step (`transcribe_tests.rs`) cover the sink in-process.
+//! What cannot be reached without weights is a successful Whisper inference.
+//! `transcribe_file_tests.rs` drives it in-process with a scripted backend: the
+//! plain `--json` result object, `==> file <==` headers, progress events and
+//! corrections. A successful Pianissimo run needs only the fake engine host, so
+//! `pianissimo_with_the_fake_host` runs it end to end where the platform gate
+//! allows it (macOS on Apple Silicon).
 //!
 //! Dynamic values (times, build revision and version, platform and path
 //! details) are normalised explicitly, by `Sandbox::stderr_lines` and
@@ -1517,6 +1520,352 @@ fn the_public_transcribe_paths_stay_importable() {
                 "\"clustering\"",
                 "\"finalizing\""
             ]
+        );
+    }
+}
+
+// ---- a Pianissimo run that succeeds, against the fake engine host ---------------
+
+/// `--model pianissimo-sv` end to end: the real binary starts
+/// `sagascript-fake-engine-host` as its engine host, decodes a WAV, has the
+/// host "transcribe" it and writes the result. No model or network is involved;
+/// the fake host derives its tokens from the audio (see its header).
+///
+/// Pianissimo runs only where the platform gate lets it (macOS 14+ on Apple
+/// Silicon, Windows on ARM), so this module is compiled for macOS on Apple
+/// Silicon, where CI's macOS lane runs it. The engine host and the model
+/// directory come from the developer overrides, which a debug build honours.
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+mod pianissimo_with_the_fake_host {
+    use std::path::Path;
+
+    use super::*;
+
+    /// The fake host built by `sagascript-core`: next to the CLI binary when
+    /// the workspace was built as a whole, otherwise built now (as the engine
+    /// tests in `src/engine.rs` do).
+    fn fake_host() -> PathBuf {
+        let cli = PathBuf::from(env!("CARGO_BIN_EXE_sagascript"));
+        let name = format!(
+            "sagascript-fake-engine-host{}",
+            std::env::consts::EXE_SUFFIX
+        );
+        let beside = cli.with_file_name(&name);
+        if beside.is_file() {
+            return beside;
+        }
+        let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+        let output = Command::new(cargo)
+            .args([
+                "build",
+                "-p",
+                "sagascript-core",
+                "--bin",
+                "sagascript-fake-engine-host",
+                "--message-format=json",
+            ])
+            .stderr(Stdio::inherit())
+            .output()
+            .expect("run cargo build for the fake engine host");
+        assert!(
+            output.status.success(),
+            "building the fake engine host failed"
+        );
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .find(|message| {
+                message["reason"] == "compiler-artifact"
+                    && message["target"]["name"] == "sagascript-fake-engine-host"
+                    && message["target"]["kind"]
+                        .as_array()
+                        .is_some_and(|kinds| kinds.iter().any(|kind| kind == "bin"))
+            })
+            .and_then(|message| message["executable"].as_str().map(PathBuf::from))
+            .expect("cargo reported the fake engine host")
+    }
+
+    /// A model directory the developer override accepts: every item the engine
+    /// host would load, empty.
+    fn model_dir(sandbox: &Sandbox) -> PathBuf {
+        let dir = sandbox.root.join("pianissimo-model");
+        std::fs::create_dir_all(&dir).expect("create the model directory");
+        for item in sagascript_core::transcription::pianissimo_model::active().required_items {
+            std::fs::write(dir.join(item), b"").expect("write a model item");
+        }
+        dir
+    }
+
+    /// A 16 kHz mono 16-bit PCM WAV of `seconds` of silence.
+    fn wav(seconds: usize) -> Vec<u8> {
+        let samples = seconds * 16_000;
+        let data_len = u32::try_from(samples * 2).expect("fixture fits a WAV");
+        let mut bytes = Vec::with_capacity(44 + samples * 2);
+        bytes.extend_from_slice(b"RIFF");
+        bytes.extend_from_slice(&(36 + data_len).to_le_bytes());
+        bytes.extend_from_slice(b"WAVEfmt ");
+        bytes.extend_from_slice(&16_u32.to_le_bytes());
+        bytes.extend_from_slice(&1_u16.to_le_bytes()); // PCM
+        bytes.extend_from_slice(&1_u16.to_le_bytes()); // mono
+        bytes.extend_from_slice(&16_000_u32.to_le_bytes());
+        bytes.extend_from_slice(&32_000_u32.to_le_bytes());
+        bytes.extend_from_slice(&2_u16.to_le_bytes());
+        bytes.extend_from_slice(&16_u16.to_le_bytes());
+        bytes.extend_from_slice(b"data");
+        bytes.extend_from_slice(&data_len.to_le_bytes());
+        bytes.resize(44 + samples * 2, 0);
+        bytes
+    }
+
+    fn run(sandbox: &Sandbox, host: &Path, args: &[&str]) -> Run {
+        let mut command = sandbox.command(args);
+        command
+            .env("SAGASCRIPT_ENGINE_HOST", host)
+            .env("SAGASCRIPT_PIANISSIMO_MODEL_DIR", model_dir(sandbox));
+        Run::from(command.output().expect("run sagascript"))
+    }
+
+    /// The words the fake host "hears" in 3 s of silence: one token per half
+    /// second, all the same.
+    const HEARD: &str = "t0 t0 t0 t0 t0 t0";
+
+    const ARGS: [&str; 6] = [
+        "transcribe",
+        "tone.wav",
+        "--model",
+        "pianissimo-sv",
+        "--language",
+        "sv",
+    ];
+
+    /// `ARGS` and then `extra`.
+    fn with<'a>(extra: &[&'a str]) -> Vec<&'a str> {
+        let mut args: Vec<&str> = ARGS.to_vec();
+        args.extend_from_slice(extra);
+        args
+    }
+
+    #[test]
+    fn plain_text_is_the_transcript_alone_on_stdout() {
+        let sandbox = Sandbox::new();
+        sandbox.write("tone.wav", &wav(3));
+        let run = run(&sandbox, &fake_host(), &ARGS);
+
+        assert_eq!(run.code, Some(0), "stderr={}", run.stderr);
+        assert_eq!(run.stdout, format!("{HEARD}\n"));
+        assert_lines(&sandbox.stderr_lines(&run), &["[1/1] tone.wav"], "plain");
+    }
+
+    #[test]
+    fn json_is_the_per_file_object_with_engine_performance() {
+        let sandbox = Sandbox::new();
+        sandbox.write("tone.wav", &wav(3));
+        let run = run(&sandbox, &fake_host(), &with(&["--json"]));
+
+        assert_eq!(run.code, Some(0), "stderr={}", run.stderr);
+        let mut result: Value = serde_json::from_str(&run.stdout).expect("--json is one document");
+        let performance = result["performance"].take();
+        let words: Vec<Value> = (0..6)
+            .map(|index| {
+                json!({
+                    "start": index as f64 * 0.5,
+                    "end": index as f64 * 0.5 + 0.4,
+                    "text": "t0",
+                    "avg_logprob": null,
+                    "no_speech_prob": null,
+                    "quarantined": false,
+                })
+            })
+            .collect();
+        result["performance"] = Value::Null;
+        assert_eq!(
+            result,
+            json!({
+                "text": HEARD,
+                "segments": words,
+                "language": "sv",
+                "model": "pianissimo-sv",
+                "file": "tone.wav",
+                "duration_seconds": 3.0,
+                "coverage_ratio": null,
+                "uncovered_spans": [],
+                "repetition_spans": [],
+                "detected_language": null,
+                "language_redetection_enabled": false,
+                "language_regions": null,
+                "warnings": [],
+                "vocabulary_corrections": [],
+                "performance": null,
+            })
+        );
+        // Times vary; the rest of `performance` is the engine's report.
+        for key in [
+            "model_load_seconds",
+            "model_verification_seconds",
+            "decode_resample_seconds",
+            "total_seconds",
+        ] {
+            assert!(performance[key].as_f64().is_some(), "{key}: {performance}");
+        }
+        assert_eq!(performance["engine"], "fake");
+        assert_eq!(performance["engine_warm"], false);
+        let windows = performance["windows"].as_array().expect("windows");
+        assert_eq!(windows.len(), 1, "{performance}");
+        assert_eq!(windows[0]["index"], 0);
+        assert_eq!(windows[0]["tokens"], 6);
+        assert_eq!(windows[0]["audio_seconds"], 3.0);
+    }
+
+    #[test]
+    fn a_profile_dictionarys_replacements_apply_after_transcription() {
+        let sandbox = Sandbox::new();
+        sandbox.write("tone.wav", &wav(3));
+        sandbox.write(
+            "settings.json",
+            br#"{"language":"sv","profile_glossary_migrated":true,
+                "hotkey_profiles":[
+                  {"id":"swedish","name":"Swedish","shortcut":"Super+S","language":"sv"}],
+                "profile_glossaries":{"swedish":"Tzero = t0"}}"#,
+        );
+        let run = run(
+            &sandbox,
+            &fake_host(),
+            &[
+                "transcribe",
+                "tone.wav",
+                "--model",
+                "pianissimo-sv",
+                "--profile",
+                "swedish",
+                "--json",
+            ],
+        );
+
+        assert_eq!(run.code, Some(0), "stderr={}", run.stderr);
+        let result: Value = serde_json::from_str(&run.stdout).expect("--json is one document");
+        assert_eq!(result["text"], "Tzero Tzero Tzero Tzero Tzero Tzero");
+        let corrections = result["vocabulary_corrections"]
+            .as_array()
+            .expect("corrections");
+        assert_eq!(corrections.len(), 6, "{result}");
+        assert_eq!(corrections[0]["original"], "t0");
+        assert_eq!(corrections[0]["replacement"], "Tzero");
+        assert_lines(
+            &sandbox.stderr_lines(&run),
+            &[
+                "Pianissimo does not use Whisper decoder hints; saved glossary replacements still apply after transcription.",
+                "[1/1] tone.wav",
+            ],
+            "glossary",
+        );
+    }
+
+    #[test]
+    fn progress_events_run_decode_resample_transcribe_complete() {
+        let sandbox = Sandbox::new();
+        sandbox.write("tone.wav", &wav(3));
+        let run = run(&sandbox, &fake_host(), &with(&["--progress-json"]));
+
+        assert_eq!(run.code, Some(0), "stderr={}", run.stderr);
+        assert_eq!(run.stdout, format!("{HEARD}\n"));
+        let mut events: Vec<Value> = Vec::new();
+        let rest: Vec<String> = sandbox
+            .stderr_lines(&run)
+            .into_iter()
+            .filter(|line| match serde_json::from_str::<Value>(line) {
+                Ok(event) if event["event"] == "transcription_progress" => {
+                    events.push(event);
+                    false
+                }
+                _ => true,
+            })
+            .collect();
+        let mut phases: Vec<(String, u64)> = Vec::new();
+        for event in &events {
+            assert_eq!(event["steps_total"], 3, "{event}");
+            let entry = (
+                event["phase"].as_str().expect("phase").to_string(),
+                event["step"].as_u64().expect("step"),
+            );
+            if phases.last() != Some(&entry) {
+                phases.push(entry);
+            }
+        }
+        let transcribing: Vec<u64> = events
+            .iter()
+            .filter(|event| event["phase"] == "transcribing")
+            .map(|event| event["percent"].as_u64().expect("percent"))
+            .collect();
+        assert_eq!(rest, ["[1/1] tone.wav"]);
+        assert_eq!(
+            phases,
+            [
+                ("decoding".to_string(), 1),
+                ("resampling".to_string(), 2),
+                ("transcribing".to_string(), 3),
+                ("completed".to_string(), 3),
+            ]
+        );
+        assert_eq!(transcribing.first(), Some(&0));
+        assert_eq!(transcribing.last(), Some(&100));
+        assert!(
+            transcribing.windows(2).all(|pair| pair[0] <= pair[1]),
+            "{transcribing:?}"
+        );
+        let last = events.last().expect("events were written");
+        assert_eq!(last["phase"], "completed");
+        assert_eq!(last["percent"], 100);
+    }
+
+    #[test]
+    fn a_batch_starts_the_engine_once_and_writes_a_header_per_file() {
+        let sandbox = Sandbox::new();
+        sandbox.write("a.wav", &wav(3));
+        sandbox.write("b.wav", &wav(3));
+        let host = fake_host();
+        let base = ["--model", "pianissimo-sv", "--language", "sv"];
+
+        let plain = run(
+            &sandbox,
+            &host,
+            &[&["transcribe", "a.wav", "b.wav"][..], &base[..]].concat(),
+        );
+        assert_eq!(plain.code, Some(0), "stderr={}", plain.stderr);
+        assert_eq!(
+            plain.stdout,
+            format!("==> a.wav <==\n{HEARD}\n==> b.wav <==\n{HEARD}\n")
+        );
+        assert_lines(
+            &sandbox.stderr_lines(&plain),
+            &["[1/2] a.wav", "[2/2] b.wav"],
+            "batch",
+        );
+
+        // The engine is started and the model loaded for the first file only.
+        let jsonl = run(
+            &sandbox,
+            &host,
+            &[&["transcribe", "a.wav", "b.wav", "--jsonl"][..], &base[..]].concat(),
+        );
+        assert_eq!(jsonl.code, Some(0), "stderr={}", jsonl.stderr);
+        let items: Vec<Value> = jsonl
+            .stdout
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("a JSONL item"))
+            .collect();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0]["source"], "a.wav");
+        assert_eq!(items[1]["source"], "b.wav");
+        for item in &items {
+            assert_eq!(item["status"], "ok");
+            assert_eq!(item["result"]["text"], HEARD);
+        }
+        assert_eq!(items[0]["result"]["performance"]["engine_warm"], false);
+        assert_eq!(items[1]["result"]["performance"]["engine_warm"], true);
+        assert_eq!(items[1]["result"]["performance"]["model_load_seconds"], 0.0);
+        assert_eq!(
+            items[1]["result"]["performance"]["model_verification_seconds"],
+            0.0
         );
     }
 }
