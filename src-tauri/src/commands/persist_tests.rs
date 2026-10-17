@@ -86,12 +86,16 @@ fn other_prewarm() -> EnginePrewarm {
 
 /// One row per setter. A new `set_*` command needs a row here or a reason in
 /// [`NOT_SETTINGS`] (`every_setter_command_has_a_row_or_a_reason`).
+///
+/// The rows use Norwegian and its models. Pianissimo is Swedish-only, so no
+/// row can resolve a profile to it, and a profile change cannot start the
+/// engine host on a machine that has the Pianissimo model installed.
 const ROWS: &[Row] = &[
     Row {
         commands: &["set_language"],
         arrange: nothing,
-        run: |app, _| persist_language(&controller(app), Language::Swedish).map(drop),
-        landed: |s| s.default_profile().language == Language::Swedish,
+        run: |app, _| persist_language(&controller(app), Language::Norwegian).map(drop),
+        landed: |s| s.default_profile().language == Language::Norwegian,
     },
     Row {
         commands: &["set_onboarding_completed"],
@@ -105,11 +109,11 @@ const ROWS: &[Row] = &[
         run: |app, rt| {
             rt.block_on(set_file_transcription_model(
                 controller(app),
-                model_id(WhisperModel::KbWhisperSmall),
+                model_id(WhisperModel::NbWhisperSmall),
             ))
         },
         landed: |s| {
-            s.file_transcription_model == FileModelPreference::Whisper(WhisperModel::KbWhisperSmall)
+            s.file_transcription_model == FileModelPreference::Whisper(WhisperModel::NbWhisperSmall)
         },
     },
     Row {
@@ -119,12 +123,12 @@ const ROWS: &[Row] = &[
             rt.block_on(set_profile_model(
                 controller(app),
                 "default".into(),
-                model_id(WhisperModel::KbWhisperMedium),
+                model_id(WhisperModel::NbWhisperMedium),
             ))
         },
         landed: |s| {
             s.profile_models.get("default")
-                == Some(&FileModelPreference::Whisper(WhisperModel::KbWhisperMedium))
+                == Some(&FileModelPreference::Whisper(WhisperModel::NbWhisperMedium))
         },
     },
     Row {
@@ -133,12 +137,12 @@ const ROWS: &[Row] = &[
         run: |app, rt| {
             rt.block_on(set_whisper_model(
                 controller(app),
-                WhisperModel::KbWhisperBase,
+                WhisperModel::NbWhisperBase,
             ))
         },
         landed: |s| {
             s.profile_models.get("default")
-                == Some(&FileModelPreference::Whisper(WhisperModel::KbWhisperBase))
+                == Some(&FileModelPreference::Whisper(WhisperModel::NbWhisperBase))
         },
     },
     Row {
