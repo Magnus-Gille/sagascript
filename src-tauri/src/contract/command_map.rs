@@ -538,6 +538,21 @@ fn module_of(path: &Path) -> String {
     parts.join("::")
 }
 
+/// The module and function a `generate_handler!` path names: `commands::get_state`
+/// is `("commands", "get_state")`, a bare `name` lives in `main.rs`.
+fn registered_module_and_name(path: &syn::Path) -> Result<(String, String), String> {
+    let segments: Vec<String> = path
+        .segments
+        .iter()
+        .map(|segment| segment.ident.to_string())
+        .collect();
+    match segments.as_slice() {
+        [name] => Ok(("main".to_string(), name.clone())),
+        [module @ .., name] => Ok((module.join("::"), name.clone())),
+        [] => Err("tauri::generate_handler! lists a path without segments".to_string()),
+    }
+}
+
 /// The `#[tauri::command]` functions of each source file, by the module the
 /// file defines and then by name.
 type CommandFiles = BTreeMap<String, BTreeMap<String, ItemFn>>;
@@ -597,18 +612,10 @@ fn generate() -> Generation {
     }
 
     for path in registered {
-        let segments: Vec<String> = path
-            .segments
-            .iter()
-            .map(|segment| segment.ident.to_string())
-            .collect();
-        let (module, name) = match segments.as_slice() {
-            [name] => ("main".to_string(), name.clone()),
-            [module @ .., name] => (module.join("::"), name.clone()),
-            [] => {
-                generation
-                    .errors
-                    .push("tauri::generate_handler! lists an empty path".to_string());
+        let (module, name) = match registered_module_and_name(path) {
+            Ok(parts) => parts,
+            Err(error) => {
+                generation.errors.push(error);
                 continue;
             }
         };
@@ -1081,4 +1088,29 @@ fn a_command_declared_twice_below_one_module_is_refused() {
     // Nothing was taken, so the report does not hide either declaration.
     assert_eq!(layout["commands::settings"].len(), 1);
     assert_eq!(layout["commands::models"].len(), 1);
+}
+
+#[test]
+fn registered_paths_name_a_module_and_a_function() {
+    let path = |text: &str| syn::parse_str::<syn::Path>(text).expect("a path");
+    assert_eq!(
+        registered_module_and_name(&path("commands::get_state")),
+        Ok(("commands".to_string(), "get_state".to_string()))
+    );
+    assert_eq!(
+        registered_module_and_name(&path("commands::settings::set_language")),
+        Ok(("commands::settings".to_string(), "set_language".to_string()))
+    );
+    assert_eq!(
+        registered_module_and_name(&path("quit")),
+        Ok(("main".to_string(), "quit".to_string()))
+    );
+    // A path with no segments is reported, not unreachable.
+    let empty = syn::Path {
+        leading_colon: None,
+        segments: syn::punctuated::Punctuated::new(),
+    };
+    assert!(registered_module_and_name(&empty)
+        .unwrap_err()
+        .contains("without segments"));
 }

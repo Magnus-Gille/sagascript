@@ -19,17 +19,17 @@ pub async fn get_loaded_model(
     let chosen = ctrl
         .settings()
         .dictation_model_for_profile(&ctrl.settings().default_profile().id)?;
-    if chosen == FileModel::PianissimoOriginal {
-        return Ok(LoadedModelInfo {
-            effective_model: "Pianissimo".into(),
-            effective_model_id: "pianissimo-sv".into(),
-            loaded_model: None,
-            is_loaded: false,
-            is_downloaded: pianissimo_model::is_downloaded(),
-        });
-    }
-    let FileModel::Whisper(effective) = chosen else {
-        unreachable!()
+    let effective = match chosen {
+        FileModel::PianissimoOriginal => {
+            return Ok(LoadedModelInfo {
+                effective_model: "Pianissimo".into(),
+                effective_model_id: "pianissimo-sv".into(),
+                loaded_model: None,
+                is_loaded: false,
+                is_downloaded: pianissimo_model::is_downloaded(),
+            });
+        }
+        FileModel::Whisper(effective) => effective,
     };
     let loaded = whisper.loaded_model();
     Ok(LoadedModelInfo {
