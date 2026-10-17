@@ -1,3 +1,16 @@
+//! Local Whisper backend (whisper-rs). `WhisperBackend` and the types its callers
+//! share live here; the behaviour is split by concern (#371):
+//!
+//! - `runtime`: model load, the warm secondary runtime, the bounded state and
+//!   load locks, abort and cancel;
+//! - `entry`: the transcription entry points and the decoding parameters;
+//! - `parallel`: long-file chunking across several Whisper states;
+//! - `stitch`: joining overlapping chunk results and assembling the transcript;
+//! - `progress`: progress callbacks;
+//! - `words`: DTW word timestamps for diarization (the `diarization` feature).
+//!
+//! The old path `transcription::whisper_backend` is an alias of this module.
+
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
