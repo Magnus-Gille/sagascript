@@ -25,7 +25,7 @@ pub mod meeting_reprocessing_cli;
 pub mod models;
 pub mod open;
 pub mod output;
-pub mod run_request;
+pub(crate) mod run_request;
 #[cfg(feature = "diarization")]
 pub mod speaker_args;
 // Live recording is optional (`record` feature, on by default) so a pure

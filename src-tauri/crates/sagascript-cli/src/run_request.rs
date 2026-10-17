@@ -29,7 +29,7 @@ use crate::transcribe::{parse_language, resolve_one_run_prompt};
 
 /// The profile, language and one-run prompt flags of one invocation, as typed.
 #[derive(Debug, Clone, Copy, Default)]
-pub struct RunRequest<'a> {
+pub(crate) struct RunRequest<'a> {
     pub profile: Option<&'a str>,
     pub language: Option<&'a str>,
     pub prompt: Option<&'a str>,
@@ -43,7 +43,7 @@ impl RunRequest<'_> {
     /// before an unknown language; the command line never offers both
     /// (`--profile` conflicts with `--language`), so this order is only
     /// visible to a caller that builds the request itself.
-    pub fn select(&self, settings: &Settings) -> Result<RunSelection, DictationError> {
+    pub(crate) fn select(&self, settings: &Settings) -> Result<RunSelection, DictationError> {
         let selection = RunSelection::resolve(
             settings,
             RunOverrides {
@@ -59,7 +59,7 @@ impl RunRequest<'_> {
 
     /// Step two: read the one-run prompt (`--prompt-file` wins over
     /// `--prompt`; an unreadable file is an error) and compose the dictionary.
-    pub fn finish(
+    pub(crate) fn finish(
         &self,
         settings: &Settings,
         selection: RunSelection,
@@ -69,7 +69,7 @@ impl RunRequest<'_> {
     }
 
     /// Both steps, for a command whose model choice comes after them.
-    pub fn resolve(&self, settings: &Settings) -> Result<RunContext, DictationError> {
+    pub(crate) fn resolve(&self, settings: &Settings) -> Result<RunContext, DictationError> {
         let selection = self.select(settings)?;
         self.finish(settings, selection)
     }
@@ -437,6 +437,53 @@ mod tests {
             assert_eq!(one.profile, two.profile);
             assert_eq!(one.language, two.language);
             assert_eq!(entries(&one), entries(&two));
+        }
+    }
+
+    /// `RunRequest` is the resolver of core plus the command line's two
+    /// chores, so for a profile and an inline prompt (no language override) it
+    /// gives exactly what the core resolver gives. The app's file transcription
+    /// is checked against the same core path on the same table
+    /// (`run_context_table`), which makes the two equal without a dependency
+    /// between them.
+    #[test]
+    fn a_request_without_language_override_equals_the_core_resolver_on_the_shared_table() {
+        use sagascript_core::test_support::run_context_table::{entries, shapes, PROMPTS};
+
+        for shape in shapes() {
+            for profile in &shape.profiles {
+                for prompt in PROMPTS {
+                    let label = format!("{}, profile {profile:?}, prompt {prompt:?}", shape.name);
+                    let core = RunSelection::resolve(
+                        &shape.settings,
+                        RunOverrides {
+                            profile: *profile,
+                            language: None,
+                        },
+                    )
+                    .unwrap_or_else(|error| panic!("{label}: core: {error}"))
+                    .into_context(&shape.settings, prompt);
+                    let cli = RunRequest {
+                        profile: *profile,
+                        prompt,
+                        ..RunRequest::default()
+                    }
+                    .resolve(&shape.settings)
+                    .unwrap_or_else(|error| panic!("{label}: cli: {error}"));
+                    assert_eq!(cli.profile, core.profile, "{label}: profile");
+                    assert_eq!(cli.language, core.language, "{label}: language");
+                    assert_eq!(
+                        entries(&cli.glossary),
+                        entries(&core.glossary),
+                        "{label}: dictionary"
+                    );
+                    assert_eq!(
+                        cli.glossary.decoder_prompt(),
+                        core.glossary.decoder_prompt(),
+                        "{label}: decoder prompt"
+                    );
+                }
+            }
         }
     }
 

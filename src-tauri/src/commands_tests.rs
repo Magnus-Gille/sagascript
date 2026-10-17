@@ -1092,151 +1092,58 @@ mod transport_contract_tests {
     }
 }
 
-/// The app's file context and the CLI's run context resolve profile, language
-/// and dictionary through the same resolver (#346). Settings carry an explicit
-/// file model, so resolving it never looks at the models downloaded on the
-/// machine running the test (ADR 0004).
+/// The app's file context resolves profile, language and dictionary through
+/// the run resolver of core, the same one the CLI's request type is checked
+/// against on the same table (`run_context_table`, #346). So the app and the
+/// CLI are equal through the resolver, and the app does not depend on the CLI
+/// for it. The tables' settings carry an explicit file model, so resolving it
+/// never looks at the models downloaded on the machine running the test
+/// (ADR 0004).
 #[cfg(test)]
 mod run_context_parity_tests {
     use super::{file_transcription_context, file_transcription_language};
-    use sagascript_cli::run_request::RunRequest;
-    use sagascript_core::settings::{
-        FileModelPreference, HotkeyProfile, Language, Settings, WhisperModel,
-    };
-    use sagascript_core::transcription::Glossary;
-
-    fn profile(id: &str, language: Language) -> HotkeyProfile {
-        HotkeyProfile {
-            id: id.into(),
-            name: id.into(),
-            shortcut: format!("Super+{id}"),
-            push_to_talk_shortcut: None,
-            toggle_shortcut: None,
-            language,
-        }
-    }
-
-    /// Profile dictionaries in force; the multilingual Base model fits every
-    /// language, so no profile is rejected for its model.
-    fn migrated() -> Settings {
-        let mut settings = Settings {
-            language: Language::English,
-            initial_prompt: "LegacyOnly".into(),
-            hotkey_profiles: vec![
-                profile("default", Language::English),
-                profile("swedish", Language::Swedish),
-                profile("automatic", Language::Auto),
-            ],
-            profile_glossary_migrated: true,
-            file_transcription_model: FileModelPreference::Whisper(WhisperModel::Base),
-            ..Settings::default()
-        };
-        for (id, source) in [
-            ("default", "Sagascript"),
-            ("swedish", "merge = merch\nGrimnir"),
-            ("automatic", "Akronym = akr"),
-        ] {
-            settings.profile_glossaries.insert(id.into(), source.into());
-        }
-        settings
-    }
-
-    /// Before profile dictionaries: no profile is called `default`, and the
-    /// saved global hint is the base of every run.
-    fn legacy() -> Settings {
-        let mut settings = Settings {
-            initial_prompt: "merge = merch\nOpenRouter".into(),
-            hotkey_profiles: vec![
-                profile("swedish", Language::Swedish),
-                profile("english", Language::English),
-            ],
-            profile_glossary_migrated: false,
-            file_transcription_model: FileModelPreference::Whisper(WhisperModel::Base),
-            ..Settings::default()
-        };
-        settings
-            .profile_glossaries
-            .insert("swedish".into(), "fika = coffee".into());
-        settings
-    }
-
-    /// No profiles stored at all: the legacy default profile of `language`.
-    fn without_profiles() -> Settings {
-        Settings {
-            language: Language::Swedish,
-            hotkey_profiles: Vec::new(),
-            file_transcription_model: FileModelPreference::Whisper(WhisperModel::Base),
-            ..Settings::default()
-        }
-    }
-
-    fn entries(glossary: &Glossary) -> Vec<(String, Vec<String>)> {
-        glossary
-            .entries()
-            .iter()
-            .map(|entry| (entry.canonical.clone(), entry.aliases.clone()))
-            .collect()
-    }
+    use sagascript_core::run_context::{RunOverrides, RunSelection};
+    use sagascript_core::settings::{FileModelPreference, Settings, WhisperModel};
+    use sagascript_core::test_support::run_context_table::{entries, migrated, shapes, PROMPTS};
 
     #[test]
-    fn the_app_resolves_what_the_cli_resolves_for_the_same_profile_and_prompt() {
-        // The app has no language override (that is #373), so the CLI side is
-        // a request with a profile and a prompt and no `--language`.
-        let fixtures = [
-            (
-                "migrated",
-                migrated(),
-                vec![None, Some("default"), Some("swedish"), Some("automatic")],
-            ),
-            (
-                "legacy",
-                legacy(),
-                vec![None, Some("swedish"), Some("english")],
-            ),
-            (
-                "without profiles",
-                without_profiles(),
-                vec![None, Some("default")],
-            ),
-        ];
-        let prompts = [
-            None,
-            Some("Acme, Foo"),
-            Some("  \n"),
-            Some("Grimmer = grimmer"),
-        ];
-        for (name, settings, profiles) in fixtures {
-            for profile in profiles {
-                for prompt in prompts {
-                    let label = format!("{name}, profile {profile:?}, prompt {prompt:?}");
-                    let app = file_transcription_context(&settings, profile, prompt)
+    fn the_app_resolves_what_the_core_resolver_resolves_for_the_same_profile_and_prompt() {
+        // The app has no language override (that is #373), so the reference is
+        // the core resolver with a profile, a prompt and `language: None`.
+        for shape in shapes() {
+            for profile in &shape.profiles {
+                for prompt in PROMPTS {
+                    let label = format!("{}, profile {profile:?}, prompt {prompt:?}", shape.name);
+                    let core = RunSelection::resolve(
+                        &shape.settings,
+                        RunOverrides {
+                            profile: *profile,
+                            language: None,
+                        },
+                    )
+                    .unwrap_or_else(|error| panic!("{label}: core: {error}"))
+                    .into_context(&shape.settings, prompt);
+                    let app = file_transcription_context(&shape.settings, *profile, prompt)
                         .unwrap_or_else(|error| panic!("{label}: app: {error}"));
-                    let cli = RunRequest {
-                        profile,
-                        prompt,
-                        ..RunRequest::default()
-                    }
-                    .resolve(&settings)
-                    .unwrap_or_else(|error| panic!("{label}: cli: {error}"));
-                    assert_eq!(app.language, cli.language, "{label}: language");
+                    assert_eq!(app.language, core.language, "{label}: language");
                     assert_eq!(
                         entries(&app.glossary),
-                        entries(&cli.glossary),
+                        entries(&core.glossary),
                         "{label}: dictionary"
                     );
                     assert_eq!(
                         app.glossary.decoder_prompt(),
-                        cli.glossary.decoder_prompt(),
+                        core.glossary.decoder_prompt(),
                         "{label}: decoder prompt"
                     );
                     assert_eq!(
                         app.options.prompt,
-                        cli.glossary.decoder_prompt(),
+                        core.glossary.decoder_prompt(),
                         "{label}: options prompt"
                     );
                     assert_eq!(
-                        file_transcription_language(&settings, profile).unwrap(),
-                        cli.language,
+                        file_transcription_language(&shape.settings, *profile).unwrap(),
+                        core.language,
                         "{label}: language helper"
                     );
                 }
