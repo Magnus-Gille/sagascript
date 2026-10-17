@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashSet};
 
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 
-use super::{canonical_hotkey, validate_hotkey};
+use super::{canonical_hotkey, validate_hotkey, LineupEnv};
 
 use crate::glossary::Glossary;
 
@@ -273,16 +273,6 @@ pub struct Settings {
 
 /// Current version of the Swedish model-lineup migration.
 pub const MODEL_LINEUP_VERSION: u32 = 1;
-
-/// Machine state the lineup migration depends on, injected for testability.
-pub struct LineupEnv<'a> {
-    /// `pianissimo_backend::runtime_supported_on_this_os()`.
-    pub pianissimo_supported: bool,
-    /// `pianissimo_model::is_downloaded()`.
-    pub pianissimo_downloaded: bool,
-    /// `model::is_model_downloaded`.
-    pub whisper_downloaded: &'a dyn Fn(WhisperModel) -> bool,
-}
 
 impl Default for Settings {
     fn default() -> Self {

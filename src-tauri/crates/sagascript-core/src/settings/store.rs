@@ -10,8 +10,8 @@ use serde_json::Value;
 
 use crate::settings::{
     lenient,
-    migrations::{self, MachineProbe, Migration, Object},
-    FileModelPreference, LineupEnv, Settings, SCHEMA_VERSION,
+    migrations::{self, Migration, Object},
+    FileModelPreference, LineupEnv, MachineProbe, Settings, SCHEMA_VERSION,
 };
 
 const APP_IDENTIFIER: &str = "ai.gille.sagascript";
