@@ -1086,6 +1086,41 @@ mod tests {
         path
     }
 
+    /// Like [`build_zip`], but each entry carries a full Unix `st_mode` (file
+    /// type and permission bits) as its external attributes; 0 leaves it unset.
+    fn build_zip_with_modes(dir: &Path, entries: &[(&str, &[u8], u32)]) -> PathBuf {
+        let path = dir.join("model.zip");
+        let mut writer = zip::ZipWriter::new(fs::File::create(&path).unwrap());
+        for (name, bytes, mode) in entries {
+            let mut options = zip::write::SimpleFileOptions::default();
+            if *mode != 0 {
+                options = options.external_attributes(mode << 16);
+            }
+            writer.start_file(*name, options).unwrap();
+            writer.write_all(bytes).unwrap();
+        }
+        writer.finish().unwrap();
+        path
+    }
+
+    /// Every path below `root`, `/`-separated and sorted, to compare the tree
+    /// before and after a rejected install.
+    fn tree(root: &Path) -> Vec<String> {
+        fn walk(dir: &Path, prefix: &str, out: &mut Vec<String>) {
+            for entry in fs::read_dir(dir).unwrap().flatten() {
+                let name = format!("{prefix}{}", entry.file_name().to_string_lossy());
+                out.push(name.clone());
+                if entry.file_type().unwrap().is_dir() {
+                    walk(&entry.path(), &format!("{name}/"), out);
+                }
+            }
+        }
+        let mut out = Vec::new();
+        walk(root, "", &mut out);
+        out.sort();
+        out
+    }
+
     fn manifest_for(entries: &[(&str, &[u8])], archive: &Path) -> ModelManifest {
         let files: Vec<ManifestFile> = entries
             .iter()
@@ -1281,6 +1316,109 @@ mod tests {
         let error = install_archive_in(&manifest, &archive, &models).unwrap_err();
         assert!(error.to_string().contains("escapes"), "{error}");
         assert!(!root.path().join("escape.txt").exists());
+    }
+
+    #[test]
+    fn hostile_entry_names_are_rejected_and_nothing_is_written_outside_staging() {
+        // Parent traversal, traversal that only escapes after descending, a
+        // Windows-style separator, rooted and drive-letter names, and an
+        // absolute path into the test root.
+        for case in [
+            "../escape.txt",
+            "wrapper/../../escape.txt",
+            "..\\escape.txt",
+            "/escape.txt",
+            "C:\\escape.txt",
+            "<absolute>",
+        ] {
+            let root = tmp();
+            let models = root.path().join("Models");
+            let name = if case == "<absolute>" {
+                root.path()
+                    .join("absolute-escape.txt")
+                    .to_string_lossy()
+                    .into_owned()
+            } else {
+                case.to_string()
+            };
+            let mut entries = FIXTURE.to_vec();
+            entries.push((name.as_str(), b"x"));
+            let archive = build_zip(root.path(), &entries);
+            let manifest = manifest_for(&FIXTURE, &archive);
+
+            let error = install_archive_in(&manifest, &archive, &models)
+                .expect_err(&format!("{name} must be rejected"));
+
+            assert!(error.to_string().contains("escapes"), "{name}: {error}");
+            // Only the archive and the empty models directory remain: no
+            // escaped file anywhere, no staging leftovers, no install.
+            assert_eq!(tree(root.path()), ["Models", "model.zip"], "{name}");
+        }
+    }
+
+    #[test]
+    fn symlink_entries_are_rejected_and_nothing_is_created() {
+        let root = tmp();
+        let models = root.path().join("Models");
+        // S_IFLNK | 0o777, the way `zip -y` and `ditto` store a symlink.
+        let mut entries: Vec<(&str, &[u8], u32)> =
+            FIXTURE.iter().map(|(p, b)| (*p, *b, 0)).collect();
+        entries.push(("model-link", b"/etc/passwd", 0o120_777));
+        let archive = build_zip_with_modes(root.path(), &entries);
+        let manifest = manifest_for(&FIXTURE, &archive);
+
+        let error = install_archive_in(&manifest, &archive, &models).unwrap_err();
+
+        assert!(error.to_string().contains("symlink"), "{error}");
+        assert_eq!(tree(root.path()), ["Models", "model.zip"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn archive_unix_modes_are_ignored_on_extraction() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = tmp();
+        let models = root.path().join("Models");
+        // setuid + setgid + sticky + rwxr-xr-x on a regular file: none of it may
+        // reach the extracted file (the SUID/SGID class of RUSTSEC-2026-0367).
+        let mut entries: Vec<(&str, &[u8], u32)> =
+            FIXTURE.iter().map(|(p, b)| (*p, *b, 0)).collect();
+        entries[4].2 = 0o107_755 | 0o1000;
+        let archive = build_zip_with_modes(root.path(), &entries);
+        let manifest = manifest_for(&FIXTURE, &archive);
+
+        let dir = install_archive_in(&manifest, &archive, &models).unwrap();
+
+        let mode = fs::metadata(dir.join(FIXTURE[4].0))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o7111, 0, "mode {mode:o}");
+    }
+
+    #[test]
+    fn explicit_directory_entries_are_created_inside_the_install() {
+        let root = tmp();
+        let models = root.path().join("Models");
+        let path = root.path().join("model.zip");
+        let mut writer = zip::ZipWriter::new(fs::File::create(&path).unwrap());
+        let options = zip::write::SimpleFileOptions::default();
+        writer.add_directory("wrapper/", options).unwrap();
+        writer.add_directory("wrapper/empty/", options).unwrap();
+        for (name, bytes) in FIXTURE {
+            writer
+                .start_file(format!("wrapper/{name}"), options)
+                .unwrap();
+            writer.write_all(bytes).unwrap();
+        }
+        writer.finish().unwrap();
+        let manifest = manifest_for(&FIXTURE, &path);
+
+        let dir = install_archive_in(&manifest, &path, &models).unwrap();
+
+        assert!(is_downloaded_in(&manifest, &dir));
+        assert!(dir.join("empty").is_dir());
     }
 
     #[test]
