@@ -14,7 +14,9 @@ use tokio::sync::oneshot;
 pub(crate) enum MainThreadReply<T> {
     /// The main thread ran the work and sent this.
     Done(T),
-    /// The sender was dropped without an answer: the app is shutting down.
+    /// The sender was dropped without an answer: the app is shutting down, or
+    /// the closure that held it panicked. Callers go on without the answer, as
+    /// they did when a closed channel ended the old `recv()`.
     Disconnected,
     /// No answer within the timeout.
     TimedOut,
