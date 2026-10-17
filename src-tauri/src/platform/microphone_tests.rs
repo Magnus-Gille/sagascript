@@ -2,7 +2,7 @@
 /// needs a real macOS bundle.
 #[cfg(target_os = "macos")]
 mod macos_mic_tests {
-    use crate::commands::permissions::macos_mic::{
+    use crate::platform::microphone::macos_mic::{
         access_request_decision, authorization_status_label, AccessRequestDecision,
     };
 
