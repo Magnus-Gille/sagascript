@@ -8,6 +8,8 @@ import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
+import { gatesFor } from "./ci/cargo-gates.mjs";
+import { commandLines, loadWorkflow } from "./lib/ci-workflow.mjs";
 import {
   POLICY_LINTS,
   RUNS,
@@ -409,17 +411,25 @@ test("clippy.toml exempts tests and sets the size thresholds", () => {
 });
 
 test("test-linux runs the policy check after the clippy gates", () => {
-  const ci = read(".github/workflows/ci.yml");
-  const start = ci.indexOf("\n  test-linux:\n");
-  const end = ci.indexOf("\n  msrv-linux:\n");
-  assert.ok(start >= 0 && end > start, "ci.yml must define test-linux before msrv-linux");
-  const job = ci.slice(start, end);
-  const steps = job.split(/\n(?=      - name: )/).slice(1);
-  const names = steps.map((step) => /^      - name: (.*)$/m.exec(step)[1]);
-  const index = steps.findIndex((step) => /^        run: node scripts\/clippy-policy\.mjs$/m.test(step));
-  assert.ok(index >= 0, "test-linux must run `node scripts/clippy-policy.mjs` as its own step");
-  assert.doesNotMatch(steps[index], /^        (if|continue-on-error|working-directory):/m);
-  assert.ok(index > names.indexOf("Install Node.js"), "the check needs Node.js");
-  assert.ok(index > names.indexOf("Cargo clippy (GUI app)"), "the regular clippy gate runs first");
-  assert.ok(index > names.indexOf("Cargo clippy (headless CLI, batch-only)"), "the regular clippy gate runs first");
+  const steps = loadWorkflow().job("test-linux").steps;
+  const index = steps.findIndex((step) => commandLines(step).includes("node scripts/clippy-policy.mjs"));
+  assert.ok(index >= 0, "test-linux must run `node scripts/clippy-policy.mjs`");
+  assert.deepEqual(commandLines(steps[index]), ["node scripts/clippy-policy.mjs"], "as its own step");
+  assert.equal(steps[index].condition, undefined);
+  assert.equal(steps[index].continueOnError, undefined);
+  assert.equal(steps[index].workingDirectory, undefined);
+  const setup = steps.findIndex((step) => step.uses === "./.github/actions/setup");
+  assert.ok(index > setup, "the check needs Node.js, which the setup action installs");
+  // The regular clippy gates run first: they compile the dependencies the policy run reuses.
+  const gates = steps.findIndex((step) => commandLines(step).includes("node scripts/ci/cargo-gates.mjs --os linux"));
+  assert.ok(index > gates, "the regular clippy gates run first");
+  const clippy = gatesFor({ os: "linux" }).filter((gate) => gate.args[0] === "clippy");
+  assert.ok(
+    clippy.some((gate) => gate.args.includes("--workspace")),
+    "the workspace clippy gate",
+  );
+  assert.ok(
+    clippy.some((gate) => gate.args.includes("--no-default-features") && gate.args.includes("sagascript-cli")),
+    "the lean CLI clippy gate",
+  );
 });

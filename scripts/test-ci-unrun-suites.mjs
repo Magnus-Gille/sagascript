@@ -1,69 +1,86 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFileSync, readdirSync } from "node:fs";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
+import { commandOf, gatesFor } from "./ci/cargo-gates.mjs";
+import { actionInput, commandLines, loadAction, loadWorkflow, readRepoFile } from "./lib/ci-workflow.mjs";
 
-// #357: suites that used to run in no PR lane (or only in the release gate)
-// are now part of PR CI. These assertions keep them there.
+// #357: suites that used to run in no PR lane (or only in the release gate) are now part of PR CI.
+// These assertions keep them there. The gate list (scripts/ci/cargo-gates.mjs) says which cargo
+// commands each OS runs; the workflow says which lane runs the list, and when.
 
-const read = async (path) => (await readFile(new URL(`../${path}`, import.meta.url), "utf8")).replace(/\r\n?/g, "\n");
+const workflow = loadWorkflow();
+const action = loadAction("setup");
+const devOverrides = readRepoFile("src-tauri/crates/sagascript-core/src/transcription/dev_overrides.rs");
+const workspaceManifest = readRepoFile("src-tauri/Cargo.toml");
+const ortManifest = readRepoFile("src-tauri/engine-host/ort/Cargo.toml");
 
-const [workflow, devOverrides, workspaceManifest, ortManifest] = await Promise.all([
-  read(".github/workflows/ci.yml"),
-  read("src-tauri/crates/sagascript-core/src/transcription/dev_overrides.rs"),
-  read("src-tauri/Cargo.toml"),
-  read("src-tauri/engine-host/ort/Cargo.toml"),
-]);
-
-function jobBlock(jobId) {
-  const start = workflow.indexOf(`\n  ${jobId}:\n`);
-  assert.notEqual(start, -1, `workflow must define ${jobId}`);
-  const body = workflow.slice(start + 1);
-  const next = body.slice(1).search(/^  [a-z][a-z0-9-]*:$/m);
-  return next === -1 ? body : body.slice(0, next + 1);
+const gateLines = (os) => gatesFor({ os }).map((gate) => `${gate.cwd}: ${commandOf(gate)}`);
+const stepIndex = (jobId, predicate) => workflow.job(jobId).steps.findIndex(predicate);
+const runs = (command) => (step) => commandLines(step).includes(command);
+const gatesStep = (os) => (step) => commandLines(step).includes(`node scripts/ci/cargo-gates.mjs --os ${os}`);
+// The step that runs `npm ci`: the setup action when it is asked to, otherwise an explicit step.
+function npmInstall(jobId) {
+  return stepIndex(
+    jobId,
+    (step) => (step.uses === "./.github/actions/setup" && actionInput(action, step, "npm-ci") === "true") || runs("npm ci")(step),
+  );
+}
+function assertBlocking(jobId, index, what) {
+  const step = workflow.job(jobId).steps[index];
+  assert.ok(step, `${jobId} must have ${what}`);
+  assert.equal(step.condition, undefined, `${what} must be unconditional`);
+  assert.equal(step.continueOnError, undefined, `${what} must be blocking`);
 }
 
-// Each step as { name, raw, run, workingDirectory }, in workflow order.
-function steps(jobId) {
-  return jobBlock(jobId)
-    .split(/\n(?=      - name: )/)
-    .slice(1)
-    .map((raw) => {
-      const name = /^      - name: (.*)$/m.exec(raw)[1];
-      const inline = /^        run: (?![|>])(.*)$/m.exec(raw)?.[1];
-      const block = /^        run: [|>]-?\n((?:          .*\n?|\n)*)/m
-        .exec(raw)?.[1]
-        ?.split("\n")
-        .map((line) => line.replace(/^          /, ""))
-        .join("\n");
-      const workingDirectory = /^        working-directory: (.*)$/m.exec(raw)?.[1];
-      return { name, raw, run: (inline ?? block ?? "").trim(), workingDirectory };
-    });
-}
-
-function stepRunning(jobId, command, workingDirectory) {
-  const matches = steps(jobId).filter((step) => step.run === command);
-  assert.equal(matches.length, 1, `${jobId} must run \`${command}\` exactly once as its own step`);
-  const [step] = matches;
-  assert.equal(step.workingDirectory, workingDirectory, `\`${command}\` must run in ${workingDirectory}`);
-  assert.doesNotMatch(step.raw, /^        (if|continue-on-error):/m, `\`${command}\` must be unconditional and blocking`);
-  return step;
-}
-
-test("test-linux runs the engine-protocol wire-format tests", () => {
-  stepRunning("test-linux", "cargo test -p sagascript-engine-protocol", "src-tauri");
+test("every lane runs the engine-protocol wire-format tests through the workspace tests", () => {
+  const members = /^members = \[(.*)\]$/m.exec(workspaceManifest)?.[1] ?? "";
+  assert.ok(members.includes('"crates/*"'), "the workspace takes every crate under crates/");
+  assert.ok(
+    readdirSync(fileURLToPath(new URL("../src-tauri/crates/", import.meta.url))).includes("sagascript-engine-protocol"),
+    "the protocol crate is one of them",
+  );
+  for (const os of ["macos", "linux", "windows"]) {
+    assert.ok(
+      gateLines(os).includes("src-tauri: cargo test --workspace"),
+      `${os} runs cargo test --workspace, which reaches the protocol crate`,
+    );
+  }
+  for (const [jobId, os] of [
+    ["test-macos", "macos"],
+    ["test-linux", "linux"],
+    ["test-windows", "windows"],
+  ]) {
+    assertBlocking(jobId, stepIndex(jobId, gatesStep(os)), "the cargo gates");
+  }
 });
 
-test("test-linux tests and lints the standalone ORT engine host workspace", () => {
+test("test-linux and test-windows test and lint the standalone ORT engine host workspace", () => {
   assert.match(ortManifest, /^\[workspace\]$/m, "the ORT host is its own Cargo workspace");
-  stepRunning("test-linux", "cargo test --locked", "src-tauri/engine-host/ort");
-  stepRunning("test-linux", "cargo clippy --all-targets --locked -- -D warnings", "src-tauri/engine-host/ort");
-  const fmt = steps("test-linux").find((step) => step.name === "Check Rust formatting");
-  assert.ok(fmt, "test-linux must keep its rustfmt gate");
-  assert.match(fmt.run, /^cargo fmt --manifest-path engine-host\/ort\/Cargo\.toml --all -- --check$/m);
-
-  const cache = steps("test-linux").find((step) => step.name === "Cache Rust dependencies");
-  assert.ok(cache, "test-linux must keep its Rust cache");
-  assert.match(cache.raw, /^          workspaces: \|\n            src-tauri\n            src-tauri\/engine-host\/ort\n/m);
+  for (const os of ["linux", "windows"]) {
+    const lines = gateLines(os);
+    assert.ok(lines.includes("src-tauri/engine-host/ort: cargo test --locked"), `${os} tests the ORT host`);
+    assert.ok(lines.includes("src-tauri/engine-host/ort: cargo clippy --all-targets --locked -- -D warnings"), `${os} lints the ORT host`);
+  }
+  assert.ok(
+    !gateLines("macos").some((line) => line.startsWith("src-tauri/engine-host/ort")),
+    "macOS ships the Core ML host, not the ORT host",
+  );
+  assert.ok(
+    gateLines("linux").includes("src-tauri: cargo fmt --manifest-path engine-host/ort/Cargo.toml --all -- --check"),
+    "test-linux must keep its rustfmt gate for the ORT host",
+  );
+  for (const jobId of ["test-linux", "test-windows"]) {
+    const setup = workflow.job(jobId).steps.find((step) => step.uses === "./.github/actions/setup");
+    assert.deepEqual(
+      actionInput(action, setup, "cache-workspaces")
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean),
+      ["src-tauri", "src-tauri/engine-host/ort"],
+      `${jobId} must cache both Cargo workspaces`,
+    );
+  }
 });
 
 test("test-linux runs the release-only dev-override guard in the release profile", () => {
@@ -75,52 +92,78 @@ test("test-linux runs the release-only dev-override guard in the release profile
   // ...and its doc comment names the command CI must run.
   const command = "cargo test --release -p sagascript-core --lib dev_overrides";
   assert.ok(devOverrides.includes(`(\`${command}\`)`), "the test's doc comment must name the CI command");
-  const guard = steps("test-linux").filter((step) => step.run.split("\n").some((line) => line.startsWith(command)));
-  assert.equal(guard.length, 1, "test-linux must run the release guard exactly once");
-  assert.equal(guard[0].workingDirectory, "src-tauri");
-  assert.doesNotMatch(guard[0].raw, /^        (if|continue-on-error):/m, "the release guard must be unconditional and blocking");
-  // cargo test exits 0 when the filter matches nothing; the step must prove
-  // the guard test itself ran, and must not lose cargo's exit code in a pipe.
-  assert.match(guard[0].run, /^set -o pipefail$/m);
-  assert.match(guard[0].run, /^grep -q 'release_build_ignores_the_real_environment \.\.\. ok' /m);
+  const guards = gatesFor({ os: "linux" }).filter((gate) => commandOf(gate) === command);
+  assert.equal(guards.length, 1, "test-linux must run the release guard exactly once");
+  const [guard] = guards;
+  assert.equal(guard.cwd, "src-tauri");
+  // cargo test exits 0 when the filter matches nothing; the gate must prove the guard test itself ran.
+  assert.ok(
+    guard.requireOutput?.pattern.test("release_build_ignores_the_real_environment ... ok"),
+    "the gate must require the guard's own pass line",
+  );
+  assert.ok(!guard.requireOutput.pattern.test("running 0 tests"));
+  assert.ok(
+    ["macos", "windows"].every((os) => !gateLines(os).some((line) => line.includes("dev_overrides"))),
+    "the guard compiles core in the release profile once, on Linux",
+  );
 
   // A release profile with debug assertions would compile the guard out and
   // leave the step green with zero tests.
   const release = /^\[profile\.release\]\n([\s\S]*?)(?=^\[|(?![\s\S]))/m.exec(workspaceManifest)?.[1];
   assert.ok(release !== undefined, "src-tauri/Cargo.toml must define [profile.release]");
   assert.doesNotMatch(release, /^debug-assertions\s*=\s*true/m);
-  assert.doesNotMatch(workflow, /CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS/);
+  const environments = [
+    workflow.doc.env,
+    action.doc.runs.env,
+    ...workflow.jobs.flatMap((job) => [job.env, ...job.steps.map((step) => step.env)]),
+    ...action.steps.map((step) => step.env),
+  ];
+  for (const environment of environments) {
+    assert.ok(
+      !Object.keys(environment ?? {}).includes("CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS"),
+      "no lane may switch debug assertions on in release",
+    );
+  }
+  for (const name of readdirSync(fileURLToPath(new URL("../.github/workflows/", import.meta.url)))) {
+    assert.ok(
+      !readFileSync(new URL(`../.github/workflows/${name}`, import.meta.url), "utf8").includes("CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS"),
+      name,
+    );
+  }
 });
 
-test("test-windows runs the full frontend suite after npm ci", () => {
-  const names = steps("test-windows").map((step) => step.name);
-  const suite = stepRunning("test-windows", "npm run test:frontend", undefined);
-  const index = names.indexOf(suite.name);
-  assert.ok(names.indexOf("Install npm dependencies") >= 0, "test-windows must install npm dependencies");
-  assert.ok(index > names.indexOf("Install npm dependencies"), "the suite needs node_modules");
-  assert.ok(index < names.indexOf("Cargo check"), "the suite must fail before Cargo work");
-  const identity = names.indexOf("Test Windows build identity gates");
-  assert.ok(identity >= 0 && identity < names.indexOf("Install npm dependencies"), "the early build identity gates stay ahead of npm ci");
+test("test-windows runs the full frontend suite after npm ci and before Cargo work", () => {
+  const suite = stepIndex("test-windows", runs("npm run test:frontend"));
+  const install = npmInstall("test-windows");
+  assert.ok(install >= 0, "test-windows must install npm dependencies");
+  assert.ok(suite > install, "the suite needs node_modules");
+  assert.ok(suite < stepIndex("test-windows", gatesStep("windows")), "the suite must fail before Cargo work");
+  assertBlocking("test-windows", suite, "`npm run test:frontend`");
+  const identity = stepIndex("test-windows", (step) =>
+    commandLines(step).some((line) => line.startsWith("node --test scripts/test-ci-build-identity.mjs")),
+  );
+  assert.ok(identity >= 0 && identity < install, "the early build identity gates stay ahead of npm ci");
 });
 
 test("test-macos runs ESLint after npm ci and before Cargo work", () => {
-  const names = steps("test-macos").map((step) => step.name);
-  const step = stepRunning("test-macos", "npm run lint", undefined);
-  const index = names.indexOf(step.name);
-  assert.ok(index > names.indexOf("Install npm dependencies"), "`npm run lint` needs node_modules");
-  assert.ok(index < names.indexOf("Cargo check"), "`npm run lint` must fail before Cargo work");
+  const lint = stepIndex("test-macos", runs("npm run lint"));
+  assert.ok(lint > npmInstall("test-macos"), "`npm run lint` needs node_modules");
+  assert.ok(lint < stepIndex("test-macos", gatesStep("macos")), "`npm run lint` must fail before Cargo work");
+  assertBlocking("test-macos", lint, "`npm run lint`");
 });
 
 test("test-macos and test-windows run the Vitest unit tests and the Prettier check after npm ci", () => {
-  for (const job of ["test-macos", "test-windows"]) {
-    const names = steps(job).map((step) => step.name);
-    const install = names.indexOf("Install npm dependencies");
-    assert.ok(install >= 0, `${job} must install npm dependencies`);
+  for (const [jobId, os] of [
+    ["test-macos", "macos"],
+    ["test-windows", "windows"],
+  ]) {
+    const install = npmInstall(jobId);
+    assert.ok(install >= 0, `${jobId} must install npm dependencies`);
     for (const command of ["npm run test:unit", "npm run format:check"]) {
-      const step = stepRunning(job, command, undefined);
-      const index = names.indexOf(step.name);
-      assert.ok(index > install, `${job}: \`${command}\` needs node_modules`);
-      assert.ok(index < names.indexOf("Cargo check"), `${job}: \`${command}\` must fail before Cargo work`);
+      const index = stepIndex(jobId, runs(command));
+      assert.ok(index > install, `${jobId}: \`${command}\` needs node_modules`);
+      assert.ok(index < stepIndex(jobId, gatesStep(os)), `${jobId}: \`${command}\` must fail before Cargo work`);
+      assertBlocking(jobId, index, `\`${command}\``);
     }
   }
 });

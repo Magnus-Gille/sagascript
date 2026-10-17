@@ -35,11 +35,6 @@
       "count": 9
     }
   },
-  "scripts/test-ci-parallel-gates.mjs": {
-    "no-useless-escape": {
-      "count": 4
-    }
-  },
   "scripts/test-code-health-producer.mjs": {
     "no-control-regex": {
       "count": 1

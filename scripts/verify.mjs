@@ -3,7 +3,8 @@
 // CHECKS below is the source of truth for what "verify my change" means:
 // CONTRIBUTING.md documents it, `--list` prints it, and
 // scripts/test-verify-ci-parity.mjs keeps it in step with the test lanes of
-// .github/workflows/ci.yml. Before anything runs, a preflight checks the
+// .github/workflows/ci.yml, whose cargo gates are listed once, in
+// scripts/ci/cargo-gates.mjs. Before anything runs, a preflight checks the
 // tools and packages the selected checks need and reports everything that is
 // missing in one error; it never installs anything. Every check has a time
 // budget; on timeout, Ctrl-C, SIGTERM or SIGHUP its whole process tree is
@@ -218,12 +219,7 @@ export const CHECKS = [
     platforms: ALL,
     requires: ["rust", "linux-libs", "frontend-dist"],
     timeoutMinutes: 45,
-    ci: [
-      ci("cargo clippy --all-targets -- -D warnings", "src-tauri"),
-      ci("cargo clippy -p sagascript-cli --all-targets -- -D warnings", "src-tauri"),
-      ci("cargo check", "src-tauri"),
-      ci("cargo check -p sagascript-cli", "src-tauri"),
-    ],
+    ci: [ci("cargo clippy --workspace --all-targets -- -D warnings", "src-tauri")],
     lanes: ["test-macos", "test-linux", "test-windows"],
   },
   {
@@ -235,8 +231,9 @@ export const CHECKS = [
     platforms: ALL,
     requires: ["rust", "linux-libs", "frontend-dist"],
     timeoutMinutes: 45,
-    ci: [ci("cargo clippy --all-targets -- -D warnings", "src-tauri")],
-    lanes: ["test-macos", "test-linux", "test-windows"],
+    // CI runs the workspace gate, which covers the app crate.
+    ci: [],
+    lanes: [],
   },
   {
     id: "clippy-cli-lean",
@@ -247,11 +244,8 @@ export const CHECKS = [
     platforms: ALL,
     requires: ["rust"],
     timeoutMinutes: 30,
-    ci: [
-      ci("cargo clippy -p sagascript-cli --all-targets --no-default-features -- -D warnings", "src-tauri"),
-      ci("cargo check -p sagascript-cli --no-default-features", "src-tauri"),
-    ],
-    lanes: ["test-linux"],
+    ci: [ci("cargo clippy -p sagascript-cli --all-targets --no-default-features -- -D warnings", "src-tauri")],
+    lanes: ["test-macos", "test-linux", "test-windows"],
   },
   {
     id: "clippy-policy",
@@ -317,7 +311,7 @@ export const CHECKS = [
     requires: ["rust"],
     timeoutMinutes: 30,
     ci: [ci("cargo clippy -p sagascript-core --all-targets -- -D warnings", "src-tauri")],
-    lanes: ["test-macos", "test-windows"],
+    lanes: ["test-macos", "test-linux", "test-windows"],
   },
   {
     id: "core-clippy-diarization",
@@ -329,7 +323,7 @@ export const CHECKS = [
     requires: ["rust"],
     timeoutMinutes: 30,
     ci: [ci("cargo clippy -p sagascript-core --features diarization --all-targets -- -D warnings", "src-tauri")],
-    lanes: ["test-macos"],
+    lanes: ["test-linux"],
   },
   {
     id: "test-workspace",
@@ -340,8 +334,8 @@ export const CHECKS = [
     platforms: ALL,
     requires: ["rust", "linux-libs", "frontend-dist"],
     timeoutMinutes: 60,
-    ci: [ci("cargo test", "src-tauri"), ci("cargo test -p sagascript-cli", "src-tauri")],
-    lanes: ["test-macos", "test-windows"],
+    ci: [ci("cargo test --workspace", "src-tauri")],
+    lanes: ["test-macos", "test-linux", "test-windows"],
   },
   {
     id: "test-cli-lean",
@@ -353,7 +347,7 @@ export const CHECKS = [
     requires: ["rust"],
     timeoutMinutes: 30,
     ci: [ci("cargo test -p sagascript-cli --no-default-features", "src-tauri")],
-    lanes: ["test-macos", "test-linux"],
+    lanes: ["test-macos", "test-linux", "test-windows"],
   },
   {
     id: "engine-protocol",
@@ -364,8 +358,9 @@ export const CHECKS = [
     platforms: ALL,
     requires: ["rust"],
     timeoutMinutes: 15,
-    ci: [ci("cargo test -p sagascript-engine-protocol", "src-tauri")],
-    lanes: ["test-linux"],
+    // CI reaches the protocol crate through `cargo test --workspace` on every OS.
+    ci: [],
+    lanes: [],
   },
   {
     id: "core-test",
@@ -400,11 +395,8 @@ export const CHECKS = [
     platforms: ALL,
     requires: ["rust"],
     timeoutMinutes: 30,
-    ci: [
-      ci("cargo test -p sagascript-core --features diarization", "src-tauri"),
-      ci("cargo check -p sagascript-core --features diarization", "src-tauri"),
-    ],
-    lanes: ["test-macos"],
+    ci: [ci("cargo test -p sagascript-core --features diarization", "src-tauri")],
+    lanes: ["test-linux"],
   },
   {
     id: "ort-host-clippy",
@@ -416,7 +408,7 @@ export const CHECKS = [
     requires: ["rust"],
     timeoutMinutes: 30,
     ci: [ci("cargo clippy --all-targets --locked -- -D warnings", "src-tauri/engine-host/ort")],
-    lanes: ["test-linux"],
+    lanes: ["test-linux", "test-windows"],
   },
   {
     id: "ort-host-test",

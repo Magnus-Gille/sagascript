@@ -251,7 +251,14 @@ jobs:
           npm run build
           npm run check
 
+      # Ownership of the Windows tests (#358): ci.yml's test-windows, a required check, owns them on
+      # a pull request and runs these same workspace commands (scripts/ci/cargo-gates.mjs), so a pull
+      # request does not repeat them on either architecture. They stay for releases (workflow_call
+      # from prebuild-release.yml) and manual runs, whose candidates are gated here. In this pwsh
+      # step only the LAST command's exit code counts: a failing test or lint here never failed the
+      # job; test-windows is where it does (x64; ARM64 tests run only here, on releases and manual runs).
       - name: Test and lint Rust workspace
+        if: github.event_name != 'pull_request'
         working-directory: src-tauri
         run: |
           # `cargo check --workspace` is omitted: clippy --all-targets below is a strict superset.
@@ -259,11 +266,18 @@ jobs:
           cargo clippy --workspace --all-targets -- -D warnings
           cargo build -p sagascript-cli --no-default-features
 
+      # A pull request skips the step above; the CPU policy checks below still read its debug tree.
+      - name: Build lean CLI (debug)
+        if: github.event_name == 'pull_request'
+        working-directory: src-tauri
+        run: cargo build -p sagascript-cli --no-default-features
+
       - name: Gate native Windows clipboard transactions
         shell: pwsh
         run: |
           # The host triple was verified above. Reuse the workspace test binary
-          # instead of recompiling a duplicate explicit-target debug tree.
+          # instead of recompiling a duplicate explicit-target debug tree (on a pull
+          # request there is none: this step then compiles the app's test binary).
           cargo test --manifest-path src-tauri/Cargo.toml -p sagascript native_runner_clipboard_transaction_smoke -- --ignored --test-threads=1
           if ($LASTEXITCODE -ne 0) { throw "Native clipboard transaction gate failed" }
 
