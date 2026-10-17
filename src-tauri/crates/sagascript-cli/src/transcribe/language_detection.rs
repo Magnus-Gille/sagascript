@@ -17,8 +17,8 @@ use crate::output::{errln, Out};
 /// is used when `download-model` installed it and is never fetched here.
 /// A policy that fetches one would be a new variant, and then every `match`
 /// over this enum, [`InstalledDetectors::load`] and
-/// `language_check_never_asks_for_an_encoder_download` have to change with it,
-/// on purpose.
+/// `language_detection_never_downloads_an_encoder` (in `transcribe_tests.rs`)
+/// have to change with it, on purpose.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum EncoderPolicy {
     NoDownload,

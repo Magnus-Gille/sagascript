@@ -1,3 +1,25 @@
+//! `sagascript transcribe`: one file or a batch through Whisper (or Pianissimo),
+//! with optional diarization (#343).
+//!
+//! `run` and `run_inner` plan the run; `transcribe_file` does one input. The
+//! parts are modules of their own:
+//!
+//! - `args`: the command line (`TranscribeArgs`) and its value parsers;
+//! - `inputs`: expanding directories into the files to work on;
+//! - `resolve`: language and model IDs, which model a run gets, the one-run glossary;
+//! - `vocab_correction`: glossary aliases and the opt-in one-edit hint repair;
+//! - `language_detection`, `language_regions`: the language check and the sampled
+//!   region detection, with their diagnostics;
+//! - `diarize`: the diarization cache policy, decoder options and concurrent analysis;
+//! - `meeting`: the meeting entry points the app and reprocessing call, with their
+//!   cancellation control and source hashing;
+//! - `pianissimo`: the Pianissimo (engine host) path;
+//! - `progress`: `--progress-json` events;
+//! - `output`: the per-file result, the three output modes, warnings and the clipboard.
+//!
+//! The paths other code imports (`sagascript_cli::transcribe::*`) are
+//! re-exported below.
+
 #[cfg(feature = "diarization")]
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
