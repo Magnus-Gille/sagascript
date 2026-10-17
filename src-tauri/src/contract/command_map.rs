@@ -188,11 +188,11 @@ struct Generation {
     used_json: BTreeSet<(&'static str, &'static str)>,
 }
 
-fn src_dir() -> PathBuf {
+pub(super) fn src_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("src")
 }
 
-fn parse_file(path: &Path) -> syn::File {
+pub(super) fn parse_file(path: &Path) -> syn::File {
     let text = fs::read_to_string(path)
         .unwrap_or_else(|error| panic!("cannot read {}: {error}", path.display()));
     syn::parse_file(&text)
@@ -426,7 +426,7 @@ impl Generation {
 
 /// Whether an attribute is `#[tauri::command]` (or `#[command]`); rejects
 /// arguments that would change the wire names.
-fn command_attribute(attribute: &syn::Attribute) -> Result<bool, String> {
+pub(super) fn command_attribute(attribute: &syn::Attribute) -> Result<bool, String> {
     let path: Vec<String> = attribute
         .path()
         .segments
@@ -511,7 +511,7 @@ impl Visit<'_> for Handlers {
 }
 
 /// Rust source files below `dir`, sorted.
-fn rust_files(dir: &Path) -> Vec<PathBuf> {
+pub(super) fn rust_files(dir: &Path) -> Vec<PathBuf> {
     let mut files = Vec::new();
     for entry in fs::read_dir(dir).expect("readable source directory") {
         let path = entry.expect("readable directory entry").path();
@@ -538,6 +538,99 @@ fn module_of(path: &Path) -> String {
     parts.join("::")
 }
 
+/// The module and function a `generate_handler!` path names: `commands::get_state`
+/// is `("commands", "get_state")`, a bare `name` lives in `main.rs`.
+fn registered_module_and_name(path: &syn::Path) -> Result<(String, String), String> {
+    let segments: Vec<String> = path
+        .segments
+        .iter()
+        .map(|segment| segment.ident.to_string())
+        .collect();
+    match segments.as_slice() {
+        [name] => Ok(("main".to_string(), name.clone())),
+        [module @ .., name] => Ok((module.join("::"), name.clone())),
+        [] => Err("tauri::generate_handler! lists a path without segments".to_string()),
+    }
+}
+
+/// The commands a `generate_handler!` list names, each once, and what is wrong
+/// with the list: a path without segments, or a command listed twice (the
+/// second would otherwise be reported as not being a command at all, because
+/// the first listing already took it).
+fn registered_commands(paths: &[syn::Path]) -> (Vec<(String, String)>, Vec<String>) {
+    let mut commands = Vec::new();
+    let mut errors = Vec::new();
+    let mut seen = BTreeSet::new();
+    for path in paths {
+        match registered_module_and_name(path) {
+            Ok((module, name)) => {
+                if seen.insert((module.clone(), name.clone())) {
+                    commands.push((module, name));
+                } else {
+                    errors.push(format!(
+                        "{module}::{name} is listed twice in tauri::generate_handler!"
+                    ));
+                }
+            }
+            Err(error) => errors.push(error),
+        }
+    }
+    (commands, errors)
+}
+
+/// The `#[tauri::command]` functions of each source file, by the module the
+/// file defines and then by name.
+type CommandFiles = BTreeMap<String, BTreeMap<String, ItemFn>>;
+
+/// The command a `generate_handler!` path names, taken out of `files`.
+///
+/// The path names the module the frontend-facing code is addressed through. A
+/// module that splits into files (`commands/mod.rs` with `settings.rs`,
+/// `hotkey.rs`, ...) re-exports their commands (`pub use settings::*;`), so a
+/// command is looked up in the named module's own file and in the files below
+/// it. A name declared in more than one of them is refused: the re-export
+/// would be ambiguous too.
+fn locate(files: &mut CommandFiles, module: &str, name: &str) -> Result<ItemFn, String> {
+    let below = format!("{module}::");
+    let owners: Vec<String> = files
+        .iter()
+        .filter(|(owner, found)| {
+            (owner.as_str() == module || owner.starts_with(&below)) && found.contains_key(name)
+        })
+        .map(|(owner, _)| owner.clone())
+        .collect();
+    match owners.as_slice() {
+        [owner] => Ok(files
+            .get_mut(owner)
+            .and_then(|found| found.remove(name))
+            .expect("the owner was found by this name")),
+        [] => Err(format!(
+            "{module}::{name} is registered but is not a #[tauri::command] in \
+             src/{module}.rs or below src/{module}/"
+        )),
+        _ => Err(format!(
+            "{module}::{name} is registered but declared in several files: {}",
+            owners.join(", ")
+        )),
+    }
+}
+
+/// The names of the registered commands, for tests elsewhere that need to know
+/// which commands exist (a setter that must be covered by a table test).
+pub(super) fn registered_names() -> Vec<String> {
+    let generation = generate();
+    assert!(
+        generation.errors.is_empty(),
+        "the CommandMap generator found problems:\n  {}",
+        generation.errors.join("\n  ")
+    );
+    generation
+        .commands
+        .into_iter()
+        .map(|command| command.name)
+        .collect()
+}
+
 fn generate() -> Generation {
     let mut generation = Generation::default();
     let mut handlers = Handlers::default();
@@ -549,7 +642,7 @@ fn generate() -> Generation {
         );
     };
 
-    let mut functions: BTreeMap<String, BTreeMap<String, ItemFn>> = BTreeMap::new();
+    let mut functions = CommandFiles::new();
     for file in rust_files(&src_dir()) {
         let mut visitor = CommandFunctions::default();
         visitor.visit_file(&parse_file(&file));
@@ -559,25 +652,15 @@ fn generate() -> Generation {
         }
     }
 
-    for path in registered {
-        let segments: Vec<String> = path
-            .segments
-            .iter()
-            .map(|segment| segment.ident.to_string())
-            .collect();
-        let (module, name) = match segments.as_slice() {
-            [name] => ("main".to_string(), name.clone()),
-            [module @ .., name] => (module.join("::"), name.clone()),
-            [] => unreachable!("syn paths have a segment"),
-        };
-        let Some(function) = functions
-            .get_mut(&module)
-            .and_then(|found| found.remove(&name))
-        else {
-            generation.errors.push(format!(
-                "{module}::{name} is registered but is not a #[tauri::command] in src/{module}.rs"
-            ));
-            continue;
+    let (registered, registration_errors) = registered_commands(registered);
+    generation.errors.extend(registration_errors);
+    for (module, name) in registered {
+        let function = match locate(&mut functions, &module, &name) {
+            Ok(function) => function,
+            Err(error) => {
+                generation.errors.push(error);
+                continue;
+            }
         };
         match generation.command(&module, &function) {
             Ok(command) => generation.commands.push(command),
@@ -960,5 +1043,134 @@ fn the_generated_map_types_each_commands_error() {
     assert!(
         !only_text.contains("import type { BackendError }"),
         "{only_text}"
+    );
+}
+
+/// Files as `generate` collects them: module name, then the commands in it.
+#[cfg(test)]
+fn files(layout: &[(&str, &[&str])]) -> CommandFiles {
+    layout
+        .iter()
+        .map(|(module, names)| {
+            let commands = names
+                .iter()
+                .map(|name| {
+                    let function: ItemFn = syn::parse_str(&format!(
+                        "#[tauri::command] pub async fn {name}() -> Result<(), String> {{ todo!() }}"
+                    ))
+                    .expect("a command signature");
+                    (name.to_string(), function)
+                })
+                .collect();
+            (module.to_string(), commands)
+        })
+        .collect()
+}
+
+#[test]
+fn a_command_is_found_in_its_module_and_below_it() {
+    // `commands::set_beam_size` is declared in commands/settings.rs and
+    // re-exported by commands/mod.rs (#370): the registered path names the
+    // parent module.
+    let mut layout = files(&[
+        ("commands", &["lock_only"]),
+        ("commands::settings", &["set_beam_size"]),
+        ("commands::hotkey", &["set_hotkey"]),
+        ("meeting_jobs", &["start_meeting_job"]),
+    ]);
+    for (module, name) in [
+        ("commands", "set_beam_size"),
+        ("commands", "lock_only"),
+        ("commands::hotkey", "set_hotkey"),
+        ("meeting_jobs", "start_meeting_job"),
+    ] {
+        let function = locate(&mut layout, module, name)
+            .unwrap_or_else(|error| panic!("{module}::{name}: {error}"));
+        assert_eq!(function.sig.ident, name);
+    }
+    // Found means taken: what is left is what no path registered.
+    assert!(layout["commands::settings"].is_empty());
+}
+
+#[test]
+fn a_command_is_not_found_in_a_module_that_only_shares_the_prefix() {
+    let mut layout = files(&[("commands_extra", &["set_beam_size"])]);
+    let error = locate(&mut layout, "commands", "set_beam_size")
+        .err()
+        .expect("refused");
+    assert!(
+        error.contains("commands::set_beam_size is registered but is not a #[tauri::command]"),
+        "{error}"
+    );
+    assert!(
+        error.contains("src/commands.rs or below src/commands/"),
+        "{error}"
+    );
+}
+
+#[test]
+fn a_command_declared_twice_below_one_module_is_refused() {
+    let mut layout = files(&[
+        ("commands::settings", &["set_beam_size"]),
+        ("commands::models", &["set_beam_size"]),
+    ]);
+    let error = locate(&mut layout, "commands", "set_beam_size")
+        .err()
+        .expect("refused");
+    assert!(
+        error.contains("declared in several files: commands::models, commands::settings"),
+        "{error}"
+    );
+    // Nothing was taken, so the report does not hide either declaration.
+    assert_eq!(layout["commands::settings"].len(), 1);
+    assert_eq!(layout["commands::models"].len(), 1);
+}
+
+#[test]
+fn registered_paths_name_a_module_and_a_function() {
+    let path = |text: &str| syn::parse_str::<syn::Path>(text).expect("a path");
+    assert_eq!(
+        registered_module_and_name(&path("commands::get_state")),
+        Ok(("commands".to_string(), "get_state".to_string()))
+    );
+    assert_eq!(
+        registered_module_and_name(&path("commands::settings::set_language")),
+        Ok(("commands::settings".to_string(), "set_language".to_string()))
+    );
+    assert_eq!(
+        registered_module_and_name(&path("quit")),
+        Ok(("main".to_string(), "quit".to_string()))
+    );
+    // A path with no segments is reported, not unreachable.
+    let empty = syn::Path {
+        leading_colon: None,
+        segments: syn::punctuated::Punctuated::new(),
+    };
+    assert!(registered_module_and_name(&empty)
+        .unwrap_err()
+        .contains("without segments"));
+}
+
+#[test]
+fn a_command_listed_twice_is_reported_as_listed_twice() {
+    let paths: Vec<syn::Path> = [
+        "commands::get_state",
+        "commands::set_x",
+        "commands::get_state",
+    ]
+    .iter()
+    .map(|text| syn::parse_str(text).expect("a path"))
+    .collect();
+    let (commands, errors) = registered_commands(&paths);
+    assert_eq!(
+        commands,
+        [
+            ("commands".to_string(), "get_state".to_string()),
+            ("commands".to_string(), "set_x".to_string())
+        ]
+    );
+    assert_eq!(
+        errors,
+        ["commands::get_state is listed twice in tauri::generate_handler!"]
     );
 }
