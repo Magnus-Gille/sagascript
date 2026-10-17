@@ -479,6 +479,20 @@ fn resolve_inside(dest: &Path, relative: &Path) -> Option<PathBuf> {
     target.starts_with(dest).then_some(target)
 }
 
+/// How many characters of an entry name an error message shows.
+const SHOWN_ENTRY_NAME_CHARS: usize = 200;
+
+/// An entry name for an error message. A zip name may be 64 KiB, and the
+/// message reaches logs and the UI; the caller formats the result with `{:?}`,
+/// which escapes control characters.
+fn shown_entry_name(name: &str) -> String {
+    let mut shown: String = name.chars().take(SHOWN_ENTRY_NAME_CHARS).collect();
+    if name.chars().nth(SHOWN_ENTRY_NAME_CHARS).is_some() {
+        shown.push('…');
+    }
+    shown
+}
+
 /// Extract `archive` with path-traversal, symlink and size guards.
 fn extract_archive(archive: &Path, dest: &Path, max_bytes: u64) -> Result<(), DictationError> {
     let file = std::fs::File::open(archive)
@@ -491,9 +505,9 @@ fn extract_archive(archive: &Path, dest: &Path, max_bytes: u64) -> Result<(), Di
             .by_index(index)
             .map_err(|e| install_err(format!("Corrupt model archive entry {index}: {e}")))?;
         // `entry.name()` is fallible in zip 9; the raw bytes, decoded lossily,
-        // serve the root/drive check and the messages.
+        // serve the root/drive check and the (capped) messages.
         let name = String::from_utf8_lossy(entry.name_raw()).into_owned();
-        let shown = &name;
+        let shown = shown_entry_name(&name);
         let escapes = || {
             install_err(format!(
                 "Model archive entry {shown:?} escapes the extraction directory"
@@ -1390,6 +1404,37 @@ mod tests {
             // escaped file anywhere, no staging leftovers, no install.
             assert_eq!(tree(root.path()), ["Models", "model.zip"], "{name}");
         }
+    }
+
+    #[test]
+    fn entry_names_in_errors_are_capped_and_escaped() {
+        let root = tmp();
+        let models = root.path().join("Models");
+        let rejection = |name: &str| {
+            let mut entries = FIXTURE.to_vec();
+            entries.push((name, b"x"));
+            let archive = build_zip(root.path(), &entries);
+            let manifest = manifest_for(&FIXTURE, &archive);
+            install_archive_in(&manifest, &archive, &models)
+                .expect_err("hostile name must be rejected")
+                .to_string()
+        };
+
+        // A zip name may be 64 KiB; only its start is echoed, cut on a char
+        // boundary and marked as cut.
+        let long = rejection(&format!("../{}", "é".repeat(5_000)));
+        assert!(long.contains("escapes"), "{long}");
+        assert!(long.contains("ééé…\""), "{long}");
+        assert!(long.chars().count() < 400, "{} chars", long.chars().count());
+
+        // A short name is echoed whole, without the marker.
+        let short = rejection("../short.txt");
+        assert!(short.contains("\"../short.txt\""), "{short}");
+        assert!(!short.contains('…'), "{short}");
+
+        // Escapes still apply: no raw control character reaches the message.
+        let control = rejection("../\u{1b}[31mred\nline");
+        assert!(!control.chars().any(char::is_control), "{control:?}");
     }
 
     #[test]
