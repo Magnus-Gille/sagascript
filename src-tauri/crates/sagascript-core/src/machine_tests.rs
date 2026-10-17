@@ -1,13 +1,17 @@
 use super::*;
 use crate::settings::HotkeyProfile;
 
-/// The platform gate of the wrappers is the gate of this machine, whatever it
-/// is: each one equals its `_gated` sibling given `pianissimo_supported()`.
-/// Red if a wrapper hard-codes the gate: on a machine that cannot run
-/// Pianissimo (Linux, Intel macOS) `true` shows in the Swedish `Auto` rows, and
-/// on one that can `false` does.
+/// Each ungated `Settings` method equals its `_gated` sibling called with
+/// this machine's gate, whatever that is.
+///
+/// What this catches depends on the machine it runs on, because the gate is a
+/// fact about the machine: a wrapper that hard-codes `true` fails wherever
+/// Pianissimo cannot run (Linux, Windows x64, Intel macOS), one that hard-codes
+/// `false` fails only where it can (Apple silicon on macOS 14+, Windows on
+/// ARM). On Linux alone a hard-coded `false` passes; the macOS lane of CI is
+/// what covers it when its runners are Apple silicon.
 #[test]
-fn the_wrappers_ask_this_machines_platform_gate() {
+fn each_wrapper_equals_its_gated_sibling_under_this_machines_gate() {
     let supported = pianissimo_supported();
     assert_eq!(
         supported,
@@ -90,9 +94,11 @@ fn the_wrappers_ask_this_machines_platform_gate() {
 }
 
 /// An explicit file model never consults readiness, so the file-model wrappers
-/// can be compared without looking at the models directory.
+/// can be compared with their `_gated` siblings without looking at the models
+/// directory. As above, only the platform gate is exercised, on whatever
+/// machine this runs.
 #[test]
-fn the_file_model_wrappers_ask_this_machines_gate_for_explicit_choices() {
+fn the_file_model_wrappers_equal_their_gated_siblings_for_explicit_choices() {
     let supported = pianissimo_supported();
     let explicit = |preference| Settings {
         file_transcription_model: preference,
@@ -117,4 +123,32 @@ fn the_file_model_wrappers_ask_this_machines_gate_for_explicit_choices() {
             settings.effective_whisper_file_model_for_gated(language, &never_asked)
         );
     }
+}
+
+/// The one platform where the gate has a known value in every build: Pianissimo
+/// does not run on Linux. A wrapper that hard-codes `true` is red here, which
+/// the comparison test above cannot say on any other machine.
+#[cfg(target_os = "linux")]
+#[test]
+fn on_linux_the_gate_is_closed_and_swedish_auto_is_a_whisper_model() {
+    assert!(!pianissimo_supported());
+    assert!(!ThisMachine.pianissimo_supported());
+    let swedish = Settings {
+        hotkey_profiles: vec![HotkeyProfile::legacy_default(
+            "Super+S".into(),
+            Language::Swedish,
+        )],
+        profile_models: [("default".to_string(), FileModelPreference::Auto)].into(),
+        ..Settings::default()
+    };
+    assert_eq!(
+        swedish.dictation_model_for_profile("default"),
+        Ok(FileModel::Whisper(WhisperModel::KbWhisperMedium))
+    );
+    assert!(!swedish.any_profile_uses_pianissimo());
+    let mut selecting = swedish;
+    assert_eq!(
+        selecting.set_profile_model("default", FileModelPreference::PianissimoOriginal),
+        Err(crate::models::PIANISSIMO_UNSUPPORTED_MESSAGE.to_string())
+    );
 }
