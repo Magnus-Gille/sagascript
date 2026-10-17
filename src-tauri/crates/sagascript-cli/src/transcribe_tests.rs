@@ -1561,3 +1561,328 @@ mod diarize_threshold_tests {
         assert_eq!(json["language"], "sv");
     }
 }
+
+/// The three output modes of `BatchSink`, driven in-process with a captured
+/// `Out` (#343). The process-level tests in `tests/transcribe_contract.rs` reach
+/// the sink only with failures and a single cached result, because a successful
+/// Whisper run needs model weights; these cover what they cannot: headers for
+/// several inputs, the array form, item order and key order.
+mod batch_sink_contract_tests {
+    use super::*;
+    use clap::Parser;
+
+    #[derive(Parser)]
+    struct TestCli {
+        #[command(flatten)]
+        args: TranscribeArgs,
+    }
+
+    fn args_for(flags: &[&str]) -> TranscribeArgs {
+        let mut argv = vec!["sagascript", "a.wav"];
+        argv.extend_from_slice(flags);
+        TestCli::try_parse_from(argv).expect("flags parse").args
+    }
+
+    fn ok(file: &str, text: &str) -> BatchExecution {
+        BatchExecution {
+            source: PathBuf::from(file),
+            output: Ok(FileTranscription {
+                json: serde_json::json!({"text": text, "file": file}),
+                plain: text.to_string(),
+                #[cfg(feature = "diarization")]
+                meeting: None,
+            }),
+        }
+    }
+
+    fn failed(file: &str, error: DictationError) -> BatchExecution {
+        BatchExecution {
+            source: PathBuf::from(file),
+            output: Err(error),
+        }
+    }
+
+    fn decode_error() -> DictationError {
+        DictationError::FileDecodeError("corrupt fixture".to_string())
+    }
+
+    #[test]
+    fn plain_prints_a_header_per_input_only_when_there_are_several() {
+        let args = args_for(&[]);
+        let (out, captured) = Out::capture();
+        let mut sink = BatchSink::new(&args, 2);
+        sink.emit(&out, &args, ok("a.wav", "first")).unwrap();
+        sink.emit(&out, &args, failed("bad.wav", decode_error()))
+            .unwrap();
+        sink.emit(&out, &args, ok("b.wav", "second")).unwrap();
+        sink.finish(&out).unwrap();
+        assert_eq!(
+            captured.stdout(),
+            "==> a.wav <==\nfirst\n==> b.wav <==\nsecond\n"
+        );
+        assert_eq!(
+            captured.stderr(),
+            "Error transcribing bad.wav: File decode error: corrupt fixture\n"
+        );
+
+        let (out, captured) = Out::capture();
+        let mut sink = BatchSink::new(&args, 1);
+        sink.emit(&out, &args, ok("a.wav", "only")).unwrap();
+        sink.finish(&out).unwrap();
+        assert_eq!(captured.stdout(), "only\n");
+        assert_eq!(captured.stderr(), "");
+    }
+
+    #[test]
+    fn json_writes_the_result_object_for_one_input_after_the_batch() {
+        let args = args_for(&["--json"]);
+        let (out, captured) = Out::capture();
+        let mut sink = BatchSink::new(&args, 1);
+        sink.emit(&out, &args, ok("a.wav", "only")).unwrap();
+        assert_eq!(captured.stdout(), "", "nothing is written before finish");
+        sink.finish(&out).unwrap();
+        assert_eq!(
+            captured.stdout(),
+            "{\n  \"file\": \"a.wav\",\n  \"text\": \"only\"\n}\n"
+        );
+        assert_eq!(captured.stderr(), "");
+    }
+
+    #[test]
+    fn json_writes_the_error_object_with_code_and_source_for_one_failed_input() {
+        let args = args_for(&["--json"]);
+        let (out, captured) = Out::capture();
+        let mut sink = BatchSink::new(&args, 1);
+        sink.emit(&out, &args, failed("a.wav", decode_error()))
+            .unwrap();
+        sink.finish(&out).unwrap();
+        assert_eq!(
+            captured.stdout(),
+            "{\n  \"status\": \"error\",\n  \"code\": \"file_decode_error\",\n  \"source\": \"a.wav\",\n  \"error\": \"File decode error: corrupt fixture\"\n}\n"
+        );
+        assert_eq!(
+            captured.stderr(),
+            "Error transcribing a.wav: File decode error: corrupt fixture\n"
+        );
+    }
+
+    #[test]
+    fn json_writes_one_array_of_items_for_several_inputs_in_order() {
+        let args = args_for(&["--json"]);
+        let (out, captured) = Out::capture();
+        let mut sink = BatchSink::new(&args, 3);
+        sink.emit(&out, &args, ok("a.wav", "first")).unwrap();
+        sink.emit(&out, &args, failed("bad.wav", decode_error()))
+            .unwrap();
+        sink.emit(&out, &args, ok("b.wav", "second")).unwrap();
+        sink.finish(&out).unwrap();
+        // Item keys are written in the order status, source, result|error; the
+        // payload inside `result` is a sorted-key JSON value.
+        let expected = [
+            "[",
+            "  {",
+            "    \"status\": \"ok\",",
+            "    \"source\": \"a.wav\",",
+            "    \"result\": {",
+            "      \"file\": \"a.wav\",",
+            "      \"text\": \"first\"",
+            "    }",
+            "  },",
+            "  {",
+            "    \"status\": \"error\",",
+            "    \"source\": \"bad.wav\",",
+            "    \"error\": \"File decode error: corrupt fixture\"",
+            "  },",
+            "  {",
+            "    \"status\": \"ok\",",
+            "    \"source\": \"b.wav\",",
+            "    \"result\": {",
+            "      \"file\": \"b.wav\",",
+            "      \"text\": \"second\"",
+            "    }",
+            "  }",
+            "]",
+        ];
+        assert_eq!(captured.stdout().lines().collect::<Vec<_>>(), expected);
+        // A batch item never carries the single-input error object's `code`.
+        let written: serde_json::Value = serde_json::from_str(&captured.stdout()).unwrap();
+        assert!(written[1].get("code").is_none());
+    }
+
+    #[test]
+    fn json_with_one_input_that_was_never_emitted_is_an_empty_array() {
+        // A batch cancelled before its first item has nothing to report.
+        let args = args_for(&["--json"]);
+        let (out, captured) = Out::capture();
+        BatchSink::new(&args, 1).finish(&out).unwrap();
+        assert_eq!(captured.stdout(), "[]\n");
+    }
+
+    #[test]
+    fn jsonl_writes_each_compact_item_as_soon_as_its_input_is_done() {
+        let args = args_for(&["--jsonl"]);
+        let (out, captured) = Out::capture();
+        let mut sink = BatchSink::new(&args, 2);
+        sink.emit(&out, &args, ok("a.wav", "first")).unwrap();
+        assert_eq!(
+            captured.stdout(),
+            "{\"status\":\"ok\",\"source\":\"a.wav\",\"result\":{\"file\":\"a.wav\",\"text\":\"first\"}}\n"
+        );
+        sink.emit(&out, &args, failed("bad.wav", decode_error()))
+            .unwrap();
+        sink.finish(&out).unwrap();
+        assert_eq!(
+            captured.stdout().lines().nth(1),
+            Some(
+                "{\"status\":\"error\",\"source\":\"bad.wav\",\"error\":\"File decode error: corrupt fixture\"}"
+            )
+        );
+        assert_eq!(captured.stdout().lines().count(), 2);
+        assert_eq!(
+            captured.stderr(),
+            "Error transcribing bad.wav: File decode error: corrupt fixture\n"
+        );
+    }
+
+    #[cfg(feature = "diarization")]
+    #[test]
+    fn meeting_json_writes_the_shared_document_instead_of_an_item() {
+        let args = args_for(&["--diarize", "--meeting-json"]);
+        let meeting = sagascript_core::test_support::meeting_transcript()
+            .segment(0.0, 1.0, "hello", "SPEAKER_0")
+            .speaker("SPEAKER_0", "SPEAKER_0")
+            .build();
+        let expected = serde_json::to_string_pretty(&meeting).unwrap();
+        let (out, captured) = Out::capture();
+        let mut sink = BatchSink::new(&args, 1);
+        sink.emit(
+            &out,
+            &args,
+            BatchExecution {
+                source: PathBuf::from("a.wav"),
+                output: Ok(FileTranscription {
+                    json: serde_json::json!({"ignored": true}),
+                    plain: "hello".to_string(),
+                    meeting: Some(meeting),
+                }),
+            },
+        )
+        .unwrap();
+        sink.finish(&out).unwrap();
+        assert_eq!(captured.stdout(), format!("{expected}\n"));
+        assert_eq!(captured.stderr(), "");
+    }
+
+    #[cfg(feature = "diarization")]
+    #[test]
+    fn meeting_json_without_a_document_is_a_transcription_failure() {
+        let args = args_for(&["--diarize", "--meeting-json"]);
+        let (out, captured) = Out::capture();
+        let mut sink = BatchSink::new(&args, 1);
+        let error = sink.emit(&out, &args, ok("a.wav", "text")).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "Transcription failed: meeting JSON was not produced by the diarized pipeline"
+        );
+        assert_eq!(captured.stdout(), "");
+    }
+}
+
+/// `--progress-json` events as the progress emitters write them (#343): the
+/// phase-to-step table, one compact line on stderr when enabled, nothing when
+/// not, and a decoder snapshot only where one is given.
+mod progress_contract_tests {
+    use super::*;
+
+    #[test]
+    fn phases_map_to_three_steps() {
+        let table: Vec<(&str, Option<u8>)> = [
+            "decoding",
+            "resampling",
+            "loading",
+            "language_detection",
+            "preparing",
+            "encoding",
+            "transcribing",
+            "finalizing",
+            "completed",
+            "cancelled",
+            "analyzing",
+            "clustering",
+        ]
+        .into_iter()
+        .map(|phase| (phase, progress_step(phase)))
+        .collect();
+        assert_eq!(
+            table,
+            [
+                ("decoding", Some(1)),
+                ("resampling", Some(2)),
+                ("loading", Some(2)),
+                ("language_detection", Some(2)),
+                ("preparing", Some(2)),
+                ("encoding", Some(2)),
+                ("transcribing", Some(3)),
+                ("finalizing", Some(3)),
+                ("completed", Some(3)),
+                ("cancelled", None),
+                ("analyzing", None),
+                ("clustering", None),
+            ]
+        );
+    }
+
+    fn written(emit: impl FnOnce(&Out)) -> String {
+        let (out, captured) = Out::capture();
+        emit(&out);
+        assert_eq!(captured.stdout(), "", "progress never goes to stdout");
+        captured.stderr()
+    }
+
+    #[test]
+    fn an_enabled_emitter_writes_one_compact_event_line_to_stderr() {
+        let line = written(|out| {
+            emit_progress(out, true, Instant::now(), "transcribing", Some(42));
+        });
+        assert!(line.ends_with('\n'));
+        let mut event: serde_json::Value = serde_json::from_str(line.trim_end()).unwrap();
+        assert!(event["elapsed_ms"].is_u64());
+        event["elapsed_ms"] = serde_json::json!(0);
+        assert_eq!(
+            event.to_string(),
+            r#"{"elapsed_ms":0,"event":"transcription_progress","percent":42,"phase":"transcribing","step":3,"steps_total":3}"#
+        );
+        assert_eq!(line.lines().count(), 1);
+    }
+
+    #[test]
+    fn a_disabled_emitter_writes_nothing() {
+        assert_eq!(
+            written(|out| emit_progress(out, false, Instant::now(), "decoding", Some(1))),
+            ""
+        );
+        assert_eq!(
+            written(|out| {
+                emit_progress_with_decoder(out, false, Instant::now(), "loading", None, None);
+            }),
+            ""
+        );
+    }
+
+    #[test]
+    fn the_decoder_snapshot_is_attached_only_when_given() {
+        let decoder = serde_json::json!({"beam_size": 0});
+        let with = written(|out| {
+            emit_progress_with_decoder(out, true, Instant::now(), "loading", None, Some(&decoder));
+        });
+        let without = written(|out| {
+            emit_progress_with_decoder(out, true, Instant::now(), "loading", None, None);
+        });
+        let with: serde_json::Value = serde_json::from_str(with.trim_end()).unwrap();
+        let without: serde_json::Value = serde_json::from_str(without.trim_end()).unwrap();
+        assert_eq!(with["decoder"], decoder);
+        assert!(without.get("decoder").is_none());
+        assert_eq!(with["step"], 2);
+        assert!(with["percent"].is_null());
+    }
+}
