@@ -44,14 +44,20 @@ test("command floors fractional subprocess timeouts without passing invalid valu
   );
 });
 
-test("failed commands report captured stream sizes and the child signal", () => {
+test("failed commands report captured stream sizes and the platform-specific child termination", () => {
+  const expectedSignal = process.platform === "win32" ? "none" : "SIGTERM";
   assert.throws(
-    () => command(process.execPath, [
-      "-e",
-      "require('node:fs').writeSync(1, 'stdout-probe'); require('node:fs').writeSync(2, 'stderr-probe'); process.kill(process.pid, 'SIGTERM')",
-    ], { timeout: 10_000 }),
+    () =>
+      command(
+        process.execPath,
+        [
+          "-e",
+          "require('node:fs').writeSync(1, 'stdout-probe'); require('node:fs').writeSync(2, 'stderr-probe'); process.kill(process.pid, 'SIGTERM')",
+        ],
+        { timeout: 10_000 },
+      ),
     (error) => {
-      assert.match(error.message, /capture stdout_bytes=12 stderr_bytes=12 child_signal=SIGTERM/);
+      assert.match(error.message, new RegExp(`capture stdout_bytes=12 stderr_bytes=12 child_signal=${expectedSignal}`));
       return true;
     },
   );
@@ -96,21 +102,27 @@ test("Rust failure diagnostics retain ANSI-colored test names and PID panic iden
 });
 
 test("Rust command diagnostics retain only child exit causes and sanitize dyld loader errors", () => {
-  const diagnostic = safeProducerFailureDiagnostic("", [
-    "process didn't exit successfully: `/private/tmp/private-cargo/bin/cargo test --secret-arg hidden` (signal: 9, SIGKILL)",
-    "process didn't exit successfully: `/private/tmp/private-cargo/bin/test-binary --test-filter hidden` (signal: 6, SIGABRT: process abort signal)",
-    "error: process didn't exit successfully: `/private/tmp/private-cargo/bin/cargo test --private-value hidden` (exit status: 101)",
-    "error: process didn't exit successfully: `/private/tmp/private-cargo/bin/cargo test --unknown-value hidden` (unrecognized cause)",
-    "Caused by:",
-    "exit status: 102",
-    "dyld[123]: Library not loaded: /Users/magnus/private/lib/libexample.dylib",
-  ].join("\n"));
+  const diagnostic = safeProducerFailureDiagnostic(
+    "",
+    [
+      "process didn't exit successfully: `/private/tmp/private-cargo/bin/cargo test --secret-arg hidden` (signal: 9, SIGKILL)",
+      "process didn't exit successfully: `/private/tmp/private-cargo/bin/test-binary --test-filter hidden` (signal: 6, SIGABRT: process abort signal)",
+      "error: process didn't exit successfully: `/private/tmp/private-cargo/bin/cargo test --private-value hidden` (exit status: 101)",
+      "error: process didn't exit successfully: `/private/tmp/private-cargo/bin/cargo test --unknown-value hidden` (unrecognized cause)",
+      "Caused by:",
+      "exit status: 102",
+      "dyld[123]: Library not loaded: /Users/magnus/private/lib/libexample.dylib",
+    ].join("\n"),
+  );
   assert.match(diagnostic, /child-signal: SIGKILL \(9\)/);
   assert.match(diagnostic, /child-signal: SIGABRT \(6\)/);
   assert.match(diagnostic, /child-exit: 101/);
   assert.match(diagnostic, /child-exit: 102/);
   assert.match(diagnostic, /dyld-loader: Library not loaded/);
-  assert.doesNotMatch(diagnostic, /private-cargo|secret-arg|private-value|test-binary|test-filter|abort signal|hidden|\/Users\/magnus|libexample\.dylib/);
+  assert.doesNotMatch(
+    diagnostic,
+    /private-cargo|secret-arg|private-value|test-binary|test-filter|abort signal|hidden|\/Users\/magnus|libexample\.dylib/,
+  );
 });
 
 test("dyld failures expose only the category regardless of library path", () => {
@@ -118,10 +130,7 @@ test("dyld failures expose only the category regardless of library path", () => 
     "/Users/example/Library/Application Support/PRIVATE_PROJECT_SENTINEL/libexample.dylib",
     "/srv/PRIVATE_PROJECT_SENTINEL/libexample.dylib",
   ]) {
-    assert.equal(
-      safeProducerFailureDiagnostic("", `dyld[123]: Library not loaded: ${path}`),
-      "stderr dyld-loader: Library not loaded",
-    );
+    assert.equal(safeProducerFailureDiagnostic("", `dyld[123]: Library not loaded: ${path}`), "stderr dyld-loader: Library not loaded");
   }
 });
 

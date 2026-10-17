@@ -85,8 +85,7 @@ export function command(commandName, args, options = {}) {
     throw new Error(`${commandName} could not run (${result.error.code ?? "spawn-error"}); ${capture}`);
   }
   if (result.status !== 0) {
-    const diagnostic = safeFailureDiagnostic(result.stdout, result.stderr)
-      || `exit ${result.status ?? result.signal ?? "unknown"}`;
+    const diagnostic = safeFailureDiagnostic(result.stdout, result.stderr) || `exit ${result.status ?? result.signal ?? "unknown"}`;
     throw new Error(`${commandName} failed (${result.status ?? result.signal ?? "unknown"}): ${diagnostic}; ${capture}`);
   }
   return result.stdout;
@@ -95,9 +94,7 @@ export function command(commandName, args, options = {}) {
 function commandCaptureMetadata(result) {
   const stdoutBytes = capturedByteLength(result.stdout);
   const stderrBytes = capturedByteLength(result.stderr);
-  const childSignal = typeof result.signal === "string" && /^[A-Z0-9]+$/.test(result.signal)
-    ? result.signal
-    : "none";
+  const childSignal = typeof result.signal === "string" && /^[A-Z0-9]+$/.test(result.signal) ? result.signal : "none";
   return `capture stdout_bytes=${stdoutBytes} stderr_bytes=${stderrBytes} child_signal=${childSignal}`;
 }
 
@@ -136,10 +133,11 @@ export function safeFailureDiagnostic(stdout, stderr) {
       }
       const causeLine = line.replace(/^(?:error:\s*)?(?:Caused by:\s*)?/i, "");
       const processFailureHeader = /^process didn't exit successfully:/i.test(causeLine);
-      const processSignal = /^process didn't exit successfully:.*\(signal:\s*(\d+)(?:,\s*|\s+\()([A-Z][A-Z0-9]+)(?::[^)]*)?\)?\)\s*$/.exec(causeLine);
+      const processSignal = /^process didn't exit successfully:.*\(signal:\s*(\d+)(?:,\s*|\s+\()([A-Z][A-Z0-9]+)(?::[^)]*)?\)?\)\s*$/.exec(
+        causeLine,
+      );
       const processExit = /^process didn't exit successfully:.*\(exit status:\s*(\d+)\)\s*$/.exec(causeLine);
-      const continuationSignal = awaitingProcessCause
-        && /^signal:\s*(\d+)(?:,\s*|\s+\()([A-Z][A-Z0-9]+)(?::[^)]*)?\)?\s*$/.exec(line);
+      const continuationSignal = awaitingProcessCause && /^signal:\s*(\d+)(?:,\s*|\s+\()([A-Z][A-Z0-9]+)(?::[^)]*)?\)?\s*$/.exec(line);
       const continuationExit = awaitingProcessCause && /^exit status:\s*(\d+)\s*$/.exec(line);
       const panic = /^thread '([^']+)'(?: \(\d+\))? panicked\b/.exec(line);
       const section = /^---- (.+?) (?:stdout|stderr) ----$/.exec(line);
