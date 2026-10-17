@@ -4,6 +4,8 @@ use super::language_detection::*;
 use super::language_regions::*;
 use super::progress::*;
 use super::*;
+#[cfg(feature = "diarization")]
+use sagascript_core::diarization_report::DecoderEvidence;
 use sagascript_core::settings::{FileModelPreference, HotkeyProfile};
 use sagascript_core::transcription::diagnostics::LanguageDetection;
 #[cfg(feature = "diarization")]

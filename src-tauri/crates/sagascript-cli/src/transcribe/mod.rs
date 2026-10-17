@@ -15,8 +15,6 @@ use indicatif::{ProgressBar, ProgressStyle};
 
 #[cfg(feature = "diarization")]
 use sagascript_core::diarization::DiarizedSegment;
-#[cfg(feature = "diarization")]
-use sagascript_core::diarization_report::DecoderEvidence;
 use sagascript_core::error::DictationError;
 #[cfg(feature = "diarization")]
 use sagascript_core::meeting::{MeetingSegmentInput, MeetingSpeaker, MeetingTranscript};
@@ -29,8 +27,6 @@ use sagascript_core::transcription::model;
 use sagascript_core::transcription::pianissimo_backend::PianissimoBackend;
 use sagascript_core::transcription::pianissimo_model;
 use sagascript_core::transcription::whisper_backend::assemble_transcript;
-#[cfg(feature = "diarization")]
-use sagascript_core::transcription::whisper_backend::validate_diarization_options;
 use sagascript_core::transcription::{
     normalize_nonspeech_markers, recommended_parallel_chunks, ContextProfile, Glossary,
     TranscribeOptions, TranscriptSegment, WhisperBackend,
@@ -40,6 +36,7 @@ use crate::output::{errln, Out};
 use crate::run_request::RunRequest;
 
 mod args;
+mod diarize;
 mod inputs;
 mod language_detection;
 mod language_regions;
@@ -60,6 +57,12 @@ pub use self::resolve::{
 
 #[cfg(feature = "diarization")]
 use self::args::speaker_hint_from_args;
+use self::diarize::CachePolicy;
+#[cfg(feature = "diarization")]
+use self::diarize::{
+    canonicalize_coverage_segments, effective_diarization_decoder_evidence,
+    resolve_diarization_options, run_diarization_analysis, DiarizationPerformance,
+};
 use self::inputs::expand_inputs;
 #[cfg(feature = "diarization")]
 use self::inputs::paths_refer_to_same_file;
@@ -74,20 +77,6 @@ use self::output::{
 use self::progress::{decoder_progress_value, emit_meeting_progress};
 use self::progress::{emit_progress, emit_progress_with_decoder};
 use self::vocab_correction::{apply_glossary_corrections, apply_hint_corrections};
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum CachePolicy {
-    Normal,
-    #[cfg(feature = "diarization")]
-    RefreshNew,
-}
-
-impl CachePolicy {
-    #[cfg(feature = "diarization")]
-    fn reads_existing_cache(self) -> bool {
-        matches!(self, Self::Normal)
-    }
-}
 
 #[cfg(feature = "diarization")]
 const MAX_MEETING_INPUT_BYTES: u64 = 2 * 1024 * 1024 * 1024;
@@ -329,33 +318,6 @@ pub(crate) fn meeting_transcript_from_plain_segments(
             "Diarized meeting segments failed shared transcript validation".to_string(),
         )
     })
-}
-
-#[cfg(feature = "diarization")]
-#[derive(Debug, Default, serde::Serialize)]
-struct DiarizationPerformance {
-    acceleration_backend: &'static str,
-    coreml_status: &'static str,
-    cache_hit: bool,
-    effective_beam_size: u32,
-    effective_temperature_fallback: bool,
-    effective_vad: bool,
-    model_load_seconds: f64,
-    decode_resample_seconds: f64,
-    language_detection_seconds: f64,
-    cache_lookup_seconds: f64,
-    diarization_model_load_seconds: f64,
-    diarization_segmentation_seconds: f64,
-    diarization_segment_extraction_seconds: f64,
-    diarization_embeddings_seconds: f64,
-    diarization_clustering_seconds: f64,
-    whisper_inference_seconds: f64,
-    word_timestamp_attribution_seconds: f64,
-    parallel_analysis_span_seconds: f64,
-    cache_write_seconds: f64,
-    merge_diagnostics_seconds: f64,
-    json_assembly_seconds: f64,
-    total_seconds: f64,
 }
 
 /// Run the diarized file pipeline and return the validated shared meeting
@@ -1875,106 +1837,6 @@ fn transcribe_file(
         #[cfg(feature = "diarization")]
         meeting: None,
     })
-}
-
-/// Overlap the CPU/ONNX diarization analysis with Metal Whisper inference on
-/// macOS. These workloads have no shared native context: only the Whisper half
-/// touches `backend`, while the worker owns fresh ONNX sessions. CPU-only
-/// targets remain sequential to avoid two heavy CPU runtimes contending.
-#[cfg(feature = "diarization")]
-fn run_diarization_analysis(
-    audio: &[f32],
-    backend: &WhisperBackend,
-    language: Language,
-    prompt: Option<&str>,
-    config: &sagascript_core::diarization::DiarizeConfig,
-    options: &TranscribeOptions,
-) -> Result<
-    (
-        sagascript_core::diarization::DiarizationAnalysis,
-        sagascript_core::diarization::DiarizationTimings,
-        sagascript_core::transcription::DiarizationTranscription,
-    ),
-    DictationError,
-> {
-    #[cfg(target_os = "macos")]
-    {
-        std::thread::scope(|scope| {
-            let diarization = scope.spawn(|| sagascript_core::diarization::analyze(audio, config));
-            let transcription = backend.transcribe_sync_for_diarization_profiled_with_options(
-                audio, language, prompt, options,
-            );
-            let (analysis, timings) = diarization.join().map_err(|_| {
-                DictationError::DiarizationError(
-                    "Diarization analysis worker terminated unexpectedly".to_string(),
-                )
-            })??;
-            Ok((analysis, timings, transcription?))
-        })
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        let (analysis, timings) = sagascript_core::diarization::analyze(audio, config)?;
-        let transcription = backend.transcribe_sync_for_diarization_profiled_with_options(
-            audio, language, prompt, options,
-        )?;
-        Ok((analysis, timings, transcription))
-    }
-}
-
-#[cfg(feature = "diarization")]
-fn canonicalize_coverage_segments(
-    segments: Vec<TranscriptSegment>,
-    duration: f64,
-) -> Vec<TranscriptSegment> {
-    if !duration.is_finite() || duration < 0.0 {
-        return Vec::new();
-    }
-
-    segments
-        .into_iter()
-        .filter_map(|mut segment| {
-            if !segment.start.is_finite() || !segment.end.is_finite() {
-                return None;
-            }
-            segment.start = segment.start.clamp(0.0, duration);
-            segment.end = segment.end.clamp(0.0, duration);
-            (segment.end > segment.start).then_some(segment)
-        })
-        .collect()
-}
-/// Resolve the diarization decoder independently from ordinary file defaults.
-/// Explicit CLI values win. Omitted flags preserve the legacy greedy/no-VAD,
-/// temperature-fallback decoding regardless of ordinary file settings.
-#[cfg(feature = "diarization")]
-fn resolve_diarization_options(
-    args: &TranscribeArgs,
-    _stored: &Settings,
-) -> Result<TranscribeOptions, DictationError> {
-    let beam_size = args.beam_size.unwrap_or(0);
-    let vad_enabled = args.vad && !args.no_vad;
-    let options = TranscribeOptions {
-        prompt: None,
-        beam_size,
-        temperature_fallback: true,
-        vad_model_path: vad_enabled.then(|| model::vad_model_path().to_string_lossy().into_owned()),
-        segment_timestamps: true,
-        parallel_chunks: 1,
-    };
-    validate_diarization_options(&options)?;
-    Ok(options)
-}
-
-#[cfg(feature = "diarization")]
-fn effective_diarization_decoder_evidence(
-    options: &TranscribeOptions,
-) -> Result<DecoderEvidence, DictationError> {
-    Ok(
-        sagascript_core::transcription::whisper_backend::effective_diarization_decoder_config(
-            options,
-        )?
-        .into(),
-    )
 }
 
 #[cfg(test)]
