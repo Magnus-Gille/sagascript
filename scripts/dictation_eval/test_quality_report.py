@@ -198,7 +198,8 @@ class QualityReportTests(unittest.TestCase):
             / "crates"
             / "sagascript-cli"
             / "src"
-            / "transcribe.rs"
+            / "transcribe"
+            / "resolve.rs"
         )
         source = source_path.read_text(encoding="utf-8")
         start = source.index("pub fn model_id_string")
