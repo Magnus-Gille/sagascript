@@ -144,7 +144,7 @@ fn a_failed_cleanup_after_a_failed_registration_leaves_the_os_state_unknown() {
 
 /// Cleanup only runs after a registration failure, so this combination does not
 /// happen; if it ever did, the OS state is unknown and the error is shown (it
-/// used to be `unreachable!`, which would have aborted startup).
+/// used to be a panic arm, which would have aborted startup).
 #[test]
 fn a_cleanup_failure_without_a_registration_error_is_unknown_not_registered() {
     assert_eq!(
