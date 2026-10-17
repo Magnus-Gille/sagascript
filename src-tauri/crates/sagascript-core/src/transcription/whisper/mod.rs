@@ -246,10 +246,15 @@ struct CachedWhisperRuntime<C = WhisperContext, S = WhisperState> {
     state: Option<S>,
 }
 
-// WhisperContext is Send+Sync (it wraps a C pointer that's thread-safe)
-// The Mutex handles interior mutability safely
-unsafe impl Send for WhisperBackend {}
-unsafe impl Sync for WhisperBackend {}
+// The backend is shared across threads (Tauri state, `spawn_blocking`). It is
+// Send + Sync by composition: every field is a `Mutex` or an atomic, and the
+// native `WhisperContext` and `WhisperState` inside are declared Send + Sync by
+// whisper-rs 0.15. Nothing is asserted by hand, so a field or dependency update
+// that loses either trait stops compiling here.
+const _: fn() = || {
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<WhisperBackend>();
+};
 
 impl Default for WhisperBackend {
     fn default() -> Self {
