@@ -261,7 +261,3 @@ where
         error!("Failed to dispatch UI work to main thread: {e}");
     }
 }
-
-#[cfg(test)]
-#[path = "main_tests.rs"]
-mod tests;

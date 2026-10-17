@@ -228,3 +228,7 @@ fn open_initial_window(app: &tauri::App, gui_launch_mode: GuiLaunchMode) {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "startup_tests.rs"]
+mod tests;
