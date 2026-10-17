@@ -2,6 +2,7 @@ use super::args::*;
 use super::inputs::*;
 use super::language_detection::*;
 use super::language_regions::*;
+use super::progress::*;
 use super::*;
 use sagascript_core::settings::{FileModelPreference, HotkeyProfile};
 use sagascript_testsupport::TempDir;

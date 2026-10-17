@@ -49,6 +49,7 @@ mod args;
 mod inputs;
 mod language_detection;
 mod language_regions;
+mod progress;
 mod resolve;
 mod vocab_correction;
 
@@ -66,6 +67,9 @@ use self::inputs::expand_inputs;
 use self::inputs::paths_refer_to_same_file;
 use self::language_detection::detect_file_language;
 use self::language_regions::detect_file_language_regions;
+#[cfg(feature = "diarization")]
+use self::progress::{decoder_progress_value, emit_meeting_progress};
+use self::progress::{emit_progress, emit_progress_with_decoder};
 use self::vocab_correction::{apply_glossary_corrections, apply_hint_corrections};
 
 #[derive(Debug)]
@@ -1145,111 +1149,6 @@ fn run_pianissimo_batch(
     Ok(())
 }
 
-fn progress_step(phase: &str) -> Option<u8> {
-    match phase {
-        "decoding" => Some(1),
-        "resampling" | "loading" | "language_detection" | "preparing" | "encoding" => Some(2),
-        "transcribing" | "finalizing" | "completed" => Some(3),
-        _ => None,
-    }
-}
-
-fn progress_event(
-    phase: &str,
-    percent: Option<u8>,
-    step: Option<u8>,
-    steps_total: Option<u8>,
-    elapsed_ms: u128,
-) -> serde_json::Value {
-    serde_json::json!({
-        "event": "transcription_progress",
-        "phase": phase,
-        "step": step,
-        "steps_total": steps_total,
-        "percent": percent,
-        "elapsed_ms": elapsed_ms,
-    })
-}
-
-fn progress_event_with_decoder(
-    phase: &str,
-    percent: Option<u8>,
-    step: Option<u8>,
-    steps_total: Option<u8>,
-    elapsed_ms: u128,
-    decoder: Option<&serde_json::Value>,
-) -> serde_json::Value {
-    let mut event = progress_event(phase, percent, step, steps_total, elapsed_ms);
-    if let Some(decoder) = decoder {
-        event["decoder"] = decoder.clone();
-    }
-    event
-}
-
-fn emit_progress(out: &Out, enabled: bool, started: Instant, phase: &str, percent: Option<u8>) {
-    if enabled {
-        errln!(
-            out,
-            "{}",
-            progress_event(
-                phase,
-                percent,
-                progress_step(phase),
-                Some(3),
-                started.elapsed().as_millis(),
-            )
-        );
-    }
-}
-
-fn emit_progress_with_decoder(
-    out: &Out,
-    enabled: bool,
-    started: Instant,
-    phase: &str,
-    percent: Option<u8>,
-    decoder: Option<&serde_json::Value>,
-) {
-    if enabled {
-        errln!(
-            out,
-            "{}",
-            progress_event_with_decoder(
-                phase,
-                percent,
-                progress_step(phase),
-                Some(3),
-                started.elapsed().as_millis(),
-                decoder,
-            )
-        );
-    }
-}
-
-#[cfg(feature = "diarization")]
-fn emit_meeting_progress(
-    out: &Out,
-    enabled: bool,
-    started: Instant,
-    phase: &str,
-    decoder: Option<&serde_json::Value>,
-) {
-    if enabled {
-        errln!(
-            out,
-            "{}",
-            progress_event_with_decoder(
-                phase,
-                None,
-                None,
-                None,
-                started.elapsed().as_millis(),
-                decoder,
-            )
-        );
-    }
-}
-
 fn process_batch<F, E>(
     files: &[PathBuf],
     fail_fast: bool,
@@ -2259,18 +2158,6 @@ fn resolve_diarization_options(
     };
     validate_diarization_options(&options)?;
     Ok(options)
-}
-
-#[cfg(feature = "diarization")]
-fn decoder_progress_value(decoder: &DecoderEvidence, meeting_json: bool) -> serde_json::Value {
-    if meeting_json {
-        // Native meeting JSON serializes typed f32 fields directly. Match that
-        // wire representation without changing the legacy JSON report format.
-        let native = serde_json::to_string(decoder).expect("decoder evidence serializes");
-        serde_json::from_str(&native).expect("serialized decoder evidence is valid JSON")
-    } else {
-        serde_json::to_value(decoder).expect("decoder evidence serializes")
-    }
 }
 
 #[cfg(feature = "diarization")]
