@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import test from "node:test";
 
 test("Finnish models document the generic default and pinned optional specialist", async () => {
@@ -24,7 +24,31 @@ test("Finnish models document the generic default and pinned optional specialist
 const settingsSource = await readFile(new URL("../src/lib/Settings.svelte", import.meta.url), "utf8");
 const onboardingSource = await readFile(new URL("../src/lib/Onboarding.svelte", import.meta.url), "utf8");
 const apiSource = await readFile(new URL("../src/lib/api.ts", import.meta.url), "utf8");
-const mainSource = await readFile(new URL("../src-tauri/src/main.rs", import.meta.url), "utf8");
+// The Rust code these assertions inspect used to be src-tauri/src/main.rs alone. #369 split it into
+// modules, so the text is main.rs followed by the modules its code moved to, without their test
+// files and without the three update modules (updates, activity, recovery) that already were files
+// of their own. Every assertion below is unchanged except the one about the order of the single-
+// instance plugin and the backend, which now names the two places where those lines live.
+const appShellDirectory = new URL("../src-tauri/src/", import.meta.url);
+const appShellModules = ["dictation", "launch", "settings_watcher.rs", "tray", "updater"];
+const separateUpdateModules = new Set(["updater/activity.rs", "updater/recovery.rs", "updater/updates.rs"]);
+async function appShellFiles(relative) {
+  if (relative.endsWith(".rs")) return [relative];
+  const entries = await readdir(new URL(`${relative}/`, appShellDirectory), { withFileTypes: true });
+  const nested = await Promise.all(
+    entries.filter((entry) => entry.isDirectory() || entry.name.endsWith(".rs")).map((entry) => appShellFiles(`${relative}/${entry.name}`)),
+  );
+  return nested.flat();
+}
+const shellPaths = (await Promise.all(appShellModules.map(appShellFiles)))
+  .flat()
+  .filter((path) => !/(^|\/)(\w+_)?tests\.rs$/.test(path) && !separateUpdateModules.has(path))
+  .sort();
+const [mainRsSource, ...moduleSources] = await Promise.all(
+  ["main.rs", ...shellPaths].map((path) => readFile(new URL(path, appShellDirectory), "utf8")),
+);
+const mainSource = [mainRsSource, ...moduleSources].join("\n");
+const startupSource = await readFile(new URL("launch/startup.rs", appShellDirectory), "utf8");
 const commandsSource = await readFile(new URL("../src-tauri/src/commands.rs", import.meta.url), "utf8");
 const appSource = await readFile(new URL("../src/App.svelte", import.meta.url), "utf8");
 const brandMarkSource = await readFile(new URL("../assets/brand/sagascript-mark.svg", import.meta.url), "utf8");
@@ -198,12 +222,17 @@ test("second GUI launches are routed to the running instance", () => {
   assert.match(mainSource, /second_instance_requests_settings/);
   assert.match(mainSource, /Second-instance launch requested Settings/);
   assert.doesNotMatch(mainSource, /Another Sagascript GUI instance is already running; exiting/);
-  const singleInstanceInit = mainSource.indexOf("tauri_plugin_single_instance::init");
-  const backendInit = mainSource.indexOf("WhisperBackend::new()");
-  assert.ok(singleInstanceInit >= 0 && backendInit > singleInstanceInit);
+  // The plugin is registered in main.rs before the setup hook runs; the backend is built only in
+  // that hook (launch/startup.rs: setup_app, whose first step is manage_app_state).
+  const singleInstanceInit = mainRsSource.indexOf("tauri_plugin_single_instance::init");
+  const setupHook = mainRsSource.indexOf(".setup(move |app| setup_app(app, gui_launch_mode))");
+  assert.ok(singleInstanceInit >= 0 && setupHook > singleInstanceInit);
+  assert.equal(mainSource.split("WhisperBackend::new()").length - 1, 1, "the backend is built in one place");
+  assert.ok(!mainRsSource.includes("WhisperBackend::new()"), "main.rs must not build the backend outside the setup hook");
+  assert.match(startupSource, /fn setup_app\([\s\S]*?\) -> Result<[^{]*\{[\s\S]*?manage_app_state\(app\);/);
   assert.match(
-    mainSource,
-    /\.setup\(move \|app\| \{[\s\S]*?let whisper: SharedWhisper = Arc::new\(WhisperBackend::new\(\)\);[\s\S]*?app\.manage\(whisper\);/,
+    startupSource,
+    /fn manage_app_state\(app: &tauri::App\) \{[\s\S]*?let whisper: SharedWhisper = Arc::new\(WhisperBackend::new\(\)\);[\s\S]*?app\.manage\(whisper\);/,
   );
 });
 
