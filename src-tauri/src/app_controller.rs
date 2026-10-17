@@ -188,6 +188,9 @@ impl AppController {
         &self.settings
     }
 
+    /// Test-only: commands write settings through
+    /// `commands::persist_and_sync`, which writes the file as well.
+    #[cfg(test)]
     pub fn settings_mut(&mut self) -> &mut Settings {
         &mut self.settings
     }
@@ -754,8 +757,9 @@ impl AppController {
     }
 
     /// Update settings
-    pub fn update_settings(&mut self, settings: Settings) {
-        self.settings = settings;
+    /// Replace the settings; returns the ones that were replaced.
+    pub fn update_settings(&mut self, settings: Settings) -> Settings {
+        std::mem::replace(&mut self.settings, settings)
     }
 }
 
