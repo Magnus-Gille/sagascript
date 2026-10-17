@@ -12,7 +12,7 @@ use whisper_rs::{
 use whisper_rs::{DtwMode, DtwParameters};
 
 use crate::error::DictationError;
-use crate::settings::{Language, WhisperModel};
+use crate::models::{Language, WhisperModel};
 use crate::sync::{lock_or_recover, recover_poisoned};
 use crate::transcription::chunking::{plan_chunks, AudioChunk};
 use crate::transcription::diagnostics::LanguageDetection;

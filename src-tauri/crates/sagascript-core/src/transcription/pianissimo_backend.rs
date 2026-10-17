@@ -1207,9 +1207,11 @@ mod tests {
     }
 
     fn pianissimo_settings(prewarm: EnginePrewarm) -> Settings {
-        let mut settings = Settings::default();
-        settings.language = crate::settings::Language::Swedish;
-        settings.engine_prewarm = prewarm;
+        let mut settings = Settings {
+            language: crate::models::Language::Swedish,
+            engine_prewarm: prewarm,
+            ..Default::default()
+        };
         settings
             .set_profile_model_gated(
                 "default",
@@ -1221,14 +1223,16 @@ mod tests {
     }
 
     fn whisper_settings(prewarm: EnginePrewarm) -> Settings {
-        let mut settings = Settings::default();
-        settings.language = crate::settings::Language::Swedish;
-        settings.engine_prewarm = prewarm;
+        let mut settings = Settings {
+            language: crate::models::Language::Swedish,
+            engine_prewarm: prewarm,
+            ..Default::default()
+        };
         settings
             .set_profile_model_gated(
                 "default",
                 crate::settings::FileModelPreference::Whisper(
-                    crate::settings::WhisperModel::KbWhisperMedium,
+                    crate::models::WhisperModel::KbWhisperMedium,
                 ),
                 true,
             )
