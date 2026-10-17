@@ -73,7 +73,7 @@ awaits.
   when the CLI edits the file, so a plain value read at use time from `ctrl.settings()` needs
   nothing there. It does not replay setter side effects: if your setter has one (recreate a
   window, download a model), add it to the watcher too.
-- Register `commands::set_example_flag` in `tauri::generate_handler![...]` in `main()`, then
+- Register `commands::set_example_flag` in `tauri::generate_handler![...]` in `build_app()` (`main.rs`), then
   regenerate the shared contract: `SAGASCRIPT_BLESS_CONTRACTS=1 cargo test -p sagascript
   contract` in `src-tauri/` adds the command to the generated `CommandMap` and the new field
   to `contracts/transport/get_settings.json` ([contracts/README.md](../../contracts/README.md)).
