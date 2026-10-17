@@ -1036,6 +1036,7 @@ fn handle_hotkey_event(app: &tauri::AppHandle, shortcut: &str, state: hotkey::Ba
         }
     }
 }
+
 fn main() -> std::process::ExitCode {
     // Remember panic messages so a lock recovered after a panic can name the
     // cause in its error log (ADR 0005); the default stderr report is kept.
@@ -1086,39 +1087,18 @@ fn main() -> std::process::ExitCode {
 
     info!("Sagascript starting...");
 
+    build_app(gui_launch_mode).run(handle_run_event);
+    std::process::ExitCode::SUCCESS
+}
+
+/// Build the Tauri application: plugins, the setup hook, window events and the
+/// command table. Running it is `main`'s job.
+fn build_app(gui_launch_mode: GuiLaunchMode) -> tauri::App {
     #[allow(unused_mut)]
     let mut builder = tauri::Builder::default()
         .register_asynchronous_uri_scheme_protocol("meeting-audio", meeting_media::protocol)
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
-            let update_requested = second_instance_requests_update(&args);
-            if !update_requested && !second_instance_requests_settings(&args) {
-                info!("Background second-instance launch ignored");
-                return;
-            }
-
-            // The callback is delivered by the single-instance transport,
-            // which is not guaranteed to be the Tauri main thread (notably on
-            // macOS). Queue all state/UI work onto the main thread. This also
-            // makes the Windows WM_COPYDATA callback return promptly instead
-            // of keeping the secondary process blocked on a window operation.
-            let app = app.clone();
-            dispatch_to_main(&app, move |app| {
-                if update_requested {
-                    info!("CLI requested the in-app updater");
-                    check_for_updates_and_install(app.clone());
-                    return;
-                }
-                let should_reveal = app
-                    .try_state::<SharedController>()
-                    .map(|ctrl| should_reveal_for_reopen(lock_controller(&ctrl).state()))
-                    .unwrap_or(true);
-                if should_reveal {
-                    info!("Second-instance launch requested Settings");
-                    open_settings_window(app, None, "second_instance_launch");
-                } else {
-                    info!("Ignoring second-instance launch while dictation is active");
-                }
-            });
+            handle_second_instance(app, args);
         }))
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
@@ -1147,443 +1127,7 @@ fn main() -> std::process::ExitCode {
     }
 
     builder
-        .setup(move |app| {
-            // `tauri-plugin-single-instance` is initialized before Tauri calls
-            // setup. Keep backend construction here so a secondary process is
-            // rejected before it loads settings, opens audio resources, or
-            // creates a Whisper backend.
-            let settings = load_settings_with_permission_gate();
-            let default_profile = settings.default_profile();
-            info!("Loaded settings: default_profile={}, language={:?}, model={:?}, hotkey={}",
-                default_profile.id, default_profile.language,
-                settings.dictation_model_for_profile(&default_profile.id), settings.hotkey);
-            let initial_hotkey = settings.hotkey.clone();
-            let update_activity = Arc::new(update_activity::UpdateActivity::default());
-            let mut app_controller = AppController::new(settings);
-            app_controller.set_update_activity(update_activity.clone());
-            let controller: SharedController = Mutex::new(app_controller);
-            let whisper: SharedWhisper = Arc::new(WhisperBackend::new());
-            app.manage(update_activity);
-            app.manage(update_activity::UpdatePreparation::default());
-            app.manage(controller);
-            app.manage(whisper);
-            app.manage(plain_file_jobs::SharedPlainFileJobs::default());
-            app.manage(Arc::new(meeting_jobs::MeetingJobs::default()));
-            app.manage(meeting_media::SharedMeetingAudio::default());
-            // Process-wide hotkey registration health (see hotkey::health for
-            // why this is deliberately independent of the AppController
-            // mutex). Assumed healthy until the synchronous registration
-            // attempt below proves otherwise.
-            app.manage(hotkey::HotkeyHealth::new(&initial_hotkey));
-            let status_item: SharedStatusItem = Mutex::new(None);
-            let profile_menu: SharedProfileMenuState = Mutex::new(None);
-            let update_menu: SharedUpdateMenuState = Mutex::new(UpdateMenuState {
-                items: None,
-                checking: false,
-                installing: false,
-                available_version: None,
-            });
-            app.manage(status_item);
-            app.manage(profile_menu);
-            app.manage(update_menu);
-
-            focus_diag::init(app.handle());
-
-            // Hide from dock on macOS (tray-only app)
-            #[cfg(target_os = "macos")]
-            {
-                focus_diag::log("startup_activation_policy_before", serde_json::json!({}));
-                platform::macos::set_activation_policy_accessory();
-                focus_diag::log("startup_activation_policy_set_accessory", serde_json::json!({}));
-                if let Err(error) = hotkey::install_bare_function_key_monitor(app.handle()) {
-                    error!("Failed to install F13-F24 event monitor: {error}");
-                }
-            }
-
-            // Read every configured dictation profile and register its shortcut.
-            let requested_settings = {
-                let ctrl: tauri::State<'_, SharedController> = app.state();
-                let c = lock_controller(&ctrl);
-                c.settings().clone()
-            };
-            let requested_primary = requested_settings.default_profile().shortcut;
-
-            // Register global shortcut. Failure here (combo already claimed by
-            // Spotlight/Raycast/etc.) used to be log-only: the app would look
-            // fine (tray shows "Idle") while being completely unable to
-            // dictate. Recorded in the process-wide health flag so the tray
-            // and Settings UI can surface it.
-            let health: tauri::State<'_, hotkey::HotkeyHealth> = app.state();
-            let validation_error = requested_settings.validate_shortcut_configuration().err();
-            let registration_shortcuts: Vec<String> = if validation_error.is_some() {
-                vec![SAFE_FALLBACK_HOTKEY.to_string()]
-            } else {
-                requested_settings.resolved_shortcuts()
-            };
-            if let Some(error) = &validation_error {
-                warn!(
-                    "Refusing invalid saved hotkey profiles: {error}; trying safe fallback '{SAFE_FALLBACK_HOTKEY}'"
-                );
-            }
-            let registration_error = hotkey::register_shortcuts(app.handle(), &registration_shortcuts)
-                .err()
-                .map(|error| error.to_string());
-            let cleanup_error = registration_error.as_ref().and_then(|_| {
-                hotkey::unregister_shortcuts(app.handle(), &registration_shortcuts)
-                    .err()
-                    .map(|error| error.to_string())
-            });
-            if let Some(error) = &registration_error {
-                error!("Failed to register hotkey profiles: {error}");
-            } else {
-                info!("Registered {} hotkey profile(s)", registration_shortcuts.len());
-            }
-            let (health_error, operational_hotkey) = match (validation_error, registration_error, cleanup_error) {
-                (validation, Some(registration), Some(cleanup)) => (
-                    Some(format!("{}registration failed: {registration}; partial-registration cleanup failed: {cleanup}", validation.map(|error| format!("{error}; ")).unwrap_or_default())),
-                    hotkey::OperationalHotkey::Unknown,
-                ),
-                (None, None, None) => (
-                    None,
-                    hotkey::OperationalHotkey::registered_many(&registration_shortcuts),
-                ),
-                (Some(validation), None, None) => (
-                    Some(format!(
-                        "{validation}; using safe fallback '{SAFE_FALLBACK_HOTKEY}'"
-                    )),
-                    hotkey::OperationalHotkey::registered_many(&registration_shortcuts),
-                ),
-                (None, Some(registration), None) => {
-                    (Some(registration), hotkey::OperationalHotkey::Inactive)
-                }
-                (Some(validation), Some(registration), None) => (
-                    Some(format!(
-                        "{validation}; fallback '{SAFE_FALLBACK_HOTKEY}' also failed: {registration}"
-                    )),
-                    hotkey::OperationalHotkey::Inactive,
-                ),
-                (_, None, Some(_)) => unreachable!("cleanup only runs after registration failure"),
-            };
-            let change = health.record(&requested_primary, health_error, operational_hotkey);
-            if change.changed {
-                let _ = app.emit_event(events::event::HOTKEY_REGISTRATION_CHANGED, &change.status);
-            }
-
-            // Build tray menu
-            let quit = MenuItem::with_id(app, "quit", "Quit Sagascript", true, None::<&str>)?;
-            let settings_item =
-                MenuItem::with_id(app, "settings", "Open Sagascript...", true, None::<&str>)?;
-            let transcribe_file_item =
-                MenuItem::with_id(app, "transcribe_file", "Transcribe File...", true, None::<&str>)?;
-            let status =
-                MenuItem::with_id(app, "status", "Sagascript - Idle", false, None::<&str>)?;
-            let profiles = {
-                let ctrl: tauri::State<'_, SharedController> = app.state();
-                let profiles = lock_controller(&ctrl).settings().resolved_hotkey_profiles();
-                profiles
-            };
-            let selected_profile_id = profiles.first().map(|profile| profile.id.clone());
-            let profile_items =
-                create_profile_menu_items(app, &profiles, selected_profile_id.as_deref())?;
-            let profiles_menu = Submenu::new(app, "Profiles", true)?;
-            for item in &profile_items {
-                profiles_menu.append(item)?;
-            }
-            let update_status = MenuItem::with_id(
-                app,
-                "update_status",
-                "Updates: not checked",
-                false,
-                None::<&str>,
-            )?;
-            let check_for_updates_item = MenuItem::with_id(
-                app,
-                "check_for_updates",
-                UPDATE_CHECK_ACTION,
-                true,
-                None::<&str>,
-            )?;
-            let build_info_item =
-                MenuItem::with_id(app, "build_info", BUILD_IDENTITY, false, None::<&str>)?;
-
-            // Store status item so we can update it after transcription
-            {
-                let status_state: tauri::State<'_, SharedStatusItem> = app.state();
-                *lock_or_recover(&status_state, STATUS_ITEM_LOCK) = Some(status.clone());
-            }
-            {
-                let profile_state: tauri::State<'_, SharedProfileMenuState> = app.state();
-                *lock_or_recover(&profile_state, PROFILE_MENU_LOCK) = Some(ProfileMenuState {
-                    submenu: profiles_menu.clone(),
-                    items: profile_items,
-                    selected_profile_id,
-                });
-            }
-            {
-                let update_state: tauri::State<'_, SharedUpdateMenuState> = app.state();
-                lock_or_recover(&update_state, UPDATE_MENU_LOCK).items = Some(UpdateMenuItems {
-                    status: update_status.clone(),
-                    check: check_for_updates_item.clone(),
-                });
-            }
-
-            let menu = Menu::with_items(
-                app,
-                &[
-                    &status,
-                    &profiles_menu,
-                    &update_status,
-                    &check_for_updates_item,
-                    &build_info_item,
-                    &settings_item,
-                    &transcribe_file_item,
-                    &quit,
-                ],
-            )?;
-
-            #[cfg(target_os = "macos")]
-            seed_macos_tray_preferred_position();
-
-            let tray_builder = TrayIconBuilder::with_id("main")
-                .menu(&menu)
-                .tooltip("Sagascript")
-                // macOS 26 can register an image-backed status item but paint
-                // it blank. Compact native text stays visible: S while idle,
-                // then a state marker while recording or transcribing.
-                .title("S");
-            #[cfg(target_os = "windows")]
-            let tray_builder = match app.default_window_icon() {
-                Some(icon) => tray_builder.icon(icon.clone()),
-                None => return Err("Windows tray icon is missing from the app bundle".into()),
-            };
-            let tray = tray_builder
-                .on_menu_event(move |app, event| {
-                    match event.id().as_ref() {
-                    "quit" => {
-                        info!("Quit requested");
-                        app.exit(0);
-                    }
-                    "settings" => {
-                        open_settings_window(app, None, "tray_menu_settings");
-                    }
-                    "transcribe_file" => {
-                        open_settings_window(app, Some("transcribe"), "tray_menu_transcribe_file");
-                    }
-                    "manage_profiles" => {
-                        open_settings_window(app, Some("dictate"), "tray_menu_manage_profiles");
-                    }
-                    "check_for_updates" => {
-                        let (available_version, installing) = {
-                            let state: tauri::State<'_, SharedUpdateMenuState> = app.state();
-                            let state = lock_or_recover(&state, UPDATE_MENU_LOCK);
-                            (
-                                state.available_version.clone(),
-                                state.installing,
-                            )
-                        };
-                        if installing {
-                            // The updater owns the menu action while it is
-                            // downloading, waiting for work, or restarting.
-                        } else if let Some(version) = available_version {
-                            if updates::updater_public_key().is_some() {
-                                check_for_updates_and_install(app.clone());
-                            } else if let Err(error) = open_update_release(&version) {
-                                error!("Failed to open update release: {error}");
-                            }
-                        } else {
-                            check_for_updates(app.clone());
-                        }
-                    }
-                    _ => {}
-                }
-                })
-                .build(app)?;
-
-            #[cfg(target_os = "macos")]
-            configure_macos_tray_identity(&tray)?;
-            tray.set_visible(true)?;
-
-            info!("Tray icon created");
-
-            // Render the initial tray state through the same path as later
-            // updates — the hotkey-health flag was recorded above, before the
-            // tray existed, and no state transition may ever come to refresh
-            // a static "Idle" label if the hotkey is dead.
-            update_tray_status(app.handle(), "idle");
-
-            // Migrate settings store from FlowDictate
-            {
-                let app_dir = app.path().app_data_dir().ok();
-                if let Some(dir) = app_dir {
-                    let legacy = dir.join("flowdictate-settings.json");
-                    let new_path = sagascript_core::settings::store::settings_path();
-                    migrate_legacy_settings_unless_overridden(
-                        &legacy,
-                        &new_path,
-                        sagascript_core::settings::store::settings_path_is_overridden(),
-                    );
-                }
-            }
-
-            // Watch settings file for external changes (e.g. `sagascript config set`)
-            start_settings_watcher(app.handle().clone());
-
-            // Only the login-item marker stays headless after onboarding.
-            // A normal Finder/Spotlight launch is deliberate and opens
-            // Settings; hotkey recording/transcription never enters this path.
-            {
-                let settings = sagascript_core::settings::store::load();
-                match initial_window_request(settings.has_completed_onboarding, gui_launch_mode) {
-                    InitialWindowRequest::Hidden => {
-                        info!("Background launch complete; Settings remains hidden");
-                    }
-                    InitialWindowRequest::Settings => {
-                        info!("Foreground GUI launch requested");
-                        open_settings_window(app.handle(), None, "startup_foreground_launch");
-                    }
-                    InitialWindowRequest::Onboarding => {
-                        info!("First launch detected, opening onboarding");
-                        open_settings_window(app.handle(), Some("onboarding"), "startup_onboarding");
-                    }
-                }
-            }
-
-            // Build the hidden overlay now, while Sagascript is still frontmost,
-            // so the first dictation never creates a window (#291).
-            if overlay::should_precreate_at_startup(
-                sagascript_core::settings::store::load().show_overlay,
-                !cfg!(target_os = "linux"),
-            ) {
-                overlay::precreate_hidden(app.handle());
-            }
-
-            {
-                let windows: Vec<serde_json::Value> = app
-                    .webview_windows()
-                    .into_iter()
-                    .map(|(label, window)| {
-                        serde_json::json!({
-                            "label": label,
-                            "visible": window.is_visible().ok(),
-                            "focused": window.is_focused().ok(),
-                        })
-                    })
-                    .collect();
-                focus_diag::log("startup_windows", serde_json::json!({ "windows": windows }));
-            }
-
-            if should_install_update_at_launch(gui_launch_mode) {
-                check_for_updates_and_install(app.handle().clone());
-            }
-
-            // Preload + warm the bounded set of models selected by the hotkey
-            // profiles. The primary profile is restored as active after warmup,
-            // while one distinct secondary stays resident for instant bilingual
-            // switching. Missing models are never downloaded implicitly.
-            {
-                let whisper: tauri::State<'_, SharedWhisper> = app.state();
-                let whisper = whisper.inner().clone();
-                let (warm_plan, vad_enabled) = {
-                    let ctrl: tauri::State<'_, SharedController> = app.state();
-                    let c = lock_controller(&ctrl);
-                    (
-                        c.settings().warm_model_plan(
-                            WARM_MODEL_CACHE_MAX_MODELS,
-                            WARM_MODEL_CACHE_BUDGET_MB,
-                        ),
-                        c.settings().vad_enabled,
-                    )
-                };
-                {
-                    // `engine_prewarm = on_app_start`: load the Pianissimo engine in
-                    // the background when a dictation profile uses it.
-                    let handle = app.handle().clone();
-                    forward_engine_load_state(&handle);
-                    // Dictation audio a killed earlier run left in the temp dir.
-                    sagascript_core::transcription::engine_host::pipeline::sweep_stale_pcm_dirs_at_startup();
-                    prewarm_engine_for(&handle, sagascript_core::transcription::pianissimo_backend::WarmTrigger::AppStart);
-                    #[cfg(target_os = "macos")]
-                    {
-                        platform::macos::observe_memory_pressure(|| {
-                            sagascript_core::transcription::pianissimo_backend::unload_if_idle_for_memory_pressure();
-                        });
-                        let wake_app = handle.clone();
-                        platform::macos::observe_system_wake(move || {
-                            prewarm_engine_for(&wake_app, sagascript_core::transcription::pianissimo_backend::WarmTrigger::Wake);
-                        });
-                    }
-                }
-                std::thread::spawn(move || {
-                    let Some(&(primary_model, primary_language)) = warm_plan.first() else {
-                        return;
-                    };
-
-                    if let Err(e) = whisper.ensure_model(primary_model) {
-                        warn!("Primary model preload skipped: {e}");
-                        return;
-                    }
-                    if let Err(e) = whisper.warmup_model(primary_model, primary_language) {
-                        warn!("Primary model warmup failed: {e}");
-                    } else {
-                        info!(
-                            "Primary model preloaded and warmed: {}",
-                            primary_model.display_name()
-                        );
-                    }
-
-                    for &(model, language) in warm_plan.iter().skip(1) {
-                        if let Err(e) = whisper.ensure_model(model) {
-                            warn!("Secondary model preload skipped: {e}");
-                            continue;
-                        }
-                        if let Err(e) = whisper.warmup_model(model, language) {
-                            warn!("Secondary model warmup failed: {e}");
-                        } else {
-                            info!(
-                                "Secondary model preloaded and warmed: {}",
-                                model.display_name()
-                            );
-                        }
-                    }
-
-                    if whisper.loaded_model() != Some(primary_model) {
-                        if let Err(e) = whisper.ensure_model(primary_model) {
-                            warn!("Could not restore primary model after warmup: {e}");
-                        }
-                    }
-
-                    info!(
-                        "Warm resident models ready: {:?}",
-                        whisper.resident_models()
-                    );
-                });
-
-                // Startup is verification-only: model repair/download remains
-                // tied to an explicit GUI enable action or CLI transcription.
-                if vad_enabled {
-                    let vad_path = sagascript_core::transcription::model::vad_model_path();
-                    if vad_path.exists() {
-                        if let Err(e) =
-                            sagascript_core::transcription::model::verify_vad_model(&vad_path)
-                        {
-                            warn!(
-                                "VAD model startup verification failed; re-enable VAD or use the CLI to repair it: {e}"
-                            );
-                        }
-                    } else {
-                        warn!(
-                            "VAD is enabled but its model is missing; re-enable VAD or use the CLI to download it"
-                        );
-                    }
-                }
-
-                // Model and accelerator assets are downloaded only from an
-                // explicit model-selection/download action. Startup never
-                // performs a silent CoreML network backfill.
-            }
-
-            Ok(())
-        })
+        .setup(move |app| setup_app(app, gui_launch_mode))
         .on_window_event(|window, event| {
             // Hide settings window instead of closing it (prevents app exit)
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
@@ -1684,38 +1228,570 @@ fn main() -> std::process::ExitCode {
         ])
         .build(tauri::generate_context!())
         .expect("error while building Sagascript")
-        .run(|_app_handle, event| {
-            match event {
-                // Prevent app from exiting when all windows are closed (tray-only app),
-                // but allow explicit exit requests (e.g. from tray "Quit" menu)
-                tauri::RunEvent::ExitRequested {
-                    api, code: None, ..
-                } => api.prevent_exit(),
-                // Stop the Pianissimo engine host with the app instead of leaving it to stdin EOF.
-                tauri::RunEvent::Exit => {
-                    sagascript_core::transcription::pianissimo_backend::shutdown_shared_client()
-                }
-                // Finder/Spotlight sends Reopen when the already-running app is
-                // launched again. A miniaturized NSWindow may still count as
-                // "visible", so always run the full reveal path.
-                #[cfg(target_os = "macos")]
-                tauri::RunEvent::Reopen { .. } => {
-                    let state = {
-                        let ctrl: tauri::State<'_, SharedController> = _app_handle.state();
-                        let state = lock_controller(&ctrl).state();
-                        state
-                    };
-                    if should_reveal_for_reopen(state) {
-                        info!("Application reopen requested");
-                        open_settings_window(_app_handle, None, "app_reopen_event");
-                    } else {
-                        info!("Ignoring application reopen while dictation is {state:?}");
-                    }
-                }
-                _ => {}
+}
+
+/// A second launch of the app reached the running instance (single-instance
+/// plugin). `args` is the second process's argv.
+fn handle_second_instance(app: &tauri::AppHandle, args: Vec<String>) {
+    let update_requested = second_instance_requests_update(&args);
+    if !update_requested && !second_instance_requests_settings(&args) {
+        info!("Background second-instance launch ignored");
+        return;
+    }
+
+    // The callback is delivered by the single-instance transport,
+    // which is not guaranteed to be the Tauri main thread (notably on
+    // macOS). Queue all state/UI work onto the main thread. This also
+    // makes the Windows WM_COPYDATA callback return promptly instead
+    // of keeping the secondary process blocked on a window operation.
+    let app = app.clone();
+    dispatch_to_main(&app, move |app| {
+        if update_requested {
+            info!("CLI requested the in-app updater");
+            check_for_updates_and_install(app.clone());
+            return;
+        }
+        let should_reveal = app
+            .try_state::<SharedController>()
+            .map(|ctrl| should_reveal_for_reopen(lock_controller(&ctrl).state()))
+            .unwrap_or(true);
+        if should_reveal {
+            info!("Second-instance launch requested Settings");
+            open_settings_window(app, None, "second_instance_launch");
+        } else {
+            info!("Ignoring second-instance launch while dictation is active");
+        }
+    });
+}
+
+/// The Tauri event loop's run-event hook: keep the tray-only app alive, stop the
+/// engine host on exit and reveal Settings on a macOS reopen.
+fn handle_run_event(_app_handle: &tauri::AppHandle, event: tauri::RunEvent) {
+    match event {
+        // Prevent app from exiting when all windows are closed (tray-only app),
+        // but allow explicit exit requests (e.g. from tray "Quit" menu)
+        tauri::RunEvent::ExitRequested {
+            api, code: None, ..
+        } => api.prevent_exit(),
+        // Stop the Pianissimo engine host with the app instead of leaving it to stdin EOF.
+        tauri::RunEvent::Exit => {
+            sagascript_core::transcription::pianissimo_backend::shutdown_shared_client()
+        }
+        // Finder/Spotlight sends Reopen when the already-running app is
+        // launched again. A miniaturized NSWindow may still count as
+        // "visible", so always run the full reveal path.
+        #[cfg(target_os = "macos")]
+        tauri::RunEvent::Reopen { .. } => {
+            let state = {
+                let ctrl: tauri::State<'_, SharedController> = _app_handle.state();
+                let state = lock_controller(&ctrl).state();
+                state
+            };
+            if should_reveal_for_reopen(state) {
+                info!("Application reopen requested");
+                open_settings_window(_app_handle, None, "app_reopen_event");
+            } else {
+                info!("Ignoring application reopen while dictation is {state:?}");
             }
+        }
+        _ => {}
+    }
+}
+
+/// The Tauri `setup` hook. The order of these steps is the startup order.
+fn setup_app(
+    app: &mut tauri::App,
+    gui_launch_mode: GuiLaunchMode,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // `tauri-plugin-single-instance` is initialized before Tauri calls
+    // setup. Keep backend construction here so a secondary process is
+    // rejected before it loads settings, opens audio resources, or
+    // creates a Whisper backend.
+    manage_app_state(app);
+
+    focus_diag::init(app.handle());
+
+    // Hide from dock on macOS (tray-only app)
+    #[cfg(target_os = "macos")]
+    {
+        focus_diag::log("startup_activation_policy_before", serde_json::json!({}));
+        platform::macos::set_activation_policy_accessory();
+        focus_diag::log(
+            "startup_activation_policy_set_accessory",
+            serde_json::json!({}),
+        );
+        if let Err(error) = hotkey::install_bare_function_key_monitor(app.handle()) {
+            error!("Failed to install F13-F24 event monitor: {error}");
+        }
+    }
+
+    register_startup_hotkeys(app);
+
+    create_tray(app)?;
+
+    // Migrate settings store from FlowDictate
+    migrate_legacy_settings_at_startup(app);
+
+    // Watch settings file for external changes (e.g. `sagascript config set`)
+    start_settings_watcher(app.handle().clone());
+
+    // Only the login-item marker stays headless after onboarding.
+    // A normal Finder/Spotlight launch is deliberate and opens
+    // Settings; hotkey recording/transcription never enters this path.
+    open_initial_window(app, gui_launch_mode);
+
+    // Build the hidden overlay now, while Sagascript is still frontmost,
+    // so the first dictation never creates a window (#291).
+    if overlay::should_precreate_at_startup(
+        sagascript_core::settings::store::load().show_overlay,
+        !cfg!(target_os = "linux"),
+    ) {
+        overlay::precreate_hidden(app.handle());
+    }
+
+    {
+        let windows: Vec<serde_json::Value> = app
+            .webview_windows()
+            .into_iter()
+            .map(|(label, window)| {
+                serde_json::json!({
+                    "label": label,
+                    "visible": window.is_visible().ok(),
+                    "focused": window.is_focused().ok(),
+                })
+            })
+            .collect();
+        focus_diag::log("startup_windows", serde_json::json!({ "windows": windows }));
+    }
+
+    if should_install_update_at_launch(gui_launch_mode) {
+        check_for_updates_and_install(app.handle().clone());
+    }
+
+    // Preload + warm the bounded set of models selected by the hotkey
+    // profiles. The primary profile is restored as active after warmup,
+    // while one distinct secondary stays resident for instant bilingual
+    // switching. Missing models are never downloaded implicitly.
+    warm_models_at_startup(app);
+
+    Ok(())
+}
+
+/// Build the controller, the Whisper backend and the other shared state, and
+/// register it with Tauri. Runs before anything can reach the controller.
+fn manage_app_state(app: &tauri::App) {
+    let settings = load_settings_with_permission_gate();
+    let default_profile = settings.default_profile();
+    info!(
+        "Loaded settings: default_profile={}, language={:?}, model={:?}, hotkey={}",
+        default_profile.id,
+        default_profile.language,
+        settings.dictation_model_for_profile(&default_profile.id),
+        settings.hotkey
+    );
+    let initial_hotkey = settings.hotkey.clone();
+    let update_activity = Arc::new(update_activity::UpdateActivity::default());
+    let mut app_controller = AppController::new(settings);
+    app_controller.set_update_activity(update_activity.clone());
+    let controller: SharedController = Mutex::new(app_controller);
+    let whisper: SharedWhisper = Arc::new(WhisperBackend::new());
+    app.manage(update_activity);
+    app.manage(update_activity::UpdatePreparation::default());
+    app.manage(controller);
+    app.manage(whisper);
+    app.manage(plain_file_jobs::SharedPlainFileJobs::default());
+    app.manage(Arc::new(meeting_jobs::MeetingJobs::default()));
+    app.manage(meeting_media::SharedMeetingAudio::default());
+    // Process-wide hotkey registration health (see hotkey::health for
+    // why this is deliberately independent of the AppController
+    // mutex). Assumed healthy until the synchronous registration
+    // attempt below proves otherwise.
+    app.manage(hotkey::HotkeyHealth::new(&initial_hotkey));
+    manage_tray_state(app);
+    manage_update_menu_state(app);
+}
+
+fn manage_tray_state(app: &tauri::App) {
+    let status_item: SharedStatusItem = Mutex::new(None);
+    let profile_menu: SharedProfileMenuState = Mutex::new(None);
+    app.manage(status_item);
+    app.manage(profile_menu);
+}
+
+fn manage_update_menu_state(app: &tauri::App) {
+    let update_menu: SharedUpdateMenuState = Mutex::new(UpdateMenuState {
+        items: None,
+        checking: false,
+        installing: false,
+        available_version: None,
+    });
+    app.manage(update_menu);
+}
+
+/// Register the shortcut of every configured profile and record the outcome in
+/// the process-wide hotkey health.
+fn register_startup_hotkeys(app: &tauri::App) {
+    // Read every configured dictation profile and register its shortcut.
+    let requested_settings = {
+        let ctrl: tauri::State<'_, SharedController> = app.state();
+        let c = lock_controller(&ctrl);
+        c.settings().clone()
+    };
+    let requested_primary = requested_settings.default_profile().shortcut;
+
+    // Register global shortcut. Failure here (combo already claimed by
+    // Spotlight/Raycast/etc.) used to be log-only: the app would look
+    // fine (tray shows "Idle") while being completely unable to
+    // dictate. Recorded in the process-wide health flag so the tray
+    // and Settings UI can surface it.
+    let health: tauri::State<'_, hotkey::HotkeyHealth> = app.state();
+    let validation_error = requested_settings.validate_shortcut_configuration().err();
+    let registration_shortcuts: Vec<String> = if validation_error.is_some() {
+        vec![SAFE_FALLBACK_HOTKEY.to_string()]
+    } else {
+        requested_settings.resolved_shortcuts()
+    };
+    if let Some(error) = &validation_error {
+        warn!(
+            "Refusing invalid saved hotkey profiles: {error}; trying safe fallback '{SAFE_FALLBACK_HOTKEY}'"
+        );
+    }
+    let registration_error = hotkey::register_shortcuts(app.handle(), &registration_shortcuts)
+        .err()
+        .map(|error| error.to_string());
+    let cleanup_error = registration_error.as_ref().and_then(|_| {
+        hotkey::unregister_shortcuts(app.handle(), &registration_shortcuts)
+            .err()
+            .map(|error| error.to_string())
+    });
+    if let Some(error) = &registration_error {
+        error!("Failed to register hotkey profiles: {error}");
+    } else {
+        info!(
+            "Registered {} hotkey profile(s)",
+            registration_shortcuts.len()
+        );
+    }
+    let (health_error, operational_hotkey) = match (validation_error, registration_error, cleanup_error) {
+        (validation, Some(registration), Some(cleanup)) => (
+            Some(format!("{}registration failed: {registration}; partial-registration cleanup failed: {cleanup}", validation.map(|error| format!("{error}; ")).unwrap_or_default())),
+            hotkey::OperationalHotkey::Unknown,
+        ),
+        (None, None, None) => (
+            None,
+            hotkey::OperationalHotkey::registered_many(&registration_shortcuts),
+        ),
+        (Some(validation), None, None) => (
+            Some(format!(
+                "{validation}; using safe fallback '{SAFE_FALLBACK_HOTKEY}'"
+            )),
+            hotkey::OperationalHotkey::registered_many(&registration_shortcuts),
+        ),
+        (None, Some(registration), None) => {
+            (Some(registration), hotkey::OperationalHotkey::Inactive)
+        }
+        (Some(validation), Some(registration), None) => (
+            Some(format!(
+                "{validation}; fallback '{SAFE_FALLBACK_HOTKEY}' also failed: {registration}"
+            )),
+            hotkey::OperationalHotkey::Inactive,
+        ),
+        (_, None, Some(_)) => unreachable!("cleanup only runs after registration failure"),
+    };
+    let change = health.record(&requested_primary, health_error, operational_hotkey);
+    if change.changed {
+        let _ = app.emit_event(events::event::HOTKEY_REGISTRATION_CHANGED, &change.status);
+    }
+}
+
+/// Build the tray icon and its menu, store the menu handles for later updates
+/// and render the initial state.
+fn create_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+    // Build tray menu
+    let quit = MenuItem::with_id(app, "quit", "Quit Sagascript", true, None::<&str>)?;
+    let settings_item =
+        MenuItem::with_id(app, "settings", "Open Sagascript...", true, None::<&str>)?;
+    let transcribe_file_item = MenuItem::with_id(
+        app,
+        "transcribe_file",
+        "Transcribe File...",
+        true,
+        None::<&str>,
+    )?;
+    let status = MenuItem::with_id(app, "status", "Sagascript - Idle", false, None::<&str>)?;
+    let profiles = {
+        let ctrl: tauri::State<'_, SharedController> = app.state();
+        let profiles = lock_controller(&ctrl).settings().resolved_hotkey_profiles();
+        profiles
+    };
+    let selected_profile_id = profiles.first().map(|profile| profile.id.clone());
+    let profile_items = create_profile_menu_items(app, &profiles, selected_profile_id.as_deref())?;
+    let profiles_menu = Submenu::new(app, "Profiles", true)?;
+    for item in &profile_items {
+        profiles_menu.append(item)?;
+    }
+    let update_status = MenuItem::with_id(
+        app,
+        "update_status",
+        "Updates: not checked",
+        false,
+        None::<&str>,
+    )?;
+    let check_for_updates_item = MenuItem::with_id(
+        app,
+        "check_for_updates",
+        UPDATE_CHECK_ACTION,
+        true,
+        None::<&str>,
+    )?;
+    let build_info_item =
+        MenuItem::with_id(app, "build_info", BUILD_IDENTITY, false, None::<&str>)?;
+
+    // Store status item so we can update it after transcription
+    {
+        let status_state: tauri::State<'_, SharedStatusItem> = app.state();
+        *lock_or_recover(&status_state, STATUS_ITEM_LOCK) = Some(status.clone());
+    }
+    {
+        let profile_state: tauri::State<'_, SharedProfileMenuState> = app.state();
+        *lock_or_recover(&profile_state, PROFILE_MENU_LOCK) = Some(ProfileMenuState {
+            submenu: profiles_menu.clone(),
+            items: profile_items,
+            selected_profile_id,
         });
-    std::process::ExitCode::SUCCESS
+    }
+    register_update_menu_items(app, &update_status, &check_for_updates_item);
+    let menu = Menu::with_items(
+        app,
+        &[
+            &status,
+            &profiles_menu,
+            &update_status,
+            &check_for_updates_item,
+            &build_info_item,
+            &settings_item,
+            &transcribe_file_item,
+            &quit,
+        ],
+    )?;
+
+    #[cfg(target_os = "macos")]
+    seed_macos_tray_preferred_position();
+
+    let tray_builder = TrayIconBuilder::with_id("main")
+        .menu(&menu)
+        .tooltip("Sagascript")
+        // macOS 26 can register an image-backed status item but paint
+        // it blank. Compact native text stays visible: S while idle,
+        // then a state marker while recording or transcribing.
+        .title("S");
+    #[cfg(target_os = "windows")]
+    let tray_builder = match app.default_window_icon() {
+        Some(icon) => tray_builder.icon(icon.clone()),
+        None => return Err("Windows tray icon is missing from the app bundle".into()),
+    };
+    let tray = tray_builder
+        .on_menu_event(move |app, event| match event.id().as_ref() {
+            "quit" => {
+                info!("Quit requested");
+                app.exit(0);
+            }
+            "settings" => {
+                open_settings_window(app, None, "tray_menu_settings");
+            }
+            "transcribe_file" => {
+                open_settings_window(app, Some("transcribe"), "tray_menu_transcribe_file");
+            }
+            "manage_profiles" => {
+                open_settings_window(app, Some("dictate"), "tray_menu_manage_profiles");
+            }
+            "check_for_updates" => {
+                handle_check_for_updates_menu_action(app);
+            }
+            _ => {}
+        })
+        .build(app)?;
+
+    #[cfg(target_os = "macos")]
+    configure_macos_tray_identity(&tray)?;
+    tray.set_visible(true)?;
+
+    info!("Tray icon created");
+
+    // Render the initial tray state through the same path as later
+    // updates — the hotkey-health flag was recorded above, before the
+    // tray existed, and no state transition may ever come to refresh
+    // a static "Idle" label if the hotkey is dead.
+    update_tray_status(app.handle(), "idle");
+    Ok(())
+}
+
+fn register_update_menu_items(
+    app: &tauri::App,
+    update_status: &MenuItem<tauri::Wry>,
+    check_for_updates_item: &MenuItem<tauri::Wry>,
+) {
+    let update_state: tauri::State<'_, SharedUpdateMenuState> = app.state();
+    lock_or_recover(&update_state, UPDATE_MENU_LOCK).items = Some(UpdateMenuItems {
+        status: update_status.clone(),
+        check: check_for_updates_item.clone(),
+    });
+}
+
+/// The tray's "Check for Updates" entry: check, or install an announced update.
+fn handle_check_for_updates_menu_action(app: &tauri::AppHandle) {
+    let (available_version, installing) = {
+        let state: tauri::State<'_, SharedUpdateMenuState> = app.state();
+        let state = lock_or_recover(&state, UPDATE_MENU_LOCK);
+        (state.available_version.clone(), state.installing)
+    };
+    if installing {
+        // The updater owns the menu action while it is
+        // downloading, waiting for work, or restarting.
+    } else if let Some(version) = available_version {
+        if updates::updater_public_key().is_some() {
+            check_for_updates_and_install(app.clone());
+        } else if let Err(error) = open_update_release(&version) {
+            error!("Failed to open update release: {error}");
+        }
+    } else {
+        check_for_updates(app.clone());
+    }
+}
+
+fn migrate_legacy_settings_at_startup(app: &tauri::App) {
+    let app_dir = app.path().app_data_dir().ok();
+    if let Some(dir) = app_dir {
+        let legacy = dir.join("flowdictate-settings.json");
+        let new_path = sagascript_core::settings::store::settings_path();
+        migrate_legacy_settings_unless_overridden(
+            &legacy,
+            &new_path,
+            sagascript_core::settings::store::settings_path_is_overridden(),
+        );
+    }
+}
+
+fn open_initial_window(app: &tauri::App, gui_launch_mode: GuiLaunchMode) {
+    let settings = sagascript_core::settings::store::load();
+    match initial_window_request(settings.has_completed_onboarding, gui_launch_mode) {
+        InitialWindowRequest::Hidden => {
+            info!("Background launch complete; Settings remains hidden");
+        }
+        InitialWindowRequest::Settings => {
+            info!("Foreground GUI launch requested");
+            open_settings_window(app.handle(), None, "startup_foreground_launch");
+        }
+        InitialWindowRequest::Onboarding => {
+            info!("First launch detected, opening onboarding");
+            open_settings_window(app.handle(), Some("onboarding"), "startup_onboarding");
+        }
+    }
+}
+
+/// Preload and warm the models and the engine selected by the settings.
+fn warm_models_at_startup(app: &tauri::App) {
+    let whisper: tauri::State<'_, SharedWhisper> = app.state();
+    let whisper = whisper.inner().clone();
+    let (warm_plan, vad_enabled) = {
+        let ctrl: tauri::State<'_, SharedController> = app.state();
+        let c = lock_controller(&ctrl);
+        (
+            c.settings()
+                .warm_model_plan(WARM_MODEL_CACHE_MAX_MODELS, WARM_MODEL_CACHE_BUDGET_MB),
+            c.settings().vad_enabled,
+        )
+    };
+    {
+        // `engine_prewarm = on_app_start`: load the Pianissimo engine in
+        // the background when a dictation profile uses it.
+        let handle = app.handle().clone();
+        forward_engine_load_state(&handle);
+        // Dictation audio a killed earlier run left in the temp dir.
+        sagascript_core::transcription::engine_host::pipeline::sweep_stale_pcm_dirs_at_startup();
+        prewarm_engine_for(
+            &handle,
+            sagascript_core::transcription::pianissimo_backend::WarmTrigger::AppStart,
+        );
+        #[cfg(target_os = "macos")]
+        {
+            platform::macos::observe_memory_pressure(|| {
+                sagascript_core::transcription::pianissimo_backend::unload_if_idle_for_memory_pressure();
+            });
+            let wake_app = handle.clone();
+            platform::macos::observe_system_wake(move || {
+                prewarm_engine_for(
+                    &wake_app,
+                    sagascript_core::transcription::pianissimo_backend::WarmTrigger::Wake,
+                );
+            });
+        }
+    }
+    std::thread::spawn(move || {
+        let Some(&(primary_model, primary_language)) = warm_plan.first() else {
+            return;
+        };
+
+        if let Err(e) = whisper.ensure_model(primary_model) {
+            warn!("Primary model preload skipped: {e}");
+            return;
+        }
+        if let Err(e) = whisper.warmup_model(primary_model, primary_language) {
+            warn!("Primary model warmup failed: {e}");
+        } else {
+            info!(
+                "Primary model preloaded and warmed: {}",
+                primary_model.display_name()
+            );
+        }
+
+        for &(model, language) in warm_plan.iter().skip(1) {
+            if let Err(e) = whisper.ensure_model(model) {
+                warn!("Secondary model preload skipped: {e}");
+                continue;
+            }
+            if let Err(e) = whisper.warmup_model(model, language) {
+                warn!("Secondary model warmup failed: {e}");
+            } else {
+                info!(
+                    "Secondary model preloaded and warmed: {}",
+                    model.display_name()
+                );
+            }
+        }
+
+        if whisper.loaded_model() != Some(primary_model) {
+            if let Err(e) = whisper.ensure_model(primary_model) {
+                warn!("Could not restore primary model after warmup: {e}");
+            }
+        }
+
+        info!(
+            "Warm resident models ready: {:?}",
+            whisper.resident_models()
+        );
+    });
+
+    // Startup is verification-only: model repair/download remains
+    // tied to an explicit GUI enable action or CLI transcription.
+    if vad_enabled {
+        let vad_path = sagascript_core::transcription::model::vad_model_path();
+        if vad_path.exists() {
+            if let Err(e) = sagascript_core::transcription::model::verify_vad_model(&vad_path) {
+                warn!(
+                    "VAD model startup verification failed; re-enable VAD or use the CLI to repair it: {e}"
+                );
+            }
+        } else {
+            warn!(
+                "VAD is enabled but its model is missing; re-enable VAD or use the CLI to download it"
+            );
+        }
+    }
+
+    // Model and accelerator assets are downloaded only from an
+    // explicit model-selection/download action. Startup never
+    // performs a silent CoreML network backfill.
 }
 
 /// Match the key AppKit uses to persist a named status item's menu-bar slot.
