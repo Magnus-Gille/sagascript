@@ -1094,7 +1094,12 @@ mod tests {
         for (name, bytes, mode) in entries {
             let mut options = zip::write::SimpleFileOptions::default();
             if *mode != 0 {
-                options = options.external_attributes(mode << 16);
+                // The writer records the host's system (DOS on Windows), and a
+                // DOS entry's attributes carry no Unix mode; archives made on
+                // macOS are Unix.
+                options = options
+                    .system(zip::System::Unix)
+                    .external_attributes(mode << 16);
             }
             writer.start_file(*name, options).unwrap();
             writer.write_all(bytes).unwrap();
