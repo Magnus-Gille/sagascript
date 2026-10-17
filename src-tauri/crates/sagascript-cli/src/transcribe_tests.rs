@@ -2,6 +2,8 @@ use super::args::*;
 use super::inputs::*;
 use super::language_detection::*;
 use super::language_regions::*;
+#[cfg(feature = "diarization")]
+use super::pianissimo::*;
 use super::progress::*;
 use super::*;
 #[cfg(feature = "diarization")]
