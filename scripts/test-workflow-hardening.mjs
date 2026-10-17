@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { parse } from "yaml";
 
 const directory = fileURLToPath(new URL("../.github/workflows/", import.meta.url));
 const workflows = Object.fromEntries(
@@ -81,6 +82,60 @@ function writeScopes(scopes) {
   });
 }
 
+// Local composite actions (#358) hold steps a workflow used to hold: their `uses:` pins and tool
+// installs are held to the same rules.
+const actionsDirectory = fileURLToPath(new URL("../.github/actions/", import.meta.url));
+const localActions = Object.fromEntries(
+  readdirSync(actionsDirectory)
+    .sort()
+    .map((name) => [`actions/${name}/action.yml`, readFileSync(`${actionsDirectory}${name}/action.yml`, "utf8").replace(/\r\n?/g, "\n")]),
+);
+
+function assertActionsPinned(name, text) {
+  let actions = 0;
+  for (const [line, ref, comment] of text.matchAll(/^\s*(?:-\s+)?uses:\s*(\S+)(.*)$/gm)) {
+    if (ref.startsWith("./")) continue;
+    actions += 1;
+    const pinned = /^([^@\s]+)@([0-9a-f]{40})$/.exec(ref);
+    assert.ok(pinned, `${name}: ${line.trim()} must be pinned to a full commit SHA`);
+    assert.match(comment, /^\s+# v\d+(?:\.\d+)*\b/, `${name}: ${line.trim()} must name the release it resolves to (# vX.Y.Z)`);
+  }
+  assert.ok(actions > 0, `${name} uses no actions; the pin check would be vacuous`);
+}
+
+function assertToolsPinned(name, text) {
+  for (const [command] of text.matchAll(/^.*\bcargo install\b.*$/gm)) {
+    assert.match(command, /--locked\b/, `${name}: ${command.trim()} must use --locked`);
+    assert.match(command, /--version \d+\.\d+\.\d+\b/, `${name}: ${command.trim()} must pin --version`);
+  }
+  for (const [command, args] of text.matchAll(/^.*\bnpm (?:install|i) (?:-g|--global)\b(.*)$/gm)) {
+    const packages = args
+      .trim()
+      .split(/\s+/)
+      .filter((arg) => arg && !arg.startsWith("-"));
+    assert.ok(packages.length > 0, `${name}: ${command.trim()} installs nothing`);
+    for (const spec of packages) {
+      assert.match(spec, /^(?:@[^@/\s]+\/)?[^@\s]+@\d+\.\d+\.\d+$/, `${name}: ${spec} must be pinned to an exact version`);
+    }
+  }
+}
+
+test("Dependabot keeps the pins of every local composite action current", () => {
+  const dependabot = parse(readFileSync(new URL("../.github/dependabot.yml", import.meta.url), "utf8"));
+  const actions = dependabot.updates.find((update) => update["package-ecosystem"] === "github-actions");
+  assert.ok(actions, "Dependabot updates GitHub Actions");
+  const directories = actions.directories ?? [actions.directory];
+  assert.ok(directories.includes("/"), "the workflows");
+  for (const name of Object.keys(localActions)) {
+    assert.ok(directories.includes(`/.github/${name.replace(/\/action\.yml$/, "")}`), `${name} is not watched by Dependabot`);
+  }
+});
+
+for (const [name, text] of Object.entries(localActions)) {
+  test(`${name} pins every action to a commit SHA with its release in a comment`, () => assertActionsPinned(name, text));
+  test(`${name} installs command-line tools at exact versions`, () => assertToolsPinned(name, text));
+}
+
 for (const [name, text] of Object.entries(workflows)) {
   test(`${name} declares a least-privilege top-level permissions block`, () => {
     const scopes = topLevelPermissions(text);
@@ -110,17 +165,7 @@ for (const [name, text] of Object.entries(workflows)) {
     }
   });
 
-  test(`${name} pins every action to a commit SHA with its release in a comment`, () => {
-    let actions = 0;
-    for (const [line, ref, comment] of text.matchAll(/^\s*(?:-\s+)?uses:\s*(\S+)(.*)$/gm)) {
-      if (ref.startsWith("./")) continue;
-      actions += 1;
-      const pinned = /^([^@\s]+)@([0-9a-f]{40})$/.exec(ref);
-      assert.ok(pinned, `${name}: ${line.trim()} must be pinned to a full commit SHA`);
-      assert.match(comment, /^\s+# v\d+(?:\.\d+)*\b/, `${name}: ${line.trim()} must name the release it resolves to (# vX.Y.Z)`);
-    }
-    assert.ok(actions > 0, `${name} uses no actions; the pin check would be vacuous`);
-  });
+  test(`${name} pins every action to a commit SHA with its release in a comment`, () => assertActionsPinned(name, text));
 
   test(`${name} grants write scopes only to reviewed publishing jobs`, () => {
     for (const job of jobs(text)) {
@@ -131,22 +176,7 @@ for (const [name, text] of Object.entries(workflows)) {
     }
   });
 
-  test(`${name} installs command-line tools at exact versions`, () => {
-    for (const [command] of text.matchAll(/^.*\bcargo install\b.*$/gm)) {
-      assert.match(command, /--locked\b/, `${name}: ${command.trim()} must use --locked`);
-      assert.match(command, /--version \d+\.\d+\.\d+\b/, `${name}: ${command.trim()} must pin --version`);
-    }
-    for (const [command, args] of text.matchAll(/^.*\bnpm (?:install|i) (?:-g|--global)\b(.*)$/gm)) {
-      const packages = args
-        .trim()
-        .split(/\s+/)
-        .filter((arg) => arg && !arg.startsWith("-"));
-      assert.ok(packages.length > 0, `${name}: ${command.trim()} installs nothing`);
-      for (const spec of packages) {
-        assert.match(spec, /^(?:@[^@/\s]+\/)?[^@\s]+@\d+\.\d+\.\d+$/, `${name}: ${spec} must be pinned to an exact version`);
-      }
-    }
-  });
+  test(`${name} installs command-line tools at exact versions`, () => assertToolsPinned(name, text));
 }
 
 test("every reviewed writer still exists and still needs its scope", () => {

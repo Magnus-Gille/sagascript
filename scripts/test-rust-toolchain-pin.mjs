@@ -5,17 +5,25 @@ import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { commandOf, gatesFor } from "./ci/cargo-gates.mjs";
+import { commandLines, loadAction, loadWorkflow } from "./lib/ci-workflow.mjs";
 
 const read = (path) => readFileSync(fileURLToPath(new URL(`../${path}`, import.meta.url)), "utf8").replace(/\r\n?/g, "\n");
 
 const toolchainFile = read("rust-toolchain.toml");
 const channel = /^channel = "([^"]+)"\s*(?:#.*)?$/m.exec(toolchainFile)?.[1];
 const nodeMajor = read(".nvmrc").trim();
-const workflows = Object.fromEntries(
-  readdirSync(fileURLToPath(new URL("../.github/workflows/", import.meta.url)))
+// Every workflow, and the local composite actions (#358): ci.yml installs its toolchains through
+// .github/actions/setup, so the pins live in the action file.
+const workflows = Object.fromEntries([
+  ...readdirSync(fileURLToPath(new URL("../.github/workflows/", import.meta.url)))
     .filter((name) => name.endsWith(".yml"))
     .map((name) => [name, read(`.github/workflows/${name}`)]),
-);
+  ...readdirSync(fileURLToPath(new URL("../.github/actions/", import.meta.url))).map((name) => [
+    `actions/${name}/action.yml`,
+    read(`.github/actions/${name}/action.yml`),
+  ]),
+]);
 const rustVersion = (manifest) => /^rust-version = "([^"]+)"$/m.exec(read(manifest))?.[1];
 const msrv = rustVersion("src-tauri/Cargo.toml");
 
@@ -49,7 +57,7 @@ test("every workflow Rust install is SHA-pinned and uses the rust-toolchain.toml
       assert.equal(withInputs(text, match.index).toolchain, channel, `${name}: toolchain must equal rust-toolchain.toml`);
     }
   }
-  assert.ok(installs >= 8, `expected the CI, release and packaging installs, found ${installs}`);
+  assert.ok(installs >= 6, `expected the setup action and the release, packaging and gate installs, found ${installs}`);
 });
 
 test("a workflow that installs a different Rust release overrides the toolchain file explicitly", () => {
@@ -80,12 +88,22 @@ test("the MSRV is declared once, inherited by every crate and checked in CI", ()
   for (const crate of ["src-tauri", ...members]) {
     assert.match(read(`${crate}/Cargo.toml`), /^rust-version\.workspace = true$/m, `${crate} must inherit rust-version`);
   }
-  const ci = workflows["ci.yml"];
-  const msrvJob = ci.slice(ci.indexOf("\n  msrv-linux:\n"), ci.indexOf("\n  check-linux:\n"));
-  assert.match(msrvJob, /rust-version = /, "msrv-linux must read the declared rust-version, not hardcode it");
-  assert.match(msrvJob, /echo "RUSTUP_TOOLCHAIN=\$msrv" >> "\$GITHUB_ENV"/);
-  assert.match(msrvJob, /cargo check --workspace --locked/);
-  assert.match(ci, /^  check-linux:\n    needs: \[[^\]]*msrv-linux[^\]]*\]$/m, "check-linux must gate on msrv-linux");
+  // The MSRV lane installs the declared `rust-version` through the setup action, which exports
+  // RUSTUP_TOOLCHAIN, and compiles with the gates' msrv profile.
+  const workflow = loadWorkflow();
+  const msrvLane = workflow.job("msrv-linux");
+  const setup = msrvLane.steps.find((step) => step.uses === "./.github/actions/setup");
+  assert.equal(setup?.with.rust, "msrv", "msrv-linux must install the declared MSRV, not a pinned release");
+  const install = loadAction("setup").steps.find((step) => step.name === "Install the declared MSRV toolchain");
+  const lines = commandLines(install);
+  assert.ok(
+    lines.some((line) => line.includes("rust-version = ")),
+    "the action must read the declared rust-version, not hardcode it",
+  );
+  assert.ok(lines.includes('echo "RUSTUP_TOOLCHAIN=$msrv" >> "$GITHUB_ENV"'));
+  assert.ok(msrvLane.steps.some((step) => commandLines(step).includes("node scripts/ci/cargo-gates.mjs --profile msrv")));
+  assert.ok(gatesFor({ os: "linux", profile: "msrv" }).some((gate) => commandOf(gate) === "cargo check --workspace --locked"));
+  assert.ok(workflow.job("check-linux").needs.includes("msrv-linux"), "check-linux must gate on msrv-linux");
 });
 
 test("Node.js is pinned to one major everywhere", () => {

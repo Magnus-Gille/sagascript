@@ -1,369 +1,311 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
+import { actionInput, commandLines, gateInvocation, loadAction, loadWorkflow, parseWorkflow } from "./lib/ci-workflow.mjs";
+import { gatesFor } from "./ci/cargo-gates.mjs";
+import { laneProblems } from "./ci/assert-lanes.mjs";
+import { importGraph } from "./lib/import-graph.mjs";
 
-const workflow = (await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8")).replace(/\r\n/g, "\n");
+// The parallel lanes of ci.yml (#358): what each one needs, how the shared setup action and the
+// aggregators are wired, and that the aggregators fail closed. The workflow is parsed, not matched.
 
-function jobBlock(jobId) {
-  const start = workflow.indexOf(`  ${jobId}:`);
-  assert.notEqual(start, -1, `workflow must define ${jobId}`);
-  const remainder = workflow.slice(start);
-  const body = remainder.slice(remainder.indexOf("\n") + 1);
-  const nextJob = body.search(/^  [a-z][a-z0-9-]*:/m);
-  return remainder.slice(0, nextJob === -1 ? remainder.length : remainder.indexOf("\n") + 1 + nextJob);
-}
+const repoRoot = fileURLToPath(new URL("..", import.meta.url));
+const workflow = loadWorkflow();
+const ASSERT_LANES = fileURLToPath(new URL("./ci/assert-lanes.mjs", import.meta.url));
+const SCOPE_CONDITION = "${{ needs.scope.result == 'success' && needs.scope.outputs.docs_only != 'true' }}";
+const LANES = ["test-macos", "build-macos", "test-linux", "msrv-linux", "test-windows", "build-windows"];
+const CHECKS = { "check-macos": "macos", "check-linux": "linux", "check-windows": "windows" };
+const setupStep = (job) => job.steps.find((step) => step.uses === "./.github/actions/setup");
 
-function scopedAggregator(jobId, expectedNeeds, laneResultNames, stepName) {
-  const block = jobBlock(jobId);
-  const needs = /^    needs: \[([^\]]+)\]$/m
-    .exec(block)?.[1]
-    .split(",")
-    .map((value) => value.trim());
-  assert.deepEqual(needs, expectedNeeds, `${jobId} must wait for scope and its applicable lane(s)`);
-  assert.match(block, /^    if: \$\{\{ always\(\) \}\}$/m);
-  assert.ok(block.includes("SCOPE_RESULT: ${{ needs.scope.result }}"));
-  assert.ok(block.includes("SCOPE_TRUSTED: ${{ needs.scope.outputs.scope_trusted }}"));
-  assert.ok(block.includes("DOCS_ONLY: ${{ needs.scope.outputs.docs_only }}"));
-  for (const [variable, lane] of Object.entries(laneResultNames)) {
-    assert.ok(block.includes(`${variable}: \${{ needs.${lane}.result }}`));
+test("the job set is the scope job, the six lanes and the three aggregators", () => {
+  assert.deepEqual([...workflow.jobIds].sort(), ["scope", ...LANES, ...Object.keys(CHECKS)].sort());
+});
+
+test("every lane waits only for the scope gate and is skipped together with every other lane on a trusted docs-only change", () => {
+  for (const id of LANES) {
+    const job = workflow.job(id);
+    assert.deepEqual(job.needs, ["scope"], `${id} must wait only for the scope gate`);
+    assert.equal(job.condition, SCOPE_CONDITION, `${id} must run only on a successful, non-docs-only scope`);
   }
-  const run = parseSteps(block).get(stepName);
-  assert.match(run, /test "\$SCOPE_RESULT" = success/);
-  assert.match(run, /test "\$SCOPE_TRUSTED" = true/);
-  assert.match(run, /if \[ "\$DOCS_ONLY" = true \]/);
-  return run;
+});
+
+test("check-macos and check-windows keep their names, need every lane of their OS and run whatever the lanes did", () => {
+  for (const [id, os] of Object.entries(CHECKS)) {
+    const job = workflow.job(id);
+    assert.equal(workflow.doc.jobs[id].name, undefined, `${id}: the check-run name is the job id; a name: would rename the required check`);
+    const lanes = LANES.filter((lane) => lane.endsWith(`-${os}`));
+    assert.ok(lanes.length >= 2, `${os} has a test lane and a second lane`);
+    assert.deepEqual([...job.needs].sort(), ["scope", ...lanes].sort(), `${id} must wait for scope and every ${os} lane`);
+    assert.equal(job.condition, "${{ always() }}", `${id} must report even when a lane failed or was skipped`);
+    assert.equal(job.env.NEEDS, "${{ toJSON(needs) }}");
+    assert.equal(job.timeoutMinutes, 20);
+    assert.equal(job.steps[0].uses?.split("@")[0], "actions/checkout");
+    assert.deepEqual(
+      job.steps.slice(1).map((step) => step.run),
+      ["node scripts/ci/assert-lanes.mjs"],
+    );
+    assert.ok(
+      job.steps.every((step) => step.condition === undefined && step.continueOnError === undefined),
+      `${id}'s steps are unconditional`,
+    );
+  }
+});
+
+// The `needs` context a check job would see: its own needs, with the results given.
+function needsContext(id, { scope = "success", trusted = "true", docsOnly = "false", lane = "success", overrides = {} }) {
+  const needs = { scope: { result: scope, outputs: { docs_only: docsOnly, scope_trusted: trusted, scope_classification: "x" } } };
+  for (const name of workflow.job(id).needs.filter((need) => need !== "scope")) {
+    needs[name] = { result: overrides[name] ?? lane, outputs: {} };
+  }
+  return needs;
 }
 
-function runScopedAggregator(run, values) {
-  execFileSync("bash", ["-euo", "pipefail", "-c", run], {
-    env: { PATH: process.env.PATH, ...values },
-    stdio: "pipe",
-  });
-}
-
-for (const [jobId, needs, laneResultNames, stepName] of [
-  [
-    "check-macos",
-    ["scope", "test-macos", "build-macos"],
-    { TEST_RESULT: "test-macos", BUILD_RESULT: "build-macos" },
-    "Assert macOS CI lanes passed",
-  ],
-  [
-    "check-windows",
-    ["scope", "test-windows", "build-windows"],
-    { TEST_RESULT: "test-windows", BUILD_RESULT: "build-windows" },
-    "Assert Windows CI lanes passed",
-  ],
-  [
-    "check-linux",
-    ["scope", "test-linux", "msrv-linux"],
-    { LINUX_RESULT: "test-linux", MSRV_RESULT: "msrv-linux" },
-    "Assert Linux CI lanes passed",
-  ],
-]) {
-  test(`${jobId} accepts only trusted docs-only skips or successful full lanes`, () => {
-    const run = scopedAggregator(jobId, needs, laneResultNames, stepName);
-    const laneVariables = Object.keys(laneResultNames);
-    const correctDocsOnly = Object.fromEntries(laneVariables.map((variable) => [variable, "skipped"]));
-    const correctFull = Object.fromEntries(laneVariables.map((variable) => [variable, "success"]));
-
-    assert.doesNotThrow(() =>
-      runScopedAggregator(run, {
-        SCOPE_RESULT: "success",
-        SCOPE_TRUSTED: "true",
-        DOCS_ONLY: "true",
-        ...correctDocsOnly,
-      }),
-    );
-    assert.doesNotThrow(() =>
-      runScopedAggregator(run, {
-        SCOPE_RESULT: "success",
-        SCOPE_TRUSTED: "true",
-        DOCS_ONLY: "false",
-        ...correctFull,
-      }),
-    );
-
-    for (const scopeResult of ["failure", "cancelled", "skipped"]) {
+for (const id of Object.keys(CHECKS)) {
+  test(`${id} accepts only trusted docs-only skips or successful full lanes`, () => {
+    const accepts = (options) => laneProblems(needsContext(id, options)).length === 0;
+    assert.ok(accepts({ docsOnly: "true", lane: "skipped" }));
+    assert.ok(accepts({ docsOnly: "false", lane: "success" }));
+    for (const scope of ["failure", "cancelled", "skipped"]) {
       for (const docsOnly of ["true", "false"]) {
-        assert.throws(() =>
-          runScopedAggregator(run, {
-            SCOPE_RESULT: scopeResult,
-            SCOPE_TRUSTED: "true",
-            DOCS_ONLY: docsOnly,
-            ...(docsOnly === "true" ? correctDocsOnly : correctFull),
-          }),
+        assert.ok(
+          !accepts({ scope, docsOnly, lane: docsOnly === "true" ? "skipped" : "success" }),
+          `scope ${scope}, docs_only ${docsOnly}`,
         );
       }
     }
     for (const trusted of ["false", "", "untrusted"]) {
-      assert.throws(() =>
-        runScopedAggregator(run, {
-          SCOPE_RESULT: "success",
-          SCOPE_TRUSTED: trusted,
-          DOCS_ONLY: "true",
-          ...correctDocsOnly,
-        }),
-      );
+      assert.ok(!accepts({ trusted, docsOnly: "true", lane: "skipped" }), `scope_trusted ${trusted}`);
     }
-    for (const docsOnly of ["", "unknown"]) {
-      assert.throws(() =>
-        runScopedAggregator(run, {
-          SCOPE_RESULT: "success",
-          SCOPE_TRUSTED: "true",
-          DOCS_ONLY: docsOnly,
-          ...correctFull,
-        }),
-      );
-    }
-    for (const variable of laneVariables) {
-      for (const result of ["failure", "cancelled", "skipped"]) {
-        assert.throws(() =>
-          runScopedAggregator(run, {
-            SCOPE_RESULT: "success",
-            SCOPE_TRUSTED: "true",
-            DOCS_ONLY: "false",
-            ...correctFull,
-            [variable]: result,
-          }),
+    for (const docsOnly of ["", "unknown"]) assert.ok(!accepts({ docsOnly }), `docs_only ${JSON.stringify(docsOnly)}`);
+    // Every lane the job waits for, one by one, with every result that is not the expected one.
+    for (const lane of workflow.job(id).needs.filter((need) => need !== "scope")) {
+      for (const result of ["failure", "cancelled", "skipped", ""]) {
+        assert.ok(!accepts({ overrides: { [lane]: result } }), `${lane} ${JSON.stringify(result)} on a full run`);
+      }
+      for (const result of ["success", "failure", "cancelled", ""]) {
+        assert.ok(
+          !accepts({ docsOnly: "true", lane: "skipped", overrides: { [lane]: result } }),
+          `${lane} ${JSON.stringify(result)} on a docs-only run`,
         );
       }
     }
   });
 }
 
-function parseSteps(job) {
-  const lines = job.split("\n");
-  const starts = lines.map((line, index) => (/^      - name: (.*)$/.exec(line) ? index : -1)).filter((index) => index >= 0);
-  const result = new Map();
-
-  for (let i = 0; i < starts.length; i += 1) {
-    const start = starts[i];
-    const end = starts[i + 1] ?? lines.length;
-    const segment = lines.slice(start, end);
-    const name = /^      - name: (.*)$/.exec(segment[0])[1];
-    const runIndex = segment.findIndex((line) => /^        run:\s*/.test(line));
-    if (runIndex < 0) continue;
-
-    const runValue = segment[runIndex].replace(/^        run:\s*/, "");
-    let command;
-    if (runValue === "|" || runValue === ">" || runValue === ">-") {
-      command = segment
-        .slice(runIndex + 1)
-        .filter((line) => line.length === 0 || line.startsWith("          "))
-        .map((line) => line.replace(/^          /, ""))
-        .join("\n");
-    } else {
-      command = runValue;
-    }
-    result.set(name, command.trim());
-  }
-  return result;
-}
-
-function normalizeCommand(command) {
-  return command.replace(/\r\n/g, "\n").trim();
-}
-
-// These are the Cargo/native/smoke run bodies in the pre-split check-macos and
-// check-windows jobs at base 1ab1128. Keeping the fixture explicit makes a
-// dropped invocation fail this test even if the replacement workflow remains valid YAML.
-const BASELINE_GATES = {
-  macos: {
-    test: [
-      ["Cargo check", "cargo check"],
-      ["Cargo test", "cargo test"],
-      ["Cargo clippy", "cargo clippy --all-targets -- -D warnings"],
-      ["Cargo test (sagascript-core, no features)", "cargo test -p sagascript-core"],
-      ["Cargo test (sagascript-cli)", "cargo test -p sagascript-cli"],
-      ["Cargo clippy (sagascript-core, no features)", "cargo clippy -p sagascript-core --all-targets -- -D warnings"],
-      ["Cargo clippy (sagascript-cli)", "cargo clippy -p sagascript-cli --all-targets -- -D warnings"],
-      ["Cargo check (sagascript-core, diarization)", "cargo check -p sagascript-core --features diarization"],
-      ["Cargo test (sagascript-core, diarization)", "cargo test -p sagascript-core --features diarization"],
-      [
-        "Cargo clippy (sagascript-core, diarization)",
-        "cargo clippy -p sagascript-core --features diarization --all-targets -- -D warnings",
-      ],
-    ],
-    build: [
-      ["Build native release binary (no installer)", "npx tauri build --config scripts/tauri-ci-prebuilt.json --no-bundle"],
-      ["Verify native release binary", 'BINARY=src-tauri/target/release/sagascript\n[[ -x "$BINARY" ]]\nfile "$BINARY"'],
-      [
-        "Smoke test — help and version",
-        "BINARY=src-tauri/target/release/sagascript\n$BINARY --help\n$BINARY transcribe --help\n$BINARY record --help",
-      ],
-      [
-        "Smoke test — config management",
-        "BINARY=src-tauri/target/release/sagascript\n$BINARY config list\n$BINARY config get language\n$BINARY config set language sv\n$BINARY config get language | grep -q sv\n$BINARY config reset language\n$BINARY config get language | grep -q en\n$BINARY config path",
-      ],
-      ["Smoke test — model listing and formats", "BINARY=src-tauri/target/release/sagascript\n$BINARY list-models\n$BINARY formats"],
-      [
-        "Smoke test — shell completions",
-        "BINARY=src-tauri/target/release/sagascript\n$BINARY completions zsh > /dev/null\n$BINARY completions bash > /dev/null",
-      ],
-      [
-        "Smoke test — download model and transcribe",
-        'BINARY=src-tauri/target/release/sagascript\n$BINARY download-model nb-whisper-tiny\nRESULT=$($BINARY transcribe --language no --model nb-whisper-tiny test-audio/norwegian-short-3s.mp3)\necho "Transcription: $RESULT"\necho "$RESULT" | grep -iq "stortinget"',
-      ],
-      [
-        "Smoke test — transcribe with JSON output",
-        'BINARY=src-tauri/target/release/sagascript\nSTDOUT="$RUNNER_TEMP/transcription-smoke.json"\nSTDERR="$RUNNER_TEMP/transcription-smoke.stderr"\n$BINARY transcribe --json --language no --model nb-whisper-tiny \\\n  test-audio/norwegian-short-3s.mp3 > "$STDOUT" 2> "$STDERR"\npython3 scripts/verify-json-cli-streams.py "$STDOUT" "$STDERR"',
-      ],
-    ],
-  },
-  windows: {
-    test: [
-      ["Cargo check", "cargo check"],
-      ["Cargo test", "cargo test"],
-      ["Cargo clippy", "cargo clippy --all-targets -- -D warnings"],
-      ["Cargo test (sagascript-core, no features)", "cargo test -p sagascript-core"],
-      ["Cargo test (sagascript-cli)", "cargo test -p sagascript-cli"],
-      ["Cargo clippy (sagascript-core, no features)", "cargo clippy -p sagascript-core --all-targets -- -D warnings"],
-      ["Cargo clippy (sagascript-cli)", "cargo clippy -p sagascript-cli --all-targets -- -D warnings"],
-    ],
-    build: [
-      ["Build native release binary (no installer)", "npx tauri build --config scripts/tauri-ci-prebuilt.json --no-bundle"],
-      [
-        "Verify native release binary",
-        '$binary = "src-tauri\\target\\release\\sagascript.exe"\nif (-not (Test-Path -PathType Leaf $binary)) {\n  throw "Missing native release binary: $binary"\n}',
-      ],
-      [
-        "Smoke test — help and version",
-        '$env:BINARY = "src-tauri\\target\\release\\sagascript.exe"\n& $env:BINARY --help\n& $env:BINARY transcribe --help\n& $env:BINARY record --help',
-      ],
-      [
-        "Smoke test — config management",
-        '$env:BINARY = "src-tauri\\target\\release\\sagascript.exe"\n& $env:BINARY config list\n& $env:BINARY config get language\n& $env:BINARY config set language sv\n$result = & $env:BINARY config get language\nif ($result -notmatch "sv") { throw "Expected \'sv\'" }\n& $env:BINARY config reset language\n$result = & $env:BINARY config get language\nif ($result -notmatch "en") { throw "Expected \'en\'" }\n& $env:BINARY config path',
-      ],
-      [
-        "Smoke test — model listing and formats",
-        '$env:BINARY = "src-tauri\\target\\release\\sagascript.exe"\n& $env:BINARY list-models\n& $env:BINARY formats',
-      ],
-      [
-        "Smoke test — shell completions",
-        '$env:BINARY = "src-tauri\\target\\release\\sagascript.exe"\n& $env:BINARY completions powershell | Out-Null',
-      ],
-      [
-        "Smoke test — download model and transcribe",
-        '$env:BINARY = "src-tauri\\target\\release\\sagascript.exe"\n& $env:BINARY download-model nb-whisper-tiny\n$result = & $env:BINARY transcribe --language no --model nb-whisper-tiny test-audio/norwegian-short-3s.mp3\nWrite-Host "Transcription: $result"\nif ($result -notmatch "(?i)stortinget") { throw "Expected \'stortinget\' in output" }',
-      ],
-      [
-        "Smoke test — transcribe with JSON output",
-        'set BINARY=src-tauri\\target\\release\\sagascript.exe\n%BINARY% transcribe --json --language no --model nb-whisper-tiny test-audio/norwegian-short-3s.mp3 > json_output.txt 2>nul\ntype json_output.txt\nfindstr /C:"text" json_output.txt\nfindstr /C:"duration_seconds" json_output.txt\nfindstr /C:"language" json_output.txt',
-      ],
-    ],
-  },
-};
-
-for (const [platform, jobIds] of Object.entries({
-  macos: { test: "test-macos", build: "build-macos" },
-  windows: { test: "test-windows", build: "build-windows" },
-})) {
-  for (const lane of ["test", "build"]) {
-    test(`${platform} ${lane} lane retains every baseline gate`, () => {
-      const block = jobBlock(jobIds[lane]);
-      assert.match(block, /^    needs: scope$/m, "each lane must wait only for the scope gate");
-      assert.match(block, /^    if: \$\{\{ needs\.scope\.result == 'success' && needs\.scope\.outputs\.docs_only != 'true' \}\}$/m);
-      const commands = parseSteps(block);
-      for (const [name, expected] of BASELINE_GATES[platform][lane]) {
-        assert.equal(commands.get(name), normalizeCommand(expected), `${jobIds[lane]} must retain the baseline ${name} command`);
-      }
-    });
-  }
-}
-
-// The Windows model smoke steps are the only non-blocking exception (#357).
-// continue-on-error masks their failures (a step's `conclusion` reads
-// "success"), so a report step must surface every one from the real `outcome`.
-test("only the two Windows smoke steps are non-blocking, and their failures are reported", () => {
-  const jobs = workflow.slice(workflow.indexOf("\njobs:\n"));
-  const jobIds = [...jobs.matchAll(/^  ([a-z][a-z0-9-]*):$/gm)].map((match) => match[1]);
-  for (const expected of ["test-macos", "build-macos", "test-linux", "msrv-linux", "test-windows", "build-windows"]) {
-    assert.ok(jobIds.includes(expected), `workflow must define ${expected}`);
-  }
-  for (const jobId of jobIds.filter((id) => id !== "build-windows")) {
-    assert.doesNotMatch(jobBlock(jobId), /continue-on-error:/, `${jobId} must not tolerate failures`);
-  }
-  const windows = jobBlock("build-windows");
-  assert.doesNotMatch(windows, /^    continue-on-error:/m, "build-windows itself must stay blocking");
-  assert.equal((windows.match(/^        continue-on-error: true$/gm) ?? []).length, 2);
-  const stepText = (name) => windows.slice(windows.indexOf(`      - name: ${name}`)).split(/\n      - name:/)[0];
-  for (const [name, id] of [
-    ["Smoke test — download model and transcribe", "smoke_transcribe"],
-    ["Smoke test — transcribe with JSON output", "smoke_json"],
-  ]) {
-    const step = stepText(name);
-    assert.match(step, /^        continue-on-error: true$/m, `${name} is a tolerated step`);
-    assert.match(step, new RegExp(`^        id: ${id}$`, "m"), `${name} needs id ${id} so its outcome can be reported`);
-  }
-  const reportName = "Report masked smoke test failures";
-  const report = stepText(reportName);
-  assert.ok(windows.indexOf(reportName) > windows.indexOf("Smoke test — transcribe with JSON output"));
-  assert.match(report, /^        if: \$\{\{ always\(\) \}\}$/m);
-  assert.match(report, /TRANSCRIBE_OUTCOME: \$\{\{ steps\.smoke_transcribe\.outcome \}\}/);
-  assert.match(report, /JSON_OUTCOME: \$\{\{ steps\.smoke_json\.outcome \}\}/);
-  assert.match(report, /::warning /);
-  assert.match(report, /GITHUB_STEP_SUMMARY/);
+test("an aggregator that waits for no lane, or gets no usable needs context, fails", () => {
+  assert.notEqual(laneProblems({ scope: { result: "success", outputs: { docs_only: "false", scope_trusted: "true" } } }).length, 0);
+  for (const bad of [null, [], "success", 1]) assert.notEqual(laneProblems(bad).length, 0);
+  const run = (env) => spawnSync(process.execPath, [ASSERT_LANES], { encoding: "utf8", env: { PATH: process.env.PATH, ...env } });
+  assert.equal(run({ NEEDS: JSON.stringify(needsContext("check-macos", {})) }).status, 0);
+  assert.equal(run({ NEEDS: JSON.stringify(needsContext("check-macos", { overrides: { "build-macos": "failure" } })) }).status, 1);
+  assert.equal(run({}).status, 1, "no NEEDS");
+  assert.equal(run({ NEEDS: "not json" }).status, 1);
+  assert.match(run({ NEEDS: JSON.stringify(needsContext("check-macos", { lane: "failure" })) }).stderr, /test-macos: result is "failure"/);
 });
 
-test("model caches are isolated to native lanes", () => {
-  assert.doesNotMatch(jobBlock("test-macos"), /name: Cache downloaded models/);
-  assert.doesNotMatch(jobBlock("test-windows"), /name: Cache downloaded models/);
-  assert.match(jobBlock("build-macos"), /name: Cache downloaded models/);
-  assert.match(jobBlock("build-windows"), /name: Cache downloaded models/);
-  assert.match(jobBlock("test-macos"), /shared-key: sagascript-ci-checks/);
-  assert.match(jobBlock("test-windows"), /shared-key: sagascript-ci-checks/);
-  assert.match(jobBlock("build-macos"), /shared-key: sagascript-ci-native/);
-  assert.match(jobBlock("build-windows"), /shared-key: sagascript-ci-native/);
+test("the scope job publishes the outputs the aggregators read", () => {
+  const scope = workflow.job("scope");
+  assert.deepEqual(Object.keys(scope.outputs).sort(), ["docs_only", "scope_classification", "scope_trusted"]);
+  for (const name of ["docs_only", "scope_trusted"]) assert.equal(scope.outputs[name], `\${{ steps.classify.outputs.${name} }}`);
 });
 
-function aggregator(jobId, expectedNeeds, testResultName, buildResultName) {
-  const block = jobBlock(jobId);
-  const needs = /^    needs: \[([^\]]+)\]$/m
-    .exec(block)?.[1]
-    .split(",")
-    .map((value) => value.trim());
-  assert.deepEqual(needs, expectedNeeds, `${jobId} must wait for scope and its applicable lane(s)`);
-  assert.match(block, /^    if: \$\{\{ always\(\) \}\}$/m);
-  assert.match(block, new RegExp(`TEST_RESULT: \\\$\\{\\{ needs\\.${testResultName}\\.result \\\}\\}`));
-  assert.match(block, new RegExp(`BUILD_RESULT: \\\$\\{\\{ needs\\.${buildResultName}\\.result \\\}\\}`));
-  const run = parseSteps(block).get(jobId === "check-macos" ? "Assert macOS CI lanes passed" : "Assert Windows CI lanes passed");
-  assert.match(run, /test "\$TEST_RESULT" = success/);
-  assert.match(run, /test "\$BUILD_RESULT" = success/);
-  return run;
-}
-
-function runAggregator(run, testResult, buildResult) {
-  execFileSync("bash", ["-euo", "pipefail", "-c", run], {
-    env: {
-      PATH: process.env.PATH,
-      SCOPE_RESULT: "success",
-      SCOPE_TRUSTED: "true",
-      DOCS_ONLY: "false",
-      TEST_RESULT: testResult,
-      BUILD_RESULT: buildResult,
-    },
-    stdio: "pipe",
-  });
-}
-
-for (const [jobId, needs] of [
-  ["check-macos", ["scope", "test-macos", "build-macos"]],
-  ["check-windows", ["scope", "test-windows", "build-windows"]],
-]) {
-  test(`${jobId} fails closed for every non-success lane result`, () => {
-    const [, testLane, buildLane] = needs;
-    const run = aggregator(jobId, needs, testLane, buildLane);
-    for (const testResult of ["success", "failure", "cancelled", "skipped"]) {
-      for (const buildResult of ["success", "failure", "cancelled", "skipped"]) {
-        const invoke = () => runAggregator(run, testResult, buildResult);
-        if (testResult === "success" && buildResult === "success") {
-          assert.doesNotThrow(invoke);
-        } else {
-          assert.throws(invoke, `${jobId} must reject ${testResult}/${buildResult}`);
-        }
-      }
+test("the setup action is the only toolchain preamble: every lane uses it with declared inputs and the cache its gates need", () => {
+  const action = loadAction("setup");
+  const KEYS = {
+    "test-macos": "sagascript-ci-checks",
+    "test-windows": "sagascript-ci-checks",
+    "build-macos": "sagascript-ci-native",
+    "build-windows": "sagascript-ci-native",
+    "test-linux": "sagascript-ci",
+    "msrv-linux": "sagascript-msrv",
+  };
+  for (const id of LANES) {
+    const job = workflow.job(id);
+    const setups = job.steps.filter((step) => step.uses === "./.github/actions/setup");
+    assert.equal(setups.length, 1, `${id} sets up once, through the action`);
+    const [setup] = setups;
+    for (const name of Object.keys(setup.with)) assert.ok(Object.hasOwn(action.inputs, name), `${id} passes an undeclared input: ${name}`);
+    for (const [name, input] of Object.entries(action.inputs)) if (input.required) assert.ok(name in setup.with, `${id} must pass ${name}`);
+    assert.equal(setup.with["cache-key"], KEYS[id]);
+    assert.equal(job.steps[0].uses?.split("@")[0], "actions/checkout", `${id}: checkout stays in the job, ahead of the local action`);
+    assert.equal(job.steps.indexOf(setup), 1, `${id}: the setup follows the checkout directly`);
+    for (const step of job.steps) {
+      assert.ok(
+        !/^(actions\/setup-(python|node)|dtolnay\/rust-toolchain|Swatinem\/rust-cache)@/.test(step.uses ?? ""),
+        `${id} repeats a step of the setup action`,
+      );
     }
-  });
-}
+
+    // Which cargo gates the lane runs decides which Rust components and workspaces it needs.
+    const invocation = job.steps.map(gateInvocation).find(Boolean);
+    const gates = invocation ? gatesFor({ os: invocation.os ?? "linux", profile: invocation.profile }) : [];
+    const components = actionInput(action, setup, "rust-components")
+      .split(",")
+      .map((part) => part.trim());
+    if (gates.some((gate) => gate.args[0] === "clippy")) assert.ok(components.includes("clippy"), `${id} runs clippy`);
+    if (gates.some((gate) => gate.args[0] === "fmt")) assert.ok(components.includes("rustfmt"), `${id} runs rustfmt`);
+    const workspaces = actionInput(action, setup, "cache-workspaces")
+      .split("\n")
+      .map((line) => line.trim());
+    assert.ok(workspaces.includes("src-tauri"));
+    if (gates.some((gate) => gate.cwd === "src-tauri/engine-host/ort")) {
+      assert.ok(workspaces.includes("src-tauri/engine-host/ort"), `${id} runs ORT host gates and must cache its workspace`);
+    }
+  }
+  const msrv = setupStep(workflow.job("msrv-linux"));
+  assert.equal(actionInput(action, msrv, "rust"), "msrv");
+  assert.equal(actionInput(action, msrv, "python"), "false");
+});
+
+test("every lane that runs Python selects the supported runtime first", () => {
+  // Moved here from scripts/dictation_eval/test_evaluate_cli.py: the workflow is parsed, not read as text.
+  const action = loadAction("setup");
+  const python = action.steps.find((step) => step.uses?.startsWith("actions/setup-python@"));
+  assert.equal(python.with["python-version"], "3.12");
+  assert.equal(python.condition, "${{ inputs.python == 'true' }}");
+  assert.equal(action.inputs.python.default, "true");
+  for (const id of ["test-macos", "test-linux", "test-windows"]) {
+    const steps = workflow.job(id).steps;
+    const setup = steps.findIndex((step) => step.uses === "./.github/actions/setup");
+    const suites = steps.findIndex((step) =>
+      commandLines(step).some((line) => line.startsWith("python -m unittest discover -s scripts/dictation_eval")),
+    );
+    assert.equal(actionInput(action, steps[setup], "python"), "true", `${id} selects Python`);
+    assert.ok(setup >= 0 && suites > setup, `${id} selects Python before the evaluator suites`);
+  }
+  // The native build lanes run the JSON stream verifier of the smoke tests with it; the MSRV lane runs no Python.
+  for (const id of ["build-macos", "build-windows"]) assert.equal(actionInput(action, setupStep(workflow.job(id)), "python"), "true");
+  assert.equal(actionInput(action, setupStep(workflow.job("msrv-linux")), "python"), "false");
+});
+
+test("the Rust cache key follows the gate list for the lanes that run gates, and for no other lane", () => {
+  // rust-cache saves only under a new key, so a changed gate list needs one to get its artifacts cached; a lane
+  // that never runs the gates (the native build lanes) must not lose its cache to a gate change.
+  const action = loadAction("setup");
+  const cache = action.steps.find((step) => step.uses?.startsWith("Swatinem/rust-cache@"));
+  assert.equal(
+    cache.with["shared-key"],
+    "${{ inputs.cache-key }}${{ inputs.native-build != 'true' && format('-{0}', hashFiles('scripts/ci/cargo-gates.mjs')) || '' }}",
+  );
+  for (const id of LANES) {
+    const job = workflow.job(id);
+    const runsGates = job.steps.some((step) => gateInvocation(step));
+    const nativeBuild = actionInput(action, setupStep(job), "native-build") === "true";
+    assert.equal(
+      nativeBuild,
+      !runsGates,
+      `${id}: ${runsGates ? "runs the cargo gates, so its cache key must carry their hash" : "runs no gate, so its cache key must not"}`,
+    );
+  }
+});
+
+test("only the native build lanes cache downloaded models", () => {
+  const action = loadAction("setup");
+  for (const id of LANES) {
+    assert.equal(
+      actionInput(action, setupStep(workflow.job(id)), "native-build"),
+      id.startsWith("build-") ? "true" : "false",
+      `${id}: native build`,
+    );
+  }
+  const step = action.steps.find((candidate) => candidate.name === "Cache downloaded models");
+  assert.equal(step.condition, "${{ inputs.native-build == 'true' }}");
+  for (const source of ["settings/manager.rs", "transcription/model.rs", "diarization/model.rs"]) {
+    assert.ok(step.with.key.includes(`sagascript-core/src/${source}`), `the model cache key hashes ${source}`);
+  }
+});
+
+test("the setup action's steps run in the order the lanes depend on", () => {
+  const action = loadAction("setup");
+  const order = action.steps.map((step) => step.name);
+  const before = (first, second) =>
+    assert.ok(order.indexOf(first) >= 0 && order.indexOf(first) < order.indexOf(second), `${first} before ${second}`);
+  before("Install Tauri system dependencies", "Select evaluation Python runtime");
+  before("Install Rust", "Cache Rust dependencies");
+  before("Install the declared MSRV toolchain", "Cache Rust dependencies");
+  before("Install Node.js", "Install npm dependencies");
+  before("Cache Rust dependencies", "Install npm dependencies");
+  // The MSRV toolchain is exported before anything later in the lane looks at rustc.
+  const lines = commandLines(action.steps.find((step) => step.name === "Install the declared MSRV toolchain"));
+  assert.ok(lines.includes('echo "RUSTUP_TOOLCHAIN=$msrv" >> "$GITHUB_ENV"'));
+  assert.ok(
+    lines.some((line) => line.includes("src-tauri/Cargo.toml")) && lines.some((line) => line.includes("engine-host/ort/Cargo.toml")),
+  );
+});
+
+test("test-windows runs the build identity gates before npm ci and any Cargo work, from sources that need no npm packages", () => {
+  const steps = workflow.job("test-windows").steps;
+  const find = (predicate) => steps.findIndex((step) => commandLines(step).some(predicate));
+  const identityCommand =
+    "node --test scripts/test-ci-build-identity.mjs scripts/test-windows-release-identity.mjs scripts/test-windows-package-workflow.mjs";
+  const identity = find((line) => line.startsWith(identityCommand));
+  const setup = steps.findIndex((step) => step.uses === "./.github/actions/setup");
+  const install = find((line) => line === "npm ci");
+  const gates = find((line) => line.startsWith("node scripts/ci/cargo-gates.mjs"));
+  assert.ok(setup >= 0 && identity > setup, "after Node is installed");
+  assert.equal(
+    actionInput(loadAction("setup"), steps[setup], "npm-ci"),
+    "false",
+    "the action must not run npm ci ahead of the identity gates",
+  );
+  assert.ok(install > identity && gates > install, "npm ci follows the identity gates; Cargo work follows npm ci");
+  // They run before node_modules exists, so neither they nor anything they import, however indirectly,
+  // may need an npm package (the YAML reader of scripts/lib/ci-workflow.mjs is one).
+  const files = commandLines(steps[identity])
+    .find((line) => line.startsWith("node --test "))
+    .split(/\s+/)
+    .slice(2);
+  assert.ok(
+    files.length >= 4 && files.every((file) => /^scripts\/test-[\w-]+\.mjs$/.test(file)),
+    `the identity step runs test files: ${files}`,
+  );
+  for (const file of files) {
+    const { packages } = importGraph(file, repoRoot);
+    assert.deepEqual([...packages], [], `${file} runs before npm ci but its imports reach npm packages`);
+  }
+});
+
+test("windows-package.yml leaves the Rust tests of a pull request to test-windows and keeps them for releases and manual runs", () => {
+  const windows = loadWorkflow("windows-package.yml").jobs[0];
+  const names = windows.steps.map((step) => step.name);
+  const tests = windows.steps[names.indexOf("Test and lint Rust workspace")];
+  assert.equal(tests.condition, "github.event_name != 'pull_request'");
+  // The debug lean CLI that the CPU policy checks read stays built: inside the step above where it runs,
+  // in a step of its own exactly where that step is skipped.
+  assert.ok(commandLines(tests).includes("cargo build -p sagascript-cli --no-default-features"));
+  const build = windows.steps[names.indexOf("Build lean CLI (debug)")];
+  assert.ok(build, "the debug build has a step of its own for the skipped case");
+  assert.equal(build.condition, "github.event_name == 'pull_request'");
+  assert.deepEqual(commandLines(build), ["cargo build -p sagascript-cli --no-default-features"]);
+  assert.ok(names.indexOf(build.name) > names.indexOf(tests.name));
+  assert.ok(names.indexOf(build.name) < names.indexOf("Verify debug x64 inference CPU policy"));
+  assert.ok(names.indexOf(build.name) < names.indexOf("Verify debug ARM64 native CPU flags"));
+  // test-windows runs the tests this one no longer repeats on a pull request.
+  assert.ok(gatesFor({ os: "windows" }).some((gate) => gate.args.join(" ") === "test --workspace"));
+  assert.ok(gatesFor({ os: "windows" }).some((gate) => gate.args.join(" ") === "clippy --workspace --all-targets -- -D warnings"));
+});
+
+test("the workflow parses the same with CRLF line endings, as on a Windows checkout", () => {
+  const source = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8").replace(/\r\n?/g, "\n");
+  const lf = parseWorkflow(source);
+  const crlf = parseWorkflow(source.replaceAll("\n", "\r\n"));
+  assert.deepEqual(crlf.jobs, lf.jobs);
+  const classify = crlf.job("scope").steps.find((step) => step.id === "classify");
+  assert.ok(!classify.run.includes("\r"), "scripts stay free of carriage returns");
+});
+
+test("a multi-command step of a Windows lane runs under bash: pwsh reports only the last native command's exit code", () => {
+  // `npm run test:frontend` failing in front of a passing `npm run format:check` went green in a first draft of this file.
+  const windowsJobs = workflow.jobs.filter((job) => /^windows/.test(job.runsOn));
+  assert.deepEqual(windowsJobs.map((job) => job.id).sort(), ["build-windows", "test-windows"]);
+  for (const job of windowsJobs) {
+    for (const step of job.steps.filter((candidate) => candidate.run !== "")) {
+      if (commandLines(step).length > 1) assert.equal(step.shell, "bash", `${job.id}: "${step.name}" runs several commands`);
+    }
+  }
+  for (const step of loadAction("setup").steps.filter((candidate) => candidate.run !== "")) {
+    assert.equal(step.shell, "bash", `the setup action's "${step.name}" must name its shell (and runs on Windows)`);
+  }
+});

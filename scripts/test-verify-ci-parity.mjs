@@ -4,28 +4,36 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { TEST_GROUPS } from "./node-test-groups.mjs";
 import { CHECKS } from "./verify.mjs";
+import { GATES, commandOf, gatesFor } from "./ci/cargo-gates.mjs";
+import { expandedSteps, gateInvocation, parseWorkflow } from "./lib/ci-workflow.mjs";
 
 // Keeps scripts/verify.mjs (the local check list, #350) and the test lanes of
-// .github/workflows/ci.yml from drifting apart until CI calls verify itself
-// (#358):
+// .github/workflows/ci.yml from drifting apart:
 // - every ci.yml job is either a test lane or a listed non-test job;
-// - every command in a test lane's run scripts (named or nameless steps, any
-//   program, not only cargo/npm/node) is covered by a verify check, the
-//   Node test-group manifest, an allowlisted difference or a listed shell
-//   word that is not a check (each with its reason);
+// - every command in a test lane (named or nameless steps, any program, not
+//   only cargo/npm/node) is covered by a verify check, the Node test-group
+//   manifest, an allowlisted difference or a listed shell word that is not a
+//   check (each with its reason);
 // - every CI command a verify check claims exists in a test lane.
+//
+// What a lane runs is read from the parsed workflow (#358), through the two
+// places the lanes keep commands outside their own `run:` scripts: the cargo
+// gate list (a step running scripts/ci/cargo-gates.mjs stands for that OS's
+// gates, in scripts/ci/cargo-gates.mjs) and the local setup action (a step
+// using it stands for the action's `run` steps its inputs enable).
 //
 // Limits: environment set elsewhere (job `env:`, $GITHUB_ENV, e.g. the MSRV
 // lane's RUSTUP_TOOLCHAIN or test-macos's DEVELOPER_DIR), `if:` conditions,
-// `uses:` actions, commands inside $(…), PowerShell syntax and shell control
-// flow beyond splitting at `;`, `&&`, `||` and `|` are not compared.
+// third-party `uses:` actions, commands inside $(…), PowerShell syntax and
+// shell control flow beyond splitting at `;`, `&&`, `||` and `|` are not
+// compared.
 //
 // SAGASCRIPT_PARITY_CI_YML=<file> checks another copy of ci.yml (used to show
 // the detections on mutated copies; never set in CI).
 
 const ciPath = process.env.SAGASCRIPT_PARITY_CI_YML ?? fileURLToPath(new URL("../.github/workflows/ci.yml", import.meta.url));
 const read = (path) => readFileSync(path, "utf8").replace(/\r\n?/g, "\n");
-const workflow = read(ciPath);
+const workflow = parseWorkflow(read(ciPath));
 const packageJson = read(fileURLToPath(new URL("../package.json", import.meta.url)));
 
 const TEST_LANES = ["test-macos", "test-linux", "msrv-linux", "test-windows"];
@@ -92,49 +100,7 @@ const ALLOWLIST = [
 ];
 
 // ---------------------------------------------------------------------------
-// A small reader for the subset of YAML and shell that ci.yml uses.
-
-function jobsSection(text) {
-  const start = text.indexOf("\njobs:\n");
-  assert.notEqual(start, -1, "ci.yml has a jobs: section");
-  return text.slice(start + "\njobs:\n".length - 1);
-}
-
-function jobIds(text) {
-  return [...jobsSection(text).matchAll(/^ {2}([A-Za-z0-9_-]+):\s*$/gm)].map((match) => match[1]);
-}
-
-function jobBlock(text, jobId) {
-  const jobs = jobsSection(text);
-  const start = jobs.indexOf(`\n  ${jobId}:\n`);
-  assert.notEqual(start, -1, `ci.yml must define ${jobId}`);
-  const body = jobs.slice(start + 1);
-  const next = body.slice(1).search(/^ {2}[A-Za-z0-9_-]+:\s*$/m);
-  return next === -1 ? body : body.slice(0, next + 1);
-}
-
-// Steps of a job as { name, run, cwd, env }, named or not.
-function stepsOf(text, jobId) {
-  return jobBlock(text, jobId)
-    .split(/\n(?= {6}- )/)
-    .slice(1)
-    .map((chunk) => {
-      const raw = chunk.replace(/^ {6}- /, "        ");
-      const inline = /^ {8}run: (?![|>])(.*)$/m.exec(raw)?.[1];
-      const block = /^ {8}run: [|>]-?\n((?: {10}.*\n?|\n)*)/m
-        .exec(raw)?.[1]
-        ?.split("\n")
-        .map((line) => line.replace(/^ {10}/, ""))
-        .join("\n");
-      const envBlock = /^ {8}env:\n((?: {10}.*\n?)*)/m.exec(raw)?.[1] ?? "";
-      return {
-        name: /^ {8}name: (.*)$/m.exec(raw)?.[1],
-        run: inline ?? block ?? "",
-        cwd: /^ {8}working-directory: (.*)$/m.exec(raw)?.[1],
-        env: Object.fromEntries([...envBlock.matchAll(/^ {10}([A-Za-z_][A-Za-z0-9_]*): (.*)$/gm)].map((match) => [match[1], match[2]])),
-      };
-    });
-}
+// A small reader for the subset of shell that the lanes' run scripts use.
 
 // Split a script into simple commands, honouring quotes and $(…): each is a
 // list of words with leading VAR=value assignments and redirections removed.
@@ -207,9 +173,21 @@ function commandsIn(script) {
     .map((words) => words.join(" "));
 }
 
-const ciCommands = TEST_LANES.flatMap((job) =>
-  stepsOf(workflow, job).flatMap((step) => commandsIn(step.run).map((run) => ({ job, run, cwd: step.cwd ?? "." }))),
-);
+const OS_OF_RUNNER = (runsOn) => (/^macos/.test(runsOn) ? "macos" : /^windows/.test(runsOn) ? "windows" : "linux");
+
+// The commands of a lane as { job, run, cwd, step }, gates and action steps expanded.
+function laneCommands(jobId) {
+  const job = workflow.job(jobId);
+  return expandedSteps(job).flatMap((step) => {
+    const invocation = gateInvocation(step);
+    if (invocation) {
+      const gates = gatesFor({ os: invocation.os ?? OS_OF_RUNNER(job.runsOn), profile: invocation.profile });
+      return gates.map((gate) => ({ job: jobId, run: commandOf(gate), cwd: gate.cwd, step }));
+    }
+    return commandsIn(step.run).map((run) => ({ job: jobId, run, cwd: step.workingDirectory ?? ".", step }));
+  });
+}
+const ciCommands = TEST_LANES.flatMap(laneCommands);
 const key = ({ run, cwd }) => `${cwd ?? "."}: ${run}`;
 
 const classified = new Set(Object.values(TEST_GROUPS).flat());
@@ -260,10 +238,11 @@ jobs:
     steps:
       - run: echo hi
 `;
-  assert.deepEqual(jobIds(synthetic), ["lane", "other"]);
-  const steps = stepsOf(synthetic, "lane");
+  const parsed = parseWorkflow(synthetic);
+  assert.deepEqual(parsed.jobIds, ["lane", "other"]);
+  const steps = parsed.job("lane").steps;
   assert.deepEqual(
-    steps.map((step) => [step.name, step.cwd]),
+    steps.map((step) => [step.name, step.workingDirectory]),
     [
       [undefined, undefined],
       [undefined, undefined],
@@ -282,7 +261,7 @@ jobs:
 });
 
 test("every ci.yml job is a test lane or a listed non-test job", () => {
-  const jobs = jobIds(workflow);
+  const jobs = workflow.jobIds;
   const known = new Set([...TEST_LANES, ...Object.keys(NON_TEST_JOBS)]);
   assert.deepEqual(
     jobs.filter((job) => !known.has(job)),
@@ -311,6 +290,21 @@ test("the parser finds the commands of the CI test lanes", () => {
       ciCommands.some((command) => command.job === job),
       `${job} has commands`,
     );
+  // The commands the lanes take from the gate list and from the setup action are visible too.
+  for (const expected of ["src-tauri: cargo test --workspace", ".: npm ci"]) assert.ok(keys.has(expected), `parsed ${expected}`);
+  assert.ok(
+    ciCommands.some((command) => command.job === "test-linux" && command.run.startsWith("sudo apt-get")),
+    "the setup action's apt step",
+  );
+  assert.ok(
+    ciCommands.some((command) => command.job === "msrv-linux" && command.run.startsWith("rustup toolchain install")),
+    "the MSRV install",
+  );
+});
+
+test("every gate of the list is run by some test lane, so the list holds no command the parity test cannot see", () => {
+  const seen = new Set(ciCommands.map(key));
+  for (const gate of GATES) assert.ok(seen.has(key({ run: commandOf(gate), cwd: gate.cwd })), `${gate.id} is run by no test lane`);
 });
 
 test("every command in the CI test lanes has a verify check, a manifest entry or an allowlisted reason", () => {
@@ -378,14 +372,23 @@ test("workflows outside ci.yml named in a check's lanes run its command", () => 
 
 test("the release guard proves its test ran, locally as in CI", () => {
   // cargo test exits 0 when the name filter matches nothing.
-  const proof = /grep -q '(release_build_ignores_the_real_environment \.\.\. ok)'/.exec(workflow)?.[1];
-  assert.ok(proof, "test-linux greps the release guard's output");
+  const proof = GATES.find((gate) => gate.id === "release-guard").requireOutput?.pattern;
+  assert.ok(proof, "the gate list requires the release guard's output");
   const [step] = CHECKS.find((check) => check.id === "release-guard").steps;
-  assert.ok(step.requireOutput?.pattern.test(proof), "verify's release-guard requires the same line");
+  assert.ok(
+    step.requireOutput?.pattern.test("release_build_ignores_the_real_environment ... ok"),
+    "verify's release-guard requires the same line",
+  );
+  assert.ok(proof.test("test tests::release_build_ignores_the_real_environment ... ok"));
+  assert.deepEqual(
+    [proof.source, step.requireOutput.pattern.source],
+    [proof.source, proof.source],
+    "verify and CI require the same output",
+  );
 });
 
 test("the browser check gives the QA scripts an output directory, as CI does", () => {
-  const ciStep = stepsOf(workflow, "test-macos").find((step) => commandsIn(step.run).includes("npm run test:browser"));
+  const ciStep = expandedSteps(workflow.job("test-macos")).find((step) => commandsIn(step.run).includes("npm run test:browser"));
   assert.ok(ciStep?.env.QA_OUTPUT_DIR, "test-macos sets QA_OUTPUT_DIR for npm run test:browser");
   const [step] = CHECKS.find((check) => check.id === "browser").steps;
   assert.ok(step.env?.QA_OUTPUT_DIR, "verify's browser check sets QA_OUTPUT_DIR");

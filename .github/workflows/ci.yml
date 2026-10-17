@@ -1,40 +1,40 @@
 name: CI
 
+# Shared parts live once, outside this file (#358): .github/actions/setup (toolchain preamble),
+# scripts/ci/cargo-gates.mjs (THE list of cargo gates; per-OS exclusions are documented there),
+# scripts/ci/smoke-cli.mjs and scripts/ci/assert-lanes.mjs (the check-* aggregators). Branch
+# protection requires check-macos and check-windows by name: keep both, `needs:` every lane of their OS.
+# assert-lanes.mjs comes from the PR checkout, at the trust level of this file itself (contents: read, no secrets).
+#
+# Windows tests have one owner on a pull request: test-windows (x64), the required lane.
+# windows-package.yml does not repeat `cargo test --workspace` and `cargo clippy --workspace` there
+# (in its pwsh step a failure never failed the job); it keeps them for releases and manual runs,
+# the only place ARM64 tests run.
+
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
 
-# Least privilege (#354): no CI job writes to the repository, so the token is
-# read-only. Every job also sets timeout-minutes (60 for native build/test
-# lanes, 20 for the rest; at least twice the slowest observed run) instead of
-# the 360-minute default.
+# Least privilege (#354): read-only token; every job sets timeout-minutes.
 permissions:
   contents: read
 
-# Cancel superseded PR runs (#178): pushes to a PR share one group, so a fix
-# cancels the stale run instead of burning runner-minutes compiling it twice.
-# Pushes (e.g. to `main`) get a unique group per run, so a newer push can
-# neither cancel an in-progress run nor replace a pending one — with the
-# default single-slot queue, same-group pending runs would otherwise be
-# dropped. Never touches release.yml (tag builds must never cancel).
+# Cancel superseded PR runs (#178); pushes (e.g. to `main`) get a unique group per run.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
-# Keep source/line backtraces for CI failures without full variable/type debug
-# information in every dependency and PDB. Release profiles are unchanged.
-# rust-cache includes CARGO_* environment variables in its compatibility key.
+# Line-table backtraces without full debug information (rust-cache keys on CARGO_* variables).
 env:
   CARGO_PROFILE_DEV_DEBUG: line-tables-only
   CARGO_PROFILE_TEST_DEBUG: line-tables-only
 
 jobs:
-  # This job is deliberately dependency-free and checks out the PR base so a
-  # PR cannot change the allowlist used to decide whether native CI is needed.
-  # Pushes use --full because the workflow only runs on main and no comparison
-  # range is needed to keep that required path fail-closed.
+  # Checks out the PR base so a PR cannot change the allowlist that decides whether native CI is
+  # needed. Inline on purpose: the base may predate any script file (adoption), and a missing file
+  # would fail the required checks instead of falling back to full CI. Pushes use --full.
   scope:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -48,7 +48,6 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.sha }}
-
       - name: Classify changed paths
         id: classify
         env:
@@ -66,9 +65,7 @@ jobs:
           }
 
           if [ "$EVENT_NAME" = pull_request ]; then
-            # The policy is read from the base checkout. During adoption the
-            # base may predate this script; a fork head may also be absent from
-            # the base repository. Both cases safely run the full CI lanes.
+            # An absent policy (adoption) or head commit (fork) safely runs the full CI lanes.
             if [ -f scripts/ci-docs-scope.mjs ] \
               && [[ "$PR_BASE_SHA" =~ ^[0-9a-f]{40}$ ]] \
               && [[ "$PR_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] \
@@ -87,77 +84,31 @@ jobs:
     if: ${{ needs.scope.result == 'success' && needs.scope.outputs.docs_only != 'true' }}
     runs-on: macos-14
     timeout-minutes: 60
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
-
-      - name: Select evaluation Python runtime
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - name: Set up toolchain
+        uses: ./.github/actions/setup
         with:
-          python-version: "3.12"
-
-      - name: Test offline dictation evaluation tooling
-        run: python -m unittest discover -s scripts/dictation_eval -p 'test_*.py'
-
-      - name: Test diarization reference contracts
-        run: python -m unittest discover -s scripts/diarization_sv -p 'test_reference_dataset.py'
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # v1; toolchain must match rust-toolchain.toml
-        with:
-          toolchain: 1.99.0
-          components: clippy
-
-      - name: Install Node.js
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
-        with:
-          node-version: 22
-          cache: npm
-
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          workspaces: src-tauri
-          shared-key: sagascript-ci-checks
-
-      - name: Install npm dependencies
-        run: npm ci
-
-      # npm advisories (#355): fail on a high or critical finding anywhere in
-      # the root package-lock.json, dev dependencies included, since they
-      # build the shipped frontend bundle. site/ and tooling/code-health/ have
-      # their own lockfiles; neither ships in the app and neither is audited
-      # here.
-      - name: Audit npm dependencies
-        run: npm audit --audit-level=high
-
-      # Prettier over src/, scripts/ and tests/, ESLint, and the Vitest unit
-      # and component tests (src/**/*.test.ts, #361). verify runs them as
-      # `format`, `lint` and `unit`.
-      - name: Check frontend formatting
-        run: npm run format:check
-
-      - name: Lint frontend and tooling
-        run: npm run lint
-
-      - name: Unit-test frontend modules
-        run: npm run test:unit
-
-      - name: Test frontend lifecycle helpers
+          rust-components: clippy
+          cache-key: sagascript-ci-checks
+      - name: Test offline dictation evaluation tooling and diarization reference contracts
         run: |
+          python -m unittest discover -s scripts/dictation_eval -p 'test_*.py'
+          python -m unittest discover -s scripts/diarization_sv -p 'test_reference_dataset.py'
+      - name: Frontend checks (npm audit, format, lint, unit tests, Node tests, types)
+        run: |
+          npm audit --audit-level=high
+          npm run format:check
+          npm run lint
+          npm run test:unit
           npm run test:frontend
-          node scripts/test-generate-updater-manifest.mjs
-          node --test scripts/diarization_sv/test_reference_review.mjs
-
-      - name: Install browser regression runtime
-        run: npx playwright install chromium
-
+          npx svelte-check --tsconfig ./tsconfig.json
       - name: Test transcription result tabs in browser
         env:
           QA_OUTPUT_DIR: ${{ runner.temp }}/transcription-browser
-        run: npm run test:browser
-
+        run: |
+          npx playwright install chromium
+          npm run test:browser
       - name: Upload browser regression diagnostics
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -165,70 +116,20 @@ jobs:
           name: transcription-browser-diagnostics
           path: ${{ runner.temp }}/transcription-browser
           if-no-files-found: ignore
-
       - name: Build frontend
         run: npm run build
-
-      - name: Cargo check
-        working-directory: src-tauri
-        run: cargo check
-
-      - name: Cargo test
-        working-directory: src-tauri
-        run: cargo test
-
-      - name: Cargo clippy
-        working-directory: src-tauri
-        run: cargo clippy --all-targets -- -D warnings
-
-      # Separate invocations preserve the core no-features build; combining
-      # package flags would unify features with the CLI defaults.
-      - name: Cargo test (sagascript-core, no features)
-        working-directory: src-tauri
-        run: cargo test -p sagascript-core
-
-      - name: Cargo test (sagascript-cli)
-        working-directory: src-tauri
-        run: cargo test -p sagascript-cli
-
-      - name: Cargo test (sagascript-cli, no features)
-        working-directory: src-tauri
-        run: cargo test -p sagascript-cli --no-default-features
-
-      - name: Cargo clippy (sagascript-core, no features)
-        working-directory: src-tauri
-        run: cargo clippy -p sagascript-core --all-targets -- -D warnings
-
-      - name: Cargo clippy (sagascript-cli)
-        working-directory: src-tauri
-        run: cargo clippy -p sagascript-cli --all-targets -- -D warnings
-
-      # Core defaults to no features. CLI defaults already include diarization
-      # and are covered above; core needs this explicit feature matrix.
-      - name: Cargo check (sagascript-core, diarization)
-        working-directory: src-tauri
-        run: cargo check -p sagascript-core --features diarization
-
-      - name: Cargo test (sagascript-core, diarization)
-        working-directory: src-tauri
-        run: cargo test -p sagascript-core --features diarization
-
-      - name: Cargo clippy (sagascript-core, diarization)
-        working-directory: src-tauri
-        run: cargo clippy -p sagascript-core --features diarization --all-targets -- -D warnings
-
-      - name: Svelte check
-        run: npx svelte-check --tsconfig ./tsconfig.json
-
-      - name: Build Core ML engine host and check its revision
+      - name: Cargo gates
+        run: node scripts/ci/cargo-gates.mjs --os macos
+      # Model-free subset of the engine-host conformance (#367); the full run needs a Pianissimo
+      # model and is in the release gate (release-build-macos.yml).
+      - name: Build the Core ML engine host, check its revision, run the conformance subset
         run: |
           ./scripts/stage-engine-host.sh
           ./scripts/check-engine-host-identity.sh build/engine-host/sagascript-engine-host "$GITHUB_SHA"
-
+          python scripts/engine-host-conformance.py build/engine-host/sagascript-engine-host --no-model
+      # The tests use Swift Testing (Xcode 16+); the runner's default Xcode may be older.
       - name: Swift test (Core ML engine host)
         working-directory: src-tauri/engine-host/coreml
-        # The tests use Swift Testing (`import Testing`), which ships with Xcode 16+;
-        # the runner's default Xcode may be older, so run them with the newest one installed.
         run: |
           newest=$(find /Applications -maxdepth 1 -name "Xcode_*.app" | sort -V | tail -1)
           if [ -z "$newest" ]; then echo "No Xcode found in /Applications" >&2; exit 1; fi
@@ -237,152 +138,29 @@ jobs:
           swift --version
           swift test
 
-      # Engine-host protocol conformance (#367), model-free subset, against the
-      # host staged above: hello, ping, status, the errors the client relies on
-      # (unsupported, model_missing, not_loaded), shutdown and EOF exit. The full
-      # run (load, windows, cancel) needs a Pianissimo model and is in the release
-      # gate (release-build-macos.yml, verify-release-draft.sh; docs/engine-host-protocol.md,
-      # Conformance).
-      - name: Engine-host conformance, model-free subset (Core ML host)
-        run: python scripts/engine-host-conformance.py build/engine-host/sagascript-engine-host --no-model
-
   build-macos:
     needs: scope
     if: ${{ needs.scope.result == 'success' && needs.scope.outputs.docs_only != 'true' }}
     runs-on: macos-14
     timeout-minutes: 60
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
-
-      - name: Select evaluation Python runtime
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - name: Set up toolchain
+        uses: ./.github/actions/setup
         with:
-          python-version: "3.12"
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # v1; toolchain must match rust-toolchain.toml
-        with:
-          toolchain: 1.99.0
-
-      - name: Install Node.js
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
-        with:
-          node-version: 22
-          cache: npm
-
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          workspaces: src-tauri
-          shared-key: sagascript-ci-native
-
-      - name: Cache downloaded models
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
-        with:
-          path: ~/Library/Application Support/Sagascript/Models
-          key: macos-models-${{ hashFiles('src-tauri/crates/sagascript-core/src/settings/manager.rs', 'src-tauri/crates/sagascript-core/src/transcription/model.rs', 'src-tauri/crates/sagascript-core/src/diarization/model.rs') }}
-          restore-keys: |
-            macos-models-
-
-      - name: Install npm dependencies
-        run: npm ci
-
+          cache-key: sagascript-ci-native
+          native-build: "true"
       - name: Build frontend
         run: npm run build
-
-      # PR validation needs the native release binary for the smoke tests, not
-      # an installer. Full packaging, signing and notarization remain gated in
-      # release.yml, so skipping bundling here removes duplicate work without
-      # weakening native macOS coverage.
-
+      # The smoke tests need the binary, not an installer (packaging: release.yml).
       - name: Build native release binary (no installer)
         env:
           SAGASCRIPT_UPDATER_PUBKEY: ${{ vars.SAGASCRIPT_UPDATER_PUBKEY }}
         run: npx tauri build --config scripts/tauri-ci-prebuilt.json --no-bundle
-
-      - name: Verify native release binary
+      - name: Smoke tests (no model; model download, transcription, JSON and JSONL streams)
         run: |
-          BINARY=src-tauri/target/release/sagascript
-          [[ -x "$BINARY" ]]
-          file "$BINARY"
-
-      # --- Tier 1: CLI smoke tests (no model needed) ---
-
-      - name: Smoke test — help and version
-        run: |
-          BINARY=src-tauri/target/release/sagascript
-          $BINARY --help
-          $BINARY transcribe --help
-          $BINARY record --help
-
-      - name: Smoke test — config management
-        run: |
-          BINARY=src-tauri/target/release/sagascript
-          $BINARY config list
-          $BINARY config get language
-          $BINARY config set language sv
-          $BINARY config get language | grep -q sv
-          $BINARY config reset language
-          $BINARY config get language | grep -q en
-          $BINARY config path
-
-      - name: Smoke test — model listing and formats
-        run: |
-          BINARY=src-tauri/target/release/sagascript
-          $BINARY list-models
-          $BINARY formats
-
-      - name: Smoke test — shell completions
-        run: |
-          BINARY=src-tauri/target/release/sagascript
-          $BINARY completions zsh > /dev/null
-          $BINARY completions bash > /dev/null
-
-      # --- Tier 2: Model download + transcription ---
-
-      - name: Smoke test — download model and transcribe
-        run: |
-          BINARY=src-tauri/target/release/sagascript
-          $BINARY download-model nb-whisper-tiny
-          RESULT=$($BINARY transcribe --language no --model nb-whisper-tiny test-audio/norwegian-short-3s.mp3)
-          echo "Transcription: $RESULT"
-          echo "$RESULT" | grep -iq "stortinget"
-
-      - name: Smoke test — transcribe with JSON output
-        run: |
-          BINARY=src-tauri/target/release/sagascript
-          STDOUT="$RUNNER_TEMP/transcription-smoke.json"
-          STDERR="$RUNNER_TEMP/transcription-smoke.stderr"
-          $BINARY transcribe --json --language no --model nb-whisper-tiny \
-            test-audio/norwegian-short-3s.mp3 > "$STDOUT" 2> "$STDERR"
-          python3 scripts/verify-json-cli-streams.py "$STDOUT" "$STDERR"
-
-      # The output contract of #364 with a real model: JSONL items, a reader
-      # that stops after the first item, and the error object of a failed --json run.
-      - name: Smoke test — JSONL, closed pipe and JSON error object
-        run: |
-          set -o pipefail
-          BINARY=src-tauri/target/release/sagascript
-          INPUTS="$RUNNER_TEMP/jsonl-inputs"
-          mkdir -p "$INPUTS"
-          cp test-audio/norwegian-short-3s.mp3 "$INPUTS/a.mp3"
-          cp test-audio/norwegian-medium-8s.mp3 "$INPUTS/b.mp3"
-          $BINARY transcribe --jsonl --language no --model nb-whisper-tiny "$INPUTS" \
-            > "$RUNNER_TEMP/transcription-smoke.jsonl" 2> "$RUNNER_TEMP/transcription-smoke-jsonl.stderr"
-          python3 scripts/verify-json-cli-streams.py --jsonl \
-            "$RUNNER_TEMP/transcription-smoke.jsonl" "$RUNNER_TEMP/transcription-smoke-jsonl.stderr"
-          # A smoke check with the real model (pipefail turns a panic or a failing exit into
-          # a red step). The deterministic check of the closed-pipe contract is
-          # `run_into_closed_pipe` in src-tauri/crates/sagascript-cli/tests/output_contract.rs.
-          $BINARY transcribe --jsonl --language no --model nb-whisper-tiny "$INPUTS" | head -1 > /dev/null
-          STATUS=0
-          $BINARY transcribe --json --language no --model nb-whisper-tiny "$RUNNER_TEMP/missing.wav" \
-            > "$RUNNER_TEMP/transcription-error.json" 2> "$RUNNER_TEMP/transcription-error.stderr" || STATUS=$?
-          test "$STATUS" -eq 1
-          python3 scripts/verify-json-cli-streams.py --error \
-            "$RUNNER_TEMP/transcription-error.json" "$RUNNER_TEMP/transcription-error.stderr"
+          node scripts/ci/smoke-cli.mjs basic
+          node scripts/ci/smoke-cli.mjs model
 
   check-macos:
     needs: [scope, test-macos, build-macos]
@@ -390,172 +168,59 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
-      SCOPE_RESULT: ${{ needs.scope.result }}
-      SCOPE_TRUSTED: ${{ needs.scope.outputs.scope_trusted }}
-      DOCS_ONLY: ${{ needs.scope.outputs.docs_only }}
-      TEST_RESULT: ${{ needs.test-macos.result }}
-      BUILD_RESULT: ${{ needs.build-macos.result }}
+      NEEDS: ${{ toJSON(needs) }}
     steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
       - name: Assert macOS CI lanes passed
-        run: |
-          test "$SCOPE_RESULT" = success
-          test "$SCOPE_TRUSTED" = true
-          if [ "$DOCS_ONLY" = true ]; then
-            test "$TEST_RESULT" = skipped
-            test "$BUILD_RESULT" = skipped
-          else
-            test "$DOCS_ONLY" = false
-            test "$TEST_RESULT" = success
-            test "$BUILD_RESULT" = success
-          fi
+        run: node scripts/ci/assert-lanes.mjs
 
   test-linux:
     needs: scope
     if: ${{ needs.scope.result == 'success' && needs.scope.outputs.docs_only != 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
-
-      - name: Select evaluation Python runtime
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - name: Set up toolchain
+        uses: ./.github/actions/setup
         with:
-          python-version: "3.12"
-
-      - name: Test offline dictation evaluation tooling
-        run: python -m unittest discover -s scripts/dictation_eval -p 'test_*.py'
-
-      - name: Install Tauri system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
-            libasound2-dev \
-            build-essential \
-            file \
-            xdotool
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # v1; toolchain must match rust-toolchain.toml
-        with:
-          toolchain: 1.99.0
-          components: clippy, rustfmt
-
-      # Formatting gate (#352). Both Cargo workspaces must be rustfmt-clean:
-      # the main one and the standalone ORT engine host. Runs before any
-      # compilation, so an unformatted PR fails early.
-      - name: Check Rust formatting
-        working-directory: src-tauri
-        run: |
-          cargo fmt --all -- --check
-          cargo fmt --manifest-path engine-host/ort/Cargo.toml --all -- --check
-
-      - name: Install Node.js
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
-        with:
-          node-version: 22
-          cache: npm
-
-      # Same rust-cache scheme as the macOS job (#178); the shared key spans
-      # branches while rust-cache keeps OS/target entries separate. The
-      # standalone ORT engine host is its own Cargo workspace (#357).
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          workspaces: |
+          rust-components: clippy, rustfmt
+          linux-deps: "true"
+          cache-key: sagascript-ci
+          cache-workspaces: |
             src-tauri
             src-tauri/engine-host/ort
-          shared-key: sagascript-ci
-
-      # Dependency policy (#355), before any compilation: RustSec advisories,
-      # licenses, banned or duplicated crates and allowed sources, as set in
-      # src-tauri/deny.toml, for both Cargo workspaces. The advisory database
-      # is fetched at run time. rust-cache keeps the installed binary. The ORT
-      # host run allows the policy entries only the main workspace uses.
+      - name: Test offline dictation evaluation tooling
+        run: python -m unittest discover -s scripts/dictation_eval -p 'test_*.py'
+      # The cargo-deny gates run first, before any compilation; rust-cache keeps the binary.
       - name: Install cargo-deny
         run: cargo install --locked cargo-deny --version 0.20.2
-
-      - name: Check Rust dependency policy (cargo-deny)
-        working-directory: src-tauri
-        run: |
-          cargo deny --locked --workspace check
-          cargo deny --locked --manifest-path engine-host/ort/Cargo.toml --workspace check -A license-not-encountered -A license-exception-not-encountered -A unmatched-source
-
-      - name: Install npm dependencies
-        run: npm ci
-
+      # tauri::generate_context! embeds ../dist, so the app crate needs it.
       - name: Build frontend
         run: npm run build
-
-      # GUI build: compiles the cfg(target_os = "linux") Tauri path so it can't
-      # silently break on a future PR (the macOS/Windows runners never see it).
-      # The bare invocation covers the root (app) package, which pulls in
-      # sagascript-core with the `record` feature.
-      - name: Cargo check (GUI app)
-        working-directory: src-tauri
-        run: cargo check
-
-      - name: Cargo clippy (GUI app)
-        working-directory: src-tauri
-        run: cargo clippy --all-targets -- -D warnings
-
-      # Headless CLI (no Tauri) — the sagascript-cli member crate. Default
-      # features include `record` (cpal/ALSA); the --no-default-features runs
-      # cover the pure batch-transcribe build, which must need no ALSA.
-      - name: Cargo check (headless CLI, with record)
-        working-directory: src-tauri
-        run: cargo check -p sagascript-cli
-
-      - name: Cargo check (headless CLI, batch-only)
-        working-directory: src-tauri
-        run: cargo check -p sagascript-cli --no-default-features
-
-      - name: Cargo clippy (headless CLI, batch-only)
-        working-directory: src-tauri
-        run: cargo clippy -p sagascript-cli --all-targets --no-default-features -- -D warnings
-
-      # Clippy policy lints (#356): unwrap/expect/panic/print/size counts in
-      # production code, per lint and crate, must not rise above
-      # src-tauri/clippy-policy-baseline.json. It re-lints only the workspace
-      # crates (workspace + batch-only CLI); dependencies come from the steps
-      # above. Measures Linux code only. See CONTRIBUTING.md.
+      - name: Cargo gates
+        run: node scripts/ci/cargo-gates.mjs --os linux
+      # Clippy policy lints (#356): counts must not rise above src-tauri/clippy-policy-baseline.json.
+      # Re-lints only the workspace crates, after the gates above compiled the dependencies.
       - name: Clippy policy lints (counts must not rise)
         run: node scripts/clippy-policy.mjs
-
-      - name: Cargo test (headless CLI, batch-only)
-        working-directory: src-tauri
-        run: cargo test -p sagascript-cli --no-default-features
-
-      - name: Build batch CLI for evaluation contracts
-        working-directory: src-tauri
-        run: cargo build -p sagascript-cli --no-default-features
-
-      - name: Install offline diarization evaluation test dependencies
-        run: python -m pip install -r scripts/diarization_sv/requirements-evaluation.txt
-
       - name: Test diarization reference and evidence contracts with native identity parity
         env:
           SAGASCRIPT_REFERENCE_CLI: ${{ github.workspace }}/src-tauri/target/debug/sagascript
         run: |
+          python -m pip install -r scripts/diarization_sv/requirements-evaluation.txt
           test -x "$SAGASCRIPT_REFERENCE_CLI"
           python -m unittest discover -s scripts/diarization_sv -p 'test_*.py'
-
       - name: Cross-check native DER and JER against independent scorers
         run: |
           curl --fail --location --retry 2 \
             https://raw.githubusercontent.com/nryant/dscore/e02f949ac6592279300a2c33d03daf9e0c12fd27/scorelib/metrics.py \
             --output "$RUNNER_TEMP/dscore-metrics.py"
-          # The cross-check verifies the pinned source SHA-256 before loading
-          # only its numeric JER function. No Perl runner or model inference.
+          # Verifies the pinned source SHA-256, loads only its numeric JER function.
           python scripts/diarization_sv/crosscheck_metrics.py \
             --binary "$GITHUB_WORKSPACE/src-tauri/target/debug/sagascript" \
             --scratch "$RUNNER_TEMP/diarization-metric-crosscheck" \
             --dscore-source "$RUNNER_TEMP/dscore-metrics.py"
-
       - name: Upload diarization metric receipts
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -564,131 +229,30 @@ jobs:
           path: ${{ runner.temp }}/diarization-metric-crosscheck
           if-no-files-found: ignore
 
-      # Run core's own tests on Linux too — cargo does not run dependency
-      # crates' tests, so without these steps core is only compile-checked
-      # here (its tests would run on macOS/Windows only).
-      - name: Cargo test (sagascript-core, no features)
-        working-directory: src-tauri
-        run: cargo test -p sagascript-core
-
-      - name: Cargo test (sagascript-core, with record)
-        working-directory: src-tauri
-        run: cargo test -p sagascript-core --features record
-
-      # Regression guard for the no-ALSA property (#66): the batch-only CLI
-      # dependency tree must contain neither cpal nor alsa. (grep -c would
-      # exit 1 on zero matches and fail the step, hence the if/grep -q form.)
-      - name: Assert batch-only CLI has no ALSA/cpal dependency
-        working-directory: src-tauri
-        run: |
-          if cargo tree -p sagascript-cli --no-default-features -e normal | grep -qiE 'alsa|cpal'; then
-            echo "ERROR: cpal/ALSA leaked into the batch-only dependency tree:"
-            cargo tree -p sagascript-cli --no-default-features -e normal | grep -iE 'alsa|cpal'
-            exit 1
-          fi
-          echo "OK: no cpal/ALSA in batch-only tree"
-
-      # The Rust<->Swift engine-host wire format (#357). No CI lane runs
-      # `cargo test --workspace` and cargo never runs a dependency's tests, so
-      # these otherwise ran only in the release gate and windows-package.yml.
-      - name: Cargo test (sagascript-engine-protocol)
-        working-directory: src-tauri
-        run: cargo test -p sagascript-engine-protocol
-
-      # The ONNX Runtime engine host is a separate Cargo workspace (#357), so
-      # the workspace steps above never reach it; windows-package.yml only
-      # builds it. Its tests include the context-biasing parity vectors shared
-      # with the Swift host. ort's `load-dynamic` means neither step needs an
-      # ONNX Runtime binary. rustfmt is gated in "Check Rust formatting".
-      - name: Cargo test (ORT engine host)
-        working-directory: src-tauri/engine-host/ort
-        run: cargo test --locked
-
-      - name: Cargo clippy (ORT engine host)
-        working-directory: src-tauri/engine-host/ort
-        run: cargo clippy --all-targets --locked -- -D warnings
-
-      # Release-profile guard (#357): `release_build_ignores_the_real_environment`
-      # proves a release build ignores SAGASCRIPT_ENGINE_HOST and
-      # SAGASCRIPT_PIANISSIMO_MODEL_DIR. It is compiled only without
-      # debug_assertions and the `dev-overrides` feature, so every debug
-      # `cargo test` above leaves it out.
-      - name: Cargo test (sagascript-core, release-profile dev-override guard)
-        working-directory: src-tauri
-        run: |
-          set -o pipefail
-          cargo test --release -p sagascript-core --lib dev_overrides 2>&1 | tee "$RUNNER_TEMP/release-guard.log"
-          # cargo test exits 0 when the filter matches nothing: prove the guard ran.
-          grep -q 'release_build_ignores_the_real_environment ... ok' "$RUNNER_TEMP/release-guard.log"
-
-  # Minimum supported Rust version (#353). `rust-version` in
-  # src-tauri/Cargo.toml (and engine-host/ort) is a promise to people building
-  # from source; compile with exactly that toolchain so it stays true. Linux is
-  # the cheapest lane that builds every workspace member. RUSTUP_TOOLCHAIN
-  # overrides the newer development pin in rust-toolchain.toml.
+  # Minimum supported Rust version (#353): `rust-version` is a promise to people building from
+  # source, so compile with exactly that toolchain. The setup action installs it and exports
+  # RUSTUP_TOOLCHAIN (over the pin in rust-toolchain.toml); the msrv profile refuses to run without it.
   msrv-linux:
     needs: scope
     if: ${{ needs.scope.result == 'success' && needs.scope.outputs.docs_only != 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
-
-      - name: Install Tauri system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
-            libasound2-dev \
-            build-essential \
-            file
-
-      - name: Install the declared MSRV toolchain
-        run: |
-          msrv=$(sed -n 's/^rust-version = "\(.*\)"$/\1/p' src-tauri/Cargo.toml)
-          ort_msrv=$(sed -n 's/^rust-version = "\(.*\)"$/\1/p' src-tauri/engine-host/ort/Cargo.toml)
-          test -n "$msrv"
-          test "$msrv" = "$ort_msrv"
-          rustup toolchain install "$msrv" --profile minimal
-          echo "RUSTUP_TOOLCHAIN=$msrv" >> "$GITHUB_ENV"
-          echo "Checking against Rust $msrv"
-
-      - name: Install Node.js
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - name: Set up toolchain
+        uses: ./.github/actions/setup
         with:
-          node-version: 22
-          cache: npm
-
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          workspaces: |
+          python: "false"
+          rust: msrv
+          linux-deps: "true"
+          cache-key: sagascript-msrv
+          cache-workspaces: |
             src-tauri
             src-tauri/engine-host/ort
-          shared-key: sagascript-msrv
-
-      - name: Install npm dependencies
-        run: npm ci
-
-      # tauri::generate_context! embeds ../dist, so the app crate needs it.
       - name: Build frontend
         run: npm run build
-
-      - name: Cargo check (workspace) on MSRV
-        working-directory: src-tauri
-        run: cargo check --workspace --locked
-
-      - name: Cargo check (headless CLI, batch-only) on MSRV
-        working-directory: src-tauri
-        run: cargo check -p sagascript-cli --no-default-features --locked
-
-      - name: Cargo check (ORT engine host) on MSRV
-        working-directory: src-tauri/engine-host/ort
-        run: cargo check --locked
+      - name: Cargo gates (MSRV profile)
+        run: node scripts/ci/cargo-gates.mjs --profile msrv
 
   check-linux:
     needs: [scope, test-linux, msrv-linux]
@@ -696,259 +260,81 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
-      SCOPE_RESULT: ${{ needs.scope.result }}
-      SCOPE_TRUSTED: ${{ needs.scope.outputs.scope_trusted }}
-      DOCS_ONLY: ${{ needs.scope.outputs.docs_only }}
-      LINUX_RESULT: ${{ needs.test-linux.result }}
-      MSRV_RESULT: ${{ needs.msrv-linux.result }}
+      NEEDS: ${{ toJSON(needs) }}
     steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
       - name: Assert Linux CI lanes passed
-        run: |
-          test "$SCOPE_RESULT" = success
-          test "$SCOPE_TRUSTED" = true
-          if [ "$DOCS_ONLY" = true ]; then
-            test "$LINUX_RESULT" = skipped
-            test "$MSRV_RESULT" = skipped
-          else
-            test "$DOCS_ONLY" = false
-            test "$LINUX_RESULT" = success
-            test "$MSRV_RESULT" = success
-          fi
+        run: node scripts/ci/assert-lanes.mjs
 
   test-windows:
     needs: scope
     if: ${{ needs.scope.result == 'success' && needs.scope.outputs.docs_only != 'true' }}
     runs-on: windows-latest
     timeout-minutes: 60
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
-
-      - name: Select evaluation Python runtime
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - name: Set up toolchain
+        uses: ./.github/actions/setup
         with:
-          python-version: "3.12"
-
-      - name: Test offline dictation evaluation tooling
-        run: python -m unittest discover -s scripts/dictation_eval -p 'test_*.py'
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # v1; toolchain must match rust-toolchain.toml
-        with:
-          toolchain: 1.99.0
-          components: clippy
-
-      - name: Install Node.js
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
-        with:
-          node-version: 22
-          cache: npm
-
-      # The standalone ORT engine host is its own Cargo workspace (#357); its
-      # tests run here too (last step below).
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          workspaces: |
+          rust-components: clippy
+          cache-key: sagascript-ci-checks
+          cache-workspaces: |
             src-tauri
             src-tauri/engine-host/ort
-          shared-key: sagascript-ci-checks
-
+          npm-ci: "false"
+      # Before npm ci, so a build identity regression fails before any npm or Cargo work.
       - name: Test Windows build identity gates
         run: node --test scripts/test-ci-build-identity.mjs scripts/test-windows-release-identity.mjs scripts/test-windows-package-workflow.mjs scripts/test-release-promotion.mjs
-
       - name: Install npm dependencies
         run: npm ci
-
-      # The whole Node test suite on a Windows checkout (#357), not only the
-      # build identity gates above (which stay first so they fail before any
-      # npm or Cargo work). Platform-only cases skip themselves.
-      - name: Test frontend suite
-        run: npm run test:frontend
-
-      - name: Unit-test frontend modules
-        run: npm run test:unit
-
-      # The checkout has CRLF line endings (core.autocrlf); prettier.config.js
-      # accepts them on Windows, test-macos holds the repository to LF.
-      - name: Check frontend formatting
-        run: npm run format:check
-
+      # The whole Node suite on a Windows checkout (#357; CRLF line endings, which prettier.config.js
+      # accepts here). bash, not pwsh: pwsh would report only the LAST native command's exit code.
+      - name: Python and frontend checks (dictation tooling, Node tests, unit tests, format)
+        shell: bash
+        run: |
+          python -m unittest discover -s scripts/dictation_eval -p 'test_*.py'
+          npm run test:frontend
+          npm run test:unit
+          npm run format:check
       - name: Build frontend
         run: npm run build
-
-      - name: Cargo check
-        working-directory: src-tauri
-        run: cargo check
-
-      - name: Cargo test
-        working-directory: src-tauri
-        run: cargo test
-
-      - name: Cargo clippy
-        working-directory: src-tauri
-        run: cargo clippy --all-targets -- -D warnings
-
-      # Separate invocations preserve the core no-features build; combining
-      # package flags would unify features with the CLI defaults.
-      - name: Cargo test (sagascript-core, no features)
-        working-directory: src-tauri
-        run: cargo test -p sagascript-core
-
-      - name: Cargo test (sagascript-cli)
-        working-directory: src-tauri
-        run: cargo test -p sagascript-cli
-
-      - name: Cargo clippy (sagascript-core, no features)
-        working-directory: src-tauri
-        run: cargo clippy -p sagascript-core --all-targets -- -D warnings
-
-      - name: Cargo clippy (sagascript-cli)
-        working-directory: src-tauri
-        run: cargo clippy -p sagascript-cli --all-targets -- -D warnings
-
-      # The ONNX Runtime engine host ships for Windows, and its golden protocol
-      # replay moves the POSIX vector paths (/vectors/...) under an absolute
-      # Windows directory (#367), which only a Windows run exercises. ort's
-      # `load-dynamic` means no ONNX Runtime binary is needed.
-      - name: Cargo test (ORT engine host)
-        working-directory: src-tauri/engine-host/ort
-        run: cargo test --locked
+      - name: Cargo gates
+        run: node scripts/ci/cargo-gates.mjs --os windows
 
   build-windows:
     needs: scope
     if: ${{ needs.scope.result == 'success' && needs.scope.outputs.docs_only != 'true' }}
     runs-on: windows-latest
     timeout-minutes: 60
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # v1; toolchain must match rust-toolchain.toml
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - name: Set up toolchain
+        uses: ./.github/actions/setup
         with:
-          toolchain: 1.99.0
-
-      - name: Install Node.js
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
-        with:
-          node-version: 22
-          cache: npm
-
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          workspaces: src-tauri
-          shared-key: sagascript-ci-native
-
-      - name: Cache downloaded models
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
-        with:
-          path: ~\AppData\Roaming\Sagascript\Models
-          key: windows-models-${{ hashFiles('src-tauri/crates/sagascript-core/src/settings/manager.rs', 'src-tauri/crates/sagascript-core/src/transcription/model.rs', 'src-tauri/crates/sagascript-core/src/diarization/model.rs') }}
-          restore-keys: |
-            windows-models-
-
-      - name: Install npm dependencies
-        run: npm ci
-
+          cache-key: sagascript-ci-native
+          native-build: "true"
       - name: Build frontend
         run: npm run build
-
-      # PR validation needs the native release binary for the smoke tests, not
-      # an installer. Full packaging, signing and notarization remain gated in
-      # release.yml, so skipping bundling here removes duplicate work without
-      # weakening native Windows coverage.
-
+      # The smoke tests need the binary, not an installer; packaging stays gated in release.yml.
       - name: Build native release binary (no installer)
         run: npx tauri build --config scripts/tauri-ci-prebuilt.json --no-bundle
-
-      - name: Verify native release binary
-        run: |
-          $binary = "src-tauri\target\release\sagascript.exe"
-          if (-not (Test-Path -PathType Leaf $binary)) {
-            throw "Missing native release binary: $binary"
-          }
-
-      # --- CLI smoke tests (Windows / PowerShell) ---
-
-      - name: Smoke test — help and version
-        run: |
-          $env:BINARY = "src-tauri\target\release\sagascript.exe"
-          & $env:BINARY --help
-          & $env:BINARY transcribe --help
-          & $env:BINARY record --help
-
-      - name: Smoke test — config management
-        run: |
-          $env:BINARY = "src-tauri\target\release\sagascript.exe"
-          & $env:BINARY config list
-          & $env:BINARY config get language
-          & $env:BINARY config set language sv
-          $result = & $env:BINARY config get language
-          if ($result -notmatch "sv") { throw "Expected 'sv'" }
-          & $env:BINARY config reset language
-          $result = & $env:BINARY config get language
-          if ($result -notmatch "en") { throw "Expected 'en'" }
-          & $env:BINARY config path
-
-      - name: Smoke test — model listing and formats
-        run: |
-          $env:BINARY = "src-tauri\target\release\sagascript.exe"
-          & $env:BINARY list-models
-          & $env:BINARY formats
-
-      - name: Smoke test — shell completions
-        run: |
-          $env:BINARY = "src-tauri\target\release\sagascript.exe"
-          & $env:BINARY completions powershell | Out-Null
-
-      # The two model smoke steps stay non-blocking (#357), but no longer
-      # silently: a step's `conclusion` is reported AFTER continue-on-error, so
-      # it read "success" while the transcription actually died after
-      # "Encoding audio..." in about half of the runs since 2026-10-09 (masked
-      # exit 1; suspected non-portable whisper.cpp build in the shared native
-      # cache). The report step below turns every masked failure into a
-      # warning annotation and a job-summary line until the cause is fixed.
-      - name: Smoke test — download model and transcribe
-        id: smoke_transcribe
+      - name: Smoke test, tier 1 (no model)
+        run: node scripts/ci/smoke-cli.mjs basic
+      # Tier 2 is the only non-blocking step (#357): the transcription dies in about half of the
+      # runs. continue-on-error masks the step's `conclusion`, so the report step below turns its
+      # real `outcome` into a warning annotation and a job-summary line.
+      - name: Smoke test, tier 2 (model download, transcription, JSON and JSONL streams)
+        id: smoke_model
         continue-on-error: true
-        run: |
-          $env:BINARY = "src-tauri\target\release\sagascript.exe"
-          & $env:BINARY download-model nb-whisper-tiny
-          $result = & $env:BINARY transcribe --language no --model nb-whisper-tiny test-audio/norwegian-short-3s.mp3
-          Write-Host "Transcription: $result"
-          if ($result -notmatch "(?i)stortinget") { throw "Expected 'stortinget' in output" }
-
-      - name: Smoke test — transcribe with JSON output
-        id: smoke_json
-        continue-on-error: true
-        shell: cmd
-        run: |
-          set BINARY=src-tauri\target\release\sagascript.exe
-          %BINARY% transcribe --json --language no --model nb-whisper-tiny test-audio/norwegian-short-3s.mp3 > json_output.txt 2>nul
-          type json_output.txt
-          findstr /C:"text" json_output.txt
-          findstr /C:"duration_seconds" json_output.txt
-          findstr /C:"language" json_output.txt
-
+        run: node scripts/ci/smoke-cli.mjs model
       - name: Report masked smoke test failures
         if: ${{ always() }}
         shell: bash
         env:
-          TRANSCRIBE_OUTCOME: ${{ steps.smoke_transcribe.outcome }}
-          JSON_OUTCOME: ${{ steps.smoke_json.outcome }}
+          MODEL_OUTCOME: ${{ steps.smoke_model.outcome }}
         run: |
-          for pair in "download model and transcribe=$TRANSCRIBE_OUTCOME" "transcribe with JSON output=$JSON_OUTCOME"; do
-            name=${pair%%=*}
-            outcome=${pair##*=}
-            echo "Windows smoke test — $name: $outcome" >> "$GITHUB_STEP_SUMMARY"
-            if [ "$outcome" != success ]; then
-              echo "::warning title=Windows smoke test failed (non-blocking)::Smoke test — $name: $outcome (masked by continue-on-error, see #357)"
-            fi
-          done
+          echo "Windows smoke test, tier 2 (model): $MODEL_OUTCOME" >> "$GITHUB_STEP_SUMMARY"
+          [ "$MODEL_OUTCOME" = success ] || echo "::warning title=Windows smoke test failed (non-blocking)::Tier 2 (model): $MODEL_OUTCOME, masked by continue-on-error (#357)"
 
   check-windows:
     needs: [scope, test-windows, build-windows]
@@ -956,21 +342,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
-      SCOPE_RESULT: ${{ needs.scope.result }}
-      SCOPE_TRUSTED: ${{ needs.scope.outputs.scope_trusted }}
-      DOCS_ONLY: ${{ needs.scope.outputs.docs_only }}
-      TEST_RESULT: ${{ needs.test-windows.result }}
-      BUILD_RESULT: ${{ needs.build-windows.result }}
+      NEEDS: ${{ toJSON(needs) }}
     steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
       - name: Assert Windows CI lanes passed
-        run: |
-          test "$SCOPE_RESULT" = success
-          test "$SCOPE_TRUSTED" = true
-          if [ "$DOCS_ONLY" = true ]; then
-            test "$TEST_RESULT" = skipped
-            test "$BUILD_RESULT" = skipped
-          else
-            test "$DOCS_ONLY" = false
-            test "$TEST_RESULT" = success
-            test "$BUILD_RESULT" = success
-          fi
+        run: node scripts/ci/assert-lanes.mjs

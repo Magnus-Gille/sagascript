@@ -23,6 +23,7 @@ pub mod meeting_reprocess_proposal;
 pub mod meeting_review;
 pub mod models;
 pub mod path_scrub;
+pub mod run_context;
 pub mod settings;
 pub mod speaker_hint;
 pub mod sync;

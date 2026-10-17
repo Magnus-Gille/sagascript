@@ -4,6 +4,9 @@
 # Rust
 target/
 *.rs.bk
+# Tauri's build writes this schema on Linux only (the others are tracked), and it
+# would otherwise leave every Linux checkout, and its `--version` identity, dirty.
+src-tauri/gen/schemas/linux-schema.json
 
 # Node
 node_modules/
