@@ -2,7 +2,7 @@
 //!
 //! The shared fixtures in contracts/transport/ are written from real Rust
 //! payloads by the tests that own each payload (`events_tests.rs`,
-//! `commands_tests.rs`, `meeting_jobs_tests.rs`) and parsed by the frontend's
+//! `commands/settings_tests.rs`, `meeting_jobs_tests.rs`) and parsed by the frontend's
 //! Vitest suite against its TypeScript types (src/test/transport.test.ts).
 //! `command_map` generates the frontend's `CommandMap` from the registered
 //! command signatures. After an intended change, regenerate both with
@@ -15,6 +15,7 @@
 //! format the frontend must accept.
 
 mod command_map;
+mod writers;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -32,6 +33,20 @@ pub const FIXTURES: &[&str] = &[
     "get_meeting_job.json",
     "get_settings.json",
 ];
+
+/// The commands that write settings (they reach `persist_and_sync` or a sibling),
+/// and the functions that call the settings store's writers themselves.
+pub(crate) use writers::SettingsWriters;
+
+/// See [`SettingsWriters`].
+pub(crate) fn settings_writers() -> SettingsWriters {
+    writers::settings_writers()
+}
+
+/// The names of every command registered in `tauri::generate_handler!`.
+pub fn registered_command_names() -> Vec<String> {
+    command_map::registered_names()
+}
 
 pub fn blessing() -> bool {
     std::env::var_os(BLESS_ENV).is_some()

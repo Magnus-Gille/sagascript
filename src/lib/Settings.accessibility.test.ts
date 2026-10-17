@@ -4,8 +4,8 @@
 import { fireEvent, screen, waitFor } from "@testing-library/svelte";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, test, vi } from "vitest";
-import type { CommandHandlers } from "../test/ipc";
-import { renderSettings, settingsBackend } from "../test/settings";
+import { backendError, type CommandHandlers } from "../test/ipc";
+import { renderSettings, settingsBackend, settingsValue, swedishProfile } from "../test/settings";
 
 // The real wait polls once a second; these tests poll every few milliseconds.
 vi.mock("./permissions", async (importOriginal) => {
@@ -129,5 +129,52 @@ describe("a bare F13 shortcut on macOS", () => {
 
     expect(await screen.findByText("System Settings did not open")).toBeInTheDocument();
     expect(ipc.callsTo("set_hotkey_profiles")).toEqual([]);
+  });
+});
+
+describe("the hotkey registration retry on macOS", () => {
+  // A bare F13 is saved, Accessibility is granted, but the registration is not
+  // healthy: Settings retries it when it opens.
+  const f13 = settingsValue({
+    hotkey: "F13",
+    hotkey_profiles: [{ ...swedishProfile, shortcut: "F13", push_to_talk_shortcut: null, toggle_shortcut: "F13" }],
+  });
+  const unhealthy = {
+    ok: false,
+    error: "The macOS F13-F24 event monitor is unavailable; restart Sagascript",
+    shortcut: "F13",
+    shortcuts: ["F13"],
+    settings_watcher: { running: true, recovered_panics: 0 },
+  };
+  const backend = (retry: CommandHandlers["retry_hotkey_registration"]) =>
+    macBackend({
+      get_settings: () => f13,
+      check_accessibility_permission: () => true,
+      hotkey_status: () => unhealthy,
+      retry_hotkey_registration: retry,
+    });
+
+  test("a retry that was refused as busy says to try again, not that the monitor is unavailable", async () => {
+    const { ipc } = await renderSettings(
+      backend(() => {
+        throw backendError("busy", "The macOS F13-F24 event monitor is still starting; try again in a moment", true);
+      }),
+    );
+
+    await waitFor(() => expect(ipc.callsTo("retry_hotkey_registration")).toHaveLength(1));
+    expect(await screen.findByText(/still starting; try again in a moment/)).toBeInTheDocument();
+    expect(screen.queryByText(/restart Sagascript/)).not.toBeInTheDocument();
+  });
+
+  test("a retry that failed to register leaves the registration health's diagnostic", async () => {
+    const { ipc } = await renderSettings(
+      backend(() => {
+        throw backendError("hotkey_change_failed", "Failed to register hotkey profiles: shortcut in use");
+      }),
+    );
+
+    await waitFor(() => expect(ipc.callsTo("retry_hotkey_registration")).toHaveLength(1));
+    expect(await screen.findByText(/event monitor is unavailable; restart Sagascript/)).toBeInTheDocument();
+    expect(screen.queryByText(/shortcut in use/)).not.toBeInTheDocument();
   });
 });

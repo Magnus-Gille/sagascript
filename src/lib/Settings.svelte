@@ -1598,7 +1598,9 @@
     return shortcuts.some((shortcut) => canUseBareHotkey(shortcut, platform));
   }
 
-  async function refreshHotkeyRegistration(): Promise<void> {    try {
+  async function refreshHotkeyRegistration(): Promise<void> {
+    let retryError: unknown = null;
+    try {
       await retryHotkeyRegistration();
       const current = await readSettings();
       await refreshProfileModels(current.hotkey_profiles);
@@ -1606,10 +1608,16 @@
       // The registration-health response below contains the backend's full
       // diagnostic and keeps the failure visible in Settings.
       console.warn("Failed to retry hotkey registration", error);
+      retryError = error;
     }
     const status = await hotkeyStatus();
     hotkeyStatusOk = status.ok;
     hotkeyStatusError = status.error ?? "";
+    // A retry that was refused as busy (the macOS event monitor is still
+    // starting, or a dictation is active) attempted nothing, so the health
+    // above has no diagnostic for it and only says the old failure: show why
+    // the retry did not happen, and that trying again will work.
+    if (isBackendError(retryError, "busy")) hotkeyStatusError = toErrorMessage(retryError);
   }
 
   async function onShowOverlayToggle() {
