@@ -28,7 +28,7 @@ a `Settings` field has no `config` key.
 
 The rule has drifted where the two surfaces implement the same intent twice. `config set
 language` calls only `set_default_profile_language`, while the app's `set_language`
-(`apply_language_selection` in `commands.rs`) also resets `whisper_model` and
+(`apply_language_selection` in `commands/settings.rs`) also resets `whisper_model` and
 `auto_select_model`; only some subcommands offer `--json` (#373, #364).
 
 ## Decision

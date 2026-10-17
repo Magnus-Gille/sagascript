@@ -2,7 +2,7 @@
 //!
 //! The shared fixtures in contracts/transport/ are written from real Rust
 //! payloads by the tests that own each payload (`events_tests.rs`,
-//! `commands_tests.rs`, `meeting_jobs_tests.rs`) and parsed by the frontend's
+//! `commands/settings_tests.rs`, `meeting_jobs_tests.rs`) and parsed by the frontend's
 //! Vitest suite against its TypeScript types (src/test/transport.test.ts).
 //! `command_map` generates the frontend's `CommandMap` from the registered
 //! command signatures. After an intended change, regenerate both with
