@@ -1205,26 +1205,35 @@ fn file_model_auto_uses_language_recommendation_independent_of_profile_choice() 
 #[test]
 fn language_detection_never_downloads_an_encoder() {
     // Local mode makes no network requests after setup: detection may use
-    // a Core ML encoder only if `download-model` already installed it.
-    let production = include_str!("transcribe.rs")
-        .split("#[cfg(test)]")
-        .next()
-        .unwrap();
-    let start = production.find("fn detect_file_language(").unwrap();
-    let end = production[start..]
-        .find("fn neutral_language_detection_model(")
-        .unwrap();
-    let body = &production[start..start + end];
-    for forbidden in [
-        "backfill",
-        "download_model",
-        "ensure_coreml_encoder",
-        "block_on",
-    ] {
+    // a Core ML encoder only if `download-model` already installed it. The
+    // check obtains every detector through `DetectorLoader::load`, which takes
+    // an `EncoderPolicy`; the only policy is `NoDownload`, and this test makes
+    // the check show every policy it asks for, on every path that loads one.
+    use language_check_seam_tests::{detect, Scenario};
+
+    let scenarios = [
+        // Confident first answer: one detector.
+        Scenario::new([WhisperModel::Base]).answering(WhisperModel::Base, "sv", 0.95),
+        // Uncertain first answer, a larger model installed: two detectors.
+        Scenario::new([WhisperModel::Base, WhisperModel::LargeV3TurboQ8])
+            .answering(WhisperModel::Base, "sv", 0.60)
+            .answering(WhisperModel::LargeV3TurboQ8, "en", 0.97),
+        // Uncertain first answer, nothing larger installed: one detector.
+        Scenario::new([WhisperModel::Tiny]).answering(WhisperModel::Tiny, "no", 0.55),
+    ];
+    for scenario in scenarios {
+        let run = detect(&scenario, WhisperModel::KbWhisperBase);
         assert!(
-            !body.contains(forbidden),
-            "detection path must not call {forbidden}"
+            !run.loads.is_empty(),
+            "the scenario must reach a detector load, or this test proves nothing"
         );
+        for (model, policy) in &run.loads {
+            assert_eq!(
+                *policy,
+                EncoderPolicy::NoDownload,
+                "the language check asked to load {model:?} with {policy:?}"
+            );
+        }
     }
 }
 
@@ -1884,5 +1893,255 @@ mod progress_contract_tests {
         assert!(without.get("decoder").is_none());
         assert_eq!(with["step"], 2);
         assert!(with["percent"].is_null());
+    }
+}
+
+/// The language check of a language-optimized model, driven through its two
+/// seams (`DetectorLoader`, `LanguageProbe`) with fakes: no weights, no
+/// network. They record what the check did and in which order (#343).
+mod language_check_seam_tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub(super) enum Event {
+        Load(WhisperModel, EncoderPolicy),
+        Detect(String),
+        Drop(String),
+    }
+
+    type Log = Rc<RefCell<Vec<Event>>>;
+
+    /// Which models are installed and what each answers.
+    pub(super) struct Scenario {
+        installed: Vec<WhisperModel>,
+        answers: Vec<(WhisperModel, LanguageDetection)>,
+    }
+
+    impl Scenario {
+        pub(super) fn new<const N: usize>(installed: [WhisperModel; N]) -> Self {
+            Self {
+                installed: installed.to_vec(),
+                answers: Vec::new(),
+            }
+        }
+
+        pub(super) fn answering(
+            mut self,
+            model: WhisperModel,
+            language: &str,
+            probability: f32,
+        ) -> Self {
+            self.answers.push((
+                model,
+                LanguageDetection {
+                    language: language.to_string(),
+                    probability,
+                },
+            ));
+            self
+        }
+    }
+
+    struct FakeProbe {
+        name: String,
+        answer: Option<LanguageDetection>,
+        log: Log,
+    }
+
+    impl LanguageProbe for FakeProbe {
+        fn detect_language(
+            &self,
+            _audio: &[f32],
+        ) -> Result<Option<LanguageDetection>, DictationError> {
+            self.log.borrow_mut().push(Event::Detect(self.name.clone()));
+            Ok(self.answer.clone())
+        }
+    }
+
+    impl Drop for FakeProbe {
+        fn drop(&mut self) {
+            self.log.borrow_mut().push(Event::Drop(self.name.clone()));
+        }
+    }
+
+    struct FakeLoader<'a> {
+        scenario: &'a Scenario,
+        log: Log,
+    }
+
+    impl DetectorLoader for FakeLoader<'_> {
+        fn is_downloaded(&self, model: WhisperModel) -> bool {
+            self.scenario.installed.contains(&model)
+        }
+
+        fn load(
+            &self,
+            model: WhisperModel,
+            encoder: EncoderPolicy,
+        ) -> Result<Box<dyn LanguageProbe>, DictationError> {
+            self.log.borrow_mut().push(Event::Load(model, encoder));
+            Ok(Box::new(FakeProbe {
+                name: format!("{model:?}"),
+                answer: self
+                    .scenario
+                    .answers
+                    .iter()
+                    .find(|(candidate, _)| *candidate == model)
+                    .map(|(_, answer)| answer.clone()),
+                log: Rc::clone(&self.log),
+            }))
+        }
+    }
+
+    pub(super) struct Run {
+        pub(super) result: Option<LanguageDetection>,
+        pub(super) events: Vec<Event>,
+        pub(super) loads: Vec<(WhisperModel, EncoderPolicy)>,
+        pub(super) stderr: String,
+    }
+
+    /// The transcription backend's own answer, for models checked directly.
+    const DIRECT: &str = "direct";
+
+    pub(super) fn detect(scenario: &Scenario, transcription_model: WhisperModel) -> Run {
+        let log: Log = Rc::default();
+        let loader = FakeLoader {
+            scenario,
+            log: Rc::clone(&log),
+        };
+        let direct = FakeProbe {
+            name: DIRECT.to_string(),
+            answer: Some(LanguageDetection {
+                language: "fi".to_string(),
+                probability: 0.8,
+            }),
+            log: Rc::clone(&log),
+        };
+        let (out, captured) = Out::capture();
+        let result =
+            detect_file_language_with(&out, &loader, &direct, &[0.1; 160], transcription_model)
+                .unwrap();
+        drop(direct);
+        // The transcription backend's own probe is the caller's, not the check's.
+        let events: Vec<Event> = log
+            .borrow()
+            .iter()
+            .filter(|event| **event != Event::Drop(DIRECT.to_string()))
+            .cloned()
+            .collect();
+        let loads = events
+            .iter()
+            .filter_map(|event| match event {
+                Event::Load(model, policy) => Some((*model, *policy)),
+                _ => None,
+            })
+            .collect();
+        Run {
+            result,
+            events,
+            loads,
+            stderr: captured.stderr(),
+        }
+    }
+
+    fn detection(language: &str, probability: f32) -> Option<LanguageDetection> {
+        Some(LanguageDetection {
+            language: language.to_string(),
+            probability,
+        })
+    }
+
+    #[test]
+    fn english_only_models_skip_the_check() {
+        let run = detect(&Scenario::new([WhisperModel::Base]), WhisperModel::BaseEn);
+        assert_eq!(run.result, None);
+        assert_eq!(run.events, []);
+        assert_eq!(run.stderr, "");
+    }
+
+    #[test]
+    fn a_general_model_classifies_with_its_own_backend_and_loads_nothing() {
+        let run = detect(&Scenario::new([WhisperModel::Base]), WhisperModel::Small);
+        assert_eq!(run.result, detection("fi", 0.8));
+        assert_eq!(run.loads, []);
+        assert_eq!(run.events, [Event::Detect(DIRECT.to_string())]);
+    }
+
+    #[test]
+    fn without_a_neutral_model_the_check_is_skipped_with_a_warning() {
+        let run = detect(&Scenario::new([]), WhisperModel::KbWhisperBase);
+        assert_eq!(run.result, None);
+        assert_eq!(run.loads, []);
+        assert_eq!(
+            run.stderr,
+            "Warning: language mismatch check skipped because no neutral multilingual model is downloaded.\n"
+        );
+    }
+
+    #[test]
+    fn a_confident_answer_from_the_cheap_detector_is_final() {
+        let scenario = Scenario::new([WhisperModel::Base, WhisperModel::LargeV3Turbo]).answering(
+            WhisperModel::Base,
+            "sv",
+            0.90,
+        );
+        let run = detect(&scenario, WhisperModel::KbWhisperBase);
+        assert_eq!(run.result, detection("sv", 0.90));
+        assert_eq!(
+            run.events,
+            [
+                Event::Load(WhisperModel::Base, EncoderPolicy::NoDownload),
+                Event::Detect("Base".to_string()),
+                Event::Drop("Base".to_string()),
+            ]
+        );
+        assert_eq!(
+            run.stderr,
+            "Checking language with neutral model: Whisper Base...\n"
+        );
+    }
+
+    #[test]
+    fn an_uncertain_answer_releases_the_cheap_detector_before_loading_the_larger_one() {
+        let scenario = Scenario::new([WhisperModel::Base, WhisperModel::LargeV3TurboQ8])
+            .answering(WhisperModel::Base, "sv", 0.60)
+            .answering(WhisperModel::LargeV3TurboQ8, "en", 0.97);
+        let run = detect(&scenario, WhisperModel::KbWhisperBase);
+        assert_eq!(run.result, detection("en", 0.97));
+        assert_eq!(
+            run.events,
+            [
+                Event::Load(WhisperModel::Base, EncoderPolicy::NoDownload),
+                Event::Detect("Base".to_string()),
+                // peak memory: the cheap context is gone before the next load
+                Event::Drop("Base".to_string()),
+                Event::Load(WhisperModel::LargeV3TurboQ8, EncoderPolicy::NoDownload),
+                Event::Detect("LargeV3TurboQ8".to_string()),
+                Event::Drop("LargeV3TurboQ8".to_string()),
+            ]
+        );
+        assert_eq!(
+            run.stderr,
+            "Checking language with neutral model: Whisper Base...\nLanguage check was uncertain (sv p=0.600); verifying with Whisper Large v3 Turbo (Q8_0)...\n"
+        );
+    }
+
+    #[test]
+    fn an_uncertain_answer_stands_when_no_larger_model_is_installed() {
+        let scenario =
+            Scenario::new([WhisperModel::Tiny]).answering(WhisperModel::Tiny, "no", 0.55);
+        let run = detect(&scenario, WhisperModel::KbWhisperBase);
+        assert_eq!(run.result, detection("no", 0.55));
+        assert_eq!(run.loads, [(WhisperModel::Tiny, EncoderPolicy::NoDownload)]);
+    }
+
+    #[test]
+    fn a_detector_that_has_no_answer_ends_the_check() {
+        let scenario = Scenario::new([WhisperModel::Base, WhisperModel::LargeV3Turbo]);
+        let run = detect(&scenario, WhisperModel::KbWhisperBase);
+        assert_eq!(run.result, None);
+        assert_eq!(run.loads.len(), 1, "no second detector after no answer");
     }
 }

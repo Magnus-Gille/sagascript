@@ -2761,9 +2761,85 @@ fn root_mean_square(samples: &[f32]) -> f64 {
         .sqrt()
 }
 
+/// What loading a model for a language check may do about its Core ML
+/// encoder (#343). Local mode makes no network request after setup, so a
+/// language check can ask for [`EncoderPolicy::NoDownload`] only: an encoder
+/// is used when `download-model` installed it and is never fetched here.
+/// A policy that fetches one would be a new variant, and then every `match`
+/// over this enum, [`InstalledDetectors::load`] and
+/// `language_check_never_asks_for_an_encoder_download` have to change with it,
+/// on purpose.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EncoderPolicy {
+    NoDownload,
+}
+
+/// A loaded Whisper context that can name the language of 16 kHz audio.
+trait LanguageProbe {
+    fn detect_language(&self, audio: &[f32]) -> Result<Option<LanguageDetection>, DictationError>;
+}
+
+impl LanguageProbe for WhisperBackend {
+    fn detect_language(&self, audio: &[f32]) -> Result<Option<LanguageDetection>, DictationError> {
+        WhisperBackend::detect_language(self, audio)
+    }
+}
+
+/// Where the language check gets the extra detectors it needs for a
+/// language-optimized model, and which models it may use. The only way to
+/// obtain a detector is [`DetectorLoader::load`], which takes an
+/// [`EncoderPolicy`].
+trait DetectorLoader {
+    fn is_downloaded(&self, model: WhisperModel) -> bool;
+    fn load(
+        &self,
+        model: WhisperModel,
+        encoder: EncoderPolicy,
+    ) -> Result<Box<dyn LanguageProbe>, DictationError>;
+}
+
+/// The detectors of an installed copy: models that `download-model` put in the
+/// models directory, loaded as they are.
+struct InstalledDetectors;
+
+impl DetectorLoader for InstalledDetectors {
+    fn is_downloaded(&self, model: WhisperModel) -> bool {
+        model::is_model_downloaded(model)
+    }
+
+    fn load(
+        &self,
+        model: WhisperModel,
+        encoder: EncoderPolicy,
+    ) -> Result<Box<dyn LanguageProbe>, DictationError> {
+        // Irrefutable while `NoDownload` is the only policy: adding one is a
+        // compile error here until its loading is written.
+        let EncoderPolicy::NoDownload = encoder;
+        let backend = WhisperBackend::new();
+        backend.load_model(model)?;
+        Ok(Box::new(backend))
+    }
+}
+
 fn detect_file_language(
     out: &Out,
     transcription_backend: &WhisperBackend,
+    audio: &[f32],
+    transcription_model: WhisperModel,
+) -> Result<Option<LanguageDetection>, DictationError> {
+    detect_file_language_with(
+        out,
+        &InstalledDetectors,
+        transcription_backend,
+        audio,
+        transcription_model,
+    )
+}
+
+fn detect_file_language_with(
+    out: &Out,
+    detectors: &dyn DetectorLoader,
+    transcription_probe: &dyn LanguageProbe,
     audio: &[f32],
     transcription_model: WhisperModel,
 ) -> Result<Option<LanguageDetection>, DictationError> {
@@ -2771,10 +2847,12 @@ fn detect_file_language(
         return Ok(None);
     }
     if !transcription_model.is_language_optimized() {
-        return transcription_backend.detect_language(audio);
+        return transcription_probe.detect_language(audio);
     }
 
-    let Some(detection_model) = neutral_language_detection_model(model::is_model_downloaded) else {
+    let Some(detection_model) =
+        neutral_language_detection_model(|candidate| detectors.is_downloaded(candidate))
+    else {
         errln!(
             out,
             "Warning: language mismatch check skipped because no neutral multilingual model is downloaded."
@@ -2786,8 +2864,7 @@ fn detect_file_language(
         "Checking language with neutral model: {}...",
         detection_model.display_name()
     );
-    let detection_backend = WhisperBackend::new();
-    detection_backend.load_model(detection_model)?;
+    let detection_backend = detectors.load(detection_model, EncoderPolicy::NoDownload)?;
     let initial_detection = detection_backend.detect_language(audio)?;
     let Some(initial) = initial_detection else {
         return Ok(None);
@@ -2801,9 +2878,10 @@ fn detect_file_language(
     // contexts alive here would needlessly increase peak memory.
     drop(detection_backend);
 
-    let Some(accurate_model) =
-        accurate_language_detection_model(model::is_model_downloaded, detection_model)
-    else {
+    let Some(accurate_model) = accurate_language_detection_model(
+        |candidate| detectors.is_downloaded(candidate),
+        detection_model,
+    ) else {
         return Ok(Some(initial));
     };
     errln!(
@@ -2813,8 +2891,7 @@ fn detect_file_language(
         initial.probability,
         accurate_model.display_name()
     );
-    let accurate_backend = WhisperBackend::new();
-    accurate_backend.load_model(accurate_model)?;
+    let accurate_backend = detectors.load(accurate_model, EncoderPolicy::NoDownload)?;
     accurate_backend.detect_language(audio)
 }
 
