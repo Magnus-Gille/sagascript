@@ -482,6 +482,136 @@ mod word_grouping_tests {
     }
 }
 
+/// More characterisation of the DTW word grouping (#371): the inputs the tests
+/// above leave out. Words are never dropped, and a word without a valid DTW
+/// time borrows the previous word's end.
+#[cfg(all(test, feature = "diarization"))]
+mod word_grouping_edge_tests {
+    use super::{
+        group_tokens_into_words, meaningful_coverage_text, words_from_segments, TokenTiming,
+    };
+
+    fn tok(text: &str, t_dtw: f64) -> TokenTiming {
+        TokenTiming {
+            t_dtw,
+            text: text.to_string(),
+        }
+    }
+
+    fn owned(words: &[(f64, f64, &str)]) -> Vec<(f64, f64, String)> {
+        words
+            .iter()
+            .map(|&(start, end, text)| (start, end, text.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn a_lone_space_token_makes_an_empty_word_instead_of_being_dropped() {
+        assert_eq!(
+            group_tokens_into_words(&[tok(" ", 1.0), tok(" hi", 2.0)]),
+            owned(&[(1.0, 1.0, ""), (2.0, 2.0, "hi")])
+        );
+    }
+
+    #[test]
+    fn only_a_leading_ascii_space_starts_a_word_and_all_of_them_are_stripped() {
+        assert_eq!(
+            group_tokens_into_words(&[tok("  hi", 1.0), tok("\tthere", 2.0), tok("\u{a0}x", 3.0)]),
+            owned(&[(1.0, 3.0, "hi\tthere\u{a0}x")])
+        );
+    }
+
+    #[test]
+    fn bracketed_tokens_are_special_only_at_the_start_and_angle_tokens_anywhere() {
+        assert_eq!(
+            group_tokens_into_words(&[
+                tok(" a[b]", 1.0),
+                tok("[_TT_150]", 1.1),
+                tok(" he<|x|>llo", 1.2),
+                tok(" c", 2.0),
+            ]),
+            owned(&[(1.0, 1.0, "a[b]"), (2.0, 2.0, "c")])
+        );
+    }
+
+    #[test]
+    fn a_word_borrows_the_previous_end_when_none_of_its_tokens_has_a_valid_time() {
+        assert_eq!(
+            group_tokens_into_words(&[
+                tok(" first", 0.0),
+                tok(" nan", f64::NAN),
+                tok(" inf", f64::INFINITY),
+                tok(" negative", -0.5),
+                tok(" last", 4.0),
+            ]),
+            owned(&[
+                (0.0, 0.0, "first"),
+                (0.0, 0.0, "nan"),
+                (0.0, 0.0, "inf"),
+                (0.0, 0.0, "negative"),
+                (4.0, 4.0, "last"),
+            ])
+        );
+        // Nothing valid before it: the borrowed time is zero.
+        assert_eq!(
+            group_tokens_into_words(&[tok(" early", -1.0)]),
+            owned(&[(0.0, 0.0, "early")])
+        );
+    }
+
+    #[test]
+    fn invalid_tokens_inside_a_word_do_not_affect_its_span() {
+        assert_eq!(
+            group_tokens_into_words(&[
+                tok(" ab", -1.0),
+                tok("c", 2.5),
+                tok("d", f64::NAN),
+                tok("e", 2.0)
+            ]),
+            owned(&[(2.0, 2.5, "abcde")])
+        );
+    }
+
+    #[test]
+    fn grouping_keeps_the_input_order_even_when_times_run_backwards() {
+        assert_eq!(
+            group_tokens_into_words(&[tok(" late", 5.0), tok(" early", 1.0)]),
+            owned(&[(5.0, 5.0, "late"), (1.0, 1.0, "early")])
+        );
+    }
+
+    #[test]
+    fn segments_without_tokens_or_without_content_give_no_words() {
+        assert!(words_from_segments(&[]).is_empty());
+        assert!(words_from_segments(&[Vec::new(), Vec::new()]).is_empty());
+        // A valid time on a special token proves DTW ran, but there is no word.
+        assert!(words_from_segments(&[vec![tok("[_BEG_]", 0.0)]]).is_empty());
+    }
+
+    #[test]
+    fn a_leading_special_token_does_not_use_up_the_segment_boundary() {
+        let words = words_from_segments(&[
+            vec![tok(" one", 1.0)],
+            vec![tok("[_BEG_]", 0.0), tok("two", 2.0), tok("s", 2.1)],
+        ]);
+
+        assert_eq!(words, owned(&[(1.0, 1.0, "one"), (2.0, 2.1, "twos")]));
+    }
+
+    #[test]
+    fn coverage_text_strips_timestamps_inside_the_text_and_trims_only_the_ends() {
+        assert_eq!(meaningful_coverage_text(b""), None);
+        assert_eq!(
+            meaningful_coverage_text(b" a <|0.00|> b "),
+            Some("a  b".to_string())
+        );
+        assert_eq!(
+            meaningful_coverage_text(b"caf\xc3"),
+            Some("caf\u{FFFD}".to_string())
+        );
+    }
+}
+
 #[cfg(test)]
 mod progress_callback_tests {
     use super::{
@@ -1334,6 +1464,360 @@ mod warm_state_tests {
             assert!(!timings.inference_started);
         }
         assert!(backend.load_lock.is_poisoned(), "fail-closed is sticky");
+    }
+}
+
+/// Characterisation of the chunk-stitching rules (#371), pinned before the
+/// module split. The rules are deliberately conservative: an overlap is only
+/// removed when it is long, distinctive and close to the chunk edges.
+#[cfg(test)]
+mod stitch_characterisation_tests {
+    use super::*;
+
+    fn segment(start: f64, end: f64, text: &str) -> TranscriptSegment {
+        TranscriptSegment {
+            start,
+            end,
+            text: text.to_string(),
+            avg_logprob: None,
+            no_speech_prob: 0.0,
+        }
+    }
+
+    fn joined(chunks: Vec<Vec<TranscriptSegment>>, duration: f64) -> String {
+        assemble_transcript(&stitch_chunk_results(chunks, duration))
+    }
+
+    fn words(count: usize, prefix: &str) -> String {
+        (0..count)
+            .map(|index| format!(" {prefix}{index}"))
+            .collect::<String>()
+    }
+
+    #[test]
+    fn nothing_to_stitch_gives_nothing() {
+        assert!(stitch_chunk_results(Vec::new(), 10.0).is_empty());
+        assert!(stitch_chunk_results(vec![Vec::new(), Vec::new()], 10.0).is_empty());
+    }
+
+    #[test]
+    fn one_chunk_keeps_its_segments_with_bounded_times_and_drops_blank_ones() {
+        let stitched = stitch_chunk_results(
+            vec![vec![
+                segment(-5.0, 2.0, " a"),
+                segment(1.0, 3.0, "   "),
+                segment(2.5, 99.0, " b"),
+            ]],
+            10.0,
+        );
+
+        let timed: Vec<_> = stitched
+            .iter()
+            .map(|s| (s.start, s.end, s.text.as_str()))
+            .collect();
+        assert_eq!(timed, [(0.0, 2.0, " a"), (2.5, 10.0, " b")]);
+    }
+
+    #[test]
+    fn a_later_chunk_cannot_start_before_the_previous_chunk_ended() {
+        let stitched = stitch_chunk_results(
+            vec![
+                vec![segment(0.0, 50.0, " first part")],
+                vec![segment(40.0, 80.0, " second part")],
+            ],
+            100.0,
+        );
+
+        assert_eq!((stitched[1].start, stitched[1].end), (50.0, 80.0));
+        assert_eq!(stitched[1].text, " second part");
+    }
+
+    #[test]
+    fn unrelated_chunks_are_joined_without_trimming() {
+        let text = joined(
+            vec![
+                vec![segment(0.0, 60.0, " the weather was clear")],
+                vec![segment(55.0, 120.0, " dinner is at seven")],
+            ],
+            120.0,
+        );
+
+        assert_eq!(text.trim(), "the weather was clear dinner is at seven");
+    }
+
+    #[test]
+    fn a_three_word_overlap_is_too_short_to_remove() {
+        let text = joined(
+            vec![
+                vec![segment(0.0, 60.0, " we went to the park today")],
+                vec![segment(55.0, 120.0, " the park today and then home")],
+            ],
+            120.0,
+        );
+
+        assert_eq!(
+            text.trim(),
+            "we went to the park today the park today and then home"
+        );
+    }
+
+    #[test]
+    fn the_anchor_needs_twelve_characters_not_just_four_words() {
+        let eleven = joined(
+            vec![
+                vec![segment(0.0, 60.0, " x ab def ghi jkl")],
+                vec![segment(55.0, 120.0, " ab def ghi jkl y")],
+            ],
+            120.0,
+        );
+        let twelve = joined(
+            vec![
+                vec![segment(0.0, 60.0, " x abc def ghi jkl")],
+                vec![segment(55.0, 120.0, " abc def ghi jkl y")],
+            ],
+            120.0,
+        );
+
+        assert_eq!(eleven.trim(), "x ab def ghi jkl ab def ghi jkl y");
+        assert_eq!(twelve.trim(), "x abc def ghi jkl y");
+    }
+
+    #[test]
+    fn the_previous_tail_after_the_anchor_is_replaced_by_the_next_chunk() {
+        let text = joined(
+            vec![
+                vec![segment(0.0, 60.0, " intro alpha beta gamma delta old tail")],
+                vec![segment(55.0, 120.0, " alpha beta gamma delta new tail")],
+            ],
+            120.0,
+        );
+
+        assert_eq!(text.trim(), "intro alpha beta gamma delta new tail");
+    }
+
+    #[test]
+    fn an_overlap_is_only_accepted_within_thirty_two_unanchored_words_of_each_edge() {
+        let anchor = " alpha beta gamma delta";
+        let trailing = |count| {
+            vec![
+                vec![segment(
+                    0.0,
+                    60.0,
+                    &format!("{anchor}{}", words(count, "t")),
+                )],
+                vec![segment(55.0, 120.0, &format!("{anchor} next"))],
+            ]
+        };
+        let leading = |count| {
+            vec![
+                vec![segment(
+                    0.0,
+                    60.0,
+                    &format!("{}{anchor} prev", words(33, "p")),
+                )],
+                vec![segment(
+                    55.0,
+                    120.0,
+                    &format!("{}{anchor}", words(count, "l")),
+                )],
+            ]
+        };
+
+        // 32 words after the anchor in the previous chunk: still replaced.
+        assert_eq!(
+            joined(trailing(32), 120.0).trim(),
+            "alpha beta gamma delta next"
+        );
+        // 33: the overlap is not trusted and both chunks are kept whole.
+        let kept = joined(trailing(33), 120.0);
+        assert!(kept.contains("t32") && kept.ends_with("alpha beta gamma delta next"));
+
+        // The same limit applies to words before the anchor in the next chunk:
+        // 32 are accepted (the previous chunk is cut where the next one begins).
+        let expected = format!("p0{}{anchor}", words(32, "l"));
+        assert_eq!(joined(leading(32), 120.0).trim(), expected);
+        // 33 are not.
+        let kept = joined(leading(33), 120.0);
+        assert!(kept.contains("p32 alpha beta gamma delta prev"));
+        assert!(kept.trim_end().ends_with("l32 alpha beta gamma delta"));
+    }
+
+    #[test]
+    fn the_longest_anchor_at_the_earliest_position_in_the_next_chunk_wins() {
+        let text = joined(
+            vec![
+                vec![segment(
+                    0.0,
+                    60.0,
+                    " one two three four five six one two three four",
+                )],
+                vec![segment(55.0, 120.0, " one two three four five six seven")],
+            ],
+            120.0,
+        );
+
+        // Both alignments start at the first word of the next chunk; the
+        // six-word anchor beats the later four-word one, so the whole
+        // previous chunk is the overlap.
+        assert_eq!(text.trim(), "one two three four five six seven");
+    }
+
+    #[test]
+    fn an_overlap_is_trimmed_across_segment_boundaries_of_the_previous_chunk() {
+        let text = joined(
+            vec![
+                vec![
+                    segment(0.0, 30.0, " start of speech"),
+                    segment(30.0, 60.0, " alpha beta"),
+                    segment(60.0, 65.0, " gamma delta"),
+                ],
+                vec![segment(55.0, 120.0, " alpha beta gamma delta end")],
+            ],
+            120.0,
+        );
+
+        assert_eq!(text.trim(), "start of speech alpha beta gamma delta end");
+    }
+
+    #[test]
+    fn suffix_trimming_keeps_whole_segments_before_the_cut_and_cuts_inside_one() {
+        let make = || vec![segment(0.0, 1.0, "abc def "), segment(1.0, 2.0, "ghi jkl")];
+
+        let mut at_boundary = make();
+        trim_segment_suffix(&mut at_boundary, 8);
+        assert_eq!(texts(&at_boundary), ["abc def"]);
+
+        let mut inside_second = make();
+        trim_segment_suffix(&mut inside_second, 9);
+        assert_eq!(texts(&inside_second), ["abc def ", "g"]);
+
+        let mut at_start = make();
+        trim_segment_suffix(&mut at_start, 0);
+        assert!(at_start.is_empty());
+
+        let mut past_the_end = make();
+        trim_segment_suffix(&mut past_the_end, 99);
+        assert_eq!(texts(&past_the_end), ["abc def ", "ghi jkl"]);
+    }
+
+    fn texts(segments: &[TranscriptSegment]) -> Vec<&str> {
+        segments
+            .iter()
+            .map(|segment| segment.text.as_str())
+            .collect()
+    }
+
+    #[test]
+    fn stitch_words_lowercases_and_keeps_inner_apostrophes_and_hyphens() {
+        let found = stitch_words("Don't stop-me, ÅÄÖ  “quoted” 'x' it’s- ok");
+
+        let normalized: Vec<_> = found.iter().map(|w| w.normalized.as_str()).collect();
+        assert_eq!(
+            normalized,
+            ["don't", "stop-me", "åäö", "quoted", "x", "it’s", "ok"]
+        );
+        assert_eq!(found[0].start, 0);
+        assert_eq!(found[1].start, 6);
+        assert!(stitch_words("... ,, --").is_empty());
+    }
+
+    #[test]
+    fn overlap_start_is_the_byte_offset_of_the_first_repeated_word() {
+        let previous = "alpha beta gamma delta epsilon zeta";
+
+        assert_eq!(
+            overlapping_suffix_start(previous, "gamma delta epsilon zeta eta"),
+            Some(11)
+        );
+        assert_eq!(
+            overlapping_suffix_start(previous, "GAMMA, Delta; epsilon. zeta"),
+            Some(11),
+            "matching ignores case and punctuation"
+        );
+        assert_eq!(
+            overlapping_suffix_start(previous, "nothing in common here"),
+            None
+        );
+        assert_eq!(
+            overlapping_suffix_start("", "gamma delta epsilon zeta"),
+            None
+        );
+    }
+
+    #[test]
+    fn plain_transcript_joins_segments_exactly_as_whisper_spaced_them() {
+        assert_eq!(assemble_transcript(&[]), "");
+        let glued = [segment(0.0, 1.0, "Hello"), segment(1.0, 2.0, "world")];
+        assert_eq!(assemble_transcript(&glued), "Helloworld");
+        let spaced = [segment(0.0, 1.0, "Hello"), segment(1.0, 2.0, " world")];
+        assert_eq!(assemble_transcript(&spaced), "Hello world");
+        assert!(contains_no_speech_marker("x<|nospeech|>y"));
+        assert!(!contains_no_speech_marker("<|nospeech"));
+    }
+
+    #[test]
+    fn segment_bounds_never_leave_the_audio_or_run_backwards() {
+        assert_eq!(sanitize_segment_bounds(1.0, 2.0, -3.0, 0.0), (0.0, 0.0));
+        assert_eq!(sanitize_segment_bounds(1.0, 2.0, f64::NAN, 0.0), (0.0, 0.0));
+        assert_eq!(sanitize_segment_bounds(1.0, 2.0, 10.0, 99.0), (10.0, 10.0));
+        assert_eq!(sanitize_segment_bounds(5.0, 3.0, 10.0, 0.0), (5.0, 5.0));
+        assert_eq!(
+            sanitize_segment_bounds(-4.0, f64::NAN, 10.0, 2.0),
+            (2.0, 2.0)
+        );
+    }
+}
+
+/// Characterisation of the parallel-chunk limits (#371). Chunk planning itself
+/// is tested in `chunking.rs`; this pins the numbers this module feeds it and
+/// the progress weights it derives from the plan.
+#[cfg(test)]
+mod parallel_limit_tests {
+    use super::*;
+    use crate::transcription::chunking::plan_chunks;
+
+    const SECOND: usize = 16_000;
+
+    fn planned(seconds: usize, requested: usize) -> Vec<AudioChunk> {
+        let audio = vec![0.25; seconds * SECOND];
+        plan_chunks(
+            &audio,
+            requested.clamp(1, MAX_PARALLEL_CHUNKS),
+            MIN_PARALLEL_CHUNK_SAMPLES,
+        )
+    }
+
+    #[test]
+    fn the_limits_are_four_states_and_one_minute_pieces() {
+        assert_eq!(MAX_PARALLEL_CHUNKS, 4);
+        assert_eq!(MIN_PARALLEL_CHUNK_SAMPLES, 60 * SECOND);
+        assert_eq!(AUTO_PARALLEL_MIN_SAMPLES, 10 * 60 * SECOND);
+        assert_eq!(AUTO_PARALLEL_MAX_MODEL_MB, 500);
+    }
+
+    #[test]
+    fn a_recording_is_never_split_into_pieces_shorter_than_a_minute() {
+        assert_eq!(planned(59, 4).len(), 1);
+        assert_eq!(planned(119, 4).len(), 1);
+        assert_eq!(planned(120, 4).len(), 2);
+        assert_eq!(planned(300, 4).len(), 4);
+    }
+
+    #[test]
+    fn requests_of_zero_or_above_the_maximum_are_clamped() {
+        assert_eq!(planned(600, 0).len(), 1);
+        assert_eq!(planned(600, 1).len(), 1);
+        assert_eq!(planned(600, 99).len(), MAX_PARALLEL_CHUNKS);
+    }
+
+    #[test]
+    fn automatic_parallelism_starts_with_beam_two_and_never_asks_for_more_than_two() {
+        let long = AUTO_PARALLEL_MIN_SAMPLES;
+        let small = WhisperModel::KbWhisperSmall;
+        assert_eq!(recommended_parallel_chunks(long, small, 1), 1);
+        assert_eq!(recommended_parallel_chunks(long, small, 2), 2);
+        assert_eq!(recommended_parallel_chunks(usize::MAX, small, 8), 2);
+        assert!(recommended_parallel_chunks(usize::MAX, small, u32::MAX) <= MAX_PARALLEL_CHUNKS);
     }
 }
 
