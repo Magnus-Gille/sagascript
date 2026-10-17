@@ -411,15 +411,9 @@ fn resolved_profile_id(
             return Ok(id.to_string());
         }
     }
-    let id = profile.map(str::to_string).unwrap_or_else(|| {
-        let profiles = stored.resolved_hotkey_profiles();
-        profiles
-            .iter()
-            .find(|candidate| candidate.id == "default")
-            .unwrap_or(&profiles[0])
-            .id
-            .clone()
-    });
+    let id = profile
+        .map(str::to_string)
+        .unwrap_or_else(|| stored.default_profile().id);
     validate_profile(stored, &id)?;
     Ok(id)
 }

@@ -218,13 +218,7 @@ impl AppController {
     /// Handle hotkey down event
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn handle_hotkey_down(&mut self) -> Result<HotkeyDownResult, DictationError> {
-        let profile = self
-            .settings
-            .resolved_hotkey_profiles()
-            .into_iter()
-            .find(|profile| profile.id == "default")
-            .or_else(|| self.settings.resolved_hotkey_profiles().into_iter().next())
-            .expect("resolved profiles always contains at least one profile");
+        let profile = self.settings.default_profile();
         self.handle_hotkey_down_for_profile(profile)
     }
 
@@ -397,13 +391,7 @@ impl AppController {
     /// still transcribing). Callers use this to avoid reporting a recording that
     /// never happened (finding 1).
     pub fn start_recording(&mut self) -> Result<bool, DictationError> {
-        let profile = self
-            .settings
-            .resolved_hotkey_profiles()
-            .into_iter()
-            .find(|profile| profile.id == "default")
-            .or_else(|| self.settings.resolved_hotkey_profiles().into_iter().next())
-            .expect("resolved profiles always contains at least one profile");
+        let profile = self.settings.default_profile();
         self.start_recording_for_profile(profile)
     }
 
