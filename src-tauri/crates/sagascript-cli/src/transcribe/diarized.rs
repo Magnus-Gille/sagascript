@@ -103,7 +103,7 @@ pub(super) fn run_diarized(
         },
         Source::Decoded(audio) => {
             if plan.options.vad_model_path.is_some() {
-                verify_vad_model(out)?;
+                verify_vad_model(backend, out)?;
             }
             prepare_language(
                 request,

@@ -12,7 +12,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use sagascript_core::error::DictationError;
 use sagascript_core::run_context::file_beam_size;
 use sagascript_core::transcription::{
-    model, recommended_parallel_chunks, ContextProfile, TranscribeOptions, TranscriptSegment,
+    recommended_parallel_chunks, ContextProfile, TranscribeOptions, TranscriptSegment,
 };
 
 use super::inference::{prepare_language, verify_vad_model, InferenceBackend};
@@ -52,7 +52,7 @@ pub(super) fn run_plain(
         out,
     )?;
 
-    let options = resolve_decoder(request, audio.samples.len(), out)?;
+    let options = resolve_decoder(request, backend, audio.samples.len(), out)?;
     let segments = transcribe(backend, request, &audio, &options, &progress, out)?;
 
     progress.phase("finalizing", None);
@@ -82,6 +82,7 @@ pub(super) fn run_plain(
 /// of beam search, parallel states and VAD the run uses.
 fn resolve_decoder(
     request: &FileRequest<'_>,
+    backend: &dyn InferenceBackend,
     audio_samples: usize,
     out: &Out,
 ) -> Result<TranscribeOptions, DictationError> {
@@ -100,8 +101,7 @@ fn resolve_decoder(
         stored.vad_enabled
     };
     let vad_model_path = if vad_enabled {
-        let path = model::vad_model_path();
-        verify_vad_model(out)?;
+        let path = verify_vad_model(backend, out)?;
         path.to_str().map(str::to_string)
     } else {
         None

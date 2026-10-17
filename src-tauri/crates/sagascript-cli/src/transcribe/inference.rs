@@ -8,6 +8,7 @@
 //! nothing else of the backend; in particular the model files, the loading and
 //! the decoding all go through this trait.
 
+use std::path::PathBuf;
 use std::time::Instant;
 
 use sagascript_core::error::DictationError;
@@ -41,6 +42,10 @@ pub(super) trait InferenceBackend: LanguageProbe + Sync {
         model: WhisperModel,
         profile: ContextProfile,
     ) -> Result<(), DictationError>;
+
+    /// Makes sure the Silero VAD model is on disk, downloading it on first
+    /// use, and returns where it is.
+    fn ensure_vad_model(&self) -> Result<PathBuf, DictationError>;
 
     /// Plain file transcription: timestamped segments, with recovery of speech
     /// Whisper's windowing skipped. `on_progress` gets Whisper's percent;
@@ -77,6 +82,14 @@ impl InferenceBackend for WhisperBackend {
         profile: ContextProfile,
     ) -> Result<(), DictationError> {
         self.load_model_with_profile(model, profile)
+    }
+
+    fn ensure_vad_model(&self) -> Result<PathBuf, DictationError> {
+        let path = model::vad_model_path();
+        tokio::runtime::Runtime::new()
+            .map_err(|e| DictationError::ModelDownloadFailed(format!("tokio runtime: {e}")))?
+            .block_on(model::download_vad_model(|_, _| {}))?;
+        Ok(path)
     }
 
     fn transcribe_segments(
@@ -201,11 +214,12 @@ pub(super) fn prepare_language(
     })
 }
 
-/// Makes sure the Silero VAD model is on disk, downloading it on first use.
-pub(super) fn verify_vad_model(out: &Out) -> Result<(), DictationError> {
+/// Says it is checking the Silero VAD model and has `backend` make sure it is
+/// on disk; returns where it is.
+pub(super) fn verify_vad_model(
+    backend: &dyn InferenceBackend,
+    out: &Out,
+) -> Result<PathBuf, DictationError> {
     errln!(out, "Verifying Silero VAD model...");
-    tokio::runtime::Runtime::new()
-        .map_err(|e| DictationError::ModelDownloadFailed(format!("tokio runtime: {e}")))?
-        .block_on(model::download_vad_model(|_, _| {}))?;
-    Ok(())
+    backend.ensure_vad_model()
 }

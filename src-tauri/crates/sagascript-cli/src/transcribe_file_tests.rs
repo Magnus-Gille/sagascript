@@ -43,6 +43,7 @@ struct Transcribed {
 enum Call {
     Load(WhisperModel, ContextProfile),
     Detect { samples: usize },
+    EnsureVadModel,
     Transcribe(Transcribed),
 }
 
@@ -76,6 +77,7 @@ impl Reply {
 struct ScriptedBackend {
     installed: bool,
     detection: Option<LanguageDetection>,
+    detection_failures: Mutex<VecDeque<DictationError>>,
     load_failures: Mutex<VecDeque<DictationError>>,
     replies: Mutex<VecDeque<Reply>>,
     calls: Mutex<Vec<Call>>,
@@ -86,6 +88,7 @@ impl ScriptedBackend {
         Self {
             installed: true,
             detection: None,
+            detection_failures: Mutex::new(VecDeque::new()),
             load_failures: Mutex::new(VecDeque::new()),
             replies: Mutex::new(replies.into()),
             calls: Mutex::new(Vec::new()),
@@ -120,7 +123,10 @@ impl LanguageProbe for ScriptedBackend {
         self.calls().push(Call::Detect {
             samples: audio.len(),
         });
-        Ok(self.detection.clone())
+        match self.detection_failures.lock().unwrap().pop_front() {
+            Some(error) => Err(error),
+            None => Ok(self.detection.clone()),
+        }
     }
 }
 
@@ -139,6 +145,11 @@ impl InferenceBackend for ScriptedBackend {
             Some(error) => Err(error),
             None => Ok(()),
         }
+    }
+
+    fn ensure_vad_model(&self) -> Result<PathBuf, DictationError> {
+        self.calls().push(Call::EnsureVadModel);
+        Ok(PathBuf::from("silero-vad.bin"))
     }
 
     fn transcribe_segments(
@@ -310,6 +321,7 @@ impl Run {
 
 struct Plan<'a> {
     flags: &'a [&'a str],
+    stored: Settings,
     language: Language,
     model: WhisperModel,
     glossary: Glossary,
@@ -320,6 +332,7 @@ impl Default for Plan<'_> {
     fn default() -> Self {
         Self {
             flags: &[],
+            stored: Settings::default(),
             language: Language::English,
             model: WhisperModel::Base,
             glossary: Glossary::default(),
@@ -340,7 +353,7 @@ fn run_batch_with(
         &WhisperBatch {
             args: &args,
             files,
-            stored: &Settings::default(),
+            stored: &plan.stored,
             language: plan.language,
             model: plan.model,
             glossary: &plan.glossary,
@@ -725,6 +738,35 @@ fn an_english_only_model_is_never_asked_to_detect_a_language() {
         .any(|call| matches!(call, Call::Detect { .. })));
 }
 
+#[test]
+fn a_language_check_that_cannot_run_is_a_warning_and_the_file_goes_on() {
+    let dir = TempDir::new();
+    let file = tone(&dir, "a.wav", 3);
+    let backend = ScriptedBackend::new(vec![transcript(" Hello there.")]);
+    backend
+        .detection_failures
+        .lock()
+        .unwrap()
+        .push_back(DictationError::TranscriptionFailed("probe broke".into()));
+    let run = run_batch(
+        &Plan {
+            flags: &["--json"],
+            ..Plan::default()
+        },
+        &[file],
+        &backend,
+    );
+
+    run.result.as_ref().expect("the run succeeds");
+    assert!(run.human_lines().contains(
+        &"Warning: local language detection was unavailable: Transcription failed: probe broke"
+    ));
+    let result: Value = serde_json::from_str(&run.stdout).unwrap();
+    assert_eq!(result["text"], "Hello there.");
+    assert_eq!(result["detected_language"], Value::Null);
+    assert_eq!(result["warnings"], json!([]));
+}
+
 // ---- corrections ------------------------------------------------------------------
 
 #[test]
@@ -879,6 +921,56 @@ fn the_decoder_options_follow_the_flags_and_say_so_on_stderr() {
 }
 
 #[test]
+fn voice_activity_detection_follows_the_flags_and_then_the_saved_setting() {
+    let dir = TempDir::new();
+    let file = tone(&dir, "a.wav", 3);
+    let cases: [(bool, &[&str], bool); 4] = [
+        (false, &[], false),
+        (false, &["--vad"], true),
+        (true, &[], true),
+        (true, &["--no-vad"], false),
+    ];
+    for (saved, flags, expected) in cases {
+        let backend = ScriptedBackend::new(vec![transcript(" Hi.")]);
+        let run = run_batch(
+            &Plan {
+                flags,
+                stored: Settings {
+                    vad_enabled: saved,
+                    ..Settings::default()
+                },
+                ..Plan::default()
+            },
+            std::slice::from_ref(&file),
+            &backend,
+        );
+        run.result.as_ref().expect("the run succeeds");
+        let context = format!("saved={saved} flags={flags:?}");
+        assert_eq!(backend.transcriptions()[0].vad, expected, "{context}");
+        let lines = run.human_lines();
+        let position = |text: &str| lines.iter().position(|line| *line == text);
+        assert_eq!(
+            position("Verifying Silero VAD model...").is_some(),
+            expected,
+            "{context}: {lines:?}"
+        );
+        assert_eq!(position("VAD: enabled").is_some(), expected, "{context}");
+        if expected {
+            // Announced after the beam search, checked before the model is prepared.
+            assert!(
+                position("Verifying Silero VAD model...") < position("Beam search: width 5"),
+                "{context}: {lines:?}"
+            );
+            assert!(
+                position("Beam search: width 5") < position("VAD: enabled")
+                    && position("VAD: enabled") < position("Preparing Whisper states..."),
+                "{context}: {lines:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn the_model_is_loaded_for_ordinary_file_runs_with_the_flash_attention_profile() {
     let dir = TempDir::new();
     let file = tone(&dir, "a.wav", 3);
@@ -949,6 +1041,7 @@ fn a_batch_loads_the_model_once_and_writes_a_header_per_file() {
         .map(|call| match call {
             Call::Load(..) => "load",
             Call::Detect { .. } => "detect",
+            Call::EnsureVadModel => "vad",
             Call::Transcribe(_) => "transcribe",
         })
         .collect();
