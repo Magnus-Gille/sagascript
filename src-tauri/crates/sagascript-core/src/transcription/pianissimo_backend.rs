@@ -30,7 +30,9 @@ use crate::transcription::engine_host::{
 use crate::transcription::pianissimo_model;
 
 /// Shown wherever Pianissimo is refused for platform reasons. Defined with the
-/// model catalog, which settings need too (#372).
+/// model catalog, which settings need too (#372). Shim for the old path: remove
+/// it, one release on, when its callers (the CLI and the app) use
+/// `models::PIANISSIMO_UNSUPPORTED_MESSAGE`.
 pub const UNSUPPORTED_MESSAGE: &str = crate::models::PIANISSIMO_UNSUPPORTED_MESSAGE;
 
 /// Environment override (development builds only): path of the `sagascript-engine-host` binary.

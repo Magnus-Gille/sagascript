@@ -587,8 +587,18 @@ where
 // `crate::machine`, above settings and transcription, so this module no longer
 // imports the transcription code to answer them. These re-exports keep the old
 // paths `settings::store::{load, update, try_update}` working for the CLI and
-// the app. Remove one release after they call `sagascript_core::machine`; that
-// leaves `settings` free of any upward import (a test guards it).
+// the app. They are the one upward import left in `settings/`, and a loop at
+// run time: `transcription::pianissimo_backend::{engine_config, shared_client}`
+// call `store::load()` themselves, i.e. this line, so transcription reaches
+// `machine::load()` and `machine` reaches transcription's probes again.
+//
+// Removal prerequisites, in order (tests/module_layering.rs says the same):
+//   1. the CLI and the app call `sagascript_core::machine::{load, update,
+//      try_update}`;
+//   2. `engine_config` and `shared_client` receive the `Settings` instead of
+//      loading them. That changes when the settings are read, so it is a
+//      behaviour change for its own change, not part of the layering move;
+//   3. delete this line and empty the expected list in that test.
 pub use crate::machine::{load, try_update, update};
 
 /// A field update under the settings lock. The latest file is loaded as the

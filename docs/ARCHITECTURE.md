@@ -95,22 +95,37 @@ stdout. `transcribe`'s three output modes live in one `BatchSink`. The statuses 
 
 ### 1.1 Layers inside `sagascript-core`
 
-Imports go downward. `crates/sagascript-core/tests/module_layering.rs` checks the source
-text for the rules marked "tested"; the rest is convention.
+The layers below are *textual*: the imports of `models/`, `glossary.rs` and `settings/` point
+downward, with one exception (below), and `crates/sagascript-core/tests/module_layering.rs`
+checks that from the source text (every path the code names, `use` groups and renames
+expanded) for the rules marked "tested". The rest is convention. At run time one edge still
+closes a loop, through a compatibility shim.
 
 | Layer | Modules | Rule |
 |---|---|---|
-| Leaves | `models/`, `glossary.rs` | `models/` is the model catalog: `WhisperModel` (21 models, ids via `id()` / `from_id()` / `FromStr`, `ALL`), its download URLs and SHA-256 in `sources.rs` (pinned revisions, cross-checked by `scripts/generate-third-party-notices.mjs`), `FileModel` (a Whisper model or Pianissimo) and `Language`. Imports neither `settings` nor `transcription` (tested) and returns no `whisper_rs` type: `transcription::whisper_backend` maps a model to its DTW preset. `glossary.rs` (personal dictionary parser) imports nothing from the crate (tested). |
+| Leaves | `models/`, `glossary.rs` | `models/` is the model catalog: `WhisperModel` (21 models, ids via `id()` / `from_id()` / `FromStr`, `ALL`), its download URLs and SHA-256 in `sources.rs` (pinned revisions; `scripts/generate-third-party-notices.mjs` only asserts that six reviewed URL prefixes still appear in the model sources, `sources.rs` among them), `FileModel` (a Whisper model or Pianissimo) and `Language`. Imports neither `settings` nor `transcription` (tested) and returns no `whisper_rs` type: `transcription::whisper_backend` maps a model to its DTW preset. `glossary.rs` (personal dictionary parser) imports nothing from the crate (tested). |
 | Settings | `settings/` | Reads the catalog. Imports nothing from `transcription` (tested): what is downloaded and whether Pianissimo can run arrive as arguments, as `LineupEnv` / `MachineProbe` into the store and as the `pianissimo_supported` and readiness arguments of the `*_gated` methods of `Settings`. |
 | Runtime | `transcription/` (Whisper, Pianissimo, engine host, model downloads), `audio/`, `download.rs`, `meeting*.rs`, `diarization*` | `transcription` reads `models` and, in `pianissimo_backend` alone, `settings` (the engine config). `transcription::model` and `pianissimo_model` answer whether a model is on disk; `pianissimo_backend::runtime_supported_on_this_os` answers whether Pianissimo runs. |
 | Machine | `machine.rs` | The only place that feeds the runtime's answers to settings: `ThisMachine` (a `MachineProbe`), `load` / `update` / `try_update`, and the `Settings` methods without a `_gated` suffix (`dictation_model_for_profile`, `effective_file_model_for`, `warm_model_plan`, ...), each its `_gated` sibling plus this machine's probe. |
 
 Old paths stay for one release (#372): `settings::{WhisperModel, FileModel, Language}`
 re-export `models`, `transcription::{glossary, Glossary, ...}` re-export `glossary`, and
-`settings::store::{load, update, try_update}` re-export `machine`, which is the one upward
-import left in `settings/` (tested). **Planned:** the rest of
-[#372](https://github.com/Magnus-Gille/sagascript/issues/372): `meeting/`, an always compiled
-`diarization/`, `pub(crate)` narrowing and a `testing` module.
+`settings::store::{load, update, try_update}` re-export `machine`.
+
+**The one edge that goes up, and the loop behind it.** The last re-export is a line in
+`settings/store.rs` that names `machine`, which imports transcription: textually the only
+upward import in `settings/` (tested; the test lists the three paths it allows). At run time
+it closes a loop: `transcription::pianissimo_backend::engine_config` and `shared_client`
+call `settings::store::load()`, which is that shim, so transcription calls `machine::load()`,
+which calls transcription's probes. It is harmless today (the probes do not call back into
+settings) but it is not a layering. Removing it takes, in order: (1) the CLI and the app call
+`machine::{load, update, try_update}`; (2) `engine_config` and `shared_client` receive the
+`Settings` they read instead of loading them, which changes *when* the settings are read, so
+it is a behaviour change of its own and not part of this move; (3) delete the re-export line
+and empty the expected list in the test.
+
+**Planned:** the rest of [#372](https://github.com/Magnus-Gille/sagascript/issues/372):
+`meeting/`, an always compiled `diarization/`, `pub(crate)` narrowing and a `testing` module.
 
 ## 2. Data flows
 
