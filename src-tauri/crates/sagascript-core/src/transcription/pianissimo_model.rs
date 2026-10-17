@@ -20,7 +20,7 @@
 //! directory; downloads and hash verification are then skipped (the directory
 //! must still contain the four Core ML packages and the vocabulary).
 
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use tracing::{info, warn};
 
@@ -29,6 +29,7 @@ use crate::download::{
     DownloadIntegrity, ExistingArtifact,
 };
 use crate::error::DictationError;
+use crate::path_scrub::scrub_paths;
 use crate::transcription::model::models_dir;
 
 /// Stable model family id; the installed directory and the id sent to the
@@ -442,6 +443,57 @@ fn install_err(message: impl Into<String>) -> DictationError {
     DictationError::ModelDownloadFailed(message.into())
 }
 
+/// True when any part of an entry name is a filesystem root or a drive: a
+/// leading `/` or `\`, or any `/`- or `\`-separated part that starts with a
+/// drive letter and a colon (`C:\x`, `C:x`, `wrapper/C:/x`).
+///
+/// zip 9's `enclosed_name` drops a root or drive at the start of a name and
+/// returns the rest as a relative path (zip 4 returned `None`), and keeps a
+/// `C:` part further in as an ordinary component. `PathBuf::push` of such a
+/// part replaces everything pushed before it on a Windows host, so
+/// `wrapper/C:/x` would come out as `C:x`, outside the extraction directory.
+/// A model archive has no reason to carry any of these, so refuse the archive.
+/// Windows syntax is checked on every host, as zip 9 parses entry names that way.
+fn has_root_or_drive(name: &str) -> bool {
+    name.starts_with(['/', '\\'])
+        || name.split(['/', '\\']).any(|part| {
+            let bytes = part.as_bytes();
+            bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':'
+        })
+}
+
+/// `dest` joined with `relative`, or `None` unless the result is a plain
+/// descendant of `dest`: every component of `relative` is a normal name (no
+/// `..`, root or drive prefix) and the joined path is still under `dest`.
+///
+/// A second line of defence behind `enclosed_name` and [`has_root_or_drive`]:
+/// `Path::join` of a rooted or drive-prefixed path replaces the base, so this
+/// checks the path that is actually written.
+fn resolve_inside(dest: &Path, relative: &Path) -> Option<PathBuf> {
+    if !relative
+        .components()
+        .all(|component| matches!(component, Component::Normal(_)))
+    {
+        return None;
+    }
+    let target = dest.join(relative);
+    target.starts_with(dest).then_some(target)
+}
+
+/// How many characters of an entry name an error message shows.
+const SHOWN_ENTRY_NAME_CHARS: usize = 200;
+
+/// An entry name for an error message. A zip name may be 64 KiB, and the
+/// message reaches logs and the UI; the caller formats the result with `{:?}`,
+/// which escapes control characters.
+fn shown_entry_name(name: &str) -> String {
+    let mut shown: String = name.chars().take(SHOWN_ENTRY_NAME_CHARS).collect();
+    if name.chars().nth(SHOWN_ENTRY_NAME_CHARS).is_some() {
+        shown.push('…');
+    }
+    shown
+}
+
 /// Extract `archive` with path-traversal, symlink and size guards.
 fn extract_archive(archive: &Path, dest: &Path, max_bytes: u64) -> Result<(), DictationError> {
     let file = std::fs::File::open(archive)
@@ -453,22 +505,28 @@ fn extract_archive(archive: &Path, dest: &Path, max_bytes: u64) -> Result<(), Di
         let mut entry = zip
             .by_index(index)
             .map_err(|e| install_err(format!("Corrupt model archive entry {index}: {e}")))?;
-        let Some(relative) = entry.enclosed_name() else {
-            return Err(install_err(format!(
-                "Model archive entry {:?} escapes the extraction directory",
-                entry.name()
-            )));
+        // `entry.name()` is fallible in zip 9; the raw bytes, decoded lossily,
+        // serve the root/drive check and the (capped) messages.
+        let name = String::from_utf8_lossy(entry.name_raw()).into_owned();
+        let shown = shown_entry_name(&name);
+        let escapes = || {
+            install_err(format!(
+                "Model archive entry {shown:?} escapes the extraction directory"
+            ))
         };
+        let relative = entry
+            .enclosed_name()
+            .filter(|_| !has_root_or_drive(&name))
+            .ok_or_else(escapes)?;
         if entry
             .unix_mode()
             .is_some_and(|mode| mode & 0o170000 == 0o120000)
         {
             return Err(install_err(format!(
-                "Model archive entry {:?} is a symlink, which is not allowed",
-                entry.name()
+                "Model archive entry {shown:?} is a symlink, which is not allowed"
             )));
         }
-        let target = dest.join(relative);
+        let target = resolve_inside(dest, &relative).ok_or_else(escapes)?;
         if entry.is_dir() {
             std::fs::create_dir_all(&target)
                 .map_err(|e| install_err(format!("Cannot create {}: {e}", target.display())))?;
@@ -950,7 +1008,10 @@ async fn download_in(
     {
         warn!("Could not clean up superseded Pianissimo files: {error}");
     }
-    info!("Pianissimo model installed: {}", installed.display());
+    info!(
+        "Pianissimo model installed: {}",
+        scrub_paths(&installed.display().to_string())
+    );
     Ok(installed)
 }
 
@@ -1068,6 +1129,46 @@ mod tests {
         }
         writer.finish().unwrap();
         path
+    }
+
+    /// Like [`build_zip`], but each entry carries a full Unix `st_mode` (file
+    /// type and permission bits) as its external attributes; 0 leaves it unset.
+    fn build_zip_with_modes(dir: &Path, entries: &[(&str, &[u8], u32)]) -> PathBuf {
+        let path = dir.join("model.zip");
+        let mut writer = zip::ZipWriter::new(fs::File::create(&path).unwrap());
+        for (name, bytes, mode) in entries {
+            let mut options = zip::write::SimpleFileOptions::default();
+            if *mode != 0 {
+                // The writer records the host's system (DOS on Windows), and a
+                // DOS entry's attributes carry no Unix mode; archives made on
+                // macOS are Unix.
+                options = options
+                    .system(zip::System::Unix)
+                    .external_attributes(mode << 16);
+            }
+            writer.start_file(*name, options).unwrap();
+            writer.write_all(bytes).unwrap();
+        }
+        writer.finish().unwrap();
+        path
+    }
+
+    /// Every path below `root`, `/`-separated and sorted, to compare the tree
+    /// before and after a rejected install.
+    fn tree(root: &Path) -> Vec<String> {
+        fn walk(dir: &Path, prefix: &str, out: &mut Vec<String>) {
+            for entry in fs::read_dir(dir).unwrap().flatten() {
+                let name = format!("{prefix}{}", entry.file_name().to_string_lossy());
+                out.push(name.clone());
+                if entry.file_type().unwrap().is_dir() {
+                    walk(&entry.path(), &format!("{name}/"), out);
+                }
+            }
+        }
+        let mut out = Vec::new();
+        walk(root, "", &mut out);
+        out.sort();
+        out
     }
 
     fn manifest_for(entries: &[(&str, &[u8])], archive: &Path) -> ModelManifest {
@@ -1265,6 +1366,174 @@ mod tests {
         let error = install_archive_in(&manifest, &archive, &models).unwrap_err();
         assert!(error.to_string().contains("escapes"), "{error}");
         assert!(!root.path().join("escape.txt").exists());
+    }
+
+    #[test]
+    fn hostile_entry_names_are_rejected_and_nothing_is_written_outside_staging() {
+        // Parent traversal, traversal that only escapes after descending, a
+        // Windows-style separator, rooted and drive-letter names, and an
+        // absolute path into the test root.
+        for case in [
+            "../escape.txt",
+            "wrapper/../../escape.txt",
+            "..\\escape.txt",
+            "/escape.txt",
+            "C:\\escape.txt",
+            // A drive-letter component after the first: on a Windows host
+            // `PathBuf::push("C:")` replaces everything pushed before it.
+            "wrapper/C:/escape.txt",
+            "a\\b\\D:\\x",
+            "<absolute>",
+        ] {
+            let root = tmp();
+            let models = root.path().join("Models");
+            let name = if case == "<absolute>" {
+                root.path()
+                    .join("absolute-escape.txt")
+                    .to_string_lossy()
+                    .into_owned()
+            } else {
+                case.to_string()
+            };
+            let mut entries = FIXTURE.to_vec();
+            entries.push((name.as_str(), b"x"));
+            let archive = build_zip(root.path(), &entries);
+            let manifest = manifest_for(&FIXTURE, &archive);
+
+            let error = install_archive_in(&manifest, &archive, &models)
+                .expect_err(&format!("{name} must be rejected"));
+
+            assert!(error.to_string().contains("escapes"), "{name}: {error}");
+            // Only the archive and the empty models directory remain: no
+            // escaped file anywhere, no staging leftovers, no install.
+            assert_eq!(tree(root.path()), ["Models", "model.zip"], "{name}");
+        }
+    }
+
+    #[test]
+    fn entry_names_in_errors_are_capped_and_escaped() {
+        let root = tmp();
+        let models = root.path().join("Models");
+        let rejection = |name: &str| {
+            let mut entries = FIXTURE.to_vec();
+            entries.push((name, b"x"));
+            let archive = build_zip(root.path(), &entries);
+            let manifest = manifest_for(&FIXTURE, &archive);
+            install_archive_in(&manifest, &archive, &models)
+                .expect_err("hostile name must be rejected")
+                .to_string()
+        };
+
+        // A zip name may be 64 KiB; only its start is echoed, cut on a char
+        // boundary and marked as cut.
+        let long = rejection(&format!("../{}", "é".repeat(5_000)));
+        assert!(long.contains("escapes"), "{long}");
+        assert!(long.contains("ééé…\""), "{long}");
+        assert!(long.chars().count() < 400, "{} chars", long.chars().count());
+
+        // A short name is echoed whole, without the marker.
+        let short = rejection("../short.txt");
+        assert!(short.contains("\"../short.txt\""), "{short}");
+        assert!(!short.contains('…'), "{short}");
+
+        // Escapes still apply: no raw control character reaches the message.
+        let control = rejection("../\u{1b}[31mred\nline");
+        assert!(!control.chars().any(char::is_control), "{control:?}");
+    }
+
+    #[test]
+    fn extraction_targets_must_stay_under_the_destination() {
+        // No archive entry reaches this check once `enclosed_name` and
+        // `has_root_or_drive` have run: they never let these paths through, on
+        // any host. So the check is tested directly.
+        let root = tmp();
+        let dest = root.path().join("staging");
+
+        assert_eq!(
+            resolve_inside(&dest, Path::new("a/b.txt")),
+            Some(dest.join("a").join("b.txt"))
+        );
+        // `dest/../escape.txt` still starts with `dest` lexically; only the
+        // component check catches it.
+        assert_eq!(resolve_inside(&dest, Path::new("../escape.txt")), None);
+        assert_eq!(resolve_inside(&dest, Path::new("a/../../escape.txt")), None);
+        // A rooted path makes `join` replace the base.
+        assert_eq!(
+            resolve_inside(&dest, &root.path().join("elsewhere.txt")),
+            None
+        );
+        // So does a drive-prefixed one, where drives exist.
+        #[cfg(windows)]
+        assert_eq!(resolve_inside(&dest, Path::new("C:escape.txt")), None);
+    }
+
+    #[test]
+    fn symlink_entries_are_rejected_and_nothing_is_created() {
+        let root = tmp();
+        let models = root.path().join("Models");
+        // S_IFLNK | 0o777, the way `zip -y` and `ditto` store a symlink.
+        let mut entries: Vec<(&str, &[u8], u32)> =
+            FIXTURE.iter().map(|(p, b)| (*p, *b, 0)).collect();
+        entries.push(("model-link", b"/etc/passwd", 0o120_777));
+        let archive = build_zip_with_modes(root.path(), &entries);
+        let manifest = manifest_for(&FIXTURE, &archive);
+
+        let error = install_archive_in(&manifest, &archive, &models).unwrap_err();
+
+        assert!(error.to_string().contains("symlink"), "{error}");
+        assert_eq!(tree(root.path()), ["Models", "model.zip"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn archive_unix_modes_are_ignored_on_extraction() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = tmp();
+        let models = root.path().join("Models");
+        // setuid + setgid + sticky + rwxr-xr-x on a regular file (0o7755): none
+        // of it may reach the extracted file. zip 9's `unix_mode()` already
+        // clears the special bits (0o7000) of a Unix entry, so what this pins
+        // today is that the execute bits are not applied either; the 0o7000
+        // part of the mask only matters if a zip release stops clearing them
+        // (the SUID/SGID class of RUSTSEC-2026-0367).
+        let mut entries: Vec<(&str, &[u8], u32)> =
+            FIXTURE.iter().map(|(p, b)| (*p, *b, 0)).collect();
+        entries[4].2 = 0o107_755;
+        let archive = build_zip_with_modes(root.path(), &entries);
+        let manifest = manifest_for(&FIXTURE, &archive);
+
+        let dir = install_archive_in(&manifest, &archive, &models).unwrap();
+
+        let mode = fs::metadata(dir.join(FIXTURE[4].0))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o7111, 0, "mode {mode:o}");
+    }
+
+    #[test]
+    fn explicit_directory_entries_are_created_inside_the_install() {
+        let root = tmp();
+        let models = root.path().join("Models");
+        let path = root.path().join("model.zip");
+        let mut writer = zip::ZipWriter::new(fs::File::create(&path).unwrap());
+        let options = zip::write::SimpleFileOptions::default();
+        writer.add_directory("wrapper/", options).unwrap();
+        writer.add_directory("wrapper/empty/", options).unwrap();
+        for (name, bytes) in FIXTURE {
+            writer
+                .start_file(format!("wrapper/{name}"), options)
+                .unwrap();
+            writer.write_all(bytes).unwrap();
+        }
+        writer.finish().unwrap();
+        let manifest = manifest_for(&FIXTURE, &path);
+
+        let dir = install_archive_in(&manifest, &path, &models).unwrap();
+
+        assert!(is_downloaded_in(&manifest, &dir));
+        assert!(dir.join("empty").is_dir());
     }
 
     #[test]
