@@ -11,7 +11,10 @@ mod native_log;
 pub mod pianissimo_backend;
 pub mod pianissimo_model;
 mod postprocess;
-pub mod whisper_backend;
+pub mod whisper;
+// `whisper_backend` was one file (#371); the old path stays for the CLI, the app
+// and the tests, which name `transcription::whisper_backend::...`.
+pub use whisper as whisper_backend;
 
 #[cfg(target_os = "macos")]
 mod metal_preflight;

@@ -1254,6 +1254,10 @@ mod tests {
     thread_local! {
         static LARGEST_ALLOC: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     }
+    // SAFETY: every method forwards to `System` with the arguments it was given,
+    // so the `GlobalAlloc` contract holds exactly as for `System`. The only
+    // addition is a thread-local counter update (const-initialised `Cell`,
+    // read through `try_with`), which neither allocates nor panics.
     unsafe impl std::alloc::GlobalAlloc for TrackingAlloc {
         unsafe fn alloc(&self, l: std::alloc::Layout) -> *mut u8 {
             let _ = LARGEST_ALLOC.try_with(|c| c.set(c.get().max(l.size())));

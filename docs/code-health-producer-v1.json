@@ -20,7 +20,13 @@
     "comparison": "strictly-greater-than",
     "scopes": {
       "rust-core": [
-        "src-tauri/crates/sagascript-core/src/transcription/whisper_backend.rs",
+        "src-tauri/crates/sagascript-core/src/transcription/whisper/mod.rs",
+        "src-tauri/crates/sagascript-core/src/transcription/whisper/entry.rs",
+        "src-tauri/crates/sagascript-core/src/transcription/whisper/parallel.rs",
+        "src-tauri/crates/sagascript-core/src/transcription/whisper/progress.rs",
+        "src-tauri/crates/sagascript-core/src/transcription/whisper/runtime.rs",
+        "src-tauri/crates/sagascript-core/src/transcription/whisper/stitch.rs",
+        "src-tauri/crates/sagascript-core/src/transcription/whisper/words.rs",
         "src-tauri/crates/sagascript-core/src/diarization_evaluation.rs",
         "src-tauri/crates/sagascript-core/src/download.rs"
       ],
