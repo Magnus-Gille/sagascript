@@ -538,6 +538,43 @@ fn module_of(path: &Path) -> String {
     parts.join("::")
 }
 
+/// The `#[tauri::command]` functions of each source file, by the module the
+/// file defines and then by name.
+type CommandFiles = BTreeMap<String, BTreeMap<String, ItemFn>>;
+
+/// The command a `generate_handler!` path names, taken out of `files`.
+///
+/// The path names the module the frontend-facing code is addressed through. A
+/// module that splits into files (`commands/mod.rs` with `settings.rs`,
+/// `hotkey.rs`, ...) re-exports their commands (`pub use settings::*;`), so a
+/// command is looked up in the named module's own file and in the files below
+/// it. A name declared in more than one of them is refused: the re-export
+/// would be ambiguous too.
+fn locate(files: &mut CommandFiles, module: &str, name: &str) -> Result<ItemFn, String> {
+    let below = format!("{module}::");
+    let owners: Vec<String> = files
+        .iter()
+        .filter(|(owner, found)| {
+            (owner.as_str() == module || owner.starts_with(&below)) && found.contains_key(name)
+        })
+        .map(|(owner, _)| owner.clone())
+        .collect();
+    match owners.as_slice() {
+        [owner] => Ok(files
+            .get_mut(owner)
+            .and_then(|found| found.remove(name))
+            .expect("the owner was found by this name")),
+        [] => Err(format!(
+            "{module}::{name} is registered but is not a #[tauri::command] in \
+             src/{module}.rs or below src/{module}/"
+        )),
+        _ => Err(format!(
+            "{module}::{name} is registered but declared in several files: {}",
+            owners.join(", ")
+        )),
+    }
+}
+
 fn generate() -> Generation {
     let mut generation = Generation::default();
     let mut handlers = Handlers::default();
@@ -549,7 +586,7 @@ fn generate() -> Generation {
         );
     };
 
-    let mut functions: BTreeMap<String, BTreeMap<String, ItemFn>> = BTreeMap::new();
+    let mut functions = CommandFiles::new();
     for file in rust_files(&src_dir()) {
         let mut visitor = CommandFunctions::default();
         visitor.visit_file(&parse_file(&file));
@@ -568,16 +605,19 @@ fn generate() -> Generation {
         let (module, name) = match segments.as_slice() {
             [name] => ("main".to_string(), name.clone()),
             [module @ .., name] => (module.join("::"), name.clone()),
-            [] => unreachable!("syn paths have a segment"),
+            [] => {
+                generation
+                    .errors
+                    .push("tauri::generate_handler! lists an empty path".to_string());
+                continue;
+            }
         };
-        let Some(function) = functions
-            .get_mut(&module)
-            .and_then(|found| found.remove(&name))
-        else {
-            generation.errors.push(format!(
-                "{module}::{name} is registered but is not a #[tauri::command] in src/{module}.rs"
-            ));
-            continue;
+        let function = match locate(&mut functions, &module, &name) {
+            Ok(function) => function,
+            Err(error) => {
+                generation.errors.push(error);
+                continue;
+            }
         };
         match generation.command(&module, &function) {
             Ok(command) => generation.commands.push(command),
@@ -961,4 +1001,84 @@ fn the_generated_map_types_each_commands_error() {
         !only_text.contains("import type { BackendError }"),
         "{only_text}"
     );
+}
+
+/// Files as `generate` collects them: module name, then the commands in it.
+#[cfg(test)]
+fn files(layout: &[(&str, &[&str])]) -> CommandFiles {
+    layout
+        .iter()
+        .map(|(module, names)| {
+            let commands = names
+                .iter()
+                .map(|name| {
+                    let function: ItemFn = syn::parse_str(&format!(
+                        "#[tauri::command] pub async fn {name}() -> Result<(), String> {{ todo!() }}"
+                    ))
+                    .expect("a command signature");
+                    (name.to_string(), function)
+                })
+                .collect();
+            (module.to_string(), commands)
+        })
+        .collect()
+}
+
+#[test]
+fn a_command_is_found_in_its_module_and_below_it() {
+    // `commands::set_beam_size` is declared in commands/settings.rs and
+    // re-exported by commands/mod.rs (#370): the registered path names the
+    // parent module.
+    let mut layout = files(&[
+        ("commands", &["lock_only"]),
+        ("commands::settings", &["set_beam_size"]),
+        ("commands::hotkey", &["set_hotkey"]),
+        ("meeting_jobs", &["start_meeting_job"]),
+    ]);
+    for (module, name) in [
+        ("commands", "set_beam_size"),
+        ("commands", "lock_only"),
+        ("commands::hotkey", "set_hotkey"),
+        ("meeting_jobs", "start_meeting_job"),
+    ] {
+        let function = locate(&mut layout, module, name)
+            .unwrap_or_else(|error| panic!("{module}::{name}: {error}"));
+        assert_eq!(function.sig.ident, name);
+    }
+    // Found means taken: what is left is what no path registered.
+    assert!(layout["commands::settings"].is_empty());
+}
+
+#[test]
+fn a_command_is_not_found_in_a_module_that_only_shares_the_prefix() {
+    let mut layout = files(&[("commands_extra", &["set_beam_size"])]);
+    let error = locate(&mut layout, "commands", "set_beam_size")
+        .err()
+        .expect("refused");
+    assert!(
+        error.contains("commands::set_beam_size is registered but is not a #[tauri::command]"),
+        "{error}"
+    );
+    assert!(
+        error.contains("src/commands.rs or below src/commands/"),
+        "{error}"
+    );
+}
+
+#[test]
+fn a_command_declared_twice_below_one_module_is_refused() {
+    let mut layout = files(&[
+        ("commands::settings", &["set_beam_size"]),
+        ("commands::models", &["set_beam_size"]),
+    ]);
+    let error = locate(&mut layout, "commands", "set_beam_size")
+        .err()
+        .expect("refused");
+    assert!(
+        error.contains("declared in several files: commands::models, commands::settings"),
+        "{error}"
+    );
+    // Nothing was taken, so the report does not hide either declaration.
+    assert_eq!(layout["commands::settings"].len(), 1);
+    assert_eq!(layout["commands::models"].len(), 1);
 }
