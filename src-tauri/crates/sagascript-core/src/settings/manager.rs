@@ -4,7 +4,7 @@ use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 
 use super::{canonical_hotkey, validate_hotkey};
 
-use crate::transcription::Glossary;
+use crate::glossary::Glossary;
 
 // The model catalog moved to `crate::models` (#372). Re-exported so the old
 // paths (`sagascript_core::settings::{FileModel, Language, WhisperModel}`)
