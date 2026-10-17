@@ -5,12 +5,16 @@ use super::language_regions::*;
 use super::progress::*;
 use super::*;
 #[cfg(feature = "diarization")]
+use sagascript_core::diarization::DiarizedSegment;
+#[cfg(feature = "diarization")]
 use sagascript_core::diarization_report::DecoderEvidence;
 use sagascript_core::settings::{FileModelPreference, HotkeyProfile};
 use sagascript_core::transcription::diagnostics::LanguageDetection;
 #[cfg(feature = "diarization")]
 use sagascript_core::transcription::whisper_backend::contains_no_speech_marker;
 use sagascript_testsupport::TempDir;
+#[cfg(feature = "diarization")]
+use std::sync::atomic::Ordering;
 
 #[cfg(feature = "diarization")]
 #[test]
