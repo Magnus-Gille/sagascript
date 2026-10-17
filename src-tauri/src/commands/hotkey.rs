@@ -5,6 +5,8 @@ use sagascript_core::settings::{validate_hotkey, HotkeyMode, HotkeyProfile, Sett
 use tauri::State;
 use tracing::{error, info};
 
+#[cfg(target_os = "macos")]
+use super::main_thread::MainThreadReply;
 use super::{lock_controller, try_persist_and_sync, SharedController};
 use crate::command_error::CommandError;
 use crate::events::EmitEvent;
@@ -301,6 +303,12 @@ fn apply_hotkey_change(
     Ok(notices)
 }
 
+/// How long [`retry_hotkey_registration`] waits for the main thread to
+/// reinstall the AppKit event monitor. The install is immediate; the bound only
+/// keeps a main thread that is stuck from parking a worker.
+#[cfg(target_os = "macos")]
+const MONITOR_INSTALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Retry the shortcuts currently persisted on disk.
 ///
 /// This is used after macOS grants Accessibility while the app is already
@@ -321,17 +329,28 @@ pub async fn retry_hotkey_registration(
     #[cfg(target_os = "macos")]
     if !crate::hotkey::bare_function_key_monitor_installed() {
         let app_for_install = app.clone();
-        let (installed_tx, installed_rx) = std::sync::mpsc::channel();
-        app.run_on_main_thread(move || {
-            let result = crate::hotkey::install_bare_function_key_monitor(&app_for_install);
-            let _ = installed_tx.send(result);
+        // The main thread runs the install promptly. Wait for it off the
+        // worker and not for ever (ADR 0003): a busy main thread, or one that
+        // is gone because the app is shutting down, must not park a Tokio
+        // worker. If there is no answer, fall through and let the registration
+        // attempt below report the monitor as unavailable.
+        let reply = super::main_thread::await_main_thread(MONITOR_INSTALL_TIMEOUT, |reply| {
+            app.run_on_main_thread(move || {
+                let result = crate::hotkey::install_bare_function_key_monitor(&app_for_install);
+                let _ = reply.send(result);
+            })
+            .map_err(|error| error.to_string())
         })
-        .map_err(|error| error.to_string())?;
-        // The main thread runs the install promptly; a disconnected channel
-        // means the app is shutting down, so fall through and let the
-        // registration attempt below report the monitor as unavailable.
-        if let Ok(Err(error)) = installed_rx.recv() {
-            tracing::warn!("F13-F24 event monitor reinstall failed: {error}");
+        .await?;
+        match reply {
+            MainThreadReply::Done(Err(error)) => {
+                tracing::warn!("F13-F24 event monitor reinstall failed: {error}");
+            }
+            MainThreadReply::TimedOut => tracing::warn!(
+                "F13-F24 event monitor reinstall was not confirmed within {}s",
+                MONITOR_INSTALL_TIMEOUT.as_secs()
+            ),
+            MainThreadReply::Done(Ok(())) | MainThreadReply::Disconnected => {}
         }
     }
     let profiles = sagascript_core::settings::store::load().resolved_hotkey_profiles();

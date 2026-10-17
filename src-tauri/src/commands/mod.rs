@@ -33,6 +33,8 @@ use sagascript_core::transcription::WhisperBackend;
 mod dictionary;
 mod files;
 mod hotkey;
+#[cfg(any(target_os = "macos", test))]
+mod main_thread;
 mod models;
 mod permissions;
 mod persist;
