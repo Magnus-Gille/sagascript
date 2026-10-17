@@ -63,23 +63,47 @@ function toolPath(name) {
   return TOOL_DIR ? join(TOOL_DIR, name) : name;
 }
 
-function command(commandName, args, options = {}) {
+export function command(commandName, args, options = {}) {
   const commandEnv = { ...process.env, ...(options.env ?? {}) };
   if (TOOL_DIR) commandEnv.PATH = `${TOOL_DIR}${delimiter}${commandEnv.PATH ?? ""}`;
+  const timeout = options.timeout ?? MAX_COMMAND_MS;
+  // spawnSync requires integral milliseconds; flooring cannot extend a shared deadline.
+  const integerTimeout = Number.isFinite(timeout) ? Math.floor(timeout) : 0;
+  if (integerTimeout < 1) {
+    throw new Error("command deadline has less than one millisecond remaining");
+  }
   const result = spawnSync(commandName, args, {
     cwd: options.cwd ?? REPO_ROOT,
     env: commandEnv,
     encoding: "utf8",
     maxBuffer: MAX_CAPTURE_BYTES,
-    timeout: options.timeout ?? MAX_COMMAND_MS,
+    timeout: integerTimeout,
     windowsHide: true,
   });
-  if (result.error) throw new Error(`${commandName} could not run (${result.error.code ?? "spawn-error"})`);
+  const capture = commandCaptureMetadata(result);
+  if (result.error) {
+    throw new Error(`${commandName} could not run (${result.error.code ?? "spawn-error"}); ${capture}`);
+  }
   if (result.status !== 0) {
-    const diagnostic = safeFailureDiagnostic(result.stdout, result.stderr) || `exit ${result.status}`;
-    throw new Error(`${commandName} failed (${result.status ?? result.signal ?? "unknown"}): ${diagnostic}`);
+    const diagnostic = safeFailureDiagnostic(result.stdout, result.stderr)
+      || `exit ${result.status ?? result.signal ?? "unknown"}`;
+    throw new Error(`${commandName} failed (${result.status ?? result.signal ?? "unknown"}): ${diagnostic}; ${capture}`);
   }
   return result.stdout;
+}
+
+function commandCaptureMetadata(result) {
+  const stdoutBytes = capturedByteLength(result.stdout);
+  const stderrBytes = capturedByteLength(result.stderr);
+  const childSignal = typeof result.signal === "string" && /^[A-Z0-9]+$/.test(result.signal)
+    ? result.signal
+    : "none";
+  return `capture stdout_bytes=${stdoutBytes} stderr_bytes=${stderrBytes} child_signal=${childSignal}`;
+}
+
+function capturedByteLength(output) {
+  if (typeof output === "string") return Buffer.byteLength(output, "utf8");
+  return Buffer.isBuffer(output) ? output.byteLength : 0;
 }
 
 function safeDiagnostic(value, maximumLength = 1600) {
@@ -97,6 +121,7 @@ function safeDiagnostic(value, maximumLength = 1600) {
 export function safeFailureDiagnostic(stdout, stderr) {
   const lines = [];
   let collectingFailures = false;
+  let awaitingProcessCause = false;
   for (const [stream, value] of [
     ["stdout", stdout],
     ["stderr", stderr],
@@ -106,15 +131,35 @@ export function safeFailureDiagnostic(stdout, stderr) {
       const line = rawLine.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "").trim();
       if (!line) {
         collectingFailures = false;
+        awaitingProcessCause = false;
         continue;
       }
+      const causeLine = line.replace(/^(?:error:\s*)?(?:Caused by:\s*)?/i, "");
+      const processFailureHeader = /^process didn't exit successfully:/i.test(causeLine);
+      const processSignal = /^process didn't exit successfully:.*\(signal:\s*(\d+)(?:,\s*|\s+\()([A-Z][A-Z0-9]+)(?::[^)]*)?\)?\)\s*$/.exec(causeLine);
+      const processExit = /^process didn't exit successfully:.*\(exit status:\s*(\d+)\)\s*$/.exec(causeLine);
+      const continuationSignal = awaitingProcessCause
+        && /^signal:\s*(\d+)(?:,\s*|\s+\()([A-Z][A-Z0-9]+)(?::[^)]*)?\)?\s*$/.exec(line);
+      const continuationExit = awaitingProcessCause && /^exit status:\s*(\d+)\s*$/.exec(line);
       const panic = /^thread '([^']+)'(?: \(\d+\))? panicked\b/.exec(line);
       const section = /^---- (.+?) (?:stdout|stderr) ----$/.exec(line);
       const rustFailedTest = /^test (.+?) \.\.\. FAILED$/.exec(line);
       const swiftFailure = /^(?:✘|X) Test (.+?)(?: recorded an issue| failed)/.exec(line);
       const swiftDiagnostic = /^.+:\d+:\d+(?::\d+)?:\s*error:\s*(.+)$/i.exec(line);
+      const dyldLoader = /^dyld(?:\[\d+\])?:\s+Library not loaded:\s*(.+)$/.exec(line);
       if (panic) lines.push(`${stream} test-failed: ${safeDiagnostic(panic[1]).slice(0, 400)}`);
-      else if (section) lines.push(`${stream} test-failed: ${safeDiagnostic(section[1]).slice(0, 400)}`);
+      else if (processSignal || continuationSignal) {
+        const match = processSignal ?? continuationSignal;
+        lines.push(`${stream} child-signal: ${match[2]} (${match[1]})`);
+      } else if (processExit || continuationExit) {
+        const match = processExit ?? continuationExit;
+        lines.push(`${stream} child-exit: ${match[1]}`);
+      } else if (/^Caused by:\s*$/.test(line)) awaitingProcessCause = true;
+      else if (processFailureHeader) {
+        // Unknown child causes must not expose argv through generic error fallbacks.
+      } else if (dyldLoader) {
+        lines.push(`${stream} dyld-loader: ${safeDiagnostic(`Library not loaded: ${dyldLoader[1]}`).slice(0, 400)}`);
+      } else if (section) lines.push(`${stream} test-failed: ${safeDiagnostic(section[1]).slice(0, 400)}`);
       else if (rustFailedTest) lines.push(`${stream} failed-test: ${safeDiagnostic(rustFailedTest[1]).slice(0, 400)}`);
       else if (swiftFailure) lines.push(`${stream} test-failed: ${safeDiagnostic(swiftFailure[1]).slice(0, 400)}`);
       else if (/^failures:$/.test(line)) {
@@ -131,6 +176,7 @@ export function safeFailureDiagnostic(stdout, stderr) {
       } else if (/\b(?:ENOENT|EACCES|EPERM|PermissionDenied|Operation not permitted|Permission denied)\b/i.test(line)) {
         lines.push(`${stream} ${safeDiagnostic(line).slice(0, 400)}`);
       }
+      if (!/^Caused by:\s*$/.test(line)) awaitingProcessCause = false;
       if (lines.length >= 80) break;
     }
     if (lines.length >= 80) break;
