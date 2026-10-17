@@ -33,6 +33,7 @@ mod paste;
 mod paste_completion;
 mod plain_file_jobs;
 mod platform;
+mod tray;
 mod update_activity;
 mod update_recovery;
 mod updates;
@@ -73,20 +74,22 @@ const ABORT_GRACE_SECS: u64 = 5;
 const PASTE_COMPLETION_TIMEOUT_MS: u64 = paste_completion::COMPLETION_TIMEOUT_MS;
 
 use events::{EmitEvent, UiState};
-use tauri::{
-    menu::{Menu, MenuItem, Submenu},
-    tray::TrayIconBuilder,
-    Manager,
-};
+use tauri::{menu::MenuItem, Manager};
 use tauri_plugin_global_shortcut::ShortcutState;
 use tracing::{error, info, warn};
+
+use tray::{
+    create_tray, manage_tray_state, select_profile_menu, update_tray_last_result,
+    update_tray_status,
+};
+// commands.rs reaches the profile menu refresh as `crate::update_profiles_menu`.
+pub(crate) use tray::update_profiles_menu;
 
 use app_controller::AppState;
 use app_controller::{AppController, HotkeyDownResult, StopRecordingOutcome};
 use commands::{lock_controller, SharedController, SharedWhisper};
 use sagascript_core::settings::canonical_hotkey;
 use sagascript_core::settings::HotkeyMode;
-use sagascript_core::settings::HotkeyProfile;
 use sagascript_core::sync::lock_or_recover;
 use sagascript_core::transcription::{
     WhisperBackend, WARM_MODEL_CACHE_BUDGET_MB, WARM_MODEL_CACHE_MAX_MODELS,
@@ -95,172 +98,8 @@ use sagascript_core::transcription::{
 /// Minimum recording duration before we allow stop (300ms)
 const MIN_RECORDING_MS: u64 = 300;
 const SAFE_FALLBACK_HOTKEY: &str = "Control+Shift+Space";
-const BUILD_IDENTITY: &str = concat!(
-    "Version ",
-    env!("CARGO_PKG_VERSION"),
-    " · Build ",
-    env!("GIT_HASH"),
-    " · ",
-    env!("BUILD_DATE"),
-);
-#[cfg(target_os = "macos")]
-const TRAY_AUTOSAVE_NAME: &str = "ai.gille.sagascript.main";
-#[cfg(target_os = "macos")]
-const DEFAULT_TRAY_PREFERRED_POSITION: f64 = 340.0;
 
-/// Shared tray status menu item for updating from anywhere
-type SharedStatusItem = Mutex<Option<MenuItem<tauri::Wry>>>;
-
-// Tray menu bookkeeping is recovered as-is after a panic (ADR 0005): it only
-// holds menu handles and flags that the next menu update overwrites.
-const STATUS_ITEM_LOCK: &str = "tray.status_item";
-const PROFILE_MENU_LOCK: &str = "tray.profile_menu";
 const UPDATE_MENU_LOCK: &str = "tray.update_menu";
-
-struct ProfileMenuState {
-    submenu: Submenu<tauri::Wry>,
-    items: Vec<MenuItem<tauri::Wry>>,
-    selected_profile_id: Option<String>,
-}
-
-type SharedProfileMenuState = Mutex<Option<ProfileMenuState>>;
-
-fn format_menu_shortcut(shortcut: &str) -> String {
-    let parts: Vec<(&str, String)> = shortcut
-        .split('+')
-        .map(|part| {
-            let original = part.trim();
-            let normalized = match original.to_ascii_lowercase().as_str() {
-                "commandorcontrol" | "commandorctrl" | "cmdorctrl" | "cmdorcontrol" => {
-                    if cfg!(target_os = "macos") {
-                        "command"
-                    } else {
-                        "control"
-                    }
-                }
-                _ => original,
-            };
-            (original, normalized.to_ascii_lowercase())
-        })
-        .collect();
-    let mut label = String::new();
-    for (aliases, symbol) in [
-        (&["control", "ctrl"][..], "⌃"),
-        (&["alt", "option"][..], "⌥"),
-        (&["shift"][..], "⇧"),
-        (&["super", "command", "cmd"][..], "⌘"),
-    ] {
-        if parts
-            .iter()
-            .any(|(_, normalized)| aliases.contains(&normalized.as_str()))
-        {
-            label.push_str(symbol);
-        }
-    }
-    for (original, normalized) in parts {
-        if matches!(
-            normalized.as_str(),
-            "control" | "ctrl" | "alt" | "option" | "shift" | "super" | "command" | "cmd"
-        ) {
-            continue;
-        }
-        label.push_str(match normalized.as_str() {
-            "space" => "Space",
-            "arrowup" | "up" => "↑",
-            "arrowdown" | "down" => "↓",
-            "arrowleft" | "left" => "←",
-            "arrowright" | "right" => "→",
-            _ => original,
-        });
-    }
-    label
-}
-
-fn profile_menu_label(profile: &HotkeyProfile, selected: bool) -> String {
-    format!(
-        "{}{} — {} · {}",
-        if selected { "✓ " } else { "" },
-        profile.name,
-        profile.language.display_name(),
-        format_menu_shortcut(&profile.shortcut)
-    )
-}
-
-fn create_profile_menu_items(
-    app: &impl tauri::Manager<tauri::Wry>,
-    profiles: &[HotkeyProfile],
-    selected_profile_id: Option<&str>,
-) -> tauri::Result<Vec<MenuItem<tauri::Wry>>> {
-    let mut items = Vec::with_capacity(profiles.len() + 1);
-    for profile in profiles {
-        items.push(MenuItem::with_id(
-            app,
-            format!("profile_shortcut_{}", profile.id),
-            profile_menu_label(profile, selected_profile_id == Some(profile.id.as_str())),
-            false,
-            None::<&str>,
-        )?);
-    }
-    items.push(MenuItem::with_id(
-        app,
-        "manage_profiles",
-        "Edit Profiles…",
-        true,
-        None::<&str>,
-    )?);
-    Ok(items)
-}
-
-pub(crate) fn update_profiles_menu(app: &tauri::AppHandle, profiles: &[HotkeyProfile]) {
-    let state: tauri::State<'_, SharedProfileMenuState> = app.state();
-    let mut state = lock_or_recover(&state, PROFILE_MENU_LOCK);
-    let Some(state) = state.as_mut() else {
-        return;
-    };
-
-    let selected_profile_id = state
-        .selected_profile_id
-        .as_deref()
-        .filter(|selected| profiles.iter().any(|profile| profile.id == *selected))
-        .map(str::to_string)
-        .or_else(|| profiles.first().map(|profile| profile.id.clone()));
-
-    for item in state.items.drain(..) {
-        if let Err(error) = state.submenu.remove(&item) {
-            error!("Failed to remove stale tray profile item: {error}");
-        }
-    }
-    match create_profile_menu_items(app, profiles, selected_profile_id.as_deref()) {
-        Ok(items) => {
-            for item in &items {
-                if let Err(error) = state.submenu.append(item) {
-                    error!("Failed to add tray profile item: {error}");
-                }
-            }
-            state.items = items;
-            state.selected_profile_id = selected_profile_id;
-        }
-        Err(error) => error!("Failed to rebuild tray profiles menu: {error}"),
-    }
-}
-
-fn select_profile_menu(app: &tauri::AppHandle, profile: &HotkeyProfile) {
-    let profiles = {
-        let controller: tauri::State<'_, SharedController> = app.state();
-        let profiles = lock_controller(&controller)
-            .settings()
-            .resolved_hotkey_profiles();
-        profiles
-    };
-    {
-        let state: tauri::State<'_, SharedProfileMenuState> = app.state();
-        let mut state = lock_or_recover(&state, PROFILE_MENU_LOCK);
-        if let Some(state) = state.as_mut() {
-            state.selected_profile_id = Some(profile.id.clone());
-        }
-    }
-    update_profiles_menu(app, &profiles);
-}
 
 #[derive(Clone)]
 struct UpdateMenuItems {
@@ -1411,13 +1250,6 @@ fn manage_app_state(app: &tauri::App) {
     manage_update_menu_state(app);
 }
 
-fn manage_tray_state(app: &tauri::App) {
-    let status_item: SharedStatusItem = Mutex::new(None);
-    let profile_menu: SharedProfileMenuState = Mutex::new(None);
-    app.manage(status_item);
-    app.manage(profile_menu);
-}
-
 fn manage_update_menu_state(app: &tauri::App) {
     let update_menu: SharedUpdateMenuState = Mutex::new(UpdateMenuState {
         items: None,
@@ -1502,128 +1334,6 @@ fn register_startup_hotkeys(app: &tauri::App) {
     if change.changed {
         let _ = app.emit_event(events::event::HOTKEY_REGISTRATION_CHANGED, &change.status);
     }
-}
-
-/// Build the tray icon and its menu, store the menu handles for later updates
-/// and render the initial state.
-fn create_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
-    // Build tray menu
-    let quit = MenuItem::with_id(app, "quit", "Quit Sagascript", true, None::<&str>)?;
-    let settings_item =
-        MenuItem::with_id(app, "settings", "Open Sagascript...", true, None::<&str>)?;
-    let transcribe_file_item = MenuItem::with_id(
-        app,
-        "transcribe_file",
-        "Transcribe File...",
-        true,
-        None::<&str>,
-    )?;
-    let status = MenuItem::with_id(app, "status", "Sagascript - Idle", false, None::<&str>)?;
-    let profiles = {
-        let ctrl: tauri::State<'_, SharedController> = app.state();
-        let profiles = lock_controller(&ctrl).settings().resolved_hotkey_profiles();
-        profiles
-    };
-    let selected_profile_id = profiles.first().map(|profile| profile.id.clone());
-    let profile_items = create_profile_menu_items(app, &profiles, selected_profile_id.as_deref())?;
-    let profiles_menu = Submenu::new(app, "Profiles", true)?;
-    for item in &profile_items {
-        profiles_menu.append(item)?;
-    }
-    let update_status = MenuItem::with_id(
-        app,
-        "update_status",
-        "Updates: not checked",
-        false,
-        None::<&str>,
-    )?;
-    let check_for_updates_item = MenuItem::with_id(
-        app,
-        "check_for_updates",
-        UPDATE_CHECK_ACTION,
-        true,
-        None::<&str>,
-    )?;
-    let build_info_item =
-        MenuItem::with_id(app, "build_info", BUILD_IDENTITY, false, None::<&str>)?;
-
-    // Store status item so we can update it after transcription
-    {
-        let status_state: tauri::State<'_, SharedStatusItem> = app.state();
-        *lock_or_recover(&status_state, STATUS_ITEM_LOCK) = Some(status.clone());
-    }
-    {
-        let profile_state: tauri::State<'_, SharedProfileMenuState> = app.state();
-        *lock_or_recover(&profile_state, PROFILE_MENU_LOCK) = Some(ProfileMenuState {
-            submenu: profiles_menu.clone(),
-            items: profile_items,
-            selected_profile_id,
-        });
-    }
-    register_update_menu_items(app, &update_status, &check_for_updates_item);
-    let menu = Menu::with_items(
-        app,
-        &[
-            &status,
-            &profiles_menu,
-            &update_status,
-            &check_for_updates_item,
-            &build_info_item,
-            &settings_item,
-            &transcribe_file_item,
-            &quit,
-        ],
-    )?;
-
-    #[cfg(target_os = "macos")]
-    seed_macos_tray_preferred_position();
-
-    let tray_builder = TrayIconBuilder::with_id("main")
-        .menu(&menu)
-        .tooltip("Sagascript")
-        // macOS 26 can register an image-backed status item but paint
-        // it blank. Compact native text stays visible: S while idle,
-        // then a state marker while recording or transcribing.
-        .title("S");
-    #[cfg(target_os = "windows")]
-    let tray_builder = match app.default_window_icon() {
-        Some(icon) => tray_builder.icon(icon.clone()),
-        None => return Err("Windows tray icon is missing from the app bundle".into()),
-    };
-    let tray = tray_builder
-        .on_menu_event(move |app, event| match event.id().as_ref() {
-            "quit" => {
-                info!("Quit requested");
-                app.exit(0);
-            }
-            "settings" => {
-                open_settings_window(app, None, "tray_menu_settings");
-            }
-            "transcribe_file" => {
-                open_settings_window(app, Some("transcribe"), "tray_menu_transcribe_file");
-            }
-            "manage_profiles" => {
-                open_settings_window(app, Some("dictate"), "tray_menu_manage_profiles");
-            }
-            "check_for_updates" => {
-                handle_check_for_updates_menu_action(app);
-            }
-            _ => {}
-        })
-        .build(app)?;
-
-    #[cfg(target_os = "macos")]
-    configure_macos_tray_identity(&tray)?;
-    tray.set_visible(true)?;
-
-    info!("Tray icon created");
-
-    // Render the initial tray state through the same path as later
-    // updates — the hotkey-health flag was recorded above, before the
-    // tray existed, and no state transition may ever come to refresh
-    // a static "Idle" label if the hotkey is dead.
-    update_tray_status(app.handle(), "idle");
-    Ok(())
 }
 
 fn register_update_menu_items(
@@ -1794,102 +1504,6 @@ fn warm_models_at_startup(app: &tauri::App) {
     // performs a silent CoreML network backfill.
 }
 
-/// Match the key AppKit uses to persist a named status item's menu-bar slot.
-#[cfg(target_os = "macos")]
-fn tray_preferred_position_key(autosave_name: &str) -> String {
-    format!("NSStatusItem Preferred Position {autosave_name}")
-}
-
-#[cfg(target_os = "macos")]
-fn initial_tray_preferred_position(has_saved_position: bool) -> Option<f64> {
-    (!has_saved_position).then_some(DEFAULT_TRAY_PREFERRED_POSITION)
-}
-
-/// Seed a usable first position on crowded, notched menu bars. AppKit normally
-/// puts a brand-new status item at the far-left edge of the status area, where
-/// it may report `isVisible = true` while sitting behind the camera cutout.
-/// Once the user moves the item, AppKit owns this value and we never overwrite
-/// it.
-#[cfg(target_os = "macos")]
-fn seed_macos_tray_preferred_position() {
-    use objc2_foundation::{NSString, NSUserDefaults};
-
-    let defaults = NSUserDefaults::standardUserDefaults();
-    let key_string = tray_preferred_position_key(TRAY_AUTOSAVE_NAME);
-    let key = NSString::from_str(&key_string);
-    let Some(position) = initial_tray_preferred_position(defaults.objectForKey(&key).is_some())
-    else {
-        return;
-    };
-
-    defaults.setDouble_forKey(position, &key);
-    info!(position, "Seeded initial macOS tray position");
-}
-
-/// Give AppKit a stable identity for the status item before making it visible.
-/// Without an autosave name macOS 26 places every fresh item in the default
-/// leftmost slot, which can sit behind a MacBook camera cutout.
-#[cfg(target_os = "macos")]
-fn configure_macos_tray_identity(tray: &tauri::tray::TrayIcon) -> tauri::Result<()> {
-    let configured = tray.with_inner_tray_icon(|inner| {
-        let Some(status_item) = inner.ns_status_item() else {
-            return false;
-        };
-
-        let autosave_name = objc2_foundation::NSString::from_str(TRAY_AUTOSAVE_NAME);
-        // Tauri constructs the native item visible. Toggle it inside the same
-        // main-thread callback so the stable name is in place before AppKit
-        // performs the visible placement pass.
-        status_item.setVisible(false);
-        status_item.setAutosaveName(Some(&autosave_name));
-        status_item.setVisible(true);
-
-        status_item.autosaveName().to_string() == TRAY_AUTOSAVE_NAME
-    })?;
-
-    if configured {
-        Ok(())
-    } else {
-        Err(std::io::Error::other("failed to assign the macOS tray autosave name").into())
-    }
-}
-
-/// Pure state -> (tooltip, title, menu_text) mapping for the tray, extracted
-/// so the "hotkey unavailable" sticky-warning behavior can be unit tested
-/// without a running Tauri app. `hotkey_failed` must win over every normal
-/// state (idle/recording/transcribing/loading_model): once the hotkey is
-/// known to be unregistered, no ordinary state transition is allowed to
-/// silently paper back over "Idle" — that's the whole point of making the
-/// warning sticky.
-fn tray_label(state: &str, hotkey_failed: bool) -> (&'static str, &'static str, &'static str) {
-    if hotkey_failed {
-        return ("Sagascript - Hotkey unavailable", "!", "Hotkey unavailable");
-    }
-    match state {
-        "recording" => ("Sagascript - Recording...", "●", "Recording..."),
-        "loading_model" => ("Sagascript - Loading model...", "…", "Loading model..."),
-        "transcribing" => ("Sagascript - Transcribing...", "…", "Transcribing..."),
-        _ => ("Sagascript", "S", "Idle"),
-    }
-}
-
-/// Update the tray tooltip, title, and status menu item to reflect current
-/// state. Consults the process-wide hotkey health flag on every call so a
-/// broken hotkey registration renders as a sticky "Hotkey unavailable"
-/// warning that later state changes (recording -> idle, model-preload status,
-/// etc.) cannot silently overwrite.
-fn update_tray_status(app: &tauri::AppHandle, state: &str) {
-    let hotkey_failed = app.state::<hotkey::HotkeyHealth>().is_failed();
-    let (tooltip, title, menu_text) = tray_label(state, hotkey_failed);
-
-    if let Some(tray) = app.tray_by_id("main") {
-        let _ = tray.set_tooltip(Some(tooltip));
-        let _ = tray.set_title(Some(title));
-    }
-
-    set_status_menu_text(app, &format!("Sagascript - {menu_text}"));
-}
-
 /// Migrate the legacy FlowDictate settings file to the new Sagascript path, if
 /// present and no Sagascript settings file already exists. Rename failure used
 /// to be silently swallowed (`let _ = std::fs::rename(...)`), which would
@@ -1924,52 +1538,6 @@ fn migrate_legacy_settings_unless_overridden(
         return;
     }
     migrate_legacy_settings(legacy, new_path);
-}
-
-/// Truncate transcription text for tray display, cutting on a char boundary.
-fn truncate_for_tray(text: &str) -> String {
-    if text.len() > 60 {
-        let cut = text
-            .char_indices()
-            .map(|(i, _)| i)
-            .take_while(|&i| i <= 57)
-            .last()
-            .unwrap_or(0);
-        format!("{}...", &text[..cut])
-    } else {
-        text.to_string()
-    }
-}
-
-/// Update the tray status menu item and tooltip to show the last transcription.
-///
-/// Guarded the same way as [`update_tray_status`]: if the hotkey is currently
-/// unregistered, showing "Last: <transcription>" would silently overwrite the
-/// sticky "Hotkey unavailable" warning (the exact trap called out in review —
-/// this call always follows an `update_tray_status(_, "idle")` in the success
-/// path). Delegate to `update_tray_status` in that case instead of duplicating
-/// the warning text here.
-fn update_tray_last_result(app: &tauri::AppHandle, text: &str) {
-    if app.state::<hotkey::HotkeyHealth>().is_failed() {
-        update_tray_status(app, "idle");
-        return;
-    }
-
-    let display = truncate_for_tray(text);
-
-    if let Some(tray) = app.tray_by_id("main") {
-        let _ = tray.set_tooltip(Some(&format!("Sagascript\nLast: {display}")));
-    }
-
-    set_status_menu_text(app, &format!("\u{2713} {display}"));
-}
-
-/// Helper to update the status menu item text
-fn set_status_menu_text(app: &tauri::AppHandle, text: &str) {
-    let guard = lock_or_recover(&app.state::<SharedStatusItem>(), STATUS_ITEM_LOCK).clone();
-    if let Some(item) = guard {
-        let _ = item.set_text(text);
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
