@@ -442,6 +442,19 @@ fn install_err(message: impl Into<String>) -> DictationError {
     DictationError::ModelDownloadFailed(message.into())
 }
 
+/// True for an entry name that starts at a filesystem root or a drive: `/x`,
+/// `\x`, `C:\x`, `C:x`.
+///
+/// zip 9's `enclosed_name` drops such a prefix and returns the rest as a
+/// relative path (zip 4 returned `None`). A model archive has no reason to
+/// carry one, so refuse it rather than extract it somewhere other than named.
+/// Windows syntax is checked on every host, as zip 9 parses entry names that way.
+fn is_rooted_entry_name(name: &str) -> bool {
+    let bytes = name.as_bytes();
+    name.starts_with(['/', '\\'])
+        || (bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':')
+}
+
 /// Extract `archive` with path-traversal, symlink and size guards.
 fn extract_archive(archive: &Path, dest: &Path, max_bytes: u64) -> Result<(), DictationError> {
     let file = std::fs::File::open(archive)
@@ -453,10 +466,14 @@ fn extract_archive(archive: &Path, dest: &Path, max_bytes: u64) -> Result<(), Di
         let mut entry = zip
             .by_index(index)
             .map_err(|e| install_err(format!("Corrupt model archive entry {index}: {e}")))?;
-        let Some(relative) = entry.enclosed_name() else {
+        // For messages only: `entry.name()` is fallible in zip 9.
+        let display_name = String::from_utf8_lossy(entry.name_raw()).into_owned();
+        let Some(relative) = entry
+            .enclosed_name()
+            .filter(|_| !is_rooted_entry_name(&display_name))
+        else {
             return Err(install_err(format!(
-                "Model archive entry {:?} escapes the extraction directory",
-                entry.name()
+                "Model archive entry {display_name:?} escapes the extraction directory"
             )));
         };
         if entry
@@ -464,8 +481,7 @@ fn extract_archive(archive: &Path, dest: &Path, max_bytes: u64) -> Result<(), Di
             .is_some_and(|mode| mode & 0o170000 == 0o120000)
         {
             return Err(install_err(format!(
-                "Model archive entry {:?} is a symlink, which is not allowed",
-                entry.name()
+                "Model archive entry {display_name:?} is a symlink, which is not allowed"
             )));
         }
         let target = dest.join(relative);
