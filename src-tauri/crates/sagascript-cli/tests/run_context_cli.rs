@@ -230,6 +230,74 @@ fn profile_and_language_cannot_be_combined_in_any_command() {
     }
 }
 
+/// The one `error` object a `--json` run prints on stdout.
+fn json_failure(output: &Output) -> Value {
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "stderr={}",
+        stderr_text(output)
+    );
+    let object: Value = serde_json::from_slice(&output.stdout).expect("stdout is one JSON object");
+    assert_eq!(object["status"], "error", "{object}");
+    object
+}
+
+#[test]
+fn a_language_override_decides_whether_the_profile_dictionary_is_in_force() {
+    // `--correct-hints` needs a dictionary to correct with. The default
+    // profile has one ("Sagascript"); it applies while the language is the
+    // profile's own and is left behind when `--language` changes it.
+    let sandbox = Sandbox::new();
+    let run = |flags: &[&str]| {
+        let mut args = vec!["transcribe", "a.wav", "--json", "--correct-hints"];
+        args.extend_from_slice(flags);
+        json_failure(&sandbox.run(&args))
+    };
+
+    let same_language = run(&["--model", "base.en", "--language", "en"]);
+    assert_eq!(
+        same_language["code"], "transcription_failed",
+        "{same_language}"
+    );
+    assert!(
+        same_language["error"]
+            .as_str()
+            .is_some_and(|text| text.contains("is not downloaded")),
+        "{same_language}"
+    );
+
+    let changed_language = run(&["--model", "kb-whisper-base", "--language", "sv"]);
+    assert_eq!(
+        changed_language["code"], "settings_error",
+        "{changed_language}"
+    );
+    assert!(
+        changed_language["error"].as_str().is_some_and(|text| text
+            .starts_with("Settings error: --correct-hints requires a non-empty --hint/--prompt, ")),
+        "{changed_language}"
+    );
+
+    let changed_with_prompt = run(&[
+        "--model",
+        "kb-whisper-base",
+        "--language",
+        "sv",
+        "--prompt",
+        "Acme",
+    ]);
+    assert_eq!(
+        changed_with_prompt["code"], "transcription_failed",
+        "{changed_with_prompt}"
+    );
+    assert!(
+        changed_with_prompt["error"]
+            .as_str()
+            .is_some_and(|text| text.contains("is not downloaded")),
+        "{changed_with_prompt}"
+    );
+}
+
 #[cfg(feature = "diarization")]
 mod reprocess {
     use super::*;
@@ -312,6 +380,10 @@ mod reprocess {
         let sandbox = Sandbox::new();
         for flags in [
             &["--model", "base.en"][..],
+            // No --model: an automatic choice that is never Pianissimo (this
+            // is the real binary in a sandbox, so what is downloaded on the
+            // machine running the test does not matter).
+            &["--language", "sv"][..],
             &[
                 "--profile",
                 "swedish",

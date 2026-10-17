@@ -67,8 +67,23 @@ impl RunSelection {
                 })?,
             None => settings.default_profile(),
         };
-        let language = overrides.language.unwrap_or(profile.language);
-        Ok(Self { profile, language })
+        let selection = Self {
+            language: profile.language,
+            profile,
+        };
+        Ok(match overrides.language {
+            Some(language) => selection.override_language(language),
+            None => selection,
+        })
+    }
+
+    /// The same run in another language. This is the whole rule for
+    /// [`RunOverrides::language`]; a caller that learns of the override after
+    /// the profile is resolved (the command line reports an unknown profile
+    /// before an unknown language) applies it with this.
+    pub fn override_language(mut self, language: Language) -> Self {
+        self.language = language;
+        self
     }
 
     /// Whether the run asked for another language than its profile's.

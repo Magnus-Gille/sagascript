@@ -395,3 +395,30 @@ fn resolution_leaves_the_settings_untouched() {
     selection.into_context(&settings, Some("Acme"));
     assert_eq!(serde_json::to_string(&settings).unwrap(), before);
 }
+
+#[test]
+fn overriding_the_language_afterwards_is_the_same_as_resolving_with_it() {
+    let settings = migrated();
+    for profile in [None, Some("default"), Some("swedish"), Some("auto")] {
+        for language in [Language::English, Language::Swedish, Language::Auto] {
+            let at_once = RunSelection::resolve(
+                &settings,
+                RunOverrides {
+                    profile,
+                    language: Some(language),
+                },
+            )
+            .unwrap();
+            let later = RunSelection::resolve(
+                &settings,
+                RunOverrides {
+                    profile,
+                    language: None,
+                },
+            )
+            .unwrap()
+            .override_language(language);
+            assert_eq!(at_once, later, "{profile:?} {language:?}");
+        }
+    }
+}

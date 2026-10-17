@@ -610,12 +610,9 @@ mod tests {
         let inputs = resolve(&["--model", "kb-whisper-base", "--language", "sv"]).unwrap();
         assert_eq!(inputs.model, WhisperModel::KbWhisperBase);
         assert_eq!(inputs.language, Language::Swedish);
-
-        // No --model: some Whisper model that fits the language, never
-        // Pianissimo (which one depends on what is downloaded on the machine).
-        let inputs = resolve(&["--language", "sv"]).unwrap();
-        assert_eq!(inputs.language, Language::Swedish);
-        assert!(inputs.model.is_compatible_with(Language::Swedish));
+        // No `--model` is covered by the real-binary test in
+        // `tests/run_context_cli.rs`: an automatic choice looks at the models
+        // downloaded on this machine, which a unit test must not touch.
     }
 
     #[test]

@@ -39,17 +39,22 @@ pub(crate) struct RunRequest<'a> {
 impl RunRequest<'_> {
     /// Step one: the profile (unknown ids are an error) and the language
     /// (`--language` is parsed here, an unknown name is an error). Reads no
-    /// file. The CLI never accepts `--profile` together with `--language`, so
-    /// which of the two is reported first cannot be observed.
+    /// file. The profile is resolved first, so an unknown profile is reported
+    /// before an unknown language; the command line never offers both
+    /// (`--profile` conflicts with `--language`), so this order is only
+    /// visible to a caller that builds the request itself.
     pub(crate) fn select(&self, settings: &Settings) -> Result<RunSelection, DictationError> {
-        let language = self.language.map(parse_language).transpose()?;
-        RunSelection::resolve(
+        let selection = RunSelection::resolve(
             settings,
             RunOverrides {
                 profile: self.profile,
-                language,
+                language: None,
             },
-        )
+        )?;
+        Ok(match self.language.map(parse_language).transpose()? {
+            Some(language) => selection.override_language(language),
+            None => selection,
+        })
     }
 
     /// Step two: read the one-run prompt (`--prompt-file` wins over
@@ -381,6 +386,12 @@ mod tests {
         assert_eq!(
             text(with_file(None, Some("xx"))),
             "Settings error: Unknown language 'xx'. Valid: en, sv, no, fi, auto"
+        );
+        // The command line never offers both flags (clap makes them conflict),
+        // but the request type can hold both: the profile still comes first.
+        assert_eq!(
+            text(with_file(Some("nope"), Some("xx"))),
+            "Settings error: Unknown dictation profile 'nope'"
         );
         assert!(text(with_file(None, None)).contains("Failed to read prompt file"));
     }
