@@ -3194,5 +3194,5 @@ pub fn copy_to_clipboard(text: &str) -> Result<(), DictationError> {
 }
 
 #[cfg(test)]
-#[path = "transcribe_tests.rs"]
+#[path = "../transcribe_tests.rs"]
 mod tests;
