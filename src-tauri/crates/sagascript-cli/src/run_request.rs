@@ -91,7 +91,7 @@ mod tests {
 
     /// Default English profile with the dictionary `Sagascript`, a Swedish
     /// profile with an alias, profile dictionaries in force.
-    pub(crate) fn settings() -> Settings {
+    fn settings() -> Settings {
         let mut settings = Settings {
             hotkey_profiles: vec![
                 profile("default", Language::English),
@@ -113,7 +113,7 @@ mod tests {
 
     type Entries = Vec<(String, Vec<String>)>;
 
-    pub(crate) fn entries(context: &RunContext) -> Entries {
+    fn entries(context: &RunContext) -> Entries {
         context
             .glossary
             .entries()

@@ -554,6 +554,128 @@ mod tests {
         .expect("synthetic review")
     }
 
+    #[derive(Debug, Parser)]
+    struct RuntimeCli {
+        #[command(flatten)]
+        args: RuntimeArgs,
+    }
+
+    fn runtime_args(flags: &[&str]) -> RuntimeArgs {
+        RuntimeCli::try_parse_from(["x"].into_iter().chain(flags.iter().copied()))
+            .expect("runtime flags parse")
+            .args
+    }
+
+    fn resolve(flags: &[&str]) -> Result<RuntimeInputs, DictationError> {
+        resolve_runtime_from(&runtime_args(flags), Settings::default())
+    }
+
+    #[test]
+    fn reprocessing_rejects_models_it_cannot_decode_with() {
+        // Reprocessing is Whisper-only; the shared resolver does not choose
+        // the model, so each command's own limits stay in force (#346).
+        for (flags, message) in [
+            (
+                &["--model", "pianissimo-sv", "--language", "sv"][..],
+                "Settings error: Meeting reprocessing requires a Whisper model; select one with --model",
+            ),
+            (
+                &["--model", "pianissimo-sv"][..],
+                "Settings error: Pianissimo Original is only available for Swedish file transcription",
+            ),
+            (
+                &["--model", "bogus"][..],
+                "Settings error: Unknown file model preference 'bogus'",
+            ),
+            (
+                &["--model", "auto"][..],
+                "Settings error: --model needs a concrete model ID; omit it to use the file default",
+            ),
+        ] {
+            let error = resolve(flags).expect_err(&format!("{flags:?} must be rejected"));
+            assert!(
+                matches!(error, DictationError::SettingsError(_)),
+                "{flags:?}: {error:?}"
+            );
+            assert_eq!(error.to_string(), message, "{flags:?}");
+        }
+    }
+
+    #[test]
+    fn reprocessing_accepts_whisper_models_and_takes_the_language_from_the_request() {
+        let inputs = resolve(&["--model", "base.en"]).unwrap();
+        assert_eq!(inputs.model, WhisperModel::BaseEn);
+        assert_eq!(inputs.language, Language::English);
+
+        let inputs = resolve(&["--model", "kb-whisper-base", "--language", "sv"]).unwrap();
+        assert_eq!(inputs.model, WhisperModel::KbWhisperBase);
+        assert_eq!(inputs.language, Language::Swedish);
+
+        // No --model: a Whisper model recommended for the language, never Pianissimo.
+        let inputs = resolve(&["--language", "sv"]).unwrap();
+        assert_eq!(inputs.model, WhisperModel::recommended(Language::Swedish));
+    }
+
+    #[test]
+    fn the_model_is_decided_before_the_prompt_file_is_read() {
+        // Both are wrong at once: the model is reported, as before the
+        // resolver was shared. `transcribe` has the opposite order and keeps it.
+        let missing = "no-such-folder/hint.txt";
+        for (flags, message) in [
+            (
+                &["--model", "bogus", "--prompt-file", missing][..],
+                "Settings error: Unknown file model preference 'bogus'",
+            ),
+            (
+                &[
+                    "--model",
+                    "pianissimo-sv",
+                    "--language",
+                    "sv",
+                    "--prompt-file",
+                    missing,
+                ][..],
+                "Settings error: Meeting reprocessing requires a Whisper model; select one with --model",
+            ),
+        ] {
+            let error = resolve(flags).unwrap_err();
+            assert_eq!(error.to_string(), message, "{flags:?}");
+        }
+        let error = resolve(&["--model", "base.en", "--prompt-file", missing]).unwrap_err();
+        assert_eq!(error.code(), "file_decode_error");
+        assert!(error.to_string().starts_with(
+            "File decode error: Failed to read prompt file 'no-such-folder/hint.txt': "
+        ));
+    }
+
+    #[test]
+    fn an_unknown_profile_is_reported_before_the_model_and_the_prompt_file() {
+        let error = resolve(&[
+            "--profile",
+            "nope",
+            "--model",
+            "bogus",
+            "--prompt-file",
+            "no-such-folder/hint.txt",
+        ])
+        .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "Settings error: Unknown dictation profile 'nope'"
+        );
+    }
+
+    #[test]
+    fn the_runtime_keeps_the_settings_it_resolved_against() {
+        let settings = Settings {
+            initial_prompt: "marker".to_string(),
+            ..Settings::default()
+        };
+        let inputs =
+            resolve_runtime_from(&runtime_args(&["--model", "base.en"]), settings).unwrap();
+        assert_eq!(inputs.stored.initial_prompt, "marker");
+    }
+
     #[test]
     fn parser_accepts_plan_and_execute_surfaces() {
         let plan = TestCli::try_parse_from([
