@@ -21,6 +21,7 @@ use crate::hotkey::configuration::HotkeyChange;
 use crate::hotkey::{HotkeyHealth, HotkeyStatus, OperationalHotkey};
 use sagascript_core::audio::decoder;
 use sagascript_core::error::DictationError;
+use sagascript_core::run_context::file_beam_size;
 use sagascript_core::settings::{
     validate_hotkey, FileModel, FileModelPreference, HotkeyMode, HotkeyProfile, Language, Settings,
     WhisperModel,
@@ -28,7 +29,6 @@ use sagascript_core::settings::{
 use sagascript_core::transcription::pianissimo_model;
 use sagascript_core::transcription::{
     model, recommended_parallel_chunks, ContextProfile, TranscribeOptions, WhisperBackend,
-    FILE_TRANSCRIBE_BEAM,
 };
 use sagascript_core::transcription::{
     suggest_glossary_candidates, Glossary, GlossarySuggestion, GlossarySuggestionKind,
@@ -75,9 +75,7 @@ pub(crate) fn build_file_transcribe_options(
     prompt: Option<String>,
 ) -> TranscribeOptions {
     let mut opts = build_transcribe_options(settings);
-    if opts.beam_size < 2 {
-        opts.beam_size = FILE_TRANSCRIBE_BEAM;
-    }
+    opts.beam_size = file_beam_size(opts.beam_size);
     opts.prompt = effective_file_glossary(settings, prompt.as_deref()).decoder_prompt();
     opts
 }

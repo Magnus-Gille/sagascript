@@ -24,7 +24,7 @@
 
 use crate::error::DictationError;
 use crate::settings::{HotkeyProfile, Language, Settings};
-use crate::transcription::Glossary;
+use crate::transcription::{Glossary, FILE_TRANSCRIBE_BEAM};
 
 /// What a run asked for, already parsed.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -111,6 +111,20 @@ impl RunSelection {
             profile: self.profile,
             language: self.language,
         }
+    }
+}
+
+/// The beam width a file run uses when the caller gave none: the saved
+/// `beam_size` when it asks for a beam search (2 or more), otherwise
+/// [`FILE_TRANSCRIBE_BEAM`]. A file run is not latency-sensitive, so it
+/// defaults to beam search (fewer repetition loops) where live dictation
+/// stays greedy. The CLI (`transcribe`) and the app (file transcription) both
+/// take their default from here.
+pub fn file_beam_size(saved: u32) -> u32 {
+    if saved >= 2 {
+        saved
+    } else {
+        FILE_TRANSCRIBE_BEAM
     }
 }
 

@@ -422,3 +422,17 @@ fn overriding_the_language_afterwards_is_the_same_as_resolving_with_it() {
         }
     }
 }
+
+#[test]
+fn file_runs_default_to_beam_search_unless_a_width_is_saved() {
+    use crate::transcription::FILE_TRANSCRIBE_BEAM;
+    assert_eq!(
+        FILE_TRANSCRIBE_BEAM, 5,
+        "the table below spells out today's default"
+    );
+    // (saved beam_size, width a file run uses). 0 is greedy and 1 is not a beam
+    // search either; both become the default. A saved width of 2 or more is kept.
+    for (saved, used) in [(0, 5), (1, 5), (2, 2), (3, 3), (5, 5), (8, 8)] {
+        assert_eq!(file_beam_size(saved), used, "saved width {saved}");
+    }
+}

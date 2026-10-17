@@ -21,7 +21,7 @@ use sagascript_core::diarization_report::DecoderEvidence;
 use sagascript_core::error::DictationError;
 #[cfg(feature = "diarization")]
 use sagascript_core::meeting::{MeetingSegmentInput, MeetingSpeaker, MeetingTranscript};
-use sagascript_core::run_context::RunContext;
+use sagascript_core::run_context::{file_beam_size, RunContext};
 use sagascript_core::settings::{FileModel, FileModelPreference, Language, Settings, WhisperModel};
 use sagascript_core::transcription::diagnostics::{
     analyze_coverage, analyze_language_windows, analyze_repetition, language_mismatch_warning,
@@ -2182,11 +2182,9 @@ fn transcribe_file(
         prompt: glossary.decoder_prompt(),
         // File transcription isn't latency-sensitive, so default to beam search
         // (fewer repetition loops). Honor an explicit beam setting/flag.
-        beam_size: args.beam_size.unwrap_or(if stored.beam_size >= 2 {
-            stored.beam_size
-        } else {
-            sagascript_core::transcription::FILE_TRANSCRIBE_BEAM
-        }),
+        beam_size: args
+            .beam_size
+            .unwrap_or_else(|| file_beam_size(stored.beam_size)),
         temperature_fallback: stored.temperature_fallback,
         vad_model_path,
         // Coverage diagnostics need real segment bounds for both human and
