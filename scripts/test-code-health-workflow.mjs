@@ -18,6 +18,7 @@ import {
   restJson,
   runSwiftCoverageSteps,
   safeFailureDiagnostic,
+  swiftCommandEnvironment,
   workflowRunContext,
 } from "./code-health-produce.mjs";
 import { createObjective } from "./lib/code-health-producer.mjs";
@@ -228,6 +229,40 @@ test("Swift runs coverage tests before querying the generated codecov report", (
   }
 });
 
+test("Swift selected developer directory is applied to every Swift subprocess without mutating the parent environment", () => {
+  const rootPath = mkdtempSync(join(tmpdir(), "sagascript-swift-developer-dir-test-"));
+  const tempRoot = join(rootPath, "task-temp");
+  const scratchPath = join(tempRoot, "scratch");
+  const reportPath = `${scratchPath}/codecov/default/codecov.json`;
+  const selectedDeveloperDir = "/Applications/Xcode_16.4.app/Contents/Developer";
+  const originalDeveloperDir = process.env.DEVELOPER_DIR;
+  const calls = [];
+  try {
+    const selectedEnv = swiftCommandEnvironment(tempRoot, selectedDeveloperDir);
+    assert.equal(selectedEnv.DEVELOPER_DIR, selectedDeveloperDir);
+    runSwiftCoverageSteps({
+      scratchPath,
+      tempRoot,
+      swiftDeveloperDir: selectedDeveloperDir,
+      runCommand: (args, options) => {
+        calls.push({ args, options });
+        return args.includes("--show-codecov-path") ? `${reportPath}\n` : "test run completed\n";
+      },
+    });
+    assert.deepEqual(
+      calls.map((call) => call.options.env.DEVELOPER_DIR),
+      [selectedDeveloperDir, selectedDeveloperDir],
+    );
+    assert.equal(process.env.DEVELOPER_DIR, originalDeveloperDir);
+
+    const fallbackEnv = swiftCommandEnvironment(tempRoot, "");
+    assert.equal("DEVELOPER_DIR" in fallbackEnv, false);
+    assert.equal(process.env.DEVELOPER_DIR, originalDeveloperDir);
+  } finally {
+    rmSync(rootPath, { recursive: true, force: true });
+  }
+});
+
 test("Swift coverage filters external and generated exports while retaining source-only paths", () => {
   const packageRoot = resolve(join("/tmp/swift-task", "swift-package"));
   const sourcePackageRoot = resolve(join("/repo", "src-tauri/engine-host/coreml"));
@@ -346,8 +381,12 @@ test("workflow collection schedule and manual dispatch are explicit and informat
   assert.match(invalidSchedule.stderr, /Unregistered schedule/);
   assert.match(workflow, /name: Select newest Xcode for Swift coverage[\s\S]*?find \/Applications -maxdepth 1 -name "Xcode_\*\.app"/);
   assert.match(workflow, /name: Select newest Xcode for Swift coverage[\s\S]*?if: \$\{\{ steps\.mode\.outputs\.mode == 'static' \}\}/);
-  assert.match(workflow, /name: Select newest Xcode for Swift coverage[\s\S]*?echo "DEVELOPER_DIR=\$developer_dir" >> "\$GITHUB_ENV"/);
-  assert.match(workflow, /name: Select newest Xcode for Swift coverage[\s\S]*?swift --version/);
+  assert.match(
+    workflow,
+    /name: Select newest Xcode for Swift coverage[\s\S]*?echo "SAGASCRIPT_CODE_HEALTH_SWIFT_DEVELOPER_DIR=\$developer_dir" >> "\$GITHUB_ENV"/,
+  );
+  assert.match(workflow, /name: Select newest Xcode for Swift coverage[\s\S]*?DEVELOPER_DIR="\$developer_dir" swift --version/);
+  assert.doesNotMatch(workflow, /echo "DEVELOPER_DIR=\$developer_dir" >> "\$GITHUB_ENV"/);
   assert.ok(workflow.indexOf("name: Select newest Xcode for Swift coverage") < workflow.indexOf("name: Collect static measurements"));
   assert.match(workflow, /steps\.mode\.outputs\.mode == 'static'/);
   assert.match(workflow, /github\.event_name != 'workflow_dispatch' \|\| github\.ref == 'refs\/heads\/main'/);

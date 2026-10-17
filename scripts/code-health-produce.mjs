@@ -510,7 +510,17 @@ export function collectRustCliCoverage(tempRoot, cargoVersion, llvmCovVersion, r
   return result;
 }
 
-export function runSwiftCoverageSteps({ scratchPath, tempRoot, runCommand } = {}) {
+export function swiftCommandEnvironment(tempRoot, swiftDeveloperDir = process.env.SAGASCRIPT_CODE_HEALTH_SWIFT_DEVELOPER_DIR) {
+  const env = {
+    TMPDIR: tempRoot,
+    CLANG_MODULE_CACHE_PATH: join(tempRoot, "clang-module-cache"),
+    SWIFT_MODULECACHE_PATH: join(tempRoot, "swift-module-cache"),
+  };
+  if (typeof swiftDeveloperDir === "string" && swiftDeveloperDir.length > 0) env.DEVELOPER_DIR = swiftDeveloperDir;
+  return env;
+}
+
+export function runSwiftCoverageSteps({ scratchPath, tempRoot, runCommand, swiftDeveloperDir } = {}) {
   if (typeof scratchPath !== "string" || typeof tempRoot !== "string" || typeof runCommand !== "function") {
     throw new TypeError("Swift coverage command input is malformed");
   }
@@ -530,13 +540,7 @@ export function runSwiftCoverageSteps({ scratchPath, tempRoot, runCommand } = {}
     "--scratch-path",
     scratchPath,
   ];
-  const options = {
-    env: {
-      TMPDIR: tempRoot,
-      CLANG_MODULE_CACHE_PATH: join(tempRoot, "clang-module-cache"),
-      SWIFT_MODULECACHE_PATH: join(tempRoot, "swift-module-cache"),
-    },
-  };
+  const options = { env: swiftCommandEnvironment(tempRoot, swiftDeveloperDir) };
   runCommand(["test", "--enable-code-coverage", "--jobs", "2", ...sharedArgs], options);
   const output = runCommand(["test", "--show-codecov-path", ...sharedArgs], options);
   const codecovPath = output.trim().split(/\r?\n/).at(-1);
@@ -606,8 +610,9 @@ export function collectSwiftCoverage(tempRoot) {
   const sourcePackageRoot = join(REPO_ROOT, "src-tauri/engine-host/coreml");
   const packageRoot = join(tempRoot, "swift-package");
   const scratchPath = join(tempRoot, "swift-scratch");
+  const swiftDeveloperDir = process.env.SAGASCRIPT_CODE_HEALTH_SWIFT_DEVELOPER_DIR;
   const result = recordCollector("coverage-swift-coreml", "runner-provided", () => {
-    const versionOutput = toolVersion("swift", ["--version"]);
+    const versionOutput = toolVersion("swift", ["--version"], { env: swiftCommandEnvironment(tempRoot, swiftDeveloperDir) });
     const swiftVersion = /Apple Swift version\s+([0-9.]+)/.exec(versionOutput)?.[1];
     if (!swiftVersion) throw new Error("could not parse the active Swift compiler version");
     prepareSwiftCoverageInputs({
@@ -631,6 +636,7 @@ export function collectSwiftCoverage(tempRoot) {
     const codecovPath = runSwiftCoverageSteps({
       scratchPath,
       tempRoot,
+      swiftDeveloperDir,
       runCommand: (args, options) => command("swift", args, { cwd: packageRoot, ...options }),
     });
     const raw = JSON.parse(readFileSync(codecovPath, "utf8"));
