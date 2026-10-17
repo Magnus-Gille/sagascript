@@ -2682,5 +2682,5 @@ pub struct LoadedModelInfo {
 }
 
 #[cfg(test)]
-#[path = "commands_tests.rs"]
+#[path = "mod_tests.rs"]
 mod tests;
