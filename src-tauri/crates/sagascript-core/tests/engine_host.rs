@@ -1335,12 +1335,19 @@ fn not_loaded_response_is_retried_once_after_reload() {
 }
 
 /// Finding 4: cancelling while the model loads returns promptly and keeps the host.
+///
+/// "Promptly" means without waiting for the load: the fake load takes 4.5 s
+/// (under the fixture's 5 s load timeout) and the cancel must return within
+/// 2.5 s of being requested, which a run that waited for the load (4.1 s more)
+/// cannot meet. A tighter absolute bound
+/// (it was 250 ms) failed on loaded Windows runners, where the cancelling
+/// thread itself was scheduled 0.6-1.6 s late.
 #[test]
 fn cancel_during_slow_load_returns_promptly_without_killing_the_host() {
     let log = tempfile::tempdir().unwrap();
     let log_path = log.path().join("ops.log");
     let f = fixture(&[
-        ("FAKE_LOAD_DELAY_MS", "2500"),
+        ("FAKE_LOAD_DELAY_MS", "4500"),
         ("FAKE_LOG", log_path.to_str().unwrap()),
     ]);
     let cancel = CancelToken::new();
@@ -1357,7 +1364,7 @@ fn cancel_during_slow_load_returns_promptly_without_killing_the_host() {
     let cancelled_at = canceller.join().unwrap();
     assert!(matches!(r, Err(EngineHostError::Cancelled)), "{r:?}");
     assert!(
-        returned.saturating_duration_since(cancelled_at) < Duration::from_millis(250),
+        returned.saturating_duration_since(cancelled_at) < Duration::from_millis(2500),
         "cancel took {:?}",
         returned.saturating_duration_since(cancelled_at)
     );
