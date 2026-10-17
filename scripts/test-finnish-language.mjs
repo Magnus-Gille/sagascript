@@ -1,8 +1,17 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import test from "node:test";
 
 const source = async (path) => readFile(new URL(`../${path}`, import.meta.url), "utf8");
+
+// The CLI's transcribe command is a directory of modules; the negative checks below
+// must hold over all of it, wherever the code lives, so they read every file.
+const transcribeSources = async () => {
+  const dir = "src-tauri/crates/sagascript-cli/src/transcribe";
+  const names = (await readdir(new URL(`../${dir}`, import.meta.url))).filter((name) => name.endsWith(".rs")).sort();
+  const texts = await Promise.all(names.map((name) => source(`${dir}/${name}`)));
+  return texts.map((text) => text.replace(/\r\n/g, "\n")).join("\n");
+};
 
 const [api, settings, overlay, onboarding, transcribe, models, benchmark, benchmarkConfig, latency, config, record, cli] =
   await Promise.all([
@@ -10,7 +19,7 @@ const [api, settings, overlay, onboarding, transcribe, models, benchmark, benchm
     source("src/lib/Settings.svelte"),
     source("src/lib/overlay-state.ts"),
     source("src/lib/Onboarding.svelte"),
-    source("src-tauri/crates/sagascript-cli/src/transcribe/resolve.rs"),
+    transcribeSources(),
     source("src-tauri/crates/sagascript-cli/src/models.rs"),
     source("src-tauri/crates/sagascript-cli/src/benchmark_dictation.rs"),
     source("src-tauri/crates/sagascript-cli/src/benchmark_config.rs"),
