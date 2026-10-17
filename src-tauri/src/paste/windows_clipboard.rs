@@ -105,17 +105,20 @@ where
 {
     const MAX_ATTEMPTS: usize = 6;
 
-    for attempt in 0..MAX_ATTEMPTS {
+    // Every pass returns or counts the attempt, and the final attempt returns
+    // its error, so the loop is bounded without a fall-through after it.
+    let mut attempt = 1;
+    loop {
         match open() {
             Ok(value) => return Ok(value),
-            Err(error) if attempt + 1 == MAX_ATTEMPTS => return Err(error),
+            Err(error) if attempt == MAX_ATTEMPTS => return Err(error),
             Err(_) => {
                 pump();
                 std::thread::sleep(Duration::from_millis(5));
+                attempt += 1;
             }
         }
     }
-    unreachable!("bounded retry loop returns on its final attempt")
 }
 
 enum RestoreRequest {

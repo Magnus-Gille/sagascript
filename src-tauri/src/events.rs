@@ -190,7 +190,7 @@ pub mod event {
     catalogue! {
         /// Dictation state changed. Producers: the hotkey pipeline (main.rs),
         /// the Dictate test recording, training and file transcription
-        /// (commands.rs), meeting jobs, and the settings watcher
+        /// (commands/), meeting jobs, and the settings watcher
         /// ([`UiState::SettingsReloaded`]). Consumers: Overlay.svelte and the
         /// Dictate tab (Settings.svelte).
         STATE_CHANGED: StateChanged = "state-changed",
@@ -257,7 +257,7 @@ pub mod event {
             scope = None;
 
         /// Hotkey registration health changed. Producers: hotkey changes
-        /// (commands.rs) and the settings watcher. Consumer: Settings.svelte.
+        /// (commands/hotkey.rs) and the settings watcher. Consumer: Settings.svelte.
         HOTKEY_REGISTRATION_CHANGED: HotkeyRegistrationChanged = "hotkey-registration-changed",
             payload<'a> = &'a HotkeyStatus,
             consumer = Consumer::Gui,

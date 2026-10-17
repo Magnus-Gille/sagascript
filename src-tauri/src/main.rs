@@ -1262,7 +1262,12 @@ fn main() -> std::process::ExitCode {
                     )),
                     hotkey::OperationalHotkey::Inactive,
                 ),
-                (_, None, Some(_)) => unreachable!("cleanup only runs after registration failure"),
+                // Cleanup runs only after a registration failure, so no run gets here;
+                // if one did, the OS state is unknown, not registered.
+                (validation, None, Some(cleanup)) => (
+                    Some(format!("{}partial-registration cleanup failed without a registration error: {cleanup}", validation.map(|error| format!("{error}; ")).unwrap_or_default())),
+                    hotkey::OperationalHotkey::Unknown,
+                ),
             };
             let change = health.record(&requested_primary, health_error, operational_hotkey);
             if change.changed {

@@ -23,7 +23,7 @@ Evidence in the code:
   `SAGASCRIPT_ENGINE_HOST` / `SAGASCRIPT_PIANISSIMO_MODEL_DIR` unless built with
   `dev-overrides`, so a signed build does not trust the environment for its sidecar or model.
 - Transcripts reach disk only on request (comment on `save_transcription_text` in
-  `src-tauri/src/commands.rs`: "privacy-first: transcripts reach disk only on explicit
+  `src-tauri/src/commands/files.rs`: "privacy-first: transcripts reach disk only on explicit
   request"; [meeting-workflow.md](../meeting-workflow.md) says the same for meeting imports).
   An update the user starts keeps unsaved dictation as a local recovery draft
   (`prepare_update_recovery`). Diagnostics exclude content: `focus_diag.rs` logs only
