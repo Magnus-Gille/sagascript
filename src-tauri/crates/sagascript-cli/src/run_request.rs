@@ -153,6 +153,8 @@ mod tests {
         }
     }
 
+    type Dictionary = &'static [(&'static str, &'static [&'static str])];
+
     struct Case {
         name: &'static str,
         profile: Option<&'static str>,
@@ -160,14 +162,7 @@ mod tests {
         prompt: Option<&'static str>,
         prompt_file: Option<&'static str>,
         /// `Ok((profile id, language, dictionary))` or the complete error text.
-        expect: Result<
-            (
-                &'static str,
-                Language,
-                &'static [(&'static str, &'static [&'static str])],
-            ),
-            &'static str,
-        >,
+        expect: Result<(&'static str, Language, Dictionary), &'static str>,
     }
 
     const SAGASCRIPT: &[(&str, &[&str])] = &[("Sagascript", &[])];

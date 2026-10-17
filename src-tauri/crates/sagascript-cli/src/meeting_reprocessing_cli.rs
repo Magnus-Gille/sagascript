@@ -611,9 +611,11 @@ mod tests {
         assert_eq!(inputs.model, WhisperModel::KbWhisperBase);
         assert_eq!(inputs.language, Language::Swedish);
 
-        // No --model: a Whisper model recommended for the language, never Pianissimo.
+        // No --model: some Whisper model that fits the language, never
+        // Pianissimo (which one depends on what is downloaded on the machine).
         let inputs = resolve(&["--language", "sv"]).unwrap();
-        assert_eq!(inputs.model, WhisperModel::recommended(Language::Swedish));
+        assert_eq!(inputs.language, Language::Swedish);
+        assert!(inputs.model.is_compatible_with(Language::Swedish));
     }
 
     #[test]

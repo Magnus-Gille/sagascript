@@ -198,6 +198,11 @@ fn the_resolved_language_reaches_the_model_choice() {
 #[test]
 fn profile_and_language_cannot_be_combined_in_any_command() {
     let sandbox = Sandbox::new();
+    // Without `record` and `diarization` (the lean build) nothing is added.
+    #[cfg_attr(
+        not(any(feature = "record", feature = "diarization")),
+        allow(unused_mut)
+    )]
     let mut commands: Vec<Vec<&str>> = vec![vec!["transcribe", "a.wav"]];
     #[cfg(feature = "record")]
     commands.push(vec!["record"]);
