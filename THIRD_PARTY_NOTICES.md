@@ -226,8 +226,8 @@ attribution as well. No matching CoreML encoder is supplied for the fine-tune.
 | kodama | 0.2.3 | MIT | [upstream](https://github.com/diffeo/kodama) |
 | kuchikiki | 0.8.8-speedreader | MIT | [upstream](https://github.com/brave/kuchikiki) |
 | lazy_static | 1.5.0 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-lang-nursery/lazy-static.rs) |
-| libc | 0.2.180 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-lang/libc) |
 | libc | 0.2.189 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-lang/libc) |
+| libc | 0.2.191 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-lang/libc) |
 | libloading | 0.8.9 | ISC | [upstream](https://github.com/nagisa/rust_libloading/) |
 | libloading | 0.9.0 | ISC | [upstream](https://github.com/nagisa/rust_libloading/) |
 | litemap | 0.8.1 | Unicode-3.0 | [upstream](https://github.com/unicode-org/icu4x) |
@@ -256,7 +256,7 @@ attribution as well. No matching CoreML encoder is supplied for the fine-tune.
 | native-tls | 0.2.18 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-native-tls/rust-native-tls) |
 | ndarray | 0.17.2 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-ndarray/ndarray) |
 | new_debug_unreachable | 1.0.6 | MIT | [upstream](https://github.com/mbrubeck/rust-debug-unreachable) |
-| nix | 0.31.1 | MIT | [upstream](https://github.com/nix-rust/nix) |
+| nix | 0.31.3 | MIT | [upstream](https://github.com/nix-rust/nix) |
 | nodrop | 0.1.14 | MIT/Apache-2.0 | [upstream](https://github.com/bluss/arrayvec) |
 | nom | 7.1.3 | MIT | [upstream](https://github.com/Geal/nom) |
 | notify | 7.0.0 | CC0-1.0 | [upstream](https://github.com/notify-rs/notify.git) |
@@ -484,6 +484,7 @@ attribution as well. No matching CoreML encoder is supplied for the fine-tune.
 | transpose | 0.2.3 | MIT OR Apache-2.0 | [upstream](https://github.com/ejmahler/transpose) |
 | tray-icon | 0.21.3 | MIT OR Apache-2.0 | [upstream](https://github.com/tauri-apps/tray-icon) |
 | try-lock | 0.2.5 | MIT | [upstream](https://github.com/seanmonstar/try-lock) |
+| typed-path | 0.12.3 | MIT OR Apache-2.0 | [upstream](https://github.com/chipsenkbeil/typed-path) |
 | typeid | 1.0.3 | MIT OR Apache-2.0 | [upstream](https://github.com/dtolnay/typeid) |
 | typenum | 1.19.0 | MIT OR Apache-2.0 | [upstream](https://github.com/paholg/typenum) |
 | unic-char-property | 0.9.0 | MIT/Apache-2.0 | [upstream](https://github.com/open-i18n/rust-unic/) |
@@ -531,7 +532,7 @@ attribution as well. No matching CoreML encoder is supplied for the fine-tune.
 | zerotrie | 0.2.3 | Unicode-3.0 | [upstream](https://github.com/unicode-org/icu4x) |
 | zerovec | 0.11.5 | Unicode-3.0 | [upstream](https://github.com/unicode-org/icu4x) |
 | zerovec-derive | 0.11.2 | Unicode-3.0 | [upstream](https://github.com/unicode-org/icu4x) |
-| zip | 4.6.1 | MIT | [upstream](https://github.com/zip-rs/zip2.git) |
+| zip | 9.0.4 | MIT | [upstream](https://github.com/zip-rs/zip2) |
 | zlib-rs | 0.6.2 | Zlib | [upstream](https://github.com/trifectatechfoundation/zlib-rs) |
 | zmij | 1.0.21 | MIT | [upstream](https://github.com/dtolnay/zmij) |
 | zmij | 1.0.23 | MIT | [upstream](https://github.com/dtolnay/zmij) |
@@ -1128,39 +1129,6 @@ CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
-~~~~
-
-### 04dc52136d82
-
-Components: Rust zip@4.6.1
-
-Source filenames: LICENSE
-
-~~~~text
-The MIT License (MIT)
-
-Copyright (c) 2014 Mathijs van de Nes
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
-Some files in the "tests/data" subdirectory of this repository are under other
-licences; see files named LICENSE.*.txt for details.
 ~~~~
 
 ### 055a17110636
@@ -4956,7 +4924,7 @@ SOFTWARE.
 
 ### 30fefc3a7d6a
 
-Components: Rust adler2@2.0.1, Rust anyhow@1.0.101, Rust atomic-waker@1.1.2, Rust camino@1.2.2, Rust cargo-platform@0.1.9, Rust cargo_metadata@0.19.2, Rust ctrlc@3.5.2, Rust displaydoc@0.2.5, Rust dtoa@1.0.11, Rust dyn-clone@1.0.20, Rust erased-serde@0.4.9, Rust fastrand@2.3.0, Rust itoa@1.0.17, Rust itoa@1.0.18, Rust kuchikiki@0.8.8-speedreader, Rust minimal-lexical@0.2.1, Rust once_cell@1.21.3, Rust once_cell@1.21.4, Rust pin-project-lite@0.2.16, Rust pin-project-lite@0.2.17, Rust portable-atomic@1.13.1, Rust prettyplease@0.2.37, Rust proc-macro2@1.0.106, Rust proc-macro2@1.0.107, Rust quote@1.0.44, Rust quote@1.0.47, Rust ref-cast-impl@1.0.25, Rust ref-cast@1.0.25, Rust rustc-hash@2.1.1, Rust rustix@1.1.3, Rust semver@1.0.27, Rust serde-untagged@0.1.9, Rust serde@1.0.228, Rust serde@1.0.229, Rust serde_core@1.0.228, Rust serde_core@1.0.229, Rust serde_derive@1.0.228, Rust serde_derive@1.0.229, Rust serde_derive_internals@0.29.1, Rust serde_json@1.0.149, Rust serde_json@1.0.151, Rust serde_repr@0.1.20, Rust servo_arc@0.2.0, Rust syn@1.0.109, Rust syn@2.0.116, Rust syn@3.0.6, Rust thiserror-impl@1.0.69, Rust thiserror-impl@2.0.18, Rust thiserror-impl@2.0.21, Rust thiserror@1.0.69, Rust thiserror@2.0.18, Rust thiserror@2.0.21, Rust typeid@1.0.3, Rust unicode-ident@1.0.24, Rust unicode-ident@1.0.26, Rust utf-8@0.7.6, Rust utf8-zero@0.8.1, Rust zmij@1.0.21, Rust zmij@1.0.23
+Components: Rust adler2@2.0.1, Rust anyhow@1.0.101, Rust atomic-waker@1.1.2, Rust camino@1.2.2, Rust cargo-platform@0.1.9, Rust cargo_metadata@0.19.2, Rust ctrlc@3.5.2, Rust displaydoc@0.2.5, Rust dtoa@1.0.11, Rust dyn-clone@1.0.20, Rust erased-serde@0.4.9, Rust fastrand@2.3.0, Rust itoa@1.0.17, Rust itoa@1.0.18, Rust kuchikiki@0.8.8-speedreader, Rust minimal-lexical@0.2.1, Rust once_cell@1.21.3, Rust once_cell@1.21.4, Rust pin-project-lite@0.2.16, Rust pin-project-lite@0.2.17, Rust portable-atomic@1.13.1, Rust prettyplease@0.2.37, Rust proc-macro2@1.0.106, Rust proc-macro2@1.0.107, Rust quote@1.0.44, Rust quote@1.0.47, Rust ref-cast-impl@1.0.25, Rust ref-cast@1.0.25, Rust rustc-hash@2.1.1, Rust rustix@1.1.3, Rust semver@1.0.27, Rust serde-untagged@0.1.9, Rust serde@1.0.228, Rust serde@1.0.229, Rust serde_core@1.0.228, Rust serde_core@1.0.229, Rust serde_derive@1.0.228, Rust serde_derive@1.0.229, Rust serde_derive_internals@0.29.1, Rust serde_json@1.0.149, Rust serde_json@1.0.151, Rust serde_repr@0.1.20, Rust servo_arc@0.2.0, Rust syn@1.0.109, Rust syn@2.0.116, Rust syn@3.0.6, Rust thiserror-impl@1.0.69, Rust thiserror-impl@2.0.18, Rust thiserror-impl@2.0.21, Rust thiserror@1.0.69, Rust thiserror@2.0.18, Rust thiserror@2.0.21, Rust typed-path@0.12.3, Rust typeid@1.0.3, Rust unicode-ident@1.0.24, Rust unicode-ident@1.0.26, Rust utf-8@0.7.6, Rust utf8-zero@0.8.1, Rust zmij@1.0.21, Rust zmij@1.0.23
 
 Source filenames: LICENSE, LICENSE-MIT
 
@@ -9460,6 +9428,36 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 ~~~~
 
+### 6ac8711fb340
+
+Components: Rust zip@9.0.4
+
+Source filenames: LICENSE
+
+~~~~text
+The MIT License (MIT)
+
+Copyright (c) 2014 Mathijs van de Nes
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+~~~~
+
 ### 6c1e5d0ccf5e
 
 Components: Rust tray-icon@0.21.3
@@ -12496,7 +12494,7 @@ SOFTWARE.
 
 ### 85ad950cce87
 
-Components: Rust anyhow@1.0.101, Rust dtoa@1.0.11, Rust dyn-clone@1.0.20, Rust erased-serde@0.4.9, Rust itoa@1.0.17, Rust itoa@1.0.18, Rust libc@0.2.180, Rust libc@0.2.189, Rust mach2@0.4.3, Rust osakit@0.3.1, Rust prettyplease@0.2.37, Rust proc-macro2@1.0.106, Rust proc-macro2@1.0.107, Rust quote@1.0.44, Rust quote@1.0.47, Rust ref-cast-impl@1.0.25, Rust ref-cast@1.0.25, Rust rustc-hash@2.1.1, Rust semver@1.0.27, Rust serde-untagged@0.1.9, Rust serde@1.0.228, Rust serde@1.0.229, Rust serde_core@1.0.228, Rust serde_core@1.0.229, Rust serde_derive@1.0.228, Rust serde_derive@1.0.229, Rust serde_derive_internals@0.29.1, Rust serde_json@1.0.149, Rust serde_json@1.0.151, Rust serde_repr@0.1.20, Rust syn@2.0.116, Rust syn@3.0.6, Rust thiserror-impl@1.0.69, Rust thiserror-impl@2.0.18, Rust thiserror-impl@2.0.21, Rust thiserror@1.0.69, Rust thiserror@2.0.18, Rust thiserror@2.0.21, Rust typeid@1.0.3, Rust unicode-ident@1.0.24, Rust unicode-ident@1.0.26, Rust utf-8@0.7.6, Rust utf8-zero@0.8.1, Rust utf8parse@0.2.2
+Components: Rust anyhow@1.0.101, Rust dtoa@1.0.11, Rust dyn-clone@1.0.20, Rust erased-serde@0.4.9, Rust itoa@1.0.17, Rust itoa@1.0.18, Rust libc@0.2.189, Rust libc@0.2.191, Rust mach2@0.4.3, Rust osakit@0.3.1, Rust prettyplease@0.2.37, Rust proc-macro2@1.0.106, Rust proc-macro2@1.0.107, Rust quote@1.0.44, Rust quote@1.0.47, Rust ref-cast-impl@1.0.25, Rust ref-cast@1.0.25, Rust rustc-hash@2.1.1, Rust semver@1.0.27, Rust serde-untagged@0.1.9, Rust serde@1.0.228, Rust serde@1.0.229, Rust serde_core@1.0.228, Rust serde_core@1.0.229, Rust serde_derive@1.0.228, Rust serde_derive@1.0.229, Rust serde_derive_internals@0.29.1, Rust serde_json@1.0.149, Rust serde_json@1.0.151, Rust serde_repr@0.1.20, Rust syn@2.0.116, Rust syn@3.0.6, Rust thiserror-impl@1.0.69, Rust thiserror-impl@2.0.18, Rust thiserror-impl@2.0.21, Rust thiserror@1.0.69, Rust thiserror@2.0.18, Rust thiserror@2.0.21, Rust typed-path@0.12.3, Rust typeid@1.0.3, Rust unicode-ident@1.0.24, Rust unicode-ident@1.0.26, Rust utf-8@0.7.6, Rust utf8-zero@0.8.1, Rust utf8parse@0.2.2
 
 Source filenames: LICENSE-APACHE
 
@@ -16751,40 +16749,6 @@ Apache License
    limitations under the License.
 ~~~~
 
-### 98ed3581f1f1
-
-Components: Rust libc@0.2.180
-
-Source filenames: LICENSE-MIT
-
-~~~~text
-Copyright (c) 2014-2020 The Rust Project Developers
-
-Permission is hereby granted, free of charge, to any
-person obtaining a copy of this software and associated
-documentation files (the "Software"), to deal in the
-Software without restriction, including without
-limitation the rights to use, copy, modify, merge,
-publish, distribute, sublicense, and/or sell copies of
-the Software, and to permit persons to whom the Software
-is furnished to do so, subject to the following
-conditions:
-
-The above copyright notice and this permission notice
-shall be included in all copies or substantial portions
-of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
-ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
-TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
-PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
-SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
-CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
-IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-DEALINGS IN THE SOFTWARE.
-~~~~
-
 ### 99afaa30c178
 
 Components: Rust autocfg@1.5.0, Rust autocfg@1.5.1
@@ -19787,7 +19751,7 @@ Creator: Person: Daniel Thompson-Yvetot
 
 ### b9b039b5058c
 
-Components: Rust nix@0.31.1
+Components: Rust nix@0.31.3
 
 Source filenames: LICENSE
 
@@ -21171,7 +21135,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 ### c96302294382
 
-Components: Rust libc@0.2.189
+Components: Rust libc@0.2.189, Rust libc@0.2.191
 
 Source filenames: LICENSE-MIT
 
@@ -21721,6 +21685,28 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+~~~~
+
+### cf12d35c36ba
+
+Components: npm yaml@2.9.1
+
+Source filenames: LICENSE
+
+~~~~text
+Copyright Eemeli Aro <eemeli@gmail.com>
+
+Permission to use, copy, modify, and/or distribute this software for any purpose
+with or without fee is hereby granted, provided that the above copyright notice
+and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
+REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND
+FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
+INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS
+OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
+TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
+THIS SOFTWARE.
 ~~~~
 
 ### cf798811e9a0

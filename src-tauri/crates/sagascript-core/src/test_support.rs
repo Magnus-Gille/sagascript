@@ -190,3 +190,133 @@ impl MeetingTranscriptBuilder {
         .unwrap_or_else(|error| panic!("synthetic meeting transcript is invalid: {error}"))
     }
 }
+
+/// The settings, profiles and prompts the callers of the run resolver are
+/// compared on (#346). The CLI's `RunRequest` and the app's file transcription
+/// each resolve a profile and a prompt, and each test checks its result against
+/// `RunSelection::resolve(..)` then `into_context(..)` of this crate for every
+/// row of this table, so the two are equal to each other through the resolver
+/// without either depending on the other.
+///
+/// Every settings value carries an explicit file model, so resolving a model
+/// from it never looks at the models downloaded on the machine running the test.
+pub mod run_context_table {
+    use crate::settings::{FileModelPreference, HotkeyProfile, Language, Settings, WhisperModel};
+    use crate::transcription::Glossary;
+
+    /// One shape of stored settings and the profile arguments to try on it.
+    pub struct Shape {
+        pub name: &'static str,
+        pub settings: Settings,
+        /// `None` is "no profile asked for": the default profile.
+        pub profiles: Vec<Option<&'static str>>,
+    }
+
+    /// One-run prompts: none, a plain hint, a blank one, one with an alias
+    /// (hint-only), and one with surrounding whitespace.
+    pub const PROMPTS: [Option<&str>; 5] = [
+        None,
+        Some("Acme, Foo"),
+        Some("  \n"),
+        Some("Grimmer = grimmer"),
+        Some("  Acme, Foo  "),
+    ];
+
+    pub fn profile(id: &str, language: Language) -> HotkeyProfile {
+        HotkeyProfile {
+            id: id.into(),
+            name: id.into(),
+            shortcut: format!("Super+{id}"),
+            push_to_talk_shortcut: None,
+            toggle_shortcut: None,
+            language,
+        }
+    }
+
+    fn explicit_model() -> FileModelPreference {
+        // The multilingual Base fits every language.
+        FileModelPreference::Whisper(WhisperModel::Base)
+    }
+
+    /// Profile dictionaries in force; the saved global hint is left behind.
+    pub fn migrated() -> Settings {
+        let mut settings = Settings {
+            language: Language::English,
+            initial_prompt: "LegacyOnly".into(),
+            hotkey_profiles: vec![
+                profile("default", Language::English),
+                profile("swedish", Language::Swedish),
+                profile("automatic", Language::Auto),
+            ],
+            profile_glossary_migrated: true,
+            file_transcription_model: explicit_model(),
+            ..Settings::default()
+        };
+        for (id, source) in [
+            ("default", "Sagascript"),
+            ("swedish", "merge = merch\nGrimnir"),
+            ("automatic", "Akronym = akr"),
+        ] {
+            settings.profile_glossaries.insert(id.into(), source.into());
+        }
+        settings
+    }
+
+    /// Before profile dictionaries: no profile is called `default`, and the
+    /// saved global hint is the base of every run.
+    pub fn legacy() -> Settings {
+        let mut settings = Settings {
+            initial_prompt: "merge = merch\nOpenRouter".into(),
+            hotkey_profiles: vec![
+                profile("swedish", Language::Swedish),
+                profile("english", Language::English),
+            ],
+            profile_glossary_migrated: false,
+            file_transcription_model: explicit_model(),
+            ..Settings::default()
+        };
+        settings
+            .profile_glossaries
+            .insert("swedish".into(), "fika = coffee".into());
+        settings
+    }
+
+    /// No profiles stored at all: the legacy default profile of `language`.
+    pub fn without_profiles() -> Settings {
+        Settings {
+            language: Language::Swedish,
+            hotkey_profiles: Vec::new(),
+            file_transcription_model: explicit_model(),
+            ..Settings::default()
+        }
+    }
+
+    pub fn shapes() -> Vec<Shape> {
+        vec![
+            Shape {
+                name: "migrated",
+                settings: migrated(),
+                profiles: vec![None, Some("default"), Some("swedish"), Some("automatic")],
+            },
+            Shape {
+                name: "legacy",
+                settings: legacy(),
+                profiles: vec![None, Some("swedish"), Some("english")],
+            },
+            Shape {
+                name: "without profiles",
+                settings: without_profiles(),
+                profiles: vec![None, Some("default")],
+            },
+        ]
+    }
+
+    /// What a dictionary holds, comparable: each term with its aliases.
+    pub fn entries(glossary: &Glossary) -> Vec<(String, Vec<String>)> {
+        glossary
+            .entries()
+            .iter()
+            .map(|entry| (entry.canonical.clone(), entry.aliases.clone()))
+            .collect()
+    }
+}

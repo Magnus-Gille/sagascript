@@ -22,7 +22,7 @@ The code follows it structurally. The desktop binary dispatches any subcommand t
 `sagascript_cli::run`; a headless build without Tauri exists for Linux and batch use
 (`cargo build -p sagascript-cli --no-default-features`); even GUI recovery has CLI entry
 points (`sagascript open`, `sagascript update`). CI exercises the release binary through the
-CLI (`config`, `list-models`, `transcribe --json`, in `.github/workflows/ci.yml`), and
+CLI (`config`, `list-models`, `transcribe --json`, in `scripts/ci/smoke-cli.mjs`, which `.github/workflows/ci.yml` runs), and
 `valid_keys_count_matches_settings_struct` in `crates/sagascript-cli/src/config.rs` fails when
 a `Settings` field has no `config` key.
 

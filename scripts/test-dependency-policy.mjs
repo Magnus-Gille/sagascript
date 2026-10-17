@@ -6,11 +6,12 @@ import assert from "node:assert/strict";
 import { readdirSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { commandOf, gatesFor } from "./ci/cargo-gates.mjs";
+import { commandLines, loadWorkflow } from "./lib/ci-workflow.mjs";
 
 const read = async (path) => (await readFile(new URL(`../${path}`, import.meta.url), "utf8")).replace(/\r\n?/g, "\n");
 
-const [workflow, deny, notices, ...manifests] = await Promise.all([
-  read(".github/workflows/ci.yml"),
+const [deny, notices, ...manifests] = await Promise.all([
   read("src-tauri/deny.toml"),
   read("scripts/generate-third-party-notices.mjs"),
   ...[
@@ -20,40 +21,13 @@ const [workflow, deny, notices, ...manifests] = await Promise.all([
   ].map(read),
 ]);
 
-function jobBlock(jobId) {
-  const start = workflow.indexOf(`\n  ${jobId}:\n`);
-  assert.notEqual(start, -1, `workflow must define ${jobId}`);
-  const body = workflow.slice(start + 1);
-  const next = body.slice(1).search(/^  [a-z][a-z0-9-]*:$/m);
-  return next === -1 ? body : body.slice(0, next + 1);
-}
-
-// Each step as { name, raw, commands, workingDirectory }, in workflow order.
-function steps(jobId) {
-  return jobBlock(jobId)
-    .split(/\n(?=      - name: )/)
-    .slice(1)
-    .map((raw) => {
-      const name = /^      - name: (.*)$/m.exec(raw)[1];
-      const inline = /^        run: (?![|>])(.*)$/m.exec(raw)?.[1];
-      const block = /^        run: [|>]-?\n((?:          .*\n?|\n)*)/m.exec(raw)?.[1];
-      const commands = (inline ?? block ?? "")
-        .split("\n")
-        .map((line) => line.trim())
-        .filter(Boolean);
-      const workingDirectory = /^        working-directory: (.*)$/m.exec(raw)?.[1];
-      return { name, raw, commands, workingDirectory };
-    });
-}
-
-function blockingStep(jobId, command, workingDirectory) {
-  const all = steps(jobId);
-  const matches = all.filter((step) => step.commands.includes(command));
-  assert.equal(matches.length, 1, `${jobId} must run \`${command}\` exactly once`);
-  const [step] = matches;
-  assert.equal(step.workingDirectory, workingDirectory, `\`${command}\` must run in ${workingDirectory ?? "the repository root"}`);
-  assert.doesNotMatch(step.raw, /^        (if|continue-on-error):/m, `\`${command}\` must be unconditional and blocking`);
-  return all.indexOf(step);
+const workflow = loadWorkflow();
+const stepIndex = (jobId, predicate) => workflow.job(jobId).steps.findIndex(predicate);
+const runs = (command) => (step) => commandLines(step).includes(command);
+// A step that gates unconditionally: no `if`, no `continue-on-error`.
+function assertBlocking(step, what) {
+  assert.equal(step.condition, undefined, `${what} must be unconditional`);
+  assert.equal(step.continueOnError, undefined, `${what} must be blocking`);
 }
 
 // The string items of a TOML array `key = [ ... ]` inside `[section]`.
@@ -66,37 +40,50 @@ function tomlStrings(text, section, key) {
 }
 
 test("test-linux gates both Cargo workspaces on cargo-deny before compiling", () => {
-  const names = steps("test-linux").map((step) => step.name);
-  const install = blockingStep("test-linux", "cargo install --locked cargo-deny --version 0.20.2", undefined);
-  const main = blockingStep("test-linux", "cargo deny --locked --workspace check", "src-tauri");
+  const INSTALL = "cargo install --locked cargo-deny --version 0.20.2";
+  const linux = gatesFor({ os: "linux" });
   // The ORT host run may only silence the "policy entry not used here" notes,
   // not skip a check or allow a finding.
   assert.deepEqual(
-    steps("test-linux")[main].commands,
+    linux.slice(0, 2).map((gate) => [gate.cwd, commandOf(gate)]),
     [
-      "cargo deny --locked --workspace check",
-      "cargo deny --locked --manifest-path engine-host/ort/Cargo.toml --workspace check -A license-not-encountered -A license-exception-not-encountered -A unmatched-source",
+      ["src-tauri", "cargo deny --locked --workspace check"],
+      [
+        "src-tauri",
+        "cargo deny --locked --manifest-path engine-host/ort/Cargo.toml --workspace check -A license-not-encountered -A license-exception-not-encountered -A unmatched-source",
+      ],
     ],
-    "the cargo-deny step must check both workspaces, every check kind, against the committed lockfiles",
+    "the cargo-deny gates must check both workspaces, every check kind, against the committed lockfiles, ahead of every gate that compiles",
   );
-  assert.ok(install < main, "cargo-deny must be installed before it runs");
-  assert.ok(main > names.indexOf("Cache Rust dependencies"), "the cached cargo-deny binary must be restored first");
-  assert.ok(main < names.indexOf("Cargo check (GUI app)"), "the policy must fail before any compilation");
+  assert.ok(
+    linux.slice(2).every((gate) => gate.args[0] !== "deny"),
+    "no other gate runs cargo-deny",
+  );
+  const steps = workflow.job("test-linux").steps;
+  const setup = stepIndex("test-linux", (step) => step.uses === "./.github/actions/setup");
+  const install = stepIndex("test-linux", runs(INSTALL));
+  const gates = stepIndex("test-linux", (step) => commandLines(step).includes("node scripts/ci/cargo-gates.mjs --os linux"));
+  assert.ok(setup >= 0 && install >= 0 && gates >= 0);
+  assertBlocking(steps[install], "the cargo-deny install");
+  assertBlocking(steps[gates], "the cargo gates");
+  assert.ok(setup < install, "the cached cargo-deny binary must be restored first");
+  assert.ok(install < gates, "cargo-deny must be installed before it runs");
 });
 
 test("npm run verify runs the same cargo-deny release CI installs", async () => {
   const { CARGO_DENY_VERSION } = await import("./verify.mjs");
   assert.ok(
-    steps("test-linux").some((step) => step.commands.includes(`cargo install --locked cargo-deny --version ${CARGO_DENY_VERSION}`)),
+    workflow.job("test-linux").steps.some(runs(`cargo install --locked cargo-deny --version ${CARGO_DENY_VERSION}`)),
     `verify's preflight asks for cargo-deny ${CARGO_DENY_VERSION}; test-linux must install the same release`,
   );
 });
 
 test("test-macos gates the npm lockfile on npm audit", () => {
-  const names = steps("test-macos").map((step) => step.name);
-  const audit = blockingStep("test-macos", "npm audit --audit-level=high", undefined);
-  assert.ok(audit > names.indexOf("Install npm dependencies"), "audit after npm ci");
-  assert.ok(audit < names.indexOf("Build frontend"), "audit before the bundle is built");
+  const audit = stepIndex("test-macos", runs("npm audit --audit-level=high"));
+  assert.ok(audit >= 0, "test-macos must run npm audit");
+  assertBlocking(workflow.job("test-macos").steps[audit], "`npm audit --audit-level=high`");
+  assert.ok(audit > stepIndex("test-macos", (step) => step.uses === "./.github/actions/setup"), "audit after npm ci (the setup action)");
+  assert.ok(audit < stepIndex("test-macos", runs("npm run build")), "audit before the bundle is built");
 });
 
 // SPDX expression satisfiability: AND binds tighter than OR, the legacy "/"

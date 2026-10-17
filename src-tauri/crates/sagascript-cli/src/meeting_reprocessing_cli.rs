@@ -13,6 +13,7 @@ use sagascript_core::error::DictationError;
 use sagascript_core::fsutil::{PublishFs, RealFs};
 use sagascript_core::meeting_reprocess_plan::{ReprocessingMode, ReprocessingPlan};
 use sagascript_core::meeting_review::MeetingReview;
+use sagascript_core::run_context::RunContext;
 use sagascript_core::settings::{FileModel, Language, Settings, WhisperModel};
 use sagascript_core::transcription::{Glossary, WhisperBackend};
 use serde_json::json;
@@ -23,6 +24,7 @@ use crate::meeting_reprocessing::{
     NativeBackend, PublishReceipt, ReprocessingInput, WorkBackend,
 };
 use crate::output::{errln, Out};
+use crate::run_request::RunRequest;
 use crate::speaker_args::SpeakerCountArgs;
 
 const MAX_REPROCESSING_JSON_BYTES: usize = 24 * 1024 * 1024;
@@ -108,6 +110,17 @@ pub struct RuntimeArgs {
     /// Read the one-run glossary prompt from a file.
     #[arg(long, conflicts_with = "prompt")]
     pub prompt_file: Option<PathBuf>,
+}
+
+impl<'a> From<&'a RuntimeArgs> for RunRequest<'a> {
+    fn from(args: &'a RuntimeArgs) -> Self {
+        Self {
+            profile: args.profile.as_deref(),
+            language: args.language.as_deref(),
+            prompt: args.prompt.as_deref(),
+            prompt_file: args.prompt_file.as_deref(),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -404,27 +417,22 @@ fn report_receipt(
 }
 
 fn resolve_runtime(args: &RuntimeArgs) -> Result<RuntimeInputs, DictationError> {
-    let stored = sagascript_core::settings::store::load();
-    let profile = match args.profile.as_deref() {
-        Some(id) => crate::transcribe::resolve_profile(&stored, id)?,
-        None => {
-            let profiles = stored.resolved_hotkey_profiles();
-            profiles
-                .iter()
-                .find(|candidate| candidate.id == "default")
-                .unwrap_or(&profiles[0])
-                .clone()
-        }
-    };
-    let language = args
-        .language
-        .as_deref()
-        .map(crate::transcribe::parse_language)
-        .transpose()?
-        .unwrap_or(profile.language);
+    resolve_runtime_from(args, sagascript_core::settings::store::load())
+}
+
+/// [`resolve_runtime`] against given settings, so tests resolve fixtures.
+fn resolve_runtime_from(
+    args: &RuntimeArgs,
+    stored: Settings,
+) -> Result<RuntimeInputs, DictationError> {
+    let request = RunRequest::from(args);
+    let selection = request.select(&stored)?;
+    // The model is this command's own choice: reprocessing decodes with
+    // Whisper only. It is resolved before the prompt file is read, so an
+    // unusable model is reported before an unreadable file.
     let model = match crate::transcribe::resolve_file_model_for_run(
         args.model.as_deref(),
-        language,
+        selection.language,
         &stored,
         true,
     )? {
@@ -435,20 +443,9 @@ fn resolve_runtime(args: &RuntimeArgs) -> Result<RuntimeInputs, DictationError> 
             ))
         }
     };
-    let glossary = if language == profile.language {
-        crate::transcribe::effective_glossary(
-            &stored,
-            Some(&profile.id),
-            args.prompt.as_deref(),
-            args.prompt_file.as_deref(),
-        )?
-    } else {
-        let hint = crate::transcribe::resolve_one_run_prompt(
-            args.prompt.as_deref(),
-            args.prompt_file.as_deref(),
-        )?;
-        Glossary::parse(hint.as_deref().unwrap_or(""))
-    };
+    let RunContext {
+        language, glossary, ..
+    } = request.finish(&stored, selection)?;
     Ok(RuntimeInputs {
         stored,
         language,
@@ -555,6 +552,127 @@ mod tests {
                 .build(),
         )
         .expect("synthetic review")
+    }
+
+    #[derive(Debug, Parser)]
+    struct RuntimeCli {
+        #[command(flatten)]
+        args: RuntimeArgs,
+    }
+
+    fn runtime_args(flags: &[&str]) -> RuntimeArgs {
+        RuntimeCli::try_parse_from(["x"].into_iter().chain(flags.iter().copied()))
+            .expect("runtime flags parse")
+            .args
+    }
+
+    fn resolve(flags: &[&str]) -> Result<RuntimeInputs, DictationError> {
+        resolve_runtime_from(&runtime_args(flags), Settings::default())
+    }
+
+    #[test]
+    fn reprocessing_rejects_models_it_cannot_decode_with() {
+        // Reprocessing is Whisper-only; the shared resolver does not choose
+        // the model, so each command's own limits stay in force (#346).
+        for (flags, message) in [
+            (
+                &["--model", "pianissimo-sv", "--language", "sv"][..],
+                "Settings error: Meeting reprocessing requires a Whisper model; select one with --model",
+            ),
+            (
+                &["--model", "pianissimo-sv"][..],
+                "Settings error: Pianissimo Original is only available for Swedish file transcription",
+            ),
+            (
+                &["--model", "bogus"][..],
+                "Settings error: Unknown file model preference 'bogus'",
+            ),
+            (
+                &["--model", "auto"][..],
+                "Settings error: --model needs a concrete model ID; omit it to use the file default",
+            ),
+        ] {
+            let error = resolve(flags).expect_err(&format!("{flags:?} must be rejected"));
+            assert!(
+                matches!(error, DictationError::SettingsError(_)),
+                "{flags:?}: {error:?}"
+            );
+            assert_eq!(error.to_string(), message, "{flags:?}");
+        }
+    }
+
+    #[test]
+    fn reprocessing_accepts_whisper_models_and_takes_the_language_from_the_request() {
+        let inputs = resolve(&["--model", "base.en"]).unwrap();
+        assert_eq!(inputs.model, WhisperModel::BaseEn);
+        assert_eq!(inputs.language, Language::English);
+
+        let inputs = resolve(&["--model", "kb-whisper-base", "--language", "sv"]).unwrap();
+        assert_eq!(inputs.model, WhisperModel::KbWhisperBase);
+        assert_eq!(inputs.language, Language::Swedish);
+        // No `--model` is covered by the real-binary test in
+        // `tests/run_context_cli.rs`: an automatic choice looks at the models
+        // downloaded on this machine, which a unit test must not touch.
+    }
+
+    #[test]
+    fn the_model_is_decided_before_the_prompt_file_is_read() {
+        // Both are wrong at once: the model is reported, as before the
+        // resolver was shared. `transcribe` has the opposite order and keeps it.
+        let missing = "no-such-folder/hint.txt";
+        for (flags, message) in [
+            (
+                &["--model", "bogus", "--prompt-file", missing][..],
+                "Settings error: Unknown file model preference 'bogus'",
+            ),
+            (
+                &[
+                    "--model",
+                    "pianissimo-sv",
+                    "--language",
+                    "sv",
+                    "--prompt-file",
+                    missing,
+                ][..],
+                "Settings error: Meeting reprocessing requires a Whisper model; select one with --model",
+            ),
+        ] {
+            let error = resolve(flags).unwrap_err();
+            assert_eq!(error.to_string(), message, "{flags:?}");
+        }
+        let error = resolve(&["--model", "base.en", "--prompt-file", missing]).unwrap_err();
+        assert_eq!(error.code(), "file_decode_error");
+        assert!(error.to_string().starts_with(
+            "File decode error: Failed to read prompt file 'no-such-folder/hint.txt': "
+        ));
+    }
+
+    #[test]
+    fn an_unknown_profile_is_reported_before_the_model_and_the_prompt_file() {
+        let error = resolve(&[
+            "--profile",
+            "nope",
+            "--model",
+            "bogus",
+            "--prompt-file",
+            "no-such-folder/hint.txt",
+        ])
+        .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "Settings error: Unknown dictation profile 'nope'"
+        );
+    }
+
+    #[test]
+    fn the_runtime_keeps_the_settings_it_resolved_against() {
+        let settings = Settings {
+            initial_prompt: "marker".to_string(),
+            ..Settings::default()
+        };
+        let inputs =
+            resolve_runtime_from(&runtime_args(&["--model", "base.en"]), settings).unwrap();
+        assert_eq!(inputs.stored.initial_prompt, "marker");
     }
 
     #[test]

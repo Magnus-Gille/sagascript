@@ -1091,3 +1091,104 @@ mod transport_contract_tests {
         }
     }
 }
+
+/// The app's file context resolves profile, language and dictionary through
+/// the run resolver of core, the same one the CLI's request type is checked
+/// against on the same table (`run_context_table`, #346). So the app and the
+/// CLI are equal through the resolver, and the app does not depend on the CLI
+/// for it. The tables' settings carry an explicit file model, so resolving it
+/// never looks at the models downloaded on the machine running the test
+/// (ADR 0004).
+#[cfg(test)]
+mod run_context_parity_tests {
+    use super::{file_transcription_context, file_transcription_language};
+    use sagascript_core::run_context::{RunOverrides, RunSelection};
+    use sagascript_core::settings::{FileModelPreference, Settings, WhisperModel};
+    use sagascript_core::test_support::run_context_table::{entries, migrated, shapes, PROMPTS};
+
+    #[test]
+    fn the_app_resolves_what_the_core_resolver_resolves_for_the_same_profile_and_prompt() {
+        // The app has no language override (that is #373), so the reference is
+        // the core resolver with a profile, a prompt and `language: None`.
+        for shape in shapes() {
+            for profile in &shape.profiles {
+                for prompt in PROMPTS {
+                    let label = format!("{}, profile {profile:?}, prompt {prompt:?}", shape.name);
+                    let core = RunSelection::resolve(
+                        &shape.settings,
+                        RunOverrides {
+                            profile: *profile,
+                            language: None,
+                        },
+                    )
+                    .unwrap_or_else(|error| panic!("{label}: core: {error}"))
+                    .into_context(&shape.settings, prompt);
+                    let app = file_transcription_context(&shape.settings, *profile, prompt)
+                        .unwrap_or_else(|error| panic!("{label}: app: {error}"));
+                    assert_eq!(app.language, core.language, "{label}: language");
+                    assert_eq!(
+                        entries(&app.glossary),
+                        entries(&core.glossary),
+                        "{label}: dictionary"
+                    );
+                    assert_eq!(
+                        app.glossary.decoder_prompt(),
+                        core.glossary.decoder_prompt(),
+                        "{label}: decoder prompt"
+                    );
+                    assert_eq!(
+                        app.options.prompt,
+                        core.glossary.decoder_prompt(),
+                        "{label}: options prompt"
+                    );
+                    assert_eq!(
+                        file_transcription_language(&shape.settings, *profile).unwrap(),
+                        core.language,
+                        "{label}: language helper"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_apps_errors_keep_their_own_text() {
+        // The app reports plain strings, without the CLI's "Settings error: ".
+        let settings = migrated();
+        assert_eq!(
+            file_transcription_context(&settings, Some("nope"), None).err(),
+            Some("Unknown dictation profile 'nope'".to_string())
+        );
+        assert_eq!(
+            file_transcription_language(&settings, Some("nope")),
+            Err("Unknown dictation profile 'nope'".to_string())
+        );
+        assert_eq!(
+            file_transcription_context(&settings, Some(""), None).err(),
+            Some("Unknown dictation profile ''".to_string())
+        );
+
+        // The profile is checked before the model, the model before any prompt.
+        let english_only = Settings {
+            file_transcription_model: FileModelPreference::Whisper(WhisperModel::BaseEn),
+            ..migrated()
+        };
+        assert_eq!(
+            file_transcription_context(&english_only, Some("nope"), None).err(),
+            Some("Unknown dictation profile 'nope'".to_string())
+        );
+        assert_eq!(
+            file_transcription_context(&english_only, Some("swedish"), Some("Acme")).err(),
+            Some("Whisper model 'Whisper Base (EN)' is incompatible with Swedish".to_string())
+        );
+
+        let pianissimo = Settings {
+            file_transcription_model: FileModelPreference::PianissimoOriginal,
+            ..migrated()
+        };
+        assert_eq!(
+            file_transcription_context(&pianissimo, Some("swedish"), None).err(),
+            Some("Pianissimo supports plain Swedish file transcription only; select a Whisper file model for meetings or diarization".to_string())
+        );
+    }
+}

@@ -33,8 +33,11 @@ updates:
         patterns: ["*"]
         update-types: ["minor", "patch"]
 
+  # The local composite actions hold SHA pins too (#358): list each one, or its pins go stale.
   - package-ecosystem: github-actions
-    directory: "/"
+    directories:
+      - "/"
+      - "/.github/actions/setup"
     schedule:
       interval: monthly
     open-pull-requests-limit: 5
