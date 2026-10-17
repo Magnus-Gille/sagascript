@@ -171,6 +171,31 @@ test("runtime crash diagnostics expose fixed categories without paths, symbols, 
   assert.doesNotMatch(diagnostic, /PRIVATE_SECRET_SENTINEL|Library\/Application Support|\/private\/tmp|\/srv\/|0x[a-f0-9]+|_PRIVATE/);
 });
 
+test("native assertion and termination diagnostics expose only fixed categories", () => {
+  const secret = "PRIVATE_NATIVE_SECRET_SENTINEL";
+  const diagnostic = safeProducerFailureDiagnostic(
+    "",
+    [
+      `Assertion failed: ${secret}, function check, file /Users/example/Library/Application Support/${secret}.mm, line 7`,
+      `GGML_ASSERT(${secret}) at /private/tmp/${secret}.cpp:8`,
+      `ggml_abort: /srv/${secret}/model.gguf`,
+      `libc++abi: terminating with uncaught exception of type ${secret}: /Users/example/${secret}`,
+      `terminate called after throwing an instance of '${secret}'`,
+    ].join("\n"),
+  );
+  assert.equal(
+    diagnostic,
+    [
+      "stderr native-assertion: failed",
+      "stderr native-assertion: failed",
+      "stderr native-assertion: failed",
+      "stderr native-termination: libcxxabi",
+      "stderr native-termination: throwing",
+    ].join(" | "),
+  );
+  assert.doesNotMatch(diagnostic, /PRIVATE_NATIVE_SECRET_SENTINEL|Library\/Application Support|\/private\/tmp|\/srv\/|model\.gguf/);
+});
+
 test("unknown process failures never fall through to generic permission diagnostics", () => {
   for (const header of ["error: ", "Error: ", "Caused by: ", ""]) {
     for (const suffix of ["ENOENT", "PermissionDenied", "EACCES"]) {

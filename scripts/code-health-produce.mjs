@@ -156,6 +156,9 @@ export function safeFailureDiagnostic(stdout, stderr) {
       const mallocAllocatorFatal =
         /\bmalloc:\s+(?:\*\*\*\s+)?(?:error|fatal|corruption|incorrect checksum|pointer being freed|heap corruption)\b/i.test(line);
       const mallocAllocatorDiagnostic = /\bmalloc:\s+\S/i.test(line);
+      const nativeAssertionAbort = /^(?:Assertion failed:|GGML_ASSERT\b|ggml_abort:)/.test(line);
+      const libcxxAbiTermination = /^libc\+\+abi:/i.test(line);
+      const throwingTermination = /^terminate called after throwing\b/i.test(line);
       if (panic) lines.push(`${stream} test-failed: ${safeDiagnostic(panic[1]).slice(0, 400)}`);
       else if (processSignal || continuationSignal) {
         const match = processSignal ?? continuationSignal;
@@ -188,6 +191,12 @@ export function safeFailureDiagnostic(stdout, stderr) {
         lines.push(`${stream} malloc-allocator: fatal`);
       } else if (mallocAllocatorDiagnostic) {
         lines.push(`${stream} malloc-allocator: diagnostic`);
+      } else if (nativeAssertionAbort) {
+        lines.push(`${stream} native-assertion: failed`);
+      } else if (libcxxAbiTermination) {
+        lines.push(`${stream} native-termination: libcxxabi`);
+      } else if (throwingTermination) {
+        lines.push(`${stream} native-termination: throwing`);
       } else if (section) lines.push(`${stream} test-failed: ${safeDiagnostic(section[1]).slice(0, 400)}`);
       else if (rustFailedTest) lines.push(`${stream} failed-test: ${safeDiagnostic(rustFailedTest[1]).slice(0, 400)}`);
       else if (swiftFailure) lines.push(`${stream} test-failed: ${safeDiagnostic(swiftFailure[1]).slice(0, 400)}`);
