@@ -11,16 +11,17 @@ use super::settings::{load_settings_with_permission_gate, migrate_legacy_setting
 use super::window::open_settings_window;
 use crate::app_controller::AppController;
 use crate::commands::{lock_controller, SharedController, SharedWhisper};
+use crate::dictation::warm_models_at_startup;
 use crate::events::{self, EmitEvent};
 #[cfg(target_os = "macos")]
 use crate::platform;
 use crate::settings_watcher::start_settings_watcher;
 use crate::tray::{create_tray, manage_tray_state};
 use crate::updater::{check_for_updates_and_install, manage_update_menu_state};
+use crate::SAFE_FALLBACK_HOTKEY;
 use crate::{
     focus_diag, hotkey, meeting_jobs, meeting_media, overlay, plain_file_jobs, update_activity,
 };
-use crate::{warm_models_at_startup, SAFE_FALLBACK_HOTKEY};
 
 /// The Tauri `setup` hook. The order of these steps is the startup order.
 pub(crate) fn setup_app(
