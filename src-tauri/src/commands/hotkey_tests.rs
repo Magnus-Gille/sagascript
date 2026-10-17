@@ -38,7 +38,8 @@ fn the_monitor_reinstall_answers_decide_whether_registration_goes_on() {
     // The install is still queued. Registering now would say "restart
     // Sagascript" about a monitor that is about to exist: ask for another try.
     let error = after_monitor_install(TimedOut).expect_err("a timeout ends the call");
-    assert_eq!(error.code(), "hotkey_change_failed");
+    assert_eq!(error.code(), "busy");
+    assert!(error.retryable());
     assert!(error.to_string().contains("try again"), "{error}");
     assert!(!error.to_string().contains("restart"), "{error}");
 }

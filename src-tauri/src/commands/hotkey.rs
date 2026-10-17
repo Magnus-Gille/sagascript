@@ -328,7 +328,10 @@ const MONITOR_INSTALL_TIMEOUT: std::time::Duration = std::time::Duration::from_s
 ///   when the thread is free (it is idempotent). Registering now would fail
 ///   with "restart Sagascript" for a monitor that is about to exist and would
 ///   record that as the registration health, so the call ends here with a
-///   message to try again; the retry finds the monitor installed.
+///   message to try again; the retry finds the monitor installed. The error is
+///   `busy` (retryable), not `hotkey_change_failed`: nothing was attempted, so
+///   the registration health has no diagnostic for it, and the settings window
+///   shows this message itself (by code, never by its text).
 #[cfg(any(target_os = "macos", test))]
 fn after_monitor_install(reply: MainThreadReply<Result<(), String>>) -> Result<(), CommandError> {
     match reply {
@@ -339,7 +342,7 @@ fn after_monitor_install(reply: MainThreadReply<Result<(), String>>) -> Result<(
         MainThreadReply::Done(Ok(())) | MainThreadReply::Disconnected => Ok(()),
         MainThreadReply::TimedOut => {
             tracing::warn!("F13-F24 event monitor reinstall was not confirmed in time");
-            Err(CommandError::HotkeyChangeFailed(
+            Err(CommandError::Busy(
                 "The macOS F13-F24 event monitor is still starting; try again in a moment"
                     .to_string(),
             ))
