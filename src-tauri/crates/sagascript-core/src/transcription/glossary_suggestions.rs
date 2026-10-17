@@ -1,6 +1,6 @@
 //! Conservative, deterministic suggestions for teaching a personal glossary.
 
-use crate::transcription::Glossary;
+use crate::glossary::Glossary;
 
 const MAX_REPLACEMENT_WORDS: usize = 4;
 const MAX_REPLACEMENT_BYTES: usize = 96;
@@ -252,7 +252,7 @@ fn is_represented_alias(glossary: &Glossary, observed: &str, canonical: &str) ->
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::transcription::Glossary;
+    use crate::glossary::Glossary;
 
     #[test]
     fn suggests_a_single_word_correction() {

@@ -29,9 +29,11 @@ use crate::transcription::engine_host::{
 };
 use crate::transcription::pianissimo_model;
 
-/// Shown wherever Pianissimo is refused for platform reasons.
-pub const UNSUPPORTED_MESSAGE: &str =
-    "Pianissimo requires macOS 14+ on Apple Silicon or Windows on ARM (Snapdragon)";
+/// Shown wherever Pianissimo is refused for platform reasons. Defined with the
+/// model catalog, which settings need too (#372). Shim for the old path: remove
+/// it, one release on, when its callers (the CLI and the app) use
+/// `models::PIANISSIMO_UNSUPPORTED_MESSAGE`.
+pub const UNSUPPORTED_MESSAGE: &str = crate::models::PIANISSIMO_UNSUPPORTED_MESSAGE;
 
 /// Environment override (development builds only): path of the `sagascript-engine-host` binary.
 pub const ENGINE_HOST_ENV: &str = "SAGASCRIPT_ENGINE_HOST";
@@ -1207,9 +1209,11 @@ mod tests {
     }
 
     fn pianissimo_settings(prewarm: EnginePrewarm) -> Settings {
-        let mut settings = Settings::default();
-        settings.language = crate::settings::Language::Swedish;
-        settings.engine_prewarm = prewarm;
+        let mut settings = Settings {
+            language: crate::models::Language::Swedish,
+            engine_prewarm: prewarm,
+            ..Default::default()
+        };
         settings
             .set_profile_model_gated(
                 "default",
@@ -1221,14 +1225,16 @@ mod tests {
     }
 
     fn whisper_settings(prewarm: EnginePrewarm) -> Settings {
-        let mut settings = Settings::default();
-        settings.language = crate::settings::Language::Swedish;
-        settings.engine_prewarm = prewarm;
+        let mut settings = Settings {
+            language: crate::models::Language::Swedish,
+            engine_prewarm: prewarm,
+            ..Default::default()
+        };
         settings
             .set_profile_model_gated(
                 "default",
                 crate::settings::FileModelPreference::Whisper(
-                    crate::settings::WhisperModel::KbWhisperMedium,
+                    crate::models::WhisperModel::KbWhisperMedium,
                 ),
                 true,
             )

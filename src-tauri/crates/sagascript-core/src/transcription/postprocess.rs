@@ -1,4 +1,4 @@
-use crate::settings::Language;
+use crate::models::Language;
 
 #[derive(Clone, Copy)]
 struct Token<'a> {
