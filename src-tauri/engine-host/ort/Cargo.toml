@@ -24,7 +24,7 @@ serde_json = "1"
 # executable), so building needs no ORT binary and works on every CI platform. Keep
 # default-features off: the defaults enable `download-binaries`, which has no CPU-only
 # prebuilt for aarch64-apple-darwin / aarch64-pc-windows-msvc.
-ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "load-dynamic", "api-27"] }
+ort = { version = "=2.0.0-rc.14", default-features = false, features = ["std", "load-dynamic", "api-27"] }
 memory-stats = "1"
 libloading = "0.9"
 
