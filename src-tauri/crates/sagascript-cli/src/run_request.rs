@@ -29,7 +29,7 @@ use crate::transcribe::{parse_language, resolve_one_run_prompt};
 
 /// The profile, language and one-run prompt flags of one invocation, as typed.
 #[derive(Debug, Clone, Copy, Default)]
-pub(crate) struct RunRequest<'a> {
+pub struct RunRequest<'a> {
     pub profile: Option<&'a str>,
     pub language: Option<&'a str>,
     pub prompt: Option<&'a str>,
@@ -43,7 +43,7 @@ impl RunRequest<'_> {
     /// before an unknown language; the command line never offers both
     /// (`--profile` conflicts with `--language`), so this order is only
     /// visible to a caller that builds the request itself.
-    pub(crate) fn select(&self, settings: &Settings) -> Result<RunSelection, DictationError> {
+    pub fn select(&self, settings: &Settings) -> Result<RunSelection, DictationError> {
         let selection = RunSelection::resolve(
             settings,
             RunOverrides {
@@ -59,7 +59,7 @@ impl RunRequest<'_> {
 
     /// Step two: read the one-run prompt (`--prompt-file` wins over
     /// `--prompt`; an unreadable file is an error) and compose the dictionary.
-    pub(crate) fn finish(
+    pub fn finish(
         &self,
         settings: &Settings,
         selection: RunSelection,
@@ -69,7 +69,7 @@ impl RunRequest<'_> {
     }
 
     /// Both steps, for a command whose model choice comes after them.
-    pub(crate) fn resolve(&self, settings: &Settings) -> Result<RunContext, DictationError> {
+    pub fn resolve(&self, settings: &Settings) -> Result<RunContext, DictationError> {
         let selection = self.select(settings)?;
         self.finish(settings, selection)
     }
