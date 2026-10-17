@@ -18,22 +18,26 @@ pub struct BuildInfo {
     build_date: String,
 }
 
+/// The host OS as the frontend reads it (`src/lib/platform.ts`): `macos`,
+/// `windows` or `linux`; `unknown` for anything else, so Onboarding takes its
+/// portable path.
 #[tauri::command]
 pub async fn get_platform() -> Result<String, String> {
-    #[cfg(target_os = "macos")]
-    {
-        Ok("macos".to_string())
-    }
-    #[cfg(target_os = "windows")]
-    {
-        Ok("windows".to_string())
-    }
-    #[cfg(target_os = "linux")]
-    {
-        Ok("linux".to_string())
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
-    {
-        Ok("unknown".to_string())
+    Ok(platform_name(std::env::consts::OS).to_string())
+}
+
+/// `std::env::consts::OS` names more systems (`freebsd`, `android`, ...) than
+/// the frontend knows; they all stay `unknown`, as they were when the answer
+/// came from `cfg` blocks.
+fn platform_name(os: &str) -> &'static str {
+    match os {
+        "macos" => "macos",
+        "windows" => "windows",
+        "linux" => "linux",
+        _ => "unknown",
     }
 }
+
+#[cfg(test)]
+#[path = "system_tests.rs"]
+mod tests;
