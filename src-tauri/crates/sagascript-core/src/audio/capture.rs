@@ -60,9 +60,14 @@ pub struct AudioCaptureService {
     stop_timings: (Duration, Duration),
 }
 
-// AudioCaptureService is Send+Sync because it doesn't hold cpal::Stream directly
-unsafe impl Send for AudioCaptureService {}
-unsafe impl Sync for AudioCaptureService {}
+// The `cpal::Stream` is !Send and lives on the capture thread, never in this
+// struct. What the struct holds (`Arc`s of mutexes and atomics, a `JoinHandle`,
+// durations) is Send + Sync by composition, so nothing is asserted by hand; this
+// stops compiling here if a field ever loses either trait.
+const _: fn() = || {
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<AudioCaptureService>();
+};
 
 impl Default for AudioCaptureService {
     fn default() -> Self {
