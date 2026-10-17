@@ -1,4 +1,5 @@
 use super::inputs::*;
+use super::language_detection::*;
 use super::language_regions::*;
 use super::*;
 use sagascript_core::settings::HotkeyProfile;
