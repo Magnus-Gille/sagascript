@@ -1222,3 +1222,178 @@ fn a_failed_load_is_retried_for_the_next_file() {
         .count();
     assert_eq!(loads, 2);
 }
+
+// ---- the output step on its own --------------------------------------------------------
+
+/// `assemble_plain_result` takes what Whisper said and returns the result: no
+/// backend, no output, no clock.
+mod assembling_the_plain_result {
+    use sagascript_core::transcription::diagnostics::{
+        LanguageRegionDiagnostics, TranscriptionWarning,
+    };
+
+    use super::*;
+    use crate::transcribe::inference::LanguageEvidence;
+    use crate::transcribe::output::{assemble_plain_result, PlainInput, PlainResult};
+
+    fn evidence(
+        detected_language: Option<LanguageDetection>,
+        language_regions: Option<LanguageRegionDiagnostics>,
+    ) -> LanguageEvidence {
+        LanguageEvidence {
+            model_load_seconds: 0.0,
+            detected_language,
+            language_regions,
+            language_detection_seconds: 0.0,
+        }
+    }
+
+    fn assemble(
+        segments: Vec<TranscriptSegment>,
+        language: Language,
+        glossary: &Glossary,
+        evidence: &LanguageEvidence,
+    ) -> PlainResult {
+        // Silence has no speech for the coverage check to miss.
+        let audio = vec![0.0_f32; 60 * 16_000];
+        assemble_plain_result(PlainInput {
+            segments,
+            audio: &audio,
+            language,
+            model: WhisperModel::Base,
+            file: Path::new("clip.wav"),
+            duration: 60.0,
+            glossary,
+            hint_vocabulary: None,
+            language_evidence: evidence,
+        })
+    }
+
+    /// A greeting, a loop of eight "thank you" segments over forty seconds, a farewell.
+    fn with_a_loop() -> Vec<TranscriptSegment> {
+        let mut segments = vec![spoken(0.0, 5.0, " Hello there.")];
+        for index in 0..8 {
+            let start = 10.0 + index as f64 * 5.0;
+            segments.push(spoken(start, start + 5.0, " Thank you. Thank you."));
+        }
+        segments.push(spoken(50.0, 55.0, " Goodbye."));
+        segments
+    }
+
+    #[test]
+    fn a_repetition_loop_is_quarantined_in_the_json_and_left_out_of_the_text() {
+        let result = assemble(
+            with_a_loop(),
+            Language::English,
+            &Glossary::default(),
+            &evidence(None, None),
+        );
+
+        assert_eq!(result.text, "Hello there. Goodbye.");
+        assert_eq!(result.json["text"], "Hello there. Goodbye.");
+        let quarantined: Vec<bool> = result.json["segments"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|segment| segment["quarantined"].as_bool().unwrap())
+            .collect();
+        assert_eq!(
+            quarantined,
+            [false, true, true, true, true, true, true, true, true, false]
+        );
+        // Every segment keeps its own words in the JSON.
+        assert_eq!(result.json["segments"][1]["text"], "Thank you. Thank you.");
+        let spans = result.json["repetition_spans"].as_array().unwrap();
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0]["pattern"], "thank you");
+        assert_eq!(spans[0]["repetitions"], 16);
+        assert_eq!(spans[0]["segment_indices"], json!([1, 2, 3, 4, 5, 6, 7, 8]));
+        let codes: Vec<&str> = result.warnings.iter().map(|w| w.code.as_str()).collect();
+        assert_eq!(codes, ["repetitive_hallucination"]);
+        assert_eq!(
+            result.json["warnings"][0]["code"],
+            "repetitive_hallucination"
+        );
+    }
+
+    #[test]
+    fn warnings_come_in_a_fixed_order_and_regions_are_reported() {
+        let region_warning = TranscriptionWarning {
+            code: "mixed_language_audio".to_string(),
+            message: "two languages".to_string(),
+            start: Some(0.0),
+            end: Some(55.0),
+        };
+        let regions = LanguageRegionDiagnostics {
+            regions: Vec::new(),
+            warnings: vec![region_warning.clone()],
+        };
+        let detected = LanguageDetection {
+            language: "sv".to_string(),
+            probability: 0.97,
+        };
+        let result = assemble(
+            with_a_loop(),
+            Language::English,
+            &Glossary::default(),
+            &evidence(Some(detected), Some(regions)),
+        );
+
+        // Coverage (none here), the language mismatch, the sampled regions, repetition.
+        let codes: Vec<&str> = result.warnings.iter().map(|w| w.code.as_str()).collect();
+        assert_eq!(
+            codes,
+            [
+                "language_mismatch",
+                "mixed_language_audio",
+                "repetitive_hallucination"
+            ]
+        );
+        assert_eq!(result.warnings[1], region_warning);
+        assert_eq!(result.json["language_redetection_enabled"], true);
+        assert_eq!(result.json["language_regions"], json!([]));
+        assert_eq!(result.json["detected_language"]["language"], "sv");
+    }
+
+    #[test]
+    fn nonspeech_markers_are_normalized_in_the_text_and_kept_in_the_segments() {
+        let result = assemble(
+            vec![
+                spoken(0.0, 2.0, " Hej [Music] hej."),
+                spoken(2.0, 4.0, " [BLANK_AUDIO]"),
+            ],
+            Language::Swedish,
+            &Glossary::default(),
+            &evidence(None, None),
+        );
+
+        assert_eq!(result.text, "Hej [MUSIK] hej.");
+        assert_eq!(result.json["segments"][0]["text"], "Hej [Music] hej.");
+        assert_eq!(result.json["segments"][1]["text"], "[BLANK_AUDIO]");
+        assert_eq!(result.json["language"], "sv");
+    }
+
+    #[test]
+    fn the_same_input_gives_the_same_result() {
+        let first = assemble(
+            with_a_loop(),
+            Language::English,
+            &Glossary::parse("Thanks = thank you"),
+            &evidence(None, None),
+        );
+        let second = assemble(
+            with_a_loop(),
+            Language::English,
+            &Glossary::parse("Thanks = thank you"),
+            &evidence(None, None),
+        );
+        assert_eq!(first.json, second.json);
+        assert_eq!(first.text, second.text);
+        assert_eq!(first.warnings, second.warnings);
+        // The glossary acted on the segments, so its corrections are in the JSON.
+        assert!(!first.json["vocabulary_corrections"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+    }
+}
