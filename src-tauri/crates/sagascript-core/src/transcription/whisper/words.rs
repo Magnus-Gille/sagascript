@@ -11,10 +11,11 @@ use crate::models::{Language, WhisperModel};
 use crate::sync::lock_or_recover;
 use crate::transcription::model;
 
+use super::entry::{segment_mean_logprob, whisper_threads, DecodeFlags, DecodePath};
 use super::stitch::strip_timestamp_tokens;
 use super::{
-    effective_diarization_decoder_config, segment_mean_logprob, whisper_threads, ContextProfile,
-    DecodeFlags, DecodePath, TranscribeOptions, TranscriptSegment, WhisperBackend, CONTEXT_LOCK,
+    effective_diarization_decoder_config, ContextProfile, TranscribeOptions, TranscriptSegment,
+    WhisperBackend, CONTEXT_LOCK,
 };
 
 /// Timestamped transcript plus phase timings used by the diarization path.
