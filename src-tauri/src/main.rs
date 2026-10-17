@@ -48,10 +48,12 @@ use dictation::handle_hotkey_event;
 use launch::{attach_parent_console, cli_args_request_console_output};
 use launch::{gui_launch_mode, handle_run_event, handle_second_instance, setup_app, GuiLaunchMode};
 // commands.rs reaches the profile menu refresh as `crate::update_profiles_menu`.
+// Drop this alias once commands/ names `crate::tray::update_profiles_menu` (#369 follow-up).
 pub(crate) use tray::update_profiles_menu;
 #[cfg(target_os = "macos")]
 use updater::updates;
-// commands.rs and app_controller.rs reach these under their old crate paths.
+// commands/ and app_controller.rs reach these under their old crate paths. Drop the aliases
+// once they name `crate::updater::{activity, recovery}` (#369 follow-up).
 pub(crate) use updater::{activity as update_activity, recovery as update_recovery};
 
 const SAFE_FALLBACK_HOTKEY: &str = "Control+Shift+Space";

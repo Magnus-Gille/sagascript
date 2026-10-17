@@ -117,7 +117,7 @@ pub(super) async fn install_signed_update(
     update: tauri_plugin_updater::Update,
     version: semver::Version,
 ) {
-    use crate::update_activity::{ExclusiveError, UpdateActivity};
+    use super::activity::{ExclusiveError, UpdateActivity};
 
     set_update_menu(
         &app,

@@ -1,3 +1,4 @@
+// These test the test-only `startup_hotkey_candidate` below, not `register_startup_hotkeys`.
 #[cfg(test)]
 use sagascript_core::settings::validate_hotkey;
 
@@ -66,5 +67,3 @@ fn startup_replaces_saved_bold_hotkey_with_safe_operational_fallback() {
         .as_deref()
         .is_some_and(|message| message.contains("reserved for Bold Text on macOS")));
 }
-
-// -- tray_label --
