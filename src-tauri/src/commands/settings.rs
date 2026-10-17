@@ -6,8 +6,8 @@ use tauri::State;
 use tracing::info;
 
 use super::{
-    acquire_hotkey_configuration, lock_controller, persist_and_sync, try_persist_and_sync,
-    try_persist_and_sync_replacing, SharedController,
+    acquire_hotkey_configuration, lock_controller, persist_and_sync, try_persist_and_replace,
+    SharedController,
 };
 
 #[tauri::command]
@@ -41,12 +41,17 @@ pub async fn set_language(
 /// The persistence half of `set_language`: the file and the controller, with
 /// the notices about profile models the new language reset. The command adds
 /// the profiles menu, which needs the app handle.
+///
+/// Replaces the controller's whole copy, as it did before `persist_and_sync`:
+/// the language change also resets whisper_model, auto_select_model and the
+/// models of profiles the new language cannot use, and the controller takes all
+/// of it.
 pub(super) fn persist_language(
     controller: &SharedController,
     language: Language,
 ) -> Result<(Settings, Vec<String>), String> {
     let mut notices = Vec::new();
-    let persisted = try_persist_and_sync(controller, |settings| {
+    let (_, persisted) = try_persist_and_replace(controller, |settings| {
         notices = apply_language_selection(settings, language)?;
         Ok::<(), String>(())
     })
@@ -128,7 +133,10 @@ pub async fn set_profile_model(
     let preference = FileModelPreference::parse_id(&model_id)?;
     let _recording_lease =
         acquire_hotkey_configuration(&controller).map_err(|error| error.to_string())?;
-    let (previous, persisted) = try_persist_and_sync_replacing(&controller, |settings| {
+    // The whole copy, as before: the profile model change may move other
+    // fields (the legacy flags, the auto-select state), and the controller
+    // compares its previous copy with the written one to decide on a warm-up.
+    let (previous, persisted) = try_persist_and_replace(&controller, |settings| {
         settings.set_profile_model(&profile_id, preference)
     })
     .map_err(|error| error.to_string())?;

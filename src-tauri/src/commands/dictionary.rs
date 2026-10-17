@@ -9,8 +9,8 @@ use tauri::State;
 use tracing::info;
 
 use super::{
-    correct_in_memory, ensure_known_profile, lock_controller, try_persist_and_sync,
-    SharedController,
+    correct_in_memory, ensure_known_profile, lock_controller, try_persist_and_mirror,
+    try_persist_and_replace, SharedController,
 };
 use crate::command_error::CommandError;
 
@@ -142,7 +142,9 @@ pub async fn set_profile_glossary(
 ) -> Result<(), CommandError> {
     let source_len = source.chars().count();
     let mut conflict_source = None;
-    let saved = try_persist_and_sync(&controller, |settings| {
+    // The whole copy, as before: a saved dictionary is applied by the
+    // controller together with the settings it was validated against.
+    let saved = try_persist_and_replace(&controller, |settings| {
         let current_source = expected_source
             .as_ref()
             .map(|_| profile_dictionary_source_snapshot(settings, &profile_id));
@@ -291,9 +293,15 @@ pub async fn apply_training_glossary(
     }
 
     let accepted_count = accepted.len();
-    try_persist_and_sync(&controller, |settings| {
-        apply_reviewed_training_candidates(settings, &heard, &corrected, &profile_id, &accepted)
-    })?;
+    // Only the dictionaries, as before: the controller takes the written
+    // `profile_glossaries` and nothing else.
+    try_persist_and_mirror(
+        &controller,
+        |settings| {
+            apply_reviewed_training_candidates(settings, &heard, &corrected, &profile_id, &accepted)
+        },
+        |memory, written| memory.profile_glossaries = written.profile_glossaries.clone(),
+    )?;
     info!(accepted_count, profile_id = %profile_id, "Applied reviewed training glossary suggestions");
     Ok(())
 }

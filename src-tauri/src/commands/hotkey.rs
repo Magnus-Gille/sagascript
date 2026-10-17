@@ -7,7 +7,7 @@ use tracing::{error, info};
 
 #[cfg(target_os = "macos")]
 use super::main_thread::MainThreadReply;
-use super::{lock_controller, try_persist_and_sync, SharedController};
+use super::{lock_controller, try_persist_and_replace, SharedController};
 use crate::command_error::CommandError;
 use crate::events::EmitEvent;
 use crate::hotkey::configuration::HotkeyChange;
@@ -85,14 +85,20 @@ pub(crate) fn acquire_hotkey_configuration(
 /// The persistence half of a hotkey change, run once the new shortcuts are
 /// registered: the file and the controller, nothing else. A refusal or a failed
 /// write leaves both as they were.
+///
+/// The one setter that must replace the controller's whole copy by the file's,
+/// because it is the caller that has just registered the file's shortcuts with
+/// the OS: the controller adopting them is what makes them the operational
+/// ones. No other setter may install shortcuts in the controller.
 pub(super) fn persist_hotkey_change(
     controller: &SharedController,
     update: &HotkeyChange,
     shortcuts: &[String],
 ) -> Result<Settings, CommandError> {
-    try_persist_and_sync(controller, |settings| {
+    try_persist_and_replace(controller, |settings| {
         update.apply_registered(settings, shortcuts)
     })
+    .map(|(_, written)| written)
 }
 
 /// What a failed hotkey change does about the shortcuts registered before it.
