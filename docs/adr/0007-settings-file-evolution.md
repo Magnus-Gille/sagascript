@@ -71,5 +71,8 @@ reproduced in #340.
   reviewing the diff. A step that changes a value is guarded by a marker of its own: a file
   from a newer release is written back with this build's version, so `schema_version` alone
   cannot keep a step from running again.
-- The probes for machine state still reach `crate::transcription` from the store. That
-  module cycle is #372.
+- The store does not probe the machine: the machine state is injected (`MachineProbe`,
+  `store::load_with`, `store::try_update_with`), and `crate::machine` supplies this machine's
+  probes. The `settings` → `transcription` module cycle is gone (#372, part 1); only the
+  re-exports of `machine::{load, update, try_update}` in `settings::store` still point upward,
+  for one release.

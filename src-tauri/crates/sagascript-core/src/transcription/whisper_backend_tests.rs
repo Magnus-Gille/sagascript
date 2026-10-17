@@ -1336,3 +1336,38 @@ mod warm_state_tests {
         assert!(backend.load_lock.is_poisoned(), "fail-closed is sticky");
     }
 }
+
+/// The DTW alignment-head preset per model. Moved here from `WhisperModel`
+/// (#372) so the models module names no `whisper_rs` type; this table pins the
+/// mapping it had there: fine-tunes share the preset of their base architecture
+/// and the large fine-tunes are large-v3.
+#[cfg(feature = "diarization")]
+#[test]
+fn dtw_preset_follows_the_base_architecture_of_every_model() {
+    let expected = [
+        (WhisperModel::TinyEn, "TinyEn"),
+        (WhisperModel::Tiny, "Tiny"),
+        (WhisperModel::BaseEn, "BaseEn"),
+        (WhisperModel::Base, "Base"),
+        (WhisperModel::FinnishWhisperTiny, "Tiny"),
+        (WhisperModel::KbWhisperTiny, "Tiny"),
+        (WhisperModel::KbWhisperBase, "Base"),
+        (WhisperModel::KbWhisperSmall, "Small"),
+        (WhisperModel::KbWhisperMedium, "Medium"),
+        (WhisperModel::KbWhisperLarge, "LargeV3"),
+        (WhisperModel::NbWhisperTiny, "Tiny"),
+        (WhisperModel::NbWhisperBase, "Base"),
+        (WhisperModel::NbWhisperSmall, "Small"),
+        (WhisperModel::NbWhisperMedium, "Medium"),
+        (WhisperModel::NbWhisperLarge, "LargeV3"),
+        (WhisperModel::SmallEn, "SmallEn"),
+        (WhisperModel::Small, "Small"),
+        (WhisperModel::MediumEn, "MediumEn"),
+        (WhisperModel::Medium, "Medium"),
+        (WhisperModel::LargeV3Turbo, "LargeV3Turbo"),
+        (WhisperModel::LargeV3TurboQ8, "LargeV3Turbo"),
+    ];
+    for (model, preset) in expected {
+        assert_eq!(format!("{:?}", dtw_preset(model)), preset, "{model:?}");
+    }
+}

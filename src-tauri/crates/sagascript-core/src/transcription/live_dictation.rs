@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use crate::error::DictationError;
-use crate::settings::{Language, WhisperModel};
+use crate::models::{Language, WhisperModel};
 
 use super::engine_host::{CancelToken, EngineHostClient};
 use super::pianissimo_backend::{

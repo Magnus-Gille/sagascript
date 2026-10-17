@@ -331,7 +331,7 @@ const modelSources = [
   "https://huggingface.co/Wespeaker/wespeaker-voxceleb-resnet34-LM/resolve/",
 ];
 const modelSourceCode = [
-  readFileSync(join(root, "src-tauri/crates/sagascript-core/src/settings/manager.rs"), "utf8"),
+  readFileSync(join(root, "src-tauri/crates/sagascript-core/src/models/sources.rs"), "utf8"),
   readFileSync(join(root, "src-tauri/crates/sagascript-core/src/transcription/model.rs"), "utf8"),
   readFileSync(join(root, "src-tauri/crates/sagascript-core/src/diarization/model.rs"), "utf8"),
 ].join("\n");

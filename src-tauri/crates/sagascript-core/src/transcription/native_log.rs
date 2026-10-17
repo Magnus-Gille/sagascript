@@ -95,7 +95,7 @@ unsafe extern "C" fn trampoline(level: ggml_log_level, text: *const c_char, _: *
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::settings::WhisperModel;
+    use crate::models::WhisperModel;
 
     const BASE_MSG: &str =
         "whisper_init_state: failed to load Core ML model from '/m/ggml-base-encoder.mlmodelc'";
