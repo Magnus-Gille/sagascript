@@ -21,9 +21,9 @@ use tauri::{
 use tracing::info;
 
 use crate::commands::{lock_controller, SharedController};
-use crate::{
-    handle_check_for_updates_menu_action, open_settings_window, register_update_menu_items,
-    UPDATE_CHECK_ACTION,
+use crate::open_settings_window;
+use crate::updater::{
+    handle_check_for_updates_menu_action, register_update_menu_items, UPDATE_CHECK_ACTION,
 };
 use menu::create_profile_menu_items;
 #[cfg(target_os = "macos")]
