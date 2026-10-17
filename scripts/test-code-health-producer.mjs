@@ -19,7 +19,12 @@ import {
   parseRustComplexity,
   wholeSecondUtc,
 } from "./lib/code-health-producer.mjs";
-import { CI_API_TOOL, collectRustCliCoverage, command, safeFailureDiagnostic as safeProducerFailureDiagnostic } from "./code-health-produce.mjs";
+import {
+  CI_API_TOOL,
+  collectRustCliCoverage,
+  command,
+  safeFailureDiagnostic as safeProducerFailureDiagnostic,
+} from "./code-health-produce.mjs";
 import { validateObjective, validateObjectiveSeries } from "./lib/code-health-objective.mjs";
 import { seriesKey } from "./lib/code-health-policy.mjs";
 import { summarizeCohorts } from "./ci-cohort-timings.mjs";
