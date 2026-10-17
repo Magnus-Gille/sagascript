@@ -211,6 +211,126 @@ fn activate_cached_runtime<C, S>(
     true
 }
 
+/// The four mutexes a runtime swap takes together, borrowed so that the swap
+/// and the warm-state protocol are generic over their payloads: the backend
+/// passes the native `WhisperContext` and `WhisperState`, tests pass fakes.
+struct RuntimeSlots<'a, C, S> {
+    state: &'a Mutex<Option<S>>,
+    context: &'a Mutex<Option<C>>,
+    loaded_runtime: &'a Mutex<Option<RuntimeKey>>,
+    cached_runtime: &'a Mutex<Option<CachedWhisperRuntime<C, S>>>,
+}
+
+/// Publish a freshly loaded context as the active runtime.
+fn publish_runtime<C, S>(
+    slots: &RuntimeSlots<'_, C, S>,
+    ctx: C,
+    desired_key: RuntimeKey,
+    grace: Duration,
+) -> Result<(), DictationError> {
+    // Publish the new context atomically with respect to warm-state users.
+    // When the old/new pair fits the explicit cache budget, move the old
+    // context and its reusable warm state into the secondary slot. The next
+    // switch can then restore both without touching disk or rebuilding the
+    // state. Lock order is state -> context -> loaded_runtime -> cache,
+    // matching activate_cached_profile().
+    //
+    // The state lock is acquired with the same bounded policy as
+    // with_warm_state: if a stuck inference pins it past the grace budget,
+    // return ModelBusy (dropping the freshly loaded `ctx` cleanly and
+    // letting ensure_model release load_lock) instead of blocking a model
+    // switch forever behind a wedged transcription.
+    let mut state = lock_state_slot_bounded(slots.state, grace)?;
+    let mut context = lock_or_recover(slots.context, CONTEXT_LOCK);
+    let mut loaded_runtime = lock_or_recover(slots.loaded_runtime, LOADED_RUNTIME_LOCK);
+    let previous = match (loaded_runtime.take(), context.take()) {
+        (Some(key), Some(context)) => Some(CachedWhisperRuntime {
+            key,
+            context,
+            state: state.take(),
+        }),
+        (None, None) => None,
+        _ => panic!("whisper model/context invariant violated"),
+    };
+
+    *context = Some(ctx);
+    *loaded_runtime = Some(desired_key);
+    *state = None;
+
+    let mut cached = lock_or_recover(slots.cached_runtime, CACHED_RUNTIME_LOCK);
+    *cached = previous.filter(|runtime| can_cache_pair(desired_key, runtime.key));
+    Ok(())
+}
+
+/// Swap the active and secondary runtimes while preserving both warm
+/// states. The caller holds load_lock, so cache membership cannot change
+/// concurrently with this operation.
+fn activate_cached_slots<C, S>(
+    slots: &RuntimeSlots<'_, C, S>,
+    desired: RuntimeKey,
+    grace: Duration,
+) -> Result<(), DictationError> {
+    let mut state = lock_state_slot_bounded(slots.state, grace)?;
+    let mut context = lock_or_recover(slots.context, CONTEXT_LOCK);
+    let mut loaded_runtime = lock_or_recover(slots.loaded_runtime, LOADED_RUNTIME_LOCK);
+    let mut cached = lock_or_recover(slots.cached_runtime, CACHED_RUNTIME_LOCK);
+
+    if !activate_cached_runtime(
+        desired,
+        &mut loaded_runtime,
+        &mut context,
+        &mut state,
+        &mut cached,
+    ) {
+        return Err(DictationError::ModelNotLoaded);
+    }
+
+    info!(
+        "Activated cached whisper model: {} ({:?})",
+        desired.model.display_name(),
+        desired.profile
+    );
+    Ok(())
+}
+
+/// Acquire the state mutex, polling `try_lock` on a short interval until the
+/// `grace` budget elapses. Returns [`DictationError::ModelBusy`] if the lock
+/// is still held when the budget runs out (a previous transcription is stuck
+/// or genuinely still running), rather than blocking forever like a plain
+/// `lock()` would.
+///
+/// A mutex poisoned by a panic mid-inference is recovered with its warm
+/// state discarded (ADR 0005): the interrupted `WhisperState` may be
+/// mid-compute, exactly like an aborted one, and is rebuilt lazily from the
+/// active context. The recovery is logged, not masked.
+fn lock_state_slot_bounded<S>(
+    slot: &Mutex<Option<S>>,
+    grace: Duration,
+) -> Result<MutexGuard<'_, Option<S>>, DictationError> {
+    let deadline = Instant::now() + grace;
+    loop {
+        match slot.try_lock() {
+            Ok(guard) => return Ok(guard),
+            Err(TryLockError::Poisoned(poisoned)) => {
+                let mut guard = recover_poisoned(slot, STATE_LOCK, poisoned);
+                *guard = None;
+                return Ok(guard);
+            }
+            Err(TryLockError::WouldBlock) => {
+                if Instant::now() >= deadline {
+                    warn!(
+                        "Whisper state mutex still held after {:?} grace — returning ModelBusy \
+                         (a previous transcription may still be running or stuck)",
+                        grace
+                    );
+                    return Err(DictationError::ModelBusy);
+                }
+                std::thread::sleep(WARM_STATE_POLL_INTERVAL);
+            }
+        }
+    }
+}
+
 /// Per-transcription tuning knobs (opt-in modes). `Default` reproduces the
 /// fast, robust dictation defaults: greedy decoding, temperature fallback on,
 /// no VAD, no prompt.
@@ -820,6 +940,15 @@ impl WhisperBackend {
         }
     }
 
+    fn runtime_slots(&self) -> RuntimeSlots<'_, WhisperContext, WhisperState> {
+        RuntimeSlots {
+            state: &self.state,
+            context: &self.context,
+            loaded_runtime: &self.loaded_runtime,
+            cached_runtime: &self.cached_runtime,
+        }
+    }
+
     /// Run Whisper's local language classifier on a bounded, speech-rich
     /// preview of the decoded audio. English-only models cannot classify
     /// languages and return `Ok(None)`.
@@ -1057,39 +1186,10 @@ impl WhisperBackend {
         )
         .map_err(|e| DictationError::TranscriptionFailed(format!("Failed to load model: {e}")))?;
 
-        // Publish the new context atomically with respect to warm-state users.
-        // When the old/new pair fits the explicit cache budget, move the old
-        // context and its reusable warm state into the secondary slot. The next
-        // switch can then restore both without touching disk or rebuilding the
-        // state. Lock order is state -> context -> loaded_runtime -> cache,
-        // matching activate_cached_profile().
-        //
-        // The state lock is acquired with the same bounded policy as
-        // with_warm_state: if a stuck inference pins it past the grace budget,
-        // return ModelBusy (dropping the freshly loaded `ctx` cleanly and
-        // letting ensure_model release load_lock) instead of blocking a model
-        // switch forever behind a wedged transcription.
-        {
-            let mut state = self.lock_state_bounded(WARM_STATE_GRACE)?;
-            let mut context = lock_or_recover(&self.context, CONTEXT_LOCK);
-            let mut loaded_runtime = lock_or_recover(&self.loaded_runtime, LOADED_RUNTIME_LOCK);
-            let previous = match (loaded_runtime.take(), context.take()) {
-                (Some(key), Some(context)) => Some(CachedWhisperRuntime {
-                    key,
-                    context,
-                    state: state.take(),
-                }),
-                (None, None) => None,
-                _ => panic!("whisper model/context invariant violated"),
-            };
-
-            *context = Some(ctx);
-            *loaded_runtime = Some(desired_key);
-            *state = None;
-
-            let mut cached = lock_or_recover(&self.cached_runtime, CACHED_RUNTIME_LOCK);
-            *cached = previous.filter(|runtime| can_cache_pair(desired_key, runtime.key));
-        }
+        // Publish the new context atomically with respect to warm-state users,
+        // moving the previous runtime into the secondary slot when the pair fits
+        // the cache budget; see publish_runtime for the lock order.
+        publish_runtime(&self.runtime_slots(), ctx, desired_key, WARM_STATE_GRACE)?;
 
         info!(
             "Model loaded: {} ({profile:?})",
@@ -1296,30 +1396,9 @@ impl WhisperBackend {
     }
 
     /// Swap the active and secondary runtimes while preserving both warm
-    /// states. The caller holds load_lock, so cache membership cannot change
-    /// concurrently with this operation.
+    /// states; see [`activate_cached_slots`].
     fn activate_cached_profile(&self, desired: RuntimeKey) -> Result<(), DictationError> {
-        let mut state = self.lock_state_bounded(WARM_STATE_GRACE)?;
-        let mut context = lock_or_recover(&self.context, CONTEXT_LOCK);
-        let mut loaded_runtime = lock_or_recover(&self.loaded_runtime, LOADED_RUNTIME_LOCK);
-        let mut cached = lock_or_recover(&self.cached_runtime, CACHED_RUNTIME_LOCK);
-
-        if !activate_cached_runtime(
-            desired,
-            &mut loaded_runtime,
-            &mut context,
-            &mut state,
-            &mut cached,
-        ) {
-            return Err(DictationError::ModelNotLoaded);
-        }
-
-        info!(
-            "Activated cached whisper model: {} ({:?})",
-            desired.model.display_name(),
-            desired.profile
-        );
-        Ok(())
+        activate_cached_slots(&self.runtime_slots(), desired, WARM_STATE_GRACE)
     }
 
     /// Pre-compile inference kernels and warm the reusable state by running a
@@ -1358,6 +1437,33 @@ impl WhisperBackend {
     /// [`Self::with_warm_state`] with an explicit grace budget. Split out so
     /// tests can shrink the budget and exercise the `ModelBusy` path quickly.
     ///
+    /// Runs [`Self::with_state_slot`] on this backend's own state mutex, whose
+    /// state is created from the loaded context.
+    fn with_warm_state_grace<R>(
+        &self,
+        grace: Duration,
+        f: impl FnOnce(&mut WhisperState) -> Result<R, DictationError>,
+    ) -> Result<R, DictationError> {
+        self.with_state_slot(
+            &self.state,
+            grace,
+            || {
+                // Lock order state -> context, matching load_model()'s atomic swap.
+                let ctx_guard = lock_or_recover(&self.context, CONTEXT_LOCK);
+                let ctx = ctx_guard.as_ref().ok_or(DictationError::ModelNotLoaded)?;
+                ctx.create_state().map_err(|e| {
+                    DictationError::TranscriptionFailed(format!(
+                        "Failed to create whisper state: {e}"
+                    ))
+                })
+            },
+            f,
+        )
+    }
+
+    /// The warm-state protocol, generic over the state payload `S` so that it
+    /// can be exercised without a native `WhisperState`.
+    ///
     /// This method is the SOLE owner of the abort-flag lifecycle. Ownership rule:
     /// only the call that holds the state lock may touch `abort_flag`, because a
     /// set flag always belongs to the current lock holder's inference:
@@ -1373,12 +1479,14 @@ impl WhisperBackend {
     ///    `full()` leaves whisper mid-compute) and the flag cleared, before any
     ///    other call can acquire the lock. No gap exists in which a new call
     ///    could observe the aborted state or race the flag.
-    fn with_warm_state_grace<R>(
+    fn with_state_slot<S, R>(
         &self,
+        slot: &Mutex<Option<S>>,
         grace: Duration,
-        f: impl FnOnce(&mut WhisperState) -> Result<R, DictationError>,
+        create_state: impl FnOnce() -> Result<S, DictationError>,
+        f: impl FnOnce(&mut S) -> Result<R, DictationError>,
     ) -> Result<R, DictationError> {
-        let mut state_guard = self.lock_state_bounded(grace)?;
+        let mut state_guard = lock_state_slot_bounded(slot, grace)?;
 
         // (2) We own the lock, so we own the flag: clear any stale abort left
         // over from a previous, already-finished inference.
@@ -1390,20 +1498,12 @@ impl WhisperBackend {
         }
 
         // No Drop guard is needed for the abort cleanup below: if `f` panics,
-        // the unwind poisons the state mutex and the next lock_state_bounded
+        // the unwind poisons the state mutex and the next lock_state_slot_bounded
         // recovers it by discarding the warm state (the same cleanup), so a
         // plain post-call check suffices.
         let result = (|| {
             if state_guard.is_none() {
-                // Lock order state -> context, matching load_model()'s atomic swap.
-                let ctx_guard = lock_or_recover(&self.context, CONTEXT_LOCK);
-                let ctx = ctx_guard.as_ref().ok_or(DictationError::ModelNotLoaded)?;
-                let st = ctx.create_state().map_err(|e| {
-                    DictationError::TranscriptionFailed(format!(
-                        "Failed to create whisper state: {e}"
-                    ))
-                })?;
-                *state_guard = Some(st);
+                *state_guard = Some(create_state()?);
             }
             f(state_guard.as_mut().unwrap())
         })();
@@ -1419,44 +1519,6 @@ impl WhisperBackend {
         }
 
         result
-    }
-
-    /// Acquire the state mutex, polling `try_lock` on a short interval until the
-    /// `grace` budget elapses. Returns [`DictationError::ModelBusy`] if the lock
-    /// is still held when the budget runs out (a previous transcription is stuck
-    /// or genuinely still running), rather than blocking forever like a plain
-    /// `lock()` would.
-    ///
-    /// A mutex poisoned by a panic mid-inference is recovered with its warm
-    /// state discarded (ADR 0005): the interrupted `WhisperState` may be
-    /// mid-compute, exactly like an aborted one, and is rebuilt lazily from the
-    /// active context. The recovery is logged, not masked.
-    fn lock_state_bounded(
-        &self,
-        grace: Duration,
-    ) -> Result<MutexGuard<'_, Option<WhisperState>>, DictationError> {
-        let deadline = Instant::now() + grace;
-        loop {
-            match self.state.try_lock() {
-                Ok(guard) => return Ok(guard),
-                Err(TryLockError::Poisoned(poisoned)) => {
-                    let mut guard = recover_poisoned(&self.state, STATE_LOCK, poisoned);
-                    *guard = None;
-                    return Ok(guard);
-                }
-                Err(TryLockError::WouldBlock) => {
-                    if Instant::now() >= deadline {
-                        warn!(
-                            "Whisper state mutex still held after {:?} grace — returning ModelBusy \
-                             (a previous transcription may still be running or stuck)",
-                            grace
-                        );
-                        return Err(DictationError::ModelBusy);
-                    }
-                    std::thread::sleep(WARM_STATE_POLL_INTERVAL);
-                }
-            }
-        }
     }
 
     /// Run transcription on loaded model (blocking — call from spawn_blocking)

@@ -1271,7 +1271,7 @@ mod warm_state_tests {
         let holder = hold_state_lock(&backend, Duration::from_millis(400));
 
         let start = Instant::now();
-        let res = backend.lock_state_bounded(Duration::from_millis(50));
+        let res = lock_state_slot_bounded(&backend.state, Duration::from_millis(50));
         let elapsed = start.elapsed();
 
         assert!(
@@ -1293,7 +1293,7 @@ mod warm_state_tests {
         let backend = Arc::new(WhisperBackend::new());
         let holder = hold_state_lock(&backend, Duration::from_millis(60));
 
-        let res = backend.lock_state_bounded(Duration::from_secs(2));
+        let res = lock_state_slot_bounded(&backend.state, Duration::from_secs(2));
         assert!(
             res.is_ok(),
             "should acquire once the briefly-held lock is released, got {res:?}"
@@ -1305,7 +1305,7 @@ mod warm_state_tests {
     #[test]
     fn lock_state_bounded_acquires_immediately_when_uncontended() {
         let backend = WhisperBackend::new();
-        let res = backend.lock_state_bounded(Duration::from_millis(0));
+        let res = lock_state_slot_bounded(&backend.state, Duration::from_millis(0));
         assert!(res.is_ok(), "uncontended lock must be acquired immediately");
     }
 
