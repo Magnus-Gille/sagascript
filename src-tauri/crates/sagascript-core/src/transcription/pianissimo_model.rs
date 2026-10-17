@@ -20,7 +20,7 @@
 //! directory; downloads and hash verification are then skipped (the directory
 //! must still contain the four Core ML packages and the vocabulary).
 
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use tracing::{info, warn};
 
@@ -442,17 +442,41 @@ fn install_err(message: impl Into<String>) -> DictationError {
     DictationError::ModelDownloadFailed(message.into())
 }
 
-/// True for an entry name that starts at a filesystem root or a drive: `/x`,
-/// `\x`, `C:\x`, `C:x`.
+/// True when any part of an entry name is a filesystem root or a drive: a
+/// leading `/` or `\`, or any `/`- or `\`-separated part that starts with a
+/// drive letter and a colon (`C:\x`, `C:x`, `wrapper/C:/x`).
 ///
-/// zip 9's `enclosed_name` drops such a prefix and returns the rest as a
-/// relative path (zip 4 returned `None`). A model archive has no reason to
-/// carry one, so refuse it rather than extract it somewhere other than named.
+/// zip 9's `enclosed_name` drops a root or drive at the start of a name and
+/// returns the rest as a relative path (zip 4 returned `None`), and keeps a
+/// `C:` part further in as an ordinary component. `PathBuf::push` of such a
+/// part replaces everything pushed before it on a Windows host, so
+/// `wrapper/C:/x` would come out as `C:x`, outside the extraction directory.
+/// A model archive has no reason to carry any of these, so refuse the archive.
 /// Windows syntax is checked on every host, as zip 9 parses entry names that way.
-fn is_rooted_entry_name(name: &str) -> bool {
-    let bytes = name.as_bytes();
+fn has_root_or_drive(name: &str) -> bool {
     name.starts_with(['/', '\\'])
-        || (bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':')
+        || name.split(['/', '\\']).any(|part| {
+            let bytes = part.as_bytes();
+            bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':'
+        })
+}
+
+/// `dest` joined with `relative`, or `None` unless the result is a plain
+/// descendant of `dest`: every component of `relative` is a normal name (no
+/// `..`, root or drive prefix) and the joined path is still under `dest`.
+///
+/// A second line of defence behind `enclosed_name` and [`has_root_or_drive`]:
+/// `Path::join` of a rooted or drive-prefixed path replaces the base, so this
+/// checks the path that is actually written.
+fn resolve_inside(dest: &Path, relative: &Path) -> Option<PathBuf> {
+    if !relative
+        .components()
+        .all(|component| matches!(component, Component::Normal(_)))
+    {
+        return None;
+    }
+    let target = dest.join(relative);
+    target.starts_with(dest).then_some(target)
 }
 
 /// Extract `archive` with path-traversal, symlink and size guards.
@@ -466,25 +490,28 @@ fn extract_archive(archive: &Path, dest: &Path, max_bytes: u64) -> Result<(), Di
         let mut entry = zip
             .by_index(index)
             .map_err(|e| install_err(format!("Corrupt model archive entry {index}: {e}")))?;
-        // For messages only: `entry.name()` is fallible in zip 9.
-        let display_name = String::from_utf8_lossy(entry.name_raw()).into_owned();
-        let Some(relative) = entry
-            .enclosed_name()
-            .filter(|_| !is_rooted_entry_name(&display_name))
-        else {
-            return Err(install_err(format!(
-                "Model archive entry {display_name:?} escapes the extraction directory"
-            )));
+        // `entry.name()` is fallible in zip 9; the raw bytes, decoded lossily,
+        // serve the root/drive check and the messages.
+        let name = String::from_utf8_lossy(entry.name_raw()).into_owned();
+        let shown = &name;
+        let escapes = || {
+            install_err(format!(
+                "Model archive entry {shown:?} escapes the extraction directory"
+            ))
         };
+        let relative = entry
+            .enclosed_name()
+            .filter(|_| !has_root_or_drive(&name))
+            .ok_or_else(escapes)?;
         if entry
             .unix_mode()
             .is_some_and(|mode| mode & 0o170000 == 0o120000)
         {
             return Err(install_err(format!(
-                "Model archive entry {display_name:?} is a symlink, which is not allowed"
+                "Model archive entry {shown:?} is a symlink, which is not allowed"
             )));
         }
-        let target = dest.join(relative);
+        let target = resolve_inside(dest, &relative).ok_or_else(escapes)?;
         if entry.is_dir() {
             std::fs::create_dir_all(&target)
                 .map_err(|e| install_err(format!("Cannot create {}: {e}", target.display())))?;
@@ -1334,6 +1361,10 @@ mod tests {
             "..\\escape.txt",
             "/escape.txt",
             "C:\\escape.txt",
+            // A drive-letter component after the first: on a Windows host
+            // `PathBuf::push("C:")` replaces everything pushed before it.
+            "wrapper/C:/escape.txt",
+            "a\\b\\D:\\x",
             "<absolute>",
         ] {
             let root = tmp();
@@ -1359,6 +1390,32 @@ mod tests {
             // escaped file anywhere, no staging leftovers, no install.
             assert_eq!(tree(root.path()), ["Models", "model.zip"], "{name}");
         }
+    }
+
+    #[test]
+    fn extraction_targets_must_stay_under_the_destination() {
+        // No archive entry reaches this check once `enclosed_name` and
+        // `has_root_or_drive` have run: they never let these paths through, on
+        // any host. So the check is tested directly.
+        let root = tmp();
+        let dest = root.path().join("staging");
+
+        assert_eq!(
+            resolve_inside(&dest, Path::new("a/b.txt")),
+            Some(dest.join("a").join("b.txt"))
+        );
+        // `dest/../escape.txt` still starts with `dest` lexically; only the
+        // component check catches it.
+        assert_eq!(resolve_inside(&dest, Path::new("../escape.txt")), None);
+        assert_eq!(resolve_inside(&dest, Path::new("a/../../escape.txt")), None);
+        // A rooted path makes `join` replace the base.
+        assert_eq!(
+            resolve_inside(&dest, &root.path().join("elsewhere.txt")),
+            None
+        );
+        // So does a drive-prefixed one, where drives exist.
+        #[cfg(windows)]
+        assert_eq!(resolve_inside(&dest, Path::new("C:escape.txt")), None);
     }
 
     #[test]
