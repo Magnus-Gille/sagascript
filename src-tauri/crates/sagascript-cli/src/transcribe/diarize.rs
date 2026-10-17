@@ -12,10 +12,12 @@ use sagascript_core::transcription::model;
 #[cfg(feature = "diarization")]
 use sagascript_core::transcription::whisper_backend::validate_diarization_options;
 #[cfg(feature = "diarization")]
-use sagascript_core::transcription::{TranscribeOptions, TranscriptSegment, WhisperBackend};
+use sagascript_core::transcription::{TranscribeOptions, TranscriptSegment};
 
 #[cfg(feature = "diarization")]
 use super::args::TranscribeArgs;
+#[cfg(feature = "diarization")]
+use super::inference::InferenceBackend;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum CachePolicy {
@@ -65,7 +67,7 @@ pub(super) struct DiarizationPerformance {
 #[cfg(feature = "diarization")]
 pub(super) fn run_diarization_analysis(
     audio: &[f32],
-    backend: &WhisperBackend,
+    backend: &dyn InferenceBackend,
     language: Language,
     prompt: Option<&str>,
     config: &sagascript_core::diarization::DiarizeConfig,
@@ -82,9 +84,8 @@ pub(super) fn run_diarization_analysis(
     {
         std::thread::scope(|scope| {
             let diarization = scope.spawn(|| sagascript_core::diarization::analyze(audio, config));
-            let transcription = backend.transcribe_sync_for_diarization_profiled_with_options(
-                audio, language, prompt, options,
-            );
+            let transcription =
+                backend.transcribe_for_diarization(audio, language, prompt, options);
             let (analysis, timings) = diarization.join().map_err(|_| {
                 DictationError::DiarizationError(
                     "Diarization analysis worker terminated unexpectedly".to_string(),
@@ -96,9 +97,7 @@ pub(super) fn run_diarization_analysis(
     #[cfg(not(target_os = "macos"))]
     {
         let (analysis, timings) = sagascript_core::diarization::analyze(audio, config)?;
-        let transcription = backend.transcribe_sync_for_diarization_profiled_with_options(
-            audio, language, prompt, options,
-        )?;
+        let transcription = backend.transcribe_for_diarization(audio, language, prompt, options)?;
         Ok((analysis, timings, transcription))
     }
 }

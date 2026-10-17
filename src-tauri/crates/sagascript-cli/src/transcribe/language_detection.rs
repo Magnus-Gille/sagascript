@@ -77,7 +77,7 @@ impl DetectorLoader for InstalledDetectors {
 
 pub(super) fn detect_file_language(
     out: &Out,
-    transcription_backend: &WhisperBackend,
+    transcription_backend: &dyn LanguageProbe,
     audio: &[f32],
     transcription_model: WhisperModel,
 ) -> Result<Option<LanguageDetection>, DictationError> {

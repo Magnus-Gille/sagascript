@@ -45,6 +45,7 @@ use crate::run_request::RunRequest;
 
 mod args;
 mod diarize;
+mod inference;
 mod inputs;
 mod language_detection;
 mod language_regions;
@@ -82,6 +83,7 @@ use self::diarize::{
     canonicalize_coverage_segments, effective_diarization_decoder_evidence,
     resolve_diarization_options, run_diarization_analysis, DiarizationPerformance,
 };
+use self::inference::{ensure_model_loaded, InferenceBackend};
 use self::inputs::expand_inputs;
 #[cfg(feature = "diarization")]
 use self::inputs::paths_refer_to_same_file;
@@ -198,38 +200,85 @@ fn run_inner(args: TranscribeArgs, out: &Out) -> Result<(), DictationError> {
         )));
     }
 
-    // Model loading is lazy so a validated diarization-cache hit never maps
-    // several gigabytes of weights that it will not use. Batch processing is
-    // sequential, so this flag safely preserves the load-once behavior.
     let backend = std::sync::Arc::new(WhisperBackend::new());
     let _abort_whisper = {
         let backend = backend.clone();
         crate::cancel::register(move || backend.request_cancel())
     };
+    run_whisper_batch(
+        &WhisperBatch {
+            args: &args,
+            files: &files,
+            stored: &stored,
+            language,
+            model,
+            glossary: &glossary,
+            correction_vocabulary: &correction_vocabulary,
+        },
+        &*backend,
+        &crate::cancel::GLOBAL,
+        out,
+    )
+}
+
+/// What a Whisper batch needs besides the backend, the canceller and the
+/// output: the planned run.
+struct WhisperBatch<'a> {
+    args: &'a TranscribeArgs,
+    files: &'a [PathBuf],
+    stored: &'a Settings,
+    language: Language,
+    model: WhisperModel,
+    glossary: &'a Glossary,
+    correction_vocabulary: &'a [String],
+}
+
+/// Transcribes the files one after another with `backend`, writing each
+/// outcome as it is done and the batch's summary at the end.
+///
+/// Model loading is lazy so a validated diarization-cache hit never maps
+/// several gigabytes of weights that it will not use. Batch processing is
+/// sequential, so one flag safely preserves the load-once behavior.
+fn run_whisper_batch(
+    batch: &WhisperBatch<'_>,
+    backend: &dyn InferenceBackend,
+    canceller: &crate::cancel::Canceller,
+    out: &Out,
+) -> Result<(), DictationError> {
+    let WhisperBatch {
+        args,
+        files,
+        stored,
+        language,
+        model,
+        glossary,
+        correction_vocabulary,
+    } = *batch;
     let mut model_loaded = false;
 
-    let mut sink = BatchSink::new(&args, files.len());
-    let (processed, failures) = process_batch(
-        &files,
+    let mut sink = BatchSink::new(args, files.len());
+    let (processed, failures) = process_batch_with(
+        canceller,
+        files,
         args.fail_fast,
         |index, file| {
             errln!(out, "[{}/{}] {}", index + 1, files.len(), file.display());
             transcribe_file(
-                &args,
+                args,
                 file,
-                &backend,
-                &stored,
+                backend,
+                stored,
                 language,
                 model,
                 &mut model_loaded,
-                &glossary,
-                &correction_vocabulary,
+                glossary,
+                correction_vocabulary,
                 None,
                 CachePolicy::Normal,
                 out,
             )
         },
-        |execution| sink.emit(out, &args, execution),
+        |execution| sink.emit(out, args, execution),
     )?;
     sink.finish(out)?;
 
@@ -288,35 +337,11 @@ where
     Ok((processed, failures))
 }
 
-fn ensure_model_loaded(
-    out: &Out,
-    backend: &WhisperBackend,
-    model: WhisperModel,
-    profile: ContextProfile,
-    loaded: &mut bool,
-) -> Result<f64, DictationError> {
-    if *loaded {
-        return Ok(0.0);
-    }
-    if !model::is_model_downloaded(model) {
-        return Err(DictationError::TranscriptionFailed(format!(
-            "Model '{}' is not downloaded. Run: sagascript download-model {}",
-            model.display_name(),
-            model_id_string(model)
-        )));
-    }
-    errln!(out, "Loading model: {}...", model.display_name());
-    let started = Instant::now();
-    backend.load_model_with_profile(model, profile)?;
-    *loaded = true;
-    Ok(started.elapsed().as_secs_f64())
-}
-
 #[allow(clippy::too_many_arguments)]
 fn transcribe_file(
     args: &TranscribeArgs,
     file: &Path,
-    backend: &WhisperBackend,
+    backend: &dyn InferenceBackend,
     stored: &Settings,
     language: Language,
     model: WhisperModel,
@@ -1030,11 +1055,11 @@ fn transcribe_file(
         pb.set_style(ProgressStyle::with_template("  Transcribing [{bar:40}] {pos}%").unwrap());
         let pb_cb = pb.clone();
         let progress_out = out.clone();
-        let segments = backend.transcribe_sync_with_gap_recovery(
+        let segments = backend.transcribe_segments(
             &audio,
             language,
             &opts,
-            move |pct| {
+            Box::new(move |pct| {
                 crate::set_transcription_progress(&pb_cb, pct);
                 if pct > 1 {
                     emit_progress(
@@ -1045,19 +1070,19 @@ fn transcribe_file(
                         Some(pct.clamp(0, 100) as u8),
                     );
                 }
-            },
-            Some(&on_encode_start),
+            }),
+            &on_encode_start,
         )?;
         pb.finish_and_clear();
         segments
     } else {
         errln!(out, "Transcribing...");
         let progress_out = out.clone();
-        backend.transcribe_sync_with_gap_recovery(
+        backend.transcribe_segments(
             &audio,
             language,
             &opts,
-            move |pct| {
+            Box::new(move |pct| {
                 if pct > 1 {
                     emit_progress(
                         &progress_out,
@@ -1067,8 +1092,8 @@ fn transcribe_file(
                         Some(pct.clamp(0, 100) as u8),
                     );
                 }
-            },
-            Some(&on_encode_start),
+            }),
+            &on_encode_start,
         )?
     };
     emit_progress(out, args.progress_json, file_started, "finalizing", None);
@@ -1149,3 +1174,7 @@ fn transcribe_file(
 #[cfg(test)]
 #[path = "../transcribe_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../transcribe_file_tests.rs"]
+mod file_tests;
