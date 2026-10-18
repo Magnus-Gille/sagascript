@@ -6,12 +6,26 @@ use crate::focus_diag;
 #[cfg(target_os = "macos")]
 use crate::platform;
 
+/// Why the main window could not be brought forward. `open_settings_window`
+/// logs it; nothing crosses IPC.
+#[derive(Debug, thiserror::Error)]
+enum WindowError {
+    #[error("failed to restore main window: {0}")]
+    Restore(#[source] tauri::Error),
+    #[error("failed to show main window: {0}")]
+    Show(#[source] tauri::Error),
+    #[error("failed to focus main window: {0}")]
+    Focus(#[source] tauri::Error),
+    #[error("failed to create main window: {0}")]
+    Create(#[source] tauri::Error),
+}
+
 trait MainWindowVisibility {
     fn activate_app(&self);
-    fn reset_to_normal_level(&self) -> Result<(), String>;
-    fn unminimize(&self) -> Result<(), String>;
-    fn show(&self) -> Result<(), String>;
-    fn set_focus(&self) -> Result<(), String>;
+    fn reset_to_normal_level(&self) -> Result<(), tauri::Error>;
+    fn unminimize(&self) -> Result<(), tauri::Error>;
+    fn show(&self) -> Result<(), tauri::Error>;
+    fn set_focus(&self) -> Result<(), tauri::Error>;
 }
 
 impl MainWindowVisibility for tauri::WebviewWindow {
@@ -27,39 +41,33 @@ impl MainWindowVisibility for tauri::WebviewWindow {
         }
     }
 
-    fn reset_to_normal_level(&self) -> Result<(), String> {
-        tauri::WebviewWindow::set_always_on_top(self, false).map_err(|error| error.to_string())
+    fn reset_to_normal_level(&self) -> Result<(), tauri::Error> {
+        tauri::WebviewWindow::set_always_on_top(self, false)
     }
 
-    fn unminimize(&self) -> Result<(), String> {
+    fn unminimize(&self) -> Result<(), tauri::Error> {
         focus_diag::activation("main_window_reveal", "unminimize");
-        tauri::WebviewWindow::unminimize(self).map_err(|error| error.to_string())
+        tauri::WebviewWindow::unminimize(self)
     }
 
-    fn show(&self) -> Result<(), String> {
+    fn show(&self) -> Result<(), tauri::Error> {
         focus_diag::activation("main_window_reveal", "show");
-        tauri::WebviewWindow::show(self).map_err(|error| error.to_string())
+        tauri::WebviewWindow::show(self)
     }
 
-    fn set_focus(&self) -> Result<(), String> {
+    fn set_focus(&self) -> Result<(), tauri::Error> {
         focus_diag::activation("main_window_reveal", "set_focus");
-        tauri::WebviewWindow::set_focus(self).map_err(|error| error.to_string())
+        tauri::WebviewWindow::set_focus(self)
     }
 }
 
-fn reveal_existing_main_window(window: &impl MainWindowVisibility) -> Result<(), String> {
+fn reveal_existing_main_window(window: &impl MainWindowVisibility) -> Result<(), WindowError> {
     if let Err(error) = window.reset_to_normal_level() {
         warn!("Failed to restore normal main-window level: {error}");
     }
-    window
-        .unminimize()
-        .map_err(|error| format!("failed to restore main window: {error}"))?;
-    window
-        .show()
-        .map_err(|error| format!("failed to show main window: {error}"))?;
-    window
-        .set_focus()
-        .map_err(|error| format!("failed to focus main window: {error}"))?;
+    window.unminimize().map_err(WindowError::Restore)?;
+    window.show().map_err(WindowError::Show)?;
+    window.set_focus().map_err(WindowError::Focus)?;
     // Queue activation after presentation. During initial `.setup()` a direct
     // AppKit activation happens before Tauri's event loop is ready and macOS
     // leaves the onboarding window behind the previously active application.
@@ -85,7 +93,7 @@ pub(crate) fn open_settings_window(app: &tauri::AppHandle, tab: Option<&str>, si
     }
 }
 
-fn try_open_settings_window(app: &tauri::AppHandle, tab: Option<&str>) -> Result<(), String> {
+fn try_open_settings_window(app: &tauri::AppHandle, tab: Option<&str>) -> Result<(), WindowError> {
     // Build a URL with optional query parameter
     let url = match tab {
         Some("onboarding") => "index.html?onboarding=true".to_string(),
@@ -120,7 +128,7 @@ fn try_open_settings_window(app: &tauri::AppHandle, tab: Option<&str>) -> Result
                 .center()
                 .focused(true)
                 .build()
-                .map_err(|error| format!("failed to create main window: {error}"))?;
+                .map_err(WindowError::Create)?;
 
         reveal_existing_main_window(&window)
     }

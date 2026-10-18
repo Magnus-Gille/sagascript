@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 
 use sagascript_core::machine;
-use sagascript_core::settings::HotkeyProfile;
+use sagascript_core::settings::{HotkeyProfile, SettingsError};
 
 use super::*;
 
@@ -543,6 +543,97 @@ fn two_setters_do_not_interleave_between_the_file_and_the_controller() {
             assert_eq!(memory.language, Language::Norwegian);
             assert_eq!(memory.beam_size, 7);
             "serialized".into()
+        },
+    ) else {
+        return;
+    };
+}
+
+/// A setter that the settings refuse (or the settings file cannot take) rejects
+/// with the code of its `SettingsError`, so the Settings window branches on the
+/// code and never on the text (ADR 0006, #360 part 2). The language change a
+/// personal dictionary blocks is the one the window recovers from.
+#[test]
+fn a_refused_setting_rejects_with_the_code_of_its_settings_error() {
+    let Some(_) = isolated(
+        module_path!(),
+        "a_refused_setting_rejects_with_the_code_of_its_settings_error",
+        || {
+            let runtime = runtime();
+            let app = app_with(Settings::default());
+            store::update(|s| {
+                s.language = Language::Swedish;
+                s.hotkey_profiles = vec![profile("default", &s.hotkey, Language::Swedish)];
+                s.profile_glossaries
+                    .insert("default".into(), "Gille = Jille".into());
+            })
+            .expect("the fake file is writable");
+
+            let blocked = persist_language(&controller(&app), Language::English)
+                .expect_err("a dictionary with aliases blocks the change");
+            assert!(
+                matches!(
+                    &blocked,
+                    CommandError::Settings(SettingsError::DictionaryBlocksLanguageChange { profile_id })
+                        if profile_id == "default"
+                ),
+                "{blocked:?}"
+            );
+            assert_eq!(
+                contract::to_value(&blocked),
+                serde_json::json!({
+                    "code": "dictionary_blocks_language_change",
+                    "message": "Profile 'default' has a personal dictionary; clear it before changing the profile language",
+                    "retryable": false,
+                })
+            );
+            assert_eq!(
+                store::load().default_profile().language,
+                Language::Swedish,
+                "nothing was written"
+            );
+
+            let code = |result: Result<(), CommandError>| {
+                result.expect_err("the setter refuses").code().to_owned()
+            };
+            assert_eq!(
+                code(runtime.block_on(set_file_transcription_model(
+                    controller(&app),
+                    "nope".into()
+                ))),
+                "invalid_setting_value"
+            );
+            assert_eq!(
+                code(runtime.block_on(set_engine_prewarm(controller(&app), "nope".into()))),
+                "invalid_setting_value"
+            );
+            assert_eq!(
+                code(runtime.block_on(set_profile_model(
+                    controller(&app),
+                    "nosuch".into(),
+                    "auto".into()
+                ))),
+                "unknown_profile"
+            );
+            assert_eq!(
+                code(runtime.block_on(set_profile_model(
+                    controller(&app),
+                    "default".into(),
+                    model_id(WhisperModel::TinyEn),
+                ))),
+                "model_incompatible",
+                "an English-only model cannot serve the Swedish default profile"
+            );
+
+            // A settings file that cannot be written is its own code too.
+            let file = fake_file();
+            std::fs::remove_file(&file).expect("the fake file exists");
+            std::fs::create_dir(&file).expect("a directory takes its place");
+            assert_eq!(
+                code(runtime.block_on(set_beam_size(controller(&app), 3))),
+                "settings_storage_failed"
+            );
+            "coded".into()
         },
     ) else {
         return;

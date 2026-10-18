@@ -16,7 +16,7 @@ use crate::hotkey::{HotkeyHealth, HotkeyStatus, OperationalHotkey};
 #[tauri::command]
 pub async fn get_active_hotkey_profile(
     controller: State<'_, SharedController>,
-) -> Result<Option<HotkeyProfile>, String> {
+) -> Result<Option<HotkeyProfile>, CommandError> {
     Ok(lock_controller(&controller)
         .active_hotkey_profile()
         .cloned())
@@ -53,7 +53,7 @@ pub(super) fn profiles_with_default_shortcut(
     settings: &Settings,
     shortcut: String,
 ) -> Result<Vec<HotkeyProfile>, CommandError> {
-    validate_hotkey(&shortcut).map_err(CommandError::HotkeyInvalid)?;
+    validate_hotkey(&shortcut).map_err(|error| CommandError::HotkeyInvalid(error.to_string()))?;
     let mut profiles = settings.resolved_hotkey_profiles();
     let profile_index = HotkeyProfile::default_index(&profiles);
     profiles[profile_index].set_primary_shortcut(shortcut);
@@ -141,7 +141,7 @@ fn apply_hotkey_change(
     let old_settings = lock_controller(&controller).settings().clone();
     let (candidate, notices) = update
         .prepare_with_notices(&sagascript_core::machine::load())
-        .map_err(CommandError::HotkeyInvalid)?;
+        .map_err(|error| CommandError::HotkeyInvalid(error.to_string()))?;
     let new_shortcuts = candidate.resolved_shortcuts();
     let new_primary = candidate.hotkey.clone();
     let old_shortcut = old_settings.hotkey.clone();
@@ -387,7 +387,7 @@ pub async fn retry_hotkey_registration(
                 let result = crate::hotkey::install_bare_function_key_monitor(&app_for_install);
                 let _ = reply.send(result);
             })
-            .map_err(|error| error.to_string())
+            .map_err(|error| super::main_thread::MainThreadUnreachable(error.to_string()))
         })
         .await?;
         after_monitor_install(reply)?;
@@ -405,7 +405,7 @@ pub async fn retry_hotkey_registration(
 /// which only tells you *a* shortcut is bound, not whether *our* most recent
 /// attempt to bind it succeeded.
 #[tauri::command]
-pub async fn hotkey_status(health: State<'_, HotkeyHealth>) -> Result<HotkeyStatus, String> {
+pub async fn hotkey_status(health: State<'_, HotkeyHealth>) -> Result<HotkeyStatus, CommandError> {
     Ok(health.status())
 }
 

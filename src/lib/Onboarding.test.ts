@@ -6,7 +6,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, test, vi } from "vitest";
 import Onboarding from "./Onboarding.svelte";
 import { deferred } from "../test/deferred";
-import { mockIpc, type CommandHandlers } from "../test/ipc";
+import { backendError, mockIpc, type CommandHandlers } from "../test/ipc";
 import { kbWhisperMedium, pianissimo, settingsValue } from "../test/settings";
 
 /** A first start on Windows: no permission steps (language, download, ready). */
@@ -76,7 +76,7 @@ describe("speech engine download", () => {
     const { ipc, user } = await renderOnboarding(
       backend({
         get_effective_model_info: () => {
-          throw "model lineup unavailable";
+          throw backendError("unavailable", "model lineup unavailable");
         },
       }),
     );

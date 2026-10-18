@@ -75,10 +75,11 @@ ipc.handle("get_platform", () => "windows"); // change an answer mid-test
   parameter rejects the call and fails the test the same way. A wrapper that still sends an
   argument key Rust renamed therefore fails Vitest, not only svelte-check. An `Option`
   parameter may be left out.
-- A fake rejects with what its Rust command rejects with: a string for `Result<T, String>`, a
-  `backendError(code, message)` for `Result<T, CommandError>` (`CommandMap[C]["error"]`,
-  `BACKEND_ERROR_COMMANDS`). The other shape fails the test, so a fake cannot keep an error
-  shape Rust no longer sends. The code under test branches on `isBackendError(error, code)`,
+- A fake rejects with what its Rust command rejects with: a `backendError(code, message)` for
+  `Result<T, CommandError>` (`CommandMap[C]["error"]`, `BACKEND_ERROR_COMMANDS`; every command
+  since #360 part 2a), a string only for a `Result<T, String>` signature, which no command has
+  now. The other shape fails the test, so a fake cannot keep an error shape Rust no longer
+  sends. The code under test branches on `isBackendError(error, code)`,
   never on the message.
 - A new command: regenerate `CommandMap` (`SAGASCRIPT_BLESS_CONTRACTS=1 cargo test -p
   sagascript contract` in `src-tauri/`), then add the wrapper and its row in

@@ -2,6 +2,7 @@ use serde::Serialize;
 use thiserror::Error;
 
 use crate::path_scrub::scrub_paths;
+use crate::settings::SettingsError;
 
 /// Errors that can occur during dictation workflow.
 ///
@@ -58,8 +59,18 @@ pub enum DictationError {
     #[error("Model download failed: {0}")]
     ModelDownloadFailed(String),
 
+    /// A settings problem the CLI reports in its own words (a bad flag, an
+    /// unknown key). `settings_error`. A refusal or failure of the settings
+    /// operations themselves is [`DictationError::Settings`], with a code of its
+    /// own.
     #[error("Settings error: {0}")]
     SettingsError(String),
+
+    /// A settings operation refused a change or failed (a model that does not
+    /// fit the language, an invalid shortcut, a settings file that could not be
+    /// written). The code is the [`SettingsError`]'s own.
+    #[error("Settings error: {0}")]
+    Settings(SettingsError),
 
     #[error("Application launch error: {0}")]
     ApplicationLaunchError(String),
@@ -80,6 +91,19 @@ pub enum DictationError {
 
     #[error("Diarization error: {0}")]
     DiarizationError(String),
+
+    /// A meeting transcript, review, reprocessing plan, proposal or attached
+    /// recording that is malformed, breaks a limit or cannot be used. The
+    /// payload is the complete user-facing text. Built by the `From` impls of
+    /// the meeting error enums (`error_from.rs`).
+    #[error("{0}")]
+    MeetingInvalid(String),
+
+    /// A meeting review, proposal or recording that no longer matches what the
+    /// caller holds (a changed revision, another source): load or attach it
+    /// again. The payload is the complete user-facing text.
+    #[error("{0}")]
+    MeetingStale(String),
 }
 
 /// What the engine host reported, kept apart from [`DictationError::Engine`]'s
@@ -152,12 +176,15 @@ impl DictationError {
             Self::AudioCaptureError(_) => "audio_capture_error",
             Self::ModelDownloadFailed(_) => "model_download_failed",
             Self::SettingsError(_) => "settings_error",
+            Self::Settings(error) => error.code(),
             Self::ApplicationLaunchError(_) => "application_launch_error",
             Self::PasteError(_) => "paste_error",
             Self::FileDecodeError(_) => "file_decode_error",
             Self::FileNotFound(_) => "file_not_found",
             Self::UnsupportedFormat(_) => "unsupported_format",
             Self::DiarizationError(_) => "diarization_error",
+            Self::MeetingInvalid(_) => "meeting_invalid",
+            Self::MeetingStale(_) => "meeting_stale",
         }
     }
 
@@ -176,6 +203,12 @@ impl DictationError {
     }
 }
 
+impl From<SettingsError> for DictationError {
+    fn from(error: SettingsError) -> Self {
+        Self::Settings(error)
+    }
+}
+
 // String conversion so callers (e.g. the app crate's Tauri command handlers,
 // which need error types convertible to a serializable form) can return
 // DictationError without depending on its variants.
@@ -188,6 +221,20 @@ impl From<DictationError> for String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `Result<_, DictationError>` is returned all over the workspace, and the
+    /// CLI's reprocessing error holds two paths beside one. On Windows a
+    /// `PathBuf` is 32 bytes, so a `DictationError` of 64 bytes pushes that error
+    /// to clippy's `result_large_err` limit of 128. Keep payloads small: a name
+    /// that is a `&'static str` rather than a `String`, a big variant boxed.
+    #[test]
+    fn a_dictation_error_stays_small() {
+        assert!(
+            std::mem::size_of::<DictationError>() <= 56,
+            "DictationError is {} bytes",
+            std::mem::size_of::<DictationError>()
+        );
+    }
 
     #[test]
     fn display_microphone_permission() {
@@ -363,6 +410,15 @@ mod tests {
                 "unsupported_format",
             ),
             (DictationError::Cancelled, "cancelled"),
+            (
+                DictationError::MeetingInvalid("x".into()),
+                "meeting_invalid",
+            ),
+            (DictationError::MeetingStale("x".into()), "meeting_stale"),
+            (
+                DictationError::Settings(SettingsError::NoProfiles),
+                "profile_invalid",
+            ),
         ];
         for (error, code) in table {
             assert_eq!(error.code(), code, "{error:?}");

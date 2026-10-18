@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use sagascript_core::audio::decoder;
 use sagascript_core::error::DictationError;
-use sagascript_core::settings::FileModel;
+use sagascript_core::settings::{FileModel, SettingsError};
 use sagascript_core::transcription::whisper_backend::display_transcript;
 use sagascript_core::transcription::{
     recommended_parallel_chunks, ContextProfile, Glossary, TranscribeRequest,
@@ -29,7 +29,7 @@ use crate::events::{EmitEvent, PlainPhase, UiState};
 pub async fn cancel_file_transcription(
     jobs: State<'_, crate::plain_file_jobs::SharedPlainFileJobs>,
     run_id: String,
-) -> Result<bool, String> {
+) -> Result<bool, CommandError> {
     Ok(jobs.cancel(&run_id))
 }
 
@@ -75,7 +75,7 @@ pub async fn transcribe_file(
     };
     if let Some(glossary) = pianissimo_glossary {
         if diarize.unwrap_or(false) {
-            return Err("Pianissimo supports plain Swedish file transcription only; choose a Whisper file model for diarization".into());
+            return Err(SettingsError::PianissimoNotForDiarization.into());
         }
         let text = crate::plain_file_jobs::transcribe_pianissimo(
             app.clone(),
@@ -93,7 +93,9 @@ pub async fn transcribe_file(
                     error!(%error, "Auto-paste failed");
                 }
             })
-            .map_err(|error| format!("Could not dispatch auto-paste: {error}"))?;
+            .map_err(|error| {
+                CommandError::Unavailable(format!("Could not dispatch auto-paste: {error}"))
+            })?;
         }
         return Ok(text);
     }
@@ -119,7 +121,9 @@ pub async fn transcribe_file(
                     error!(%error, "Auto-paste failed");
                 }
             })
-            .map_err(|error| format!("Could not dispatch auto-paste: {error}"))?;
+            .map_err(|error| {
+                CommandError::Unavailable(format!("Could not dispatch auto-paste: {error}"))
+            })?;
         }
         return Ok(text);
     }

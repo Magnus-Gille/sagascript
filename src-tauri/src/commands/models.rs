@@ -1,12 +1,15 @@
 //! Speech models: what each picker offers, what is downloaded or loaded, and
 //! the downloads themselves.
 
-use sagascript_core::settings::{FileModel, FileModelPreference, Language, Settings, WhisperModel};
+use sagascript_core::settings::{
+    FileModel, FileModelPreference, Language, Settings, SettingsError, WhisperModel,
+};
 use sagascript_core::transcription::model;
 use sagascript_core::transcription::pianissimo_model;
 use tauri::State;
 
 use super::{lock_controller, SharedController, SharedWhisper};
+use crate::command_error::CommandError;
 use crate::events::EmitEvent;
 
 /// Returns the display name of the currently loaded (or effective) model
@@ -14,7 +17,7 @@ use crate::events::EmitEvent;
 pub async fn get_loaded_model(
     controller: State<'_, SharedController>,
     whisper: State<'_, SharedWhisper>,
-) -> Result<LoadedModelInfo, String> {
+) -> Result<LoadedModelInfo, CommandError> {
     let ctrl = lock_controller(&controller);
     let chosen = ctrl
         .settings()
@@ -44,14 +47,14 @@ pub async fn get_loaded_model(
 }
 
 #[tauri::command]
-pub async fn is_model_downloaded(whisper_model: WhisperModel) -> Result<bool, String> {
+pub async fn is_model_downloaded(whisper_model: WhisperModel) -> Result<bool, CommandError> {
     Ok(model::is_model_downloaded(whisper_model))
 }
 
 #[tauri::command]
 pub async fn get_model_info(
     controller: State<'_, SharedController>,
-) -> Result<Vec<ModelInfo>, String> {
+) -> Result<Vec<ModelInfo>, CommandError> {
     let ctrl = lock_controller(&controller);
     let profile = ctrl.settings().default_profile();
     let effective = ctrl.settings().dictation_model_for_profile(&profile.id)?;
@@ -117,7 +120,7 @@ fn lineup_model_infos(
 pub async fn get_file_model_options(
     language: Language,
     include: Option<String>,
-) -> Result<Vec<ModelInfo>, String> {
+) -> Result<Vec<ModelInfo>, CommandError> {
     let include = include
         .as_deref()
         .and_then(|id| match FileModelPreference::parse_id(id) {
@@ -142,17 +145,26 @@ fn pianissimo_model_size_mb() -> u32 {
 pub async fn get_profile_model_info(
     controller: State<'_, SharedController>,
     profile_id: String,
-) -> Result<ModelInfo, String> {
+) -> Result<ModelInfo, CommandError> {
     let ctrl = lock_controller(&controller);
     let choice = ctrl.settings().dictation_model_for_profile(&profile_id)?;
     Ok(model_info_for(choice, true))
 }
 
-#[tauri::command]
-pub async fn download_pianissimo_model(app: tauri::AppHandle) -> Result<(), String> {
-    if !sagascript_core::transcription::pianissimo_backend::runtime_supported_on_this_os() {
-        return Err(sagascript_core::transcription::pianissimo_backend::UNSUPPORTED_MESSAGE.into());
+/// The download is refused on a host that cannot run Pianissimo.
+fn ensure_pianissimo_runs(supported: bool) -> Result<(), CommandError> {
+    if supported {
+        Ok(())
+    } else {
+        Err(SettingsError::PianissimoUnsupported.into())
     }
+}
+
+#[tauri::command]
+pub async fn download_pianissimo_model(app: tauri::AppHandle) -> Result<(), CommandError> {
+    ensure_pianissimo_runs(
+        sagascript_core::transcription::pianissimo_backend::runtime_supported_on_this_os(),
+    )?;
     let progress_app = app.clone();
     pianissimo_model::download(move |downloaded, total| {
         let _ = progress_app.emit_event(
@@ -160,8 +172,7 @@ pub async fn download_pianissimo_model(app: tauri::AppHandle) -> Result<(), Stri
             crate::events::ModelDownloadProgress::new("pianissimo-sv".into(), downloaded, total),
         );
     })
-    .await
-    .map_err(|error| error.to_string())?;
+    .await?;
     let _ = app.emit_event(crate::events::event::MODEL_READY, ());
     Ok(())
 }
@@ -173,7 +184,7 @@ pub async fn download_pianissimo_model(app: tauri::AppHandle) -> Result<(), Stri
 pub async fn get_effective_model_info(
     _controller: State<'_, SharedController>,
     language: Language,
-) -> Result<ModelInfo, String> {
+) -> Result<ModelInfo, CommandError> {
     Ok(model_info_for(
         FileModel::recommended_for(language, pianissimo_supported()),
         true,
@@ -184,7 +195,7 @@ pub async fn get_effective_model_info(
 /// `language`: the recommended model when downloaded, else the best already
 /// downloaded compatible model (same resolution the transcribe command uses).
 #[tauri::command]
-pub async fn get_auto_file_model_info(language: Language) -> Result<ModelInfo, String> {
+pub async fn get_auto_file_model_info(language: Language) -> Result<ModelInfo, CommandError> {
     let auto = Settings {
         file_transcription_model: FileModelPreference::Auto,
         ..Default::default()
@@ -199,7 +210,7 @@ pub async fn get_auto_file_model_info(language: Language) -> Result<ModelInfo, S
 pub async fn get_dictation_model_info(
     controller: State<'_, SharedController>,
     language: Language,
-) -> Result<ModelInfo, String> {
+) -> Result<ModelInfo, CommandError> {
     let profile = lock_controller(&controller).settings().default_profile();
     if profile.language == language {
         return get_profile_model_info(controller, profile.id).await;
@@ -213,7 +224,7 @@ pub async fn get_dictation_model_info(
 pub async fn download_model(
     app: tauri::AppHandle,
     whisper_model: WhisperModel,
-) -> Result<(), String> {
+) -> Result<(), CommandError> {
     let app_handle = app.clone();
     model::download_model(whisper_model, move |downloaded, total| {
         let _ = app_handle.emit_event(
@@ -226,8 +237,7 @@ pub async fn download_model(
             ),
         );
     })
-    .await
-    .map_err(|e| e.to_string())?;
+    .await?;
 
     let _ = app.emit_event(crate::events::event::MODEL_READY, ());
     Ok(())
@@ -249,7 +259,7 @@ pub struct EngineStatus {
 #[tauri::command]
 pub async fn engine_status(
     controller: State<'_, SharedController>,
-) -> Result<EngineStatus, String> {
+) -> Result<EngineStatus, CommandError> {
     use sagascript_core::settings::FileModelPreference;
     use sagascript_core::transcription::pianissimo_backend as backend;
     let supported = backend::runtime_supported_on_this_os();
@@ -278,7 +288,7 @@ pub async fn engine_status(
             backend::refresh_host_identity(&sagascript_core::machine::load())
         })
         .await
-        .map_err(|e| format!("engine status task failed: {e}"))?;
+        .map_err(|e| CommandError::task_failed(format!("engine status task failed: {e}")))?;
     }
     let (host_version, host_git_sha) = match identity {
         Some((version, sha)) => (Some(version), sha),

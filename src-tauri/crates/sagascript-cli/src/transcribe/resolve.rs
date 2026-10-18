@@ -70,8 +70,7 @@ pub fn resolve_file_model_for_run(
     needs_whisper: bool,
 ) -> Result<FileModel, DictationError> {
     if let Some(id) = model_arg {
-        let preference =
-            FileModelPreference::parse_id(id).map_err(DictationError::SettingsError)?;
+        let preference = FileModelPreference::parse_id(id).map_err(DictationError::from)?;
         if preference == FileModelPreference::Auto {
             return Err(DictationError::SettingsError(
                 "--model needs a concrete model ID; omit it to use the file default".into(),
@@ -81,16 +80,16 @@ pub fn resolve_file_model_for_run(
         run.file_transcription_model = preference;
         return run
             .effective_file_model_for(language)
-            .map_err(DictationError::SettingsError);
+            .map_err(DictationError::from);
     }
     if needs_whisper {
         return settings
             .effective_whisper_file_model_for(language)
-            .map_err(DictationError::SettingsError);
+            .map_err(DictationError::from);
     }
     settings
         .effective_file_model_for(language)
-        .map_err(DictationError::SettingsError)
+        .map_err(DictationError::from)
 }
 
 /// Resolve a non-empty one-run hint and compose it through Settings' scoped

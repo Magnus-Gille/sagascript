@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashSet};
 
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 
-use super::{canonical_hotkey, validate_hotkey, LineupEnv};
+use super::{canonical_hotkey, validate_hotkey, LineupEnv, SettingsError};
 
 use crate::glossary::Glossary;
 
@@ -61,13 +61,13 @@ impl FileModelPreference {
     }
 
     /// Parse one of the stable persisted model identifiers.
-    pub fn parse_id(id: &str) -> Result<Self, String> {
+    pub fn parse_id(id: &str) -> Result<Self, SettingsError> {
         match id {
             "auto" => Ok(Self::Auto),
             FileModel::PIANISSIMO_ID => Ok(Self::PianissimoOriginal),
             _ => WhisperModel::from_id(id)
                 .map(Self::Whisper)
-                .ok_or_else(|| format!("Unknown file model preference '{id}'")),
+                .ok_or_else(|| SettingsError::UnknownModelPreference { id: id.to_string() }),
         }
     }
 }
@@ -164,12 +164,12 @@ impl EnginePrewarm {
         }
     }
 
-    pub fn parse_id(value: &str) -> Result<Self, String> {
+    pub fn parse_id(value: &str) -> Result<Self, SettingsError> {
         Self::ALL
             .into_iter()
             .find(|mode| mode.id() == value)
-            .ok_or_else(|| {
-                format!("engine_prewarm must be off, on_app_start or on_key_down, got '{value}'")
+            .ok_or_else(|| SettingsError::InvalidEnginePrewarm {
+                value: value.to_string(),
             })
     }
 }
@@ -520,12 +520,14 @@ impl Settings {
         &self,
         profile_id: &str,
         pianissimo_supported: bool,
-    ) -> Result<FileModel, String> {
+    ) -> Result<FileModel, SettingsError> {
         let profile = self
             .resolved_hotkey_profiles()
             .into_iter()
             .find(|profile| profile.id == profile_id)
-            .ok_or_else(|| format!("Unknown profile '{profile_id}'"))?;
+            .ok_or_else(|| SettingsError::UnknownProfile {
+                id: profile_id.to_string(),
+            })?;
         let preference = self
             .profile_models
             .get(profile_id)
@@ -549,17 +551,20 @@ impl Settings {
             FileModelPreference::Whisper(model) if model.is_compatible_with(profile.language) => {
                 Ok(FileModel::Whisper(model))
             }
-            FileModelPreference::Whisper(model) => Err(format!(
-                "Model '{}' is incompatible with profile '{}'",
-                model.display_name(),
-                profile_id
-            )),
+            FileModelPreference::Whisper(model) => {
+                Err(SettingsError::ModelIncompatibleWithProfile {
+                    model: model.display_name(),
+                    profile_id: profile_id.to_string(),
+                })
+            }
             FileModelPreference::PianissimoOriginal if profile.language == Language::Swedish => {
                 Ok(FileModel::PianissimoOriginal)
             }
-            FileModelPreference::PianissimoOriginal => Err(format!(
-                "Pianissimo is only available for Swedish profile '{profile_id}'"
-            )),
+            FileModelPreference::PianissimoOriginal => {
+                Err(SettingsError::PianissimoSwedishProfileOnly {
+                    profile_id: profile_id.to_string(),
+                })
+            }
         }
     }
 
@@ -570,7 +575,7 @@ impl Settings {
         &self,
         profile_id: &str,
         pianissimo_supported: bool,
-    ) -> Result<(WhisperModel, bool), String> {
+    ) -> Result<(WhisperModel, bool), SettingsError> {
         match self.dictation_model_for_profile_gated(profile_id, pianissimo_supported)? {
             FileModel::Whisper(model) => Ok((model, false)),
             // The Whisper slot is unused when the flag is set; keep the Whisper
@@ -607,24 +612,26 @@ impl Settings {
         profile_id: &str,
         preference: FileModelPreference,
         pianissimo_supported: bool,
-    ) -> Result<(), String> {
+    ) -> Result<(), SettingsError> {
         if preference == FileModelPreference::PianissimoOriginal && !pianissimo_supported {
-            return Err(crate::models::PIANISSIMO_UNSUPPORTED_MESSAGE.into());
+            return Err(SettingsError::PianissimoUnsupported);
         }
         let profile = self
             .resolved_hotkey_profiles()
             .into_iter()
             .find(|profile| profile.id == profile_id)
-            .ok_or_else(|| format!("Unknown profile '{profile_id}'"))?;
+            .ok_or_else(|| SettingsError::UnknownProfile {
+                id: profile_id.to_string(),
+            })?;
         match preference {
             FileModelPreference::Whisper(model) if !model.is_compatible_with(profile.language) => {
-                return Err(format!(
-                    "Model '{}' is incompatible with profile '{profile_id}'",
-                    model.display_name()
-                ));
+                return Err(SettingsError::ModelIncompatibleWithProfile {
+                    model: model.display_name(),
+                    profile_id: profile_id.to_string(),
+                });
             }
             FileModelPreference::PianissimoOriginal if profile.language != Language::Swedish => {
-                return Err("Pianissimo requires a Swedish profile".to_string());
+                return Err(SettingsError::PianissimoRequiresSwedishProfile);
             }
             _ => {}
         }
@@ -696,7 +703,7 @@ impl Settings {
         &mut self,
         language: Language,
         pianissimo_supported: bool,
-    ) -> Result<Vec<ModelResetNotice>, String> {
+    ) -> Result<Vec<ModelResetNotice>, SettingsError> {
         let mut candidate = self.clone();
         let mut profiles = candidate.resolved_hotkey_profiles();
         let index = HotkeyProfile::default_index(&profiles);
@@ -859,7 +866,7 @@ impl Settings {
         language: Language,
         pianissimo_supported: bool,
         is_ready: &dyn Fn(FileModel) -> bool,
-    ) -> Result<FileModel, String> {
+    ) -> Result<FileModel, SettingsError> {
         match self.file_transcription_model {
             FileModelPreference::Auto => Ok(auto_file_model(
                 language,
@@ -871,23 +878,24 @@ impl Settings {
         }
     }
 
-    fn explicit_file_model_for(&self, language: Language) -> Result<FileModel, String> {
+    fn explicit_file_model_for(&self, language: Language) -> Result<FileModel, SettingsError> {
         match self.file_transcription_model {
             FileModelPreference::Auto => unreachable!("Auto is resolved by the caller"),
             FileModelPreference::Whisper(model) if model.is_compatible_with(language) => {
                 Ok(FileModel::Whisper(model))
             }
-            FileModelPreference::Whisper(model) => Err(format!(
-                "Whisper model '{}' is incompatible with {}",
-                model.display_name(),
-                language.display_name()
-            )),
+            FileModelPreference::Whisper(model) => {
+                Err(SettingsError::ModelIncompatibleWithLanguage {
+                    model: model.display_name(),
+                    language: language.display_name(),
+                })
+            }
             FileModelPreference::PianissimoOriginal if language == Language::Swedish => {
                 Ok(FileModel::PianissimoOriginal)
             }
-            FileModelPreference::PianissimoOriginal => Err(
-                "Pianissimo Original is only available for Swedish file transcription".to_string(),
-            ),
+            FileModelPreference::PianissimoOriginal => {
+                Err(SettingsError::PianissimoSwedishFilesOnly)
+            }
         }
     }
 
@@ -901,7 +909,7 @@ impl Settings {
         &self,
         language: Language,
         is_ready: &dyn Fn(FileModel) -> bool,
-    ) -> Result<FileModel, String> {
+    ) -> Result<FileModel, SettingsError> {
         match self.file_transcription_model {
             FileModelPreference::Auto => Ok(auto_file_model(language, false, false, is_ready)),
             _ => self.explicit_file_model_for(language),
@@ -949,9 +957,9 @@ impl Settings {
             .collect()
     }
 
-    pub fn validate_hotkey_profiles(profiles: &[HotkeyProfile]) -> Result<(), String> {
+    pub fn validate_hotkey_profiles(profiles: &[HotkeyProfile]) -> Result<(), SettingsError> {
         if profiles.is_empty() {
-            return Err("At least one hotkey profile is required".to_string());
+            return Err(SettingsError::NoProfiles);
         }
         let mut ids = HashSet::new();
         let mut shortcuts = HashSet::new();
@@ -964,22 +972,24 @@ impl Settings {
                     .chars()
                     .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
             {
-                return Err(format!(
-                    "Invalid profile id '{}': use lowercase letters, numbers, '-' or '_'",
-                    profile.id
-                ));
+                return Err(SettingsError::InvalidProfileId {
+                    id: profile.id.clone(),
+                });
             }
             if !ids.insert(profile.id.clone()) {
-                return Err(format!("Duplicate profile id '{}'", profile.id));
+                return Err(SettingsError::DuplicateProfileId {
+                    id: profile.id.clone(),
+                });
             }
             if profile.name.trim().is_empty() {
-                return Err(format!("Profile '{}' must have a name", profile.id));
+                return Err(SettingsError::ProfileNameMissing {
+                    profile_id: profile.id.clone(),
+                });
             }
             if profile.name.chars().count() > 40 {
-                return Err(format!(
-                    "Profile '{}' name must be 40 characters or fewer",
-                    profile.id
-                ));
+                return Err(SettingsError::ProfileNameTooLong {
+                    profile_id: profile.id.clone(),
+                });
             }
             validate_hotkey(&profile.shortcut)?;
             let has_explicit_bindings =
@@ -996,12 +1006,16 @@ impl Settings {
             };
             for shortcut in active_shortcuts {
                 if shortcut.trim().is_empty() {
-                    return Err(format!("Profile '{}' has an empty hotkey", profile.id));
+                    return Err(SettingsError::EmptyProfileHotkey {
+                        profile_id: profile.id.clone(),
+                    });
                 }
                 validate_hotkey(shortcut)?;
                 let canonical = canonical_hotkey(shortcut)?;
                 if !shortcuts.insert(canonical) {
-                    return Err(format!("Duplicate hotkey '{}'", shortcut));
+                    return Err(SettingsError::DuplicateHotkey {
+                        shortcut: shortcut.to_string(),
+                    });
                 }
             }
         }
@@ -1009,7 +1023,7 @@ impl Settings {
     }
 
     /// Validate the complete shortcut configuration.
-    pub fn validate_shortcut_configuration(&self) -> Result<(), String> {
+    pub fn validate_shortcut_configuration(&self) -> Result<(), SettingsError> {
         let profiles = self.resolved_hotkey_profiles();
         Self::validate_hotkey_profiles(&profiles)?;
         let shortcuts = self
@@ -1018,12 +1032,12 @@ impl Settings {
             .map(|(_, shortcut, _)| canonical_hotkey(&shortcut))
             .collect::<Result<HashSet<_>, _>>()?;
         if shortcuts.len() != self.resolved_hotkey_bindings().len() {
-            return Err("Duplicate hotkey bindings".to_string());
+            return Err(SettingsError::DuplicateHotkeyBindings);
         }
         Ok(())
     }
 
-    pub fn replace_hotkey_mode(&mut self, hotkey_mode: HotkeyMode) -> Result<(), String> {
+    pub fn replace_hotkey_mode(&mut self, hotkey_mode: HotkeyMode) -> Result<(), SettingsError> {
         let mut candidate = self.clone();
         candidate.hotkey_mode = hotkey_mode;
         candidate.validate_shortcut_configuration()?;
@@ -1039,7 +1053,7 @@ impl Settings {
         &mut self,
         profiles: Vec<HotkeyProfile>,
         pianissimo_supported: bool,
-    ) -> Result<Vec<ModelResetNotice>, String> {
+    ) -> Result<Vec<ModelResetNotice>, SettingsError> {
         let mut profiles = profiles;
         for profile in &mut profiles {
             if let Some(shortcut) = profile
@@ -1067,10 +1081,9 @@ impl Settings {
                         })
             })
         }) {
-            return Err(format!(
-                "Profile '{}' has a personal dictionary; clear it before changing the profile language",
-                profile.id
-            ));
+            return Err(SettingsError::DictionaryBlocksLanguageChange {
+                profile_id: profile.id.clone(),
+            });
         }
         let current_ids: HashSet<&str> = current_profiles
             .iter()
@@ -1083,10 +1096,9 @@ impl Settings {
                     .get(&profile.id)
                     .is_some_and(|source| !source.trim().is_empty())
         }) {
-            return Err(format!(
-                "Profile id '{}' has an inactive personal dictionary; choose a new id to avoid reactivating old aliases",
-                profile.id
-            ));
+            return Err(SettingsError::InactiveProfileDictionary {
+                profile_id: profile.id.clone(),
+            });
         }
         let legacy = &profiles[HotkeyProfile::default_index(&profiles)];
         let mut candidate = self.clone();
@@ -1132,7 +1144,7 @@ impl Settings {
             .map(|(profile, _, _)| profile)
     }
 
-    pub fn set_legacy_language(&mut self, language: Language) -> Result<(), String> {
+    pub fn set_legacy_language(&mut self, language: Language) -> Result<(), SettingsError> {
         let current_legacy_language = if self.hotkey_profiles.is_empty() {
             Some(self.language)
         } else {
@@ -1152,10 +1164,9 @@ impl Settings {
                         .any(|entry| !entry.aliases.is_empty())
                 })
         {
-            return Err(
-                "Profile 'default' has a personal dictionary; clear it before changing the profile language"
-                    .to_string(),
-            );
+            return Err(SettingsError::DictionaryBlocksLanguageChange {
+                profile_id: "default".to_string(),
+            });
         }
         self.language = language;
         if let Some(profile) = self
@@ -1173,7 +1184,7 @@ impl Settings {
     /// ([`HotkeyProfile::default_index`]): with no profile called `default`
     /// this used to store the shortcut in `hotkey` alone, which no binding
     /// reads, so `config set hotkey` changed nothing that fires (#373).
-    pub fn try_set_legacy_hotkey(&mut self, shortcut: String) -> Result<(), String> {
+    pub fn try_set_legacy_hotkey(&mut self, shortcut: String) -> Result<(), SettingsError> {
         let mut candidate = self.clone();
         candidate.hotkey = shortcut.clone();
         if !candidate.hotkey_profiles.is_empty() {
@@ -1188,7 +1199,7 @@ impl Settings {
 
     /// Checked legacy/default profile shortcut update. Invalid or colliding
     /// updates leave the complete settings value unchanged.
-    pub fn set_legacy_hotkey(&mut self, shortcut: String) -> Result<(), String> {
+    pub fn set_legacy_hotkey(&mut self, shortcut: String) -> Result<(), SettingsError> {
         self.try_set_legacy_hotkey(shortcut)
     }
 

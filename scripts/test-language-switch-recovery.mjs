@@ -8,11 +8,15 @@ import { frontendErrorsSource } from "./lib/frontend-errors-source.mjs";
 const source = await readFile(new URL("../src/lib/Settings.svelte", import.meta.url), "utf8");
 const script = source.match(/<script lang="ts">([\s\S]*?)<\/script>/)[1];
 const parsed = ts.createSourceFile("Settings.ts", script, ts.ScriptTarget.Latest, true);
-const defaultDictionaryLanguageBlock = script.match(/const defaultDictionaryLanguageBlock = "([^"]+)"/)[1];
-const core = await readFile(new URL("../src-tauri/crates/sagascript-core/src/settings/manager.rs", import.meta.url), "utf8");
-const backendError = core.match(/"(Profile 'default' has a personal dictionary;[^"\n]+)"/)[1];
-test("language recovery classifier matches the actual backend guard", () => {
-  assert.ok(backendError.includes(defaultDictionaryLanguageBlock));
+// What the backend rejects `set_language` with when the default profile's personal
+// dictionary blocks the change: Rust writes it (command_error_tests.rs) and the
+// window recognises it by its code, never by its text (ADR 0006).
+const fixtures = JSON.parse(await readFile(new URL("../contracts/transport/command_errors.json", import.meta.url), "utf8"));
+const backendError = fixtures.dictionary_blocks_language_change;
+test("the recovery is keyed to the code the backend sends for a blocked language change", () => {
+  assert.equal(backendError.code, "dictionary_blocks_language_change");
+  assert.equal(backendError.retryable, false);
+  assert.match(backendError.message, /personal dictionary/);
 });
 const names = [
   "isDictionaryConflictShown",
@@ -22,6 +26,7 @@ const names = [
   "restampUnconfirmed",
   "saveSetting",
   "applySetting",
+  "languageProfileId",
   "onLanguageChange",
   "clearDictionaryAndSwitchLanguage",
   "glossaryHasUnsavedChanges",
@@ -48,7 +53,6 @@ function harness({
   const context = vm.createContext({
     options: { clearFailure, retryFailure, refreshFailure, rejectionRefreshFailure, concurrentClear, empty },
     backendError,
-    defaultDictionaryLanguageBlock,
     pauseClear: () =>
       new Promise((resolve) => {
         release = resolve;
@@ -85,7 +89,7 @@ function harness({
     async function setProfileGlossary(id, value, expected) {
       calls.push(["dictionary", id, value, expected]);
       if (holdClear) await pauseClear();
-      if (options.clearFailure) throw commandError("unclassified", options.clearFailure);
+      if (options.clearFailure) throw commandError("settings_storage_failed", options.clearFailure);
       if (expected !== stored.profile_glossaries[id]) throw commandError("dictionary_changed_elsewhere", "Dictionary changed elsewhere: default");
       stored.profile_glossaries[id] = value;
       cleared = true;
@@ -236,7 +240,7 @@ test("failed refresh after rejection reports uncertainty and restores the known 
   const h = harness({ rejectionRefreshFailure: true });
   assert.equal(await h.select(), "sv");
   // The rejection stays as the reason; the notice, not a second sentence, covers the failed read.
-  assert.equal(h.snapshot().settingsError, backendError);
+  assert.equal(h.snapshot().settingsError, backendError.message);
   // Nothing was saved, but a read failed: the shown copy may be behind, so it is marked like any failed read.
   assert.deepEqual(h.snapshot().settingsUnconfirmed, { afterSave: false, detail: "rejection read failed" });
   assert.equal(h.snapshot().blockedLanguageChange, null);

@@ -40,6 +40,41 @@ pub async fn check_signed_update(
         .map_err(|error| format!("signed update check failed: {error}"))
 }
 
+/// Why the check for a newer release failed. It is logged and the tray says
+/// "Couldn't check for updates"; nothing crosses IPC.
+#[derive(Debug, thiserror::Error)]
+pub enum UpdateError {
+    #[error("failed to build update client: {0}")]
+    Client(#[source] reqwest::Error),
+    #[error("update request failed: {0}")]
+    Request(#[source] reqwest::Error),
+    #[error("invalid update response: {0}")]
+    Response(#[source] reqwest::Error),
+    #[error("latest release was not a stable release")]
+    NotStable,
+    #[error("invalid current version '{version}': {source}")]
+    CurrentVersion {
+        version: String,
+        #[source]
+        source: semver::Error,
+    },
+    #[error("invalid release tag '{tag}': {source}")]
+    ReleaseTag {
+        tag: String,
+        #[source]
+        source: semver::Error,
+    },
+    #[error("release tag '{0}' is not stable")]
+    PrereleaseTag(String),
+    /// The browser (or `xdg-open`) could not be started for the release page.
+    #[error("failed to open {url}: {source}")]
+    Open {
+        url: String,
+        #[source]
+        source: std::io::Error,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UpdateCheck {
     Available { version: Version },
@@ -57,27 +92,27 @@ struct LatestRelease {
 ///
 /// This is deliberately only called from an explicit tray-menu action. It
 /// neither downloads nor installs anything, and it stores no release data.
-pub async fn check_for_update(current_version: &str) -> Result<UpdateCheck, String> {
+pub async fn check_for_update(current_version: &str) -> Result<UpdateCheck, UpdateError> {
     let client = reqwest::Client::builder()
         // Platform TLS, as for every first-party request (see Cargo.toml).
         .tls_backend_native()
         .timeout(UPDATE_CHECK_TIMEOUT)
         .user_agent(format!("sagascript/{current_version}"))
         .build()
-        .map_err(|error| format!("failed to build update client: {error}"))?;
+        .map_err(UpdateError::Client)?;
     let release = client
         .get(LATEST_RELEASE_URL)
         .send()
         .await
-        .map_err(|error| format!("update request failed: {error}"))?
+        .map_err(UpdateError::Request)?
         .error_for_status()
-        .map_err(|error| format!("update request failed: {error}"))?
+        .map_err(UpdateError::Request)?
         .json::<LatestRelease>()
         .await
-        .map_err(|error| format!("invalid update response: {error}"))?;
+        .map_err(UpdateError::Response)?;
 
     if release.draft || release.prerelease {
-        return Err("latest release was not a stable release".to_string());
+        return Err(UpdateError::NotStable);
     }
     compare_release_version(current_version, &release.tag_name)
 }
@@ -85,9 +120,12 @@ pub async fn check_for_update(current_version: &str) -> Result<UpdateCheck, Stri
 fn compare_release_version(
     current_version: &str,
     release_tag: &str,
-) -> Result<UpdateCheck, String> {
-    let current = Version::parse(current_version)
-        .map_err(|error| format!("invalid current version '{current_version}': {error}"))?;
+) -> Result<UpdateCheck, UpdateError> {
+    let current =
+        Version::parse(current_version).map_err(|source| UpdateError::CurrentVersion {
+            version: current_version.to_string(),
+            source,
+        })?;
     let release = parse_stable_release_tag(release_tag)?;
     Ok(if release > current {
         UpdateCheck::Available { version: release }
@@ -96,13 +134,17 @@ fn compare_release_version(
     })
 }
 
-fn parse_stable_release_tag(tag: &str) -> Result<Version, String> {
-    let version = Version::parse(tag.trim().trim_start_matches('v'))
-        .map_err(|error| format!("invalid release tag '{tag}': {error}"))?;
+fn parse_stable_release_tag(tag: &str) -> Result<Version, UpdateError> {
+    let version = Version::parse(tag.trim().trim_start_matches('v')).map_err(|source| {
+        UpdateError::ReleaseTag {
+            tag: tag.to_string(),
+            source,
+        }
+    })?;
     if version.pre.is_empty() {
         Ok(version)
     } else {
-        Err(format!("release tag '{tag}' is not stable"))
+        Err(UpdateError::PrereleaseTag(tag.to_string()))
     }
 }
 
@@ -151,5 +193,34 @@ mod tests {
     fn prerelease_or_malformed_tag_is_rejected() {
         assert!(parse_stable_release_tag("v1.0.2-beta.1").is_err());
         assert!(parse_stable_release_tag("latest").is_err());
+    }
+
+    #[test]
+    fn a_failed_check_says_which_step_failed_in_its_old_words() {
+        let prerelease = parse_stable_release_tag("v1.0.2-beta.1").unwrap_err();
+        assert!(matches!(prerelease, UpdateError::PrereleaseTag(_)));
+        assert_eq!(
+            prerelease.to_string(),
+            "release tag 'v1.0.2-beta.1' is not stable"
+        );
+        let malformed = parse_stable_release_tag("latest").unwrap_err();
+        assert!(matches!(malformed, UpdateError::ReleaseTag { .. }));
+        assert!(
+            malformed
+                .to_string()
+                .starts_with("invalid release tag 'latest': "),
+            "{malformed}"
+        );
+        let current = compare_release_version("one", "v1.0.0").unwrap_err();
+        assert!(
+            current
+                .to_string()
+                .starts_with("invalid current version 'one': "),
+            "{current}"
+        );
+        assert_eq!(
+            UpdateError::NotStable.to_string(),
+            "latest release was not a stable release"
+        );
     }
 }

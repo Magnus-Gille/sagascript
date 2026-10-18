@@ -2,7 +2,7 @@
 
 use sagascript_core::settings::{
     Accessibility, FileModelPreference, HotkeyProfile, Language, ModelResetNotice, Settings,
-    WhisperModel,
+    SettingsError, WhisperModel,
 };
 use sagascript_core::transcription::model;
 use tauri::State;
@@ -12,9 +12,12 @@ use super::{
     acquire_hotkey_configuration, host_runs_pianissimo, lock_controller, persist_and_sync,
     try_persist_and_mirror, SharedController,
 };
+use crate::command_error::CommandError;
 
 #[tauri::command]
-pub async fn get_settings(controller: State<'_, SharedController>) -> Result<Settings, String> {
+pub async fn get_settings(
+    controller: State<'_, SharedController>,
+) -> Result<Settings, CommandError> {
     let settings = lock_controller(&controller).settings().clone();
     Ok(settings_for_frontend(settings))
 }
@@ -34,7 +37,7 @@ pub async fn set_language(
     app: tauri::AppHandle,
     controller: State<'_, SharedController>,
     language: Language,
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<String>, CommandError> {
     let (persisted, notices) = persist_language(&controller, language)?;
     crate::update_profiles_menu(&app, &persisted.resolved_hotkey_profiles());
     info!("Language set to {:?}", language);
@@ -53,17 +56,16 @@ pub async fn set_language(
 pub(super) fn persist_language(
     controller: &SharedController,
     language: Language,
-) -> Result<(Settings, Vec<String>), String> {
+) -> Result<(Settings, Vec<String>), CommandError> {
     let mut notices = Vec::new();
     let persisted = try_persist_and_mirror(
         controller,
         |settings| {
             notices = apply_language_selection(settings, language)?;
-            Ok::<(), String>(())
+            Ok::<(), SettingsError>(())
         },
         |memory, written| mirror_language_selection(memory, written, language),
-    )
-    .map_err(|error| error.to_string())?;
+    )?;
     Ok((persisted.current, notices))
 }
 
@@ -140,7 +142,7 @@ fn mirror_models_of_own_profiles(memory: &mut Settings, written: &Settings) {
 fn apply_language_selection(
     settings: &mut Settings,
     language: Language,
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<String>, SettingsError> {
     settings
         .apply_language_selection(language)
         .map(|notices| ModelResetNotice::messages(&notices))
@@ -149,11 +151,10 @@ fn apply_language_selection(
 #[tauri::command]
 pub async fn set_onboarding_completed(
     controller: State<'_, SharedController>,
-) -> Result<(), String> {
+) -> Result<(), CommandError> {
     persist_and_sync(&controller, |settings| {
         settings.has_completed_onboarding = true;
-    })
-    .map_err(|error| error.to_string())?;
+    })?;
 
     info!("Onboarding marked as completed");
     Ok(())
@@ -163,7 +164,7 @@ pub async fn set_onboarding_completed(
 pub async fn set_whisper_model(
     controller: State<'_, SharedController>,
     model: WhisperModel,
-) -> Result<(), String> {
+) -> Result<(), CommandError> {
     change_profile_model(
         &controller,
         |settings| settings.set_whisper_model(model),
@@ -175,7 +176,7 @@ pub async fn set_whisper_model(
 pub async fn set_pianissimo_dictation(
     controller: State<'_, SharedController>,
     enabled: bool,
-) -> Result<(), String> {
+) -> Result<(), CommandError> {
     change_profile_model(
         &controller,
         |settings| settings.set_pianissimo_dictation(enabled),
@@ -187,12 +188,11 @@ pub async fn set_pianissimo_dictation(
 pub async fn set_file_transcription_model(
     controller: State<'_, SharedController>,
     model_id: String,
-) -> Result<(), String> {
+) -> Result<(), CommandError> {
     let choice = FileModelPreference::parse_id(&model_id)?;
     persist_and_sync(&controller, |settings| {
         settings.file_transcription_model = choice;
-    })
-    .map_err(|error| error.to_string())?;
+    })?;
     Ok(())
 }
 
@@ -201,7 +201,7 @@ pub async fn set_profile_model(
     controller: State<'_, SharedController>,
     profile_id: String,
     model_id: String,
-) -> Result<(), String> {
+) -> Result<(), CommandError> {
     let preference = FileModelPreference::parse_id(&model_id)?;
     change_profile_model(
         &controller,
@@ -214,7 +214,7 @@ pub async fn set_profile_model(
 pub async fn set_auto_select_model(
     controller: State<'_, SharedController>,
     enabled: bool,
-) -> Result<(), String> {
+) -> Result<(), CommandError> {
     change_profile_model(
         &controller,
         |settings| settings.set_auto_select_model(enabled),
@@ -229,11 +229,10 @@ pub async fn set_auto_select_model(
 /// recording, and the engine unloaded or warmed when the change needs it.
 fn change_profile_model(
     controller: &SharedController,
-    change: impl FnOnce(&mut Settings) -> Result<(), String>,
+    change: impl FnOnce(&mut Settings) -> Result<(), SettingsError>,
     mirror: impl FnOnce(&mut Settings, &Settings),
-) -> Result<(), String> {
-    let _recording_lease =
-        acquire_hotkey_configuration(controller).map_err(|error| error.to_string())?;
+) -> Result<(), CommandError> {
+    let _recording_lease = acquire_hotkey_configuration(controller)?;
     let changed = persist_profile_model(controller, change, mirror)?;
     // Outside the controller lock: an unload talks to the engine host.
     sagascript_core::transcription::pianissimo_backend::unload_if_unused(&changed.settings);
@@ -264,11 +263,10 @@ pub(super) struct ProfileModelChange {
 /// sees a profile "newly" on it because the file selects it.
 pub(super) fn persist_profile_model(
     controller: &SharedController,
-    change: impl FnOnce(&mut Settings) -> Result<(), String>,
+    change: impl FnOnce(&mut Settings) -> Result<(), SettingsError>,
     mirror: impl FnOnce(&mut Settings, &Settings),
-) -> Result<ProfileModelChange, String> {
-    let persisted =
-        try_persist_and_mirror(controller, change, mirror).map_err(|error| error.to_string())?;
+) -> Result<ProfileModelChange, CommandError> {
+    let persisted = try_persist_and_mirror(controller, change, mirror)?;
     // The gate the copies were demoted by, so the decision and the demotion
     // cannot disagree about the host.
     let warm = sagascript_core::transcription::pianissimo_backend::profile_change_needs_warm_gated(
@@ -312,7 +310,7 @@ fn mirror_pianissimo_dictation(memory: &mut Settings, written: &Settings) {
 pub async fn set_auto_paste(
     controller: State<'_, SharedController>,
     enabled: bool,
-) -> Result<(), String> {
+) -> Result<(), CommandError> {
     #[cfg(target_os = "macos")]
     let permission_granted = !enabled || crate::platform::macos::is_accessibility_trusted();
     #[cfg(not(target_os = "macos"))]
@@ -326,7 +324,9 @@ pub async fn set_auto_paste(
     let persisted = persist_auto_paste(&controller, enabled, accessibility)?;
     info!("Auto-paste: {}", persisted.auto_paste);
     if enabled && !persisted.auto_paste {
-        Err("Accessibility permission is required before auto-paste can be enabled".to_string())
+        Err(CommandError::AccessibilityPermissionDenied(
+            "Accessibility permission is required before auto-paste can be enabled".to_string(),
+        ))
     } else {
         Ok(())
     }
@@ -339,11 +339,10 @@ pub(super) fn persist_auto_paste(
     controller: &SharedController,
     enabled: bool,
     accessibility: Accessibility,
-) -> Result<Settings, String> {
+) -> Result<Settings, CommandError> {
     persist_and_sync(controller, |settings| {
         settings.set_auto_paste(enabled, accessibility);
     })
-    .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -351,7 +350,7 @@ pub async fn set_show_overlay(
     app: tauri::AppHandle,
     controller: State<'_, SharedController>,
     enabled: bool,
-) -> Result<(), String> {
+) -> Result<(), CommandError> {
     let persisted = persist_show_overlay(&controller, enabled)?;
     crate::overlay::on_show_overlay_changed(&app, persisted.show_overlay);
     info!("Show overlay: {enabled}");
@@ -363,19 +362,23 @@ pub async fn set_show_overlay(
 pub(super) fn persist_show_overlay(
     controller: &SharedController,
     enabled: bool,
-) -> Result<Settings, String> {
+) -> Result<Settings, CommandError> {
     persist_and_sync(controller, |settings| {
         settings.show_overlay = enabled;
     })
-    .map_err(|error| error.to_string())
 }
 
-pub(super) fn ensure_known_profile(settings: &Settings, profile_id: &str) -> Result<(), String> {
+pub(super) fn ensure_known_profile(
+    settings: &Settings,
+    profile_id: &str,
+) -> Result<(), CommandError> {
     settings
         .resolved_hotkey_profiles()
         .into_iter()
         .find(|profile| profile.id == profile_id)
-        .ok_or_else(|| format!("Unknown dictation profile '{profile_id}'"))?;
+        .ok_or_else(|| SettingsError::UnknownDictationProfile {
+            id: profile_id.to_string(),
+        })?;
     Ok(())
 }
 
@@ -383,11 +386,10 @@ pub(super) fn ensure_known_profile(settings: &Settings, profile_id: &str) -> Res
 pub async fn set_beam_size(
     controller: State<'_, SharedController>,
     beam_size: u32,
-) -> Result<(), String> {
+) -> Result<(), CommandError> {
     persist_and_sync(&controller, |settings| {
         settings.beam_size = beam_size;
-    })
-    .map_err(|error| error.to_string())?;
+    })?;
     info!("Beam size: {beam_size}");
     Ok(())
 }
@@ -396,11 +398,10 @@ pub async fn set_beam_size(
 pub async fn set_temperature_fallback(
     controller: State<'_, SharedController>,
     enabled: bool,
-) -> Result<(), String> {
+) -> Result<(), CommandError> {
     persist_and_sync(&controller, |settings| {
         settings.temperature_fallback = enabled;
-    })
-    .map_err(|error| error.to_string())?;
+    })?;
     info!("Temperature fallback: {enabled}");
     Ok(())
 }
@@ -409,16 +410,16 @@ pub async fn set_temperature_fallback(
 pub async fn set_vad_enabled(
     controller: State<'_, SharedController>,
     enabled: bool,
-) -> Result<(), String> {
+) -> Result<(), CommandError> {
     persist_vad_enabled(&controller, enabled)?;
     // Fetch the Silero VAD model so it's ready for the next dictation. Done
     // after releasing the lock (no lock held across await). The CLI does not:
     // `transcribe --vad` fetches it on first use.
     if enabled {
         info!("Verifying or downloading VAD model...");
-        model::download_vad_model(|_, _| {})
-            .await
-            .map_err(|e| format!("Failed to download VAD model: {e}"))?;
+        model::download_vad_model(|_, _| {}).await.map_err(|e| {
+            CommandError::DownloadFailed(format!("Failed to download VAD model: {e}"))
+        })?;
     }
     info!("VAD enabled: {enabled}");
     Ok(())
@@ -429,11 +430,10 @@ pub async fn set_vad_enabled(
 pub(super) fn persist_vad_enabled(
     controller: &SharedController,
     enabled: bool,
-) -> Result<Settings, String> {
+) -> Result<Settings, CommandError> {
     persist_and_sync(controller, |settings| {
         settings.set_vad_enabled(enabled);
     })
-    .map_err(|error| error.to_string())
 }
 
 /// `engine_prewarm`: `off`, `on_app_start` or `on_key_down`.
@@ -441,12 +441,11 @@ pub(super) fn persist_vad_enabled(
 pub async fn set_engine_prewarm(
     controller: State<'_, SharedController>,
     mode: String,
-) -> Result<(), String> {
+) -> Result<(), CommandError> {
     let mode = sagascript_core::settings::EnginePrewarm::parse_id(&mode)?;
     persist_and_sync(&controller, |settings| {
         settings.engine_prewarm = mode;
-    })
-    .map_err(|error| error.to_string())?;
+    })?;
     info!("Engine prewarm: {}", mode.id());
     Ok(())
 }
@@ -458,11 +457,10 @@ pub async fn set_engine_prewarm(
 pub async fn set_engine_idle_unload_minutes(
     controller: State<'_, SharedController>,
     minutes: u32,
-) -> Result<(), String> {
+) -> Result<(), CommandError> {
     persist_and_sync(&controller, |settings| {
         settings.engine_idle_unload_minutes = minutes;
-    })
-    .map_err(|error| error.to_string())?;
+    })?;
     info!("Engine idle unload: {minutes} min");
     Ok(())
 }

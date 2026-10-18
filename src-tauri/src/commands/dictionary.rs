@@ -86,16 +86,16 @@ fn reconcile_profile_dictionary_after_conflict(
     }
 }
 
-fn ensure_learning_profile(settings: &Settings, profile_id: &str) -> Result<(), String> {
+fn ensure_learning_profile(settings: &Settings, profile_id: &str) -> Result<(), CommandError> {
     ensure_known_profile(settings, profile_id)?;
     if settings
         .resolved_hotkey_profiles()
         .iter()
         .any(|profile| profile.id == profile_id && profile.language == Language::Auto)
     {
-        return Err(
+        return Err(CommandError::InvalidInput(
             "Deterministic dictionary training requires a profile with an explicit language".into(),
-        );
+        ));
     }
     Ok(())
 }
@@ -124,9 +124,9 @@ fn set_profile_glossary_in(
             .iter()
             .any(|entry| !entry.aliases.is_empty())
     {
-        return Err(
+        return Err(CommandError::InvalidInput(
             "Auto-detect profiles support dictionary hints, not deterministic aliases".into(),
-        );
+        ));
     }
     let current_source = settings
         .profile_glossaries
@@ -195,7 +195,7 @@ fn apply_reviewed_training_candidates(
     corrected: &str,
     profile_id: &str,
     accepted: &[GlossarySuggestion],
-) -> Result<(), String> {
+) -> Result<(), CommandError> {
     ensure_learning_profile(settings, profile_id)?;
     let effective = Glossary::parse(&settings.effective_glossary_source(Some(profile_id)));
     let allowed = suggest_glossary_candidates(heard, corrected, &effective);
@@ -214,9 +214,9 @@ fn apply_reviewed_training_candidates(
                 && training_term_key(&other.observed) == canonical_key
         });
         if conflicts_with_existing_alias || conflicts_with_reviewed_alias {
-            return Err(
+            return Err(CommandError::InvalidInput(
                 "Edited preferred spelling conflicts with a personal dictionary alias".to_string(),
-            );
+            ));
         }
         let Some((index, _)) = allowed.iter().enumerate().find(|(index, original)| {
             !matched[*index]
@@ -229,9 +229,9 @@ fn apply_reviewed_training_candidates(
                     (GlossarySuggestionKind::HintOnly, GlossarySuggestionKind::Alias) => false,
                 }
         }) else {
-            return Err(
+            return Err(CommandError::InvalidInput(
                 "Dictionary suggestions changed; review the corrected transcript again".to_string(),
-            );
+            ));
         };
         matched[index] = true;
     }
@@ -262,7 +262,7 @@ fn training_term_key(value: &str) -> String {
     value.chars().flat_map(char::to_lowercase).collect()
 }
 
-fn validate_edited_training_candidate(candidate: &GlossarySuggestion) -> Result<(), String> {
+fn validate_edited_training_candidate(candidate: &GlossarySuggestion) -> Result<(), CommandError> {
     let canonical = candidate.canonical.trim();
     if canonical.is_empty()
         || canonical != candidate.canonical
@@ -272,9 +272,9 @@ fn validate_edited_training_candidate(candidate: &GlossarySuggestion) -> Result<
             .chars()
             .any(|character| matches!(character, '\n' | '\r' | ',' | '=' | '|'))
     {
-        return Err(
+        return Err(CommandError::InvalidInput(
             "Edited dictionary terms must be 1-4 words without glossary delimiters".to_string(),
-        );
+        ));
     }
     Ok(())
 }
@@ -300,7 +300,9 @@ pub async fn apply_training_glossary(
     accepted: Vec<GlossarySuggestion>,
 ) -> Result<(), CommandError> {
     if accepted.is_empty() {
-        return Err("Select at least one dictionary suggestion".into());
+        return Err(CommandError::InvalidInput(
+            "Select at least one dictionary suggestion".into(),
+        ));
     }
 
     let accepted_count = accepted.len();

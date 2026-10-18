@@ -94,7 +94,7 @@ describe("the dictionary conflict", () => {
   });
 
   test("is not guessed from the message text of another error", async () => {
-    await saveStaleDictionary(backendError("unclassified", "Dictionary changed elsewhere: only the words say so"));
+    await saveStaleDictionary(backendError("settings_storage_failed", "Dictionary changed elsewhere: only the words say so"));
     await screen.findAllByText("Dictionary changed elsewhere: only the words say so");
     expect(screen.queryByText(hint)).toBeNull();
   });

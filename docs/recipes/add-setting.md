@@ -92,9 +92,9 @@ of the controller's copy, so a setter does not repeat it.
   their models are a pair that differs from the file's.
   Never `store::save()` an in-memory clone, never write `ctrl.settings_mut()` (it exists in
   tests only), never hold the controller lock across the store call or an `.await`. The
-  setter's error type stays `String` until
-  [#360](https://github.com/Magnus-Gille/sagascript/issues/360) part 2: map with
-  `.map_err(|error| error.to_string())`.
+  setter returns `Result<_, CommandError>`: a refusal of the core operation is a
+  `SettingsError` (`?` converts it, keeping its code), and the store's own failures arrive as
+  `CommandError::Settings` as well.
 - Add a row to the table in `commands/persist_tests.rs` and say how the setter syncs
   (`Mirror::Field` with the fields the setter writes; `Mirror::Whole` is the hotkey change's
   and no other row's): the test calls every setter, changes the file behind the controller,

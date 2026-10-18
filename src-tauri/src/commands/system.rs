@@ -1,9 +1,11 @@
 //! Facts about the running build and host.
 
+use crate::command_error::CommandError;
+
 // -- Build info --
 
 #[tauri::command]
-pub async fn get_build_info() -> Result<BuildInfo, String> {
+pub async fn get_build_info() -> Result<BuildInfo, CommandError> {
     Ok(BuildInfo {
         version: env!("CARGO_PKG_VERSION").to_string(),
         git_hash: env!("GIT_HASH").to_string(),
@@ -22,7 +24,7 @@ pub struct BuildInfo {
 /// `windows` or `linux`; `unknown` for anything else, so Onboarding takes its
 /// portable path.
 #[tauri::command]
-pub async fn get_platform() -> Result<String, String> {
+pub async fn get_platform() -> Result<String, CommandError> {
     Ok(platform_name(std::env::consts::OS).to_string())
 }
 

@@ -42,7 +42,7 @@ pub(super) struct Key {
     /// Parse `value` and apply it. An error changes nothing the caller keeps.
     pub set: fn(&mut Settings, &str) -> Result<Notices, DictationError>,
     /// Put the setting back to its value in the second argument, the defaults.
-    pub reset: fn(&mut Settings, &Settings) -> Result<Notices, String>,
+    pub reset: fn(&mut Settings, &Settings) -> Result<Notices, DictationError>,
     /// A warning for `config set` to print after the value was stored.
     pub warning: fn(&Settings) -> Option<&'static str>,
 }
@@ -109,9 +109,9 @@ pub(super) const KEYS: &[Key] = &[
             let language = parse_value::<Language>(value, "language")?;
             settings
                 .apply_language_selection(language)
-                .map_err(DictationError::SettingsError)
+                .map_err(DictationError::from)
         },
-        reset: |settings, defaults| settings.apply_language_selection(defaults.language),
+        reset: |settings, defaults| Ok(settings.apply_language_selection(defaults.language)?),
         warning: no_warning,
     },
     Key {
@@ -128,7 +128,7 @@ pub(super) const KEYS: &[Key] = &[
             settings
                 .set_whisper_model(model)
                 .map(|()| Vec::new())
-                .map_err(DictationError::SettingsError)
+                .map_err(DictationError::from)
         },
         reset: |settings, defaults| {
             settings.whisper_model = defaults.whisper_model;
@@ -145,7 +145,7 @@ pub(super) const KEYS: &[Key] = &[
         get: |settings| settings.file_transcription_model.id().to_string(),
         set: |settings, value| {
             settings.file_transcription_model =
-                FileModelPreference::parse_id(value).map_err(DictationError::SettingsError)?;
+                FileModelPreference::parse_id(value).map_err(DictationError::from)?;
             Ok(Vec::new())
         },
         reset: |settings, defaults| {
@@ -171,12 +171,13 @@ pub(super) const KEYS: &[Key] = &[
             settings
                 .replace_hotkey_mode(mode)
                 .map(|()| Vec::new())
-                .map_err(DictationError::SettingsError)
+                .map_err(DictationError::from)
         },
         reset: |settings, defaults| {
             settings
                 .replace_hotkey_mode(defaults.hotkey_mode)
                 .map(|()| Vec::new())
+                .map_err(DictationError::from)
         },
         warning: no_warning,
     },
@@ -222,7 +223,7 @@ pub(super) const KEYS: &[Key] = &[
             settings
                 .set_auto_select_model(enabled)
                 .map(|()| Vec::new())
-                .map_err(DictationError::SettingsError)
+                .map_err(DictationError::from)
         },
         reset: |settings, defaults| {
             settings.auto_select_model = defaults.auto_select_model;
@@ -250,7 +251,7 @@ pub(super) const KEYS: &[Key] = &[
             settings
                 .set_pianissimo_dictation(enabled)
                 .map(|()| Vec::new())
-                .map_err(DictationError::SettingsError)
+                .map_err(DictationError::from)
         },
         reset: |settings, defaults| {
             settings.pianissimo_dictation = defaults.pianissimo_dictation;
@@ -266,11 +267,11 @@ pub(super) const KEYS: &[Key] = &[
         help: &["Modifier+Key; bare F13-F24 on macOS (Accessibility) or Windows"],
         get: |settings| settings.hotkey.clone(),
         set: |settings, value| {
-            validate_hotkey(value).map_err(DictationError::SettingsError)?;
+            validate_hotkey(value).map_err(DictationError::from)?;
             settings
                 .try_set_legacy_hotkey(value.to_string())
                 .map(|()| Vec::new())
-                .map_err(DictationError::SettingsError)
+                .map_err(DictationError::from)
         },
         reset: |settings, defaults| {
             let mut profiles = settings.resolved_hotkey_profiles();
@@ -305,7 +306,9 @@ pub(super) const KEYS: &[Key] = &[
                 .get(&settings.default_profile().id)
                 .is_some_and(|source| !source.trim().is_empty())
             {
-                Err("Default profile dictionary contains entries; use `sagascript glossary clear --yes` after reviewing them".into())
+                Err(DictationError::SettingsError(
+                    "Default profile dictionary contains entries; use `sagascript glossary clear --yes` after reviewing them".into(),
+                ))
             } else {
                 Ok(Vec::new())
             }
@@ -346,7 +349,7 @@ pub(super) const KEYS: &[Key] = &[
         get: |settings| settings.engine_prewarm.id().to_string(),
         set: |settings, value| {
             settings.engine_prewarm =
-                EnginePrewarm::parse_id(value).map_err(DictationError::SettingsError)?;
+                EnginePrewarm::parse_id(value).map_err(DictationError::from)?;
             Ok(Vec::new())
         },
         reset: |settings, defaults| {

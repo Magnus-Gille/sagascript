@@ -116,7 +116,8 @@ fn refused_language_selection_changes_nothing() {
     let before = as_json(&settings);
     let error = settings
         .apply_language_selection_gated(Language::English, true)
-        .unwrap_err();
+        .unwrap_err()
+        .to_string();
     assert!(error.contains("personal dictionary"), "{error}");
     assert_eq!(as_json(&settings), before);
 }
@@ -148,7 +149,8 @@ fn a_model_the_default_profile_cannot_use_is_refused_without_a_change() {
     let before = as_json(&settings);
     let error = settings
         .set_whisper_model_gated(WhisperModel::BaseEn, true)
-        .unwrap_err();
+        .unwrap_err()
+        .to_string();
     assert!(
         error.contains("incompatible with profile 'default'"),
         "{error}"
@@ -187,7 +189,8 @@ fn auto_select_model_off_is_refused_when_the_legacy_model_does_not_fit() {
     let before = as_json(&settings);
     let error = settings
         .set_auto_select_model_gated(false, true)
-        .unwrap_err();
+        .unwrap_err()
+        .to_string();
     assert!(error.contains("incompatible"), "{error}");
     assert_eq!(as_json(&settings), before);
 }
@@ -199,7 +202,11 @@ fn pianissimo_dictation_needs_the_platform_and_a_swedish_profile() {
     let unsupported = settings
         .set_pianissimo_dictation_gated(true, false)
         .unwrap_err();
-    assert_eq!(unsupported, crate::models::PIANISSIMO_UNSUPPORTED_MESSAGE);
+    assert_eq!(unsupported, SettingsError::PianissimoUnsupported);
+    assert_eq!(
+        unsupported.to_string(),
+        crate::models::PIANISSIMO_UNSUPPORTED_MESSAGE
+    );
     assert_eq!(as_json(&settings), before);
 
     settings.set_pianissimo_dictation_gated(true, true).unwrap();
@@ -222,7 +229,8 @@ fn pianissimo_dictation_needs_the_platform_and_a_swedish_profile() {
     let error = english
         .set_pianissimo_dictation_gated(true, true)
         .unwrap_err();
-    assert_eq!(error, "Pianissimo requires a Swedish profile");
+    assert_eq!(error, SettingsError::PianissimoRequiresSwedishProfile);
+    assert_eq!(error.to_string(), "Pianissimo requires a Swedish profile");
     assert!(!english.pianissimo_dictation);
 }
 
@@ -271,7 +279,8 @@ fn profile_change_with_an_explicit_model_checks_it_against_the_new_language() {
             Some(("default", FileModelPreference::PianissimoOriginal)),
             true,
         )
-        .unwrap_err();
+        .unwrap_err()
+        .to_string();
     assert!(error.contains("Pianissimo"), "{error}");
     assert_eq!(
         as_json(&settings),

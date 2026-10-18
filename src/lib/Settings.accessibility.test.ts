@@ -73,7 +73,7 @@ describe("Auto-paste on macOS", () => {
     const { ipc } = await renderSettings(
       macBackend({
         request_accessibility_permission: () => {
-          throw "System Settings did not open";
+          throw backendError("launch_failed", "System Settings did not open");
         },
       }),
     );
@@ -116,7 +116,7 @@ describe("a bare F13 shortcut on macOS", () => {
     const { ipc } = await renderSettings(
       macBackend({
         request_accessibility_permission: () => {
-          throw "System Settings did not open";
+          throw backendError("launch_failed", "System Settings did not open");
         },
       }),
     );

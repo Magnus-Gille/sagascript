@@ -26,7 +26,7 @@
 //! the CLI's `transcribe` and the app's file transcription share.
 
 use crate::error::DictationError;
-use crate::settings::{HotkeyProfile, Language, Settings};
+use crate::settings::{HotkeyProfile, Language, Settings, SettingsError};
 use crate::transcription::{Glossary, FILE_TRANSCRIBE_BEAM};
 
 /// What a run asked for, already parsed.
@@ -66,7 +66,9 @@ impl RunSelection {
                 .into_iter()
                 .find(|profile| profile.id == id)
                 .ok_or_else(|| {
-                    DictationError::SettingsError(format!("Unknown dictation profile '{id}'"))
+                    DictationError::from(SettingsError::UnknownDictationProfile {
+                        id: id.to_string(),
+                    })
                 })?,
             None => settings.default_profile(),
         };
