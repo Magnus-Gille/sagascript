@@ -7,7 +7,9 @@ use crate::diarization_report::{
 };
 use crate::error::DictationError;
 
-use super::{clustering, DiarizationAnalysis, DiarizeConfig, SpeakerSegment};
+use super::{
+    is_usable_embedding, DiarizationAnalysis, DiarizeConfig, SpeakerSegment, EMBEDDING_DIM,
+};
 
 fn distance(left: &[f32], right: &[f64]) -> Option<f64> {
     let norm_left = left
@@ -54,16 +56,16 @@ impl DiarizationAnalysis {
             .collect::<BTreeMap<_, _>>();
         let mut centroids = BTreeMap::<&str, Vec<f64>>::new();
         for (index, embedding) in &embeddings {
-            let vector: [f32; super::embedding::EMBEDDING_DIM] = embedding
+            let vector: [f32; EMBEDDING_DIM] = embedding
                 .as_slice()
                 .try_into()
                 .expect("validated embedding dimension");
-            if !clustering::is_usable_embedding(&vector) {
+            if !is_usable_embedding(&vector) {
                 continue;
             }
             let sum = centroids
                 .entry(&speakers[*index].speaker)
-                .or_insert_with(|| vec![0.0; super::embedding::EMBEDDING_DIM]);
+                .or_insert_with(|| vec![0.0; EMBEDDING_DIM]);
             for (target, value) in sum.iter_mut().zip(embedding.iter()) {
                 *target += f64::from(*value);
             }
@@ -79,11 +81,11 @@ impl DiarizationAnalysis {
                 let status = match embedding {
                     None => EmbeddingStatus::Missing,
                     Some(vector) => {
-                        let array: [f32; super::embedding::EMBEDDING_DIM] = vector
+                        let array: [f32; EMBEDDING_DIM] = vector
                             .as_slice()
                             .try_into()
                             .expect("validated embedding dimension");
-                        if clustering::is_usable_embedding(&array) {
+                        if is_usable_embedding(&array) {
                             EmbeddingStatus::Usable
                         } else {
                             EmbeddingStatus::Degenerate

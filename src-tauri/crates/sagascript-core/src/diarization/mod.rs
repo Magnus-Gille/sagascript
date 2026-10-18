@@ -1,9 +1,11 @@
+#[cfg(feature = "diarization")]
 pub mod engine;
 pub mod merge;
 pub mod model;
 pub mod report;
 
 // The old paths of the stages that moved into `engine/` (#372).
+#[cfg(feature = "diarization")]
 pub use engine::{
     analyze, analyze_with_control, cluster, cluster_with_outcome, clustering, diarize, embedding,
     fbank, segmentation,
@@ -60,6 +62,16 @@ pub const MIN_SPEAKER_SECONDS: f64 = 8.0;
 /// Maximum centroid cosine distance for absorbing a small cluster (see [`DiarizeConfig`]).
 pub const ABSORB_MAX_DISTANCE: f32 = 0.75;
 
+/// Size of one speaker embedding: the output of the WeSpeaker ResNet34-LM model.
+pub const EMBEDDING_DIM: usize = 256;
+
+/// A usable embedding is finite and non-degenerate. Zero (or non-finite) vectors carry no
+/// speaker information; cosine similarity maps them to 0, which would make every one a separate
+/// speaker. Callers route such segments through the track fallback instead.
+pub fn is_usable_embedding(e: &[f32; EMBEDDING_DIM]) -> bool {
+    e.iter().all(|x| x.is_finite()) && e.iter().map(|x| x * x).sum::<f32>().sqrt() > 1e-6
+}
+
 /// Threshold-independent output of segmentation and speaker embedding.
 ///
 /// This is deliberately serializable so callers can persist the expensive
@@ -108,7 +120,7 @@ impl DiarizationAnalysis {
         for (index, embedding) in &self.embeddings {
             if *index >= self.raw_segments.len()
                 || !embedding_indices.insert(*index)
-                || embedding.len() != embedding::EMBEDDING_DIM
+                || embedding.len() != EMBEDDING_DIM
                 || embedding.iter().any(|value| !value.is_finite())
             {
                 return Err(DictationError::DiarizationError(

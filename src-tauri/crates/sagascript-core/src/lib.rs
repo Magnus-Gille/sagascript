@@ -4,6 +4,7 @@
 //! entry points and integrations on top.
 
 pub mod audio;
+pub mod diarization;
 pub mod diarization_evaluation;
 pub mod diarization_qualification;
 pub mod diarization_reference;
@@ -30,9 +31,6 @@ pub use crate::meeting::reprocess as meeting_reprocess;
 pub use crate::meeting::reprocess::plan as meeting_reprocess_plan;
 pub use crate::meeting::reprocess::proposal as meeting_reprocess_proposal;
 pub use crate::meeting::review as meeting_review;
-
-#[cfg(feature = "diarization")]
-pub mod diarization;
 
 /// Test fixtures made of core types (#363); see the module documentation.
 #[cfg(any(test, feature = "test-support"))]
