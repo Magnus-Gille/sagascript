@@ -473,6 +473,37 @@ fn nothing_in_core_depends_on_the_test_seams() {
     );
 }
 
+/// The optional crates of the `diarization` feature (ONNX Runtime, clustering,
+/// arrays, FFT). Only `diarization/engine/` is compiled with them; everything
+/// else in `diarization/` (report, merge, model, eval, speaker_hint) builds
+/// without the feature, which `cargo build -p sagascript-core
+/// --no-default-features` and the lean CLI depend on.
+const ENGINE_ONLY_CRATES: [&str; 4] = ["ort", "kodama", "ndarray", "rustfft"];
+
+/// Whether `path` starts at one of [`ENGINE_ONLY_CRATES`] (`ort::session::Session`,
+/// the expansion of `use ::ndarray::{..}`, a macro path `ndarray::array`).
+fn names_engine_only_crate(path: &str) -> bool {
+    let first = path.trim_start_matches("::").split("::").next();
+    first.is_some_and(|name| ENGINE_ONLY_CRATES.contains(&name))
+}
+
+#[test]
+fn only_the_diarization_engine_names_its_optional_crates() {
+    let found: Vec<_> = tree_paths("")
+        .into_iter()
+        .filter(|(file, path)| {
+            !file.starts_with("diarization/engine/") && names_engine_only_crate(path)
+        })
+        .collect();
+    assert!(
+        found.is_empty(),
+        "`ort`, `kodama`, `ndarray` and `rustfft` are optional dependencies of the `diarization` \
+         feature, so only diarization/engine/ (the one part behind the feature) may name them; \
+         the rest of core must build without them:\n{}",
+        report(&found)
+    );
+}
+
 // ---- the compatibility paths have no users -------------------------------
 
 /// The old names `lib.rs` re-exports (`pub use crate::path as name;`, or the
@@ -887,4 +918,52 @@ fn the_shim_lists_come_from_lib_rs_and_the_store() {
         sorted(store_shims()),
         strings(&["load", "try_update", "update"])
     );
+}
+
+#[test]
+fn the_engine_only_crates_are_found_however_they_are_imported_or_called() {
+    let source = "use ort::session::Session;\n\
+                  use ::ndarray::{Array2, s as slice};\n\
+                  use kodama as k;\n\
+                  use std::{fmt, rustfft::x};\n\
+                  fn f() { let _ = rustfft::FftPlanner::<f32>::new(); let _ = ndarray::array![1]; }\n";
+    let hits: Vec<String> = sorted(
+        paths(source)
+            .into_iter()
+            .filter(|path| names_engine_only_crate(path))
+            .collect(),
+    );
+    assert_eq!(
+        hits,
+        strings(&[
+            "kodama",
+            "ndarray::Array2",
+            "ndarray::array",
+            "ndarray::s",
+            "ort::session::Session",
+            "rustfft::FftPlanner",
+        ])
+    );
+}
+
+#[test]
+fn the_engine_only_crates_scan_ignores_comments_strings_and_similar_names() {
+    let source = "// use ndarray::Array2;\n\
+                  /// `ort::session::Session` and `rustfft::FftPlanner`\n\
+                  fn f(support: u8) -> &'static str {\n\
+                  \tlet _ = crate::diarization::engine::cluster;\n\
+                  \tlet _ = report::ort_free::x; let _ = other::kodama_like::y; let _ = shorts::ort;\n\
+                  \t\"ndarray::Array2\"\n\
+                  }\n";
+    assert!(paths(source)
+        .into_iter()
+        .all(|path| !names_engine_only_crate(&path)));
+}
+
+#[test]
+fn the_engine_only_crates_scan_reads_crlf_like_lf() {
+    let lf = "use ndarray::{\n    Array2,\n};\nfn f() {\n    let _ = ort::x();\n}\n";
+    let crlf = lf.replace('\n', "\r\n");
+    assert_eq!(paths(lf), paths(&crlf));
+    assert!(paths(&crlf).iter().any(|p| names_engine_only_crate(p)));
 }

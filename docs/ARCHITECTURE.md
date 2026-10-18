@@ -144,7 +144,7 @@ CLI and the app and wait for their own change: `settings::{WhisperModel, FileMod
   against a reference, which only the CLI's `diarization` commands use. `engine/` is what needs
   an optional dependency of the `diarization` feature (ONNX Runtime and ndarray in
   `segmentation.rs` and `embedding.rs`, rustfft in `fbank.rs`, kodama in `clustering.rs`) and
-  the pipeline functions `analyze`, `diarize` and `cluster` that run them; `diarization::
+  the pipeline functions `analyze`, `diarize` and `cluster` that run them. Only `engine/` may name `ort`, `kodama`, `ndarray` or `rustfft` (tested), so the rest builds without the feature; `diarization::
   {analyze, cluster, clustering, embedding, ...}` re-export it when the feature is on.
   `eval/` is not behind a feature of its own: the CLI's lean build uses it (a feature for it is
   an open decision on #372).
