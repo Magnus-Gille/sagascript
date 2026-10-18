@@ -32,6 +32,8 @@ use super::diarize::CachePolicy;
 #[cfg(feature = "diarization")]
 use super::inputs::paths_refer_to_same_file;
 #[cfg(feature = "diarization")]
+use super::plan::FileRequest;
+#[cfg(feature = "diarization")]
 use super::resolve::model_id_string;
 #[cfg(feature = "diarization")]
 use super::transcribe_file;
@@ -461,17 +463,19 @@ fn transcribe_meeting_file_inner(
     // error-object bookkeeping of `exit::conclude`. `transcribe_file` writes
     // it with `errln!` only.
     let output = transcribe_file(
-        &args,
-        file,
+        &FileRequest {
+            args: &args,
+            file,
+            stored,
+            language,
+            model,
+            glossary,
+            correction_vocabulary: &[],
+            control,
+            cache_policy,
+        },
         backend,
-        stored,
-        language,
-        model,
         &mut model_loaded,
-        glossary,
-        &[],
-        control,
-        cache_policy,
         &Out::stdio(),
     )?;
     output.meeting.ok_or_else(|| {
