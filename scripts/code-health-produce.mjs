@@ -258,16 +258,7 @@ function addEvidenceFile(path, data, ref = null) {
 
 function recordCollector(name, actualVersion, work) {
   const start = performance.now();
-  try {
-    const value = work();
-    collectionStatus.collectors[name] = {
-      status: "measured",
-      actual_tool_version: actualVersion,
-      elapsed_seconds: Number(((performance.now() - start) / 1000).toFixed(3)),
-      error: null,
-    };
-    return { status: "measured", value };
-  } catch (error) {
+  const recordFailure = (error) => {
     collectionStatus.collectors[name] = {
       status: "failed",
       actual_tool_version: actualVersion,
@@ -275,6 +266,24 @@ function recordCollector(name, actualVersion, work) {
       error: safeDiagnostic(error?.message ?? error, 6000),
     };
     return { status: "failed", error };
+  };
+  const recordSuccess = (value) => {
+    collectionStatus.collectors[name] = {
+      status: "measured",
+      actual_tool_version: actualVersion,
+      elapsed_seconds: Number(((performance.now() - start) / 1000).toFixed(3)),
+      error: null,
+    };
+    return { status: "measured", value };
+  };
+  try {
+    const value = work();
+    if (value && typeof value.then === "function") {
+      return Promise.resolve(value).then(recordSuccess, recordFailure);
+    }
+    return recordSuccess(value);
+  } catch (error) {
+    return recordFailure(error);
   }
 }
 
@@ -805,6 +814,174 @@ export function restJson(url, timeoutMs = CI_METADATA_BUDGET_MS, spawn = spawnSy
   return value;
 }
 
+const MAX_CI_RESPONSE_BYTES = 8 * 1024 * 1024;
+const MAX_CI_REQUESTS = 8;
+
+function assertActionsApiTarget(rawUrl) {
+  let url;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    throw new Error("GitHub Actions API target is malformed");
+  }
+  const repoPrefix = `/repos/${config.repository.owner}/${config.repository.name}/actions/`;
+  const workflowRunsPath = url.pathname === `${repoPrefix}workflows/ci.yml/runs`;
+  const attemptIdentityPath = new RegExp(`^${repoPrefix}runs/[1-9]\\d*/attempts/1$`).test(url.pathname);
+  const attemptJobsPath = new RegExp(`^${repoPrefix}runs/[1-9]\\d*/attempts/1/jobs$`).test(url.pathname);
+  const uniqueQueryKeys = [...url.searchParams.keys()].every((key, index, keys) => keys.indexOf(key) === index);
+  const validPageParameters =
+    uniqueQueryKeys && url.searchParams.get("per_page") === "100" && /^[1-9]\d*$/.test(url.searchParams.get("page") ?? "");
+  const paginationQuery = validPageParameters && [...url.searchParams.keys()].every((key) => ["per_page", "page"].includes(key));
+  const validQuery = workflowRunsPath
+    ? validPageParameters &&
+      url.searchParams.get("branch") === "main" &&
+      url.searchParams.get("event") === "push" &&
+      /^\d{4}-\d{2}-\d{2}\.\.\d{4}-\d{2}-\d{2}$/.test(url.searchParams.get("created") ?? "") &&
+      [...url.searchParams.keys()].every((key) => ["branch", "event", "created", "per_page", "page"].includes(key))
+    : attemptJobsPath
+      ? paginationQuery
+      : attemptIdentityPath && [...url.searchParams.keys()].length === 0;
+  const validPath = workflowRunsPath || attemptIdentityPath || attemptJobsPath;
+  if (url.origin !== "https://api.github.com" || url.username || url.password || url.hash || !validPath || !validQuery) {
+    throw new Error("GitHub Actions API target is outside the fixed read-only endpoint set");
+  }
+  return url;
+}
+
+async function readBoundedResponseBody(response, signal) {
+  if (!response.body) return "";
+  const reader = response.body.getReader();
+  const chunks = [];
+  let byteLength = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      byteLength += value.byteLength;
+      if (byteLength > MAX_CI_RESPONSE_BYTES) {
+        try {
+          await reader.cancel();
+        } catch {
+          throw new Error("GitHub Actions API response cancellation failed");
+        }
+        throw new Error("GitHub Actions API response exceeds 8 MiB");
+      }
+      chunks.push(value);
+    }
+  } catch (error) {
+    if (signal.aborted) throw signal.reason instanceof Error ? signal.reason : new Error("GitHub Actions API request cancelled");
+    if (error?.message === "GitHub Actions API response exceeds 8 MiB") throw error;
+    throw new Error("GitHub Actions API request failed");
+  }
+  const bytes = new Uint8Array(byteLength);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(bytes);
+}
+
+async function cancelResponseBody(response) {
+  if (!response.body) return;
+  try {
+    await response.body.cancel();
+  } catch {
+    throw new Error("GitHub Actions API response cancellation failed");
+  }
+}
+
+export async function githubActionsJson(rawUrl, _timeoutMs, signal, fetchImpl = globalThis.fetch) {
+  const url = assertActionsApiTarget(rawUrl);
+  const token = process.env.GH_TOKEN ?? process.env.GITHUB_TOKEN;
+  if (!token) throw new Error("CI artifact collection requires the scoped GH_TOKEN environment value");
+  if (typeof fetchImpl !== "function") throw new Error("GitHub Actions API fetch is unavailable");
+  let response;
+  try {
+    response = await fetchImpl(url.href, {
+      method: "GET",
+      headers: {
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        Authorization: `Bearer ${token}`,
+      },
+      redirect: "error",
+      signal,
+    });
+  } catch (error) {
+    if (signal.aborted) throw signal.reason instanceof Error ? signal.reason : new Error("GitHub Actions API request cancelled");
+    if (error?.message === "GitHub Actions API target is outside the fixed read-only endpoint set") throw error;
+    throw new Error("GitHub Actions API request failed");
+  }
+  if (response.status < 200 || response.status >= 300) {
+    await cancelResponseBody(response);
+    const error = new Error(`GitHub Actions API returned HTTP ${response.status}`);
+    error.status = response.status;
+    throw error;
+  }
+  const responseBody = await readBoundedResponseBody(response, signal);
+  try {
+    return JSON.parse(responseBody);
+  } catch {
+    throw new Error("GitHub Actions API returned invalid JSON");
+  }
+}
+
+export function createAsyncMetadataTransport(
+  transport = githubActionsJson,
+  { budgetMs = CI_METADATA_BUDGET_MS, now = () => performance.now() } = {},
+) {
+  if (typeof transport !== "function" || typeof now !== "function" || !Number.isFinite(budgetMs) || budgetMs <= 0) {
+    throw new TypeError("CI metadata transport configuration is malformed");
+  }
+  const deadline = now() + budgetMs;
+  const deadlineError = new Error("GitHub Actions metadata phase exceeded its 30-second budget");
+  const controller = new AbortController();
+  let requestCount = 0;
+  const timer = setTimeout(() => controller.abort(deadlineError), Math.ceil(budgetMs));
+  const remainingMs = () => {
+    if (controller.signal.aborted) throw controller.signal.reason instanceof Error ? controller.signal.reason : deadlineError;
+    const remaining = deadline - now();
+    if (remaining <= 0) {
+      controller.abort(deadlineError);
+      throw deadlineError;
+    }
+    return remaining;
+  };
+  const request = async (url) => {
+    const timeoutMs = remainingMs();
+    requestCount += 1;
+    try {
+      const value = await transport(url, timeoutMs, controller.signal);
+      remainingMs();
+      return value;
+    } catch (error) {
+      if (controller.signal.aborted) throw controller.signal.reason instanceof Error ? controller.signal.reason : deadlineError;
+      throw error;
+    }
+  };
+  request.remainingMs = remainingMs;
+  request.abort = (reason = new Error("GitHub Actions metadata requests cancelled")) => {
+    if (!controller.signal.aborted) controller.abort(reason);
+  };
+  request.close = () => clearTimeout(timer);
+  Object.defineProperty(request, "requestCount", { get: () => requestCount });
+  return request;
+}
+
+function appendPage(all, body, collectionKey, maxItems, expectedTotal) {
+  if (!Number.isSafeInteger(body.total_count) || !Array.isArray(body[collectionKey])) {
+    throw new Error(`GitHub Actions API ${collectionKey} inventory is malformed`);
+  }
+  if (expectedTotal === null) expectedTotal = body.total_count;
+  if (body.total_count !== expectedTotal) throw new Error("GitHub Actions API total changed during pagination");
+  all.push(...body[collectionKey]);
+  if (all.length > maxItems || body.total_count > maxItems) throw new Error("GitHub Actions API inventory exceeds the configured limit");
+  if (all.length >= expectedTotal) return { expectedTotal, complete: true };
+  if (body[collectionKey].length !== 100) throw new Error("GitHub Actions API pagination ended before total_count");
+  return { expectedTotal, complete: false };
+}
+
 export function paginate(url, collectionKey, maxItems, request = restJson) {
   let page = 1;
   let expectedTotal = null;
@@ -812,15 +989,25 @@ export function paginate(url, collectionKey, maxItems, request = restJson) {
   while (true) {
     const separator = url.includes("?") ? "&" : "?";
     const body = request(`${url}${separator}per_page=100&page=${page}`);
-    if (!Number.isSafeInteger(body.total_count) || !Array.isArray(body[collectionKey])) {
-      throw new Error(`GitHub Actions API ${collectionKey} inventory is malformed`);
-    }
-    if (expectedTotal === null) expectedTotal = body.total_count;
-    if (body.total_count !== expectedTotal) throw new Error("GitHub Actions API total changed during pagination");
-    all.push(...body[collectionKey]);
-    if (all.length > maxItems || body.total_count > maxItems) throw new Error("GitHub Actions API inventory exceeds the configured limit");
-    if (all.length >= expectedTotal) break;
-    if (body[collectionKey].length !== 100) throw new Error("GitHub Actions API pagination ended before total_count");
+    const result = appendPage(all, body, collectionKey, maxItems, expectedTotal);
+    expectedTotal = result.expectedTotal;
+    if (result.complete) break;
+    page += 1;
+  }
+  assertCompletePageCount(all.length, expectedTotal, maxItems);
+  return all;
+}
+
+export async function paginateAsync(url, collectionKey, maxItems, request) {
+  let page = 1;
+  let expectedTotal = null;
+  const all = [];
+  while (true) {
+    const separator = url.includes("?") ? "&" : "?";
+    const body = await request(`${url}${separator}per_page=100&page=${page}`);
+    const result = appendPage(all, body, collectionKey, maxItems, expectedTotal);
+    expectedTotal = result.expectedTotal;
+    if (result.complete) break;
     page += 1;
   }
   assertCompletePageCount(all.length, expectedTotal, maxItems);
@@ -840,15 +1027,7 @@ export function firstAttemptRunContext(apiRun, request) {
     const first = request(
       `https://api.github.com/repos/${config.repository.owner}/${config.repository.name}/actions/runs/${apiRun.id}/attempts/1`,
     );
-    if (
-      first.id !== apiRun.id ||
-      first.run_attempt !== 1 ||
-      first.head_sha !== apiRun.head_sha ||
-      first.event !== apiRun.event ||
-      first.head_branch !== apiRun.head_branch
-    ) {
-      throw new Error("GitHub Actions attempt-1 workflow identity does not match its enumerated run");
-    }
+    assertFirstAttemptIdentity(apiRun, first);
     return { status: first.status ?? null, conclusion: first.conclusion ?? null };
   } catch (error) {
     if (error?.status !== 404) throw error;
@@ -859,53 +1038,133 @@ export function firstAttemptRunContext(apiRun, request) {
   }
 }
 
-function collectCi(observedAt) {
-  const scopeName = "ci-release";
-  const metadataStarted = performance.now();
-  const latestWorkflow = readFileSync(join(REPO_ROOT, config.ci.workflow));
-  const currentWorkflowDigest = sha256(latestWorkflow);
-  const expectedJobIds = config.ci.expected_job_ids;
-  const result = recordCollector("ci-first-attempt", "GitHub Actions REST API 2022-11-28", () => {
-    const actualJobIds = parseWorkflowJobIds(latestWorkflow.toString("utf8"));
-    if (canonical(actualJobIds) !== canonical(expectedJobIds)) {
-      throw new Error("CI workflow job inventory differs from the pinned cohort registry");
-    }
-    const { windowStart, windowEnd } = ciWindow(observedAt);
-    const dateFilter = `${windowStart.slice(0, 10)}..${windowEnd.slice(0, 10)}`;
-    const runsUrl = `https://api.github.com/repos/${config.repository.owner}/${config.repository.name}/actions/workflows/ci.yml/runs?branch=main&event=push&created=${encodeURIComponent(dateFilter)}`;
-    const request = createMetadataTransport((url, remainingMs) => restJson(url, remainingMs));
-    const apiRuns = paginate(runsUrl, "workflow_runs", config.ci.limits.maximum_runs, request);
-    const normalizedInputs = [];
-    const runEvidence = {};
-    const excludedWorkflowRuns = [];
-    const runInventoryRows = [];
-    for (const apiRun of apiRuns) {
-      if (
-        !Number.isSafeInteger(apiRun.id) ||
-        !Number.isSafeInteger(apiRun.run_attempt) ||
-        !/^[a-f0-9]{40}$/.test(apiRun.head_sha) ||
-        typeof apiRun.created_at !== "string" ||
-        !Number.isFinite(Date.parse(apiRun.created_at))
-      ) {
-        throw new Error("GitHub Actions workflow run inventory contains a malformed identity or timestamp");
+function assertFirstAttemptIdentity(apiRun, first) {
+  if (
+    first.id !== apiRun.id ||
+    first.run_attempt !== 1 ||
+    first.head_sha !== apiRun.head_sha ||
+    first.event !== apiRun.event ||
+    first.head_branch !== apiRun.head_branch
+  ) {
+    throw new Error("GitHub Actions attempt-1 workflow identity does not match its enumerated run");
+  }
+}
+
+async function firstAttemptRunContextAsync(apiRun, request) {
+  try {
+    const first = await request(
+      `https://api.github.com/repos/${config.repository.owner}/${config.repository.name}/actions/runs/${apiRun.id}/attempts/1`,
+    );
+    assertFirstAttemptIdentity(apiRun, first);
+    return { status: first.status ?? null, conclusion: first.conclusion ?? null };
+  } catch (error) {
+    if (error?.status !== 404) throw error;
+    return apiRun.run_attempt === 1
+      ? { status: apiRun.status ?? null, conclusion: apiRun.conclusion ?? null }
+      : { status: null, conclusion: null };
+  }
+}
+
+function safeCiMetadataReason(error) {
+  const message = String(error?.message ?? "");
+  if (/exceeded its 30-second budget/.test(message)) return "deadline exceeded";
+  if (Number.isSafeInteger(error?.status) && error.status >= 400 && error.status <= 599) return `HTTP ${error.status}`;
+  const status = /GitHub Actions API returned HTTP (\d{3})/.exec(message);
+  if (status) return `HTTP ${status[1]}`;
+  if (/attempt-1 workflow identity does not match/.test(message)) return "attempt-1 identity mismatch";
+  if (/inventory exceeds/.test(message)) return "inventory exceeds configured limit";
+  if (/pagination ended|page count does not match|total changed/.test(message)) return "pagination incomplete or changed";
+  if (/malformed|invalid JSON|response status is missing/.test(message)) return "malformed API response";
+  if (/response exceeds 8 MiB/.test(message)) return "response exceeds 8 MiB";
+  if (/cancelled/.test(message)) return "request cancelled";
+  return "request or response validation failed";
+}
+
+function ciMetadataError(stage, runId, request, error) {
+  const runIdentity = Number.isSafeInteger(runId) && runId > 0 ? ` run_id=${runId}` : "";
+  return new Error(
+    `GitHub Actions metadata ${stage} failed${runIdentity} request_count=${request.requestCount}: ${safeCiMetadataReason(error)}`,
+  );
+}
+
+async function mapMetadataWithConcurrency(items, mapper, request, concurrency = MAX_CI_REQUESTS) {
+  if (!Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > MAX_CI_REQUESTS) {
+    throw new RangeError("CI metadata request concurrency exceeds the configured limit");
+  }
+  const results = new Array(items.length);
+  let nextIndex = 0;
+  let firstError = null;
+  const worker = async () => {
+    while (!firstError) {
+      const index = nextIndex;
+      nextIndex += 1;
+      if (index >= items.length) return;
+      try {
+        results[index] = await mapper(items[index], index);
+      } catch (error) {
+        if (!firstError) {
+          firstError = error;
+          request.abort(error);
+        }
+        return;
       }
-      const sha = apiRun.head_sha;
-      const createdAt = Date.parse(apiRun.created_at);
-      if (
-        apiRun.event !== "push" ||
-        apiRun.head_branch !== "main" ||
-        createdAt < Date.parse(windowStart) ||
-        createdAt >= Date.parse(windowEnd)
-      ) {
-        normalizedInputs.push({
+    }
+  };
+  const workerCount = Math.min(items.length, concurrency);
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  if (firstError) throw firstError;
+  request.remainingMs();
+  return results;
+}
+
+export async function collectFirstAttemptMetadata({
+  apiRuns,
+  request,
+  currentWorkflowDigest,
+  windowStart,
+  windowEnd,
+  workflowPath = config.ci.workflow,
+  maximumRuns = config.ci.limits.maximum_runs,
+  maximumJobsPerRun = config.ci.limits.maximum_jobs_per_run,
+  readHistoricalWorkflow,
+  concurrency = MAX_CI_REQUESTS,
+} = {}) {
+  if (!Array.isArray(apiRuns) || apiRuns.length > maximumRuns || typeof readHistoricalWorkflow !== "function") {
+    throw new Error("GitHub Actions workflow run inventory is malformed or exceeds the configured limit");
+  }
+  const workflowBytesBySha = new Map();
+  const records = new Array(apiRuns.length);
+  const candidates = [];
+  const excludedWorkflowRuns = [];
+  for (let index = 0; index < apiRuns.length; index += 1) {
+    const apiRun = apiRuns[index];
+    if (
+      !Number.isSafeInteger(apiRun.id) ||
+      !Number.isSafeInteger(apiRun.run_attempt) ||
+      !/^[a-f0-9]{40}$/.test(apiRun.head_sha) ||
+      typeof apiRun.created_at !== "string" ||
+      !Number.isFinite(Date.parse(apiRun.created_at))
+    ) {
+      throw new Error("GitHub Actions workflow run inventory contains a malformed identity or timestamp");
+    }
+    const sha = apiRun.head_sha;
+    const createdAt = Date.parse(apiRun.created_at);
+    if (
+      apiRun.event !== "push" ||
+      apiRun.head_branch !== "main" ||
+      createdAt < Date.parse(windowStart) ||
+      createdAt >= Date.parse(windowEnd)
+    ) {
+      records[index] = {
+        outsideCohort: {
           id: apiRun.id,
           head_sha: sha,
           run_attempt: apiRun.run_attempt,
           event: apiRun.event,
           head_branch: apiRun.head_branch,
           created_at: apiRun.created_at,
-        });
-        runInventoryRows.push({
+        },
+        inventory: {
           id: apiRun.id,
           head_sha: sha,
           event: apiRun.event,
@@ -918,19 +1177,31 @@ function collectCi(observedAt) {
           latest_status: apiRun.status ?? null,
           latest_conclusion: apiRun.conclusion ?? null,
           excluded_reason: "outside-declared-cohort",
-        });
-        continue;
+        },
+      };
+      continue;
+    }
+    let historicalWorkflow = workflowBytesBySha.get(sha);
+    if (!historicalWorkflow) {
+      let bytes;
+      try {
+        bytes = await readHistoricalWorkflow(sha, request.remainingMs());
+      } catch (error) {
+        throw ciMetadataError("historical workflow lookup", apiRun.id, request, error);
       }
-      const historicalWorkflow = command("git", ["show", `${sha}:${config.ci.workflow}`], { timeout: request.remainingMs() });
-      const workflowClassification = classifyCiWorkflowConfiguration({
-        runId: apiRun.id,
-        commit: sha,
-        historicalWorkflow: Buffer.from(historicalWorkflow),
-        expectedDigest: currentWorkflowDigest,
-      });
-      if (!workflowClassification.included) {
-        excludedWorkflowRuns.push(workflowClassification.excluded);
-        runInventoryRows.push({
+      historicalWorkflow = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
+      workflowBytesBySha.set(sha, historicalWorkflow);
+    }
+    const workflowClassification = classifyCiWorkflowConfiguration({
+      runId: apiRun.id,
+      commit: sha,
+      historicalWorkflow,
+      expectedDigest: currentWorkflowDigest,
+    });
+    if (!workflowClassification.included) {
+      excludedWorkflowRuns.push(workflowClassification.excluded);
+      records[index] = {
+        inventory: {
           id: apiRun.id,
           status: apiRun.status ?? null,
           conclusion: apiRun.conclusion ?? null,
@@ -944,28 +1215,47 @@ function collectCi(observedAt) {
           created_at: apiRun.created_at,
           workflow_config_digest: workflowClassification.excluded.workflow_config_digest,
           excluded_reason: workflowClassification.excluded.reason,
-        });
-        continue;
+        },
+      };
+      continue;
+    }
+    candidates.push({ index, apiRun, workflowDigest: workflowClassification.digest });
+  }
+
+  const fetched = await mapMetadataWithConcurrency(
+    candidates,
+    async ({ apiRun, workflowDigest }) => {
+      let firstAttempt;
+      try {
+        firstAttempt = await firstAttemptRunContextAsync(apiRun, request);
+      } catch (error) {
+        throw ciMetadataError("attempt-1 identity", apiRun.id, request, error);
       }
-      const historicalDigest = workflowClassification.digest;
-      const firstAttempt = firstAttemptRunContext(apiRun, request);
       let attempt1Jobs = [];
       try {
-        attempt1Jobs = paginate(
+        attempt1Jobs = await paginateAsync(
           `https://api.github.com/repos/${config.repository.owner}/${config.repository.name}/actions/runs/${apiRun.id}/attempts/1/jobs`,
           "jobs",
-          config.ci.limits.maximum_jobs_per_run,
+          maximumJobsPerRun,
           request,
         );
       } catch (error) {
-        if (error?.status !== 404) throw error;
-        // A missing attempt-1 endpoint is retained as unknown for each registered job.
+        if (error?.status !== 404) throw ciMetadataError("attempt-1 jobs", apiRun.id, request, error);
       }
-      const runRef = `ref:ci-run-${apiRun.id}-attempt-1`;
-      runEvidence[runRef] = { kind: "github-run", run_id: apiRun.id, attempt: 1 };
-      normalizedInputs.push({
+      return { firstAttempt, attempt1Jobs, workflowDigest };
+    },
+    request,
+    concurrency,
+  );
+
+  for (let candidateIndex = 0; candidateIndex < candidates.length; candidateIndex += 1) {
+    const { index, apiRun, workflowDigest } = candidates[candidateIndex];
+    const { firstAttempt, attempt1Jobs } = fetched[candidateIndex];
+    const runRef = `ref:ci-run-${apiRun.id}-attempt-1`;
+    records[index] = {
+      normalized: {
         id: apiRun.id,
-        head_sha: sha,
+        head_sha: apiRun.head_sha,
         run_attempt: apiRun.run_attempt,
         event: apiRun.event,
         head_branch: apiRun.head_branch,
@@ -974,8 +1264,8 @@ function collectCi(observedAt) {
         latest_status: apiRun.status ?? null,
         latest_conclusion: apiRun.conclusion ?? null,
         created_at: apiRun.created_at,
-        workflow_path: config.ci.workflow,
-        workflow_config_digest: historicalDigest,
+        workflow_path: workflowPath,
+        workflow_config_digest: workflowDigest,
         attempt1_jobs: attempt1Jobs.map((job) => ({
           id: job.id,
           name: job.name,
@@ -985,8 +1275,9 @@ function collectCi(observedAt) {
           completed_at: job.completed_at,
           steps: job.steps,
         })),
-      });
-      runInventoryRows.push({
+      },
+      runEvidence: [runRef, { kind: "github-run", run_id: apiRun.id, attempt: 1 }],
+      inventory: {
         id: apiRun.id,
         status: firstAttempt.status,
         conclusion: firstAttempt.conclusion,
@@ -994,120 +1285,170 @@ function collectCi(observedAt) {
         latest_attempt: apiRun.run_attempt,
         latest_status: apiRun.status ?? null,
         latest_conclusion: apiRun.conclusion ?? null,
-        head_sha: sha,
+        head_sha: apiRun.head_sha,
         event: apiRun.event,
         head_branch: apiRun.head_branch,
         created_at: apiRun.created_at,
-        workflow_config_digest: historicalDigest,
+        workflow_config_digest: workflowDigest,
+      },
+    };
+  }
+
+  return {
+    normalizedInputs: records.flatMap((record) =>
+      record?.normalized || record?.outsideCohort ? [record.normalized ?? record.outsideCohort] : [],
+    ),
+    runInventoryRows: records.map((record) => record?.inventory).filter(Boolean),
+    runEvidence: Object.fromEntries(records.flatMap((record) => (record?.runEvidence ? [record.runEvidence] : []))),
+    excludedWorkflowRuns,
+  };
+}
+
+async function collectCi(observedAt) {
+  const scopeName = "ci-release";
+  const metadataStarted = performance.now();
+  const latestWorkflow = readFileSync(join(REPO_ROOT, config.ci.workflow));
+  const currentWorkflowDigest = sha256(latestWorkflow);
+  const expectedJobIds = config.ci.expected_job_ids;
+  const request = createAsyncMetadataTransport();
+  let result;
+  try {
+    result = await recordCollector("ci-first-attempt", "GitHub Actions REST API 2022-11-28", async () => {
+      const actualJobIds = parseWorkflowJobIds(latestWorkflow.toString("utf8"));
+      if (canonical(actualJobIds) !== canonical(expectedJobIds)) {
+        throw new Error("CI workflow job inventory differs from the pinned cohort registry");
+      }
+      const { windowStart, windowEnd } = ciWindow(observedAt);
+      const dateFilter = `${windowStart.slice(0, 10)}..${windowEnd.slice(0, 10)}`;
+      const runsUrl = `https://api.github.com/repos/${config.repository.owner}/${config.repository.name}/actions/workflows/ci.yml/runs?branch=main&event=push&created=${encodeURIComponent(dateFilter)}`;
+      let apiRuns;
+      try {
+        apiRuns = await paginateAsync(runsUrl, "workflow_runs", config.ci.limits.maximum_runs, request);
+      } catch (error) {
+        throw ciMetadataError("run inventory", null, request, error);
+      }
+      const metadata = await collectFirstAttemptMetadata({
+        apiRuns,
+        request,
+        expectedJobIds,
+        currentWorkflowDigest,
+        windowStart,
+        windowEnd,
+        workflowPath: config.ci.workflow,
+        maximumRuns: config.ci.limits.maximum_runs,
+        maximumJobsPerRun: config.ci.limits.maximum_jobs_per_run,
+        readHistoricalWorkflow: (sha, timeout) => command("git", ["show", `${sha}:${config.ci.workflow}`], { timeout }),
       });
-    }
-    const cohort = normalizeCiCohort({
-      runs: normalizedInputs,
-      expectedJobIds,
-      windowStart,
-      windowEnd,
-      workflowConfigDigest: currentWorkflowDigest,
-      workflowPath: config.ci.workflow,
-      repoRoot: REPO_ROOT,
-      preExcludedRuns: excludedWorkflowRuns,
+      const cohort = normalizeCiCohort({
+        runs: metadata.normalizedInputs,
+        expectedJobIds,
+        windowStart,
+        windowEnd,
+        workflowConfigDigest: currentWorkflowDigest,
+        workflowPath: config.ci.workflow,
+        repoRoot: REPO_ROOT,
+        preExcludedRuns: metadata.excludedWorkflowRuns,
+      });
+      const payload = buildCiFirstAttemptPayload({
+        normalizedRuns: cohort.runs,
+        windowStart,
+        windowEnd,
+        workflowConfigDigest: currentWorkflowDigest,
+        expectedJobIds,
+        runInventoryRef: evidenceRef("ci-main-push-28-day-runs"),
+      });
+      const runInventoryPath = "evidence/ci-main-push-28-day-runs.json";
+      addEvidenceFile(
+        runInventoryPath,
+        {
+          source: "GitHub Actions REST API",
+          workflow_path: config.ci.workflow,
+          workflow_config_digest: currentWorkflowDigest,
+          filter: { branch: "main", event: "push", window_start: windowStart, window_end: windowEnd },
+          scope_version: "main-push-current-config-ci-v2",
+          denominator_policy: "current-configuration included runs only; no current-configuration runs is not-collected",
+          api_total_count: apiRuns.length,
+          workflow_runs: metadata.runInventoryRows,
+          included_run_ids: cohort.runs.map((run) => Number(run.run_ref.match(/ci-run-(\d+)-attempt-1/)[1])).sort((a, b) => a - b),
+          excluded_runs: cohort.excluded_runs,
+        },
+        payload.run_inventory_ref,
+      );
+      Object.assign(evidenceRefs, metadata.runEvidence);
+      const workflowRef = "ref:workflow-ci-main-push";
+      const workflowPath = "evidence/ci-workflow.json";
+      addEvidenceFile(workflowPath, {
+        path: config.ci.workflow,
+        digest: { algorithm: "sha256", value: currentWorkflowDigest },
+        expected_job_ids: expectedJobIds,
+      });
+      for (const jobId of expectedJobIds) {
+        evidenceRefs[`ref:job-ci-${jobId}`] = { kind: "artifact-file", path: "evidence/ci-job-inventory.json" };
+      }
+      addEvidenceFile("evidence/ci-job-inventory.json", { job_ids: expectedJobIds });
+      const runRef = `ref:github-run-${process.env.GITHUB_RUN_ID}-attempt-${process.env.GITHUB_RUN_ATTEMPT ?? "1"}`;
+      evidenceRefs[runRef] = {
+        kind: "github-run",
+        run_id: Number(process.env.GITHUB_RUN_ID),
+        attempt: Number(process.env.GITHUB_RUN_ATTEMPT ?? 1),
+      };
+      const timingRows = cohort.timing_runs.map((run) => ({
+        databaseId: run.databaseId,
+        headSha: run.headSha,
+        workflowName: run.workflowName,
+        event: run.event,
+        attempt: run.attempt,
+        status: run.status,
+        conclusion: run.conclusion,
+        createdAt: run.createdAt,
+        jobs: run.jobs.map((job) => ({
+          databaseId: job.databaseId,
+          name: job.name,
+          status: job.status,
+          conclusion: job.conclusion,
+          startedAt: job.startedAt,
+          completedAt: job.completedAt,
+          steps: job.steps,
+        })),
+      }));
+      const timingRunSummaries = timingRows.map((run) => summarizeRun(run));
+      const timingCohorts = timingRows.length
+        ? summarizeCohorts(timingRows)
+        : { cohorts: [], note: "No CI runs fell in the closed cohort window." };
+      addEvidenceFile("evidence/ci-attempt1-timings.json", {
+        source: "scripts/ci-run-timings.mjs and scripts/ci-cohort-timings.mjs",
+        attempt_policy: "attempt 1 only",
+        metadata_elapsed_seconds: Number(((performance.now() - metadataStarted) / 1000).toFixed(3)),
+        metadata_budget_seconds: CI_METADATA_BUDGET_MS / 1000,
+        metadata_over_budget: performance.now() - metadataStarted > CI_METADATA_BUDGET_MS,
+        per_run: timingRunSummaries,
+        cohorts: timingCohorts,
+      });
+      const unavailableReason = ciCohortUnavailableReason(cohort);
+      if (unavailableReason) return { unavailable: true, reason: unavailableReason, incomplete_runs: cohort.incomplete_runs };
+      void workflowRef;
+      return {
+        payload,
+        included_refs: [payload.run_inventory_ref],
+        excluded_refs: [],
+        tool: CI_API_TOOL,
+        command: "GET /repos/{owner}/{repo}/actions/workflows/ci.yml/runs and attempt-1 jobs with pagination",
+        workflowRef,
+        scope_policy: {
+          workflow: config.ci.workflow,
+          branch: config.ci.branch,
+          event: config.ci.event,
+          window_days: config.ci.window_days,
+          expected_job_ids: config.ci.expected_job_ids,
+          limits: config.ci.limits,
+          attempt_policy: config.ci.attempt_policy,
+          scope_version: "main-push-current-config-ci-v2",
+        },
+      };
     });
-    const payload = buildCiFirstAttemptPayload({
-      normalizedRuns: cohort.runs,
-      windowStart,
-      windowEnd,
-      workflowConfigDigest: currentWorkflowDigest,
-      expectedJobIds,
-      runInventoryRef: evidenceRef("ci-main-push-28-day-runs"),
-    });
-    const runInventoryPath = "evidence/ci-main-push-28-day-runs.json";
-    addEvidenceFile(
-      runInventoryPath,
-      {
-        source: "GitHub Actions REST API",
-        workflow_path: config.ci.workflow,
-        workflow_config_digest: currentWorkflowDigest,
-        filter: { branch: "main", event: "push", window_start: windowStart, window_end: windowEnd },
-        scope_version: "main-push-current-config-ci-v2",
-        denominator_policy: "current-configuration included runs only; no current-configuration runs is not-collected",
-        api_total_count: apiRuns.length,
-        workflow_runs: runInventoryRows,
-        included_run_ids: cohort.runs.map((run) => Number(run.run_ref.match(/ci-run-(\d+)-attempt-1/)[1])).sort((a, b) => a - b),
-        excluded_runs: cohort.excluded_runs,
-      },
-      payload.run_inventory_ref,
-    );
-    Object.assign(evidenceRefs, runEvidence);
-    const workflowRef = "ref:workflow-ci-main-push";
-    const workflowPath = "evidence/ci-workflow.json";
-    addEvidenceFile(workflowPath, {
-      path: config.ci.workflow,
-      digest: { algorithm: "sha256", value: currentWorkflowDigest },
-      expected_job_ids: expectedJobIds,
-    });
-    for (const jobId of expectedJobIds) {
-      evidenceRefs[`ref:job-ci-${jobId}`] = { kind: "artifact-file", path: "evidence/ci-job-inventory.json" };
-    }
-    addEvidenceFile("evidence/ci-job-inventory.json", { job_ids: expectedJobIds });
-    const runRef = `ref:github-run-${process.env.GITHUB_RUN_ID}-attempt-${process.env.GITHUB_RUN_ATTEMPT ?? "1"}`;
-    evidenceRefs[runRef] = {
-      kind: "github-run",
-      run_id: Number(process.env.GITHUB_RUN_ID),
-      attempt: Number(process.env.GITHUB_RUN_ATTEMPT ?? 1),
-    };
-    const timingRows = cohort.timing_runs.map((run) => ({
-      databaseId: run.databaseId,
-      headSha: run.headSha,
-      workflowName: run.workflowName,
-      event: run.event,
-      attempt: run.attempt,
-      status: run.status,
-      conclusion: run.conclusion,
-      createdAt: run.createdAt,
-      jobs: run.jobs.map((job) => ({
-        databaseId: job.databaseId,
-        name: job.name,
-        status: job.status,
-        conclusion: job.conclusion,
-        startedAt: job.startedAt,
-        completedAt: job.completedAt,
-        steps: job.steps,
-      })),
-    }));
-    const timingRunSummaries = timingRows.map((run) => summarizeRun(run));
-    const timingCohorts = timingRows.length
-      ? summarizeCohorts(timingRows)
-      : { cohorts: [], note: "No CI runs fell in the closed cohort window." };
-    addEvidenceFile("evidence/ci-attempt1-timings.json", {
-      source: "scripts/ci-run-timings.mjs and scripts/ci-cohort-timings.mjs",
-      attempt_policy: "attempt 1 only",
-      metadata_elapsed_seconds: Number(((performance.now() - metadataStarted) / 1000).toFixed(3)),
-      metadata_budget_seconds: CI_METADATA_BUDGET_MS / 1000,
-      metadata_over_budget: performance.now() - metadataStarted > CI_METADATA_BUDGET_MS,
-      per_run: timingRunSummaries,
-      cohorts: timingCohorts,
-    });
-    const unavailableReason = ciCohortUnavailableReason(cohort);
-    if (unavailableReason) return { unavailable: true, reason: unavailableReason, incomplete_runs: cohort.incomplete_runs };
-    void workflowRef;
-    return {
-      payload,
-      included_refs: [payload.run_inventory_ref],
-      excluded_refs: [],
-      tool: CI_API_TOOL,
-      command: "GET /repos/{owner}/{repo}/actions/workflows/ci.yml/runs and attempt-1 jobs with pagination",
-      workflowRef,
-      scope_policy: {
-        workflow: config.ci.workflow,
-        branch: config.ci.branch,
-        event: config.ci.event,
-        window_days: config.ci.window_days,
-        expected_job_ids: config.ci.expected_job_ids,
-        limits: config.ci.limits,
-        attempt_policy: config.ci.attempt_policy,
-        scope_version: "main-push-current-config-ci-v2",
-      },
-    };
-  });
+  } finally {
+    request.close();
+  }
   if (result.status === "measured" && result.value.unavailable) {
     const collector = collectionStatus.collectors["ci-first-attempt"];
     collector.status = result.value.reason === "not-collected" ? "not-collected" : "failed";
@@ -1174,7 +1515,7 @@ function validateCiRunContext(commitSha) {
   return context;
 }
 
-function main() {
+async function main() {
   const options = parseProducerOptions(process.argv.slice(2));
   if (options.help) {
     process.stdout.write("Usage: node scripts/code-health-produce.mjs --output-dir PATH [--mode static|ci-only] [--ci]\n");
@@ -1248,7 +1589,7 @@ function main() {
       ciRuntime = validateCiRunContext(commitSha);
       runRef = ciRuntime.runRef;
       attempt = ciRuntime.attempt;
-      collectCi(observedAt);
+      await collectCi(observedAt);
     }
     addEvidenceFile(
       "evidence/ci-workflow.json",
@@ -1309,10 +1650,8 @@ function isDirectEntry() {
 }
 
 if (isDirectEntry()) {
-  try {
-    main();
-  } catch (error) {
+  main().catch((error) => {
     process.stderr.write(`code-health-produce: ${safeDiagnostic(error?.message ?? error)}\n`);
     process.exitCode = 1;
-  }
+  });
 }
