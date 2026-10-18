@@ -206,7 +206,7 @@ export function judgeStep(step, shell, exceptions = []) {
       ...judged,
       verdict: null,
       problem:
-        "carries the PowerShell preference lines but does not name shell: pwsh itself, so a changed defaults.run.shell would move it to another shell",
+        "carries the PowerShell preference lines, so its shell must be exactly `shell: pwsh`: a default, another shell or a template changes what the lines do",
     };
   }
   if (stopsAtFirstFailure(shell)) return { ...judged, verdict: "bash" };

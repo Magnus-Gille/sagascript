@@ -233,8 +233,16 @@ test("a step with the preference lines names shell: pwsh itself, so a changed de
     ["a workflow default of bash", workflowWith({ shell: undefined, script: body, top: "defaults:\n  run:\n    shell: bash" })],
     ["Windows PowerShell 5.1, which ignores the native-exit preference", workflowWith({ shell: "powershell", script: body })],
     ["a step that says bash", workflowWith({ shell: "bash", script: body })],
+    [
+      "a pwsh template, which is not the shell the lines are written for",
+      workflowWith({ shell: "pwsh -NoProfile -command \". '{0}'\"", script: body }),
+    ],
   ]) {
-    assert.match(problemsOf(workflow).join("\n"), /carries the PowerShell preference lines but does not name shell: pwsh itself/, what);
+    assert.match(
+      problemsOf(workflow).join("\n"),
+      /carries the PowerShell preference lines, so its shell must be exactly `shell: pwsh`/,
+      what,
+    );
   }
   // Composite actions always name their shell, so the same rule reads their step.
   const action = (shell) => ({
