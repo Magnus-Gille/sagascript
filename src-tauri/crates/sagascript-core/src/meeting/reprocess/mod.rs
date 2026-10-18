@@ -6,6 +6,7 @@
 //! conflict before accepting the result.
 
 pub mod matching;
+pub mod plan;
 
 use std::collections::BTreeMap;
 
