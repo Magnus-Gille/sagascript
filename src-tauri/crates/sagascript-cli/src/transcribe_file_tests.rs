@@ -1348,14 +1348,29 @@ mod assembling_the_plain_result {
         evidence: &LanguageEvidence,
     ) -> PlainResult {
         // Silence has no speech for the coverage check to miss.
-        let audio = vec![0.0_f32; 60 * 16_000];
+        assemble_over(
+            &vec![0.0_f32; 60 * 16_000],
+            segments,
+            language,
+            glossary,
+            evidence,
+        )
+    }
+
+    fn assemble_over(
+        audio: &[f32],
+        segments: Vec<TranscriptSegment>,
+        language: Language,
+        glossary: &Glossary,
+        evidence: &LanguageEvidence,
+    ) -> PlainResult {
         assemble_plain_result(PlainInput {
             segments,
-            audio: &audio,
+            audio,
             language,
             model: WhisperModel::Base,
             file: Path::new("clip.wav"),
-            duration: 60.0,
+            duration: audio.len() as f64 / 16_000.0,
             glossary,
             hint_vocabulary: None,
             language_evidence: evidence,
@@ -1407,6 +1422,36 @@ mod assembling_the_plain_result {
             result.json["warnings"][0]["code"],
             "repetitive_hallucination"
         );
+    }
+
+    #[test]
+    fn coverage_is_judged_on_the_trusted_segments_so_a_quarantined_loop_is_not_covered() {
+        // Speech-like all through the 55 s; the loop at 10-50 s is set aside, so
+        // what the transcript covers is the greeting (0-5 s) and the farewell
+        // (50-55 s) and the 45 s between them are speech nobody transcribed.
+        let audio: Vec<f32> = (0..55 * 16_000)
+            .map(|index| if index % 2 == 0 { 0.3 } else { -0.3 })
+            .collect();
+        let result = assemble_over(
+            &audio,
+            with_a_loop(),
+            Language::English,
+            &Glossary::default(),
+            &evidence(None, None),
+        );
+
+        let spans = result.json["uncovered_spans"].as_array().unwrap();
+        assert_eq!(spans.len(), 1, "{}", result.json["uncovered_spans"]);
+        assert_eq!(spans[0]["start"], 5.0);
+        assert_eq!(spans[0]["end"], 50.0);
+        assert!((result.json["coverage_ratio"].as_f64().unwrap() - 10.0 / 55.0).abs() < 0.01);
+        let codes: Vec<&str> = result.warnings.iter().map(|w| w.code.as_str()).collect();
+        assert_eq!(codes, ["uncovered_speech", "repetitive_hallucination"]);
+        assert_eq!(result.warnings[0].start, Some(5.0));
+        assert_eq!(result.warnings[0].end, Some(50.0));
+        // The loop is still in the JSON, flagged, and out of the text.
+        assert_eq!(result.text, "Hello there. Goodbye.");
+        assert_eq!(result.json["segments"][1]["quarantined"], true);
     }
 
     #[test]
