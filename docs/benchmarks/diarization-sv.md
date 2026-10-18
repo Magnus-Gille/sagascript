@@ -285,17 +285,18 @@ the embedding model is the same, so this is a warning, not a measurement of Swed
 2. The threshold barely mattered on main because of the stabilisation step. Window stitching
    produces only 2-3 global tracks on a turn-taking debate (SoU38: 2 tracks for 6 speakers) and
    every track was forced into a single embedding cluster (`stabilize_clusters_by_track`,
-   `diarization/mod.rs`). The number of speakers could never exceed the number of tracks, so
-   lowering the threshold changed nothing (SoU38: 2 speakers at every threshold from 0.3 to 0.75),
+   then in `diarization/mod.rs`; since replaced by the change below). The number of speakers
+   could never exceed the number of tracks, so lowering the threshold changed nothing (SoU38: 2 speakers at every threshold from 0.3 to 0.75),
    matching the report in #284.
 3. Without that cap, clustering over-splits short noisy segments into small spurious clusters.
 
 ## Change
 
-- `diarization/mod.rs`: each embedded segment keeps its own embedding cluster
-  (`assign_speaker_labels`); tracks are only a fallback label for segments too short to embed or
+- `diarization/engine/mod.rs` (then `diarization/mod.rs`): each embedded segment keeps its own
+  embedding cluster (`assign_speaker_labels`); tracks are only a fallback label for segments too short to embed or
   whose embedding is degenerate (zero norm).
-- `diarization/clustering.rs`: `absorb_small_clusters` (see above), aggregates computed once.
+- `diarization/engine/clustering.rs` (then `diarization/clustering.rs`): `absorb_small_clusters`
+  (see above), aggregates computed once.
 - Default threshold 0.75 -> 0.34 (`DEFAULT_THRESHOLD` in core; the `transcribe --diarize-threshold`,
   `meeting reprocess` CLI and reprocessing UI literals are pinned by tests). Clustering stays
   threshold-only, so `--diarize-cache` reruns skip segmentation and embeddings as before. Speed:
