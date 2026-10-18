@@ -52,13 +52,21 @@ mod language_selection_tests {
 
 #[cfg(test)]
 mod auto_paste_tests {
-    use super::effective_auto_paste;
+    use sagascript_core::settings::{Accessibility, Settings};
+
+    /// What the setter stores for a request, given what it found out about the
+    /// permission: the shared operation the CLI calls as well (#373).
+    fn stored(requested: bool, accessibility: Accessibility) -> bool {
+        let mut settings = Settings::default();
+        settings.set_auto_paste(requested, accessibility);
+        settings.auto_paste
+    }
 
     #[test]
     fn enabling_never_persists_true_before_accessibility_is_trusted() {
-        assert!(!effective_auto_paste(true, false));
-        assert!(effective_auto_paste(true, true));
-        assert!(!effective_auto_paste(false, true));
+        assert!(!stored(true, Accessibility::Denied));
+        assert!(stored(true, Accessibility::Granted));
+        assert!(!stored(false, Accessibility::Granted));
     }
 }
 

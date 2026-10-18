@@ -55,6 +55,20 @@ fn hotkey_mode_serde() {
     assert_eq!(serde_json::to_string(&legacy).unwrap(), "\"push\"");
 }
 
+#[test]
+fn hotkey_mode_ids_are_the_serde_names_and_presenter_is_not_one() {
+    for mode in HotkeyMode::ALL {
+        assert_eq!(
+            serde_json::to_value(mode).unwrap(),
+            serde_json::Value::String(mode.id().to_owned())
+        );
+        assert_eq!(HotkeyMode::from_id(mode.id()), Some(mode));
+    }
+    assert_eq!(HotkeyMode::from_id("presenter"), None);
+    assert_eq!(HotkeyMode::from_id("Push"), None);
+    assert_eq!(HotkeyMode::from_id(""), None);
+}
+
 // -- Settings --
 
 #[test]
@@ -892,6 +906,53 @@ fn legacy_hotkey_update_tracks_explicit_primary_binding() {
 }
 
 #[test]
+fn the_default_profile_is_the_one_called_default_else_the_first() {
+    let profiles = [
+        profile("english", "Super+E", Language::English),
+        profile("default", "Super+D", Language::Swedish),
+    ];
+    assert_eq!(HotkeyProfile::default_index(&profiles), 1);
+    assert_eq!(HotkeyProfile::default_index(&profiles[..1]), 0);
+}
+
+/// With explicit profiles and none called `default`, the legacy hotkey update
+/// used to write `hotkey` alone, which no binding reads (#373). It now changes
+/// the first profile, the one `default_profile()` returns, as the app's
+/// `set_hotkey` always did.
+#[test]
+fn legacy_hotkey_update_edits_the_first_profile_when_none_is_called_default() {
+    let mut settings = Settings::default();
+    settings
+        .replace_hotkey_profiles(vec![
+            profile("english", "Super+E", Language::English),
+            profile("swedish", "Super+S", Language::Swedish),
+        ])
+        .unwrap();
+    assert_eq!(settings.default_profile().id, "english");
+    settings
+        .try_set_legacy_hotkey("Control+Alt+D".to_string())
+        .unwrap();
+    assert_eq!(settings.hotkey, "Control+Alt+D");
+    assert_eq!(settings.hotkey_profiles[0].shortcut, "Control+Alt+D");
+    assert_eq!(settings.hotkey_profiles[1].shortcut, "Super+S");
+    assert_eq!(
+        settings.resolved_shortcuts(),
+        vec!["Control+Alt+D".to_string(), "Super+S".to_string()]
+    );
+}
+
+#[test]
+fn legacy_hotkey_update_without_explicit_profiles_moves_the_implicit_one() {
+    let mut settings = Settings::default();
+    assert!(settings.hotkey_profiles.is_empty());
+    settings
+        .try_set_legacy_hotkey("Control+Alt+D".to_string())
+        .unwrap();
+    assert!(settings.hotkey_profiles.is_empty());
+    assert_eq!(settings.resolved_shortcuts(), vec!["Control+Alt+D"]);
+}
+
+#[test]
 fn replacing_profiles_syncs_legacy_fields_from_default() {
     let mut settings = Settings::default();
     settings
@@ -1106,6 +1167,16 @@ fn file_model_preference_ids_are_the_model_ids() {
         FileModelPreference::parse_id("auto"),
         Ok(FileModelPreference::Auto)
     );
+    for preference in [
+        FileModelPreference::Auto,
+        FileModelPreference::Whisper(WhisperModel::KbWhisperSmall),
+        FileModelPreference::PianissimoOriginal,
+    ] {
+        assert_eq!(
+            FileModelPreference::parse_id(preference.id()),
+            Ok(preference)
+        );
+    }
     assert_eq!(
         FileModelPreference::parse_id("large-v3"),
         Err("Unknown file model preference 'large-v3'".to_owned())

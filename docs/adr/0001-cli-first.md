@@ -29,7 +29,10 @@ a `Settings` field has no `config` key.
 The rule has drifted where the two surfaces implement the same intent twice. `config set
 language` calls only `set_default_profile_language`, while the app's `set_language`
 (`apply_language_selection` in `commands/settings.rs`) also resets `whisper_model` and
-`auto_select_model`; only some subcommands offer `--json` (#373, #364).
+`auto_select_model`; only some subcommands offer `--json` (#373, #364). Since #373 part 1 the
+settings operations are one implementation in core (`Settings::apply_language_selection` and its
+siblings, `settings/ops.rs`) and both surfaces call it; the decision for each operation is in
+[ARCHITECTURE.md §2.2](../ARCHITECTURE.md#22-settings-layers-disk--store--appcontroller--watcher--frontend).
 
 ## Decision
 
@@ -50,9 +53,12 @@ language` calls only `set_default_profile_language`, while the app's `set_langua
 
 - Features are testable and scriptable without a GUI, signing or TCC permissions, and the lean
   CLI builds on platforms the GUI does not target.
-- Two surfaces can drift. Until #373 lands (shared operations and a parity test table),
-  reviewers check parity by hand; [add-setting.md](../recipes/add-setting.md) includes the
-  manual parity check.
+- Two surfaces can still drift in what they do around an operation. The parity table
+  (`core::test_support::settings_ops_table`, run by the CLI and by the app) fails when a surface
+  persists something else than the shared operation for any settings row; a new operation gets a
+  row ([add-setting.md](../recipes/add-setting.md)). Operations outside the table (dictionaries,
+  model lists, the part 2 of #373) are still checked by hand.
 - The app depends on the CLI crate, also for meeting pipelines, which pulls clap and friends
   into the GUI; #374 moves those pipelines to core.
-- A new setting touches `config.rs` in several places; the key-count test catches omissions.
+- A new setting is one entry in the CLI's key table (`config/keys.rs`); the key-count test
+  catches an omission.

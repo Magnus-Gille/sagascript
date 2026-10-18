@@ -49,6 +49,17 @@ pub enum FileModelPreference {
 }
 
 impl FileModelPreference {
+    /// Stable identifier of this preference: `auto`, a Whisper model's
+    /// [`WhisperModel::id`] or [`FileModel::PIANISSIMO_ID`]. What the settings
+    /// file stores and `config get` prints; [`Self::parse_id`] is its inverse.
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Whisper(model) => model.id(),
+            Self::PianissimoOriginal => FileModel::PIANISSIMO_ID,
+        }
+    }
+
     /// Parse one of the stable persisted model identifiers.
     pub fn parse_id(id: &str) -> Result<Self, String> {
         match id {
@@ -66,11 +77,7 @@ impl Serialize for FileModelPreference {
     where
         S: Serializer,
     {
-        match self {
-            Self::Auto => serializer.serialize_str("auto"),
-            Self::Whisper(model) => model.serialize(serializer),
-            Self::PianissimoOriginal => serializer.serialize_str(FileModel::PIANISSIMO_ID),
-        }
+        serializer.serialize_str(self.id())
     }
 }
 
@@ -109,6 +116,26 @@ pub enum HotkeyMode {
     PushToTalk,
     #[serde(rename = "toggle")]
     Toggle,
+}
+
+impl HotkeyMode {
+    /// Both modes, in the order the app lists them.
+    pub const ALL: [HotkeyMode; 2] = [HotkeyMode::PushToTalk, HotkeyMode::Toggle];
+
+    /// Stable identifier of this mode: what the settings file stores and
+    /// `sagascript config` prints.
+    pub fn id(self) -> &'static str {
+        match self {
+            HotkeyMode::PushToTalk => "push",
+            HotkeyMode::Toggle => "toggle",
+        }
+    }
+
+    /// The mode with this stable identifier, if any. The retired `presenter`
+    /// is not one: only a settings file is still read with it (as `push`).
+    pub fn from_id(id: &str) -> Option<HotkeyMode> {
+        HotkeyMode::ALL.into_iter().find(|mode| mode.id() == id)
+    }
 }
 
 /// When the Pianissimo engine host loads its model ahead of the first utterance.
@@ -180,6 +207,17 @@ impl HotkeyProfile {
             push_to_talk_shortcut: None,
             toggle_shortcut: None,
         }
+    }
+
+    /// Index of the default profile in `profiles`: the one called `default`,
+    /// else the first. `profiles` must not be empty. The profile that `hotkey`
+    /// and `language` mirror, that `default_profile()` returns and that the
+    /// legacy-named operations (`config set hotkey`, `set_language`) change.
+    pub fn default_index(profiles: &[HotkeyProfile]) -> usize {
+        profiles
+            .iter()
+            .position(|profile| profile.id == "default")
+            .unwrap_or(0)
     }
 
     /// Update the compatibility shortcut and whichever explicit binding is
@@ -414,11 +452,7 @@ impl Settings {
 
     pub fn default_profile(&self) -> HotkeyProfile {
         let profiles = self.resolved_hotkey_profiles();
-        profiles
-            .iter()
-            .find(|profile| profile.id == "default")
-            .unwrap_or(&profiles[0])
-            .clone()
+        profiles[HotkeyProfile::default_index(&profiles)].clone()
     }
 
     /// Preserve the effective live model of every existing profile before
@@ -642,10 +676,7 @@ impl Settings {
     ) -> Result<Vec<ModelResetNotice>, String> {
         let mut candidate = self.clone();
         let mut profiles = candidate.resolved_hotkey_profiles();
-        let index = profiles
-            .iter()
-            .position(|profile| profile.id == "default")
-            .unwrap_or(0);
+        let index = HotkeyProfile::default_index(&profiles);
         profiles[index].language = language;
         let notices = candidate.replace_hotkey_profiles_gated(profiles, pianissimo_supported)?;
         *self = candidate;
@@ -1034,10 +1065,7 @@ impl Settings {
                 profile.id
             ));
         }
-        let legacy = profiles
-            .iter()
-            .find(|profile| profile.id == "default")
-            .unwrap_or(&profiles[0]);
+        let legacy = &profiles[HotkeyProfile::default_index(&profiles)];
         let mut candidate = self.clone();
         candidate.hotkey = legacy.shortcut.clone();
         candidate.language = legacy.language;
@@ -1117,16 +1145,17 @@ impl Settings {
         Ok(())
     }
 
-    /// Try to update the legacy/default profile shortcut atomically.
+    /// Try to update the legacy/default profile shortcut atomically. The default
+    /// profile is the one called `default`, else the first
+    /// ([`HotkeyProfile::default_index`]): with no profile called `default`
+    /// this used to store the shortcut in `hotkey` alone, which no binding
+    /// reads, so `config set hotkey` changed nothing that fires (#373).
     pub fn try_set_legacy_hotkey(&mut self, shortcut: String) -> Result<(), String> {
         let mut candidate = self.clone();
         candidate.hotkey = shortcut.clone();
-        if let Some(profile) = candidate
-            .hotkey_profiles
-            .iter_mut()
-            .find(|profile| profile.id == "default")
-        {
-            profile.set_primary_shortcut(shortcut);
+        if !candidate.hotkey_profiles.is_empty() {
+            let index = HotkeyProfile::default_index(&candidate.hotkey_profiles);
+            candidate.hotkey_profiles[index].set_primary_shortcut(shortcut);
         }
         candidate.validate_shortcut_configuration()?;
         self.hotkey = candidate.hotkey;
