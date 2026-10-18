@@ -413,7 +413,7 @@ fn drop_invalid_profile_models(object: &mut Object) -> bool {
 fn decode_object(
     object: &Object,
     dropped_profile_models: bool,
-) -> Result<lenient::Decoded, String> {
+) -> Result<lenient::Decoded, serde_json::Error> {
     let mut decoded = lenient::decode(object)?;
     if dropped_profile_models && !decoded.reset.iter().any(|key| key == PROFILE_MODELS_KEY) {
         decoded.reset.push(PROFILE_MODELS_KEY.to_string());

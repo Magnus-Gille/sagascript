@@ -34,7 +34,7 @@ const HOTKEY_PROFILES: &str = "hotkey_profiles";
 /// reset (`hotkey_profiles` keeps the profiles [`readable_profiles`] can
 /// read) and the rest decodes; unknown keys never count as invalid. Fails
 /// only if the object is invalid without any single field to blame.
-pub(crate) fn decode(object: &Object) -> Result<Decoded, String> {
+pub(crate) fn decode(object: &Object) -> Result<Decoded, serde_json::Error> {
     let strict_error = match serde_json::from_value(Value::Object(object.clone())) {
         Ok(settings) => {
             return Ok(Decoded {
@@ -50,15 +50,14 @@ pub(crate) fn decode(object: &Object) -> Result<Decoded, String> {
         .map(|(key, _)| key.clone())
         .collect();
     if reset.is_empty() {
-        return Err(strict_error.to_string());
+        return Err(strict_error);
     }
     reset.sort();
     let mut rest = object.clone();
     for key in &reset {
         rest.remove(key);
     }
-    let mut settings: Settings =
-        serde_json::from_value(Value::Object(rest)).map_err(|error| error.to_string())?;
+    let mut settings: Settings = serde_json::from_value(Value::Object(rest))?;
     if let Some(profiles) = object
         .get(HOTKEY_PROFILES)
         .filter(|_| reset.iter().any(|key| key == HOTKEY_PROFILES))
