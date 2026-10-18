@@ -148,6 +148,29 @@ test("the pwsh preferences must be the first two command lines and must stay on"
   assert.deepEqual(ok(`${PREFERENCES}Remove-Item x -ErrorAction SilentlyContinue\nnpm run check`), []);
 });
 
+test("a step with the preference lines names shell: pwsh itself, so a changed default cannot move it", () => {
+  const body = `${PREFERENCES}npm run build\nnpm run check`;
+  assert.deepEqual(problemsOf(workflowWith({ shell: "pwsh", script: body })), []);
+  // The lines are PowerShell. Left to the default, a later `defaults.run.shell: bash` would hand them to Git Bash,
+  // which the guard would then wave through as bash.
+  for (const [what, workflow] of [
+    ["no shell on a Windows runner", workflowWith({ shell: undefined, script: body })],
+    ["a job default of bash", workflowWith({ shell: undefined, script: body, jobExtra: "    defaults:\n      run:\n        shell: bash" })],
+    ["a workflow default of bash", workflowWith({ shell: undefined, script: body, top: "defaults:\n  run:\n    shell: bash" })],
+    ["Windows PowerShell 5.1, which ignores the native-exit preference", workflowWith({ shell: "powershell", script: body })],
+    ["a step that says bash", workflowWith({ shell: "bash", script: body })],
+  ]) {
+    assert.match(problemsOf(workflow).join("\n"), /carries the PowerShell preference lines but does not name shell: pwsh itself/, what);
+  }
+  // Composite actions always name their shell, so the same rule reads their step.
+  const action = (shell) => ({
+    name: "setup",
+    action: parseAction(`name: setup\nruns:\n  using: composite\n  steps:\n    - shell: ${shell}\n      run: |\n${block(body)}`),
+  });
+  assert.deepEqual(windowsShellAudit({ workflows: [], actions: [action("pwsh")] }).problems, []);
+  assert.equal(windowsShellAudit({ workflows: [], actions: [action("powershell")] }).problems.length, 1);
+});
+
 test("exceptions are pinned to the audited script, are reported when stale, and never excuse bash-less cmd", () => {
   const script = "./scripts/accept.ps1 -Fixture a.mp3\nif (-not (Test-Path 'out.json')) { throw 'missing' }";
   const workflow = workflowWith({ shell: "powershell", script });

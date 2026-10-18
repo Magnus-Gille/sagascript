@@ -136,6 +136,10 @@ const matchesException = (exception, shell, lines) =>
       exception.lines.length === lines.length &&
       exception.lines.every((pattern, index) => pattern.test(lines[index]) && commandsOnLine(lines[index], shell) === 1)));
 
+/** True when a script's first two command lines are the two PWSH_PREFERENCES, in either order. */
+const carriesPreferences = (lines) =>
+  PWSH_PREFERENCES.every((preference) => lines.slice(0, PWSH_PREFERENCES.length).some((line) => preference.pattern.test(line)));
+
 /**
  * Whether a step is acceptable. Returns `{ verdict, lines, commands, problem?, exception? }`: `verdict` names why
  * it passes ("single command", "bash", "pwsh preferences", "exception: <reason>") or is null with a `problem`.
@@ -147,12 +151,20 @@ export function judgeStep(step, shell, exceptions = []) {
   const commands = lines.reduce((count, line) => count + commandsOnLine(line, shell), 0);
   const judged = { lines, commands };
   if (commands <= 1) return { ...judged, verdict: "single command" };
+  // The preference lines are PowerShell. A step that carries them must say `shell: pwsh` itself: left to the default,
+  // a changed `defaults.run.shell` would hand them to another shell, and this guard would judge the step by that one.
+  if (carriesPreferences(lines) && String(step.shell ?? "").trim() !== "pwsh") {
+    return {
+      ...judged,
+      verdict: null,
+      problem:
+        "carries the PowerShell preference lines but does not name shell: pwsh itself, so a changed defaults.run.shell would move it to another shell",
+    };
+  }
   if (shell === "bash") return { ...judged, verdict: "bash" };
   let problem;
   if (shell === "pwsh") {
-    const missing = PWSH_PREFERENCES.some(
-      (preference) => !lines.slice(0, PWSH_PREFERENCES.length).some((line) => preference.pattern.test(line)),
-    );
+    const missing = !carriesPreferences(lines);
     const weakened = lines.slice(2).find((line) => PWSH_WEAKENING.some((pattern) => pattern.test(line)));
     if (!missing && weakened === undefined) return { ...judged, verdict: "pwsh preferences" };
     const why =

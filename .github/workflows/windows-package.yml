@@ -278,13 +278,15 @@ jobs:
       # request does not repeat them on either architecture. They stay for releases (workflow_call
       # from prebuild-release.yml) and manual runs, whose candidates are gated here. Under pwsh only the
       # LAST command's exit code counted, so this step gated nothing and ARM64 tests had no gate at all
-      # (#436). It stays in pwsh, not bash: Git Bash rewrites the ARM64 build environment exported above
-      # (CMAKE_CXX_FLAGS=/EHsc /utf-8 arrives as "C:/Program Files/Git/EHsc /utf-8"), which would change
-      # how whisper.cpp is compiled. The two preference lines make any native command that exits
-      # non-zero stop the step, as bash -e would.
+      # (#436). It names pwsh itself, not bash and not the default: Git Bash rewrites the ARM64 build
+      # environment exported above (CMAKE_CXX_FLAGS=/EHsc /utf-8 arrives as "C:/Program Files/Git/EHsc
+      # /utf-8"), which would change how whisper.cpp is compiled, and a changed defaults.run.shell must
+      # not move this release-only step unseen. The two preference lines make any native command that
+      # exits non-zero stop the step, as bash -e would.
       - name: Test and lint Rust workspace
         if: github.event_name != 'pull_request'
         working-directory: src-tauri
+        shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
