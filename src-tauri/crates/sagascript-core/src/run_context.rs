@@ -62,12 +62,8 @@ impl RunSelection {
     ) -> Result<Self, DictationError> {
         let profile = match overrides.profile {
             Some(id) => settings
-                .resolved_hotkey_profiles()
-                .into_iter()
-                .find(|profile| profile.id == id)
-                .ok_or_else(|| {
-                    DictationError::SettingsError(format!("Unknown dictation profile '{id}'"))
-                })?,
+                .dictation_profile(id)
+                .map_err(|unknown| DictationError::SettingsError(unknown.to_string()))?,
             None => settings.default_profile(),
         };
         let selection = Self {

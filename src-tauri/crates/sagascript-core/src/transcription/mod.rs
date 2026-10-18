@@ -26,7 +26,8 @@ mod metal_preflight;
 pub use crate::glossary;
 pub use crate::glossary::{Glossary, GlossaryCorrection, GlossaryEntry};
 pub use glossary_suggestions::{
-    suggest_glossary_candidates, GlossarySuggestion, GlossarySuggestionKind,
+    apply_glossary_candidates, is_reviewable_term, suggest_glossary_candidates, GlossarySuggestion,
+    GlossarySuggestionKind,
 };
 pub use live_dictation::LiveDictationBackend;
 pub use postprocess::normalize_nonspeech_markers;

@@ -12,6 +12,18 @@ use crate::glossary::Glossary;
 // callers import from `sagascript_core::models`.
 pub use crate::models::{FileModel, Language, WhisperModel};
 
+/// No dictation profile has this id. Its text is what both surfaces print.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnknownProfile(pub String);
+
+impl std::fmt::Display for UnknownProfile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Unknown dictation profile '{}'", self.0)
+    }
+}
+
+impl std::error::Error for UnknownProfile {}
+
 /// Resolve an `Auto` file-model preference against what is downloaded.
 /// `allow_pianissimo` false yields Whisper models only.
 fn auto_file_model(
@@ -453,6 +465,15 @@ impl Settings {
     pub fn default_profile(&self) -> HotkeyProfile {
         let profiles = self.resolved_hotkey_profiles();
         profiles[HotkeyProfile::default_index(&profiles)].clone()
+    }
+
+    /// The dictation profile with this id (#373): the one lookup behind every
+    /// "Unknown dictation profile" refusal of the CLI and the app.
+    pub fn dictation_profile(&self, id: &str) -> Result<HotkeyProfile, UnknownProfile> {
+        self.resolved_hotkey_profiles()
+            .into_iter()
+            .find(|profile| profile.id == id)
+            .ok_or_else(|| UnknownProfile(id.to_owned()))
     }
 
     /// Preserve the effective live model of every existing profile before
@@ -1059,12 +1080,7 @@ impl Settings {
                     && self
                         .profile_glossaries
                         .get(&profile.id)
-                        .is_some_and(|source| {
-                            Glossary::parse(source)
-                                .entries()
-                                .iter()
-                                .any(|entry| !entry.aliases.is_empty())
-                        })
+                        .is_some_and(|source| Glossary::parse(source).has_aliases())
             })
         }) {
             return Err(format!(
@@ -1145,12 +1161,7 @@ impl Settings {
             && self
                 .profile_glossaries
                 .get("default")
-                .is_some_and(|source| {
-                    Glossary::parse(source)
-                        .entries()
-                        .iter()
-                        .any(|entry| !entry.aliases.is_empty())
-                })
+                .is_some_and(|source| Glossary::parse(source).has_aliases())
         {
             return Err(
                 "Profile 'default' has a personal dictionary; clear it before changing the profile language"
