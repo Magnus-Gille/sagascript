@@ -643,7 +643,7 @@ mod tests {
             "CmdOrCtrl+Q",
             "Control+Super+Shift+Q",
         ] {
-            let error = validate_hotkey(shortcut).unwrap_err();
+            let error = validate_hotkey(shortcut).unwrap_err().to_string();
             assert!(
                 error.contains("reserved for Quit on macOS"),
                 "unexpected error for {shortcut}: {error}"

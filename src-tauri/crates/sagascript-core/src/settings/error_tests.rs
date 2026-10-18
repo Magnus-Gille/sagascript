@@ -41,7 +41,7 @@ fn every_variant_keeps_its_text_and_has_a_stable_snake_case_code() {
         ),
         (
             SettingsError::ModelIncompatibleWithProfile {
-                model: "Whisper Tiny (EN)".into(),
+                model: "Whisper Tiny (EN)",
                 profile_id: "default".into(),
             },
             "Model 'Whisper Tiny (EN)' is incompatible with profile 'default'",
@@ -49,8 +49,8 @@ fn every_variant_keeps_its_text_and_has_a_stable_snake_case_code() {
         ),
         (
             SettingsError::ModelIncompatibleWithLanguage {
-                model: "KB-Whisper Tiny".into(),
-                language: "English".into(),
+                model: "KB-Whisper Tiny",
+                language: "English",
             },
             "Whisper model 'KB-Whisper Tiny' is incompatible with English",
             "model_incompatible",

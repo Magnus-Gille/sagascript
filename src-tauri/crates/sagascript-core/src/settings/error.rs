@@ -47,11 +47,17 @@ pub enum SettingsError {
 
     /// A model cannot serve the language of the profile it was chosen for.
     #[error("Model '{model}' is incompatible with profile '{profile_id}'")]
-    ModelIncompatibleWithProfile { model: String, profile_id: String },
+    ModelIncompatibleWithProfile {
+        model: &'static str,
+        profile_id: String,
+    },
 
     /// A model cannot serve the language of the file run.
     #[error("Whisper model '{model}' is incompatible with {language}")]
-    ModelIncompatibleWithLanguage { model: String, language: String },
+    ModelIncompatibleWithLanguage {
+        model: &'static str,
+        language: &'static str,
+    },
 
     /// Pianissimo only serves a Swedish profile, and this one is not.
     #[error("Pianissimo is only available for Swedish profile '{profile_id}'")]

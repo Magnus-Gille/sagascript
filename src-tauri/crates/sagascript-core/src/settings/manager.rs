@@ -553,7 +553,7 @@ impl Settings {
             }
             FileModelPreference::Whisper(model) => {
                 Err(SettingsError::ModelIncompatibleWithProfile {
-                    model: model.display_name().to_string(),
+                    model: model.display_name(),
                     profile_id: profile_id.to_string(),
                 })
             }
@@ -626,7 +626,7 @@ impl Settings {
         match preference {
             FileModelPreference::Whisper(model) if !model.is_compatible_with(profile.language) => {
                 return Err(SettingsError::ModelIncompatibleWithProfile {
-                    model: model.display_name().to_string(),
+                    model: model.display_name(),
                     profile_id: profile_id.to_string(),
                 });
             }
@@ -886,8 +886,8 @@ impl Settings {
             }
             FileModelPreference::Whisper(model) => {
                 Err(SettingsError::ModelIncompatibleWithLanguage {
-                    model: model.display_name().to_string(),
-                    language: language.display_name().to_string(),
+                    model: model.display_name(),
+                    language: language.display_name(),
                 })
             }
             FileModelPreference::PianissimoOriginal if language == Language::Swedish => {

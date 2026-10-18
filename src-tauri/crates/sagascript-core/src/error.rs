@@ -222,6 +222,20 @@ impl From<DictationError> for String {
 mod tests {
     use super::*;
 
+    /// `Result<_, DictationError>` is returned all over the workspace, and the
+    /// CLI's reprocessing error holds two paths beside one. On Windows a
+    /// `PathBuf` is 32 bytes, so a `DictationError` of 64 bytes pushes that error
+    /// to clippy's `result_large_err` limit of 128. Keep payloads small: a name
+    /// that is a `&'static str` rather than a `String`, a big variant boxed.
+    #[test]
+    fn a_dictation_error_stays_small() {
+        assert!(
+            std::mem::size_of::<DictationError>() <= 56,
+            "DictationError is {} bytes",
+            std::mem::size_of::<DictationError>()
+        );
+    }
+
     #[test]
     fn display_microphone_permission() {
         let err = DictationError::MicrophonePermissionDenied;
