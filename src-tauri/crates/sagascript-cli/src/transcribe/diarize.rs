@@ -148,7 +148,7 @@ pub(super) fn run_diarization_analysis(
 /// The analysis on a worker thread while this one runs the Whisper half. The
 /// analysis' error comes first, as in the sequential order.
 #[cfg(feature = "diarization")]
-fn analyze_overlapped(
+pub(super) fn analyze_overlapped(
     audio: &[f32],
     services: Services<'_>,
     language: Language,
@@ -174,7 +174,7 @@ fn analyze_overlapped(
 /// The analysis, then the Whisper half; a failed analysis ends the run before
 /// Whisper starts.
 #[cfg(feature = "diarization")]
-fn analyze_in_sequence(
+pub(super) fn analyze_in_sequence(
     audio: &[f32],
     services: Services<'_>,
     language: Language,

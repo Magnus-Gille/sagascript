@@ -16,6 +16,8 @@ use std::sync::Mutex;
 use clap::Parser;
 use sagascript_core::audio::wav::encode_wav;
 use sagascript_core::transcription::diagnostics::LanguageDetection;
+#[cfg(feature = "diarization")]
+use sagascript_core::transcription::DiarizationTranscription;
 use sagascript_testsupport::TempDir;
 use serde_json::{json, Value};
 
@@ -25,6 +27,10 @@ use super::*;
 use sagascript_core::transcription::{ContextProfile, TranscribeOptions, TranscriptSegment};
 
 // ---- the scripted backend -----------------------------------------------------
+
+/// A step a test runs in the middle of a call, which can fail the call.
+#[cfg(feature = "diarization")]
+type Hook = Box<dyn FnOnce() -> Result<(), DictationError> + Send>;
 
 /// What `transcribe_segments` was called with.
 #[derive(Debug, PartialEq)]
@@ -43,9 +49,17 @@ struct Transcribed {
 #[derive(Debug, PartialEq)]
 enum Call {
     Load(WhisperModel, ContextProfile),
-    Detect { samples: usize },
+    Detect {
+        samples: usize,
+    },
     EnsureVadModel,
     Transcribe(Transcribed),
+    /// The Whisper half of a diarized run.
+    #[cfg(feature = "diarization")]
+    TranscribeForDiarization {
+        samples: usize,
+        prompt: Option<String>,
+    },
 }
 
 /// One scripted answer to `transcribe_segments`.
@@ -81,6 +95,12 @@ struct ScriptedBackend {
     detection_failures: Mutex<VecDeque<DictationError>>,
     load_failures: Mutex<VecDeque<DictationError>>,
     replies: Mutex<VecDeque<Reply>>,
+    /// What the Whisper half of a diarized run answers, in order.
+    #[cfg(feature = "diarization")]
+    diarizations: Mutex<VecDeque<Result<DiarizationTranscription, DictationError>>>,
+    /// Run when the Whisper half of a diarized run is asked, before it answers.
+    #[cfg(feature = "diarization")]
+    during_diarization: Mutex<Option<Hook>>,
     calls: Mutex<Vec<Call>>,
 }
 
@@ -92,8 +112,29 @@ impl ScriptedBackend {
             detection_failures: Mutex::new(VecDeque::new()),
             load_failures: Mutex::new(VecDeque::new()),
             replies: Mutex::new(replies.into()),
+            #[cfg(feature = "diarization")]
+            diarizations: Mutex::new(VecDeque::new()),
+            #[cfg(feature = "diarization")]
+            during_diarization: Mutex::new(None),
             calls: Mutex::new(Vec::new()),
         }
+    }
+
+    /// Runs `hook` when the Whisper half of a diarized run is asked, before it answers.
+    #[cfg(feature = "diarization")]
+    fn during_diarization(
+        self,
+        hook: impl FnOnce() -> Result<(), DictationError> + Send + 'static,
+    ) -> Self {
+        *self.during_diarization.lock().unwrap() = Some(Box::new(hook));
+        self
+    }
+
+    /// Scripts the answers of the Whisper half of a diarized run.
+    #[cfg(feature = "diarization")]
+    fn diarizing(self, replies: Vec<Result<DiarizationTranscription, DictationError>>) -> Self {
+        *self.diarizations.lock().unwrap() = replies.into();
+        self
     }
 
     fn detecting(mut self, language: &str, probability: f32) -> Self {
@@ -190,12 +231,24 @@ impl InferenceBackend for ScriptedBackend {
     #[cfg(feature = "diarization")]
     fn transcribe_for_diarization(
         &self,
-        _: &[f32],
+        audio: &[f32],
         _: Language,
-        _: Option<&str>,
+        prompt: Option<&str>,
         _: &TranscribeOptions,
-    ) -> Result<sagascript_core::transcription::DiarizationTranscription, DictationError> {
-        unreachable!("a plain run never asks for the diarization transcription")
+    ) -> Result<DiarizationTranscription, DictationError> {
+        self.calls().push(Call::TranscribeForDiarization {
+            samples: audio.len(),
+            prompt: prompt.map(str::to_string),
+        });
+        let during = self.during_diarization.lock().unwrap().take();
+        if let Some(during) = during {
+            during()?;
+        }
+        self.diarizations
+            .lock()
+            .unwrap()
+            .pop_front()
+            .expect("the run asked for more diarization transcriptions than the test scripted")
     }
 }
 
@@ -1048,6 +1101,8 @@ fn a_batch_loads_the_model_once_and_writes_a_header_per_file() {
             Call::Detect { .. } => "detect",
             Call::EnsureVadModel => "vad",
             Call::Transcribe(_) => "transcribe",
+            #[cfg(feature = "diarization")]
+            Call::TranscribeForDiarization { .. } => "transcribe-for-diarization",
         })
         .collect();
     assert_eq!(
@@ -1540,3 +1595,9 @@ mod assembling_the_plain_result {
             .is_empty());
     }
 }
+
+// ---- the diarized path --------------------------------------------------------
+
+#[cfg(feature = "diarization")]
+#[path = "transcribe_diarized_tests.rs"]
+mod diarized;
