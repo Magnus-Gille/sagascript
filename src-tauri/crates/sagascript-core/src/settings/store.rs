@@ -599,6 +599,8 @@ where
 //      loading them. That changes when the settings are read, so it is a
 //      behaviour change for its own change, not part of the layering move;
 //   3. delete this line and empty the expected list in that test.
+// Shim (#372): kept one release; remove after the next release.
+#[doc(hidden)]
 pub use crate::machine::{load, try_update, update};
 
 /// A field update under the settings lock. The latest file is loaded as the

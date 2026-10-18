@@ -15,9 +15,10 @@
 //! adding it to [`CROSS_CUTTING`] and to the table in `docs/ARCHITECTURE.md`.
 //!
 //! `lib.rs` also re-exports the old paths of modules that moved into `meeting/`
-//! and `diarization/`, for one release (the CLI and the app still name them).
-//! They are listed in [`COMPAT_SHIMS`] so they do not multiply; removing one
-//! means removing it from both places.
+//! and `diarization/`, for one release, `#[doc(hidden)]`. Nothing in the
+//! workspace names them any more (`tests/module_layering.rs` locks that). They
+//! are listed in [`COMPAT_SHIMS`] so they do not multiply; removing one means
+//! removing it from both places.
 //!
 //! Everything is read as text with `str::lines`, so `\n` and `\r\n` read alike.
 
@@ -43,7 +44,7 @@ const CROSS_CUTTING: [&str; 8] = [
 ];
 
 /// Old paths `lib.rs` re-exports for one release; see the module documentation.
-/// Each goes when the CLI and the app import the new path (#372, part 2b).
+/// Each goes after the release that ships them (#372).
 const COMPAT_SHIMS: [&str; 11] = [
     "diarization_evaluation",
     "diarization_qualification",
