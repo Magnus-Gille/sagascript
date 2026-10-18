@@ -1,23 +1,28 @@
-//! The diarization half of a file run (#343): the cache policy, the decoder
-//! the diarized path uses, the concurrent analysis and the performance report.
+//! The diarization half of a file run (#343): the cache policy, the speaker
+//! analysis seam, the decoder the diarized path uses, the concurrent analysis
+//! and the performance report.
 
 #[cfg(feature = "diarization")]
 use sagascript_core::diarization::report::DecoderEvidence;
 #[cfg(feature = "diarization")]
+use sagascript_core::diarization::{DiarizationAnalysis, DiarizationTimings, DiarizeConfig};
+#[cfg(feature = "diarization")]
 use sagascript_core::error::DictationError;
 #[cfg(feature = "diarization")]
-use sagascript_core::settings::{Language, Settings};
+use sagascript_core::settings::Language;
 #[cfg(feature = "diarization")]
 use sagascript_core::transcription::model;
 #[cfg(feature = "diarization")]
 use sagascript_core::transcription::whisper_backend::validate_diarization_options;
 #[cfg(feature = "diarization")]
-use sagascript_core::transcription::{TranscribeOptions, TranscriptSegment};
+use sagascript_core::transcription::{
+    DiarizationTranscription, TranscribeOptions, TranscriptSegment,
+};
 
 #[cfg(feature = "diarization")]
-use super::args::TranscribeArgs;
+use super::plan::DecoderFlags;
 #[cfg(feature = "diarization")]
-use super::inference::InferenceBackend;
+use super::services::Services;
 
 /// What a diarized run does with `--diarize-cache`: `Normal` reads a matching
 /// cache and writes a miss over it; `RefreshNew` never reads and creates the
@@ -63,46 +68,125 @@ pub(super) struct DiarizationPerformance {
     pub(super) total_seconds: f64,
 }
 
-/// Overlap the CPU/ONNX diarization analysis with Metal Whisper inference on
-/// macOS. These workloads have no shared native context: only the Whisper half
-/// touches `backend`, while the worker owns fresh ONNX sessions. CPU-only
-/// targets remain sequential to avoid two heavy CPU runtimes contending.
+/// The speaker analysis of a diarized run as the run uses it: whether its
+/// models are installed, and the analysis of 16 kHz audio (segmentation and
+/// speaker embeddings, before any clustering).
+///
+/// The same pattern as [`InferenceBackend`](super::inference::InferenceBackend):
+/// [`OnnxAnalyzer`] is the one implementation that ships, and a test supplies
+/// its own, so the diarized path (the cache, the concurrency, the clustering and
+/// the result) can be driven without ONNX models.
+///
+/// `Sync` because on macOS the analysis runs on another thread while the
+/// Whisper half uses the backend.
+#[cfg(feature = "diarization")]
+pub(super) trait DiarizationAnalyzer: Sync {
+    /// Whether the diarization models are installed.
+    fn models_downloaded(&self) -> bool;
+
+    /// Segments `audio` and embeds the speakers of its segments.
+    fn analyze(
+        &self,
+        audio: &[f32],
+        config: &DiarizeConfig,
+    ) -> Result<(DiarizationAnalysis, DiarizationTimings), DictationError>;
+}
+
+/// The analysis of an installed copy: the ONNX segmentation and embedding
+/// models that `download-model diarization` put in the models directory.
+#[cfg(feature = "diarization")]
+pub(super) struct OnnxAnalyzer;
+
+#[cfg(feature = "diarization")]
+impl DiarizationAnalyzer for OnnxAnalyzer {
+    fn models_downloaded(&self) -> bool {
+        sagascript_core::diarization::model::all_models_downloaded()
+    }
+
+    fn analyze(
+        &self,
+        audio: &[f32],
+        config: &DiarizeConfig,
+    ) -> Result<(DiarizationAnalysis, DiarizationTimings), DictationError> {
+        sagascript_core::diarization::analyze(audio, config)
+    }
+}
+
+/// What the two halves of a diarized run bring back: the speaker analysis and
+/// its timings, and the Whisper word timings.
+#[cfg(feature = "diarization")]
+pub(super) type AnalysisOutcome = (
+    DiarizationAnalysis,
+    DiarizationTimings,
+    DiarizationTranscription,
+);
+
+/// Runs the speaker analysis and the Whisper half of a diarized run: overlapped
+/// on macOS, one after the other elsewhere.
+///
+/// The overlap puts the CPU/ONNX analysis beside Metal Whisper inference.
+/// These workloads have no shared native context: only the Whisper half
+/// touches the backend, while the worker owns fresh ONNX sessions. CPU-only
+/// targets stay sequential to avoid two heavy CPU runtimes contending. Both
+/// are compiled everywhere (the platform picks one), so a test can run either.
 #[cfg(feature = "diarization")]
 pub(super) fn run_diarization_analysis(
     audio: &[f32],
-    backend: &dyn InferenceBackend,
+    services: Services<'_>,
     language: Language,
     prompt: Option<&str>,
-    config: &sagascript_core::diarization::DiarizeConfig,
+    config: &DiarizeConfig,
     options: &TranscribeOptions,
-) -> Result<
-    (
-        sagascript_core::diarization::DiarizationAnalysis,
-        sagascript_core::diarization::DiarizationTimings,
-        sagascript_core::transcription::DiarizationTranscription,
-    ),
-    DictationError,
-> {
-    #[cfg(target_os = "macos")]
-    {
-        std::thread::scope(|scope| {
-            let diarization = scope.spawn(|| sagascript_core::diarization::analyze(audio, config));
-            let transcription =
-                backend.transcribe_for_diarization(audio, language, prompt, options);
-            let (analysis, timings) = diarization.join().map_err(|_| {
-                DictationError::DiarizationError(
-                    "Diarization analysis worker terminated unexpectedly".to_string(),
-                )
-            })??;
-            Ok((analysis, timings, transcription?))
-        })
+) -> Result<AnalysisOutcome, DictationError> {
+    if cfg!(target_os = "macos") {
+        analyze_overlapped(audio, services, language, prompt, config, options)
+    } else {
+        analyze_in_sequence(audio, services, language, prompt, config, options)
     }
-    #[cfg(not(target_os = "macos"))]
-    {
-        let (analysis, timings) = sagascript_core::diarization::analyze(audio, config)?;
-        let transcription = backend.transcribe_for_diarization(audio, language, prompt, options)?;
-        Ok((analysis, timings, transcription))
-    }
+}
+
+/// The analysis on a worker thread while this one runs the Whisper half. The
+/// analysis' error comes first, as in the sequential order.
+#[cfg(feature = "diarization")]
+pub(super) fn analyze_overlapped(
+    audio: &[f32],
+    services: Services<'_>,
+    language: Language,
+    prompt: Option<&str>,
+    config: &DiarizeConfig,
+    options: &TranscribeOptions,
+) -> Result<AnalysisOutcome, DictationError> {
+    let analyzer = services.analyzer;
+    std::thread::scope(|scope| {
+        let diarization = scope.spawn(move || analyzer.analyze(audio, config));
+        let transcription = services
+            .backend
+            .transcribe_for_diarization(audio, language, prompt, options);
+        let (analysis, timings) = diarization.join().map_err(|_| {
+            DictationError::DiarizationError(
+                "Diarization analysis worker terminated unexpectedly".to_string(),
+            )
+        })??;
+        Ok((analysis, timings, transcription?))
+    })
+}
+
+/// The analysis, then the Whisper half; a failed analysis ends the run before
+/// Whisper starts.
+#[cfg(feature = "diarization")]
+pub(super) fn analyze_in_sequence(
+    audio: &[f32],
+    services: Services<'_>,
+    language: Language,
+    prompt: Option<&str>,
+    config: &DiarizeConfig,
+    options: &TranscribeOptions,
+) -> Result<AnalysisOutcome, DictationError> {
+    let (analysis, timings) = services.analyzer.analyze(audio, config)?;
+    let transcription = services
+        .backend
+        .transcribe_for_diarization(audio, language, prompt, options)?;
+    Ok((analysis, timings, transcription))
 }
 
 #[cfg(feature = "diarization")]
@@ -132,11 +216,10 @@ pub(super) fn canonicalize_coverage_segments(
 /// temperature-fallback decoding regardless of ordinary file settings.
 #[cfg(feature = "diarization")]
 pub(super) fn resolve_diarization_options(
-    args: &TranscribeArgs,
-    _stored: &Settings,
+    decoder: &DecoderFlags,
 ) -> Result<TranscribeOptions, DictationError> {
-    let beam_size = args.beam_size.unwrap_or(0);
-    let vad_enabled = args.vad && !args.no_vad;
+    let beam_size = decoder.beam_size.unwrap_or(0);
+    let vad_enabled = decoder.vad && !decoder.no_vad;
     let options = TranscribeOptions {
         prompt: None,
         beam_size,

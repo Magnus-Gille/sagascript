@@ -19,6 +19,7 @@ use super::inference::{prepare_language, verify_vad_model, InferenceBackend};
 use super::output::{assemble_plain_result, emit_warnings, FileTranscription, PlainInput};
 use super::plan::FileRequest;
 use super::progress::Progress;
+use super::services::Services;
 use super::source::{decode_file, DecodedAudio};
 use crate::output::{errln, Out};
 
@@ -26,12 +27,12 @@ use crate::output::{errln, Out};
 pub(super) fn run_plain(
     request: &FileRequest<'_>,
     started: Instant,
-    backend: &dyn InferenceBackend,
+    services: Services<'_>,
     model_loaded: &mut bool,
     out: &Out,
 ) -> Result<FileTranscription, DictationError> {
     let FileRequest {
-        args,
+        options: file_options,
         file,
         language,
         model,
@@ -40,11 +41,12 @@ pub(super) fn run_plain(
         control,
         ..
     } = *request;
-    let progress = Progress::new(out, args.progress_json, started, None);
-    let audio = decode_file(file, control, &progress, out)?;
+    let progress = Progress::new(out, file_options.progress_json, started, None);
+    let backend = services.backend;
+    let audio = decode_file(file, services.canceller, control, &progress, out)?;
     let language_evidence = prepare_language(
         request,
-        backend,
+        services,
         &audio.samples,
         ContextProfile::FlashAttention,
         model_loaded,
@@ -64,7 +66,7 @@ pub(super) fn run_plain(
         file,
         duration: audio.duration_seconds(),
         glossary,
-        hint_vocabulary: args.correct_hints.then_some(correction_vocabulary),
+        hint_vocabulary: file_options.correct_hints.then_some(correction_vocabulary),
         language_evidence: &language_evidence,
     });
     emit_warnings(out, &result.warnings);
@@ -87,15 +89,16 @@ fn resolve_decoder(
     out: &Out,
 ) -> Result<TranscribeOptions, DictationError> {
     let FileRequest {
-        args,
+        options: file_options,
         stored,
         model,
         glossary,
         ..
     } = *request;
-    let vad_enabled = if args.no_vad {
+    let decoder = &file_options.decoder;
+    let vad_enabled = if decoder.no_vad {
         false
-    } else if args.vad {
+    } else if decoder.vad {
         true
     } else {
         stored.vad_enabled
@@ -110,7 +113,7 @@ fn resolve_decoder(
         prompt: glossary.decoder_prompt(),
         // File transcription isn't latency-sensitive, so default to beam search
         // (fewer repetition loops). Honor an explicit beam setting/flag.
-        beam_size: args
+        beam_size: decoder
             .beam_size
             .unwrap_or_else(|| file_beam_size(stored.beam_size)),
         temperature_fallback: stored.temperature_fallback,
@@ -120,7 +123,7 @@ fn resolve_decoder(
         segment_timestamps: true,
         parallel_chunks: 1,
     };
-    options.parallel_chunks = args
+    options.parallel_chunks = decoder
         .parallel
         .unwrap_or_else(|| recommended_parallel_chunks(audio_samples, model, options.beam_size));
     if options.beam_size >= 2 {
