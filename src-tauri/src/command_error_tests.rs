@@ -94,6 +94,42 @@ fn a_settings_error_keeps_its_code_and_its_text_on_the_wire() {
 }
 
 #[test]
+fn the_meeting_and_evaluation_errors_keep_their_codes_and_texts() {
+    use sagascript_core::diarization_reference::ReferenceError;
+    use sagascript_core::meeting::MeetingError;
+    use sagascript_core::meeting_media::MediaError;
+    use sagascript_core::meeting_reprocess_plan::ReprocessingPlanError;
+    use sagascript_core::meeting_reprocess_proposal::ProposalError;
+    use sagascript_core::meeting_review::MeetingReviewError;
+
+    assert_eq!(
+        wire(MeetingReviewError::ExpectedRevisionMismatch),
+        json!({
+            "code": "meeting_stale",
+            "message": "correction expected revision does not match this review",
+            "retryable": false,
+        })
+    );
+    assert_eq!(
+        wire(MeetingError::UnknownSpeaker)["code"],
+        "meeting_invalid"
+    );
+    assert_eq!(
+        wire(ReprocessingPlanError::StaleContext)["code"],
+        "meeting_stale"
+    );
+    assert_eq!(
+        wire(ProposalError::UnresolvedCorrections)["code"],
+        "meeting_invalid"
+    );
+    assert_eq!(wire(MediaError::Changed)["code"], "meeting_stale");
+    assert_eq!(
+        wire(ReferenceError::TooManySpeakers)["code"],
+        "diarization_error"
+    );
+}
+
+#[test]
 fn cancellation_has_one_representation() {
     let from_dictation = CommandError::from(DictationError::Cancelled);
     assert!(matches!(from_dictation, CommandError::Cancelled));

@@ -4,6 +4,7 @@
 //! meeting), [`review`] (replayable corrections) and [`reprocess`] (migrating a review onto a new
 //! transcript). All of it is pure and compiled in every build (#372).
 
+mod dictation_error;
 pub mod media;
 pub mod reprocess;
 pub mod review;

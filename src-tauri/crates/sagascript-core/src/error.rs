@@ -91,6 +91,19 @@ pub enum DictationError {
 
     #[error("Diarization error: {0}")]
     DiarizationError(String),
+
+    /// A meeting transcript, review, reprocessing plan, proposal or attached
+    /// recording that is malformed, breaks a limit or cannot be used. The
+    /// payload is the complete user-facing text. Built by the `From` impls of
+    /// the meeting error enums (`error_from.rs`).
+    #[error("{0}")]
+    MeetingInvalid(String),
+
+    /// A meeting review, proposal or recording that no longer matches what the
+    /// caller holds (a changed revision, another source): load or attach it
+    /// again. The payload is the complete user-facing text.
+    #[error("{0}")]
+    MeetingStale(String),
 }
 
 /// What the engine host reported, kept apart from [`DictationError::Engine`]'s
@@ -170,6 +183,8 @@ impl DictationError {
             Self::FileNotFound(_) => "file_not_found",
             Self::UnsupportedFormat(_) => "unsupported_format",
             Self::DiarizationError(_) => "diarization_error",
+            Self::MeetingInvalid(_) => "meeting_invalid",
+            Self::MeetingStale(_) => "meeting_stale",
         }
     }
 
@@ -381,6 +396,15 @@ mod tests {
                 "unsupported_format",
             ),
             (DictationError::Cancelled, "cancelled"),
+            (
+                DictationError::MeetingInvalid("x".into()),
+                "meeting_invalid",
+            ),
+            (DictationError::MeetingStale("x".into()), "meeting_stale"),
+            (
+                DictationError::Settings(SettingsError::NoProfiles),
+                "profile_invalid",
+            ),
         ];
         for (error, code) in table {
             assert_eq!(error.code(), code, "{error:?}");

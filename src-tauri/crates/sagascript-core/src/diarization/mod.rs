@@ -6,6 +6,7 @@
 //! constants, the cached-analysis validation, [`report`], [`merge`], [`model`],
 //! [`speaker_hint`] and the offline scoring in [`eval`] need none of them (#372).
 
+mod dictation_error;
 #[cfg(feature = "diarization")]
 pub mod engine;
 pub mod eval;

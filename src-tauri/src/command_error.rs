@@ -212,6 +212,32 @@ impl From<DictationError> for CommandError {
     }
 }
 
+/// The meeting and evaluation error enums arrive as the [`DictationError`]
+/// their `From` impl in core classifies (`meeting_invalid`, `meeting_stale`,
+/// `diarization_error`), with the enum's own text.
+macro_rules! through_dictation_error {
+    ($($ty:ty),+ $(,)?) => {$(
+        impl From<$ty> for CommandError {
+            fn from(error: $ty) -> Self {
+                Self::Dictation(DictationError::from(error))
+            }
+        }
+    )+};
+}
+
+through_dictation_error!(
+    sagascript_core::meeting::MeetingError,
+    sagascript_core::meeting_review::MeetingReviewError,
+    sagascript_core::meeting_reprocess_plan::ReprocessingPlanError,
+    sagascript_core::meeting_reprocess_proposal::ProposalError,
+    sagascript_core::meeting_media::MediaError,
+    sagascript_core::diarization_reference::ReferenceError,
+    sagascript_core::diarization_evaluation::EvaluationError,
+    sagascript_core::diarization_qualification::QualificationError,
+    sagascript_core::diarization_strata::StrataError,
+    sagascript_core::diarization_report::ReportError,
+);
+
 impl From<SettingsError> for CommandError {
     fn from(error: SettingsError) -> Self {
         Self::Settings(error)
