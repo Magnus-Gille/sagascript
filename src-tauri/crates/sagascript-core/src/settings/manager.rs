@@ -182,6 +182,17 @@ impl HotkeyProfile {
         }
     }
 
+    /// Index of the default profile in `profiles`: the one called `default`,
+    /// else the first. `profiles` must not be empty. The profile that `hotkey`
+    /// and `language` mirror, that `default_profile()` returns and that the
+    /// legacy-named operations (`config set hotkey`, `set_language`) change.
+    pub fn default_index(profiles: &[HotkeyProfile]) -> usize {
+        profiles
+            .iter()
+            .position(|profile| profile.id == "default")
+            .unwrap_or(0)
+    }
+
     /// Update the compatibility shortcut and whichever explicit binding is
     /// primary for this profile.
     pub fn set_primary_shortcut(&mut self, shortcut: String) {
@@ -414,11 +425,7 @@ impl Settings {
 
     pub fn default_profile(&self) -> HotkeyProfile {
         let profiles = self.resolved_hotkey_profiles();
-        profiles
-            .iter()
-            .find(|profile| profile.id == "default")
-            .unwrap_or(&profiles[0])
-            .clone()
+        profiles[HotkeyProfile::default_index(&profiles)].clone()
     }
 
     /// Preserve the effective live model of every existing profile before
@@ -642,10 +649,7 @@ impl Settings {
     ) -> Result<Vec<ModelResetNotice>, String> {
         let mut candidate = self.clone();
         let mut profiles = candidate.resolved_hotkey_profiles();
-        let index = profiles
-            .iter()
-            .position(|profile| profile.id == "default")
-            .unwrap_or(0);
+        let index = HotkeyProfile::default_index(&profiles);
         profiles[index].language = language;
         let notices = candidate.replace_hotkey_profiles_gated(profiles, pianissimo_supported)?;
         *self = candidate;
@@ -1034,10 +1038,7 @@ impl Settings {
                 profile.id
             ));
         }
-        let legacy = profiles
-            .iter()
-            .find(|profile| profile.id == "default")
-            .unwrap_or(&profiles[0]);
+        let legacy = &profiles[HotkeyProfile::default_index(&profiles)];
         let mut candidate = self.clone();
         candidate.hotkey = legacy.shortcut.clone();
         candidate.language = legacy.language;
@@ -1117,16 +1118,17 @@ impl Settings {
         Ok(())
     }
 
-    /// Try to update the legacy/default profile shortcut atomically.
+    /// Try to update the legacy/default profile shortcut atomically. The default
+    /// profile is the one called `default`, else the first
+    /// ([`HotkeyProfile::default_index`]): with no profile called `default`
+    /// this used to store the shortcut in `hotkey` alone, which no binding
+    /// reads, so `config set hotkey` changed nothing that fires (#373).
     pub fn try_set_legacy_hotkey(&mut self, shortcut: String) -> Result<(), String> {
         let mut candidate = self.clone();
         candidate.hotkey = shortcut.clone();
-        if let Some(profile) = candidate
-            .hotkey_profiles
-            .iter_mut()
-            .find(|profile| profile.id == "default")
-        {
-            profile.set_primary_shortcut(shortcut);
+        if !candidate.hotkey_profiles.is_empty() {
+            let index = HotkeyProfile::default_index(&candidate.hotkey_profiles);
+            candidate.hotkey_profiles[index].set_primary_shortcut(shortcut);
         }
         candidate.validate_shortcut_configuration()?;
         self.hotkey = candidate.hotkey;

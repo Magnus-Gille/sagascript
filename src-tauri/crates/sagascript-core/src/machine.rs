@@ -129,6 +129,38 @@ impl Settings {
         self.set_default_profile_language_gated(language, pianissimo_supported())
     }
 
+    /// The settings operations of `settings::ops`, asked of this machine.
+    pub fn apply_language_selection(
+        &mut self,
+        language: Language,
+    ) -> Result<Vec<ModelResetNotice>, String> {
+        self.apply_language_selection_gated(language, pianissimo_supported())
+    }
+
+    /// See [`Self::set_whisper_model_gated`].
+    pub fn set_whisper_model(&mut self, model: WhisperModel) -> Result<(), String> {
+        self.set_whisper_model_gated(model, pianissimo_supported())
+    }
+
+    /// See [`Self::set_auto_select_model_gated`].
+    pub fn set_auto_select_model(&mut self, enabled: bool) -> Result<(), String> {
+        self.set_auto_select_model_gated(enabled, pianissimo_supported())
+    }
+
+    /// See [`Self::set_pianissimo_dictation_gated`].
+    pub fn set_pianissimo_dictation(&mut self, enabled: bool) -> Result<(), String> {
+        self.set_pianissimo_dictation_gated(enabled, pianissimo_supported())
+    }
+
+    /// See [`Self::apply_profiles_change_gated`].
+    pub fn apply_profiles_change(
+        &mut self,
+        profiles: Vec<HotkeyProfile>,
+        model: Option<(&str, FileModelPreference)>,
+    ) -> Result<Vec<ModelResetNotice>, String> {
+        self.apply_profiles_change_gated(profiles, model, pianissimo_supported())
+    }
+
     /// Replace the profile list. When a profile's language changes and its explicit
     /// model no longer fits, that profile's model is reset to Auto and a notice
     /// is returned instead of an error.
