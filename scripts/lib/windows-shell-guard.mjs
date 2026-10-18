@@ -23,7 +23,14 @@
 //   - a construct on one line counts as one command: `foreach ($c in $list) { cargo $c }` and
 //     `pwsh -Command "a; b"` (the `;` is inside a string) are each one;
 //   - local actions are found only as `.github/actions/<name>/action.yml` (see actionNames in ci-workflow.mjs): a
-//     nested directory or an `action.yaml` is not seen.
+//     nested directory or an `action.yaml` is not seen;
+//   - `try { native } catch { }` is allowed by design: the preference makes a failing native command reach the catch,
+//     and windows-package.yml's informational latency probe swallows it there on purpose (a `try/finally`, as in the
+//     silent-install step, lets it through);
+//   - a script dot-sourced into the step can reset a preference; only the step's own lines are read;
+//   - wrapper launchers count as one command and never trip the native-exit preference: `Start-Process ... -Wait`
+//     returns an object, so the step must check its ExitCode itself, and `cmd /c "a & b"` is one native command
+//     whose exit code is cmd's.
 import { createHash } from "node:crypto";
 
 /**
