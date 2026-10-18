@@ -28,6 +28,7 @@ verification commands, [docs/recipes/](recipes/README.md) for step-by-step chang
 | `src-tauri/tauri.conf.json`, `src-tauri/capabilities/` | App config (`frontendDist: ../dist`) and plugin permissions. |
 | Meeting modules | Core `meeting.rs`, `meeting_media.rs`, `meeting_review.rs`, `meeting_reprocess*.rs`; CLI `meeting.rs`, `meeting_proposal.rs`, `meeting_reprocessing*.rs` and `transcribe/meeting.rs`; app `meeting_jobs.rs`, `meeting_media*.rs`, `meeting_review_commands.rs`, `meeting_reprocessing_commands.rs`. Docs: `docs/meeting-*.md`. |
 | Run context (#346) | Which profile, language and dictionary a file, recording or reprocessing run uses: core `run_context.rs` (`RunSelection` = profile and language, `RunContext` = those plus the dictionary; pure, no I/O; also `file_beam_size`, the beam default of a file run) and CLI `run_request.rs` (`RunRequest`: `--profile`, `--language`, `--prompt`, `--prompt-file` as typed; parses the language, reads the prompt file). `transcribe`, `record`, `meeting reprocess` and the app's file transcription (`commands/files.rs` `file_transcription_context`, which has no language override) all use it. The model is not resolved there: each caller chooses its own from the resolved language, which also fixes its order of errors (`tests/run_context_cli.rs`). |
+| Settings operations (#373) | One implementation per settings operation that both `sagascript config` and the app's setters perform. Core `settings/ops.rs` holds them as `Settings` methods (`apply_language_selection`, `set_whisper_model`, `set_auto_select_model`, `set_pianissimo_dictation`, `apply_profiles_change`, `set_auto_paste`, `set_vad_enabled`; the machine-aware siblings of the `_gated` ones are in `machine.rs`). The CLI applies them from a key table (`config/keys.rs`, section 2.2), the app from `commands/settings.rs`; side effects stay with the surface. The CLI/app parity table is `core::test_support::settings_ops_table`. |
 | Transcribe command (#343) | CLI `transcribe/`: `mod.rs` runs a command (`run`, `run_inner`, the Whisper batch `run_whisper_batch`) and delegates one input to `transcribe_file`, which plans the file and runs the plain or the diarized pipeline. `plan.rs` decides before any work starts (`plan_run` → `RunPlan` with its `EnginePlan`; `plan_file` → `FilePlan` with `FileMode`; `FileRequest` is one input with everything it is told). `source.rs` is where the audio comes from: `decode_file` and, for a diarized run, `enum Source { Cached, Decoded }` with `acquire_source` (cache identity, lookup, decode; `Cached` exists only with the diarization feature). `inference.rs` is the Whisper backend as a run uses it: the `InferenceBackend` trait (load, language probe, plain and diarization transcription; `WhisperBackend` is the one implementation, a test brings its own), model loading and the language check that follows. `plain.rs` (decoder options, the backend call with its narration, `assemble_plain_result` in `output.rs`) and `diarized.rs` (analysis from the cache or computed, clustering, merge and report, result) are the two pipelines. Around them: `args.rs` (the command line), `inputs.rs` (directory expansion), `resolve.rs` (language and model IDs, which model a run gets, the one-run glossary), `vocab_correction.rs`, `language_detection.rs` (the language check; it asks for its detectors through `DetectorLoader`, naming an `EncoderPolicy`, and `InstalledDetectors::load` is the one place that touches the models directory, local files only today; a new policy is a deliberate change, but the types do not stop code in the loader from fetching, so review and `language_detection_never_downloads_an_encoder` have to) and `language_regions.rs`, `diarize.rs` (cache policy, decoder options, the concurrent analysis, the performance report), `meeting.rs` (entry points the app and reprocessing call), `pianissimo.rs`, `progress.rs` (`--progress-json`, `Progress`), `output.rs` (the per-file result, `BatchSink`, warnings). `transcribe/mod.rs` re-exports the paths other code imports. Tests: the sibling `transcribe_tests.rs`; `transcribe_file_tests.rs`, which drives a successful Whisper run in-process with a scripted `InferenceBackend`; and the whole command's observable contract (streams, exit status, error `code`, cache hits, cancellation, and a successful Pianissimo run against the fake engine host on macOS) in `tests/transcribe_contract.rs`. |
 | `scripts/` | Build/release/CI helpers (`*.sh`, `*.mjs`, `*.ps1`), Node tests `test-*.mjs`, Playwright suites `qa-*.mjs`, browser IPC mock `fixtures/transcription-browser-mock.js`, Python tooling `dictation_eval/` and `diarization_sv/`, Core ML conversion `pianissimo-coreml/`. |
 | `tests/` | Code-health contract tests (`tests/scripts/`) and fixtures (`tests/fixtures/code-health/`). |
@@ -110,9 +111,9 @@ closes a loop, through a compatibility shim.
 | Layer | Modules | Rule |
 |---|---|---|
 | Leaves | `models/`, `glossary.rs` | `models/` is the model catalog: `WhisperModel` (21 models, ids via `id()` / `from_id()` / `FromStr`, `ALL`), its download URLs and SHA-256 in `sources.rs` (pinned revisions; `scripts/generate-third-party-notices.mjs` only asserts that six reviewed URL prefixes still appear in the model sources, `sources.rs` among them), `FileModel` (a Whisper model or Pianissimo) and `Language`. Imports neither `settings` nor `transcription` (tested) and returns no `whisper_rs` type: `transcription::whisper` (`whisper/words.rs`) maps a model to its DTW preset. `glossary.rs` (personal dictionary parser) imports nothing from the crate (tested). |
-| Settings | `settings/` | Reads the catalog. Imports nothing from `transcription` (tested): what is downloaded and whether Pianissimo can run arrive as arguments, as `LineupEnv` / `MachineProbe` into the store and as the `pianissimo_supported` and readiness arguments of the `*_gated` methods of `Settings`. |
+| Settings | `settings/` | Reads the catalog. Imports nothing from `transcription` (tested): what is downloaded and whether Pianissimo can run arrive as arguments, as `LineupEnv` / `MachineProbe` into the store and as the `pianissimo_supported` and readiness arguments of the `*_gated` methods of `Settings`. `ops.rs` is the settings operations of section 2.2; they take the Pianissimo gate and the Accessibility answer (`Accessibility`) the same way. |
 | Runtime | `transcription/` (Whisper, Pianissimo, engine host, model downloads), `audio/`, `download.rs`, `meeting*.rs`, `diarization*` | `transcription` reads `models` and, in `pianissimo_backend` alone, `settings` (the engine config). `transcription::model` and `pianissimo_model` answer whether a model is on disk; `pianissimo_backend::runtime_supported_on_this_os` answers whether Pianissimo runs. |
-| Machine | `machine.rs` | The only place that feeds the runtime's answers to settings: `ThisMachine` (a `MachineProbe`), `load` / `update` / `try_update`, and the `Settings` methods without a `_gated` suffix (`dictation_model_for_profile`, `effective_file_model_for`, `warm_model_plan`, ...), each its `_gated` sibling plus this machine's probe. |
+| Machine | `machine.rs` | The only place that feeds the runtime's answers to settings: `ThisMachine` (a `MachineProbe`), `load` / `update` / `try_update`, and the `Settings` methods without a `_gated` suffix (`dictation_model_for_profile`, `effective_file_model_for`, `warm_model_plan`, `apply_language_selection`, ...), each its `_gated` sibling plus this machine's probe. |
 
 Old paths stay for one release (#372): `settings::{WhisperModel, FileModel, Language}`
 re-export `models`, `transcription::{glossary, Glossary, ...}` re-export `glossary`, and
@@ -237,8 +238,42 @@ setter (for example `overlay::on_show_overlay_changed`, the VAD model download i
 with a warning, and a save over such a file first preserves its bytes as `.bak`. Migrations are
 the ordered steps in `settings/migrations.rs`, recorded as `schema_version` plus the legacy
 markers, and the copy from legacy locations ([ADR 0007](adr/0007-settings-file-evolution.md)).
-**Planned:** [#373](https://github.com/Magnus-Gille/sagascript/issues/373) (one implementation
-per CLI/app operation).
+
+**One implementation per operation ([#373](https://github.com/Magnus-Gille/sagascript/issues/373)
+part 1).** `sagascript config set` and the app's setters are two entry points to the same user
+intentions, so they call the same `Settings` operation (`settings/ops.rs`) and persist the same
+state. The CLI's keys are one `Key { name, help, get, set, reset, warning }` each in
+`crates/sagascript-cli/src/config/keys.rs`; `VALID_KEYS`, `config list`, the key lists and the value
+table of `config list|get|set --help` and the `[possible values]` of the key argument are generated
+from that table. A language is parsed by `Language::from_str` and a model by `WhisperModel::from_id`
+on every surface (`config set language english` and `transcribe --language english` take the same
+spellings; each surface keeps its own error text). Each decision where the two used to differ:
+
+| Operation | Decision |
+|---|---|
+| `language` (`config set\|reset language`, `set_language`) | One operation: the default profile takes the language (a model of its own that the language cannot use goes back to Auto, with a notice), and the legacy `whisper_model` becomes the recommended model of the language with `auto_select_model` on. The app always did this; the CLI now does too. Reason: releases before the profile models read those fields (ADR 0007, rule 3), nothing that reads settings now consults them while a profile has a model (`config get whisper_model` and `auto_select_model` read the profile), and the CLI had no reason of its own. `config reset language` is the same operation with the default language. |
+| `whisper_model`, `auto_select_model`, `pianissimo_dictation` (the default profile's model under its legacy names) | One operation each (`set_whisper_model`, `set_auto_select_model`, `set_pianissimo_dictation`); the legacy field moves with the profile model, as the CLI always did and the app did not. In the app this holds for the three IPC commands of those names only, and the GUI never calls them: its default-profile model pick goes through `set_profile_model`, which, like `config profiles update --model`, leaves the legacy fields as they were (part 2). Besides the rollback reason, the app's `set_auto_select_model(false)` pins the model `whisper_model` names, which the app's own `set_whisper_model` used to leave stale. A profile other than the default has no legacy field, so `set_profile_model` and `apply_profiles_change` do not touch them. |
+| `auto_paste` | One operation, `set_auto_paste(requested, Accessibility)`. **Kept difference:** with the permission missing the app stores `false` and refuses; the CLI stores the request and warns. The permission belongs to the installed app's bundle identity, so a CLI process would probe the wrong program (and Linux and Windows have no such permission); the app applies it when it loads the settings (`load_settings_with_permission_gate`). The parity table marks this as the one case where the surfaces differ (`Case::differs_in`). |
+| `vad_enabled` | One operation (`set_vad_enabled`), the stored value only. The app also fetches the Silero model when it turns the setting on (a side effect, so it stays there); the CLI fetches it on first use (`transcribe --vad`), and the settings watcher does not replay the download for CLI edits. |
+| `hotkey` | The default profile is the one called `default`, else the first (`HotkeyProfile::default_index`), as the app's `set_hotkey` and `config reset hotkey` always chose it. `config set hotkey` used to write `hotkey` alone when no profile was called `default`, which no binding reads. Registering the shortcut with the OS stays in the app. |
+| profile list and profile model (`config profiles create\|update\|remove`, `set_hotkey_profiles`, `set_profile_model`) | One operation, `apply_profiles_change(profiles, model)`. The CLI applies the list and a model given in the same command in one step and refuses all of it if the model does not fit; the app sends the list and the model as two commands. The parity table therefore holds only edits whose model fits. |
+| `file_transcription_model`, `show_overlay`, `beam_size`, `temperature_fallback`, `engine_prewarm`, `engine_idle_unload_minutes`, `hotkey_mode` | A field (or `replace_hotkey_mode`) on both sides; no operation of their own. The parity table pins that neither surface adds anything. |
+| `initial_prompt` | **Kept difference, part 2:** `config set initial_prompt` merges entries into the default profile's dictionary and never erases an alias; the app's `set_initial_prompt` replaces a profile's dictionary. Documented in `config set --help`; `glossary_ops` is the planned fix. |
+
+Side effects stay in each surface and arrive as arguments (`Accessibility`, `pianissimo_supported`):
+registering shortcuts with the OS, the VAD download, the Accessibility probe, the profiles menu and
+the overlay. How the app's controller follows the file (`persist_and_sync` or
+`try_persist_and_replace`, above) is each setter's own and did not change; the whole-copy setters
+still adopt shortcuts the OS never registered ([#458](https://github.com/Magnus-Gille/sagascript/issues/458)).
+
+The parity table (`core::test_support::settings_ops_table`) is the check: each row is an operation
+from a starting `Settings`, and `expected` computes with core alone what a surface must have
+persisted (and nothing at all for an operation core refuses). The CLI runs every row through the real
+`sagascript config` (`crates/sagascript-cli/tests/settings_parity.rs`), the app through its real
+setters on Tauri's mock runtime in a child process on a fake settings file
+(`commands/persist_parity_tests.rs`); both compare against the table, so they are equal through core
+and the app needs nothing from the CLI crate. A new operation that both surfaces perform gets a
+`Settings` method, a row, and a call from each surface (docs/recipes/add-setting.md).
 
 ### 2.3 Updater phases
 
@@ -427,6 +462,7 @@ Shared fixtures: `sagascript_testsupport` (`TempDir`, `fake_settings`, `sha256_h
 | Rust integration | `sagascript-core/tests/*.rs` (engine host against the fake host, chunk-merge golden, Pianissimo adapter); `sagascript-cli/tests/*.rs` (spawn `CARGO_BIN_EXE_sagascript`) | `cargo test -p sagascript-core`, `-p sagascript-cli` | macOS, Linux, Windows |
 | ORT host | `src-tauri/engine-host/ort/src/**` | `cargo test` and `cargo clippy --all-targets -- -D warnings` in `engine-host/ort/` | test-linux (fmt, test, clippy); test-windows (test, clippy) |
 | Engine-host protocol | golden transcripts `src-tauri/engine-host/test-vectors/protocol/*.jsonl` with the scripted `fake-engine.json` ([contract](engine-host-protocol.md#golden-transcripts)); replayed by `sagascript-engine-protocol/src/vector_tests.rs`, `engine-host/ort/src/server/golden_tests.rs` and `ProtocolServerTests.swift` | `cargo test -p sagascript-engine-protocol`; `cargo test --locked` in `engine-host/ort/`; `swift test` | `cargo test --workspace` in every OS lane (protocol crate); test-linux, test-windows (ORT host); test-macos (Swift) |
+| CLI/app parity (#373) | `core::test_support::settings_ops_table` (the rows and what each must persist) with its own consistency tests; the CLI side `sagascript-cli/tests/settings_parity.rs` (the real `sagascript config` on a fake settings file per row), the app side `commands/persist_parity_tests.rs` (the real setters, child process, fake settings file) | `cargo test -p sagascript-cli --test settings_parity`; `cargo test -p sagascript parity` | every OS lane (`cargo test --workspace`) |
 | MSRV | whole workspace, lean CLI, ORT host | `RUSTUP_TOOLCHAIN=1.88 cargo check --workspace --locked` (see CONTRIBUTING.md) | msrv-linux |
 | Swift | `src-tauri/engine-host/coreml/Tests/EngineHostCoreTests/` | `scripts/build-engine-host.sh`, then `swift test` (`npm run verify -- --only swift`) | test-macos |
 | Frontend unit and component (Vitest) | `src/**/*.test.ts` next to the module or component, in happy-dom; typed IPC mock, setup and component backends in `src/test/` ([docs/testing/frontend.md](testing/frontend.md)) | `npm run test:unit` (`test:unit:coverage` for a report) | test-macos, test-windows; release-quality-gate, windows-package |
@@ -495,6 +531,24 @@ replaces the remaining source-text tests in the `ui` group with component tests.
 - `main.rs` was split in [#369](https://github.com/Magnus-Gille/sagascript/issues/369) and
   `commands.rs` in [#370](https://github.com/Magnus-Gille/sagascript/issues/370); update this map
   when files move.
+- Left for part 2 of [#373](https://github.com/Magnus-Gille/sagascript/issues/373) (part 1 is
+  section 2.2): the GUI's model pick keeps the legacy fields in step (`set_profile_model` leaves
+  `whisper_model`, `auto_select_model` and `pianissimo_dictation` as they were; today only the three
+  commands the GUI never calls, `config set` and a language change move them); the legacy triple
+  consistent in itself (`pianissimo_dictation` false when `config set whisper_model` or a change to
+  Auto chooses a Whisper model, and true only while Pianissimo is chosen: a downgrade case of ADR 0007,
+  rule 3); the `whisper_model` list of `config set --help` generated from `WhisperModel::ALL` (it lists
+  11 of the 21 models; generating it changes help text, so it is a decision of its own); `config reset`
+  and starts with a pending migration as rows of the parity table; `models::catalog(language)` so that `list-models --json` and the app's model picker
+  list the same models (the CLI sizes with `installed_size_bytes`, the app with
+  `download_size_bytes`); one `sha256_hex` (four helpers remain); `glossary_ops`, one validation of
+  a profile's dictionary (two sets remain, and `config set initial_prompt` merges where
+  `set_initial_prompt` replaces); the exact search `find(|c| c.id == "default")` of the issue no
+  longer occurs, and the choice of the default profile is `HotkeyProfile::default_index` for the
+  operations above, while `Settings::set_legacy_language` and `warm_model_plan_gated` still spell
+  it out; the app's
+  `commands/models.rs` still turns a model into its id through serde; the summary in `config
+  --help` (`lib.rs`) lists 6 of the 15 keys.
 - Most `async` Tauri commands in `commands/` have no `.await` and call synchronous helpers
   that write the settings file (`persist_and_sync` → `store::update`, under the settings file
   lock) on a Tokio worker. Model downloads and Pianissimo installs already do their file work

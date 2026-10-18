@@ -24,10 +24,17 @@ const [api, settings, overlay, onboarding, transcribe, models, benchmark, benchm
     source("src-tauri/crates/sagascript-cli/src/benchmark_dictation.rs"),
     source("src-tauri/crates/sagascript-cli/src/benchmark_config.rs"),
     source("src-tauri/crates/sagascript-cli/src/latency.rs"),
-    source("src-tauri/crates/sagascript-cli/src/config.rs"),
+    // The key table: the language values are listed in its help line (#373).
+    source("src-tauri/crates/sagascript-cli/src/config/keys.rs"),
     source("src-tauri/crates/sagascript-cli/src/record.rs"),
     source("src-tauri/crates/sagascript-cli/src/lib.rs"),
   ]);
+
+// The CLI parses languages and models with the core catalog (#373).
+const [coreLanguage, coreWhisper] = await Promise.all([
+  source("src-tauri/crates/sagascript-core/src/models/language.rs"),
+  source("src-tauri/crates/sagascript-core/src/models/whisper.rs"),
+]);
 
 test("Finnish is exposed by every production language selector", () => {
   assert.match(api, /export type Language = "en" \| "sv" \| "no" \| "fi" \| "auto";/);
@@ -40,8 +47,10 @@ test("Finnish is exposed by every production language selector", () => {
 });
 
 test("CLI Finnish language and model IDs use the core model registry", () => {
-  assert.match(transcribe, /"fi" \| "finnish" => Ok\(Language::Finnish\)/);
-  assert.match(transcribe, /"base" => Ok\(WhisperModel::Base\)/);
+  assert.match(coreLanguage, /"finnish" => Ok\(Language::Finnish\)/);
+  assert.match(coreWhisper, /WhisperModel::Base => "base"/);
+  assert.match(transcribe, /s\.parse::<Language>\(\)/);
+  assert.match(transcribe, /WhisperModel::from_id\(s\)/);
   assert.doesNotMatch(transcribe, /"fi-whisper-medium"\s*=>\s*Ok\(WhisperModel::/);
   assert.doesNotMatch(transcribe, /WhisperModel::FinnishWhisperMedium/);
   assert.match(models, /Language::Finnish/);
@@ -60,5 +69,5 @@ test("Finnish remains opt-in and does not alter generic defaults", () => {
   assert.doesNotMatch(cli, /fi-whisper-medium|Finnish-NLP model/);
   assert.match(onboarding, /let selectedLanguage: OnboardingLanguage = \$state\("en"\)/);
   assert.match(onboarding, /fi: "base"/);
-  assert.match(transcribe, /"auto" => Ok\(Language::Auto\)/);
+  assert.match(coreLanguage, /Language::Auto => "auto"/);
 });
