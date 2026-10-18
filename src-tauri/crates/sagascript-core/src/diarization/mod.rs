@@ -1,3 +1,11 @@
+//! Speaker diarization: who spoke when, and the evidence for it.
+//!
+//! Everything here is compiled in every build except `engine`, which needs the
+//! optional dependencies of the `diarization` feature (ONNX Runtime, ndarray, rustfft,
+//! kodama) and holds the stages and pipeline functions that run them. The types, the
+//! constants, the cached-analysis validation, [`report`], [`merge`], [`model`],
+//! [`speaker_hint`] and the offline scoring in [`eval`] need none of them (#372).
+
 #[cfg(feature = "diarization")]
 pub mod engine;
 pub mod eval;
@@ -36,7 +44,7 @@ pub struct DiarizeConfig {
     pub absorb_max_distance: f32,
     /// Optional speaker-count hint (exact, or min and/or max). `None` (the default) leaves
     /// clustering exactly as the threshold decides. With a hint the dendrogram is cut by count
-    /// instead; see [`cluster`] for the precise rules. Applies only to the clustering stage, so it
+    /// instead; see `engine::cluster` for the precise rules. Applies only to the clustering stage, so it
     /// works on a cached [`DiarizationAnalysis`] without re-running analysis.
     pub speaker_hint: Option<SpeakerCountHint>,
     /// When a (non-forced) hint asks for fewer speakers than were found, clusters are merged

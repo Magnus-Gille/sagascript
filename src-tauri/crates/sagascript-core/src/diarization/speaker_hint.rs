@@ -1,8 +1,8 @@
 //! Optional speaker-count hint for diarization (issue #305).
 //!
-//! The hint lives outside the `diarization` feature because the meeting document and the
+//! The hint is compiled without the `diarization` feature because the meeting document and the
 //! reprocessing plan record it. It is a plain value: validation here, interpretation in
-//! `diarization::clustering`.
+//! `diarization::engine::clustering`.
 
 use serde::{Deserialize, Serialize};
 

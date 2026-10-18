@@ -1,4 +1,8 @@
 //! Validated meeting transcripts and deterministic exports.
+//!
+//! This module is the transcript document. Its submodules: [`media`] (the audio attached to a
+//! meeting), [`review`] (replayable corrections) and [`reprocess`] (migrating a review onto a new
+//! transcript). All of it is pure and compiled in every build (#372).
 
 pub mod media;
 pub mod reprocess;
