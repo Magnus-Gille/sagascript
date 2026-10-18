@@ -25,11 +25,18 @@ export const PWSH_PREFERENCES = [
   { name: "$PSNativeCommandUseErrorActionPreference = $true", pattern: /^\$PSNativeCommandUseErrorActionPreference\s*=\s*\$true\s*;?$/i },
 ];
 
-// A later assignment that switches either preference off again.
-const PWSH_WEAKENING = [
-  /\$(?:(?:global|script|local):)?ErrorActionPreference\s*=\s*['"]?(?:continue|silentlycontinue|ignore|inquire|suspend)\b/i,
-  /\$(?:(?:global|script|local):)?PSNativeCommandUseErrorActionPreference\s*=\s*(?:\$false|0)\b/i,
-];
+// A line after the preference lines that may change either preference: any assignment to either variable (in any scope,
+// with any value, braced or not) other than the passing line itself, or any variable cmdlet, alias or `variable:` drive
+// path that names one. Reading a preference, or naming it in text, is no change.
+const PREFERENCE_NAME = String.raw`(?:PSNativeCommandUseErrorActionPreference|ErrorActionPreference)`;
+const PREFERENCE_ASSIGNMENT = new RegExp(String.raw`\$\{?(?:\w+:)?${PREFERENCE_NAME}\}?\s*(?:[-+*/%]|\?\?)?=(?!=)`, "i");
+const PREFERENCE_VARIABLE_ACCESS = new RegExp(
+  String.raw`(?:\b(?:Set|Remove|Clear|New)-Variable\b|\b(?:sv|rv|clv|si|ri)\b|\bvariable:)[^|]*\b${PREFERENCE_NAME}\b`,
+  "i",
+);
+const changesPreference = (line) =>
+  !PWSH_PREFERENCES.some((preference) => preference.pattern.test(line)) &&
+  (PREFERENCE_ASSIGNMENT.test(line) || PREFERENCE_VARIABLE_ACCESS.test(line));
 
 const POWERSHELL = new Set(["pwsh", "powershell"]);
 const flat = (value) => (value === undefined || value === null ? [] : Array.isArray(value) ? value.flatMap(flat) : [value]);
@@ -165,11 +172,11 @@ export function judgeStep(step, shell, exceptions = []) {
   let problem;
   if (shell === "pwsh") {
     const missing = !carriesPreferences(lines);
-    const weakened = lines.slice(2).find((line) => PWSH_WEAKENING.some((pattern) => pattern.test(line)));
+    const weakened = lines.slice(2).find(changesPreference);
     if (!missing && weakened === undefined) return { ...judged, verdict: "pwsh preferences" };
     const why =
       weakened !== undefined
-        ? `it switches a preference off again: ${weakened}`
+        ? `it changes a preference after the first two lines: ${weakened}`
         : `its first two command lines must be ${PWSH_PREFERENCES.map((preference) => preference.name).join(" and ")}`;
     problem = `runs ${commands} commands in pwsh, where only the last native command's exit code counts; ${why}, or use shell: bash`;
   } else {

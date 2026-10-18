@@ -138,14 +138,47 @@ test("the pwsh preferences must be the first two command lines and must stay on"
   assert.equal(ok(`$ErrorActionPreference = 'Stop'\n$PSNativeCommandUseErrorActionPreference = $false\n${body}`).length, 1);
   assert.match(
     ok(`${PREFERENCES}npm run build\n$global:ErrorActionPreference = 'SilentlyContinue'\nnpm run check`)[0],
-    /switches a preference off again/,
+    /changes a preference after the first two lines/,
   );
   assert.match(
     ok(`${PREFERENCES}npm run build\n$PSNativeCommandUseErrorActionPreference = $false\nnpm run check`)[0],
-    /switches a preference off again/,
+    /changes a preference after the first two lines/,
   );
   // -ErrorAction on one cmdlet is not a preference.
   assert.deepEqual(ok(`${PREFERENCES}Remove-Item x -ErrorAction SilentlyContinue\nnpm run check`), []);
+  // Any later change of either preference fails, whatever it assigns or how it reaches the variable.
+  for (const change of [
+    "$PSNativeCommandUseErrorActionPreference = $null",
+    "$PSNativeCommandUseErrorActionPreference=0",
+    "$ErrorActionPreference = $saved",
+    "$ErrorActionPreference = [System.Management.Automation.ActionPreference]::Continue",
+    "$ErrorActionPreference = [ActionPreference]::Continue",
+    "$script:ErrorActionPreference = 'Ignore'",
+    "${ErrorActionPreference} = 'Continue'",
+    "$ErrorActionPreference += 'x'",
+    "Set-Variable -Name ErrorActionPreference -Value Continue",
+    "Set-Variable ErrorActionPreference Continue -Scope Global",
+    "sv PSNativeCommandUseErrorActionPreference $false",
+    "Remove-Variable PSNativeCommandUseErrorActionPreference",
+    "Clear-Variable -Name ErrorActionPreference",
+    "Remove-Item variable:ErrorActionPreference",
+    "& { $ErrorActionPreference = 'Continue'; cargo test }",
+  ]) {
+    const problems = ok(`${PREFERENCES}npm run build\n${change}\nnpm run check`);
+    assert.equal(problems.length, 1, change);
+    assert.match(problems[0], /changes a preference after the first two lines/, change);
+  }
+  // Re-asserting the passing values, reading them, or naming them in text is not a change.
+  for (const harmless of [
+    "$ErrorActionPreference = 'Stop'",
+    "$PSNativeCommandUseErrorActionPreference = $true",
+    "Write-Host $ErrorActionPreference",
+    "if ($ErrorActionPreference -ne 'Stop') { throw 'preference lost' }",
+    "Get-Variable PSNativeCommandUseErrorActionPreference",
+    'Write-Host "ErrorActionPreference stays Stop"',
+  ]) {
+    assert.deepEqual(ok(`${PREFERENCES}npm run build\n${harmless}\nnpm run check`), [], harmless);
+  }
 });
 
 test("a step with the preference lines names shell: pwsh itself, so a changed default cannot move it", () => {
