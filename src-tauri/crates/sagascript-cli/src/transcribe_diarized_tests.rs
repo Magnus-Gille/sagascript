@@ -178,6 +178,7 @@ struct Job {
     model: WhisperModel,
     policy: CachePolicy,
     with_cache: bool,
+    progress_events: bool,
 }
 
 impl Job {
@@ -186,6 +187,7 @@ impl Job {
             model: WhisperModel::TinyEn,
             policy: CachePolicy::Normal,
             with_cache: true,
+            progress_events: false,
         }
     }
 
@@ -198,6 +200,14 @@ impl Job {
 
     fn with_model(self, model: WhisperModel) -> Self {
         Self { model, ..self }
+    }
+
+    /// With `--progress-json`.
+    fn with_progress_events(self) -> Self {
+        Self {
+            progress_events: true,
+            ..self
+        }
     }
 
     fn without_cache(self) -> Self {
@@ -226,16 +236,43 @@ fn diarize(
     analyzer: &ScriptedAnalyzer,
     control: Option<&MeetingControl<'_>>,
 ) -> Diarized {
-    let cache = fx.cache.display().to_string();
-    let flags: &[&str] = if job.with_cache {
-        &["--diarize", "--diarize-cache", &cache]
-    } else {
-        &["--diarize"]
-    };
-    let args = args_for(flags);
     let (out, captured) = Out::capture();
+    let result = diarize_in(
+        fx,
+        job,
+        Services {
+            backend,
+            analyzer,
+            canceller: &crate::cancel::Canceller::new(),
+        },
+        control,
+        &out,
+    );
+    Diarized {
+        result,
+        stderr: captured.stderr(),
+    }
+}
+
+/// One diarized file with the given services and output.
+fn diarize_in(
+    fx: &Fixture,
+    job: Job,
+    services: Services<'_>,
+    control: Option<&MeetingControl<'_>>,
+    out: &Out,
+) -> Result<FileTranscription, DictationError> {
+    let cache = fx.cache.display().to_string();
+    let mut flags = vec!["--diarize"];
+    if job.progress_events {
+        flags.push("--progress-json");
+    }
+    if job.with_cache {
+        flags.extend(["--diarize-cache", &cache]);
+    }
+    let args = args_for(&flags);
     let mut model_loaded = false;
-    let result = transcribe_file(
+    transcribe_file(
         &FileRequest {
             args: &args,
             file: &fx.file,
@@ -247,14 +284,10 @@ fn diarize(
             control,
             cache_policy: job.policy,
         },
-        Services { backend, analyzer },
+        services,
         &mut model_loaded,
-        &out,
-    );
-    Diarized {
-        result,
-        stderr: captured.stderr(),
-    }
+        out,
+    )
 }
 
 fn run(fx: &Fixture, job: Job, backend: &ScriptedBackend, analyzer: &ScriptedAnalyzer) -> Diarized {
@@ -595,6 +628,71 @@ fn a_cancel_during_the_analysis_keeps_a_previous_cache() {
     assert_eq!(fx.files(), ["cache.json", "meeting.wav"]);
 }
 
+#[test]
+fn a_cancel_while_decoding_stops_before_the_analysis_and_writes_no_cache() {
+    for job in [Job::normal(), Job::refresh()] {
+        let fx = Fixture::new();
+        let canceller = Arc::new(crate::cancel::Canceller::new());
+        let backend = whisper(1);
+        let analyzer = ScriptedAnalyzer::new();
+        let out = CancelOnMention::out(FIRST_DECODING_EVENT, &canceller);
+
+        let result = diarize_in(
+            &fx,
+            job.with_progress_events(),
+            Services {
+                backend: &backend,
+                analyzer: &analyzer,
+                canceller: &canceller,
+            },
+            None,
+            &out,
+        );
+
+        assert!(
+            matches!(result, Err(DictationError::Cancelled)),
+            "{result:?}"
+        );
+        assert_eq!(analyzer.calls(), 0, "the analysis never started");
+        assert!(backend.calls().is_empty(), "no model, no Whisper half");
+        assert_eq!(fx.files(), ["meeting.wav"], "no cache, no staging file");
+    }
+}
+
+#[test]
+fn a_cancel_while_decoding_keeps_a_previous_cache() {
+    let fx = Fixture::new();
+    seed(&fx, WhisperModel::TinyEn);
+    let seeded = fx.cache_bytes();
+    let canceller = Arc::new(crate::cancel::Canceller::new());
+    let backend = whisper(1);
+    let analyzer = ScriptedAnalyzer::new();
+    let out = CancelOnMention::out(FIRST_DECODING_EVENT, &canceller);
+
+    // Another model: a miss, so the file is decoded.
+    let result = diarize_in(
+        &fx,
+        Job::normal()
+            .with_model(WhisperModel::Base)
+            .with_progress_events(),
+        Services {
+            backend: &backend,
+            analyzer: &analyzer,
+            canceller: &canceller,
+        },
+        None,
+        &out,
+    );
+
+    assert!(
+        matches!(result, Err(DictationError::Cancelled)),
+        "{result:?}"
+    );
+    assert!(backend.calls().is_empty(), "the model was never loaded");
+    assert_eq!(fx.cache_bytes(), seeded);
+    assert_eq!(fx.files(), ["cache.json", "meeting.wav"]);
+}
+
 // ---- the models -----------------------------------------------------------------------
 
 #[test]
@@ -641,7 +739,11 @@ fn analysis_outcome(
 ) -> Result<AnalysisOutcome, DictationError> {
     strategy(
         &[0.1; 1_600],
-        Services { backend, analyzer },
+        Services {
+            backend,
+            analyzer,
+            canceller: &crate::cancel::Canceller::new(),
+        },
         Language::English,
         None,
         &DiarizeConfig::default(),

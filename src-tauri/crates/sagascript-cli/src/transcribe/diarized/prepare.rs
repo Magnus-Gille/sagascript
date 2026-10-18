@@ -8,12 +8,11 @@ use sagascript_core::transcription::{model, ContextProfile};
 
 use super::super::args::{speaker_hint_from_args, TranscribeArgs};
 use super::super::diarize::DiarizationPerformance;
-use super::super::inference::{
-    prepare_language, verify_vad_model, InferenceBackend, LanguageEvidence,
-};
+use super::super::inference::{prepare_language, verify_vad_model, LanguageEvidence};
 use super::super::meeting::{meeting_checkpoint, MeetingPhase};
 use super::super::plan::{DiarizationPlan, FileRequest};
 use super::super::progress::Progress;
+use super::super::services::Services;
 use super::super::source::Source;
 use crate::output::{errln, Out};
 
@@ -22,7 +21,7 @@ pub(super) struct LanguageRequest<'a> {
     pub(super) request: &'a FileRequest<'a>,
     pub(super) plan: &'a DiarizationPlan,
     pub(super) source: &'a Source,
-    pub(super) backend: &'a dyn InferenceBackend,
+    pub(super) services: Services<'a>,
 }
 
 /// Settles what the run knows about the audio's language: a cache hit brings
@@ -40,7 +39,7 @@ pub(super) fn settle_language(
         request,
         plan,
         source,
-        backend,
+        services,
     } = *step;
     let FileRequest { args, control, .. } = *request;
     if args.meeting_json {
@@ -55,11 +54,11 @@ pub(super) fn settle_language(
         },
         Source::Decoded(audio) => {
             if plan.options.vad_model_path.is_some() {
-                verify_vad_model(backend, out)?;
+                verify_vad_model(services.backend, out)?;
             }
             prepare_language(
                 request,
-                backend,
+                services,
                 &audio.samples,
                 ContextProfile::for_diarization(true),
                 model_loaded,

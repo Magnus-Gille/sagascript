@@ -9,7 +9,6 @@
 //! `tests/` and run on macOS only.
 
 use std::collections::VecDeque;
-use std::io::Write;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -247,6 +246,7 @@ fn run_with_out(
             files,
             language: job.language,
             glossary: &job.glossary,
+            clipboard: &NoClipboard,
         },
         host,
         canceller,
@@ -813,42 +813,13 @@ fn a_cancel_during_transcription_ends_the_batch_and_aborts_the_engine() {
     assert!(!run.stderr.contains("Error transcribing"));
 }
 
-/// A stderr that cancels the run when a line it is given mentions `needle`.
-struct CancelOnMention {
-    needle: &'static str,
-    seen: String,
-    canceller: Arc<crate::cancel::Canceller>,
-}
-
-impl Write for CancelOnMention {
-    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        self.seen.push_str(&String::from_utf8_lossy(bytes));
-        if self.seen.contains(self.needle) {
-            self.canceller.request();
-        }
-        Ok(bytes.len())
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
 #[test]
 fn a_cancel_while_decoding_stops_before_the_engine_is_asked() {
     let dir = TempDir::new();
     let canceller = Arc::new(crate::cancel::Canceller::new());
     let engine = FakeEngine::new(vec![EngineReply::says("aldrig")]);
     let host = FakeHost::new(engine.clone());
-    let out = Out::new(
-        std::io::sink(),
-        CancelOnMention {
-            needle: "\"phase\":\"decoding\"",
-            seen: String::new(),
-            canceller: canceller.clone(),
-        },
-    );
-
+    let out = CancelOnMention::out(FIRST_DECODING_EVENT, &canceller);
     // The first decoding event is written just before the decoder starts, so
     // the cancel lands inside the decode, not between files.
     let result = run_with_out(

@@ -81,25 +81,30 @@ pub use self::resolve::{
 use self::diarize::{CachePolicy, OnnxAnalyzer};
 #[cfg(feature = "diarization")]
 use self::diarized::run_diarized;
-use self::output::{BatchExecution, BatchSink, FileTranscription};
+use self::output::{BatchExecution, BatchSink, Clipboard, FileTranscription, SystemClipboard};
 use self::pianissimo::{run_pianissimo_batch, InstalledPianissimo, PianissimoBatch};
 use self::plain::run_plain;
 use self::plan::{plan_file, plan_run, EnginePlan, FileMode, FileRequest, RunPlan};
 use self::progress::emit_progress;
 use self::services::Services;
+use crate::cancel::Canceller;
 
 pub fn run(args: TranscribeArgs, out: &Out) -> Result<(), DictationError> {
     crate::cancel::install();
+    // The one place the process-wide canceller is named for a command line run.
+    let canceller = &crate::cancel::GLOBAL;
     let progress_json = args.progress_json;
     let started = Instant::now();
-    let result = run_inner(args, out);
-    if crate::cancel::is_cancelled() {
+    let result = run_inner(args, canceller, out);
+    if canceller.is_cancelled() {
         emit_progress(out, progress_json, started, "cancelled", None);
     }
     result
 }
 
-fn run_inner(args: TranscribeArgs, out: &Out) -> Result<(), DictationError> {
+/// Plans the run and hands it to its engine, wired to the process: the real
+/// backends, the system clipboard, and `canceller`.
+fn run_inner(args: TranscribeArgs, canceller: &Canceller, out: &Out) -> Result<(), DictationError> {
     let RunPlan {
         stored,
         language,
@@ -114,9 +119,10 @@ fn run_inner(args: TranscribeArgs, out: &Out) -> Result<(), DictationError> {
                 files: &files,
                 language,
                 glossary: &glossary,
+                clipboard: &SystemClipboard,
             },
             &InstalledPianissimo,
-            &crate::cancel::GLOBAL,
+            canceller,
             out,
         ),
         EnginePlan::Whisper {
@@ -126,7 +132,7 @@ fn run_inner(args: TranscribeArgs, out: &Out) -> Result<(), DictationError> {
             let backend = std::sync::Arc::new(WhisperBackend::new());
             let _abort_whisper = {
                 let backend = backend.clone();
-                crate::cancel::register(move || backend.request_cancel())
+                canceller.register(move || backend.request_cancel())
             };
             run_whisper_batch(
                 &WhisperBatch {
@@ -137,21 +143,22 @@ fn run_inner(args: TranscribeArgs, out: &Out) -> Result<(), DictationError> {
                     model,
                     glossary: &glossary,
                     correction_vocabulary: &correction_vocabulary,
+                    clipboard: &SystemClipboard,
                 },
                 Services {
                     backend: &*backend,
                     #[cfg(feature = "diarization")]
                     analyzer: &OnnxAnalyzer,
+                    canceller,
                 },
-                &crate::cancel::GLOBAL,
                 out,
             )
         }
     }
 }
 
-/// What a Whisper batch needs besides the backend, the canceller and the
-/// output: the planned run.
+/// What a Whisper batch needs besides its [`Services`] and the output: the
+/// planned run, and where `--clipboard` puts the transcript.
 struct WhisperBatch<'a> {
     args: &'a TranscribeArgs,
     files: &'a [PathBuf],
@@ -160,6 +167,7 @@ struct WhisperBatch<'a> {
     model: WhisperModel,
     glossary: &'a Glossary,
     correction_vocabulary: &'a [String],
+    clipboard: &'a dyn Clipboard,
 }
 
 /// Transcribes the files one after another with `services`, writing each
@@ -171,7 +179,6 @@ struct WhisperBatch<'a> {
 fn run_whisper_batch(
     batch: &WhisperBatch<'_>,
     services: Services<'_>,
-    canceller: &crate::cancel::Canceller,
     out: &Out,
 ) -> Result<(), DictationError> {
     let WhisperBatch {
@@ -182,12 +189,13 @@ fn run_whisper_batch(
         model,
         glossary,
         correction_vocabulary,
+        clipboard,
     } = *batch;
     let mut model_loaded = false;
 
     let mut sink = BatchSink::new(args, files.len());
     let (processed, failures) = process_batch_with(
-        canceller,
+        services.canceller,
         files,
         args.fail_fast,
         |index, file| {
@@ -210,7 +218,7 @@ fn run_whisper_batch(
                 out,
             )
         },
-        |execution| sink.emit(out, args, execution),
+        |execution| sink.emit(out, args, clipboard, execution),
     )?;
     sink.finish(out)?;
 
@@ -276,7 +284,7 @@ fn transcribe_file(
             model_loaded,
             out,
         ),
-        FileMode::Plain => run_plain(request, plan.started, services.backend, model_loaded, out),
+        FileMode::Plain => run_plain(request, plan.started, services, model_loaded, out),
     }
 }
 

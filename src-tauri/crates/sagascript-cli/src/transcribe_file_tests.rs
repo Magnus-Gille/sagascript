@@ -29,7 +29,6 @@ use sagascript_core::transcription::{ContextProfile, TranscribeOptions, Transcri
 // ---- the scripted backend -----------------------------------------------------
 
 /// A step a test runs in the middle of a call, which can fail the call.
-#[cfg(feature = "diarization")]
 type Hook = Box<dyn FnOnce() -> Result<(), DictationError> + Send>;
 
 /// What `transcribe_segments` was called with.
@@ -101,6 +100,10 @@ struct ScriptedBackend {
     /// Run when the Whisper half of a diarized run is asked, before it answers.
     #[cfg(feature = "diarization")]
     during_diarization: Mutex<Option<Hook>>,
+    /// Run when the model is asked to load, before it answers.
+    during_load: Mutex<Option<Hook>>,
+    /// Run when the language is asked for, before it answers.
+    during_detect: Mutex<Option<Hook>>,
     calls: Mutex<Vec<Call>>,
 }
 
@@ -116,8 +119,28 @@ impl ScriptedBackend {
             diarizations: Mutex::new(VecDeque::new()),
             #[cfg(feature = "diarization")]
             during_diarization: Mutex::new(None),
+            during_load: Mutex::new(None),
+            during_detect: Mutex::new(None),
             calls: Mutex::new(Vec::new()),
         }
+    }
+
+    /// Runs `hook` when the model is asked to load, before it answers.
+    fn during_load(
+        self,
+        hook: impl FnOnce() -> Result<(), DictationError> + Send + 'static,
+    ) -> Self {
+        *self.during_load.lock().unwrap() = Some(Box::new(hook));
+        self
+    }
+
+    /// Runs `hook` when the language is asked for, before it answers.
+    fn during_detect(
+        self,
+        hook: impl FnOnce() -> Result<(), DictationError> + Send + 'static,
+    ) -> Self {
+        *self.during_detect.lock().unwrap() = Some(Box::new(hook));
+        self
     }
 
     /// Runs `hook` when the Whisper half of a diarized run is asked, before it answers.
@@ -165,6 +188,10 @@ impl LanguageProbe for ScriptedBackend {
         self.calls().push(Call::Detect {
             samples: audio.len(),
         });
+        let during = self.during_detect.lock().unwrap().take();
+        if let Some(during) = during {
+            during()?;
+        }
         match self.detection_failures.lock().unwrap().pop_front() {
             Some(error) => Err(error),
             None => Ok(self.detection.clone()),
@@ -183,6 +210,10 @@ impl InferenceBackend for ScriptedBackend {
         profile: ContextProfile,
     ) -> Result<(), DictationError> {
         self.calls().push(Call::Load(model, profile));
+        let during = self.during_load.lock().unwrap().take();
+        if let Some(during) = during {
+            during()?;
+        }
         match self.load_failures.lock().unwrap().pop_front() {
             Some(error) => Err(error),
             None => Ok(()),
@@ -395,15 +426,99 @@ impl Default for Plan<'_> {
     }
 }
 
-fn run_batch_with(
+/// A clipboard nothing may reach: the run was not asked for `--clipboard`.
+struct NoClipboard;
+
+impl Clipboard for NoClipboard {
+    fn copy(&self, _: &str) -> Result<(), DictationError> {
+        panic!("the clipboard was not asked for");
+    }
+}
+
+/// A clipboard that keeps what it is given, or refuses it.
+struct ScriptedClipboard {
+    copies: Mutex<Vec<String>>,
+    refusal: Option<fn() -> DictationError>,
+}
+
+impl ScriptedClipboard {
+    fn new() -> Self {
+        Self {
+            copies: Mutex::new(Vec::new()),
+            refusal: None,
+        }
+    }
+
+    fn refusing(refusal: fn() -> DictationError) -> Self {
+        Self {
+            refusal: Some(refusal),
+            ..Self::new()
+        }
+    }
+}
+
+impl Clipboard for ScriptedClipboard {
+    fn copy(&self, text: &str) -> Result<(), DictationError> {
+        if let Some(refusal) = self.refusal {
+            return Err(refusal());
+        }
+        self.copies.lock().unwrap().push(text.to_string());
+        Ok(())
+    }
+}
+
+/// A stderr that cancels the run the moment a line it is given mentions
+/// `needle`: a deterministic cancel at a chosen step, through the real
+/// `Canceller`.
+struct CancelOnMention {
+    needle: &'static str,
+    seen: String,
+    canceller: std::sync::Arc<crate::cancel::Canceller>,
+}
+
+impl CancelOnMention {
+    /// An `Out` whose stderr cancels `canceller` when `needle` is written; the
+    /// stdout is dropped.
+    fn out(needle: &'static str, canceller: &std::sync::Arc<crate::cancel::Canceller>) -> Out {
+        Out::new(
+            std::io::sink(),
+            Self {
+                needle,
+                seen: String::new(),
+                canceller: canceller.clone(),
+            },
+        )
+    }
+}
+
+impl std::io::Write for CancelOnMention {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.seen.push_str(&String::from_utf8_lossy(bytes));
+        if self.seen.contains(self.needle) {
+            self.canceller.request();
+        }
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// The first `--progress-json` event of a file, written just before its decoder
+/// starts: a cancel on it lands inside the decode, not between files.
+const FIRST_DECODING_EVENT: &str = "\"phase\":\"decoding\"";
+
+fn run_batch_in(
     plan: &Plan<'_>,
     files: &[PathBuf],
     backend: &ScriptedBackend,
     canceller: &crate::cancel::Canceller,
-) -> Run {
-    let (out, captured) = Out::capture();
+    clipboard: &dyn Clipboard,
+    out: &Out,
+) -> Result<(), DictationError> {
     let args = args_for(plan.flags);
-    let result = run_whisper_batch(
+    run_whisper_batch(
         &WhisperBatch {
             args: &args,
             files,
@@ -412,15 +527,26 @@ fn run_batch_with(
             model: plan.model,
             glossary: &plan.glossary,
             correction_vocabulary: &plan.vocabulary,
+            clipboard,
         },
         Services {
             backend,
             #[cfg(feature = "diarization")]
             analyzer: &OnnxAnalyzer,
+            canceller,
         },
-        canceller,
-        &out,
-    );
+        out,
+    )
+}
+
+fn run_batch_with(
+    plan: &Plan<'_>,
+    files: &[PathBuf],
+    backend: &ScriptedBackend,
+    canceller: &crate::cancel::Canceller,
+) -> Run {
+    let (out, captured) = Out::capture();
+    let result = run_batch_in(plan, files, backend, canceller, &NoClipboard, &out);
     Run {
         stdout: captured.stdout(),
         stderr: captured.stderr(),
@@ -1327,6 +1453,181 @@ fn a_cancel_in_json_mode_writes_no_document_at_all() {
 
     assert!(matches!(run.result, Err(DictationError::Cancelled)));
     assert_eq!(run.stdout, "");
+}
+
+// ---- cancellation through the seam ---------------------------------------------------------
+
+#[test]
+fn a_cancel_while_decoding_ends_the_run_before_the_backend_is_touched() {
+    let dir = TempDir::new();
+    let files = three_files(&dir);
+    let canceller = std::sync::Arc::new(crate::cancel::Canceller::new());
+    let backend = ScriptedBackend::new(vec![transcript(" Never.")]);
+    let out = CancelOnMention::out(FIRST_DECODING_EVENT, &canceller);
+
+    // The cancel lands inside the first file's decode, after the batch's own
+    // check and before the file is out of the decoder.
+    let result = run_batch_in(
+        &Plan {
+            flags: &["--progress-json", "--jsonl"],
+            ..Plan::default()
+        },
+        &files,
+        &backend,
+        &canceller,
+        &NoClipboard,
+        &out,
+    );
+
+    assert!(
+        matches!(result, Err(DictationError::Cancelled)),
+        "{result:?}"
+    );
+    assert!(backend.calls().is_empty(), "no model, no language check");
+}
+
+#[test]
+fn a_cancel_during_the_model_load_ends_the_file_before_the_language_check() {
+    let dir = TempDir::new();
+    let files = three_files(&dir);
+    let canceller = std::sync::Arc::new(crate::cancel::Canceller::new());
+    let backend = ScriptedBackend::new(vec![transcript(" Never.")]).during_load({
+        let canceller = canceller.clone();
+        move || {
+            canceller.request();
+            Ok(())
+        }
+    });
+
+    let run = run_batch_with(
+        &Plan {
+            flags: &["--jsonl"],
+            ..Plan::default()
+        },
+        &files,
+        &backend,
+        &canceller,
+    );
+
+    assert!(matches!(run.result, Err(DictationError::Cancelled)));
+    assert!(
+        matches!(backend.calls()[..], [Call::Load(..)]),
+        "{:?}",
+        backend.calls()
+    );
+    assert_eq!(run.stdout, "");
+}
+
+#[test]
+fn a_cancel_during_the_language_check_ends_the_file_before_transcription() {
+    let dir = TempDir::new();
+    let files = three_files(&dir);
+    let canceller = std::sync::Arc::new(crate::cancel::Canceller::new());
+    let backend = ScriptedBackend::new(vec![transcript(" Never.")]).during_detect({
+        let canceller = canceller.clone();
+        move || {
+            canceller.request();
+            Ok(())
+        }
+    });
+
+    // `Base` is not English-only and not language-optimized: it is asked directly.
+    let run = run_batch_with(
+        &Plan {
+            flags: &["--jsonl"],
+            ..Plan::default()
+        },
+        &files,
+        &backend,
+        &canceller,
+    );
+
+    assert!(matches!(run.result, Err(DictationError::Cancelled)));
+    assert!(
+        matches!(backend.calls()[..], [Call::Load(..), Call::Detect { .. }]),
+        "{:?}",
+        backend.calls()
+    );
+    assert_eq!(run.stdout, "");
+}
+
+#[test]
+fn a_batch_that_is_already_cancelled_starts_no_file() {
+    let dir = TempDir::new();
+    let files = three_files(&dir);
+    let canceller = crate::cancel::Canceller::new();
+    canceller.request();
+    let backend = ScriptedBackend::new(vec![transcript(" Never.")]);
+
+    let run = run_batch_with(&Plan::default(), &files, &backend, &canceller);
+
+    assert!(matches!(run.result, Err(DictationError::Cancelled)));
+    assert!(backend.calls().is_empty());
+    assert_eq!(run.stderr, "", "not even the first file is announced");
+}
+
+// ---- the clipboard through the seam ---------------------------------------------------------
+
+#[test]
+fn clipboard_receives_the_transcript_and_the_run_says_so() {
+    let dir = TempDir::new();
+    let file = tone(&dir, "a.wav", 3);
+    let backend = ScriptedBackend::new(vec![transcript(" Hello there.")]);
+    let clipboard = ScriptedClipboard::new();
+    let (out, captured) = Out::capture();
+
+    let result = run_batch_in(
+        &Plan {
+            flags: &["--clipboard"],
+            ..Plan::default()
+        },
+        std::slice::from_ref(&file),
+        &backend,
+        &crate::cancel::Canceller::new(),
+        &clipboard,
+        &out,
+    );
+
+    result.expect("the run succeeds");
+    assert_eq!(*clipboard.copies.lock().unwrap(), ["Hello there."]);
+    assert_eq!(captured.stdout(), "Hello there.\n");
+    assert!(captured.stderr().contains("Copied to clipboard.\n"));
+}
+
+#[test]
+fn a_clipboard_that_refuses_fails_the_run_after_the_transcription_and_writes_nothing() {
+    let dir = TempDir::new();
+    let file = tone(&dir, "a.wav", 3);
+    let backend = ScriptedBackend::new(vec![transcript(" Hello there.")]);
+    let clipboard = ScriptedClipboard::refusing(|| {
+        DictationError::PasteError("Clipboard error: no display".to_string())
+    });
+    let (out, captured) = Out::capture();
+
+    let result = run_batch_in(
+        &Plan {
+            flags: &["--clipboard", "--json"],
+            ..Plan::default()
+        },
+        std::slice::from_ref(&file),
+        &backend,
+        &crate::cancel::Canceller::new(),
+        &clipboard,
+        &out,
+    );
+
+    let error = result.expect_err("the clipboard refused");
+    assert_eq!(
+        error.to_string(),
+        "Paste error: Clipboard error: no display"
+    );
+    assert_eq!(
+        backend.transcriptions().len(),
+        1,
+        "the file was transcribed"
+    );
+    assert_eq!(captured.stdout(), "");
+    assert!(!captured.stderr().contains("Copied to clipboard."));
 }
 
 // ---- the model ---------------------------------------------------------------------------

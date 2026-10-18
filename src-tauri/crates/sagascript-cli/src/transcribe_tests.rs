@@ -536,6 +536,7 @@ fn cached_transcribe_uses_coarse_coverage_across_threshold_sweep() {
         beam_size: None,
         parallel: None,
     };
+    let canceller = crate::cancel::Canceller::new();
     let run = |threshold| {
         let args = args_for_threshold(threshold);
         let backend = WhisperBackend::new();
@@ -555,6 +556,7 @@ fn cached_transcribe_uses_coarse_coverage_across_threshold_sweep() {
             Services {
                 backend: &backend,
                 analyzer: &OnnxAnalyzer,
+                canceller: &canceller,
             },
             &mut model_loaded,
             &Out::capture().0,
@@ -1649,15 +1651,114 @@ mod batch_sink_contract_tests {
         DictationError::FileDecodeError("corrupt fixture".to_string())
     }
 
+    /// A clipboard nothing may reach: the sink was not asked for `--clipboard`.
+    struct NoClipboard;
+
+    impl Clipboard for NoClipboard {
+        fn copy(&self, _: &str) -> Result<(), DictationError> {
+            panic!("the clipboard was not asked for");
+        }
+    }
+
+    /// A clipboard that keeps what it is given, or refuses it.
+    struct RecordingClipboard {
+        copies: std::cell::RefCell<Vec<String>>,
+        failure: Option<fn() -> DictationError>,
+    }
+
+    impl RecordingClipboard {
+        fn new() -> Self {
+            Self {
+                copies: std::cell::RefCell::default(),
+                failure: None,
+            }
+        }
+
+        fn refusing(failure: fn() -> DictationError) -> Self {
+            Self {
+                failure: Some(failure),
+                ..Self::new()
+            }
+        }
+    }
+
+    impl Clipboard for RecordingClipboard {
+        fn copy(&self, text: &str) -> Result<(), DictationError> {
+            if let Some(failure) = self.failure {
+                return Err(failure());
+            }
+            self.copies.borrow_mut().push(text.to_string());
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn clipboard_gets_the_plain_text_before_the_result_is_written() {
+        for flags in [
+            &["--clipboard"][..],
+            &["--clipboard", "--json"],
+            &["--clipboard", "--jsonl"],
+        ] {
+            let args = args_for(flags);
+            let (out, captured) = Out::capture();
+            let clipboard = RecordingClipboard::new();
+            let mut sink = BatchSink::new(&args, 1);
+
+            sink.emit(&out, &args, &clipboard, ok("a.wav", "only"))
+                .unwrap();
+            sink.finish(&out).unwrap();
+
+            // The plain text, whatever the output mode writes to stdout.
+            assert_eq!(*clipboard.copies.borrow(), ["only"], "{flags:?}");
+            assert_eq!(captured.stderr(), "Copied to clipboard.\n", "{flags:?}");
+        }
+    }
+
+    #[test]
+    fn a_clipboard_that_refuses_ends_the_batch_and_the_result_is_not_written() {
+        let args = args_for(&["--clipboard"]);
+        let (out, captured) = Out::capture();
+        let clipboard = RecordingClipboard::refusing(|| {
+            DictationError::PasteError("Clipboard error: no display".to_string())
+        });
+        let mut sink = BatchSink::new(&args, 1);
+
+        let error = sink
+            .emit(&out, &args, &clipboard, ok("a.wav", "only"))
+            .unwrap_err();
+
+        assert!(matches!(error, DictationError::PasteError(_)), "{error:?}");
+        assert_eq!(captured.stdout(), "");
+        assert_eq!(captured.stderr(), "", "no `Copied to clipboard.`");
+    }
+
+    #[test]
+    fn a_failed_input_is_never_copied_and_without_the_flag_nothing_is() {
+        let args = args_for(&["--clipboard"]);
+        let (out, _) = Out::capture();
+        let clipboard = RecordingClipboard::new();
+        let mut sink = BatchSink::new(&args, 1);
+        sink.emit(&out, &args, &clipboard, failed("bad.wav", decode_error()))
+            .unwrap();
+        assert!(clipboard.copies.borrow().is_empty());
+
+        let args = args_for(&[]);
+        let mut sink = BatchSink::new(&args, 1);
+        sink.emit(&out, &args, &NoClipboard, ok("a.wav", "only"))
+            .unwrap();
+    }
+
     #[test]
     fn plain_prints_a_header_per_input_only_when_there_are_several() {
         let args = args_for(&[]);
         let (out, captured) = Out::capture();
         let mut sink = BatchSink::new(&args, 2);
-        sink.emit(&out, &args, ok("a.wav", "first")).unwrap();
-        sink.emit(&out, &args, failed("bad.wav", decode_error()))
+        sink.emit(&out, &args, &NoClipboard, ok("a.wav", "first"))
             .unwrap();
-        sink.emit(&out, &args, ok("b.wav", "second")).unwrap();
+        sink.emit(&out, &args, &NoClipboard, failed("bad.wav", decode_error()))
+            .unwrap();
+        sink.emit(&out, &args, &NoClipboard, ok("b.wav", "second"))
+            .unwrap();
         sink.finish(&out).unwrap();
         assert_eq!(
             captured.stdout(),
@@ -1670,7 +1771,8 @@ mod batch_sink_contract_tests {
 
         let (out, captured) = Out::capture();
         let mut sink = BatchSink::new(&args, 1);
-        sink.emit(&out, &args, ok("a.wav", "only")).unwrap();
+        sink.emit(&out, &args, &NoClipboard, ok("a.wav", "only"))
+            .unwrap();
         sink.finish(&out).unwrap();
         assert_eq!(captured.stdout(), "only\n");
         assert_eq!(captured.stderr(), "");
@@ -1681,7 +1783,8 @@ mod batch_sink_contract_tests {
         let args = args_for(&["--json"]);
         let (out, captured) = Out::capture();
         let mut sink = BatchSink::new(&args, 1);
-        sink.emit(&out, &args, ok("a.wav", "only")).unwrap();
+        sink.emit(&out, &args, &NoClipboard, ok("a.wav", "only"))
+            .unwrap();
         assert_eq!(captured.stdout(), "", "nothing is written before finish");
         sink.finish(&out).unwrap();
         assert_eq!(
@@ -1696,7 +1799,7 @@ mod batch_sink_contract_tests {
         let args = args_for(&["--json"]);
         let (out, captured) = Out::capture();
         let mut sink = BatchSink::new(&args, 1);
-        sink.emit(&out, &args, failed("a.wav", decode_error()))
+        sink.emit(&out, &args, &NoClipboard, failed("a.wav", decode_error()))
             .unwrap();
         sink.finish(&out).unwrap();
         assert_eq!(
@@ -1714,10 +1817,12 @@ mod batch_sink_contract_tests {
         let args = args_for(&["--json"]);
         let (out, captured) = Out::capture();
         let mut sink = BatchSink::new(&args, 3);
-        sink.emit(&out, &args, ok("a.wav", "first")).unwrap();
-        sink.emit(&out, &args, failed("bad.wav", decode_error()))
+        sink.emit(&out, &args, &NoClipboard, ok("a.wav", "first"))
             .unwrap();
-        sink.emit(&out, &args, ok("b.wav", "second")).unwrap();
+        sink.emit(&out, &args, &NoClipboard, failed("bad.wav", decode_error()))
+            .unwrap();
+        sink.emit(&out, &args, &NoClipboard, ok("b.wav", "second"))
+            .unwrap();
         sink.finish(&out).unwrap();
         // Item keys are written in the order status, source, result|error; the
         // payload inside `result` is a sorted-key JSON value.
@@ -1766,12 +1871,13 @@ mod batch_sink_contract_tests {
         let args = args_for(&["--jsonl"]);
         let (out, captured) = Out::capture();
         let mut sink = BatchSink::new(&args, 2);
-        sink.emit(&out, &args, ok("a.wav", "first")).unwrap();
+        sink.emit(&out, &args, &NoClipboard, ok("a.wav", "first"))
+            .unwrap();
         assert_eq!(
             captured.stdout(),
             "{\"status\":\"ok\",\"source\":\"a.wav\",\"result\":{\"file\":\"a.wav\",\"text\":\"first\"}}\n"
         );
-        sink.emit(&out, &args, failed("bad.wav", decode_error()))
+        sink.emit(&out, &args, &NoClipboard, failed("bad.wav", decode_error()))
             .unwrap();
         sink.finish(&out).unwrap();
         assert_eq!(
@@ -1801,6 +1907,7 @@ mod batch_sink_contract_tests {
         sink.emit(
             &out,
             &args,
+            &NoClipboard,
             BatchExecution {
                 source: PathBuf::from("a.wav"),
                 output: Ok(FileTranscription {
@@ -1822,7 +1929,9 @@ mod batch_sink_contract_tests {
         let args = args_for(&["--diarize", "--meeting-json"]);
         let (out, captured) = Out::capture();
         let mut sink = BatchSink::new(&args, 1);
-        let error = sink.emit(&out, &args, ok("a.wav", "text")).unwrap_err();
+        let error = sink
+            .emit(&out, &args, &NoClipboard, ok("a.wav", "text"))
+            .unwrap_err();
         assert_eq!(
             error.to_string(),
             "Transcription failed: meeting JSON was not produced by the diarized pipeline"

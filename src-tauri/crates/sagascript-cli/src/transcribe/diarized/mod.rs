@@ -68,7 +68,7 @@ pub(super) fn run_diarized(
         source,
         cache,
         cache_lookup_seconds,
-    } = acquire_source(request, &plan, services.analyzer, &progress, out)?;
+    } = acquire_source(request, &plan, services, &progress, out)?;
     let duration = source.duration_seconds();
     let coverage_profile = source.coverage_profile();
 
@@ -77,7 +77,7 @@ pub(super) fn run_diarized(
             request,
             plan: &plan,
             source: &source,
-            backend: services.backend,
+            services,
         },
         model_loaded,
         &progress,

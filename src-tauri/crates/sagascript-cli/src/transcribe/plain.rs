@@ -19,6 +19,7 @@ use super::inference::{prepare_language, verify_vad_model, InferenceBackend};
 use super::output::{assemble_plain_result, emit_warnings, FileTranscription, PlainInput};
 use super::plan::FileRequest;
 use super::progress::Progress;
+use super::services::Services;
 use super::source::{decode_file, DecodedAudio};
 use crate::output::{errln, Out};
 
@@ -26,7 +27,7 @@ use crate::output::{errln, Out};
 pub(super) fn run_plain(
     request: &FileRequest<'_>,
     started: Instant,
-    backend: &dyn InferenceBackend,
+    services: Services<'_>,
     model_loaded: &mut bool,
     out: &Out,
 ) -> Result<FileTranscription, DictationError> {
@@ -41,10 +42,11 @@ pub(super) fn run_plain(
         ..
     } = *request;
     let progress = Progress::new(out, args.progress_json, started, None);
-    let audio = decode_file(file, control, &progress, out)?;
+    let backend = services.backend;
+    let audio = decode_file(file, services.canceller, control, &progress, out)?;
     let language_evidence = prepare_language(
         request,
-        backend,
+        services,
         &audio.samples,
         ContextProfile::FlashAttention,
         model_loaded,

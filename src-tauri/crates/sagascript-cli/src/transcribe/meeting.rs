@@ -479,6 +479,7 @@ fn transcribe_meeting_file_inner(
         Services {
             backend,
             analyzer: &OnnxAnalyzer,
+            canceller: &crate::cancel::GLOBAL,
         },
         &mut model_loaded,
         &Out::stdio(),

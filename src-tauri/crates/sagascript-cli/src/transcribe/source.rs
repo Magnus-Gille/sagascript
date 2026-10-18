@@ -17,8 +17,6 @@ use sagascript_core::transcription::diagnostics::{
 #[cfg(feature = "diarization")]
 use sagascript_core::transcription::TranscriptSegment;
 
-#[cfg(feature = "diarization")]
-use super::diarize::DiarizationAnalyzer;
 use super::meeting::MeetingControl;
 #[cfg(feature = "diarization")]
 use super::meeting::{meeting_checkpoint, MeetingPhase};
@@ -27,6 +25,9 @@ use super::plan::{DiarizationPlan, FileRequest};
 use super::progress::Progress;
 #[cfg(feature = "diarization")]
 use super::resolve::model_id_string;
+#[cfg(feature = "diarization")]
+use super::services::Services;
+use crate::cancel::Canceller;
 #[cfg(feature = "diarization")]
 use crate::diarization_cache::{CacheIdentity, CacheLookup, DiarizationCache};
 use crate::output::{errln, Out};
@@ -47,10 +48,11 @@ impl DecodedAudio {
 }
 
 /// Decodes and resamples `file`, narrating on stderr and in `--progress-json`
-/// events. A cancel (Ctrl-C, or the meeting job's flag) stops it between
-/// packets.
+/// events. A cancel (the `canceller`'s, or the meeting job's flag) stops it
+/// between packets.
 pub(super) fn decode_file(
     file: &Path,
+    canceller: &Canceller,
     control: Option<&MeetingControl<'_>>,
     progress: &Progress,
     out: &Out,
@@ -83,7 +85,7 @@ pub(super) fn decode_file(
         }
     };
     let checkpoint = || {
-        crate::cancel::check()?;
+        canceller.check()?;
         control.map_or(Ok(()), |control| control.check())
     };
     on_decode(0);
@@ -204,7 +206,7 @@ pub(super) struct Acquired<'a> {
 pub(super) fn acquire_source<'a>(
     request: &FileRequest<'a>,
     plan: &DiarizationPlan,
-    analyzer: &dyn DiarizationAnalyzer,
+    services: Services<'_>,
     progress: &Progress,
     out: &Out,
 ) -> Result<Acquired<'a>, DictationError> {
@@ -242,7 +244,7 @@ pub(super) fn acquire_source<'a>(
     };
     let cache_lookup_seconds = cache_lookup_started.elapsed().as_secs_f64();
 
-    if hit.is_none() && !analyzer.models_downloaded() {
+    if hit.is_none() && !services.analyzer.models_downloaded() {
         return Err(DictationError::DiarizationError(
             "Diarization models not found. Run: sagascript download-model diarization".to_string(),
         ));
@@ -261,7 +263,13 @@ pub(super) fn acquire_source<'a>(
             );
             Source::Cached(Box::new(run))
         }
-        None => Source::Decoded(decode_file(file, control, progress, out)?),
+        None => Source::Decoded(decode_file(
+            file,
+            services.canceller,
+            control,
+            progress,
+            out,
+        )?),
     };
     if args.meeting_json {
         meeting_checkpoint(control, MeetingPhase::Decoding)?;

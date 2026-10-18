@@ -25,6 +25,7 @@ use super::language_regions::detect_file_language_regions;
 use super::plan::FileRequest;
 use super::progress::Progress;
 use super::resolve::model_id_string;
+use super::services::Services;
 use crate::output::{errln, Out};
 
 /// A Whisper backend: it can load a model, classify the language of audio
@@ -167,10 +168,11 @@ pub(super) struct LanguageEvidence {
 }
 
 /// Loads the model (once per batch) and checks the language of `audio`.
-/// A check that cannot run is a warning on stderr, not a failure of the file.
+/// A check that cannot run is a warning on stderr, not a failure of the file;
+/// a cancel after the load, or after the check, ends the run.
 pub(super) fn prepare_language(
     request: &FileRequest<'_>,
-    backend: &dyn InferenceBackend,
+    services: Services<'_>,
     audio: &[f32],
     profile: ContextProfile,
     model_loaded: &mut bool,
@@ -180,9 +182,12 @@ pub(super) fn prepare_language(
     let FileRequest {
         language, model, ..
     } = *request;
+    let Services {
+        backend, canceller, ..
+    } = services;
     progress.phase("loading", None);
     let model_load_seconds = ensure_model_loaded(out, backend, model, profile, model_loaded)?;
-    crate::cancel::check()?;
+    canceller.check()?;
     progress.phase("language_detection", None);
     let language_detection_started = Instant::now();
     let detected_language = match detect_file_language(out, backend, audio, model) {
@@ -205,7 +210,7 @@ pub(super) fn prepare_language(
             None
         }
     };
-    crate::cancel::check()?;
+    canceller.check()?;
     Ok(LanguageEvidence {
         model_load_seconds,
         detected_language,

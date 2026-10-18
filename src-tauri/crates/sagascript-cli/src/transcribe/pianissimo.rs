@@ -16,7 +16,7 @@ use sagascript_core::transcription::pianissimo_model;
 use sagascript_core::transcription::Glossary;
 
 use super::args::TranscribeArgs;
-use super::output::{BatchSink, FileTranscription};
+use super::output::{BatchSink, Clipboard, FileTranscription};
 use super::process_batch_with;
 use super::progress::emit_progress;
 use crate::cancel::Canceller;
@@ -209,6 +209,8 @@ pub(super) struct PianissimoBatch<'a> {
     pub(super) files: &'a [PathBuf],
     pub(super) language: Language,
     pub(super) glossary: &'a Glossary,
+    /// Where `--clipboard` puts the transcript.
+    pub(super) clipboard: &'a dyn Clipboard,
 }
 
 /// Transcribes the files one after another through the engine host, writing
@@ -227,6 +229,7 @@ pub(super) fn run_pianissimo_batch(
         files,
         language,
         glossary,
+        clipboard,
     } = *batch;
     check_request(batch, host, out)?;
     let load_started = Instant::now();
@@ -263,7 +266,7 @@ pub(super) fn run_pianissimo_batch(
                 out,
             )
         },
-        |execution| sink.emit(out, args, execution),
+        |execution| sink.emit(out, args, clipboard, execution),
     )?;
     if args.glossary_boost.is_some() {
         report_boost(&engine.boost_report(), out);
