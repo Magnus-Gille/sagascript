@@ -56,9 +56,16 @@ jobs:
           components: clippy
           targets: ${{ matrix.rust_target }}
 
+      # Windows steps run in pwsh, which reports only the exit code of the LAST native command (#436), so a step
+      # with several commands either names `shell: bash` (bash -e stops at the first failure) or, when it must stay
+      # PowerShell, starts with the two preference lines below: PowerShell 7.4+ then throws on any native command
+      # that exits non-zero. scripts/test-ci-parallel-gates.mjs enforces this for every Windows job in every
+      # workflow; its two audited exceptions are the transcription gate and the PowerShell 5.1 acceptance step.
       - name: Verify native runner architecture
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           $hostTriple = rustc -vV | Select-String '^host:' | ForEach-Object { ($_ -split ':', 2)[1].Trim() }
           if ([string]::IsNullOrWhiteSpace($hostTriple)) {
             throw "Unable to determine the Rust host triple"
@@ -87,6 +94,8 @@ jobs:
         if: matrix.architecture == 'arm64' && steps.llvm-cache.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           # Upstream rust-bindgen#3264: LLVM 22 is incompatible with bindgen 0.71.
           $llvmUrl = 'https://github.com/llvm/llvm-project/releases/download/llvmorg-20.1.8/LLVM-20.1.8-woa64.exe'
           $expectedHash = '7c4ac97eb2ae6b960ca5f9caf3ff6124c8d2a18cc07a7840a4d2ea15537bad8e'
@@ -111,6 +120,8 @@ jobs:
         if: matrix.architecture == 'arm64'
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           $llvmBin = 'C:\sagascript-tools\llvm-20.1.8\bin'
           $clangPath = Join-Path $llvmBin 'clang-cl.exe'
           $libclangPath = Join-Path $llvmBin 'libclang.dll'
@@ -143,6 +154,8 @@ jobs:
         if: matrix.architecture == 'arm64'
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           $clang = Get-Command clang-cl -ErrorAction Stop
           $ninja = Get-Command ninja -ErrorAction Stop
           & $clang.Source --version
@@ -165,6 +178,8 @@ jobs:
         if: matrix.architecture == 'x64'
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           # whisper-rs-sys forwards CMAKE_* but not GGML_* environment flags.
           # Its legacy WHISPER_NATIVE=OFF alias does not disable native probing.
           $policy = (Resolve-Path -LiteralPath 'scripts/cmake/windows-x64-portable.cmake').Path.Replace('\', '/')
@@ -184,6 +199,8 @@ jobs:
         id: windows-image
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           $imageOs = $env:ImageOS
           $imageVersion = $env:ImageVersion
           if ([string]::IsNullOrWhiteSpace($imageOs)) {
@@ -285,6 +302,8 @@ jobs:
       - name: Gate native Windows clipboard transactions
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           # The host triple was verified above. Reuse the workspace test binary
           # instead of recompiling a duplicate explicit-target debug tree (on a pull
           # request there is none: this step then compiles the app's test binary).
@@ -303,6 +322,9 @@ jobs:
       - name: Verify source before release CLI build
         run: node scripts/ci-build-identity.mjs --verify
 
+      # Audited exception to the preference lines (#436): every native command below is followed by its own
+      # $LASTEXITCODE check, and a failing transcription must print its captured stdout and stderr before it
+      # throws, which the native-exit preference would skip. A new native command here needs its own check.
       - name: Gate real Windows transcription
         env:
           CARGO_LOG: cargo::core::compiler::fingerprint=info
@@ -335,6 +357,7 @@ jobs:
             throw "Transcription failed with exit code $transcriptionExit"
           }
           python scripts/verify-json-cli-streams.py $stdout $stderr
+          if ($LASTEXITCODE -ne 0) { throw "JSON CLI stream verification failed with exit code $LASTEXITCODE" }
           $result = Get-Content $stdout -Raw | ConvertFrom-Json
           if ($result.language -ne "no") { throw "Expected Norwegian result, got '$($result.language)'" }
           if ($result.text -notmatch "(?i)storting") { throw "Expected 'storting' in transcription" }
@@ -348,12 +371,16 @@ jobs:
       - name: Gate repeated English dictation with warm model reuse
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           $binary = "src-tauri\target\${{ matrix.rust_target }}\release\sagascript.exe"
           & $binary download-model base.en
           if ($LASTEXITCODE -ne 0) { throw "English model download failed" }
           & $binary benchmark-dictation test-audio/english-jfk.wav --language en --iterations 5 --expect-word country > "$env:RUNNER_TEMP\english-dictation-benchmark.json"
           if ($LASTEXITCODE -ne 0) { throw "Repeated English dictation failed" }
 
+      # Audited exception to the preference lines (#436): Windows PowerShell 5.1 has none. The script call throws on
+      # failure and the check below is a cmdlet, so no later native command can reset the exit code.
       - name: Test Windows PowerShell 5.1 acceptance
         shell: powershell
         run: |
@@ -364,6 +391,8 @@ jobs:
         if: matrix.architecture == 'arm64'
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           $ortVersion = '1.28.2'
           $ortZipName = "onnxruntime-win-arm64-$ortVersion.zip"
           $ortUrl = "https://github.com/microsoft/onnxruntime/releases/download/v$ortVersion/$ortZipName"
@@ -404,6 +433,8 @@ jobs:
         if: matrix.architecture == 'arm64'
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           # Numbers only, no thresholds: short-utterance latency on windows-11-arm without the device.
           # A failure here is reported as a warning so a model-download hiccup cannot block the candidate.
           try {
@@ -426,6 +457,8 @@ jobs:
       - name: Remove cached installer bundles
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           $bundleRoot = "src-tauri\target\${{ matrix.rust_target }}\release\bundle"
           foreach ($format in @("nsis", "msi")) {
             $bundleDirectory = Join-Path $bundleRoot $format
@@ -455,6 +488,8 @@ jobs:
         if: matrix.architecture == 'arm64'
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           $sha = (git rev-parse HEAD).Trim()
           $release = 'src-tauri\target\${{ matrix.rust_target }}\release'
           # Tauri stages resources beside the app executable; NSIS and MSI package this tree.
@@ -476,6 +511,8 @@ jobs:
       - name: Verify installers carry the console CLI
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           $release = 'src-tauri\target\${{ matrix.rust_target }}\release'
           $version = node -p "require('./package.json').version"
           $msi = @(Get-ChildItem (Join-Path $release 'bundle\msi') -Filter '*.msi' -File)
@@ -495,6 +532,8 @@ jobs:
         if: matrix.architecture == 'arm64'
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           $release = 'src-tauri\target\${{ matrix.rust_target }}\release'
           $version = node -p "require('./package.json').version"
           $nsis = @(Get-ChildItem (Join-Path $release 'bundle\nsis') -Filter '*.exe' -File)
@@ -553,6 +592,8 @@ jobs:
         if: matrix.architecture == 'arm64'
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           $version = node -p "require('./package.json').version"
           $architecture = 'arm64'
           $desktop = "src-tauri\target\${{ matrix.rust_target }}\release\sagascript.exe"
@@ -583,6 +624,8 @@ jobs:
       - name: Prepare and verify candidate artifacts
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           $version = node -p "require('./package.json').version"
           $architecture = "${{ matrix.architecture }}"
           $targetRoot = "src-tauri\target\${{ matrix.rust_target }}\release"
