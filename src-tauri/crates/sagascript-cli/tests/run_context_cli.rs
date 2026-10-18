@@ -489,6 +489,109 @@ mod glossary_suggest {
     }
 }
 
+/// The dictionary editor (`glossary add|remove|clear`, `suggest --apply`)
+/// reports a refusal of its own closure with the text the settings give it,
+/// once: it used to flatten `Settings error: Unknown dictation profile 'x'` into
+/// a string and wrap it again (#360 part 2b).
+mod glossary_edit {
+    use super::*;
+
+    #[test]
+    fn an_unknown_profile_is_reported_once_by_every_editing_command() {
+        let sandbox = Sandbox::new();
+        for args in [
+            &["glossary", "add", "Term", "--profile", "nope"][..],
+            &["glossary", "remove", "Term", "--profile", "nope"][..],
+            &["glossary", "clear", "--yes", "--profile", "nope"][..],
+            &["glossary", "list", "--profile", "nope"][..],
+            &["glossary", "path", "--profile", "nope"][..],
+        ] {
+            assert_eq!(
+                failure(&sandbox.run(args)),
+                "Settings error: Unknown dictation profile 'nope'",
+                "{args:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_other_refusals_and_the_success_lines_keep_their_text() {
+        let sandbox = Sandbox::new();
+        let removed = sandbox.run(&["glossary", "remove", "Sagascript"]);
+        assert_eq!(removed.status.code(), Some(0));
+        assert!(
+            stderr_text(&removed).contains("Removed personal dictionary term: Sagascript\n"),
+            "{}",
+            stderr_text(&removed)
+        );
+        assert_eq!(
+            failure(&sandbox.run(&["glossary", "remove", "Sagascript"])),
+            "Settings error: Personal dictionary term 'Sagascript' was not found"
+        );
+        assert_eq!(
+            failure(&sandbox.run(&["glossary", "clear"])),
+            "Settings error: Refusing to clear the personal dictionary without --yes"
+        );
+        let cleared = sandbox.run(&["glossary", "clear", "--yes", "--profile", "swedish"]);
+        assert_eq!(cleared.status.code(), Some(0));
+        assert!(
+            stderr_text(&cleared).contains("Cleared personal dictionary\n"),
+            "{}",
+            stderr_text(&cleared)
+        );
+        assert_eq!(
+            failure(&sandbox.run(&["glossary", "add", "Term", "--alias", "a,b"])),
+            "Settings error: Glossary alias cannot contain a newline, comma, '=' or '|'"
+        );
+    }
+
+    /// A settings file that cannot be read or written is the settings'
+    /// `settings_storage_failed`, with the text it always had, also where the
+    /// editor's closure used to flatten it into a plain `settings_error`.
+    #[test]
+    fn a_settings_file_that_cannot_be_used_is_a_storage_failure() {
+        let sandbox = Sandbox::new();
+        std::fs::write(sandbox.root.join("heard.txt"), "heard\n").expect("write text");
+        std::fs::write(sandbox.root.join("corrected.txt"), "corrected\n").expect("write text");
+        let args = [
+            "glossary",
+            "suggest",
+            "heard.txt",
+            "--corrected",
+            "corrected.txt",
+            "--apply",
+            "--json",
+        ];
+        // The dry run needs no write; it works and names the suggestion.
+        assert_eq!(sandbox.run(&args[..args.len() - 2]).status.code(), Some(0));
+
+        // A folder where the settings file belongs: it cannot be read or replaced.
+        std::fs::remove_file(sandbox.root.join("settings.json")).expect("remove settings");
+        std::fs::create_dir(sandbox.root.join("settings.json")).expect("a folder takes its place");
+        let output = sandbox.run(&args);
+        assert_eq!(output.status.code(), Some(1));
+        let (code, text) = json_error(&output);
+        assert_eq!(code, "settings_storage_failed");
+        assert!(
+            text.starts_with("Settings error: Settings file ")
+                && text.contains("refusing to overwrite it"),
+            "{text}"
+        );
+        for args in [
+            &["glossary", "add", "Term"][..],
+            &["glossary", "remove", "Term"][..],
+            &["glossary", "clear", "--yes"][..],
+        ] {
+            let message = failure(&sandbox.run(args));
+            assert!(
+                message.starts_with("Settings error: Settings file ")
+                    && !message.starts_with("Settings error: Settings error: "),
+                "{args:?}: {message}"
+            );
+        }
+    }
+}
+
 #[cfg(feature = "record")]
 mod record {
     use super::*;

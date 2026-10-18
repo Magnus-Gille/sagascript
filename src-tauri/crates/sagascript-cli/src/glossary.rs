@@ -147,21 +147,20 @@ fn add(
         validate_learning_profile(&current, &profile_id)?;
     }
 
-    machine::try_update::<String, _>(|stored| {
-        let profile_id = resolved_profile_id(stored, profile).map_err(|error| error.to_string())?;
+    machine::try_update::<DictationError, _>(|stored| {
+        let profile_id = resolved_profile_id(stored, profile)?;
         if profile.is_some() {
-            validate_profile(stored, &profile_id).map_err(|error| error.to_string())?;
+            validate_profile(stored, &profile_id)?;
         }
         if !aliases.is_empty() {
-            validate_learning_profile(stored, &profile_id).map_err(|error| error.to_string())?;
+            validate_learning_profile(stored, &profile_id)?;
         }
         let source = glossary_source_mut(stored, profile)?;
         let mut glossary = Glossary::parse(source);
         glossary.upsert(term.clone(), aliases.clone());
         *source = glossary.render();
         Ok(())
-    })
-    .map_err(DictationError::SettingsError)?;
+    })?;
     errln!(out, "Saved personal dictionary term: {term}");
     Ok(())
 }
@@ -169,7 +168,7 @@ fn add(
 fn remove(term: &str, profile: Option<&str>, out: &Out) -> Result<(), DictationError> {
     let term = validate_component("term", term)?;
     let mut removed = false;
-    machine::try_update::<String, _>(|stored| {
+    machine::try_update::<DictationError, _>(|stored| {
         let source = glossary_source_mut(stored, profile)?;
         let mut glossary = Glossary::parse(source);
         removed = glossary.remove(&term);
@@ -177,8 +176,7 @@ fn remove(term: &str, profile: Option<&str>, out: &Out) -> Result<(), DictationE
             *source = glossary.render();
         }
         Ok(())
-    })
-    .map_err(DictationError::SettingsError)?;
+    })?;
 
     if removed {
         errln!(out, "Removed personal dictionary term: {term}");
@@ -196,11 +194,10 @@ fn clear(confirmed: bool, profile: Option<&str>, out: &Out) -> Result<(), Dictat
             "Refusing to clear the personal dictionary without --yes".to_string(),
         ));
     }
-    machine::try_update::<String, _>(|stored| {
+    machine::try_update::<DictationError, _>(|stored| {
         glossary_source_mut(stored, profile)?.clear();
         Ok(())
-    })
-    .map_err(DictationError::SettingsError)?;
+    })?;
     errln!(out, "Cleared personal dictionary");
     Ok(())
 }
@@ -234,15 +231,14 @@ fn suggest(
             ));
         }
         let reviewed = suggestions.clone();
-        machine::try_update::<String, _>(|latest| {
-            validate_learning_profile(latest, &profile_id).map_err(|error| error.to_string())?;
-            let effective = effective_glossary(latest, Some(&profile_id), None, None)
-                .map_err(|error| error.to_string())?;
+        machine::try_update::<DictationError, _>(|latest| {
+            validate_learning_profile(latest, &profile_id)?;
+            let effective = effective_glossary(latest, Some(&profile_id), None, None)?;
             let current = suggest_glossary_candidates(&heard, &corrected, &effective);
             if current != reviewed {
-                return Err(
+                return Err(DictationError::SettingsError(
                     "Dictionary changed since the dry run; review suggestions again".to_string(),
-                );
+                ));
             }
 
             let source = latest
@@ -253,8 +249,7 @@ fn suggest(
             apply_candidates(&mut scoped, &reviewed);
             *source = scoped.render();
             Ok(())
-        })
-        .map_err(DictationError::SettingsError)?;
+        })?;
     }
 
     if json {
@@ -398,8 +393,8 @@ fn glossary_source<'a>(
 fn glossary_source_mut<'a>(
     stored: &'a mut settings::Settings,
     profile: Option<&str>,
-) -> Result<&'a mut String, String> {
-    let id = resolved_profile_id(stored, profile).map_err(|error| error.to_string())?;
+) -> Result<&'a mut String, DictationError> {
+    let id = resolved_profile_id(stored, profile)?;
     Ok(stored.profile_glossaries.entry(id).or_default())
 }
 
