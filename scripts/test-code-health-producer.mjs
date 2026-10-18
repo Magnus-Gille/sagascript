@@ -18,11 +18,16 @@ import {
   parseKnipCandidates,
   parseRustComplexity,
   wholeSecondUtc,
+  sha256,
 } from "./lib/code-health-producer.mjs";
 import {
   CI_API_TOOL,
+  collectFirstAttemptMetadata,
   collectRustCliCoverage,
   command,
+  createAsyncMetadataTransport,
+  githubActionsJson,
+  paginateAsync,
   safeFailureDiagnostic as safeProducerFailureDiagnostic,
 } from "./code-health-produce.mjs";
 import { validateObjective, validateObjectiveSeries } from "./lib/code-health-objective.mjs";
@@ -586,6 +591,440 @@ test("measured CI cohort uses a schema-safe tool identity", () => {
   );
   const validation = validateObjective(schema, objective);
   assert.equal(validation.valid, true, validation.schemaErrors.join("; "));
+});
+
+test("async CI metadata preserves the 89-run current-configuration attempt-1 cohort with bounded concurrency", async () => {
+  const currentWorkflow = Buffer.from("name: CI\njobs:\n  scope:\n  test-macos:\n");
+  const oldWorkflow = Buffer.from("name: legacy CI\njobs:\n  build:\n");
+  const currentDigest = sha256(currentWorkflow);
+  const windowStart = "2026-09-11T10:00:00Z";
+  const windowEnd = "2026-10-09T10:00:00Z";
+  const workflowBySha = new Map();
+  const shaByKey = new Map();
+  const shaFor = (key) => {
+    if (!shaByKey.has(key)) shaByKey.set(key, String(shaByKey.size + 1).padStart(40, "0"));
+    return shaByKey.get(key);
+  };
+  const apiRuns = Array.from({ length: 89 }, (_, index) => {
+    const isCurrent = index < 19;
+    const group = isCurrent ? `current-${Math.floor(index / 5)}` : `old-${Math.floor((index - 19) / 5)}`;
+    const headSha = shaFor(group);
+    workflowBySha.set(headSha, isCurrent ? currentWorkflow : oldWorkflow);
+    return {
+      id: 30000 + index,
+      head_sha: headSha,
+      run_attempt: [1, 2, 3].includes(index) ? 2 : 1,
+      event: "push",
+      head_branch: "main",
+      created_at: at(10 * 86400 + index),
+      status: "completed",
+      conclusion: "success",
+    };
+  });
+  const runById = new Map(apiRuns.map((run) => [run.id, run]));
+  const jobIds = config.ci.expected_job_ids;
+  let activeRequests = 0;
+  let maximumActiveRequests = 0;
+  let completedRequests = 0;
+  let requestStarts = 0;
+  let returned = false;
+  let startsAfterReturn = 0;
+  const transport = async (rawUrl, _timeoutMs, signal) => {
+    const url = new URL(rawUrl);
+    requestStarts += 1;
+    if (returned) startsAfterReturn += 1;
+    activeRequests += 1;
+    maximumActiveRequests = Math.max(maximumActiveRequests, activeRequests);
+    let timer;
+    let onAbort;
+    try {
+      await new Promise((resolve, reject) => {
+        timer = setTimeout(resolve, 2);
+        onAbort = () => {
+          clearTimeout(timer);
+          reject(signal.reason);
+        };
+        signal.addEventListener("abort", onAbort, { once: true });
+      });
+      if (url.pathname.endsWith("/actions/workflows/ci.yml/runs")) {
+        return { total_count: apiRuns.length, workflow_runs: apiRuns };
+      }
+      const identity = /\/actions\/runs\/(\d+)\/attempts\/1$/.exec(url.pathname);
+      if (identity) {
+        const run = runById.get(Number(identity[1]));
+        if (run.id === 30000) {
+          const error = new Error("not found");
+          error.status = 404;
+          throw error;
+        }
+        return {
+          id: run.id,
+          run_attempt: 1,
+          head_sha: run.head_sha,
+          event: run.event,
+          head_branch: run.head_branch,
+          status: "completed",
+          conclusion: run.id === 30001 ? "failure" : "success",
+        };
+      }
+      const jobs = /\/actions\/runs\/(\d+)\/attempts\/1\/jobs$/.exec(url.pathname);
+      if (jobs) {
+        const runId = Number(jobs[1]);
+        return {
+          total_count: jobIds.length,
+          jobs: jobIds.map((name, index) => ({
+            id: runId * 10 + index,
+            name,
+            status: "completed",
+            conclusion: runId === 30001 && name === "test-macos" ? "failure" : "success",
+            started_at: at(10 * 86400 + 10),
+            completed_at: at(10 * 86400 + 20),
+            steps: [{ number: 1, name: "test", status: "completed", conclusion: "success" }],
+          })),
+        };
+      }
+      throw new Error("unexpected API endpoint");
+    } finally {
+      if (timer) clearTimeout(timer);
+      if (onAbort) signal.removeEventListener("abort", onAbort);
+      activeRequests -= 1;
+      completedRequests += 1;
+    }
+  };
+  const request = createAsyncMetadataTransport(transport, { budgetMs: 5000 });
+  try {
+    const inventory = await paginateAsync(
+      `https://api.github.com/repos/${config.repository.owner}/${config.repository.name}/actions/workflows/ci.yml/runs?branch=main&event=push&created=2026-09-11..2026-10-09`,
+      "workflow_runs",
+      config.ci.limits.maximum_runs,
+      request,
+    );
+    assert.equal(inventory.length, 89);
+    let historicalReads = 0;
+    const metadata = await collectFirstAttemptMetadata({
+      apiRuns: inventory,
+      request,
+      currentWorkflowDigest: currentDigest,
+      windowStart,
+      windowEnd,
+      maximumRuns: config.ci.limits.maximum_runs,
+      maximumJobsPerRun: config.ci.limits.maximum_jobs_per_run,
+      readHistoricalWorkflow: (sha) => {
+        historicalReads += 1;
+        return workflowBySha.get(sha);
+      },
+    });
+    assert.equal(historicalReads, workflowBySha.size, "historical workflow bytes are read once per SHA and classified per run");
+    assert.equal(metadata.normalizedInputs.length, 19);
+    assert.equal(metadata.runInventoryRows.length, 89);
+    assert.equal(metadata.excludedWorkflowRuns.length, 70);
+    assert.equal(Object.keys(metadata.runEvidence).length, 19);
+    assert.equal(
+      metadata.normalizedInputs.find((run) => run.id === 30000).status,
+      "completed",
+      "attempt-1 404 falls back only when no rerun exists",
+    );
+    assert.equal(metadata.normalizedInputs.find((run) => run.id === 30001).conclusion, "failure");
+    assert.equal(metadata.normalizedInputs.find((run) => run.id === 30001).latest_conclusion, "success");
+    const rerunJobs = metadata.normalizedInputs.find((run) => run.id === 30001).attempt1_jobs;
+    assert.equal(rerunJobs.length, jobIds.length);
+    assert.equal(rerunJobs.find((job) => job.name === "scope").conclusion, "success");
+    assert.equal(rerunJobs.find((job) => job.name === "test-macos").conclusion, "failure");
+    const cohort = normalizeCiCohort({
+      runs: metadata.normalizedInputs,
+      expectedJobIds: jobIds,
+      windowStart,
+      windowEnd,
+      workflowConfigDigest: currentDigest,
+      workflowPath: config.ci.workflow,
+      repoRoot,
+      preExcludedRuns: metadata.excludedWorkflowRuns,
+    });
+    assert.equal(cohort.runs.length, 19);
+    assert.equal(cohort.excluded_runs.length, 70);
+    assert.equal(
+      cohort.runs.find((run) => run.run_ref === "ref:ci-run-30001-attempt-1").jobs.find((job) => job.job_ref === "ref:job-ci-test-macos")
+        .conclusion,
+      "failure",
+    );
+    const payload = buildCiFirstAttemptPayload({
+      normalizedRuns: cohort.runs,
+      windowStart,
+      windowEnd,
+      workflowConfigDigest: currentDigest,
+      expectedJobIds: jobIds,
+      runInventoryRef: "ref:ci-main-push-28-day-runs",
+    });
+    const objective = createObjective(
+      config.scopes.find((scope) => scope.name === "ci-release"),
+      {
+        commitSha: commit,
+        runRef,
+        attempt: 1,
+        observedAt,
+      },
+      {
+        ci_first_attempt: {
+          status: "measured",
+          payload,
+          tool: CI_API_TOOL,
+          command: "GET /repos/{owner}/{repo}/actions/workflows/ci.yml/runs and attempt-1 jobs with pagination",
+          included_refs: [payload.run_inventory_ref],
+          excluded_refs: [],
+          scope_policy: {
+            workflow: config.ci.workflow,
+            branch: config.ci.branch,
+            event: config.ci.event,
+            window_days: config.ci.window_days,
+            expected_job_ids: jobIds,
+            limits: config.ci.limits,
+            attempt_policy: config.ci.attempt_policy,
+            scope_version: "main-push-current-config-ci-v2",
+          },
+        },
+      },
+    );
+    const validation = validateObjective(schema, objective);
+    assert.equal(validation.valid, true, validation.schemaErrors.join("; "));
+  } finally {
+    request.close();
+  }
+  returned = true;
+  const completedAtReturn = completedRequests;
+  await Promise.resolve();
+  assert.equal(activeRequests, 0);
+  assert.equal(completedRequests, completedAtReturn);
+  assert.equal(startsAfterReturn, 0);
+  assert.equal(requestStarts, 1 + 19 * 2);
+  assert.equal(maximumActiveRequests, 8);
+});
+
+test("async CI metadata cancels in-flight work and sanitizes diagnostics after a request fails", async () => {
+  const workflow = Buffer.from("name: CI\njobs:\n  scope:\n  test-macos:\n");
+  const apiRuns = Array.from({ length: 20 }, (_, index) => ({
+    id: 70000 + index,
+    head_sha: "c".repeat(40),
+    run_attempt: 1,
+    event: "push",
+    head_branch: "main",
+    created_at: at(10 * 86400),
+    status: "completed",
+    conclusion: "success",
+  }));
+  let active = 0;
+  let peak = 0;
+  let starts = 0;
+  let startsAfterReturn = 0;
+  let returned = false;
+  const transport = async (rawUrl, _timeoutMs, signal) => {
+    const url = new URL(rawUrl);
+    const isFailingJobsRequest = url.pathname.endsWith("/runs/70000/attempts/1/jobs");
+    starts += 1;
+    if (returned) startsAfterReturn += 1;
+    active += 1;
+    peak = Math.max(peak, active);
+    let timer;
+    let onAbort;
+    try {
+      await new Promise((resolve, reject) => {
+        timer = setTimeout(resolve, isFailingJobsRequest ? 2 : 100);
+        onAbort = () => {
+          clearTimeout(timer);
+          reject(signal.reason);
+        };
+        signal.addEventListener("abort", onAbort, { once: true });
+      });
+      if (isFailingJobsRequest) {
+        const error = new Error("https://api.github.com/private?token=PRIVATE_SENTINEL github_pat_PRIVATE_SENTINEL");
+        error.status = 503;
+        throw error;
+      }
+      const identity = /\/actions\/runs\/(\d+)\/attempts\/1$/.exec(url.pathname);
+      if (identity) return { ...apiRuns.find((run) => run.id === Number(identity[1])), run_attempt: 1 };
+      return { total_count: 2, jobs: [] };
+    } finally {
+      if (timer) clearTimeout(timer);
+      if (onAbort) signal.removeEventListener("abort", onAbort);
+      active -= 1;
+    }
+  };
+  const request = createAsyncMetadataTransport(transport, { budgetMs: 5000 });
+  let failure;
+  try {
+    await assert.rejects(
+      collectFirstAttemptMetadata({
+        apiRuns,
+        request,
+        currentWorkflowDigest: sha256(workflow),
+        windowStart: "2026-09-11T10:00:00Z",
+        windowEnd: "2026-10-09T10:00:00Z",
+        readHistoricalWorkflow: () => workflow,
+      }),
+      (error) => {
+        failure = error;
+        return true;
+      },
+    );
+  } finally {
+    request.close();
+    returned = true;
+  }
+  const startsAtReturn = starts;
+  await Promise.resolve();
+  assert.equal(active, 0);
+  assert.equal(starts, startsAtReturn);
+  assert.equal(startsAfterReturn, 0);
+  assert.ok(peak <= 8);
+  assert.match(failure.message, /attempt-1 jobs failed run_id=70000 request_count=/);
+  assert.match(failure.message, /HTTP 503/);
+  assert.doesNotMatch(failure.message, /PRIVATE_SENTINEL|github_pat_|https?:\/\/|token=/);
+  assert.ok(starts < apiRuns.length * 2, "failure cancels queued metadata requests before all runs are dispatched");
+});
+
+test("async CI pagination checks completeness and the metadata transport enforces one deadline", async () => {
+  const urls = [];
+  const entries = await paginateAsync("https://api.github.com/repos/acme/app/runs", "entries", 200, async (url) => {
+    urls.push(url);
+    const page = Number(new URL(url).searchParams.get("page"));
+    return { total_count: 101, entries: Array.from({ length: page === 1 ? 100 : 1 }, (_, index) => index) };
+  });
+  assert.equal(entries.length, 101);
+  assert.deepEqual(
+    urls.map((url) => Number(new URL(url).searchParams.get("page"))),
+    [1, 2],
+  );
+  await assert.rejects(
+    paginateAsync("https://api.github.com/repos/acme/app/runs", "entries", 200, async () => ({ total_count: 101, entries: [1] })),
+    /pagination ended before total_count/,
+  );
+
+  let now = 0;
+  const request = createAsyncMetadataTransport(
+    async () => {
+      now = 31;
+      return { complete: true };
+    },
+    { budgetMs: 30, now: () => now },
+  );
+  try {
+    await assert.rejects(request("https://api.github.com/test"), /exceeded its 30-second budget/);
+    assert.equal(request.requestCount, 1);
+  } finally {
+    request.close();
+  }
+});
+
+test("native async GitHub transport pins the API origin, rejects redirects, and keeps tokens out of errors", async () => {
+  const previous = process.env.GH_TOKEN;
+  const sentinel = "test-token-value-not-a-real-credential";
+  process.env.GH_TOKEN = sentinel;
+  const url = `https://api.github.com/repos/${config.repository.owner}/${config.repository.name}/actions/runs/123/attempts/1`;
+  const controller = new AbortController();
+  let captured;
+  try {
+    const body = await githubActionsJson(url, 1000, controller.signal, async (target, options) => {
+      captured = { target, options };
+      return new Response('{"id":123}', { status: 200 });
+    });
+    assert.deepEqual(body, { id: 123 });
+    assert.equal(captured.target, url);
+    assert.equal(captured.options.method, "GET");
+    assert.equal(captured.options.redirect, "error");
+    assert.equal(captured.options.headers.Authorization, `Bearer ${sentinel}`);
+    const inventoryUrl = `https://api.github.com/repos/${config.repository.owner}/${config.repository.name}/actions/workflows/ci.yml/runs?branch=main&event=push&created=2026-09-11..2026-10-09&per_page=100&page=1`;
+    await githubActionsJson(
+      inventoryUrl,
+      1000,
+      controller.signal,
+      async () => new Response('{"total_count":0,"workflow_runs":[]}', { status: 200 }),
+    );
+    await assert.rejects(
+      githubActionsJson(`${url}?token=PRIVATE_SENTINEL`, 1000, controller.signal, async () => assert.fail("unexpected fetch")),
+      /outside the fixed read-only endpoint set/,
+    );
+    let fetchFailure;
+    await assert.rejects(
+      githubActionsJson(url, 1000, controller.signal, async () => {
+        fetchFailure = new Error(`redirect to https://example.test/?token=${sentinel}`);
+        throw fetchFailure;
+      }),
+      (error) => error.message === "GitHub Actions API request failed" && error.cause === fetchFailure && !error.message.includes(sentinel),
+    );
+    let responseReadFailure;
+    const failedBody = new Response(
+      new ReadableStream({
+        start(streamController) {
+          responseReadFailure = new Error(`body from https://example.test/?token=${sentinel}`);
+          streamController.error(responseReadFailure);
+        },
+      }),
+      { status: 200 },
+    );
+    await assert.rejects(
+      githubActionsJson(url, 1000, controller.signal, async () => failedBody),
+      (error) =>
+        error.message === "GitHub Actions API request failed" && error.cause === responseReadFailure && !error.message.includes(sentinel),
+    );
+    const currentWorkflow = Buffer.from("name: CI\njobs:\n  scope:\n");
+    const diagnosticRequest = createAsyncMetadataTransport(
+      (target, timeoutMs, signal) =>
+        githubActionsJson(target, timeoutMs, signal, async () => {
+          throw new Error(`request to https://example.test/?token=${sentinel}`);
+        }),
+      { budgetMs: 1000 },
+    );
+    try {
+      await assert.rejects(
+        collectFirstAttemptMetadata({
+          apiRuns: [
+            {
+              id: 1234,
+              head_sha: "d".repeat(40),
+              run_attempt: 1,
+              event: "push",
+              head_branch: "main",
+              created_at: at(10 * 86400),
+              status: "completed",
+              conclusion: "success",
+            },
+          ],
+          request: diagnosticRequest,
+          currentWorkflowDigest: sha256(currentWorkflow),
+          windowStart: "2026-09-11T00:00:00Z",
+          windowEnd: "2026-10-09T00:00:00Z",
+          readHistoricalWorkflow: () => currentWorkflow,
+        }),
+        (error) => {
+          assert.match(error.message, /attempt-1 identity failed run_id=1234 request_count=1/);
+          assert.doesNotMatch(error.message, /PRIVATE_SENTINEL|https?:\/\/|token=/);
+          assert.equal(error.cause, undefined, "public collector diagnostics do not retain the transport cause");
+          return true;
+        },
+      );
+    } finally {
+      diagnosticRequest.close();
+    }
+    for (const status of [404, 503]) {
+      let bodyCancelled = false;
+      const response = new Response(
+        new ReadableStream({
+          cancel: async () => {
+            await Promise.resolve();
+            bodyCancelled = true;
+          },
+        }),
+        { status },
+      );
+      await assert.rejects(
+        githubActionsJson(url, 1000, controller.signal, async () => response),
+        (error) => error.status === status && error.message === `GitHub Actions API returned HTTP ${status}`,
+      );
+      assert.equal(bodyCancelled, true, `HTTP ${status} response body is cancelled before the request settles`);
+    }
+  } finally {
+    if (previous === undefined) delete process.env.GH_TOKEN;
+    else process.env.GH_TOKEN = previous;
+  }
 });
 
 test("CI cohort excludes historical workflow configurations and measures current runs only", () => {
