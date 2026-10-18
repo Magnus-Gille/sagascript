@@ -55,6 +55,20 @@ fn hotkey_mode_serde() {
     assert_eq!(serde_json::to_string(&legacy).unwrap(), "\"push\"");
 }
 
+#[test]
+fn hotkey_mode_ids_are_the_serde_names_and_presenter_is_not_one() {
+    for mode in HotkeyMode::ALL {
+        assert_eq!(
+            serde_json::to_value(mode).unwrap(),
+            serde_json::Value::String(mode.id().to_owned())
+        );
+        assert_eq!(HotkeyMode::from_id(mode.id()), Some(mode));
+    }
+    assert_eq!(HotkeyMode::from_id("presenter"), None);
+    assert_eq!(HotkeyMode::from_id("Push"), None);
+    assert_eq!(HotkeyMode::from_id(""), None);
+}
+
 // -- Settings --
 
 #[test]
@@ -1153,6 +1167,16 @@ fn file_model_preference_ids_are_the_model_ids() {
         FileModelPreference::parse_id("auto"),
         Ok(FileModelPreference::Auto)
     );
+    for preference in [
+        FileModelPreference::Auto,
+        FileModelPreference::Whisper(WhisperModel::KbWhisperSmall),
+        FileModelPreference::PianissimoOriginal,
+    ] {
+        assert_eq!(
+            FileModelPreference::parse_id(preference.id()),
+            Ok(preference)
+        );
+    }
     assert_eq!(
         FileModelPreference::parse_id("large-v3"),
         Err("Unknown file model preference 'large-v3'".to_owned())

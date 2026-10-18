@@ -49,6 +49,17 @@ pub enum FileModelPreference {
 }
 
 impl FileModelPreference {
+    /// Stable identifier of this preference: `auto`, a Whisper model's
+    /// [`WhisperModel::id`] or [`FileModel::PIANISSIMO_ID`]. What the settings
+    /// file stores and `config get` prints; [`Self::parse_id`] is its inverse.
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Whisper(model) => model.id(),
+            Self::PianissimoOriginal => FileModel::PIANISSIMO_ID,
+        }
+    }
+
     /// Parse one of the stable persisted model identifiers.
     pub fn parse_id(id: &str) -> Result<Self, String> {
         match id {
@@ -66,11 +77,7 @@ impl Serialize for FileModelPreference {
     where
         S: Serializer,
     {
-        match self {
-            Self::Auto => serializer.serialize_str("auto"),
-            Self::Whisper(model) => model.serialize(serializer),
-            Self::PianissimoOriginal => serializer.serialize_str(FileModel::PIANISSIMO_ID),
-        }
+        serializer.serialize_str(self.id())
     }
 }
 
@@ -109,6 +116,26 @@ pub enum HotkeyMode {
     PushToTalk,
     #[serde(rename = "toggle")]
     Toggle,
+}
+
+impl HotkeyMode {
+    /// Both modes, in the order the app lists them.
+    pub const ALL: [HotkeyMode; 2] = [HotkeyMode::PushToTalk, HotkeyMode::Toggle];
+
+    /// Stable identifier of this mode: what the settings file stores and
+    /// `sagascript config` prints.
+    pub fn id(self) -> &'static str {
+        match self {
+            HotkeyMode::PushToTalk => "push",
+            HotkeyMode::Toggle => "toggle",
+        }
+    }
+
+    /// The mode with this stable identifier, if any. The retired `presenter`
+    /// is not one: only a settings file is still read with it (as `push`).
+    pub fn from_id(id: &str) -> Option<HotkeyMode> {
+        HotkeyMode::ALL.into_iter().find(|mode| mode.id() == id)
+    }
 }
 
 /// When the Pianissimo engine host loads its model ahead of the first utterance.
