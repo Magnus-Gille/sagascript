@@ -844,6 +844,26 @@ mod lock_protocol_tests {
     }
 
     #[test]
+    fn resident_models_list_the_active_model_first_and_the_secondary_after_it() {
+        let fakes = Fakes::with_active_runtime();
+        *fakes.cached_runtime.lock().unwrap() = Some(CachedWhisperRuntime {
+            runtime: Loaded {
+                key: RuntimeKey {
+                    model: WhisperModel::BaseEn,
+                    profile: ContextProfile::FlashAttention,
+                },
+                ctx: Arc::new(()),
+            },
+            state: None,
+        });
+
+        assert_eq!(
+            fakes.slots().resident_models(),
+            vec![MODEL, WhisperModel::BaseEn]
+        );
+    }
+
+    #[test]
     fn a_poisoned_secondary_runtime_slot_is_recovered_as_empty() {
         let fakes = Fakes::with_active_runtime();
         poison_lock(&fakes, |fakes| &fakes.cached_runtime);

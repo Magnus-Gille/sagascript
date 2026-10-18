@@ -597,6 +597,9 @@ mod stitch_characterisation_tests {
         let music = [segment(0.0, 3.0, " Music Music Music")];
         assert_eq!(display_transcript(&music, Language::English), "[MUSIC]");
         assert_eq!(music[0].text, " Music Music Music");
+        // The marker is the configured language's.
+        let swedish = [segment(0.0, 3.0, " Musik Musik Musik")];
+        assert_eq!(display_transcript(&swedish, Language::Swedish), "[MUSIK]");
     }
 
     #[test]
