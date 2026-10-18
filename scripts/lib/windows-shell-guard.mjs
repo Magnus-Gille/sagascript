@@ -8,15 +8,22 @@
 //
 // A step that may run on a Windows runner passes when it
 //   - is a single command (one logical, non-comment line), or
-//   - names `shell: bash`, or
+//   - names `shell: bash` (or `sh`, or a bash or sh template with errexit, see stopsAtFirstFailure), or
 //   - is a `pwsh` script that STARTS with the two preference lines in PWSH_PREFERENCES (PowerShell
-//     7.4 and later throw on any native command exiting non-zero) and does not switch either off later, or
+//     7.4 and later throw on any native command exiting non-zero), names `shell: pwsh` itself, and does not
+//     change either preference later, or
 //   - matches an exception the caller pinned, with its reason: an audited script whose every native command
 //     is checked by hand and for which the preference would hide a diagnostic, or the `powershell` 5.1 step,
 //     which has no such preference.
 //
 // Nothing here runs a script: workflows are read through scripts/lib/ci-workflow.mjs (parsed YAML,
-// CRLF-safe). The scripts of a step are classified by line; there is no PowerShell parser.
+// CRLF-safe). The scripts of a step are classified by line; there is no PowerShell parser. What that means:
+//   - `<# ... #>` blocks are stripped before strings are read, so a `'<#'` inside a string can hide the lines up to
+//     the next `#>` from the count;
+//   - a construct on one line counts as one command: `foreach ($c in $list) { cargo $c }` and
+//     `pwsh -Command "a; b"` (the `;` is inside a string) are each one;
+//   - local actions are found only as `.github/actions/<name>/action.yml` (see actionNames in ci-workflow.mjs): a
+//     nested directory or an `action.yaml` is not seen.
 import { createHash } from "node:crypto";
 
 /** The first two command lines of a multi-command pwsh script, in either order. Both are needed: the native-exit preference only acts under the error preference. */
