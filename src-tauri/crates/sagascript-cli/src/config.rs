@@ -2,12 +2,13 @@ use clap::{Args, Subcommand};
 
 use sagascript_core::error::DictationError;
 use sagascript_core::settings::{
-    self, validate_hotkey, EnginePrewarm, FileModelPreference, HotkeyMode, HotkeyProfile, Language,
-    ModelResetNotice, Settings, WhisperModel,
+    self, FileModelPreference, HotkeyProfile, Language, ModelResetNotice, Settings,
 };
-use sagascript_core::transcription::Glossary;
 
 use crate::output::{errln, outln, Out};
+
+mod keys;
+use keys::{lookup, parse_value, KEYS};
 
 #[derive(Args)]
 pub struct ConfigArgs {
@@ -18,22 +19,12 @@ pub struct ConfigArgs {
 #[derive(Subcommand)]
 pub enum ConfigAction {
     /// Show all settings with current and default values
-    #[command(long_about = "\
-Show all settings in a table with their current values and defaults.
-
-Valid keys: language, whisper_model, file_transcription_model, hotkey_mode (push, toggle), show_overlay, \
-auto_paste, auto_select_model, pianissimo_dictation, hotkey, initial_prompt, \
-beam_size, temperature_fallback, vad_enabled, engine_prewarm, engine_idle_unload_minutes.")]
+    #[command(long_about = list_long_about())]
     List,
 
     /// Get a single setting value
     #[command(
-        long_about = "\
-Print the current value of a single setting to stdout.
-
-Valid keys: language, whisper_model, file_transcription_model, hotkey_mode (push, toggle), show_overlay, \
-auto_paste, auto_select_model, pianissimo_dictation, hotkey, initial_prompt, \
-beam_size, temperature_fallback, vad_enabled, engine_prewarm, engine_idle_unload_minutes",
+        long_about = get_long_about(),
         after_long_help = "\
 EXAMPLES:
   sagascript config get language
@@ -41,37 +32,13 @@ EXAMPLES:
   sagascript config get initial_prompt"
     )]
     Get {
-        /// Setting key [possible values: language, whisper_model, file_transcription_model, hotkey_mode, show_overlay, auto_paste, auto_select_model, pianissimo_dictation, hotkey, initial_prompt, beam_size, temperature_fallback, vad_enabled, engine_prewarm, engine_idle_unload_minutes]
+        #[arg(help = key_help())]
         key: String,
     },
 
     /// Set a setting value
     #[command(
-        long_about = "\
-Update a setting. The new value takes effect immediately — the GUI \
- hot-reloads changes made via CLI. Legacy language, whisper_model, auto_select_model, \
- pianissimo_dictation, and initial_prompt keys edit the default profile. The \
- initial_prompt alias only merges entries and never erases saved aliases; prefer \
- `config profiles update ID --language ... --model ...`.
-
-Valid values per key:
-  language             en, sv, no, fi, auto (auto uses a generic model — less accurate)
-  whisper_model        tiny.en, tiny, base.en, base, kb-whisper-tiny,
-                       kb-whisper-base, kb-whisper-small, nb-whisper-tiny,
-                       nb-whisper-base, nb-whisper-small, fi-whisper-tiny
-  file_transcription_model  auto, any compatible Whisper model ID, pianissimo-sv
-  hotkey_mode          push, toggle
-  show_overlay         true, false
-  auto_paste           true, false (enabling requires Accessibility approval for the installed GUI)
-  auto_select_model    true, false
-  pianissimo_dictation true, false (Swedish live dictation only)
-  hotkey               Modifier+Key; bare F13-F24 on macOS (Accessibility) or Windows
-  initial_prompt       Personal dictionary text; aliases use TERM = ALIAS | ALIAS
-  beam_size            Integer >= 0 (0 = greedy/fast, 5 = beam search/accurate)
-  temperature_fallback true, false
-  vad_enabled          true, false
-  engine_prewarm       off, on_app_start, on_key_down (when the Pianissimo engine loads its model)
-  engine_idle_unload_minutes  Integer >= 0 (default 60; engine host exits after twice this; 0 = never unload)",
+        long_about = set_long_about(),
         after_long_help = "\
 EXAMPLES:
   sagascript config set language sv
@@ -83,7 +50,7 @@ EXAMPLES:
   sagascript config set initial_prompt $'OpenRouter = open router | open vrouter\\nmerge = merch'"
     )]
     Set {
-        /// Setting key [possible values: language, whisper_model, file_transcription_model, hotkey_mode, show_overlay, auto_paste, auto_select_model, pianissimo_dictation, hotkey, initial_prompt, beam_size, temperature_fallback, vad_enabled, engine_prewarm, engine_idle_unload_minutes]
+        #[arg(help = key_help())]
         key: String,
         /// New value for the setting
         value: String,
@@ -194,23 +161,41 @@ pub enum ProfileAction {
     Remove { id: String },
 }
 
-const VALID_KEYS: &[&str] = &[
-    "language",
-    "whisper_model",
-    "file_transcription_model",
-    "hotkey_mode",
-    "show_overlay",
-    "auto_paste",
-    "auto_select_model",
-    "pianissimo_dictation",
-    "hotkey",
-    "initial_prompt",
-    "beam_size",
-    "temperature_fallback",
-    "vad_enabled",
-    "engine_prewarm",
-    "engine_idle_unload_minutes",
-];
+/// The part of `config set --help` before the table of values.
+const SET_INTRO: &str = "\
+Update a setting. The new value takes effect immediately — the GUI \
+ hot-reloads changes made via CLI. Legacy language, whisper_model, auto_select_model, \
+ pianissimo_dictation, and initial_prompt keys edit the default profile. The \
+ initial_prompt alias only merges entries and never erases saved aliases; prefer \
+ `config profiles update ID --language ... --model ...`.";
+
+// The key lists and the table of values in the help come from the key table
+// (`keys::KEYS`), so a key cannot be missing from one of them.
+
+fn list_long_about() -> String {
+    format!(
+        "Show all settings in a table with their current values and defaults.\n\nValid keys: {}.",
+        keys::key_list_help()
+    )
+}
+
+fn get_long_about() -> String {
+    format!(
+        "Print the current value of a single setting to stdout.\n\nValid keys: {}",
+        keys::key_list_help()
+    )
+}
+
+fn set_long_about() -> String {
+    format!(
+        "{SET_INTRO}\n\nValid values per key:\n{}",
+        keys::valid_values_help()
+    )
+}
+
+fn key_help() -> String {
+    format!("Setting key [possible values: {}]", keys::possible_values())
+}
 
 pub fn run(args: ConfigArgs, out: &Out) -> Result<(), DictationError> {
     match args.action {
@@ -243,9 +228,6 @@ fn cmd_profiles(action: ProfileAction, out: &Out) -> Result<(), DictationError> 
                     .get(&profile.id)
                     .copied()
                     .unwrap_or(FileModelPreference::Auto);
-                let model_id = serde_json::to_value(model)
-                    .and_then(serde_json::from_value::<String>)
-                    .map_err(|error| DictationError::SettingsError(error.to_string()))?;
                 outln!(
                     out,
                     "{:<16} {:<20} {:<28} {:<28} {:<28} {:<12} {}",
@@ -254,8 +236,8 @@ fn cmd_profiles(action: ProfileAction, out: &Out) -> Result<(), DictationError> 
                     profile.shortcut,
                     profile.push_to_talk_shortcut.as_deref().unwrap_or("-"),
                     profile.toggle_shortcut.as_deref().unwrap_or("-"),
-                    format_language(profile.language),
-                    model_id,
+                    profile.language.id(),
+                    model.id(),
                 )?;
             }
             Ok(())
@@ -271,7 +253,7 @@ fn cmd_profiles(action: ProfileAction, out: &Out) -> Result<(), DictationError> 
             language,
             model,
         } => {
-            let language = parse_enum_value::<Language>(&language, "language")?;
+            let language = parse_value::<Language>(&language, "language")?;
             let model = model
                 .as_deref()
                 .map(FileModelPreference::parse_id)
@@ -354,7 +336,7 @@ fn cmd_profiles(action: ProfileAction, out: &Out) -> Result<(), DictationError> 
             ];
             let language = language
                 .as_deref()
-                .map(|value| parse_enum_value::<Language>(value, "language"))
+                .map(|value| parse_value::<Language>(value, "language"))
                 .transpose()?;
             let model = model
                 .as_deref()
@@ -428,30 +410,8 @@ fn cmd_profiles(action: ProfileAction, out: &Out) -> Result<(), DictationError> 
     }
 }
 
-/// Apply a profile-list change (plus optional explicit model) to `settings`.
-/// Returns notices for profiles whose model was reset to Auto by a language
-/// change. A profile given an explicit `model` in the same change gets no reset
-/// notice; the explicit model is validated against the new language and an
-/// incompatible one is an error.
-fn apply_profiles_change(
-    settings: &mut Settings,
-    profiles: Vec<HotkeyProfile>,
-    model: Option<(&str, FileModelPreference)>,
-) -> Result<Vec<ModelResetNotice>, String> {
-    let mut notices = settings.replace_hotkey_profiles(profiles)?;
-    if let Some((id, preference)) = model {
-        settings.set_profile_model(id, preference)?;
-    }
-    if let Some((id, _)) = model {
-        notices.retain(|notice| notice.profile_id != id);
-    }
-    for profile in settings.resolved_hotkey_profiles() {
-        settings.dictation_model_for_profile(&profile.id)?;
-    }
-    Ok(notices)
-}
-
-/// Persist the profile list atomically; see [`apply_profiles_change`].
+/// Persist the profile list atomically; the change itself is
+/// [`Settings::apply_profiles_change`], which the app's shortcut profiles use too.
 fn persist_profiles(
     profiles: Vec<HotkeyProfile>,
     model: Option<(&str, FileModelPreference)>,
@@ -459,7 +419,7 @@ fn persist_profiles(
     Settings::validate_hotkey_profiles(&profiles).map_err(DictationError::SettingsError)?;
     let mut notices = Vec::new();
     settings::store::try_update(|settings| {
-        notices = apply_profiles_change(settings, profiles.clone(), model)?;
+        notices = settings.apply_profiles_change(profiles.clone(), model)?;
         Ok(())
     })
     .map_err(DictationError::SettingsError)?;
@@ -478,162 +438,44 @@ fn cmd_list(out: &Out) -> Result<(), DictationError> {
 
     outln!(out, "{:<20} {:<24} DEFAULT", "KEY", "CURRENT")?;
     outln!(out, "{:<20} {:<24} -------", "---", "-------")?;
-    outln!(
-        out,
-        "{:<20} {:<24} {}",
-        "language",
-        get_setting_value(&current, "language"),
-        get_setting_value(&defaults, "language")
-    )?;
-    outln!(
-        out,
-        "{:<20} {:<24} {}",
-        "whisper_model",
-        get_setting_value(&current, "whisper_model"),
-        get_setting_value(&defaults, "whisper_model")
-    )?;
-    outln!(
-        out,
-        "{:<20} {:<24} {}",
-        "file_transcription_model",
-        format_file_model(current.file_transcription_model),
-        format_file_model(defaults.file_transcription_model)
-    )?;
-    outln!(
-        out,
-        "{:<20} {:<24} {}",
-        "hotkey_mode",
-        format_hotkey_mode(current.hotkey_mode),
-        format_hotkey_mode(defaults.hotkey_mode)
-    )?;
-    outln!(
-        out,
-        "{:<20} {:<24} {}",
-        "show_overlay",
-        current.show_overlay,
-        defaults.show_overlay
-    )?;
-    outln!(
-        out,
-        "{:<20} {:<24} {}",
-        "auto_paste",
-        current.auto_paste,
-        defaults.auto_paste
-    )?;
-    outln!(
-        out,
-        "{:<20} {:<24} {}",
-        "auto_select_model",
-        get_setting_value(&current, "auto_select_model"),
-        get_setting_value(&defaults, "auto_select_model")
-    )?;
-    outln!(
-        out,
-        "{:<20} {:<24} {}",
-        "pianissimo_dictation",
-        get_setting_value(&current, "pianissimo_dictation"),
-        get_setting_value(&defaults, "pianissimo_dictation")
-    )?;
-    outln!(
-        out,
-        "{:<20} {:<24} {}",
-        "hotkey",
-        current.hotkey,
-        defaults.hotkey
-    )?;
-    outln!(
-        out,
-        "{:<20} {:<24} {}",
-        "initial_prompt",
-        get_setting_value(&current, "initial_prompt"),
-        get_setting_value(&defaults, "initial_prompt")
-    )?;
-    outln!(
-        out,
-        "{:<20} {:<24} {}",
-        "beam_size",
-        current.beam_size,
-        defaults.beam_size
-    )?;
-    outln!(
-        out,
-        "{:<20} {:<24} {}",
-        "temperature_fallback",
-        current.temperature_fallback,
-        defaults.temperature_fallback
-    )?;
-    outln!(
-        out,
-        "{:<20} {:<24} {}",
-        "vad_enabled",
-        current.vad_enabled,
-        defaults.vad_enabled
-    )?;
-    outln!(
-        out,
-        "{:<20} {:<24} {}",
-        "engine_prewarm",
-        current.engine_prewarm.id(),
-        defaults.engine_prewarm.id()
-    )?;
-    outln!(
-        out,
-        "{:<20} {:<24} {}",
-        "engine_idle_unload_minutes",
-        current.engine_idle_unload_minutes,
-        defaults.engine_idle_unload_minutes
-    )?;
+    for key in KEYS {
+        outln!(
+            out,
+            "{:<20} {:<24} {}",
+            key.name,
+            (key.get)(&current),
+            (key.get)(&defaults)
+        )?;
+    }
     Ok(())
 }
 
 fn cmd_get(key: &str, out: &Out) -> Result<(), DictationError> {
-    validate_key(key)?;
+    let key = lookup(key)?;
     let settings = settings::store::load();
-    let value = get_setting_value(&settings, key);
+    let value = (key.get)(&settings);
     outln!(out, "{value}")?;
     Ok(())
 }
 
-fn cmd_set(key: &str, value: &str, out: &Out) -> Result<(), DictationError> {
-    validate_key(key)?;
+fn cmd_set(name: &str, value: &str, out: &Out) -> Result<(), DictationError> {
+    let key = lookup(name)?;
     // Parse before acquiring the settings lock so invalid input never writes.
     let mut validation_target = settings::store::load();
-    apply_setting_value(&mut validation_target, key, value)?;
-    if matches!(key, "hotkey" | "hotkey_mode") {
-        validation_target
-            .validate_shortcut_configuration()
-            .map_err(DictationError::SettingsError)?;
-    }
+    (key.set)(&mut validation_target, value)?;
     let mut notices = Vec::new();
     let settings = settings::store::try_update(|settings| {
-        notices = apply_setting_value_with_notices(settings, key, value)
-            .map_err(|error| error.to_string())?;
-        if matches!(key, "hotkey" | "hotkey_mode") {
-            settings.validate_shortcut_configuration()?;
-        }
+        notices = (key.set)(settings, value).map_err(|error| error.to_string())?;
         Ok(())
     })
     .map_err(DictationError::SettingsError)?;
 
-    errln!(out, "Set {key} = {}", get_setting_value(&settings, key));
+    errln!(out, "Set {name} = {}", (key.get)(&settings));
     print_notices(&notices, out);
-    if let Some(warning) = setting_warning(key, &settings) {
+    if let Some(warning) = (key.warning)(&settings) {
         errln!(out, "Warning: {warning}");
     }
     Ok(())
-}
-
-fn setting_warning(key: &str, settings: &Settings) -> Option<&'static str> {
-    if key == "auto_paste" && settings.auto_paste {
-        Some(
-            "auto-paste requires Accessibility approval for the installed Sagascript app; \
-             until it is granted, the GUI will keep or reset auto-paste to false",
-        )
-    } else if key == "hotkey" {
-        shortcut_warning(&settings.hotkey)
-    } else {
-        None
-    }
 }
 
 /// Warning for a shortcut: the brightness-key hint takes precedence because a
@@ -667,178 +509,17 @@ fn bare_extended_hotkey_warning(shortcut: &str) -> Option<&'static str> {
         .then_some("bare F13-F24 requires Accessibility approval for the installed Sagascript app")
 }
 
-fn apply_setting_value(
-    settings: &mut Settings,
-    key: &str,
-    value: &str,
-) -> Result<(), DictationError> {
-    apply_setting_value_with_notices(settings, key, value).map(|_| ())
-}
-
-/// Apply one `config set`; returns notices for profile models reset to Auto
-/// because the new language does not support them.
-fn apply_setting_value_with_notices(
-    settings: &mut Settings,
-    key: &str,
-    value: &str,
-) -> Result<Vec<ModelResetNotice>, DictationError> {
-    if key == "language" {
-        return settings
-            .set_default_profile_language(parse_enum_value::<Language>(value, "language")?)
-            .map_err(DictationError::SettingsError);
-    }
-    apply_other_setting_value(settings, key, value).map(|()| Vec::new())
-}
-
-fn apply_other_setting_value(
-    settings: &mut Settings,
-    key: &str,
-    value: &str,
-) -> Result<(), DictationError> {
-    match key {
-        "whisper_model" => {
-            let model = parse_enum_value::<WhisperModel>(value, "whisper_model")?;
-            settings
-                .set_profile_model(
-                    &settings.default_profile().id,
-                    FileModelPreference::Whisper(model),
-                )
-                .map_err(DictationError::SettingsError)?;
-            settings.whisper_model = model; // retain rollback compatibility
-            settings.auto_select_model = false;
-        }
-        "file_transcription_model" => {
-            settings.file_transcription_model =
-                FileModelPreference::parse_id(value).map_err(DictationError::SettingsError)?;
-        }
-        "hotkey_mode" => {
-            if value == "presenter" {
-                return Err(DictationError::SettingsError(
-                    "Invalid value 'presenter' for hotkey_mode. Supported values: push, toggle."
-                        .to_string(),
-                ));
-            }
-            settings
-                .replace_hotkey_mode(parse_enum_value::<HotkeyMode>(value, "hotkey_mode")?)
-                .map_err(DictationError::SettingsError)?;
-        }
-        "show_overlay" => {
-            settings.show_overlay = parse_bool(value, "show_overlay")?;
-        }
-        "auto_paste" => {
-            settings.auto_paste = parse_bool(value, "auto_paste")?;
-        }
-        "auto_select_model" => {
-            let enabled = parse_bool(value, "auto_select_model")?;
-            settings
-                .set_profile_model(
-                    &settings.default_profile().id,
-                    if enabled {
-                        FileModelPreference::Auto
-                    } else {
-                        FileModelPreference::Whisper(settings.whisper_model)
-                    },
-                )
-                .map_err(DictationError::SettingsError)?;
-            settings.auto_select_model = enabled;
-        }
-        "pianissimo_dictation" => {
-            let enabled = parse_bool(value, "pianissimo_dictation")?;
-            settings
-                .set_profile_model(
-                    &settings.default_profile().id,
-                    if enabled {
-                        FileModelPreference::PianissimoOriginal
-                    } else {
-                        FileModelPreference::Auto
-                    },
-                )
-                .map_err(DictationError::SettingsError)?;
-            settings.pianissimo_dictation = enabled; // retained for rollback only
-        }
-        "hotkey" => {
-            validate_hotkey(value).map_err(DictationError::SettingsError)?;
-            settings
-                .try_set_legacy_hotkey(value.to_string())
-                .map_err(DictationError::SettingsError)?;
-        }
-        "initial_prompt" => {
-            append_legacy_hints(settings, value)?;
-        }
-        "beam_size" => {
-            settings.beam_size = value.parse::<u32>().map_err(|_| {
-                DictationError::SettingsError(format!(
-                    "beam_size must be a non-negative integer, got '{value}'"
-                ))
-            })?;
-        }
-        "temperature_fallback" => {
-            settings.temperature_fallback = parse_bool(value, "temperature_fallback")?;
-        }
-        "vad_enabled" => {
-            settings.vad_enabled = parse_bool(value, "vad_enabled")?;
-        }
-        "engine_prewarm" => {
-            settings.engine_prewarm =
-                EnginePrewarm::parse_id(value).map_err(DictationError::SettingsError)?;
-        }
-        "engine_idle_unload_minutes" => {
-            settings.engine_idle_unload_minutes = value.parse::<u32>().map_err(|_| {
-                DictationError::SettingsError(format!(
-                    "engine_idle_unload_minutes must be a non-negative integer, got '{value}'"
-                ))
-            })?;
-        }
-        _ => unreachable!(), // validate_key already checked
-    }
-    Ok(())
-}
-
-/// The old `initial_prompt` command is a compatibility alias for *merging*
-/// default-profile entries and aliases. Never replace a profile dictionary: it may
-/// contain the user's reviewed deterministic aliases and has no implicit
-/// rollback file of its own.
-fn append_legacy_hints(settings: &mut Settings, value: &str) -> Result<(), DictationError> {
-    let id = settings.default_profile().id;
-    let source = settings.profile_glossaries.entry(id).or_default();
-    if value.trim().is_empty() && !source.trim().is_empty() {
-        return Err(DictationError::SettingsError(
-            "Use `sagascript glossary clear --yes` to remove reviewed profile entries".into(),
-        ));
-    }
-    let mut glossary = Glossary::parse(source);
-    for entry in Glossary::parse(value).entries() {
-        glossary.upsert(entry.canonical.clone(), entry.aliases.clone());
-    }
-    *source = glossary.render();
-    Ok(())
-}
-
-fn cmd_reset(key: Option<&str>, out: &Out) -> Result<(), DictationError> {
-    if let Some(key) = key {
-        validate_key(key)?;
+fn cmd_reset(name: Option<&str>, out: &Out) -> Result<(), DictationError> {
+    if let Some(name) = name {
+        let key = lookup(name)?;
         let defaults = Settings::default();
-        if key == "hotkey" {
-            let mut profiles = settings::store::load().resolved_hotkey_profiles();
-            let index = profiles
-                .iter()
-                .position(|profile| profile.id == "default")
-                .unwrap_or(0);
-            profiles[index].shortcut = defaults.hotkey;
-            persist_profiles(profiles, None)?;
-            errln!(out, "Reset hotkey to {}", settings::store::load().hotkey);
-            return Ok(());
-        }
         let mut notices = Vec::new();
         let settings = settings::store::try_update(|settings| {
-            if key == "language" {
-                notices = settings.set_default_profile_language(defaults.language)?;
-                return Ok(());
-            }
-            reset_setting_value(settings, key, &defaults)
+            notices = (key.reset)(settings, &defaults)?;
+            Ok(())
         })
         .map_err(DictationError::SettingsError)?;
-        errln!(out, "Reset {key} to {}", get_setting_value(&settings, key));
+        errln!(out, "Reset {name} to {}", (key.get)(&settings));
         print_notices(&notices, out);
     } else {
         settings::store::try_update(|current| {
@@ -852,82 +533,6 @@ fn cmd_reset(key: Option<&str>, out: &Out) -> Result<(), DictationError> {
         );
     }
     Ok(())
-}
-
-fn reset_setting_value(
-    settings: &mut Settings,
-    key: &str,
-    defaults: &Settings,
-) -> Result<(), String> {
-    match key {
-        "language" => settings
-            .set_default_profile_language(defaults.language)
-            .map(|_| ()),
-        "whisper_model" => {
-            settings.whisper_model = defaults.whisper_model;
-            settings
-                .set_profile_model(&settings.default_profile().id, FileModelPreference::Auto)?;
-            Ok(())
-        }
-        "file_transcription_model" => {
-            settings.file_transcription_model = defaults.file_transcription_model;
-            Ok(())
-        }
-        "hotkey_mode" => settings.replace_hotkey_mode(defaults.hotkey_mode),
-        "show_overlay" => {
-            settings.show_overlay = defaults.show_overlay;
-            Ok(())
-        }
-        "auto_paste" => {
-            settings.auto_paste = defaults.auto_paste;
-            Ok(())
-        }
-        "auto_select_model" => {
-            settings.auto_select_model = defaults.auto_select_model;
-            settings
-                .set_profile_model(&settings.default_profile().id, FileModelPreference::Auto)?;
-            Ok(())
-        }
-        "pianissimo_dictation" => {
-            settings.pianissimo_dictation = defaults.pianissimo_dictation;
-            settings
-                .set_profile_model(&settings.default_profile().id, FileModelPreference::Auto)?;
-            Ok(())
-        }
-        "hotkey" => unreachable!("hotkey reset handled transactionally above"),
-        "initial_prompt" => {
-            if settings
-                .profile_glossaries
-                .get(&settings.default_profile().id)
-                .is_some_and(|source| !source.trim().is_empty())
-            {
-                Err("Default profile dictionary contains entries; use `sagascript glossary clear --yes` after reviewing them".into())
-            } else {
-                Ok(())
-            }
-        }
-        "beam_size" => {
-            settings.beam_size = defaults.beam_size;
-            Ok(())
-        }
-        "temperature_fallback" => {
-            settings.temperature_fallback = defaults.temperature_fallback;
-            Ok(())
-        }
-        "vad_enabled" => {
-            settings.vad_enabled = defaults.vad_enabled;
-            Ok(())
-        }
-        "engine_prewarm" => {
-            settings.engine_prewarm = defaults.engine_prewarm;
-            Ok(())
-        }
-        "engine_idle_unload_minutes" => {
-            settings.engine_idle_unload_minutes = defaults.engine_idle_unload_minutes;
-            Ok(())
-        }
-        _ => unreachable!("validate_key already checked the setting key"),
-    }
 }
 
 fn reset_all_settings(current: &mut Settings) -> Result<(), String> {
@@ -960,121 +565,51 @@ fn cmd_path(out: &Out) -> Result<(), DictationError> {
     Ok(())
 }
 
-// -- Helpers --
-
-fn validate_key(key: &str) -> Result<(), DictationError> {
-    if VALID_KEYS.contains(&key) {
-        Ok(())
-    } else {
-        Err(DictationError::SettingsError(format!(
-            "Unknown setting '{key}'. Valid keys: {}",
-            VALID_KEYS.join(", ")
-        )))
-    }
-}
-
-fn get_setting_value(settings: &Settings, key: &str) -> String {
-    match key {
-        "language" => format_language(settings.default_profile().language),
-        "whisper_model" => {
-            match settings.dictation_model_for_profile(&settings.default_profile().id) {
-                Ok(sagascript_core::settings::FileModel::Whisper(model)) => format_model(model),
-                Ok(sagascript_core::settings::FileModel::PianissimoOriginal) => {
-                    "pianissimo-sv".to_string()
-                }
-                _ => format_model(WhisperModel::recommended(
-                    settings.default_profile().language,
-                )),
-            }
-        }
-        "file_transcription_model" => format_file_model(settings.file_transcription_model),
-        "hotkey_mode" => format_hotkey_mode(settings.hotkey_mode),
-        "show_overlay" => settings.show_overlay.to_string(),
-        "auto_paste" => settings.auto_paste.to_string(),
-        "auto_select_model" => settings
-            .profile_models
-            .get(&settings.default_profile().id)
-            .map_or(settings.auto_select_model, |model| {
-                *model == FileModelPreference::Auto
-            })
-            .to_string(),
-        "pianissimo_dictation" => settings
-            .profile_models
-            .get(&settings.default_profile().id)
-            .map_or(settings.pianissimo_dictation, |model| {
-                *model == FileModelPreference::PianissimoOriginal
-            })
-            .to_string(),
-        "hotkey" => settings.hotkey.clone(),
-        "initial_prompt" => settings
-            .profile_glossaries
-            .get(&settings.default_profile().id)
-            .cloned()
-            .unwrap_or_else(|| {
-                if settings.profile_glossary_migrated {
-                    String::new()
-                } else {
-                    settings.initial_prompt.clone()
-                }
-            }),
-        "beam_size" => settings.beam_size.to_string(),
-        "temperature_fallback" => settings.temperature_fallback.to_string(),
-        "vad_enabled" => settings.vad_enabled.to_string(),
-        "engine_prewarm" => settings.engine_prewarm.id().to_string(),
-        "engine_idle_unload_minutes" => settings.engine_idle_unload_minutes.to_string(),
-        _ => "unknown".to_string(),
-    }
-}
-
-fn format_language(lang: Language) -> String {
-    serde_json::to_value(lang)
-        .and_then(serde_json::from_value::<String>)
-        .unwrap_or_else(|_| format!("{:?}", lang))
-}
-
-fn format_file_model(model: FileModelPreference) -> String {
-    serde_json::to_value(model)
-        .and_then(serde_json::from_value::<String>)
-        .expect("file model preference has a stable string ID")
-}
-
-fn format_model(model: WhisperModel) -> String {
-    serde_json::to_value(model)
-        .and_then(serde_json::from_value::<String>)
-        .unwrap_or_else(|_| format!("{:?}", model))
-}
-
-fn format_hotkey_mode(mode: HotkeyMode) -> String {
-    serde_json::to_value(mode)
-        .and_then(serde_json::from_value::<String>)
-        .unwrap_or_else(|_| format!("{:?}", mode))
-}
-
-fn parse_enum_value<T: serde::de::DeserializeOwned>(
-    value: &str,
-    key: &str,
-) -> Result<T, DictationError> {
-    let quoted = format!("\"{}\"", value);
-    serde_json::from_str::<T>(&quoted).map_err(|_| {
-        DictationError::SettingsError(format!(
-            "Invalid value '{value}' for {key}. Run 'sagascript config get {key}' to see current value."
-        ))
-    })
-}
-
-fn parse_bool(value: &str, key: &str) -> Result<bool, DictationError> {
-    match value {
-        "true" => Ok(true),
-        "false" => Ok(false),
-        _ => Err(DictationError::SettingsError(format!(
-            "Invalid value '{value}' for {key}. Must be 'true' or 'false'."
-        ))),
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use super::keys::{parse_bool, VALID_KEYS};
     use super::*;
+    use sagascript_core::settings::{validate_hotkey, WhisperModel};
+
+    // The tests name a key as `config` is given it; these run the key's entry
+    // in the table (`keys::KEYS`).
+
+    fn apply_setting_value_with_notices(
+        settings: &mut Settings,
+        key: &str,
+        value: &str,
+    ) -> Result<Vec<ModelResetNotice>, DictationError> {
+        (lookup(key)?.set)(settings, value)
+    }
+
+    fn apply_setting_value(
+        settings: &mut Settings,
+        key: &str,
+        value: &str,
+    ) -> Result<(), DictationError> {
+        apply_setting_value_with_notices(settings, key, value).map(|_| ())
+    }
+
+    fn reset_setting_value(
+        settings: &mut Settings,
+        key: &str,
+        defaults: &Settings,
+    ) -> Result<(), String> {
+        let key = lookup(key).map_err(|error| error.to_string())?;
+        (key.reset)(settings, defaults).map(|_| ())
+    }
+
+    fn get_setting_value(settings: &Settings, key: &str) -> String {
+        lookup(key).map_or_else(|_| "unknown".to_string(), |key| (key.get)(settings))
+    }
+
+    fn setting_warning(key: &str, settings: &Settings) -> Option<&'static str> {
+        lookup(key).ok().and_then(|key| (key.warning)(settings))
+    }
+
+    fn validate_key(key: &str) -> Result<(), DictationError> {
+        lookup(key).map(|_| ())
+    }
 
     #[test]
     fn validate_hotkey_valid_shortcuts() {
@@ -1271,14 +806,14 @@ mod tests {
     fn parse_enum_value_all_valid_languages() {
         let valid = ["en", "sv", "no", "fi", "auto"];
         for v in valid {
-            let result = parse_enum_value::<Language>(v, "language");
+            let result = parse_value::<Language>(v, "language");
             assert!(result.is_ok(), "should parse language '{v}'");
         }
     }
 
     #[test]
     fn parse_enum_value_invalid_language() {
-        let result = parse_enum_value::<Language>("de", "language");
+        let result = parse_value::<Language>("de", "language");
         assert!(result.is_err());
     }
 
@@ -1374,7 +909,7 @@ mod tests {
     fn profiles_update_language_only_resets_model_with_notice() {
         let mut settings = pianissimo_sv_settings();
         let profiles = english_default(&settings);
-        let notices = apply_profiles_change(&mut settings, profiles, None).unwrap();
+        let notices = settings.apply_profiles_change(profiles, None).unwrap();
         assert_eq!(notices.len(), 1);
         assert!(
             notices[0]
@@ -1394,8 +929,9 @@ mod tests {
         let mut settings = pianissimo_sv_settings();
         let profiles = english_default(&settings);
         let choice = FileModelPreference::Whisper(WhisperModel::BaseEn);
-        let notices =
-            apply_profiles_change(&mut settings, profiles, Some(("default", choice))).unwrap();
+        let notices = settings
+            .apply_profiles_change(profiles, Some(("default", choice)))
+            .unwrap();
         assert!(notices.is_empty(), "{notices:?}");
         assert_eq!(settings.profile_models["default"], choice);
     }
@@ -1406,12 +942,12 @@ mod tests {
         let before = settings.clone();
         let mut candidate = settings.clone();
         let profiles = english_default(&settings);
-        let error = apply_profiles_change(
-            &mut candidate,
-            profiles,
-            Some(("default", FileModelPreference::PianissimoOriginal)),
-        )
-        .unwrap_err();
+        let error = candidate
+            .apply_profiles_change(
+                profiles,
+                Some(("default", FileModelPreference::PianissimoOriginal)),
+            )
+            .unwrap_err();
         assert!(error.contains("Pianissimo"), "{error}");
         // try_update only persists on Ok, so the stored settings stay `before`.
         assert_eq!(settings.profile_models, before.profile_models);
@@ -1448,7 +984,9 @@ mod tests {
             profile.language = Language::English;
         }
         let choice = FileModelPreference::Whisper(WhisperModel::BaseEn);
-        let notices = apply_profiles_change(&mut settings, profiles, Some(("a", choice))).unwrap();
+        let notices = settings
+            .apply_profiles_change(profiles, Some(("a", choice)))
+            .unwrap();
         assert_eq!(notices.len(), 1, "{notices:?}");
         assert_eq!(notices[0].profile_id, "b");
         assert!(notices[0].message.contains("'Svenska exakt'"));
@@ -1645,14 +1183,14 @@ mod tests {
             "fi-whisper-tiny",
         ];
         for v in valid {
-            let result = parse_enum_value::<WhisperModel>(v, "whisper_model");
+            let result = parse_value::<WhisperModel>(v, "whisper_model");
             assert!(result.is_ok(), "should parse model '{v}'");
         }
     }
 
     #[test]
     fn parse_enum_value_invalid_model() {
-        let result = parse_enum_value::<WhisperModel>("large-v3", "whisper_model");
+        let result = parse_value::<WhisperModel>("large-v3", "whisper_model");
         assert!(result.is_err());
     }
 
@@ -1660,14 +1198,14 @@ mod tests {
     fn parse_enum_value_all_valid_hotkey_modes() {
         let valid = ["push", "toggle"];
         for v in valid {
-            let result = parse_enum_value::<HotkeyMode>(v, "hotkey_mode");
+            let result = apply_setting_value(&mut Settings::default(), "hotkey_mode", v);
             assert!(result.is_ok(), "should parse hotkey_mode '{v}'");
         }
     }
 
     #[test]
     fn parse_enum_value_invalid_hotkey_mode() {
-        let result = parse_enum_value::<HotkeyMode>("hold", "hotkey_mode");
+        let result = apply_setting_value(&mut Settings::default(), "hotkey_mode", "hold");
         assert!(result.is_err());
     }
 
@@ -1905,5 +1443,235 @@ mod tests {
         assert!(brightness_key_hotkey_warning("F140").is_none());
         assert!(shortcut_warning("F14").unwrap().contains("brightness"));
         assert!(shortcut_warning("F13").unwrap().contains("Accessibility"));
+    }
+
+    // -- the key table (#373) --
+
+    #[test]
+    fn the_key_table_has_unique_names_and_generates_valid_keys() {
+        let names: Vec<&str> = KEYS.iter().map(|key| key.name).collect();
+        assert_eq!(names, VALID_KEYS);
+        let mut unique = names.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), names.len(), "duplicate key in the table");
+        for key in KEYS {
+            assert!(!key.help.is_empty(), "{} has no help line", key.name);
+        }
+    }
+
+    #[test]
+    fn every_key_resets_to_the_value_of_the_defaults() {
+        let defaults = Settings::default();
+        for key in KEYS {
+            let mut settings = Settings::default();
+            // `initial_prompt` refuses to forget entries; the rest must reset.
+            (key.reset)(&mut settings, &defaults)
+                .unwrap_or_else(|error| panic!("{}: {error}", key.name));
+            assert_eq!(
+                (key.get)(&settings),
+                (key.get)(&defaults),
+                "{} after reset",
+                key.name
+            );
+        }
+    }
+
+    #[test]
+    fn help_lists_every_key_in_every_place_a_key_is_listed() {
+        use clap::{Args, Command};
+
+        let mut config = ConfigArgs::augment_args(Command::new("config"));
+        for (name, with_values) in [("list", false), ("get", false), ("set", true)] {
+            let help = config
+                .find_subcommand_mut(name)
+                .unwrap()
+                .render_long_help()
+                .to_string();
+            for key in KEYS {
+                assert!(
+                    help.contains(key.name),
+                    "config {name} --help lacks {}",
+                    key.name
+                );
+                if with_values {
+                    for line in key.help {
+                        assert!(
+                            help.contains(line),
+                            "config set --help lacks the values of {}: {line}",
+                            key.name
+                        );
+                    }
+                }
+            }
+        }
+        let set = config.find_subcommand_mut("set").unwrap();
+        assert!(
+            set.render_long_help()
+                .to_string()
+                .contains("[possible values: language, whisper_model, "),
+            "the key argument lists the possible values"
+        );
+    }
+
+    // -- one parser per type (#373) --
+
+    #[test]
+    fn config_and_the_flags_take_the_same_language_spellings() {
+        let spellings = [
+            "en",
+            "sv",
+            "no",
+            "fi",
+            "auto",
+            "english",
+            "swedish",
+            "norwegian",
+            "finnish",
+            "EN",
+            "English",
+            "de",
+            "",
+            " en",
+            "en ",
+            "svenska",
+            "\\u0073v",
+            "\"sv\"",
+        ];
+        for text in spellings {
+            let flag = crate::transcribe::parse_language(text);
+            let config = apply_setting_value(&mut Settings::default(), "language", text);
+            let profile = parse_value::<Language>(text, "language");
+            assert_eq!(flag.is_ok(), config.is_ok(), "{text:?}");
+            assert_eq!(flag.is_ok(), profile.is_ok(), "{text:?}");
+            if let (Ok(language), Ok(())) = (flag, config) {
+                assert_eq!(profile.unwrap(), language, "{text:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn config_and_the_flags_take_the_same_model_spellings() {
+        for model in WhisperModel::ALL {
+            let id = model.id();
+            assert_eq!(crate::transcribe::parse_model(id).unwrap(), model, "{id}");
+            assert_eq!(
+                parse_value::<WhisperModel>(id, "whisper_model").unwrap(),
+                model
+            );
+        }
+        for text in [
+            "",
+            "Base",
+            "BASE",
+            " base",
+            "large-v3",
+            "pianissimo-sv",
+            "auto",
+            "ba\\u0073e",
+        ] {
+            assert!(crate::transcribe::parse_model(text).is_err(), "{text:?}");
+            let error = apply_setting_value(&mut Settings::default(), "whisper_model", text)
+                .unwrap_err()
+                .to_string();
+            assert!(
+                error.contains(&format!("Invalid value '{text}' for whisper_model")),
+                "{text:?}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_spellings_each_surface_reports_keep_their_own_text() {
+        assert_eq!(
+            crate::transcribe::parse_language("de")
+                .unwrap_err()
+                .to_string(),
+            "Settings error: Unknown language 'de'. Valid: en, sv, no, fi, auto"
+        );
+        assert_eq!(
+            apply_setting_value(&mut Settings::default(), "language", "de")
+                .unwrap_err()
+                .to_string(),
+            "Settings error: Invalid value 'de' for language. Run 'sagascript config get language' to see current value."
+        );
+        assert_eq!(
+            crate::transcribe::parse_model("nope").unwrap_err().to_string(),
+            "Settings error: Unknown model 'nope'. Run 'sagascript list-models' to see available models."
+        );
+    }
+
+    // -- the same persisted state as the app (#373) --
+
+    #[test]
+    fn config_set_language_resets_the_legacy_model_fields_like_the_app() {
+        let mut settings = Settings {
+            whisper_model: WhisperModel::Small,
+            auto_select_model: false,
+            ..Settings::default()
+        };
+        apply_setting_value(&mut settings, "language", "sv").unwrap();
+        assert_eq!(
+            settings.whisper_model,
+            WhisperModel::recommended(Language::Swedish)
+        );
+        assert!(settings.auto_select_model);
+
+        let mut settings = Settings {
+            whisper_model: WhisperModel::Small,
+            auto_select_model: false,
+            ..Settings::default()
+        };
+        let defaults = Settings::default();
+        reset_setting_value(&mut settings, "language", &defaults).unwrap();
+        assert_eq!(
+            settings.whisper_model,
+            WhisperModel::recommended(defaults.language)
+        );
+        assert!(settings.auto_select_model, "reset is a set of the default");
+    }
+
+    #[test]
+    fn config_set_hotkey_edits_the_first_profile_when_none_is_called_default() {
+        let mut settings = Settings::default();
+        settings
+            .replace_hotkey_profiles(vec![
+                HotkeyProfile {
+                    id: "english".into(),
+                    name: "English".into(),
+                    shortcut: "Super+E".into(),
+                    language: Language::English,
+                    push_to_talk_shortcut: None,
+                    toggle_shortcut: None,
+                },
+                HotkeyProfile {
+                    id: "swedish".into(),
+                    name: "Swedish".into(),
+                    shortcut: "Super+S".into(),
+                    language: Language::Swedish,
+                    push_to_talk_shortcut: None,
+                    toggle_shortcut: None,
+                },
+            ])
+            .unwrap();
+        apply_setting_value(&mut settings, "hotkey", "Control+Alt+D").unwrap();
+        assert_eq!(settings.resolved_shortcuts(), ["Control+Alt+D", "Super+S"]);
+        let error = apply_setting_value(&mut settings, "hotkey", "Super+S").unwrap_err();
+        assert!(error.to_string().contains("Duplicate hotkey"), "{error}");
+        assert_eq!(settings.resolved_shortcuts(), ["Control+Alt+D", "Super+S"]);
+    }
+
+    #[test]
+    fn config_set_auto_paste_stores_the_request_and_warns() {
+        let mut settings = Settings {
+            auto_paste: false,
+            ..Settings::default()
+        };
+        apply_setting_value(&mut settings, "auto_paste", "true").unwrap();
+        assert!(
+            settings.auto_paste,
+            "the CLI cannot ask the app's permission"
+        );
+        assert!(setting_warning("auto_paste", &settings).is_some());
     }
 }
