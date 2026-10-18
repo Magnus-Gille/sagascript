@@ -50,7 +50,7 @@ pub struct MigrationPreview {
 /// speaker membership mappings.  Explicit overrides are target operations and
 /// therefore remain available when source identity changed or automatic
 /// mapping is impossible.
-pub fn preview_migration(
+pub(crate) fn preview_migration(
     previous: &MeetingReview,
     proposed: &MeetingTranscript,
     overrides: &BTreeMap<usize, Vec<CorrectionOperation>>,

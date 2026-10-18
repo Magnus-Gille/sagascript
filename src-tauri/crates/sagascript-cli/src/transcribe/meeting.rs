@@ -13,11 +13,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::SystemTime;
 
 #[cfg(feature = "diarization")]
-use sha2::{Digest, Sha256};
-
-#[cfg(feature = "diarization")]
 use sagascript_core::diarization::DiarizedSegment;
 use sagascript_core::error::DictationError;
+#[cfg(feature = "diarization")]
+use sagascript_core::hash::StreamingSha256;
 #[cfg(feature = "diarization")]
 use sagascript_core::meeting::{MeetingSegmentInput, MeetingSpeaker, MeetingTranscript};
 #[cfg(feature = "diarization")]
@@ -155,7 +154,7 @@ pub(crate) fn stable_file_sha256(
             "Meeting input changed while opening; refusing output".to_string(),
         ));
     }
-    let mut hasher = Sha256::new();
+    let mut hasher = StreamingSha256::new();
     let mut buffer = [0_u8; CHUNK_SIZE];
     let mut bytes_read = 0_u64;
     {
@@ -210,11 +209,7 @@ pub(crate) fn stable_file_sha256(
             "Meeting input changed while hashing; refusing output".to_string(),
         ));
     }
-    Ok(hasher
-        .finalize()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect())
+    Ok(hasher.finish_hex())
 }
 
 #[cfg(feature = "diarization")]
@@ -346,7 +341,7 @@ pub fn transcribe_meeting_file_full(
     backend: &WhisperBackend,
     control: Option<&MeetingControl<'_>>,
     threshold: f32,
-    speaker_hint: Option<sagascript_core::speaker_hint::SpeakerCountHint>,
+    speaker_hint: Option<sagascript_core::diarization::speaker_hint::SpeakerCountHint>,
     cache_output: Option<&Path>,
 ) -> Result<MeetingTranscript, DictationError> {
     if !threshold.is_finite() {
@@ -422,7 +417,7 @@ fn process_services(backend: &WhisperBackend) -> Services<'_> {
 #[cfg(feature = "diarization")]
 pub(super) fn meeting_options(
     threshold: f32,
-    speaker_hint: Option<sagascript_core::speaker_hint::SpeakerCountHint>,
+    speaker_hint: Option<sagascript_core::diarization::speaker_hint::SpeakerCountHint>,
     cache: Option<CacheRequest>,
 ) -> FileOptions {
     FileOptions {

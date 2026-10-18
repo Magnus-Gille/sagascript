@@ -15,6 +15,7 @@ use std::path::Path;
 use crate::fsutil::{PublishFs, RealFs};
 use crate::meeting::{MeetingSegmentInput, MeetingSpeaker, MeetingTranscript};
 
+pub mod model_env;
 pub mod settings_ops_table;
 
 /// The real filesystem with chosen failures injected into a publication

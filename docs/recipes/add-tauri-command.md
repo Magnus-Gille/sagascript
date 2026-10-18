@@ -47,10 +47,10 @@ pub async fn get_example_info(
   `Result<T, CommandError>` (`src-tauri/src/command_error.rs`, [ADR 0006](../adr/0006-typed-errors.md)):
   the frontend receives `{ code, message, retryable }` and branches on `code` only. A new
   failure the UI must tell apart gets a code (a `DictationError` variant or a `CommandError`
-  variant), a row in `command_errors.json` (`command_error_tests.rs`) and a test. A command
-  still returning `Result<T, String>` rejects with a string; a `String` converts into
-  `CommandError::Unclassified`, which part 2 of [#360](https://github.com/Magnus-Gille/sagascript/issues/360)
-  removes.
+  variant), a row in `command_errors.json` (`command_error_tests.rs`) and a test. A `String`
+  does not convert into `CommandError` (`?` on a `Result<_, String>` does not compile): pick the
+  variant that says what failed (`InvalidInput`, `NotFound`, `Unavailable`, `Io`, …, see the table
+  in `command_error.rs`), or keep a fixed message and its cause with `CommandError::because`.
 - Managed state you can ask for: `State<'_, SharedController>`, `State<'_, SharedWhisper>`,
   `State<'_, Arc<UpdateActivity>>`, `State<'_, HotkeyHealth>`, job slots, plus
   `tauri::AppHandle`. See the `.manage(...)` calls in `manage_app_state` (`launch/startup.rs`).

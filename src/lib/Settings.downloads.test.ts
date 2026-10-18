@@ -1,6 +1,7 @@
 // Model downloads in Settings.svelte (#362): the Dictate profile's "Download
 // speech engine", the Transcribe tab's file model download, and what the
 // window shows while one runs. Pianissimo downloads through its own command.
+import { backendError } from "../test/ipc";
 import { screen, waitFor } from "@testing-library/svelte";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, test } from "vitest";
@@ -48,7 +49,7 @@ describe("a profile's speech engine download", () => {
       settingsBackend({
         get_profile_model_info: () => missing(kbWhisperMedium),
         download_model: () => {
-          throw "No space left on device";
+          throw backendError("model_download_failed", "No space left on device");
         },
       }),
     );
@@ -108,7 +109,7 @@ describe("the file transcription model download", () => {
         get_settings: () => settingsValue({ file_transcription_model: kbWhisperMedium.id }),
         get_file_model_options: () => [pianissimo, missing(kbWhisperMedium)],
         download_model: () => {
-          throw "Download interrupted";
+          throw backendError("model_download_failed", "Download interrupted");
         },
       }),
     );

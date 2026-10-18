@@ -81,7 +81,7 @@ impl<'a> From<&'a RecordArgs> for RunRequest<'a> {
 }
 
 pub fn run(args: RecordArgs, out: &Out) -> Result<(), DictationError> {
-    let stored = sagascript_core::settings::store::load();
+    let stored = sagascript_core::machine::load();
     let request = RunRequest::from(&args);
     let selection = request.select(&stored)?;
     let profile = &selection.profile;
@@ -284,7 +284,7 @@ fn resolve_record_model_for_profile(
     if explicit.is_none() && language == profile.language {
         let (whisper, pianissimo) = stored
             .live_model_for_profile(&profile.id)
-            .map_err(DictationError::SettingsError)?;
+            .map_err(DictationError::from)?;
         return Ok(if pianissimo {
             RecordModel::Pianissimo
         } else {
@@ -349,7 +349,11 @@ fn transcribe_pianissimo_record(
     duration: f64,
     out: &Out,
 ) -> Result<String, DictationError> {
-    let backend = LiveDictationBackend::new(Arc::new(WhisperBackend::new()), true);
+    let backend = LiveDictationBackend::new(
+        Arc::new(WhisperBackend::new()),
+        true,
+        sagascript_core::machine::load,
+    );
     transcribe_pianissimo_with_progress(duration, out, |progress| {
         progress(0);
         let result = backend.transcribe(

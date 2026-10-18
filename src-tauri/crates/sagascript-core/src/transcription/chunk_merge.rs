@@ -101,7 +101,7 @@ pub fn plan_windows(
 
 /// Shift window-relative tokens onto the global timeline
 /// (`start += offset; end = start + duration`).
-pub fn offset_tokens(tokens: &mut [AlignedToken], offset_s: f64) {
+pub(crate) fn offset_tokens(tokens: &mut [AlignedToken], offset_s: f64) {
     for t in tokens {
         t.start += offset_s;
         t.end = t.start + t.duration;
@@ -274,7 +274,7 @@ pub fn merge_window_traced(
 }
 
 /// Contiguous merge with LCS fallback (see [`merge_window_traced`]).
-pub fn merge_window(
+pub(crate) fn merge_window(
     acc: &[AlignedToken],
     next: &[AlignedToken],
     overlap_duration: f64,
@@ -292,7 +292,7 @@ pub struct Word {
 
 /// Group tokens into words: a token beginning with a space or `▁` starts a new
 /// word; empty words are dropped (matches the bench `words_from_tokens`).
-pub fn tokens_to_words(tokens: &[AlignedToken]) -> Vec<Word> {
+pub(crate) fn tokens_to_words(tokens: &[AlignedToken]) -> Vec<Word> {
     let mut words = Vec::new();
     let mut cur: Option<Word> = None;
     for t in tokens {

@@ -37,10 +37,10 @@ use crate::transcription::model::models_dir;
 pub const MODEL_ID: &str = "pianissimo-sv-coreml";
 
 /// Model family id of the Windows ONNX artifact.
-pub const ONNX_MODEL_ID: &str = "pianissimo-sv-onnx";
+pub(crate) const ONNX_MODEL_ID: &str = "pianissimo-sv-onnx";
 
 /// Licence and attribution for both artifacts.
-pub const ATTRIBUTION: &str = "Pianissimo by Klang AI AB, CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/); https://huggingface.co/KlangAI/pianissimo-sv";
+pub(crate) const ATTRIBUTION: &str = "Pianissimo by Klang AI AB, CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/); https://huggingface.co/KlangAI/pianissimo-sv";
 
 /// Environment override (development): use this existing model directory.
 pub const MODEL_DIR_ENV: &str = "SAGASCRIPT_PIANISSIMO_MODEL_DIR";
@@ -58,7 +58,7 @@ const STAMP_DIR: &str = ".verified";
 
 /// Core ML packages the engine host loads, plus the vocabulary. A model
 /// directory must contain all of these to be usable.
-pub const REQUIRED_ITEMS: [&str; 5] = [
+pub(crate) const REQUIRED_ITEMS: [&str; 5] = [
     "Preprocessor.mlpackage",
     "Encoder.mlpackage",
     "Decoder.mlpackage",
@@ -67,7 +67,7 @@ pub const REQUIRED_ITEMS: [&str; 5] = [
 ];
 
 /// Files the ONNX engine host loads from the model directory.
-pub const ONNX_REQUIRED_ITEMS: [&str; 5] = [
+pub(crate) const ONNX_REQUIRED_ITEMS: [&str; 5] = [
     "encoder-model.int8.onnx",
     "decoder_joint-model.int8.onnx",
     "nemo128.onnx",
@@ -172,7 +172,7 @@ pub fn active() -> &'static ModelManifest {
 /// The published artifact: our Core ML conversion of Klang Pianissimo (CC BY 4.0), revision r1,
 /// hosted on Hugging Face and pinned to an immutable commit. Produced by
 /// `scripts/pianissimo-coreml/` (see its README); sizes and SHA-256 generated from the archive.
-pub const MANIFEST: ModelManifest = ModelManifest {
+pub(crate) const MANIFEST: ModelManifest = ModelManifest {
     model_id: MODEL_ID,
     revision: "r1",
     source: ModelSource::Archive {
@@ -266,7 +266,7 @@ pub const MANIFEST: ModelManifest = ModelManifest {
 /// Windows-on-ARM artifact: KlangAI's official ONNX int8 export, pinned to an
 /// immutable Hugging Face commit (CC BY 4.0, Klang AI AB). Only the int8 encoder
 /// and decoder/joint are fetched; `nemo128.onnx` is the mel front end.
-pub const ONNX_MANIFEST: ModelManifest = ModelManifest {
+pub(crate) const ONNX_MANIFEST: ModelManifest = ModelManifest {
     model_id: ONNX_MODEL_ID,
     revision: "32118e6",
     source: ModelSource::Files {
@@ -313,7 +313,7 @@ pub fn override_dir() -> Option<PathBuf> {
 }
 
 /// Installed model directory for `manifest` under `models`.
-pub fn installed_dir_in(manifest: &ModelManifest, models: &Path) -> PathBuf {
+pub(crate) fn installed_dir_in(manifest: &ModelManifest, models: &Path) -> PathBuf {
     models.join(manifest.versioned_id())
 }
 
@@ -732,7 +732,7 @@ fn free_space_bytes(dir: &Path) -> Option<u64> {
 /// Extract `archive`, verify every manifest file, and atomically move the result
 /// to its final directory under `models`. The archive itself must already have
 /// been verified by the caller. Returns the installed directory.
-pub fn install_archive_in(
+pub(crate) fn install_archive_in(
     manifest: &ModelManifest,
     archive: &Path,
     models: &Path,
@@ -773,7 +773,7 @@ fn write_attribution(manifest: &ModelManifest, dir: &Path) -> Result<(), Dictati
 }
 
 /// Verify a staging directory of individually downloaded files and install it.
-pub fn install_staged_files_in(
+pub(crate) fn install_staged_files_in(
     manifest: &ModelManifest,
     staging: &Path,
     models: &Path,
@@ -1041,7 +1041,7 @@ fn remove_dir_if_present(path: &Path) -> Result<(), DictationError> {
 }
 
 /// Remove the NeMo-era GGUF (and the original `.nemo` checkpoint) plus stamps.
-pub fn remove_legacy_files_in(models: &Path) -> Result<(), DictationError> {
+pub(crate) fn remove_legacy_files_in(models: &Path) -> Result<(), DictationError> {
     remove_file_if_present(&models.join(LEGACY_GGUF_FILENAME))?;
     remove_file_if_present(&models.join(LEGACY_NEMO_FILENAME))
 }

@@ -307,8 +307,10 @@ Use `--fail-fast` to stop immediately. For machine consumers, multi-input
 `--jsonl` emits the same objects one per line. Single-file `--json` retains its
 existing object shape; when that file fails it is one error object,
 `{"status":"error","code":"file_decode_error","source":…,"error":…}` (`file_not_found` when
-the file does not exist, `engine_*` for a Pianissimo engine failure, `cancelled`; the codes are
-the ones the app's errors carry, [ADR 0006](docs/adr/0006-typed-errors.md)). Engine error text,
+the file does not exist, `engine_*` for a Pianissimo engine failure, `cancelled`, and for a
+settings refusal `unknown_profile`, `invalid_setting_value`, `model_incompatible` or
+`pianissimo_unavailable`; the codes are the ones the app's errors carry,
+[ADR 0006](docs/adr/0006-typed-errors.md)). Engine error text,
 in the `Error:` line as in the JSON `error` field, has user paths replaced by `<path>` (privacy
 first). A `--json`/`--jsonl` run that fails before any result (unknown profile, model not
 downloaded) writes the same kind of object without `source`, so stdout is never

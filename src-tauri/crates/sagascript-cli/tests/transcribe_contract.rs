@@ -244,7 +244,7 @@ fn preflight_failures_keep_their_message_code_and_exit_status() {
         ),
         (
             &["a.wav", "--model", "nope"],
-            "settings_error",
+            "invalid_setting_value",
             "Settings error: Unknown file model preference 'nope'",
         ),
         (
@@ -254,7 +254,7 @@ fn preflight_failures_keep_their_message_code_and_exit_status() {
         ),
         (
             &["a.wav", "--model", "pianissimo-sv", "--language", "en"],
-            "settings_error",
+            "pianissimo_unavailable",
             "Settings error: Pianissimo Original is only available for Swedish file transcription",
         ),
         (
@@ -1465,8 +1465,8 @@ fn the_public_transcribe_paths_stay_importable() {
             transcribe_meeting_file, transcribe_meeting_file_full,
             transcribe_meeting_file_with_control, MeetingControl, MeetingPhase,
         };
+        use sagascript_core::diarization::speaker_hint::SpeakerCountHint;
         use sagascript_core::meeting::MeetingTranscript;
-        use sagascript_core::speaker_hint::SpeakerCountHint;
         use sagascript_core::transcription::{Glossary, WhisperBackend};
 
         let _: fn(

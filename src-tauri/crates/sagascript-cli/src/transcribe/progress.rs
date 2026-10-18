@@ -4,7 +4,7 @@
 use std::time::Instant;
 
 #[cfg(feature = "diarization")]
-use sagascript_core::diarization_report::DecoderEvidence;
+use sagascript_core::diarization::report::DecoderEvidence;
 
 use crate::output::{errln, Out};
 

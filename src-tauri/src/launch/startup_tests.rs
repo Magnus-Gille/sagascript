@@ -14,7 +14,7 @@ fn startup_hotkey_candidate(requested: &str) -> (String, Option<String>) {
         Err(error) => {
             let fallback = sagascript_core::settings::Settings::default().hotkey;
             debug_assert!(validate_hotkey(&fallback).is_ok());
-            (fallback, Some(error))
+            (fallback, Some(error.to_string()))
         }
     }
 }

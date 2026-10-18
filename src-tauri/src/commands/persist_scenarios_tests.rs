@@ -4,7 +4,8 @@
 
 use std::collections::BTreeMap;
 
-use sagascript_core::settings::HotkeyProfile;
+use sagascript_core::machine;
+use sagascript_core::settings::{HotkeyProfile, SettingsError};
 
 use super::*;
 
@@ -85,14 +86,14 @@ fn an_unrelated_setter_keeps_the_controllers_registered_shortcuts() {
                 let name = row.commands.join("+");
                 let app = app_with(norwegian_settings());
                 let registered = lock_controller(&controller(&app)).settings().clone();
-                store::update(|s| {
+                machine::update(|s| {
                     s.hotkey = UNREGISTERED.into();
                     s.hotkey_profiles = vec![profile("default", UNREGISTERED, Language::Norwegian)];
                 })
                 .expect("the fake file is writable");
                 (row.arrange)();
                 assert_ne!(
-                    store::load().resolved_shortcuts(),
+                    machine::load().resolved_shortcuts(),
                     registered.resolved_shortcuts(),
                     "the file must hold other shortcuts than the controller"
                 );
@@ -111,7 +112,7 @@ fn an_unrelated_setter_keeps_the_controllers_registered_shortcuts() {
                         "{name}: the controller's shortcut configuration moved"
                     ));
                 }
-                if store::load().hotkey != UNREGISTERED {
+                if machine::load().hotkey != UNREGISTERED {
                     problems.push(format!("{name}: the file lost what was written"));
                 }
                 checked.push(name);
@@ -137,7 +138,7 @@ fn a_language_change_follows_the_file_but_keeps_the_controllers_shortcuts() {
         || {
             let registered = Settings::default();
             let app = app_with(registered.clone());
-            store::update(|s| {
+            machine::update(|s| {
                 s.hotkey = UNREGISTERED.into();
                 s.hotkey_profiles = vec![profile("default", UNREGISTERED, Language::English)];
             })
@@ -200,7 +201,7 @@ fn a_setter_keeps_the_models_of_the_controllers_own_profiles() {
                     ..norwegian_settings()
                 };
                 let app = app_with(memory);
-                store::update(|s| {
+                machine::update(|s| {
                     s.whisper_model = WhisperModel::NbWhisperBase;
                     s.hotkey_profiles = vec![
                         profile("default", "Control+Shift+Space", Language::Norwegian),
@@ -277,14 +278,14 @@ fn a_language_change_lands_on_the_controllers_default_profile() {
                 ..Settings::default()
             };
             let app = app_with(memory.clone());
-            store::update(|s| {
+            machine::update(|s| {
                 s.hotkey = second.shortcut.clone();
                 s.language = second.language;
                 s.hotkey_profiles = vec![second.clone(), first.clone()];
                 s.profile_models = memory.profile_models.clone();
             })
             .expect("the fake file is writable");
-            assert_eq!(store::load().default_profile().id, "b");
+            assert_eq!(machine::load().default_profile().id, "b");
 
             persist_language(&controller(&app), Language::Norwegian).expect("the setter works");
 
@@ -311,7 +312,7 @@ fn a_language_change_lands_on_the_controllers_default_profile() {
 /// Swedish profile on it next to the Norwegian default, file transcription on
 /// it, and the legacy flag on.
 fn file_selecting_pianissimo() {
-    store::update(|s| {
+    machine::update(|s| {
         s.language = Language::Norwegian;
         s.whisper_model = WhisperModel::NbWhisperBase;
         s.engine_prewarm = EnginePrewarm::OnAppStart;
@@ -349,7 +350,7 @@ fn selects_pianissimo(settings: &Settings) -> bool {
 }
 
 /// A host that cannot run Pianissimo demotes a file's selection of it in
-/// memory only (`store::load`): the file keeps the user's choice, the
+/// memory only (`machine::load`): the file keeps the user's choice, the
 /// controller runs on Auto. A setter of something else must not bring the
 /// selection back into the controller.
 #[test]
@@ -358,7 +359,7 @@ fn an_unrelated_setter_keeps_the_demotion_of_an_unsupported_engine() {
         module_path!(),
         "an_unrelated_setter_keeps_the_demotion_of_an_unsupported_engine",
         || {
-            store::update(|s| {
+            machine::update(|s| {
                 s.file_transcription_model = FileModelPreference::PianissimoOriginal;
                 s.profile_models
                     .insert("default".into(), FileModelPreference::PianissimoOriginal);
@@ -396,7 +397,7 @@ fn an_unrelated_setter_keeps_the_demotion_of_an_unsupported_engine() {
 }
 
 /// A host that cannot run Pianissimo demotes a file's selection of it in
-/// memory only (`store::load`): the file keeps the user's choice, the
+/// memory only (`machine::load`): the file keeps the user's choice, the
 /// controller runs on Auto. No setter may bring the selection back into the
 /// controller, whether it mirrors a field or takes the whole copy. The file
 /// keeps the choice through every setter.
@@ -503,10 +504,10 @@ fn two_setters_do_not_interleave_between_the_file_and_the_controller() {
         "two_setters_do_not_interleave_between_the_file_and_the_controller",
         || {
             let file = fake_file();
-            store::update(|_| {}).expect("the fake file is writable");
+            machine::update(|_| {}).expect("the fake file is writable");
             // The controller starts as the app loads it, so file and controller
             // agree before the setters run.
-            let controller: SharedController = Mutex::new(AppController::new(store::load()));
+            let controller: SharedController = Mutex::new(AppController::new(machine::load()));
             let intruded = std::thread::scope(|scope| {
                 let held = lock_controller(&controller);
                 let first = scope.spawn(|| persist_language(&controller, Language::Norwegian));
@@ -542,6 +543,97 @@ fn two_setters_do_not_interleave_between_the_file_and_the_controller() {
             assert_eq!(memory.language, Language::Norwegian);
             assert_eq!(memory.beam_size, 7);
             "serialized".into()
+        },
+    ) else {
+        return;
+    };
+}
+
+/// A setter that the settings refuse (or the settings file cannot take) rejects
+/// with the code of its `SettingsError`, so the Settings window branches on the
+/// code and never on the text (ADR 0006, #360 part 2). The language change a
+/// personal dictionary blocks is the one the window recovers from.
+#[test]
+fn a_refused_setting_rejects_with_the_code_of_its_settings_error() {
+    let Some(_) = isolated(
+        module_path!(),
+        "a_refused_setting_rejects_with_the_code_of_its_settings_error",
+        || {
+            let runtime = runtime();
+            let app = app_with(Settings::default());
+            store::update(|s| {
+                s.language = Language::Swedish;
+                s.hotkey_profiles = vec![profile("default", &s.hotkey, Language::Swedish)];
+                s.profile_glossaries
+                    .insert("default".into(), "Gille = Jille".into());
+            })
+            .expect("the fake file is writable");
+
+            let blocked = persist_language(&controller(&app), Language::English)
+                .expect_err("a dictionary with aliases blocks the change");
+            assert!(
+                matches!(
+                    &blocked,
+                    CommandError::Settings(SettingsError::DictionaryBlocksLanguageChange { profile_id })
+                        if profile_id == "default"
+                ),
+                "{blocked:?}"
+            );
+            assert_eq!(
+                contract::to_value(&blocked),
+                serde_json::json!({
+                    "code": "dictionary_blocks_language_change",
+                    "message": "Profile 'default' has a personal dictionary; clear it before changing the profile language",
+                    "retryable": false,
+                })
+            );
+            assert_eq!(
+                store::load().default_profile().language,
+                Language::Swedish,
+                "nothing was written"
+            );
+
+            let code = |result: Result<(), CommandError>| {
+                result.expect_err("the setter refuses").code().to_owned()
+            };
+            assert_eq!(
+                code(runtime.block_on(set_file_transcription_model(
+                    controller(&app),
+                    "nope".into()
+                ))),
+                "invalid_setting_value"
+            );
+            assert_eq!(
+                code(runtime.block_on(set_engine_prewarm(controller(&app), "nope".into()))),
+                "invalid_setting_value"
+            );
+            assert_eq!(
+                code(runtime.block_on(set_profile_model(
+                    controller(&app),
+                    "nosuch".into(),
+                    "auto".into()
+                ))),
+                "unknown_profile"
+            );
+            assert_eq!(
+                code(runtime.block_on(set_profile_model(
+                    controller(&app),
+                    "default".into(),
+                    model_id(WhisperModel::TinyEn),
+                ))),
+                "model_incompatible",
+                "an English-only model cannot serve the Swedish default profile"
+            );
+
+            // A settings file that cannot be written is its own code too.
+            let file = fake_file();
+            std::fs::remove_file(&file).expect("the fake file exists");
+            std::fs::create_dir(&file).expect("a directory takes its place");
+            assert_eq!(
+                code(runtime.block_on(set_beam_size(controller(&app), 3))),
+                "settings_storage_failed"
+            );
+            "coded".into()
         },
     ) else {
         return;

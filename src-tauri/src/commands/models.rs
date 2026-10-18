@@ -1,12 +1,17 @@
 //! Speech models: what each picker offers, what is downloaded or loaded, and
 //! the downloads themselves.
 
-use sagascript_core::settings::{FileModel, FileModelPreference, Language, Settings, WhisperModel};
+use sagascript_core::machine;
+use sagascript_core::models::ModelInfo as CatalogEntry;
+use sagascript_core::settings::{
+    FileModel, FileModelPreference, Language, Settings, SettingsError, WhisperModel,
+};
 use sagascript_core::transcription::model;
 use sagascript_core::transcription::pianissimo_model;
 use tauri::State;
 
 use super::{lock_controller, SharedController, SharedWhisper};
+use crate::command_error::CommandError;
 use crate::events::EmitEvent;
 
 /// Returns the display name of the currently loaded (or effective) model
@@ -14,7 +19,7 @@ use crate::events::EmitEvent;
 pub async fn get_loaded_model(
     controller: State<'_, SharedController>,
     whisper: State<'_, SharedWhisper>,
-) -> Result<LoadedModelInfo, String> {
+) -> Result<LoadedModelInfo, CommandError> {
     let ctrl = lock_controller(&controller);
     let chosen = ctrl
         .settings()
@@ -34,9 +39,7 @@ pub async fn get_loaded_model(
     let loaded = whisper.loaded_model();
     Ok(LoadedModelInfo {
         effective_model: effective.display_name().to_string(),
-        effective_model_id: serde_json::to_value(effective)
-            .and_then(serde_json::from_value::<String>)
-            .unwrap_or_else(|_| format!("{:?}", effective)),
+        effective_model_id: effective.id().to_string(),
         loaded_model: loaded.map(|m| m.display_name().to_string()),
         is_loaded: loaded == Some(effective),
         is_downloaded: model::is_model_downloaded(effective),
@@ -44,20 +47,19 @@ pub async fn get_loaded_model(
 }
 
 #[tauri::command]
-pub async fn is_model_downloaded(whisper_model: WhisperModel) -> Result<bool, String> {
+pub async fn is_model_downloaded(whisper_model: WhisperModel) -> Result<bool, CommandError> {
     Ok(model::is_model_downloaded(whisper_model))
 }
 
 #[tauri::command]
 pub async fn get_model_info(
     controller: State<'_, SharedController>,
-) -> Result<Vec<ModelInfo>, String> {
+) -> Result<Vec<ModelInfo>, CommandError> {
     let ctrl = lock_controller(&controller);
     let profile = ctrl.settings().default_profile();
     let effective = ctrl.settings().dictation_model_for_profile(&profile.id)?;
     Ok(lineup_model_infos(
         profile.language,
-        pianissimo_supported(),
         Some(effective),
         Some(effective),
     ))
@@ -67,48 +69,41 @@ fn pianissimo_supported() -> bool {
     sagascript_core::transcription::pianissimo_backend::runtime_supported_on_this_os()
 }
 
-/// Wire description of one engine choice (Whisper model or Pianissimo).
-fn model_info_for(choice: FileModel, active: bool) -> ModelInfo {
-    match choice {
-        FileModel::Whisper(model) => ModelInfo {
-            id: serde_json::to_value(model)
-                .and_then(serde_json::from_value::<String>)
-                .expect("Whisper model has a stable ID"),
-            display_name: model.display_name().to_string(),
-            description: model.description().to_string(),
-            size_mb: model.size_mb(),
-            downloaded: model::is_model_downloaded(model),
-            active,
-        },
-        FileModel::PianissimoOriginal => ModelInfo {
-            id: "pianissimo-sv".into(),
-            display_name: "Pianissimo".into(),
-            description: if cfg!(windows) {
-                "Swedish file transcription · ONNX Runtime on the CPU · Windows on ARM (Snapdragon)"
-                    .into()
-            } else {
-                "Swedish file transcription · Core ML on the Neural Engine · macOS 14+ on Apple Silicon".into()
-            },
-            size_mb: pianissimo_model_size_mb(),
-            downloaded: pianissimo_model::is_downloaded(),
-            active,
-        },
+/// Wire description of one catalog entry. The picker shows what a download
+/// transfers, which for Pianissimo is its archive, not its size on disk.
+fn wire_info(info: &CatalogEntry, active: bool) -> ModelInfo {
+    ModelInfo {
+        id: info.id.to_string(),
+        display_name: info.display_name.to_string(),
+        description: info.description.to_string(),
+        size_mb: info.download_size_mb,
+        downloaded: info.installed,
+        active,
     }
 }
 
+/// Wire description of one engine choice (Whisper model or Pianissimo).
+fn model_info_for(choice: FileModel, active: bool) -> ModelInfo {
+    wire_info(&machine::model_info(choice), active)
+}
+
+/// The wire form of a picker's entries; `active` marks the selected model.
+fn wire_picker(entries: &[CatalogEntry], active: Option<FileModel>) -> Vec<ModelInfo> {
+    entries
+        .iter()
+        .map(|entry| wire_info(entry, active == Some(entry.model)))
+        .collect()
+}
+
 /// The app's model choices for `language` (after the "Recommended" entry),
-/// with the platform gate injected. `include` keeps a currently selected
+/// from the catalog of this machine. `include` keeps a currently selected
 /// model (for example a retired KB-Whisper Base) visible in the list.
 fn lineup_model_infos(
     language: Language,
-    pianissimo_supported: bool,
     include: Option<FileModel>,
     active: Option<FileModel>,
 ) -> Vec<ModelInfo> {
-    FileModel::app_lineup(language, pianissimo_supported, include)
-        .into_iter()
-        .map(|choice| model_info_for(choice, active == Some(choice)))
-        .collect()
+    wire_picker(&machine::app_picker(language, include), active)
 }
 
 /// Model choices for the pickers. `include` is the currently selected model
@@ -117,7 +112,7 @@ fn lineup_model_infos(
 pub async fn get_file_model_options(
     language: Language,
     include: Option<String>,
-) -> Result<Vec<ModelInfo>, String> {
+) -> Result<Vec<ModelInfo>, CommandError> {
     let include = include
         .as_deref()
         .and_then(|id| match FileModelPreference::parse_id(id) {
@@ -125,34 +120,33 @@ pub async fn get_file_model_options(
             Ok(FileModelPreference::PianissimoOriginal) => Some(FileModel::PianissimoOriginal),
             _ => None,
         });
-    Ok(lineup_model_infos(
-        language,
-        pianissimo_supported(),
-        include,
-        None,
-    ))
-}
-
-/// Download size of the Pianissimo model, in MB, for model listings.
-fn pianissimo_model_size_mb() -> u32 {
-    (pianissimo_model::download_size_bytes() / 1_048_576) as u32
+    Ok(lineup_model_infos(language, include, None))
 }
 
 #[tauri::command]
 pub async fn get_profile_model_info(
     controller: State<'_, SharedController>,
     profile_id: String,
-) -> Result<ModelInfo, String> {
+) -> Result<ModelInfo, CommandError> {
     let ctrl = lock_controller(&controller);
     let choice = ctrl.settings().dictation_model_for_profile(&profile_id)?;
     Ok(model_info_for(choice, true))
 }
 
-#[tauri::command]
-pub async fn download_pianissimo_model(app: tauri::AppHandle) -> Result<(), String> {
-    if !sagascript_core::transcription::pianissimo_backend::runtime_supported_on_this_os() {
-        return Err(sagascript_core::transcription::pianissimo_backend::UNSUPPORTED_MESSAGE.into());
+/// The download is refused on a host that cannot run Pianissimo.
+fn ensure_pianissimo_runs(supported: bool) -> Result<(), CommandError> {
+    if supported {
+        Ok(())
+    } else {
+        Err(SettingsError::PianissimoUnsupported.into())
     }
+}
+
+#[tauri::command]
+pub async fn download_pianissimo_model(app: tauri::AppHandle) -> Result<(), CommandError> {
+    ensure_pianissimo_runs(
+        sagascript_core::transcription::pianissimo_backend::runtime_supported_on_this_os(),
+    )?;
     let progress_app = app.clone();
     pianissimo_model::download(move |downloaded, total| {
         let _ = progress_app.emit_event(
@@ -160,8 +154,7 @@ pub async fn download_pianissimo_model(app: tauri::AppHandle) -> Result<(), Stri
             crate::events::ModelDownloadProgress::new("pianissimo-sv".into(), downloaded, total),
         );
     })
-    .await
-    .map_err(|error| error.to_string())?;
+    .await?;
     let _ = app.emit_event(crate::events::event::MODEL_READY, ());
     Ok(())
 }
@@ -173,7 +166,7 @@ pub async fn download_pianissimo_model(app: tauri::AppHandle) -> Result<(), Stri
 pub async fn get_effective_model_info(
     _controller: State<'_, SharedController>,
     language: Language,
-) -> Result<ModelInfo, String> {
+) -> Result<ModelInfo, CommandError> {
     Ok(model_info_for(
         FileModel::recommended_for(language, pianissimo_supported()),
         true,
@@ -184,7 +177,7 @@ pub async fn get_effective_model_info(
 /// `language`: the recommended model when downloaded, else the best already
 /// downloaded compatible model (same resolution the transcribe command uses).
 #[tauri::command]
-pub async fn get_auto_file_model_info(language: Language) -> Result<ModelInfo, String> {
+pub async fn get_auto_file_model_info(language: Language) -> Result<ModelInfo, CommandError> {
     let auto = Settings {
         file_transcription_model: FileModelPreference::Auto,
         ..Default::default()
@@ -199,7 +192,7 @@ pub async fn get_auto_file_model_info(language: Language) -> Result<ModelInfo, S
 pub async fn get_dictation_model_info(
     controller: State<'_, SharedController>,
     language: Language,
-) -> Result<ModelInfo, String> {
+) -> Result<ModelInfo, CommandError> {
     let profile = lock_controller(&controller).settings().default_profile();
     if profile.language == language {
         return get_profile_model_info(controller, profile.id).await;
@@ -213,7 +206,7 @@ pub async fn get_dictation_model_info(
 pub async fn download_model(
     app: tauri::AppHandle,
     whisper_model: WhisperModel,
-) -> Result<(), String> {
+) -> Result<(), CommandError> {
     let app_handle = app.clone();
     model::download_model(whisper_model, move |downloaded, total| {
         let _ = app_handle.emit_event(
@@ -226,8 +219,7 @@ pub async fn download_model(
             ),
         );
     })
-    .await
-    .map_err(|e| e.to_string())?;
+    .await?;
 
     let _ = app.emit_event(crate::events::event::MODEL_READY, ());
     Ok(())
@@ -249,7 +241,7 @@ pub struct EngineStatus {
 #[tauri::command]
 pub async fn engine_status(
     controller: State<'_, SharedController>,
-) -> Result<EngineStatus, String> {
+) -> Result<EngineStatus, CommandError> {
     use sagascript_core::settings::FileModelPreference;
     use sagascript_core::transcription::pianissimo_backend as backend;
     let supported = backend::runtime_supported_on_this_os();
@@ -274,9 +266,11 @@ pub async fn engine_status(
         && selected
         && host.as_ref().is_some_and(|p| p.is_file())
     {
-        identity = tokio::task::spawn_blocking(backend::refresh_host_identity)
-            .await
-            .map_err(|e| format!("engine status task failed: {e}"))?;
+        identity = tokio::task::spawn_blocking(|| {
+            backend::refresh_host_identity(&sagascript_core::machine::load())
+        })
+        .await
+        .map_err(|e| CommandError::task_failed(format!("engine status task failed: {e}")))?;
     }
     let (host_version, host_git_sha) = match identity {
         Some((version, sha)) => (Some(version), sha),

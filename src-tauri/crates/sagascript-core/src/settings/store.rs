@@ -11,7 +11,7 @@ use serde_json::Value;
 use crate::settings::{
     lenient,
     migrations::{self, Migration, Object},
-    FileModelPreference, LineupEnv, MachineProbe, Settings, SCHEMA_VERSION,
+    FileModelPreference, LineupEnv, MachineProbe, Settings, SettingsError, SCHEMA_VERSION,
 };
 
 const APP_IDENTIFIER: &str = "ai.gille.sagascript";
@@ -25,7 +25,7 @@ const XDG_CONFIG_HOME_ENV: &str = "XDG_CONFIG_HOME";
 ///
 /// When set, legacy settings migration is disabled so an isolated session can
 /// never import or mutate the user's normal application settings by accident.
-pub const SETTINGS_PATH_ENV: &str = "SAGASCRIPT_SETTINGS_PATH";
+pub(crate) const SETTINGS_PATH_ENV: &str = "SAGASCRIPT_SETTINGS_PATH";
 
 /// Returns the application data directory (platform-specific).
 /// macOS: ~/Library/Application Support/ai.gille.sagascript/
@@ -42,7 +42,7 @@ pub fn settings_path() -> PathBuf {
 }
 
 /// Returns the directory containing the user-managed configuration files.
-pub fn config_dir() -> PathBuf {
+pub(crate) fn config_dir() -> PathBuf {
     settings_path()
         .parent()
         .map(Path::to_path_buf)
@@ -55,7 +55,7 @@ pub fn global_glossary_path() -> PathBuf {
 }
 
 /// Returns the personal-dictionary file for a profile.
-pub fn profile_glossary_path(profile_id: &str) -> Result<PathBuf, String> {
+pub fn profile_glossary_path(profile_id: &str) -> Result<PathBuf, SettingsError> {
     validate_profile_file_id(profile_id)?;
     Ok(profile_glossary_dir().join(format!("{profile_id}.txt")))
 }
@@ -141,22 +141,25 @@ fn default_config_base(_home_dir: &Path, data_dir: &Path) -> PathBuf {
 }
 
 /// Caller must hold the destination's settings lock.
-fn copy_legacy_settings(source: &Path, destination: &Path) -> Result<bool, String> {
+fn copy_legacy_settings(source: &Path, destination: &Path) -> Result<bool, SettingsError> {
     if destination.exists() || !source.is_file() {
         return Ok(false);
     }
     let parent = destination
         .parent()
-        .ok_or_else(|| "Settings destination has no parent directory".to_string())?;
-    create_private_dir_all(parent)
-        .map_err(|error| format!("Failed to create settings directory: {error}"))?;
-    let contents = std::fs::read_to_string(source)
-        .map_err(|error| format!("Failed to read legacy settings: {error}"))?;
-    let mut value: serde_json::Value = serde_json::from_str(&contents)
-        .map_err(|error| format!("Failed to parse legacy settings: {error}"))?;
+        .ok_or_else(|| SettingsError::storage("Settings destination has no parent directory"))?;
+    create_private_dir_all(parent).map_err(|error| {
+        SettingsError::storage(format!("Failed to create settings directory: {error}"))
+    })?;
+    let contents = std::fs::read_to_string(source).map_err(|error| {
+        SettingsError::storage(format!("Failed to read legacy settings: {error}"))
+    })?;
+    let mut value: serde_json::Value = serde_json::from_str(&contents).map_err(|error| {
+        SettingsError::storage(format!("Failed to parse legacy settings: {error}"))
+    })?;
     let object = value
         .as_object_mut()
-        .ok_or_else(|| "Legacy settings root is not an object".to_string())?;
+        .ok_or_else(|| SettingsError::storage("Legacy settings root is not an object"))?;
 
     // Moving the current bundle's settings into the XDG directory preserves
     // its TCC identity. Older bundle identifiers and FlowDictate do not.
@@ -168,8 +171,9 @@ fn copy_legacy_settings(source: &Path, destination: &Path) -> Result<bool, Strin
             .and_then(|name| name.to_str())
             == Some(APP_IDENTIFIER);
     migrations::from_legacy_location(object, same_bundle_settings);
-    let migrated = serde_json::to_string_pretty(&value)
-        .map_err(|error| format!("Failed to serialize migrated settings: {error}"))?;
+    let migrated = serde_json::to_string_pretty(&value).map_err(|error| {
+        SettingsError::storage(format!("Failed to serialize migrated settings: {error}"))
+    })?;
     atomic_write(destination, migrated.as_bytes(), "migrated settings")?;
     Ok(true)
 }
@@ -217,11 +221,14 @@ pub(crate) fn load_with(machine: &dyn MachineProbe) -> Settings {
     load_at_with_machine(&settings_path(), legacy_settings_paths(), machine)
 }
 
-/// Test seam for `tests/settings_fixtures.rs`: [`load_with`] for an explicit
-/// settings file and legacy locations, with fixed machine state instead of
-/// probing this machine.
-#[doc(hidden)]
-pub fn load_at(path: &Path, legacy_sources: &[PathBuf], machine: &LineupEnv<'_>) -> Settings {
+/// Test seam (`crate::testing::load_settings_at`, for `tests/settings_fixtures.rs`):
+/// [`load_with`] for an explicit settings file and legacy locations, with fixed
+/// machine state instead of probing this machine.
+pub(crate) fn load_at(
+    path: &Path,
+    legacy_sources: &[PathBuf],
+    machine: &LineupEnv<'_>,
+) -> Settings {
     load_at_with_machine(path, legacy_sources.iter().cloned(), machine)
 }
 
@@ -283,7 +290,7 @@ fn load_migrated(
         }
         Ok(loaded.settings)
     })
-    .unwrap_or_else(|error| {
+    .unwrap_or_else(|error: SettingsError| {
         tracing::warn!(
             "Failed to lock settings file at {} for loading: {error} — falling back to defaults",
             path.display()
@@ -546,7 +553,7 @@ fn defaults_after_failed_load(path: &Path, error: &SettingsLoadError) -> Setting
 /// Persist settings to disk using read-merge-write to preserve unknown or
 /// legacy keys while writing the canonical Settings fields.
 /// Uses atomic write: write a private temp file, fsync, then rename.
-pub fn save(settings: &Settings) -> Result<(), String> {
+pub fn save(settings: &Settings) -> Result<(), SettingsError> {
     let path = settings_path();
     with_settings_lock(&path, || {
         migrate_legacy_identifier_settings_locked(&path, legacy_settings_paths());
@@ -562,7 +569,10 @@ pub fn save(settings: &Settings) -> Result<(), String> {
 ///
 /// `machine` is the injected machine state of [`load_with`];
 /// `crate::machine::update` is this with the probes of this machine.
-pub(crate) fn update_with<F>(machine: &dyn MachineProbe, mutate: F) -> Result<Settings, String>
+pub(crate) fn update_with<F>(
+    machine: &dyn MachineProbe,
+    mutate: F,
+) -> Result<Settings, SettingsError>
 where
     F: FnOnce(&mut Settings),
 {
@@ -575,30 +585,30 @@ where
 /// Like [`update_with`], but lets validation fail while the cross-process lock
 /// is held so read/validate/write profile mutations cannot race another writer.
 /// `crate::machine::try_update` is this with the probes of this machine.
-pub(crate) fn try_update_with<F>(machine: &dyn MachineProbe, mutate: F) -> Result<Settings, String>
+pub(crate) fn try_update_with<E, F>(machine: &dyn MachineProbe, mutate: F) -> Result<Settings, E>
 where
-    F: FnOnce(&mut Settings) -> Result<(), String>,
+    E: From<SettingsError>,
+    F: FnOnce(&mut Settings) -> Result<(), E>,
 {
     let path = settings_path();
     update_locked(&path, legacy_settings_paths(), machine, mutate)
 }
 
-// Shims (#372): the loads and updates that probe *this* machine moved to
-// `crate::machine`, above settings and transcription, so this module no longer
-// imports the transcription code to answer them. These re-exports keep the old
-// paths `settings::store::{load, update, try_update}` working for the CLI and
-// the app. They are the one upward import left in `settings/`, and a loop at
+// Shims (#372): the loads and updates that probe *this* machine live in
+// `crate::machine`, above settings and transcription, so this module does not
+// import the transcription code to answer them. These re-exports keep the old
+// paths `settings::store::{load, update, try_update}` for callers outside the
+// workspace; nothing inside it uses them (tests/module_layering.rs checks that).
+// They are the one upward import left in `settings/`, and no longer a loop at
 // run time: `transcription::pianissimo_backend::{engine_config, shared_client}`
-// call `store::load()` themselves, i.e. this line, so transcription reaches
-// `machine::load()` and `machine` reaches transcription's probes again.
+// take the `Settings` from their callers instead of calling `load` here.
 //
-// Removal prerequisites, in order (tests/module_layering.rs says the same):
-//   1. the CLI and the app call `sagascript_core::machine::{load, update,
-//      try_update}`;
-//   2. `engine_config` and `shared_client` receive the `Settings` instead of
-//      loading them. That changes when the settings are read, so it is a
-//      behaviour change for its own change, not part of the layering move;
-//   3. delete this line and empty the expected list in that test.
+// To remove them, after the next release: delete the line below, and in
+// tests/module_layering.rs the test
+// `only_the_compat_shim_in_the_store_names_the_machine_module` and the
+// `store_shims` assertions.
+// Shim (#372): kept one release; remove after the next release.
+#[doc(hidden)]
 pub use crate::machine::{load, try_update, update};
 
 /// A field update under the settings lock. The latest file is loaded as the
@@ -607,14 +617,15 @@ pub use crate::machine::{load, try_update, update};
 /// step left pending here would run at the next start over the value the
 /// user has just chosen. A file that cannot be loaded is updated from
 /// defaults, so the save first preserves its bytes (see [`save_over`]).
-fn update_locked<F>(
+fn update_locked<E, F>(
     path: &Path,
     sources: impl IntoIterator<Item = PathBuf>,
     machine: &dyn MachineProbe,
     mutate: F,
-) -> Result<Settings, String>
+) -> Result<Settings, E>
 where
-    F: FnOnce(&mut Settings) -> Result<(), String>,
+    E: From<SettingsError>,
+    F: FnOnce(&mut Settings) -> Result<(), E>,
 {
     with_settings_lock(path, || {
         migrate_legacy_identifier_settings_locked(path, sources);
@@ -628,15 +639,17 @@ where
     })
 }
 
-fn with_settings_lock<T, F>(path: &Path, operation: F) -> Result<T, String>
+fn with_settings_lock<T, E, F>(path: &Path, operation: F) -> Result<T, E>
 where
-    F: FnOnce() -> Result<T, String>,
+    E: From<SettingsError>,
+    F: FnOnce() -> Result<T, E>,
 {
     let dir = path
         .parent()
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| PathBuf::from("."));
-    create_private_dir_all(&dir).map_err(|e| format!("Failed to create settings dir: {e}"))?;
+    create_private_dir_all(&dir)
+        .map_err(|e| SettingsError::storage(format!("Failed to create settings dir: {e}")))?;
 
     let lock_path = path.with_extension("json.lock");
     let lock_file = OpenOptions::new()
@@ -645,10 +658,10 @@ where
         .read(true)
         .write(true)
         .open(&lock_path)
-        .map_err(|e| format!("Failed to open settings lock: {e}"))?;
+        .map_err(|e| SettingsError::storage(format!("Failed to open settings lock: {e}")))?;
     lock_file
         .lock_exclusive()
-        .map_err(|e| format!("Failed to lock settings: {e}"))?;
+        .map_err(|e| SettingsError::storage(format!("Failed to lock settings: {e}")))?;
 
     let result = operation();
     // fs2's trait method, spelled out: from Rust 1.89 the inherent
@@ -664,7 +677,7 @@ where
 
 /// Persist settings to a specific path. Test seam for `save`, which always
 /// targets `settings_path()`. Caller must hold the settings lock.
-fn save_to(path: &Path, settings: &Settings) -> Result<(), String> {
+fn save_to(path: &Path, settings: &Settings) -> Result<(), SettingsError> {
     save_over(path, settings, None)
 }
 
@@ -676,14 +689,15 @@ fn save_over(
     path: &Path,
     settings: &Settings,
     load_failure: Option<&SettingsLoadError>,
-) -> Result<(), String> {
+) -> Result<(), SettingsError> {
     let dir = path
         .parent()
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| PathBuf::from("."));
 
     // Ensure directory exists
-    create_private_dir_all(&dir).map_err(|e| format!("Failed to create settings dir: {e}"))?;
+    create_private_dir_all(&dir)
+        .map_err(|e| SettingsError::storage(format!("Failed to create settings dir: {e}")))?;
 
     // Read existing file to preserve non-settings keys. This is the one place
     // every settings write passes through, so it is also where an unreadable
@@ -701,10 +715,15 @@ fn save_over(
                 );
                 Ok(())
             }
-            Err(error) => Err(format!(
-                "{error} (the invalid original settings file is preserved at {})",
-                recovered.copy.display()
-            )),
+            // The copy is named, not located: the app scrubs a folder out of
+            // an error's text (ADR 0006), and the copy lies next to the file.
+            Err(error) => Err(SettingsError::storage(format!(
+                "{error} (the invalid original settings file is preserved as {}, next to the settings file)",
+                recovered
+                    .copy
+                    .file_name()
+                    .map_or_else(|| "(unnamed)".into(), |name| name.to_string_lossy())
+            ))),
         };
     }
     written
@@ -716,7 +735,7 @@ fn merge_and_write(
     path: &Path,
     settings: &Settings,
     map: &mut serde_json::Map<String, serde_json::Value>,
-) -> Result<(), String> {
+) -> Result<(), SettingsError> {
     migrations::canonical_onboarding_key(map);
 
     save_external_glossaries(path, settings)?;
@@ -727,8 +746,8 @@ fn merge_and_write(
     map.remove("profile_glossaries");
 
     // Merge settings fields into the map
-    let settings_value =
-        serde_json::to_value(settings).map_err(|e| format!("Serialize error: {e}"))?;
+    let settings_value = serde_json::to_value(settings)
+        .map_err(|e| SettingsError::storage(format!("Serialize error: {e}")))?;
     if let serde_json::Value::Object(mut settings_map) = settings_value {
         settings_map.remove("initial_prompt");
         settings_map.remove("profile_glossaries");
@@ -737,7 +756,8 @@ fn merge_and_write(
         }
     }
 
-    let json = serde_json::to_string_pretty(&map).map_err(|e| format!("Serialize error: {e}"))?;
+    let json = serde_json::to_string_pretty(&map)
+        .map_err(|e| SettingsError::storage(format!("Serialize error: {e}")))?;
 
     atomic_write(path, json.as_bytes(), "settings")
 }
@@ -769,7 +789,7 @@ fn existing_settings_for_merge(
         serde_json::Map<String, serde_json::Value>,
         Option<RecoveredSettings>,
     ),
-    String,
+    SettingsError,
 > {
     let contents = match std::fs::read(path) {
         Ok(contents) => contents,
@@ -777,10 +797,10 @@ fn existing_settings_for_merge(
             return Ok((serde_json::Map::new(), None))
         }
         Err(error) => {
-            return Err(format!(
+            return Err(SettingsError::storage(format!(
                 "Settings file {} could not be read ({error}); refusing to overwrite it",
                 path.display()
-            ))
+            )))
         }
     };
     // The load already reported any ignored profile-model entries.
@@ -793,10 +813,10 @@ fn existing_settings_for_merge(
         },
     };
     let recovery = preserve_invalid_settings(path, &contents).map_err(|error| {
-        format!(
+        SettingsError::storage(format!(
             "Settings file {} is invalid ({problem}) and a recovery copy could not be saved ({error}); refusing to overwrite it",
             path.display()
-        )
+        ))
     })?;
     Ok((
         merge_base,
@@ -818,10 +838,10 @@ const MAX_RECOVERY_COPIES: usize = 1000;
 /// A candidate that already holds these exact bytes is reused instead of
 /// duplicated. A new copy is owner-only (0600 on Unix) and synced, with its
 /// directory, before this returns.
-fn preserve_invalid_settings(path: &Path, contents: &[u8]) -> Result<PathBuf, String> {
+fn preserve_invalid_settings(path: &Path, contents: &[u8]) -> Result<PathBuf, SettingsError> {
     #[cfg(test)]
     if tests::FAIL_RECOVERY_COPY.with(std::cell::Cell::get) {
-        return Err("injected recovery copy failure".to_string());
+        return Err(SettingsError::storage("injected recovery copy failure"));
     }
 
     let first = path.with_extension("json.bak");
@@ -853,13 +873,18 @@ fn preserve_invalid_settings(path: &Path, contents: &[u8]) -> Result<PathBuf, St
                     return Ok(candidate);
                 }
             }
-            Err(error) => return Err(format!("Failed to create {}: {error}", candidate.display())),
+            Err(error) => {
+                return Err(SettingsError::storage(format!(
+                    "Failed to create {}: {error}",
+                    candidate.display()
+                )))
+            }
         }
     }
-    Err(format!(
+    Err(SettingsError::storage(format!(
         "{MAX_RECOVERY_COPIES} recovery copies of {} already exist",
         path.display()
-    ))
+    )))
 }
 
 fn write_recovery_copy(
@@ -867,20 +892,23 @@ fn write_recovery_copy(
     candidate: &Path,
     dir: &Path,
     contents: &[u8],
-) -> Result<(), String> {
+) -> Result<(), SettingsError> {
     use std::io::Write;
 
     if let Err(error) = file.write_all(contents).and_then(|()| file.sync_all()) {
         drop(file);
         // Created exclusively above, so this incomplete copy is ours to remove.
         let _ = std::fs::remove_file(candidate);
-        return Err(format!("Failed to write {}: {error}", candidate.display()));
+        return Err(SettingsError::storage(format!(
+            "Failed to write {}: {error}",
+            candidate.display()
+        )));
     }
     sync_directory(dir).map_err(|error| {
-        format!(
+        SettingsError::storage(format!(
             "Saved {} but failed to sync its directory: {error}",
             candidate.display()
-        )
+        ))
     })
 }
 
@@ -911,7 +939,7 @@ fn profile_glossary_dir_for_settings(path: &Path) -> PathBuf {
     config_dir_for_settings(path).join(PROFILE_GLOSSARY_DIRNAME)
 }
 
-pub(super) fn validate_profile_file_id(profile_id: &str) -> Result<(), String> {
+pub(super) fn validate_profile_file_id(profile_id: &str) -> Result<(), SettingsError> {
     if profile_id.is_empty()
         || profile_id.len() > 32
         || !profile_id.starts_with(|character: char| character.is_ascii_alphanumeric())
@@ -921,9 +949,9 @@ pub(super) fn validate_profile_file_id(profile_id: &str) -> Result<(), String> {
                 || matches!(character, '-' | '_')
         })
     {
-        return Err(format!(
-            "Invalid profile id '{profile_id}' for personal dictionary file"
-        ));
+        return Err(SettingsError::InvalidProfileFileId {
+            id: profile_id.to_string(),
+        });
     }
     Ok(())
 }
@@ -1025,7 +1053,7 @@ fn read_dictionary_files(path: &Path, object: &mut Object) {
     }
 }
 
-fn save_external_glossaries(path: &Path, settings: &Settings) -> Result<(), String> {
+fn save_external_glossaries(path: &Path, settings: &Settings) -> Result<(), SettingsError> {
     for profile_id in settings.profile_glossaries.keys() {
         validate_profile_file_id(profile_id)?;
     }
@@ -1049,7 +1077,7 @@ fn save_external_glossaries(path: &Path, settings: &Settings) -> Result<(), Stri
     Ok(())
 }
 
-fn atomic_write_if_changed(path: &Path, contents: &[u8], label: &str) -> Result<(), String> {
+fn atomic_write_if_changed(path: &Path, contents: &[u8], label: &str) -> Result<(), SettingsError> {
     if std::fs::read(path).is_ok_and(|current| current == contents) {
         return Ok(());
     }
@@ -1057,11 +1085,12 @@ fn atomic_write_if_changed(path: &Path, contents: &[u8], label: &str) -> Result<
 }
 
 /// Atomically replace a regular file while preserving a user-managed symlink.
-fn atomic_write(path: &Path, contents: &[u8], label: &str) -> Result<(), String> {
+fn atomic_write(path: &Path, contents: &[u8], label: &str) -> Result<(), SettingsError> {
     let destination = match std::fs::symlink_metadata(path) {
         Ok(metadata) if metadata.file_type().is_symlink() => {
-            let target = std::fs::read_link(path)
-                .map_err(|error| format!("Failed to resolve {label} symlink: {error}"))?;
+            let target = std::fs::read_link(path).map_err(|error| {
+                SettingsError::storage(format!("Failed to resolve {label} symlink: {error}"))
+            })?;
             let target = if target.is_absolute() {
                 target
             } else {
@@ -1069,7 +1098,9 @@ fn atomic_write(path: &Path, contents: &[u8], label: &str) -> Result<(), String>
             };
             if target.exists() {
                 std::fs::canonicalize(&target).map_err(|error| {
-                    format!("Failed to canonicalize {label} symlink target: {error}")
+                    SettingsError::storage(format!(
+                        "Failed to canonicalize {label} symlink target: {error}"
+                    ))
                 })?
             } else {
                 target
@@ -1082,8 +1113,9 @@ fn atomic_write(path: &Path, contents: &[u8], label: &str) -> Result<(), String>
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."));
-    create_private_dir_all(&parent)
-        .map_err(|error| format!("Failed to create {label} directory: {error}"))?;
+    create_private_dir_all(&parent).map_err(|error| {
+        SettingsError::storage(format!("Failed to create {label} directory: {error}"))
+    })?;
     install_replacement(
         &destination,
         &parent,
@@ -1107,7 +1139,7 @@ fn install_replacement(
     contents: &[u8],
     label: &str,
     copy_permissions: &dyn Fn(&std::fs::File, &std::fs::Metadata) -> std::io::Result<()>,
-) -> Result<(), String> {
+) -> Result<(), SettingsError> {
     use std::io::Write;
 
     // Exclusive, uniquely named, owner-only (0600 on Unix) temporary file in the
@@ -1116,29 +1148,37 @@ fn install_replacement(
         .prefix(".sagascript-")
         .suffix(".tmp")
         .tempfile_in(parent)
-        .map_err(|error| format!("Failed to create {label} temporary file: {error}"))?;
+        .map_err(|error| {
+            SettingsError::storage(format!("Failed to create {label} temporary file: {error}"))
+        })?;
     // Distinguish an absent target from an unreadable one; fail closed on the latter.
     let existing = match std::fs::metadata(destination) {
         Ok(metadata) => Some(metadata),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
         Err(error) => {
-            return Err(format!("Failed to inspect existing {label}: {error}"));
+            return Err(SettingsError::storage(format!(
+                "Failed to inspect existing {label}: {error}"
+            )));
         }
     };
     tmp.write_all(contents)
-        .map_err(|error| format!("Failed to write {label}: {error}"))?;
+        .map_err(|error| SettingsError::storage(format!("Failed to write {label}: {error}")))?;
     // Keep an existing target's permissions (e.g. a deliberately restrictive or
     // shared mode); a new file stays owner-only. Applied before the final fsync.
     if let Some(existing) = existing.as_ref().filter(|metadata| metadata.is_file()) {
-        copy_permissions(tmp.as_file(), existing)
-            .map_err(|error| format!("Failed to preserve {label} permissions: {error}"))?;
+        copy_permissions(tmp.as_file(), existing).map_err(|error| {
+            SettingsError::storage(format!("Failed to preserve {label} permissions: {error}"))
+        })?;
     }
-    tmp.as_file()
-        .sync_all()
-        .map_err(|error| format!("Failed to sync {label} before install: {error}"))?;
+    tmp.as_file().sync_all().map_err(|error| {
+        SettingsError::storage(format!("Failed to sync {label} before install: {error}"))
+    })?;
     install_temp_file(tmp, destination, existing.is_some(), label)?;
-    sync_directory(parent)
-        .map_err(|error| format!("Installed {label} but failed to sync its directory: {error}"))
+    sync_directory(parent).map_err(|error| {
+        SettingsError::storage(format!(
+            "Installed {label} but failed to sync its directory: {error}"
+        ))
+    })
 }
 
 /// Unix: rename(2) replaces atomically.
@@ -1148,10 +1188,10 @@ fn install_temp_file(
     destination: &Path,
     _target_exists: bool,
     label: &str,
-) -> Result<(), String> {
-    tmp.persist(destination)
-        .map(|_| ())
-        .map_err(|error| format!("Failed to install {label}: {}", error.error))
+) -> Result<(), SettingsError> {
+    tmp.persist(destination).map(|_| ()).map_err(|error| {
+        SettingsError::storage(format!("Failed to install {label}: {}", error.error))
+    })
 }
 
 /// Windows: `ReplaceFileW` replaces atomically and merges the replaced file's
@@ -1165,15 +1205,14 @@ fn install_temp_file(
     destination: &Path,
     target_exists: bool,
     label: &str,
-) -> Result<(), String> {
+) -> Result<(), SettingsError> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Storage::FileSystem::ReplaceFileW;
 
     if !target_exists {
-        return tmp
-            .persist(destination)
-            .map(|_| ())
-            .map_err(|error| format!("Failed to install {label}: {}", error.error));
+        return tmp.persist(destination).map(|_| ()).map_err(|error| {
+            SettingsError::storage(format!("Failed to install {label}: {}", error.error))
+        });
     }
     // Close the handle; the TempPath removes the replacement unless kept.
     let temp_path = tmp.into_temp_path();
@@ -1189,12 +1228,14 @@ fn install_temp_file(
             .prefix(".sagascript-bak-")
             .suffix(".tmp")
             .tempfile_in(destination.parent().unwrap_or_else(|| Path::new(".")))
-            .map_err(|error| format!("Failed to reserve {label} backup name: {error}"))?
+            .map_err(|error| {
+                SettingsError::storage(format!("Failed to reserve {label} backup name: {error}"))
+            })?
             .into_temp_path();
         let path = reserved.to_path_buf();
-        reserved
-            .close()
-            .map_err(|error| format!("Failed to reserve {label} backup name: {error}"))?;
+        reserved.close().map_err(|error| {
+            SettingsError::storage(format!("Failed to reserve {label} backup name: {error}"))
+        })?;
         path
     };
     let wide =
@@ -1229,23 +1270,25 @@ fn install_temp_file(
         // The original now lives under the backup name: move it back.
         if let Err(restore) = std::fs::rename(&backup, destination) {
             let kept = temp_path.keep().ok();
-            return Err(format!(
+            return Err(SettingsError::storage(format!(
                 "Failed to install {label}: {os_error}; restoring the original from {} also failed ({restore}); new contents kept at {}",
                 backup.display(),
                 kept.map_or_else(|| "(unknown)".to_string(), |p| p.display().to_string())
-            ));
+            )));
         }
     }
     // Never let cleanup delete the only remaining copy.
     if !destination.exists() {
         let kept = temp_path.keep().ok();
-        return Err(format!(
+        return Err(SettingsError::storage(format!(
             "Failed to install {label}: {os_error}; the original is missing, new contents kept at {}",
             kept.map_or_else(|| "(unknown)".to_string(), |p| p.display().to_string())
-        ));
+        )));
     }
     let _ = std::fs::remove_file(&backup);
-    Err(format!("Failed to install {label}: {os_error}"))
+    Err(SettingsError::storage(format!(
+        "Failed to install {label}: {os_error}"
+    )))
 }
 
 #[cfg(unix)]

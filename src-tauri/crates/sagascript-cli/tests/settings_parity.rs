@@ -12,8 +12,9 @@
 use std::process::Command;
 
 use sagascript_core::settings::store;
+use sagascript_core::settings::SCHEMA_VERSION;
 use sagascript_core::test_support::settings_ops_table::{
-    assert_persisted, cases, Case, Op, ProfileEdit, Surface,
+    assert_persisted, cases, differing_fields, Case, Op, ProfileEdit, Surface,
 };
 use sagascript_testsupport::{fake_settings, isolated_cli_env};
 
@@ -88,17 +89,28 @@ fn args(op: &Op) -> Vec<String> {
                 .map(String::from)
                 .into()
         }
+        Op::DictionaryAdd {
+            profile,
+            term,
+            aliases,
+        } => {
+            let mut args: Vec<String> = ["glossary", "add", term, "--profile", profile]
+                .map(String::from)
+                .into();
+            for alias in *aliases {
+                args.extend(["--alias".to_string(), alias.to_string()]);
+            }
+            args
+        }
+        Op::InitialPrompt(text) => set("initial_prompt", (*text).into()),
+        Op::Reset(key) => ["config", "reset", key].map(String::from).into(),
     }
 }
 
 /// Run one row; returns the CLI's verdict.
 fn run(case: &Case) {
     let settings = fake_settings();
-    std::fs::write(
-        settings.path(),
-        serde_json::to_string_pretty(&case.start).expect("settings serialize"),
-    )
-    .expect("write the starting settings");
+    std::fs::write(settings.path(), case.file_text()).expect("write the starting settings");
     let before = store::load_from(settings.path());
 
     let mut command = Command::new(env!("CARGO_BIN_EXE_sagascript"));
@@ -138,4 +150,43 @@ fn every_operation_persists_what_the_shared_operation_leaves() {
     for case in &table {
         run(case);
     }
+}
+
+/// A row that starts from the file of an older release is only worth having if
+/// the file has steps pending and loads as the settings the table starts from:
+/// the surface runs the steps when it writes, and ends where the operation on
+/// those settings ends.
+#[test]
+fn a_legacy_file_has_steps_pending_and_loads_as_its_start() {
+    let mut files = 0;
+    for case in cases() {
+        let Some(text) = &case.legacy_file else {
+            continue;
+        };
+        files += 1;
+        let raw: serde_json::Value = serde_json::from_str(text).expect("the file is JSON");
+        let pending_profile_models = raw["profile_models"] == serde_json::json!({});
+        let pending_dictionaries =
+            raw["profile_glossary_migrated"] == serde_json::Value::Bool(false);
+        let newer = raw["schema_version"]
+            .as_u64()
+            .is_some_and(|version| version > u64::from(SCHEMA_VERSION));
+        assert!(
+            pending_profile_models || pending_dictionaries || newer,
+            "{}: nothing is pending in {text}",
+            case.name
+        );
+
+        let settings = fake_settings();
+        std::fs::write(settings.path(), text).expect("write the legacy file");
+        let loaded = store::load_from(settings.path());
+        assert_eq!(
+            differing_fields(&loaded, &case.start),
+            Vec::<String>::new(),
+            "{}: the file does not load as the table's start",
+            case.name
+        );
+        assert_eq!(loaded.schema_version, SCHEMA_VERSION, "{}", case.name);
+    }
+    assert!(files >= 3, "the table has {files} legacy files");
 }

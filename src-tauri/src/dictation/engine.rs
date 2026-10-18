@@ -8,14 +8,22 @@ use crate::focus_diag;
 #[cfg(target_os = "macos")]
 use crate::platform;
 
+/// Pre-warm the engine on its own thread. The thread reads the settings file
+/// (`machine::load`) when it attaches to the engine, not the caller, which is
+/// the hotkey path or a wake callback.
+fn warm_in_background(reason: &'static str) {
+    sagascript_core::transcription::pianissimo_backend::warm_in_background(
+        reason,
+        sagascript_core::machine::load,
+    );
+}
+
 /// Key-down pre-warm: start loading the Pianissimo model while the user is
 /// still speaking (also after an idle unload under `on_app_start`). Never
 /// blocks the hotkey path: the work runs on its own thread and this only reads
 /// settings.
 pub(super) fn prewarm_engine_on_key_down(ctrl: &tauri::State<'_, SharedController>) {
-    use sagascript_core::transcription::pianissimo_backend::{
-        warm_in_background, warm_on, WarmTrigger,
-    };
+    use sagascript_core::transcription::pianissimo_backend::{warm_on, WarmTrigger};
     let c = lock_controller(ctrl);
     let profile_id = c.active_hotkey_profile().map(|profile| profile.id.clone());
     warm_on(
@@ -57,7 +65,7 @@ fn prewarm_engine_for(
     app: &tauri::AppHandle,
     trigger: sagascript_core::transcription::pianissimo_backend::WarmTrigger,
 ) {
-    use sagascript_core::transcription::pianissimo_backend::{warm_in_background, warm_on};
+    use sagascript_core::transcription::pianissimo_backend::warm_on;
     let ctrl: tauri::State<'_, SharedController> = app.state();
     // Wake callbacks run on the main thread inside an ObjC block: never block
     // on the controller there. Skip this warm when it is busy; a poisoned

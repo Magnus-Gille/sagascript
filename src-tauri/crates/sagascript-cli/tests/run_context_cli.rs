@@ -62,6 +62,35 @@ impl Sandbox {
     fn run(&self, args: &[&str]) -> Output {
         self.command(args).output().expect("run sagascript")
     }
+
+    /// The stored settings of the Swedish profile hold a model that only serves
+    /// English: what a run of `swedish` then refuses with.
+    fn with_an_english_model_on_the_swedish_profile(self) -> Self {
+        std::fs::write(
+            self.root.join("settings.json"),
+            r#"{"language":"en","hotkey":"Super+D","profile_glossary_migrated":true,
+                "hotkey_profiles":[
+                  {"id":"default","name":"English","shortcut":"Super+D","language":"en"},
+                  {"id":"swedish","name":"Swedish","shortcut":"Super+S","language":"sv"}],
+                "profile_models":{"swedish":"tiny.en"},
+                "profile_glossaries":{"default":"Sagascript","swedish":"Grimnir = grimmer"}}"#,
+        )
+        .expect("write settings");
+        self
+    }
+}
+
+/// The `code` and `error` of the one JSON error object a failed `--json` or
+/// `--jsonl` run writes on stdout (#364).
+fn json_error(output: &Output) -> (String, String) {
+    let stdout = String::from_utf8(output.stdout.clone()).expect("CLI stdout is UTF-8");
+    let value: Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|error| panic!("stdout is not one JSON document ({error}): {stdout:?}"));
+    assert_eq!(value["status"], "error", "{value}");
+    (
+        value["code"].as_str().expect("a code").to_string(),
+        value["error"].as_str().expect("an error text").to_string(),
+    )
 }
 
 fn stderr_text(output: &Output) -> String {
@@ -113,7 +142,7 @@ fn transcribe_reports_resolution_failures_with_their_codes() {
     );
 
     for (flags, code) in [
-        (&["--profile", "nope"][..], "settings_error"),
+        (&["--profile", "nope"][..], "unknown_profile"),
         (&["--language", "xx"][..], "settings_error"),
         (&["--prompt-file", MISSING_HINT][..], "file_decode_error"),
     ] {
@@ -410,9 +439,91 @@ mod reprocess {
     }
 }
 
+/// `glossary suggest --json` reports a settings refusal with the code of its
+/// `SettingsError`, as `transcribe --json` does (ADR 0006).
+mod glossary_suggest {
+    use super::*;
+
+    fn suggest(sandbox: &Sandbox, input: &str, profile: &str) -> Output {
+        std::fs::write(sandbox.root.join("corrected.txt"), "corrected\n").expect("write text");
+        sandbox.run(&[
+            "glossary",
+            "suggest",
+            input,
+            "--corrected",
+            "corrected.txt",
+            "--profile",
+            profile,
+            "--json",
+        ])
+    }
+
+    #[test]
+    fn an_unknown_profile_is_unknown_profile() {
+        let sandbox = Sandbox::new();
+        std::fs::write(sandbox.root.join("heard.txt"), "heard\n").expect("write text");
+        let output = suggest(&sandbox, "heard.txt", "nope");
+        assert_eq!(output.status.code(), Some(1));
+        assert_eq!(
+            json_error(&output),
+            (
+                "unknown_profile".to_string(),
+                "Settings error: Unknown dictation profile 'nope'".to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn a_stored_model_the_profile_language_cannot_use_is_model_incompatible() {
+        let sandbox = Sandbox::new().with_an_english_model_on_the_swedish_profile();
+        let output = suggest(&sandbox, "a.wav", "swedish");
+        assert_eq!(output.status.code(), Some(1));
+        assert_eq!(
+            json_error(&output),
+            (
+                "model_incompatible".to_string(),
+                "Settings error: Model 'Whisper Tiny (EN)' is incompatible with profile 'swedish'"
+                    .to_string()
+            )
+        );
+    }
+}
+
 #[cfg(feature = "record")]
 mod record {
     use super::*;
+
+    /// `record --json` writes its settings refusals as error objects with the
+    /// code of their `SettingsError`.
+    #[test]
+    fn a_json_run_reports_a_settings_refusal_with_its_own_code() {
+        let sandbox = Sandbox::new();
+        let unknown = sandbox.run(&["record", "--json", "--profile", "nope"]);
+        assert_eq!(unknown.status.code(), Some(1));
+        assert_eq!(
+            json_error(&unknown),
+            (
+                "unknown_profile".to_string(),
+                "Settings error: Unknown dictation profile 'nope'".to_string()
+            )
+        );
+
+        let sandbox = Sandbox::new().with_an_english_model_on_the_swedish_profile();
+        let incompatible = sandbox.run(&["record", "--json", "--profile", "swedish"]);
+        assert_eq!(incompatible.status.code(), Some(1));
+        assert_eq!(
+            json_error(&incompatible),
+            (
+                "model_incompatible".to_string(),
+                "Settings error: Model 'Whisper Tiny (EN)' is incompatible with profile 'swedish'"
+                    .to_string()
+            )
+        );
+
+        // A flag the CLI words itself stays `settings_error`.
+        let language = sandbox.run(&["record", "--json", "--language", "xx"]);
+        assert_eq!(json_error(&language).0, "settings_error");
+    }
 
     #[test]
     fn resolution_failures_come_before_any_capture() {

@@ -3,9 +3,34 @@ use super::*;
 #[cfg(test)]
 mod lineup_option_tests {
     use super::*;
+    use sagascript_core::models;
+    use sagascript_core::test_support::model_env::FixedModelEnv;
+
+    /// A host that does (`supported`) or does not run Pianissimo, with nothing
+    /// downloaded.
+    fn host(supported: bool) -> FixedModelEnv {
+        if supported {
+            FixedModelEnv::with_pianissimo()
+        } else {
+            FixedModelEnv::new()
+        }
+    }
+
+    /// The picker's wire entries for a host.
+    fn lineup(
+        supported: bool,
+        language: Language,
+        include: Option<FileModel>,
+        active: Option<FileModel>,
+    ) -> Vec<ModelInfo> {
+        wire_picker(
+            &models::app_picker(language, include, &host(supported)),
+            active,
+        )
+    }
 
     fn ids(supported: bool, language: Language, include: Option<FileModel>) -> Vec<String> {
-        lineup_model_infos(language, supported, include, None)
+        lineup(supported, language, include, None)
             .into_iter()
             .map(|info| info.id)
             .collect()
@@ -37,7 +62,7 @@ mod lineup_option_tests {
 
     #[test]
     fn model_info_wire_keys_are_stable() {
-        let info = lineup_model_infos(Language::Swedish, true, None, None).remove(0);
+        let info = lineup(true, Language::Swedish, None, None).remove(0);
         let value = serde_json::to_value(info).unwrap();
         let mut keys: Vec<_> = value.as_object().unwrap().keys().cloned().collect();
         keys.sort();
@@ -56,13 +81,87 @@ mod lineup_option_tests {
 
     #[test]
     fn recommended_info_follows_the_platform_gate() {
+        for (supported, expected) in [(true, "pianissimo-sv"), (false, "kb-whisper-medium")] {
+            let choice = FileModel::recommended_for(Language::Swedish, supported);
+            let info = wire_info(&models::model_info(choice, &host(supported)), true);
+            assert_eq!(info.id, expected);
+        }
+    }
+
+    /// The picker shows what a download transfers, `list-models` what the
+    /// model occupies: Pianissimo's two sizes differ, and the picker keeps the
+    /// download (#373 part 2).
+    #[test]
+    fn the_picker_shows_the_download_size_of_pianissimo() {
+        let picker = lineup(true, Language::Swedish, None, None);
+        assert_eq!(picker[0].id, "pianissimo-sv");
+        assert_eq!(picker[0].size_mb, 1_000);
+        assert!(picker[0]
+            .description
+            .starts_with("Swedish file transcription"));
+        assert_eq!(picker[1].id, "kb-whisper-large");
+        assert_eq!(picker[1].size_mb, WhisperModel::KbWhisperLarge.size_mb());
+    }
+
+    #[test]
+    fn the_selected_model_is_marked_active_and_installed_models_downloaded() {
+        let active = Some(FileModel::PianissimoOriginal);
+        let env = FixedModelEnv {
+            pianissimo_downloaded: true,
+            downloaded: vec![WhisperModel::KbWhisperLarge],
+            ..FixedModelEnv::with_pianissimo()
+        };
+        let picker = wire_picker(&models::app_picker(Language::Swedish, None, &env), active);
+        let marks: Vec<(&str, bool, bool)> = picker
+            .iter()
+            .map(|info| (info.id.as_str(), info.active, info.downloaded))
+            .collect();
         assert_eq!(
-            model_info_for(FileModel::recommended_for(Language::Swedish, true), true).id,
-            "pianissimo-sv"
+            marks,
+            [
+                ("pianissimo-sv", true, true),
+                ("kb-whisper-large", false, true)
+            ]
         );
+    }
+}
+
+/// A model query for a profile that does not exist rejects with the code of
+/// its settings error, and Pianissimo is refused with its own code where the
+/// host cannot run it.
+#[cfg(test)]
+mod rejection_tests {
+    use super::*;
+    use crate::app_controller::AppController;
+    use std::sync::Mutex;
+    use tauri::Manager;
+
+    #[test]
+    fn a_profile_model_query_for_an_unknown_profile_is_unknown_profile() {
+        let app = tauri::test::mock_app();
+        app.manage::<SharedController>(Mutex::new(AppController::new(Settings::default())));
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("a runtime");
+        let error = runtime
+            .block_on(get_profile_model_info(
+                app.state::<SharedController>(),
+                "nosuch".into(),
+            ))
+            .err()
+            .expect("there is no such profile");
+        assert_eq!(error.code(), "unknown_profile");
+        assert_eq!(error.to_string(), "Unknown profile 'nosuch'");
+    }
+
+    #[test]
+    fn downloading_pianissimo_is_refused_with_its_code_where_it_cannot_run() {
+        assert!(ensure_pianissimo_runs(true).is_ok());
+        let error = ensure_pianissimo_runs(false).expect_err("this host cannot run Pianissimo");
+        assert_eq!(error.code(), "pianissimo_unavailable");
         assert_eq!(
-            model_info_for(FileModel::recommended_for(Language::Swedish, false), true).id,
-            "kb-whisper-medium"
+            error.to_string(),
+            sagascript_core::transcription::pianissimo_backend::UNSUPPORTED_MESSAGE
         );
     }
 }

@@ -5,12 +5,12 @@
 //! still have to enforce the selected work at the runtime orchestration layer.
 
 use serde::{de::Error as DeError, Deserialize, Deserializer, Serialize};
-use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::diarization::speaker_hint::SpeakerCountHint;
+use crate::hash::sha256_hex;
 
-pub const REPROCESSING_PLAN_SCHEMA_VERSION: u32 = 1;
+pub(crate) const REPROCESSING_PLAN_SCHEMA_VERSION: u32 = 1;
 
 /// The bounded reprocessing operation selected by the caller.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -269,7 +269,7 @@ impl ReprocessingPlan {
         };
         let bytes =
             serde_json::to_vec(&payload).map_err(|_| ReprocessingPlanError::Serialization)?;
-        Ok(hex_sha256(&bytes))
+        Ok(sha256_hex(bytes))
     }
 }
 
@@ -285,11 +285,6 @@ fn is_sha256(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
-}
-
-fn hex_sha256(bytes: &[u8]) -> String {
-    let digest = Sha256::digest(bytes);
-    digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 #[cfg(test)]

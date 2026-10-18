@@ -8,9 +8,9 @@
 use std::collections::BTreeMap;
 
 use serde::{de::Error as DeError, Deserialize, Deserializer, Serialize};
-use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+use crate::hash::sha256_hex;
 use crate::meeting::reprocess::{preview_migration, MigrationPreview, MigrationStatus};
 use crate::meeting::review::{
     CorrectionFile, CorrectionOperation, MeetingReview, MeetingReviewError,
@@ -18,7 +18,7 @@ use crate::meeting::review::{
 };
 use crate::meeting::MeetingTranscript;
 
-pub const REPROCESS_PROPOSAL_SCHEMA_VERSION: u32 = 1;
+pub(crate) const REPROCESS_PROPOSAL_SCHEMA_VERSION: u32 = 1;
 pub const MAX_SERIALIZED_PROPOSAL_BYTES: usize = 72 * 1024 * 1024;
 
 const ZERO_SHA256: &str = "0000000000000000000000000000000000000000000000000000000000000000";
@@ -290,8 +290,7 @@ fn serialized_size<T: Serialize>(value: &T) -> Result<usize, ProposalError> {
 
 fn hash_json<T: Serialize>(value: &T) -> Result<String, ProposalError> {
     let bytes = serde_json::to_vec(value).map_err(|_| ProposalError::Serialization)?;
-    let digest = Sha256::digest(bytes);
-    Ok(digest.iter().map(|byte| format!("{byte:02x}")).collect())
+    Ok(sha256_hex(bytes))
 }
 
 #[cfg(test)]

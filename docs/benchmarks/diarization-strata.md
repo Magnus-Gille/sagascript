@@ -1,6 +1,6 @@
 # Diarization strata measurements
 
-`sagascript_core::diarization_strata::measure_strata` computes bounded,
+`sagascript_core::diarization::eval::strata::measure_strata` computes bounded,
 offline measurements from validated `SpeakerTurn` inputs. It receives the
 explicit UEM and an existing `EvaluationReport`; the report's hypothesis to
 reference speaker mapping is reused exactly. The helper never re-optimizes a

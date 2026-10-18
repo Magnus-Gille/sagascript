@@ -200,7 +200,7 @@ impl CheckSource for ManifestCheck {
                     install_offered: false,
                 })),
                 Ok(updates::UpdateCheck::UpToDate) => Ok(None),
-                Err(error) => Err(error),
+                Err(error) => Err(error.to_string()),
             }
         })
     }
@@ -210,7 +210,7 @@ fn stable_release_url(version: &str) -> String {
     format!("https://github.com/Magnus-Gille/sagascript/releases/tag/v{version}")
 }
 
-fn open_update_release(version: &str) -> Result<(), String> {
+fn open_update_release(version: &str) -> Result<(), updates::UpdateError> {
     let url = stable_release_url(version);
 
     #[cfg(target_os = "macos")]
@@ -228,7 +228,7 @@ fn open_update_release(version: &str) -> Result<(), String> {
         .arg(&url)
         .spawn()
         .map(|_| ())
-        .map_err(|error| format!("failed to open {url}: {error}"))
+        .map_err(|source| updates::UpdateError::Open { url, source })
 }
 
 fn set_update_menu(

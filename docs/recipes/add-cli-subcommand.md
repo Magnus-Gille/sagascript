@@ -75,9 +75,11 @@ to stderr, `out.json(&value)?` a pretty document, `out.jsonl(&value)?` a compact
   keeps its failure and status. A check that owes a verdict (exit 3) writes its report through
   `output::ignore_closed(…)`, so a reader that left cannot turn a failed check into exit 0.
 - A `--json`/`--jsonl` run that fails before writing anything to stdout gets one error object
-  there, `{"status":"error","code":"settings_error","error":"Settings error: …"}`, pretty or
-  compact like the command's own output (`exit::conclude`). `code` is the `DictationError`
-  variant in snake_case (`cancelled` and `check_failed` for those exits). A run that
+  there, `{"status":"error","code":"unknown_profile","error":"Settings error: …"}`, pretty or
+  compact like the command's own output (`exit::conclude`). `code` is `DictationError::code()`:
+  the variant in snake_case, or the code of the typed error it wraps (a `SettingsError` keeps
+  its own, `unknown_profile` above; `settings_error` is only the CLI's own wording of a bad
+  flag), and `cancelled` / `check_failed` for those exits. A run that
   already wrote its report, or some `--jsonl` items, keeps stdout as it is. A single-file
   `transcribe --json` whose file fails writes that object with a `source` key.
 - A command whose stdout is always JSON, with no `--json` flag (for example `latency-report`,

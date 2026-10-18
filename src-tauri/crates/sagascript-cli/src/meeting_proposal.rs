@@ -11,11 +11,11 @@ use std::path::{Path, PathBuf};
 use clap::{Args, Subcommand};
 use sagascript_core::error::DictationError;
 use sagascript_core::fsutil::{self, PublishError, PublishErrorKind};
-use sagascript_core::meeting::MeetingTranscript;
-use sagascript_core::meeting_reprocess_proposal::{
+use sagascript_core::meeting::reprocess::proposal::{
     MeetingReprocessingProposal, ProposalError, MAX_SERIALIZED_PROPOSAL_BYTES,
 };
-use sagascript_core::meeting_review::{CorrectionOperation, MeetingReview};
+use sagascript_core::meeting::review::{CorrectionOperation, MeetingReview};
+use sagascript_core::meeting::MeetingTranscript;
 use serde::{de::DeserializeOwned, Serialize};
 
 use crate::output::{errln, Out};
@@ -321,7 +321,7 @@ fn truncated(error: &io::Error) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sagascript_core::meeting_review::{CorrectionFile, MeetingReview, REVIEW_SCHEMA_VERSION};
+    use sagascript_core::meeting::review::{CorrectionFile, MeetingReview, REVIEW_SCHEMA_VERSION};
     use sagascript_core::test_support::meeting_transcript;
     use sagascript_testsupport::TempDir;
     use serde_json::json;
@@ -410,7 +410,7 @@ mod tests {
             read_json(&resolved_path, MAX_SERIALIZED_PROPOSAL_BYTES, "proposal").expect("resolved");
         let preview = resolved.preview().expect("preview");
         assert!(preview.steps.iter().all(
-            |step| step.status == sagascript_core::meeting_reprocess::MigrationStatus::Applied
+            |step| step.status == sagascript_core::meeting::reprocess::MigrationStatus::Applied
         ));
 
         write_fixture(&current_path, &previous);

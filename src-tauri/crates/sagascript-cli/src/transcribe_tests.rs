@@ -15,9 +15,9 @@ use super::progress::*;
 use super::vocab_correction::*;
 use super::*;
 #[cfg(feature = "diarization")]
-use sagascript_core::diarization::DiarizedSegment;
+use sagascript_core::diarization::report::DecoderEvidence;
 #[cfg(feature = "diarization")]
-use sagascript_core::diarization_report::DecoderEvidence;
+use sagascript_core::diarization::DiarizedSegment;
 use sagascript_core::settings::FileModel;
 use sagascript_core::settings::{FileModelPreference, HotkeyProfile};
 use sagascript_core::transcription::diagnostics::LanguageDetection;
@@ -1422,7 +1422,7 @@ mod diarize_threshold_tests {
             .unwrap();
         assert_eq!(
             speaker_hint_from_args(&cli.args).unwrap(),
-            Some(sagascript_core::speaker_hint::SpeakerCountHint::exact(3))
+            Some(sagascript_core::diarization::speaker_hint::SpeakerCountHint::exact(3))
         );
         let none = TestCli::try_parse_from(["sagascript", "f.wav", "--diarize"]).unwrap();
         assert_eq!(speaker_hint_from_args(&none.args).unwrap(), None);

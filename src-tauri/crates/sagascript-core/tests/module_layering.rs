@@ -6,12 +6,12 @@
 //!        ^
 //!     settings       reads the model catalog; the machine is injected
 //!        ^
-//!  transcription     reads settings (the engine host config)
+//!  transcription     takes settings from its callers (the engine host config)
 //!        ^
 //!     machine        composes settings with transcription's probes
 //! ```
 //!
-//! # The one upward line, and why it exists
+//! # The one upward line
 //!
 //! `settings/store.rs` re-exports `machine::{load, update, try_update}`:
 //!
@@ -20,17 +20,18 @@
 //! ```
 //!
 //! It is a shim for the old paths `settings::store::{load, update, try_update}`,
-//! which the CLI and the app still call, and it is an edge from settings up to
-//! the layer that imports transcription. Behind it is a second, runtime edge:
-//! `transcription::pianissimo_backend::{engine_config, shared_client}` call
-//! `settings::store::load()`, so transcription reaches `machine::load()` and
-//! `machine` reaches transcription's probes again. Removing the line is a
-//! deliberate step, not a clean-up: first the CLI and the app call
-//! `machine::*`, and those two functions receive the `Settings` they read
-//! (which changes *when* the settings are read: behaviour, so a separate
-//! change). Then the expected list in the last layering test becomes empty.
-//! Until then it must name exactly these three paths, so no other `machine`
-//! import can slip in beside them.
+//! kept for one release for callers outside the workspace (nothing in it uses
+//! them: `nothing_in_the_workspace_uses_a_compatibility_path`), and it is an edge
+//! from settings up to the layer that imports transcription. It is no longer a
+//! loop at run time: `transcription::pianissimo_backend::{engine_config,
+//! shared_client}` used to call `settings::store::load()`, so transcription
+//! reached `machine::load()` and `machine` reached transcription's probes
+//! again. They now receive the `Settings` (or, for the two deferred callers, the
+//! function that loads them), and only `settings/` and `machine.rs` name the
+//! store at all (`only_settings_and_the_machine_name_the_store`, with the test seam). Until the line
+//! is deleted, `only_the_compat_shim_in_the_store_names_the_machine_module` lets
+//! it name exactly these three paths, so no other `machine` import can slip in
+//! beside them.
 //!
 //! # What the scan sees
 //!
@@ -421,6 +422,258 @@ fn only_the_compat_shim_in_the_store_names_the_machine_module() {
     );
 }
 
+/// Whether `path` is `crate::a::b..` or the bare `a::b..` for the given modules.
+fn names_path(path: &str, modules: &[&str]) -> bool {
+    let mut segments = path.split("::").peekable();
+    if segments.peek() == Some(&"crate") {
+        segments.next();
+    }
+    modules
+        .iter()
+        .all(|module| segments.next() == Some(*module))
+}
+
+/// Settings are loaded by their callers, never by the code that needs them to
+/// configure itself: outside `settings/`, `machine.rs` (which composes the
+/// store with this machine's probes) and `testing.rs` (the seam into
+/// `store::load_at`) no module of core names the store. That is
+/// what `transcription` did in `pianissimo_backend` until #372 part 2b, which
+/// closed a loop at run time through `machine`.
+#[test]
+fn only_settings_and_the_machine_name_the_store() {
+    let found: Vec<_> = tree_paths("")
+        .into_iter()
+        .filter(|(file, path)| {
+            !file.starts_with("settings/")
+                && !["machine.rs", "machine_tests.rs", "testing.rs"].contains(&file.as_str())
+                && names_path(path, &["settings", "store"])
+        })
+        .collect();
+    assert!(
+        found.is_empty(),
+        "the settings store is named only by settings/ and machine.rs; take a `&Settings` from the \
+         caller (which loads it with `machine::load`) instead:\n{}",
+        report(&found)
+    );
+}
+
+/// `crate::testing` is for tests outside the crate's own source: no module of
+/// core depends on it.
+#[test]
+fn nothing_in_core_depends_on_the_test_seams() {
+    let found: Vec<_> = tree_paths("")
+        .into_iter()
+        .filter(|(file, path)| file != "testing.rs" && names_module(path, "testing"))
+        .collect();
+    assert!(
+        found.is_empty(),
+        "the `testing` module is a way in for tests; the modules it calls into keep their own \
+         `pub(crate)` seams for unit tests:\n{}",
+        report(&found)
+    );
+}
+
+/// The optional crates of the `diarization` feature (ONNX Runtime, clustering,
+/// arrays, FFT). Only `diarization/engine/` is compiled with them; everything
+/// else in `diarization/` (report, merge, model, eval, speaker_hint) builds
+/// without the feature, which `cargo build -p sagascript-core
+/// --no-default-features` and the lean CLI depend on.
+const ENGINE_ONLY_CRATES: [&str; 4] = ["ort", "kodama", "ndarray", "rustfft"];
+
+/// Whether `path` starts at one of [`ENGINE_ONLY_CRATES`] (`ort::session::Session`,
+/// the expansion of `use ::ndarray::{..}`, a macro path `ndarray::array`).
+fn names_engine_only_crate(path: &str) -> bool {
+    let first = path.trim_start_matches("::").split("::").next();
+    first.is_some_and(|name| ENGINE_ONLY_CRATES.contains(&name))
+}
+
+#[test]
+fn only_the_diarization_engine_names_its_optional_crates() {
+    let found: Vec<_> = tree_paths("")
+        .into_iter()
+        .filter(|(file, path)| {
+            !file.starts_with("diarization/engine/") && names_engine_only_crate(path)
+        })
+        .collect();
+    assert!(
+        found.is_empty(),
+        "`ort`, `kodama`, `ndarray` and `rustfft` are optional dependencies of the `diarization` \
+         feature, so only diarization/engine/ (the one part behind the feature) may name them; \
+         the rest of core must build without them:\n{}",
+        report(&found)
+    );
+}
+
+// ---- the compatibility paths have no users -------------------------------
+
+/// The old names `lib.rs` re-exports (`pub use crate::path as name;`, or the
+/// last segment without an `as`). Read from the source, so a new compatibility
+/// line is covered the day it is added and a removed one leaves the scan.
+fn lib_shims() -> Vec<String> {
+    let lib = fs::read_to_string(src().join("lib.rs")).unwrap();
+    let shims: Vec<String> = lib
+        .lines()
+        .map(str::trim)
+        .filter_map(|line| line.strip_prefix("pub use crate::"))
+        .map(|rest| rest.trim_end_matches(';').trim())
+        .map(|path| match path.split_once(" as ") {
+            Some((_, alias)) => alias.trim(),
+            None => path.rsplit("::").next().unwrap(),
+        })
+        .map(str::to_string)
+        .collect();
+    assert!(
+        !shims.is_empty(),
+        "lib.rs has no `pub use crate::..;` lines; if the last compatibility path is gone, \
+         delete this check and the scan that uses lib_shims()"
+    );
+    shims
+}
+
+/// The functions `settings/store.rs` re-exports from `machine`: the old
+/// `settings::store::{load, update, try_update}`.
+fn store_shims() -> Vec<String> {
+    let store = fs::read_to_string(src().join("settings/store.rs")).unwrap();
+    paths(&store)
+        .into_iter()
+        .filter_map(|path| path.strip_prefix("crate::machine::").map(str::to_string))
+        .collect()
+}
+
+/// What the scan of one file needs to know about the compatibility paths.
+struct Shims {
+    /// Old top-level module names (`meeting_review`, `speaker_hint`, ..).
+    modules: Vec<String>,
+    /// Old function names under `settings::store` (`load`, `update`, ..).
+    store_functions: Vec<String>,
+}
+
+fn shims() -> Shims {
+    Shims {
+        modules: lib_shims(),
+        store_functions: store_shims(),
+    }
+}
+
+/// The compatibility paths a source file names, as `path` strings.
+///
+/// `in_core` is a file of `sagascript-core/src`, where the old module names are
+/// reached as `crate::name` (a bare `speaker_hint::..` is the real module in
+/// `diarization/`); any other file reaches core as `sagascript_core::name`, and
+/// a bare `meeting_media::..` there is the app's own module of that name.
+///
+/// A path counts when it is:
+/// - `crate::<old module>..` (core) or `sagascript_core::<old module>..`;
+/// - `settings::store::<load|update|try_update>` however the prefix is spelt,
+///   or `store::<..>` in a file that imports `sagascript_core::settings::store`;
+/// - a rename of the store module itself (`.. store as s`), which would hide
+///   the later calls from the second rule.
+///
+/// Not seen: `use sagascript_core as core;` and the like; nobody renames the crate.
+fn compat_uses(source: &str, in_core: bool, shims: &Shims) -> Vec<String> {
+    let all = paths(source);
+    let imports_store = all
+        .iter()
+        .any(|path| path == "sagascript_core::settings::store" || path == "crate::settings::store");
+    let mut found = Vec::new();
+    for path in &all {
+        let segments: Vec<&str> = path.split("::").collect();
+        let module_prefix = if in_core { "crate" } else { "sagascript_core" };
+        let old_module = segments.first() == Some(&module_prefix)
+            && segments
+                .get(1)
+                .is_some_and(|name| shims.modules.iter().any(|shim| shim == name));
+        let store_function = |from: usize| {
+            segments.get(from) == Some(&"store")
+                && segments
+                    .get(from + 1)
+                    .is_some_and(|name| shims.store_functions.iter().any(|shim| shim == name))
+        };
+        let old_store_function = (store_function(0) && imports_store)
+            || (1..segments.len())
+                .any(|from| segments[from - 1] == "settings" && store_function(from));
+        if old_module || old_store_function {
+            found.push(path.clone());
+        }
+    }
+    let tokens = tokens(&code_only(source));
+    let renamed_store = imports_store
+        && tokens.windows(2).any(|pair| {
+            matches!(pair, [Token::Ident(first), Token::Ident(second)] if first == "store" && second == "as")
+        });
+    if renamed_store {
+        found.push("settings::store as <alias>".to_string());
+    }
+    found
+}
+
+/// Every `.rs` file of the workspace that is Rust the repository maintains:
+/// the app (`src-tauri/src`) and the member crates (`src-tauri/crates`), as
+/// `(path relative to src-tauri with / separators, text)`.
+fn workspace_sources() -> Vec<(String, String)> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut files = Vec::new();
+    rust_files(&root.join("src"), &mut files);
+    rust_files(&root.join("crates"), &mut files);
+    files.sort();
+    files
+        .into_iter()
+        .filter(|path| !path.components().any(|part| part.as_os_str() == "target"))
+        .map(|path| {
+            let name = path
+                .strip_prefix(&root)
+                .unwrap()
+                .to_string_lossy()
+                .replace('\\', "/");
+            let text = fs::read_to_string(&path).unwrap();
+            (name, text)
+        })
+        .collect()
+}
+
+/// The files that define the compatibility paths; everything else must not use them.
+const SHIM_DEFINITIONS: [&str; 2] = [
+    "crates/sagascript-core/src/lib.rs",
+    "crates/sagascript-core/src/settings/store.rs",
+];
+
+/// Core files that still use a compatibility path, until their own change lands:
+/// `(file, path)`. Empty: nothing is left.
+const STILL_USING_A_COMPAT_PATH: [(&str, &str); 0] = [];
+
+/// "No internal users" (#372, part 2b): the CLI, the app, the tests and the
+/// rest of core name the new paths, so a compatibility path can be deleted
+/// without touching them and a new caller cannot start leaning on one.
+#[test]
+fn nothing_in_the_workspace_uses_a_compatibility_path() {
+    let shims = shims();
+    let mut found = Vec::new();
+    for (name, text) in workspace_sources() {
+        if SHIM_DEFINITIONS.contains(&name.as_str()) {
+            continue;
+        }
+        let in_core = name.starts_with("crates/sagascript-core/src/");
+        for path in compat_uses(&text, in_core, &shims) {
+            found.push((name.clone(), path));
+        }
+    }
+    found.sort();
+    found.dedup();
+    let expected: Vec<(String, String)> = STILL_USING_A_COMPAT_PATH
+        .iter()
+        .map(|(file, path)| (file.to_string(), path.to_string()))
+        .collect();
+    assert_eq!(
+        found,
+        expected,
+        "a compatibility path (an old `sagascript_core::meeting_review`-style module name from \
+         lib.rs, or `settings::store::{{load, update, try_update}}`) is used outside the files \
+         that define it. Use the new path: `meeting::..`, `diarization::..` or \
+         `machine::{{load, update, try_update}}`. The files that define them are exempt: {}",
+        SHIM_DEFINITIONS.join(", ")
+    );
+}
+
 // ---- the scan itself -----------------------------------------------------
 
 fn sorted(mut paths: Vec<String>) -> Vec<String> {
@@ -520,4 +773,197 @@ fn a_grouped_or_renamed_import_of_a_forbidden_module_is_seen() {
     let bare = paths("use crate::*;\nfn f() { machine::load(); }\n");
     assert!(bare.iter().any(|path| names_module(path, "machine")));
     assert!(bare.iter().any(|path| reaches_the_root(path)));
+}
+
+// ---- the scan for compatibility paths itself -------------------------------
+
+fn test_shims() -> Shims {
+    Shims {
+        modules: ["meeting_review", "speaker_hint", "diarization_report"]
+            .map(str::to_string)
+            .to_vec(),
+        store_functions: ["load", "update", "try_update"]
+            .map(str::to_string)
+            .to_vec(),
+    }
+}
+
+fn uses(source: &str, in_core: bool) -> Vec<String> {
+    sorted(compat_uses(source, in_core, &test_shims()))
+}
+
+/// The mutation of the real check: each of these makes it red.
+#[test]
+fn a_use_of_an_old_module_or_store_path_is_seen_however_it_is_spelt() {
+    // Plain, grouped, nested and renamed imports of an old module.
+    assert_eq!(
+        uses("use sagascript_core::meeting_review::MeetingReview;", false),
+        strings(&["sagascript_core::meeting_review::MeetingReview"])
+    );
+    assert_eq!(
+        uses(
+            "use sagascript_core::{meeting_review as r, diarization_report::{DecoderEvidence, self}};",
+            false
+        ),
+        strings(&[
+            "sagascript_core::diarization_report",
+            "sagascript_core::diarization_report::DecoderEvidence",
+            "sagascript_core::meeting_review",
+        ])
+    );
+    // In code, without an import.
+    assert_eq!(
+        uses(
+            "fn f() -> sagascript_core::speaker_hint::SpeakerCountHint { todo!() }",
+            false
+        ),
+        strings(&["sagascript_core::speaker_hint::SpeakerCountHint"])
+    );
+    // Inside core the old name is `crate::name`.
+    assert_eq!(
+        uses("use crate::speaker_hint::SpeakerCountHint;", true),
+        strings(&["crate::speaker_hint::SpeakerCountHint"])
+    );
+    // The store functions: full path, through `settings`, through `store`.
+    assert_eq!(
+        uses(
+            "fn f() { sagascript_core::settings::store::load(); }",
+            false
+        ),
+        strings(&["sagascript_core::settings::store::load"])
+    );
+    assert_eq!(
+        uses(
+            "use sagascript_core::settings;\nfn f() { settings::store::try_update(|_| {}); }",
+            false
+        ),
+        strings(&["settings::store::try_update"])
+    );
+    assert_eq!(
+        uses(
+            "use sagascript_core::settings::{store, Settings};\nfn f() { store::update(|_| {}); }",
+            false
+        ),
+        strings(&["store::update"])
+    );
+    assert_eq!(
+        uses(
+            "use sagascript_core::settings::store::{load, save_to};",
+            false
+        ),
+        strings(&["sagascript_core::settings::store::load"])
+    );
+    // A rename of the module hides the calls, so the rename is the finding.
+    let renamed = uses(
+        "use sagascript_core::settings::store as s;\nfn f() { s::load(); }",
+        false,
+    );
+    assert_eq!(renamed, strings(&["settings::store as <alias>"]));
+}
+
+#[test]
+fn the_new_paths_and_unrelated_names_are_not_compatibility_uses() {
+    for source in [
+        // The new paths.
+        "use sagascript_core::meeting::review::MeetingReview;",
+        "use sagascript_core::diarization::speaker_hint::SpeakerCountHint;",
+        "use sagascript_core::machine::{load, update};",
+        // The app's own module of the same name, and a field of the same name.
+        "mod meeting_review; use crate::meeting_review::x; use meeting_review::y;",
+        "struct S { speaker_hint: u8 } fn f(s: S) -> u8 { s.speaker_hint }",
+        // Inside core, `speaker_hint` is the module of `diarization/`.
+        "pub use speaker_hint::{SpeakerCountHint, SpeakerHintOutcome};",
+        // Store functions that are not the old three, and `store` of another crate.
+        "use sagascript_core::settings::store;\nfn f() { store::load_from(p); store::load_with(m); }",
+        "fn f() { other::store::load(); store::update(1); }",
+    ] {
+        assert!(uses(source, false).is_empty(), "wrongly flagged: {source}");
+    }
+    assert!(uses("pub use speaker_hint::SpeakerCountHint;", true).is_empty());
+    // Comments and strings (the contract scanner's fixtures) are not code.
+    let text = "// sagascript_core::speaker_hint::X\n\
+                /// settings::store::load\n\
+                fn f() { let _ = \"sagascript_core::meeting_review::M\"; \
+                let _ = r#\"use sagascript_core::settings::store::update;\"#; }\n";
+    assert!(uses(text, false).is_empty());
+}
+
+#[test]
+fn the_compatibility_scan_reads_crlf_like_lf() {
+    let lf = "use sagascript_core::{\n    meeting_review::MeetingReview,\n    machine,\n};\n\
+              use sagascript_core::settings::store;\nfn f() {\n    store::load();\n}\n";
+    let crlf = lf.replace('\n', "\r\n");
+    let found = uses(&crlf, false);
+    assert_eq!(found, uses(lf, false));
+    assert_eq!(
+        found,
+        strings(&[
+            "sagascript_core::meeting_review::MeetingReview",
+            "store::load"
+        ])
+    );
+}
+
+/// `lib.rs` is the source of the module list: its lines in either spelling.
+#[test]
+fn the_shim_lists_come_from_lib_rs_and_the_store() {
+    let modules = lib_shims();
+    for name in ["meeting_review", "speaker_hint", "diarization_report"] {
+        assert!(
+            modules.iter().any(|shim| shim == name),
+            "{name} in {modules:?}"
+        );
+    }
+    assert_eq!(
+        sorted(store_shims()),
+        strings(&["load", "try_update", "update"])
+    );
+}
+
+#[test]
+fn the_engine_only_crates_are_found_however_they_are_imported_or_called() {
+    let source = "use ort::session::Session;\n\
+                  use ::ndarray::{Array2, s as slice};\n\
+                  use kodama as k;\n\
+                  use std::{fmt, rustfft::x};\n\
+                  fn f() { let _ = rustfft::FftPlanner::<f32>::new(); let _ = ndarray::array![1]; }\n";
+    let hits: Vec<String> = sorted(
+        paths(source)
+            .into_iter()
+            .filter(|path| names_engine_only_crate(path))
+            .collect(),
+    );
+    assert_eq!(
+        hits,
+        strings(&[
+            "kodama",
+            "ndarray::Array2",
+            "ndarray::array",
+            "ndarray::s",
+            "ort::session::Session",
+            "rustfft::FftPlanner",
+        ])
+    );
+}
+
+#[test]
+fn the_engine_only_crates_scan_ignores_comments_strings_and_similar_names() {
+    let source = "// use ndarray::Array2;\n\
+                  /// `ort::session::Session` and `rustfft::FftPlanner`\n\
+                  fn f(support: u8) -> &'static str {\n\
+                  \tlet _ = crate::diarization::engine::cluster;\n\
+                  \tlet _ = report::ort_free::x; let _ = other::kodama_like::y; let _ = shorts::ort;\n\
+                  \t\"ndarray::Array2\"\n\
+                  }\n";
+    assert!(paths(source)
+        .into_iter()
+        .all(|path| !names_engine_only_crate(&path)));
+}
+
+#[test]
+fn the_engine_only_crates_scan_reads_crlf_like_lf() {
+    let lf = "use ndarray::{\n    Array2,\n};\nfn f() {\n    let _ = ort::x();\n}\n";
+    let crlf = lf.replace('\n', "\r\n");
+    assert_eq!(paths(lf), paths(&crlf));
+    assert!(paths(&crlf).iter().any(|p| names_engine_only_crate(p)));
 }

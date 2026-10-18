@@ -29,7 +29,7 @@ pub const SUPPORTED_EXTENSIONS: &[&str] = &[
 /// clip is rejected the same whether it's mono 16kHz or stereo 48kHz. This is
 /// deliberately generous: no legitimate multi-hour podcast batch-
 /// transcription job should ever hit it.
-pub const MAX_DECODE_SAMPLES: usize = 4 * 3600 * 16_000; // ~230M, ~4h @ 16kHz mono equivalent
+pub(crate) const MAX_DECODE_SAMPLES: usize = 4 * 3600 * 16_000; // ~230M, ~4h @ 16kHz mono equivalent
 
 /// Check whether the accumulated decode so far has exceeded
 /// [`MAX_DECODE_SAMPLES`], normalized to a 16kHz-mono-equivalent duration.
@@ -319,7 +319,7 @@ pub fn decode_audio_file_with_control(
 /// and container overhead means packet bytes asymptote below 100 (the caller
 /// snaps to 100 on clean EOF). `total == 0` (unknown size) yields 0 and the
 /// caller must not display any percent at all.
-pub fn decode_percent(consumed_bytes: u64, total_bytes: u64) -> u8 {
+pub(crate) fn decode_percent(consumed_bytes: u64, total_bytes: u64) -> u8 {
     if total_bytes == 0 {
         return 0;
     }

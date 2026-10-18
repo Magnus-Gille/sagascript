@@ -29,16 +29,16 @@ fn startup_load(path: &Path) -> Settings {
 /// [`try_update`] of `path` (no legacy locations) on a machine with
 /// Pianissimo supported and every model downloaded.
 #[cfg(test)]
-fn try_update_at<F>(path: &Path, mutate: F) -> Result<Settings, String>
+fn try_update_at<F>(path: &Path, mutate: F) -> Result<Settings, SettingsError>
 where
-    F: FnOnce(&mut Settings) -> Result<(), String>,
+    F: FnOnce(&mut Settings) -> Result<(), SettingsError>,
 {
     update_locked(path, std::iter::empty(), &ready_machine(), mutate)
 }
 
 /// [`update`] as [`try_update_at`] runs it.
 #[cfg(test)]
-fn update_at<F>(path: &Path, mutate: F) -> Result<Settings, String>
+fn update_at<F>(path: &Path, mutate: F) -> Result<Settings, SettingsError>
 where
     F: FnOnce(&mut Settings),
 {
@@ -687,7 +687,7 @@ fn concurrent_first_run_update_waits_for_atomic_migration() {
     let migration_destination = destination.clone();
     let migration_legacy = legacy.clone();
     let migration = thread::spawn(move || {
-        with_settings_lock(&migration_destination, || {
+        with_settings_lock::<(), SettingsError, _>(&migration_destination, || {
             migrate_legacy_identifier_settings_locked(&migration_destination, [migration_legacy]);
             migration_locked_tx.send(()).unwrap();
             release_migration_rx.recv().unwrap();
@@ -713,7 +713,7 @@ fn concurrent_first_run_update_waits_for_atomic_migration() {
             "migration must still hold the settings lock"
         );
         update_blocked_tx.send(()).unwrap();
-        update_locked(
+        update_locked::<SettingsError, _>(
             &update_destination,
             [update_legacy],
             &ready_machine(),
@@ -820,7 +820,9 @@ fn dictionary_compare_and_set_survives_external_file_round_trip() {
                     &first.profile_glossaries["swedish"],
                 )
             {
-                return Err("Spurious dictionary conflict after file round trip".into());
+                return Err(SettingsError::storage(
+                    "Spurious dictionary conflict after file round trip",
+                ));
             }
             assert_eq!(
                 settings.profile_glossaries.get("empty").map(String::as_str),
@@ -1022,9 +1024,9 @@ fn fallible_update_does_not_persist_a_rejected_mutation() {
         save_to(&path, &Settings::default()).unwrap();
         let result = try_update_at(&path, |settings| {
             settings.hotkey = "invalid".to_string();
-            Err("rejected".to_string())
+            Err(SettingsError::storage("rejected"))
         });
-        assert_eq!(result.unwrap_err(), "rejected");
+        assert_eq!(result.unwrap_err(), SettingsError::storage("rejected"));
         assert_eq!(load_from(&path).hotkey, Settings::default().hotkey);
     });
 }
@@ -1535,6 +1537,39 @@ fn schema_error_preserves_original_bytes_before_field_update() {
     });
 }
 
+/// When the rewrite fails after the invalid file was copied, the error says
+/// which copy holds the original and where it lies without a folder: the app
+/// scrubs a folder out of an error's text.
+#[test]
+fn a_failed_rewrite_names_the_recovery_copy_without_its_folder() {
+    with_temp_settings(|path| {
+        fs::write(&path, SCHEMA_INVALID_SETTINGS).unwrap();
+
+        let error = update_at(&path, |settings| {
+            settings
+                .profile_glossaries
+                .insert("../escape".into(), "words".into());
+        })
+        .unwrap_err()
+        .to_string();
+
+        let copy = recovery_copy_path(&path, 0);
+        assert_file_bytes(&copy, SCHEMA_INVALID_SETTINGS);
+        let name = copy.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(
+            error.ends_with(&format!(
+                "(the invalid original settings file is preserved as {name}, next to the settings file)"
+            )),
+            "{error}"
+        );
+        let folder = path.parent().unwrap().to_string_lossy().into_owned();
+        assert!(
+            !error.contains(&folder),
+            "no folder in the message: {error}"
+        );
+    });
+}
+
 #[test]
 fn repeated_invalid_files_never_overwrite_an_earlier_recovery_copy() {
     with_temp_settings(|path| {
@@ -1579,7 +1614,9 @@ fn failed_recovery_copy_refuses_the_write() {
             fs::write(&path, original).unwrap();
             let _failing = FailRecoveryCopy::enable();
 
-            let error = update_at(&path, |settings| settings.beam_size = 9).unwrap_err();
+            let error = update_at(&path, |settings| settings.beam_size = 9)
+                .unwrap_err()
+                .to_string();
             assert!(error.contains("refusing to overwrite"), "{error}");
             assert!(try_update_at(&path, |settings| {
                 settings.beam_size = 9;
@@ -1607,7 +1644,7 @@ fn unreadable_settings_file_is_never_overwritten() {
         fs::write(path.join("keep"), b"original").unwrap();
         // Create the lock file up front so the listing only changes if
         // something is written.
-        with_settings_lock(&path, || Ok(())).unwrap();
+        with_settings_lock::<(), SettingsError, _>(&path, || Ok(())).unwrap();
         let before = dir_names(&dir);
 
         let save_error = save_to(&path, &Settings::default()).unwrap_err();
@@ -1619,6 +1656,7 @@ fn unreadable_settings_file_is_never_overwritten() {
         })
         .unwrap_err();
         for error in [save_error, update_error, try_update_error] {
+            let error = error.to_string();
             assert!(
                 error.contains("could not be read") && error.contains("refusing to overwrite"),
                 "{error}"
@@ -1638,7 +1676,9 @@ fn unreadable_settings_file_is_never_overwritten() {
         if fs::read(&path).is_ok() {
             return; // Running as root: permissions do not block reads.
         }
-        let error = update_at(&path, |settings| settings.beam_size = 9).unwrap_err();
+        let error = update_at(&path, |settings| settings.beam_size = 9)
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("refusing to overwrite"), "{error}");
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
         assert_file_bytes(&path, br#"{"language":"sv"}"#);
@@ -1871,7 +1911,9 @@ mod private_atomic_write {
                 "injected",
             ))
         };
-        let error = install_replacement(&path, dir.path(), b"new", "settings", &fail).unwrap_err();
+        let error = install_replacement(&path, dir.path(), b"new", "settings", &fail)
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("preserve settings permissions"), "{error}");
         assert_eq!(fs::read(&path).unwrap(), b"original");
         assert_eq!(names(dir.path()), vec!["settings.json"]);

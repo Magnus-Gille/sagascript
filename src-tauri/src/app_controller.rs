@@ -133,7 +133,11 @@ impl AppController {
         self.update_activity = update_activity;
     }
 
-    pub fn set_update_result_pending(&self, result_id: &str, pending: bool) -> Result<(), String> {
+    pub fn set_update_result_pending(
+        &self,
+        result_id: &str,
+        pending: bool,
+    ) -> Result<(), crate::update_activity::ActivityError> {
         self.update_activity.set_result_pending(result_id, pending)
     }
 
@@ -144,7 +148,10 @@ impl AppController {
     /// Acknowledge exactly the result the UI delivered. Hold the controller
     /// lock across text comparison and activity update so a newer result cannot
     /// arrive between them.
-    pub fn acknowledge_update_result(&self, expected_text: &str) -> Result<bool, String> {
+    pub fn acknowledge_update_result(
+        &self,
+        expected_text: &str,
+    ) -> Result<bool, crate::update_activity::ActivityError> {
         if self.last_transcription() != Some(expected_text)
             || !self.is_update_result_pending("live-dictation")
         {
@@ -219,12 +226,15 @@ impl AppController {
     }
 
     /// Handle hotkey down event
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     pub fn handle_hotkey_down(&mut self) -> Result<HotkeyDownResult, DictationError> {
         let profile = self.settings.default_profile();
         self.handle_hotkey_down_for_profile(profile)
     }
 
+    /// A press of `profile`'s own shortcut in the session mode (tests; the app resolves
+    /// the binding and calls [`Self::handle_hotkey_down_for_binding`]).
+    #[cfg(test)]
     pub fn handle_hotkey_down_for_profile(
         &mut self,
         profile: HotkeyProfile,
@@ -453,7 +463,7 @@ impl AppController {
         let session_model = match self
             .settings
             .dictation_model_for_profile(&profile.id)
-            .map_err(DictationError::SettingsError)?
+            .map_err(DictationError::from)?
         {
             FileModel::Whisper(model) => serde_json::to_value(model)
                 .map_err(|error| DictationError::SettingsError(error.to_string()))?,
@@ -463,7 +473,7 @@ impl AppController {
         let work_lease = self
             .update_activity
             .begin_work()
-            .map_err(DictationError::TranscriptionFailed)?;
+            .map_err(|error| DictationError::TranscriptionFailed(error.to_string()))?;
 
         let next_generation = self.recording_generation.checked_add(1).ok_or_else(|| {
             DictationError::TranscriptionFailed(

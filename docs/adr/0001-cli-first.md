@@ -55,9 +55,10 @@ siblings, `settings/ops.rs`) and both surfaces call it; the decision for each op
   CLI builds on platforms the GUI does not target.
 - Two surfaces can still drift in what they do around an operation. The parity table
   (`core::test_support::settings_ops_table`, run by the CLI and by the app) fails when a surface
-  persists something else than the shared operation for any settings row; a new operation gets a
-  row ([add-setting.md](../recipes/add-setting.md)). Operations outside the table (dictionaries,
-  model lists, the part 2 of #373) are still checked by hand.
+  persists something else than the shared operation for any settings row, dictionary edit,
+  `config reset` or file with steps pending; a new operation gets a row
+  ([add-setting.md](../recipes/add-setting.md)). The model lists need no row: `list-models` and the
+  app's pickers are built from the same `models::catalog` / `app_picker` (#373 part 2).
 - The app depends on the CLI crate, also for meeting pipelines, which pulls clap and friends
   into the GUI; #374 moves those pipelines to core.
 - A new setting is one entry in the CLI's key table (`config/keys.rs`); the key-count test

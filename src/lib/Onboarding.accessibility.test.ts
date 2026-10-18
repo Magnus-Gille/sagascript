@@ -95,7 +95,7 @@ describe("the Accessibility step", () => {
     const { user } = await reachAccessibilityStep(
       backend({
         request_accessibility_permission: () => {
-          throw "System Settings did not open";
+          throw backendError("launch_failed", "System Settings did not open");
         },
       }),
     );
@@ -111,7 +111,7 @@ describe("the Accessibility step", () => {
     const { ipc, user } = await reachAccessibilityStep(
       backend({
         check_accessibility_permission: () => {
-          if (failing) throw "TCC database unavailable";
+          if (failing) throw backendError("unavailable", "TCC database unavailable");
           return false;
         },
       }),

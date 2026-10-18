@@ -5,12 +5,12 @@ use std::collections::HashSet;
 use std::time::Instant;
 
 use sagascript_core::diarization::merge::consolidate;
+use sagascript_core::diarization::report::DiarizationReport;
+use sagascript_core::diarization::speaker_hint::{SpeakerCountHint, SpeakerHintOutcome};
 use sagascript_core::diarization::DiarizedSegment;
-use sagascript_core::diarization_report::DiarizationReport;
 use sagascript_core::error::DictationError;
 use sagascript_core::meeting::MeetingTranscript;
 use sagascript_core::settings::Language;
-use sagascript_core::speaker_hint::{SpeakerCountHint, SpeakerHintOutcome};
 use sagascript_core::transcription::diagnostics::{analyze_coverage_profile, CoverageProfile};
 use sagascript_core::transcription::{
     normalize_nonspeech_markers, Glossary, GlossaryCorrection, TranscriptSegment,

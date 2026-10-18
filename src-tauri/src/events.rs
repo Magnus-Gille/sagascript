@@ -33,8 +33,8 @@ pub trait EmitEvent<R: Runtime>: Emitter<R> {
     }
 
     /// Sends to the webview window with this label only (`"settings"`).
-    // The macOS signed updater is its only caller.
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    // The macOS signed updater is its only caller (updater/signed.rs).
+    #[cfg(target_os = "macos")]
     #[allow(clippy::disallowed_methods)]
     fn emit_event_to<E: Event>(
         &self,
@@ -281,6 +281,7 @@ pub mod event {
         /// Sent to the Settings window only: save recovery drafts, then call
         /// `complete_update_preparation` with this nonce. Producer: the macOS
         /// signed updater (updater/signed.rs). Consumer: Settings.svelte.
+        // Built only by the macOS updater; the catalogue (and the IPC contract) lists it on every platform.
         #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
         UPDATE_PREPARING: UpdatePreparing = "update-preparing",
             payload<'a> = &'a str,
@@ -290,6 +291,7 @@ pub mod event {
         /// Sent to the Settings window only: the update stopped after
         /// preparation; the payload is the error message. Producer and
         /// consumer as for `update-preparing`.
+        // Same as `update-preparing`: built only by the macOS updater.
         #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
         UPDATE_ABORTED: UpdateAborted = "update-aborted",
             payload<'a> = &'a str,

@@ -17,7 +17,7 @@ import {
 import type { MeetingTranscript } from "./meeting-types";
 import { PIANISSIMO_ID } from "./models.svelte";
 import { deferred, settle } from "../test/deferred";
-import type { CommandHandlers, IpcMock } from "../test/ipc";
+import { backendError, type CommandHandlers, type IpcMock } from "../test/ipc";
 import { renderSettings, settingsBackend } from "../test/settings";
 
 /** The `update-aborted` payload Rust sends: the error message (events.rs). */
@@ -176,7 +176,7 @@ describe("restoring drafts after an update", () => {
         // Only the startup read fails: the update stays blocked even if the
         // file reads fine later.
         load_update_recovery: () => {
-          if (++reads === 1) throw "invalid JSON at line 1";
+          if (++reads === 1) throw backendError("io_error", "invalid JSON at line 1");
           return file.current;
         },
       }),
@@ -185,7 +185,7 @@ describe("restoring drafts after an update", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Update blocked: unreadable recovery drafts were retained. invalid JSON at line 1. Back up or repair update-recovery.json in Sagascript's app data folder, then restart Sagascript before retrying.",
     );
-    expect(warn).toHaveBeenCalledWith("Could not restore update recovery drafts", "invalid JSON at line 1");
+    expect(warn).toHaveBeenCalledWith("Could not restore update recovery drafts", backendError("io_error", "invalid JSON at line 1"));
 
     // The failed read stays a failure for the updater (and is never an
     // unhandled rejection, which would fail this test run).
@@ -448,7 +448,7 @@ describe("preparing for an update", () => {
     ipc.emit("update-preparing", "nonce-1");
     await waitFor(() => expect(ipc.callsTo("save_update_recovery")).toHaveLength(1));
     ipc.emit("update-preparing", "nonce-2");
-    firstWrite.reject("disk full");
+    firstWrite.reject(backendError("io_error", "disk full"));
     await waitFor(() => expect(ipc.callsTo("complete_update_preparation")).toEqual([{ nonce: "nonce-2", error: null }]));
     await settle();
     expect(ipc.callsTo("complete_update_preparation")).toEqual([{ nonce: "nonce-2", error: null }]);
@@ -462,7 +462,7 @@ describe("preparing for an update", () => {
     await userEvent.setup().type(editor(), "Egen anteckning");
 
     ipc.handle("save_update_recovery", () => {
-      throw "disk full";
+      throw backendError("io_error", "disk full");
     });
     expect(await prepareForUpdate(ipc, "nonce-1")).toEqual({ nonce: "nonce-1", error: "disk full" });
     await waitFor(() => expect(editor()).toBeEnabled());
@@ -472,7 +472,7 @@ describe("preparing for an update", () => {
     ipc.emit("update-preparing", "nonce-2");
     await waitFor(() => expect(ipc.callsTo("save_update_recovery")).toHaveLength(2));
     ipc.emit("update-aborted", UPDATE_FAILED);
-    write.reject("disk full");
+    write.reject(backendError("io_error", "disk full"));
     await settle();
     expect(ipc.callsTo("complete_update_preparation")).toEqual([{ nonce: "nonce-1", error: "disk full" }]);
   });
@@ -654,13 +654,13 @@ describe("cleaning up delivered drafts", () => {
     const { ipc } = await renderSettings(backend(file));
     const user = userEvent.setup();
     ipc.handle("load_update_recovery", () => {
-      throw "permission denied";
+      throw backendError("io_error", "permission denied");
     });
 
     await user.click(screen.getByRole("button", { name: "Copy result" }));
     expect(await screen.findByText("Copied to clipboard.")).toBeInTheDocument();
     expect(await screen.findByRole("alert")).toHaveTextContent(repair);
-    expect(warn).toHaveBeenCalledWith("Could not clear delivered update recovery draft", "permission denied");
+    expect(warn).toHaveBeenCalledWith("Could not clear delivered update recovery draft", backendError("io_error", "permission denied"));
 
     const interview = await showResult(user, "interview.wav");
     await user.click(within(interview).getByRole("button", { name: "Copy" }));
