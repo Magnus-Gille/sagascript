@@ -122,8 +122,9 @@
   without a separator after a name with an extension, a word ending in a colon, a period or an
   exclamation mark, a URL), and towards removing more when a later word contains a separator
   (`and/or` after `a.wav` joins the path).
-- **Part 2a** (done): the app crate's production `Result<_, String>` went from 158 lines to 14
-  (31 with `paste/windows_clipboard.rs`, which never crosses IPC). What stays, and why:
+- **Part 2a** (done): the app crate's production `Result<_, String>` went from 125 lines to 14
+  (191 to 76 counting tests, the CommandMap generator and its fixtures, and
+  `paste/windows_clipboard.rs`, whose 17 lines never cross IPC). What stays, and why:
   `finish_snapshot`'s job result (`meeting_jobs.rs`) and `AppController::finish_transcription`
   (`app_controller.rs`) carry the failure text a job or a dictation records as data
   (`MeetingSnapshot.error`, `last_error`); `UpdatePreparation`'s channel (`updater/activity.rs`)
