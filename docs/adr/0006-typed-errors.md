@@ -104,9 +104,29 @@
 - `DictationError` gains `Cancelled`, `Engine`, `TranscriptionTimedOut`, `TaskFailed` and
   `FileNotFound` (a missing file, from `ErrorKind::NotFound`). `PasteError`,
   `ApplicationLaunchError` and `AccessibilityPermissionDenied` stay: the paste service and
-  `sagascript open` construct them. The CLI's `code` changes only for failures that were
-  `transcription_failed` or `file_decode_error` before (engine failures, cancellation, a missing
-  file).
+  `sagascript open` construct them.
+- **The CLI's JSON `code` changes** for every failure whose cause is now a typed error. Part 1
+  moved failures that were `transcription_failed` or `file_decode_error` (engine failures,
+  cancellation, a missing file). Part 2a moves the settings refusals of core, which were
+  `settings_error`, in every run that frames its errors as JSON (`transcribe --json|--jsonl`,
+  `record --json`, `glossary suggest --json`; `engine status|doctor --json` reach none). The text
+  and the exit code are unchanged:
+
+  | Failure | Before | After |
+  |---|---|---|
+  | `--profile` names no dictation profile (`transcribe`, `record`, `glossary suggest`) | `settings_error` | `unknown_profile` |
+  | `transcribe --model` names no model | `settings_error` | `invalid_setting_value` |
+  | The model cannot serve the language: `transcribe --model` or the stored file model against `--language` or the profile's language; the profile's stored model for `record` and `glossary suggest` | `settings_error` | `model_incompatible` |
+  | Pianissimo for a language or profile that is not Swedish | `settings_error` | `pianissimo_unavailable` |
+
+  Other `settings_error` objects stay: they are the CLI's own wording for a flag or a
+  combination (`--model auto`, an unknown `--language`, `--speakers`, Pianissimo with
+  `--diarize`, a missing corrected transcript). `settings_storage_failed` cannot appear in a JSON
+  run today: settings are read without failing, and the one JSON command that writes them,
+  `glossary suggest --apply`, keeps reporting a store failure as `settings_error` text. The
+  plain-text commands (`config`, `glossary add|remove|clear`) print the same lines as before;
+  their JSON objects do not exist. `run_context_cli.rs`, `transcribe_contract.rs` and
+  `output_contract.rs` pin the codes.
 - The scrubber is a heuristic for text it does not control. It removes the account name from
   every path in a recognised spelling (decision 5). Known non-goals:
   - a root that does not start a word (`é/Users/zoe`, `-o/Users/zoe`), a percent-encoded path
