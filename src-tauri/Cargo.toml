@@ -78,6 +78,9 @@ thiserror = "2"
 [dev-dependencies]
 sagascript-core = { path = "crates/sagascript-core", features = ["test-support"] }
 sagascript-testsupport = { path = "crates/sagascript-testsupport" }
+# The mock runtime (`tauri::test`): a `State` for calling the real setters in
+# the whole-copy shortcut tests (commands_tests.rs, #458).
+tauri = { version = "2", features = ["test"] }
 # Parses the command signatures to generate the frontend's CommandMap
 # (src/contract/command_map.rs, #347). Already in the tree via serde_derive.
 syn = { version = "2", features = ["full", "visit"] }

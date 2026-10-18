@@ -607,6 +607,8 @@ pub use crate::machine::{load, try_update, update};
 /// step left pending here would run at the next start over the value the
 /// user has just chosen. A file that cannot be loaded is updated from
 /// defaults, so the save first preserves its bytes (see [`save_over`]).
+/// The returned copy is demoted for this machine as the startup load
+/// demotes one (#458); the file is not.
 fn update_locked<F>(
     path: &Path,
     sources: impl IntoIterator<Item = PathBuf>,
@@ -624,6 +626,10 @@ where
         };
         mutate(&mut settings)?;
         save_over(path, &settings, load_failure.as_ref())?;
+        // A settings file copied from a supported machine must not select an
+        // engine this system cannot run (#458). In memory only, as at load:
+        // the file keeps the user's choice, saved above.
+        settings.demote_unsupported_pianissimo(machine.pianissimo_supported());
         Ok(settings)
     })
 }

@@ -1192,3 +1192,264 @@ mod run_context_parity_tests {
         );
     }
 }
+
+/// #458: the whole-copy setters must not replace the controller's shortcuts.
+///
+/// The controller can hold the shortcuts the OS has registered while the file
+/// holds ones it could not register (the settings watcher keeps it there on
+/// purpose). A setter that writes the whole file — a language change, a
+/// profile's model, a dictionary — must leave those shortcuts alone: a key
+/// press is resolved against the controller's copy, not the file.
+///
+/// Settings are global user state (ADR 0004, rule 5), so each test runs in a
+/// child process whose `SAGASCRIPT_SETTINGS_PATH` points at a fake file.
+#[cfg(test)]
+mod whole_copy_shortcuts_tests {
+    use super::*;
+    use std::process::Command;
+    use std::sync::Mutex;
+
+    use sagascript_core::settings::{store, FileModelPreference, Language, Settings, WhisperModel};
+    use sagascript_testsupport::{fake_settings, isolated_cli_env};
+    use tauri::test::MockRuntime;
+    use tauri::Manager;
+
+    use crate::app_controller::AppController;
+
+    type App = tauri::App<MockRuntime>;
+
+    /// Set in the child process only.
+    const CHILD: &str = "SAGASCRIPT_WHOLE_COPY_SHORTCUTS_CHILD";
+
+    fn controller(app: &App) -> tauri::State<'_, SharedController> {
+        app.state::<SharedController>()
+    }
+
+    fn runtime() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("a runtime")
+    }
+
+    /// A mock app whose controller holds `memory`.
+    fn app_with(memory: Settings) -> App {
+        let app = tauri::test::mock_app();
+        app.manage::<SharedController>(Mutex::new(AppController::new(memory)));
+        app
+    }
+
+    /// The controller's shortcuts as after a successful registration: every
+    /// profile on `F6`, which the file will not hold.
+    fn registered_settings() -> Settings {
+        let mut settings = Settings::default();
+        settings.language = Language::Swedish;
+        settings.hotkey = "F6".into();
+        settings.hotkey_profiles = settings.resolved_hotkey_profiles();
+        for profile in &mut settings.hotkey_profiles {
+            profile.set_primary_shortcut("F6".into());
+        }
+        settings
+    }
+
+    /// The file holds a shortcut the OS never registered, the way it does
+    /// after a failed registration the watcher recovered from.
+    fn write_unregistered_file() {
+        store::update(|settings| {
+            *settings = Settings::default();
+            settings.language = Language::Swedish;
+            settings.hotkey = "Super+S".into();
+            settings.hotkey_profiles = settings.resolved_hotkey_profiles();
+            for profile in &mut settings.hotkey_profiles {
+                profile.set_primary_shortcut("Super+S".into());
+            }
+        })
+        .expect("the fake settings file is writable");
+        let on_disk = store::load();
+        assert_eq!(
+            on_disk.hotkey, "Super+S",
+            "the file must hold a shortcut the controller does not"
+        );
+    }
+
+    /// The controller kept the registered shortcuts and applied the setter.
+    fn assert_shortcuts_kept(app: &App, name: &str, landed: impl FnOnce(&Settings)) {
+        let after = lock_controller(&controller(app)).settings().clone();
+        let registered = registered_settings();
+        assert_eq!(
+            after.hotkey, registered.hotkey,
+            "{name}: the controller's hotkey is the file's, not the registered one"
+        );
+        assert_eq!(
+            after.hotkey_mode, registered.hotkey_mode,
+            "{name}: the controller's hotkey mode changed"
+        );
+        for profile in after.resolved_hotkey_profiles() {
+            let known = registered
+                .resolved_hotkey_profiles()
+                .into_iter()
+                .find(|candidate| candidate.id == profile.id)
+                .unwrap_or_else(|| panic!("{name}: profile '{}' vanished", profile.id));
+            assert_eq!(
+                profile.shortcut, known.shortcut,
+                "{name}: profile '{}' takes the file's shortcut",
+                profile.id
+            );
+            assert_eq!(
+                profile.push_to_talk_shortcut, known.push_to_talk_shortcut,
+                "{name}: profile '{}' takes the file's push-to-talk shortcut",
+                profile.id
+            );
+            assert_eq!(
+                profile.toggle_shortcut, known.toggle_shortcut,
+                "{name}: profile '{}' takes the file's toggle shortcut",
+                profile.id
+            );
+        }
+        landed(&after);
+    }
+
+    /// The setters' work in one child, each against a freshly written file.
+    fn run() -> String {
+        let registered = registered_settings();
+        let runtime = runtime();
+        let mut ran = Vec::new();
+
+        write_unregistered_file();
+        let app = app_with(registered.clone());
+        persist_language(&controller(&app), Language::Norwegian).expect("set_language persists");
+        assert_shortcuts_kept(&app, "set_language", |after| {
+            assert_eq!(after.default_profile().language, Language::Norwegian);
+        });
+        ran.push("set_language");
+
+        write_unregistered_file();
+        let app = app_with(registered.clone());
+        runtime
+            .block_on(set_profile_model(
+                controller(&app),
+                "default".into(),
+                "kb-whisper-base".into(),
+            ))
+            .expect("set_profile_model persists");
+        assert_shortcuts_kept(&app, "set_profile_model", |after| {
+            assert_eq!(
+                after.profile_models["default"],
+                FileModelPreference::Whisper(WhisperModel::KbWhisperBase)
+            );
+        });
+        ran.push("set_profile_model");
+
+        write_unregistered_file();
+        let app = app_with(registered.clone());
+        runtime
+            .block_on(set_profile_glossary(
+                controller(&app),
+                "default".into(),
+                "OpenRouter = open router".into(),
+                None,
+            ))
+            .expect("set_profile_glossary persists");
+        assert_shortcuts_kept(&app, "set_profile_glossary", |after| {
+            assert_eq!(
+                after.profile_glossaries["default"],
+                "OpenRouter = open router"
+            );
+        });
+        ran.push("set_profile_glossary");
+
+        ran.join("\n")
+    }
+
+    /// Runs `body` on a fake settings file in a child process of this test
+    /// binary and returns what it reported, in the parent. In the child
+    /// (`CHILD` is set) it runs `body` in place and returns `None`. The
+    /// environment is reduced to the ordinary OS variables plus
+    /// `SAGASCRIPT_SETTINGS_PATH` (ADR 0004, rule 5).
+    fn isolated(module: &str, test: &str, body: impl FnOnce() -> String) -> Option<String> {
+        if std::env::var_os(CHILD).is_some() {
+            let report = body();
+            let file = fake_file();
+            let dir = file.parent().expect("the settings file has a directory");
+            std::fs::write(dir.join(format!("{test}.report")), report)
+                .expect("the report is writable");
+            return None;
+        }
+        let fake = fake_settings();
+        // `module` is the caller's `module_path!()`; the test filter has no crate name.
+        let path = module
+            .split_once("::")
+            .map(|(_, path)| format!("{path}::{test}"))
+            .expect("a module path below the crate");
+        let mut command = Command::new(std::env::current_exe().expect("the test binary"));
+        isolated_cli_env(&mut command, fake.path())
+            .env(CHILD, "1")
+            .args(["--exact", &path, "--test-threads=1", "--nocapture"]);
+        let output = command.output().expect("the test binary starts");
+        assert!(
+            output.status.success(),
+            "{test} failed in the child:\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let report = std::fs::read_to_string(fake.dir().join(format!("{test}.report")))
+            .unwrap_or_else(|_| panic!("the child did not run {test}"));
+        Some(report)
+    }
+
+    /// The file the process environment names, which must be a fake one.
+    fn fake_file() -> std::path::PathBuf {
+        assert!(
+            store::settings_path_is_overridden(),
+            "this must run on a fake settings file, never the user's"
+        );
+        store::settings_path()
+    }
+
+    #[test]
+    fn whole_copy_setters_keep_the_controllers_registered_shortcuts() {
+        let Some(report) = isolated(
+            module_path!(),
+            "whole_copy_setters_keep_the_controllers_registered_shortcuts",
+            run,
+        ) else {
+            return;
+        };
+        assert_eq!(
+            report,
+            "set_language\nset_profile_model\nset_profile_glossary"
+        );
+    }
+
+    #[test]
+    fn keeping_shortcuts_takes_the_written_settings_but_the_registered_shortcuts() {
+        let memory = registered_settings();
+        let mut written = Settings {
+            beam_size: 9,
+            language: Language::Norwegian,
+            ..Settings::default()
+        };
+        written.hotkey = "Super+S".into();
+        written.hotkey_profiles = written.resolved_hotkey_profiles();
+        for profile in &mut written.hotkey_profiles {
+            profile.set_primary_shortcut("Super+S".into());
+        }
+        let next = keeping_shortcuts(&memory, &written);
+        assert_eq!(next.hotkey, memory.hotkey);
+        assert_eq!(next.hotkey_mode, memory.hotkey_mode);
+        for profile in next.resolved_hotkey_profiles() {
+            let known = memory
+                .resolved_hotkey_profiles()
+                .into_iter()
+                .find(|candidate| candidate.id == profile.id)
+                .expect("the registered profiles have this one");
+            assert_eq!(profile.shortcut, known.shortcut);
+            assert_eq!(profile.push_to_talk_shortcut, known.push_to_talk_shortcut);
+            assert_eq!(profile.toggle_shortcut, known.toggle_shortcut);
+        }
+        // The written profile carries its own language: a language change
+        // reaches the profiles, only the shortcuts stay registered ones.
+        assert_eq!(next.default_profile().language, Language::Norwegian);
+        assert_eq!(next.beam_size, 9);
+    }
+}

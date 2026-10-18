@@ -1029,6 +1029,44 @@ fn fallible_update_does_not_persist_a_rejected_mutation() {
     });
 }
 
+/// #458: the copy `update_locked` returns is what a whole-copy setter puts in
+/// the controller. On a machine that cannot run Pianissimo it must be demoted
+/// like a load, while the file keeps the user's choice.
+#[test]
+fn update_returns_a_copy_demoted_for_an_unsupported_machine() {
+    with_temp_settings(|path| {
+        fs::write(
+            &path,
+            r#"{"language":"sv","hotkey":"Super+S","profile_glossary_migrated":true,"model_lineup_version":1,"engine_defaults_version":1,"schema_version":6,"hotkey_profiles":[{"id":"default","name":"Swedish","shortcut":"Super+S","language":"sv"}],"profile_models":{"default":"pianissimo-sv"},"file_transcription_model":"pianissimo-sv","pianissimo_dictation":true}"#,
+        )
+        .unwrap();
+        let all_downloaded = |_: WhisperModel| true;
+        let unsupported = LineupEnv {
+            pianissimo_supported: false,
+            pianissimo_downloaded: false,
+            whisper_downloaded: &all_downloaded,
+        };
+        let updated = update_locked(&path, std::iter::empty(), &unsupported, |settings| {
+            settings.beam_size = 1;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(
+            updated.profile_models["default"],
+            FileModelPreference::Auto,
+            "the returned copy must not select an engine this machine cannot run"
+        );
+        assert_eq!(updated.file_transcription_model, FileModelPreference::Auto);
+        assert!(!updated.pianissimo_dictation);
+        // The file keeps the user's choice, as a load leaves it.
+        let on_disk: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(on_disk["profile_models"]["default"], "pianissimo-sv");
+        assert_eq!(on_disk["file_transcription_model"], "pianissimo-sv");
+        assert_eq!(on_disk["pianissimo_dictation"], true);
+    });
+}
+
 #[test]
 fn update_uses_a_cross_process_lock_file() {
     with_temp_settings(|path| {

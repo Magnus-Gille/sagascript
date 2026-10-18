@@ -285,25 +285,28 @@ pub async fn set_language(
     controller: State<'_, SharedController>,
     language: Language,
 ) -> Result<Vec<String>, String> {
-    set_language_for_controller(&controller, &app, language)
+    let (persisted, notices) = persist_language(&controller, language)?;
+    crate::update_profiles_menu(&app, &persisted.resolved_hotkey_profiles());
+    info!("Language set to {:?}", language);
+    Ok(notices)
 }
 
-fn set_language_for_controller(
-    controller: &State<'_, SharedController>,
-    app: &tauri::AppHandle,
+/// The persistence half of `set_language`: the file and the controller's copy,
+/// without replacing its shortcuts (#458). The command adds the profiles menu,
+/// which needs the app handle.
+fn persist_language(
+    controller: &SharedController,
     language: Language,
-) -> Result<Vec<String>, String> {
+) -> Result<(Settings, Vec<String>), String> {
     let mut notices = Vec::new();
     let persisted = sagascript_core::settings::store::try_update(|settings| {
         notices = apply_language_selection(settings, language)?;
         Ok(())
     })?;
     let mut ctrl = lock_controller(controller);
-    ctrl.update_settings(persisted.clone());
-    drop(ctrl);
-    crate::update_profiles_menu(app, &persisted.resolved_hotkey_profiles());
-    info!("Language set to {:?}", language);
-    Ok(notices)
+    let next = keeping_shortcuts(ctrl.settings(), &persisted);
+    ctrl.update_settings(next);
+    Ok((persisted, notices))
 }
 
 // Keep profile/dictionary validation ahead of all preset mutations.
@@ -317,6 +320,39 @@ fn apply_language_selection(
     settings.whisper_model = WhisperModel::recommended(language);
     settings.auto_select_model = true;
     Ok(notices)
+}
+
+/// The written settings as the controller's next copy, when a setter wrote the
+/// whole file without touching shortcuts (#458): the controller's own `hotkey`,
+/// `hotkey_mode` and the registered shortcut of each profile it knows stay.
+/// Those are the shortcuts the OS registered; a key press is resolved against
+/// the controller's copy, and the file can hold ones the OS could not register
+/// (the watcher leaves the old ones in place after a failed registration).
+/// A profile only the file has takes its written shortcut: it has never been
+/// registered here, and the watcher is what registers it.
+fn keeping_shortcuts(memory: &Settings, written: &Settings) -> Settings {
+    let mut next = written.clone();
+    next.hotkey = memory.hotkey.clone();
+    next.hotkey_mode = memory.hotkey_mode;
+    let registered = memory.resolved_hotkey_profiles();
+    next.hotkey_profiles = written
+        .resolved_hotkey_profiles()
+        .into_iter()
+        .map(|mut profile| {
+            if let Some(known) = registered
+                .iter()
+                .find(|candidate| candidate.id == profile.id)
+            {
+                profile.shortcut.clone_from(&known.shortcut);
+                profile
+                    .push_to_talk_shortcut
+                    .clone_from(&known.push_to_talk_shortcut);
+                profile.toggle_shortcut.clone_from(&known.toggle_shortcut);
+            }
+            profile
+        })
+        .collect();
+    next
 }
 
 #[tauri::command]
@@ -389,11 +425,14 @@ pub async fn set_profile_model(
     })?;
     let warm = {
         let mut ctrl = lock_controller(&controller);
+        // The next controller copy, not the written settings: warm compares
+        // the controller's old and new models, and its shortcuts stay (#458).
+        let next = keeping_shortcuts(ctrl.settings(), &persisted);
         let warm = sagascript_core::transcription::pianissimo_backend::profile_change_needs_warm(
             ctrl.settings(),
-            &persisted,
+            &next,
         );
-        ctrl.update_settings(persisted.clone());
+        ctrl.update_settings(next);
         warm
     };
     // Outside the controller lock: an unload talks to the engine host.
@@ -1453,7 +1492,9 @@ pub async fn set_profile_glossary(
     });
     match persisted {
         Ok(persisted) => {
-            lock_controller(&controller).update_settings(persisted);
+            let mut ctrl = lock_controller(&controller);
+            let next = keeping_shortcuts(ctrl.settings(), &persisted);
+            ctrl.update_settings(next);
             info!(source_len, "Profile personal dictionary updated");
             Ok(())
         }
