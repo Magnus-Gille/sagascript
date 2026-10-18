@@ -7,6 +7,7 @@
 
 pub mod matching;
 pub mod plan;
+pub mod proposal;
 
 use std::collections::BTreeMap;
 
