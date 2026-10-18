@@ -9,7 +9,7 @@ use crate::transcription::chunking::plan_chunks;
 use crate::transcription::diagnostics::LanguageDetection;
 use crate::transcription::model;
 
-use super::parallel::{MAX_PARALLEL_CHUNKS, MIN_PARALLEL_CHUNK_SAMPLES};
+use super::parallel::{ParallelJob, MAX_PARALLEL_CHUNKS, MIN_PARALLEL_CHUNK_SAMPLES};
 use super::progress::{clamped_progress_callback, started_progress_callback};
 use super::stitch::{display_transcript, sanitize_segment_bounds, strip_timestamp_tokens};
 #[cfg(feature = "diarization")]
@@ -44,6 +44,28 @@ pub(super) fn segment_mean_logprob(
         }
     }
     mean_logprob(&plogs)
+}
+
+/// How a piece of audio is decoded, apart from the audio itself and the state
+/// it runs on.
+#[derive(Clone, Copy)]
+pub(super) struct DecodeSettings<'a> {
+    pub(super) model: WhisperModel,
+    pub(super) language: Language,
+    pub(super) options: &'a TranscribeOptions,
+    /// End-of-text token id of the loaded context; token ids at or above it
+    /// are special tokens, excluded from the avg-logprob diagnostic.
+    pub(super) token_eot: i32,
+}
+
+/// One chunk to decode: its audio, where it starts in the whole recording and
+/// how to decode it.
+#[derive(Clone, Copy)]
+pub(super) struct ChunkJob<'a> {
+    pub(super) audio: &'a [f32],
+    /// Seconds added to every segment time.
+    pub(super) offset_seconds: f64,
+    pub(super) settings: DecodeSettings<'a>,
 }
 
 /// Which decoding call site is asking for flags.
@@ -343,6 +365,12 @@ impl WhisperBackend {
         };
         let on_encode_start: Option<&dyn Fn()> = Some(&encode_start_then_begin);
 
+        let settings = DecodeSettings {
+            model,
+            language,
+            options: opts,
+            token_eot,
+        };
         let chunks = plan_chunks(
             audio,
             opts.parallel_chunks.clamp(1, MAX_PARALLEL_CHUNKS),
@@ -367,41 +395,44 @@ impl WhisperBackend {
                 }
                 self.transcribe_chunk_segments(
                     state,
-                    audio,
-                    0.0,
-                    model,
-                    language,
-                    opts,
-                    token_eot,
+                    ChunkJob {
+                        audio,
+                        offset_seconds: 0.0,
+                        settings,
+                    },
                     on_progress,
                 )
             });
         }
 
-        self.transcribe_parallel_segments(
+        self.transcribe_parallel_segments(ParallelJob {
             audio,
-            &chunks,
-            model,
-            language,
-            opts,
-            token_eot,
-            on_progress,
+            chunks: &chunks,
+            settings,
+            on_progress: Box::new(on_progress),
             on_encode_start,
-        )
+        })
     }
 
-    #[allow(clippy::too_many_arguments)]
+    /// Decode one chunk on `state` and return its segments, shifted by the
+    /// chunk's offset.
     pub(super) fn transcribe_chunk_segments(
         &self,
         state: &mut WhisperState,
-        audio: &[f32],
-        offset_seconds: f64,
-        model: WhisperModel,
-        language: Language,
-        opts: &TranscribeOptions,
-        token_eot: i32,
+        job: ChunkJob<'_>,
         on_progress: impl FnMut(i32) + 'static,
     ) -> Result<Vec<TranscriptSegment>, DictationError> {
+        let ChunkJob {
+            audio,
+            offset_seconds,
+            settings:
+                DecodeSettings {
+                    model,
+                    language,
+                    options: opts,
+                    token_eot,
+                },
+        } = job;
         let mut params = self.full_params(model, language, opts, on_progress)?;
         self.install_abort_callback(&mut params);
         state.full(params, audio).map_err(|error| {
