@@ -1,6 +1,6 @@
 <script lang="ts">
   import { drainUpdateWork } from "./update-preparation";
-  import { toErrorMessage } from "./errors";
+  import { isBackendError, toErrorMessage } from "./errors";
   import MeetingReprocessing from "./MeetingReprocessing.svelte";
   import {
     planMeetingReprocessing, beginMeetingReprocessing, previewMeetingProposal,
@@ -487,8 +487,11 @@
       if (transcriptionResult.trim()) void revealTranscriptionResult();
     } catch (error) {
       if (isMissingTranscribeFileError(error)) onMissingFile(filePath);
-      plainStages = finishStages(plainStages, cancellingPlain ? "cancelled" : "failed");
-      transcribeError = cancellingPlain ? "Transcription was cancelled." : toErrorMessage(error, "Transcription failed");
+      // Stop was pressed, or the backend ended the run as cancelled by itself
+      // (ADR 0006): a cancelled run, not a failure.
+      const cancelled = cancellingPlain || isBackendError(error, "cancelled");
+      plainStages = finishStages(plainStages, cancelled ? "cancelled" : "failed");
+      transcribeError = cancelled ? "Transcription was cancelled." : toErrorMessage(error, "Transcription failed");
     } finally {
       progress?.dispose();
       clearInterval(timer);

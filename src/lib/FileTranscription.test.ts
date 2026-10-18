@@ -51,3 +51,47 @@ test("a run that fails still releases its progress listener", async () => {
   expect(await screen.findByText("Could not decode the file")).toBeInTheDocument();
   expect(ipc.listenerCount("plain-transcription-progress")).toBe(0);
 });
+
+// A run the backend ended as `cancelled` (the engine was stopped, not only the
+// Stop button) is a cancelled run, not a failed one (ADR 0006, #360 part 2b).
+// The existing cancelled wording is used: "Transcription was cancelled." in the
+// panel, "Cancelled" on the stage, `cancelled` on the file's tab and in the
+// queue summary.
+async function dropAndReject(failure: unknown, path: string) {
+  const rendered = await renderSettings(
+    settingsBackend({
+      transcribe_file: () => {
+        throw failure;
+      },
+      set_update_result_pending: () => undefined,
+    }),
+  );
+  await userEvent.setup().click(screen.getByRole("button", { name: "Transcribe" }));
+  await emit("tauri://drag-drop", { paths: [path], position: { x: 0, y: 0 } });
+  await waitFor(() => expect(rendered.ipc.callsTo("transcribe_file")).toHaveLength(1));
+  return rendered;
+}
+
+const queueSummary = () => screen.getByRole("status", { name: "File transcription status" }).textContent?.replace(/\s+/g, " ").trim();
+
+test("a backend cancellation shows as cancelled, not as a failure", async () => {
+  const { ipc } = await dropAndReject(backendError("cancelled", "Transcription cancelled."), "/audio/stopped.wav");
+
+  expect(await screen.findByText("Transcription was cancelled.")).toBeInTheDocument();
+  expect(screen.queryByText("Transcription cancelled.")).toBeNull();
+  expect(screen.queryByText("Transcription failed")).toBeNull();
+  await waitFor(() => expect(queueSummary()).toMatch(/^0 completed · 0 failed · 1 cancelled /));
+  expect(screen.getByRole("tab", { name: /stopped\.wav/ })).toHaveTextContent("cancelled");
+  expect(screen.getByRole("list", { name: "Transcription steps" })).toHaveTextContent("Cancelled");
+  expect(screen.getByRole("list", { name: "Transcription steps" })).not.toHaveTextContent("Failed");
+  expect(ipc.listenerCount("plain-transcription-progress")).toBe(0);
+});
+
+test("another backend error is still a failure, with its own message", async () => {
+  await dropAndReject(backendError("engine_busy", "The engine is busy.", true), "/audio/busy.wav");
+
+  expect(await screen.findByText("The engine is busy.")).toBeInTheDocument();
+  await waitFor(() => expect(queueSummary()).toMatch(/^0 completed · 1 failed · 0 cancelled /));
+  expect(screen.getByRole("tab", { name: /busy\.wav/ })).toHaveTextContent("failed");
+  expect(screen.queryByText("Transcription was cancelled.")).toBeNull();
+});
