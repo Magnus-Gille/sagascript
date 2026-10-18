@@ -1,5 +1,7 @@
-//! DTW word timestamps for speaker diarization. Compiled only with the
-//! `diarization` feature, which gates the module in `mod.rs`.
+//! DTW word timestamps, which the speaker-diarization pipeline reads. Compiled
+//! in every build: DTW is a whisper.cpp option and this module uses only
+//! `whisper-rs` and core types, none of the `diarization` feature's
+//! dependencies (`ort`, `ndarray`, `rustfft`, `kodama`).
 
 use std::time::Instant;
 
