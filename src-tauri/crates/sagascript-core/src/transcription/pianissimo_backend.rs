@@ -536,16 +536,35 @@ pub fn warm_wanted(
     trigger: WarmTrigger,
     active_profile: Option<&str>,
 ) -> bool {
+    warm_wanted_gated(
+        settings,
+        trigger,
+        active_profile,
+        runtime_supported_on_this_os(),
+    )
+}
+
+/// [`warm_wanted`] with the platform gate given instead of asked of this
+/// machine, for a caller that decides against a gate of its own (the app's
+/// tests simulate a host that cannot run Pianissimo).
+pub fn warm_wanted_gated(
+    settings: &Settings,
+    trigger: WarmTrigger,
+    active_profile: Option<&str>,
+    pianissimo_supported: bool,
+) -> bool {
     match (settings.engine_prewarm, trigger) {
         (EnginePrewarm::Off, _) => false,
         (_, WarmTrigger::KeyDown) => {
             let id = active_profile
                 .map(str::to_owned)
                 .unwrap_or_else(|| settings.default_profile().id);
-            settings.profile_uses_pianissimo(&id)
+            settings.profile_uses_pianissimo_gated(&id, pianissimo_supported)
         }
         (EnginePrewarm::OnKeyDown, _) => false,
-        (EnginePrewarm::OnAppStart, _) => settings.any_profile_uses_pianissimo(),
+        (EnginePrewarm::OnAppStart, _) => {
+            settings.any_profile_uses_pianissimo_gated(pianissimo_supported)
+        }
     }
 }
 
@@ -567,14 +586,25 @@ pub fn warm_on(
 /// True when a settings change newly puts a profile on Pianissimo (or newly
 /// enables `on_app_start` while one is), so the engine should load now.
 pub fn profile_change_needs_warm(old: &Settings, new: &Settings) -> bool {
-    if !warm_wanted(new, WarmTrigger::ProfileChange, None) {
+    profile_change_needs_warm_gated(old, new, runtime_supported_on_this_os())
+}
+
+/// [`profile_change_needs_warm`] with the platform gate given instead of asked
+/// of this machine (see [`warm_wanted_gated`]).
+pub fn profile_change_needs_warm_gated(
+    old: &Settings,
+    new: &Settings,
+    pianissimo_supported: bool,
+) -> bool {
+    if !warm_wanted_gated(new, WarmTrigger::ProfileChange, None, pianissimo_supported) {
         return false;
     }
-    if !warm_wanted(old, WarmTrigger::ProfileChange, None) {
+    if !warm_wanted_gated(old, WarmTrigger::ProfileChange, None, pianissimo_supported) {
         return true;
     }
     new.resolved_hotkey_profiles().iter().any(|profile| {
-        new.profile_uses_pianissimo(&profile.id) && !old.profile_uses_pianissimo(&profile.id)
+        new.profile_uses_pianissimo_gated(&profile.id, pianissimo_supported)
+            && !old.profile_uses_pianissimo_gated(&profile.id, pianissimo_supported)
     })
 }
 
@@ -1325,6 +1355,49 @@ mod tests {
         assert!(profile_change_needs_warm(&was_off, &after));
         // With pre-warm off nothing warms.
         assert!(!profile_change_needs_warm(&before, &was_off));
+    }
+
+    #[test]
+    fn the_warm_decision_asks_the_gate_it_is_given() {
+        let selected = pianissimo_settings(EnginePrewarm::OnAppStart);
+        let mut demoted = selected.clone();
+        assert!(demoted.demote_unsupported_pianissimo(false));
+        let other = whisper_settings(EnginePrewarm::OnAppStart);
+
+        // A host that cannot run it: a demoted copy never wants the engine, and
+        // a pair of demoted copies is no change; the file's selection set
+        // against the demoted copy would be one.
+        assert!(!warm_wanted_gated(
+            &demoted,
+            WarmTrigger::ProfileChange,
+            None,
+            false
+        ));
+        assert!(!profile_change_needs_warm_gated(
+            &demoted,
+            &demoted.clone(),
+            false
+        ));
+        assert!(!profile_change_needs_warm_gated(&other, &demoted, false));
+        assert!(profile_change_needs_warm_gated(&demoted, &selected, false));
+        // A host that can: Auto for a Swedish profile is Pianissimo there.
+        assert!(warm_wanted_gated(
+            &demoted,
+            WarmTrigger::ProfileChange,
+            None,
+            true
+        ));
+        assert!(!profile_change_needs_warm_gated(
+            &demoted,
+            &demoted.clone(),
+            true
+        ));
+        // The ungated functions ask this machine and decide the same way.
+        let supported = runtime_supported_on_this_os();
+        assert_eq!(
+            profile_change_needs_warm(&other, &selected),
+            profile_change_needs_warm_gated(&other, &selected, supported)
+        );
     }
 
     #[test]

@@ -643,29 +643,52 @@ impl Settings {
     /// Settings migration for systems that cannot run Pianissimo (anything but
     /// macOS 14+ on Apple Silicon or Windows on ARM): every selection of it falls back to the
     /// recommended Whisper model (`Auto`). Returns true when anything changed.
+    /// Warns once for each selection it demotes: the startup load's notice.
     pub fn demote_unsupported_pianissimo(&mut self, pianissimo_supported: bool) -> bool {
+        self.demote_unsupported_pianissimo_logging(pianissimo_supported, true)
+    }
+
+    /// [`Self::demote_unsupported_pianissimo`] without the warnings, for a copy
+    /// that is demoted again after each write (the app's controller): the
+    /// startup load has said that this host cannot run the engine, and saying
+    /// it again with every setter would only repeat it.
+    pub fn demote_unsupported_pianissimo_quietly(&mut self, pianissimo_supported: bool) -> bool {
+        self.demote_unsupported_pianissimo_logging(pianissimo_supported, false)
+    }
+
+    fn demote_unsupported_pianissimo_logging(
+        &mut self,
+        pianissimo_supported: bool,
+        warn: bool,
+    ) -> bool {
         if pianissimo_supported {
             return false;
         }
         let mut changed = false;
         for (profile, preference) in self.profile_models.iter_mut() {
             if *preference == FileModelPreference::PianissimoOriginal {
-                tracing::warn!(
-                    "Pianissimo is not supported on this system; profile '{profile}' now uses the recommended Whisper model"
-                );
+                if warn {
+                    tracing::warn!(
+                        "Pianissimo is not supported on this system; profile '{profile}' now uses the recommended Whisper model"
+                    );
+                }
                 *preference = FileModelPreference::Auto;
                 changed = true;
             }
         }
         if self.file_transcription_model == FileModelPreference::PianissimoOriginal {
-            tracing::warn!(
-                "Pianissimo is not supported on this system; file transcription now uses the recommended Whisper model"
-            );
+            if warn {
+                tracing::warn!(
+                    "Pianissimo is not supported on this system; file transcription now uses the recommended Whisper model"
+                );
+            }
             self.file_transcription_model = FileModelPreference::Auto;
             changed = true;
         }
         if self.pianissimo_dictation {
-            tracing::warn!("Pianissimo is not supported on this system; disabling the legacy Pianissimo dictation flag");
+            if warn {
+                tracing::warn!("Pianissimo is not supported on this system; disabling the legacy Pianissimo dictation flag");
+            }
             self.pianissimo_dictation = false;
             changed = true;
         }

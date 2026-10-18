@@ -284,7 +284,8 @@ mod training_glossary_tests {
             "default",
             &[fabricated],
         )
-        .unwrap_err();
+        .unwrap_err()
+        .to_string();
 
         assert!(error.contains("review"));
         assert!(settings.profile_glossaries.is_empty());
@@ -343,7 +344,8 @@ mod training_glossary_tests {
             "default",
             &candidates,
         )
-        .unwrap_err();
+        .unwrap_err()
+        .to_string();
 
         assert!(error.contains("explicit language"));
         assert!(settings.profile_glossaries.is_empty());
@@ -375,7 +377,8 @@ mod training_glossary_tests {
             "default",
             &[candidate],
         )
-        .unwrap_err();
+        .unwrap_err()
+        .to_string();
 
         assert!(error.contains("conflicts"));
         assert_eq!(settings.profile_glossaries, original);

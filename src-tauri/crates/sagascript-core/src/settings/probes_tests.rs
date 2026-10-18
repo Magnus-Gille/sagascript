@@ -195,7 +195,7 @@ fn selecting_pianissimo_needs_the_injected_gate() {
         (true, Ok(())),
         (
             false,
-            Err(crate::models::PIANISSIMO_UNSUPPORTED_MESSAGE.to_string()),
+            Err(crate::settings::SettingsError::PianissimoUnsupported),
         ),
     ] {
         let mut settings = two_language_settings();

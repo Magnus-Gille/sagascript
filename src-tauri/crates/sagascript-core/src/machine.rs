@@ -98,13 +98,19 @@ where
 impl Settings {
     /// Resolve the live engine for one profile. Unmigrated settings retain
     /// their previous global selection until the profile migration is saved.
-    pub fn dictation_model_for_profile(&self, profile_id: &str) -> Result<FileModel, SettingsError> {
+    pub fn dictation_model_for_profile(
+        &self,
+        profile_id: &str,
+    ) -> Result<FileModel, SettingsError> {
         self.dictation_model_for_profile_gated(profile_id, pianissimo_supported())
     }
 
     /// [`Self::dictation_model_for_profile`] as the Whisper model and whether
     /// the profile uses Pianissimo instead.
-    pub fn live_model_for_profile(&self, profile_id: &str) -> Result<(WhisperModel, bool), SettingsError> {
+    pub fn live_model_for_profile(
+        &self,
+        profile_id: &str,
+    ) -> Result<(WhisperModel, bool), SettingsError> {
         self.live_model_for_profile_gated(profile_id, pianissimo_supported())
     }
 

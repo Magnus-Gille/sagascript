@@ -116,10 +116,14 @@ fn run_table(settings: &Settings, cases: &[Case]) {
             }
             (Err(message), Err(error)) => {
                 assert!(
-                    matches!(error, DictationError::SettingsError(_)),
+                    matches!(
+                        error,
+                        DictationError::Settings(SettingsError::UnknownDictationProfile { .. })
+                    ),
                     "{}: {error:?}",
                     case.name
                 );
+                assert_eq!(error.code(), "unknown_profile", "{}", case.name);
                 assert_eq!(
                     error.to_string(),
                     format!("Settings error: {message}"),

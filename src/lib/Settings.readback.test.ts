@@ -25,9 +25,8 @@ import {
 /**
  * The settings file in memory. `readFailure` makes get_settings reject and
  * `writeFailure` makes every setter reject, each with what its Rust command
- * rejects with: an `Err(String)`, or for a command that returns
- * `Result<_, CommandError>` (set_profile_glossary, set_hotkey_profiles) a
- * backend error with the given code.
+ * rejects with: a backend error (every command returns `Result<_, CommandError>`)
+ * with the given code, `settings_storage_failed` unless the setter names one.
  */
 function settingsFile(initial: Partial<SettingsValue> = {}) {
   const file = {
@@ -40,13 +39,13 @@ function settingsFile(initial: Partial<SettingsValue> = {}) {
   const setter =
     <A, R = undefined>(change: (args: A) => Partial<SettingsValue>, answer?: R, errorCode?: string) =>
     (args: A): R => {
-      if (file.writeFailure !== null) throw errorCode === undefined ? file.writeFailure : backendError(errorCode, file.writeFailure);
+      if (file.writeFailure !== null) throw backendError(errorCode ?? "settings_storage_failed", file.writeFailure);
       file.current = { ...file.current, ...change(args) };
       return answer as R;
     };
   file.handlers = {
     get_settings: () => {
-      if (file.readFailure !== null) throw file.readFailure;
+      if (file.readFailure !== null) throw backendError("unavailable", file.readFailure);
       return file.current;
     },
     set_file_transcription_model: setter(({ modelId }) => ({ file_transcription_model: modelId })),
@@ -366,7 +365,7 @@ describe("a saved change whose read-back fails", () => {
     const { ipc } = await renderSettings(backend(file));
     const user = await openSettingsTab();
     ipc.handle("set_language", () => {
-      throw "Profile 'default' has a personal dictionary; clear it first";
+      throw backendError("dictionary_blocks_language_change", "Profile 'default' has a personal dictionary; clear it first");
     });
     await user.selectOptions(screen.getByRole("combobox", { name: "Default profile language" }), "English");
     const clear = await screen.findByRole("button", { name: "Clear default dictionary and switch to English" });
@@ -454,7 +453,7 @@ describe("a saved change whose read-back fails", () => {
     await user.click(reload);
     expect(reads).toHaveLength(1);
 
-    reads[0].reject("backend still unreachable");
+    reads[0].reject(backendError("unavailable", "backend still unreachable"));
     await waitFor(() => expect(unconfirmedNotice()).toHaveTextContent("backend still unreachable"));
     await waitFor(() => expect(reload).toHaveAttribute("aria-disabled", "false"));
     expect(reload).toHaveFocus();
@@ -711,7 +710,7 @@ describe("two answers that arrive out of order", () => {
 
     reads[1].resolve(settingsValue({ file_transcription_model: "pianissimo-sv" }));
     await waitFor(() => expect(screen.getByText(/Effective model: Pianissimo/)).toBeInTheDocument());
-    reads[0].reject(readbackFailure);
+    reads[0].reject(backendError("unavailable", readbackFailure));
     await settle();
 
     expect(screen.queryByRole("alert")).toBeNull();
@@ -732,7 +731,7 @@ describe("two answers that arrive out of order", () => {
 
     reads[0].resolve(settingsValue({ file_transcription_model: "pianissimo-sv" }));
     await settle();
-    reads[1].reject(readbackFailure);
+    reads[1].reject(backendError("unavailable", readbackFailure));
 
     expect(await screen.findByRole("alert", { name: "Settings not confirmed" })).toHaveTextContent(readbackFailure);
   });
@@ -750,7 +749,7 @@ describe("two answers that arrive out of order", () => {
     await waitFor(() => expect(reads).toHaveLength(2));
     expect(ipc.callsTo("set_beam_size")).toEqual([{ beamSize: 0 }, { beamSize: 5 }]);
 
-    reads[1].reject(readbackFailure);
+    reads[1].reject(backendError("unavailable", readbackFailure));
     await screen.findByRole("alert", { name: "Settings not confirmed" });
     // The older read answers now with the state before the second change.
     reads[0].resolve(settingsValue({ beam_size: 0 }));
@@ -771,7 +770,7 @@ describe("a failed read that is not part of a save", () => {
     const { ipc } = await renderSettings(backend(file));
     const user = await openAdvancedSettings();
     ipc.handle("set_language", () => {
-      throw dictionaryBlock;
+      throw backendError("dictionary_blocks_language_change", dictionaryBlock);
     });
     const reads = holdReads(ipc);
 
@@ -785,7 +784,7 @@ describe("a failed read that is not part of a save", () => {
   test("a failed preview read is reported even when the older read-back of a saved change then succeeds", async () => {
     const { reads } = await savedChangeThenBlockedLanguage();
 
-    reads[1].reject(readbackFailure);
+    reads[1].reject(backendError("unavailable", readbackFailure));
     await screen.findByRole("alert", { name: "Settings not confirmed" });
     // The older read answers with the saved toggle, but a newer read has failed since.
     reads[0].resolve(settingsValue({ temperature_fallback: false }));
@@ -801,9 +800,9 @@ describe("a failed read that is not part of a save", () => {
   test("a failed preview read and a failed read-back are both reported, and the save is not called confirmed", async () => {
     const { ipc, reads } = await savedChangeThenBlockedLanguage();
 
-    reads[1].reject(readbackFailure);
+    reads[1].reject(backendError("unavailable", readbackFailure));
     await screen.findByRole("alert", { name: "Settings not confirmed" });
-    reads[0].reject("the older read failed as well");
+    reads[0].reject(backendError("unavailable", "the older read failed as well"));
     await settle();
 
     const notice = unconfirmedNotice();
@@ -818,7 +817,7 @@ describe("a failed read that is not part of a save", () => {
     const { ipc } = await renderSettings(backend(file));
     const user = await openSettingsTab();
     ipc.handle("set_language", () => {
-      throw dictionaryBlock;
+      throw backendError("dictionary_blocks_language_change", dictionaryBlock);
     });
     const language = screen.getByRole("combobox", { name: "Default profile language" });
 
@@ -849,7 +848,7 @@ describe("a failed read that is not part of a save", () => {
     const { ipc } = await renderSettings(backend(file));
     const user = await openSettingsTab();
     ipc.handle("set_language", () => {
-      throw dictionaryBlock;
+      throw backendError("dictionary_blocks_language_change", dictionaryBlock);
     });
     await user.selectOptions(screen.getByRole("combobox", { name: "Default profile language" }), "English");
     const clear = await screen.findByRole("button", { name: "Clear default dictionary and switch to English" });
@@ -860,7 +859,7 @@ describe("a failed read that is not part of a save", () => {
     await waitFor(() => expect(reads).toHaveLength(1));
     ipc.emit("state-changed", "settings_reloaded");
     await waitFor(() => expect(reads).toHaveLength(2));
-    reads[1].reject(readbackFailure);
+    reads[1].reject(backendError("unavailable", readbackFailure));
     await screen.findByRole("alert", { name: "Settings not confirmed" });
     reads[0].resolve(settingsValue({ language: "en" }));
     await settle();
@@ -892,7 +891,7 @@ describe("a failed read that is not part of a save", () => {
 
     ipc.emit("state-changed", "settings_reloaded");
     await waitFor(() => expect(reads).toHaveLength(2));
-    reads[1].reject(readbackFailure);
+    reads[1].reject(backendError("unavailable", readbackFailure));
     await settle();
     reads[0].resolve(settingsValue());
 

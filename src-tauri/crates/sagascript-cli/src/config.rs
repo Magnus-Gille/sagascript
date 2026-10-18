@@ -590,8 +590,8 @@ mod tests {
         settings: &mut Settings,
         key: &str,
         defaults: &Settings,
-    ) -> Result<(), String> {
-        let key = lookup(key).map_err(|error| error.to_string())?;
+    ) -> Result<(), DictationError> {
+        let key = lookup(key)?;
         (key.reset)(settings, defaults).map(|_| ())
     }
 
@@ -943,7 +943,8 @@ mod tests {
                 profiles,
                 Some(("default", FileModelPreference::PianissimoOriginal)),
             )
-            .unwrap_err();
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("Pianissimo"), "{error}");
         // try_update only persists on Ok, so the stored settings stay `before`.
         assert_eq!(settings.profile_models, before.profile_models);
@@ -1083,7 +1084,7 @@ mod tests {
             .insert("default".to_string(), "merge = merch".to_string());
         let before = settings.clone();
 
-        let error = reset_all_settings(&mut settings).unwrap_err();
+        let error = reset_all_settings(&mut settings).unwrap_err().to_string();
 
         assert!(error.contains("personal dictionary"));
         assert_eq!(settings.language, before.language);
@@ -1102,7 +1103,7 @@ mod tests {
             .profile_glossaries
             .insert("default".into(), "merge = merch".into());
         let before = settings.clone();
-        let error = reset_all_settings(&mut settings).unwrap_err();
+        let error = reset_all_settings(&mut settings).unwrap_err().to_string();
         assert!(error.contains("personal dictionary"));
         assert_eq!(settings.language, before.language);
         assert_eq!(settings.hotkey_profiles, before.hotkey_profiles);
@@ -1154,7 +1155,7 @@ mod tests {
             .insert("default".to_string(), "merge = merch".to_string());
         let before = settings.clone();
 
-        let error = reset_all_settings(&mut settings).unwrap_err();
+        let error = reset_all_settings(&mut settings).unwrap_err().to_string();
 
         assert!(error.contains("inactive personal dictionary"));
         assert_eq!(settings.language, before.language);

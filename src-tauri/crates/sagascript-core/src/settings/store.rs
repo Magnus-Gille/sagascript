@@ -148,12 +148,15 @@ fn copy_legacy_settings(source: &Path, destination: &Path) -> Result<bool, Setti
     let parent = destination
         .parent()
         .ok_or_else(|| SettingsError::storage("Settings destination has no parent directory"))?;
-    create_private_dir_all(parent)
-        .map_err(|error| SettingsError::storage(format!("Failed to create settings directory: {error}")))?;
-    let contents = std::fs::read_to_string(source)
-        .map_err(|error| SettingsError::storage(format!("Failed to read legacy settings: {error}")))?;
-    let mut value: serde_json::Value = serde_json::from_str(&contents)
-        .map_err(|error| SettingsError::storage(format!("Failed to parse legacy settings: {error}")))?;
+    create_private_dir_all(parent).map_err(|error| {
+        SettingsError::storage(format!("Failed to create settings directory: {error}"))
+    })?;
+    let contents = std::fs::read_to_string(source).map_err(|error| {
+        SettingsError::storage(format!("Failed to read legacy settings: {error}"))
+    })?;
+    let mut value: serde_json::Value = serde_json::from_str(&contents).map_err(|error| {
+        SettingsError::storage(format!("Failed to parse legacy settings: {error}"))
+    })?;
     let object = value
         .as_object_mut()
         .ok_or_else(|| SettingsError::storage("Legacy settings root is not an object"))?;
@@ -168,8 +171,9 @@ fn copy_legacy_settings(source: &Path, destination: &Path) -> Result<bool, Setti
             .and_then(|name| name.to_str())
             == Some(APP_IDENTIFIER);
     migrations::from_legacy_location(object, same_bundle_settings);
-    let migrated = serde_json::to_string_pretty(&value)
-        .map_err(|error| SettingsError::storage(format!("Failed to serialize migrated settings: {error}")))?;
+    let migrated = serde_json::to_string_pretty(&value).map_err(|error| {
+        SettingsError::storage(format!("Failed to serialize migrated settings: {error}"))
+    })?;
     atomic_write(destination, migrated.as_bytes(), "migrated settings")?;
     Ok(true)
 }
@@ -642,7 +646,8 @@ where
         .parent()
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| PathBuf::from("."));
-    create_private_dir_all(&dir).map_err(|e| SettingsError::storage(format!("Failed to create settings dir: {e}")))?;
+    create_private_dir_all(&dir)
+        .map_err(|e| SettingsError::storage(format!("Failed to create settings dir: {e}")))?;
 
     let lock_path = path.with_extension("json.lock");
     let lock_file = OpenOptions::new()
@@ -689,7 +694,8 @@ fn save_over(
         .unwrap_or_else(|| PathBuf::from("."));
 
     // Ensure directory exists
-    create_private_dir_all(&dir).map_err(|e| SettingsError::storage(format!("Failed to create settings dir: {e}")))?;
+    create_private_dir_all(&dir)
+        .map_err(|e| SettingsError::storage(format!("Failed to create settings dir: {e}")))?;
 
     // Read existing file to preserve non-settings keys. This is the one place
     // every settings write passes through, so it is also where an unreadable
@@ -733,8 +739,8 @@ fn merge_and_write(
     map.remove("profile_glossaries");
 
     // Merge settings fields into the map
-    let settings_value =
-        serde_json::to_value(settings).map_err(|e| SettingsError::storage(format!("Serialize error: {e}")))?;
+    let settings_value = serde_json::to_value(settings)
+        .map_err(|e| SettingsError::storage(format!("Serialize error: {e}")))?;
     if let serde_json::Value::Object(mut settings_map) = settings_value {
         settings_map.remove("initial_prompt");
         settings_map.remove("profile_glossaries");
@@ -743,7 +749,8 @@ fn merge_and_write(
         }
     }
 
-    let json = serde_json::to_string_pretty(&map).map_err(|e| SettingsError::storage(format!("Serialize error: {e}")))?;
+    let json = serde_json::to_string_pretty(&map)
+        .map_err(|e| SettingsError::storage(format!("Serialize error: {e}")))?;
 
     atomic_write(path, json.as_bytes(), "settings")
 }
@@ -859,7 +866,12 @@ fn preserve_invalid_settings(path: &Path, contents: &[u8]) -> Result<PathBuf, Se
                     return Ok(candidate);
                 }
             }
-            Err(error) => return Err(SettingsError::storage(format!("Failed to create {}: {error}", candidate.display()))),
+            Err(error) => {
+                return Err(SettingsError::storage(format!(
+                    "Failed to create {}: {error}",
+                    candidate.display()
+                )))
+            }
         }
     }
     Err(SettingsError::storage(format!(
@@ -880,7 +892,10 @@ fn write_recovery_copy(
         drop(file);
         // Created exclusively above, so this incomplete copy is ours to remove.
         let _ = std::fs::remove_file(candidate);
-        return Err(SettingsError::storage(format!("Failed to write {}: {error}", candidate.display())));
+        return Err(SettingsError::storage(format!(
+            "Failed to write {}: {error}",
+            candidate.display()
+        )));
     }
     sync_directory(dir).map_err(|error| {
         SettingsError::storage(format!(
@@ -1055,11 +1070,7 @@ fn save_external_glossaries(path: &Path, settings: &Settings) -> Result<(), Sett
     Ok(())
 }
 
-fn atomic_write_if_changed(
-    path: &Path,
-    contents: &[u8],
-    label: &str,
-) -> Result<(), SettingsError> {
+fn atomic_write_if_changed(path: &Path, contents: &[u8], label: &str) -> Result<(), SettingsError> {
     if std::fs::read(path).is_ok_and(|current| current == contents) {
         return Ok(());
     }
@@ -1070,8 +1081,9 @@ fn atomic_write_if_changed(
 fn atomic_write(path: &Path, contents: &[u8], label: &str) -> Result<(), SettingsError> {
     let destination = match std::fs::symlink_metadata(path) {
         Ok(metadata) if metadata.file_type().is_symlink() => {
-            let target = std::fs::read_link(path)
-                .map_err(|error| SettingsError::storage(format!("Failed to resolve {label} symlink: {error}")))?;
+            let target = std::fs::read_link(path).map_err(|error| {
+                SettingsError::storage(format!("Failed to resolve {label} symlink: {error}"))
+            })?;
             let target = if target.is_absolute() {
                 target
             } else {
@@ -1079,7 +1091,9 @@ fn atomic_write(path: &Path, contents: &[u8], label: &str) -> Result<(), Setting
             };
             if target.exists() {
                 std::fs::canonicalize(&target).map_err(|error| {
-                    SettingsError::storage(format!("Failed to canonicalize {label} symlink target: {error}"))
+                    SettingsError::storage(format!(
+                        "Failed to canonicalize {label} symlink target: {error}"
+                    ))
                 })?
             } else {
                 target
@@ -1092,8 +1106,9 @@ fn atomic_write(path: &Path, contents: &[u8], label: &str) -> Result<(), Setting
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."));
-    create_private_dir_all(&parent)
-        .map_err(|error| SettingsError::storage(format!("Failed to create {label} directory: {error}")))?;
+    create_private_dir_all(&parent).map_err(|error| {
+        SettingsError::storage(format!("Failed to create {label} directory: {error}"))
+    })?;
     install_replacement(
         &destination,
         &parent,
@@ -1126,13 +1141,17 @@ fn install_replacement(
         .prefix(".sagascript-")
         .suffix(".tmp")
         .tempfile_in(parent)
-        .map_err(|error| SettingsError::storage(format!("Failed to create {label} temporary file: {error}")))?;
+        .map_err(|error| {
+            SettingsError::storage(format!("Failed to create {label} temporary file: {error}"))
+        })?;
     // Distinguish an absent target from an unreadable one; fail closed on the latter.
     let existing = match std::fs::metadata(destination) {
         Ok(metadata) => Some(metadata),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
         Err(error) => {
-            return Err(SettingsError::storage(format!("Failed to inspect existing {label}: {error}")));
+            return Err(SettingsError::storage(format!(
+                "Failed to inspect existing {label}: {error}"
+            )));
         }
     };
     tmp.write_all(contents)
@@ -1140,15 +1159,19 @@ fn install_replacement(
     // Keep an existing target's permissions (e.g. a deliberately restrictive or
     // shared mode); a new file stays owner-only. Applied before the final fsync.
     if let Some(existing) = existing.as_ref().filter(|metadata| metadata.is_file()) {
-        copy_permissions(tmp.as_file(), existing)
-            .map_err(|error| SettingsError::storage(format!("Failed to preserve {label} permissions: {error}")))?;
+        copy_permissions(tmp.as_file(), existing).map_err(|error| {
+            SettingsError::storage(format!("Failed to preserve {label} permissions: {error}"))
+        })?;
     }
-    tmp.as_file()
-        .sync_all()
-        .map_err(|error| SettingsError::storage(format!("Failed to sync {label} before install: {error}")))?;
+    tmp.as_file().sync_all().map_err(|error| {
+        SettingsError::storage(format!("Failed to sync {label} before install: {error}"))
+    })?;
     install_temp_file(tmp, destination, existing.is_some(), label)?;
-    sync_directory(parent)
-        .map_err(|error| SettingsError::storage(format!("Installed {label} but failed to sync its directory: {error}")))
+    sync_directory(parent).map_err(|error| {
+        SettingsError::storage(format!(
+            "Installed {label} but failed to sync its directory: {error}"
+        ))
+    })
 }
 
 /// Unix: rename(2) replaces atomically.
@@ -1159,9 +1182,9 @@ fn install_temp_file(
     _target_exists: bool,
     label: &str,
 ) -> Result<(), SettingsError> {
-    tmp.persist(destination)
-        .map(|_| ())
-        .map_err(|error| SettingsError::storage(format!("Failed to install {label}: {}", error.error)))
+    tmp.persist(destination).map(|_| ()).map_err(|error| {
+        SettingsError::storage(format!("Failed to install {label}: {}", error.error))
+    })
 }
 
 /// Windows: `ReplaceFileW` replaces atomically and merges the replaced file's
@@ -1180,10 +1203,9 @@ fn install_temp_file(
     use windows_sys::Win32::Storage::FileSystem::ReplaceFileW;
 
     if !target_exists {
-        return tmp
-            .persist(destination)
-            .map(|_| ())
-            .map_err(|error| SettingsError::storage(format!("Failed to install {label}: {}", error.error)));
+        return tmp.persist(destination).map(|_| ()).map_err(|error| {
+            SettingsError::storage(format!("Failed to install {label}: {}", error.error))
+        });
     }
     // Close the handle; the TempPath removes the replacement unless kept.
     let temp_path = tmp.into_temp_path();
@@ -1199,12 +1221,14 @@ fn install_temp_file(
             .prefix(".sagascript-bak-")
             .suffix(".tmp")
             .tempfile_in(destination.parent().unwrap_or_else(|| Path::new(".")))
-            .map_err(|error| SettingsError::storage(format!("Failed to reserve {label} backup name: {error}")))?
+            .map_err(|error| {
+                SettingsError::storage(format!("Failed to reserve {label} backup name: {error}"))
+            })?
             .into_temp_path();
         let path = reserved.to_path_buf();
-        reserved
-            .close()
-            .map_err(|error| SettingsError::storage(format!("Failed to reserve {label} backup name: {error}")))?;
+        reserved.close().map_err(|error| {
+            SettingsError::storage(format!("Failed to reserve {label} backup name: {error}"))
+        })?;
         path
     };
     let wide =
@@ -1255,7 +1279,9 @@ fn install_temp_file(
         )));
     }
     let _ = std::fs::remove_file(&backup);
-    Err(SettingsError::storage(format!("Failed to install {label}: {os_error}")))
+    Err(SettingsError::storage(format!(
+        "Failed to install {label}: {os_error}"
+    )))
 }
 
 #[cfg(unix)]

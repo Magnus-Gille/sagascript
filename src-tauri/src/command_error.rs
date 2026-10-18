@@ -46,6 +46,9 @@ use sagascript_core::path_scrub::scrub_paths;
 use sagascript_core::settings::SettingsError;
 use serde::ser::{Serialize, SerializeStruct, Serializer};
 
+// TEMPORARY (removed in this PR's last commit): the variants below are built by
+// the commits that convert the remaining domains.
+#[allow(dead_code)]
 #[derive(Debug, thiserror::Error)]
 pub enum CommandError {
     /// Refused because Sagascript is working on something else (`busy`).
@@ -127,6 +130,7 @@ pub enum CommandError {
     Unclassified(String),
 }
 
+#[allow(dead_code)] // TEMPORARY, see the enum
 impl CommandError {
     /// The stable wire code.
     pub fn code(&self) -> &str {

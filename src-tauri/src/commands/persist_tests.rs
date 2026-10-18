@@ -2,11 +2,14 @@
 //! controller agree, in the way that setter always had.
 //!
 //! There are two ways a setter keeps the controller in step, and the table
-//! pins which one each uses ([`Mirror`]). Ten setters mirror only the field they
-//! change: the controller can be on shortcuts the OS has registered while the
-//! file holds ones it could not register (the settings watcher keeps it there
-//! on purpose), and an unrelated setter must not move it. The others replace the
-//! whole copy, because they act on the settings they have just applied.
+//! pins the rule of each ([`Mirror`]). Every setter but the hotkey change
+//! mirrors only the fields it writes: the controller can be on shortcuts the OS
+//! has registered while the file holds ones it could not register (the settings
+//! watcher keeps it there on purpose), and a setter of something else must not
+//! move them. Only the hotkey change replaces the whole copy, because it is the
+//! one that has just registered the file's shortcuts. After either, the
+//! controller's copy is demoted as `store::load` demotes it on a host that
+//! cannot run Pianissimo (the scenarios).
 //!
 //! Settings are global user state, and the store reads its location from
 //! `SAGASCRIPT_SETTINGS_PATH`. ADR 0004 (rule 5) forbids setting that in a test
@@ -50,13 +53,19 @@ const CHILD: &str = "SAGASCRIPT_PERSIST_TABLE_CHILD";
 enum Mirror {
     /// Only the named settings fields (JSON keys): they must equal the file
     /// after the setter; every other field of the controller stays as it was,
-    /// even if the file moved on behind it. The ten setters that mirrored a
-    /// single field before `persist_and_sync` keep doing that.
+    /// even if the file moved on behind it. A rule is the fields the setter
+    /// writes in the file, no more: a field the file holds for another reason
+    /// (shortcuts the OS could not register, a Pianissimo selection this host
+    /// cannot run) is not the setter's to hand to the controller.
+    ///
+    /// `hotkey_profiles` is named only where the setter writes the language of
+    /// a profile, which lives there; the scenarios check that the profiles'
+    /// shortcuts are not taken with it.
     Field(&'static [&'static str]),
-    /// The controller's whole copy is replaced by the file's: the setters that
-    /// did that before `persist_and_sync`, because the controller adopts the
-    /// settings they have just applied (a language change, a profile's model, a
-    /// dictionary, shortcuts the OS has just registered).
+    /// The controller's whole copy is replaced by the file's. Only for the
+    /// setter that has just registered the file's shortcuts with the OS: the
+    /// controller adopting them is what makes them the operational ones. No
+    /// other row may use this rule.
     Whole,
 }
 
@@ -114,16 +123,35 @@ fn other_prewarm() -> EnginePrewarm {
 const ROWS: &[Row] = &[
     Row {
         commands: &["set_language"],
-        mirror: Mirror::Whole,
+        // The default profile's language (inside `hotkey_profiles`), the models
+        // the language resets, and the legacy model fields that start over.
+        // `hotkey_profiles` equals the file here only because the table's
+        // controller and file agree on the profile list; when they differ, the
+        // controller keeps its own list and shortcuts and takes only the
+        // language, onto its own default profile (the scenarios).
+        mirror: Mirror::Field(&[
+            "language",
+            "whisper_model",
+            "auto_select_model",
+            "profile_models",
+            "hotkey_profiles",
+        ]),
         arrange: nothing,
-        run: |app, _| persist_language(&controller(app), Language::Norwegian).map(drop),
+        run: |app, _| {
+            persist_language(&controller(app), Language::Norwegian)
+                .map(drop)
+                .map_err(text)
+        },
         landed: |s| s.default_profile().language == Language::Norwegian,
     },
     Row {
         commands: &["set_onboarding_completed"],
         mirror: Mirror::Field(&["has_completed_onboarding"]),
         arrange: nothing,
-        run: |app, rt| rt.block_on(set_onboarding_completed(controller(app))),
+        run: |app, rt| {
+            rt.block_on(set_onboarding_completed(controller(app)))
+                .map_err(text)
+        },
         landed: |s| s.has_completed_onboarding,
     },
     Row {
@@ -135,6 +163,7 @@ const ROWS: &[Row] = &[
                 controller(app),
                 model_id(WhisperModel::NbWhisperSmall),
             ))
+            .map_err(text)
         },
         landed: |s| {
             s.file_transcription_model == FileModelPreference::Whisper(WhisperModel::NbWhisperSmall)
@@ -142,7 +171,7 @@ const ROWS: &[Row] = &[
     },
     Row {
         commands: &["set_profile_model"],
-        mirror: Mirror::Whole,
+        mirror: Mirror::Field(&["profile_models"]),
         arrange: nothing,
         run: |app, rt| {
             rt.block_on(set_profile_model(
@@ -150,6 +179,7 @@ const ROWS: &[Row] = &[
                 "default".into(),
                 model_id(WhisperModel::NbWhisperMedium),
             ))
+            .map_err(text)
         },
         landed: |s| {
             s.profile_models.get("default")
@@ -158,13 +188,14 @@ const ROWS: &[Row] = &[
     },
     Row {
         commands: &["set_whisper_model"],
-        mirror: Mirror::Whole,
+        mirror: Mirror::Field(&["profile_models", "whisper_model", "auto_select_model"]),
         arrange: nothing,
         run: |app, rt| {
             rt.block_on(set_whisper_model(
                 controller(app),
                 WhisperModel::NbWhisperBase,
             ))
+            .map_err(text)
         },
         landed: |s| {
             s.profile_models.get("default")
@@ -173,16 +204,22 @@ const ROWS: &[Row] = &[
     },
     Row {
         commands: &["set_pianissimo_dictation"],
-        mirror: Mirror::Whole,
+        mirror: Mirror::Field(&["profile_models", "pianissimo_dictation"]),
         arrange: nothing,
-        run: |app, rt| rt.block_on(set_pianissimo_dictation(controller(app), false)),
+        run: |app, rt| {
+            rt.block_on(set_pianissimo_dictation(controller(app), false))
+                .map_err(text)
+        },
         landed: |s| s.profile_models.get("default") == Some(&FileModelPreference::Auto),
     },
     Row {
         commands: &["set_auto_select_model"],
-        mirror: Mirror::Whole,
+        mirror: Mirror::Field(&["profile_models", "auto_select_model"]),
         arrange: nothing,
-        run: |app, rt| rt.block_on(set_auto_select_model(controller(app), false)),
+        run: |app, rt| {
+            rt.block_on(set_auto_select_model(controller(app), false))
+                .map_err(text)
+        },
         landed: |s| {
             s.profile_models.get("default") == Some(&FileModelPreference::Whisper(s.whisper_model))
         },
@@ -193,19 +230,26 @@ const ROWS: &[Row] = &[
         arrange: nothing,
         // Disabling needs no Accessibility permission, so this row is the same
         // on every platform.
-        run: |app, rt| rt.block_on(set_auto_paste(controller(app), false)),
+        run: |app, rt| {
+            rt.block_on(set_auto_paste(controller(app), false))
+                .map_err(text)
+        },
         landed: |s| !s.auto_paste,
     },
     Row {
         commands: &["set_show_overlay"],
         mirror: Mirror::Field(&["show_overlay"]),
         arrange: nothing,
-        run: |app, _| persist_show_overlay(&controller(app), false).map(drop),
+        run: |app, _| {
+            persist_show_overlay(&controller(app), false)
+                .map(drop)
+                .map_err(text)
+        },
         landed: |s| !s.show_overlay,
     },
     Row {
         commands: &["set_initial_prompt", "set_profile_glossary"],
-        mirror: Mirror::Whole,
+        mirror: Mirror::Field(&["profile_glossaries"]),
         arrange: nothing,
         run: |app, rt| {
             rt.block_on(set_initial_prompt(
@@ -246,14 +290,17 @@ const ROWS: &[Row] = &[
         commands: &["set_beam_size"],
         mirror: Mirror::Field(&["beam_size"]),
         arrange: nothing,
-        run: |app, rt| rt.block_on(set_beam_size(controller(app), 7)),
+        run: |app, rt| rt.block_on(set_beam_size(controller(app), 7)).map_err(text),
         landed: |s| s.beam_size == 7,
     },
     Row {
         commands: &["set_temperature_fallback"],
         mirror: Mirror::Field(&["temperature_fallback"]),
         arrange: nothing,
-        run: |app, rt| rt.block_on(set_temperature_fallback(controller(app), false)),
+        run: |app, rt| {
+            rt.block_on(set_temperature_fallback(controller(app), false))
+                .map_err(text)
+        },
         landed: |s| !s.temperature_fallback,
     },
     Row {
@@ -264,7 +311,10 @@ const ROWS: &[Row] = &[
         arrange: || {
             store::update(|s| s.vad_enabled = true).expect("the fake settings file is writable");
         },
-        run: |app, rt| rt.block_on(set_vad_enabled(controller(app), false)),
+        run: |app, rt| {
+            rt.block_on(set_vad_enabled(controller(app), false))
+                .map_err(text)
+        },
         landed: |s| !s.vad_enabled,
     },
     Row {
@@ -276,6 +326,7 @@ const ROWS: &[Row] = &[
                 controller(app),
                 other_prewarm().id().into(),
             ))
+            .map_err(text)
         },
         landed: |s| s.engine_prewarm == other_prewarm(),
     },
@@ -283,7 +334,10 @@ const ROWS: &[Row] = &[
         commands: &["set_engine_idle_unload_minutes"],
         mirror: Mirror::Field(&["engine_idle_unload_minutes"]),
         arrange: nothing,
-        run: |app, rt| rt.block_on(set_engine_idle_unload_minutes(controller(app), 11)),
+        run: |app, rt| {
+            rt.block_on(set_engine_idle_unload_minutes(controller(app), 11))
+                .map_err(text)
+        },
         landed: |s| s.engine_idle_unload_minutes == 11,
     },
     Row {
@@ -540,6 +594,25 @@ fn every_settings_writing_command_has_a_row() {
             "the table has a row for {command}, which does not write settings (any more)"
         );
     }
+}
+
+/// The one setter that registers shortcuts with the OS is the only one whose
+/// controller takes the file's shortcuts. The rule is stated per row, so a new
+/// row cannot replace the whole copy without a line here that says why.
+#[test]
+fn only_the_hotkey_change_replaces_the_whole_copy() {
+    const REGISTER_SHORTCUTS: [&str; 4] = [
+        "set_hotkey_mode",
+        "set_hotkey",
+        "set_hotkey_profiles",
+        "retry_hotkey_registration",
+    ];
+    let whole: Vec<&str> = ROWS
+        .iter()
+        .filter(|row| matches!(row.mirror, Mirror::Whole))
+        .flat_map(|row| row.commands.iter().copied())
+        .collect();
+    assert_eq!(whole, REGISTER_SHORTCUTS);
 }
 
 /// The harness does not reach the user's model directories (ADR 0004, rule 5):

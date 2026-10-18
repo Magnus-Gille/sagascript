@@ -197,7 +197,7 @@ fn transcribe_jsonl_preflight_failure_reports_one_error_line() {
     assert!(stdout.ends_with('\n'), "JSONL lines end with a newline");
     let value: Value = serde_json::from_str(lines[0]).expect("error line is JSON");
     assert_error_object(&value, "transcribe --jsonl --profile no-such-profile");
-    assert_eq!(value["code"], "settings_error");
+    assert_eq!(value["code"], "unknown_profile");
     assert_eq!(
         value["error"],
         "Settings error: Unknown dictation profile 'no-such-profile'"

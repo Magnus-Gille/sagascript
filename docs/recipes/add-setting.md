@@ -70,25 +70,38 @@ pub async fn set_example_flag(
 applies the change to the latest file under the settings lock and then the same change to
 the controller's copy, one writer at a time, so a setter cannot forget the second half. It
 returns the written `Settings`. A new setter uses this form: **the controller takes over only
-the field you set**. That matters: after a hot reload that could not register the file's
+the field you set**. That matters twice. After a hot reload that could not register the file's
 shortcuts, the controller deliberately stays on the registered ones, and a setter that
-replaced the whole copy would install shortcuts the OS never registered.
+replaced the whole copy would install shortcuts the OS never registered. And on a host that
+cannot run Pianissimo the controller holds a demoted copy of the file's selection of it
+(`store::load` demotes in memory only); every write in `persist.rs` ends with that demotion
+of the controller's copy, so a setter does not repeat it.
 
 - `try_persist_and_mirror(ctrl, change, |memory, written| …)` when the change can be refused
   (validation runs under the settings lock; a typed `CommandError` stays typed) and the
-  controller should copy the written fields (`apply_training_glossary`).
-  `try_persist_and_replace` replaces the controller's whole copy; only the setters that
-  applied the settings they just wrote use it (`set_language`, `set_profile_model`,
-  `set_profile_glossary`, `persist_hotkey_change`), and it also returns the copy it replaced.
+  controller should copy the written fields, and only those (`apply_training_glossary`,
+  `set_profile_glossary`, `set_language` and the profile model setters). It returns the
+  settings as written and the controller's copy before and after (`Persisted`).
+  `try_persist_and_replace` replaces the controller's whole copy; **only
+  `persist_hotkey_change` uses it**, because it is the one caller that has just registered the
+  file's shortcuts with the OS. A language change is a profile's, and the profiles carry the
+  shortcuts: `set_language` puts the language on the controller's own default profile, never
+  takes a shortcut from the file (`mirror_language_selection`), and a setter of models
+  copies the file's model only for profiles the controller has
+  (`mirror_models_of_own_profiles`): after a failed hot reload the controller's profiles and
+  their models are a pair that differs from the file's.
   Never `store::save()` an in-memory clone, never write `ctrl.settings_mut()` (it exists in
   tests only), never hold the controller lock across the store call or an `.await`. The
   setter's error type stays `String` until
   [#360](https://github.com/Magnus-Gille/sagascript/issues/360) part 2: map with
   `.map_err(|error| error.to_string())`.
 - Add a row to the table in `commands/persist_tests.rs` and say how the setter syncs
-  (`Mirror::Field` with its fields, or `Mirror::Whole`): the test calls every setter, changes
-  the file behind the controller, and checks that only those fields followed. It also fails
-  for a command that writes settings and has no row. The writers are found from the sources
+  (`Mirror::Field` with the fields the setter writes; `Mirror::Whole` is the hotkey change's
+  and no other row's): the test calls every setter, changes the file behind the controller,
+  and checks that only those fields followed. Two scenarios run every row against a file
+  with an unregistered shortcut and against a file that selects Pianissimo on a host that
+  cannot run it. The table also fails for a command that writes settings and has no row.
+  The writers are found from the sources
   (`src-tauri/src/contract/writers.rs`), not from the name: a `#[tauri::command]` that reaches
   `persist_and_sync` or a sibling counts, through any chain of functions, methods and other
   commands in any file under `src/` (tests excepted), through a `use … as` rename, and from
@@ -101,7 +114,7 @@ replaced the whole copy would install shortcuts the OS never registered.
   `update_with`, `try_update_with`, `save` or `machine::{update, try_update}` itself.
 - A setting that is more than a field is a `Settings` operation in `settings/ops.rs` (take the
   Pianissimo gate or the Accessibility answer as an argument, never probe the machine), the setter
-  calls it inside `persist_and_sync` / `try_persist_and_replace` and so does the CLI key (#373).
+  calls it inside `persist_and_sync` / `try_persist_and_mirror` and so does the CLI key (#373).
   Add a row for it to `core::test_support::settings_ops_table` and a translation to the CLI and to the
   app side of the table (`sagascript-cli/tests/settings_parity.rs`, `commands/persist_parity_tests.rs`):
   the table fails when a surface persists something else than the operation does. Decide a

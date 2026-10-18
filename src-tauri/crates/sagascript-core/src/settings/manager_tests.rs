@@ -298,7 +298,8 @@ fn removed_profile_glossary_stays_inert_and_reserves_its_old_id() {
                 toggle_shortcut: None,
             },
         ])
-        .unwrap_err();
+        .unwrap_err()
+        .to_string();
 
     assert!(error.contains("inactive personal dictionary"));
     assert_eq!(
@@ -347,7 +348,8 @@ fn profile_with_dictionary_cannot_change_language_in_place() {
             "Control+Shift+Space".to_string(),
             Language::English,
         )])
-        .unwrap_err();
+        .unwrap_err()
+        .to_string();
 
     assert!(error.contains("personal dictionary"));
     assert!(error.contains("language"));
@@ -385,7 +387,10 @@ fn legacy_language_change_with_implicit_default_dictionary_is_atomic() {
         .profile_glossaries
         .insert("default".to_string(), "merge = merch".to_string());
 
-    let error = settings.set_legacy_language(Language::English).unwrap_err();
+    let error = settings
+        .set_legacy_language(Language::English)
+        .unwrap_err()
+        .to_string();
 
     assert!(error.contains("personal dictionary"));
     assert_eq!(settings.language, Language::Swedish);
@@ -413,7 +418,10 @@ fn legacy_language_change_with_explicit_default_dictionary_is_atomic() {
         .profile_glossaries
         .insert("default".to_string(), "merge = merch".to_string());
 
-    let error = settings.set_legacy_language(Language::English).unwrap_err();
+    let error = settings
+        .set_legacy_language(Language::English)
+        .unwrap_err()
+        .to_string();
 
     assert!(error.contains("personal dictionary"));
     assert_eq!(settings.language, Language::English);
@@ -1179,7 +1187,9 @@ fn file_model_preference_ids_are_the_model_ids() {
     }
     assert_eq!(
         FileModelPreference::parse_id("large-v3"),
-        Err("Unknown file model preference 'large-v3'".to_owned())
+        Err(SettingsError::UnknownModelPreference {
+            id: "large-v3".to_owned()
+        })
     );
 }
 
@@ -1512,6 +1522,32 @@ fn unsupported_system_demotes_every_pianissimo_selection_to_recommended_whisper(
 }
 
 #[test]
+fn the_quiet_demotion_leaves_what_the_logging_one_leaves() {
+    let mut loud = Settings {
+        language: Language::Swedish,
+        pianissimo_dictation: true,
+        file_transcription_model: FileModelPreference::PianissimoOriginal,
+        hotkey_profiles: vec![profile("default", "Super+S", Language::Swedish)],
+        ..Default::default()
+    };
+    loud.materialize_profile_models();
+    let mut quiet = loud.clone();
+
+    assert!(!quiet.clone().demote_unsupported_pianissimo_quietly(true));
+    assert!(loud.demote_unsupported_pianissimo(false));
+    assert!(quiet.demote_unsupported_pianissimo_quietly(false));
+
+    assert_eq!(
+        serde_json::to_value(&quiet).unwrap(),
+        serde_json::to_value(&loud).unwrap()
+    );
+    assert!(
+        !quiet.demote_unsupported_pianissimo_quietly(false),
+        "idempotent"
+    );
+}
+
+#[test]
 fn selecting_pianissimo_is_refused_when_the_platform_gate_is_closed() {
     let mut settings = Settings {
         language: Language::Swedish,
@@ -1520,7 +1556,8 @@ fn selecting_pianissimo_is_refused_when_the_platform_gate_is_closed() {
     };
     let error = settings
         .set_profile_model_gated("default", FileModelPreference::PianissimoOriginal, false)
-        .unwrap_err();
+        .unwrap_err()
+        .to_string();
     assert!(error.contains("macOS 14"), "{error}");
     assert_ne!(
         settings.profile_models.get("default"),

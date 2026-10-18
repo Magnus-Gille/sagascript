@@ -574,29 +574,37 @@ mod tests {
     fn reprocessing_rejects_models_it_cannot_decode_with() {
         // Reprocessing is Whisper-only; the shared resolver does not choose
         // the model, so each command's own limits stay in force (#346).
-        for (flags, message) in [
+        for (flags, code, message) in [
             (
                 &["--model", "pianissimo-sv", "--language", "sv"][..],
+                "settings_error",
                 "Settings error: Meeting reprocessing requires a Whisper model; select one with --model",
             ),
             (
                 &["--model", "pianissimo-sv"][..],
+                "pianissimo_unavailable",
                 "Settings error: Pianissimo Original is only available for Swedish file transcription",
             ),
             (
                 &["--model", "bogus"][..],
+                "invalid_setting_value",
                 "Settings error: Unknown file model preference 'bogus'",
             ),
             (
                 &["--model", "auto"][..],
+                "settings_error",
                 "Settings error: --model needs a concrete model ID; omit it to use the file default",
             ),
         ] {
             let error = resolve(flags).expect_err(&format!("{flags:?} must be rejected"));
             assert!(
-                matches!(error, DictationError::SettingsError(_)),
+                matches!(
+                    error,
+                    DictationError::SettingsError(_) | DictationError::Settings(_)
+                ),
                 "{flags:?}: {error:?}"
             );
+            assert_eq!(error.code(), code, "{flags:?}");
             assert_eq!(error.to_string(), message, "{flags:?}");
         }
     }

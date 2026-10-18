@@ -87,8 +87,8 @@ export interface CommandMap {
   get_platform: { args: NoArgs; result: string; error: string };
   /** `commands::get_profile_model_info(profile_id: String) -> Result<ModelInfo, String>` */
   get_profile_model_info: { args: { profileId: string }; result: WhisperModel; error: string };
-  /** `commands::get_settings() -> Result<Settings, String>` */
-  get_settings: { args: NoArgs; result: Settings; error: string };
+  /** `commands::get_settings() -> Result<Settings, CommandError>` */
+  get_settings: { args: NoArgs; result: Settings; error: BackendError };
   /** `commands::get_state() -> Result<AppState, String>` */
   get_state: { args: NoArgs; result: AppState; error: string };
   /** `commands::get_supported_formats() -> Result<Vec<String>, String>` */
@@ -141,18 +141,18 @@ export interface CommandMap {
   save_transcription_text: { args: { text: string; fileName: string; directory?: string | null }; result: boolean; error: string };
   /** `commands::save_update_recovery(payload: serde_json::Value) -> Result<(), String>` */
   save_update_recovery: { args: { payload: UpdateRecoveryPayload }; result: void; error: string };
-  /** `commands::set_auto_paste(enabled: bool) -> Result<(), String>` */
-  set_auto_paste: { args: { enabled: boolean }; result: void; error: string };
-  /** `commands::set_auto_select_model(enabled: bool) -> Result<(), String>` */
-  set_auto_select_model: { args: { enabled: boolean }; result: void; error: string };
-  /** `commands::set_beam_size(beam_size: u32) -> Result<(), String>` */
-  set_beam_size: { args: { beamSize: number }; result: void; error: string };
-  /** `commands::set_engine_idle_unload_minutes(minutes: u32) -> Result<(), String>` */
-  set_engine_idle_unload_minutes: { args: { minutes: number }; result: void; error: string };
-  /** `commands::set_engine_prewarm(mode: String) -> Result<(), String>` */
-  set_engine_prewarm: { args: { mode: string }; result: void; error: string };
-  /** `commands::set_file_transcription_model(model_id: String) -> Result<(), String>` */
-  set_file_transcription_model: { args: { modelId: string }; result: void; error: string };
+  /** `commands::set_auto_paste(enabled: bool) -> Result<(), CommandError>` */
+  set_auto_paste: { args: { enabled: boolean }; result: void; error: BackendError };
+  /** `commands::set_auto_select_model(enabled: bool) -> Result<(), CommandError>` */
+  set_auto_select_model: { args: { enabled: boolean }; result: void; error: BackendError };
+  /** `commands::set_beam_size(beam_size: u32) -> Result<(), CommandError>` */
+  set_beam_size: { args: { beamSize: number }; result: void; error: BackendError };
+  /** `commands::set_engine_idle_unload_minutes(minutes: u32) -> Result<(), CommandError>` */
+  set_engine_idle_unload_minutes: { args: { minutes: number }; result: void; error: BackendError };
+  /** `commands::set_engine_prewarm(mode: String) -> Result<(), CommandError>` */
+  set_engine_prewarm: { args: { mode: string }; result: void; error: BackendError };
+  /** `commands::set_file_transcription_model(model_id: String) -> Result<(), CommandError>` */
+  set_file_transcription_model: { args: { modelId: string }; result: void; error: BackendError };
   /** `commands::set_hotkey(shortcut: String) -> Result<(), CommandError>` */
   set_hotkey: { args: { shortcut: string }; result: void; error: BackendError };
   /** `commands::set_hotkey_mode(mode: HotkeyMode) -> Result<(), CommandError>` */
@@ -161,26 +161,26 @@ export interface CommandMap {
   set_hotkey_profiles: { args: { profiles: HotkeyProfile[] }; result: string[]; error: BackendError };
   /** `commands::set_initial_prompt(prompt: String, expected_source: Option<String>) -> Result<(), CommandError>` */
   set_initial_prompt: { args: { prompt: string; expectedSource?: string | null }; result: void; error: BackendError };
-  /** `commands::set_language(language: Language) -> Result<Vec<String>, String>` */
-  set_language: { args: { language: Language }; result: string[]; error: string };
-  /** `commands::set_onboarding_completed() -> Result<(), String>` */
-  set_onboarding_completed: { args: NoArgs; result: void; error: string };
-  /** `commands::set_pianissimo_dictation(enabled: bool) -> Result<(), String>` */
-  set_pianissimo_dictation: { args: { enabled: boolean }; result: void; error: string };
+  /** `commands::set_language(language: Language) -> Result<Vec<String>, CommandError>` */
+  set_language: { args: { language: Language }; result: string[]; error: BackendError };
+  /** `commands::set_onboarding_completed() -> Result<(), CommandError>` */
+  set_onboarding_completed: { args: NoArgs; result: void; error: BackendError };
+  /** `commands::set_pianissimo_dictation(enabled: bool) -> Result<(), CommandError>` */
+  set_pianissimo_dictation: { args: { enabled: boolean }; result: void; error: BackendError };
   /** `commands::set_profile_glossary(profile_id: String, source: String, expected_source: Option<String>) -> Result<(), CommandError>` */
   set_profile_glossary: { args: { profileId: string; source: string; expectedSource?: string | null }; result: void; error: BackendError };
-  /** `commands::set_profile_model(profile_id: String, model_id: String) -> Result<(), String>` */
-  set_profile_model: { args: { profileId: string; modelId: string }; result: void; error: string };
-  /** `commands::set_show_overlay(enabled: bool) -> Result<(), String>` */
-  set_show_overlay: { args: { enabled: boolean }; result: void; error: string };
-  /** `commands::set_temperature_fallback(enabled: bool) -> Result<(), String>` */
-  set_temperature_fallback: { args: { enabled: boolean }; result: void; error: string };
+  /** `commands::set_profile_model(profile_id: String, model_id: String) -> Result<(), CommandError>` */
+  set_profile_model: { args: { profileId: string; modelId: string }; result: void; error: BackendError };
+  /** `commands::set_show_overlay(enabled: bool) -> Result<(), CommandError>` */
+  set_show_overlay: { args: { enabled: boolean }; result: void; error: BackendError };
+  /** `commands::set_temperature_fallback(enabled: bool) -> Result<(), CommandError>` */
+  set_temperature_fallback: { args: { enabled: boolean }; result: void; error: BackendError };
   /** `commands::set_update_result_pending(result_id: String, pending: bool) -> Result<(), String>` */
   set_update_result_pending: { args: { resultId: string; pending: boolean }; result: void; error: string };
-  /** `commands::set_vad_enabled(enabled: bool) -> Result<(), String>` */
-  set_vad_enabled: { args: { enabled: boolean }; result: void; error: string };
-  /** `commands::set_whisper_model(model: WhisperModel) -> Result<(), String>` */
-  set_whisper_model: { args: { model: string }; result: void; error: string };
+  /** `commands::set_vad_enabled(enabled: bool) -> Result<(), CommandError>` */
+  set_vad_enabled: { args: { enabled: boolean }; result: void; error: BackendError };
+  /** `commands::set_whisper_model(model: WhisperModel) -> Result<(), CommandError>` */
+  set_whisper_model: { args: { model: string }; result: void; error: BackendError };
   /** `commands::start_recording() -> Result<(), CommandError>` */
   start_recording: { args: NoArgs; result: void; error: BackendError };
   /** `commands::start_training_recording(profile_id: String) -> Result<(), CommandError>` */
@@ -297,12 +297,27 @@ export const COMMAND_NAMES = [
  */
 export const BACKEND_ERROR_COMMANDS = [
   "apply_training_glossary",
+  "get_settings",
   "retry_hotkey_registration",
+  "set_auto_paste",
+  "set_auto_select_model",
+  "set_beam_size",
+  "set_engine_idle_unload_minutes",
+  "set_engine_prewarm",
+  "set_file_transcription_model",
   "set_hotkey",
   "set_hotkey_mode",
   "set_hotkey_profiles",
   "set_initial_prompt",
+  "set_language",
+  "set_onboarding_completed",
+  "set_pianissimo_dictation",
   "set_profile_glossary",
+  "set_profile_model",
+  "set_show_overlay",
+  "set_temperature_fallback",
+  "set_vad_enabled",
+  "set_whisper_model",
   "start_recording",
   "start_training_recording",
   "stop_and_transcribe",

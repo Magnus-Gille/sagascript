@@ -70,8 +70,7 @@ pub fn resolve_file_model_for_run(
     needs_whisper: bool,
 ) -> Result<FileModel, DictationError> {
     if let Some(id) = model_arg {
-        let preference =
-            FileModelPreference::parse_id(id).map_err(DictationError::from)?;
+        let preference = FileModelPreference::parse_id(id).map_err(DictationError::from)?;
         if preference == FileModelPreference::Auto {
             return Err(DictationError::SettingsError(
                 "--model needs a concrete model ID; omit it to use the file default".into(),

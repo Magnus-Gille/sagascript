@@ -152,8 +152,6 @@
   let languageSaving = $state(false);
   let languageSelectEl: HTMLSelectElement | undefined = $state();
   let languageRecoveryTitle: HTMLHeadingElement | undefined = $state();
-  // Contract-pinned against the Rust guard by test-language-switch-recovery.
-  const defaultDictionaryLanguageBlock = "Profile 'default' has a personal dictionary";
 
   $effect(() => {
     if (blockedLanguageChange && languageRecoveryTitle) languageRecoveryTitle.focus();
@@ -1464,9 +1462,17 @@
     languageSaving = true;
     let saved = false;
     try {
-      const ok = await applySetting(() => setLanguage(value));
+      let rejection: unknown = null;
+      const ok = await applySetting(() =>
+        setLanguage(value).catch((error: unknown) => {
+          rejection = error;
+          throw error;
+        }),
+      );
       saved = ok;
-      if (!ok && settingsError.includes(defaultDictionaryLanguageBlock)) {
+      // The backend names a dictionary that blocks the change by its code
+      // (src-tauri/crates/sagascript-core/src/settings/error.rs).
+      if (!ok && isBackendError(rejection, "dictionary_blocks_language_change")) {
         // Show the actual blocking dictionary, not whichever editor scope is
         // selected. Freeze the preview for the existing compare-and-swap API.
         const current = await readSettings();

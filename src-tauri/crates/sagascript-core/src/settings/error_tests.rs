@@ -1,9 +1,7 @@
 use super::SettingsError;
 use crate::error::DictationError;
 use crate::models::{Language, WhisperModel};
-use crate::settings::{
-    FileModelPreference, HotkeyProfile, Settings, validate_hotkey,
-};
+use crate::settings::{validate_hotkey, FileModelPreference, HotkeyProfile, Settings};
 
 fn profile(id: &str, name: &str, shortcut: &str, language: Language) -> HotkeyProfile {
     HotkeyProfile {
@@ -189,7 +187,10 @@ fn the_cli_wraps_a_settings_error_with_its_own_code_and_the_old_text() {
 fn the_operations_refuse_with_the_variant_a_caller_can_match() {
     // A language change blocked by a personal dictionary: the one refusal the
     // Settings window recognises (it shows the dictionary and offers to clear it).
-    let mut settings = Settings::default();
+    let mut settings = Settings {
+        language: Language::Swedish,
+        ..Settings::default()
+    };
     settings
         .profile_glossaries
         .insert("default".into(), "Foo = bar".into());
@@ -210,8 +211,10 @@ fn the_operations_refuse_with_the_variant_a_caller_can_match() {
         "invalid_setting_value"
     );
 
-    let mut english = Settings::default();
-    english.language = Language::English;
+    let mut english = Settings {
+        language: Language::English,
+        ..Settings::default()
+    };
     let incompatible = english
         .set_profile_model(
             "default",

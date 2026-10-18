@@ -90,6 +90,7 @@ fn file_transcription_selection(
     )
     .map_err(|error| match error {
         DictationError::SettingsError(message) => message,
+        DictationError::Settings(error) => error.to_string(),
         other => other.to_string(),
     })
 }

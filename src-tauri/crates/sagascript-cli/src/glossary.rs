@@ -107,8 +107,7 @@ pub fn run(args: GlossaryArgs, out: &Out) -> Result<(), DictationError> {
 fn path(profile: Option<&str>, out: &Out) -> Result<(), DictationError> {
     let stored = settings::store::load();
     let profile = resolved_profile_id(&stored, profile)?;
-    let path =
-        settings::store::profile_glossary_path(&profile).map_err(DictationError::from)?;
+    let path = settings::store::profile_glossary_path(&profile).map_err(DictationError::from)?;
     outln!(out, "{}", path.display())?;
     Ok(())
 }

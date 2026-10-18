@@ -113,7 +113,7 @@ fn transcribe_reports_resolution_failures_with_their_codes() {
     );
 
     for (flags, code) in [
-        (&["--profile", "nope"][..], "settings_error"),
+        (&["--profile", "nope"][..], "unknown_profile"),
         (&["--language", "xx"][..], "settings_error"),
         (&["--prompt-file", MISSING_HINT][..], "file_decode_error"),
     ] {

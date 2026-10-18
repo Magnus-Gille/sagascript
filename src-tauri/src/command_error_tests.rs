@@ -1,6 +1,7 @@
 use super::*;
 use crate::contract;
 use sagascript_core::error::DictationError;
+use sagascript_core::settings::SettingsError;
 use serde_json::{json, Value};
 
 /// What the Swift engine host sends when a model file cannot be loaded
@@ -69,6 +70,30 @@ fn dictation_errors_keep_their_code_and_retry_hint() {
 }
 
 #[test]
+fn a_settings_error_keeps_its_code_and_its_text_on_the_wire() {
+    assert_eq!(
+        wire(SettingsError::DictionaryBlocksLanguageChange {
+            profile_id: "default".into()
+        }),
+        json!({
+            "code": "dictionary_blocks_language_change",
+            "message": "Profile 'default' has a personal dictionary; clear it before changing the profile language",
+            "retryable": false,
+        })
+    );
+    assert_eq!(
+        wire(SettingsError::Storage("Failed to lock settings: x".into()))["code"],
+        "settings_storage_failed"
+    );
+    // The CLI's wrapper of the same error says "Settings error: …"; the webview
+    // gets the text the command always showed, without the prefix.
+    assert_eq!(
+        wire(SettingsError::UnknownProfile { id: "p".into() })["message"],
+        "Unknown profile 'p'"
+    );
+}
+
+#[test]
 fn cancellation_has_one_representation() {
     let from_dictation = CommandError::from(DictationError::Cancelled);
     assert!(matches!(from_dictation, CommandError::Cancelled));
@@ -130,6 +155,17 @@ fn every_code_is_stable_snake_case() {
         CommandError::DictionaryChangedElsewhere,
         CommandError::HotkeyInvalid("x".into()),
         CommandError::HotkeyChangeFailed("x".into()),
+        SettingsError::NoProfiles.into(),
+        CommandError::InvalidInput("x".into()),
+        CommandError::NotFound("x".into()),
+        CommandError::Unavailable("x".into()),
+        CommandError::Io("x".into()),
+        CommandError::Clipboard("x".into()),
+        CommandError::ExportExists("x".into()),
+        CommandError::LaunchFailed("x".into()),
+        CommandError::DownloadFailed("x".into()),
+        CommandError::AccessibilityPermissionDenied("x".into()),
+        CommandError::InvalidInput("x".into()).because("y"),
         CommandError::Unclassified("x".into()),
         DictationError::TranscriptionFailed("x".into()).into(),
         DictationError::engine("engine_busy", true, "x").into(),
@@ -153,6 +189,37 @@ fn plain_strings_become_unclassified_until_their_command_is_typed() {
     assert_eq!(error.to_string(), "An update is being applied.");
     let error: CommandError = String::from("x").into();
     assert!(matches!(error, CommandError::Unclassified(_)));
+}
+
+#[test]
+fn a_fixed_message_keeps_its_cause_for_the_log_and_never_sends_it() {
+    let error =
+        CommandError::InvalidInput("Could not read a valid, bounded meeting proposal".into())
+            .because("Failed to open /Users/x/Documents/a.json: No such file or directory");
+    assert_eq!(error.code(), "invalid_input");
+    assert_eq!(
+        error.to_string(),
+        "Could not read a valid, bounded meeting proposal"
+    );
+    let cause = error.cause().expect("the cause is kept");
+    assert!(cause.contains("No such file or directory"), "{cause}");
+    assert!(
+        !cause.contains("/Users/x"),
+        "the kept cause is scrubbed like the log: {cause}"
+    );
+    assert!(!format!("{error:?}").contains("/Users/x"), "{error:?}");
+    // The webview gets the code and the fixed text, not the cause.
+    assert_eq!(
+        wire(error),
+        json!({
+            "code": "invalid_input",
+            "message": "Could not read a valid, bounded meeting proposal",
+            "retryable": false,
+        })
+    );
+    let busy = CommandError::Busy("busy".into()).because("worker held the lock");
+    assert!(busy.retryable(), "a cause does not change the retry hint");
+    assert_eq!(busy.code(), "busy");
 }
 
 /// The shared fixture the frontend parses (src/test/transport.test.ts): real
@@ -181,6 +248,10 @@ fn command_error_fixture_matches_what_rust_sends() {
             &format!("Pianissimo engine: {SWIFT_MESSAGE}"),
         )),
         "engine_busy": wire(DictationError::engine("engine_busy", true, "Pianissimo engine: queue full")),
+        "dictionary_blocks_language_change": wire(SettingsError::DictionaryBlocksLanguageChange {
+            profile_id: "default".into()
+        }),
+        "unknown_profile": wire(SettingsError::UnknownDictationProfile { id: "x".into() }),
         "unclassified": wire(CommandError::Unclassified("Unknown dictation profile 'x'".into())),
     });
     contract::assert_fixture("command_errors.json", &actual);

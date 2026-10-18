@@ -321,7 +321,10 @@ mod tests {
                 }
                 (Err(message), Err(error)) => {
                     assert!(
-                        matches!(error, DictationError::SettingsError(_)),
+                        matches!(
+                            error,
+                            DictationError::SettingsError(_) | DictationError::Settings(_)
+                        ),
                         "{}: {error:?}",
                         case.name
                     );

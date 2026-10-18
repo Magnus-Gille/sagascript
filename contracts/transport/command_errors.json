@@ -9,6 +9,11 @@
     "message": "Transcription cancelled.",
     "retryable": false
   },
+  "dictionary_blocks_language_change": {
+    "code": "dictionary_blocks_language_change",
+    "message": "Profile 'default' has a personal dictionary; clear it before changing the profile language",
+    "retryable": false
+  },
   "dictionary_changed_elsewhere": {
     "code": "dictionary_changed_elsewhere",
     "message": "Dictionary changed elsewhere: the persisted source no longer matches the editor baseline",
@@ -46,6 +51,11 @@
   },
   "unclassified": {
     "code": "unclassified",
+    "message": "Unknown dictation profile 'x'",
+    "retryable": false
+  },
+  "unknown_profile": {
+    "code": "unknown_profile",
     "message": "Unknown dictation profile 'x'",
     "retryable": false
   }

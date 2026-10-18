@@ -111,9 +111,7 @@ pub(super) const KEYS: &[Key] = &[
                 .apply_language_selection(language)
                 .map_err(DictationError::from)
         },
-        reset: |settings, defaults| {
-            Ok(settings.apply_language_selection(defaults.language)?)
-        },
+        reset: |settings, defaults| Ok(settings.apply_language_selection(defaults.language)?),
         warning: no_warning,
     },
     Key {
