@@ -90,10 +90,43 @@ test("a multi-command pwsh step without the preferences fails, and so does every
     assert.match(problems[0], /synthetic\.yml > probe: "Probe step" runs 2 commands in pwsh/);
     assert.match(problems[0], /script sha256 [0-9a-f]{64}/);
   }
-  for (const shell of ["powershell", "cmd", "sh", "python", "pwsh -command \". '{0}'\""]) {
-    assert.equal(problemsOf(workflowWith({ shell, script: "npm run build\nnpm run check" })).length, 1, `shell ${shell}`);
+  const multi = "npm run build\nnpm run check";
+  // Shells that stop at the first failing command: bash and sh as GitHub runs them (-e), and an explicit template with -e.
+  for (const shell of [
+    "bash",
+    "sh",
+    "sh -e {0}",
+    "bash -e {0}",
+    "bash -eo pipefail {0}",
+    "bash --noprofile --norc -eo pipefail {0}",
+    "bash --noprofile --norc -e -o pipefail {0}",
+    "bash -o errexit {0}",
+  ]) {
+    assert.deepEqual(problemsOf(workflowWith({ shell, script: multi })), [], `shell ${shell}`);
   }
-  assert.deepEqual(problemsOf(workflowWith({ shell: "bash", script: "npm run build\nnpm run check" })), []);
+  // Shells that do not, or whose template does not say so. The message offers bash or a pinned exception.
+  for (const shell of ["powershell", "cmd", "bash {0}", "sh {0}", "bash -x {0}", "bash -o pipefail {0}", "pwsh -command \". '{0}'\""]) {
+    const problems = problemsOf(workflowWith({ shell, script: multi }));
+    assert.equal(problems.length, 1, `shell ${shell}`);
+    assert.match(
+      problems[0],
+      /does not stop at the first failing command; use shell: bash, or pin the audited script as an exception/,
+      shell,
+    );
+  }
+  // An interpreter is not a shell the guard can judge: its message names only the exception mechanism.
+  for (const shell of ["python", "python {0}", "python3 {0}", "node {0}"]) {
+    const problems = problemsOf(workflowWith({ shell, script: multi }));
+    assert.equal(problems.length, 1, `shell ${shell}`);
+    assert.match(
+      problems[0],
+      /is an interpreter, not a shell the guard can judge: pin the audited script as an exception \(WINDOWS_SHELL_EXCEPTIONS in scripts\/test-ci-parallel-gates\.mjs\)/,
+      shell,
+    );
+    assert.doesNotMatch(problems[0], /use shell: bash/, shell);
+  }
+  // Single commands still pass in an interpreter.
+  assert.deepEqual(problemsOf(workflowWith({ shell: "python", script: "print('hi')" })), []);
 });
 
 test("single commands pass in any shell: continuations, comments, blank lines and strings do not make a command", () => {

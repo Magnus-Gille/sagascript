@@ -143,6 +143,23 @@ const matchesException = (exception, shell, lines) =>
       exception.lines.length === lines.length &&
       exception.lines.every((pattern, index) => pattern.test(lines[index]) && commandsOnLine(lines[index], shell) === 1)));
 
+/**
+ * True for a shell that stops at the first failing command: `bash` (GitHub runs `bash --noprofile --norc -eo pipefail
+ * {0}`), `sh` (`sh -e {0}`), or a bash or sh template that turns errexit on (`-e`, `-eo pipefail`, `-o errexit`).
+ */
+export function stopsAtFirstFailure(shell) {
+  if (shell === "bash" || shell === "sh") return true;
+  const template = /^(?:bash|sh)\s+(.*)\{0\}\s*$/.exec(shell);
+  if (template === null) return false;
+  const words = template[1].trim().split(/\s+/);
+  return words.some((word, index) => /^-[A-Za-z]*e[A-Za-z]*$/.test(word) || (word === "-o" && words[index + 1] === "errexit"));
+}
+
+// Interpreters whose scripts are code, not commands; the guard cannot judge how their statements fail.
+const INTERPRETER = /^(?:python[\d.]*|py|node|perl|ruby)(?:\s|$)/i;
+
+const EXCEPTION_HINT = "pin the audited script as an exception (WINDOWS_SHELL_EXCEPTIONS in scripts/test-ci-parallel-gates.mjs)";
+
 /** True when a script's first two command lines are the two PWSH_PREFERENCES, in either order. */
 const carriesPreferences = (lines) =>
   PWSH_PREFERENCES.every((preference) => lines.slice(0, PWSH_PREFERENCES.length).some((line) => preference.pattern.test(line)));
@@ -168,7 +185,7 @@ export function judgeStep(step, shell, exceptions = []) {
         "carries the PowerShell preference lines but does not name shell: pwsh itself, so a changed defaults.run.shell would move it to another shell",
     };
   }
-  if (shell === "bash") return { ...judged, verdict: "bash" };
+  if (stopsAtFirstFailure(shell)) return { ...judged, verdict: "bash" };
   let problem;
   if (shell === "pwsh") {
     const missing = !carriesPreferences(lines);
@@ -180,7 +197,9 @@ export function judgeStep(step, shell, exceptions = []) {
         : `its first two command lines must be ${PWSH_PREFERENCES.map((preference) => preference.name).join(" and ")}`;
     problem = `runs ${commands} commands in pwsh, where only the last native command's exit code counts; ${why}, or use shell: bash`;
   } else {
-    problem = `runs ${commands} commands in ${shell}, which does not stop at the first failing command; use shell: bash`;
+    problem = INTERPRETER.test(shell)
+      ? `runs ${commands} lines in ${shell}, which is an interpreter, not a shell the guard can judge: ${EXCEPTION_HINT}`
+      : `runs ${commands} commands in ${shell}, which does not stop at the first failing command; use shell: bash, or ${EXCEPTION_HINT}`;
   }
   const exception = exceptions.find((candidate) => matchesException(candidate, shell, lines));
   if (exception) return { ...judged, verdict: `exception: ${exception.reason}`, exception };
