@@ -204,6 +204,12 @@ impl<C, S> RuntimeSlots<'_, C, S> {
 /// transaction, `with_model` and `pinned`, `ensure_model*`, `load_model*`)
 /// still waits out the teardown and reports `ModelBusy` after the grace
 /// budget.
+///
+/// Memory: for a moment the peak can be the old context and its state plus
+/// the new context and its state, because a caller that takes only the state
+/// lock can build a state on the new runtime while the old context is still
+/// being freed on the loading thread. The bound of two resident contexts
+/// still holds.
 #[must_use = "drop the displaced payloads only after the locks are released"]
 struct Displaced<C, S> {
     /// A warm state that belonged to no runtime.
