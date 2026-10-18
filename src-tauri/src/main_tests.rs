@@ -88,26 +88,6 @@ fn second_instance_reveals_settings_except_for_background_startup() {
     assert!(second_instance_requests_update(&update_args));
 }
 
-#[test]
-fn update_status_describes_available_and_current_releases() {
-    assert_eq!(
-        update_status_text(&updates::UpdateCheck::Available {
-            version: semver::Version::new(1, 2, 3)
-        }),
-        "Update available — v1.2.3"
-    );
-    assert_eq!(
-        update_status_text(&updates::UpdateCheck::UpToDate),
-        "Sagascript is up to date"
-    );
-    assert_eq!(
-        update_action_text(&updates::UpdateCheck::Available {
-            version: semver::Version::new(1, 2, 3)
-        }),
-        "Open Release v1.2.3…"
-    );
-}
-
 #[derive(Default)]
 struct MockMainWindow {
     operations: std::cell::RefCell<Vec<&'static str>>,
@@ -508,19 +488,6 @@ fn auto_paste_requires_runtime_accessibility_approval() {
 }
 
 #[test]
-fn update_wait_times_out_without_stopping_active_work() {
-    let start = Instant::now();
-    assert!(!update_work_wait_expired(
-        start,
-        start + Duration::from_secs(599)
-    ));
-    assert!(update_work_wait_expired(
-        start,
-        start + Duration::from_secs(600)
-    ));
-}
-
-#[test]
 fn pending_native_dictation_cannot_replace_a_different_recovered_draft() {
     let old = serde_json::json!({ "dictation": { "text": "Older unsaved draft" } });
     assert!(native_recovery_conflicts(&old, "New unsaved dictation"));
@@ -645,30 +612,10 @@ fn startup_replaces_saved_bold_hotkey_with_safe_operational_fallback() {
         .is_some_and(|message| message.contains("reserved for Bold Text on macOS")));
 }
 
-// -- tray_label --
-
-#[test]
-fn update_menu_makes_available_release_actionable() {
-    let result = updates::UpdateCheck::Available {
-        version: semver::Version::new(1, 2, 0),
-    };
-
-    assert_eq!(update_status_text(&result), "Update available — v1.2.0");
-    assert_eq!(update_action_text(&result), "Open Release v1.2.0…");
-}
-
-#[test]
-fn update_menu_keeps_a_clear_recheck_action_when_current() {
-    assert_eq!(
-        update_action_text(&updates::UpdateCheck::UpToDate),
-        "Check Again…"
-    );
-}
-
 #[test]
 fn update_action_targets_the_exact_stable_release() {
     assert_eq!(
-        stable_release_url(&semver::Version::new(1, 2, 0)),
+        stable_release_url("1.2.0"),
         "https://github.com/Magnus-Gille/sagascript/releases/tag/v1.2.0"
     );
 }

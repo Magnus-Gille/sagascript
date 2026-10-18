@@ -25,6 +25,7 @@ const settingsSource = await readFile(new URL("../src/lib/Settings.svelte", impo
 const onboardingSource = await readFile(new URL("../src/lib/Onboarding.svelte", import.meta.url), "utf8");
 const apiSource = await readFile(new URL("../src/lib/api.ts", import.meta.url), "utf8");
 const mainSource = await readFile(new URL("../src-tauri/src/main.rs", import.meta.url), "utf8");
+const traySource = await readFile(new URL("../src-tauri/src/updater/tray_menu.rs", import.meta.url), "utf8");
 const commandsSource = await readFile(new URL("../src-tauri/src/commands.rs", import.meta.url), "utf8");
 const appSource = await readFile(new URL("../src/App.svelte", import.meta.url), "utf8");
 const brandMarkSource = await readFile(new URL("../assets/brand/sagascript-mark.svg", import.meta.url), "utf8");
@@ -213,7 +214,10 @@ test("profile and update menu states remain explicit after interaction", () => {
   assert.match(mainSource, /if updates::updater_public_key\(\)\.is_some\(\) \{\s*check_for_updates_and_install\(app\.clone\(\)\)/);
   assert.match(mainSource, /state\.available_version = None;/);
   assert.match(mainSource, /items\.check\.set_text\(action_text\)/);
-  assert.match(mainSource, /"Check Again…"/);
+  // The wording lives with the menu sink, one module over, so the tray texts
+  // can change without the install sequence noticing.
+  assert.match(traySource, /"Check Again…"/);
+  assert.doesNotMatch(mainSource, /"Check Again…"/);
 });
 
 test("mobile site keeps navigation and readable terminal text", () => {

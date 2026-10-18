@@ -265,18 +265,23 @@ sequenceDiagram
     end
 ```
 
-- Code: `check_for_updates_with_intent`, `install_signed_update`, `prepare_update_recovery`
-  in `main.rs`; `updates.rs`; `UpdateActivity` / `UpdatePreparation` in `update_activity.rs`;
-  `update_recovery.rs`. Checks are never implicit (test
+- Code: the sequence itself is `updater::Orchestrator` in
+  `src-tauri/src/updater/mod.rs`, driven through three seams — `MenuSink`,
+  `UpdateProvider`, `Recovery` — so it can be tested without a tray, a download or a
+  restart. `updater/tray_menu.rs` owns every tray wording (it turns an
+  `UpdatePhase` into menu texts) and supplies the Tauri-side implementations of those
+  seams; `main.rs` keeps the thin `check_for_updates_with_intent` /
+  `install_signed_update` entry points, `updates.rs` the release check, and
+  `update_activity.rs` / `update_recovery.rs` the two recovery layers the seams call
+  into. Checks are never implicit (test
   `normal_gui_launches_never_check_for_updates_implicitly`). `sagascript update` (macOS)
   opens the app with `GUI_UPDATE_ARG` (`--install-update`), handled by
   `second_instance_requests_update` / `should_install_update_at_launch`.
 - A failure in any phase resets the menu to "Try Again…"; failures during preparation or
   install also emit `update-aborted` to Settings. The `updater-smoke-test` feature points the
   manifest at a loopback URL (section 4).
-- **Planned:** [#376](https://github.com/Magnus-Gille/sagascript/issues/376) puts the
-  orchestration behind traits; [#369](https://github.com/Magnus-Gille/sagascript/issues/369)
-  moves it out of `main.rs`.
+- **Planned:** [#369](https://github.com/Magnus-Gille/sagascript/issues/369) moves the
+  remaining entry points and tray state out of `main.rs`.
 
 ### 2.4 Engine-host process lifecycle
 
