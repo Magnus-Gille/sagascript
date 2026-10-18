@@ -50,12 +50,14 @@ The file still carries the older global `whisper_model`, `auto_select_model`
 and `pianissimo_dictation` so that a downgrade finds something sensible; they
 decide nothing while a profile has a model. Changing the default profile's
 language (`config set language`, `config reset language` or Settings) sets
-`whisper_model` to the language's recommended model and `auto_select_model` on,
-and `config set whisper_model|auto_select_model|pianissimo_dictation` moves its
-field together with the profile's model, the same way in the CLI and in the app
-(#373). A language is written as its code or its English name (`sv`,
-`swedish`) by `config set language`, `config profiles ... --language` and
-`--language` of the other commands alike.
+`whisper_model` to the language's recommended model and `auto_select_model` on.
+`config set whisper_model|auto_select_model|pianissimo_dictation` moves its
+field together with the profile's model, and so do the app commands of the same
+names, which the Settings window does not call: its model pick sets the
+profile's model alone and leaves these fields as they were (#373). A language
+is written as its code or its English name (`sv`, `swedish`) by `config set
+language`, `config profiles ... --language` and `--language` of the other
+commands alike.
 
 Use the CLI to discover the effective paths rather than duplicating the
 resolution rules in scripts:

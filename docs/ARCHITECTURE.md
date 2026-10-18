@@ -252,7 +252,7 @@ spellings; each surface keeps its own error text). Each decision where the two u
 | Operation | Decision |
 |---|---|
 | `language` (`config set\|reset language`, `set_language`) | One operation: the default profile takes the language (a model of its own that the language cannot use goes back to Auto, with a notice), and the legacy `whisper_model` becomes the recommended model of the language with `auto_select_model` on. The app always did this; the CLI now does too. Reason: releases before the profile models read those fields (ADR 0007, rule 3), nothing that reads settings now consults them while a profile has a model (`config get whisper_model` and `auto_select_model` read the profile), and the CLI had no reason of its own. `config reset language` is the same operation with the default language. |
-| `whisper_model`, `auto_select_model`, `pianissimo_dictation` (the default profile's model under its legacy names) | One operation each; the legacy field moves with the profile model, as the CLI always did and the app did not. Besides the rollback reason, the app's `set_auto_select_model(false)` pins the model `whisper_model` names, which the app's own `set_whisper_model` used to leave stale. A profile other than the default has no legacy field, so `set_profile_model` and `apply_profiles_change` do not touch them. |
+| `whisper_model`, `auto_select_model`, `pianissimo_dictation` (the default profile's model under its legacy names) | One operation each (`set_whisper_model`, `set_auto_select_model`, `set_pianissimo_dictation`); the legacy field moves with the profile model, as the CLI always did and the app did not. In the app this holds for the three IPC commands of those names only, and the GUI never calls them: its default-profile model pick goes through `set_profile_model`, which, like `config profiles update --model`, leaves the legacy fields as they were (part 2). Besides the rollback reason, the app's `set_auto_select_model(false)` pins the model `whisper_model` names, which the app's own `set_whisper_model` used to leave stale. A profile other than the default has no legacy field, so `set_profile_model` and `apply_profiles_change` do not touch them. |
 | `auto_paste` | One operation, `set_auto_paste(requested, Accessibility)`. **Kept difference:** with the permission missing the app stores `false` and refuses; the CLI stores the request and warns. The permission belongs to the installed app's bundle identity, so a CLI process would probe the wrong program (and Linux and Windows have no such permission); the app applies it when it loads the settings (`load_settings_with_permission_gate`). The parity table marks this as the one case where the surfaces differ (`Case::differs_in`). |
 | `vad_enabled` | One operation (`set_vad_enabled`), the stored value only. The app also fetches the Silero model when it turns the setting on (a side effect, so it stays there); the CLI fetches it on first use (`transcribe --vad`), and the settings watcher does not replay the download for CLI edits. |
 | `hotkey` | The default profile is the one called `default`, else the first (`HotkeyProfile::default_index`), as the app's `set_hotkey` and `config reset hotkey` always chose it. `config set hotkey` used to write `hotkey` alone when no profile was called `default`, which no binding reads. Registering the shortcut with the OS stays in the app. |
@@ -532,7 +532,14 @@ replaces the remaining source-text tests in the `ui` group with component tests.
   `commands.rs` in [#370](https://github.com/Magnus-Gille/sagascript/issues/370); update this map
   when files move.
 - Left for part 2 of [#373](https://github.com/Magnus-Gille/sagascript/issues/373) (part 1 is
-  section 2.2): `models::catalog(language)` so that `list-models --json` and the app's model picker
+  section 2.2): the GUI's model pick keeps the legacy fields in step (`set_profile_model` leaves
+  `whisper_model`, `auto_select_model` and `pianissimo_dictation` as they were; today only the three
+  commands the GUI never calls, `config set` and a language change move them); the legacy triple
+  consistent in itself (`pianissimo_dictation` false when `config set whisper_model` or a change to
+  Auto chooses a Whisper model, and true only while Pianissimo is chosen: a downgrade case of ADR 0007,
+  rule 3); the `whisper_model` list of `config set --help` generated from `WhisperModel::ALL` (it lists
+  11 of the 21 models; generating it changes help text, so it is a decision of its own); `config reset`
+  and starts with a pending migration as rows of the parity table; `models::catalog(language)` so that `list-models --json` and the app's model picker
   list the same models (the CLI sizes with `installed_size_bytes`, the app with
   `download_size_bytes`); one `sha256_hex` (four helpers remain); `glossary_ops`, one validation of
   a profile's dictionary (two sets remain, and `config set initial_prompt` merges where
