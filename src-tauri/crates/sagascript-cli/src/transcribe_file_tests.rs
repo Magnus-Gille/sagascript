@@ -1601,3 +1601,8 @@ mod assembling_the_plain_result {
 #[cfg(feature = "diarization")]
 #[path = "transcribe_diarized_tests.rs"]
 mod diarized;
+
+// ---- the Pianissimo path -------------------------------------------------------
+
+#[path = "transcribe_pianissimo_tests.rs"]
+mod pianissimo;
