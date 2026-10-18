@@ -1991,10 +1991,12 @@
   /** "Download the model again" under the Dictate tab's error. */
   async function onDictateDownloadModel(): Promise<void> {
     if (updatePreparing || downloads.busy) return;
+    const shown = testError;
     try {
       await downloadEngineModelAgain();
-      // The model is there: the action can be repeated.
-      testRecovery = "retry";
+      // The model is there: the action can be repeated. Unless another error
+      // took the place of this one meanwhile: that one decides its own recovery.
+      if (testError === shown) testRecovery = "retry";
     } catch (failure) {
       showTestError(failure, "Speech engine download failed.");
       // Whatever the code, the download is what the person asked for: offer it again.

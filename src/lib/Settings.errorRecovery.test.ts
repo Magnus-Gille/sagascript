@@ -6,7 +6,7 @@
 import { screen, waitFor } from "@testing-library/svelte";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, test } from "vitest";
-import { deferred } from "../test/deferred";
+import { deferred, settle } from "../test/deferred";
 import { backendError } from "../test/ipc";
 import { renderSettings, settingsBackend } from "../test/settings";
 import commandErrors from "../../contracts/transport/command_errors.json";
@@ -159,6 +159,23 @@ describe("Download the model again", () => {
     expect(downloadAgain()).toBeNull();
     await user.click(retry);
     await waitFor(() => expect(ipc.callsTo("start_recording")).toHaveLength(1));
+  });
+
+  test("a different error that arrives during the download keeps its own recovery", async () => {
+    const download = deferred<void>();
+    const { ipc } = await renderSettings(settingsBackend({ download_pianissimo_model: () => download.promise }));
+    ipc.emit("error", commandErrors.engine_model_missing);
+    await userEvent.setup().click(await screen.findByRole("button", { name: "Download the model again" }));
+    await waitFor(() => expect(ipc.callsTo("download_pianissimo_model")).toHaveLength(1));
+
+    // A dictation by hotkey fails meanwhile, with an error nobody can repeat.
+    ipc.emit("error", commandErrors.transcription_timed_out);
+    download.resolve();
+
+    await waitFor(() => expect(dictateError()?.textContent).toBe(commandErrors.transcription_timed_out.message));
+    await settle();
+    expect(tryAgain()).toBeNull();
+    expect(downloadAgain()).toBeNull();
   });
 
   test("a failed download shows its error and can be tried again", async () => {
