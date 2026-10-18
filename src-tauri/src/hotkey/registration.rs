@@ -28,19 +28,38 @@ fn plugin_shortcuts(shortcuts: &[String]) -> Vec<&str> {
         .collect()
 }
 
-pub fn register_shortcuts(app: &tauri::AppHandle, shortcuts: &[String]) -> Result<(), String> {
+/// Why shortcuts could not be registered with the OS. The text is shown in the
+/// shortcut health (`HotkeyStatus`) and the settings window.
+#[derive(Debug, thiserror::Error)]
+pub enum RegistrationError {
+    /// The AppKit monitor for bare F13-F24 was never installed.
+    #[cfg(target_os = "macos")]
+    #[error("The macOS F13-F24 event monitor is unavailable; restart Sagascript")]
+    MonitorUnavailable,
+    /// Bare F13-F24 are read through the Accessibility permission.
+    #[cfg(target_os = "macos")]
+    #[error(
+        "Bare F13-F24 shortcuts require Accessibility permission on macOS. Open Sagascript Settings and approve Accessibility first"
+    )]
+    AccessibilityRequired,
+    /// The global-shortcut plugin refused (a shortcut another application holds).
+    #[error("{0}")]
+    Plugin(#[from] tauri_plugin_global_shortcut::Error),
+}
+
+pub fn register_shortcuts(
+    app: &tauri::AppHandle,
+    shortcuts: &[String],
+) -> Result<(), RegistrationError> {
     #[cfg(target_os = "macos")]
     let native_monitor_error = if shortcuts
         .iter()
         .any(|shortcut| uses_native_macos_monitor(shortcut))
     {
         if !super::bare_function_key_monitor_installed() {
-            Some("The macOS F13-F24 event monitor is unavailable; restart Sagascript".to_string())
+            Some(RegistrationError::MonitorUnavailable)
         } else if !crate::platform::macos::is_accessibility_trusted() {
-            Some(
-                "Bare F13-F24 shortcuts require Accessibility permission on macOS. Open Sagascript Settings and approve Accessibility first"
-                    .to_string(),
-            )
+            Some(RegistrationError::AccessibilityRequired)
         } else {
             None
         }
@@ -55,22 +74,23 @@ pub fn register_shortcuts(app: &tauri::AppHandle, shortcuts: &[String]) -> Resul
 
     let plugin_shortcuts = plugin_shortcuts(shortcuts);
     if !plugin_shortcuts.is_empty() {
-        app.global_shortcut()
-            .register_multiple(plugin_shortcuts)
-            .map_err(|error| error.to_string())?;
+        app.global_shortcut().register_multiple(plugin_shortcuts)?;
     }
 
     Ok(())
 }
 
-pub fn unregister_shortcuts(app: &tauri::AppHandle, shortcuts: &[String]) -> Result<(), String> {
+pub fn unregister_shortcuts(
+    app: &tauri::AppHandle,
+    shortcuts: &[String],
+) -> Result<(), RegistrationError> {
     let plugin_shortcuts = plugin_shortcuts(shortcuts);
     if plugin_shortcuts.is_empty() {
         Ok(())
     } else {
-        app.global_shortcut()
-            .unregister_multiple(plugin_shortcuts)
-            .map_err(|error| error.to_string())
+        Ok(app
+            .global_shortcut()
+            .unregister_multiple(plugin_shortcuts)?)
     }
 }
 

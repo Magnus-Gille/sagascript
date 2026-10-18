@@ -84,18 +84,28 @@ fn reconcile_profile_dictionary_after_conflict(
     }
 }
 
+/// A refusal of the dictionary rules in core as the app reports it: the unknown
+/// profile is the settings' own error (`unknown_profile`), anything else is
+/// invalid input with core's text.
+fn dictionary_error(refusal: DictionaryRefusal) -> CommandError {
+    match refusal {
+        DictionaryRefusal::Settings(error) => CommandError::from(error),
+        other => CommandError::InvalidInput(other.to_string()),
+    }
+}
+
 /// The rule (a profile that detects its language holds no aliases) is core's,
 /// `Settings::ensure_alias_profile`; this is what the training review calls its
 /// refusal.
-fn ensure_learning_profile(settings: &Settings, profile_id: &str) -> Result<(), String> {
+fn ensure_learning_profile(settings: &Settings, profile_id: &str) -> Result<(), CommandError> {
     settings
         .ensure_alias_profile(profile_id)
         .map_err(|refusal| match refusal {
-            DictionaryRefusal::AutoDetectAliases => {
+            DictionaryRefusal::AutoDetectAliases => CommandError::InvalidInput(
                 "Deterministic dictionary training requires a profile with an explicit language"
-                    .to_string()
-            }
-            other => other.to_string(),
+                    .into(),
+            ),
+            other => dictionary_error(other),
         })
 }
 
@@ -117,7 +127,7 @@ fn set_profile_glossary_in(
     // between them and the write.
     settings
         .check_dictionary_source(profile_id, &source)
-        .map_err(|refusal| refusal.to_string())?;
+        .map_err(dictionary_error)?;
     let current_source = settings
         .profile_glossaries
         .get(profile_id)
@@ -126,8 +136,7 @@ fn set_profile_glossary_in(
     ensure_expected_dictionary_source(current_source, expected_source)?;
     settings
         .set_profile_dictionary(profile_id, source)
-        .map_err(|refusal| refusal.to_string())?;
-    Ok(())
+        .map_err(dictionary_error)
 }
 
 #[tauri::command]
@@ -185,7 +194,7 @@ fn apply_reviewed_training_candidates(
     corrected: &str,
     profile_id: &str,
     accepted: &[GlossarySuggestion],
-) -> Result<(), String> {
+) -> Result<(), CommandError> {
     ensure_learning_profile(settings, profile_id)?;
     let effective = Glossary::parse(&settings.effective_glossary_source(Some(profile_id)));
     let allowed = suggest_glossary_candidates(heard, corrected, &effective);
@@ -204,9 +213,9 @@ fn apply_reviewed_training_candidates(
                 && training_term_key(&other.observed) == canonical_key
         });
         if conflicts_with_existing_alias || conflicts_with_reviewed_alias {
-            return Err(
+            return Err(CommandError::InvalidInput(
                 "Edited preferred spelling conflicts with a personal dictionary alias".to_string(),
-            );
+            ));
         }
         let Some((index, _)) = allowed.iter().enumerate().find(|(index, original)| {
             !matched[*index]
@@ -219,9 +228,9 @@ fn apply_reviewed_training_candidates(
                     (GlossarySuggestionKind::HintOnly, GlossarySuggestionKind::Alias) => false,
                 }
         }) else {
-            return Err(
+            return Err(CommandError::InvalidInput(
                 "Dictionary suggestions changed; review the corrected transcript again".to_string(),
-            );
+            ));
         };
         matched[index] = true;
     }
@@ -240,11 +249,11 @@ fn training_term_key(value: &str) -> String {
     value.chars().flat_map(char::to_lowercase).collect()
 }
 
-fn validate_edited_training_candidate(candidate: &GlossarySuggestion) -> Result<(), String> {
+fn validate_edited_training_candidate(candidate: &GlossarySuggestion) -> Result<(), CommandError> {
     if !is_reviewable_term(&candidate.canonical) {
-        return Err(
+        return Err(CommandError::InvalidInput(
             "Edited dictionary terms must be 1-4 words without glossary delimiters".to_string(),
-        );
+        ));
     }
     Ok(())
 }
@@ -270,7 +279,9 @@ pub async fn apply_training_glossary(
     accepted: Vec<GlossarySuggestion>,
 ) -> Result<(), CommandError> {
     if accepted.is_empty() {
-        return Err("Select at least one dictionary suggestion".into());
+        return Err(CommandError::InvalidInput(
+            "Select at least one dictionary suggestion".into(),
+        ));
     }
 
     let accepted_count = accepted.len();

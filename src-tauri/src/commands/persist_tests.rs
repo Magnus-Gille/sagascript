@@ -138,14 +138,21 @@ const ROWS: &[Row] = &[
             "hotkey_profiles",
         ]),
         arrange: nothing,
-        run: |app, _| persist_language(&controller(app), Language::Norwegian).map(drop),
+        run: |app, _| {
+            persist_language(&controller(app), Language::Norwegian)
+                .map(drop)
+                .map_err(text)
+        },
         landed: |s| s.default_profile().language == Language::Norwegian,
     },
     Row {
         commands: &["set_onboarding_completed"],
         mirror: Mirror::Field(&["has_completed_onboarding"]),
         arrange: nothing,
-        run: |app, rt| rt.block_on(set_onboarding_completed(controller(app))),
+        run: |app, rt| {
+            rt.block_on(set_onboarding_completed(controller(app)))
+                .map_err(text)
+        },
         landed: |s| s.has_completed_onboarding,
     },
     Row {
@@ -157,6 +164,7 @@ const ROWS: &[Row] = &[
                 controller(app),
                 model_id(WhisperModel::NbWhisperSmall),
             ))
+            .map_err(text)
         },
         landed: |s| {
             s.file_transcription_model == FileModelPreference::Whisper(WhisperModel::NbWhisperSmall)
@@ -172,6 +180,7 @@ const ROWS: &[Row] = &[
                 "default".into(),
                 model_id(WhisperModel::NbWhisperMedium),
             ))
+            .map_err(text)
         },
         landed: |s| {
             s.profile_models.get("default")
@@ -187,6 +196,7 @@ const ROWS: &[Row] = &[
                 controller(app),
                 WhisperModel::NbWhisperBase,
             ))
+            .map_err(text)
         },
         landed: |s| {
             s.profile_models.get("default")
@@ -197,14 +207,20 @@ const ROWS: &[Row] = &[
         commands: &["set_pianissimo_dictation"],
         mirror: Mirror::Field(&["profile_models", "pianissimo_dictation"]),
         arrange: nothing,
-        run: |app, rt| rt.block_on(set_pianissimo_dictation(controller(app), false)),
+        run: |app, rt| {
+            rt.block_on(set_pianissimo_dictation(controller(app), false))
+                .map_err(text)
+        },
         landed: |s| s.profile_models.get("default") == Some(&FileModelPreference::Auto),
     },
     Row {
         commands: &["set_auto_select_model"],
         mirror: Mirror::Field(&["profile_models", "auto_select_model"]),
         arrange: nothing,
-        run: |app, rt| rt.block_on(set_auto_select_model(controller(app), false)),
+        run: |app, rt| {
+            rt.block_on(set_auto_select_model(controller(app), false))
+                .map_err(text)
+        },
         landed: |s| {
             s.profile_models.get("default") == Some(&FileModelPreference::Whisper(s.whisper_model))
         },
@@ -215,14 +231,21 @@ const ROWS: &[Row] = &[
         arrange: nothing,
         // Disabling needs no Accessibility permission, so this row is the same
         // on every platform.
-        run: |app, rt| rt.block_on(set_auto_paste(controller(app), false)),
+        run: |app, rt| {
+            rt.block_on(set_auto_paste(controller(app), false))
+                .map_err(text)
+        },
         landed: |s| !s.auto_paste,
     },
     Row {
         commands: &["set_show_overlay"],
         mirror: Mirror::Field(&["show_overlay"]),
         arrange: nothing,
-        run: |app, _| persist_show_overlay(&controller(app), false).map(drop),
+        run: |app, _| {
+            persist_show_overlay(&controller(app), false)
+                .map(drop)
+                .map_err(text)
+        },
         landed: |s| !s.show_overlay,
     },
     Row {
@@ -268,14 +291,17 @@ const ROWS: &[Row] = &[
         commands: &["set_beam_size"],
         mirror: Mirror::Field(&["beam_size"]),
         arrange: nothing,
-        run: |app, rt| rt.block_on(set_beam_size(controller(app), 7)),
+        run: |app, rt| rt.block_on(set_beam_size(controller(app), 7)).map_err(text),
         landed: |s| s.beam_size == 7,
     },
     Row {
         commands: &["set_temperature_fallback"],
         mirror: Mirror::Field(&["temperature_fallback"]),
         arrange: nothing,
-        run: |app, rt| rt.block_on(set_temperature_fallback(controller(app), false)),
+        run: |app, rt| {
+            rt.block_on(set_temperature_fallback(controller(app), false))
+                .map_err(text)
+        },
         landed: |s| !s.temperature_fallback,
     },
     Row {
@@ -286,7 +312,10 @@ const ROWS: &[Row] = &[
         arrange: || {
             machine::update(|s| s.vad_enabled = true).expect("the fake settings file is writable");
         },
-        run: |app, rt| rt.block_on(set_vad_enabled(controller(app), false)),
+        run: |app, rt| {
+            rt.block_on(set_vad_enabled(controller(app), false))
+                .map_err(text)
+        },
         landed: |s| !s.vad_enabled,
     },
     Row {
@@ -298,6 +327,7 @@ const ROWS: &[Row] = &[
                 controller(app),
                 other_prewarm().id().into(),
             ))
+            .map_err(text)
         },
         landed: |s| s.engine_prewarm == other_prewarm(),
     },
@@ -305,7 +335,10 @@ const ROWS: &[Row] = &[
         commands: &["set_engine_idle_unload_minutes"],
         mirror: Mirror::Field(&["engine_idle_unload_minutes"]),
         arrange: nothing,
-        run: |app, rt| rt.block_on(set_engine_idle_unload_minutes(controller(app), 11)),
+        run: |app, rt| {
+            rt.block_on(set_engine_idle_unload_minutes(controller(app), 11))
+                .map_err(text)
+        },
         landed: |s| s.engine_idle_unload_minutes == 11,
     },
     Row {

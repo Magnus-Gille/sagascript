@@ -1,4 +1,6 @@
-use sagascript_core::settings::{HotkeyMode, HotkeyProfile, Settings};
+use sagascript_core::settings::{HotkeyMode, HotkeyProfile, Settings, SettingsError};
+
+use crate::command_error::CommandError;
 
 /// One explicit user change. Apply it to fresh settings without replacing
 /// unrelated preferences, then bind persistence to the registered shortcuts.
@@ -8,7 +10,7 @@ pub enum HotkeyChange {
 }
 
 impl HotkeyChange {
-    pub fn prepare(&self, settings: &Settings) -> Result<Settings, String> {
+    pub fn prepare(&self, settings: &Settings) -> Result<Settings, SettingsError> {
         self.prepare_with_notices(settings)
             .map(|(candidate, _)| candidate)
     }
@@ -18,7 +20,7 @@ impl HotkeyChange {
     pub fn prepare_with_notices(
         &self,
         settings: &Settings,
-    ) -> Result<(Settings, Vec<String>), String> {
+    ) -> Result<(Settings, Vec<String>), SettingsError> {
         let mut candidate = settings.clone();
         let notices = match self {
             // The profile list is applied by the operation `sagascript config
@@ -39,12 +41,14 @@ impl HotkeyChange {
         &self,
         fresh: &mut Settings,
         registered: &[String],
-    ) -> Result<(), String> {
-        let candidate = self.prepare(fresh)?;
+    ) -> Result<(), CommandError> {
+        let candidate = self
+            .prepare(fresh)
+            .map_err(|error| CommandError::HotkeyInvalid(error.to_string()))?;
         if candidate.resolved_shortcuts() != registered {
-            return Err(
+            return Err(CommandError::HotkeyChangeFailed(
                 "Shortcut configuration changed concurrently; retry after settings refresh".into(),
-            );
+            ));
         }
         *fresh = candidate;
         Ok(())

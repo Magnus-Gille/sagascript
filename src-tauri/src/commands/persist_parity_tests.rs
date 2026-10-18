@@ -27,31 +27,41 @@ use super::*;
 fn run_op(app: &App, runtime: &tokio::runtime::Runtime, op: &Op) -> Result<(), String> {
     let state = controller(app);
     match op {
-        Op::Language(language) => persist_language(&state, *language).map(drop),
-        Op::WhisperModel(model) => runtime.block_on(set_whisper_model(state, *model)),
-        Op::AutoSelectModel(enabled) => runtime.block_on(set_auto_select_model(state, *enabled)),
-        Op::PianissimoDictation(enabled) => {
-            runtime.block_on(set_pianissimo_dictation(state, *enabled))
-        }
+        Op::Language(language) => persist_language(&state, *language).map(drop).map_err(text),
+        Op::WhisperModel(model) => runtime
+            .block_on(set_whisper_model(state, *model))
+            .map_err(text),
+        Op::AutoSelectModel(enabled) => runtime
+            .block_on(set_auto_select_model(state, *enabled))
+            .map_err(text),
+        Op::PianissimoDictation(enabled) => runtime
+            .block_on(set_pianissimo_dictation(state, *enabled))
+            .map_err(text),
         Op::AutoPaste {
             enabled,
             permission,
-        } => persist_auto_paste(&state, *enabled, *permission).map(drop),
-        Op::VadEnabled(enabled) => persist_vad_enabled(&state, *enabled).map(drop),
-        Op::ShowOverlay(enabled) => persist_show_overlay(&state, *enabled).map(drop),
-        Op::BeamSize(beam) => runtime.block_on(set_beam_size(state, *beam)),
-        Op::TemperatureFallback(enabled) => {
-            runtime.block_on(set_temperature_fallback(state, *enabled))
-        }
-        Op::EnginePrewarm(mode) => {
-            runtime.block_on(set_engine_prewarm(state, mode.id().to_string()))
-        }
-        Op::EngineIdleUnloadMinutes(minutes) => {
-            runtime.block_on(set_engine_idle_unload_minutes(state, *minutes))
-        }
-        Op::FileTranscriptionModel(choice) => {
-            runtime.block_on(set_file_transcription_model(state, choice.id().to_string()))
-        }
+        } => persist_auto_paste(&state, *enabled, *permission)
+            .map(drop)
+            .map_err(text),
+        Op::VadEnabled(enabled) => persist_vad_enabled(&state, *enabled)
+            .map(drop)
+            .map_err(text),
+        Op::ShowOverlay(enabled) => persist_show_overlay(&state, *enabled)
+            .map(drop)
+            .map_err(text),
+        Op::BeamSize(beam) => runtime.block_on(set_beam_size(state, *beam)).map_err(text),
+        Op::TemperatureFallback(enabled) => runtime
+            .block_on(set_temperature_fallback(state, *enabled))
+            .map_err(text),
+        Op::EnginePrewarm(mode) => runtime
+            .block_on(set_engine_prewarm(state, mode.id().to_string()))
+            .map_err(text),
+        Op::EngineIdleUnloadMinutes(minutes) => runtime
+            .block_on(set_engine_idle_unload_minutes(state, *minutes))
+            .map_err(text),
+        Op::FileTranscriptionModel(choice) => runtime
+            .block_on(set_file_transcription_model(state, choice.id().to_string()))
+            .map_err(text),
         Op::HotkeyMode(mode) => persist_hotkey(app, HotkeyChange::Mode(*mode)),
         Op::Hotkey(shortcut) => {
             let profiles = profiles_with_default_shortcut(
@@ -67,19 +77,23 @@ fn run_op(app: &App, runtime: &tokio::runtime::Runtime, op: &Op) -> Result<(), S
             let (profiles, model) = edit.resulting(&machine::load())?;
             persist_hotkey(app, HotkeyChange::Profiles(profiles))?;
             match model {
-                Some((id, choice)) => runtime.block_on(set_profile_model(
-                    controller(app),
-                    id,
-                    choice.id().to_string(),
-                )),
+                Some((id, choice)) => runtime
+                    .block_on(set_profile_model(
+                        controller(app),
+                        id,
+                        choice.id().to_string(),
+                    ))
+                    .map_err(text),
                 None => Ok(()),
             }
         }
-        Op::ProfileModel { id, model } => runtime.block_on(set_profile_model(
-            state,
-            id.to_string(),
-            model.id().to_string(),
-        )),
+        Op::ProfileModel { id, model } => runtime
+            .block_on(set_profile_model(
+                state,
+                id.to_string(),
+                model.id().to_string(),
+            ))
+            .map_err(text),
         Op::DictionaryAdd {
             profile,
             term,

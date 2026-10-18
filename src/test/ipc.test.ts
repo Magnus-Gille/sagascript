@@ -3,7 +3,7 @@ import { emit, listen, once } from "@tauri-apps/api/event";
 import { describe, expect, test } from "vitest";
 import { getPlatform, getSettings, setHotkeyProfiles, setLanguage, setProfileGlossary, type Settings } from "../lib/api";
 import { isBackendError } from "../lib/errors";
-import { backendError, COMMAND_NAMES, isCommandName, mockIpc, resetIpcMock, type EventMap } from "./ipc";
+import { backendError, COMMAND_NAMES, isCommandName, mockIpc, rejectionProblem, resetIpcMock, type EventMap } from "./ipc";
 
 const settings: Settings = {
   language: "sv",
@@ -97,13 +97,18 @@ describe("commands", () => {
     ]);
   });
 
-  test("a handler that throws a string rejects like a Rust error", async () => {
+  test("a handler that throws a backend error rejects like a Rust error", async () => {
     mockIpc({
       set_language: () => {
-        throw "Profile 'default' has a personal dictionary";
+        throw backendError("dictionary_blocks_language_change", "Profile 'default' has a personal dictionary");
       },
     });
-    await expect(setLanguage("en")).rejects.toBe("Profile 'default' has a personal dictionary");
+    await expect(setLanguage("en")).rejects.toEqual({
+      code: "dictionary_blocks_language_change",
+      message: "Profile 'default' has a personal dictionary",
+      retryable: false,
+    });
+    expect(() => resetIpcMock()).not.toThrow();
   });
 
   test("a command that returns Result<_, CommandError> rejects with a BackendError object", async () => {
@@ -139,15 +144,14 @@ describe("commands", () => {
     );
   });
 
-  test("a command that is not typed yet fails the test when its fake rejects with an object", async () => {
-    mockIpc({
-      set_language: () => {
-        throw backendError("settings_error", "Profile 'default' has a personal dictionary");
-      },
-    });
-    await expect(setLanguage("en")).rejects.toMatchObject({ code: "settings_error" });
-    expect(() => resetIpcMock()).toThrow(
-      'IPC command "set_language" returns Result<_, String>: its fake must reject with a string, not with an error object',
+  test("a command that returns Result<_, String> takes a string and refuses an error object", () => {
+    // No command rejects with a string any more (#360 part 2), but the generator
+    // still maps `Result<T, String>`, so the check for that shape is kept.
+    const stringCommands: ReadonlySet<string> = new Set();
+    expect(rejectionProblem("get_platform", "boom", stringCommands)).toBeNull();
+    expect(rejectionProblem("get_platform", new Error("boom"), stringCommands)).toBeNull();
+    expect(rejectionProblem("get_platform", backendError("settings_error", "boom"), stringCommands)).toBe(
+      'IPC command "get_platform" returns Result<_, String>: its fake must reject with a string, not with an error object',
     );
   });
 

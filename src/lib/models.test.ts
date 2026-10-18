@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { ModelDownloads, PIANISSIMO_ID, downloadModelById } from "./models.svelte";
-import { mockIpc } from "../test/ipc";
+import { backendError, mockIpc } from "../test/ipc";
 
 describe("downloadModelById", () => {
   test("Pianissimo goes through its own command", async () => {
@@ -34,11 +34,13 @@ describe("downloadModelById", () => {
   test("the backend's refusal reaches the caller", async () => {
     mockIpc({
       download_pianissimo_model: () => {
-        throw "Pianissimo is not supported on this OS";
+        throw backendError("pianissimo_unavailable", "Pianissimo is not supported on this OS");
       },
     });
 
-    await expect(downloadModelById(PIANISSIMO_ID)).rejects.toBe("Pianissimo is not supported on this OS");
+    await expect(downloadModelById(PIANISSIMO_ID)).rejects.toEqual(
+      backendError("pianissimo_unavailable", "Pianissimo is not supported on this OS"),
+    );
   });
 });
 

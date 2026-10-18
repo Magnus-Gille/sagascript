@@ -2,7 +2,8 @@
 
 - Status: Accepted (2026-10-14). Part 1 of [#360](https://github.com/Magnus-Gille/sagascript/issues/360)
   implements it for dictation, transcription, hotkeys, the dictionary and file transcription;
-  part 2 finishes the migration.
+  part 2a (decisions 7 and 8) types the rest of the app crate and the settings; part 2b is
+  listed under Consequences.
 - Related: [#347](https://github.com/Magnus-Gille/sagascript/issues/347) (generated `CommandMap`),
   [#364](https://github.com/Magnus-Gille/sagascript/issues/364) (CLI error object),
   [ADR 0002](0002-privacy-first.md)
@@ -33,12 +34,14 @@
    is the one list for workflow errors (the variant name in snake_case, or an engine failure's
    own `engine_*` code); the CLI's JSON error object uses the same function, so there is one
    vocabulary. `CommandError` adds `busy`, `not_recording`, `cancelled`,
-   `dictionary_changed_elsewhere`, `hotkey_invalid`, `hotkey_change_failed`, and the
-   transitional `unclassified`. A cancellation has one representation (`cancelled`).
+   `dictionary_changed_elsewhere`, `hotkey_invalid`, `hotkey_change_failed` and, since part 2a,
+   the codes of decision 8. A cancellation has one representation (`cancelled`). The transitional
+   `unclassified` of part 1 is gone: after part 2a nothing produced it, and a `String` no longer
+   converts into a `CommandError`.
 3. **The frontend matches only on `code`**: `isBackendError(error, code)`. `message` is shown
-   (`toErrorMessage`) and never parsed. A command not yet typed still rejects with a string; the
-   generated `CommandMap` says which (`error: string | BackendError`, `BACKEND_ERROR_COMMANDS`),
-   and the IPC fake fails a test whose rejection has the other shape.
+   (`toErrorMessage`) and never parsed. Every command is typed since part 2a; the generated
+   `CommandMap` still says which shape a signature has (`error: string | BackendError`,
+   `BACKEND_ERROR_COMMANDS`), and the IPC fake fails a test whose rejection has the other shape.
 4. **Engine failures** are `DictationError::Engine(EngineFailure)`, a struct with private
    `code`, `retryable` and `message`, built only by `EngineFailure::new`. A variant's fields are
    always public, so `Engine { code, retryable, message }` could be built unscrubbed; and
@@ -71,6 +74,29 @@
    be offered a retry forever. `engine_model_missing` and `engine_model_load_failed` offer a model
    download instead (`backendErrorRecovery`).
 
+7. **Settings failures are `SettingsError`** (`sagascript_core::settings::SettingsError`). The
+   settings manager, store, operations (`ops`), machine wrappers and hotkey validation return
+   it instead of a `String`; its `Display` is the text each refusal always had.
+   `machine::try_update` (and the store beneath it) hands back the error type of the caller's
+   closure (`E: From<SettingsError>`) and converts its own failures into it, so a typed refusal
+   needs no side channel out of the settings lock. The CLI wraps it as `DictationError::Settings` (its JSON error object gets
+   the specific code), the app as `CommandError::Settings`. Codes: `invalid_setting_value`,
+   `unknown_profile`, `model_incompatible`, `pianissimo_unavailable`, `hotkey_invalid`,
+   `profile_invalid`, `dictionary_blocks_language_change`, `inactive_profile_dictionary`,
+   `settings_storage_failed`. The Settings window recognises a language change a personal
+   dictionary blocks by `dictionary_blocks_language_change`, which removed the last text match.
+8. **Command codes beyond the workflow errors.** `invalid_input` (the command refused its
+   arguments or the user's choice), `not_found`, `unavailable` (not in this build, window or
+   state), `io_error`, `clipboard_failed`, `export_exists` (exports never overwrite),
+   `launch_failed`, `model_download_failed` and `accessibility_permission_denied` (the last
+   two with the command's own text, sharing the code of the same condition elsewhere), plus
+   `busy` for an update being applied or a job already running. The meeting error enums convert
+   through `DictationError` (`meeting_invalid`, or `meeting_stale` when a revision or recording
+   no longer matches what the caller holds; the diarization evaluation enums are
+   `diarization_error`), matched exhaustively so a new variant needs a code before it compiles.
+   Where a fixed message replaces a source error, `CommandError::because` scrubs the cause, logs
+   it and keeps it as the error's `source()`; it never reaches the webview.
+
 ## Consequences
 
 - Rewording a message cannot change behaviour; a new failure that needs its own handling needs
@@ -78,9 +104,29 @@
 - `DictationError` gains `Cancelled`, `Engine`, `TranscriptionTimedOut`, `TaskFailed` and
   `FileNotFound` (a missing file, from `ErrorKind::NotFound`). `PasteError`,
   `ApplicationLaunchError` and `AccessibilityPermissionDenied` stay: the paste service and
-  `sagascript open` construct them. The CLI's `code` changes only for failures that were
-  `transcription_failed` or `file_decode_error` before (engine failures, cancellation, a missing
-  file).
+  `sagascript open` construct them.
+- **The CLI's JSON `code` changes** for every failure whose cause is now a typed error. Part 1
+  moved failures that were `transcription_failed` or `file_decode_error` (engine failures,
+  cancellation, a missing file). Part 2a moves the settings refusals of core, which were
+  `settings_error`, in every run that frames its errors as JSON (`transcribe --json|--jsonl`,
+  `record --json`, `glossary suggest --json`; `engine status|doctor --json` reach none). The text
+  and the exit code are unchanged:
+
+  | Failure | Before | After |
+  |---|---|---|
+  | `--profile` names no dictation profile (`transcribe`, `record`, `glossary suggest`) | `settings_error` | `unknown_profile` |
+  | `transcribe --model` names no model | `settings_error` | `invalid_setting_value` |
+  | The model cannot serve the language: `transcribe --model` or the stored file model against `--language` or the profile's language; the profile's stored model for `record` and `glossary suggest` | `settings_error` | `model_incompatible` |
+  | Pianissimo for a language or profile that is not Swedish | `settings_error` | `pianissimo_unavailable` |
+
+  Other `settings_error` objects stay: they are the CLI's own wording for a flag or a
+  combination (`--model auto`, an unknown `--language`, `--speakers`, Pianissimo with
+  `--diarize`, a missing corrected transcript). `settings_storage_failed` cannot appear in a JSON
+  run today: settings are read without failing, and the one JSON command that writes them,
+  `glossary suggest --apply`, keeps reporting a store failure as `settings_error` text. The
+  plain-text commands (`config`, `glossary add|remove|clear`) print the same lines as before;
+  their JSON objects do not exist. `run_context_cli.rs`, `transcribe_contract.rs` and
+  `output_contract.rs` pin the codes.
 - The scrubber is a heuristic for text it does not control. It removes the account name from
   every path in a recognised spelling (decision 5). Known non-goals:
   - a root that does not start a word (`é/Users/zoe`, `-o/Users/zoe`), a percent-encoded path
@@ -96,12 +142,21 @@
   without a separator after a name with an extension, a word ending in a colon, a period or an
   exclamation mark, a URL), and towards removing more when a later word contains a separator
   (`and/or` after `a.wav` joins the path).
-- **Part 2** ([#360](https://github.com/Magnus-Gille/sagascript/issues/360)): convert the rest
-  of the app crate's `Result<_, String>` (the target is at most 20, each justified), give every
-  `Unclassified` producer a code, type `SettingsError` (the one remaining text match,
-  `defaultDictionaryLanguageBlock` in `Settings.svelte`, needs it), add `From` impls for the nine
-  `Meeting*`/`Reference`/`Proposal` error enums, keep the source errors in
-  `meeting_reprocessing_commands.rs`, wire "Try again" (restarting the action, decision 6) and
-  "Download the model again" into the transcription error views, have `FileTranscription` mark a
-  backend `cancelled` as cancelled rather than failed, and have the hotkey path show a
-  `Cancelled` as a quiet end instead of `UiState::Error`.
+- **Part 2a** (done): the app crate's production `Result<_, String>` went from 125 lines to 14
+  (191 to 76 counting tests, the CommandMap generator and its fixtures, and
+  `paste/windows_clipboard.rs`, whose 17 lines never cross IPC). What stays, and why:
+  `finish_snapshot`'s job result (`meeting_jobs.rs`) and `AppController::finish_transcription`
+  (`app_controller.rs`) carry the failure text a job or a dictation records as data
+  (`MeetingSnapshot.error`, `last_error`); `UpdatePreparation`'s channel (`updater/activity.rs`)
+  and `paste/completion.rs` carry text the Settings window or the paste task reported;
+  `platform/macos.rs`, `hotkey/macos_bare.rs`, `updater/signed.rs` and the macOS monitor reply in
+  `commands/hotkey.rs` are macOS-only and are only logged or mapped to `launch_failed` (they can
+  be compiled by the macOS runner alone). The settings internals that still use `String`
+  (`settings/migrations.rs`, `settings/lenient.rs`) feed `SettingsLoadError`, which is typed.
+- **Part 2b** (not done): `apply_hotkey_change` flattens a `SettingsError` into `hotkey_invalid`
+  (`commands/hotkey.rs`, `hotkey/configuration.rs`), so a profile refusal such as
+  `dictionary_blocks_language_change` or `model_incompatible` reaches the Settings window as
+  `hotkey_invalid` there; the `error` event's payload is still a plain string, `FileTranscription`
+  shows a backend `cancelled` as a failure, the hotkey path shows a `Cancelled` as
+  `UiState::Error` rather than a quiet end, and the "Try again" (restarting the action, decision 6)
+  and "Download the model again" buttons are not wired to `backendErrorRecovery`.

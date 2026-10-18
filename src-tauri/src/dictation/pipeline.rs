@@ -187,6 +187,8 @@ pub(super) fn stop_recording_and_transcribe(
         let (language, effective_model, opts, glossary, use_pianissimo) = match selection {
             Ok(selection) => selection,
             Err(error) => {
+                // The `error` event still carries plain text (#360 part 2b).
+                let error = error.to_string();
                 error!("Cannot resolve profile model: {error}");
                 if let Err(finish_error) =
                     lock_controller(&ctrl).finish_transcription(Err(error.clone()))
@@ -398,7 +400,7 @@ pub(super) fn stop_recording_and_transcribe(
                     #[cfg(target_os = "macos")]
                     let dispatch_result = app_handle.run_on_main_thread(paste_task);
                     #[cfg(not(target_os = "macos"))]
-                    let dispatch_result: Result<(), String> = {
+                    let dispatch_result: Result<(), tauri::Error> = {
                         // Clipboard focus/paste can block on Windows. Keep its
                         // native UI thread responsive while preserving macOS's
                         // mandatory main-thread execution above.

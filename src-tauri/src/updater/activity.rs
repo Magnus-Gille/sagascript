@@ -9,6 +9,20 @@ use tokio::sync::oneshot;
 const PREPARATION_LOCK: &str = "update.preparation";
 const ACTIVITY_LOCK: &str = "update.activity";
 
+/// Why the update coordinator refused a request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum ActivityError {
+    /// An update is being installed: no new work, no new pending result.
+    #[error("An update is being applied. Wait for Sagascript to restart.")]
+    UpdateApplying,
+    /// A result id that is empty or longer than 128 bytes.
+    #[error("Invalid transcription result ID.")]
+    InvalidResultId,
+    /// An acknowledgement whose nonce is not the pending preparation's.
+    #[error("Unknown or expired update preparation request.")]
+    UnknownPreparation,
+}
+
 struct PendingPreparation {
     nonce: String,
     sender: oneshot::Sender<Result<(), String>>,
@@ -34,13 +48,13 @@ impl UpdatePreparation {
         (nonce, receiver)
     }
 
-    pub fn complete(&self, nonce: &str, result: Result<(), String>) -> Result<(), String> {
+    pub fn complete(&self, nonce: &str, result: Result<(), String>) -> Result<(), ActivityError> {
         let mut pending = lock_or_recover(&self.pending, PREPARATION_LOCK);
         if pending
             .as_ref()
             .is_none_or(|current| current.nonce != nonce)
         {
-            return Err("Unknown or expired update preparation request.".into());
+            return Err(ActivityError::UnknownPreparation);
         }
         if let Some(current) = pending.take() {
             let _ = current.sender.send(result);
@@ -88,22 +102,22 @@ pub enum ExclusiveError {
 }
 
 impl UpdateActivity {
-    pub fn begin_work(self: &Arc<Self>) -> Result<WorkLease, String> {
+    pub fn begin_work(self: &Arc<Self>) -> Result<WorkLease, ActivityError> {
         let mut state = lock_or_recover(&self.state, ACTIVITY_LOCK);
         if state.exclusive {
-            return Err("An update is being applied. Wait for Sagascript to restart.".into());
+            return Err(ActivityError::UpdateApplying);
         }
         state.active_work = state.active_work.saturating_add(1);
         Ok(WorkLease(self.clone()))
     }
 
-    pub fn set_result_pending(&self, result_id: &str, pending: bool) -> Result<(), String> {
+    pub fn set_result_pending(&self, result_id: &str, pending: bool) -> Result<(), ActivityError> {
         if result_id.is_empty() || result_id.len() > 128 {
-            return Err("Invalid transcription result ID.".into());
+            return Err(ActivityError::InvalidResultId);
         }
         let mut state = lock_or_recover(&self.state, ACTIVITY_LOCK);
         if pending && state.exclusive {
-            return Err("An update is being applied. Wait for Sagascript to restart.".into());
+            return Err(ActivityError::UpdateApplying);
         }
         if pending {
             state.unsaved_results.insert(result_id.to_owned());
@@ -189,6 +203,65 @@ mod tests {
         preparation.complete(&nonce, Ok(())).unwrap();
         assert!(receiver.blocking_recv().unwrap().is_ok());
         assert!(preparation.complete(&nonce, Ok(())).is_err());
+    }
+
+    /// A refusal says why, and the command layer maps it to a code of its own:
+    /// an update being applied is `busy` (repeat the action once Sagascript has
+    /// restarted), a bad id is `invalid_input`, an unknown nonce `not_found`.
+    #[test]
+    fn refusals_are_typed_and_become_command_errors_with_codes() {
+        use crate::command_error::CommandError;
+
+        let activity = Arc::new(UpdateActivity::default());
+        assert_eq!(
+            activity.set_result_pending("", true),
+            Err(ActivityError::InvalidResultId)
+        );
+        assert_eq!(
+            activity.set_result_pending(&"x".repeat(129), true),
+            Err(ActivityError::InvalidResultId)
+        );
+        let exclusive = activity.try_exclusive(false).unwrap();
+        assert_eq!(
+            activity.begin_work().err(),
+            Some(ActivityError::UpdateApplying)
+        );
+        assert_eq!(
+            activity.set_result_pending("result", true),
+            Err(ActivityError::UpdateApplying)
+        );
+        drop(exclusive);
+        let preparation = UpdatePreparation::default();
+        assert_eq!(
+            preparation.complete("nonce", Ok(())),
+            Err(ActivityError::UnknownPreparation)
+        );
+
+        for (error, code, retryable, text) in [
+            (
+                ActivityError::UpdateApplying,
+                "busy",
+                true,
+                "An update is being applied. Wait for Sagascript to restart.",
+            ),
+            (
+                ActivityError::InvalidResultId,
+                "invalid_input",
+                false,
+                "Invalid transcription result ID.",
+            ),
+            (
+                ActivityError::UnknownPreparation,
+                "not_found",
+                false,
+                "Unknown or expired update preparation request.",
+            ),
+        ] {
+            let error = CommandError::from(error);
+            assert_eq!(error.code(), code);
+            assert_eq!(error.retryable(), retryable, "{code}");
+            assert_eq!(error.to_string(), text);
+        }
     }
 
     #[test]

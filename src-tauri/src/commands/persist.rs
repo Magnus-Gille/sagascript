@@ -81,8 +81,8 @@ pub(crate) struct Persisted {
 /// `change` runs twice, so it must not depend on the copy it is given beyond
 /// the fields it assigns; the setters assign a value they were handed.
 ///
-/// `Err` is the file's own error ([`CommandError::Unclassified`] until
-/// #360 part 2 types the settings store); the controller is left as it was.
+/// `Err` is the file's own error ([`CommandError::Settings`], with the code of
+/// its `SettingsError`); the controller is left as it was.
 pub(crate) fn persist_and_sync(
     controller: &SharedController,
     change: impl Fn(&mut Settings),
@@ -162,42 +162,30 @@ fn persist<E: Into<CommandError>>(
     follow: impl FnOnce(&Settings, &Settings) -> Settings,
 ) -> Result<Persisted, CommandError> {
     let _one_writer = lock_or_recover(&PERSIST, PERSIST_LOCK);
-    // The store reports a refusal as text. The typed error is carried out of
-    // the closure beside it, so the caller gets the error it produced.
-    let mut refusal: Option<CommandError> = None;
-    let written = machine::try_update(|settings| {
-        change(settings).map_err(|error| {
-            let error: CommandError = error.into();
-            let text = error.to_string();
-            refusal = Some(error);
-            text
-        })
-    });
-    match written {
-        Ok(written) => {
-            // Asked before the controller lock is taken: the first answer may
-            // probe the machine.
-            let pianissimo_supported = host_runs_pianissimo();
-            let mut ctrl = lock_controller(controller);
-            let mut current = follow(ctrl.settings(), &written);
-            // Quietly: the startup load warned about each demoted selection,
-            // and every setter would say it again.
-            let demoted = current.demote_unsupported_pianissimo_quietly(pianissimo_supported);
-            let previous = ctrl.update_settings(current.clone());
-            drop(ctrl);
-            if demoted {
-                tracing::debug!(
-                    "The written settings select Pianissimo, which this host cannot run; the controller keeps them demoted"
-                );
-            }
-            Ok(Persisted {
-                written,
-                previous,
-                current,
-            })
-        }
-        Err(text) => Err(refusal.unwrap_or(CommandError::Unclassified(text))),
+    // The store hands back the error type of `change` unchanged, and converts
+    // its own failures (a settings file that cannot be written) into it.
+    let written =
+        machine::try_update::<CommandError, _>(|settings| change(settings).map_err(Into::into))?;
+    // Asked before the controller lock is taken: the first answer may probe the
+    // machine.
+    let pianissimo_supported = host_runs_pianissimo();
+    let mut ctrl = lock_controller(controller);
+    let mut current = follow(ctrl.settings(), &written);
+    // Quietly: the startup load warned about each demoted selection, and every
+    // setter would say it again.
+    let demoted = current.demote_unsupported_pianissimo_quietly(pianissimo_supported);
+    let previous = ctrl.update_settings(current.clone());
+    drop(ctrl);
+    if demoted {
+        tracing::debug!(
+            "The written settings select Pianissimo, which this host cannot run; the controller keeps them demoted"
+        );
     }
+    Ok(Persisted {
+        written,
+        previous,
+        current,
+    })
 }
 
 #[cfg(test)]

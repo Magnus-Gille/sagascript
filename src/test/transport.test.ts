@@ -89,7 +89,11 @@ describe("command_errors", () => {
       "dictionary_changed_elsewhere",
       "file_not_found",
       "transcription_timed_out",
-      "unclassified",
+      "dictionary_blocks_language_change",
+      "unknown_profile",
+      "invalid_input",
+      "export_exists",
+      "meeting_stale",
     ]) {
       expect(recovery(final), final).toBeNull();
     }

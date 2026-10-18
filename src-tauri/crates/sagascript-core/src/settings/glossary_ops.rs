@@ -15,14 +15,15 @@
 //! Like the operations of `ops`, these are methods of [`Settings`] that either
 //! change nothing or the whole of what they say.
 
-use super::{Language, Settings, UnknownProfile};
+use super::{Language, Settings, SettingsError};
 use crate::glossary::Glossary;
 
 /// Why an edit of a profile's dictionary was refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DictionaryRefusal {
-    /// No profile has this id.
-    UnknownProfile(UnknownProfile),
+    /// A refusal of the settings themselves: no profile has this id
+    /// ([`SettingsError::UnknownDictationProfile`]).
+    Settings(SettingsError),
     /// The profile detects its language, so its dictionary keeps hints only.
     AutoDetectAliases,
     /// Merging nothing into a dictionary that has entries would not remove them;
@@ -30,9 +31,9 @@ pub enum DictionaryRefusal {
     WouldEraseEntries,
 }
 
-impl From<UnknownProfile> for DictionaryRefusal {
-    fn from(unknown: UnknownProfile) -> Self {
-        Self::UnknownProfile(unknown)
+impl From<SettingsError> for DictionaryRefusal {
+    fn from(error: SettingsError) -> Self {
+        Self::Settings(error)
     }
 }
 
@@ -42,7 +43,7 @@ impl From<UnknownProfile> for DictionaryRefusal {
 impl std::fmt::Display for DictionaryRefusal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::UnknownProfile(unknown) => unknown.fmt(f),
+            Self::Settings(error) => error.fmt(f),
             Self::AutoDetectAliases => f.write_str(
                 "Auto-detect profiles support dictionary hints, not deterministic aliases",
             ),

@@ -41,7 +41,9 @@ mod language_selection_tests {
         settings
             .profile_glossaries
             .insert("default".into(), "merge = merch".into());
-        let error = apply_language_selection(&mut settings, Language::English).unwrap_err();
+        let error = apply_language_selection(&mut settings, Language::English)
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("personal dictionary"));
         assert_eq!(settings.language, Language::Swedish);
         assert_eq!(settings.whisper_model, WhisperModel::KbWhisperSmall);

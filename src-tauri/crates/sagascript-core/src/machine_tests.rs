@@ -149,6 +149,6 @@ fn on_linux_the_gate_is_closed_and_swedish_auto_is_a_whisper_model() {
     let mut selecting = swedish;
     assert_eq!(
         selecting.set_profile_model("default", FileModelPreference::PianissimoOriginal),
-        Err(crate::models::PIANISSIMO_UNSUPPORTED_MESSAGE.to_string())
+        Err(crate::settings::SettingsError::PianissimoUnsupported)
     );
 }

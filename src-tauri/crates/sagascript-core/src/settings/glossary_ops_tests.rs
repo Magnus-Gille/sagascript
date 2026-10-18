@@ -55,9 +55,9 @@ fn only_a_profile_with_a_known_language_may_keep_aliases() {
     );
     assert_eq!(
         settings.ensure_alias_profile("ghost"),
-        Err(DictionaryRefusal::UnknownProfile(UnknownProfile(
-            "ghost".into()
-        )))
+        Err(DictionaryRefusal::Settings(
+            SettingsError::UnknownDictationProfile { id: "ghost".into() }
+        ))
     );
 }
 
@@ -79,7 +79,7 @@ fn a_dictionary_for_a_detecting_profile_may_hold_hints() {
     );
     assert!(matches!(
         settings.check_dictionary_source("ghost", ""),
-        Err(DictionaryRefusal::UnknownProfile(_))
+        Err(DictionaryRefusal::Settings(_))
     ));
 }
 
@@ -149,7 +149,7 @@ fn an_entry_for_an_unknown_profile_is_refused_with_or_without_aliases() {
     for given in [aliases(&[]), aliases(&["grimmer"])] {
         assert!(matches!(
             settings.add_dictionary_entry("ghost", "Grimnir", &given),
-            Err(DictionaryRefusal::UnknownProfile(_))
+            Err(DictionaryRefusal::Settings(_))
         ));
     }
     assert_eq!(settings.profile_glossaries, before);
@@ -216,7 +216,7 @@ fn a_profile_is_found_by_its_id_or_is_unknown() {
     );
     assert_eq!(
         settings.dictation_profile("ghost"),
-        Err(UnknownProfile("ghost".into()))
+        Err(SettingsError::UnknownDictationProfile { id: "ghost".into() })
     );
     // Settings without profiles still have the one they resolve to.
     assert_eq!(
@@ -224,7 +224,7 @@ fn a_profile_is_found_by_its_id_or_is_unknown() {
         "default"
     );
     assert_eq!(
-        UnknownProfile("x y".into()).to_string(),
+        SettingsError::UnknownDictationProfile { id: "x y".into() }.to_string(),
         "Unknown dictation profile 'x y'"
     );
 }

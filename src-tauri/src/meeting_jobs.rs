@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
+use crate::command_error::CommandError;
 use crate::commands::{file_transcription_context, lock_controller, SharedController};
 #[cfg(feature = "diarization")]
 use crate::events::{EmitEvent, UiState};
@@ -101,8 +102,10 @@ fn phase_name(phase: sagascript_cli::transcribe::MeetingPhase) -> String {
 pub struct MeetingJobs(Mutex<Option<MeetingJob>>);
 pub type SharedMeetingJobs = Arc<MeetingJobs>;
 
-fn lock_error() -> String {
-    "Meeting job state is unavailable; restart the app before importing again.".into()
+fn lock_error() -> CommandError {
+    CommandError::Unavailable(
+        "Meeting job state is unavailable; restart the app before importing again.".into(),
+    )
 }
 
 #[tauri::command]
@@ -113,7 +116,7 @@ pub async fn begin_meeting_file(
     file_path: String,
     prompt: Option<String>,
     profile_id: Option<String>,
-) -> Result<String, String> {
+) -> Result<String, CommandError> {
     begin_job(app, jobs, controller, file_path, prompt, profile_id, None).await
 }
 
@@ -128,7 +131,7 @@ pub async fn begin_meeting_reprocessing(
     prompt: Option<String>,
     profile_id: Option<String>,
     request: ReprocessingRequest,
-) -> Result<String, String> {
+) -> Result<String, CommandError> {
     crate::meeting_review_commands::require_settings(&window)?;
     begin_job(
         app,
@@ -150,21 +153,23 @@ async fn begin_job(
     prompt: Option<String>,
     profile_id: Option<String>,
     request: Option<ReprocessingRequest>,
-) -> Result<String, String> {
+) -> Result<String, CommandError> {
     #[cfg(not(feature = "diarization"))]
     {
         let _ = (
             app, jobs, controller, file_path, prompt, profile_id, request,
         );
-        Err("This build has no speaker diarization support.".into())
+        Err(CommandError::Unavailable(
+            "This build has no speaker diarization support.".into(),
+        ))
     }
     #[cfg(feature = "diarization")]
     {
         let mut slot = jobs.0.lock().map_err(|_| lock_error())?;
         if slot.as_ref().is_some_and(|job| job.snapshot.status.busy()) {
-            return Err(
+            return Err(CommandError::Busy(
                 "A meeting import is still running or cancelling. Wait for it to finish.".into(),
-            );
+            ));
         }
         let id = uuid::Uuid::new_v4().to_string();
         let mut ctrl = lock_controller(&controller);
@@ -172,7 +177,9 @@ async fn begin_job(
         let context =
             file_transcription_context(&settings, profile_id.as_deref(), prompt.as_deref())?;
         if !ctrl.begin_meeting_job(&id) {
-            return Err("Finish the current dictation before importing a meeting.".into());
+            return Err(CommandError::Busy(
+                "Finish the current dictation before importing a meeting.".into(),
+            ));
         }
         let backend = Arc::new(WhisperBackend::new());
         let cancelled = Arc::new(AtomicBool::new(false));
@@ -313,7 +320,12 @@ async fn begin_job(
                             timed_out,
                         );
                     } else {
-                        finish_snapshot(&mut job.snapshot, Err(lock_error()), false, false);
+                        finish_snapshot(
+                            &mut job.snapshot,
+                            Err(lock_error().to_string()),
+                            false,
+                            false,
+                        );
                     }
                     job.backend = None;
                 }
@@ -388,7 +400,7 @@ fn finish_snapshot(
 pub fn get_meeting_job(
     jobs: State<'_, SharedMeetingJobs>,
     job_id: String,
-) -> Result<MeetingSnapshot, String> {
+) -> Result<MeetingSnapshot, CommandError> {
     jobs.0
         .lock()
         .map_err(|_| lock_error())?
@@ -396,7 +408,10 @@ pub fn get_meeting_job(
         .filter(|job| job.snapshot.id == job_id)
         .map(|job| job.snapshot_at(Instant::now()))
         .ok_or_else(|| {
-            "This meeting job is no longer available. No transcript was saved automatically.".into()
+            CommandError::NotFound(
+                "This meeting job is no longer available. No transcript was saved automatically."
+                    .into(),
+            )
         })
 }
 
@@ -404,16 +419,16 @@ pub fn get_meeting_job(
 pub fn cancel_meeting_job(
     jobs: State<'_, SharedMeetingJobs>,
     job_id: String,
-) -> Result<bool, String> {
+) -> Result<bool, CommandError> {
     let mut slot = jobs.0.lock().map_err(|_| lock_error())?;
     cancel_job(&mut slot, &job_id)
 }
 
-fn cancel_job(slot: &mut Option<MeetingJob>, job_id: &str) -> Result<bool, String> {
+fn cancel_job(slot: &mut Option<MeetingJob>, job_id: &str) -> Result<bool, CommandError> {
     let job = slot
         .as_mut()
         .filter(|job| job.snapshot.id == job_id)
-        .ok_or_else(|| "This meeting job is no longer available.".to_string())?;
+        .ok_or_else(|| CommandError::NotFound("This meeting job is no longer available.".into()))?;
     if !job.snapshot.status.busy() {
         return Ok(false);
     }
@@ -430,10 +445,8 @@ pub fn rename_meeting_speaker(
     transcript: MeetingTranscript,
     speaker_id: String,
     label: String,
-) -> Result<MeetingTranscript, String> {
-    transcript
-        .rename_speaker(&speaker_id, label)
-        .map_err(|error| error.to_string())
+) -> Result<MeetingTranscript, CommandError> {
+    Ok(transcript.rename_speaker(&speaker_id, label)?)
 }
 
 #[tauri::command]
@@ -441,10 +454,8 @@ pub fn merge_meeting_speakers(
     transcript: MeetingTranscript,
     from_id: String,
     into_id: String,
-) -> Result<MeetingTranscript, String> {
-    transcript
-        .merge_speakers(&from_id, &into_id)
-        .map_err(|error| error.to_string())
+) -> Result<MeetingTranscript, CommandError> {
+    Ok(transcript.merge_speakers(&from_id, &into_id)?)
 }
 
 #[derive(Clone, Copy, Deserialize)]
@@ -474,11 +485,9 @@ pub async fn save_meeting_export(
     app: tauri::AppHandle,
     transcript: MeetingTranscript,
     format: ExportFormat,
-) -> Result<bool, String> {
+) -> Result<bool, CommandError> {
     let (format, extension) = format.details();
-    let output = transcript
-        .export(format)
-        .map_err(|error| error.to_string())?;
+    let output = transcript.export(format)?;
     tauri::async_runtime::spawn_blocking(move || {
         let selected = app
             .dialog()
@@ -490,21 +499,21 @@ pub async fn save_meeting_export(
         let Some(selected) = selected else {
             return Ok(false);
         };
-        let path = selected
-            .into_path()
-            .map_err(|error| format!("Choose a local export file: {error}"))?;
+        let path = selected.into_path().map_err(|error| {
+            CommandError::InvalidInput(format!("Choose a local export file: {error}"))
+        })?;
         write_new_export(&path, output.as_bytes())?;
         Ok(true)
     })
     .await
-    .map_err(|error| format!("Export worker failed: {error}"))?
+    .map_err(|error| CommandError::task_failed(format!("Export worker failed: {error}")))?
 }
 
 /// A user-selected NEW destination only; never truncate an existing recording
 /// or document, even if a native dialog offered replacement. Published through
 /// [`sagascript_core::fsutil::publish_new`]: complete or not at all, never
 /// over an existing file.
-pub(crate) fn write_new_export(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
+pub(crate) fn write_new_export(path: &std::path::Path, bytes: &[u8]) -> Result<(), CommandError> {
     write_new_export_with(path, bytes, &sagascript_core::fsutil::RealFs)
 }
 
@@ -512,12 +521,18 @@ fn write_new_export_with(
     path: &std::path::Path,
     bytes: &[u8],
     ops: &dyn sagascript_core::fsutil::PublishFs,
-) -> Result<(), String> {
+) -> Result<(), CommandError> {
     use sagascript_core::fsutil::{publish_new_with, Leftover, PublishErrorKind};
+    // The file is named, not located: the webview never gets a folder (ADR
+    // 0006), and the staging file lies in the folder the user chose for the
+    // export, which the note says.
     let unsaved_note = |leftover: &Leftover| {
+        let name = leftover
+            .path
+            .file_name()
+            .map_or_else(|| "(unnamed)".into(), |name| name.to_string_lossy());
         format!(
-            "The export was not saved, but its private temporary file could not be removed: {} ({}). Remove that temporary file manually.",
-            leftover.path.display(),
+            "The export was not saved, but its private temporary file {name} could not be removed from the folder you chose ({}). Remove that file manually.",
             leftover.error
         )
     };
@@ -536,18 +551,20 @@ fn write_new_export_with(
         }
         Err(error) => {
             if let Some(leftover) = &error.leftover {
-                return Err(unsaved_note(leftover));
+                return Err(CommandError::Io(unsaved_note(leftover)));
             }
             Err(match &error.kind {
-                PublishErrorKind::AlreadyExists => {
+                PublishErrorKind::AlreadyExists => CommandError::ExportExists(
                     "That file already exists. Choose a new name; no existing file was changed."
-                        .into()
-                }
-                PublishErrorKind::NoFileName => "Choose a local export file.".into(),
-                PublishErrorKind::Commit(source) => format!(
-                    "Export was not published. Choose a writable local folder supporting atomic file creation: {source}"
+                        .into(),
                 ),
-                other => format!("Could not create export: {other}"),
+                PublishErrorKind::NoFileName => {
+                    CommandError::InvalidInput("Choose a local export file.".into())
+                }
+                PublishErrorKind::Commit(source) => CommandError::Io(format!(
+                    "Export was not published. Choose a writable local folder supporting atomic file creation: {source}"
+                )),
+                other => CommandError::Io(format!("Could not create export: {other}")),
             })
         }
     }

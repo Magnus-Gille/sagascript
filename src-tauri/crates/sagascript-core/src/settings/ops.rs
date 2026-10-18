@@ -31,7 +31,7 @@
 //! `apply_profiles_change`) do not: a profile other than the default has no
 //! legacy field.
 
-use super::{FileModelPreference, HotkeyProfile, ModelResetNotice, Settings};
+use super::{FileModelPreference, HotkeyProfile, ModelResetNotice, Settings, SettingsError};
 use crate::models::{Language, WhisperModel};
 
 /// What a surface knows about the Accessibility permission when it is asked to
@@ -67,7 +67,7 @@ impl Settings {
         &mut self,
         language: Language,
         pianissimo_supported: bool,
-    ) -> Result<Vec<ModelResetNotice>, String> {
+    ) -> Result<Vec<ModelResetNotice>, SettingsError> {
         let notices = self.set_default_profile_language_gated(language, pianissimo_supported)?;
         self.whisper_model = WhisperModel::recommended(language);
         self.auto_select_model = true;
@@ -81,7 +81,7 @@ impl Settings {
         &mut self,
         model: WhisperModel,
         pianissimo_supported: bool,
-    ) -> Result<(), String> {
+    ) -> Result<(), SettingsError> {
         let profile_id = self.default_profile().id;
         self.set_profile_model_gated(
             &profile_id,
@@ -101,7 +101,7 @@ impl Settings {
         &mut self,
         enabled: bool,
         pianissimo_supported: bool,
-    ) -> Result<(), String> {
+    ) -> Result<(), SettingsError> {
         let profile_id = self.default_profile().id;
         let preference = if enabled {
             FileModelPreference::Auto
@@ -120,7 +120,7 @@ impl Settings {
         &mut self,
         enabled: bool,
         pianissimo_supported: bool,
-    ) -> Result<(), String> {
+    ) -> Result<(), SettingsError> {
         let profile_id = self.default_profile().id;
         let preference = if enabled {
             FileModelPreference::PianissimoOriginal
@@ -149,7 +149,7 @@ impl Settings {
         profiles: Vec<HotkeyProfile>,
         model: Option<(&str, FileModelPreference)>,
         pianissimo_supported: bool,
-    ) -> Result<Vec<ModelResetNotice>, String> {
+    ) -> Result<Vec<ModelResetNotice>, SettingsError> {
         let mut candidate = self.clone();
         let mut notices =
             candidate.replace_hotkey_profiles_gated(profiles, pianissimo_supported)?;

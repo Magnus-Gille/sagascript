@@ -41,7 +41,7 @@ test("missing-file errors forget the remembered file gracefully", () => {
   expect(isMissingTranscribeFileError(backendError("file_decode_error", "Failed to open file: Permission denied"))).toBe(false);
   expect(isMissingTranscribeFileError(backendError("transcription_failed", "Whisper inference failed: -6"))).toBe(false);
   expect(
-    isMissingTranscribeFileError(backendError("unclassified", "File decode error: Failed to open file: No such file or directory")),
+    isMissingTranscribeFileError(backendError("file_decode_error", "File decode error: Failed to open file: No such file or directory")),
   ).toBe(false);
   expect(isMissingTranscribeFileError("File decode error: Failed to open file: No such file or directory")).toBe(false);
   expect(isMissingTranscribeFileError(new Error("Failed to open file: ENOENT"))).toBe(false);

@@ -153,7 +153,10 @@ fn register_startup_hotkeys(app: &tauri::App) {
     // dictate. Recorded in the process-wide health flag so the tray
     // and Settings UI can surface it.
     let health: tauri::State<'_, hotkey::HotkeyHealth> = app.state();
-    let validation_error = requested_settings.validate_shortcut_configuration().err();
+    let validation_error = requested_settings
+        .validate_shortcut_configuration()
+        .err()
+        .map(|error| error.to_string());
     let registration_shortcuts: Vec<String> = if validation_error.is_some() {
         vec![SAFE_FALLBACK_HOTKEY.to_string()]
     } else {

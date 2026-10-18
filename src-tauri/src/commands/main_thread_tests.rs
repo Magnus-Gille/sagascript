@@ -50,9 +50,16 @@ fn a_dropped_sender_means_the_app_is_shutting_down() {
 #[test]
 fn a_main_thread_that_cannot_be_reached_is_an_error() {
     let reply = runtime().block_on(await_main_thread::<()>(LONG, |_sender| {
-        Err("the event loop is closed".to_string())
+        Err(MainThreadUnreachable(
+            "the event loop is closed".to_string(),
+        ))
     }));
-    assert_eq!(reply, Err("the event loop is closed".to_string()));
+    let unreachable = reply.expect_err("the dispatch failed");
+    assert_eq!(unreachable.to_string(), "the event loop is closed");
+    // A command reports it as unavailable, with the runtime's text.
+    let error = CommandError::from(unreachable);
+    assert_eq!(error.code(), "unavailable");
+    assert_eq!(error.to_string(), "the event loop is closed");
 }
 
 /// The wait yields its worker. The answer only exists once a task on the same

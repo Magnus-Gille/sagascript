@@ -10,6 +10,8 @@
 //! request and its wait on the blocking pool. None of them is a main-thread
 //! call, and none was moved to or from the main thread.
 
+use crate::command_error::CommandError;
+
 /// The host's microphone permission, from [`crate::platform::mic_permission`].
 pub struct MicPermission;
 
@@ -39,7 +41,7 @@ impl MicPermission {
     /// Triggers AVCaptureDevice.requestAccessForMediaType:completionHandler: and
     /// returns the new status string after the user responds (or immediately if
     /// already determined). The values are those of [`Self::status`].
-    pub async fn request(&self) -> Result<String, String> {
+    pub async fn request(&self) -> Result<String, CommandError> {
         #[cfg(target_os = "macos")]
         {
             if !macos_mic::is_in_app_bundle() {
@@ -57,7 +59,7 @@ impl MicPermission {
                 macos_mic::authorization_status_string()
             })
             .await
-            .map_err(|e| e.to_string())
+            .map_err(|e| CommandError::task_failed(e.to_string()))
         }
         #[cfg(not(target_os = "macos"))]
         {

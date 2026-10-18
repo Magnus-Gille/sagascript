@@ -3,7 +3,7 @@ use clap::{Args, Subcommand};
 use sagascript_core::error::DictationError;
 use sagascript_core::machine;
 use sagascript_core::settings::{
-    self, FileModelPreference, HotkeyProfile, Language, ModelResetNotice, Settings,
+    self, FileModelPreference, HotkeyProfile, Language, ModelResetNotice, Settings, SettingsError,
 };
 
 use crate::output::{errln, outln, Out};
@@ -259,7 +259,7 @@ fn cmd_profiles(action: ProfileAction, out: &Out) -> Result<(), DictationError> 
                 .as_deref()
                 .map(FileModelPreference::parse_id)
                 .transpose()
-                .map_err(DictationError::SettingsError)?;
+                .map_err(DictationError::from)?;
             if clear_push_to_talk_shortcut || clear_toggle_shortcut {
                 return Err(DictationError::SettingsError(
                     "Clear shortcut options are only valid when updating a profile".to_string(),
@@ -343,12 +343,14 @@ fn cmd_profiles(action: ProfileAction, out: &Out) -> Result<(), DictationError> 
                 .as_deref()
                 .map(FileModelPreference::parse_id)
                 .transpose()
-                .map_err(DictationError::SettingsError)?;
+                .map_err(DictationError::from)?;
             let mut profiles = machine::load().resolved_hotkey_profiles();
             let profile = profiles
                 .iter_mut()
                 .find(|profile| profile.id == id)
-                .ok_or_else(|| DictationError::SettingsError(format!("Unknown profile '{id}'")))?;
+                .ok_or_else(|| {
+                    DictationError::from(SettingsError::UnknownProfile { id: id.clone() })
+                })?;
             if let Some(name) = name {
                 profile.name = name;
             }
@@ -394,9 +396,7 @@ fn cmd_profiles(action: ProfileAction, out: &Out) -> Result<(), DictationError> 
             let original_len = profiles.len();
             profiles.retain(|profile| profile.id != id);
             if profiles.len() == original_len {
-                return Err(DictationError::SettingsError(format!(
-                    "Unknown profile '{id}'"
-                )));
+                return Err(SettingsError::UnknownProfile { id }.into());
             }
             persist_profiles(profiles, None)?;
             errln!(out, "Removed profile {id}");
@@ -417,13 +417,12 @@ fn persist_profiles(
     profiles: Vec<HotkeyProfile>,
     model: Option<(&str, FileModelPreference)>,
 ) -> Result<Vec<ModelResetNotice>, DictationError> {
-    Settings::validate_hotkey_profiles(&profiles).map_err(DictationError::SettingsError)?;
+    Settings::validate_hotkey_profiles(&profiles).map_err(DictationError::from)?;
     let mut notices = Vec::new();
-    machine::try_update(|settings| {
+    machine::try_update::<DictationError, _>(|settings| {
         notices = settings.apply_profiles_change(profiles.clone(), model)?;
         Ok(())
-    })
-    .map_err(DictationError::SettingsError)?;
+    })?;
     Ok(notices)
 }
 
@@ -465,11 +464,10 @@ fn cmd_set(name: &str, value: &str, out: &Out) -> Result<(), DictationError> {
     let mut validation_target = machine::load();
     (key.set)(&mut validation_target, value)?;
     let mut notices = Vec::new();
-    let settings = machine::try_update(|settings| {
-        notices = (key.set)(settings, value).map_err(|error| error.to_string())?;
+    let settings = machine::try_update::<DictationError, _>(|settings| {
+        notices = (key.set)(settings, value)?;
         Ok(())
-    })
-    .map_err(DictationError::SettingsError)?;
+    })?;
 
     errln!(out, "Set {name} = {}", (key.get)(&settings));
     print_notices(&notices, out);
@@ -515,19 +513,17 @@ fn cmd_reset(name: Option<&str>, out: &Out) -> Result<(), DictationError> {
         let key = lookup(name)?;
         let defaults = Settings::default();
         let mut notices = Vec::new();
-        let settings = machine::try_update(|settings| {
+        let settings = machine::try_update::<DictationError, _>(|settings| {
             notices = (key.reset)(settings, &defaults)?;
             Ok(())
-        })
-        .map_err(DictationError::SettingsError)?;
+        })?;
         errln!(out, "Reset {name} to {}", (key.get)(&settings));
         print_notices(&notices, out);
     } else {
-        machine::try_update(|current| {
+        machine::try_update::<DictationError, _>(|current| {
             reset_all_settings(current)?;
             Ok(())
-        })
-        .map_err(DictationError::SettingsError)?;
+        })?;
         errln!(
             out,
             "All application settings reset to defaults; personal dictionaries preserved"
@@ -536,7 +532,7 @@ fn cmd_reset(name: Option<&str>, out: &Out) -> Result<(), DictationError> {
     Ok(())
 }
 
-fn reset_all_settings(current: &mut Settings) -> Result<(), String> {
+fn reset_all_settings(current: &mut Settings) -> Result<(), SettingsError> {
     let defaults = Settings::default();
     let mut validation = current.clone();
     validation.replace_hotkey_profiles(vec![HotkeyProfile::legacy_default(
@@ -595,8 +591,8 @@ mod tests {
         settings: &mut Settings,
         key: &str,
         defaults: &Settings,
-    ) -> Result<(), String> {
-        let key = lookup(key).map_err(|error| error.to_string())?;
+    ) -> Result<(), DictationError> {
+        let key = lookup(key)?;
         (key.reset)(settings, defaults).map(|_| ())
     }
 
@@ -648,7 +644,7 @@ mod tests {
             "CmdOrCtrl+Q",
             "Control+Super+Shift+Q",
         ] {
-            let error = validate_hotkey(shortcut).unwrap_err();
+            let error = validate_hotkey(shortcut).unwrap_err().to_string();
             assert!(
                 error.contains("reserved for Quit on macOS"),
                 "unexpected error for {shortcut}: {error}"
@@ -948,7 +944,8 @@ mod tests {
                 profiles,
                 Some(("default", FileModelPreference::PianissimoOriginal)),
             )
-            .unwrap_err();
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("Pianissimo"), "{error}");
         // try_update only persists on Ok, so the stored settings stay `before`.
         assert_eq!(settings.profile_models, before.profile_models);
@@ -1088,7 +1085,7 @@ mod tests {
             .insert("default".to_string(), "merge = merch".to_string());
         let before = settings.clone();
 
-        let error = reset_all_settings(&mut settings).unwrap_err();
+        let error = reset_all_settings(&mut settings).unwrap_err().to_string();
 
         assert!(error.contains("personal dictionary"));
         assert_eq!(settings.language, before.language);
@@ -1107,7 +1104,7 @@ mod tests {
             .profile_glossaries
             .insert("default".into(), "merge = merch".into());
         let before = settings.clone();
-        let error = reset_all_settings(&mut settings).unwrap_err();
+        let error = reset_all_settings(&mut settings).unwrap_err().to_string();
         assert!(error.contains("personal dictionary"));
         assert_eq!(settings.language, before.language);
         assert_eq!(settings.hotkey_profiles, before.hotkey_profiles);
@@ -1159,7 +1156,7 @@ mod tests {
             .insert("default".to_string(), "merge = merch".to_string());
         let before = settings.clone();
 
-        let error = reset_all_settings(&mut settings).unwrap_err();
+        let error = reset_all_settings(&mut settings).unwrap_err().to_string();
 
         assert!(error.contains("inactive personal dictionary"));
         assert_eq!(settings.language, before.language);

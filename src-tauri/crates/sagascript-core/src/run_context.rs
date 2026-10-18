@@ -63,7 +63,7 @@ impl RunSelection {
         let profile = match overrides.profile {
             Some(id) => settings
                 .dictation_profile(id)
-                .map_err(|unknown| DictationError::SettingsError(unknown.to_string()))?,
+                .map_err(DictationError::from)?,
             None => settings.default_profile(),
         };
         let selection = Self {

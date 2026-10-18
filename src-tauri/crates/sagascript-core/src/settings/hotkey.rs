@@ -1,16 +1,18 @@
+use super::SettingsError;
+
 /// Validate a hotkey string against the format accepted by Tauri's
 /// global-shortcut crate and Sagascript's platform safety rules.
 ///
 /// Format: `[Modifier+]*Key` (case-insensitive).
-pub fn validate_hotkey(value: &str) -> Result<(), String> {
-    validate_hotkey_for_platform(value, CURRENT_PLATFORM)
+pub fn validate_hotkey(value: &str) -> Result<(), SettingsError> {
+    validate_hotkey_for_platform(value, CURRENT_PLATFORM).map_err(SettingsError::InvalidHotkey)
 }
 
 /// Canonical representation used for equality and duplicate detection.
 /// Tauri accepts several aliases for the same physical shortcut; storing the
 /// user's spelling is useful for display, but comparisons must collapse those
 /// aliases so two profiles cannot claim the same key combination.
-pub fn canonical_hotkey(value: &str) -> Result<String, String> {
+pub fn canonical_hotkey(value: &str) -> Result<String, SettingsError> {
     validate_hotkey(value)?;
     Ok(canonical_hotkey_for_platform(value, CURRENT_PLATFORM))
 }

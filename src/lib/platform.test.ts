@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 import { forgetPlatform, loadPlatform } from "./platform";
 import { deferred } from "../test/deferred";
-import { mockIpc } from "../test/ipc";
+import { backendError, mockIpc } from "../test/ipc";
 
 test("the platform is asked for once, however many callers and however late", async () => {
   const answer = deferred<string>();
@@ -19,14 +19,14 @@ test("a failed lookup rejects every caller that shared it and is asked again nex
   let failing = true;
   const ipc = mockIpc({
     get_platform: () => {
-      if (failing) throw "no window";
+      if (failing) throw backendError("unavailable", "no window");
       return "windows";
     },
   });
 
   const callers = [loadPlatform(), loadPlatform()];
-  await expect(callers[0]).rejects.toBe("no window");
-  await expect(callers[1]).rejects.toBe("no window");
+  await expect(callers[0]).rejects.toEqual(backendError("unavailable", "no window"));
+  await expect(callers[1]).rejects.toEqual(backendError("unavailable", "no window"));
 
   failing = false;
   await expect(loadPlatform()).resolves.toBe("windows");

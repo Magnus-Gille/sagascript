@@ -109,8 +109,7 @@ pub fn run(args: GlossaryArgs, out: &Out) -> Result<(), DictationError> {
 fn path(profile: Option<&str>, out: &Out) -> Result<(), DictationError> {
     let stored = machine::load();
     let profile = resolved_profile_id(&stored, profile)?;
-    let path =
-        settings::store::profile_glossary_path(&profile).map_err(DictationError::SettingsError)?;
+    let path = settings::store::profile_glossary_path(&profile).map_err(DictationError::from)?;
     outln!(out, "{}", path.display())?;
     Ok(())
 }
@@ -148,7 +147,7 @@ fn add(
         .add_dictionary_entry(&profile_id, &term, &aliases)
         .map_err(learning_refusal)?;
 
-    machine::try_update(|stored| {
+    machine::try_update::<String, _>(|stored| {
         let profile_id = resolved_profile_id(stored, profile).map_err(|error| error.to_string())?;
         stored
             .add_dictionary_entry(&profile_id, &term, &aliases)
@@ -162,7 +161,7 @@ fn add(
 fn remove(term: &str, profile: Option<&str>, out: &Out) -> Result<(), DictationError> {
     let term = validate_component("term", term)?;
     let mut removed = false;
-    machine::try_update(|stored| {
+    machine::try_update::<String, _>(|stored| {
         let source = glossary_source_mut(stored, profile)?;
         let mut glossary = Glossary::parse(source);
         removed = glossary.remove(&term);
@@ -189,7 +188,7 @@ fn clear(confirmed: bool, profile: Option<&str>, out: &Out) -> Result<(), Dictat
             "Refusing to clear the personal dictionary without --yes".to_string(),
         ));
     }
-    machine::try_update(|stored| {
+    machine::try_update::<String, _>(|stored| {
         glossary_source_mut(stored, profile)?.clear();
         Ok(())
     })
@@ -227,7 +226,7 @@ fn suggest(
             ));
         }
         let reviewed = suggestions.clone();
-        machine::try_update(|latest| {
+        machine::try_update::<String, _>(|latest| {
             validate_learning_profile(latest, &profile_id).map_err(|error| error.to_string())?;
             let effective = effective_glossary(latest, Some(&profile_id), None, None)
                 .map_err(|error| error.to_string())?;
@@ -308,7 +307,7 @@ fn load_training_input(
         .expect("validated profile must still exist");
     let choice = stored
         .dictation_model_for_profile(profile_id)
-        .map_err(DictationError::SettingsError)?;
+        .map_err(DictationError::from)?;
     match choice {
         FileModel::Whisper(model) if !model::is_model_downloaded(model) => {
             return Err(DictationError::TranscriptionFailed(format!(
@@ -400,7 +399,7 @@ fn validate_profile(stored: &settings::Settings, profile: &str) -> Result<(), Di
     stored
         .dictation_profile(profile)
         .map(drop)
-        .map_err(|unknown| DictationError::SettingsError(unknown.to_string()))
+        .map_err(DictationError::from)
 }
 
 /// The rule (a profile that detects its language holds no aliases) is core's,
@@ -415,12 +414,13 @@ fn validate_learning_profile(
 }
 
 fn learning_refusal(refusal: DictionaryRefusal) -> DictationError {
-    DictationError::SettingsError(match refusal {
-        DictionaryRefusal::AutoDetectAliases => {
-            "Glossary learning requires a profile with an explicit language".to_string()
-        }
-        other => other.to_string(),
-    })
+    match refusal {
+        DictionaryRefusal::Settings(error) => DictationError::from(error),
+        DictionaryRefusal::AutoDetectAliases => DictationError::SettingsError(
+            "Glossary learning requires a profile with an explicit language".to_string(),
+        ),
+        other => DictationError::SettingsError(other.to_string()),
+    }
 }
 
 fn validate_component(label: &str, value: &str) -> Result<String, DictationError> {

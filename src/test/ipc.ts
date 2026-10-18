@@ -180,9 +180,16 @@ function describeRejection(error: unknown): string {
  * or a `BackendError` for `Result<T, CommandError>`), or null. `Error`
  * instances are tolerated for commands that still reject with strings: Rust
  * never sends one, but tests use them for failures that are not a command's.
+ * `backendCommands` is the set of commands that return `Result<T, CommandError>`
+ * (all of them, since #360 part 2); a test passes another set to exercise the
+ * string shape of `Result<T, String>`, which the generator still supports.
  */
-export function rejectionProblem(command: CommandName, error: unknown): string | null {
-  if (BACKEND_ERROR_SET.has(command)) {
+export function rejectionProblem(
+  command: CommandName,
+  error: unknown,
+  backendCommands: ReadonlySet<string> = BACKEND_ERROR_SET,
+): string | null {
+  if (backendCommands.has(command)) {
     if (isBackendError(error)) return null;
     return (
       `IPC command "${command}" returns Result<_, CommandError>: its fake must reject with backendError(code, message) ` +

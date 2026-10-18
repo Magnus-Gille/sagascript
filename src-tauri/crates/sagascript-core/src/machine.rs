@@ -22,6 +22,7 @@
 use crate::models::{self, FileModel, Language, ModelEnv, ModelInfo, WhisperModel};
 use crate::settings::{
     store, FileModelPreference, HotkeyProfile, LineupEnv, MachineProbe, ModelResetNotice, Settings,
+    SettingsError,
 };
 use crate::transcription::{model, pianissimo_backend, pianissimo_model};
 
@@ -113,7 +114,7 @@ pub fn load() -> Settings {
 /// GUI commands use this instead of saving their in-memory `Settings` clone,
 /// which may be stale when the CLI changed another field moments earlier.
 /// `store::update_with` with the probes of this machine.
-pub fn update<F>(mutate: F) -> Result<Settings, String>
+pub fn update<F>(mutate: F) -> Result<Settings, SettingsError>
 where
     F: FnOnce(&mut Settings),
 {
@@ -123,9 +124,14 @@ where
 /// Like [`update`], but lets validation fail while the cross-process lock is
 /// held so read/validate/write profile mutations cannot race another writer.
 /// `store::try_update_with` with the probes of this machine.
-pub fn try_update<F>(mutate: F) -> Result<Settings, String>
+///
+/// The closure's own error type `E` comes back unchanged; a failure of the store
+/// itself is converted into it (`E: From<SettingsError>`), so a caller that
+/// validates with its own error type does not have to flatten either one.
+pub fn try_update<E, F>(mutate: F) -> Result<Settings, E>
 where
-    F: FnOnce(&mut Settings) -> Result<(), String>,
+    E: From<SettingsError>,
+    F: FnOnce(&mut Settings) -> Result<(), E>,
 {
     store::try_update_with(&ThisMachine, mutate)
 }
@@ -134,13 +140,19 @@ where
 impl Settings {
     /// Resolve the live engine for one profile. Unmigrated settings retain
     /// their previous global selection until the profile migration is saved.
-    pub fn dictation_model_for_profile(&self, profile_id: &str) -> Result<FileModel, String> {
+    pub fn dictation_model_for_profile(
+        &self,
+        profile_id: &str,
+    ) -> Result<FileModel, SettingsError> {
         self.dictation_model_for_profile_gated(profile_id, pianissimo_supported())
     }
 
     /// [`Self::dictation_model_for_profile`] as the Whisper model and whether
     /// the profile uses Pianissimo instead.
-    pub fn live_model_for_profile(&self, profile_id: &str) -> Result<(WhisperModel, bool), String> {
+    pub fn live_model_for_profile(
+        &self,
+        profile_id: &str,
+    ) -> Result<(WhisperModel, bool), SettingsError> {
         self.live_model_for_profile_gated(profile_id, pianissimo_supported())
     }
 
@@ -158,7 +170,7 @@ impl Settings {
         &mut self,
         profile_id: &str,
         preference: FileModelPreference,
-    ) -> Result<(), String> {
+    ) -> Result<(), SettingsError> {
         self.set_profile_model_gated(profile_id, preference, pianissimo_supported())
     }
 
@@ -167,7 +179,7 @@ impl Settings {
     pub fn set_default_profile_language(
         &mut self,
         language: Language,
-    ) -> Result<Vec<ModelResetNotice>, String> {
+    ) -> Result<Vec<ModelResetNotice>, SettingsError> {
         self.set_default_profile_language_gated(language, pianissimo_supported())
     }
 
@@ -175,22 +187,22 @@ impl Settings {
     pub fn apply_language_selection(
         &mut self,
         language: Language,
-    ) -> Result<Vec<ModelResetNotice>, String> {
+    ) -> Result<Vec<ModelResetNotice>, SettingsError> {
         self.apply_language_selection_gated(language, pianissimo_supported())
     }
 
     /// See [`Self::set_whisper_model_gated`].
-    pub fn set_whisper_model(&mut self, model: WhisperModel) -> Result<(), String> {
+    pub fn set_whisper_model(&mut self, model: WhisperModel) -> Result<(), SettingsError> {
         self.set_whisper_model_gated(model, pianissimo_supported())
     }
 
     /// See [`Self::set_auto_select_model_gated`].
-    pub fn set_auto_select_model(&mut self, enabled: bool) -> Result<(), String> {
+    pub fn set_auto_select_model(&mut self, enabled: bool) -> Result<(), SettingsError> {
         self.set_auto_select_model_gated(enabled, pianissimo_supported())
     }
 
     /// See [`Self::set_pianissimo_dictation_gated`].
-    pub fn set_pianissimo_dictation(&mut self, enabled: bool) -> Result<(), String> {
+    pub fn set_pianissimo_dictation(&mut self, enabled: bool) -> Result<(), SettingsError> {
         self.set_pianissimo_dictation_gated(enabled, pianissimo_supported())
     }
 
@@ -199,7 +211,7 @@ impl Settings {
         &mut self,
         profiles: Vec<HotkeyProfile>,
         model: Option<(&str, FileModelPreference)>,
-    ) -> Result<Vec<ModelResetNotice>, String> {
+    ) -> Result<Vec<ModelResetNotice>, SettingsError> {
         self.apply_profiles_change_gated(profiles, model, pianissimo_supported())
     }
 
@@ -209,7 +221,7 @@ impl Settings {
     pub fn replace_hotkey_profiles(
         &mut self,
         profiles: Vec<HotkeyProfile>,
-    ) -> Result<Vec<ModelResetNotice>, String> {
+    ) -> Result<Vec<ModelResetNotice>, SettingsError> {
         self.replace_hotkey_profiles_gated(profiles, pianissimo_supported())
     }
 
@@ -217,7 +229,7 @@ impl Settings {
     /// dictation model preference. An `Auto` preference prefers the
     /// recommended model when it is downloaded, else the best downloaded
     /// compatible model (see [`Self::effective_file_model_for_gated`]).
-    pub fn effective_file_model_for(&self, language: Language) -> Result<FileModel, String> {
+    pub fn effective_file_model_for(&self, language: Language) -> Result<FileModel, SettingsError> {
         self.effective_file_model_for_gated(language, pianissimo_supported(), &file_model_ready)
     }
 
@@ -228,7 +240,7 @@ impl Settings {
     pub fn effective_whisper_file_model_for(
         &self,
         language: Language,
-    ) -> Result<FileModel, String> {
+    ) -> Result<FileModel, SettingsError> {
         self.effective_whisper_file_model_for_gated(language, &file_model_ready)
     }
 

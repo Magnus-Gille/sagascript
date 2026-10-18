@@ -83,10 +83,7 @@ pub async fn start_training_recording(
     profile_id: String,
 ) -> Result<(), CommandError> {
     let mut ctrl = lock_controller(&controller);
-    let profile = ctrl
-        .settings()
-        .dictation_profile(&profile_id)
-        .map_err(|unknown| unknown.to_string())?;
+    let profile = ctrl.settings().dictation_profile(&profile_id)?;
     gui_start_recording_result(ctrl.start_training_recording_for_profile(profile))
 }
 
@@ -165,8 +162,9 @@ async fn stop_and_transcribe_impl(
             match ctrl.settings().live_model_for_profile(&profile_id) {
                 Ok(choice) => choice,
                 Err(error) => {
-                    let completion = ctrl.finish_transcription(Err(error.clone()));
-                    return Err(completion.err().unwrap_or(error).into());
+                    // The controller hands back the text it was given.
+                    let _ = ctrl.finish_transcription(Err(error.to_string()));
+                    return Err(error.into());
                 }
             };
         let opts = build_transcribe_options_for_profile(ctrl.settings(), Some(&profile_id));
@@ -385,7 +383,7 @@ pub async fn transcribe_training_file(
 pub async fn cancel_recording(
     app: tauri::AppHandle,
     controller: State<'_, SharedController>,
-) -> Result<(), String> {
+) -> Result<(), CommandError> {
     let mut ctrl = lock_controller(&controller);
     ctrl.cancel_recording();
     drop(ctrl);

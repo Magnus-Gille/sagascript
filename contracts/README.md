@@ -81,11 +81,10 @@ from the component, not from `EventMap`; they become typed in
 
 ## Errors
 
-A command rejects with a string (`Result<T, String>`) or, when it is typed, with a `BackendError`
-`{ code, message, retryable }` (`Result<T, CommandError>`, [ADR 0006](../docs/adr/0006-typed-errors.md)).
-The generator reads the error type of each signature: `CommandMap[C]["error"]` is `string` or
-`BackendError`, and `BACKEND_ERROR_COMMANDS` lists the typed commands. The IPC fake
-(`src/test/ipc.ts`) rejects a test whose fake throws the other shape, so use `backendError(code,
-message)` for a typed command. The frontend matches on `code` only (`isBackendError`); the
-remaining `Result<_, String>` commands are the rest of
-[#360](https://github.com/Magnus-Gille/sagascript/issues/360).
+A command rejects with a `BackendError` `{ code, message, retryable }` (`Result<T, CommandError>`,
+[ADR 0006](../docs/adr/0006-typed-errors.md)); since #360 part 2a every command is typed.
+The generator reads the error type of each signature: `CommandMap[C]["error"]` is `BackendError`
+(or `string` for a `Result<T, String>` signature, which the generator still accepts), and
+`BACKEND_ERROR_COMMANDS` lists the typed commands. The IPC fake (`src/test/ipc.ts`) rejects a
+test whose fake throws the other shape, so use `backendError(code, message)` in a fake. The
+frontend matches on `code` only (`isBackendError`).

@@ -244,7 +244,7 @@ fn preflight_failures_keep_their_message_code_and_exit_status() {
         ),
         (
             &["a.wav", "--model", "nope"],
-            "settings_error",
+            "invalid_setting_value",
             "Settings error: Unknown file model preference 'nope'",
         ),
         (
@@ -254,7 +254,7 @@ fn preflight_failures_keep_their_message_code_and_exit_status() {
         ),
         (
             &["a.wav", "--model", "pianissimo-sv", "--language", "en"],
-            "settings_error",
+            "pianissimo_unavailable",
             "Settings error: Pianissimo Original is only available for Swedish file transcription",
         ),
         (
