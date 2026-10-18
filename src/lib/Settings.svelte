@@ -2862,7 +2862,7 @@
         <span class="download-status-pct">{Math.round(downloadProgress)}%</span>
       </div>
       <div class="download-status-track">
-        <div class="download-status-fill" style="width: {downloadProgress}%"></div>
+        <div class="download-status-fill" style:width="{downloadProgress}%"></div>
       </div>
     </div>
   {/if}
