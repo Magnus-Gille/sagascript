@@ -137,8 +137,10 @@ impl Settings {
     /// whose model no longer fits goes back to Auto with a notice, except the one
     /// given an explicit `model`, which is checked against the new language
     /// instead: an incompatible choice is an error. Every profile of the result
-    /// must resolve to a model. Refused, with nothing changed, when any of that
-    /// fails. `pianissimo_supported` is the platform gate.
+    /// resolves to a model: `replace_hotkey_profiles_gated` checks each one, and
+    /// the chosen model is checked by `set_profile_model_gated`. Refused, with
+    /// nothing changed, when any of that fails. `pianissimo_supported` is the
+    /// platform gate.
     ///
     /// The one place a profile list is applied: `sagascript config profiles
     /// create|update|remove` and the app's shortcut profiles both end here.
@@ -154,9 +156,6 @@ impl Settings {
         if let Some((id, preference)) = model {
             candidate.set_profile_model_gated(id, preference, pianissimo_supported)?;
             notices.retain(|notice| notice.profile_id != id);
-        }
-        for profile in candidate.resolved_hotkey_profiles() {
-            candidate.dictation_model_for_profile_gated(&profile.id, pianissimo_supported)?;
         }
         *self = candidate;
         Ok(notices)
