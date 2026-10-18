@@ -497,3 +497,6 @@ fn every_settings_writing_command_has_a_row() {
 
 #[path = "persist_scenarios_tests.rs"]
 mod scenarios;
+
+#[path = "persist_parity_tests.rs"]
+mod parity;
