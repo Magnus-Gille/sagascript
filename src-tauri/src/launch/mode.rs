@@ -23,7 +23,7 @@ pub(super) fn should_install_update_at_launch(mode: GuiLaunchMode) -> bool {
 
 /// True when argv asks clap for informational output (`--version`/`-V`,
 /// `--help`/`-h`, or the `help` subcommand) that must reach a terminal.
-#[cfg_attr(not(any(windows, test)), allow(dead_code))]
+#[cfg(any(windows, test))]
 pub(crate) fn cli_args_request_console_output(args: &[std::ffi::OsString]) -> bool {
     args.iter().skip(1).any(|argument| {
         argument == std::ffi::OsStr::new("--version")

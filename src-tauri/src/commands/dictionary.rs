@@ -285,7 +285,7 @@ pub async fn suggest_training_glossary(
     corrected: String,
     profile_id: String,
 ) -> Result<Vec<GlossarySuggestion>, CommandError> {
-    let settings = sagascript_core::settings::store::load();
+    let settings = sagascript_core::machine::load();
     ensure_learning_profile(&settings, &profile_id)?;
     let glossary = Glossary::parse(&settings.effective_glossary_source(Some(&profile_id)));
     Ok(suggest_glossary_candidates(&heard, &corrected, &glossary))

@@ -34,20 +34,20 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+use sagascript_core::diarization::report::{AsrSegmentEvidence, DecoderEvidence};
+use sagascript_core::diarization::speaker_hint::SpeakerCountHint;
 use sagascript_core::diarization::{
     self, merge::merge_with_diagnostics, DiarizationAnalysis, DiarizeConfig, TimestampedSegment,
 };
-use sagascript_core::diarization_report::{AsrSegmentEvidence, DecoderEvidence};
 use sagascript_core::error::DictationError;
 use sagascript_core::fsutil::{Leftover, PublishFs, RealFs, StagedFile};
-use sagascript_core::meeting::MeetingTranscript;
-use sagascript_core::meeting_reprocess_plan::{
+use sagascript_core::meeting::reprocess::plan::{
     ReprocessingContext, ReprocessingMode, ReprocessingPlan, RequiredWork,
 };
-use sagascript_core::meeting_reprocess_proposal::MeetingReprocessingProposal;
-use sagascript_core::meeting_review::MeetingReview;
+use sagascript_core::meeting::reprocess::proposal::MeetingReprocessingProposal;
+use sagascript_core::meeting::review::MeetingReview;
+use sagascript_core::meeting::MeetingTranscript;
 use sagascript_core::settings::{Language, Settings, WhisperModel};
-use sagascript_core::speaker_hint::SpeakerCountHint;
 use sagascript_core::transcription::{Glossary, TranscribeOptions, WhisperBackend};
 use serde::Serialize;
 use sha2::{Digest, Sha256};

@@ -226,12 +226,15 @@ impl AppController {
     }
 
     /// Handle hotkey down event
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     pub fn handle_hotkey_down(&mut self) -> Result<HotkeyDownResult, DictationError> {
         let profile = self.settings.default_profile();
         self.handle_hotkey_down_for_profile(profile)
     }
 
+    /// A press of `profile`'s own shortcut in the session mode (tests; the app resolves
+    /// the binding and calls [`Self::handle_hotkey_down_for_binding`]).
+    #[cfg(test)]
     pub fn handle_hotkey_down_for_profile(
         &mut self,
         profile: HotkeyProfile,

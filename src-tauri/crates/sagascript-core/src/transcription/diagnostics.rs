@@ -6,7 +6,7 @@ use crate::models::Language;
 
 use super::TranscriptSegment;
 
-pub const MATERIAL_GAP_SECONDS: f64 = 5.0;
+pub(crate) const MATERIAL_GAP_SECONDS: f64 = 5.0;
 const SAMPLE_RATE_HZ: f64 = 16_000.0;
 const FRAME_SAMPLES: usize = 320;
 const MIN_SPEECH_RMS: f64 = 0.0015;

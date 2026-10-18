@@ -247,6 +247,7 @@ pub(super) fn stop_recording_and_transcribe(
                 sagascript_core::transcription::live_dictation::LiveDictationBackend::new(
                     whisper.inner().clone(),
                     use_pianissimo,
+                    sagascript_core::machine::load,
                 ),
             );
             let live_ref = live_backend.clone();

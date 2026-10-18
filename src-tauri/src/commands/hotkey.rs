@@ -140,7 +140,7 @@ fn apply_hotkey_change(
     let _recording_lease = acquire_hotkey_configuration(&controller)?;
     let old_settings = lock_controller(&controller).settings().clone();
     let (candidate, notices) = update
-        .prepare_with_notices(&sagascript_core::settings::store::load())
+        .prepare_with_notices(&sagascript_core::machine::load())
         .map_err(|error| CommandError::HotkeyInvalid(error.to_string()))?;
     let new_shortcuts = candidate.resolved_shortcuts();
     let new_primary = candidate.hotkey.clone();
@@ -392,7 +392,7 @@ pub async fn retry_hotkey_registration(
         .await?;
         after_monitor_install(reply)?;
     }
-    let profiles = sagascript_core::settings::store::load().resolved_hotkey_profiles();
+    let profiles = sagascript_core::machine::load().resolved_hotkey_profiles();
     set_hotkey_profiles(app, controller, health, profiles)
         .await
         .map(|_| ())

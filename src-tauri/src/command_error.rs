@@ -224,15 +224,15 @@ macro_rules! through_dictation_error {
 
 through_dictation_error!(
     sagascript_core::meeting::MeetingError,
-    sagascript_core::meeting_review::MeetingReviewError,
-    sagascript_core::meeting_reprocess_plan::ReprocessingPlanError,
-    sagascript_core::meeting_reprocess_proposal::ProposalError,
-    sagascript_core::meeting_media::MediaError,
-    sagascript_core::diarization_reference::ReferenceError,
-    sagascript_core::diarization_evaluation::EvaluationError,
-    sagascript_core::diarization_qualification::QualificationError,
-    sagascript_core::diarization_strata::StrataError,
-    sagascript_core::diarization_report::ReportError,
+    sagascript_core::meeting::review::MeetingReviewError,
+    sagascript_core::meeting::reprocess::plan::ReprocessingPlanError,
+    sagascript_core::meeting::reprocess::proposal::ProposalError,
+    sagascript_core::meeting::media::MediaError,
+    sagascript_core::diarization::eval::reference::ReferenceError,
+    sagascript_core::diarization::eval::evaluation::EvaluationError,
+    sagascript_core::diarization::eval::qualification::QualificationError,
+    sagascript_core::diarization::eval::strata::StrataError,
+    sagascript_core::diarization::report::ReportError,
 );
 
 impl From<crate::update_activity::ActivityError> for CommandError {

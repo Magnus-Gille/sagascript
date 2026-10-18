@@ -9,7 +9,7 @@
 //!
 //! Recovering is only correct when the protected data is still consistent or
 //! the caller re-validates it. Modules whose invariants a panic could break
-//! restore a safe state first via [`lock_or_recover_with`] or
+//! restore a safe state first via `lock_or_recover_with` or
 //! [`recover_poisoned`].
 
 use std::any::Any;
@@ -28,7 +28,7 @@ const MAX_PANIC_TEXT_CHARS: usize = 512;
 /// `name` identifies the lock in the recovery log (for example
 /// `"app_controller"`). Use this only where the protected data stays
 /// consistent even if a panic interrupted an update; otherwise use
-/// [`lock_or_recover_with`].
+/// `lock_or_recover_with`.
 pub fn lock_or_recover<'a, T: ?Sized>(
     mutex: &'a Mutex<T>,
     name: &'static str,
@@ -41,7 +41,7 @@ pub fn lock_or_recover<'a, T: ?Sized>(
 /// Like [`lock_or_recover`], but runs `restore` on the data before returning
 /// it when (and only when) the lock was poisoned, so the caller never observes
 /// state a panic may have left half-updated.
-pub fn lock_or_recover_with<'a, T: ?Sized>(
+pub(crate) fn lock_or_recover_with<'a, T: ?Sized>(
     mutex: &'a Mutex<T>,
     name: &'static str,
     restore: impl FnOnce(&mut T),

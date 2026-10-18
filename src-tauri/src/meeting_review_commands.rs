@@ -1,8 +1,10 @@
 //! Explicit, local-only review transforms and document dialogs.
 use std::io::Read;
 
+use sagascript_core::meeting::review::{
+    CorrectionFile, MeetingReview, MAX_SERIALIZED_REVIEW_BYTES,
+};
 use sagascript_core::meeting::MeetingTranscript;
-use sagascript_core::meeting_review::{CorrectionFile, MeetingReview, MAX_SERIALIZED_REVIEW_BYTES};
 use serde::Serialize;
 use tauri_plugin_dialog::DialogExt;
 

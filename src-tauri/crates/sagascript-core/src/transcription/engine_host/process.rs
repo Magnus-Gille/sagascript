@@ -18,12 +18,12 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 /// Size of the stderr ring buffer used for error messages.
-pub const STDERR_TAIL_BYTES: usize = 8 * 1024;
+pub(crate) const STDERR_TAIL_BYTES: usize = 8 * 1024;
 
 /// How long one stdin write may take before the host counts as no longer
 /// reading (see [`HostProcess::with_write_timeout`]). A host reads stdin on its
 /// own thread, so a healthy write completes in microseconds.
-pub const DEFAULT_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
+pub(crate) const DEFAULT_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 
 // Poisoned transport locks are recovered as-is (ADR 0005): every critical
 // section is a single map insert/remove, `Option` take/clone or channel send,
@@ -251,7 +251,7 @@ impl HostProcess {
         })
     }
 
-    /// Bound each stdin write by `timeout` instead of [`DEFAULT_WRITE_TIMEOUT`].
+    /// Bound each stdin write by `timeout` instead of `DEFAULT_WRITE_TIMEOUT`.
     pub fn with_write_timeout(mut self, timeout: Duration) -> Self {
         self.write_timeout = timeout;
         self

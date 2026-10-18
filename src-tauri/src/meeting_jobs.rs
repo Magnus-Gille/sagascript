@@ -52,9 +52,9 @@ enum JobOutput {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReprocessingRequest {
-    pub plan: sagascript_core::meeting_reprocess_plan::ReprocessingPlan,
+    pub plan: sagascript_core::meeting::reprocess::plan::ReprocessingPlan,
     pub expected_revision: String,
-    pub previous: sagascript_core::meeting_review::MeetingReview,
+    pub previous: sagascript_core::meeting::review::MeetingReview,
     pub cache_path: Option<String>,
     pub cache_output: Option<String>,
 }

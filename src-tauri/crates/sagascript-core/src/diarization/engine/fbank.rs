@@ -8,9 +8,9 @@ use std::sync::OnceLock;
 use rustfft::{num_complex::Complex, FftPlanner};
 
 const SAMPLE_RATE: f32 = 16_000.0;
-pub const N_FFT: usize = 400; // 25ms window at 16kHz
-pub const HOP_LENGTH: usize = 160; // 10ms hop
-pub const N_MELS: usize = 80;
+pub(crate) const N_FFT: usize = 400; // 25ms window at 16kHz
+pub(crate) const HOP_LENGTH: usize = 160; // 10ms hop
+pub(crate) const N_MELS: usize = 80;
 const FMIN: f32 = 20.0;
 const FMAX: f32 = 7600.0;
 const N_FREQS: usize = N_FFT / 2 + 1; // 201
@@ -81,7 +81,7 @@ fn hann_window() -> &'static [f32; N_FFT] {
 /// Global mean subtraction is applied across all frames per mel bin.
 ///
 /// Returns an empty vec if audio is too short to produce any frames.
-pub fn compute_fbank(audio: &[f32]) -> Vec<[f32; N_MELS]> {
+pub(crate) fn compute_fbank(audio: &[f32]) -> Vec<[f32; N_MELS]> {
     if audio.len() < N_FFT {
         return Vec::new();
     }

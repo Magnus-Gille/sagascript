@@ -22,7 +22,7 @@ pub mod process;
 
 pub use client::{
     BoostReport, BoostSpec, ClientIdentity, EngineHostClient, EngineHostConfig, HostSnapshot,
-    LoadEvent, LoadObserver, LoadSpec, TestHook, Timeouts, WindowOutput,
+    LoadEvent, LoadObserver, LoadSpec, Timeouts, WindowOutput,
 };
 pub use pipeline::{CancelToken, JobOptions, Transcription, WindowTiming};
 pub use process::CrashInfo;

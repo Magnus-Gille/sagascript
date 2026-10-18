@@ -54,7 +54,7 @@ use crate::sync::lock_or_recover;
 /// fine-tunes — quantization only changes tensor payloads, never the
 /// header) and against the Silero VAD model, which whisper.cpp has shipped
 /// in ggml format since v1.7.4.
-pub const GGML_MAGIC: [u8; 4] = [0x6c, 0x6d, 0x67, 0x67];
+pub(crate) const GGML_MAGIC: [u8; 4] = [0x6c, 0x6d, 0x67, 0x67];
 
 /// Number of leading response bytes buffered for the magic check. Only ever
 /// need to compare against `GGML_MAGIC` (4 bytes) today; a little slack
@@ -85,7 +85,7 @@ const ORPHAN_TMP_MAX_AGE: Duration = Duration::from_secs(60 * 60);
 ///   `min_bytes_per_sec` plus `total_base`, not that arbitrarily slow
 ///   downloads always finish.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct DownloadLimits {
+pub(crate) struct DownloadLimits {
     pub connect_timeout: Duration,
     pub idle_timeout: Duration,
     pub total_base: Duration,
@@ -121,7 +121,7 @@ pub struct DownloadIntegrity {
 
 /// Result of preparing an app-managed artifact for a download attempt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ExistingArtifact {
+pub(crate) enum ExistingArtifact {
     Missing,
     Verified,
     RemovedInvalid,
@@ -148,7 +148,7 @@ enum VerificationFailure {
 /// On any failure the temp file is removed best-effort before the error is
 /// returned; `dest` itself is only ever touched by the final rename, so a
 /// failed download can never leave a partial or invalid file in its place.
-pub async fn download_to_path(
+pub(crate) async fn download_to_path(
     url: &str,
     dest: &Path,
     tmp_ext: &str,
@@ -169,7 +169,7 @@ pub async fn download_to_path(
 }
 
 /// [`download_to_path`] with explicit network bounds.
-pub async fn download_to_path_with_limits(
+pub(crate) async fn download_to_path_with_limits(
     url: &str,
     dest: &Path,
     tmp_ext: &str,
@@ -800,7 +800,7 @@ fn redirect_target(current: &reqwest::Url, location: &str) -> Result<reqwest::Ur
 ///   HuggingFace git-LFS pointer stub, an HTML rate-limit/error page, or an
 ///   S3 XML error document would otherwise be renamed straight into
 ///   `ggml-*.bin` and `is_model_downloaded()` would report success forever.
-pub fn validate_download(
+pub(crate) fn validate_download(
     prefix_bytes: &[u8],
     bytes_written: u64,
     content_length: Option<u64>,
@@ -857,11 +857,11 @@ pub fn validate_download(
 /// Successful full hashes are remembered (in-process, and on unix in a
 /// persistent `<file>.verified.json` stamp) so later calls skip the hash while
 /// the file's identity and the manifest digest are unchanged.
-pub fn verify_file(path: &Path, integrity: DownloadIntegrity) -> Result<(), DictationError> {
+pub(crate) fn verify_file(path: &Path, integrity: DownloadIntegrity) -> Result<(), DictationError> {
     verify_file_detailed(path, integrity).map_err(failure_into_error)
 }
 
-/// Like [`verify_file`] but ignores the in-process cache and the persistent
+/// Like `verify_file` but ignores the in-process cache and the persistent
 /// stamp, always re-hashing the file (and refreshing the stamp on success).
 /// Intended for explicit user-requested verification such as a future
 /// `sagascript engine doctor --verify-model`.
@@ -872,7 +872,7 @@ pub fn verify_file_forced(path: &Path, integrity: DownloadIntegrity) -> Result<(
 /// [`verify_file`] / [`verify_file_forced`] with the persistent stamp stored at
 /// `stamp_path` instead of beside the file. Used for files inside directory
 /// packages (Core ML `.mlpackage`) that must not gain foreign files.
-pub fn verify_file_with_stamp(
+pub(crate) fn verify_file_with_stamp(
     path: &Path,
     stamp_path: &Path,
     integrity: DownloadIntegrity,
@@ -939,7 +939,7 @@ fn prepare_existing_artifact_with(
 /// be gigabytes, so the check and the hash run on Tokio's blocking pool
 /// (#368). Dropping the future stops the hash before its next 1 MiB read; a
 /// hash stopped that way never deletes the file.
-pub async fn prepare_existing_artifact_async(
+pub(crate) async fn prepare_existing_artifact_async(
     path: &Path,
     integrity: DownloadIntegrity,
 ) -> Result<ExistingArtifact, DictationError> {
@@ -1177,7 +1177,7 @@ struct VerificationStamp {
 }
 
 /// Path of the stamp that belongs to `model` (`<file name>.verified.json`).
-pub fn verification_stamp_path(model: &Path) -> PathBuf {
+pub(crate) fn verification_stamp_path(model: &Path) -> PathBuf {
     let mut name = model.as_os_str().to_os_string();
     name.push(STAMP_SUFFIX);
     PathBuf::from(name)

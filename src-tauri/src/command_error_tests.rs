@@ -95,12 +95,12 @@ fn a_settings_error_keeps_its_code_and_its_text_on_the_wire() {
 
 #[test]
 fn the_meeting_and_evaluation_errors_keep_their_codes_and_texts() {
-    use sagascript_core::diarization_reference::ReferenceError;
+    use sagascript_core::diarization::eval::reference::ReferenceError;
+    use sagascript_core::meeting::media::MediaError;
+    use sagascript_core::meeting::reprocess::plan::ReprocessingPlanError;
+    use sagascript_core::meeting::reprocess::proposal::ProposalError;
+    use sagascript_core::meeting::review::MeetingReviewError;
     use sagascript_core::meeting::MeetingError;
-    use sagascript_core::meeting_media::MediaError;
-    use sagascript_core::meeting_reprocess_plan::ReprocessingPlanError;
-    use sagascript_core::meeting_reprocess_proposal::ProposalError;
-    use sagascript_core::meeting_review::MeetingReviewError;
 
     assert_eq!(
         wire(MeetingReviewError::ExpectedRevisionMismatch),
@@ -284,7 +284,7 @@ fn command_error_fixture_matches_what_rust_sends() {
         "export_exists": wire(CommandError::ExportExists(
             "That file already exists. Choose a new name; no existing file was changed.".into()
         )),
-        "meeting_stale": wire(sagascript_core::meeting_review::MeetingReviewError::ExpectedRevisionMismatch),
+        "meeting_stale": wire(sagascript_core::meeting::review::MeetingReviewError::ExpectedRevisionMismatch),
     });
     contract::assert_fixture("command_errors.json", &actual);
 }

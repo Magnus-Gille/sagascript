@@ -76,10 +76,10 @@
 
 7. **Settings failures are `SettingsError`** (`sagascript_core::settings::SettingsError`). The
    settings manager, store, operations (`ops`), machine wrappers and hotkey validation return
-   it instead of a `String`; its `Display` is the text each refusal always had. The store's
-   `update` functions hand back the error type of the caller's closure (`E: From<SettingsError>`)
-   and convert their own failures into it, so a typed refusal needs no side channel out of the
-   settings lock. The CLI wraps it as `DictationError::Settings` (its JSON error object gets
+   it instead of a `String`; its `Display` is the text each refusal always had.
+   `machine::try_update` (and the store beneath it) hands back the error type of the caller's
+   closure (`E: From<SettingsError>`) and converts its own failures into it, so a typed refusal
+   needs no side channel out of the settings lock. The CLI wraps it as `DictationError::Settings` (its JSON error object gets
    the specific code), the app as `CommandError::Settings`. Codes: `invalid_setting_value`,
    `unknown_profile`, `model_incompatible`, `pianissimo_unavailable`, `hotkey_invalid`,
    `profile_invalid`, `dictionary_blocks_language_change`, `inactive_profile_dictionary`,

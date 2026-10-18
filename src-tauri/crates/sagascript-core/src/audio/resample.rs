@@ -48,7 +48,7 @@ pub fn resample_to_16khz_with_control(
 /// `max_output_samples`: the limit is checked (including rubato's flush and
 /// padding output) before every growth, and reservations are fallible, so an
 /// oversized conversion returns an error instead of allocating or aborting.
-pub fn resample_to_16khz_bounded(
+pub(crate) fn resample_to_16khz_bounded(
     mono: Vec<f32>,
     source_rate: u32,
     on_progress: Option<&dyn Fn(f64)>,

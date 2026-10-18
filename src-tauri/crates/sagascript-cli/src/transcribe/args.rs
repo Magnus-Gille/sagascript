@@ -184,7 +184,7 @@ impl<'a> From<&'a TranscribeArgs> for RunRequest<'a> {
 #[cfg(feature = "diarization")]
 pub(super) fn validated_speaker_hint(
     counts: &crate::speaker_args::SpeakerCountArgs,
-) -> Result<Option<sagascript_core::speaker_hint::SpeakerCountHint>, DictationError> {
+) -> Result<Option<sagascript_core::diarization::speaker_hint::SpeakerCountHint>, DictationError> {
     counts
         .hint()
         .map_err(|message| DictationError::SettingsError(format!("--speakers: {message}")))
@@ -194,7 +194,7 @@ pub(super) fn validated_speaker_hint(
 #[cfg(feature = "diarization")]
 pub(super) fn speaker_hint_from_args(
     args: &TranscribeArgs,
-) -> Result<Option<sagascript_core::speaker_hint::SpeakerCountHint>, DictationError> {
+) -> Result<Option<sagascript_core::diarization::speaker_hint::SpeakerCountHint>, DictationError> {
     let hint = validated_speaker_hint(&args.speaker_count)?;
     if hint.is_some() && !args.diarize {
         return Err(DictationError::SettingsError(

@@ -68,7 +68,7 @@ pub(crate) fn setup_app(
     // Build the hidden overlay now, while Sagascript is still frontmost,
     // so the first dictation never creates a window (#291).
     if overlay::should_precreate_at_startup(
-        sagascript_core::settings::store::load().show_overlay,
+        sagascript_core::machine::load().show_overlay,
         !cfg!(target_os = "linux"),
     ) {
         overlay::precreate_hidden(app.handle());
@@ -240,7 +240,7 @@ fn startup_hotkey_health(
 }
 
 fn open_initial_window(app: &tauri::App, gui_launch_mode: GuiLaunchMode) {
-    let settings = sagascript_core::settings::store::load();
+    let settings = sagascript_core::machine::load();
     match initial_window_request(settings.has_completed_onboarding, gui_launch_mode) {
         InitialWindowRequest::Hidden => {
             info!("Background launch complete; Settings remains hidden");

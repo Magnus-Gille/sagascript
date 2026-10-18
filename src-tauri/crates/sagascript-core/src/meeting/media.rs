@@ -7,7 +7,7 @@ use std::{
     time::SystemTime,
 };
 
-pub const MAX_AUDIO_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+pub(crate) const MAX_AUDIO_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 pub const MAX_RANGE_BYTES: u64 = 8 * 1024 * 1024;
 
 #[derive(Debug, thiserror::Error)]

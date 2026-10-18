@@ -4,6 +4,7 @@ use clap::{Args, Subcommand};
 
 use sagascript_core::audio::decoder::decode_audio_file;
 use sagascript_core::error::DictationError;
+use sagascript_core::machine;
 use sagascript_core::settings;
 use sagascript_core::settings::{FileModel, Language, SettingsError};
 use sagascript_core::transcription::model;
@@ -105,7 +106,7 @@ pub fn run(args: GlossaryArgs, out: &Out) -> Result<(), DictationError> {
 }
 
 fn path(profile: Option<&str>, out: &Out) -> Result<(), DictationError> {
-    let stored = settings::store::load();
+    let stored = machine::load();
     let profile = resolved_profile_id(&stored, profile)?;
     let path = settings::store::profile_glossary_path(&profile).map_err(DictationError::from)?;
     outln!(out, "{}", path.display())?;
@@ -113,7 +114,7 @@ fn path(profile: Option<&str>, out: &Out) -> Result<(), DictationError> {
 }
 
 fn list(profile: Option<&str>, out: &Out) -> Result<(), DictationError> {
-    let stored = settings::store::load();
+    let stored = machine::load();
     let source = glossary_source(&stored, profile)?;
     let glossary = Glossary::parse(source);
     for entry in glossary.entries() {
@@ -137,7 +138,7 @@ fn add(
         .iter()
         .map(|alias| validate_component("alias", alias))
         .collect::<Result<Vec<_>, _>>()?;
-    let current = settings::store::load();
+    let current = machine::load();
     let profile_id = resolved_profile_id(&current, profile)?;
     if profile.is_some() {
         validate_profile(&current, &profile_id)?;
@@ -146,7 +147,7 @@ fn add(
         validate_learning_profile(&current, &profile_id)?;
     }
 
-    settings::store::try_update::<String, _>(|stored| {
+    machine::try_update::<String, _>(|stored| {
         let profile_id = resolved_profile_id(stored, profile).map_err(|error| error.to_string())?;
         if profile.is_some() {
             validate_profile(stored, &profile_id).map_err(|error| error.to_string())?;
@@ -168,7 +169,7 @@ fn add(
 fn remove(term: &str, profile: Option<&str>, out: &Out) -> Result<(), DictationError> {
     let term = validate_component("term", term)?;
     let mut removed = false;
-    settings::store::try_update::<String, _>(|stored| {
+    machine::try_update::<String, _>(|stored| {
         let source = glossary_source_mut(stored, profile)?;
         let mut glossary = Glossary::parse(source);
         removed = glossary.remove(&term);
@@ -195,7 +196,7 @@ fn clear(confirmed: bool, profile: Option<&str>, out: &Out) -> Result<(), Dictat
             "Refusing to clear the personal dictionary without --yes".to_string(),
         ));
     }
-    settings::store::try_update::<String, _>(|stored| {
+    machine::try_update::<String, _>(|stored| {
         glossary_source_mut(stored, profile)?.clear();
         Ok(())
     })
@@ -219,7 +220,7 @@ fn suggest(
         ))
     })?;
 
-    let stored = settings::store::load();
+    let stored = machine::load();
     let profile_id = resolved_profile_id(&stored, profile)?;
     validate_learning_profile(&stored, &profile_id)?;
     let glossary = effective_glossary(&stored, Some(&profile_id), None, None)?;
@@ -233,7 +234,7 @@ fn suggest(
             ));
         }
         let reviewed = suggestions.clone();
-        settings::store::try_update::<String, _>(|latest| {
+        machine::try_update::<String, _>(|latest| {
             validate_learning_profile(latest, &profile_id).map_err(|error| error.to_string())?;
             let effective = effective_glossary(latest, Some(&profile_id), None, None)
                 .map_err(|error| error.to_string())?;
@@ -358,7 +359,9 @@ fn load_training_input(
                 out,
                 "Transcribing training input locally with Pianissimo..."
             );
-            PianissimoBackend::start()?.transcribe(&audio, |_| {})?.text
+            PianissimoBackend::start(&machine::load())?
+                .transcribe(&audio, |_| {})?
+                .text
         }
     };
     Ok(glossary.correct_text(&raw).0)

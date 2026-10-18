@@ -2,9 +2,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use sagascript_core::diarization::DiarizationAnalysis;
+use sagascript_core::meeting::reprocess::plan::ReprocessingMode;
+use sagascript_core::meeting::review::MeetingReview;
 use sagascript_core::meeting::MeetingTranscript;
-use sagascript_core::meeting_reprocess_plan::ReprocessingMode;
-use sagascript_core::meeting_review::MeetingReview;
 use sagascript_core::settings::{Language, WhisperModel};
 use sagascript_core::test_support::meeting_transcript;
 use sagascript_core::transcription::Glossary;
@@ -30,7 +30,7 @@ struct CountingBackend {
     fail_analyze: bool,
     fail_full: bool,
     cancel_during_analyze: bool,
-    last_full_hint: Option<sagascript_core::speaker_hint::SpeakerCountHint>,
+    last_full_hint: Option<sagascript_core::diarization::speaker_hint::SpeakerCountHint>,
     /// Behave like the real full pipeline: save a new cache at the path it is
     /// given with `save_new`, as `transcribe_file` does mid-inference.
     write_cache: bool,
@@ -85,7 +85,7 @@ impl WorkBackend for CountingBackend {
         &mut self,
         input: &ReprocessingInput<'_>,
         _threshold: f32,
-        speaker_hint: Option<sagascript_core::speaker_hint::SpeakerCountHint>,
+        speaker_hint: Option<sagascript_core::diarization::speaker_hint::SpeakerCountHint>,
         cache_output: Option<&Path>,
         control: Option<&MeetingControl<'_>>,
     ) -> Result<MeetingTranscript, DictationError> {
@@ -212,7 +212,7 @@ fn selective_reprocessing_preserves_explicit_decoder_policy_and_acoustic_report(
         segment_timestamps: true,
         ..Default::default()
     };
-    let decoder: sagascript_core::diarization_report::DecoderEvidence =
+    let decoder: sagascript_core::diarization::report::DecoderEvidence =
         sagascript_core::transcription::whisper_backend::effective_diarization_decoder_config(
             &options,
         )
@@ -331,9 +331,9 @@ fn work_modes_invoke_only_their_selected_backend_stages() {
 
 #[test]
 fn speaker_hint_flows_through_plan_execution_and_persistence_in_every_mode() {
-    use sagascript_core::meeting_reprocess_plan::ReprocessingPlan;
-    use sagascript_core::meeting_reprocess_proposal::MeetingReprocessingProposal;
-    use sagascript_core::speaker_hint::SpeakerCountHint;
+    use sagascript_core::diarization::speaker_hint::SpeakerCountHint;
+    use sagascript_core::meeting::reprocess::plan::ReprocessingPlan;
+    use sagascript_core::meeting::reprocess::proposal::MeetingReprocessingProposal;
 
     let hint = SpeakerCountHint::exact(2);
     let fixture = Fixture::new(true);
@@ -558,7 +558,7 @@ fn directory_names(dir: &Path) -> Vec<String> {
     names
 }
 
-fn full_plan(fixture: &Fixture) -> sagascript_core::meeting_reprocess_plan::ReprocessingPlan {
+fn full_plan(fixture: &Fixture) -> sagascript_core::meeting::reprocess::plan::ReprocessingPlan {
     plan_reprocessing(&fixture.input(None), ReprocessingMode::Full, 0.75, None).expect("full plan")
 }
 
@@ -760,8 +760,8 @@ fn staging_publishes_nothing_and_commit_publishes_the_cache_then_the_proposal() 
 
 fn receipt_proposal(
     fixture: &Fixture,
-) -> sagascript_core::meeting_reprocess_proposal::MeetingReprocessingProposal {
-    sagascript_core::meeting_reprocess_proposal::MeetingReprocessingProposal::new(
+) -> sagascript_core::meeting::reprocess::proposal::MeetingReprocessingProposal {
+    sagascript_core::meeting::reprocess::proposal::MeetingReprocessingProposal::new(
         fixture.previous.clone(),
         fixture.previous.original.clone(),
     )

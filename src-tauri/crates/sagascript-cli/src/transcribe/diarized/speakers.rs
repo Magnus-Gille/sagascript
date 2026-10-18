@@ -4,13 +4,13 @@
 use std::time::Instant;
 
 use sagascript_core::diarization::merge::merge_with_diagnostics;
+use sagascript_core::diarization::report::DiarizationReport;
+use sagascript_core::diarization::speaker_hint::SpeakerHintOutcome;
 use sagascript_core::diarization::{
     cluster_with_outcome, DiarizationAnalysis, DiarizeConfig, DiarizedSegment, SpeakerSegment,
     TimestampedSegment,
 };
-use sagascript_core::diarization_report::DiarizationReport;
 use sagascript_core::error::DictationError;
-use sagascript_core::speaker_hint::SpeakerHintOutcome;
 use sagascript_core::transcription::TranscriptSegment;
 
 use super::super::meeting::{
@@ -137,7 +137,7 @@ pub(super) fn merge_speakers(step: MergeRequest<'_>, out: &Out) -> Result<Merged
         .iter()
         .filter(|_| diagnostics)
         .map(
-            |segment| sagascript_core::diarization_report::AsrSegmentEvidence {
+            |segment| sagascript_core::diarization::report::AsrSegmentEvidence {
                 start: segment.start,
                 end: segment.end,
                 avg_logprob: segment.avg_logprob,

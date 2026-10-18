@@ -1053,7 +1053,7 @@ fn crash_mid_long_job_resubmits_and_still_reconstructs() {
 
 // ------------------------------------------------ review fixes (2026-09)
 
-use sagascript_core::transcription::engine_host::TestHook;
+use sagascript_core::testing::{run_idle_check_now, set_engine_test_hook};
 use std::sync::mpsc;
 use std::sync::Mutex;
 
@@ -1234,7 +1234,7 @@ fn idle_unload_cannot_race_with_a_batch_request() {
     let f = fixture_with(&[("FAKE_LOG", log_path.to_str().unwrap())], |cfg| {
         cfg.idle_unload = Some(Duration::ZERO);
         cfg.supervisor_tick = Duration::from_secs(3600);
-        cfg.test_hook = Some(TestHook(Arc::new(move |point| {
+        set_engine_test_hook(cfg, move |point| {
             if point == "after_ready" {
                 let _ = reached_tx.lock().unwrap().send(());
                 let _ = release_rx
@@ -1242,7 +1242,7 @@ fn idle_unload_cannot_race_with_a_batch_request() {
                     .unwrap()
                     .recv_timeout(Duration::from_secs(5));
             }
-        })));
+        });
     });
     f.client.warm().unwrap();
     let t = {
@@ -1269,7 +1269,7 @@ fn idle_unload_cannot_race_with_a_batch_request() {
         })
     };
     reached_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-    f.client.run_idle_check_now();
+    run_idle_check_now(&f.client);
     release_tx.send(()).unwrap();
     let out = t.join().unwrap().unwrap();
     assert_eq!(out.tokens.len(), 1);
@@ -1290,7 +1290,7 @@ fn not_loaded_response_is_retried_once_after_reload() {
     let release_rx = Mutex::new(release_rx);
     let reached_tx = Mutex::new(reached_tx);
     let f = fixture_with(&[("FAKE_LOG", log_path.to_str().unwrap())], |cfg| {
-        cfg.test_hook = Some(TestHook(Arc::new(move |point| {
+        set_engine_test_hook(cfg, move |point| {
             if point == "after_ready" {
                 let _ = reached_tx.lock().unwrap().send(());
                 let _ = release_rx
@@ -1298,7 +1298,7 @@ fn not_loaded_response_is_retried_once_after_reload() {
                     .unwrap()
                     .recv_timeout(Duration::from_secs(5));
             }
-        })));
+        });
     });
     f.client.warm().unwrap();
     let dir = tempfile::tempdir().unwrap();
