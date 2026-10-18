@@ -37,13 +37,13 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 
 use futures_util::StreamExt;
-use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt;
 
 use crate::error::DictationError;
 #[cfg(unix)]
 use crate::fsutil::tolerate_unsupported;
 use crate::fsutil::{sync_durably, sync_unsupported};
+use crate::hash::StreamingSha256;
 use crate::sync::lock_or_recover;
 
 /// whisper.cpp's `GGML_FILE_MAGIC` (`0x67676d6c`, mnemonic "ggml") as it
@@ -697,7 +697,7 @@ async fn stream_to_tmp(
     let total_size = content_length.unwrap_or(0);
     let mut downloaded: u64 = 0;
     let mut prefix: Vec<u8> = Vec::with_capacity(MAGIC_PREFIX_LEN);
-    let mut hasher = Sha256::new();
+    let mut hasher = StreamingSha256::new();
 
     // Create the file and its cleanup guard together on the blocking pool. If
     // this future is cancelled while creation is queued, the abandoned result
@@ -752,7 +752,7 @@ async fn stream_to_tmp(
         return Err(total_err(limits, integrity.size));
     }
 
-    let sha256 = format!("{:x}", hasher.finalize());
+    let sha256 = hasher.finish_hex();
     validate_download(
         &prefix,
         downloaded,
@@ -1053,7 +1053,7 @@ fn sha256_of_file_until(
     cancel: &CancelFlag,
 ) -> Result<String, VerificationFailure> {
     let mut reader = BufReader::new(file);
-    let mut hasher = Sha256::new();
+    let mut hasher = StreamingSha256::new();
     // Keep the multi-megabyte artifact hash buffer off the thread stack. The
     // CLI verifier runs on the process's main/Tokio thread on Windows, whose
     // stack is small enough for this allocation to trigger STATUS_STACK_OVERFLOW
@@ -1079,7 +1079,7 @@ fn sha256_of_file_until(
         }
         hasher.update(&buffer[..read]);
     }
-    Ok(format!("{:x}", hasher.finalize()))
+    Ok(hasher.finish_hex())
 }
 
 fn is_sha256(value: &str) -> bool {
