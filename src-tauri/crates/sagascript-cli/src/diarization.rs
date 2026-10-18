@@ -12,7 +12,6 @@ use std::path::{Path, PathBuf};
 use clap::{Args, Subcommand, ValueEnum};
 use serde::Serialize;
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
 
 use crate::exit::CliError;
 use crate::output::{ignore_closed, outln, Out};
@@ -29,6 +28,7 @@ use sagascript_core::diarization::report::{
     DecoderEvidence, DiarizationParameters, DiarizationReport,
 };
 use sagascript_core::error::DictationError;
+use sagascript_core::hash::sha256_hex;
 use sagascript_core::meeting::MeetingTranscript;
 
 const MAX_INPUT_BYTES: usize = 24 * 1024 * 1024;
@@ -1212,15 +1212,8 @@ fn read_input(path: &Path) -> Result<InputFile, DictationError> {
             MAX_INPUT_BYTES / (1024 * 1024)
         )));
     }
-    let sha256 = hex_digest(&bytes);
+    let sha256 = sha256_hex(&bytes);
     Ok(InputFile { bytes, sha256 })
-}
-
-fn hex_digest(bytes: &[u8]) -> String {
-    Sha256::digest(bytes)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
 }
 
 fn utf8(bytes: &[u8]) -> Result<&str, DictationError> {
@@ -1595,11 +1588,11 @@ mod tests {
         assert_eq!(report["coverage"], Value::Null);
         assert_eq!(
             report["reference_file_sha256"],
-            hex_digest(&std::fs::read(reference_file.path()).unwrap())
+            sha256_hex(&std::fs::read(reference_file.path()).unwrap())
         );
         assert_eq!(
             report["manifest_file_sha256"],
-            hex_digest(&std::fs::read(manifest_file.path()).unwrap())
+            sha256_hex(&std::fs::read(manifest_file.path()).unwrap())
         );
         // The command writes the same report, then fails as a check that did
         // not pass (exit 3), not as a command failure (exit 1).
@@ -1873,7 +1866,7 @@ mod tests {
         assert_eq!(receipt["minimum_coverage"], 0.9);
         assert_eq!(
             receipt["manifest_file_sha256"],
-            hex_digest(&std::fs::read(manifest_file.path()).unwrap())
+            sha256_hex(&std::fs::read(manifest_file.path()).unwrap())
         );
         let qualification = qualify(&reference, &manifest, 0.9).unwrap();
         assert_eq!(

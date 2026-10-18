@@ -164,6 +164,7 @@ gets a directory of its own.
 | `download` | The hash-verified streaming download behind every model downloader (Whisper, VAD, Pianissimo, diarization); `models/` imports only its `DownloadIntegrity`. |
 | `fsutil` | Publishing a new file without ever replacing one ([ADR 0008](adr/0008-publishing-new-files.md)), used by the downloads and by every export the CLI and the app write. |
 | `glossary` | The personal dictionary parser, a leaf that `settings`, `transcription` and the CLI read and that imports nothing from the crate (tested). |
+| `hash` | SHA-256 as 64 lowercase hex digits, in memory (`sha256_hex`) or in pieces (`StreamingSha256`): one spelling for the source hashes, revisions, context hashes, staging names and download integrity that `meeting`, `diarization`, `download`, `fsutil` and the CLI write (#373). |
 | `machine` | The one place that feeds this machine's answers to `settings` (the Machine layer above). |
 | `path_scrub` | Removes absolute paths from error text before it reaches a log or the UI ([ADR 0006](adr/0006-typed-errors.md)), for `error` and the engine-host client. |
 | `run_context` | Which profile, language and dictionary a file, recording or reprocessing run uses (#346), shared by the CLI commands and the app. |
