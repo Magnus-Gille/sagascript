@@ -8,6 +8,59 @@ use sagascript_core::diarization_report::DecoderEvidence;
 
 use crate::output::{errln, Out};
 
+/// Where one file's `--progress-json` events go, and what they carry: the
+/// stream, whether events are wanted, the file's start (their `elapsed_ms`
+/// counts from it) and, for a diarized run, the effective decoder settings.
+/// Owns what it needs, so a progress callback of another thread can hold a
+/// clone.
+#[derive(Clone)]
+pub(super) struct Progress {
+    out: Out,
+    enabled: bool,
+    started: Instant,
+    decoder: Option<serde_json::Value>,
+}
+
+impl Progress {
+    pub(super) fn new(
+        out: &Out,
+        enabled: bool,
+        started: Instant,
+        decoder: Option<serde_json::Value>,
+    ) -> Self {
+        Self {
+            out: out.clone(),
+            enabled,
+            started,
+            decoder,
+        }
+    }
+
+    /// One phase event, with the decoder settings when the run has them.
+    pub(super) fn phase(&self, phase: &str, percent: Option<u8>) {
+        emit_progress_with_decoder(
+            &self.out,
+            self.enabled,
+            self.started,
+            phase,
+            percent,
+            self.decoder.as_ref(),
+        );
+    }
+
+    /// One phase of a diarized run: indeterminate, without a step number.
+    #[cfg(feature = "diarization")]
+    pub(super) fn meeting_phase(&self, phase: &str) {
+        emit_meeting_progress(
+            &self.out,
+            self.enabled,
+            self.started,
+            phase,
+            self.decoder.as_ref(),
+        );
+    }
+}
+
 pub(super) fn progress_step(phase: &str) -> Option<u8> {
     match phase {
         "decoding" => Some(1),
