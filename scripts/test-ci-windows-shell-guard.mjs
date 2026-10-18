@@ -177,6 +177,33 @@ test("the pwsh preferences must be the first two command lines and must stay on"
     ok(`${PREFERENCES}npm run build\n$PSNativeCommandUseErrorActionPreference = $false\nnpm run check`)[0],
     /changes a preference after the first two lines/,
   );
+  // A trailing comment after a preference line is not part of the line; a '#' inside a string, or glued to a word, is.
+  const body2 = "npm run build\nnpm run check";
+  assert.deepEqual(
+    ok(`$ErrorActionPreference = 'Stop' # why\n$PSNativeCommandUseErrorActionPreference = $true   # fail on any exit code\n${body2}`),
+    [],
+  );
+  assert.deepEqual(ok(`$ErrorActionPreference = 'Stop'; # why\n$PSNativeCommandUseErrorActionPreference = $true\n${body2}`), []);
+  assert.equal(
+    ok(`$ErrorActionPreference = 'Continue' # Stop\n$PSNativeCommandUseErrorActionPreference = $true\n${body2}`).length,
+    1,
+    "a comment cannot supply the value",
+  );
+  assert.equal(
+    ok(`$ErrorActionPreference = 'Stop#'\n$PSNativeCommandUseErrorActionPreference = $true\n${body2}`).length,
+    1,
+    "# inside a string is not a comment",
+  );
+  assert.equal(
+    ok(`${PREFERENCES}npm run build\n$ErrorActionPreference = 'Continue' # 'Stop'\nnpm run check`).length,
+    1,
+    "a later change with a comment is still a change",
+  );
+  assert.deepEqual(
+    ok(`${PREFERENCES}npm run build\n$ErrorActionPreference = 'Stop' # again\nnpm run check`),
+    [],
+    "re-asserting with a comment",
+  );
   // -ErrorAction on one cmdlet is not a preference.
   assert.deepEqual(ok(`${PREFERENCES}Remove-Item x -ErrorAction SilentlyContinue\nnpm run check`), []);
   // Any later change of either preference fails, whatever it assigns or how it reaches the variable.

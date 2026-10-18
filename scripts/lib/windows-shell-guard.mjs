@@ -57,7 +57,7 @@ const PREFERENCE_VARIABLE_ACCESS = new RegExp(
   "i",
 );
 const changesPreference = (line) =>
-  !PWSH_PREFERENCES.some((preference) => preference.pattern.test(line)) &&
+  !PWSH_PREFERENCES.some((preference) => isPreferenceLine(preference, line)) &&
   (PREFERENCE_ASSIGNMENT.test(withoutStrings(line)) ||
     PREFERENCE_SUBEXPRESSION_ASSIGNMENT.test(line) ||
     PREFERENCE_VARIABLE_ACCESS.test(line));
@@ -143,6 +143,23 @@ function withoutStrings(line) {
   return out;
 }
 
+// The line without a trailing `# comment`: a `#` outside strings that starts the line or follows whitespace.
+function withoutTrailingComment(line) {
+  let quote = null;
+  for (let index = 0; index < line.length; index++) {
+    const char = line[index];
+    if (quote === null) {
+      if (char === "'" || char === '"') quote = char;
+      else if (char === "#" && (index === 0 || /\s/.test(line[index - 1]))) return line.slice(0, index).trimEnd();
+    } else if (quote === '"' && char === "`") index++;
+    else if (char === quote) quote = null;
+  }
+  return line;
+}
+
+// Whether a line is the given preference line, with or without a trailing comment.
+const isPreferenceLine = (preference, line) => preference.pattern.test(withoutTrailingComment(line));
+
 /** How many commands a logical line holds: PowerShell and cmd lines are split on `;` and `&`, outside strings. */
 function commandsOnLine(line, shell) {
   const separator = shell === "cmd" ? /&+|\|\|/ : POWERSHELL.has(shell) ? /;/ : null;
@@ -186,7 +203,7 @@ const EXCEPTION_HINT = "pin the audited script as an exception (WINDOWS_SHELL_EX
 
 /** True when a script's first two command lines are the two PWSH_PREFERENCES, in either order. */
 const carriesPreferences = (lines) =>
-  PWSH_PREFERENCES.every((preference) => lines.slice(0, PWSH_PREFERENCES.length).some((line) => preference.pattern.test(line)));
+  PWSH_PREFERENCES.every((preference) => lines.slice(0, PWSH_PREFERENCES.length).some((line) => isPreferenceLine(preference, line)));
 
 /**
  * Whether a step is acceptable. Returns `{ verdict, lines, commands, problem?, exception? }`: `verdict` names why
