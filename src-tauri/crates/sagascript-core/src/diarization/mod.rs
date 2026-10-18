@@ -1,10 +1,10 @@
-pub mod clustering;
-pub mod embedding;
-pub mod fbank;
+pub mod engine;
 pub mod merge;
 pub mod model;
 pub mod report;
-pub mod segmentation;
+
+// The old paths of the stages that moved into `engine/` (#372).
+pub use engine::{clustering, embedding, fbank, segmentation};
 
 use std::collections::{BTreeMap, HashMap};
 use std::time::Instant;
@@ -13,10 +13,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::DictationError;
 pub use crate::speaker_hint::{SpeakerCountHint, SpeakerHintOutcome};
-
-/// Keep both CPU-bound ONNX stages within the Apple-Silicon performance-core
-/// budget while Whisper runs concurrently on Metal.
-const ORT_INTRA_THREADS: usize = 4;
 
 /// Configuration for the diarization pipeline.
 pub struct DiarizeConfig {
