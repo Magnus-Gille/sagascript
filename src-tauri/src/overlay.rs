@@ -96,15 +96,15 @@ fn create_overlay(app: &tauri::AppHandle, present: bool) -> Result<(), Box<dyn s
     Ok(())
 }
 
-#[cfg_attr(target_os = "linux", allow(dead_code))]
+#[cfg(any(not(target_os = "linux"), test))]
 const OVERLAY_WIDTH: f64 = 220.0;
-#[cfg_attr(target_os = "linux", allow(dead_code))]
+#[cfg(not(target_os = "linux"))]
 const OVERLAY_TOP: f64 = 80.0;
-#[cfg_attr(target_os = "linux", allow(dead_code))]
+#[cfg(not(target_os = "linux"))]
 const FALLBACK_SCREEN_WIDTH: f64 = 1200.0;
 
 /// Horizontal origin (logical points) that centres the overlay on a screen.
-#[cfg_attr(target_os = "linux", allow(dead_code))]
+#[cfg(any(not(target_os = "linux"), test))]
 fn overlay_x_for_screen_width(logical_screen_width: f64) -> f64 {
     logical_screen_width / 2.0 - OVERLAY_WIDTH / 2.0
 }

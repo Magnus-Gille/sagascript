@@ -75,7 +75,8 @@ pub fn segment_word(word: &str, pieces: &HashMap<&str, u32>) -> Vec<Vec<u32>> {
 #[derive(Debug, Default)]
 pub struct BoostTrie {
     children: Vec<HashMap<u32, usize>>, // node 0 = root
-    #[cfg_attr(not(test), allow(dead_code))]
+    /// Which nodes end a phrase; only the tests read it back (`phrases`).
+    #[cfg(test)]
     terminal: Vec<bool>,
     max_nodes: usize,
 }
@@ -98,6 +99,7 @@ impl BoostTrie {
         }
         let mut trie = Self {
             children: vec![HashMap::new()],
+            #[cfg(test)]
             terminal: vec![false],
             max_nodes,
         };
@@ -158,8 +160,11 @@ impl BoostTrie {
                 }
             };
         }
-        self.terminal.resize(self.children.len(), false);
-        self.terminal[node] = true;
+        #[cfg(test)]
+        {
+            self.terminal.resize(self.children.len(), false);
+            self.terminal[node] = true;
+        }
     }
 
     pub fn is_empty(&self) -> bool {
