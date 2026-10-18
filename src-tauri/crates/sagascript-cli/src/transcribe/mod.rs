@@ -82,7 +82,7 @@ use self::diarize::{CachePolicy, OnnxAnalyzer};
 #[cfg(feature = "diarization")]
 use self::diarized::run_diarized;
 use self::output::{BatchExecution, BatchSink, FileTranscription};
-use self::pianissimo::run_pianissimo_batch;
+use self::pianissimo::{run_pianissimo_batch, InstalledPianissimo, PianissimoBatch};
 use self::plain::run_plain;
 use self::plan::{plan_file, plan_run, EnginePlan, FileMode, FileRequest, RunPlan};
 use self::progress::emit_progress;
@@ -108,9 +108,17 @@ fn run_inner(args: TranscribeArgs, out: &Out) -> Result<(), DictationError> {
         engine,
     } = plan_run(&args)?;
     match engine {
-        EnginePlan::Pianissimo => {
-            run_pianissimo_batch(&args, &files, &stored, language, &glossary, out)
-        }
+        EnginePlan::Pianissimo => run_pianissimo_batch(
+            &PianissimoBatch {
+                args: &args,
+                files: &files,
+                language,
+                glossary: &glossary,
+            },
+            &InstalledPianissimo,
+            &crate::cancel::GLOBAL,
+            out,
+        ),
         EnginePlan::Whisper {
             model,
             correction_vocabulary,
@@ -213,19 +221,6 @@ fn run_whisper_batch(
         )));
     }
     Ok(())
-}
-
-fn process_batch<F, E>(
-    files: &[PathBuf],
-    fail_fast: bool,
-    process: F,
-    emit: E,
-) -> Result<(usize, usize), DictationError>
-where
-    F: FnMut(usize, &Path) -> Result<FileTranscription, DictationError>,
-    E: FnMut(BatchExecution) -> Result<(), DictationError>,
-{
-    process_batch_with(&crate::cancel::GLOBAL, files, fail_fast, process, emit)
 }
 
 fn process_batch_with<F, E>(

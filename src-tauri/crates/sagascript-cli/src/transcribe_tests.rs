@@ -179,7 +179,8 @@ fn batch_continues_after_item_failure_by_default() {
     ];
     let mut visited = Vec::new();
     let mut executions = Vec::new();
-    let counts = process_batch(
+    let counts = process_batch_with(
+        &crate::cancel::Canceller::new(),
         &files,
         false,
         |_, file| {
@@ -216,7 +217,8 @@ fn batch_continues_after_item_failure_by_default() {
 fn batch_fail_fast_stops_after_first_failure() {
     let files = vec![PathBuf::from("bad.wav"), PathBuf::from("never.wav")];
     let mut executions = Vec::new();
-    let counts = process_batch(
+    let counts = process_batch_with(
+        &crate::cancel::Canceller::new(),
         &files,
         true,
         |_, file| {
