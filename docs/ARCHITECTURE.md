@@ -209,7 +209,7 @@ sequenceDiagram
     Cmd->>Store: persist_and_sync (one writer at a time) calls store::try_update
     Store->>Disk: lock json.lock, load and migrate, mutate, atomic save_to
     Store-->>Cmd: persisted Settings
-    Cmd->>Ctrl: lock, the same change on the controller's copy (a few setters replace the whole copy)
+    Cmd->>Ctrl: lock, the same change (or the written fields) on the controller's copy, demoted for this host; only the hotkey change replaces the whole copy
     Cmd-->>UI: Ok, then applySetting calls get_settings
     CLI->>Store: config set uses store::try_update
     Store->>Disk: same lock and atomic write
@@ -262,9 +262,10 @@ spellings; each surface keeps its own error text). Each decision where the two u
 
 Side effects stay in each surface and arrive as arguments (`Accessibility`, `pianissimo_supported`):
 registering shortcuts with the OS, the VAD download, the Accessibility probe, the profiles menu and
-the overlay. How the app's controller follows the file (`persist_and_sync` or
-`try_persist_and_replace`, above) is each setter's own and did not change; the whole-copy setters
-still adopt shortcuts the OS never registered ([#458](https://github.com/Magnus-Gille/sagascript/issues/458)).
+the overlay. How the app's controller follows the file (`persist_and_sync`, `try_persist_and_mirror`
+or, for the hotkey change only, `try_persist_and_replace`, above) is each setter's own; none but the
+hotkey change adopts shortcuts the OS never registered, and every write demotes an unsupported
+Pianissimo selection in the controller's copy as `store::load` does ([#458](https://github.com/Magnus-Gille/sagascript/issues/458)).
 
 The parity table (`core::test_support::settings_ops_table`) is the check: each row is an operation
 from a starting `Settings`, and `expected` computes with core alone what a surface must have

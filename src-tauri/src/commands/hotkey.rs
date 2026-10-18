@@ -93,10 +93,11 @@ pub(crate) fn acquire_hotkey_configuration(
 /// registered: the file and the controller, nothing else. A refusal or a failed
 /// write leaves both as they were.
 ///
-/// The one setter that must replace the controller's whole copy by the file's,
+/// The one setter that replaces the controller's whole copy by the file's,
 /// because it is the caller that has just registered the file's shortcuts with
 /// the OS: the controller adopting them is what makes them the operational
-/// ones. No other setter may install shortcuts in the controller.
+/// ones. No other setter may install shortcuts in the controller; each mirrors
+/// the fields it writes (`persist_tests.rs` has the rule of every one).
 pub(super) fn persist_hotkey_change(
     controller: &SharedController,
     update: &HotkeyChange,
@@ -105,7 +106,7 @@ pub(super) fn persist_hotkey_change(
     try_persist_and_replace(controller, |settings| {
         update.apply_registered(settings, shortcuts)
     })
-    .map(|(_, written)| written)
+    .map(|persisted| persisted.current)
 }
 
 /// What a failed hotkey change does about the shortcuts registered before it.

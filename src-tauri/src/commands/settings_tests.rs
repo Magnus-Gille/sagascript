@@ -50,6 +50,186 @@ mod language_selection_tests {
     }
 }
 
+/// What the controller takes over from a setter that the file may have moved
+/// ahead of it in other ways: shortcuts nothing registered, a Pianissimo
+/// selection this host demoted. The mirrors take the fields their setter writes
+/// and no others (the table in `persist_tests.rs` runs the real setters).
+#[cfg(test)]
+mod mirror_tests {
+    use super::{
+        mirror_auto_select_model, mirror_language_selection, mirror_pianissimo_dictation,
+        mirror_profile_models, mirror_whisper_model,
+    };
+    use sagascript_core::settings::{
+        FileModelPreference, HotkeyMode, HotkeyProfile, Language, Settings, WhisperModel,
+    };
+
+    type Mirror = fn(&mut Settings, &Settings);
+
+    fn profile(id: &str, shortcut: &str, language: Language) -> HotkeyProfile {
+        HotkeyProfile {
+            id: id.into(),
+            name: id.into(),
+            shortcut: shortcut.into(),
+            push_to_talk_shortcut: None,
+            toggle_shortcut: None,
+            language,
+        }
+    }
+
+    /// The keys of the settings JSON whose values differ between two copies.
+    fn changed_keys(before: &Settings, after: &Settings) -> Vec<String> {
+        let (before, after) = (
+            serde_json::to_value(before).unwrap(),
+            serde_json::to_value(after).unwrap(),
+        );
+        let mut keys: Vec<String> = after
+            .as_object()
+            .unwrap()
+            .iter()
+            .filter(|(key, value)| before.get(key.as_str()) != Some(*value))
+            .map(|(key, _)| key.clone())
+            .collect();
+        keys.sort();
+        keys
+    }
+
+    /// A file that differs from `memory` in every field a mirror might take or
+    /// must leave: models, legacy flags, dictionaries, and the shortcut state.
+    fn written_ahead_of(memory: &Settings) -> Settings {
+        let mut written = memory.clone();
+        written.language = Language::Norwegian;
+        written.whisper_model = WhisperModel::NbWhisperBase;
+        written.auto_select_model = !memory.auto_select_model;
+        written.pianissimo_dictation = !memory.pianissimo_dictation;
+        written
+            .profile_models
+            .insert("default".into(), FileModelPreference::Auto);
+        written
+            .profile_glossaries
+            .insert("default".into(), "Astrid = astrid".into());
+        written.hotkey = "Control+Alt+K".into();
+        written.hotkey_mode = HotkeyMode::Toggle;
+        written.hotkey_profiles = vec![profile("default", "Control+Alt+K", Language::Norwegian)];
+        written.beam_size = 7;
+        written.file_transcription_model = FileModelPreference::PianissimoOriginal;
+        written
+    }
+
+    #[test]
+    fn each_model_mirror_takes_the_fields_its_setter_writes_and_no_others() {
+        let memory = Settings::default();
+        let written = written_ahead_of(&memory);
+        let table: [(&str, Mirror, &[&str]); 4] = [
+            (
+                "set_profile_model",
+                mirror_profile_models,
+                &["profile_models"],
+            ),
+            (
+                "set_whisper_model",
+                mirror_whisper_model,
+                &["auto_select_model", "profile_models", "whisper_model"],
+            ),
+            (
+                "set_auto_select_model",
+                mirror_auto_select_model,
+                &["auto_select_model", "profile_models"],
+            ),
+            (
+                "set_pianissimo_dictation",
+                mirror_pianissimo_dictation,
+                &["pianissimo_dictation", "profile_models"],
+            ),
+        ];
+        for (setter, mirror, fields) in table {
+            let mut next = memory.clone();
+            mirror(&mut next, &written);
+            assert_eq!(changed_keys(&memory, &next), fields, "{setter}");
+        }
+    }
+
+    #[test]
+    fn the_language_mirror_follows_the_default_profile_and_keeps_the_shortcuts() {
+        let mut memory = Settings {
+            hotkey_profiles: vec![
+                profile("default", "Control+Shift+Space", Language::English),
+                profile("sv", "Control+Alt+S", Language::Swedish),
+            ],
+            ..Settings::default()
+        };
+        memory
+            .profile_models
+            .insert("sv".into(), FileModelPreference::Auto);
+        let mut written = written_ahead_of(&memory);
+        written.hotkey_profiles = vec![
+            profile("default", "Control+Alt+K", Language::Norwegian),
+            profile("sv", "Control+Alt+L", Language::Finnish),
+        ];
+
+        let mut next = memory.clone();
+        mirror_language_selection(&mut next, &written);
+
+        // The default profile's language is taken, its shortcut is not; the
+        // other profile is not the operation's to move at all.
+        assert_eq!(
+            next.hotkey_profiles,
+            vec![
+                profile("default", "Control+Shift+Space", Language::Norwegian),
+                profile("sv", "Control+Alt+S", Language::Swedish),
+            ]
+        );
+        assert_eq!(next.hotkey, memory.hotkey);
+        assert_eq!(next.hotkey_mode, memory.hotkey_mode);
+        assert_eq!(
+            changed_keys(&memory, &next),
+            [
+                "auto_select_model",
+                "hotkey_profiles",
+                "language",
+                "profile_models",
+                "whisper_model"
+            ]
+        );
+        assert_eq!(next.language, Language::Norwegian);
+    }
+
+    #[test]
+    fn the_language_mirror_makes_an_implicit_profile_list_explicit_like_the_file() {
+        let memory = Settings::default();
+        assert!(memory.hotkey_profiles.is_empty());
+        let written = written_ahead_of(&memory);
+
+        let mut next = memory.clone();
+        mirror_language_selection(&mut next, &written);
+
+        assert_eq!(
+            next.hotkey_profiles,
+            vec![HotkeyProfile::legacy_default(
+                memory.hotkey.clone(),
+                Language::Norwegian
+            )]
+        );
+        assert_eq!(next.resolved_shortcuts(), memory.resolved_shortcuts());
+    }
+
+    #[test]
+    fn the_language_mirror_leaves_profiles_the_file_does_not_name() {
+        let memory = Settings {
+            hotkey_profiles: vec![profile("work", "Control+Alt+W", Language::English)],
+            ..Settings::default()
+        };
+        let written = written_ahead_of(&memory);
+        assert_eq!(written.default_profile().id, "default");
+
+        let mut next = memory.clone();
+        mirror_language_selection(&mut next, &written);
+
+        assert_eq!(next.hotkey_profiles, memory.hotkey_profiles);
+        assert_eq!(next.language, Language::English);
+    }
+}
+
 #[cfg(test)]
 mod auto_paste_tests {
     use sagascript_core::settings::{Accessibility, Settings};
