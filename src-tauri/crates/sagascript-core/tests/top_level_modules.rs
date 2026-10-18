@@ -165,10 +165,13 @@ fn listed(names: &BTreeSet<String>) -> String {
 
 #[test]
 fn the_top_level_files_are_lib_error_and_the_allowlist() {
-    let (files, _) = files_and_directories(&src());
+    let (files, directories) = files_and_directories(&src());
     let allowed = allowed_files();
     let stray: BTreeSet<String> = files.difference(&allowed).cloned().collect();
-    let missing: BTreeSet<String> = allowed.difference(&files).cloned().collect();
+    // A cross-cutting module may grow into a directory (`foo/mod.rs`) once it
+    // has submodules, as `test_support` did; it is still on the allowlist.
+    let present: BTreeSet<String> = files.union(&directories).cloned().collect();
+    let missing: BTreeSet<String> = allowed.difference(&present).cloned().collect();
     assert!(
         stray.is_empty(),
         "new top-level file(s) in sagascript-core/src: {}.\n\
@@ -179,7 +182,7 @@ fn the_top_level_files_are_lib_error_and_the_allowlist() {
     );
     assert!(
         missing.is_empty(),
-        "the allowlist names file(s) that no longer exist: {}. Remove them from CROSS_CUTTING here \
+        "the allowlist names module(s) that no longer exist: {}. Remove them from CROSS_CUTTING here \
          and from the table in docs/ARCHITECTURE.md section 1.1.",
         listed(&missing)
     );
