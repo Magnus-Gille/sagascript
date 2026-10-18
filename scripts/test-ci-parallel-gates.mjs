@@ -212,8 +212,32 @@ test("only the native build lanes cache downloaded models", () => {
   }
   const step = action.steps.find((candidate) => candidate.name === "Cache downloaded models");
   assert.equal(step.condition, "${{ inputs.native-build == 'true' }}");
-  for (const source of ["settings/manager.rs", "transcription/model.rs", "diarization/model.rs"]) {
+  for (const source of MODEL_IDENTITY_SOURCES) {
     assert.ok(step.with.key.includes(`sagascript-core/src/${source}`), `the model cache key hashes ${source}`);
+  }
+});
+
+// The files that hold the downloaded models' URLs and SHA-256 identities. A model
+// cache key that does not hash them keeps restoring an old cache after a model
+// changes, and never saves the new one (#372 moved the catalog to models/sources.rs).
+const MODEL_IDENTITY_SOURCES = ["models/sources.rs", "transcription/model.rs", "diarization/model.rs"];
+
+test("every model cache key hashes the files that hold the model identities", () => {
+  const keys = [
+    ["the setup action", loadAction("setup").steps.find((step) => step.name === "Cache downloaded models").with.key],
+    ...["release-quality-gate.yml", "windows-package.yml"].map((file) => {
+      const steps = parseWorkflow(readFileSync(new URL(`../.github/workflows/${file}`, import.meta.url), "utf8"))
+        .jobs.flatMap((job) => job.steps)
+        .filter((step) => step.name === "Cache downloaded models");
+      assert.equal(steps.length, 1, `${file} has one model cache step`);
+      return [file, steps[0].with.key];
+    }),
+  ];
+  for (const [where, key] of keys) {
+    for (const source of MODEL_IDENTITY_SOURCES) {
+      assert.ok(key.includes(`sagascript-core/src/${source}`), `${where}: the model cache key hashes ${source}`);
+    }
+    assert.ok(!key.includes("settings/manager.rs"), `${where}: settings/manager.rs no longer holds model identities`);
   }
 });
 
