@@ -239,13 +239,17 @@ test("Rust complexity counts function-body complexity once and uses a strict thr
 });
 
 test("the rust-cli complexity scope lists every production module of the transcribe command", () => {
-  // The scope names files, so a module added to transcribe/ would silently drop out of the
-  // measurement until someone remembers to list it. Test files (tests.rs, *_tests.rs) are not measured.
+  // The scope names files, so a module added to transcribe/ (or to a directory module inside it)
+  // would silently drop out of the measurement until someone remembers to list it. Test files
+  // (tests.rs, *_tests.rs) are not measured.
   const directory = "src-tauri/crates/sagascript-cli/src/transcribe";
-  const modules = readdirSync(join(repoRoot, directory))
-    .filter((name) => name.endsWith(".rs") && !/(^|_)tests\.rs$/.test(name))
-    .map((name) => `${directory}/${name}`)
-    .sort();
+  const productionModules = (dir) =>
+    readdirSync(join(repoRoot, dir), { withFileTypes: true }).flatMap((entry) => {
+      const path = `${dir}/${entry.name}`;
+      if (entry.isDirectory()) return productionModules(path);
+      return entry.name.endsWith(".rs") && !/(^|_)tests\.rs$/.test(entry.name) ? [path] : [];
+    });
+  const modules = productionModules(directory).sort();
   const configured = config.complexity.scopes["rust-cli"];
   assert.deepEqual(
     configured.filter((path) => path.startsWith(`${directory}/`)).sort(),
