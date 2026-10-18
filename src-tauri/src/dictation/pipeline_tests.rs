@@ -113,3 +113,35 @@ fn an_engine_failure_event_keeps_its_code_and_loses_the_path() {
     );
     assert!(!wire.to_string().contains("/Users/x"), "{wire}");
 }
+
+/// A transcription that was stopped on request is not a failure: the hotkey
+/// path ends it quietly instead of raising the error state, the `error` event
+/// and the controller's last error (ADR 0006, #360 part 2b). Every other error
+/// still fails the dictation.
+#[test]
+fn a_cancelled_transcription_ends_quietly_and_every_other_error_fails() {
+    use sagascript_core::error::DictationError;
+
+    assert_eq!(
+        transcription_end(&DictationError::Cancelled),
+        TranscriptionEnd::Quiet
+    );
+    for error in [
+        DictationError::ModelBusy,
+        DictationError::ModelNotLoaded,
+        DictationError::NoAudioCaptured,
+        DictationError::TranscriptionFailed("no model".into()),
+        dictation_timed_out(),
+        dictation_task_failed("task 7 panicked"),
+        DictationError::engine("engine_busy", true, "queue full"),
+        DictationError::engine("engine_crashed", false, "host exited"),
+        DictationError::AudioCaptureError("no device".into()),
+        DictationError::MicrophonePermissionDenied,
+    ] {
+        assert_eq!(
+            transcription_end(&error),
+            TranscriptionEnd::Failed,
+            "{error}"
+        );
+    }
+}

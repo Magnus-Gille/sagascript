@@ -29,6 +29,24 @@ fn dictation_failure_event(error: &sagascript_core::error::DictationError) -> Co
     CommandError::from(error.clone())
 }
 
+/// How the hotkey path ends a dictation whose transcription returned an error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TranscriptionEnd {
+    /// Stopped on request (`cancelled`): back to idle, nothing to show. Not a
+    /// failure (ADR 0006).
+    Quiet,
+    /// A failure: the error event, the overlay's error state, the controller's
+    /// last error.
+    Failed,
+}
+
+fn transcription_end(error: &sagascript_core::error::DictationError) -> TranscriptionEnd {
+    match error {
+        sagascript_core::error::DictationError::Cancelled => TranscriptionEnd::Quiet,
+        _ => TranscriptionEnd::Failed,
+    }
+}
+
 /// The dictation outran [`TRANSCRIPTION_TIMEOUT_SECS`] and was aborted.
 fn dictation_timed_out() -> sagascript_core::error::DictationError {
     sagascript_core::error::DictationError::TranscriptionTimedOut(format!(
@@ -512,6 +530,20 @@ pub(super) fn stop_recording_and_transcribe(
                     update_tray_last_result(app, &text_for_tray);
                 });
                 info!("Transcription flow complete, app should remain running");
+            }
+            Err(e) if transcription_end(&e) == TranscriptionEnd::Quiet => {
+                // Stopped on request: not a failure. Back to idle like a
+                // dictation without speech; no error event, no error state, no
+                // last error. No latency record either: the stopped run is no
+                // completed dictation (`latency-report` knows three outcomes).
+                info!("Transcription cancelled: {e}");
+                lock_controller(&ctrl).on_transcription_cancelled();
+                let _ = app_handle.emit_event(events::event::STATE_CHANGED, UiState::Idle);
+                dispatch_to_main(&app_handle, |app| {
+                    overlay::hide(app);
+                    update_tray_status(app, "idle");
+                });
+                info!("Cancelled flow complete; back to idle");
             }
             Err(e) => {
                 error!("Transcription failed: {e}");
