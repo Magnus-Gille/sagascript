@@ -36,6 +36,25 @@ mod recovery_payload_tests {
         });
         assert_eq!(too_large.code(), "invalid_input");
 
+        // A stored file that is no draft and a payload that does not serialize are
+        // about the draft, like a stored envelope the guard refuses.
+        let parse_error = || serde_json::from_str::<Value>("{").unwrap_err();
+        let corrupt = CommandError::from(RecoveryError::Corrupt {
+            path: "/Users/zoe/Library/Application Support/update-recovery.json".into(),
+            source: parse_error(),
+        });
+        assert_eq!(corrupt.code(), "invalid_input");
+        assert_eq!(
+            CommandError::from(RecoveryError::Serialize(parse_error())).code(),
+            "invalid_input"
+        );
+        let unusable = CommandError::from(RecoveryError::Io {
+            operation: "read",
+            path: "/Users/zoe/update-recovery.json".into(),
+            source: std::io::Error::other("disk gone"),
+        });
+        assert_eq!(unusable.code(), "io_error");
+
         let unreadable = CommandError::from(RecoveryError::InvalidPath(
             "/Users/zoe/Library/Application Support/update-recovery.json".into(),
         ));

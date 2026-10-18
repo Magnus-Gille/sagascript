@@ -252,15 +252,18 @@ impl From<crate::update_recovery::RecoveryError> for CommandError {
     fn from(error: crate::update_recovery::RecoveryError) -> Self {
         use crate::update_recovery::RecoveryError;
         match &error {
-            // The draft is too large to keep: the caller's input is the problem.
-            RecoveryError::PayloadTooLarge { .. } | RecoveryError::SnapshotTooLarge { .. } => {
-                Self::InvalidInput(error.to_string())
-            }
+            // The draft is the problem, not the disk: too large to keep, not
+            // serializable, or a stored file that is not a draft any more (the
+            // same `invalid_input` as a stored envelope or payload the guard
+            // refuses, which keeps the draft).
+            RecoveryError::PayloadTooLarge { .. }
+            | RecoveryError::SnapshotTooLarge { .. }
+            | RecoveryError::Corrupt { .. }
+            | RecoveryError::Serialize(_) => Self::InvalidInput(error.to_string()),
+            // The recovery file cannot be used or reached.
             RecoveryError::InvalidPath(_)
             | RecoveryError::PathContainsSymlink(_)
             | RecoveryError::TargetIsNotRegularFile(_)
-            | RecoveryError::Corrupt { .. }
-            | RecoveryError::Serialize(_)
             | RecoveryError::Io { .. } => Self::Io(error.to_string()),
         }
     }
