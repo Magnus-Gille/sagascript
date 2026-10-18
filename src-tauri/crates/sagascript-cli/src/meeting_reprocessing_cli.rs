@@ -819,15 +819,16 @@ mod tests {
             _control: Option<&MeetingControl<'_>>,
         ) -> Result<sagascript_core::meeting::MeetingTranscript, DictationError> {
             if let Some(path) = cache_output {
-                let identity = crate::diarization_cache::CacheIdentity::for_source_sha256(
-                    &input.previous.original.source_sha256,
-                    "en",
-                    "base",
-                    None,
-                )?;
+                let identity =
+                    sagascript_core::diarization::cache::CacheIdentity::for_source_sha256(
+                        &input.previous.original.source_sha256,
+                        "en",
+                        "base",
+                        None,
+                    )?;
                 let analysis = serde_json::from_str(r#"{"raw_segments":[],"embeddings":[]}"#)
                     .expect("empty synthetic analysis");
-                let cache = crate::diarization_cache::DiarizationCache::new(
+                let cache = sagascript_core::diarization::cache::DiarizationCache::new(
                     identity,
                     analysis,
                     vec![(0.0, 1.0, "hello".to_string())],
@@ -837,7 +838,7 @@ mod tests {
                     None,
                     None,
                 );
-                crate::diarization_cache::save_new(path, &cache)?;
+                sagascript_core::diarization::cache::save_new(path, &cache)?;
             }
             if let Some(hook) = self.during_inference.as_mut() {
                 hook();

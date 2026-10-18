@@ -1,28 +1,40 @@
+//! The reusable diarization cache (#374): what a diarized run keeps so that a later one can skip
+//! decoding and speaker analysis, and what selective meeting reprocessing reads.
+//!
+//! A cache file is a [`DiarizationCache`] under the [`CacheIdentity`] of the run that made it
+//! (source hash, language, model, prompt, decoder) and the [`AnalysisIdentity`] of the models that
+//! analysed it. A lookup answers [`CacheLookup::Hit`] only for the identity it was asked for; every
+//! other case is a [`CacheLookup::Miss`] with the reason. Nothing here needs the ONNX engine: the
+//! cache is compiled in every build, and the CLI and the app write and read it through this module.
+//!
+//! The constructors and loaders that only tests need are compiled under `cfg(test)` or the
+//! `test-support` feature, like `test_support`.
+
 use std::fs::{File, OpenOptions};
 use std::io::{BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 
-use sagascript_core::diarization::{model::DiarizationModel, DiarizationAnalysis, DiarizeConfig};
-use sagascript_core::error::DictationError;
-use sagascript_core::fsutil::{self, PublishError, PublishErrorKind};
-use sagascript_core::hash::sha256_hex;
-use sagascript_core::transcription::diagnostics::{
+use crate::diarization::{model::DiarizationModel, DiarizationAnalysis, DiarizeConfig};
+use crate::error::DictationError;
+use crate::fsutil::{self, PublishError, PublishErrorKind};
+use crate::hash::sha256_hex;
+use crate::transcription::diagnostics::{
     CoverageProfile, LanguageDetection, LanguageRegionDiagnostics,
 };
-use sagascript_core::transcription::TranscriptSegment;
+use crate::transcription::TranscriptSegment;
 use serde::{Deserialize, Serialize};
 
 const CACHE_SCHEMA_VERSION: u32 = 6;
 const MAX_CACHE_BYTES: u64 = 256 * 1024 * 1024;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 const DEFAULT_DIARIZATION_BEAM_SIZE: u32 = 0;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 const DEFAULT_DIARIZATION_TEMPERATURE_FALLBACK: bool = true;
 const VAD_MODEL_ID: &str =
     "ggml-silero-v5.1.2.bin@29940d98d42b91fbd05ce489f3ecf7c72f0a42f027e4875919a28fb4c04ea2cf;threshold=0.5;min_silence_ms=200;speech_pad_ms=50;samples_overlap=0.1";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct CacheIdentity {
+pub struct CacheIdentity {
     schema_version: u32,
     input_sha256: String,
     language: String,
@@ -34,7 +46,7 @@ pub(crate) struct CacheIdentity {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub(crate) struct AnalysisIdentity {
+pub struct AnalysisIdentity {
     segmentation_sha256: String,
     embedding_sha256: String,
     min_segment: f64,
@@ -54,7 +66,7 @@ pub(crate) struct AnalysisIdentity {
 }
 
 impl AnalysisIdentity {
-    pub(crate) fn current_with_policy(exclusive_speech_embeddings: bool) -> Self {
+    pub fn current_with_policy(exclusive_speech_embeddings: bool) -> Self {
         Self {
             segmentation_sha256: DiarizationModel::PyannoteSegmentation3
                 .download_integrity()
@@ -84,30 +96,30 @@ impl AnalysisIdentity {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct DiarizationCache {
+pub struct DiarizationCache {
     identity: CacheIdentity,
     #[serde(default)]
-    pub(crate) analysis_identity: Option<AnalysisIdentity>,
-    pub(crate) analysis: DiarizationAnalysis,
-    pub(crate) transcript: Vec<(f64, f64, String)>,
+    pub analysis_identity: Option<AnalysisIdentity>,
+    pub analysis: DiarizationAnalysis,
+    pub transcript: Vec<(f64, f64, String)>,
     #[serde(default)]
-    pub(crate) coverage_segments: Option<Vec<TranscriptSegment>>,
+    pub coverage_segments: Option<Vec<TranscriptSegment>>,
     #[serde(default)]
-    pub(crate) coverage_profile: CoverageProfile,
+    pub coverage_profile: CoverageProfile,
     #[serde(default)]
-    pub(crate) detected_language: Option<LanguageDetection>,
+    pub detected_language: Option<LanguageDetection>,
     #[serde(default)]
-    pub(crate) language_regions: Option<LanguageRegionDiagnostics>,
+    pub language_regions: Option<LanguageRegionDiagnostics>,
 }
 
-pub(crate) enum CacheLookup {
+pub enum CacheLookup {
     Hit(Box<DiarizationCache>),
     Miss(&'static str),
 }
 
 impl CacheIdentity {
-    #[cfg(test)]
-    pub(crate) fn for_input(
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn for_input(
         input: &Path,
         language: &str,
         model: &str,
@@ -117,8 +129,8 @@ impl CacheIdentity {
         Self::for_source_sha256(&input_sha256, language, model, prompt)
     }
 
-    #[cfg(test)]
-    pub(crate) fn for_source_sha256(
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn for_source_sha256(
         source_sha256: &str,
         language: &str,
         model: &str,
@@ -140,8 +152,8 @@ impl CacheIdentity {
         )
     }
 
-    #[cfg(test)]
-    pub(crate) fn for_input_with_options(
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn for_input_with_options(
         input: &Path,
         language: &str,
         model: &str,
@@ -162,7 +174,7 @@ impl CacheIdentity {
         )
     }
 
-    pub(crate) fn for_source_sha256_with_options(
+    pub fn for_source_sha256_with_options(
         source_sha256: &str,
         language: &str,
         model: &str,
@@ -198,8 +210,8 @@ impl DiarizationCache {
     /// Synthetic fixture constructor retained for crate tests and legacy test helpers.
     /// Its coarse spans mirror the supplied transcript tuples; production cache writes use
     /// `new_with_coverage_segments` with authentic Whisper segment bounds.
-    #[cfg(test)]
-    pub(crate) fn new(
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn new(
         identity: CacheIdentity,
         analysis: DiarizationAnalysis,
         transcript: Vec<(f64, f64, String)>,
@@ -228,8 +240,8 @@ impl DiarizationCache {
         )
     }
 
-    #[cfg(test)]
-    pub(crate) fn new_with_coverage_segments(
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn new_with_coverage_segments(
         identity: CacheIdentity,
         analysis: DiarizationAnalysis,
         transcript: Vec<(f64, f64, String)>,
@@ -251,7 +263,7 @@ impl DiarizationCache {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn new_with_coverage_segments_and_policy(
+    pub fn new_with_coverage_segments_and_policy(
         identity: CacheIdentity,
         analysis: DiarizationAnalysis,
         transcript: Vec<(f64, f64, String)>,
@@ -276,12 +288,12 @@ impl DiarizationCache {
     }
 }
 
-#[cfg(test)]
-pub(crate) fn load(path: &Path, expected: &CacheIdentity) -> Result<CacheLookup, DictationError> {
+#[cfg(any(test, feature = "test-support"))]
+pub fn load(path: &Path, expected: &CacheIdentity) -> Result<CacheLookup, DictationError> {
     load_with_analysis_policy(path, expected, false)
 }
 
-pub(crate) fn load_with_analysis_policy(
+pub fn load_with_analysis_policy(
     path: &Path,
     expected: &CacheIdentity,
     exclusive_speech_embeddings: bool,
@@ -289,7 +301,7 @@ pub(crate) fn load_with_analysis_policy(
     load_internal(path, expected, false, exclusive_speech_embeddings)
 }
 
-pub(crate) fn load_for_rediarization(
+pub fn load_for_rediarization(
     path: &Path,
     expected: &CacheIdentity,
 ) -> Result<CacheLookup, DictationError> {
@@ -409,7 +421,7 @@ fn validate_cache_payload(cached: &DiarizationCache) -> Result<(), DictationErro
     Ok(())
 }
 
-pub(crate) fn save(path: &Path, cache: &DiarizationCache) -> Result<(), DictationError> {
+pub fn save(path: &Path, cache: &DiarizationCache) -> Result<(), DictationError> {
     if let Some(parent) = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
@@ -455,7 +467,7 @@ pub(crate) fn save(path: &Path, cache: &DiarizationCache) -> Result<(), Dictatio
 
 /// Persist a newly recomputed cache without ever replacing an existing path:
 /// [`fsutil::publish_new`], so the file appears complete or not at all.
-pub(crate) fn save_new(path: &Path, cache: &DiarizationCache) -> Result<(), DictationError> {
+pub fn save_new(path: &Path, cache: &DiarizationCache) -> Result<(), DictationError> {
     save_new_with(path, cache, &fsutil::RealFs)
 }
 
@@ -486,7 +498,7 @@ fn save_new_with(
 
 /// The error a failed [`save_new`] or cache publication reports; `path` is the
 /// destination the caller asked for.
-pub(crate) fn publish_error(path: &Path, error: &PublishError) -> DictationError {
+pub fn publish_error(path: &Path, error: &PublishError) -> DictationError {
     let cleanup = match &error.leftover {
         Some(leftover) => format!(
             "; its private temporary file {} could not be removed: {}",
@@ -516,7 +528,7 @@ pub(crate) fn publish_error(path: &Path, error: &PublishError) -> DictationError
 }
 
 /// The digest of a test fixture, read whole.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn sha256_file(path: &Path) -> Result<String, DictationError> {
     let bytes = std::fs::read(path).map_err(|error| cache_error(path, "hash", error))?;
     Ok(sha256_hex(bytes))
@@ -547,7 +559,7 @@ fn cache_error(path: &Path, action: &str, error: std::io::Error) -> DictationErr
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sagascript_core::transcription::diagnostics::{LanguageRegion, TranscriptionWarning};
+    use crate::transcription::diagnostics::{LanguageRegion, TranscriptionWarning};
     use sagascript_testsupport::TempDir;
 
     fn identity(input: &Path) -> CacheIdentity {
@@ -1382,7 +1394,7 @@ mod tests {
 
     #[test]
     fn save_new_succeeds_when_only_the_temporary_file_cannot_be_removed() {
-        use sagascript_core::test_support::FaultyFs;
+        use crate::test_support::FaultyFs;
         let dir = TempDir::new();
         let input = dir.join("audio.m4a");
         let output = dir.join("analysis.json");

@@ -10,8 +10,6 @@ mod benchmark_quality;
 pub mod cancel;
 pub mod config;
 pub mod diarization;
-#[cfg(feature = "diarization")]
-mod diarization_cache;
 pub mod engine;
 pub mod exit;
 pub mod glossary;

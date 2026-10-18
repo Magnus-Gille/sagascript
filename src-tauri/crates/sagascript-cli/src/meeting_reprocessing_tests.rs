@@ -16,8 +16,10 @@ use super::{
     execute_with, execute_with_model_check, plan_reprocessing, plan_reprocessing_with_model_check,
     CommitError, PendingPublication, ReprocessingInput, WorkBackend,
 };
-use crate::diarization_cache::{self, CacheIdentity, DiarizationCache};
 use crate::transcribe::{MeetingControl, MeetingPhase};
+use sagascript_core::diarization::cache::{
+    self as diarization_cache, CacheIdentity, DiarizationCache,
+};
 use sagascript_core::diarization::DiarizeConfig as CoreDiarizeConfig;
 use sagascript_core::error::DictationError;
 

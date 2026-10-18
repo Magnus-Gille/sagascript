@@ -52,11 +52,11 @@ use sagascript_core::settings::{Language, Settings, WhisperModel};
 use sagascript_core::transcription::{Glossary, TranscribeOptions, WhisperBackend};
 use serde::Serialize;
 
-use crate::diarization_cache::{
-    self, AnalysisIdentity, CacheIdentity, CacheLookup, DiarizationCache,
-};
 use crate::meeting_proposal;
 use crate::transcribe::{self, MeetingControl, MeetingPhase};
+use sagascript_core::diarization::cache::{
+    self as diarization_cache, AnalysisIdentity, CacheIdentity, CacheLookup, DiarizationCache,
+};
 
 pub struct ReprocessingInput<'a> {
     pub audio: &'a Path,

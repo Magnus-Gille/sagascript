@@ -484,28 +484,29 @@ fn cached_transcribe_uses_coarse_coverage_across_threshold_sweep() {
     let coverage_segments =
         canonicalize_coverage_segments(coverage_segments, coverage_profile.duration_seconds());
     assert_eq!(coverage_segments[1].end, 11.0);
-    let source_identity = crate::diarization_cache::CacheIdentity::for_input(
+    let source_identity = sagascript_core::diarization::cache::CacheIdentity::for_input(
         &input,
         "en",
         model_id_string(WhisperModel::TinyEn),
         Some("alpha"),
     )
     .unwrap();
-    let cache_value = crate::diarization_cache::DiarizationCache::new_with_coverage_segments(
-        source_identity.clone(),
-        analysis,
-        vec![
-            (1.0, 1.0, "first".to_string()),
-            (9.0, 9.0, "second".to_string()),
-        ],
-        coverage_segments,
-        coverage_profile,
-        None,
-        None,
-    );
-    crate::diarization_cache::save(&cache, &cache_value).unwrap();
-    let loaded = crate::diarization_cache::load(&cache, &source_identity).unwrap();
-    let crate::diarization_cache::CacheLookup::Hit(loaded) = loaded else {
+    let cache_value =
+        sagascript_core::diarization::cache::DiarizationCache::new_with_coverage_segments(
+            source_identity.clone(),
+            analysis,
+            vec![
+                (1.0, 1.0, "first".to_string()),
+                (9.0, 9.0, "second".to_string()),
+            ],
+            coverage_segments,
+            coverage_profile,
+            None,
+            None,
+        );
+    sagascript_core::diarization::cache::save(&cache, &cache_value).unwrap();
+    let loaded = sagascript_core::diarization::cache::load(&cache, &source_identity).unwrap();
+    let sagascript_core::diarization::cache::CacheLookup::Hit(loaded) = loaded else {
         panic!("canonicalized coarse coverage should produce a cache hit");
     };
     assert_eq!(loaded.coverage_segments.as_ref().unwrap()[1].end, 11.0);
