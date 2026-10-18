@@ -801,8 +801,8 @@ use crate::transcribe::args::validated_speaker_hint;
 use crate::transcribe::meeting::{
     meeting_options, stable_file_sha256, transcribe_meeting_file_inner,
 };
+use sagascript_core::diarization::speaker_hint::SpeakerCountHint;
 use sagascript_core::meeting::MeetingTranscript;
-use sagascript_core::speaker_hint::SpeakerCountHint;
 
 /// One meeting run as the app and reprocessing make it: the options of
 /// `meeting_options`, the given backend and analyzer.

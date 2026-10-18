@@ -18,7 +18,7 @@ use crate::meeting::review::{
 };
 use crate::meeting::MeetingTranscript;
 
-pub const REPROCESS_PROPOSAL_SCHEMA_VERSION: u32 = 1;
+pub(crate) const REPROCESS_PROPOSAL_SCHEMA_VERSION: u32 = 1;
 pub const MAX_SERIALIZED_PROPOSAL_BYTES: usize = 72 * 1024 * 1024;
 
 const ZERO_SHA256: &str = "0000000000000000000000000000000000000000000000000000000000000000";

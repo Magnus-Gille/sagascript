@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 use sagascript_core::settings::{
     store, EnginePrewarm, FileModelPreference, LineupEnv, Settings, WhisperModel, SCHEMA_VERSION,
 };
+use sagascript_core::testing::load_settings_at;
 use serde_json::Value;
 
 const SETTINGS_FILE: &str = "sagascript-settings.json";
@@ -201,7 +202,7 @@ fn run(name: &str) -> Outcome {
     let root = tempfile::tempdir().unwrap();
     copy_tree(&input, root.path());
     let paths = layout(root.path());
-    let loaded = store::load_at(&paths.settings, &paths.legacy, &machine());
+    let loaded = load_settings_at(&paths.settings, &paths.legacy, &machine());
     let config = files(&root.path().join("config"));
 
     // Rollback sources stay as they were.
@@ -212,7 +213,7 @@ fn run(name: &str) -> Outcome {
     );
 
     // Idempotent: a second startup changes nothing.
-    let again = store::load_at(&paths.settings, &paths.legacy, &machine());
+    let again = load_settings_at(&paths.settings, &paths.legacy, &machine());
     assert_eq!(
         files(&root.path().join("config")),
         config,
@@ -328,7 +329,7 @@ fn assert_no_remigration_without_schema_version(name: &str, outcome: &Outcome) {
         file.remove("schema_version");
     });
     let before = files(&root.path().join("config"));
-    let loaded = store::load_at(&paths.settings, &paths.legacy, &machine());
+    let loaded = load_settings_at(&paths.settings, &paths.legacy, &machine());
     assert_eq!(
         files(&root.path().join("config")),
         before,
@@ -460,7 +461,7 @@ fn removing_schema_version_never_reruns_a_migration_over_user_choices() {
     fs::write(&english, "").unwrap();
     let before = files(&root.path().join("config"));
 
-    let loaded = store::load_at(&paths.settings, &paths.legacy, &machine());
+    let loaded = load_settings_at(&paths.settings, &paths.legacy, &machine());
     // The markers put it at the current version: nothing runs or is written.
     assert_eq!(files(&root.path().join("config")), before);
     assert_user_choices_kept(&loaded);
@@ -471,7 +472,7 @@ fn removing_schema_version_never_reruns_a_migration_over_user_choices() {
     edit_settings(&paths.settings, |file| {
         file.insert("initial_prompt".into(), "".into());
     });
-    let loaded = store::load_at(&paths.settings, &paths.legacy, &machine());
+    let loaded = load_settings_at(&paths.settings, &paths.legacy, &machine());
     let migrated = json(&fs::read(&paths.settings).unwrap());
     assert_eq!(migrated["schema_version"], SCHEMA_VERSION);
     assert!(migrated.get("initial_prompt").is_none());
@@ -510,7 +511,7 @@ fn older_release_rewrite_is_migrated_again_where_it_regressed() {
     });
     let edited = json(&fs::read(&paths.settings).unwrap());
 
-    let loaded = store::load_at(&paths.settings, &paths.legacy, &machine());
+    let loaded = load_settings_at(&paths.settings, &paths.legacy, &machine());
 
     let migrated = json(&fs::read(&paths.settings).unwrap());
     assert_eq!(migrated["schema_version"], SCHEMA_VERSION);

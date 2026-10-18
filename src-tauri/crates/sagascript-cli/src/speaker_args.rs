@@ -1,7 +1,7 @@
 //! Shared `--speakers` / `--min-speakers` / `--max-speakers` / `--force-speakers` flags (issue #305).
 
 use clap::Args;
-use sagascript_core::speaker_hint::SpeakerCountHint;
+use sagascript_core::diarization::speaker_hint::SpeakerCountHint;
 
 /// Speaker-count hint flags, flattened into every command that clusters speakers.
 #[derive(Args, Debug, Clone, Copy, Default, PartialEq, Eq)]

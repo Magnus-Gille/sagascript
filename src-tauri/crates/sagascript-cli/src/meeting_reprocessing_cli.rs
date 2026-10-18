@@ -11,8 +11,8 @@ use std::path::{Path, PathBuf};
 use clap::{Args, Subcommand, ValueEnum};
 use sagascript_core::error::DictationError;
 use sagascript_core::fsutil::{PublishFs, RealFs};
-use sagascript_core::meeting_reprocess_plan::{ReprocessingMode, ReprocessingPlan};
-use sagascript_core::meeting_review::MeetingReview;
+use sagascript_core::meeting::reprocess::plan::{ReprocessingMode, ReprocessingPlan};
+use sagascript_core::meeting::review::MeetingReview;
 use sagascript_core::run_context::RunContext;
 use sagascript_core::settings::{FileModel, Language, Settings, WhisperModel};
 use sagascript_core::transcription::{Glossary, WhisperBackend};
@@ -417,7 +417,7 @@ fn report_receipt(
 }
 
 fn resolve_runtime(args: &RuntimeArgs) -> Result<RuntimeInputs, DictationError> {
-    resolve_runtime_from(args, sagascript_core::settings::store::load())
+    resolve_runtime_from(args, sagascript_core::machine::load())
 }
 
 /// [`resolve_runtime`] against given settings, so tests resolve fixtures.
@@ -485,7 +485,7 @@ mod tests {
     use crate::meeting_reprocessing::{CommitError, WorkBackend};
     use crate::transcribe::MeetingControl;
     use clap::Parser;
-    use sagascript_core::meeting_review::MeetingReview;
+    use sagascript_core::meeting::review::MeetingReview;
     use sagascript_core::test_support::meeting_transcript;
     use sagascript_testsupport::{sha256_hex, TempDir};
 
@@ -806,7 +806,7 @@ mod tests {
             &mut self,
             input: &ReprocessingInput<'_>,
             _threshold: f32,
-            _speaker_hint: Option<sagascript_core::speaker_hint::SpeakerCountHint>,
+            _speaker_hint: Option<sagascript_core::diarization::speaker_hint::SpeakerCountHint>,
             cache_output: Option<&Path>,
             _control: Option<&MeetingControl<'_>>,
         ) -> Result<sagascript_core::meeting::MeetingTranscript, DictationError> {

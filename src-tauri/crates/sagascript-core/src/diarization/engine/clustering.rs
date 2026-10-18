@@ -20,7 +20,7 @@ use crate::diarization::EMBEDDING_DIM;
 ///
 /// Returns `Vec<(local_speaker_idx, global_speaker_id)>` — one entry per input embedding.
 /// Global speaker IDs are assigned 0, 1, 2, ... in order of first appearance.
-pub fn cluster_speakers(
+pub(crate) fn cluster_speakers(
     embeddings: &[(usize, [f32; EMBEDDING_DIM])],
     threshold: f32,
 ) -> Vec<(usize, usize)> {
@@ -118,7 +118,7 @@ fn relabel_by_first_appearance(
 /// back to cutting the dendrogram into min(`target`, embeddings) clusters without absorption.
 /// `durations[i]` belongs to `embeddings[i]`. The result never has fewer clusters than the target
 /// unless there are fewer embeddings.
-pub fn cluster_to_count(
+pub(crate) fn cluster_to_count(
     embeddings: &[(usize, [f32; EMBEDDING_DIM])],
     durations: &[f64],
     min_seconds: f64,
@@ -187,7 +187,7 @@ pub fn cluster_to_count(
 /// would merge a real speaker in place of the one the user did not count. The result is all or
 /// nothing: if the count cannot reach `target` under the limit, `labels` is left unchanged.
 /// Returns the number of clusters afterwards (the original count when unchanged).
-pub fn merge_least_heard_within(
+pub(crate) fn merge_least_heard_within(
     embeddings: &[(usize, [f32; EMBEDDING_DIM])],
     labels: &mut [usize],
     durations: &[f64],
@@ -267,7 +267,7 @@ pub fn merge_least_heard_within(
 /// `labels[i]` and `durations[i]` belong to `embeddings[i]`. Smallest cluster first, ties
 /// resolved by lowest label (also for equally similar targets). Aggregates are computed once and
 /// updated per merge; labels are rewritten once.
-pub fn absorb_small_clusters(
+pub(crate) fn absorb_small_clusters(
     embeddings: &[(usize, [f32; EMBEDDING_DIM])],
     labels: &mut [usize],
     durations: &[f64],
@@ -281,7 +281,7 @@ pub fn absorb_small_clusters(
 /// many clusters remain it stops, even if smaller-than-minimum clusters are left (a speaker-count
 /// hint says they are real speakers). `0` or `1` behaves like the unfloored function for any input
 /// with at least two clusters.
-pub fn absorb_small_clusters_floor(
+pub(crate) fn absorb_small_clusters_floor(
     embeddings: &[(usize, [f32; EMBEDDING_DIM])],
     labels: &mut [usize],
     durations: &[f64],

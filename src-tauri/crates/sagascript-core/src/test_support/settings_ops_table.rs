@@ -65,7 +65,7 @@ pub enum ProfileEdit {
 }
 
 /// The list the edit leaves and the model it chooses in the same step.
-pub type ProfileChange = (Vec<HotkeyProfile>, Option<(String, FileModelPreference)>);
+pub(crate) type ProfileChange = (Vec<HotkeyProfile>, Option<(String, FileModelPreference)>);
 
 impl ProfileEdit {
     /// The profile list after the edit, and the model it chooses, from the
@@ -188,7 +188,7 @@ pub fn english() -> Settings {
 
 /// English, with a legacy model that English cannot use: turning automatic
 /// selection off would pin it, and is refused.
-pub fn english_with_an_unusable_legacy_model() -> Settings {
+pub(crate) fn english_with_an_unusable_legacy_model() -> Settings {
     Settings {
         whisper_model: WhisperModel::KbWhisperLarge,
         auto_select_model: false,
@@ -197,7 +197,7 @@ pub fn english_with_an_unusable_legacy_model() -> Settings {
 }
 
 /// A Norwegian default profile on a chosen model, the legacy fields in step.
-pub fn norwegian_pinned() -> Settings {
+pub(crate) fn norwegian_pinned() -> Settings {
     let mut settings = english();
     settings.language = Language::Norwegian;
     settings.hotkey_profiles[0].language = Language::Norwegian;
@@ -215,7 +215,7 @@ pub fn norwegian_pinned() -> Settings {
 /// Pianissimo where it runs, and the app's setter would then warm its engine.
 /// `engine_prewarm` is off for the same reason, so that even the row that ends on
 /// Auto (`pianissimo_dictation` false) wants no warm-up on any machine.
-pub fn swedish_pinned() -> Settings {
+pub(crate) fn swedish_pinned() -> Settings {
     let mut settings = english();
     settings.engine_prewarm = EnginePrewarm::Off;
     settings.language = Language::Swedish;
@@ -238,7 +238,7 @@ pub fn swedish_pinned() -> Settings {
 
 /// A Swedish default profile whose dictionary has an alias: its language cannot
 /// change.
-pub fn swedish_with_a_dictionary() -> Settings {
+pub(crate) fn swedish_with_a_dictionary() -> Settings {
     let mut settings = swedish_pinned();
     settings
         .profile_glossaries
@@ -247,7 +247,7 @@ pub fn swedish_with_a_dictionary() -> Settings {
 }
 
 /// Explicit profiles, none called `default`.
-pub fn without_a_default_profile() -> Settings {
+pub(crate) fn without_a_default_profile() -> Settings {
     Settings {
         language: Language::English,
         hotkey: "Super+E".into(),
@@ -269,7 +269,7 @@ pub fn without_a_default_profile() -> Settings {
 }
 
 /// The default profile has an explicit push-to-talk and toggle shortcut.
-pub fn with_explicit_bindings() -> Settings {
+pub(crate) fn with_explicit_bindings() -> Settings {
     let mut settings = english();
     let default = &mut settings.hotkey_profiles[0];
     default.shortcut = "Super+D".into();
@@ -715,7 +715,7 @@ pub fn expected(case: &Case, surface: Surface, start: &Settings) -> Result<Setti
 }
 
 /// The top-level settings fields in which `a` and `b` differ.
-pub fn differing_fields(a: &Settings, b: &Settings) -> Vec<String> {
+pub(crate) fn differing_fields(a: &Settings, b: &Settings) -> Vec<String> {
     let (Value::Object(a), Value::Object(b)) = (
         serde_json::to_value(a).expect("settings serialize"),
         serde_json::to_value(b).expect("settings serialize"),

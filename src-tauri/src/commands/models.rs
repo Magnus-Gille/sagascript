@@ -274,9 +274,11 @@ pub async fn engine_status(
         && selected
         && host.as_ref().is_some_and(|p| p.is_file())
     {
-        identity = tokio::task::spawn_blocking(backend::refresh_host_identity)
-            .await
-            .map_err(|e| format!("engine status task failed: {e}"))?;
+        identity = tokio::task::spawn_blocking(|| {
+            backend::refresh_host_identity(&sagascript_core::machine::load())
+        })
+        .await
+        .map_err(|e| format!("engine status task failed: {e}"))?;
     }
     let (host_version, host_git_sha) = match identity {
         Some((version, sha)) => (Some(version), sha),

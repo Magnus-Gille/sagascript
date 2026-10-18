@@ -175,14 +175,14 @@ impl EnginePrewarm {
 }
 
 /// Default minutes of inactivity before the engine host unloads its model.
-pub const DEFAULT_ENGINE_IDLE_UNLOAD_MINUTES: u32 = 60;
+pub(crate) const DEFAULT_ENGINE_IDLE_UNLOAD_MINUTES: u32 = 60;
 
 /// Defaults that shipped before [`ENGINE_DEFAULTS_VERSION`] 1, used to tell
 /// users still on the old defaults from users who chose something else.
-pub const LEGACY_ENGINE_IDLE_UNLOAD_MINUTES: u32 = 10;
+pub(crate) const LEGACY_ENGINE_IDLE_UNLOAD_MINUTES: u32 = 10;
 
 /// Current version of the engine warm-up defaults migration.
-pub const ENGINE_DEFAULTS_VERSION: u32 = 1;
+pub(crate) const ENGINE_DEFAULTS_VERSION: u32 = 1;
 
 /// One global shortcut and the transcription language selected when it fires.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -302,7 +302,7 @@ pub struct Settings {
 }
 
 /// Current version of the Swedish model-lineup migration.
-pub const MODEL_LINEUP_VERSION: u32 = 1;
+pub(crate) const MODEL_LINEUP_VERSION: u32 = 1;
 
 impl Default for Settings {
     fn default() -> Self {

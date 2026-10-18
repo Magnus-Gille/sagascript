@@ -38,7 +38,7 @@ pub const UNSUPPORTED_MESSAGE: &str = crate::models::PIANISSIMO_UNSUPPORTED_MESS
 /// Environment override (development builds only): path of the `sagascript-engine-host` binary.
 pub const ENGINE_HOST_ENV: &str = "SAGASCRIPT_ENGINE_HOST";
 /// Environment override: Core ML compute units (`ane`, `gpu`, `cpu`, `all`).
-pub const COMPUTE_UNITS_ENV: &str = "SAGASCRIPT_ENGINE_COMPUTE_UNITS";
+pub(crate) const COMPUTE_UNITS_ENV: &str = "SAGASCRIPT_ENGINE_COMPUTE_UNITS";
 /// Neural Engine on macOS (Core ML host); the ONNX Runtime host on Windows is CPU-only.
 const DEFAULT_COMPUTE_UNITS_MACOS: &str = "ane";
 const DEFAULT_COMPUTE_UNITS_WINDOWS: &str = "cpu";
@@ -84,7 +84,7 @@ fn macos_major(version: &str) -> Option<u32> {
 
 /// Pure gate: macOS >= 14 on aarch64 and nothing else. `macos_version` is the
 /// `sw_vers -productVersion` string (only meaningful on macOS).
-pub fn platform_supported(os: &str, arch: &str, macos_version: Option<&str>) -> bool {
+pub(crate) fn platform_supported(os: &str, arch: &str, macos_version: Option<&str>) -> bool {
     os == "macos"
         && arch == "aarch64"
         && macos_version
@@ -94,7 +94,7 @@ pub fn platform_supported(os: &str, arch: &str, macos_version: Option<&str>) -> 
 
 /// Full platform gate: the macOS gate, or Windows on ARM once the bundled host
 /// exists. Windows x64 and Linux are never supported.
-pub fn platform_gate(
+pub(crate) fn platform_gate(
     os: &str,
     arch: &str,
     macos_version: Option<&str>,
@@ -279,7 +279,7 @@ pub fn set_load_listener(listener: impl Fn(LoadEvent, LoadSource) + Send + Sync 
 
 /// Message the webview sees for a failed load. The detailed error (which may
 /// contain filesystem paths) stays in the logs.
-pub const GENERIC_LOAD_FAILURE: &str = "Model failed to load";
+pub(crate) const GENERIC_LOAD_FAILURE: &str = "Model failed to load";
 
 /// Webview payload for a load event: `{ state, source, loadMs?, message? }`
 /// with `state` one of `loading | ready | failed | unknown`.
@@ -371,11 +371,13 @@ fn precheck() -> Result<PathBuf, DictationError> {
     Ok(host)
 }
 
-/// Engine-host configuration for the current machine and settings, after the
+/// Engine-host configuration for the current machine and `settings`, after the
 /// platform, host and model-presence checks (no model verification, no spawn).
-pub fn engine_config() -> Result<EngineHostConfig, DictationError> {
+/// The caller loads the settings (`machine::load`): transcription does not read
+/// the settings file (#372).
+pub fn engine_config(settings: &Settings) -> Result<EngineHostConfig, DictationError> {
     let host = precheck()?;
-    Ok(config_for_host(host, &crate::settings::store::load()))
+    Ok(config_for_host(host, settings))
 }
 
 // ---- process-global client ------------------------------------------------
@@ -400,20 +402,61 @@ fn shared_slot() -> &'static Mutex<Option<Shared>> {
 }
 
 /// The one [`EngineHostClient`] of this process. Created lazily (this does not
-/// spawn the host); recreated when the host path, model or idle settings change.
-/// The model artifact is verified once, when the client is created.
-pub fn shared_client() -> Result<EngineHostClient, DictationError> {
+/// spawn the host); recreated when the host path, model or the idle setting of
+/// `settings` (`engine_idle_unload_minutes`, the only field read) changes between
+/// two calls: the next call then verifies the model again, shuts the old client
+/// down and creates a new one (see `client_in_slot`). The model artifact is
+/// verified once per client, when it is created.
+///
+/// The caller loads the settings (`machine::load`) when it asks, as this
+/// function itself did before (#372).
+pub fn shared_client(settings: &Settings) -> Result<EngineHostClient, DictationError> {
     let host = precheck()?;
-    let settings = crate::settings::store::load();
-    let config = config_for_host(host, &settings);
-    let key = SharedKey {
+    let config = config_for_host(host, settings);
+    let key = shared_key(&config, settings);
+    client_in_slot(
+        shared_slot(),
+        key,
+        pianissimo_model::verify_downloaded,
+        |old| {
+            if let Some(old) = old {
+                old.client.shutdown();
+            }
+            // Audio a killed app or CLI left in the PCM temp dir (once per process).
+            super::engine_host::pipeline::sweep_stale_pcm_dirs_in_background(
+                config.temp_dir.clone().unwrap_or_else(std::env::temp_dir),
+            );
+            EngineHostClient::new(config)
+        },
+    )
+}
+
+/// What identifies the client a `config` and the idle setting would create.
+fn shared_key(config: &EngineHostConfig, settings: &Settings) -> SharedKey {
+    SharedKey {
         host: config.host_path.clone(),
         model_dir: config.load.model_dir.clone(),
         model_id: config.load.model_id.clone(),
         compute_units: config.load.compute_units.clone(),
         idle_minutes: settings.engine_idle_unload_minutes,
-    };
-    let mut slot = shared_slot().lock().map_err(|_| {
+    }
+}
+
+/// The decision of [`shared_client`] on its `slot`, apart from where the key
+/// and the client come from:
+///
+/// - the slot holds a client with this `key`: that client, nothing else runs;
+/// - otherwise `verify_model` runs first, and when it fails the slot keeps the
+///   client it had (the error is the caller's);
+/// - then `replace` is given the client being retired (`None` for the first
+///   one) and returns the new client, which goes into the slot.
+fn client_in_slot(
+    slot: &Mutex<Option<Shared>>,
+    key: SharedKey,
+    verify_model: impl FnOnce() -> Result<(), DictationError>,
+    replace: impl FnOnce(Option<Shared>) -> EngineHostClient,
+) -> Result<EngineHostClient, DictationError> {
+    let mut slot = slot.lock().map_err(|_| {
         DictationError::TranscriptionFailed("Pianissimo client lock was poisoned".into())
     })?;
     if let Some(shared) = slot.as_ref() {
@@ -421,15 +464,8 @@ pub fn shared_client() -> Result<EngineHostClient, DictationError> {
             return Ok(shared.client.clone());
         }
     }
-    pianissimo_model::verify_downloaded()?;
-    if let Some(old) = slot.take() {
-        old.client.shutdown();
-    }
-    // Audio a killed app or CLI left in the PCM temp dir (once per process).
-    super::engine_host::pipeline::sweep_stale_pcm_dirs_in_background(
-        config.temp_dir.clone().unwrap_or_else(std::env::temp_dir),
-    );
-    let client = EngineHostClient::new(config);
+    verify_model()?;
+    let client = replace(slot.take());
     *slot = Some(Shared {
         key,
         client: client.clone(),
@@ -482,8 +518,8 @@ pub fn cached_host_identity() -> Option<(String, Option<String>)> {
 
 /// Start the host if needed and complete `hello` only (no model load) so the
 /// build identity is known. Blocking; call from a blocking context.
-pub fn refresh_host_identity() -> Option<(String, Option<String>)> {
-    if let Ok(client) = shared_client() {
+pub fn refresh_host_identity(settings: &Settings) -> Option<(String, Option<String>)> {
+    if let Ok(client) = shared_client(settings) {
         if let Ok(snapshot) = client.connect() {
             remember_host_identity(&snapshot);
         }
@@ -531,7 +567,7 @@ impl WarmTrigger {
 /// and need some profile on Pianissimo. Key-down warms in both `on_app_start`
 /// and `on_key_down` (an additional trigger after an idle unload) when the
 /// active profile uses Pianissimo. `off` never warms.
-pub fn warm_wanted(
+pub(crate) fn warm_wanted(
     settings: &Settings,
     trigger: WarmTrigger,
     active_profile: Option<&str>,
@@ -547,7 +583,7 @@ pub fn warm_wanted(
 /// [`warm_wanted`] with the platform gate given instead of asked of this
 /// machine, for a caller that decides against a gate of its own (the app's
 /// tests simulate a host that cannot run Pianissimo).
-pub fn warm_wanted_gated(
+pub(crate) fn warm_wanted_gated(
     settings: &Settings,
     trigger: WarmTrigger,
     active_profile: Option<&str>,
@@ -568,7 +604,7 @@ pub fn warm_wanted_gated(
     }
 }
 
-/// Call `warm(reason)` when [`warm_wanted`]. The hook is injected so tests need
+/// Call `warm(reason)` when `warm_wanted`. The hook is injected so tests need
 /// no engine; production passes [`warm_in_background`].
 pub fn warm_on(
     settings: &Settings,
@@ -590,7 +626,7 @@ pub fn profile_change_needs_warm(old: &Settings, new: &Settings) -> bool {
 }
 
 /// [`profile_change_needs_warm`] with the platform gate given instead of asked
-/// of this machine (see [`warm_wanted_gated`]).
+/// of this machine (see `warm_wanted_gated`).
 pub fn profile_change_needs_warm_gated(
     old: &Settings,
     new: &Settings,
@@ -610,7 +646,7 @@ pub fn profile_change_needs_warm_gated(
 
 /// After a memory-pressure unload, key-down and wake warms are skipped for
 /// this long so the engine is not reloaded straight into the same pressure.
-pub const PRESSURE_WARM_COOLDOWN: Duration = Duration::from_secs(5 * 60);
+pub(crate) const PRESSURE_WARM_COOLDOWN: Duration = Duration::from_secs(5 * 60);
 
 static LAST_PRESSURE_UNLOAD: Mutex<Option<Instant>> = Mutex::new(None);
 
@@ -631,7 +667,7 @@ fn shared_client_if_created() -> Option<EngineHostClient> {
 /// Free the engine's model memory when the system reports memory pressure and
 /// no transcription is running. The next utterance reloads (and shows the
 /// loading state). Never starts anything. Returns whether it unloaded, and
-/// starts the [`PRESSURE_WARM_COOLDOWN`] when it did.
+/// starts the `PRESSURE_WARM_COOLDOWN` when it did.
 pub fn unload_if_idle_for_memory_pressure() -> bool {
     let unloaded = shared_client_if_created().is_some_and(|client| client.unload_if_idle());
     if unloaded {
@@ -645,7 +681,7 @@ pub fn unload_if_idle_for_memory_pressure() -> bool {
 
 /// The model is only worth keeping resident while some profile uses Pianissimo.
 /// (Pre-warm `off` is not a reason to unload: it only skips eager loading.)
-pub fn should_unload_when_unused(settings: &Settings) -> bool {
+pub(crate) fn should_unload_when_unused(settings: &Settings) -> bool {
     !settings.any_profile_uses_pianissimo()
 }
 
@@ -666,7 +702,11 @@ pub fn unload_if_unused(settings: &Settings) -> bool {
 /// Load the model in the background so the next utterance starts warm. Returns
 /// immediately; never blocks the caller (hotkey path, main thread). Silently
 /// does nothing when Pianissimo is unsupported or not installed.
-pub fn warm_in_background(reason: &'static str) {
+///
+/// `load_settings` (`machine::load`) is called on the warm-up thread, when it
+/// attaches to the shared engine, not by the caller: the settings file is not
+/// read on the hotkey path, and the read happens as late as it always did.
+pub fn warm_in_background(reason: &'static str, load_settings: fn() -> Settings) {
     static IN_FLIGHT: AtomicBool = AtomicBool::new(false);
     if !runtime_supported_on_this_os() || !pianissimo_model::is_downloaded() {
         return;
@@ -689,7 +729,7 @@ pub fn warm_in_background(reason: &'static str) {
         .spawn(move || {
             LOAD_SOURCE.with(|source| source.set(LoadSource::Warm));
             let started = Instant::now();
-            match shared_client()
+            match shared_client(&load_settings())
                 .map_err(|e| e.to_string())
                 .and_then(|client| {
                     if client.snapshot().loaded {
@@ -839,18 +879,22 @@ pub struct PianissimoBackend {
 }
 
 impl PianissimoBackend {
-    pub fn start() -> Result<Self, DictationError> {
+    pub fn start(settings: &Settings) -> Result<Self, DictationError> {
         static NEVER_CANCEL: AtomicBool = AtomicBool::new(false);
-        Self::start_with_cancel(&NEVER_CANCEL)
+        Self::start_with_cancel(&NEVER_CANCEL, settings)
     }
 
     /// Attach to the process-global engine client. Does not load the model; the
-    /// first transcription (or [`Self::warm_up`]) does.
-    pub fn start_with_cancel(cancelled: &AtomicBool) -> Result<Self, DictationError> {
+    /// first transcription (or [`Self::warm_up`]) does. `settings` are the
+    /// current ones (see [`shared_client`]).
+    pub fn start_with_cancel(
+        cancelled: &AtomicBool,
+        settings: &Settings,
+    ) -> Result<Self, DictationError> {
         if cancelled.load(Ordering::SeqCst) {
             return Err(cancelled_error());
         }
-        let client = shared_client()?;
+        let client = shared_client(settings)?;
         if cancelled.load(Ordering::SeqCst) {
             return Err(cancelled_error());
         }
@@ -1128,6 +1172,146 @@ mod tests {
 
         assert!(shutdown_slot(&slot), "the client was not shut down");
         assert!(slot.lock().is_ok_and(|slot| slot.is_none()));
+    }
+
+    // ---- the shared client and the settings it was made from ----------------
+    //
+    // `shared_client` caches one client per process, keyed by the host path, the
+    // model, the compute units and `engine_idle_unload_minutes`. These tests pin
+    // what a change of that setting between two calls does: the next call finds a
+    // different key, verifies the model again, retires the old client (the caller
+    // shuts it down) and creates a new one; an unchanged key hands out the same
+    // client without any of that.
+
+    fn key_with_idle_minutes(idle_minutes: u32) -> SharedKey {
+        SharedKey {
+            idle_minutes,
+            ..shared_for_test().key
+        }
+    }
+
+    /// A slot plus counters for what `client_in_slot` ran.
+    #[derive(Default)]
+    struct Calls {
+        verified: std::cell::Cell<u32>,
+        created: std::cell::Cell<u32>,
+        retired: std::cell::RefCell<Vec<EngineHostClient>>,
+    }
+
+    fn client_for(
+        slot: &Mutex<Option<Shared>>,
+        idle_minutes: u32,
+        calls: &Calls,
+    ) -> EngineHostClient {
+        client_in_slot(
+            slot,
+            key_with_idle_minutes(idle_minutes),
+            || {
+                calls.verified.set(calls.verified.get() + 1);
+                Ok(())
+            },
+            |old| {
+                calls.created.set(calls.created.get() + 1);
+                calls
+                    .retired
+                    .borrow_mut()
+                    .extend(old.map(|shared| shared.client));
+                idle_client()
+            },
+        )
+        .expect("verification passes")
+    }
+
+    #[test]
+    fn the_same_settings_give_the_same_client_without_verifying_again() {
+        let slot = Mutex::new(None);
+        let calls = Calls::default();
+        let first = client_for(&slot, 10, &calls);
+        let second = client_for(&slot, 10, &calls);
+        assert!(std::sync::Arc::ptr_eq(&first.inner, &second.inner));
+        assert_eq!(
+            (calls.verified.get(), calls.created.get()),
+            (1, 1),
+            "the model is verified once, when the client is created"
+        );
+        assert!(calls.retired.borrow().is_empty());
+    }
+
+    #[test]
+    fn a_changed_idle_setting_between_calls_replaces_the_client() {
+        let slot = Mutex::new(None);
+        let calls = Calls::default();
+        let before = client_for(&slot, 10, &calls);
+        let after = client_for(&slot, 3, &calls);
+        assert!(
+            !std::sync::Arc::ptr_eq(&before.inner, &after.inner),
+            "a new idle setting is a new client"
+        );
+        assert_eq!(
+            (calls.verified.get(), calls.created.get()),
+            (2, 2),
+            "the replacement verifies the model again"
+        );
+        let retired = calls.retired.borrow();
+        assert_eq!(
+            retired.len(),
+            1,
+            "the old client is handed back to be shut down"
+        );
+        assert!(std::sync::Arc::ptr_eq(&retired[0].inner, &before.inner));
+        // And the slot now holds the new one: asking again changes nothing.
+        let again = client_for(&slot, 3, &calls);
+        assert!(std::sync::Arc::ptr_eq(&again.inner, &after.inner));
+        assert_eq!(calls.created.get(), 2);
+    }
+
+    #[test]
+    fn going_back_to_an_earlier_setting_is_a_replacement_too() {
+        // The slot holds one client, not one per setting.
+        let slot = Mutex::new(None);
+        let calls = Calls::default();
+        let a = client_for(&slot, 10, &calls);
+        let _b = client_for(&slot, 3, &calls);
+        let c = client_for(&slot, 10, &calls);
+        assert!(!std::sync::Arc::ptr_eq(&a.inner, &c.inner));
+        assert_eq!(calls.created.get(), 3);
+        assert_eq!(calls.retired.borrow().len(), 2);
+    }
+
+    #[test]
+    fn a_failed_model_check_keeps_the_client_the_slot_had() {
+        let slot = Mutex::new(None);
+        let calls = Calls::default();
+        let kept = client_for(&slot, 10, &calls);
+        let refused = client_in_slot(
+            &slot,
+            key_with_idle_minutes(3),
+            || {
+                Err(DictationError::TranscriptionFailed(
+                    "model changed on disk".into(),
+                ))
+            },
+            |_| unreachable!("nothing is replaced when the model check fails"),
+        );
+        assert!(refused.is_err());
+        let still = client_for(&slot, 10, &calls);
+        assert!(std::sync::Arc::ptr_eq(&kept.inner, &still.inner));
+        assert!(calls.retired.borrow().is_empty());
+    }
+
+    #[test]
+    fn the_key_takes_the_idle_minutes_from_the_settings_it_is_given() {
+        let config = |minutes| {
+            let settings = Settings {
+                engine_idle_unload_minutes: minutes,
+                ..Settings::default()
+            };
+            let config = config_for_host("/nonexistent/host".into(), &settings);
+            shared_key(&config, &settings)
+        };
+        assert_eq!(config(7).idle_minutes, 7);
+        assert_ne!(config(7), config(0));
+        assert_eq!(config(7), config(7));
     }
 
     #[test]

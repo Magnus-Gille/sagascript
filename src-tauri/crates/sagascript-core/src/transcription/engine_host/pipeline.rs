@@ -408,7 +408,7 @@ pub fn sweep_stale_pcm_dirs_at_startup() {
 }
 
 /// Progress callback: `(merged_windows, total_windows)`.
-pub type ProgressFn<'a> = &'a mut dyn FnMut(usize, usize);
+pub(crate) type ProgressFn<'a> = &'a mut dyn FnMut(usize, usize);
 
 impl EngineHostClient {
     /// Dictation: one window with `interactive` priority when the utterance

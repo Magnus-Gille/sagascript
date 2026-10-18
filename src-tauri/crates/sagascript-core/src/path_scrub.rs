@@ -9,7 +9,7 @@
 //! ([`crate::error::DictationError::engine`]), in the engine's log lines and
 //! again when the app serializes a command error.
 //!
-//! A path becomes [`PLACEHOLDER`], followed by its file name when the path goes
+//! A path becomes `PLACEHOLDER`, followed by its file name when the path goes
 //! deeper than the account folder: `/Users/x/Documents/a.m4a` is
 //! `<path>/a.m4a`, `/Users/x` is `<path>`. The file name stays because it is
 //! what the user (and a bug report) needs to tell which file failed; every
@@ -65,7 +65,7 @@ use std::borrow::Cow;
 use std::sync::OnceLock;
 
 /// What a removed path leaves behind.
-pub const PLACEHOLDER: &str = "<path>";
+pub(crate) const PLACEHOLDER: &str = "<path>";
 
 /// Roots that identify a path without needing the user's home directory, with
 /// the number of leading components that can identify the user or machine
@@ -113,7 +113,7 @@ fn home_dir_text() -> Option<&'static str> {
 }
 
 /// [`scrub_paths`] with an explicit home directory, for tests.
-pub fn scrub_paths_with_home(text: &str, home: Option<&str>) -> String {
+pub(crate) fn scrub_paths_with_home(text: &str, home: Option<&str>) -> String {
     let text = unescape_slashes(text);
     let text: &str = &text;
     let mut out = String::with_capacity(text.len());

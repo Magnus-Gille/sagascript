@@ -14,10 +14,10 @@ use thiserror::Error;
 use crate::meeting::{MeetingError, MeetingExportFormat, MeetingTranscript};
 
 pub const REVIEW_SCHEMA_VERSION: u32 = 1;
-pub const MAX_CORRECTION_OPERATIONS: usize = 1024;
+pub(crate) const MAX_CORRECTION_OPERATIONS: usize = 1024;
 pub const MAX_SERIALIZED_REVIEW_BYTES: usize = 24 * 1024 * 1024;
 /// Highest generation representable exactly by the JavaScript `number` type.
-pub const MAX_REVIEW_GENERATION: u64 = 9_007_199_254_740_991;
+pub(crate) const MAX_REVIEW_GENERATION: u64 = 9_007_199_254_740_991;
 
 const MAX_ID_CHARS: usize = 128;
 const MAX_LABEL_CHARS: usize = 128;

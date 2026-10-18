@@ -209,6 +209,7 @@ async fn stop_and_transcribe_impl(
             sagascript_core::transcription::live_dictation::LiveDictationBackend::new(
                 whisper.inner().clone(),
                 use_pianissimo,
+                sagascript_core::machine::load,
             ),
         );
         let live_ref = live_backend.clone();
@@ -332,6 +333,7 @@ pub async fn transcribe_training_file(
         sagascript_core::transcription::live_dictation::LiveDictationBackend::new(
             whisper.inner().clone(),
             use_pianissimo,
+            sagascript_core::machine::load,
         ),
     );
     let live_ref = live_backend.clone();

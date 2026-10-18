@@ -8,7 +8,7 @@
 //! watcher keeps it there on purpose), and a setter of something else must not
 //! move them. Only the hotkey change replaces the whole copy, because it is the
 //! one that has just registered the file's shortcuts. After either, the
-//! controller's copy is demoted as `store::load` demotes it on a host that
+//! controller's copy is demoted as `machine::load` demotes it on a host that
 //! cannot run Pianissimo (the scenarios).
 //!
 //! Settings are global user state, and the store reads its location from
@@ -28,6 +28,7 @@ use std::process::Command;
 use std::sync::Mutex;
 use std::time::Duration;
 
+use sagascript_core::machine;
 use sagascript_core::settings::{
     store, EnginePrewarm, FileModelPreference, HotkeyMode, Language, Settings, WhisperModel,
 };
@@ -101,7 +102,7 @@ fn controller(app: &App) -> tauri::State<'_, SharedController> {
 /// A hotkey change as `apply_hotkey_change` persists it, after the OS accepted
 /// the shortcuts (registering them needs a real app handle).
 fn persist_hotkey(app: &App, change: HotkeyChange) -> Result<(), String> {
-    let (candidate, _notices) = change.prepare_with_notices(&store::load())?;
+    let (candidate, _notices) = change.prepare_with_notices(&machine::load())?;
     persist_hotkey_change(&controller(app), &change, &candidate.resolved_shortcuts())
         .map(drop)
         .map_err(text)
@@ -283,7 +284,7 @@ const ROWS: &[Row] = &[
         // Disabling is the direction that downloads nothing; the file starts
         // with it on so the setter has a value to change.
         arrange: || {
-            store::update(|s| s.vad_enabled = true).expect("the fake settings file is writable");
+            machine::update(|s| s.vad_enabled = true).expect("the fake settings file is writable");
         },
         run: |app, rt| rt.block_on(set_vad_enabled(controller(app), false)),
         landed: |s| !s.vad_enabled,
@@ -323,7 +324,7 @@ const ROWS: &[Row] = &[
         mirror: Mirror::Whole,
         arrange: nothing,
         run: |app, _| {
-            let mut profiles = store::load().resolved_hotkey_profiles();
+            let mut profiles = machine::load().resolved_hotkey_profiles();
             profiles[0].set_primary_shortcut("Control+Alt+D".into());
             persist_hotkey(app, HotkeyChange::Profiles(profiles))
         },
@@ -448,10 +449,10 @@ fn isolated(module: &str, test: &str, body: impl FnOnce() -> String) -> Option<S
 /// setter that wrongly replaced the whole copy would show in it.
 fn move_the_file_ahead(row: &Row, value: u32) -> Result<&'static str, String> {
     if row.commands.contains(&"set_engine_idle_unload_minutes") {
-        store::update(|s| s.beam_size = value)?;
+        machine::update(|s| s.beam_size = value)?;
         Ok("beam_size")
     } else {
-        store::update(|s| s.engine_idle_unload_minutes = value)?;
+        machine::update(|s| s.engine_idle_unload_minutes = value)?;
         Ok("engine_idle_unload_minutes")
     }
 }

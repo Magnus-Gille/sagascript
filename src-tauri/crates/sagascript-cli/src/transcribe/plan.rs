@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 #[cfg(feature = "diarization")]
-use sagascript_core::diarization_report::DecoderEvidence;
+use sagascript_core::diarization::report::DecoderEvidence;
 use sagascript_core::error::DictationError;
 use sagascript_core::run_context::RunContext;
 use sagascript_core::settings::{FileModel, Language, Settings, WhisperModel};
@@ -73,7 +73,7 @@ pub(super) fn plan_run(
 ) -> Result<RunPlan, DictationError> {
     #[cfg(feature = "diarization")]
     speaker_hint_from_args(args)?;
-    let stored = sagascript_core::settings::store::load();
+    let stored = sagascript_core::machine::load();
     plan_run_with(args, stored, backend)
 }
 

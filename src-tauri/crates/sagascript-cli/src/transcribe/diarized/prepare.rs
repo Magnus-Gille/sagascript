@@ -1,9 +1,9 @@
 //! The first steps of a diarized run (#343): what the run knows about the
 //! audio's language, and the settings the analysis is configured with.
 
+use sagascript_core::diarization::speaker_hint::SpeakerCountHint;
 use sagascript_core::diarization::DiarizeConfig;
 use sagascript_core::error::DictationError;
-use sagascript_core::speaker_hint::SpeakerCountHint;
 use sagascript_core::transcription::{model, ContextProfile};
 
 use super::super::args::validated_speaker_hint;

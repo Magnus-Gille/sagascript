@@ -116,7 +116,10 @@ impl PianissimoHost for InstalledPianissimo {
     }
 
     fn start(&self, cancelled: &AtomicBool) -> Result<Arc<dyn PianissimoEngine>, DictationError> {
-        Ok(Arc::new(PianissimoBackend::start_with_cancel(cancelled)?))
+        Ok(Arc::new(PianissimoBackend::start_with_cancel(
+            cancelled,
+            &sagascript_core::machine::load(),
+        )?))
     }
 }
 

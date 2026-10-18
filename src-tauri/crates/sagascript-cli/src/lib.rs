@@ -684,7 +684,7 @@ fn dispatch(command: Command, out: &Out) -> Result<(), CliError> {
         #[cfg(target_os = "macos")]
         Command::Update => open::run_update(out)?,
         Command::ResetOnboarding => {
-            sagascript_core::settings::store::update(|settings| {
+            sagascript_core::machine::update(|settings| {
                 settings.has_completed_onboarding = false;
             })
             .map_err(DictationError::SettingsError)?;

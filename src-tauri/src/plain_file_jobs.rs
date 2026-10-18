@@ -166,7 +166,10 @@ pub async fn transcribe_pianissimo(
             let audio = decode_for_run(run, std::path::Path::new(&file_path), &progress)?;
             let timeout = Duration::from_secs(((audio.len() / 16_000) as u64 * 10).max(180));
             progress(PlainPhase::Loading, None);
-            let backend = Arc::new(PianissimoBackend::start_with_cancel(&run.cancelled)?);
+            let backend = Arc::new(PianissimoBackend::start_with_cancel(
+                &run.cancelled,
+                &sagascript_core::machine::load(),
+            )?);
             *lock_or_recover(
                 &worker_lease.jobs.pianissimo_backend,
                 PIANISSIMO_BACKEND_LOCK,

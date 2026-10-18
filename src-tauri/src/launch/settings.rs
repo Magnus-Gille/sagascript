@@ -6,7 +6,7 @@ use tracing::{info, warn};
 /// Treat macOS TCC approval as runtime authorization, never as a preference
 /// that can be inherited from another bundle identity or forced by the CLI.
 pub(crate) fn load_settings_with_permission_gate() -> sagascript_core::settings::Settings {
-    let settings = sagascript_core::settings::store::load();
+    let settings = sagascript_core::machine::load();
 
     #[cfg(target_os = "macos")]
     {
@@ -16,7 +16,7 @@ pub(crate) fn load_settings_with_permission_gate() -> sagascript_core::settings:
             crate::platform::macos::is_accessibility_trusted(),
         ) {
             warn!("Auto-paste was enabled without Accessibility permission; disabling it");
-            match sagascript_core::settings::store::update(|latest| latest.auto_paste = false) {
+            match sagascript_core::machine::update(|latest| latest.auto_paste = false) {
                 Ok(persisted) => settings = persisted,
                 Err(error) => {
                     error!("Failed to persist permission-gated auto-paste setting: {error}");

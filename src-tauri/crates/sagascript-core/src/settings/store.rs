@@ -25,7 +25,7 @@ const XDG_CONFIG_HOME_ENV: &str = "XDG_CONFIG_HOME";
 ///
 /// When set, legacy settings migration is disabled so an isolated session can
 /// never import or mutate the user's normal application settings by accident.
-pub const SETTINGS_PATH_ENV: &str = "SAGASCRIPT_SETTINGS_PATH";
+pub(crate) const SETTINGS_PATH_ENV: &str = "SAGASCRIPT_SETTINGS_PATH";
 
 /// Returns the application data directory (platform-specific).
 /// macOS: ~/Library/Application Support/ai.gille.sagascript/
@@ -42,7 +42,7 @@ pub fn settings_path() -> PathBuf {
 }
 
 /// Returns the directory containing the user-managed configuration files.
-pub fn config_dir() -> PathBuf {
+pub(crate) fn config_dir() -> PathBuf {
     settings_path()
         .parent()
         .map(Path::to_path_buf)
@@ -217,11 +217,14 @@ pub(crate) fn load_with(machine: &dyn MachineProbe) -> Settings {
     load_at_with_machine(&settings_path(), legacy_settings_paths(), machine)
 }
 
-/// Test seam for `tests/settings_fixtures.rs`: [`load_with`] for an explicit
-/// settings file and legacy locations, with fixed machine state instead of
-/// probing this machine.
-#[doc(hidden)]
-pub fn load_at(path: &Path, legacy_sources: &[PathBuf], machine: &LineupEnv<'_>) -> Settings {
+/// Test seam (`crate::testing::load_settings_at`, for `tests/settings_fixtures.rs`):
+/// [`load_with`] for an explicit settings file and legacy locations, with fixed
+/// machine state instead of probing this machine.
+pub(crate) fn load_at(
+    path: &Path,
+    legacy_sources: &[PathBuf],
+    machine: &LineupEnv<'_>,
+) -> Settings {
     load_at_with_machine(path, legacy_sources.iter().cloned(), machine)
 }
 
@@ -583,22 +586,21 @@ where
     update_locked(&path, legacy_settings_paths(), machine, mutate)
 }
 
-// Shims (#372): the loads and updates that probe *this* machine moved to
-// `crate::machine`, above settings and transcription, so this module no longer
-// imports the transcription code to answer them. These re-exports keep the old
-// paths `settings::store::{load, update, try_update}` working for the CLI and
-// the app. They are the one upward import left in `settings/`, and a loop at
+// Shims (#372): the loads and updates that probe *this* machine live in
+// `crate::machine`, above settings and transcription, so this module does not
+// import the transcription code to answer them. These re-exports keep the old
+// paths `settings::store::{load, update, try_update}` for callers outside the
+// workspace; nothing inside it uses them (tests/module_layering.rs checks that).
+// They are the one upward import left in `settings/`, and no longer a loop at
 // run time: `transcription::pianissimo_backend::{engine_config, shared_client}`
-// call `store::load()` themselves, i.e. this line, so transcription reaches
-// `machine::load()` and `machine` reaches transcription's probes again.
+// take the `Settings` from their callers instead of calling `load` here.
 //
-// Removal prerequisites, in order (tests/module_layering.rs says the same):
-//   1. the CLI and the app call `sagascript_core::machine::{load, update,
-//      try_update}`;
-//   2. `engine_config` and `shared_client` receive the `Settings` instead of
-//      loading them. That changes when the settings are read, so it is a
-//      behaviour change for its own change, not part of the layering move;
-//   3. delete this line and empty the expected list in that test.
+// To remove them, after the next release: delete the line below, and in
+// tests/module_layering.rs the test
+// `only_the_compat_shim_in_the_store_names_the_machine_module` and the
+// `store_shims` assertions.
+// Shim (#372): kept one release; remove after the next release.
+#[doc(hidden)]
 pub use crate::machine::{load, try_update, update};
 
 /// A field update under the settings lock. The latest file is loaded as the

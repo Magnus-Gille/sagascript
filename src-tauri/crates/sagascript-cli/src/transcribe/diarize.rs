@@ -3,9 +3,9 @@
 //! and the performance report.
 
 #[cfg(feature = "diarization")]
-use sagascript_core::diarization::{DiarizationAnalysis, DiarizationTimings, DiarizeConfig};
+use sagascript_core::diarization::report::DecoderEvidence;
 #[cfg(feature = "diarization")]
-use sagascript_core::diarization_report::DecoderEvidence;
+use sagascript_core::diarization::{DiarizationAnalysis, DiarizationTimings, DiarizeConfig};
 #[cfg(feature = "diarization")]
 use sagascript_core::error::DictationError;
 #[cfg(feature = "diarization")]

@@ -12,17 +12,17 @@ use super::ORT_INTRA_THREADS;
 use crate::error::DictationError;
 
 /// 10-second window at 16kHz
-pub const WINDOW_SAMPLES: usize = 160_000;
+pub(crate) const WINDOW_SAMPLES: usize = 160_000;
 /// 1-second shift (90% overlap between consecutive windows)
-pub const STEP_SAMPLES: usize = 16_000;
+pub(crate) const STEP_SAMPLES: usize = 16_000;
 /// Number of output frames per 10-second window
-pub const FRAMES_PER_WINDOW: usize = 589;
+pub(crate) const FRAMES_PER_WINDOW: usize = 589;
 /// receptive_field_shift = 270 samples → 16.875ms per frame
-pub const FRAME_DURATION_S: f64 = 270.0 / 16_000.0;
+pub(crate) const FRAME_DURATION_S: f64 = 270.0 / 16_000.0;
 /// Powerset encoding: 7 classes for up to 3 simultaneous speakers
-pub const NUM_CLASSES: usize = 7;
+pub(crate) const NUM_CLASSES: usize = 7;
 /// Maximum simultaneous speakers supported by the model
-pub const MAX_SPEAKERS: usize = 3;
+pub(crate) const MAX_SPEAKERS: usize = 3;
 /// Number of overlapping windows evaluated in one ONNX Runtime call.
 const SEGMENTATION_BATCH_SIZE: usize = 16;
 

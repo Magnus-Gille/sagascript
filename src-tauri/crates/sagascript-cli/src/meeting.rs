@@ -6,9 +6,9 @@ use std::path::{Path, PathBuf};
 
 use clap::{Args, Subcommand, ValueEnum};
 use sagascript_core::error::DictationError;
+use sagascript_core::meeting::media::MeetingAudio;
+use sagascript_core::meeting::review::{CorrectionFile, MeetingReview, MeetingReviewError};
 use sagascript_core::meeting::{MeetingExportFormat, MeetingTranscript};
-use sagascript_core::meeting_media::MeetingAudio;
-use sagascript_core::meeting_review::{CorrectionFile, MeetingReview, MeetingReviewError};
 
 use crate::output::{outln, Out};
 

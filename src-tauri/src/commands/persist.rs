@@ -1,7 +1,7 @@
 //! The one way a command writes settings (#370).
 //!
 //! A setter used to do two things by hand: write the file with
-//! `store::update(|settings| …)` and then copy the result into the controller
+//! `machine::update(|settings| …)` and then copy the result into the controller
 //! through its mutable settings accessor. Forgetting the second half left the
 //! controller stale until the settings watcher happened to reload the file.
 //! Both halves live here now, with the writers serialized.
@@ -16,7 +16,7 @@
 //!   controller. A setter that installed the file's shortcuts would make the
 //!   watcher see no difference, and the working shortcut would be dead until a
 //!   restart.
-//! - **The demotion of Pianissimo.** `store::load` demotes a selection of it on
+//! - **The demotion of Pianissimo.** `machine::load` demotes a selection of it on
 //!   a host that cannot run it in memory only; the file keeps the user's choice.
 //!   Every write here ends with the same demotion of the controller's copy, so
 //!   the controller never holds a selection the host cannot run, whatever the
@@ -45,7 +45,8 @@
 
 use std::sync::Mutex;
 
-use sagascript_core::settings::{store, Settings};
+use sagascript_core::machine;
+use sagascript_core::settings::Settings;
 use sagascript_core::sync::lock_or_recover;
 use sagascript_core::transcription::pianissimo_backend::runtime_supported_on_this_os;
 
@@ -140,7 +141,7 @@ pub(crate) fn try_persist_and_replace<E: Into<CommandError>>(
 }
 
 /// Whether this host can run Pianissimo: the gate the controller's copy is
-/// demoted by, as `store::load` demotes the startup copy, and the gate the
+/// demoted by, as `machine::load` demotes the startup copy, and the gate the
 /// warm decision after a profile model change is made against.
 pub(super) fn host_runs_pianissimo() -> bool {
     #[cfg(test)]
@@ -164,7 +165,7 @@ fn persist<E: Into<CommandError>>(
     // The store reports a refusal as text. The typed error is carried out of
     // the closure beside it, so the caller gets the error it produced.
     let mut refusal: Option<CommandError> = None;
-    let written = store::try_update(|settings| {
+    let written = machine::try_update(|settings| {
         change(settings).map_err(|error| {
             let error: CommandError = error.into();
             let text = error.to_string();
