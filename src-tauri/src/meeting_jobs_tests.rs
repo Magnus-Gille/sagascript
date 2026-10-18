@@ -178,19 +178,24 @@ fn finish_snapshot_applies_cancel_timeout_and_errors_without_stale_data() {
 fn cancel_job_rejects_foreign_ids_and_transitions_only_matching_running_jobs() {
     let mut slot = Some(job("running", JobStatus::Running));
     let result = cancel_job(&mut slot, "foreign");
-    assert!(result.is_err());
+    let refused = result.expect_err("a job that is not in the slot cannot be cancelled");
+    assert_eq!(refused.code(), "not_found");
+    assert_eq!(
+        refused.to_string(),
+        "This meeting job is no longer available."
+    );
     let running = slot.as_ref().expect("running job remains");
     assert_eq!(running.snapshot.status, JobStatus::Running);
     assert!(!running.cancelled.load(Ordering::SeqCst));
 
-    assert_eq!(cancel_job(&mut slot, "running"), Ok(true));
+    assert!(cancel_job(&mut slot, "running").expect("a running job is cancelled"));
     let running = slot.as_ref().expect("cancelling job remains");
     assert_eq!(running.snapshot.status, JobStatus::Cancelling);
     assert!(running.cancelled.load(Ordering::SeqCst));
-    assert_eq!(cancel_job(&mut slot, "running"), Ok(true));
+    assert!(cancel_job(&mut slot, "running").expect("cancelling twice is fine"));
 
     let mut terminal = Some(job("done", JobStatus::Completed));
-    assert_eq!(cancel_job(&mut terminal, "done"), Ok(false));
+    assert!(!cancel_job(&mut terminal, "done").expect("a finished job has nothing to cancel"));
     let terminal = terminal.as_ref().expect("terminal job remains");
     assert_eq!(terminal.snapshot.status, JobStatus::Completed);
     assert!(!terminal.cancelled.load(Ordering::SeqCst));
@@ -258,7 +263,8 @@ fn write_new_export_writes_exact_bytes_and_never_replaces_existing_files() {
     let existing = b"keep this file";
     std::fs::write(&destination, existing).expect("create existing export");
     let error = write_new_export(&destination, b"replacement").expect_err("reject overwrite");
-    assert!(error.contains("already exists"));
+    assert_eq!(error.code(), "export_exists");
+    assert!(error.to_string().contains("already exists"));
     assert_eq!(
         std::fs::read(&destination).expect("read preserved export"),
         existing
@@ -295,7 +301,8 @@ fn write_new_export_refuses_existing_symlink_without_changing_target_or_link() {
     std::os::unix::fs::symlink(&target, &link).expect("create destination symlink");
 
     let error = write_new_export(&link, b"replacement").expect_err("reject symlink overwrite");
-    assert!(error.contains("already exists"));
+    assert_eq!(error.code(), "export_exists");
+    assert!(error.to_string().contains("already exists"));
     assert_eq!(
         std::fs::read(&target).expect("read symlink target"),
         b"target bytes"
@@ -305,6 +312,25 @@ fn write_new_export_refuses_existing_symlink_without_changing_target_or_link() {
         .file_type()
         .is_symlink());
     assert!(staging_files(scratch.path()).is_empty());
+}
+
+#[test]
+fn write_new_export_failures_say_what_kind_of_failure_they_are() {
+    let scratch = TempDir::new();
+    let missing_parent = scratch.path().join("missing").join("meeting.txt");
+    let unwritable =
+        write_new_export(&missing_parent, b"bytes").expect_err("no folder to write in");
+    assert_eq!(unwritable.code(), "io_error");
+    assert!(
+        unwritable
+            .to_string()
+            .starts_with("Could not create export:"),
+        "{unwritable}"
+    );
+    let nameless = write_new_export(std::path::Path::new(".."), b"bytes")
+        .expect_err("a path without a file name is no destination");
+    assert_eq!(nameless.code(), "invalid_input");
+    assert_eq!(nameless.to_string(), "Choose a local export file.");
 }
 
 #[test]
@@ -664,7 +690,7 @@ mod transport_contract {
             analyzing.started_at + Duration::from_millis(500),
         );
         let mut slot = Some(analyzing);
-        assert_eq!(cancel_job(&mut slot, "job-1"), Ok(true));
+        assert!(cancel_job(&mut slot, "job-1").expect("the running job is cancelled"));
         let cancelling = slot.expect("the job stays in its slot");
         add(
             "cancelling",

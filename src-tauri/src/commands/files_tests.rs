@@ -80,15 +80,19 @@ mod run_context_parity_tests {
         // The app reports plain strings, without the CLI's "Settings error: ".
         let settings = migrated();
         assert_eq!(
-            file_transcription_context(&settings, Some("nope"), None).err(),
+            file_transcription_context(&settings, Some("nope"), None)
+                .err()
+                .map(|error| error.to_string()),
             Some("Unknown dictation profile 'nope'".to_string())
         );
         assert_eq!(
-            file_transcription_language(&settings, Some("nope")),
+            file_transcription_language(&settings, Some("nope")).map_err(|error| error.to_string()),
             Err("Unknown dictation profile 'nope'".to_string())
         );
         assert_eq!(
-            file_transcription_context(&settings, Some(""), None).err(),
+            file_transcription_context(&settings, Some(""), None)
+                .err()
+                .map(|error| error.to_string()),
             Some("Unknown dictation profile ''".to_string())
         );
 
@@ -98,11 +102,15 @@ mod run_context_parity_tests {
             ..migrated()
         };
         assert_eq!(
-            file_transcription_context(&english_only, Some("nope"), None).err(),
+            file_transcription_context(&english_only, Some("nope"), None)
+                .err()
+                .map(|error| error.to_string()),
             Some("Unknown dictation profile 'nope'".to_string())
         );
         assert_eq!(
-            file_transcription_context(&english_only, Some("swedish"), Some("Acme")).err(),
+            file_transcription_context(&english_only, Some("swedish"), Some("Acme"))
+                .err()
+                .map(|error| error.to_string()),
             Some("Whisper model 'Whisper Base (EN)' is incompatible with Swedish".to_string())
         );
 
@@ -111,7 +119,7 @@ mod run_context_parity_tests {
             ..migrated()
         };
         assert_eq!(
-            file_transcription_context(&pianissimo, Some("swedish"), None).err(),
+            file_transcription_context(&pianissimo, Some("swedish"), None).err().map(|error| error.to_string()),
             Some("Pianissimo supports plain Swedish file transcription only; select a Whisper file model for meetings or diarization".to_string())
         );
     }
@@ -219,7 +227,8 @@ mod glossary_options_tests {
         let error = file_transcription_context(&settings, Some("swedish"), None)
             .err()
             .expect("meeting path must reject Pianissimo");
-        assert!(error.contains("plain Swedish"));
+        assert!(error.to_string().contains("plain Swedish"));
+        assert_eq!(error.code(), "pianissimo_unavailable");
         assert_eq!(
             settings.effective_model_for(Language::Swedish),
             WhisperModel::KbWhisperMedium

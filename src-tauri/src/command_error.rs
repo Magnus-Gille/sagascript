@@ -176,6 +176,12 @@ impl CommandError {
         }
     }
 
+    /// A background worker that ended abnormally (a join error). The text is
+    /// the complete message; the code is `task_failed`.
+    pub fn task_failed(message: impl Into<String>) -> Self {
+        Self::Dictation(DictationError::TaskFailed(message.into()))
+    }
+
     /// The scrubbed cause attached by [`CommandError::because`], if any.
     pub fn cause(&self) -> Option<&str> {
         match self {

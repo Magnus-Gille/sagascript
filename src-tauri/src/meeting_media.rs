@@ -6,6 +6,7 @@ use serde::Serialize;
 use tauri::{http, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
+use crate::command_error::CommandError;
 use crate::meeting_media_range::plan_range;
 use crate::meeting_review_commands::require_settings;
 
@@ -35,19 +36,15 @@ pub async fn attach_meeting_audio(
     window: tauri::WebviewWindow,
     audio: State<'_, SharedMeetingAudio>,
     source_sha256: String,
-) -> Result<Option<AudioAttachment>, String> {
+) -> Result<Option<AudioAttachment>, CommandError> {
     require_settings(&window)?;
     let state = audio.inner().clone();
     let request = uuid::Uuid::new_v4().to_string();
-    state
-        .0
-        .lock()
-        .map_err(|_| "Audio attachment lock failed")?
-        .pending = Some(request.clone());
+    state.0.lock().map_err(lock_failed)?.pending = Some(request.clone());
     tauri::async_runtime::spawn_blocking(move || {
         // Keep the previous descriptor and token intact until selection and
         // verification have both succeeded. Cancellation has no side effects.
-        let result = (|| {
+        let result = (|| -> Result<Option<MeetingAudio>, CommandError> {
             let selected = app
                 .dialog()
                 .file()
@@ -60,16 +57,16 @@ pub async fn attach_meeting_audio(
             let Some(selected) = selected else {
                 return Ok(None);
             };
-            let path = selected
-                .into_path()
-                .map_err(|e| format!("Choose a local recording: {e}"))?;
-            MeetingAudio::open(&path, &source_sha256)
-                .map(Some)
-                .map_err(|e| e.to_string())
+            let path = selected.into_path().map_err(|e| {
+                CommandError::InvalidInput(format!("Choose a local recording: {e}"))
+            })?;
+            Ok(MeetingAudio::open(&path, &source_sha256).map(Some)?)
         })();
-        let mut slot = state.0.lock().map_err(|_| "Audio attachment lock failed")?;
+        let mut slot = state.0.lock().map_err(lock_failed)?;
         if slot.pending.as_deref() != Some(&request) {
-            return Err("A newer audio attachment request replaced this one.".into());
+            return Err(CommandError::Unavailable(
+                "A newer audio attachment request replaced this one.".into(),
+            ));
         }
         slot.pending = None;
         let Some(audio) = result? else {
@@ -84,7 +81,13 @@ pub async fn attach_meeting_audio(
         Ok(Some(AudioAttachment { token, mime }))
     })
     .await
-    .map_err(|e| format!("Audio attachment worker failed: {e}"))?
+    .map_err(|e| CommandError::task_failed(format!("Audio attachment worker failed: {e}")))?
+}
+
+/// The attachment slot's lock was lost (a panic held it). The poison error says
+/// nothing a user can act on; it is kept as the cause for the log.
+fn lock_failed(error: impl std::fmt::Display) -> CommandError {
+    CommandError::Unavailable("Audio attachment lock failed".into()).because(error)
 }
 
 #[tauri::command]
@@ -92,9 +95,9 @@ pub fn detach_meeting_audio(
     window: tauri::WebviewWindow,
     audio: State<'_, SharedMeetingAudio>,
     token: String,
-) -> Result<(), String> {
+) -> Result<(), CommandError> {
     require_settings(&window)?;
-    let mut slot = audio.0.lock().map_err(|_| "Audio attachment lock failed")?;
+    let mut slot = audio.0.lock().map_err(lock_failed)?;
     if slot.current.as_ref().is_some_and(|a| a.token == token) {
         slot.current = None;
         slot.pending = None;

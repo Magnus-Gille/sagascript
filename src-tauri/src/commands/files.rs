@@ -5,11 +5,12 @@
 use sagascript_core::audio::decoder;
 use sagascript_core::error::DictationError;
 use sagascript_core::run_context::{file_beam_size, RunContext, RunOverrides, RunSelection};
-use sagascript_core::settings::{FileModel, Language, Settings, WhisperModel};
+use sagascript_core::settings::{FileModel, Language, Settings, SettingsError, WhisperModel};
 use sagascript_core::transcription::{Glossary, TranscribeOptions};
 use tauri_plugin_dialog::DialogExt;
 
 use super::build_transcribe_options;
+use crate::command_error::CommandError;
 
 /// Like [`build_transcribe_options`] but for file transcription: defaults to
 /// beam search for quality (unless the user explicitly set a beam width), and
@@ -45,15 +46,13 @@ pub(crate) fn file_transcription_context(
     settings: &Settings,
     profile_id: Option<&str>,
     prompt: Option<&str>,
-) -> Result<FileTranscriptionContext, String> {
+) -> Result<FileTranscriptionContext, CommandError> {
     let selection = file_transcription_selection(settings, profile_id)?;
     // Meetings and diarization need Whisper: an Auto preference uses the
     // recommended Whisper model rather than Pianissimo.
     let model = match settings.effective_whisper_file_model_for(selection.language)? {
         FileModel::Whisper(model) => model,
-        FileModel::PianissimoOriginal => return Err(
-            "Pianissimo supports plain Swedish file transcription only; select a Whisper file model for meetings or diarization".into(),
-        ),
+        FileModel::PianissimoOriginal => return Err(SettingsError::PianissimoPlainFilesOnly.into()),
     };
     let RunContext {
         language, glossary, ..
@@ -71,16 +70,16 @@ pub(crate) fn file_transcription_context(
 pub(crate) fn file_transcription_language(
     settings: &Settings,
     profile_id: Option<&str>,
-) -> Result<Language, String> {
+) -> Result<Language, CommandError> {
     file_transcription_selection(settings, profile_id).map(|selection| selection.language)
 }
 
-/// The profile a file run uses and its language. This command reports plain
-/// strings, so the resolver's settings error is unwrapped to its message.
+/// The profile a file run uses and its language. The resolver's settings error
+/// keeps its code and its message, without the CLI's "Settings error: " prefix.
 fn file_transcription_selection(
     settings: &Settings,
     profile_id: Option<&str>,
-) -> Result<RunSelection, String> {
+) -> Result<RunSelection, CommandError> {
     RunSelection::resolve(
         settings,
         RunOverrides {
@@ -89,9 +88,8 @@ fn file_transcription_selection(
         },
     )
     .map_err(|error| match error {
-        DictationError::SettingsError(message) => message,
-        DictationError::Settings(error) => error.to_string(),
-        other => other.to_string(),
+        DictationError::Settings(error) => CommandError::Settings(error),
+        other => CommandError::Dictation(other),
     })
 }
 
@@ -99,19 +97,21 @@ fn file_transcription_selection(
 /// `set_text` only — no paste, no restore dance (see `paste::PasteService`
 /// for the guarded live-dictation path).
 #[tauri::command]
-pub async fn copy_transcription_text(text: String) -> Result<(), String> {
+pub async fn copy_transcription_text(text: String) -> Result<(), CommandError> {
     if text.trim().is_empty() {
-        return Err("There is no transcription to copy.".to_string());
+        return Err(CommandError::InvalidInput(
+            "There is no transcription to copy.".to_string(),
+        ));
     }
     tauri::async_runtime::spawn_blocking(move || {
-        let mut clipboard =
-            arboard::Clipboard::new().map_err(|error| format!("Clipboard error: {error}"))?;
+        let mut clipboard = arboard::Clipboard::new()
+            .map_err(|error| CommandError::Clipboard(format!("Clipboard error: {error}")))?;
         clipboard
             .set_text(text)
-            .map_err(|error| format!("Could not copy: {error}"))
+            .map_err(|error| CommandError::Clipboard(format!("Could not copy: {error}")))
     })
     .await
-    .map_err(|error| format!("Copy worker failed: {error}"))?
+    .map_err(|error| CommandError::task_failed(format!("Copy worker failed: {error}")))?
 }
 
 /// Explicit manual save of a finished plain transcription (#238). Always
@@ -126,9 +126,11 @@ pub async fn save_transcription_text(
     text: String,
     file_name: String,
     directory: Option<String>,
-) -> Result<bool, String> {
+) -> Result<bool, CommandError> {
     if text.trim().is_empty() {
-        return Err("There is no transcription to save.".to_string());
+        return Err(CommandError::InvalidInput(
+            "There is no transcription to save.".to_string(),
+        ));
     }
     let file_name = sanitize_save_file_name(&file_name);
     tauri::async_runtime::spawn_blocking(move || {
@@ -146,10 +148,12 @@ pub async fn save_transcription_text(
         };
         let path = selected
             .into_path()
-            .map_err(|error| format!("Choose a local file: {error}"))?;
+            .map_err(|error| CommandError::InvalidInput(format!("Choose a local file: {error}")))?;
         crate::meeting_jobs::write_new_export(&path, text.as_bytes()).map_err(|error| {
             if path.exists() {
-                "Choose a new file name — existing files are never overwritten.".to_string()
+                CommandError::ExportExists(
+                    "Choose a new file name — existing files are never overwritten.".to_string(),
+                )
             } else {
                 error
             }
@@ -157,7 +161,7 @@ pub async fn save_transcription_text(
         Ok(true)
     })
     .await
-    .map_err(|error| format!("Save worker failed: {error}"))?
+    .map_err(|error| CommandError::task_failed(format!("Save worker failed: {error}")))?
 }
 
 /// Keep the save dialog default to a bare file name: strip any directories
@@ -176,7 +180,7 @@ fn sanitize_save_file_name(name: &str) -> String {
 }
 
 #[tauri::command]
-pub async fn get_supported_formats() -> Result<Vec<String>, String> {
+pub async fn get_supported_formats() -> Result<Vec<String>, CommandError> {
     Ok(decoder::SUPPORTED_EXTENSIONS
         .iter()
         .map(|s| s.to_string())
