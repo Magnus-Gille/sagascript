@@ -15,6 +15,8 @@ use std::path::Path;
 use crate::fsutil::{PublishFs, RealFs};
 use crate::meeting::{MeetingSegmentInput, MeetingSpeaker, MeetingTranscript};
 
+pub mod settings_ops_table;
+
 /// The real filesystem with chosen failures injected into a publication
 /// ([`PublishFs`], #342): the n-th hard link, every unlink, the creation of
 /// the staging file, the file fsync or the folder fsync. Build one with [`FaultyFs::new`] and

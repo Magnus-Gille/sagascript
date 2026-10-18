@@ -61,7 +61,7 @@ Known problems on this branch:
 6. **Deterministic.** Wait on events or conditions instead of wall-clock thresholds; no
    automatic retries to hide flakes (#381).
 7. **Testable seams over Tauri.** Keep decisions in plain functions that take plain values
-   (`apply_language_selection`, `effective_auto_paste`, `overlay-state.ts`) so they need no
+   (`Settings::apply_language_selection`, `Settings::set_auto_paste`, `overlay-state.ts`) so they need no
    Tauri runtime; inject environment probes (`Probe` in `crates/sagascript-cli/src/engine.rs`).
 
 ## Consequences

@@ -1,7 +1,7 @@
 //! Deterministic strata measurements for an already-scored diarization run.
 //!
 //! This module does not choose a speaker mapping.  [`measure_strata`] accepts the
-//! mapping produced by [`crate::diarization_evaluation::evaluate`] and applies it
+//! mapping produced by [`crate::diarization::eval::evaluation::evaluate`] and applies it
 //! to the explicit UEM.  This keeps short-region and boundary measurements
 //! comparable with the global DER run without allowing a local stratum to pick
 //! a more favourable mapping.
@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::diarization_evaluation::{EvaluationReport, ScoringRegion, SpeakerTurn};
+use crate::diarization::eval::evaluation::{EvaluationReport, ScoringRegion, SpeakerTurn};
 
 pub const SHORT_REGION_SECONDS: f64 = 2.0;
 pub const MAX_TIME_SECONDS: f64 = 14_400.0;
@@ -736,7 +736,7 @@ fn lower_bound(values: &[f64], target: f64) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::diarization_evaluation::{evaluate, EvaluationOptions};
+    use crate::diarization::eval::evaluation::{evaluate, EvaluationOptions};
 
     fn turn(start: f64, end: f64, speakers: &[&str]) -> SpeakerTurn {
         SpeakerTurn {

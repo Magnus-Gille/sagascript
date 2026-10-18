@@ -1,19 +1,30 @@
 use super::args::*;
+#[cfg(feature = "diarization")]
+use super::diarize::*;
 use super::inputs::*;
 use super::language_detection::*;
 use super::language_regions::*;
 #[cfg(feature = "diarization")]
+use super::meeting::{meeting_checkpoint, validate_meeting_input_scope};
+use super::output::*;
+#[cfg(feature = "diarization")]
 use super::pianissimo::*;
 use super::progress::*;
+use super::vocab_correction::*;
 use super::*;
 #[cfg(feature = "diarization")]
 use sagascript_core::diarization::DiarizedSegment;
 #[cfg(feature = "diarization")]
 use sagascript_core::diarization_report::DecoderEvidence;
+use sagascript_core::settings::FileModel;
 use sagascript_core::settings::{FileModelPreference, HotkeyProfile};
 use sagascript_core::transcription::diagnostics::LanguageDetection;
+use sagascript_core::transcription::whisper_backend::assemble_transcript;
 #[cfg(feature = "diarization")]
 use sagascript_core::transcription::whisper_backend::contains_no_speech_marker;
+#[cfg(feature = "diarization")]
+use sagascript_core::transcription::TranscribeOptions;
+use sagascript_core::transcription::TranscriptSegment;
 use sagascript_testsupport::TempDir;
 #[cfg(feature = "diarization")]
 use std::sync::atomic::Ordering;
@@ -528,17 +539,19 @@ fn cached_transcribe_uses_coarse_coverage_across_threshold_sweep() {
         let backend = WhisperBackend::new();
         let mut model_loaded = false;
         transcribe_file(
-            &args,
-            &input,
+            &FileRequest {
+                args: &args,
+                file: &input,
+                stored: &Settings::default(),
+                language: Language::English,
+                model: WhisperModel::TinyEn,
+                glossary: &Glossary::parse("alpha"),
+                correction_vocabulary: &[],
+                control: None,
+                cache_policy: CachePolicy::Normal,
+            },
             &backend,
-            &Settings::default(),
-            Language::English,
-            WhisperModel::TinyEn,
             &mut model_loaded,
-            &Glossary::parse("alpha"),
-            &[],
-            None,
-            CachePolicy::Normal,
             &Out::capture().0,
         )
         .unwrap()

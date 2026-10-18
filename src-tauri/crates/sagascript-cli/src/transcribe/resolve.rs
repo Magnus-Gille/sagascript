@@ -8,17 +8,12 @@ use sagascript_core::error::DictationError;
 use sagascript_core::settings::{FileModel, FileModelPreference, Language, Settings, WhisperModel};
 use sagascript_core::transcription::Glossary;
 
+/// A language as typed on the command line: the id or the English name
+/// (`sv`, `swedish`), the spellings of `Language`'s `FromStr`, which
+/// `sagascript config` takes as well (#373).
 pub fn parse_language(s: &str) -> Result<Language, DictationError> {
-    match s {
-        "en" | "english" => Ok(Language::English),
-        "sv" | "swedish" => Ok(Language::Swedish),
-        "no" | "norwegian" => Ok(Language::Norwegian),
-        "fi" | "finnish" => Ok(Language::Finnish),
-        "auto" => Ok(Language::Auto),
-        other => Err(DictationError::SettingsError(format!(
-            "Unknown language '{other}'. Valid: en, sv, no, fi, auto"
-        ))),
-    }
+    s.parse::<Language>()
+        .map_err(|error| DictationError::SettingsError(error.to_string()))
 }
 
 /// Resolves the whisper model to use for a run: an explicit `--model` argument
@@ -134,57 +129,16 @@ pub(crate) fn resolve_one_run_prompt(
     Ok((!trimmed.is_empty()).then(|| trimmed.to_string()))
 }
 
+/// A Whisper model as typed on the command line: its catalog id
+/// (`WhisperModel::from_id`), which `sagascript config` takes as well (#373).
 pub fn parse_model(s: &str) -> Result<WhisperModel, DictationError> {
-    match s {
-        "tiny.en" => Ok(WhisperModel::TinyEn),
-        "tiny" => Ok(WhisperModel::Tiny),
-        "base.en" => Ok(WhisperModel::BaseEn),
-        "base" => Ok(WhisperModel::Base),
-        "fi-whisper-tiny" => Ok(WhisperModel::FinnishWhisperTiny),
-        "kb-whisper-tiny" => Ok(WhisperModel::KbWhisperTiny),
-        "kb-whisper-base" => Ok(WhisperModel::KbWhisperBase),
-        "kb-whisper-small" => Ok(WhisperModel::KbWhisperSmall),
-        "kb-whisper-medium" => Ok(WhisperModel::KbWhisperMedium),
-        "kb-whisper-large" => Ok(WhisperModel::KbWhisperLarge),
-        "nb-whisper-tiny" => Ok(WhisperModel::NbWhisperTiny),
-        "nb-whisper-base" => Ok(WhisperModel::NbWhisperBase),
-        "nb-whisper-small" => Ok(WhisperModel::NbWhisperSmall),
-        "nb-whisper-medium" => Ok(WhisperModel::NbWhisperMedium),
-        "nb-whisper-large" => Ok(WhisperModel::NbWhisperLarge),
-        "small.en" => Ok(WhisperModel::SmallEn),
-        "small" => Ok(WhisperModel::Small),
-        "medium.en" => Ok(WhisperModel::MediumEn),
-        "medium" => Ok(WhisperModel::Medium),
-        "large-v3-turbo" => Ok(WhisperModel::LargeV3Turbo),
-        "large-v3-turbo-q8_0" => Ok(WhisperModel::LargeV3TurboQ8),
-        other => Err(DictationError::SettingsError(format!(
-            "Unknown model '{other}'. Run 'sagascript list-models' to see available models."
-        ))),
-    }
+    WhisperModel::from_id(s).ok_or_else(|| {
+        DictationError::SettingsError(format!(
+            "Unknown model '{s}'. Run 'sagascript list-models' to see available models."
+        ))
+    })
 }
 
 pub fn model_id_string(model: WhisperModel) -> &'static str {
-    match model {
-        WhisperModel::TinyEn => "tiny.en",
-        WhisperModel::Tiny => "tiny",
-        WhisperModel::BaseEn => "base.en",
-        WhisperModel::Base => "base",
-        WhisperModel::FinnishWhisperTiny => "fi-whisper-tiny",
-        WhisperModel::KbWhisperTiny => "kb-whisper-tiny",
-        WhisperModel::KbWhisperBase => "kb-whisper-base",
-        WhisperModel::KbWhisperSmall => "kb-whisper-small",
-        WhisperModel::KbWhisperMedium => "kb-whisper-medium",
-        WhisperModel::KbWhisperLarge => "kb-whisper-large",
-        WhisperModel::NbWhisperTiny => "nb-whisper-tiny",
-        WhisperModel::NbWhisperBase => "nb-whisper-base",
-        WhisperModel::NbWhisperSmall => "nb-whisper-small",
-        WhisperModel::NbWhisperMedium => "nb-whisper-medium",
-        WhisperModel::NbWhisperLarge => "nb-whisper-large",
-        WhisperModel::SmallEn => "small.en",
-        WhisperModel::Small => "small",
-        WhisperModel::MediumEn => "medium.en",
-        WhisperModel::Medium => "medium",
-        WhisperModel::LargeV3Turbo => "large-v3-turbo",
-        WhisperModel::LargeV3TurboQ8 => "large-v3-turbo-q8_0",
-    }
+    model.id()
 }

@@ -6,7 +6,8 @@
 /// because it uses mean inter-cluster distance rather than worst-case.
 use kodama::{linkage, Method};
 
-use crate::diarization::embedding::EMBEDDING_DIM;
+pub use crate::diarization::is_usable_embedding;
+use crate::diarization::EMBEDDING_DIM;
 
 // The default clustering threshold lives in `DiarizeConfig::default()`
 // (diarization/mod.rs) — the single source of truth. A stale `DEFAULT_THRESHOLD`
@@ -252,13 +253,6 @@ pub fn merge_least_heard_within(
         }
     }
     clusters.len()
-}
-
-/// A usable embedding is finite and non-degenerate. Zero (or non-finite) vectors carry no
-/// speaker information; cosine similarity maps them to 0, which would make every one a separate
-/// speaker. Callers route such segments through the track fallback instead.
-pub fn is_usable_embedding(e: &[f32; EMBEDDING_DIM]) -> bool {
-    e.iter().all(|x| x.is_finite()) && e.iter().map(|x| x * x).sum::<f32>().sqrt() > 1e-6
 }
 
 /// Absorb clusters with less than `min_seconds` of total speech into a similar cluster.

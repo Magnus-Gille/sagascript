@@ -5,16 +5,20 @@
 //! review and never publishes the candidate; callers must resolve every
 //! conflict before accepting the result.
 
+pub mod matching;
+pub mod plan;
+pub mod proposal;
+
 use std::collections::BTreeMap;
 
 use serde::Serialize;
 
-use crate::meeting::{MeetingError, MeetingTranscript};
-use crate::meeting_reprocess_matching::{match_segments, match_speakers};
-use crate::meeting_review::{
+use crate::meeting::review::{
     CorrectionFile, CorrectionOperation, MeetingReview, MeetingReviewError,
     MAX_CORRECTION_OPERATIONS, REVIEW_SCHEMA_VERSION,
 };
+use crate::meeting::{MeetingError, MeetingTranscript};
+use matching::{match_segments, match_speakers};
 
 /// The disposition of one previous correction during migration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]

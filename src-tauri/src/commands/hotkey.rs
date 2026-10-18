@@ -39,18 +39,25 @@ pub async fn set_hotkey(
     health: State<'_, HotkeyHealth>,
     shortcut: String,
 ) -> Result<(), CommandError> {
-    validate_hotkey(&shortcut).map_err(CommandError::HotkeyInvalid)?;
-    let mut profiles = lock_controller(&controller)
-        .settings()
-        .resolved_hotkey_profiles();
-    let profile_index = profiles
-        .iter()
-        .position(|profile| profile.id == "default")
-        .unwrap_or(0);
-    profiles[profile_index].set_primary_shortcut(shortcut);
+    let profiles =
+        profiles_with_default_shortcut(lock_controller(&controller).settings(), shortcut)?;
     set_hotkey_profiles(app, controller, health, profiles)
         .await
         .map(|_| ())
+}
+
+/// The profile list `set_hotkey` applies: `shortcut` becomes the primary
+/// shortcut of the default profile (the one called `default`, else the first),
+/// the profile `config set hotkey` changes too (#373).
+pub(super) fn profiles_with_default_shortcut(
+    settings: &Settings,
+    shortcut: String,
+) -> Result<Vec<HotkeyProfile>, CommandError> {
+    validate_hotkey(&shortcut).map_err(CommandError::HotkeyInvalid)?;
+    let mut profiles = settings.resolved_hotkey_profiles();
+    let profile_index = HotkeyProfile::default_index(&profiles);
+    profiles[profile_index].set_primary_shortcut(shortcut);
+    Ok(profiles)
 }
 
 #[tauri::command]
@@ -86,10 +93,11 @@ pub(crate) fn acquire_hotkey_configuration(
 /// registered: the file and the controller, nothing else. A refusal or a failed
 /// write leaves both as they were.
 ///
-/// The one setter that must replace the controller's whole copy by the file's,
+/// The one setter that replaces the controller's whole copy by the file's,
 /// because it is the caller that has just registered the file's shortcuts with
 /// the OS: the controller adopting them is what makes them the operational
-/// ones. No other setter may install shortcuts in the controller.
+/// ones. No other setter may install shortcuts in the controller; each mirrors
+/// the fields it writes (`persist_tests.rs` has the rule of every one).
 pub(super) fn persist_hotkey_change(
     controller: &SharedController,
     update: &HotkeyChange,
@@ -98,7 +106,7 @@ pub(super) fn persist_hotkey_change(
     try_persist_and_replace(controller, |settings| {
         update.apply_registered(settings, shortcuts)
     })
-    .map(|(_, written)| written)
+    .map(|persisted| persisted.current)
 }
 
 /// What a failed hotkey change does about the shortcuts registered before it.
