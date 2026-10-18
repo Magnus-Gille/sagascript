@@ -22,7 +22,8 @@ use sagascript_testsupport::TempDir;
 use serde_json::{json, Value};
 
 use super::inference::InferenceBackend;
-use super::language_detection::LanguageProbe;
+use super::language_detection::{detect_file_language, LanguageProbe};
+use super::plan::plan_run_with;
 use super::*;
 use sagascript_core::transcription::{ContextProfile, TranscribeOptions, TranscriptSegment};
 
@@ -90,6 +91,8 @@ impl Reply {
 
 struct ScriptedBackend {
     installed: bool,
+    /// The models `is_downloaded` was asked about, in order.
+    asked: Mutex<Vec<WhisperModel>>,
     detection: Option<LanguageDetection>,
     detection_failures: Mutex<VecDeque<DictationError>>,
     load_failures: Mutex<VecDeque<DictationError>>,
@@ -111,6 +114,7 @@ impl ScriptedBackend {
     fn new(replies: Vec<Reply>) -> Self {
         Self {
             installed: true,
+            asked: Mutex::new(Vec::new()),
             detection: None,
             detection_failures: Mutex::new(VecDeque::new()),
             load_failures: Mutex::new(VecDeque::new()),
@@ -200,7 +204,8 @@ impl LanguageProbe for ScriptedBackend {
 }
 
 impl InferenceBackend for ScriptedBackend {
-    fn is_downloaded(&self, _: WhisperModel) -> bool {
+    fn is_downloaded(&self, model: WhisperModel) -> bool {
+        self.asked.lock().unwrap().push(model);
         self.installed
     }
 
@@ -1675,6 +1680,126 @@ fn a_failed_load_is_retried_for_the_next_file() {
         .filter(|call| matches!(call, Call::Load(..)))
         .count();
     assert_eq!(loads, 2);
+}
+
+// ---- one answer to "is the model installed" --------------------------------------------------
+
+fn plan_for(flags: &[&str], backend: &ScriptedBackend) -> Result<RunPlan, DictationError> {
+    plan_run_with(&args_for(flags), Settings::default(), backend)
+}
+
+#[test]
+fn the_plans_model_preflight_asks_the_backend_the_run_uses() {
+    let mut backend = ScriptedBackend::new(Vec::new());
+    backend.installed = false;
+
+    let error = plan_for(&["--language", "en", "--model", "base"], &backend)
+        .err()
+        .expect("a model that is not installed fails the plan");
+
+    assert_eq!(
+        error.to_string(),
+        "Transcription failed: Model 'Whisper Base' is not downloaded. \
+         Run: sagascript download-model base"
+    );
+    assert_eq!(*backend.asked.lock().unwrap(), [WhisperModel::Base]);
+
+    backend.installed = true;
+    let plan = plan_for(&["--language", "en", "--model", "base"], &backend)
+        .expect("an installed model plans");
+    assert!(matches!(
+        plan.engine,
+        EnginePlan::Whisper {
+            model: WhisperModel::Base,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn the_preflight_is_skipped_where_no_whisper_model_is_needed() {
+    let mut backend = ScriptedBackend::new(Vec::new());
+    backend.installed = false;
+
+    // Pianissimo has its own model, checked by its own batch.
+    let plan = plan_for(&["--language", "sv", "--model", "pianissimo-sv"], &backend)
+        .expect("Pianissimo plans without a Whisper model");
+    assert!(matches!(plan.engine, EnginePlan::Pianissimo));
+    assert!(backend.asked.lock().unwrap().is_empty());
+
+    // A diarization cache may stand in for the model: the run decides on a hit.
+    #[cfg(feature = "diarization")]
+    {
+        plan_for(
+            &[
+                "--language",
+                "en",
+                "--model",
+                "base",
+                "--diarize",
+                "--diarize-cache",
+                "cache.json",
+            ],
+            &backend,
+        )
+        .expect("a cache may bypass the model");
+        assert!(backend.asked.lock().unwrap().is_empty());
+    }
+}
+
+#[test]
+fn the_preflight_comes_after_the_checks_on_the_request() {
+    let mut backend = ScriptedBackend::new(Vec::new());
+    backend.installed = false;
+
+    let error = plan_for(
+        &[
+            "second.wav",
+            "--clipboard",
+            "--language",
+            "en",
+            "--model",
+            "base",
+        ],
+        &backend,
+    )
+    .err()
+    .expect("two inputs with --clipboard fail the plan");
+
+    assert_eq!(
+        error.to_string(),
+        "Settings error: --clipboard is only available when transcribing one file"
+    );
+    assert!(backend.asked.lock().unwrap().is_empty());
+}
+
+#[test]
+fn the_language_check_asks_the_backend_which_neutral_model_is_installed() {
+    let mut backend = ScriptedBackend::new(Vec::new());
+    backend.installed = false;
+    let (out, captured) = Out::capture();
+
+    // A Swedish-optimized model is checked with a neutral one: with none
+    // installed (the backend's answer) there is no check and nothing is loaded.
+    let detection =
+        detect_file_language(&out, &backend, &[0.1; 160], WhisperModel::KbWhisperBase).unwrap();
+
+    assert_eq!(detection, None);
+    assert_eq!(
+        *backend.asked.lock().unwrap(),
+        [
+            WhisperModel::Base,
+            WhisperModel::Tiny,
+            WhisperModel::Small,
+            WhisperModel::Medium,
+            WhisperModel::LargeV3TurboQ8,
+            WhisperModel::LargeV3Turbo,
+        ]
+    );
+    assert!(captured.stderr().contains(
+        "Warning: language mismatch check skipped because no neutral multilingual model is downloaded."
+    ));
+    assert!(backend.calls().is_empty());
 }
 
 // ---- the output step on its own --------------------------------------------------------

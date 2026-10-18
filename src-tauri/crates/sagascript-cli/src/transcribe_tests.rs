@@ -2115,10 +2115,6 @@ mod language_check_seam_tests {
     }
 
     impl DetectorLoader for FakeLoader<'_> {
-        fn is_downloaded(&self, model: WhisperModel) -> bool {
-            self.scenario.installed.contains(&model)
-        }
-
         fn load(
             &self,
             model: WhisperModel,
@@ -2163,9 +2159,17 @@ mod language_check_seam_tests {
             log: Rc::clone(&log),
         };
         let (out, captured) = Out::capture();
-        let result =
-            detect_file_language_with(&out, &loader, &direct, &[0.1; 160], transcription_model)
-                .unwrap();
+        // Which models are installed is the backend's answer; here, the scenario's.
+        let installed = |model: WhisperModel| scenario.installed.contains(&model);
+        let result = detect_file_language_with(
+            &out,
+            &loader,
+            &direct,
+            &installed,
+            &[0.1; 160],
+            transcription_model,
+        )
+        .unwrap();
         drop(direct);
         // The transcription backend's own probe is the caller's, not the check's.
         let events: Vec<Event> = log

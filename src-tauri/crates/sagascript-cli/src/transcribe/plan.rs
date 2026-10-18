@@ -16,7 +16,6 @@ use sagascript_core::diarization_report::DecoderEvidence;
 use sagascript_core::error::DictationError;
 use sagascript_core::run_context::RunContext;
 use sagascript_core::settings::{FileModel, Language, Settings, WhisperModel};
-use sagascript_core::transcription::model;
 use sagascript_core::transcription::Glossary;
 #[cfg(feature = "diarization")]
 use sagascript_core::transcription::TranscribeOptions;
@@ -28,7 +27,7 @@ use super::args::TranscribeArgs;
 use super::diarize::CachePolicy;
 #[cfg(feature = "diarization")]
 use super::diarize::{effective_diarization_decoder_evidence, resolve_diarization_options};
-use super::inference::not_downloaded;
+use super::inference::{not_downloaded, InferenceBackend};
 use super::inputs::expand_inputs;
 #[cfg(feature = "diarization")]
 use super::inputs::paths_refer_to_same_file;
@@ -64,16 +63,19 @@ pub(super) enum EnginePlan {
     },
 }
 
-/// Plans a run against the saved settings.
-pub(super) fn plan_run(args: &TranscribeArgs) -> Result<RunPlan, DictationError> {
+/// Plans a run against the saved settings. `backend` is the one the run will
+/// use, and its answer to which models are installed is the preflight's.
+pub(super) fn plan_run(
+    args: &TranscribeArgs,
+    backend: &dyn InferenceBackend,
+) -> Result<RunPlan, DictationError> {
     #[cfg(feature = "diarization")]
     speaker_hint_from_args(args)?;
     let stored = sagascript_core::settings::store::load();
-    plan_run_with(args, stored, model::is_model_downloaded)
+    plan_run_with(args, stored, backend)
 }
 
-/// [`plan_run`] against the given settings and the given idea of which
-/// models are installed.
+/// [`plan_run`] against the given settings.
 ///
 /// The checks run in this order, and the first that fails ends the plan:
 /// language and glossary, the inputs (none, `--meeting-json` scope, `--clipboard`
@@ -82,7 +84,7 @@ pub(super) fn plan_run(args: &TranscribeArgs) -> Result<RunPlan, DictationError>
 pub(super) fn plan_run_with(
     args: &TranscribeArgs,
     stored: Settings,
-    is_downloaded: impl Fn(WhisperModel) -> bool,
+    backend: &dyn InferenceBackend,
 ) -> Result<RunPlan, DictationError> {
     let RunContext {
         language, glossary, ..
@@ -139,7 +141,7 @@ pub(super) fn plan_run_with(
             let cache_may_bypass_model = args.diarize && args.diarize_cache.is_some();
             #[cfg(not(feature = "diarization"))]
             let cache_may_bypass_model = false;
-            if !cache_may_bypass_model && !is_downloaded(model) {
+            if !cache_may_bypass_model && !backend.is_downloaded(model) {
                 return Err(not_downloaded(model));
             }
             EnginePlan::Whisper {

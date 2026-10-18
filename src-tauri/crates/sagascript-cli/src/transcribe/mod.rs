@@ -105,13 +105,16 @@ pub fn run(args: TranscribeArgs, out: &Out) -> Result<(), DictationError> {
 /// Plans the run and hands it to its engine, wired to the process: the real
 /// backends, the system clipboard, and `canceller`.
 fn run_inner(args: TranscribeArgs, canceller: &Canceller, out: &Out) -> Result<(), DictationError> {
+    // One backend for the run: it answers the plan's model preflight and, if the
+    // plan picks Whisper, does the work.
+    let backend = std::sync::Arc::new(WhisperBackend::new());
     let RunPlan {
         stored,
         language,
         glossary,
         files,
         engine,
-    } = plan_run(&args)?;
+    } = plan_run(&args, &*backend)?;
     match engine {
         EnginePlan::Pianissimo => run_pianissimo_batch(
             &PianissimoBatch {
@@ -129,7 +132,6 @@ fn run_inner(args: TranscribeArgs, canceller: &Canceller, out: &Out) -> Result<(
             model,
             correction_vocabulary,
         } => {
-            let backend = std::sync::Arc::new(WhisperBackend::new());
             let _abort_whisper = {
                 let backend = backend.clone();
                 canceller.register(move || backend.request_cancel())
