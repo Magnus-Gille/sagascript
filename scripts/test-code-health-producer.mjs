@@ -938,12 +938,68 @@ test("native async GitHub transport pins the API origin, rejects redirects, and 
       githubActionsJson(`${url}?token=PRIVATE_SENTINEL`, 1000, controller.signal, async () => assert.fail("unexpected fetch")),
       /outside the fixed read-only endpoint set/,
     );
+    let fetchFailure;
     await assert.rejects(
       githubActionsJson(url, 1000, controller.signal, async () => {
-        throw new Error(`redirect to https://example.test/?token=${sentinel}`);
+        fetchFailure = new Error(`redirect to https://example.test/?token=${sentinel}`);
+        throw fetchFailure;
       }),
-      (error) => error.message === "GitHub Actions API request failed" && !error.message.includes(sentinel),
+      (error) => error.message === "GitHub Actions API request failed" && error.cause === fetchFailure && !error.message.includes(sentinel),
     );
+    let responseReadFailure;
+    const failedBody = new Response(
+      new ReadableStream({
+        start(streamController) {
+          responseReadFailure = new Error(`body from https://example.test/?token=${sentinel}`);
+          streamController.error(responseReadFailure);
+        },
+      }),
+      { status: 200 },
+    );
+    await assert.rejects(
+      githubActionsJson(url, 1000, controller.signal, async () => failedBody),
+      (error) =>
+        error.message === "GitHub Actions API request failed" && error.cause === responseReadFailure && !error.message.includes(sentinel),
+    );
+    const currentWorkflow = Buffer.from("name: CI\njobs:\n  scope:\n");
+    const diagnosticRequest = createAsyncMetadataTransport(
+      (target, timeoutMs, signal) =>
+        githubActionsJson(target, timeoutMs, signal, async () => {
+          throw new Error(`request to https://example.test/?token=${sentinel}`);
+        }),
+      { budgetMs: 1000 },
+    );
+    try {
+      await assert.rejects(
+        collectFirstAttemptMetadata({
+          apiRuns: [
+            {
+              id: 1234,
+              head_sha: "d".repeat(40),
+              run_attempt: 1,
+              event: "push",
+              head_branch: "main",
+              created_at: at(10 * 86400),
+              status: "completed",
+              conclusion: "success",
+            },
+          ],
+          request: diagnosticRequest,
+          currentWorkflowDigest: sha256(currentWorkflow),
+          windowStart: "2026-09-11T00:00:00Z",
+          windowEnd: "2026-10-09T00:00:00Z",
+          readHistoricalWorkflow: () => currentWorkflow,
+        }),
+        (error) => {
+          assert.match(error.message, /attempt-1 identity failed run_id=1234 request_count=1/);
+          assert.doesNotMatch(error.message, /PRIVATE_SENTINEL|https?:\/\/|token=/);
+          assert.equal(error.cause, undefined, "public collector diagnostics do not retain the transport cause");
+          return true;
+        },
+      );
+    } finally {
+      diagnosticRequest.close();
+    }
     for (const status of [404, 503]) {
       let bodyCancelled = false;
       const response = new Response(

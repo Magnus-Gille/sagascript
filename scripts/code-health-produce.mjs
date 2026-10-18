@@ -871,7 +871,7 @@ async function readBoundedResponseBody(response, signal) {
   } catch (error) {
     if (signal.aborted) throw signal.reason instanceof Error ? signal.reason : new Error("GitHub Actions API request cancelled");
     if (error?.message === "GitHub Actions API response exceeds 8 MiB") throw error;
-    throw new Error("GitHub Actions API request failed");
+    throw new Error("GitHub Actions API request failed", { cause: error });
   }
   const bytes = new Uint8Array(byteLength);
   let offset = 0;
@@ -911,7 +911,7 @@ export async function githubActionsJson(rawUrl, _timeoutMs, signal, fetchImpl = 
   } catch (error) {
     if (signal.aborted) throw signal.reason instanceof Error ? signal.reason : new Error("GitHub Actions API request cancelled");
     if (error?.message === "GitHub Actions API target is outside the fixed read-only endpoint set") throw error;
-    throw new Error("GitHub Actions API request failed");
+    throw new Error("GitHub Actions API request failed", { cause: error });
   }
   if (response.status < 200 || response.status >= 300) {
     await cancelResponseBody(response);
