@@ -25,22 +25,27 @@ step below. Per-profile values (language, model, dictionary, shortcuts) live on
      resets that field to its default, and the next save replaces it (after saving a `.bak`
      copy of the file).
 
-## 2. CLI key: `src-tauri/crates/sagascript-cli/src/config.rs`
+## 2. CLI key: `src-tauri/crates/sagascript-cli/src/config/keys.rs`
 
-CLI first ([ADR 0001](../adr/0001-cli-first.md)): every user setting gets a `config` key.
+CLI first ([ADR 0001](../adr/0001-cli-first.md)): every user setting gets a `config` key, and a
+key is one entry in the `KEYS` table (#373): `VALID_KEYS`, `config list`, the key lists and the
+value table of the `--help` texts and the `[possible values]` of the key argument are generated
+from it.
 
-1. Add `"example_flag"` to `VALID_KEYS`.
-2. Add arms to `apply_other_setting_value` (set:
-   `settings.example_flag = parse_bool(value, "example_flag")?;`; enums use `parse_id` or
-   `parse_enum_value`, integers `value.parse::<u32>()` mapped to a `SettingsError`),
-   `reset_setting_value` and `get_setting_value` (the string `config get` prints), and a row
-   to `cmd_list`. `reset_all_settings` picks up the default through `..defaults`.
-3. Add the key and its values to the help text: the `long_about` of `ConfigAction::List`,
-   `Get` and `Set` and the `key` doc comments of `Get` and `Set`. A warning (like
-   `auto_paste`'s) goes in `setting_warning`.
-4. The test `valid_keys_count_matches_settings_struct` fails until the key is in
-   `VALID_KEYS`. Add the field to its `INTERNAL_FIELDS` list only if it is not user-facing
-   (markers such as `engine_defaults_version`).
+1. Add a `Key { name, note, help, get, set, reset, warning }` to `KEYS`, in the order `config list`
+   should print it. A `bool` or `u32` field with nothing to apply beside it is one line:
+   `bool_key!("example_flag", example_flag, &["true, false"])` (`count_key!` for an integer). Any
+   other key spells out `get` (the string `config get` prints), `set` (parse the text, then apply the
+   operation; a language is parsed by `parse_value::<Language>`, a model by
+   `parse_value::<WhisperModel>`, an enum by its `from_id` / `parse_id`, a bool by `parse_bool`),
+   `reset` (back to the value in `defaults`) and a `warning` if `config set` should print one (like
+   `auto_paste`'s). `help` is the line of `config set --help`: the accepted values.
+2. If the setting is more than a field (it moves other fields, or the app must do the same), the rule
+   is a `Settings` method in `sagascript-core/src/settings/ops.rs` and the key calls it: see the next
+   section. `reset_all_settings` picks up a plain field's default through `..defaults`.
+3. The test `valid_keys_count_matches_settings_struct` fails until the key is in `KEYS`. Add the
+   field to its `INTERNAL_FIELDS` list only if it is not user-facing (markers such as
+   `engine_defaults_version`).
 
 ## 3. App command: `src-tauri/src/commands/settings.rs` and `src-tauri/src/main.rs`
 
@@ -94,6 +99,14 @@ replaced the whole copy would install shortcuts the OS never registered.
   function other than the permission gate (`load_settings_with_permission_gate` in
   `launch/settings.rs`) calls `store::update`, `try_update`,
   `update_with`, `try_update_with`, `save` or `machine::{update, try_update}` itself.
+- A setting that is more than a field is a `Settings` operation in `settings/ops.rs` (take the
+  Pianissimo gate or the Accessibility answer as an argument, never probe the machine), the setter
+  calls it inside `persist_and_sync` / `try_persist_and_replace` and so does the CLI key (#373).
+  Add a row for it to `core::test_support::settings_ops_table` and a translation to the CLI and to the
+  app side of the table (`sagascript-cli/tests/settings_parity.rs`, `commands/persist_parity_tests.rs`):
+  the table fails when a surface persists something else than the operation does. Decide a
+  difference on purpose and write it in `Case::differs_in` and in
+  [ARCHITECTURE.md §2.2](../ARCHITECTURE.md#22-settings-layers-disk--store--appcontroller--watcher--frontend).
 - Side effects go after the persist call (`set_show_overlay`, `set_vad_enabled`). A setter that
   needs the `AppHandle` (the profiles menu, the overlay window) splits its persistence half into
   a plain function, as `persist_language` and `persist_show_overlay` do, so the table test can
@@ -109,8 +122,8 @@ replaced the whole copy would install shortcuts the OS never registered.
   Set a non-default value in `customised()` in `commands/settings_tests.rs` so the fixture
   shows it.
 - Setter logic goes in a plain function with a test in `commands/settings_tests.rs`
-  (`apply_language_selection` / `language_selection_tests`, `effective_auto_paste` /
-  `auto_paste_tests`).
+  (`apply_language_selection` / `language_selection_tests`, `auto_paste_tests`; the rule itself is
+  tested in `settings/ops_tests.rs`).
 
 ## 4. Frontend: `src/lib/api.ts`, `src/lib/Settings.svelte`
 
@@ -144,6 +157,7 @@ replaced the whole copy would install shortcuts the OS never registered.
 | `settings/manager_tests.rs` | Assert the default in `settings_default_values` and the round trip in `settings_serde_roundtrip`. |
 | `settings/store_tests.rs` | Assert a file without the key loads the default (`partial_json_fills_defaults`). Migrations: test through the `*_at(path, …)` helpers on a `fake_settings()` file (`with_temp_settings`), never the real settings path. |
 | `config.rs` | Extend `get_setting_value_returns_serialized_values`; add a set/reset/reject test modeled on `engine_settings_can_be_set_reset_and_reject_bad_values`. |
+| `settings/ops_tests.rs`, `test_support/settings_ops_table.rs` | The rule of an operation, and its row in the CLI/app parity table (run by `tests/settings_parity.rs` and `commands/persist_parity_tests.rs`). |
 | `commands/settings_tests.rs`, `commands/persist_tests.rs` | Unit-test any extracted setter logic; add the setter's row to the `persist_and_sync` table. |
 | Frontend | New logic in a `.ts` module gets a Vitest test in `src/lib/<module>.test.ts`; what Settings shows or invokes gets a component test (`src/lib/Settings.test.ts`, [docs/testing/frontend.md](../testing/frontend.md)). Do not add regex tests over `Settings.svelte` source ([ADR 0004](../adr/0004-test-strategy.md)). |
 
@@ -166,7 +180,7 @@ cli() { cargo run -q -p sagascript-cli --no-default-features -- "$@"; }
 cli config get example_flag                     # false (the default)
 cli config set example_flag true && cli config get example_flag   # true
 cli config set example_flag maybe; echo "exit $?"                 # rejected: exit 1
-cli config list | grep example_flag             # the cmd_list row
+cli config list | grep example_flag             # the row `config list` prints from the table
 cli config set --help | grep example_flag       # the help text
 cli config reset example_flag && grep example_flag "$SAGASCRIPT_SETTINGS_PATH"  # key stays, now false
 cd ..
@@ -183,6 +197,7 @@ Parity: with the same `SAGASCRIPT_SETTINGS_PATH` exported, run `cargo tauri dev`
 setting in the UI and check the file holds what `config set` writes; then `config set` while
 the app runs and check the UI follows (watcher → `settings_reloaded`). Without a desktop
 session (a headless agent), say so in the PR and leave this step to a reviewer with a Mac.
-Finish with `npm run verify` ([CONTRIBUTING.md](../../CONTRIBUTING.md#running-tests)). Planned:
-[#373](https://github.com/Magnus-Gille/sagascript/issues/373) (automated CLI/app parity table,
-table-driven key registry).
+Finish with `npm run verify` ([CONTRIBUTING.md](../../CONTRIBUTING.md#running-tests)). The
+automated part of the parity check, for every setting that has an operation or a row in the table,
+is `cargo test -p sagascript-cli --test settings_parity` and `cargo test -p sagascript parity`
+([#373](https://github.com/Magnus-Gille/sagascript/issues/373)).
