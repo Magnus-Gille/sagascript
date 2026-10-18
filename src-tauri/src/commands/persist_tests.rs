@@ -20,6 +20,7 @@
 //! after the file was changed behind the controller's back the way the CLI does.
 
 use std::collections::BTreeSet;
+use std::path::Path;
 use std::process::Command;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -27,7 +28,9 @@ use std::time::Duration;
 use sagascript_core::settings::{
     store, EnginePrewarm, FileModelPreference, HotkeyMode, Language, Settings, WhisperModel,
 };
-use sagascript_core::transcription::{suggest_glossary_candidates, Glossary};
+use sagascript_core::transcription::{
+    model as whisper_model_files, pianissimo_model, suggest_glossary_candidates, Glossary,
+};
 use sagascript_testsupport::{fake_settings, isolated_cli_env};
 use tauri::test::MockRuntime;
 use tauri::Manager;
@@ -334,6 +337,48 @@ fn app_with(memory: Settings) -> App {
     app
 }
 
+/// The directory of the child's files besides the settings: its home and the
+/// Pianissimo model directory. A test that clears the fake settings directory
+/// between rows leaves this one alone.
+const CHILD_ENV_DIR: &str = "env";
+
+/// Keep the child's user directories and its model directories inside `dir`.
+///
+/// A setter that changes a profile's model may, once it has written the file,
+/// ask whether the Pianissimo model is installed (`warm_in_background`,
+/// `pianissimo_model::is_downloaded`, which also repairs an interrupted
+/// install) and start the engine. That is the app's job, but a test must never
+/// do it to the user's models directory (ADR 0004, rule 5). The settings path
+/// is not enough: `isolated_cli_env` keeps `HOME`, so on a developer's Mac the
+/// child would read `~/Library/Application Support/Sagascript/Models`.
+///
+/// So `HOME` and the other user directories point into `dir`, which is what
+/// `dirs` and the models directory follow on macOS and Linux, and
+/// `SAGASCRIPT_PIANISSIMO_MODEL_DIR` names an empty directory there, which every
+/// platform's debug build honors and which reads as "not installed", also
+/// where `dirs` ignores the environment (Windows). The guard test
+/// `the_child_cannot_reach_the_users_models_directory` checks both.
+fn keep_the_child_in(command: &mut Command, dir: &Path) {
+    let env = dir.join(CHILD_ENV_DIR);
+    let home = env.join("home");
+    let model = env.join("pianissimo-model");
+    for path in [&home, &model] {
+        std::fs::create_dir_all(path).expect("the child's directories can be created");
+    }
+    for key in [
+        "HOME",
+        "USERPROFILE",
+        "APPDATA",
+        "LOCALAPPDATA",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+        "XDG_CACHE_HOME",
+    ] {
+        command.env(key, &home);
+    }
+    command.env(pianissimo_model::MODEL_DIR_ENV, &model);
+}
+
 /// Runs `body` on a fake settings file in a child process of this test binary
 /// and returns what it reported, in the parent. In the child (`CHILD` is set)
 /// it runs `body` in place and returns `None`.
@@ -359,7 +404,9 @@ fn isolated(module: &str, test: &str, body: impl FnOnce() -> String) -> Option<S
         .map(|(_, path)| format!("{path}::{test}"))
         .expect("a module path below the crate");
     let mut command = Command::new(std::env::current_exe().expect("the test binary"));
-    isolated_cli_env(&mut command, fake.path())
+    isolated_cli_env(&mut command, fake.path());
+    keep_the_child_in(&mut command, fake.dir());
+    command
         .env(CHILD, "1")
         .args(["--exact", &path, "--test-threads=1", "--nocapture"]);
     let output = command.output().expect("the test binary starts");
@@ -493,6 +540,58 @@ fn every_settings_writing_command_has_a_row() {
             "the table has a row for {command}, which does not write settings (any more)"
         );
     }
+}
+
+/// The harness does not reach the user's model directories (ADR 0004, rule 5):
+/// in the child, the Pianissimo model directory is the empty one inside the fake
+/// directory, so "is it installed" is answered without touching, repairing or
+/// starting anything of the user's, and where the platform follows `HOME` the
+/// Whisper models directory is inside it as well.
+#[test]
+fn the_child_cannot_reach_the_users_models_directory() {
+    let Some(report) = isolated(
+        module_path!(),
+        "the_child_cannot_reach_the_users_models_directory",
+        || {
+            let dir = fake_file()
+                .parent()
+                .expect("the settings file has a directory")
+                .to_path_buf();
+            let pianissimo = pianissimo_model::model_dir();
+            assert!(
+                pianissimo.starts_with(&dir),
+                "the Pianissimo model directory {} is outside {}",
+                pianissimo.display(),
+                dir.display()
+            );
+            assert_eq!(
+                pianissimo_model::override_dir().as_deref(),
+                Some(&*pianissimo)
+            );
+            assert!(
+                !pianissimo_model::is_downloaded(),
+                "an empty directory is not an installed model"
+            );
+            // Windows resolves `data_dir` from the OS, not the environment; the
+            // override above is what keeps Pianissimo there.
+            #[cfg(not(windows))]
+            {
+                let whisper = whisper_model_files::models_dir();
+                assert!(
+                    whisper.starts_with(&dir),
+                    "the Whisper models directory {} is outside {}",
+                    whisper.display(),
+                    dir.display()
+                );
+            }
+            #[cfg(windows)]
+            let _ = whisper_model_files::models_dir;
+            "contained".to_string()
+        },
+    ) else {
+        return;
+    };
+    assert_eq!(report, "contained");
 }
 
 #[path = "persist_scenarios_tests.rs"]

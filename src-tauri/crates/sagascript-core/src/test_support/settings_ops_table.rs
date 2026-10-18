@@ -210,11 +210,14 @@ pub fn norwegian_pinned() -> Settings {
     settings
 }
 
-/// A Swedish default profile on a chosen Whisper model (never Auto: that is
-/// Pianissimo where it runs, and a model change would warm its engine) and an
-/// English second profile.
+/// A Swedish default profile on a chosen Whisper model and an English second
+/// profile. Never Auto on Swedish in a row that changes a model: that is
+/// Pianissimo where it runs, and the app's setter would then warm its engine.
+/// `engine_prewarm` is off for the same reason, so that even the row that ends on
+/// Auto (`pianissimo_dictation` false) wants no warm-up on any machine.
 pub fn swedish_pinned() -> Settings {
     let mut settings = english();
+    settings.engine_prewarm = EnginePrewarm::Off;
     settings.language = Language::Swedish;
     settings.hotkey_profiles[0].language = Language::Swedish;
     settings

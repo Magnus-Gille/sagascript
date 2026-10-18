@@ -84,17 +84,19 @@ fn run_op(app: &App, runtime: &tokio::runtime::Runtime, op: &Op) -> Result<(), S
 
 /// The directory of the fake settings file holds only this test's files, so
 /// what the store keeps beside the file (dictionary files, the lock, recovery
-/// copies) is removed between rows. The child's report is written after the
+/// copies) is removed between rows. The child's own directories
+/// (`CHILD_ENV_DIR`) stay, and so does its report, which is written after the
 /// last row.
 fn clear_the_fake_directory() {
     let file = fake_file();
     let dir = file.parent().expect("the settings file has a directory");
     for entry in std::fs::read_dir(dir).expect("the directory is readable") {
         let path = entry.expect("an entry").path();
-        if path
+        let kept = path
             .extension()
             .is_some_and(|extension| extension == "report")
-        {
+            || path.file_name().is_some_and(|name| name == CHILD_ENV_DIR);
+        if kept {
             continue;
         }
         if path.is_dir() {
