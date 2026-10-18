@@ -188,6 +188,34 @@ impl<C, S> RuntimeSlots<'_, C, S> {
     }
 }
 
+/// What a runtime swap pushed out of the slots and nothing can use again.
+///
+/// Dropping a native context or state frees model weights and GPU buffers,
+/// which takes long enough to matter. A swap therefore hands these back
+/// instead of dropping them under its locks, and the caller drops them once
+/// every lock is released: a dictation that arrives during the teardown takes
+/// the state lock at once instead of waiting out its grace budget for
+/// `ModelBusy`, and a lookup of the active model is not held up either.
+#[must_use = "drop the displaced payloads only after the locks are released"]
+struct Displaced<C, S> {
+    /// A warm state that belonged to no runtime.
+    orphan_state: Option<S>,
+    /// The previous active runtime, when it does not fit the cache budget
+    /// next to the new one.
+    rejected: Option<CachedWhisperRuntime<C, S>>,
+    /// The previous secondary runtime, replaced by the previous active one.
+    replaced_secondary: Option<CachedWhisperRuntime<C, S>>,
+}
+
+impl<C, S> Displaced<C, S> {
+    /// Free the payloads, in the order they were displaced.
+    fn release(self) {
+        drop(self.orphan_state);
+        drop(self.rejected);
+        drop(self.replaced_secondary);
+    }
+}
+
 /// Publish a freshly loaded context as the active runtime.
 fn publish_runtime<C, S>(
     slots: &RuntimeSlots<'_, C, S>,
@@ -207,23 +235,46 @@ fn publish_runtime<C, S>(
     // return ModelBusy (dropping the freshly loaded `ctx` cleanly and
     // letting ensure_model release load_lock) instead of blocking a model
     // switch forever behind a wedged transcription.
-    let mut state = lock_state_slot_bounded(slots.state, grace)?;
-    let mut loaded_runtime = lock_or_recover(slots.loaded_runtime, LOADED_RUNTIME_LOCK);
-    let previous = loaded_runtime
-        .replace(Loaded {
-            key: desired_key,
-            ctx: Arc::new(ctx),
-        })
-        .map(|runtime| CachedWhisperRuntime {
-            runtime,
-            state: state.take(),
-        });
-    // A warm state left without a runtime belongs to no context: discard it.
-    *state = None;
+    //
+    // What the swap displaces is released after the locks, see `Displaced`.
+    let displaced = {
+        let mut state = lock_state_slot_bounded(slots.state, grace)?;
+        let mut loaded_runtime = lock_or_recover(slots.loaded_runtime, LOADED_RUNTIME_LOCK);
+        let previous = loaded_runtime
+            .replace(Loaded {
+                key: desired_key,
+                ctx: Arc::new(ctx),
+            })
+            .map(|runtime| CachedWhisperRuntime {
+                runtime,
+                state: state.take(),
+            });
+        // A warm state left without a runtime belongs to no context.
+        let orphan_state = state.take();
 
-    let mut cached = lock_or_recover(slots.cached_runtime, CACHED_RUNTIME_LOCK);
-    *cached = previous.filter(|runtime| can_cache_pair(desired_key, runtime.runtime.key));
+        let mut cached = lock_or_recover(slots.cached_runtime, CACHED_RUNTIME_LOCK);
+        let (kept, rejected) = match previous {
+            Some(runtime) if can_cache_pair(desired_key, runtime.runtime.key) => {
+                (Some(runtime), None)
+            }
+            other => (None, other),
+        };
+        let replaced_secondary = std::mem::replace(&mut *cached, kept);
+        Displaced {
+            orphan_state,
+            rejected,
+            replaced_secondary,
+        }
+    };
+    displaced.release();
     Ok(())
+}
+
+/// Empty the secondary slot, releasing what it held after its lock is let go
+/// (see [`Displaced`]).
+fn discard_secondary<C, S>(slots: &RuntimeSlots<'_, C, S>) {
+    let discarded = lock_or_recover(slots.cached_runtime, CACHED_RUNTIME_LOCK).take();
+    drop(discarded);
 }
 
 /// Swap the active and secondary runtimes while preserving both warm
@@ -468,7 +519,7 @@ impl WhisperBackend {
         // its weights are being opened. Keep the active runtime available for
         // rollback, but discard the secondary before allocating the new
         // context so transient memory remains bounded to two model contexts.
-        lock_or_recover(&self.cached_runtime, CACHED_RUNTIME_LOCK).take();
+        discard_secondary(&self.runtime_slots());
 
         let ctx = WhisperContext::new_with_params(
             model_path.to_str().ok_or_else(|| {
@@ -754,3 +805,7 @@ mod tests;
 #[cfg(test)]
 #[path = "runtime_protocol_tests.rs"]
 mod protocol_tests;
+
+#[cfg(test)]
+#[path = "runtime_release_tests.rs"]
+mod release_tests;
