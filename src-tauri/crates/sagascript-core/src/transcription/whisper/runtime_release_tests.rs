@@ -107,8 +107,9 @@ impl Rig {
     }
 }
 
-/// What a bystander (a concurrent dictation, a lookup of the active model)
-/// sees while a swap is busy releasing a displaced payload.
+/// What a bystander (a transcription that takes only the state lock, a lookup
+/// of the active model) sees while a swap is busy releasing a displaced
+/// payload.
 #[derive(Debug, PartialEq)]
 struct Seen {
     state_lock_acquired: bool,
@@ -128,8 +129,10 @@ fn unobstructed(active: RuntimeKey) -> Seen {
     }
 }
 
-/// Take and release the state lock the way a dictation does, with its bounded
-/// wait: `false` is the `ModelBusy` a dictation would report.
+/// Take and release the state lock the way a transcription that takes only
+/// that lock does (the CLI's), with its bounded wait: `false` is the
+/// `ModelBusy` such a caller would report. A caller that also needs
+/// `load_lock` waits for it to be released as well.
 fn can_take_state(state: &Mutex<Option<Slow>>) -> bool {
     lock_state_slot_bounded(state, SHORT).is_ok()
 }
@@ -178,8 +181,8 @@ fn seen_during_release(
 
 /// A runtime that does not fit the cache budget next to the new one is
 /// dropped. With the old code that happened under all the swap's locks, so a
-/// dictation that arrived meanwhile waited up to the grace budget and then
-/// reported `ModelBusy`.
+/// caller that arrived meanwhile and needed the state lock waited up to the
+/// grace budget and then reported `ModelBusy`.
 #[test]
 fn a_runtime_outside_the_cache_budget_is_released_after_the_locks_are_let_go() {
     let rig = Rig::new();

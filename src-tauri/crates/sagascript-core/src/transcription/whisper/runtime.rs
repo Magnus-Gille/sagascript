@@ -193,9 +193,17 @@ impl<C, S> RuntimeSlots<'_, C, S> {
 /// Dropping a native context or state frees model weights and GPU buffers,
 /// which takes long enough to matter. A swap therefore hands these back
 /// instead of dropping them under its locks, and the caller drops them once
-/// every lock is released: a dictation that arrives during the teardown takes
-/// the state lock at once instead of waiting out its grace budget for
-/// `ModelBusy`, and a lookup of the active model is not held up either.
+/// the state, runtime and cache locks are released. Lookups of the active
+/// model (`loaded_model`, `needs_reload`, `resident_models`) and callers that
+/// take only the state lock (a transcription on the loaded model, as the CLI
+/// makes with `transcribe_text` and `detect_language`) are not held up by
+/// the teardown.
+///
+/// What this does not change: a load, and with it the publish, runs under
+/// `load_lock`, so everything that goes through that lock (the dictation
+/// transaction, `with_model` and `pinned`, `ensure_model*`, `load_model*`)
+/// still waits out the teardown and reports `ModelBusy` after the grace
+/// budget.
 #[must_use = "drop the displaced payloads only after the locks are released"]
 struct Displaced<C, S> {
     /// A warm state that belonged to no runtime.
