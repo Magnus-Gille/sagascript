@@ -1,7 +1,7 @@
 //! Token-scoped playback of an explicitly selected, source-verified recording.
 use std::sync::{Arc, Mutex};
 
-use sagascript_core::meeting_media::MeetingAudio;
+use sagascript_core::meeting::media::MeetingAudio;
 use serde::Serialize;
 use tauri::{http, Manager, State};
 use tauri_plugin_dialog::DialogExt;

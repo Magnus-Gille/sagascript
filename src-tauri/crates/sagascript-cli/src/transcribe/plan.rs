@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 #[cfg(feature = "diarization")]
-use sagascript_core::diarization_report::DecoderEvidence;
+use sagascript_core::diarization::report::DecoderEvidence;
 use sagascript_core::error::DictationError;
 use sagascript_core::run_context::RunContext;
 use sagascript_core::settings::{FileModel, Language, Settings, WhisperModel};

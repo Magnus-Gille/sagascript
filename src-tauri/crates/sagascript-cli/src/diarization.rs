@@ -17,15 +17,17 @@ use sha2::{Digest, Sha256};
 use crate::exit::CliError;
 use crate::output::{ignore_closed, outln, Out};
 
-use sagascript_core::diarization_evaluation::{
+use sagascript_core::diarization::eval::evaluation::{
     evaluate, EvaluationOptions, ScoringRegion, SpeakerTurn,
 };
-use sagascript_core::diarization_qualification::{qualify, reference_identity, QualificationError};
-use sagascript_core::diarization_reference::{ReferenceDocument, ReferenceStatus};
-use sagascript_core::diarization_report::{
+use sagascript_core::diarization::eval::qualification::{
+    qualify, reference_identity, QualificationError,
+};
+use sagascript_core::diarization::eval::reference::{ReferenceDocument, ReferenceStatus};
+use sagascript_core::diarization::eval::strata::{measure_strata, DiarizationStrataReport};
+use sagascript_core::diarization::report::{
     DecoderEvidence, DiarizationParameters, DiarizationReport,
 };
-use sagascript_core::diarization_strata::{measure_strata, DiarizationStrataReport};
 use sagascript_core::error::DictationError;
 use sagascript_core::meeting::MeetingTranscript;
 
@@ -159,9 +161,9 @@ struct HypothesisProvenance {
 struct QualificationReceipt {
     selected_split: String,
     minimum_coverage: f64,
-    reference_identity: sagascript_core::diarization_qualification::IdentityReport,
-    frozen_policy_identity: sagascript_core::diarization_qualification::IdentityReport,
-    frozen_split_identity: sagascript_core::diarization_qualification::IdentityReport,
+    reference_identity: sagascript_core::diarization::eval::qualification::IdentityReport,
+    frozen_policy_identity: sagascript_core::diarization::eval::qualification::IdentityReport,
+    frozen_split_identity: sagascript_core::diarization::eval::qualification::IdentityReport,
 }
 
 #[derive(Debug)]
@@ -179,7 +181,7 @@ struct ParsedReference {
     native: bool,
     duration_seconds: f64,
     qualified: bool,
-    qualification: Option<sagascript_core::diarization_qualification::QualificationReport>,
+    qualification: Option<sagascript_core::diarization::eval::qualification::QualificationReport>,
 }
 
 #[derive(Debug)]
@@ -216,7 +218,7 @@ struct EvaluationReceipt<'a> {
     maximum_confusion: f64,
     observed_der: Option<f64>,
     observed_confusion: Option<f64>,
-    metrics: sagascript_core::diarization_evaluation::EvaluationReport,
+    metrics: sagascript_core::diarization::eval::evaluation::EvaluationReport,
     /// Short-region and boundary visibility uses the original explicit UEM.
     strata_collar_seconds: f64,
     strata: DiarizationStrataReport,
@@ -434,7 +436,7 @@ fn invalid_qualification_report(
 }
 
 fn apply_expected_qualification_gates(
-    report: &mut sagascript_core::diarization_qualification::QualificationReport,
+    report: &mut sagascript_core::diarization::eval::qualification::QualificationReport,
     expected_policy_id: Option<&str>,
     expected_policy_version: Option<&str>,
     expected_split_sha256: Option<&str>,
@@ -443,7 +445,7 @@ fn apply_expected_qualification_gates(
     if let Some(expected) = expected_policy_id {
         if policy.id.as_deref() != Some(expected) {
             report.failures.push(
-                sagascript_core::diarization_qualification::QualificationFailure {
+                sagascript_core::diarization::eval::qualification::QualificationFailure {
                     code: "stale-policy".into(),
                     detail: "reference policy identity differs from the expected frozen policy"
                         .into(),
@@ -454,7 +456,7 @@ fn apply_expected_qualification_gates(
     if let Some(expected) = expected_policy_version {
         if policy.version.as_deref() != Some(expected) {
             report.failures.push(
-                sagascript_core::diarization_qualification::QualificationFailure {
+                sagascript_core::diarization::eval::qualification::QualificationFailure {
                     code: "stale-policy".into(),
                     detail: "reference policy version differs from the expected frozen policy"
                         .into(),
@@ -465,7 +467,7 @@ fn apply_expected_qualification_gates(
     if let Some(expected) = expected_split_sha256 {
         if report.frozen_split_identity.sha256.as_deref() != Some(expected) {
             report.failures.push(
-                sagascript_core::diarization_qualification::QualificationFailure {
+                sagascript_core::diarization::eval::qualification::QualificationFailure {
                     code: "stale-split".into(),
                     detail:
                         "split manifest identity differs from the expected canonical split SHA-256"
@@ -731,7 +733,7 @@ fn fraction(numerator: f64, denominator: f64) -> Option<f64> {
 }
 
 fn metric_fractions(
-    metrics: &sagascript_core::diarization_evaluation::EvaluationReport,
+    metrics: &sagascript_core::diarization::eval::evaluation::EvaluationReport,
 ) -> (Option<f64>, Option<f64>) {
     let reference_speaker_seconds =
         metrics.overlap.reference_speaker_seconds + metrics.non_overlap.reference_speaker_seconds;
@@ -744,7 +746,7 @@ fn metric_fractions(
 }
 
 fn metric_targets_met(
-    metrics: &sagascript_core::diarization_evaluation::EvaluationReport,
+    metrics: &sagascript_core::diarization::eval::evaluation::EvaluationReport,
     maximum_der: f64,
     maximum_confusion: f64,
 ) -> bool {

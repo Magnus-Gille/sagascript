@@ -352,7 +352,7 @@ pub fn transcribe_meeting_file_full(
     backend: &WhisperBackend,
     control: Option<&MeetingControl<'_>>,
     threshold: f32,
-    speaker_hint: Option<sagascript_core::speaker_hint::SpeakerCountHint>,
+    speaker_hint: Option<sagascript_core::diarization::speaker_hint::SpeakerCountHint>,
     cache_output: Option<&Path>,
 ) -> Result<MeetingTranscript, DictationError> {
     if !threshold.is_finite() {
@@ -416,7 +416,7 @@ fn transcribe_meeting_file_inner(
     backend: &WhisperBackend,
     control: Option<&MeetingControl<'_>>,
     threshold: f32,
-    speaker_hint: Option<sagascript_core::speaker_hint::SpeakerCountHint>,
+    speaker_hint: Option<sagascript_core::diarization::speaker_hint::SpeakerCountHint>,
     cache_output: Option<&Path>,
     cache_policy: CachePolicy,
 ) -> Result<MeetingTranscript, DictationError> {

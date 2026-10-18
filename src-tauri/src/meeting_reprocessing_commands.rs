@@ -1,8 +1,8 @@
 //! Explicit proposal workflow. No command implicitly replaces the active review.
-use sagascript_core::meeting_reprocess::MigrationPreview;
-use sagascript_core::meeting_reprocess_plan::{ReprocessingMode, ReprocessingPlan};
-use sagascript_core::meeting_reprocess_proposal::MeetingReprocessingProposal;
-use sagascript_core::meeting_review::{CorrectionOperation, MeetingReview};
+use sagascript_core::meeting::reprocess::plan::{ReprocessingMode, ReprocessingPlan};
+use sagascript_core::meeting::reprocess::proposal::MeetingReprocessingProposal;
+use sagascript_core::meeting::reprocess::MigrationPreview;
+use sagascript_core::meeting::review::{CorrectionOperation, MeetingReview};
 use serde::Serialize;
 use tauri::State;
 use tauri_plugin_dialog::DialogExt;

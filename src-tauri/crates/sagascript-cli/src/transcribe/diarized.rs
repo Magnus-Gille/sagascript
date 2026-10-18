@@ -12,13 +12,13 @@ use std::collections::HashSet;
 use std::time::Instant;
 
 use sagascript_core::diarization::merge::{consolidate, merge_with_diagnostics};
+use sagascript_core::diarization::report::DiarizationReport;
+use sagascript_core::diarization::speaker_hint::{SpeakerCountHint, SpeakerHintOutcome};
 use sagascript_core::diarization::{
     cluster_with_outcome, DiarizationAnalysis, DiarizationTimings, DiarizeConfig, DiarizedSegment,
     SpeakerSegment, TimestampedSegment,
 };
-use sagascript_core::diarization_report::DiarizationReport;
 use sagascript_core::error::DictationError;
-use sagascript_core::speaker_hint::{SpeakerCountHint, SpeakerHintOutcome};
 use sagascript_core::transcription::diagnostics::{analyze_coverage_profile, CoverageProfile};
 use sagascript_core::transcription::{
     model, normalize_nonspeech_markers, ContextProfile, DiarizationTranscriptionTimings,
@@ -329,7 +329,7 @@ impl DiarizedRun<'_> {
             .iter()
             .filter(|_| args.diarize_diagnostics)
             .map(
-                |segment| sagascript_core::diarization_report::AsrSegmentEvidence {
+                |segment| sagascript_core::diarization::report::AsrSegmentEvidence {
                     start: segment.start,
                     end: segment.end,
                     avg_logprob: segment.avg_logprob,

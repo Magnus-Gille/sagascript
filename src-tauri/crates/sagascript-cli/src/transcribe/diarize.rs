@@ -2,7 +2,7 @@
 //! the diarized path uses, the concurrent analysis and the performance report.
 
 #[cfg(feature = "diarization")]
-use sagascript_core::diarization_report::DecoderEvidence;
+use sagascript_core::diarization::report::DecoderEvidence;
 #[cfg(feature = "diarization")]
 use sagascript_core::error::DictationError;
 #[cfg(feature = "diarization")]

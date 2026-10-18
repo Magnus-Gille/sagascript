@@ -184,7 +184,7 @@ impl<'a> From<&'a TranscribeArgs> for RunRequest<'a> {
 #[cfg(feature = "diarization")]
 pub(super) fn speaker_hint_from_args(
     args: &TranscribeArgs,
-) -> Result<Option<sagascript_core::speaker_hint::SpeakerCountHint>, DictationError> {
+) -> Result<Option<sagascript_core::diarization::speaker_hint::SpeakerCountHint>, DictationError> {
     let hint = args
         .speaker_count
         .hint()
