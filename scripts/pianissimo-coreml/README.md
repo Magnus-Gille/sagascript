@@ -11,7 +11,11 @@ four-model layout loaded by FluidAudio Parakeet TDT v3:
 | `JointDecisionv3.mlpackage` | `encoder_step`, `decoder_step` → TDT decision outputs |
 
 The packages use fixed 16 kHz windows: 240,000 samples / 1,501 mel frames /
-188 encoder frames for 15 s, and 480,000 / 3,001 / 376 for 30 s. The encoder
+188 encoder frames for 15 s, 480,000 / 3,001 / 376 for 30 s, and 640,000 / 4,001 / 501
+for 40 s (`--window-s 15|30|40`). For 30/40 s windows `--rel-shift auto` (default) aligns
+the relative-position scores with an exact reshape/slice skew instead of a gather: the gather
+runs on the CPU in Core ML and makes the 30 s encoder about 4x slower end to end
+(`docs/benchmarks/pianissimo-coreml-2026-09.md`, section 7). The encoder
 weights use CoreML linear int8 per-channel quantization. The encoder computes
 in fp16 by default (`--encoder-precision fp16`) so it runs on the Apple Neural
 Engine, which executes fp16 only; `--encoder-precision fp32` keeps the older
@@ -120,7 +124,7 @@ $PY scripts/pianissimo-coreml/placement.py \
   $SCRATCH/out/pianissimo-sv-coreml-own-15s/Encoder.mlpackage --compute-units CPU_AND_NE
 ```
 
-30 s windows: the fp16 encoder is numerically sound (the earlier reported fp16
+30 s windows (before the skew rel-shift, see above): the fp16 encoder is numerically sound (the earlier reported fp16
 divergence came from the fp16 *preprocessor*, which produced non-finite mel on
 `CPU_AND_NE`; the preprocessor now computes in fp32). Core ML's plan reports
 about 96 % of the 30 s fp16 encoder ops on the ANE, but measured warm latency on

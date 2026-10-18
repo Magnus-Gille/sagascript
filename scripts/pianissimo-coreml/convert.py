@@ -33,6 +33,7 @@ from components import (  # noqa: E402
     JointDecisionV3,
     PreprocessorWrapper,
     patch_local_attention,
+    SUPPORTED_WINDOWS,
     trace_inputs,
 )
 
@@ -214,7 +215,7 @@ def build_manifest(out: Path, nemo_path: Path, nemo_sha: str, window_s: int, sam
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--window-s", type=int, choices=(15, 30), required=True)
+    parser.add_argument("--window-s", type=int, choices=SUPPORTED_WINDOWS, required=True)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument(
         "--encoder-precision",
@@ -222,6 +223,14 @@ def main() -> None:
         default="fp16",
         help="Core ML compute precision of the encoder. The Neural Engine executes fp16 only; "
         "fp32 ops fall back to CPU/GPU.",
+    )
+    parser.add_argument(
+        "--rel-shift",
+        choices=("auto", "gather", "skew"),
+        default="auto",
+        help="How the relative-position scores are aligned to the band: gather (r1) or an exact "
+        "reshape/slice skew that keeps the op on the Neural Engine. auto = skew for 256-512 encoder "
+        "frames (30/40 s windows), gather otherwise (15 s is bit-identical to r1).",
     )
     parser.add_argument("--nemo", type=Path, default=Path(os.environ.get("PIANISSIMO_NEMO", "")))
     args = parser.parse_args()
@@ -264,7 +273,7 @@ def main() -> None:
     )
     save(pre_ml, out / "Preprocessor.mlpackage")
 
-    patch_local_attention(model.encoder, enc_frames)
+    patch_local_attention(model.encoder, enc_frames, args.rel_shift)
     encoder = EncoderWrapper(model.encoder.eval())
     with torch.inference_mode():
         encoded, encoded_length = encoder(mel, mel_length)
