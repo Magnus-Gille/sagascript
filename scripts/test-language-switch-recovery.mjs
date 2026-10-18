@@ -26,6 +26,7 @@ const names = [
   "restampUnconfirmed",
   "saveSetting",
   "applySetting",
+  "languageProfileId",
   "onLanguageChange",
   "clearDictionaryAndSwitchLanguage",
   "glossaryHasUnsavedChanges",

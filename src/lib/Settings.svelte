@@ -148,7 +148,8 @@
   let windowTitleEl: HTMLHeadingElement | undefined = $state();
   // Non-blocking notices: a profile's model was reset to Auto by a language change.
   let profileModelNotices: string[] = $state([]);
-  let blockedLanguageChange: { language: Language; source: string } | null = $state(null);
+  /** A language change a personal dictionary blocks: the dictionary of `profileId`, previewed so that clearing it is a compare-and-swap. */
+  let blockedLanguageChange: { language: Language; source: string; profileId: string } | null = $state(null);
   let languageSaving = $state(false);
   let languageSelectEl: HTMLSelectElement | undefined = $state();
   let languageRecoveryTitle: HTMLHeadingElement | undefined = $state();
@@ -1450,6 +1451,17 @@
     return applySetting(mutate, undefined, true, false);
   }
 
+  /**
+   * The profile `set_language` changes, and so the one whose dictionary can block
+   * the change: the profile called "default", else the first one
+   * (`HotkeyProfile::default_index` in sagascript-core). The error carries only a
+   * code, and "default" can be removed. A settings shape without profiles has the
+   * implicit "default".
+   */
+  function languageProfileId(profiles: HotkeyProfile[]): string {
+    return profiles.find((profile) => profile.id === "default")?.id ?? profiles[0]?.id ?? "default";
+  }
+
   async function onLanguageChange(e: Event) {
     const select = e.currentTarget as HTMLSelectElement;
     const value = select.value as Language;
@@ -1476,8 +1488,9 @@
         // Show the actual blocking dictionary, not whichever editor scope is
         // selected. Freeze the preview for the existing compare-and-swap API.
         const current = await readSettings();
-        const source = current.profile_glossaries.default ?? "";
-        if (source.trim()) blockedLanguageChange = { language: value, source };
+        const profileId = languageProfileId(current.hotkey_profiles);
+        const source = current.profile_glossaries[profileId] ?? "";
+        if (source.trim()) blockedLanguageChange = { language: value, source, profileId };
         else settingsError = "The blocking dictionary was cleared elsewhere. Select the language again to retry.";
       }
     } catch (error) {
@@ -1506,25 +1519,26 @@
   async function clearDictionaryAndSwitchLanguage(): Promise<void> {
     if (!settings || !blockedLanguageChange || languageSaving || glossarySaving) return;
     const request = blockedLanguageChange;
-    const defaultDraft = glossaryScopeId === "default" && glossaryHasUnsavedChanges()
+    const { profileId } = request;
+    const scopeDraft = glossaryScopeId === profileId && glossaryHasUnsavedChanges()
       ? glossaryDraft : null;
     languageSaving = true;
     settingsError = "";
     let cleared = false;
     try {
-      await setProfileGlossary("default", "", request.source);
+      await setProfileGlossary(profileId, "", request.source);
       cleared = true;
       // Clear the confirmation immediately: a failed retry must not offer to
       // erase a dictionary that may have been populated again in the meantime.
       blockedLanguageChange = null;
-      if (defaultDraft !== null) rememberGlossaryRecovery("default", defaultDraft);
-      settings = { ...settings, profile_glossaries: { ...settings.profile_glossaries, default: "" } };
-      if (glossaryScopeId === "default") discardGlossaryChanges();
+      if (scopeDraft !== null) rememberGlossaryRecovery(profileId, scopeDraft);
+      settings = { ...settings, profile_glossaries: { ...settings.profile_glossaries, [profileId]: "" } };
+      if (glossaryScopeId === profileId) discardGlossaryChanges();
       const notices = await setLanguage(request.language);
       profileModelNotices = Array.isArray(notices) ? notices : [];
     } catch (error) {
       const message = toErrorMessage(error, "Unknown error");
-      if (cleared) rememberGlossaryRecovery("default", request.source);
+      if (cleared) rememberGlossaryRecovery(profileId, request.source);
       settingsError = cleared
         ? `The default dictionary was cleared, but the language change failed: ${message}`
         : `The dictionary could not be cleared; the language was not changed: ${message}`;
