@@ -18,7 +18,7 @@ verification commands, [docs/recipes/](recipes/README.md) for step-by-step chang
 | `src/lib/*.ts`, `src/lib/*.js` | DOM-free logic (reducers, queues, update recovery), tested by Vitest next to the module and by the remaining `scripts/test-*.mjs`. |
 | `src/lib/tauri-events.svelte.ts`, `models.svelte.ts`, `permissions.ts`, `platform.ts` | Shared by the windows. Tauri events are only listened to through `useTauriEvent`/`useDragDropEvent`/`subscribeTauriEvent` (they own the unlisten; ESLint forbids raw `listen()` in `src/`) and take their payload types from `EventMap` in `events.ts`; `models.svelte.ts` holds `PIANISSIMO_ID` and `downloadModelById`; `permissions.ts` the macOS Accessibility request and wait; `platform.ts` one `get_platform` lookup per window. |
 | `src-tauri/src/` | App crate `sagascript`: CLI dispatch, Tauri shell, tray, hotkeys, paste, overlay, updater, Tauri commands. |
-| `src-tauri/crates/sagascript-core/` | Library: audio decode/resample/capture, Whisper and Pianissimo transcription, engine-host client, model catalog (`models/`), settings store, model downloads, diarization, meeting documents, `fsutil` (publish a new file without ever replacing one, [ADR 0008](adr/0008-publishing-new-files.md)). |
+| `src-tauri/crates/sagascript-core/` | Library: audio decode/resample/capture, Whisper and Pianissimo transcription, engine-host client, model catalog (`models/`), settings store, model downloads, diarization (`diarization/`), meeting documents (`meeting/`), `fsutil` (publish a new file without ever replacing one, [ADR 0008](adr/0008-publishing-new-files.md)). |
 | `src-tauri/crates/sagascript-cli/` | Library + headless `sagascript` binary: every clap subcommand. Also holds meeting/diarization pipelines that the app imports. |
 | `src-tauri/crates/sagascript-engine-protocol/` | Wire types for the engine-host JSON Lines protocol ([spec](engine-host-protocol.md)); used by the core client, the ORT host and the fake host. |
 | `src-tauri/crates/sagascript-testsupport/` | Dev-only test helpers shared by core, CLI and app tests: `TempDir` (unique, removed on drop), `fake_settings` (a settings file alone in its own `TempDir`), `sha256_hex`, `isolated_cli_env` (spawned CLI without inherited credentials, with `SAGASCRIPT_SETTINGS_PATH`). Never linked into a shipped binary. |
@@ -26,7 +26,7 @@ verification commands, [docs/recipes/](recipes/README.md) for step-by-step chang
 | `src-tauri/engine-host/ort/` | Standalone Cargo workspace (own `Cargo.lock`): ONNX Runtime CPU host `sagascript-engine-host-ort`, shipped for Windows on ARM. |
 | `src-tauri/engine-host/test-vectors/` | Vectors shared by both hosts' unit tests: `protocol/` (the golden JSONL transcripts and the scripted `fake-engine.json` that define the wire contract, also decoded by `sagascript-engine-protocol`; [spec](engine-host-protocol.md#golden-transcripts)) and `context-biasing.json`. |
 | `src-tauri/tauri.conf.json`, `src-tauri/capabilities/` | App config (`frontendDist: ../dist`) and plugin permissions. |
-| Meeting modules | Core `meeting.rs`, `meeting_media.rs`, `meeting_review.rs`, `meeting_reprocess*.rs`; CLI `meeting.rs`, `meeting_proposal.rs`, `meeting_reprocessing*.rs` and `transcribe/meeting.rs`; app `meeting_jobs.rs`, `meeting_media*.rs`, `meeting_review_commands.rs`, `meeting_reprocessing_commands.rs`. Docs: `docs/meeting-*.md`. |
+| Meeting modules | Core `meeting/` (`mod.rs` the transcript document and its exports, `media.rs`, `review.rs`, `reprocess/{mod, matching, plan, proposal}.rs`); CLI `meeting.rs`, `meeting_proposal.rs`, `meeting_reprocessing*.rs` and `transcribe/meeting.rs`; app `meeting_jobs.rs`, `meeting_media*.rs`, `meeting_review_commands.rs`, `meeting_reprocessing_commands.rs`. Docs: `docs/meeting-*.md`. |
 | Run context (#346) | Which profile, language and dictionary a file, recording or reprocessing run uses: core `run_context.rs` (`RunSelection` = profile and language, `RunContext` = those plus the dictionary; pure, no I/O; also `file_beam_size`, the beam default of a file run) and CLI `run_request.rs` (`RunRequest`: `--profile`, `--language`, `--prompt`, `--prompt-file` as typed; parses the language, reads the prompt file). `transcribe`, `record`, `meeting reprocess` and the app's file transcription (`commands/files.rs` `file_transcription_context`, which has no language override) all use it. The model is not resolved there: each caller chooses its own from the resolved language, which also fixes its order of errors (`tests/run_context_cli.rs`). |
 | Transcribe command (#343) | CLI `transcribe/`: `mod.rs` runs a command (`run`, `run_inner`, the Whisper batch `run_whisper_batch`) and delegates one input to `transcribe_file`, which plans the file and runs the plain or the diarized pipeline. `plan.rs` decides before any work starts (`plan_run` → `RunPlan` with its `EnginePlan`; `plan_file` → `FilePlan` with `FileMode`; `FileRequest` is one input with everything it is told). `source.rs` is where the audio comes from: `decode_file` and, for a diarized run, `enum Source { Cached, Decoded }` with `acquire_source` (cache identity, lookup, decode; `Cached` exists only with the diarization feature). `inference.rs` is the Whisper backend as a run uses it: the `InferenceBackend` trait (load, language probe, plain and diarization transcription; `WhisperBackend` is the one implementation, a test brings its own), model loading and the language check that follows. `plain.rs` (decoder options, the backend call with its narration, `assemble_plain_result` in `output.rs`) and `diarized.rs` (analysis from the cache or computed, clustering, merge and report, result) are the two pipelines. Around them: `args.rs` (the command line), `inputs.rs` (directory expansion), `resolve.rs` (language and model IDs, which model a run gets, the one-run glossary), `vocab_correction.rs`, `language_detection.rs` (the language check; it asks for its detectors through `DetectorLoader`, naming an `EncoderPolicy`, and `InstalledDetectors::load` is the one place that touches the models directory, local files only today; a new policy is a deliberate change, but the types do not stop code in the loader from fetching, so review and `language_detection_never_downloads_an_encoder` have to) and `language_regions.rs`, `diarize.rs` (cache policy, decoder options, the concurrent analysis, the performance report), `meeting.rs` (entry points the app and reprocessing call), `pianissimo.rs`, `progress.rs` (`--progress-json`, `Progress`), `output.rs` (the per-file result, `BatchSink`, warnings). `transcribe/mod.rs` re-exports the paths other code imports. Tests: the sibling `transcribe_tests.rs`; `transcribe_file_tests.rs`, which drives a successful Whisper run in-process with a scripted `InferenceBackend`; and the whole command's observable contract (streams, exit status, error `code`, cache hits, cancellation, and a successful Pianissimo run against the fake engine host on macOS) in `tests/transcribe_contract.rs`. |
 | `scripts/` | Build/release/CI helpers (`*.sh`, `*.mjs`, `*.ps1`), Node tests `test-*.mjs`, Playwright suites `qa-*.mjs`, browser IPC mock `fixtures/transcription-browser-mock.js`, Python tooling `dictation_eval/` and `diarization_sv/`, Core ML conversion `pianissimo-coreml/`. |
@@ -111,12 +111,60 @@ closes a loop, through a compatibility shim.
 |---|---|---|
 | Leaves | `models/`, `glossary.rs` | `models/` is the model catalog: `WhisperModel` (21 models, ids via `id()` / `from_id()` / `FromStr`, `ALL`), its download URLs and SHA-256 in `sources.rs` (pinned revisions; `scripts/generate-third-party-notices.mjs` only asserts that six reviewed URL prefixes still appear in the model sources, `sources.rs` among them), `FileModel` (a Whisper model or Pianissimo) and `Language`. Imports neither `settings` nor `transcription` (tested) and returns no `whisper_rs` type: `transcription::whisper` (`whisper/words.rs`) maps a model to its DTW preset. `glossary.rs` (personal dictionary parser) imports nothing from the crate (tested). |
 | Settings | `settings/` | Reads the catalog. Imports nothing from `transcription` (tested): what is downloaded and whether Pianissimo can run arrive as arguments, as `LineupEnv` / `MachineProbe` into the store and as the `pianissimo_supported` and readiness arguments of the `*_gated` methods of `Settings`. |
-| Runtime | `transcription/` (Whisper, Pianissimo, engine host, model downloads), `audio/`, `download.rs`, `meeting*.rs`, `diarization*` | `transcription` reads `models` and, in `pianissimo_backend` alone, `settings` (the engine config). `transcription::model` and `pianissimo_model` answer whether a model is on disk; `pianissimo_backend::runtime_supported_on_this_os` answers whether Pianissimo runs. |
+| Runtime | `transcription/` (Whisper, Pianissimo, engine host, model downloads), `audio/`, `download.rs`, `meeting/`, `diarization/` | `transcription` reads `models` and, in `pianissimo_backend` alone, `settings` (the engine config). `transcription::model` and `pianissimo_model` answer whether a model is on disk; `pianissimo_backend::runtime_supported_on_this_os` answers whether Pianissimo runs. |
 | Machine | `machine.rs` | The only place that feeds the runtime's answers to settings: `ThisMachine` (a `MachineProbe`), `load` / `update` / `try_update`, and the `Settings` methods without a `_gated` suffix (`dictation_model_for_profile`, `effective_file_model_for`, `warm_model_plan`, ...), each its `_gated` sibling plus this machine's probe. |
 
 Old paths stay for one release (#372): `settings::{WhisperModel, FileModel, Language}`
-re-export `models`, `transcription::{glossary, Glossary, ...}` re-export `glossary`, and
-`settings::store::{load, update, try_update}` re-export `machine`.
+re-export `models`, `transcription::{glossary, Glossary, ...}` re-export `glossary`,
+`settings::store::{load, update, try_update}` re-export `machine`, and `lib.rs` re-exports the
+old top-level paths of the modules that moved into `meeting/` and `diarization/`
+(`meeting_media`, `meeting_review`, `meeting_reprocess`, `meeting_reprocess_plan`,
+`meeting_reprocess_proposal`, `speaker_hint`, `diarization_report` and
+`diarization_{evaluation, qualification, reference, strata}`). Each goes when the CLI and the
+app import the new path.
+
+**The subsystems.**
+
+- `meeting/`: `mod.rs` is the validated transcript document and its exports
+  (`MeetingTranscript`); `media.rs` the audio attached to a meeting; `review.rs` the replayable
+  corrections (`MeetingReview`); `reprocess/` the migration of a review onto a new
+  transcript (`mod.rs` the preview, `matching.rs` segment and speaker matching, `plan.rs` what
+  work a reprocessing needs, `proposal.rs` the saved proposal). All of it is pure and compiled
+  in every build.
+- `diarization/`: compiled in every build, except `engine/`. `mod.rs` holds the types
+  (`DiarizeConfig`, `DiarizationAnalysis`, the segment types), the constants and the
+  validation of a cached analysis; `speaker_hint.rs` the speaker-count hint, which the meeting
+  document records; `model.rs` the model registry; `merge.rs` the join of speakers and
+  transcript segments; `report/` the evidence types (`mod.rs`) and the projection of a cached
+  analysis onto them (`projection.rs`, `DiarizationAnalysis::report`); `eval/` the offline scoring
+  against a reference, which only the CLI's `diarization` commands use. `engine/` is what needs
+  an optional dependency of the `diarization` feature (ONNX Runtime and ndarray in
+  `segmentation.rs` and `embedding.rs`, rustfft in `fbank.rs`, kodama in `clustering.rs`) and
+  the pipeline functions `analyze`, `diarize` and `cluster` that run them; `diarization::
+  {analyze, cluster, clustering, embedding, ...}` re-export it when the feature is on.
+  `eval/` is not behind a feature of its own: the CLI's lean build uses it (a feature for it is
+  an open decision on #372).
+
+**The top level of `src/`.** A subsystem is a directory; the files beside `lib.rs` are the
+cross-cutting modules that belong to no one subsystem, and each has a row here.
+`crates/sagascript-core/tests/top_level_modules.rs` compares this table, the files of `src/`,
+the `mod` lines and the re-exports of `lib.rs`, so a new top-level file fails it until it gets a
+row here and a line in the test: a deliberate decision (#372, owner decision of 2026-10-17).
+`foo_tests.rs` files (test modules pulled in with `#[path]`, #363) do not count. A new subsystem
+gets a directory of its own.
+
+| Top-level module | Why it sits at the top level |
+|---|---|
+| `lib` | The crate root: the list of modules and, for one release, the old paths of moved modules. |
+| `error` | `DictationError`, the one error type with stable codes ([ADR 0006](adr/0006-typed-errors.md)) that every subsystem returns. |
+| `download` | The hash-verified streaming download behind every model downloader (Whisper, VAD, Pianissimo, diarization); `models/` imports only its `DownloadIntegrity`. |
+| `fsutil` | Publishing a new file without ever replacing one ([ADR 0008](adr/0008-publishing-new-files.md)), used by the downloads and by every export the CLI and the app write. |
+| `glossary` | The personal dictionary parser, a leaf that `settings`, `transcription` and the CLI read and that imports nothing from the crate (tested). |
+| `machine` | The one place that feeds this machine's answers to `settings` (the Machine layer above). |
+| `path_scrub` | Removes absolute paths from error text before it reaches a log or the UI ([ADR 0006](adr/0006-typed-errors.md)), for `error` and the engine-host client. |
+| `run_context` | Which profile, language and dictionary a file, recording or reprocessing run uses (#346), shared by the CLI commands and the app. |
+| `sync` | Poison-tolerant locking ([ADR 0005](adr/0005-mutex-poison-policy.md)), used by `audio`, `download`, `transcription`, the CLI and the app. |
+| `test_support` | Fixtures made of core types for the tests of the crates above core, compiled only under `cfg(test)` or the `test-support` feature (#363). |
 
 **The one edge that goes up, and the loop behind it.** The last re-export is a line in
 `settings/store.rs` that names `machine`, which imports transcription: textually the only
@@ -131,7 +179,8 @@ it is a behaviour change of its own and not part of this move; (3) delete the re
 and empty the expected list in the test.
 
 **Planned:** the rest of [#372](https://github.com/Magnus-Gille/sagascript/issues/372):
-`meeting/`, an always compiled `diarization/`, `pub(crate)` narrowing and a `testing` module.
+`pub(crate)` narrowing, a `testing` module for the test seams, and the CLI and the app moving to
+the new paths so the re-exports can go.
 
 ## 2. Data flows
 
@@ -404,7 +453,7 @@ settings watcher runs each event under `catch_unwind`; its health is
 | app | `updater-smoke-test` | off | `SIGNED_UPDATE_MANIFEST_URL` → `http://127.0.0.1:34827/latest.json`; enabled only by `.github/workflows/test-build.yml`. |
 | app, core, CLI | `dev-overrides` | off | Release builds honor `SAGASCRIPT_ENGINE_HOST` / `SAGASCRIPT_PIANISSIMO_MODEL_DIR` (`transcription/dev_overrides.rs`; debug builds always do). |
 | core | `record` | off | `audio::capture` / `AudioCaptureService` (cpal; ALSA on Linux). The app always enables it. |
-| core | `diarization` | off | `ort`, `rustfft`, `kodama`, `ndarray`; the `diarization` module; the `diarize_eval` example; DTW word timestamps in `transcription/whisper/words.rs`. |
+| core | `diarization` | off | `ort`, `rustfft`, `kodama`, `ndarray`; `diarization/engine/` (and the re-exports of its old paths from `diarization`); the `diarize_eval` example; DTW word timestamps in `transcription/whisper/words.rs`. |
 | CLI | `record` | on | The `record` subcommand. |
 | CLI | `diarization` | on | `--diarize`, `meeting_reprocessing*`, `speaker_args`, `diarization_cache`. |
 | ORT host | `dev-overrides` | off | Release builds honor `ORT_DYLIB_PATH`. |
