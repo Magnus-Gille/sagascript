@@ -10,7 +10,7 @@ use tracing::info;
 
 use super::{
     correct_in_memory, ensure_known_profile, lock_controller, try_persist_and_mirror,
-    try_persist_and_replace, SharedController,
+    SharedController,
 };
 use crate::command_error::CommandError;
 
@@ -100,6 +100,13 @@ fn ensure_learning_profile(settings: &Settings, profile_id: &str) -> Result<(), 
     Ok(())
 }
 
+/// The fields a dictionary save writes: the controller takes the written
+/// `profile_glossaries` and nothing else, so a saved dictionary reaches the
+/// controller without the shortcuts or the demotion the file differs in.
+fn mirror_profile_glossaries(memory: &mut Settings, written: &Settings) {
+    memory.profile_glossaries = written.profile_glossaries.clone();
+}
+
 fn set_profile_glossary_in(
     settings: &mut Settings,
     profile_id: &str,
@@ -142,19 +149,23 @@ pub async fn set_profile_glossary(
 ) -> Result<(), CommandError> {
     let source_len = source.chars().count();
     let mut conflict_source = None;
-    // The whole copy, as before: a saved dictionary is applied by the
-    // controller together with the settings it was validated against.
-    let saved = try_persist_and_replace(&controller, |settings| {
-        let current_source = expected_source
-            .as_ref()
-            .map(|_| profile_dictionary_source_snapshot(settings, &profile_id));
-        set_profile_glossary_in(settings, &profile_id, source, expected_source.as_deref())
-            .inspect_err(|error| {
-                if matches!(error, CommandError::DictionaryChangedElsewhere) {
-                    conflict_source = current_source;
-                }
-            })
-    });
+    // Only the dictionaries, like `apply_training_glossary`: the controller
+    // takes the written `profile_glossaries` and nothing else.
+    let saved = try_persist_and_mirror(
+        &controller,
+        |settings| {
+            let current_source = expected_source
+                .as_ref()
+                .map(|_| profile_dictionary_source_snapshot(settings, &profile_id));
+            set_profile_glossary_in(settings, &profile_id, source, expected_source.as_deref())
+                .inspect_err(|error| {
+                    if matches!(error, CommandError::DictionaryChangedElsewhere) {
+                        conflict_source = current_source;
+                    }
+                })
+        },
+        mirror_profile_glossaries,
+    );
     match saved {
         Ok(_) => {
             info!(source_len, "Profile personal dictionary updated");
@@ -293,14 +304,12 @@ pub async fn apply_training_glossary(
     }
 
     let accepted_count = accepted.len();
-    // Only the dictionaries, as before: the controller takes the written
-    // `profile_glossaries` and nothing else.
     try_persist_and_mirror(
         &controller,
         |settings| {
             apply_reviewed_training_candidates(settings, &heard, &corrected, &profile_id, &accepted)
         },
-        |memory, written| memory.profile_glossaries = written.profile_glossaries.clone(),
+        mirror_profile_glossaries,
     )?;
     info!(accepted_count, profile_id = %profile_id, "Applied reviewed training glossary suggestions");
     Ok(())

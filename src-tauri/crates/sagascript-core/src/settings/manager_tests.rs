@@ -1512,6 +1512,32 @@ fn unsupported_system_demotes_every_pianissimo_selection_to_recommended_whisper(
 }
 
 #[test]
+fn the_quiet_demotion_leaves_what_the_logging_one_leaves() {
+    let mut loud = Settings {
+        language: Language::Swedish,
+        pianissimo_dictation: true,
+        file_transcription_model: FileModelPreference::PianissimoOriginal,
+        hotkey_profiles: vec![profile("default", "Super+S", Language::Swedish)],
+        ..Default::default()
+    };
+    loud.materialize_profile_models();
+    let mut quiet = loud.clone();
+
+    assert!(!quiet.clone().demote_unsupported_pianissimo_quietly(true));
+    assert!(loud.demote_unsupported_pianissimo(false));
+    assert!(quiet.demote_unsupported_pianissimo_quietly(false));
+
+    assert_eq!(
+        serde_json::to_value(&quiet).unwrap(),
+        serde_json::to_value(&loud).unwrap()
+    );
+    assert!(
+        !quiet.demote_unsupported_pianissimo_quietly(false),
+        "idempotent"
+    );
+}
+
+#[test]
 fn selecting_pianissimo_is_refused_when_the_platform_gate_is_closed() {
     let mut settings = Settings {
         language: Language::Swedish,
