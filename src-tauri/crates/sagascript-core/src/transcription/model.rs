@@ -9,7 +9,7 @@ use crate::download::{
     DownloadIntegrity, ExistingArtifact, GGML_MAGIC,
 };
 use crate::error::DictationError;
-use crate::settings::WhisperModel;
+use crate::models::WhisperModel;
 
 /// Get the models directory for storing GGML files
 pub fn models_dir() -> PathBuf {

@@ -18,7 +18,7 @@ verification commands, [docs/recipes/](recipes/README.md) for step-by-step chang
 | `src/lib/*.ts`, `src/lib/*.js` | DOM-free logic (reducers, queues, update recovery), tested by Vitest next to the module and by the remaining `scripts/test-*.mjs`. |
 | `src/lib/tauri-events.svelte.ts`, `models.svelte.ts`, `permissions.ts`, `platform.ts` | Shared by the windows. Tauri events are only listened to through `useTauriEvent`/`useDragDropEvent`/`subscribeTauriEvent` (they own the unlisten; ESLint forbids raw `listen()` in `src/`) and take their payload types from `EventMap` in `events.ts`; `models.svelte.ts` holds `PIANISSIMO_ID` and `downloadModelById`; `permissions.ts` the macOS Accessibility request and wait; `platform.ts` one `get_platform` lookup per window. |
 | `src-tauri/src/` | App crate `sagascript`: CLI dispatch, Tauri shell, tray, hotkeys, paste, overlay, updater, Tauri commands. |
-| `src-tauri/crates/sagascript-core/` | Library: audio decode/resample/capture, Whisper and Pianissimo transcription, engine-host client, settings store, model downloads, diarization, meeting documents, `fsutil` (publish a new file without ever replacing one, [ADR 0008](adr/0008-publishing-new-files.md)). |
+| `src-tauri/crates/sagascript-core/` | Library: audio decode/resample/capture, Whisper and Pianissimo transcription, engine-host client, model catalog (`models/`), settings store, model downloads, diarization (`diarization/`), meeting documents (`meeting/`), `fsutil` (publish a new file without ever replacing one, [ADR 0008](adr/0008-publishing-new-files.md)). |
 | `src-tauri/crates/sagascript-cli/` | Library + headless `sagascript` binary: every clap subcommand. Also holds meeting/diarization pipelines that the app imports. |
 | `src-tauri/crates/sagascript-engine-protocol/` | Wire types for the engine-host JSON Lines protocol ([spec](engine-host-protocol.md)); used by the core client, the ORT host and the fake host. |
 | `src-tauri/crates/sagascript-testsupport/` | Dev-only test helpers shared by core, CLI and app tests: `TempDir` (unique, removed on drop), `fake_settings` (a settings file alone in its own `TempDir`), `sha256_hex`, `isolated_cli_env` (spawned CLI without inherited credentials, with `SAGASCRIPT_SETTINGS_PATH`). Never linked into a shipped binary. |
@@ -26,7 +26,10 @@ verification commands, [docs/recipes/](recipes/README.md) for step-by-step chang
 | `src-tauri/engine-host/ort/` | Standalone Cargo workspace (own `Cargo.lock`): ONNX Runtime CPU host `sagascript-engine-host-ort`, shipped for Windows on ARM. |
 | `src-tauri/engine-host/test-vectors/` | Vectors shared by both hosts' unit tests: `protocol/` (the golden JSONL transcripts and the scripted `fake-engine.json` that define the wire contract, also decoded by `sagascript-engine-protocol`; [spec](engine-host-protocol.md#golden-transcripts)) and `context-biasing.json`. |
 | `src-tauri/tauri.conf.json`, `src-tauri/capabilities/` | App config (`frontendDist: ../dist`) and plugin permissions. |
-| Meeting modules | Core `meeting.rs`, `meeting_media.rs`, `meeting_review.rs`, `meeting_reprocess*.rs`; CLI `meeting.rs`, `meeting_proposal.rs`, `meeting_reprocessing*.rs` and the meeting part of `transcribe.rs`; app `meeting_jobs.rs`, `meeting_media*.rs`, `meeting_review_commands.rs`, `meeting_reprocessing_commands.rs`. Docs: `docs/meeting-*.md`. |
+| Meeting modules | Core `meeting/` (`mod.rs` the transcript document and its exports, `media.rs`, `review.rs`, `reprocess/{mod, matching, plan, proposal}.rs`); CLI `meeting.rs`, `meeting_proposal.rs`, `meeting_reprocessing*.rs` and `transcribe/meeting.rs`; app `meeting_jobs.rs`, `meeting_media*.rs`, `meeting_review_commands.rs`, `meeting_reprocessing_commands.rs`. Docs: `docs/meeting-*.md`. |
+| Run context (#346) | Which profile, language and dictionary a file, recording or reprocessing run uses: core `run_context.rs` (`RunSelection` = profile and language, `RunContext` = those plus the dictionary; pure, no I/O; also `file_beam_size`, the beam default of a file run) and CLI `run_request.rs` (`RunRequest`: `--profile`, `--language`, `--prompt`, `--prompt-file` as typed; parses the language, reads the prompt file). `transcribe`, `record`, `meeting reprocess` and the app's file transcription (`commands/files.rs` `file_transcription_context`, which has no language override) all use it. The model is not resolved there: each caller chooses its own from the resolved language, which also fixes its order of errors (`tests/run_context_cli.rs`). |
+| Settings operations (#373) | One implementation per settings operation that both `sagascript config` and the app's setters perform. Core `settings/ops.rs` holds them as `Settings` methods (`apply_language_selection`, `set_whisper_model`, `set_auto_select_model`, `set_pianissimo_dictation`, `apply_profiles_change`, `set_auto_paste`, `set_vad_enabled`; the machine-aware siblings of the `_gated` ones are in `machine.rs`). The CLI applies them from a key table (`config/keys.rs`, section 2.2), the app from `commands/settings.rs`; side effects stay with the surface. The CLI/app parity table is `core::test_support::settings_ops_table`. |
+| Transcribe command (#343) | CLI `transcribe/`: `mod.rs` runs a command (`run`, `run_inner`, the Whisper batch `run_whisper_batch`) and delegates one input to `transcribe_file`, which plans the file and runs the plain or the diarized pipeline. `plan.rs` decides before any work starts (`plan_run` → `RunPlan` with its `EnginePlan`; `plan_file` → `FilePlan` with `FileMode`; `FileRequest` is one input with everything it is told). `source.rs` is where the audio comes from: `decode_file` and, for a diarized run, `enum Source { Cached, Decoded }` with `acquire_source` (cache identity, lookup, decode; `Cached` exists only with the diarization feature). `inference.rs` is the Whisper backend as a run uses it: the `InferenceBackend` trait (load, language probe, plain and diarization transcription; `WhisperBackend` is the one implementation, a test brings its own), model loading and the language check that follows. `plain.rs` (decoder options, the backend call with its narration, `assemble_plain_result` in `output.rs`) and `diarized.rs` (analysis from the cache or computed, clustering, merge and report, result) are the two pipelines. Around them: `args.rs` (the command line), `inputs.rs` (directory expansion), `resolve.rs` (language and model IDs, which model a run gets, the one-run glossary), `vocab_correction.rs`, `language_detection.rs` (the language check; it asks for its detectors through `DetectorLoader`, naming an `EncoderPolicy`, and `InstalledDetectors::load` is the one place that touches the models directory, local files only today; a new policy is a deliberate change, but the types do not stop code in the loader from fetching, so review and `language_detection_never_downloads_an_encoder` have to) and `language_regions.rs`, `diarize.rs` (cache policy, decoder options, the concurrent analysis, the performance report), `meeting.rs` (entry points the app and reprocessing call), `pianissimo.rs`, `progress.rs` (`--progress-json`, `Progress`), `output.rs` (the per-file result, `BatchSink`, warnings). `transcribe/mod.rs` re-exports the paths other code imports. Tests: the sibling `transcribe_tests.rs`; `transcribe_file_tests.rs`, which drives a successful Whisper run in-process with a scripted `InferenceBackend`; and the whole command's observable contract (streams, exit status, error `code`, cache hits, cancellation, and a successful Pianissimo run against the fake engine host on macOS) in `tests/transcribe_contract.rs`. |
 | `scripts/` | Build/release/CI helpers (`*.sh`, `*.mjs`, `*.ps1`), Node tests `test-*.mjs`, Playwright suites `qa-*.mjs`, browser IPC mock `fixtures/transcription-browser-mock.js`, Python tooling `dictation_eval/` and `diarization_sv/`, Core ML conversion `pianissimo-coreml/`. |
 | `tests/` | Code-health contract tests (`tests/scripts/`) and fixtures (`tests/fixtures/code-health/`). |
 | `contracts/` | The Rust–TypeScript transport contract: shared payload fixtures in `transport/` that Rust writes and Vitest parses ([README](../contracts/README.md), #347). |
@@ -38,16 +41,20 @@ App crate modules (`src-tauri/src/`):
 
 | Module | Role |
 |---|---|
-| `main.rs` | `main()`: CLI dispatch, Tauri builder and `.setup`, tray and update menu, signed updater, live dictation pipeline, settings watcher, window handling. |
-| `commands.rs` | Most `#[tauri::command]`s, `SharedController` / `SharedWhisper`, Dictate test recording, file transcription, permissions. |
+| `main.rs` | Wiring only (#369): `main()` (CLI dispatch, logging), `build_app` (plugins, `.setup`, window events, the `generate_handler!` command table), `dispatch_to_main` and `SAFE_FALLBACK_HOTKEY`. |
+| `launch/` | How the app starts and is started again: `GuiLaunchMode` and the second-instance checks (`mode.rs`), the `setup` hook in startup order (`startup.rs`), second-instance and run-event handlers (`lifecycle.rs`), the Settings window (`window.rs`), the legacy-settings migration and the permission-gated settings load (`settings.rs`). |
+| `tray/` | Tray icon and menu: `create_tray` and the build identity (`mod.rs`), profile entries (`menu.rs`), status line, `tray_label` and `update_tray_status` (`status.rs`), macOS position and identity (`position.rs`). |
+| `updater/` | The update flow: tray entries, menu state and the check (`mod.rs`), the macOS signed download and install (`signed.rs`), the manifest check (`updates.rs`), work/exclusivity accounting (`activity.rs`) and recovery drafts (`recovery.rs`). `main.rs` re-exports the last two as `crate::update_activity` and `crate::update_recovery`. |
+| `dictation/` | Live dictation: hotkey press and release (`trigger.rs`), engine warm-up and load-state events (`engine.rs`), and the recording-to-paste pipeline `stop_recording_and_transcribe` (`pipeline.rs`). |
+| `settings_watcher.rs` | Hot reload of settings and dictionaries edited outside the app. |
+| `commands/` | Most `#[tauri::command]`s, one file per domain (`settings`, `hotkey`, `state`, `transcribe`, `transcribe_file`, `files`, `models`, `dictionary`, `update_recovery`, `permissions`, `system`), re-exported by `mod.rs` so `generate_handler!` names `commands::name`. `mod.rs` also holds `SharedController` / `SharedWhisper` / `lock_controller`; `persist.rs` holds `persist_and_sync`, the only way a command writes settings (file and controller copy together); `main_thread.rs` waits for the main thread without blocking a worker. |
 | `app_controller.rs` | `AppController`: dictation state (`AppState`), audio capture, in-memory `Settings` copy, session logging. |
 | `events.rs` | Event catalogue: every event's name, payload type, producer and consumer (`events::event::*`); emit with `EmitEvent::emit_event`, since a raw `tauri::Emitter::emit` is a clippy error. |
-| `contract/` | Tests only: the shared fixture helper and the `CommandMap` generator (`command_map.rs`, parses `generate_handler!` and the command signatures with `syn`). |
+| `contract/` | Tests only: the shared fixture helper and the `CommandMap` generator (`command_map.rs`, parses `generate_handler!` and the command signatures with `syn`; a registered `commands::name` is looked up in `commands/mod.rs` and the files below it). |
 | `hotkey/` | Shortcut registration, `HotkeyHealth`, bare F-key monitor `macos_bare.rs`. |
 | `paste/` | `PasteService` (clipboard + simulated paste: enigo on macOS/Windows, `xdotool` on Linux). `paste/completion.rs` (completion wait) is mounted from `main.rs` via `#[path]` as `crate::paste_completion`. |
-| `platform/`, `overlay.rs`, `focus_diag.rs`, `logging/` | Per-OS helpers, recording indicator window, focus diagnostics, app log file. |
+| `platform/`, `overlay.rs`, `focus_diag.rs`, `logging/` | Per-OS helpers (`platform::mic_permission()`: the macOS microphone permission and its `unsafe` AVFoundation calls; `platform/macos.rs`), recording indicator window, focus diagnostics, app log file. |
 | `plain_file_jobs.rs`, `meeting_*.rs` | File-transcription and meeting job slots, cancel, deadlines. |
-| `updates.rs`, `update_activity.rs`, `update_recovery.rs` | Update checks, work/exclusivity accounting, recovery drafts. |
 
 **Dependency direction:** `sagascript-engine-protocol` ← `sagascript-core` ← `sagascript-cli`
 ← app. The app uses the CLI crate for CLI dispatch (`sagascript_cli::try_parse`,
@@ -74,7 +81,7 @@ through `output::Out` (`outln!`/`errln!`, `Out::json`/`jsonl`; the crate denies
 `println!`/`eprintln!`): a closed stdout pipe ends the run quietly with exit 0, and
 `exit::conclude` maps the result to the exit status and, for a `--json`/`--jsonl` run that
 failed before writing anything, writes one `{"status":"error","code","error"}` object on
-stdout. `transcribe`'s three output modes live in one `BatchSink`. The statuses are listed in
+stdout. `transcribe`'s three output modes live in one `BatchSink` (`transcribe/output.rs`). The statuses are listed in
 [add-cli-subcommand.md](recipes/add-cli-subcommand.md#4-exit-codes).
 
 **Build facts that bite:**
@@ -92,6 +99,89 @@ stdout. `transcribe`'s three output modes live in one `BatchSink`. The statuses 
 - Build identity comes from `src-tauri/build.rs` (`GIT_HASH`, `BUILD_DATE`, overridable with
   `SAGASCRIPT_GIT_HASH` / `SAGASCRIPT_BUILD_DATE`) and feeds the tray `BUILD_IDENTITY`, the
   `get_build_info` command and the engine-host handshake.
+
+### 1.1 Layers inside `sagascript-core`
+
+The layers below are *textual*: the imports of `models/`, `glossary.rs` and `settings/` point
+downward, with one exception (below), and `crates/sagascript-core/tests/module_layering.rs`
+checks that from the source text (every path the code names, `use` groups and renames
+expanded) for the rules marked "tested". The rest is convention. At run time one edge still
+closes a loop, through a compatibility shim.
+
+| Layer | Modules | Rule |
+|---|---|---|
+| Leaves | `models/`, `glossary.rs` | `models/` is the model catalog: `WhisperModel` (21 models, ids via `id()` / `from_id()` / `FromStr`, `ALL`), its download URLs and SHA-256 in `sources.rs` (pinned revisions; `scripts/generate-third-party-notices.mjs` only asserts that six reviewed URL prefixes still appear in the model sources, `sources.rs` among them), `FileModel` (a Whisper model or Pianissimo) and `Language`. Imports neither `settings` nor `transcription` (tested) and returns no `whisper_rs` type: `transcription::whisper` (`whisper/words.rs`) maps a model to its DTW preset. `glossary.rs` (personal dictionary parser) imports nothing from the crate (tested). |
+| Settings | `settings/` | Reads the catalog. Imports nothing from `transcription` (tested): what is downloaded and whether Pianissimo can run arrive as arguments, as `LineupEnv` / `MachineProbe` into the store and as the `pianissimo_supported` and readiness arguments of the `*_gated` methods of `Settings`. `ops.rs` is the settings operations of section 2.2; they take the Pianissimo gate and the Accessibility answer (`Accessibility`) the same way. |
+| Runtime | `transcription/` (Whisper, Pianissimo, engine host, model downloads), `audio/`, `download.rs`, `meeting/`, `diarization/` | `transcription` reads `models` and, in `pianissimo_backend` alone, `settings` (the engine config). `transcription::model` and `pianissimo_model` answer whether a model is on disk; `pianissimo_backend::runtime_supported_on_this_os` answers whether Pianissimo runs. |
+| Machine | `machine.rs` | The only place that feeds the runtime's answers to settings: `ThisMachine` (a `MachineProbe`), `load` / `update` / `try_update`, and the `Settings` methods without a `_gated` suffix (`dictation_model_for_profile`, `effective_file_model_for`, `warm_model_plan`, `apply_language_selection`, ...), each its `_gated` sibling plus this machine's probe. |
+
+Old paths stay for one release (#372): `settings::{WhisperModel, FileModel, Language}`
+re-export `models`, `transcription::{glossary, Glossary, ...}` re-export `glossary`,
+`settings::store::{load, update, try_update}` re-export `machine`, and `lib.rs` re-exports the
+old top-level paths of the modules that moved into `meeting/` and `diarization/`
+(`meeting_media`, `meeting_review`, `meeting_reprocess`, `meeting_reprocess_plan`,
+`meeting_reprocess_proposal`, `speaker_hint`, `diarization_report` and
+`diarization_{evaluation, qualification, reference, strata}`). Each goes when the CLI and the
+app import the new path.
+
+**The subsystems.**
+
+- `meeting/`: `mod.rs` is the validated transcript document and its exports
+  (`MeetingTranscript`); `media.rs` the audio attached to a meeting; `review.rs` the replayable
+  corrections (`MeetingReview`); `reprocess/` the migration of a review onto a new
+  transcript (`mod.rs` the preview, `matching.rs` segment and speaker matching, `plan.rs` what
+  work a reprocessing needs, `proposal.rs` the saved proposal). All of it is pure and compiled
+  in every build.
+- `diarization/`: compiled in every build, except `engine/`. `mod.rs` holds the types
+  (`DiarizeConfig`, `DiarizationAnalysis`, the segment types), the constants and the
+  validation of a cached analysis; `speaker_hint.rs` the speaker-count hint, which the meeting
+  document records; `model.rs` the model registry; `merge.rs` the join of speakers and
+  transcript segments; `report/` the evidence types (`mod.rs`) and the projection of a cached
+  analysis onto them (`projection.rs`, `DiarizationAnalysis::report`); `eval/` the offline scoring
+  against a reference, which only the CLI's `diarization` commands use. `engine/` is what needs
+  an optional dependency of the `diarization` feature (ONNX Runtime and ndarray in
+  `segmentation.rs` and `embedding.rs`, rustfft in `fbank.rs`, kodama in `clustering.rs`) and
+  the pipeline functions `analyze`, `diarize` and `cluster` that run them; `diarization::
+  {analyze, cluster, clustering, embedding, ...}` re-export it when the feature is on.
+  `eval/` is not behind a feature of its own: the CLI's lean build uses it (a feature for it is
+  an open decision on #372).
+
+**The top level of `src/`.** A subsystem is a directory; the files beside `lib.rs` are the
+cross-cutting modules that belong to no one subsystem, and each has a row here.
+`crates/sagascript-core/tests/top_level_modules.rs` compares this table, the files of `src/`,
+the `mod` lines and the re-exports of `lib.rs`, so a new top-level file fails it until it gets a
+row here and a line in the test: a deliberate decision (#372, owner decision of 2026-10-17).
+`foo_tests.rs` files (test modules pulled in with `#[path]`, #363) do not count. A new subsystem
+gets a directory of its own.
+
+| Top-level module | Why it sits at the top level |
+|---|---|
+| `lib` | The crate root: the list of modules and, for one release, the old paths of moved modules. |
+| `error` | `DictationError`, the one error type with stable codes ([ADR 0006](adr/0006-typed-errors.md)) that every subsystem returns. |
+| `download` | The hash-verified streaming download behind every model downloader (Whisper, VAD, Pianissimo, diarization); `models/` imports only its `DownloadIntegrity`. |
+| `fsutil` | Publishing a new file without ever replacing one ([ADR 0008](adr/0008-publishing-new-files.md)), used by the downloads and by every export the CLI and the app write. |
+| `glossary` | The personal dictionary parser, a leaf that `settings`, `transcription` and the CLI read and that imports nothing from the crate (tested). |
+| `machine` | The one place that feeds this machine's answers to `settings` (the Machine layer above). |
+| `path_scrub` | Removes absolute paths from error text before it reaches a log or the UI ([ADR 0006](adr/0006-typed-errors.md)), for `error` and the engine-host client. |
+| `run_context` | Which profile, language and dictionary a file, recording or reprocessing run uses (#346), shared by the CLI commands and the app. |
+| `sync` | Poison-tolerant locking ([ADR 0005](adr/0005-mutex-poison-policy.md)), used by `audio`, `download`, `transcription`, the CLI and the app. |
+| `test_support` | Fixtures made of core types for the tests of the crates above core, compiled only under `cfg(test)` or the `test-support` feature (#363). |
+
+**The one edge that goes up, and the loop behind it.** The last re-export is a line in
+`settings/store.rs` that names `machine`, which imports transcription: textually the only
+upward import in `settings/` (tested; the test lists the three paths it allows). At run time
+it closes a loop: `transcription::pianissimo_backend::engine_config` and `shared_client`
+call `settings::store::load()`, which is that shim, so transcription calls `machine::load()`,
+which calls transcription's probes. It is harmless today (the probes do not call back into
+settings) but it is not a layering. Removing it takes, in order: (1) the CLI and the app call
+`machine::{load, update, try_update}`; (2) `engine_config` and `shared_client` receive the
+`Settings` they read instead of loading them, which changes *when* the settings are read, so
+it is a behaviour change of its own and not part of this move; (3) delete the re-export line
+and empty the expected list in the test.
+
+**Planned:** the rest of [#372](https://github.com/Magnus-Gille/sagascript/issues/372):
+`pub(crate)` narrowing, a `testing` module for the test seams, and the CLI and the app moving to
+the new paths so the re-exports can go.
 
 ## 2. Data flows
 
@@ -129,11 +219,13 @@ sequenceDiagram
     Task->>Main: dispatch_to_main hides overlay, updates tray
 ```
 
-- Code: `handle_hotkey_event`, `handle_hotkey_release`, `stop_recording_and_transcribe` and
-  `restore_target_before_paste` in `src-tauri/src/main.rs`; capture in `AppController`
+- Code: `handle_hotkey_event` and `handle_hotkey_release` in `src-tauri/src/dictation/trigger.rs`,
+  `stop_recording_and_transcribe` and `restore_target_before_paste` in
+  `src-tauri/src/dictation/pipeline.rs`; capture in `AppController`
   (`app_controller.rs`) over `sagascript_core::audio::AudioCaptureService`; engine choice in
   `crates/sagascript-core/src/transcription/live_dictation.rs` (Whisper via
-  `whisper_backend.rs`, Pianissimo via `pianissimo_backend.rs` and the engine host, 2.4).
+  `transcription/whisper/` (still importable as `transcription::whisper_backend`), Pianissimo via
+  `pianissimo_backend.rs` and the engine host, 2.4).
 - Callback thread: `tauri-plugin-global-shortcut` calls `handle_hotkey_event` inline from
   `global-hotkey`. On macOS that is the main thread (Carbon handler; the `macos_bare` NSEvent
   monitors too); on Windows key-down arrives on the main thread and key-up on a spawned
@@ -163,10 +255,10 @@ sequenceDiagram
     participant CLI as sagascript config
     participant W as Settings watcher thread
     UI->>Cmd: api.ts wrapper invokes set_x
-    Cmd->>Store: store::update or store::try_update
+    Cmd->>Store: persist_and_sync (one writer at a time) calls store::try_update
     Store->>Disk: lock json.lock, load and migrate, mutate, atomic save_to
     Store-->>Cmd: persisted Settings
-    Cmd->>Ctrl: lock, settings_mut().x = persisted.x
+    Cmd->>Ctrl: lock, the same change (or the written fields) on the controller's copy, demoted for this host; only the hotkey change replaces the whole copy
     Cmd-->>UI: Ok, then applySetting calls get_settings
     CLI->>Store: config set uses store::try_update
     Store->>Disk: same lock and atomic write
@@ -181,10 +273,10 @@ sequenceDiagram
 | Layer | Where | Notes |
 |---|---|---|
 | Disk | `${XDG_CONFIG_HOME:-~/.config}/sagascript/sagascript-settings.json`, `glossary.txt`, `glossaries/*.txt` | See [configuration.md](configuration.md). `SAGASCRIPT_SETTINGS_PATH` selects an exact file and disables legacy migration (tests, isolated CLI runs). |
-| Model | `Settings` in `crates/sagascript-core/src/settings/manager.rs` | `#[serde(default)]` on the struct: missing keys take `Default` values. |
-| Store | `crates/sagascript-core/src/settings/store.rs` | `load`, `load_from`, `save`, `update`, `try_update`; cross-process `fs2` lock on `<file>.json.lock`; read-merge-write keeps unknown keys; atomic rename. |
-| AppController | `app_controller.rs` | In-memory copy: `settings()`, `settings_mut()`, `update_settings()`. Dictation reads it at use time. |
-| Watcher | `start_settings_watcher` in `main.rs` | `PollWatcher` on macOS, `RecommendedWatcher` elsewhere; filter `configuration_event_may_affect`; waits while a dictation records (`acquire_hotkey_configuration`). Fires for the app's own writes too (harmless reload). |
+| Model | `Settings` in `crates/sagascript-core/src/settings/manager.rs` | `#[serde(default)]` on the struct: missing keys take `Default` values. The model types it names (`WhisperModel`, `FileModel`, `Language`) live in `models/` (section 1.1). |
+| Store | `crates/sagascript-core/src/settings/store.rs` | `load_with`, `load_from`, `save`, `update_with`, `try_update_with` take the machine state as a `MachineProbe`; `machine::{load, update, try_update}` are them with this machine's probes (`store::{load, update, try_update}` re-export those for one release); cross-process `fs2` lock on `<file>.json.lock`; read-merge-write keeps unknown keys; atomic rename. |
+| AppController | `app_controller.rs` | In-memory copy: `settings()`, `update_settings()` (`settings_mut()` in tests only). Dictation reads it at use time. It can differ from the file on purpose: the watcher keeps the registered shortcuts after a failed reload, and a host that cannot run Pianissimo demotes a selection of it in this copy only. |
+| Watcher | `start_settings_watcher` in `settings_watcher.rs` | `PollWatcher` on macOS, `RecommendedWatcher` elsewhere; filter `configuration_event_may_affect`; waits while a dictation records (`acquire_hotkey_configuration`). Fires for the app's own writes too (harmless reload). |
 | Frontend | `getSettings()` / setters in `src/lib/api.ts`; `saveSetting()`, `applySetting()` and the `settings_reloaded` listener in `Settings.svelte` | Re-reads after a write. A rejected setter saved nothing; a saved change whose re-read fails is reported as saved, never repeated and never rolled back: the window shows a Reload settings notice, disables the controls that save a setting and sends no further change until a read succeeds. Reads are settled in the order they were issued, so a late answer, success or failure, cannot replace or hide a newer one ([#341](https://github.com/Magnus-Gille/sagascript/issues/341)). |
 
 Rules: write through `store::update`/`try_update` (never `save()` a possibly stale clone);
@@ -195,8 +287,43 @@ setter (for example `overlay::on_show_overlay_changed`, the VAD model download i
 with a warning, and a save over such a file first preserves its bytes as `.bak`. Migrations are
 the ordered steps in `settings/migrations.rs`, recorded as `schema_version` plus the legacy
 markers, and the copy from legacy locations ([ADR 0007](adr/0007-settings-file-evolution.md)).
-**Planned:** [#373](https://github.com/Magnus-Gille/sagascript/issues/373) (one implementation
-per CLI/app operation).
+
+**One implementation per operation ([#373](https://github.com/Magnus-Gille/sagascript/issues/373)
+part 1).** `sagascript config set` and the app's setters are two entry points to the same user
+intentions, so they call the same `Settings` operation (`settings/ops.rs`) and persist the same
+state. The CLI's keys are one `Key { name, help, get, set, reset, warning }` each in
+`crates/sagascript-cli/src/config/keys.rs`; `VALID_KEYS`, `config list`, the key lists and the value
+table of `config list|get|set --help` and the `[possible values]` of the key argument are generated
+from that table. A language is parsed by `Language::from_str` and a model by `WhisperModel::from_id`
+on every surface (`config set language english` and `transcribe --language english` take the same
+spellings; each surface keeps its own error text). Each decision where the two used to differ:
+
+| Operation | Decision |
+|---|---|
+| `language` (`config set\|reset language`, `set_language`) | One operation: the default profile takes the language (a model of its own that the language cannot use goes back to Auto, with a notice), and the legacy `whisper_model` becomes the recommended model of the language with `auto_select_model` on. The app always did this; the CLI now does too. Reason: releases before the profile models read those fields (ADR 0007, rule 3), nothing that reads settings now consults them while a profile has a model (`config get whisper_model` and `auto_select_model` read the profile), and the CLI had no reason of its own. `config reset language` is the same operation with the default language. |
+| `whisper_model`, `auto_select_model`, `pianissimo_dictation` (the default profile's model under its legacy names) | One operation each (`set_whisper_model`, `set_auto_select_model`, `set_pianissimo_dictation`); the legacy field moves with the profile model, as the CLI always did and the app did not. In the app this holds for the three IPC commands of those names only, and the GUI never calls them: its default-profile model pick goes through `set_profile_model`, which, like `config profiles update --model`, leaves the legacy fields as they were (part 2). Besides the rollback reason, the app's `set_auto_select_model(false)` pins the model `whisper_model` names, which the app's own `set_whisper_model` used to leave stale. A profile other than the default has no legacy field, so `set_profile_model` and `apply_profiles_change` do not touch them. |
+| `auto_paste` | One operation, `set_auto_paste(requested, Accessibility)`. **Kept difference:** with the permission missing the app stores `false` and refuses; the CLI stores the request and warns. The permission belongs to the installed app's bundle identity, so a CLI process would probe the wrong program (and Linux and Windows have no such permission); the app applies it when it loads the settings (`load_settings_with_permission_gate`). The parity table marks this as the one case where the surfaces differ (`Case::differs_in`). |
+| `vad_enabled` | One operation (`set_vad_enabled`), the stored value only. The app also fetches the Silero model when it turns the setting on (a side effect, so it stays there); the CLI fetches it on first use (`transcribe --vad`), and the settings watcher does not replay the download for CLI edits. |
+| `hotkey` | The default profile is the one called `default`, else the first (`HotkeyProfile::default_index`), as the app's `set_hotkey` and `config reset hotkey` always chose it. `config set hotkey` used to write `hotkey` alone when no profile was called `default`, which no binding reads. Registering the shortcut with the OS stays in the app. |
+| profile list and profile model (`config profiles create\|update\|remove`, `set_hotkey_profiles`, `set_profile_model`) | One operation, `apply_profiles_change(profiles, model)`. The CLI applies the list and a model given in the same command in one step and refuses all of it if the model does not fit; the app sends the list and the model as two commands. The parity table therefore holds only edits whose model fits. |
+| `file_transcription_model`, `show_overlay`, `beam_size`, `temperature_fallback`, `engine_prewarm`, `engine_idle_unload_minutes`, `hotkey_mode` | A field (or `replace_hotkey_mode`) on both sides; no operation of their own. The parity table pins that neither surface adds anything. |
+| `initial_prompt` | **Kept difference, part 2:** `config set initial_prompt` merges entries into the default profile's dictionary and never erases an alias; the app's `set_initial_prompt` replaces a profile's dictionary. Documented in `config set --help`; `glossary_ops` is the planned fix. |
+
+Side effects stay in each surface and arrive as arguments (`Accessibility`, `pianissimo_supported`):
+registering shortcuts with the OS, the VAD download, the Accessibility probe, the profiles menu and
+the overlay. How the app's controller follows the file (`persist_and_sync`, `try_persist_and_mirror`
+or, for the hotkey change only, `try_persist_and_replace`, above) is each setter's own; none but the
+hotkey change adopts shortcuts the OS never registered, and every write demotes an unsupported
+Pianissimo selection in the controller's copy as `store::load` does ([#458](https://github.com/Magnus-Gille/sagascript/issues/458)).
+
+The parity table (`core::test_support::settings_ops_table`) is the check: each row is an operation
+from a starting `Settings`, and `expected` computes with core alone what a surface must have
+persisted (and nothing at all for an operation core refuses). The CLI runs every row through the real
+`sagascript config` (`crates/sagascript-cli/tests/settings_parity.rs`), the app through its real
+setters on Tauri's mock runtime in a child process on a fake settings file
+(`commands/persist_parity_tests.rs`); both compare against the table, so they are equal through core
+and the app needs nothing from the CLI crate. A new operation that both surfaces perform gets a
+`Settings` method, a row, and a call from each surface (docs/recipes/add-setting.md).
 
 ### 2.3 Updater phases
 
@@ -229,18 +356,17 @@ sequenceDiagram
     end
 ```
 
-- Code: `check_for_updates_with_intent`, `install_signed_update`, `prepare_update_recovery`
-  in `main.rs`; `updates.rs`; `UpdateActivity` / `UpdatePreparation` in `update_activity.rs`;
-  `update_recovery.rs`. Checks are never implicit (test
-  `normal_gui_launches_never_check_for_updates_implicitly`). `sagascript update` (macOS)
-  opens the app with `GUI_UPDATE_ARG` (`--install-update`), handled by
-  `second_instance_requests_update` / `should_install_update_at_launch`.
+- Code: `check_for_updates_with_intent` in `updater/mod.rs`; `install_signed_update` and
+  `prepare_update_recovery` in `updater/signed.rs`; `updater/updates.rs`; `UpdateActivity` /
+  `UpdatePreparation` in `updater/activity.rs`; `updater/recovery.rs`. Checks are never implicit
+  (test `normal_gui_launches_never_check_for_updates_implicitly` in `launch/mode_tests.rs`).
+  `sagascript update` (macOS) opens the app with `GUI_UPDATE_ARG` (`--install-update`), handled by
+  `second_instance_requests_update` / `should_install_update_at_launch` in `launch/mode.rs`.
 - A failure in any phase resets the menu to "Try Again…"; failures during preparation or
   install also emit `update-aborted` to Settings. The `updater-smoke-test` feature points the
   manifest at a loopback URL (section 4).
 - **Planned:** [#376](https://github.com/Magnus-Gille/sagascript/issues/376) puts the
-  orchestration behind traits; [#369](https://github.com/Magnus-Gille/sagascript/issues/369)
-  moves it out of `main.rs`.
+  orchestration behind traits.
 
 ### 2.4 Engine-host process lifecycle
 
@@ -306,14 +432,14 @@ sequenceDiagram
 
 | Lock | Where | Notes |
 |---|---|---|
-| `SharedController = Mutex<AppController>` | `commands.rs`, managed in `main()` | Taken from commands, the hotkey handler, the watcher, the updater and meeting jobs, always via `lock_controller`. Audio start/stop and log writes happen under it. Never hold it across `.await` or inference; `SharedWhisper` lives outside it for that reason. |
+| `SharedController = Mutex<AppController>` | `commands/mod.rs`, managed in `launch/startup.rs` (`manage_app_state`) | Taken from commands, the hotkey handler, the watcher, the updater and meeting jobs, always via `lock_controller`. Audio start/stop and log writes happen under it. Never hold it across `.await` or inference; `SharedWhisper` lives outside it for that reason. |
 | `<settings>.json.lock` | `with_settings_lock` in `settings/store.rs` | Exclusive file lock shared by app and CLI processes, held for read-merge-write only. |
 | `HotkeyHealth { state, transition }` | `hotkey/health.rs` | `transition` serializes OS (un)registration between commands and the watcher; kept out of the controller on purpose (see its doc comment). |
-| `UpdateActivity`, `UpdatePreparation` | `update_activity.rs` | Work leases and the exclusive update permit. |
-| Tray state (`SharedUpdateMenuState`, `SharedStatusItem`, `SharedProfileMenuState`) | `main.rs` | Short critical sections. |
+| `UpdateActivity`, `UpdatePreparation` | `updater/activity.rs` | Work leases and the exclusive update permit. |
+| Tray state (`SharedUpdateMenuState`, `SharedStatusItem`, `SharedProfileMenuState`) | `updater/mod.rs`, `tray/mod.rs` | Short critical sections. |
 | Job slots (`MeetingJobs`, `SharedMeetingAudio`, `PlainFileJobs` fields) | `meeting_jobs.rs`, `meeting_media.rs`, `plain_file_jobs.rs` | One active job each. |
 | `LoggingService` (`log_file`, `dictation_session_id`) | `logging/service.rs` | Taken inside controller methods. |
-| `WhisperBackend` (`load_lock`, `state`, `context`, `loaded_runtime`, `cached_runtime`) | `transcription/whisper_backend.rs` | `load_lock` and `state` are taken with a bounded wait (`lock_load_bounded`, `lock_state_bounded`, `WARM_STATE_GRACE`), returning `ModelBusy` instead of blocking. |
+| `WhisperBackend` (`load_lock`, `state`, `context`, `loaded_runtime`, `cached_runtime`) | `transcription/whisper/` (struct and poison policy in `mod.rs`, locks and abort protocol in `runtime.rs`) | `load_lock` and `state` are taken with a bounded wait (`lock_load_bounded`, `lock_state_slot_bounded`, `WARM_STATE_GRACE`), returning `ModelBusy` instead of blocking. The runtime swaps take `state`, `context`, `loaded_runtime`, then `cached_runtime` (`publish_runtime`, `activate_cached_slots`); `with_state_slot` takes `state`, then `context`. |
 | Engine host (`lifecycle`, `state`, `boost`; process `routing`, `stdin`, `child`) | `engine_host/client.rs`, `process.rs` | `lifecycle` serializes start/load/unload/shutdown; it is released while a restart backoff is slept. `stdin` only guards the writer thread's queue, never a write. |
 | Pianissimo `shared_slot` and load-state statics | `pianissimo_backend.rs` | Process-global client. |
 | Others | `AudioCaptureService` buffers (`audio/capture.rs`), `GLOBAL_DICTATION` (`logging/service.rs`), the download `verification_cache` and `download.http_clients` client cache (`download.rs`), `LiveDictationBackend.active_job`, `PianissimoBackend.active`, `HostProcess` `stderr_tail`/`reader`, the CLI `Canceller` (`cancel.rs`) | Leaf locks. The capture buffers are taken under `SharedController` by start/stop and without it by the capture worker and cpal callback. |
@@ -363,7 +489,7 @@ settings watcher runs each event under `catch_unwind`; its health is
 | app | `updater-smoke-test` | off | `SIGNED_UPDATE_MANIFEST_URL` → `http://127.0.0.1:34827/latest.json`; enabled only by `.github/workflows/test-build.yml`. |
 | app, core, CLI | `dev-overrides` | off | Release builds honor `SAGASCRIPT_ENGINE_HOST` / `SAGASCRIPT_PIANISSIMO_MODEL_DIR` (`transcription/dev_overrides.rs`; debug builds always do). |
 | core | `record` | off | `audio::capture` / `AudioCaptureService` (cpal; ALSA on Linux). The app always enables it. |
-| core | `diarization` | off | `ort`, `rustfft`, `kodama`, `ndarray`; the `diarization` module; the `diarize_eval` example; DTW word timestamps in `whisper_backend.rs`. |
+| core | `diarization` | off | `ort`, `rustfft`, `kodama`, `ndarray`; `diarization/engine/` (and the re-exports of its old paths from `diarization`); the `diarize_eval` example; DTW word timestamps in `transcription/whisper/words.rs`. |
 | CLI | `record` | on | The `record` subcommand. |
 | CLI | `diarization` | on | `--diarize`, `meeting_reprocessing*`, `speaker_args`, `diarization_cache`. |
 | ORT host | `dev-overrides` | off | Release builds honor `ORT_DYLIB_PATH`. |
@@ -381,11 +507,12 @@ Shared fixtures: `sagascript_testsupport` (`TempDir`, `fake_settings`, `sha256_h
 
 | Layer | Location | Local command | CI |
 |---|---|---|---|
-| Rust unit, app | sibling `foo_tests.rs` files, declared last in `foo.rs` as `#[cfg(test)] #[path = "foo_tests.rs"] mod tests;` (`commands_tests.rs`, `main_tests.rs`, `meeting_jobs_tests.rs`, `paste/windows_clipboard_tests.rs`); inline `#[cfg(test)]` modules in smaller files | `cargo test` (app only), `cargo test --workspace` (everything) | every OS lane (`cargo test --workspace`) |
-| Rust unit, core/CLI/protocol | inline, or sibling `foo_tests.rs` as in the app: core `download_tests.rs`, `settings/manager_tests.rs`, `settings/store_tests.rs`, `transcription/whisper_backend_tests.rs`; CLI `transcribe_tests.rs`, `meeting_reprocessing_tests.rs`; `sagascript-engine-protocol/src/tests.rs` | `cargo test -p <crate>`; release-only guard: `cargo test --release -p sagascript-core --lib dev_overrides` | `cargo test --workspace` and the per-crate feature-subset gates on every OS; the release guard in test-linux |
+| Rust unit, app | sibling `foo_tests.rs` files, declared last in `foo.rs` as `#[cfg(test)] #[path = "foo_tests.rs"] mod tests;` (`commands/settings_tests.rs` and the other `commands/*_tests.rs`, `launch/mode_tests.rs`, `tray/status_tests.rs`, `meeting_jobs_tests.rs`, `paste/windows_clipboard_tests.rs`); inline `#[cfg(test)]` modules in smaller files | `cargo test` (app only), `cargo test --workspace` (everything) | every OS lane (`cargo test --workspace`) |
+| Rust unit, core/CLI/protocol | inline, or sibling `foo_tests.rs` as in the app: core `download_tests.rs`, `settings/manager_tests.rs`, `settings/store_tests.rs`, `transcription/whisper/*_tests.rs` (one per module, declared with `#[path]`); CLI `transcribe_tests.rs`, `transcribe_file_tests.rs`, `meeting_reprocessing_tests.rs`; `sagascript-engine-protocol/src/tests.rs` | `cargo test -p <crate>`; release-only guard: `cargo test --release -p sagascript-core --lib dev_overrides` | `cargo test --workspace` and the per-crate feature-subset gates on every OS; the release guard in test-linux |
 | Rust integration | `sagascript-core/tests/*.rs` (engine host against the fake host, chunk-merge golden, Pianissimo adapter); `sagascript-cli/tests/*.rs` (spawn `CARGO_BIN_EXE_sagascript`) | `cargo test -p sagascript-core`, `-p sagascript-cli` | macOS, Linux, Windows |
 | ORT host | `src-tauri/engine-host/ort/src/**` | `cargo test` and `cargo clippy --all-targets -- -D warnings` in `engine-host/ort/` | test-linux (fmt, test, clippy); test-windows (test, clippy) |
 | Engine-host protocol | golden transcripts `src-tauri/engine-host/test-vectors/protocol/*.jsonl` with the scripted `fake-engine.json` ([contract](engine-host-protocol.md#golden-transcripts)); replayed by `sagascript-engine-protocol/src/vector_tests.rs`, `engine-host/ort/src/server/golden_tests.rs` and `ProtocolServerTests.swift` | `cargo test -p sagascript-engine-protocol`; `cargo test --locked` in `engine-host/ort/`; `swift test` | `cargo test --workspace` in every OS lane (protocol crate); test-linux, test-windows (ORT host); test-macos (Swift) |
+| CLI/app parity (#373) | `core::test_support::settings_ops_table` (the rows and what each must persist) with its own consistency tests; the CLI side `sagascript-cli/tests/settings_parity.rs` (the real `sagascript config` on a fake settings file per row), the app side `commands/persist_parity_tests.rs` (the real setters, child process, fake settings file) | `cargo test -p sagascript-cli --test settings_parity`; `cargo test -p sagascript parity` | every OS lane (`cargo test --workspace`) |
 | MSRV | whole workspace, lean CLI, ORT host | `RUSTUP_TOOLCHAIN=1.88 cargo check --workspace --locked` (see CONTRIBUTING.md) | msrv-linux |
 | Swift | `src-tauri/engine-host/coreml/Tests/EngineHostCoreTests/` | `scripts/build-engine-host.sh`, then `swift test` (`npm run verify -- --only swift`) | test-macos |
 | Frontend unit and component (Vitest) | `src/**/*.test.ts` next to the module or component, in happy-dom; typed IPC mock, setup and component backends in `src/test/` ([docs/testing/frontend.md](testing/frontend.md)) | `npm run test:unit` (`test:unit:coverage` for a report) | test-macos, test-windows; release-quality-gate, windows-package |
@@ -394,7 +521,7 @@ Shared fixtures: `sagascript_testsupport` (`TempDir`, `fake_settings`, `sha256_h
 | Browser | `scripts/qa-*.mjs` with the mocked IPC in `scripts/fixtures/transcription-browser-mock.js` | `npx playwright install chromium && npm run test:browser` | test-macos |
 | Python | `scripts/dictation_eval/test_*.py`, `scripts/diarization_sv/test_*.py` | `python -m unittest discover -s scripts/dictation_eval -p 'test_*.py'` | all OS (dictation_eval); Linux and macOS (diarization_sv) |
 | Types | Svelte/TS, including the Vitest files | `npx svelte-check --tsconfig ./tsconfig.json` | test-macos |
-| Transport contract | Rust: `transport_contract*` tests in `events_tests.rs`, `commands_tests.rs`, `meeting_jobs_tests.rs` and `contract/` write or compare `contracts/transport/*.json` and `src/lib/ipc-contract.generated.ts`; TS: `src/test/transport.test.ts`, `src/lib/api.test.ts` ([contracts/README.md](../contracts/README.md)) | `cargo test contract` in `src-tauri/` (`SAGASCRIPT_BLESS_CONTRACTS=1` regenerates), `npm run test:unit`, svelte-check | with the app tests and the frontend suites |
+| Transport contract | Rust: `transport_contract*` tests in `events_tests.rs`, `commands/settings_tests.rs`, `meeting_jobs_tests.rs` and `contract/` write or compare `contracts/transport/*.json` and `src/lib/ipc-contract.generated.ts`; TS: `src/test/transport.test.ts`, `src/lib/api.test.ts` ([contracts/README.md](../contracts/README.md)) | `cargo test contract` in `src-tauri/` (`SAGASCRIPT_BLESS_CONTRACTS=1` regenerates), `npm run test:unit`, svelte-check | with the app tests and the frontend suites |
 | Formatting | Prettier over `src/`, `scripts/`, `tests/` (not `.svelte` yet; `.prettierignore`) | `npm run format:check` (`npm run format` fixes) | test-macos, test-windows |
 | Lint | ESLint over `src/` (TypeScript, Svelte), `scripts/`, `tests/` (`eslint.config.js`, baseline in `eslint-suppressions.json`) | `npm run lint` | test-macos |
 | CLI smoke | release binary in `ci.yml` build jobs, `scripts/ci/smoke-cli.mjs` (one script for every OS; `basic` tier without a model: help, `config`, `list-models`, `formats`, completions of every shell; `model` tier: download + transcribe, `--json`, `--jsonl`, a closed pipe and the error object through `scripts/verify-json-cli-streams.py`) | `node scripts/ci/smoke-cli.mjs basic --binary <path>` | build-macos, build-windows (Windows tolerates the `model` tier, #357) |
@@ -451,11 +578,32 @@ replaces the remaining source-text tests in the `ui` group with component tests.
   (`cancel.rs`). Follow-ups of [#364](https://github.com/Magnus-Gille/sagascript/issues/364).
 - Whisper and Pianissimo are selected by hand (`LiveDictationBackend::new(whisper, pianissimo)`);
   there is no engine trait. **Planned:** [#378](https://github.com/Magnus-Gille/sagascript/issues/378).
-- `main.rs` and `commands.rs` will be split by domain
-  ([#369](https://github.com/Magnus-Gille/sagascript/issues/369),
-  [#370](https://github.com/Magnus-Gille/sagascript/issues/370)); update this map when files move.
-- Most `async` Tauri commands in `commands.rs` have no `.await` and call synchronous helpers
-  that write the settings file (`store::update`, under the settings file lock) on a Tokio
-  worker. Model downloads and Pianissimo installs already do their file work on the blocking
-  pool ([#368](https://github.com/Magnus-Gille/sagascript/issues/368)). **Planned:** the setters
-  become plain `fn`s or `spawn_blocking` writes together with `persist_and_sync` in #370.
+- `main.rs` was split in [#369](https://github.com/Magnus-Gille/sagascript/issues/369) and
+  `commands.rs` in [#370](https://github.com/Magnus-Gille/sagascript/issues/370); update this map
+  when files move.
+- Left for part 2 of [#373](https://github.com/Magnus-Gille/sagascript/issues/373) (part 1 is
+  section 2.2): the GUI's model pick keeps the legacy fields in step (`set_profile_model` leaves
+  `whisper_model`, `auto_select_model` and `pianissimo_dictation` as they were; today only the three
+  commands the GUI never calls, `config set` and a language change move them); the legacy triple
+  consistent in itself (`pianissimo_dictation` false when `config set whisper_model` or a change to
+  Auto chooses a Whisper model, and true only while Pianissimo is chosen: a downgrade case of ADR 0007,
+  rule 3); the `whisper_model` list of `config set --help` generated from `WhisperModel::ALL` (it lists
+  11 of the 21 models; generating it changes help text, so it is a decision of its own); `config reset`
+  and starts with a pending migration as rows of the parity table; `models::catalog(language)` so that `list-models --json` and the app's model picker
+  list the same models (the CLI sizes with `installed_size_bytes`, the app with
+  `download_size_bytes`); one `sha256_hex` (four helpers remain); `glossary_ops`, one validation of
+  a profile's dictionary (two sets remain, and `config set initial_prompt` merges where
+  `set_initial_prompt` replaces); the exact search `find(|c| c.id == "default")` of the issue no
+  longer occurs, and the choice of the default profile is `HotkeyProfile::default_index` for the
+  operations above, while `Settings::set_legacy_language` and `warm_model_plan_gated` still spell
+  it out; the app's
+  `commands/models.rs` still turns a model into its id through serde; the summary in `config
+  --help` (`lib.rs`) lists 6 of the 15 keys.
+- Most `async` Tauri commands in `commands/` have no `.await` and call synchronous helpers
+  that write the settings file (`persist_and_sync` → `store::update`, under the settings file
+  lock) on a Tokio worker. Model downloads and Pianissimo installs already do their file work
+  on the blocking pool ([#368](https://github.com/Magnus-Gille/sagascript/issues/368)). **Not
+  done in #370:** the setters stay `async fn`s that write on the worker. They cannot become
+  plain `fn`s (a sync command runs on the main thread, ADR 0003), and `spawn_blocking` needs an
+  owned handle on the controller, which Tauri manages by reference, so moving the write off the
+  worker is a separate change.

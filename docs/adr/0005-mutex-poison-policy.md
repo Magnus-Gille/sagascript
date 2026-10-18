@@ -13,11 +13,11 @@ Accepted (issue #359).
   guard is held poisons the mutex, and every later command and hotkey press then panicked
   until the app was restarted.
 - `Drop` impls panicked on a poisoned lock: `HotkeyConfigurationLease` (`commands.rs`),
-  `WorkLease` and `ExclusiveLease` (`update_activity.rs`), `Lease` (`plain_file_jobs.rs`), `Slot`,
+  `WorkLease` and `ExclusiveLease` (`updater/activity.rs`), `Lease` (`plain_file_jobs.rs`), `Slot`,
   `Reservation` and `Inner` (`engine_host/client.rs`), `HostProcess` (`engine_host/process.rs`).
   They run while unwinding, so poison meant a second panic and a process abort ("panic in a
   destructor during cleanup", reproduced by the engine-host regression test).
-- The settings watcher thread (`main.rs`) had no `catch_unwind`: one panic silently ended
+- The settings watcher thread (`settings_watcher.rs`) had no `catch_unwind`: one panic silently ended
   settings hot reload for the rest of the session.
 - Core code panicked on poison too: `engine_host/{client,process}.rs`, `audio/capture.rs` (also in
   the realtime input callback) and `whisper_backend.rs`, whose `lock_state_bounded` panicked by

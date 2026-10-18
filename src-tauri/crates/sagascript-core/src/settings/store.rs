@@ -10,8 +10,8 @@ use serde_json::Value;
 
 use crate::settings::{
     lenient,
-    migrations::{self, MachineProbe, Migration, Object},
-    FileModelPreference, LineupEnv, Settings, SCHEMA_VERSION,
+    migrations::{self, Migration, Object},
+    FileModelPreference, LineupEnv, MachineProbe, Settings, SCHEMA_VERSION,
 };
 
 const APP_IDENTIFIER: &str = "ai.gille.sagascript";
@@ -205,32 +205,19 @@ fn migrate_legacy_identifier_settings_locked(
     }
 }
 
-/// The machine this process runs on. Probing it from the settings store is
-/// the `settings` → `transcription` module cycle that #372 removes.
-struct ThisMachine;
-
-impl MachineProbe for ThisMachine {
-    fn pianissimo_supported(&self) -> bool {
-        crate::transcription::pianissimo_backend::runtime_supported_on_this_os()
-    }
-
-    fn lineup_env(&self) -> LineupEnv<'_> {
-        LineupEnv {
-            pianissimo_supported: self.pianissimo_supported(),
-            pianissimo_downloaded: crate::transcription::pianissimo_model::is_downloaded(),
-            whisper_downloaded: &crate::transcription::model::is_model_downloaded,
-        }
-    }
-}
-
 /// Load settings from disk, migrating an older settings file (see
 /// [`migrations`]). Returns defaults if the file is missing or unreadable.
 /// Partial JSON files are handled by `#[serde(default)]` on Settings.
-pub fn load() -> Settings {
-    load_at_with_machine(&settings_path(), legacy_settings_paths(), &ThisMachine)
+///
+/// `machine` supplies what the load needs to know about the machine it runs on
+/// (what is downloaded, whether Pianissimo runs): the store never probes it
+/// itself, so settings do not depend on the transcription code (#372).
+/// `crate::machine::load` is this with the probes of this machine.
+pub(crate) fn load_with(machine: &dyn MachineProbe) -> Settings {
+    load_at_with_machine(&settings_path(), legacy_settings_paths(), machine)
 }
 
-/// Test seam for `tests/settings_fixtures.rs`: [`load`] for an explicit
+/// Test seam for `tests/settings_fixtures.rs`: [`load_with`] for an explicit
 /// settings file and legacy locations, with fixed machine state instead of
 /// probing this machine.
 #[doc(hidden)]
@@ -572,25 +559,47 @@ pub fn save(settings: &Settings) -> Result<(), String> {
 ///
 /// GUI commands use this instead of saving their in-memory `Settings` clone,
 /// which may be stale when the CLI changed another field moments earlier.
-pub fn update<F>(mutate: F) -> Result<Settings, String>
+///
+/// `machine` is the injected machine state of [`load_with`];
+/// `crate::machine::update` is this with the probes of this machine.
+pub(crate) fn update_with<F>(machine: &dyn MachineProbe, mutate: F) -> Result<Settings, String>
 where
     F: FnOnce(&mut Settings),
 {
-    try_update(|settings| {
+    try_update_with(machine, |settings| {
         mutate(settings);
         Ok(())
     })
 }
 
-/// Like [`update`], but lets validation fail while the cross-process lock is
-/// held so read/validate/write profile mutations cannot race another writer.
-pub fn try_update<F>(mutate: F) -> Result<Settings, String>
+/// Like [`update_with`], but lets validation fail while the cross-process lock
+/// is held so read/validate/write profile mutations cannot race another writer.
+/// `crate::machine::try_update` is this with the probes of this machine.
+pub(crate) fn try_update_with<F>(machine: &dyn MachineProbe, mutate: F) -> Result<Settings, String>
 where
     F: FnOnce(&mut Settings) -> Result<(), String>,
 {
     let path = settings_path();
-    update_locked(&path, legacy_settings_paths(), &ThisMachine, mutate)
+    update_locked(&path, legacy_settings_paths(), machine, mutate)
 }
+
+// Shims (#372): the loads and updates that probe *this* machine moved to
+// `crate::machine`, above settings and transcription, so this module no longer
+// imports the transcription code to answer them. These re-exports keep the old
+// paths `settings::store::{load, update, try_update}` working for the CLI and
+// the app. They are the one upward import left in `settings/`, and a loop at
+// run time: `transcription::pianissimo_backend::{engine_config, shared_client}`
+// call `store::load()` themselves, i.e. this line, so transcription reaches
+// `machine::load()` and `machine` reaches transcription's probes again.
+//
+// Removal prerequisites, in order (tests/module_layering.rs says the same):
+//   1. the CLI and the app call `sagascript_core::machine::{load, update,
+//      try_update}`;
+//   2. `engine_config` and `shared_client` receive the `Settings` instead of
+//      loading them. That changes when the settings are read, so it is a
+//      behaviour change for its own change, not part of the layering move;
+//   3. delete this line and empty the expected list in that test.
+pub use crate::machine::{load, try_update, update};
 
 /// A field update under the settings lock. The latest file is loaded as the
 /// startup load does, with every pending migration step, machine state

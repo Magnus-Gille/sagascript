@@ -67,7 +67,7 @@ notify = { version = "7", default-features = false }
 # feature now adds ALPN, hence `default-features = false` and
 # `native-tls-no-alpn`. `http2` and `charset` were inert here (no ALPN, no
 # `text()`) and would leak into the updater's client through feature
-# unification. Each client names its backend; see src/updates.rs.
+# unification. Each client names its backend; see src/updater/updates.rs.
 reqwest = { version = "0.13", default-features = false, features = ["native-tls-no-alpn", "system-proxy", "json"] }
 semver = "1"
 # `CommandError` derives Error like core's DictationError (same major; already
@@ -78,6 +78,9 @@ thiserror = "2"
 [dev-dependencies]
 sagascript-core = { path = "crates/sagascript-core", features = ["test-support"] }
 sagascript-testsupport = { path = "crates/sagascript-testsupport" }
+# The mock runtime (`tauri::test`): a `State` for calling the real setters in
+# the persist_and_sync table test (commands/persist_tests.rs, #370).
+tauri = { version = "2", features = ["test"] }
 # Parses the command signatures to generate the frontend's CommandMap
 # (src/contract/command_map.rs, #347). Already in the tree via serde_derive.
 syn = { version = "2", features = ["full", "visit"] }
@@ -88,7 +91,13 @@ syn = { version = "2", features = ["full", "visit"] }
 notify = { version = "7", default-features = false, features = ["macos_fsevent"] }
 # `rustls-tls` is the plugin's default, named because check_signed_update
 # selects it explicitly (the shared reqwest also has native-tls).
-tauri-plugin-updater = { version = "2", features = ["rustls-tls"] }
+# The plugin's default `zip` feature is off: on macOS it gates nothing (tar and
+# flate2 are unconditional there), and what it does gate is only the Windows
+# `.zip` payload and Linux AppImage `.tar.gz` update paths, which this macOS-only
+# dependency never builds. It would pull zip 4.6.1 into the lockfile and
+# cargo-deny's graph (RUSTSEC-2026-0367/0368/0369) although no shipped target
+# compiles it; every released plugin version still requires zip ^4.
+tauri-plugin-updater = { version = "2", default-features = false, features = ["rustls-tls", "system-proxy"] }
 # enigo (auto-paste) and the objc FFI stack are desktop-GUI integrations.
 enigo = { version = "0.6", features = ["serde"] }
 core-foundation = "0.10"

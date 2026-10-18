@@ -8,9 +8,14 @@ still written by hand ([contracts/README.md](../../contracts/README.md)). Exampl
 
 ## 1. Rust command
 
-Put it in `src-tauri/src/commands.rs`, or in the domain file that already owns the area
-(`meeting_jobs.rs`, `meeting_review_commands.rs`, `meeting_reprocessing_commands.rs`,
-`meeting_media.rs`).
+Put it in the file of `src-tauri/src/commands/` that owns the domain (`settings`, `hotkey`,
+`state`, `transcribe`, `transcribe_file`, `files`, `models`, `dictionary`, `update_recovery`,
+`permissions`, `system`; `commands/mod.rs` lists them) or in the domain file that already owns
+the area (`meeting_jobs.rs`, `meeting_review_commands.rs`, `meeting_reprocessing_commands.rs`,
+`meeting_media.rs`). `commands/mod.rs` re-exports each module with a glob, so
+`generate_handler!` keeps naming `commands::name`; a new file under `commands/` needs a `mod`
+and a `pub use` line there (the glob also carries the `__cmd__<name>` macro Tauri generates
+beside the command). The CommandMap generator reads every file below `commands/`.
 
 ```rust
 #[derive(serde::Serialize)]
@@ -48,22 +53,22 @@ pub async fn get_example_info(
   removes.
 - Managed state you can ask for: `State<'_, SharedController>`, `State<'_, SharedWhisper>`,
   `State<'_, Arc<UpdateActivity>>`, `State<'_, HotkeyHealth>`, job slots, plus
-  `tauri::AppHandle`. See `.manage(...)` calls in `main()`.
+  `tauri::AppHandle`. See the `.manage(...)` calls in `manage_app_state` (`launch/startup.rs`).
 - Lock the controller in a short block; a `std::sync::MutexGuard` cannot cross `.await`, and
   blocking work belongs in `tokio::task::spawn_blocking`. Keep the lock order in
   [ARCHITECTURE.md §3](../ARCHITECTURE.md#3-threads-and-locks).
 - Native UI, enigo or AppKit calls go through `app.run_on_main_thread(...)`
   ([ADR 0003](../adr/0003-main-thread-native-apis.md)).
 - Put decisions in a plain function (`example_ready` above) and unit-test it in
-  `commands_tests.rs`, the test file of `commands.rs`; see `apply_language_selection` and
-  `language_selection_tests`.
+  the domain's `*_tests.rs` (`commands/settings_tests.rs` for `settings.rs`); see
+  `apply_language_selection` and `language_selection_tests`.
 - Settings writes follow [add-setting.md](add-setting.md) step 3.
 - App commands need no entry in `src-tauri/capabilities/default.json`; that file only lists
   plugin and core permissions (`build.rs` declares no app manifest).
 
 ## 2. Register it
 
-Add `commands::get_example_info,` to `tauri::generate_handler![...]` in `main()` in
+Add `commands::get_example_info,` to `tauri::generate_handler![...]` in `build_app()` in
 `src-tauri/src/main.rs`. A missing entry compiles, but the app crate's
 `command_map_is_generated_from_the_rust_signatures` test fails.
 
@@ -114,7 +119,7 @@ depends on it. Calls are recorded in `window.qa.calls` for assertions.
 
 | Layer | Where |
 |---|---|
-| Rust logic | A test module in `commands_tests.rs`, the test file of `commands.rs` (pure function, no Tauri runtime). |
+| Rust logic | A test module in the domain's `*_tests.rs` under `commands/` (pure function, no Tauri runtime). |
 | Frontend logic | Put non-trivial handling in a `src/lib/*.ts` module and test it with Vitest in `src/lib/<module>.test.ts` (see `src/lib/overlay-state.test.ts`). Add the wrapper's row to `src/lib/api.test.ts`; it is type-checked against the generated `CommandMap`. |
 | User flow | A `scripts/qa-*.mjs` Playwright check against the mock, run by `npm run test:browser`. |
 
@@ -140,5 +145,3 @@ npm run test:browser        # if a view or qa flow uses the command
 ```
 
 Then `npm run verify` ([CONTRIBUTING.md](../../CONTRIBUTING.md#running-tests)).
-Planned: [#370](https://github.com/Magnus-Gille/sagascript/issues/370) splits `commands.rs` by
-domain; put new commands in the matching module once it exists.

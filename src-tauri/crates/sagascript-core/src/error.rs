@@ -78,7 +78,6 @@ pub enum DictationError {
     #[error("Unsupported format: {0}")]
     UnsupportedFormat(String),
 
-    #[cfg(feature = "diarization")]
     #[error("Diarization error: {0}")]
     DiarizationError(String),
 }
@@ -158,7 +157,6 @@ impl DictationError {
             Self::FileDecodeError(_) => "file_decode_error",
             Self::FileNotFound(_) => "file_not_found",
             Self::UnsupportedFormat(_) => "unsupported_format",
-            #[cfg(feature = "diarization")]
             Self::DiarizationError(_) => "diarization_error",
         }
     }
@@ -369,7 +367,6 @@ mod tests {
         for (error, code) in table {
             assert_eq!(error.code(), code, "{error:?}");
         }
-        #[cfg(feature = "diarization")]
         assert_eq!(
             DictationError::DiarizationError("x".into()).code(),
             "diarization_error"

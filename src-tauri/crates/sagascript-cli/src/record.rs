@@ -15,11 +15,9 @@ use sagascript_core::transcription::pianissimo_model;
 use sagascript_core::transcription::{Glossary, TranscribeOptions, WhisperBackend};
 
 use crate::output::{errln, outln, Out, WriteError};
+use crate::run_request::RunRequest;
 
-use super::transcribe::{
-    copy_to_clipboard, effective_glossary, model_id_string, parse_language,
-    resolve_effective_model, resolve_one_run_prompt, resolve_profile,
-};
+use super::transcribe::{copy_to_clipboard, model_id_string, resolve_effective_model};
 
 #[derive(Args)]
 pub struct RecordArgs {
@@ -69,23 +67,23 @@ pub struct RecordArgs {
     pub prompt_file: Option<PathBuf>,
 }
 
+impl<'a> From<&'a RecordArgs> for RunRequest<'a> {
+    fn from(args: &'a RecordArgs) -> Self {
+        Self {
+            profile: args.profile.as_deref(),
+            language: args.language.as_deref(),
+            prompt: args.prompt.as_deref(),
+            prompt_file: args.prompt_file.as_deref(),
+        }
+    }
+}
+
 pub fn run(args: RecordArgs, out: &Out) -> Result<(), DictationError> {
     let stored = sagascript_core::settings::store::load();
-    let profile = match args.profile.as_deref() {
-        Some(profile_id) => resolve_profile(&stored, profile_id)?,
-        None => stored
-            .resolved_hotkey_profiles()
-            .into_iter()
-            .find(|candidate| candidate.id == "default")
-            .or_else(|| stored.resolved_hotkey_profiles().into_iter().next())
-            .expect("settings always resolve a default profile"),
-    };
-    let language = args
-        .language
-        .as_deref()
-        .map(parse_language)
-        .transpose()?
-        .unwrap_or(profile.language);
+    let request = RunRequest::from(&args);
+    let selection = request.select(&stored)?;
+    let profile = &selection.profile;
+    let language = selection.language;
     let save_only = args.output.is_some();
     // Saving audio does not select or require a transcription model. Resolve
     // and validate the engine before capture for every transcription run.
@@ -93,12 +91,12 @@ pub fn run(args: RecordArgs, out: &Out) -> Result<(), DictationError> {
         None
     } else {
         let mut selected =
-            resolve_record_model_for_profile(&stored, &profile, language, args.model.as_deref())?;
+            resolve_record_model_for_profile(&stored, profile, language, args.model.as_deref())?;
         // Pianissimo has no decoder hints. When it was only implied by
         // "recommended" (no --model, profile on Auto or a language override),
         // decode with the recommended Whisper model instead of failing.
         let implicit_pianissimo = args.model.is_none()
-            && (language != profile.language
+            && (selection.language_overridden()
                 || stored
                     .profile_models
                     .get(&profile.id)
@@ -118,16 +116,8 @@ pub fn run(args: RecordArgs, out: &Out) -> Result<(), DictationError> {
     // a hint file. Transcription keeps the normal scoped glossary behavior.
     let glossary = if save_only {
         Glossary::parse("")
-    } else if language == profile.language {
-        effective_glossary(
-            &stored,
-            Some(&profile.id),
-            args.prompt.as_deref(),
-            args.prompt_file.as_deref(),
-        )?
     } else {
-        let hint = resolve_one_run_prompt(args.prompt.as_deref(), args.prompt_file.as_deref())?;
-        Glossary::parse(hint.as_deref().unwrap_or(""))
+        request.finish(&stored, selection)?.glossary
     };
     if let Some(selected) = selected_model {
         match selected {

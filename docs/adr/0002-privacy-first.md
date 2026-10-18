@@ -15,15 +15,15 @@ CONTRIBUTING.md: "Remote/cloud features are always opt-in, never default."
 Evidence in the code:
 
 - In the Rust app and CLI, HTTP is confined to two files: `crates/sagascript-core/src/download.rs` (model
-  downloads) and `src-tauri/src/updates.rs` (update checks, "deliberately only called from an
+  downloads) and `src-tauri/src/updater/updates.rs` (update checks, "deliberately only called from an
   explicit tray-menu action"), plus `tauri-plugin-updater` on the signed macOS update path.
-  The test `normal_gui_launches_never_check_for_updates_implicitly` in `main_tests.rs` pins that.
+  The test `normal_gui_launches_never_check_for_updates_implicitly` in `launch/mode_tests.rs` pins that.
 - Engine hosts "never open network connections and never touch the microphone"
   ([engine-host-protocol.md](../engine-host-protocol.md)); release builds ignore
   `SAGASCRIPT_ENGINE_HOST` / `SAGASCRIPT_PIANISSIMO_MODEL_DIR` unless built with
   `dev-overrides`, so a signed build does not trust the environment for its sidecar or model.
 - Transcripts reach disk only on request (comment on `save_transcription_text` in
-  `src-tauri/src/commands.rs`: "privacy-first: transcripts reach disk only on explicit
+  `src-tauri/src/commands/files.rs`: "privacy-first: transcripts reach disk only on explicit
   request"; [meeting-workflow.md](../meeting-workflow.md) says the same for meeting imports).
   An update the user starts keeps unsaved dictation as a local recovery draft
   (`prepare_update_recovery`). Diagnostics exclude content: `focus_diag.rs` logs only
@@ -34,7 +34,7 @@ Evidence in the code:
 - File paths are handled case by case today, with no written rule: the engine-host client
   logs no paths because "the persistent log must not carry the user's home directory"
   (`start_and_handshake` in `engine_host/client.rs`), while settings warnings in
-  `settings/store.rs` log the settings file path and the watcher start message in `main.rs`
+  `settings/store.rs` log the settings file path and the watcher start message in `settings_watcher.rs`
   logs its directory.
 
 ## Decision

@@ -21,8 +21,10 @@ impl HotkeyChange {
     ) -> Result<(Settings, Vec<String>), String> {
         let mut candidate = settings.clone();
         let notices = match self {
+            // The profile list is applied by the operation `sagascript config
+            // profiles` uses as well (#373).
             Self::Profiles(profiles) => sagascript_core::settings::ModelResetNotice::messages(
-                &candidate.replace_hotkey_profiles(profiles.clone())?,
+                &candidate.apply_profiles_change(profiles.clone(), None)?,
             ),
             Self::Mode(mode) => {
                 candidate.replace_hotkey_mode(*mode)?;

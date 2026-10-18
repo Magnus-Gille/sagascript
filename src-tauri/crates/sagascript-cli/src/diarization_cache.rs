@@ -140,6 +140,7 @@ impl CacheIdentity {
         )
     }
 
+    #[cfg(test)]
     pub(crate) fn for_input_with_options(
         input: &Path,
         language: &str,
@@ -514,6 +515,7 @@ pub(crate) fn publish_error(path: &Path, error: &PublishError) -> DictationError
     }
 }
 
+#[cfg(test)]
 fn sha256_file(path: &Path) -> Result<String, DictationError> {
     let mut file = File::open(path).map_err(|error| cache_error(path, "hash", error))?;
     let mut hasher = Sha256::new();

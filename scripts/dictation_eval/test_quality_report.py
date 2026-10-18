@@ -192,17 +192,20 @@ class QualityReportTests(unittest.TestCase):
         self.assertEqual(validated["model"], "fi-whisper-tiny")
 
     def test_model_inventory_matches_rust_model_id_string_source(self):
+        # The ids are `WhisperModel::id` in the core model catalog; the CLI's
+        # `model_id_string` is that function (#373).
         source_path = (
             Path(__file__).resolve().parents[2]
             / "src-tauri"
             / "crates"
-            / "sagascript-cli"
+            / "sagascript-core"
             / "src"
-            / "transcribe.rs"
+            / "models"
+            / "whisper.rs"
         )
         source = source_path.read_text(encoding="utf-8")
-        start = source.index("pub fn model_id_string")
-        body = source[start : source.index("\n}", start)]
+        start = source.index("pub fn id(self)")
+        body = source[start : source.index("\n    }\n", start)]
         rust_models = set(
             re.findall(r"WhisperModel::[A-Za-z0-9_]+\s*=>\s*\"([^\"]+)\"", body)
         )

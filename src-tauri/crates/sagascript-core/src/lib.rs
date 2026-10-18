@@ -4,29 +4,35 @@
 //! entry points and integrations on top.
 
 pub mod audio;
-pub mod diarization_evaluation;
-pub mod diarization_qualification;
-pub mod diarization_reference;
-pub mod diarization_report;
-pub mod diarization_strata;
+pub mod diarization;
 pub mod download;
 pub mod error;
 pub mod fsutil;
+pub mod glossary;
+pub mod machine;
 pub mod meeting;
-pub mod meeting_media;
-pub mod meeting_reprocess;
-pub mod meeting_reprocess_matching;
-pub mod meeting_reprocess_plan;
-pub mod meeting_reprocess_proposal;
-pub mod meeting_review;
+pub mod models;
 pub mod path_scrub;
+pub mod run_context;
 pub mod settings;
-pub mod speaker_hint;
 pub mod sync;
 pub mod transcription;
 
-#[cfg(feature = "diarization")]
-pub mod diarization;
+// Old paths of modules that moved into `meeting/` (#372). The CLI and the app still
+// name them; each line goes when the last caller imports the new path.
+pub use crate::meeting::media as meeting_media;
+pub use crate::meeting::reprocess as meeting_reprocess;
+pub use crate::meeting::reprocess::plan as meeting_reprocess_plan;
+pub use crate::meeting::reprocess::proposal as meeting_reprocess_proposal;
+pub use crate::meeting::review as meeting_review;
+
+// Old paths of modules that moved into `diarization/` (#372), same rule.
+pub use crate::diarization::eval::evaluation as diarization_evaluation;
+pub use crate::diarization::eval::qualification as diarization_qualification;
+pub use crate::diarization::eval::reference as diarization_reference;
+pub use crate::diarization::eval::strata as diarization_strata;
+pub use crate::diarization::report as diarization_report;
+pub use crate::diarization::speaker_hint;
 
 /// Test fixtures made of core types (#363); see the module documentation.
 #[cfg(any(test, feature = "test-support"))]

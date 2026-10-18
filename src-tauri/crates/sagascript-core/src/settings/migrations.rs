@@ -40,7 +40,7 @@
 
 use serde_json::{Map, Value};
 
-use super::{LineupEnv, Settings, ENGINE_DEFAULTS_VERSION, MODEL_LINEUP_VERSION};
+use super::{MachineProbe, Settings, ENGINE_DEFAULTS_VERSION, MODEL_LINEUP_VERSION};
 
 /// The settings object the steps operate on.
 pub(crate) type Object = Map<String, Value>;
@@ -70,30 +70,6 @@ pub(crate) struct MigrationError {
 impl std::fmt::Display for MigrationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{} migration failed: {}", self.step, self.reason)
-    }
-}
-
-/// Machine state a migration step may need. Probed lazily: only a pending
-/// Swedish lineup step asks for [`MachineProbe::lineup_env`].
-pub(crate) trait MachineProbe {
-    /// `pianissimo_backend::runtime_supported_on_this_os()`.
-    fn pianissimo_supported(&self) -> bool;
-    /// What the Swedish model-lineup step needs to know about this machine.
-    fn lineup_env(&self) -> LineupEnv<'_>;
-}
-
-/// Fixed machine state, for tests.
-impl MachineProbe for LineupEnv<'_> {
-    fn pianissimo_supported(&self) -> bool {
-        self.pianissimo_supported
-    }
-
-    fn lineup_env(&self) -> LineupEnv<'_> {
-        LineupEnv {
-            pianissimo_supported: self.pianissimo_supported,
-            pianissimo_downloaded: self.pianissimo_downloaded,
-            whisper_downloaded: self.whisper_downloaded,
-        }
     }
 }
 
@@ -410,7 +386,7 @@ pub(crate) fn from_legacy_location(object: &mut Object, same_bundle: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::settings::{EnginePrewarm, FileModelPreference, Language, WhisperModel};
+    use crate::settings::{EnginePrewarm, FileModelPreference, Language, LineupEnv, WhisperModel};
     use serde_json::json;
 
     fn object(value: Value) -> Object {

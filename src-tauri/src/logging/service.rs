@@ -150,7 +150,15 @@ impl LoggingService {
     /// under `cfg(test)` the directory is a per-process temp directory.
     #[cfg(test)]
     fn log_directory() -> PathBuf {
-        std::env::temp_dir().join(format!("sagascript-test-logs-{}", std::process::id()))
+        // One directory per test process, shared by every `LoggingService::new()`
+        // in it. A static is never dropped, so the directory outlives the
+        // process like the pid-named one it replaces; `TempDir` makes the name
+        // unique and creates it atomically (#363).
+        static TEST_LOG_DIRECTORY: std::sync::OnceLock<sagascript_testsupport::TempDir> =
+            std::sync::OnceLock::new();
+        TEST_LOG_DIRECTORY
+            .get_or_init(sagascript_testsupport::TempDir::new)
+            .to_path_buf()
     }
 
     #[cfg(not(test))]
@@ -311,6 +319,8 @@ mod tests {
     #[test]
     fn test_log_path_is_inside_temp_dir_not_real_app_log() {
         let svc = LoggingService::new();
+        // The system temp root is the subject of this assertion, so it is read
+        // directly rather than through a `TempDir`.
         let temp = std::env::temp_dir();
         assert!(
             svc.log_path.starts_with(&temp),

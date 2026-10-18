@@ -188,9 +188,9 @@ pub mod event {
     use sagascript_core::settings::HotkeyProfile;
 
     catalogue! {
-        /// Dictation state changed. Producers: the hotkey pipeline (main.rs),
+        /// Dictation state changed. Producers: the hotkey pipeline (dictation/pipeline.rs),
         /// the Dictate test recording, training and file transcription
-        /// (commands.rs), meeting jobs, and the settings watcher
+        /// (commands/), meeting jobs, and the settings watcher
         /// ([`UiState::SettingsReloaded`]). Consumers: Overlay.svelte and the
         /// Dictate tab (Settings.svelte).
         STATE_CHANGED: StateChanged = "state-changed",
@@ -257,7 +257,7 @@ pub mod event {
             scope = None;
 
         /// Hotkey registration health changed. Producers: hotkey changes
-        /// (commands.rs) and the settings watcher. Consumer: Settings.svelte.
+        /// (commands/hotkey.rs) and the settings watcher. Consumer: Settings.svelte.
         HOTKEY_REGISTRATION_CHANGED: HotkeyRegistrationChanged = "hotkey-registration-changed",
             payload<'a> = &'a HotkeyStatus,
             consumer = Consumer::Gui,
@@ -272,7 +272,7 @@ pub mod event {
 
         /// Pianissimo engine load lifecycle, built by
         /// `pianissimo_backend::load_state_payload`: `{ state, source,
-        /// loadMs?, message? }`. Producer: main.rs. Consumer: Overlay.svelte.
+        /// loadMs?, message? }`. Producer: dictation/engine.rs. Consumer: Overlay.svelte.
         ENGINE_LOAD_STATE: EngineLoadState = "engine-load-state",
             payload<'a> = serde_json::Value,
             consumer = Consumer::Gui,
@@ -280,7 +280,7 @@ pub mod event {
 
         /// Sent to the Settings window only: save recovery drafts, then call
         /// `complete_update_preparation` with this nonce. Producer: the macOS
-        /// signed updater (main.rs). Consumer: Settings.svelte.
+        /// signed updater (updater/signed.rs). Consumer: Settings.svelte.
         #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
         UPDATE_PREPARING: UpdatePreparing = "update-preparing",
             payload<'a> = &'a str,
@@ -297,7 +297,7 @@ pub mod event {
             scope = None;
 
         /// Switch the open Settings window to a tab (`dictate`, `transcribe`).
-        /// Producer: the tray menu (main.rs). Consumer: Settings.svelte.
+        /// Producer: the tray menu, through launch/window.rs. Consumer: Settings.svelte.
         NAVIGATE_TAB: NavigateTab = "navigate_tab",
             payload<'a> = &'a str,
             consumer = Consumer::Gui,
