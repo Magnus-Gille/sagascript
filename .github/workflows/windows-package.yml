@@ -293,39 +293,6 @@ jobs:
           cargo clippy --workspace --all-targets -- -D warnings
           cargo build -p sagascript-cli --no-default-features
 
-      # TEMPORARY (#436 probe, removed in the next commit): the release-only step above, run on a pull request.
-      - name: Probe 436 - test and lint Rust workspace on a pull request
-        if: github.head_ref != ''
-        working-directory: src-tauri
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $PSNativeCommandUseErrorActionPreference = $true
-          # `cargo check --workspace` is omitted: clippy --all-targets below is a strict superset.
-          cargo test --workspace
-          cargo clippy --workspace --all-targets -- -D warnings
-          cargo build -p sagascript-cli --no-default-features
-
-      # TEMPORARY (#436 probe): a failing cargo command in front of a passing one must fail the step.
-      - name: Probe 436 - a failing cargo command in front of a passing one
-        id: probe436_fail
-        if: github.head_ref != ''
-        continue-on-error: true
-        working-directory: src-tauri
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $PSNativeCommandUseErrorActionPreference = $true
-          cargo build -p package-that-does-not-exist
-          cargo --version
-
-      - name: Probe 436 - judge
-        if: github.head_ref != ''
-        shell: bash
-        env:
-          OUTCOME: ${{ steps.probe436_fail.outcome }}
-        run: |
-          echo "failing cargo then cargo --version: $OUTCOME (want failure)"
-          [ "$OUTCOME" = failure ]
-
       # A pull request skips the step above; the CPU policy checks below still read its debug tree.
       - name: Build lean CLI (debug)
         if: github.event_name == 'pull_request'
