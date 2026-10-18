@@ -44,7 +44,7 @@ App crate modules (`src-tauri/src/`):
 | `main.rs` | Wiring only (#369): `main()` (CLI dispatch, logging), `build_app` (plugins, `.setup`, window events, the `generate_handler!` command table), `dispatch_to_main` and `SAFE_FALLBACK_HOTKEY`. |
 | `launch/` | How the app starts and is started again: `GuiLaunchMode` and the second-instance checks (`mode.rs`), the `setup` hook in startup order (`startup.rs`), second-instance and run-event handlers (`lifecycle.rs`), the Settings window (`window.rs`), the legacy-settings migration and the permission-gated settings load (`settings.rs`). |
 | `tray/` | Tray icon and menu: `create_tray` and the build identity (`mod.rs`), profile entries (`menu.rs`), status line, `tray_label` and `update_tray_status` (`status.rs`), macOS position and identity (`position.rs`). |
-| `updater/` | The update flow: tray entries, menu state and the check (`mod.rs`), the macOS signed download and install (`signed.rs`), the manifest check (`updates.rs`), work/exclusivity accounting (`activity.rs`) and recovery drafts (`recovery.rs`). `main.rs` re-exports the last two as `crate::update_activity` and `crate::update_recovery`. |
+| `updater/` | The update flow: tray entries, menu state and the check (`mod.rs`), the update orchestrator behind the `MenuSink` / `CheckSource` / `UpdateProvider` / `Recovery` seams (`orchestrator.rs`), the macOS signed download and install (`signed.rs`), the manifest check (`updates.rs`), work/exclusivity accounting (`activity.rs`) and recovery drafts (`recovery.rs`). `main.rs` re-exports the last two as `crate::update_activity` and `crate::update_recovery`. |
 | `dictation/` | Live dictation: hotkey press and release (`trigger.rs`), engine warm-up and load-state events (`engine.rs`), and the recording-to-paste pipeline `stop_recording_and_transcribe` (`pipeline.rs`). |
 | `settings_watcher.rs` | Hot reload of settings and dictionaries edited outside the app. |
 | `commands/` | Most `#[tauri::command]`s, one file per domain (`settings`, `hotkey`, `state`, `transcribe`, `transcribe_file`, `files`, `models`, `dictionary`, `update_recovery`, `permissions`, `system`), re-exported by `mod.rs` so `generate_handler!` names `commands::name`. `mod.rs` also holds `SharedController` / `SharedWhisper` / `lock_controller`; `persist.rs` holds `persist_and_sync`, the only way a command writes settings (file and controller copy together); `main_thread.rs` waits for the main thread without blocking a worker. |
@@ -356,7 +356,9 @@ sequenceDiagram
     end
 ```
 
-- Code: `check_for_updates_with_intent` in `updater/mod.rs`; `install_signed_update` and
+- Code: `check_for_updates_with_intent` in `updater/mod.rs`; the state machine behind the
+  `MenuSink` / `CheckSource` / `UpdateProvider` / `Recovery` seams in `updater/orchestrator.rs`;
+  `SignedCheck`, `SignedUpdate`, `DraftRecovery`, `install_signed_update` and
   `prepare_update_recovery` in `updater/signed.rs`; `updater/updates.rs`; `UpdateActivity` /
   `UpdatePreparation` in `updater/activity.rs`; `updater/recovery.rs`. Checks are never implicit
   (test `normal_gui_launches_never_check_for_updates_implicitly` in `launch/mode_tests.rs`).
@@ -364,9 +366,8 @@ sequenceDiagram
   `second_instance_requests_update` / `should_install_update_at_launch` in `launch/mode.rs`.
 - A failure in any phase resets the menu to "Try Again…"; failures during preparation or
   install also emit `update-aborted` to Settings. The `updater-smoke-test` feature points the
-  manifest at a loopback URL (section 4).
-- **Planned:** [#376](https://github.com/Magnus-Gille/sagascript/issues/376) puts the
-  orchestration behind traits.
+  manifest at a loopback URL (section 4). [#376](https://github.com/Magnus-Gille/sagascript/issues/376)
+  landed the orchestration behind those traits; the issue stays open for the remaining scope.
 
 ### 2.4 Engine-host process lifecycle
 
