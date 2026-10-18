@@ -170,6 +170,14 @@ impl Source {
         }
     }
 
+    /// Seconds spent decoding and resampling; a cache hit decoded nothing.
+    pub(super) fn decode_resample_seconds(&self) -> f64 {
+        match self {
+            Self::Cached(_) => 0.0,
+            Self::Decoded(audio) => audio.decode_resample_seconds,
+        }
+    }
+
     /// Which stretches of the audio carry speech.
     pub(super) fn coverage_profile(&self) -> CoverageProfile {
         match self {
