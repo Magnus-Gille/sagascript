@@ -20,9 +20,11 @@ use sagascript_core::transcription::DiarizationTranscriptionTimings;
 
 use super::*;
 use crate::diarization_cache::{load, CacheIdentity, CacheLookup};
+use crate::transcribe::diarize::CachePolicy;
 use crate::transcribe::diarize::{
     analyze_in_sequence, analyze_overlapped, AnalysisOutcome, DiarizationAnalyzer,
 };
+use crate::transcribe::plan::{CacheRequest, DiarizationFlags};
 
 /// Long enough for two speakers of five and six seconds.
 const SECONDS: usize = 12;
@@ -262,19 +264,21 @@ fn diarize_in(
     control: Option<&MeetingControl<'_>>,
     out: &Out,
 ) -> Result<FileTranscription, DictationError> {
-    let cache = fx.cache.display().to_string();
-    let mut flags = vec!["--diarize"];
-    if job.progress_events {
-        flags.push("--progress-json");
-    }
-    if job.with_cache {
-        flags.extend(["--diarize-cache", &cache]);
-    }
-    let args = args_for(&flags);
+    let options = FileOptions {
+        progress_json: job.progress_events,
+        diarization: Some(DiarizationFlags {
+            cache: job.with_cache.then(|| CacheRequest {
+                path: fx.cache.clone(),
+                policy: job.policy,
+            }),
+            ..DiarizationFlags::default()
+        }),
+        ..FileOptions::default()
+    };
     let mut model_loaded = false;
     transcribe_file(
         &FileRequest {
-            args: &args,
+            options: &options,
             file: &fx.file,
             stored: &Settings::default(),
             language: Language::English,
@@ -282,7 +286,6 @@ fn diarize_in(
             glossary: &Glossary::default(),
             correction_vocabulary: &[],
             control,
-            cache_policy: job.policy,
         },
         services,
         &mut model_loaded,
@@ -427,6 +430,105 @@ fn without_a_cache_flag_nothing_is_read_or_written() {
     assert_eq!(run.json()["performance"]["cache_hit"], false);
     assert_eq!(analyzer.calls(), 1);
     assert_eq!(fx.files(), ["meeting.wav"]);
+}
+
+// ---- the command line's own run: the batch, the sink and the options ------------------------
+
+/// The command line's batch (`run_whisper_batch`) over the fixture's recording.
+fn cli_run(
+    fx: &Fixture,
+    flags: &[&str],
+    backend: &ScriptedBackend,
+    analyzer: &ScriptedAnalyzer,
+) -> Run {
+    let args = args_for(flags);
+    let (out, captured) = Out::capture();
+    let result = run_whisper_batch(
+        &WhisperBatch {
+            args: &args,
+            files: std::slice::from_ref(&fx.file),
+            stored: &Settings::default(),
+            language: Language::English,
+            model: WhisperModel::TinyEn,
+            glossary: &Glossary::default(),
+            correction_vocabulary: &[],
+            clipboard: &NoClipboard,
+        },
+        Services {
+            backend,
+            analyzer,
+            canceller: &crate::cancel::Canceller::new(),
+        },
+        &out,
+    );
+    Run {
+        stdout: captured.stdout(),
+        stderr: captured.stderr(),
+        result,
+    }
+}
+
+#[test]
+fn a_command_line_run_reads_and_writes_the_cache_under_the_normal_policy() {
+    let fx = Fixture::new();
+    let backend = whisper(1);
+    let analyzer = ScriptedAnalyzer::new();
+    let cache = fx.cache.display().to_string();
+    let flags = ["--diarize", "--diarize-cache", &cache, "--json"];
+
+    let first = cli_run(&fx, &flags, &backend, &analyzer);
+    first.result.as_ref().expect("the miss succeeds");
+    let miss: Value = serde_json::from_str(&first.stdout).unwrap();
+    assert_eq!(miss["performance"]["cache_hit"], false);
+    assert!(first.stderr.contains("Saved reusable diarization cache"));
+
+    let second = cli_run(&fx, &flags, &backend, &analyzer);
+    second.result.as_ref().expect("the hit succeeds");
+    let hit: Value = serde_json::from_str(&second.stdout).unwrap();
+    assert_eq!(hit["performance"]["cache_hit"], true);
+    assert!(second.stderr.contains("Reusing diarization cache"));
+    assert_eq!(analyzer.calls(), 1);
+    assert_eq!(without_performance(miss), without_performance(hit));
+}
+
+#[test]
+fn a_command_line_meeting_run_writes_the_shared_document_and_narrates_the_phases() {
+    let fx = Fixture::new();
+    let analyzer = ScriptedAnalyzer::new();
+
+    let run = cli_run(
+        &fx,
+        &["--diarize", "--meeting-json", "--progress-json"],
+        &whisper(1),
+        &analyzer,
+    );
+
+    run.result.as_ref().expect("the run succeeds");
+    let document: Value = serde_json::from_str(&run.stdout).unwrap();
+    assert_eq!(document["speakers"].as_array().unwrap().len(), 2);
+    assert_eq!(document["model"], "tiny.en");
+    assert!(document["diarization"].is_object());
+    // The phases of a computed run, in order; the diarized ones carry no
+    // step number or percent but the decoder settings.
+    let phases = run.phases();
+    let position = |name: &str| {
+        phases
+            .iter()
+            .position(|phase| phase == name)
+            .unwrap_or_else(|| panic!("no {name} event in {phases:?}"))
+    };
+    assert!(position("decoding") < position("loading"));
+    assert!(position("loading") < position("analyzing"));
+    assert!(position("analyzing") < position("clustering"));
+    assert!(position("clustering") < position("finalizing"));
+    assert!(position("finalizing") < position("completed"));
+    let analyzing = run
+        .events()
+        .into_iter()
+        .find(|event| event["phase"] == "analyzing")
+        .unwrap();
+    assert!(analyzing["step"].is_null() && analyzing["percent"].is_null());
+    assert_eq!(analyzing["decoder"]["beam_size"], 0);
 }
 
 // ---- CachePolicy::RefreshNew --------------------------------------------------------
@@ -691,6 +793,321 @@ fn a_cancel_while_decoding_keeps_a_previous_cache() {
     assert!(backend.calls().is_empty(), "the model was never loaded");
     assert_eq!(fx.cache_bytes(), seeded);
     assert_eq!(fx.files(), ["cache.json", "meeting.wav"]);
+}
+
+// ---- the meeting entry points: typed options, no command line --------------------------------
+
+use crate::transcribe::args::validated_speaker_hint;
+use crate::transcribe::meeting::{
+    meeting_options, stable_file_sha256, transcribe_meeting_file_inner,
+};
+use sagascript_core::meeting::MeetingTranscript;
+use sagascript_core::speaker_hint::SpeakerCountHint;
+
+/// One meeting run as the app and reprocessing make it: the options of
+/// `meeting_options`, the given backend and analyzer.
+fn meeting(
+    fx: &Fixture,
+    options: &FileOptions,
+    backend: &ScriptedBackend,
+    analyzer: &ScriptedAnalyzer,
+    control: Option<&MeetingControl<'_>>,
+) -> Result<MeetingTranscript, DictationError> {
+    transcribe_meeting_file_inner(
+        &fx.file,
+        &Settings::default(),
+        Language::English,
+        WhisperModel::TinyEn,
+        &Glossary::default(),
+        Services {
+            backend,
+            analyzer,
+            canceller: &crate::cancel::Canceller::new(),
+        },
+        control,
+        options,
+    )
+}
+
+fn default_meeting_options() -> FileOptions {
+    meeting_options(sagascript_core::diarization::DEFAULT_THRESHOLD, None, None)
+}
+
+#[test]
+fn a_meeting_run_returns_the_validated_document_of_the_recording() {
+    let fx = Fixture::new();
+    let analyzer = ScriptedAnalyzer::new();
+
+    let document = meeting(
+        &fx,
+        &default_meeting_options(),
+        &whisper(1),
+        &analyzer,
+        None,
+    )
+    .expect("the meeting run succeeds");
+
+    document.validate().expect("the document validates");
+    assert_eq!(document.speakers.len(), 2);
+    assert_eq!(
+        document.source_sha256,
+        stable_file_sha256(&fx.file, None).unwrap()
+    );
+    assert_eq!(document.language, "en");
+    assert_eq!(document.model, "tiny.en");
+    assert_eq!(document.duration_seconds, SECONDS as f64);
+    assert!(document.diarization.is_some());
+    assert!(document.speaker_hint.is_none());
+    assert_eq!(analyzer.calls(), 1);
+    // The meeting options carry no cache.
+    assert_eq!(fx.files(), ["meeting.wav"]);
+}
+
+#[test]
+fn the_threshold_reaches_the_clustering() {
+    let fx = Fixture::new();
+    let speakers = |threshold: f32| {
+        meeting(
+            &fx,
+            &meeting_options(threshold, None, None),
+            &whisper(1),
+            &ScriptedAnalyzer::new(),
+            None,
+        )
+        .expect("the meeting run succeeds")
+        .speakers
+        .len()
+    };
+
+    assert_eq!(speakers(0.34), 2);
+    assert_eq!(speakers(1.1), 1);
+}
+
+#[test]
+fn the_speaker_hint_reaches_the_clustering_and_is_recorded() {
+    let fx = Fixture::new();
+    let run = |hint: Option<SpeakerCountHint>| {
+        meeting(
+            &fx,
+            &meeting_options(sagascript_core::diarization::DEFAULT_THRESHOLD, hint, None),
+            &whisper(1),
+            &ScriptedAnalyzer::new(),
+            None,
+        )
+        .expect("the meeting run succeeds")
+    };
+
+    // Two clearly different voices: asking for one does not merge them, and
+    // the document says the hint fell short ...
+    let exact = run(Some(SpeakerCountHint::exact(1)));
+    assert_eq!(exact.speakers.len(), 2);
+    assert_eq!(exact.speaker_hint, Some(SpeakerCountHint::exact(1)));
+    assert_eq!(exact.speaker_hint_satisfied, Some(false));
+    assert_eq!(exact.speaker_hint_delivered, Some(2));
+    // ... unless the hint is forced.
+    let forced = run(Some(SpeakerCountHint::forced(1)));
+    assert_eq!(forced.speakers.len(), 1);
+    assert_eq!(forced.speaker_hint, Some(SpeakerCountHint::forced(1)));
+    assert_eq!(forced.speaker_hint_satisfied, Some(true));
+    let range = run(Some(SpeakerCountHint::range(Some(2), None)));
+    assert_eq!(range.speaker_hint_satisfied, Some(true));
+    assert_eq!(range.speaker_hint_delivered, Some(2));
+}
+
+#[test]
+fn the_meeting_options_hold_the_hint_as_the_flags_would() {
+    let hints = [
+        None,
+        Some(SpeakerCountHint::exact(3)),
+        Some(SpeakerCountHint::range(Some(2), Some(4))),
+        Some(SpeakerCountHint::range(None, Some(2))),
+        Some(SpeakerCountHint::forced(2)),
+    ];
+    for hint in hints {
+        let options = meeting_options(0.5, hint, None);
+        let flags = options.diarization.expect("a meeting run is diarized");
+        assert_eq!(validated_speaker_hint(&flags.speaker_count).unwrap(), hint);
+        assert_eq!(flags.threshold, 0.5);
+        assert!(flags.meeting_json);
+        assert!(flags.cache.is_none());
+        assert!(!flags.diagnostics && !flags.exclusive_speech_embeddings);
+    }
+    // Nothing but the diarized pipeline is switched on.
+    let options = meeting_options(0.5, None, None);
+    assert!(!options.progress_json && !options.correct_hints);
+    assert!(!options.decoder.vad && !options.decoder.no_vad);
+    assert!(options.decoder.beam_size.is_none() && options.decoder.parallel.is_none());
+    // An empty hint is no hint, as an empty set of flags is.
+    let empty = meeting_options(0.5, Some(SpeakerCountHint::default()), None);
+    let flags = empty.diarization.unwrap();
+    assert_eq!(validated_speaker_hint(&flags.speaker_count).unwrap(), None);
+}
+
+#[test]
+fn a_hint_that_does_not_validate_fails_after_the_model_load_and_before_the_analysis() {
+    let fx = Fixture::new();
+    let analyzer = ScriptedAnalyzer::new();
+    let backend = whisper(1);
+    let backwards = SpeakerCountHint {
+        min: Some(4),
+        max: Some(2),
+        ..SpeakerCountHint::default()
+    };
+
+    let error = meeting(
+        &fx,
+        &meeting_options(
+            sagascript_core::diarization::DEFAULT_THRESHOLD,
+            Some(backwards),
+            None,
+        ),
+        &backend,
+        &analyzer,
+        None,
+    )
+    .expect_err("an invalid hint fails the run");
+
+    assert_eq!(
+        error.to_string(),
+        "Settings error: --speakers: min-speakers (4) must not exceed max-speakers (2)"
+    );
+    assert_eq!(analyzer.calls(), 0);
+    // An English-only model needs no language check; it was loaded, for the
+    // diarized profile, before the hint was looked at.
+    assert!(
+        matches!(
+            backend.calls()[..],
+            [Call::Load(
+                WhisperModel::TinyEn,
+                ContextProfile::TokenAlignment
+            )]
+        ),
+        "{:?}",
+        backend.calls()
+    );
+}
+
+#[test]
+fn a_full_meeting_run_stages_a_new_cache_and_never_replaces_one() {
+    let fx = Fixture::new();
+    let staged = meeting_options(
+        sagascript_core::diarization::DEFAULT_THRESHOLD,
+        None,
+        Some(CacheRequest {
+            path: fx.cache.clone(),
+            policy: CachePolicy::RefreshNew,
+        }),
+    );
+    let analyzer = ScriptedAnalyzer::new();
+
+    meeting(&fx, &staged, &whisper(1), &analyzer, None).expect("the staging run succeeds");
+    assert!(matches!(
+        fx.lookup(WhisperModel::TinyEn),
+        CacheLookup::Hit(_)
+    ));
+    let staged_bytes = fx.cache_bytes();
+
+    // A second full run recomputes (it never reads the cache) and refuses to replace it.
+    let error = meeting(&fx, &staged, &whisper(1), &analyzer, None)
+        .expect_err("the staged cache is not replaced");
+    assert!(
+        error
+            .to_string()
+            .contains("Diarization cache output already exists"),
+        "{error}"
+    );
+    assert_eq!(analyzer.calls(), 2);
+    assert_eq!(fx.cache_bytes(), staged_bytes);
+    assert_eq!(fx.files(), ["cache.json", "meeting.wav"]);
+}
+
+#[test]
+fn a_meeting_job_reports_its_phases_in_order() {
+    let fx = Fixture::new();
+    let cancelled = AtomicBool::new(false);
+    let phases = Mutex::new(Vec::new());
+    let progress = |phase| {
+        let mut seen = phases.lock().unwrap();
+        // Each checkpoint reports once; a phase with two checkpoints is one phase.
+        if seen.last() != Some(&phase) {
+            seen.push(phase);
+        }
+    };
+    let control = MeetingControl {
+        cancellation: &cancelled,
+        progress: &progress,
+    };
+
+    meeting(
+        &fx,
+        &default_meeting_options(),
+        &whisper(1),
+        &ScriptedAnalyzer::new(),
+        Some(&control),
+    )
+    .expect("the meeting run succeeds");
+
+    assert_eq!(
+        *phases.lock().unwrap(),
+        [
+            MeetingPhase::Preparing,
+            MeetingPhase::Decoding,
+            MeetingPhase::LoadingModel,
+            MeetingPhase::Analyzing,
+            MeetingPhase::Clustering,
+            MeetingPhase::Finalizing,
+        ]
+    );
+}
+
+// ---- a cache that cannot be trusted -----------------------------------------------------------
+
+#[test]
+fn a_cache_path_that_is_the_recording_is_refused_before_any_work() {
+    let fx = Fixture::new();
+    let options = FileOptions {
+        diarization: Some(DiarizationFlags {
+            cache: Some(CacheRequest {
+                path: fx.file.clone(),
+                policy: CachePolicy::Normal,
+            }),
+            ..DiarizationFlags::default()
+        }),
+        ..FileOptions::default()
+    };
+    let backend = whisper(1);
+    let analyzer = ScriptedAnalyzer::new();
+    let (out, captured) = Out::capture();
+    let mut model_loaded = false;
+
+    let error = transcribe_file(
+        &FileRequest {
+            options: &options,
+            file: &fx.file,
+            stored: &Settings::default(),
+            language: Language::English,
+            model: WhisperModel::TinyEn,
+            glossary: &Glossary::default(),
+            correction_vocabulary: &[],
+            control: None,
+        },
+        Services {
+            backend: &backend,
+            analyzer: &analyzer,
+            canceller: &crate::cancel::Canceller::new(),
+        },
+        &mut model_loaded,
+        &out,
+    )
+    .expect_err("the recording is not a cache");
+
+    assert_eq!(
+        error.to_string(),
+        "Settings error: --diarize-cache must not point to the input recording"
+    );
+    assert!(backend.calls().is_empty() && analyzer.calls() == 0);
+    assert!(!captured.stderr().contains("Decoding"));
+    assert_eq!(fx.files(), ["meeting.wav"]);
 }
 
 // ---- the models -----------------------------------------------------------------------

@@ -29,8 +29,7 @@ pub(super) struct AnalysisRequest<'a> {
     pub(super) options: &'a TranscribeOptions,
     pub(super) coverage_profile: &'a CoverageProfile,
     pub(super) language_evidence: &'a LanguageEvidence,
-    pub(super) cache: Option<&'a CacheTarget<'a>>,
-    pub(super) cache_policy: CachePolicy,
+    pub(super) cache: Option<&'a CacheTarget>,
     pub(super) control: Option<&'a MeetingControl<'a>>,
 }
 
@@ -83,7 +82,6 @@ pub(super) fn obtain_analysis(
         coverage_profile,
         language_evidence,
         cache,
-        cache_policy,
         control,
     } = *request;
     let audio = match source {
@@ -121,7 +119,6 @@ pub(super) fn obtain_analysis(
         Some(target) => write_cache(
             &CacheWrite {
                 target,
-                policy: cache_policy,
                 analysis: &analysis,
                 transcription: &transcription,
                 coverage_profile,
@@ -145,10 +142,9 @@ pub(super) fn obtain_analysis(
     })
 }
 
-/// What [`write_cache`] stores, and where, under which policy.
+/// What [`write_cache`] stores, and where (the target also says under which policy).
 struct CacheWrite<'a> {
-    target: &'a CacheTarget<'a>,
-    policy: CachePolicy,
+    target: &'a CacheTarget,
     analysis: &'a DiarizationAnalysis,
     transcription: &'a DiarizationTranscription,
     coverage_profile: &'a CoverageProfile,
@@ -165,7 +161,6 @@ struct CacheWrite<'a> {
 fn write_cache(step: &CacheWrite<'_>, out: &Out) -> Result<f64, DictationError> {
     let CacheWrite {
         target,
-        policy,
         analysis,
         transcription,
         coverage_profile,
@@ -183,9 +178,9 @@ fn write_cache(step: &CacheWrite<'_>, out: &Out) -> Result<f64, DictationError> 
         language_evidence.language_regions.clone(),
         exclusive_speech_embeddings,
     );
-    match policy {
+    match target.policy {
         CachePolicy::Normal => {
-            crate::diarization_cache::save(target.path, &cache)?;
+            crate::diarization_cache::save(&target.path, &cache)?;
             let seconds = cache_write_started.elapsed().as_secs_f64();
             errln!(
                 out,
@@ -195,7 +190,7 @@ fn write_cache(step: &CacheWrite<'_>, out: &Out) -> Result<f64, DictationError> 
             Ok(seconds)
         }
         CachePolicy::RefreshNew => {
-            crate::diarization_cache::save_new(target.path, &cache)?;
+            crate::diarization_cache::save_new(&target.path, &cache)?;
             Ok(cache_write_started.elapsed().as_secs_f64())
         }
     }

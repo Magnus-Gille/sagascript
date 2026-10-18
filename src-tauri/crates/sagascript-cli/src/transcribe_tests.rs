@@ -9,6 +9,8 @@ use super::meeting::{meeting_checkpoint, validate_meeting_input_scope};
 use super::output::*;
 #[cfg(feature = "diarization")]
 use super::pianissimo::*;
+#[cfg(feature = "diarization")]
+use super::plan::{CacheRequest, DiarizationFlags};
 use super::progress::*;
 use super::vocab_correction::*;
 use super::*;
@@ -508,42 +510,25 @@ fn cached_transcribe_uses_coarse_coverage_across_threshold_sweep() {
     };
     assert_eq!(loaded.coverage_segments.as_ref().unwrap()[1].end, 11.0);
 
-    let args_for_threshold = |threshold| TranscribeArgs {
-        progress_json: false,
-        files: vec![input.clone()],
-        recursive: false,
-        language: Some("en".to_string()),
-        profile: None,
-        model: Some("tiny.en".to_string()),
-        json: true,
-        jsonl: false,
-        fail_fast: true,
-        clipboard: false,
-        diarize: true,
-        diarize_exclusive_speech_embeddings: false,
-        meeting_json: false,
-        diarize_threshold: threshold,
-        diarize_diagnostics: false,
-        speaker_count: crate::speaker_args::SpeakerCountArgs::default(),
-        diarize_cache: Some(cache.clone()),
-        prompt: Some("alpha".to_string()),
-        prompt_file: None,
-        glossary_boost: None,
-        boost_terms_file: None,
-        correct_hints: false,
-        vad: false,
-        no_vad: false,
-        beam_size: None,
-        parallel: None,
+    let options_for_threshold = |threshold| FileOptions {
+        diarization: Some(DiarizationFlags {
+            cache: Some(CacheRequest {
+                path: cache.clone(),
+                policy: CachePolicy::Normal,
+            }),
+            threshold,
+            ..DiarizationFlags::default()
+        }),
+        ..FileOptions::default()
     };
     let canceller = crate::cancel::Canceller::new();
     let run = |threshold| {
-        let args = args_for_threshold(threshold);
+        let options = options_for_threshold(threshold);
         let backend = WhisperBackend::new();
         let mut model_loaded = false;
         transcribe_file(
             &FileRequest {
-                args: &args,
+                options: &options,
                 file: &input,
                 stored: &Settings::default(),
                 language: Language::English,
@@ -551,7 +536,6 @@ fn cached_transcribe_uses_coarse_coverage_across_threshold_sweep() {
                 glossary: &Glossary::parse("alpha"),
                 correction_vocabulary: &[],
                 control: None,
-                cache_policy: CachePolicy::Normal,
             },
             Services {
                 backend: &backend,
@@ -1404,41 +1388,29 @@ mod diarize_threshold_tests {
 
     #[test]
     fn diarized_decoder_flags_resolve_to_effective_options() {
-        let cli =
-            TestCli::try_parse_from(["sagascript", "f.wav", "--diarize", "--beam", "4", "--vad"])
-                .unwrap();
-        let options = resolve_diarization_options(&cli.args, &Settings::default()).unwrap();
+        // The diarized decoder reads the flags alone: saved settings (a saved
+        // beam of 5, VAD enabled, no temperature fallback) are not an input.
+        let decoder = |flags: &[&str]| {
+            let argv = ["sagascript", "f.wav", "--diarize"]
+                .into_iter()
+                .chain(flags.iter().copied());
+            FileOptions::from_args(&TestCli::try_parse_from(argv).unwrap().args).decoder
+        };
+
+        let options = resolve_diarization_options(&decoder(&["--beam", "4", "--vad"])).unwrap();
         assert_eq!(options.beam_size, 4);
         assert!(options.vad_model_path.is_some());
 
-        let stored = Settings {
-            beam_size: 5,
-            vad_enabled: true,
-            temperature_fallback: false,
-            ..Settings::default()
-        };
-        let defaulted = TestCli::try_parse_from(["sagascript", "f.wav", "--diarize"]).unwrap();
-        let options = resolve_diarization_options(&defaulted.args, &stored).unwrap();
+        let options = resolve_diarization_options(&decoder(&[])).unwrap();
         assert_eq!(options.beam_size, 0);
         assert!(options.vad_model_path.is_none());
         assert!(options.temperature_fallback);
 
-        let no_vad =
-            TestCli::try_parse_from(["sagascript", "f.wav", "--diarize", "--no-vad"]).unwrap();
-        let options = resolve_diarization_options(&no_vad.args, &stored).unwrap();
+        let options = resolve_diarization_options(&decoder(&["--no-vad"])).unwrap();
         assert_eq!(options.beam_size, 0);
         assert!(options.vad_model_path.is_none());
 
-        let invalid_saved = Settings {
-            beam_size: 99,
-            ..stored
-        };
-        let options = resolve_diarization_options(&defaulted.args, &invalid_saved).unwrap();
-        assert_eq!(options.beam_size, 0);
-        let explicit =
-            TestCli::try_parse_from(["sagascript", "f.wav", "--diarize", "--beam", "2", "--vad"])
-                .unwrap();
-        let options = resolve_diarization_options(&explicit.args, &invalid_saved).unwrap();
+        let options = resolve_diarization_options(&decoder(&["--beam", "2", "--vad"])).unwrap();
         assert_eq!(options.beam_size, 2);
         assert!(options.vad_model_path.is_some());
         assert!(options.temperature_fallback);

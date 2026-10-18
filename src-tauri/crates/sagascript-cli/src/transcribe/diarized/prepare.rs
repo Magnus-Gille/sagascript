@@ -6,11 +6,11 @@ use sagascript_core::error::DictationError;
 use sagascript_core::speaker_hint::SpeakerCountHint;
 use sagascript_core::transcription::{model, ContextProfile};
 
-use super::super::args::{speaker_hint_from_args, TranscribeArgs};
+use super::super::args::validated_speaker_hint;
 use super::super::diarize::DiarizationPerformance;
 use super::super::inference::{prepare_language, verify_vad_model, LanguageEvidence};
 use super::super::meeting::{meeting_checkpoint, MeetingPhase};
-use super::super::plan::{DiarizationPlan, FileRequest};
+use super::super::plan::{DiarizationPlan, FileOptions, FileRequest};
 use super::super::progress::Progress;
 use super::super::services::Services;
 use super::super::source::Source;
@@ -41,8 +41,9 @@ pub(super) fn settle_language(
         source,
         services,
     } = *step;
-    let FileRequest { args, control, .. } = *request;
-    if args.meeting_json {
+    let FileRequest { control, .. } = *request;
+    let meeting_json = plan.flags.meeting_json;
+    if meeting_json {
         meeting_checkpoint(control, MeetingPhase::LoadingModel)?;
     }
     let evidence = match source {
@@ -67,7 +68,7 @@ pub(super) fn settle_language(
             )?
         }
     };
-    if args.meeting_json {
+    if meeting_json {
         meeting_checkpoint(control, MeetingPhase::LoadingModel)?;
     }
     Ok(evidence)
@@ -75,8 +76,8 @@ pub(super) fn settle_language(
 
 /// `--correct-hints` repairs words by their confidence, which diarized output
 /// does not have.
-pub(super) fn refuse_hint_correction(args: &TranscribeArgs) -> Result<(), DictationError> {
-    if args.correct_hints {
+pub(super) fn refuse_hint_correction(options: &FileOptions) -> Result<(), DictationError> {
+    if options.correct_hints {
         return Err(DictationError::SettingsError(
             "--correct-hints is not available with --diarize because diarized output has no segment confidence"
                 .to_string(),
@@ -117,7 +118,8 @@ pub(super) fn configure(
         decode_resample_seconds,
         cache_lookup_seconds,
     } = *step;
-    let FileRequest { args, model, .. } = *request;
+    let FileRequest { model, .. } = *request;
+    let flags = &plan.flags;
     let acceleration = model::acceleration_profile(model);
     let performance = DiarizationPerformance {
         acceleration_backend: acceleration.backend,
@@ -138,11 +140,11 @@ pub(super) fn configure(
         acceleration.coreml_status
     );
 
-    let speaker_hint = speaker_hint_from_args(args)?;
+    let speaker_hint = validated_speaker_hint(&flags.speaker_count)?;
     let config = DiarizeConfig {
-        threshold: args.diarize_threshold,
+        threshold: flags.threshold,
         speaker_hint,
-        exclusive_speech_embeddings: args.diarize_exclusive_speech_embeddings,
+        exclusive_speech_embeddings: flags.exclusive_speech_embeddings,
         ..DiarizeConfig::default()
     };
     errln!(

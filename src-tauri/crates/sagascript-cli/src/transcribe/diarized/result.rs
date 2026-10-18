@@ -25,7 +25,7 @@ use super::super::output::{
     assemble_diarized_plain_text, combined_warnings, emit_warnings,
     prepare_diarized_plain_segments, FileTranscription,
 };
-use super::super::plan::FileRequest;
+use super::super::plan::{DiarizationFlags, FileRequest};
 use super::super::progress::Progress;
 use super::super::resolve::model_id_string;
 use super::speakers::Merged;
@@ -34,6 +34,7 @@ use crate::output::{errln, Out};
 /// What [`assemble_result`] needs.
 pub(super) struct AssembleRequest<'a> {
     pub(super) request: &'a FileRequest<'a>,
+    pub(super) flags: &'a DiarizationFlags,
     pub(super) source_sha256: String,
     pub(super) duration: f64,
     pub(super) coverage_profile: &'a CoverageProfile,
@@ -111,6 +112,7 @@ pub(super) fn assemble_result(
 ) -> Result<FileTranscription, DictationError> {
     let AssembleRequest {
         request,
+        flags,
         source_sha256,
         duration,
         coverage_profile,
@@ -128,7 +130,6 @@ pub(super) fn assemble_result(
         started,
     } = step;
     let FileRequest {
-        args,
         file,
         language,
         model,
@@ -177,7 +178,7 @@ pub(super) fn assemble_result(
         duration / performance.total_seconds.max(f64::EPSILON),
         performance.cache_hit
     );
-    if args.meeting_json {
+    if flags.meeting_json {
         meeting_checkpoint(control, MeetingPhase::Finalizing)?;
         let meeting = build_meeting_document(
             source_sha256,

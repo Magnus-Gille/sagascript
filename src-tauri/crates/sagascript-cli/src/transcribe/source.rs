@@ -3,6 +3,8 @@
 //! for the inference that made it.
 
 use std::path::Path;
+#[cfg(feature = "diarization")]
+use std::path::PathBuf;
 use std::time::Instant;
 
 use indicatif::{ProgressBar, ProgressStyle};
@@ -17,6 +19,8 @@ use sagascript_core::transcription::diagnostics::{
 #[cfg(feature = "diarization")]
 use sagascript_core::transcription::TranscriptSegment;
 
+#[cfg(feature = "diarization")]
+use super::diarize::CachePolicy;
 use super::meeting::MeetingControl;
 #[cfg(feature = "diarization")]
 use super::meeting::{meeting_checkpoint, MeetingPhase};
@@ -113,12 +117,13 @@ pub(super) fn decode_file(
 
 // ---- the diarized run's source ---------------------------------------------------
 
-/// A diarization cache a run may read and, on a miss, writes: where it lives
-/// and the run it belongs to.
+/// A diarization cache a run may read and, on a miss, writes: where it lives,
+/// the run it belongs to and the policy that governs it.
 #[cfg(feature = "diarization")]
-pub(super) struct CacheTarget<'a> {
-    pub(super) path: &'a Path,
+pub(super) struct CacheTarget {
+    pub(super) path: PathBuf,
     pub(super) identity: CacheIdentity,
+    pub(super) policy: CachePolicy,
 }
 
 /// What a validated cache hit brings, in place of decoding the file and
@@ -191,10 +196,10 @@ impl Source {
 
 /// What a diarized run holds once its source is settled.
 #[cfg(feature = "diarization")]
-pub(super) struct Acquired<'a> {
+pub(super) struct Acquired {
     pub(super) source: Source,
     /// The cache to write on a miss; `None` without `--diarize-cache`.
-    pub(super) cache: Option<CacheTarget<'a>>,
+    pub(super) cache: Option<CacheTarget>,
     /// Seconds from naming the cache's identity to knowing hit or miss.
     pub(super) cache_lookup_seconds: f64,
 }
@@ -203,27 +208,26 @@ pub(super) struct Acquired<'a> {
 /// says not to read it), then either takes the hit or checks the diarization
 /// models and decodes the file.
 #[cfg(feature = "diarization")]
-pub(super) fn acquire_source<'a>(
-    request: &FileRequest<'a>,
+pub(super) fn acquire_source(
+    request: &FileRequest<'_>,
     plan: &DiarizationPlan,
     services: Services<'_>,
     progress: &Progress,
     out: &Out,
-) -> Result<Acquired<'a>, DictationError> {
+) -> Result<Acquired, DictationError> {
     let FileRequest {
-        args,
         file,
         language,
         model,
         control,
-        cache_policy,
         ..
     } = *request;
+    let flags = &plan.flags;
     let cache_lookup_started = Instant::now();
-    let cache = args
-        .diarize_cache
-        .as_deref()
-        .map(|path| {
+    let cache = flags
+        .cache
+        .as_ref()
+        .map(|cache| {
             CacheIdentity::for_source_sha256_with_options(
                 &plan.source_sha256,
                 language.whisper_code().unwrap_or("auto"),
@@ -233,12 +237,16 @@ pub(super) fn acquire_source<'a>(
                 plan.options.temperature_fallback,
                 plan.options.vad_model_path.is_some(),
             )
-            .map(|identity| CacheTarget { path, identity })
+            .map(|identity| CacheTarget {
+                path: cache.path.clone(),
+                identity,
+                policy: cache.policy,
+            })
         })
         .transpose()?;
     let hit = match &cache {
-        Some(target) if cache_policy.reads_existing_cache() => {
-            lookup_cache(target, args.diarize_exclusive_speech_embeddings, out)?
+        Some(target) if target.policy.reads_existing_cache() => {
+            lookup_cache(target, flags.exclusive_speech_embeddings, out)?
         }
         _ => None,
     };
@@ -250,7 +258,7 @@ pub(super) fn acquire_source<'a>(
         ));
     }
 
-    if args.meeting_json {
+    if flags.meeting_json {
         meeting_checkpoint(control, MeetingPhase::Decoding)?;
     }
     let source = match hit {
@@ -271,7 +279,7 @@ pub(super) fn acquire_source<'a>(
             out,
         )?),
     };
-    if args.meeting_json {
+    if flags.meeting_json {
         meeting_checkpoint(control, MeetingPhase::Decoding)?;
     }
     Ok(Acquired {
@@ -283,12 +291,12 @@ pub(super) fn acquire_source<'a>(
 
 #[cfg(feature = "diarization")]
 fn lookup_cache(
-    target: &CacheTarget<'_>,
+    target: &CacheTarget,
     exclusive_speech_embeddings: bool,
     out: &Out,
 ) -> Result<Option<Box<DiarizationCache>>, DictationError> {
     match crate::diarization_cache::load_with_analysis_policy(
-        target.path,
+        &target.path,
         &target.identity,
         exclusive_speech_embeddings,
     )? {

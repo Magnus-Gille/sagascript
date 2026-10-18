@@ -78,13 +78,13 @@ pub use self::resolve::{
 };
 
 #[cfg(feature = "diarization")]
-use self::diarize::{CachePolicy, OnnxAnalyzer};
+use self::diarize::OnnxAnalyzer;
 #[cfg(feature = "diarization")]
 use self::diarized::run_diarized;
 use self::output::{BatchExecution, BatchSink, Clipboard, FileTranscription, SystemClipboard};
 use self::pianissimo::{run_pianissimo_batch, InstalledPianissimo, PianissimoBatch};
 use self::plain::run_plain;
-use self::plan::{plan_file, plan_run, EnginePlan, FileMode, FileRequest, RunPlan};
+use self::plan::{plan_file, plan_run, EnginePlan, FileMode, FileOptions, FileRequest, RunPlan};
 use self::progress::emit_progress;
 use self::services::Services;
 use crate::cancel::Canceller;
@@ -194,6 +194,7 @@ fn run_whisper_batch(
         clipboard,
     } = *batch;
     let mut model_loaded = false;
+    let options = FileOptions::from_args(args);
 
     let mut sink = BatchSink::new(args, files.len());
     let (processed, failures) = process_batch_with(
@@ -204,7 +205,7 @@ fn run_whisper_batch(
             errln!(out, "[{}/{}] {}", index + 1, files.len(), file.display());
             transcribe_file(
                 &FileRequest {
-                    args,
+                    options: &options,
                     file,
                     stored,
                     language,
@@ -212,8 +213,6 @@ fn run_whisper_batch(
                     glossary,
                     correction_vocabulary,
                     control: None,
-                    #[cfg(feature = "diarization")]
-                    cache_policy: CachePolicy::Normal,
                 },
                 services,
                 &mut model_loaded,

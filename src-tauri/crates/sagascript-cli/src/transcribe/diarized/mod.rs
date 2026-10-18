@@ -52,15 +52,14 @@ pub(super) fn run_diarized(
     out: &Out,
 ) -> Result<FileTranscription, DictationError> {
     let FileRequest {
-        args,
+        options,
         language,
         control,
-        cache_policy,
         ..
     } = *request;
     let progress = Progress::new(
         out,
-        args.progress_json,
+        options.progress_json,
         started,
         Some(plan.decoder_progress.clone()),
     );
@@ -83,7 +82,7 @@ pub(super) fn run_diarized(
         &progress,
         out,
     )?;
-    refuse_hint_correction(args)?;
+    refuse_hint_correction(options)?;
 
     let Configured {
         config,
@@ -112,7 +111,6 @@ pub(super) fn run_diarized(
             coverage_profile: &coverage_profile,
             language_evidence: &language_evidence,
             cache: cache.as_ref(),
-            cache_policy,
             control,
         },
         out,
@@ -154,6 +152,7 @@ pub(super) fn run_diarized(
     assemble_result(
         AssembleRequest {
             request,
+            flags: &plan.flags,
             source_sha256: plan.source_sha256,
             duration,
             coverage_profile: &coverage_profile,

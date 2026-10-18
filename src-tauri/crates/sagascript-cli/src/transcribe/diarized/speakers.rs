@@ -104,12 +104,8 @@ pub(super) fn merge_speakers(step: MergeRequest<'_>, out: &Out) -> Result<Merged
         duration,
         progress,
     } = step;
-    let FileRequest {
-        args,
-        file,
-        control,
-        ..
-    } = *request;
+    let FileRequest { file, control, .. } = *request;
+    let diagnostics = plan.flags.diagnostics;
     errln!(out, "Got {} word/segment(s) for merging", words.len());
     if std::env::var("SAGA_DIAR_DEBUG").is_ok() {
         for (st, en, tx) in &words {
@@ -129,7 +125,7 @@ pub(super) fn merge_speakers(step: MergeRequest<'_>, out: &Out) -> Result<Merged
         speakers,
         config,
         attributions,
-        args.diarize_diagnostics,
+        diagnostics,
         plan.source_sha256.clone(),
         duration,
         crate::GIT_HASH.into(),
@@ -139,7 +135,7 @@ pub(super) fn merge_speakers(step: MergeRequest<'_>, out: &Out) -> Result<Merged
     report.speaker_hint_outcome = hint_outcome;
     report.asr_segments = coverage_segments
         .iter()
-        .filter(|_| args.diarize_diagnostics)
+        .filter(|_| diagnostics)
         .map(
             |segment| sagascript_core::diarization_report::AsrSegmentEvidence {
                 start: segment.start,

@@ -26,13 +26,11 @@ use sagascript_core::settings::{Language, Settings, WhisperModel};
 use sagascript_core::transcription::{Glossary, WhisperBackend};
 
 #[cfg(feature = "diarization")]
-use super::args::TranscribeArgs;
-#[cfg(feature = "diarization")]
 use super::diarize::{CachePolicy, OnnxAnalyzer};
 #[cfg(feature = "diarization")]
 use super::inputs::paths_refer_to_same_file;
 #[cfg(feature = "diarization")]
-use super::plan::FileRequest;
+use super::plan::{CacheRequest, DiarizationFlags, FileOptions, FileRequest};
 #[cfg(feature = "diarization")]
 use super::resolve::model_id_string;
 #[cfg(feature = "diarization")]
@@ -301,12 +299,9 @@ pub fn transcribe_meeting_file(
         language,
         model,
         glossary,
-        backend,
+        process_services(backend),
         None,
-        sagascript_core::diarization::DEFAULT_THRESHOLD,
-        None,
-        None,
-        CachePolicy::Normal,
+        &meeting_options(sagascript_core::diarization::DEFAULT_THRESHOLD, None, None),
     )
 }
 
@@ -329,12 +324,9 @@ pub fn transcribe_meeting_file_with_control(
         language,
         model,
         glossary,
-        backend,
+        process_services(backend),
         Some(control),
-        sagascript_core::diarization::DEFAULT_THRESHOLD,
-        None,
-        None,
-        CachePolicy::Normal,
+        &meeting_options(sagascript_core::diarization::DEFAULT_THRESHOLD, None, None),
     )
 }
 
@@ -398,65 +390,72 @@ pub fn transcribe_meeting_file_full(
         language,
         model,
         glossary,
-        backend,
+        process_services(backend),
         control,
-        threshold,
-        speaker_hint,
-        cache_output,
-        CachePolicy::RefreshNew,
+        &meeting_options(
+            threshold,
+            speaker_hint,
+            cache_output.map(|path| CacheRequest {
+                path: path.to_path_buf(),
+                policy: CachePolicy::RefreshNew,
+            }),
+        ),
     )
+}
+
+/// The services of a meeting job in the app or of reprocessing: the Whisper
+/// backend the caller owns, the ONNX analysis and the process-wide canceller
+/// (which the app never installs a handler for; its jobs cancel through their
+/// `MeetingControl`).
+#[cfg(feature = "diarization")]
+fn process_services(backend: &WhisperBackend) -> Services<'_> {
+    Services {
+        backend,
+        analyzer: &OnnxAnalyzer,
+        canceller: &crate::cancel::GLOBAL,
+    }
+}
+
+/// The options of a meeting run, which has no command line: the diarized
+/// pipeline with the meeting document as its result, the given clustering
+/// threshold, speaker-count hint and cache, and nothing else switched on.
+#[cfg(feature = "diarization")]
+pub(super) fn meeting_options(
+    threshold: f32,
+    speaker_hint: Option<sagascript_core::speaker_hint::SpeakerCountHint>,
+    cache: Option<CacheRequest>,
+) -> FileOptions {
+    FileOptions {
+        diarization: Some(DiarizationFlags {
+            cache,
+            threshold,
+            speaker_count: crate::speaker_args::SpeakerCountArgs {
+                speakers: speaker_hint
+                    .and_then(|hint| hint.exact)
+                    .filter(|_| !speaker_hint.is_some_and(|h| h.force)),
+                min_speakers: speaker_hint.and_then(|hint| hint.min),
+                max_speakers: speaker_hint.and_then(|hint| hint.max),
+                force_speakers: speaker_hint.filter(|h| h.force).and_then(|h| h.exact),
+            },
+            meeting_json: true,
+            ..DiarizationFlags::default()
+        }),
+        ..FileOptions::default()
+    }
 }
 
 #[cfg(feature = "diarization")]
 #[allow(clippy::too_many_arguments)]
-fn transcribe_meeting_file_inner(
+pub(super) fn transcribe_meeting_file_inner(
     file: &Path,
     stored: &Settings,
     language: Language,
     model: WhisperModel,
     glossary: &Glossary,
-    backend: &WhisperBackend,
+    services: Services<'_>,
     control: Option<&MeetingControl<'_>>,
-    threshold: f32,
-    speaker_hint: Option<sagascript_core::speaker_hint::SpeakerCountHint>,
-    cache_output: Option<&Path>,
-    cache_policy: CachePolicy,
+    options: &FileOptions,
 ) -> Result<MeetingTranscript, DictationError> {
-    let args = TranscribeArgs {
-        progress_json: false,
-        files: vec![file.to_path_buf()],
-        recursive: false,
-        language: Some(language.whisper_code().unwrap_or("auto").to_string()),
-        profile: None,
-        model: Some(model_id_string(model).to_string()),
-        json: false,
-        jsonl: false,
-        fail_fast: true,
-        clipboard: false,
-        diarize: true,
-        diarize_exclusive_speech_embeddings: false,
-        meeting_json: true,
-        diarize_threshold: threshold,
-        diarize_diagnostics: false,
-        speaker_count: crate::speaker_args::SpeakerCountArgs {
-            speakers: speaker_hint
-                .and_then(|hint| hint.exact)
-                .filter(|_| !speaker_hint.is_some_and(|h| h.force)),
-            min_speakers: speaker_hint.and_then(|hint| hint.min),
-            max_speakers: speaker_hint.and_then(|hint| hint.max),
-            force_speakers: speaker_hint.filter(|h| h.force).and_then(|h| h.exact),
-        },
-        diarize_cache: cache_output.map(Path::to_path_buf),
-        prompt: None,
-        prompt_file: None,
-        glossary_boost: None,
-        boost_terms_file: None,
-        correct_hints: false,
-        vad: false,
-        no_vad: false,
-        beam_size: None,
-        parallel: None,
-    };
     let mut model_loaded = false;
     // The pipeline's progress lines go to the process's stderr, as they did
     // before the output layer; the meeting document is the return value.
@@ -466,7 +465,7 @@ fn transcribe_meeting_file_inner(
     // it with `errln!` only.
     let output = transcribe_file(
         &FileRequest {
-            args: &args,
+            options,
             file,
             stored,
             language,
@@ -474,13 +473,8 @@ fn transcribe_meeting_file_inner(
             glossary,
             correction_vocabulary: &[],
             control,
-            cache_policy,
         },
-        Services {
-            backend,
-            analyzer: &OnnxAnalyzer,
-            canceller: &crate::cancel::GLOBAL,
-        },
+        services,
         &mut model_loaded,
         &Out::stdio(),
     )?;

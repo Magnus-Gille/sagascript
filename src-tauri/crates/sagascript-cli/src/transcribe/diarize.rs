@@ -9,7 +9,7 @@ use sagascript_core::diarization_report::DecoderEvidence;
 #[cfg(feature = "diarization")]
 use sagascript_core::error::DictationError;
 #[cfg(feature = "diarization")]
-use sagascript_core::settings::{Language, Settings};
+use sagascript_core::settings::Language;
 #[cfg(feature = "diarization")]
 use sagascript_core::transcription::model;
 #[cfg(feature = "diarization")]
@@ -20,7 +20,7 @@ use sagascript_core::transcription::{
 };
 
 #[cfg(feature = "diarization")]
-use super::args::TranscribeArgs;
+use super::plan::DecoderFlags;
 #[cfg(feature = "diarization")]
 use super::services::Services;
 
@@ -216,11 +216,10 @@ pub(super) fn canonicalize_coverage_segments(
 /// temperature-fallback decoding regardless of ordinary file settings.
 #[cfg(feature = "diarization")]
 pub(super) fn resolve_diarization_options(
-    args: &TranscribeArgs,
-    _stored: &Settings,
+    decoder: &DecoderFlags,
 ) -> Result<TranscribeOptions, DictationError> {
-    let beam_size = args.beam_size.unwrap_or(0);
-    let vad_enabled = args.vad && !args.no_vad;
+    let beam_size = decoder.beam_size.unwrap_or(0);
+    let vad_enabled = decoder.vad && !decoder.no_vad;
     let options = TranscribeOptions {
         prompt: None,
         beam_size,
