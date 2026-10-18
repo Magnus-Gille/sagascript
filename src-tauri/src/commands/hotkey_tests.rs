@@ -43,3 +43,143 @@ fn the_monitor_reinstall_answers_decide_whether_registration_goes_on() {
     assert!(error.to_string().contains("try again"), "{error}");
     assert!(!error.to_string().contains("restart"), "{error}");
 }
+
+/// A profile of the scenarios below: on its own shortcut, Swedish unless said.
+fn profile(id: &str, shortcut: &str) -> HotkeyProfile {
+    HotkeyProfile {
+        id: id.into(),
+        name: format!("Profile {id}"),
+        shortcut: shortcut.into(),
+        language: sagascript_core::settings::Language::Swedish,
+        push_to_talk_shortcut: None,
+        toggle_shortcut: None,
+    }
+}
+
+/// Settings with the profiles `default` (Swedish) and, optionally, others.
+fn settings_with(profiles: Vec<HotkeyProfile>) -> Settings {
+    Settings {
+        hotkey: profiles[0].shortcut.clone(),
+        hotkey_profiles: profiles,
+        ..Settings::default()
+    }
+}
+
+/// `apply_hotkey_change` used to turn every refusal of the settings into
+/// `hotkey_invalid`, so the Settings window could not tell a language change a
+/// dictionary blocks from a shortcut that cannot be used. A refusal now rejects
+/// with the code of its `SettingsError` and its text, unwrapped (ADR 0006,
+/// #360 part 2b).
+#[test]
+fn a_refused_hotkey_change_rejects_with_the_code_and_text_of_its_settings_error() {
+    use sagascript_core::settings::{FileModelPreference, Language, WhisperModel};
+
+    let default_profile = profile("default", "Control+Shift+Space");
+
+    let mut blocked = settings_with(vec![default_profile.clone()]);
+    blocked
+        .profile_glossaries
+        .insert("default".into(), "Gille = Jille".into());
+    let mut english = default_profile.clone();
+    english.language = Language::English;
+
+    let mut inactive = settings_with(vec![default_profile.clone()]);
+    inactive
+        .profile_glossaries
+        .insert("extra".into(), "Gille".into());
+
+    let mut incompatible = settings_with(vec![default_profile.clone()]);
+    incompatible.profile_models.insert(
+        "default".into(),
+        FileModelPreference::Whisper(WhisperModel::TinyEn),
+    );
+
+    let mut banana = default_profile.clone();
+    banana.shortcut = "Banana".into();
+
+    let cases: Vec<(&str, Settings, HotkeyChange, &str)> = vec![
+        (
+            "a language change a personal dictionary blocks",
+            blocked,
+            HotkeyChange::Profiles(vec![english]),
+            "dictionary_blocks_language_change",
+        ),
+        (
+            "an empty profile list",
+            settings_with(vec![default_profile.clone()]),
+            HotkeyChange::Profiles(Vec::new()),
+            "profile_invalid",
+        ),
+        (
+            "a profile id that cannot name a file",
+            settings_with(vec![default_profile.clone()]),
+            HotkeyChange::Profiles(vec![profile("Not Valid", "Control+Shift+K")]),
+            "profile_invalid",
+        ),
+        (
+            "a new profile that already has a dictionary",
+            inactive,
+            HotkeyChange::Profiles(vec![
+                default_profile.clone(),
+                profile("extra", "Control+Shift+K"),
+            ]),
+            "inactive_profile_dictionary",
+        ),
+        (
+            "a model that cannot serve its profile's language",
+            incompatible,
+            HotkeyChange::Profiles(vec![default_profile.clone()]),
+            "model_incompatible",
+        ),
+        (
+            "two profiles on one shortcut",
+            settings_with(vec![default_profile.clone()]),
+            HotkeyChange::Profiles(vec![
+                default_profile.clone(),
+                profile("other", "Control+Shift+Space"),
+            ]),
+            "hotkey_invalid",
+        ),
+        (
+            "a shortcut that does not parse",
+            settings_with(vec![default_profile.clone()]),
+            HotkeyChange::Profiles(vec![banana]),
+            "hotkey_invalid",
+        ),
+    ];
+    for (what, stored, change, code) in cases {
+        let refusal = change
+            .prepare(&stored)
+            .expect_err(&format!("{what}: the settings refuse it"));
+        let error = prepare_candidate(&change, &stored)
+            .expect_err(&format!("{what}: the command rejects it"));
+        assert_eq!(error.code(), code, "{what}");
+        assert_eq!(error.to_string(), refusal.to_string(), "{what}");
+        assert!(!error.retryable(), "{what}");
+        assert!(
+            matches!(error, CommandError::Settings(_)),
+            "{what}: {error:?}"
+        );
+
+        // The persistence half names the same code for the same refusal.
+        let mut fresh = stored.clone();
+        let persisted = change
+            .apply_registered(&mut fresh, &[])
+            .expect_err(&format!("{what}: persisting rejects it"));
+        assert_eq!(persisted.code(), code, "{what}");
+        assert_eq!(persisted.to_string(), refusal.to_string(), "{what}");
+    }
+}
+
+/// Only a failure of the shortcuts themselves is a `hotkey_change_failed`: the
+/// registration moved on while the settings were being saved.
+#[test]
+fn a_shortcut_configuration_that_changed_underneath_is_a_failed_change() {
+    let stored = settings_with(vec![profile("default", "Control+Shift+Space")]);
+    let change = HotkeyChange::Mode(HotkeyMode::Toggle);
+    let mut fresh = stored;
+    let error = change
+        .apply_registered(&mut fresh, &["Control+Alt+K".to_string()])
+        .expect_err("the registered shortcuts are not the ones the change resolves to");
+    assert_eq!(error.code(), "hotkey_change_failed");
+}
