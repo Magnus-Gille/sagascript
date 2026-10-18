@@ -697,9 +697,9 @@
   }
 
   let dictationEventRevision = 0;
-  const errorEvents = useTauriEvent("error", (message) => {
+  const errorEvents = useTauriEvent("error", (failure) => {
     dictationEventRevision++;
-    testError = message;
+    testError = toErrorMessage(failure, "Transcription failed");
     requestTabChange("dictate");
   });
   const resultEvents = useTauriEvent("transcription-result", (text) => {

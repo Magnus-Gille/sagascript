@@ -5,6 +5,7 @@ use tracing::{error, info, warn};
 use super::engine::{prewarm_engine_on_key_down, reemit_engine_load_state};
 use super::pipeline::stop_recording_and_transcribe;
 use crate::app_controller::HotkeyDownResult;
+use crate::command_error::CommandError;
 use crate::commands::{lock_controller, SharedController};
 use crate::events::{self, EmitEvent, UiState};
 #[cfg(target_os = "macos")]
@@ -83,7 +84,8 @@ pub(crate) fn handle_hotkey_event(
                             }
                             Err(error) => {
                                 error!("Hotkey down error: {error}");
-                                let _ = app.emit_event(events::event::ERROR, &error.to_string());
+                                let _ = app
+                                    .emit_event(events::event::ERROR, &CommandError::from(error));
                                 HotkeyDownResult::NoOp
                             }
                         }
@@ -103,7 +105,8 @@ pub(crate) fn handle_hotkey_event(
                             }
                             Err(error) => {
                                 error!("Hotkey down error: {error}");
-                                let _ = app.emit_event(events::event::ERROR, &error.to_string());
+                                let _ = app
+                                    .emit_event(events::event::ERROR, &CommandError::from(error));
                                 HotkeyDownResult::NoOp
                             }
                         }
