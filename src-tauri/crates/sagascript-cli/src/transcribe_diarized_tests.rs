@@ -1062,6 +1062,63 @@ fn a_meeting_job_reports_its_phases_in_order() {
 
 // ---- a cache that cannot be trusted -----------------------------------------------------------
 
+use crate::transcribe::source::CachedRun;
+
+#[test]
+fn a_cache_without_coarse_coverage_segments_is_a_miss_and_is_recomputed() {
+    let fx = Fixture::new();
+    seed(&fx, WhisperModel::TinyEn);
+    // The same cache, as an older writer left it: the field is gone.
+    let mut cache: Value = serde_json::from_slice(&fx.cache_bytes()).unwrap();
+    cache["coverage_segments"] = Value::Null;
+    std::fs::write(&fx.cache, serde_json::to_vec(&cache).unwrap()).unwrap();
+    assert!(matches!(
+        fx.lookup(WhisperModel::TinyEn),
+        CacheLookup::Miss("coarse coverage segments are missing")
+    ));
+    let analyzer = ScriptedAnalyzer::new();
+
+    let run = run(&fx, Job::normal(), &whisper(1), &analyzer);
+
+    assert!(run.stderr.contains(
+        "Diarization cache miss (coarse coverage segments are missing); computing analysis."
+    ));
+    assert_eq!(run.json()["performance"]["cache_hit"], false);
+    assert_eq!(analyzer.calls(), 1);
+    // The run wrote a cache that has them, and the next run reads it.
+    assert!(matches!(
+        fx.lookup(WhisperModel::TinyEn),
+        CacheLookup::Hit(_)
+    ));
+    assert_eq!(fx.files(), ["cache.json", "meeting.wav"]);
+}
+
+#[test]
+fn a_hit_without_coverage_segments_is_a_typed_error_not_a_panic() {
+    // Unreachable through the loader (see the test above); `from_hit` still
+    // answers it with a diarization error.
+    let fx = Fixture::new();
+    seed(&fx, WhisperModel::TinyEn);
+    let CacheLookup::Hit(mut hit) = fx.lookup(WhisperModel::TinyEn) else {
+        panic!("the seeded cache is a hit");
+    };
+    assert!(CachedRun::from_hit((*hit).clone()).is_ok());
+    hit.coverage_segments = None;
+
+    let error = CachedRun::from_hit(*hit)
+        .err()
+        .expect("a hit without coverage segments is refused");
+
+    assert!(
+        matches!(error, DictationError::DiarizationError(_)),
+        "{error:?}"
+    );
+    assert_eq!(
+        error.to_string(),
+        "Diarization error: A validated diarization cache has no coverage segments"
+    );
+}
+
 #[test]
 fn a_cache_path_that_is_the_recording_is_refused_before_any_work() {
     let fx = Fixture::new();

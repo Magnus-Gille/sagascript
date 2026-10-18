@@ -140,10 +140,17 @@ pub(super) struct CachedRun {
 
 #[cfg(feature = "diarization")]
 impl CachedRun {
-    /// The loader returns a hit only for a cache with coarse coverage
-    /// segments; a hit without them is a bug of the loader, reported rather
-    /// than trusted.
-    fn from_hit(hit: DiarizationCache) -> Result<Self, DictationError> {
+    /// Takes what a validated cache hit brings.
+    ///
+    /// The `Err` below is unreachable through [`lookup_cache`]: the loader
+    /// (`diarization_cache::load_internal`) answers a cache without coarse
+    /// coverage segments with `Miss("coarse coverage segments are missing")`,
+    /// so the run computes instead, and only a cache that has them is a
+    /// `Hit`. The branch stays as a typed error, never a panic, in case the
+    /// loader and this function ever disagree: a hit without segments would
+    /// be a bug of the loader, reported rather than trusted. Both halves are
+    /// tested: the loader's miss through the run, this error directly.
+    pub(super) fn from_hit(hit: DiarizationCache) -> Result<Self, DictationError> {
         let coverage_segments = hit.coverage_segments.ok_or_else(|| {
             DictationError::DiarizationError(
                 "A validated diarization cache has no coverage segments".to_string(),
