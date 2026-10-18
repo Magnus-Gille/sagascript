@@ -39,16 +39,21 @@ export const PWSH_PREFERENCES = [
 
 // A line after the preference lines that may change either preference: any assignment to either variable (in any scope,
 // with any value, braced or not) other than the passing line itself, or any variable cmdlet, alias or `variable:` drive
-// path that names one. Reading a preference, or naming it in text, is no change.
+// path that names one. Reading a preference, or naming it in text, is no change: assignments are looked for outside
+// strings, except in a `$( )` subexpression of a string, which runs. A variable cmdlet is looked for on the raw line,
+// since `Set-Variable -Name 'ErrorActionPreference'` quotes the name.
 const PREFERENCE_NAME = String.raw`(?:PSNativeCommandUseErrorActionPreference|ErrorActionPreference)`;
 const PREFERENCE_ASSIGNMENT = new RegExp(String.raw`\$\{?(?:\w+:)?${PREFERENCE_NAME}\}?\s*(?:[-+*/%]|\?\?)?=(?!=)`, "i");
+const PREFERENCE_SUBEXPRESSION_ASSIGNMENT = new RegExp(String.raw`\$\([^)]*${PREFERENCE_ASSIGNMENT.source}`, "i");
 const PREFERENCE_VARIABLE_ACCESS = new RegExp(
   String.raw`(?:\b(?:Set|Remove|Clear|New)-Variable\b|\b(?:sv|rv|clv|si|ri)\b|\bvariable:)[^|]*\b${PREFERENCE_NAME}\b`,
   "i",
 );
 const changesPreference = (line) =>
   !PWSH_PREFERENCES.some((preference) => preference.pattern.test(line)) &&
-  (PREFERENCE_ASSIGNMENT.test(line) || PREFERENCE_VARIABLE_ACCESS.test(line));
+  (PREFERENCE_ASSIGNMENT.test(withoutStrings(line)) ||
+    PREFERENCE_SUBEXPRESSION_ASSIGNMENT.test(line) ||
+    PREFERENCE_VARIABLE_ACCESS.test(line));
 
 const POWERSHELL = new Set(["pwsh", "powershell"]);
 const flat = (value) => (value === undefined || value === null ? [] : Array.isArray(value) ? value.flatMap(flat) : [value]);

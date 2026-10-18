@@ -196,6 +196,10 @@ test("the pwsh preferences must be the first two command lines and must stay on"
     "Clear-Variable -Name ErrorActionPreference",
     "Remove-Item variable:ErrorActionPreference",
     "& { $ErrorActionPreference = 'Continue'; cargo test }",
+    // An assignment inside a $( ) subexpression of a string still runs.
+    "Write-Host \"$($ErrorActionPreference = 'Continue')\"",
+    "Set-Variable -Name 'ErrorActionPreference' -Value Continue",
+    'Set-Variable -Name "PSNativeCommandUseErrorActionPreference" -Value $false',
   ]) {
     const problems = ok(`${PREFERENCES}npm run build\n${change}\nnpm run check`);
     assert.equal(problems.length, 1, change);
@@ -209,6 +213,10 @@ test("the pwsh preferences must be the first two command lines and must stay on"
     "if ($ErrorActionPreference -ne 'Stop') { throw 'preference lost' }",
     "Get-Variable PSNativeCommandUseErrorActionPreference",
     'Write-Host "ErrorActionPreference stays Stop"',
+    // Text in a string is not an assignment, even when it reads like one.
+    'Write-Host "x `$ErrorActionPreference=$ErrorActionPreference"',
+    "Write-Host 'checking $ErrorActionPreference = Stop'",
+    'Write-Host "checking $ErrorActionPreference = Stop"',
   ]) {
     assert.deepEqual(ok(`${PREFERENCES}npm run build\n${harmless}\nnpm run check`), [], harmless);
   }
