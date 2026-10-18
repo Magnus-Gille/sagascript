@@ -7,7 +7,7 @@
 //! and these functions are the only way in from outside. The module is
 //! `#[doc(hidden)]` and not part of the API.
 //!
-//! Not to be confused with [`crate::test_support`], which holds fixtures made of
+//! Not to be confused with `test_support`, which holds fixtures made of
 //! core types and exists only under `cfg(test)` or the `test-support` feature.
 //! The integration tests of this crate compile it as a plain library without
 //! that feature, so a seam they need has to be here, always compiled; each is a
@@ -21,7 +21,7 @@ use crate::transcription::engine_host::{EngineHostClient, EngineHostConfig};
 
 /// The startup load of the settings file at `path` (legacy locations imported
 /// from `legacy_sources`, every pending migration run) with fixed machine state
-/// instead of this machine's: [`store::load_at`].
+/// instead of this machine's: `store::load_at`.
 pub fn load_settings_at(
     path: &Path,
     legacy_sources: &[PathBuf],
