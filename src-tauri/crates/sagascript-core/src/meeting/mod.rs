@@ -9,8 +9,8 @@ use std::fmt;
 
 use serde::{Deserialize, Deserializer, Serialize};
 
+use crate::diarization::speaker_hint::{SpeakerCountHint, SpeakerHintOutcome};
 use crate::diarization_report::DiarizationReport;
-use crate::speaker_hint::{SpeakerCountHint, SpeakerHintOutcome};
 
 const SCHEMA_VERSION: u32 = 1;
 const ACTIVITY_SCHEMA_VERSION: u32 = 2;
@@ -634,7 +634,7 @@ mod tests {
 
     #[test]
     fn hint_outcome_round_trips_and_must_accompany_a_hint() {
-        use crate::speaker_hint::SpeakerHintOutcome;
+        use crate::diarization::speaker_hint::SpeakerHintOutcome;
         let outcome = Some(SpeakerHintOutcome {
             satisfied: false,
             delivered: 3,

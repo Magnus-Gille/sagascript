@@ -3,6 +3,7 @@ pub mod engine;
 pub mod merge;
 pub mod model;
 pub mod report;
+pub mod speaker_hint;
 
 // The old paths of the stages that moved into `engine/` (#372).
 #[cfg(feature = "diarization")]
@@ -14,7 +15,7 @@ pub use engine::{
 use serde::{Deserialize, Serialize};
 
 use crate::error::DictationError;
-pub use crate::speaker_hint::{SpeakerCountHint, SpeakerHintOutcome};
+pub use speaker_hint::{SpeakerCountHint, SpeakerHintOutcome};
 
 /// Configuration for the diarization pipeline.
 pub struct DiarizeConfig {

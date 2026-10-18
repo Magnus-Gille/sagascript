@@ -20,7 +20,6 @@ pub mod models;
 pub mod path_scrub;
 pub mod run_context;
 pub mod settings;
-pub mod speaker_hint;
 pub mod sync;
 pub mod transcription;
 
@@ -31,6 +30,9 @@ pub use crate::meeting::reprocess as meeting_reprocess;
 pub use crate::meeting::reprocess::plan as meeting_reprocess_plan;
 pub use crate::meeting::reprocess::proposal as meeting_reprocess_proposal;
 pub use crate::meeting::review as meeting_review;
+
+// Old paths of modules that moved into `diarization/` (#372), same rule.
+pub use crate::diarization::speaker_hint;
 
 /// Test fixtures made of core types (#363); see the module documentation.
 #[cfg(any(test, feature = "test-support"))]
