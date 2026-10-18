@@ -91,17 +91,18 @@ replaced the whole copy would install shortcuts the OS never registered.
   name across files (a same-named function can ask for a row you do not need), glob imports
   (`use x::*`), `macro_rules!`-generated code, a turbofish call inside a macro, and calls
   through a function pointer or closure kept in a variable. A second test fails when a
-  function other than the permission gate in `main.rs` calls `store::update`, `try_update`,
+  function other than the permission gate (`load_settings_with_permission_gate` in
+  `launch/settings.rs`) calls `store::update`, `try_update`,
   `update_with`, `try_update_with`, `save` or `machine::{update, try_update}` itself.
 - Side effects go after the persist call (`set_show_overlay`, `set_vad_enabled`). A setter that
   needs the `AppHandle` (the profiles menu, the overlay window) splits its persistence half into
   a plain function, as `persist_language` and `persist_show_overlay` do, so the table test can
   call it. The
-  watcher (`start_settings_watcher` in `main.rs`) reloads the **whole** `Settings` from disk
+  watcher (`start_settings_watcher` in `settings_watcher.rs`) reloads the **whole** `Settings` from disk
   when the CLI edits the file, so a plain value read at use time from `ctrl.settings()` needs
   nothing there. It does not replay setter side effects: if your setter has one (recreate a
   window, download a model), add it to the watcher too.
-- Register `commands::set_example_flag` in `tauri::generate_handler![...]` in `main()`, then
+- Register `commands::set_example_flag` in `tauri::generate_handler![...]` in `build_app()` (`main.rs`), then
   regenerate the shared contract: `SAGASCRIPT_BLESS_CONTRACTS=1 cargo test -p sagascript
   contract` in `src-tauri/` adds the command to the generated `CommandMap` and the new field
   to `contracts/transport/get_settings.json` ([contracts/README.md](../../contracts/README.md)).
