@@ -217,11 +217,14 @@ pub(crate) fn load_with(machine: &dyn MachineProbe) -> Settings {
     load_at_with_machine(&settings_path(), legacy_settings_paths(), machine)
 }
 
-/// Test seam for `tests/settings_fixtures.rs`: [`load_with`] for an explicit
-/// settings file and legacy locations, with fixed machine state instead of
-/// probing this machine.
-#[doc(hidden)]
-pub fn load_at(path: &Path, legacy_sources: &[PathBuf], machine: &LineupEnv<'_>) -> Settings {
+/// Test seam (`crate::testing::load_settings_at`, for `tests/settings_fixtures.rs`):
+/// [`load_with`] for an explicit settings file and legacy locations, with fixed
+/// machine state instead of probing this machine.
+pub(crate) fn load_at(
+    path: &Path,
+    legacy_sources: &[PathBuf],
+    machine: &LineupEnv<'_>,
+) -> Settings {
     load_at_with_machine(path, legacy_sources.iter().cloned(), machine)
 }
 

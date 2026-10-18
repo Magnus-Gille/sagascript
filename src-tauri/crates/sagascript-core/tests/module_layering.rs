@@ -28,7 +28,7 @@
 //! reached `machine::load()` and `machine` reached transcription's probes
 //! again. They now receive the `Settings` (or, for the two deferred callers, the
 //! function that loads them), and only `settings/` and `machine.rs` name the
-//! store at all (`only_settings_and_the_machine_name_the_store`). Until the line
+//! store at all (`only_settings_and_the_machine_name_the_store`, with the test seam). Until the line
 //! is deleted, `only_the_compat_shim_in_the_store_names_the_machine_module` lets
 //! it name exactly these three paths, so no other `machine` import can slip in
 //! beside them.
@@ -434,8 +434,9 @@ fn names_path(path: &str, modules: &[&str]) -> bool {
 }
 
 /// Settings are loaded by their callers, never by the code that needs them to
-/// configure itself: outside `settings/` and `machine.rs` (which composes the
-/// store with this machine's probes) no module of core names the store. That is
+/// configure itself: outside `settings/`, `machine.rs` (which composes the
+/// store with this machine's probes) and `testing.rs` (the seam into
+/// `store::load_at`) no module of core names the store. That is
 /// what `transcription` did in `pianissimo_backend` until #372 part 2b, which
 /// closed a loop at run time through `machine`.
 #[test]
@@ -444,8 +445,7 @@ fn only_settings_and_the_machine_name_the_store() {
         .into_iter()
         .filter(|(file, path)| {
             !file.starts_with("settings/")
-                && file != "machine.rs"
-                && file != "machine_tests.rs"
+                && !["machine.rs", "machine_tests.rs", "testing.rs"].contains(&file.as_str())
                 && names_path(path, &["settings", "store"])
         })
         .collect();
@@ -453,6 +453,22 @@ fn only_settings_and_the_machine_name_the_store() {
         found.is_empty(),
         "the settings store is named only by settings/ and machine.rs; take a `&Settings` from the \
          caller (which loads it with `machine::load`) instead:\n{}",
+        report(&found)
+    );
+}
+
+/// `crate::testing` is for tests outside the crate's own source: no module of
+/// core depends on it.
+#[test]
+fn nothing_in_core_depends_on_the_test_seams() {
+    let found: Vec<_> = tree_paths("")
+        .into_iter()
+        .filter(|(file, path)| file != "testing.rs" && names_module(path, "testing"))
+        .collect();
+    assert!(
+        found.is_empty(),
+        "the `testing` module is a way in for tests; the modules it calls into keep their own \
+         `pub(crate)` seams for unit tests:\n{}",
         report(&found)
     );
 }

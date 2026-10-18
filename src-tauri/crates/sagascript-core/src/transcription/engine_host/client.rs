@@ -123,7 +123,7 @@ impl Timeouts {
 /// path (`"after_ready"`). Lets tests interleave lifecycle operations
 /// deterministically; production code never sets it.
 #[derive(Clone)]
-pub struct TestHook(pub Arc<dyn Fn(&str) + Send + Sync>);
+pub(crate) struct TestHook(pub(crate) Arc<dyn Fn(&str) + Send + Sync>);
 
 impl std::fmt::Debug for TestHook {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -184,9 +184,8 @@ pub struct EngineHostConfig {
     pub busy_retry_delay: Duration,
     /// Parent for the private PCM temp dir (`None`: the system temp dir).
     pub temp_dir: Option<PathBuf>,
-    /// See [`TestHook`].
-    #[doc(hidden)]
-    pub test_hook: Option<TestHook>,
+    /// See [`TestHook`]; set through `crate::testing`.
+    pub(crate) test_hook: Option<TestHook>,
     /// Told when a model load starts, finishes or fails (see [`LoadObserver`]).
     pub load_observer: Option<LoadObserver>,
 }
@@ -431,9 +430,9 @@ impl EngineHostClient {
         self.inner.ensure_ready(Some(cancel)).map(|(_, caps)| caps)
     }
 
-    /// Run one idle-supervision pass now (tests; the supervisor thread does this on a timer).
-    #[doc(hidden)]
-    pub fn run_idle_check_now(&self) {
+    /// Run one idle-supervision pass now (tests, through `crate::testing`; the supervisor
+    /// thread does this on a timer).
+    pub(crate) fn run_idle_check_now(&self) {
         self.inner.idle_check();
     }
 

@@ -112,7 +112,7 @@ compatibility shim and closes no loop at run time.
 |---|---|---|
 | Leaves | `models/`, `glossary.rs` | `models/` is the model catalog: `WhisperModel` (21 models, ids via `id()` / `from_id()` / `FromStr`, `ALL`), its download URLs and SHA-256 in `sources.rs` (pinned revisions; `scripts/generate-third-party-notices.mjs` only asserts that six reviewed URL prefixes still appear in the model sources, `sources.rs` among them), `FileModel` (a Whisper model or Pianissimo) and `Language`. Imports neither `settings` nor `transcription` (tested) and returns no `whisper_rs` type: `transcription::whisper` (`whisper/words.rs`) maps a model to its DTW preset. `glossary.rs` (personal dictionary parser) imports nothing from the crate (tested). |
 | Settings | `settings/` | Reads the catalog. Imports nothing from `transcription` (tested): what is downloaded and whether Pianissimo can run arrive as arguments, as `LineupEnv` / `MachineProbe` into the store and as the `pianissimo_supported` and readiness arguments of the `*_gated` methods of `Settings`. `ops.rs` is the settings operations of section 2.2; they take the Pianissimo gate and the Accessibility answer (`Accessibility`) the same way. |
-| Runtime | `transcription/` (Whisper, Pianissimo, engine host, model downloads), `audio/`, `download.rs`, `meeting/`, `diarization/` | `transcription` reads `models` and the `Settings` type, and never loads the settings file: `pianissimo_backend::{engine_config, shared_client}` take the `Settings` their callers load with `machine::load` (only `settings/` and `machine.rs` name the store; tested). `transcription::model` and `pianissimo_model` answer whether a model is on disk; `pianissimo_backend::runtime_supported_on_this_os` answers whether Pianissimo runs. |
+| Runtime | `transcription/` (Whisper, Pianissimo, engine host, model downloads), `audio/`, `download.rs`, `meeting/`, `diarization/` | `transcription` reads `models` and the `Settings` type, and never loads the settings file: `pianissimo_backend::{engine_config, shared_client}` take the `Settings` their callers load with `machine::load` (only `settings/`, `machine.rs` and the `testing` seam name the store; tested). `transcription::model` and `pianissimo_model` answer whether a model is on disk; `pianissimo_backend::runtime_supported_on_this_os` answers whether Pianissimo runs. |
 | Machine | `machine.rs` | The only place that feeds the runtime's answers to settings: `ThisMachine` (a `MachineProbe`), `load` / `update` / `try_update`, and the `Settings` methods without a `_gated` suffix (`dictation_model_for_profile`, `effective_file_model_for`, `warm_model_plan`, `apply_language_selection`, ...), each its `_gated` sibling plus this machine's probe. |
 
 Old paths stay for one release (#372). The re-exports of `lib.rs` (the old top-level paths of
@@ -169,6 +169,7 @@ gets a directory of its own.
 | `run_context` | Which profile, language and dictionary a file, recording or reprocessing run uses (#346), shared by the CLI commands and the app. |
 | `sync` | Poison-tolerant locking ([ADR 0005](adr/0005-mutex-poison-policy.md)), used by `audio`, `download`, `transcription`, the CLI and the app. |
 | `test_support` | Fixtures made of core types for the tests of the crates above core, compiled only under `cfg(test)` or the `test-support` feature (#363). |
+| `testing` | The test seams: the few functions that let a test reach what production code must not (the startup load of an explicit settings file, the engine-host test hook, one idle-supervision pass). `#[doc(hidden)]` and always compiled, because core's own integration tests build the library without the `test-support` feature; nothing else in core names it (tested). |
 
 **The one edge that goes up.** The last re-export is a line in `settings/store.rs` that names
 `machine`, which imports transcription: textually the only upward import in `settings/`
@@ -182,8 +183,10 @@ the engine later, take `machine::load` as a function and call it at that point, 
 file is read earlier than it was. Deleting the line, after the next release, is then the only
 step left.
 
-**Planned:** the rest of [#372](https://github.com/Magnus-Gille/sagascript/issues/372):
-`pub(crate)` narrowing and a `testing` module for the test seams.
+Public items that no code outside core names are `pub(crate)` (#372): an item the CLI or the app
+needs is `pub`, one only core's own tests need is reached through `testing`. **Planned:**
+[#372](https://github.com/Magnus-Gille/sagascript/issues/372) deletes the old paths above after
+the next release.
 
 ## 2. Data flows
 

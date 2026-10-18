@@ -16,6 +16,8 @@ pub mod path_scrub;
 pub mod run_context;
 pub mod settings;
 pub mod sync;
+#[doc(hidden)]
+pub mod testing;
 pub mod transcription;
 
 // Old paths of modules that moved into `meeting/` (#372). Nothing in the workspace
