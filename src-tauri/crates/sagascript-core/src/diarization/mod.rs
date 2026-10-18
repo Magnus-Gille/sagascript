@@ -1,5 +1,6 @@
 #[cfg(feature = "diarization")]
 pub mod engine;
+pub mod eval;
 pub mod merge;
 pub mod model;
 pub mod report;
