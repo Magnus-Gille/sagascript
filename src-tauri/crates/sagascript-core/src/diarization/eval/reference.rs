@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::diarization_evaluation::{ScoringRegion, SpeakerTurn};
+use crate::diarization::eval::evaluation::{ScoringRegion, SpeakerTurn};
 
 const MAX_DURATION_SECONDS: f64 = 14_400.0;
 const MAX_INTERVALS: usize = 100_000;

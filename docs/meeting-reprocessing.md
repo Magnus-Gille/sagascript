@@ -67,7 +67,7 @@ not permission to silently run a full job.
 | `full` | Does not read an input cache. | Audio decoding, transcription, language detection, segmentation, speaker embeddings, and clustering. |
 
 These flags are derived in
-[`meeting_reprocess_plan.rs`](../src-tauri/crates/sagascript-core/src/meeting_reprocess_plan.rs)
+[`meeting/reprocess/plan.rs`](../src-tauri/crates/sagascript-core/src/meeting/reprocess/plan.rs)
 and enforced by
 [`meeting_reprocessing.rs`](../src-tauri/crates/sagascript-cli/src/meeting_reprocessing.rs).
 
@@ -226,7 +226,7 @@ sagascript meeting proposal preview PROPOSAL
 
 Resolve one correction with a JSON file containing the validated
 `CorrectionOperation[]` shape used by
-[`meeting_review.rs`](../src-tauri/crates/sagascript-core/src/meeting_review.rs):
+[`meeting/review.rs`](../src-tauri/crates/sagascript-core/src/meeting/review.rs):
 
 ```text
 sagascript meeting proposal resolve PROPOSAL \

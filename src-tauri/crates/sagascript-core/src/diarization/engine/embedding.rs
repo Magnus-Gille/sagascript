@@ -14,8 +14,7 @@ use crate::error::DictationError;
 
 /// Minimum audio samples for a meaningful embedding (25ms = 400 samples)
 pub const MIN_SAMPLES: usize = fbank::N_FFT;
-/// Embedding dimension
-pub const EMBEDDING_DIM: usize = 256;
+pub use crate::diarization::EMBEDDING_DIM;
 
 type EmbeddingCallback<'a> =
     dyn FnMut(&[f32]) -> Result<Option<[f32; EMBEDDING_DIM]>, DictationError> + 'a;

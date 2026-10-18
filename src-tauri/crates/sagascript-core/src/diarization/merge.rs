@@ -1,9 +1,9 @@
+use crate::diarization::report::{AttributionEvidence, AttributionReason, SpeakerSupport};
 /// Merge diarization speaker segments with Whisper transcript segments.
 ///
 /// Assigns a speaker label to each transcript segment based on time overlap
 /// with the diarization output.
 use crate::diarization::{DiarizedSegment, SpeakerSegment, TimestampedSegment};
-use crate::diarization_report::{AttributionEvidence, AttributionReason, SpeakerSupport};
 use std::collections::BTreeMap;
 
 /// Assign speakers to transcript segments by maximum time overlap.

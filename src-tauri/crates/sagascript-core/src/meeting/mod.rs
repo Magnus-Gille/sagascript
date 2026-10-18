@@ -1,12 +1,20 @@
 //! Validated meeting transcripts and deterministic exports.
+//!
+//! This module is the transcript document. Its submodules: [`media`] (the audio attached to a
+//! meeting), [`review`] (replayable corrections) and [`reprocess`] (migrating a review onto a new
+//! transcript). All of it is pure and compiled in every build (#372).
+
+pub mod media;
+pub mod reprocess;
+pub mod review;
 
 use std::collections::BTreeSet;
 use std::fmt;
 
 use serde::{Deserialize, Deserializer, Serialize};
 
-use crate::diarization_report::DiarizationReport;
-use crate::speaker_hint::{SpeakerCountHint, SpeakerHintOutcome};
+use crate::diarization::report::DiarizationReport;
+use crate::diarization::speaker_hint::{SpeakerCountHint, SpeakerHintOutcome};
 
 const SCHEMA_VERSION: u32 = 1;
 const ACTIVITY_SCHEMA_VERSION: u32 = 2;
@@ -630,7 +638,7 @@ mod tests {
 
     #[test]
     fn hint_outcome_round_trips_and_must_accompany_a_hint() {
-        use crate::speaker_hint::SpeakerHintOutcome;
+        use crate::diarization::speaker_hint::SpeakerHintOutcome;
         let outcome = Some(SpeakerHintOutcome {
             satisfied: false,
             delivered: 3,
