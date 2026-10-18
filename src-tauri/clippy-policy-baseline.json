@@ -10,7 +10,7 @@
     },
     "expect_used": {
       "sagascript": 3,
-      "sagascript-cli": 31,
+      "sagascript-cli": 30,
       "sagascript-core": 24,
       "sagascript-engine-protocol": 0,
       "sagascript-testsupport": 0
