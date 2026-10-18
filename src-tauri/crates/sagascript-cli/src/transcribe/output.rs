@@ -237,6 +237,7 @@ impl BatchSink {
         &mut self,
         out: &Out,
         args: &TranscribeArgs,
+        clipboard: &dyn Clipboard,
         execution: BatchExecution,
     ) -> Result<(), DictationError> {
         let file = execution.source;
@@ -253,7 +254,7 @@ impl BatchSink {
                     return Ok(());
                 }
                 if args.clipboard {
-                    copy_to_clipboard(&output.plain)?;
+                    clipboard.copy(&output.plain)?;
                     errln!(out, "Copied to clipboard.");
                 }
                 let item = BatchItem::Ok {
@@ -328,6 +329,21 @@ pub(super) fn combined_warnings(
 pub(super) fn emit_warnings(out: &Out, warnings: &[TranscriptionWarning]) {
     for warning in warnings {
         errln!(out, "Warning [{}]: {}", warning.code, warning.message);
+    }
+}
+
+/// Where `--clipboard` puts a transcript: a seam so a test needs no display
+/// server. [`SystemClipboard`] is the one implementation that ships.
+pub(super) trait Clipboard {
+    fn copy(&self, text: &str) -> Result<(), DictationError>;
+}
+
+/// The clipboard of the desktop session.
+pub(super) struct SystemClipboard;
+
+impl Clipboard for SystemClipboard {
+    fn copy(&self, text: &str) -> Result<(), DictationError> {
+        copy_to_clipboard(text)
     }
 }
 

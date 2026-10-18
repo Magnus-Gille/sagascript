@@ -47,7 +47,7 @@ attribution as well. No matching CoreML encoder is supplied for the fine-tune.
 | adler2 | 2.0.1 | 0BSD OR MIT OR Apache-2.0 | [upstream](https://github.com/oyvindln/adler2) |
 | aho-corasick | 1.1.4 | Unlicense OR MIT | [upstream](https://github.com/BurntSushi/aho-corasick) |
 | alloc-no-stdlib | 2.0.4 | BSD-3-Clause | [upstream](https://github.com/dropbox/rust-alloc-no-stdlib) |
-| alloc-stdlib | 0.2.2 | BSD-3-Clause | [upstream](https://github.com/dropbox/rust-alloc-no-stdlib) |
+| alloc-stdlib | 0.2.4 | BSD-3-Clause | [upstream](https://github.com/dropbox/rust-alloc-no-stdlib) |
 | anstream | 0.6.21 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-cli/anstyle.git) |
 | anstyle | 1.0.13 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-cli/anstyle.git) |
 | anstyle-parse | 0.2.7 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-cli/anstyle.git) |
@@ -61,6 +61,7 @@ attribution as well. No matching CoreML encoder is supplied for the fine-tune.
 | autocfg | 1.5.1 | Apache-2.0 OR MIT | [upstream](https://github.com/cuviper/autocfg) |
 | base64 | 0.21.7 | MIT OR Apache-2.0 | [upstream](https://github.com/marshallpierce/rust-base64) |
 | base64 | 0.22.1 | MIT OR Apache-2.0 | [upstream](https://github.com/marshallpierce/rust-base64) |
+| base64 | 0.23.1 | MIT OR Apache-2.0 | [upstream](https://github.com/marshallpierce/rust-base64) |
 | base64ct | 1.8.3 | Apache-2.0 OR MIT | [upstream](https://github.com/RustCrypto/formats) |
 | bindgen | 0.71.1 | BSD-3-Clause | [upstream](https://github.com/rust-lang/rust-bindgen) |
 | bindgen | 0.72.1 | BSD-3-Clause | [upstream](https://github.com/rust-lang/rust-bindgen) |
@@ -69,8 +70,8 @@ attribution as well. No matching CoreML encoder is supplied for the fine-tune.
 | block | 0.1.6 | MIT | [upstream](http://github.com/SSheldon/rust-block) |
 | block-buffer | 0.10.4 | MIT OR Apache-2.0 | [upstream](https://github.com/RustCrypto/utils) |
 | block2 | 0.6.2 | MIT | [upstream](https://github.com/madsmtm/objc2) |
-| brotli | 8.0.2 | BSD-3-Clause AND MIT | [upstream](https://github.com/dropbox/rust-brotli) |
-| brotli-decompressor | 5.0.0 | BSD-3-Clause/MIT | [upstream](https://github.com/dropbox/rust-brotli-decompressor) |
+| brotli | 8.0.4 | BSD-3-Clause AND MIT | [upstream](https://github.com/dropbox/rust-brotli) |
+| brotli-decompressor | 5.0.3 | BSD-3-Clause/MIT | [upstream](https://github.com/dropbox/rust-brotli-decompressor) |
 | bumpalo | 3.20.1 | MIT OR Apache-2.0 | [upstream](https://github.com/fitzgen/bumpalo) |
 | bytemuck | 1.25.0 | Zlib OR Apache-2.0 OR MIT | [upstream](https://github.com/Lokathor/bytemuck) |
 | byteorder | 1.5.0 | Unlicense OR MIT | [upstream](https://github.com/BurntSushi/byteorder) |
@@ -86,11 +87,11 @@ attribution as well. No matching CoreML encoder is supplied for the fine-tune.
 | cfg-if | 1.0.4 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-lang/cfg-if) |
 | cfg-if | 1.0.5 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-lang/cfg-if) |
 | cfg_aliases | 0.2.1 | MIT | [upstream](https://github.com/katharostech/cfg_aliases) |
-| chrono | 0.4.43 | MIT OR Apache-2.0 | [upstream](https://github.com/chronotope/chrono) |
+| chrono | 0.4.45 | MIT OR Apache-2.0 | [upstream](https://github.com/chronotope/chrono) |
 | clang-sys | 1.8.1 | Apache-2.0 | [upstream](https://github.com/KyleMayes/clang-sys) |
 | clap | 4.5.60 | MIT OR Apache-2.0 | [upstream](https://github.com/clap-rs/clap) |
 | clap_builder | 4.5.60 | MIT OR Apache-2.0 | [upstream](https://github.com/clap-rs/clap) |
-| clap_complete | 4.5.66 | MIT OR Apache-2.0 | [upstream](https://github.com/clap-rs/clap) |
+| clap_complete | 4.6.9 | MIT OR Apache-2.0 | [upstream](https://github.com/clap-rs/clap) |
 | clap_derive | 4.5.55 | MIT OR Apache-2.0 | [upstream](https://github.com/clap-rs/clap) |
 | clap_lex | 1.0.0 | MIT OR Apache-2.0 | [upstream](https://github.com/clap-rs/clap) |
 | clap_mangen | 0.2.31 | MIT OR Apache-2.0 | [upstream](https://github.com/clap-rs/clap) |
@@ -131,7 +132,6 @@ attribution as well. No matching CoreML encoder is supplied for the fine-tune.
 | dirs | 6.0.0 | MIT OR Apache-2.0 | [upstream](https://github.com/soc/dirs-rs) |
 | dirs-sys | 0.3.7 | MIT OR Apache-2.0 | [upstream](https://github.com/dirs-dev/dirs-sys-rs) |
 | dirs-sys | 0.5.0 | MIT OR Apache-2.0 | [upstream](https://github.com/dirs-dev/dirs-sys-rs) |
-| dispatch | 0.2.0 | MIT | [upstream](http://github.com/SSheldon/rust-dispatch) |
 | dispatch2 | 0.3.0 | Zlib OR Apache-2.0 OR MIT | [upstream](https://github.com/madsmtm/objc2) |
 | displaydoc | 0.2.5 | MIT OR Apache-2.0 | [upstream](https://github.com/yaahc/displaydoc) |
 | dpi | 0.1.2 | Apache-2.0 AND MIT | [upstream](https://github.com/rust-windowing/winit) |
@@ -165,12 +165,12 @@ attribution as well. No matching CoreML encoder is supplied for the fine-tune.
 | fsevent-sys | 4.1.0 | MIT | [upstream](https://github.com/octplane/fsevent-rust/tree/master/fsevent-sys) |
 | futf | 0.1.5 | MIT / Apache-2.0 | [upstream](https://github.com/servo/futf) |
 | futures-channel | 0.3.32 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-lang/futures-rs) |
-| futures-core | 0.3.32 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-lang/futures-rs) |
-| futures-io | 0.3.32 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-lang/futures-rs) |
-| futures-macro | 0.3.32 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-lang/futures-rs) |
-| futures-sink | 0.3.32 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-lang/futures-rs) |
-| futures-task | 0.3.32 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-lang/futures-rs) |
-| futures-util | 0.3.32 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-lang/futures-rs) |
+| futures-core | 0.3.34 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-lang/futures-rs) |
+| futures-io | 0.3.34 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-lang/futures-rs) |
+| futures-macro | 0.3.34 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-lang/futures-rs) |
+| futures-sink | 0.3.34 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-lang/futures-rs) |
+| futures-task | 0.3.34 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-lang/futures-rs) |
+| futures-util | 0.3.34 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-lang/futures-rs) |
 | fxhash | 0.2.1 | Apache-2.0/MIT | [upstream](https://github.com/cbreeden/fxhash) |
 | generic-array | 0.14.7 | MIT | [upstream](https://github.com/fizyk20/generic-array.git) |
 | getrandom | 0.1.16 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-random/getrandom) |
@@ -226,7 +226,6 @@ attribution as well. No matching CoreML encoder is supplied for the fine-tune.
 | kodama | 0.2.3 | MIT | [upstream](https://github.com/diffeo/kodama) |
 | kuchikiki | 0.8.8-speedreader | MIT | [upstream](https://github.com/brave/kuchikiki) |
 | lazy_static | 1.5.0 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-lang-nursery/lazy-static.rs) |
-| libc | 0.2.189 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-lang/libc) |
 | libc | 0.2.191 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-lang/libc) |
 | libloading | 0.8.9 | ISC | [upstream](https://github.com/nagisa/rust_libloading/) |
 | libloading | 0.9.0 | ISC | [upstream](https://github.com/nagisa/rust_libloading/) |
@@ -252,7 +251,7 @@ attribution as well. No matching CoreML encoder is supplied for the fine-tune.
 | miniz_oxide | 0.8.9 | MIT OR Zlib OR Apache-2.0 | [upstream](https://github.com/Frommi/miniz_oxide/tree/master/miniz_oxide) |
 | mio | 1.1.1 | MIT | [upstream](https://github.com/tokio-rs/mio) |
 | moxcms | 0.7.11 | BSD-3-Clause OR Apache-2.0 | [upstream](https://github.com/awxkee/moxcms.git) |
-| muda | 0.17.1 | Apache-2.0 OR MIT | [upstream](https://github.com/amrbashir/muda) |
+| muda | 0.17.2 | Apache-2.0 OR MIT | [upstream](https://github.com/tauri-apps/muda) |
 | native-tls | 0.2.18 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-native-tls/rust-native-tls) |
 | ndarray | 0.17.2 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-ndarray/ndarray) |
 | new_debug_unreachable | 1.0.6 | MIT | [upstream](https://github.com/mbrubeck/rust-debug-unreachable) |
@@ -270,7 +269,7 @@ attribution as well. No matching CoreML encoder is supplied for the fine-tune.
 | num_cpus | 1.17.0 | MIT OR Apache-2.0 | [upstream](https://github.com/seanmonstar/num_cpus) |
 | number_prefix | 0.4.0 | MIT | [upstream](https://github.com/ogham/rust-number-prefix) |
 | objc | 0.2.7 | MIT | [upstream](http://github.com/SSheldon/rust-objc) |
-| objc2 | 0.6.3 | MIT | [upstream](https://github.com/madsmtm/objc2) |
+| objc2 | 0.6.5 | MIT | [upstream](https://github.com/madsmtm/objc2) |
 | objc2-app-kit | 0.3.2 | Zlib OR Apache-2.0 OR MIT | [upstream](https://github.com/madsmtm/objc2) |
 | objc2-cloud-kit | 0.3.2 | Zlib OR Apache-2.0 OR MIT | [upstream](https://github.com/madsmtm/objc2) |
 | objc2-core-data | 0.3.2 | Zlib OR Apache-2.0 OR MIT | [upstream](https://github.com/madsmtm/objc2) |
@@ -335,7 +334,7 @@ attribution as well. No matching CoreML encoder is supplied for the fine-tune.
 | quote | 1.0.44 | MIT OR Apache-2.0 | [upstream](https://github.com/dtolnay/quote) |
 | quote | 1.0.47 | MIT OR Apache-2.0 | [upstream](https://github.com/dtolnay/quote) |
 | rand | 0.7.3 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-random/rand) |
-| rand | 0.8.5 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-random/rand) |
+| rand | 0.8.8 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-random/rand) |
 | rand_chacha | 0.2.2 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-random/rand) |
 | rand_chacha | 0.3.1 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-random/rand) |
 | rand_core | 0.5.1 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-random/rand) |
@@ -346,10 +345,10 @@ attribution as well. No matching CoreML encoder is supplied for the fine-tune.
 | realfft | 3.5.0 | MIT | [upstream](https://github.com/HEnquist/realfft) |
 | ref-cast | 1.0.25 | MIT OR Apache-2.0 | [upstream](https://github.com/dtolnay/ref-cast) |
 | ref-cast-impl | 1.0.25 | MIT OR Apache-2.0 | [upstream](https://github.com/dtolnay/ref-cast) |
-| regex | 1.12.3 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-lang/regex) |
-| regex-automata | 0.4.14 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-lang/regex) |
-| regex-syntax | 0.8.9 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-lang/regex) |
-| reqwest | 0.13.2 | MIT OR Apache-2.0 | [upstream](https://github.com/seanmonstar/reqwest) |
+| regex | 1.13.1 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-lang/regex) |
+| regex-automata | 0.4.18 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-lang/regex) |
+| regex-syntax | 0.8.11 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-lang/regex) |
+| reqwest | 0.13.5 | MIT OR Apache-2.0 | [upstream](https://github.com/seanmonstar/reqwest) |
 | rfd | 0.16.0 | MIT | [upstream](https://github.com/PolyMeilex/rfd) |
 | ring | 0.17.14 | Apache-2.0 AND ISC | [upstream](https://github.com/briansmith/ring) |
 | roff | 0.2.2 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-cli/roff-rs) |
@@ -357,7 +356,7 @@ attribution as well. No matching CoreML encoder is supplied for the fine-tune.
 | rustc-hash | 2.1.1 | Apache-2.0 OR MIT | [upstream](https://github.com/rust-lang/rustc-hash) |
 | rustc_version | 0.4.1 | MIT OR Apache-2.0 | [upstream](https://github.com/djc/rustc-version-rs) |
 | rustfft | 6.4.1 | MIT OR Apache-2.0 | [upstream](https://github.com/ejmahler/RustFFT) |
-| rustix | 1.1.3 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | [upstream](https://github.com/bytecodealliance/rustix) |
+| rustix | 1.1.5 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | [upstream](https://github.com/bytecodealliance/rustix) |
 | rustls | 0.23.46 | Apache-2.0 OR ISC OR MIT | [upstream](https://github.com/rustls/rustls) |
 | rustls-pki-types | 1.14.0 | MIT OR Apache-2.0 | [upstream](https://github.com/rustls/pki-types) |
 | rustls-platform-verifier | 0.6.2 | MIT OR Apache-2.0 | [upstream](https://github.com/rustls/rustls-platform-verifier) |
@@ -371,19 +370,15 @@ attribution as well. No matching CoreML encoder is supplied for the fine-tune.
 | security-framework | 3.6.0 | MIT OR Apache-2.0 | [upstream](https://github.com/kornelski/rust-security-framework) |
 | security-framework-sys | 2.16.0 | MIT OR Apache-2.0 | [upstream](https://github.com/kornelski/rust-security-framework) |
 | selectors | 0.24.0 | MPL-2.0 | [upstream](https://github.com/servo/servo) |
-| semver | 1.0.27 | MIT OR Apache-2.0 | [upstream](https://github.com/dtolnay/semver) |
-| serde | 1.0.228 | MIT OR Apache-2.0 | [upstream](https://github.com/serde-rs/serde) |
+| semver | 1.0.28 | MIT OR Apache-2.0 | [upstream](https://github.com/dtolnay/semver) |
 | serde | 1.0.229 | MIT OR Apache-2.0 | [upstream](https://github.com/serde-rs/serde) |
 | serde-untagged | 0.1.9 | MIT OR Apache-2.0 | [upstream](https://github.com/dtolnay/serde-untagged) |
-| serde_core | 1.0.228 | MIT OR Apache-2.0 | [upstream](https://github.com/serde-rs/serde) |
 | serde_core | 1.0.229 | MIT OR Apache-2.0 | [upstream](https://github.com/serde-rs/serde) |
-| serde_derive | 1.0.228 | MIT OR Apache-2.0 | [upstream](https://github.com/serde-rs/serde) |
 | serde_derive | 1.0.229 | MIT OR Apache-2.0 | [upstream](https://github.com/serde-rs/serde) |
 | serde_derive_internals | 0.29.1 | MIT OR Apache-2.0 | [upstream](https://github.com/serde-rs/serde) |
-| serde_json | 1.0.149 | MIT OR Apache-2.0 | [upstream](https://github.com/serde-rs/json) |
-| serde_json | 1.0.151 | MIT OR Apache-2.0 | [upstream](https://github.com/serde-rs/json) |
+| serde_json | 1.0.154 | MIT OR Apache-2.0 | [upstream](https://github.com/serde-rs/json) |
 | serde_repr | 0.1.20 | MIT OR Apache-2.0 | [upstream](https://github.com/dtolnay/serde-repr) |
-| serde_spanned | 1.0.4 | MIT OR Apache-2.0 | [upstream](https://github.com/toml-rs/toml) |
+| serde_spanned | 1.1.2 | MIT OR Apache-2.0 | [upstream](https://github.com/toml-rs/toml) |
 | serde_with | 3.16.1 | MIT OR Apache-2.0 | [upstream](https://github.com/jonasbb/serde_with/) |
 | serde_with_macros | 3.16.1 | MIT OR Apache-2.0 | [upstream](https://github.com/jonasbb/serde_with/) |
 | serialize-to-javascript | 0.1.2 | MIT OR Apache-2.0 | [upstream](https://github.com/chippers/serialize-to-javascript) |
@@ -408,7 +403,7 @@ attribution as well. No matching CoreML encoder is supplied for the fine-tune.
 | string_cache_codegen | 0.5.4 | MIT OR Apache-2.0 | [upstream](https://github.com/servo/string-cache) |
 | strsim | 0.11.1 | MIT | [upstream](https://github.com/rapidfuzz/strsim-rs) |
 | subtle | 2.6.1 | BSD-3-Clause | [upstream](https://github.com/dalek-cryptography/subtle) |
-| swift-rs | 1.0.7 | MIT OR Apache-2.0 | [upstream](https://github.com/Brendonovich/swift-rs) |
+| swift-rs | 1.0.9 | MIT OR Apache-2.0 | [upstream](https://github.com/Brendonovich/swift-rs) |
 | symphonia | 0.5.5 | MPL-2.0 | [upstream](https://github.com/pdeljanov/Symphonia) |
 | symphonia-bundle-flac | 0.5.5 | MPL-2.0 | [upstream](https://github.com/pdeljanov/Symphonia) |
 | symphonia-bundle-mp3 | 0.5.5 | MPL-2.0 | [upstream](https://github.com/pdeljanov/Symphonia) |
@@ -426,12 +421,13 @@ attribution as well. No matching CoreML encoder is supplied for the fine-tune.
 | symphonia-utils-xiph | 0.5.5 | MPL-2.0 | [upstream](https://github.com/pdeljanov/Symphonia) |
 | syn | 1.0.109 | MIT OR Apache-2.0 | [upstream](https://github.com/dtolnay/syn) |
 | syn | 2.0.116 | MIT OR Apache-2.0 | [upstream](https://github.com/dtolnay/syn) |
-| syn | 3.0.6 | MIT OR Apache-2.0 | [upstream](https://github.com/dtolnay/syn) |
+| syn | 3.0.4 | MIT OR Apache-2.0 | [upstream](https://github.com/dtolnay/syn) |
+| syn | 3.0.9 | MIT OR Apache-2.0 | [upstream](https://github.com/dtolnay/syn) |
 | sync_wrapper | 1.0.2 | Apache-2.0 | [upstream](https://github.com/Actyx/sync_wrapper) |
 | synstructure | 0.13.2 | MIT | [upstream](https://github.com/mystor/synstructure) |
 | system-configuration | 0.7.0 | MIT OR Apache-2.0 | [upstream](https://github.com/mullvad/system-configuration-rs) |
 | system-configuration-sys | 0.6.0 | MIT OR Apache-2.0 | [upstream](https://github.com/mullvad/system-configuration-rs) |
-| tao | 0.34.5 | Apache-2.0 | [upstream](https://github.com/tauri-apps/tao) |
+| tao | 0.34.8 | Apache-2.0 | [upstream](https://github.com/tauri-apps/tao) |
 | tar | 0.4.46 | MIT OR Apache-2.0 | [upstream](https://github.com/composefs/tar-rs) |
 | tauri | 2.10.2 | Apache-2.0 OR MIT | [upstream](https://github.com/tauri-apps/tauri) |
 | tauri-build | 2.5.5 | Apache-2.0 OR MIT | [upstream](https://github.com/tauri-apps/tauri) |
@@ -448,13 +444,11 @@ attribution as well. No matching CoreML encoder is supplied for the fine-tune.
 | tauri-runtime-wry | 2.10.0 | Apache-2.0 OR MIT | [upstream](https://github.com/tauri-apps/tauri) |
 | tauri-utils | 2.8.2 | Apache-2.0 OR MIT | [upstream](https://github.com/tauri-apps/tauri) |
 | tauri-winres | 0.3.5 | MIT | [upstream](https://github.com/tauri-apps/winres) |
-| tempfile | 3.25.0 | MIT OR Apache-2.0 | [upstream](https://github.com/Stebalien/tempfile) |
+| tempfile | 3.27.0 | MIT OR Apache-2.0 | [upstream](https://github.com/Stebalien/tempfile) |
 | tendril | 0.4.3 | MIT/Apache-2.0 | [upstream](https://github.com/servo/tendril) |
 | thiserror | 1.0.69 | MIT OR Apache-2.0 | [upstream](https://github.com/dtolnay/thiserror) |
-| thiserror | 2.0.18 | MIT OR Apache-2.0 | [upstream](https://github.com/dtolnay/thiserror) |
 | thiserror | 2.0.21 | MIT OR Apache-2.0 | [upstream](https://github.com/dtolnay/thiserror) |
 | thiserror-impl | 1.0.69 | MIT OR Apache-2.0 | [upstream](https://github.com/dtolnay/thiserror) |
-| thiserror-impl | 2.0.18 | MIT OR Apache-2.0 | [upstream](https://github.com/dtolnay/thiserror) |
 | thiserror-impl | 2.0.21 | MIT OR Apache-2.0 | [upstream](https://github.com/dtolnay/thiserror) |
 | thread_local | 1.1.9 | MIT OR Apache-2.0 | [upstream](https://github.com/Amanieu/thread_local-rs) |
 | tiff | 0.10.3 | MIT | [upstream](https://github.com/image-rs/image-tiff) |
@@ -462,15 +456,15 @@ attribution as well. No matching CoreML encoder is supplied for the fine-tune.
 | time-core | 0.1.8 | MIT OR Apache-2.0 | [upstream](https://github.com/time-rs/time) |
 | time-macros | 0.2.27 | MIT OR Apache-2.0 | [upstream](https://github.com/time-rs/time) |
 | tinystr | 0.8.2 | Unicode-3.0 | [upstream](https://github.com/unicode-org/icu4x) |
-| tokio | 1.49.0 | MIT | [upstream](https://github.com/tokio-rs/tokio) |
+| tokio | 1.50.0 | MIT | [upstream](https://github.com/tokio-rs/tokio) |
 | tokio-macros | 2.6.0 | MIT | [upstream](https://github.com/tokio-rs/tokio) |
 | tokio-native-tls | 0.3.1 | MIT | [upstream](https://github.com/tokio-rs/tls) |
 | tokio-rustls | 0.26.4 | MIT OR Apache-2.0 | [upstream](https://github.com/rustls/tokio-rustls) |
 | tokio-util | 0.7.18 | MIT | [upstream](https://github.com/tokio-rs/tokio) |
 | toml | 0.9.12+spec-1.1.0 | MIT OR Apache-2.0 | [upstream](https://github.com/toml-rs/toml) |
 | toml_datetime | 0.7.5+spec-1.1.0 | MIT OR Apache-2.0 | [upstream](https://github.com/toml-rs/toml) |
-| toml_parser | 1.0.9+spec-1.1.0 | MIT OR Apache-2.0 | [upstream](https://github.com/toml-rs/toml) |
-| toml_writer | 1.0.6+spec-1.1.0 | MIT OR Apache-2.0 | [upstream](https://github.com/toml-rs/toml) |
+| toml_parser | 1.1.5+spec-1.1.0 | MIT OR Apache-2.0 | [upstream](https://github.com/toml-rs/toml) |
+| toml_writer | 1.1.3+spec-1.1.0 | MIT OR Apache-2.0 | [upstream](https://github.com/toml-rs/toml) |
 | tower | 0.5.3 | MIT | [upstream](https://github.com/tower-rs/tower) |
 | tower-http | 0.6.8 | MIT | [upstream](https://github.com/tower-rs/tower-http) |
 | tower-layer | 0.3.3 | MIT | [upstream](https://github.com/tower-rs/tower) |
@@ -480,7 +474,7 @@ attribution as well. No matching CoreML encoder is supplied for the fine-tune.
 | tracing-core | 0.1.36 | MIT | [upstream](https://github.com/tokio-rs/tracing) |
 | tracing-log | 0.2.0 | MIT | [upstream](https://github.com/tokio-rs/tracing) |
 | tracing-serde | 0.2.0 | MIT | [upstream](https://github.com/tokio-rs/tracing) |
-| tracing-subscriber | 0.3.22 | MIT | [upstream](https://github.com/tokio-rs/tracing) |
+| tracing-subscriber | 0.3.23 | MIT | [upstream](https://github.com/tokio-rs/tracing) |
 | transpose | 0.2.3 | MIT OR Apache-2.0 | [upstream](https://github.com/ejmahler/transpose) |
 | tray-icon | 0.21.3 | MIT OR Apache-2.0 | [upstream](https://github.com/tauri-apps/tray-icon) |
 | try-lock | 0.2.5 | MIT | [upstream](https://github.com/seanmonstar/try-lock) |
@@ -519,8 +513,9 @@ attribution as well. No matching CoreML encoder is supplied for the fine-tune.
 | windows-targets | 0.52.6 | MIT OR Apache-2.0 | [upstream](https://github.com/microsoft/windows-rs) |
 | windows_aarch64_msvc | 0.52.6 | MIT OR Apache-2.0 | [upstream](https://github.com/microsoft/windows-rs) |
 | winnow | 0.7.14 | MIT | [upstream](https://github.com/winnow-rs/winnow) |
+| winnow | 1.0.4 | MIT | [upstream](https://github.com/winnow-rs/winnow) |
 | writeable | 0.6.2 | Unicode-3.0 | [upstream](https://github.com/unicode-org/icu4x) |
-| wry | 0.54.2 | Apache-2.0 OR MIT | [upstream](https://github.com/tauri-apps/wry) |
+| wry | 0.54.4 | Apache-2.0 OR MIT | [upstream](https://github.com/tauri-apps/wry) |
 | xattr | 1.6.1 | MIT OR Apache-2.0 | [upstream](https://github.com/Stebalien/xattr) |
 | yoke | 0.8.1 | Unicode-3.0 | [upstream](https://github.com/unicode-org/icu4x) |
 | yoke-derive | 0.8.1 | Unicode-3.0 | [upstream](https://github.com/unicode-org/icu4x) |
@@ -1757,7 +1752,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 ### 14435fbcd271
 
-Components: Rust bitflags@1.3.2, Rust bitflags@2.11.0, Rust glob@0.3.3, Rust log@0.4.29, Rust num-complex@0.4.6, Rust num-integer@0.1.46, Rust num-integer@0.1.47, Rust num-traits@0.2.19, Rust regex-automata@0.4.14, Rust regex-syntax@0.8.9, Rust regex@1.12.3
+Components: Rust bitflags@1.3.2, Rust bitflags@2.11.0, Rust glob@0.3.3, Rust log@0.4.29, Rust num-complex@0.4.6, Rust num-integer@0.1.46, Rust num-integer@0.1.47, Rust num-traits@0.2.19, Rust regex-automata@0.4.18, Rust regex-syntax@0.8.11, Rust regex@1.13.1
 
 Source filenames: LICENSE-MIT
 
@@ -2914,7 +2909,7 @@ IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 ### 26235c41e314
 
-Components: Rust wry@0.54.2
+Components: Rust wry@0.54.4
 
 Source filenames: LICENSE.spdx
 
@@ -2973,7 +2968,7 @@ SOFTWARE.
 
 ### 27480f391bd9
 
-Components: Rust futures-channel@0.3.32, Rust futures-core@0.3.32, Rust futures-io@0.3.32, Rust futures-macro@0.3.32, Rust futures-sink@0.3.32, Rust futures-task@0.3.32, Rust futures-util@0.3.32
+Components: Rust futures-channel@0.3.32, Rust futures-core@0.3.34, Rust futures-io@0.3.34, Rust futures-macro@0.3.34, Rust futures-sink@0.3.34, Rust futures-task@0.3.34, Rust futures-util@0.3.34
 
 Source filenames: LICENSE-APACHE
 
@@ -3424,7 +3419,7 @@ Apache License
 
 ### 28694f36acab
 
-Components: Rust tao@0.34.5
+Components: Rust tao@0.34.8
 
 Source filenames: LICENSE.spdx
 
@@ -3481,7 +3476,7 @@ SOFTWARE.
 
 ### 2a57418d6b10
 
-Components: Rust brotli@8.0.2
+Components: Rust brotli@8.0.4
 
 Source filenames: LICENSE.MIT
 
@@ -4667,7 +4662,7 @@ Repository: git+https://github.com/websockets/ws.git
 
 ### 2f213ec6b135
 
-Components: Rust rustix@1.1.3
+Components: Rust rustix@1.1.5
 
 Source filenames: LICENSE-Apache-2.0_WITH_LLVM-exception
 
@@ -4892,6 +4887,36 @@ the License, but only in their entirety and only with respect to the Combined
 Software.
 ~~~~
 
+### 2ff8d9734312
+
+Components: Rust base64@0.23.1
+
+Source filenames: LICENSE-MIT
+
+~~~~text
+The MIT License (MIT)
+
+Copyright (c) 2025 Alice Maz, Marshall Pierce
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+~~~~
+
 ### 30158cc81738
 
 Components: Rust fs_extra@1.3.0
@@ -4924,7 +4949,7 @@ SOFTWARE.
 
 ### 30fefc3a7d6a
 
-Components: Rust adler2@2.0.1, Rust anyhow@1.0.104, Rust atomic-waker@1.1.2, Rust camino@1.2.2, Rust cargo-platform@0.1.9, Rust cargo_metadata@0.19.2, Rust ctrlc@3.5.2, Rust displaydoc@0.2.5, Rust dtoa@1.0.11, Rust dyn-clone@1.0.20, Rust erased-serde@0.4.9, Rust fastrand@2.3.0, Rust itoa@1.0.17, Rust itoa@1.0.18, Rust kuchikiki@0.8.8-speedreader, Rust minimal-lexical@0.2.1, Rust once_cell@1.21.3, Rust once_cell@1.21.4, Rust pin-project-lite@0.2.16, Rust pin-project-lite@0.2.17, Rust portable-atomic@1.13.1, Rust prettyplease@0.2.37, Rust proc-macro2@1.0.106, Rust proc-macro2@1.0.107, Rust quote@1.0.44, Rust quote@1.0.47, Rust ref-cast-impl@1.0.25, Rust ref-cast@1.0.25, Rust rustc-hash@2.1.1, Rust rustix@1.1.3, Rust semver@1.0.27, Rust serde-untagged@0.1.9, Rust serde@1.0.228, Rust serde@1.0.229, Rust serde_core@1.0.228, Rust serde_core@1.0.229, Rust serde_derive@1.0.228, Rust serde_derive@1.0.229, Rust serde_derive_internals@0.29.1, Rust serde_json@1.0.149, Rust serde_json@1.0.151, Rust serde_repr@0.1.20, Rust servo_arc@0.2.0, Rust syn@1.0.109, Rust syn@2.0.116, Rust syn@3.0.6, Rust thiserror-impl@1.0.69, Rust thiserror-impl@2.0.18, Rust thiserror-impl@2.0.21, Rust thiserror@1.0.69, Rust thiserror@2.0.18, Rust thiserror@2.0.21, Rust typed-path@0.12.3, Rust typeid@1.0.3, Rust unicode-ident@1.0.24, Rust unicode-ident@1.0.26, Rust utf-8@0.7.6, Rust utf8-zero@0.8.1, Rust zmij@1.0.21, Rust zmij@1.0.23
+Components: Rust adler2@2.0.1, Rust anyhow@1.0.104, Rust atomic-waker@1.1.2, Rust camino@1.2.2, Rust cargo-platform@0.1.9, Rust cargo_metadata@0.19.2, Rust ctrlc@3.5.2, Rust displaydoc@0.2.5, Rust dtoa@1.0.11, Rust dyn-clone@1.0.20, Rust erased-serde@0.4.9, Rust fastrand@2.3.0, Rust itoa@1.0.17, Rust itoa@1.0.18, Rust kuchikiki@0.8.8-speedreader, Rust minimal-lexical@0.2.1, Rust once_cell@1.21.3, Rust once_cell@1.21.4, Rust pin-project-lite@0.2.16, Rust pin-project-lite@0.2.17, Rust portable-atomic@1.13.1, Rust prettyplease@0.2.37, Rust proc-macro2@1.0.106, Rust proc-macro2@1.0.107, Rust quote@1.0.44, Rust quote@1.0.47, Rust ref-cast-impl@1.0.25, Rust ref-cast@1.0.25, Rust rustc-hash@2.1.1, Rust rustix@1.1.5, Rust semver@1.0.28, Rust serde-untagged@0.1.9, Rust serde@1.0.229, Rust serde_core@1.0.229, Rust serde_derive@1.0.229, Rust serde_derive_internals@0.29.1, Rust serde_json@1.0.154, Rust serde_repr@0.1.20, Rust servo_arc@0.2.0, Rust syn@1.0.109, Rust syn@2.0.116, Rust syn@3.0.4, Rust syn@3.0.9, Rust thiserror-impl@1.0.69, Rust thiserror-impl@2.0.21, Rust thiserror@1.0.69, Rust thiserror@2.0.21, Rust typed-path@0.12.3, Rust typeid@1.0.3, Rust unicode-ident@1.0.24, Rust unicode-ident@1.0.26, Rust utf-8@0.7.6, Rust utf8-zero@0.8.1, Rust zmij@1.0.21, Rust zmij@1.0.23
 
 Source filenames: LICENSE, LICENSE-MIT
 
@@ -5663,7 +5688,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 ### 3e1bef82aa0d
 
-Components: Rust tokio-util@0.7.18, Rust tokio@1.49.0
+Components: Rust tokio-util@0.7.18, Rust tokio@1.50.0
 
 Source filenames: LICENSE
 
@@ -6120,7 +6145,7 @@ DEALINGS IN THE SOFTWARE.
 
 ### 4498464c2864
 
-Components: Rust anstream@0.6.21, Rust anstyle-parse@0.2.7, Rust anstyle-query@1.1.5, Rust anstyle@1.0.13, Rust clap@4.5.60, Rust clap_builder@4.5.60, Rust clap_complete@4.5.66, Rust clap_derive@4.5.55, Rust clap_lex@1.0.0, Rust clap_mangen@0.2.31, Rust colorchoice@1.0.4, Rust is_terminal_polyfill@1.70.2, Rust roff@0.2.2, Rust serde_spanned@1.0.4, Rust toml@0.9.12+spec-1.1.0, Rust toml_datetime@0.7.5+spec-1.1.0, Rust toml_parser@1.0.9+spec-1.1.0, Rust toml_writer@1.0.6+spec-1.1.0
+Components: Rust anstream@0.6.21, Rust anstyle-parse@0.2.7, Rust anstyle-query@1.1.5, Rust anstyle@1.0.13, Rust clap@4.5.60, Rust clap_builder@4.5.60, Rust clap_complete@4.6.9, Rust clap_derive@4.5.55, Rust clap_lex@1.0.0, Rust clap_mangen@0.2.31, Rust colorchoice@1.0.4, Rust is_terminal_polyfill@1.70.2, Rust roff@0.2.2, Rust serde_spanned@1.1.2, Rust toml@0.9.12+spec-1.1.0, Rust toml_datetime@0.7.5+spec-1.1.0, Rust toml_parser@1.1.5+spec-1.1.0, Rust toml_writer@1.1.3+spec-1.1.0
 
 Source filenames: LICENSE-MIT
 
@@ -8344,7 +8369,7 @@ Apache License
 
 ### 5c3866f31ed2
 
-Components: Rust reqwest@0.13.2
+Components: Rust reqwest@0.13.5
 
 Source filenames: LICENSE-APACHE
 
@@ -9488,9 +9513,9 @@ Creator: Person: Daniel Thompson-Yvetot
 
 ### 6c91ec82929f
 
-Components: Rust alloc-no-stdlib@2.0.4, Rust brotli-decompressor@5.0.0
+Components: Rust alloc-no-stdlib@2.0.4, Rust brotli-decompressor@5.0.3, Rust brotli@8.0.4
 
-Source filenames: LICENSE
+Source filenames: LICENSE, LICENSE.BSD-3-Clause
 
 ~~~~text
 Copyright (c) 2016 Dropbox, Inc.
@@ -9707,7 +9732,7 @@ express Statement of Purpose.
 
 ### 6dc0e068dcf3
 
-Components: Rust anstream@0.6.21, Rust anstyle-parse@0.2.7, Rust anstyle-query@1.1.5, Rust anstyle@1.0.13, Rust clap@4.5.60, Rust clap_builder@4.5.60, Rust clap_complete@4.5.66, Rust clap_derive@4.5.55, Rust clap_lex@1.0.0, Rust clap_mangen@0.2.31, Rust colorchoice@1.0.4, Rust crc32fast@1.5.0, Rust ctor@0.2.9, Rust dpi@0.1.2, Rust foreign-types-macros@0.2.3, Rust foreign-types-shared@0.3.1, Rust foreign-types@0.5.0, Rust hex@0.4.3, Rust is_terminal_polyfill@1.70.2, Rust json-patch@3.0.1, Rust native-tls@0.2.18, Rust quick-error@2.0.1, Rust roff@0.2.2, Rust rustfft@6.4.1, Rust serde_spanned@1.0.4, Rust socks@0.3.4, Rust strength_reduce@0.2.4, Rust tao@0.34.5, Rust toml@0.9.12+spec-1.1.0, Rust toml_datetime@0.7.5+spec-1.1.0, Rust toml_parser@1.0.9+spec-1.1.0, Rust toml_writer@1.0.6+spec-1.1.0
+Components: Rust anstream@0.6.21, Rust anstyle-parse@0.2.7, Rust anstyle-query@1.1.5, Rust anstyle@1.0.13, Rust clap@4.5.60, Rust clap_builder@4.5.60, Rust clap_complete@4.6.9, Rust clap_derive@4.5.55, Rust clap_lex@1.0.0, Rust clap_mangen@0.2.31, Rust colorchoice@1.0.4, Rust crc32fast@1.5.0, Rust ctor@0.2.9, Rust dpi@0.1.2, Rust foreign-types-macros@0.2.3, Rust foreign-types-shared@0.3.1, Rust foreign-types@0.5.0, Rust hex@0.4.3, Rust is_terminal_polyfill@1.70.2, Rust json-patch@3.0.1, Rust native-tls@0.2.18, Rust quick-error@2.0.1, Rust roff@0.2.2, Rust rustfft@6.4.1, Rust socks@0.3.4, Rust strength_reduce@0.2.4, Rust tao@0.34.8, Rust toml@0.9.12+spec-1.1.0, Rust toml_datetime@0.7.5+spec-1.1.0
 
 Source filenames: LICENSE, LICENSE-APACHE
 
@@ -10640,7 +10665,7 @@ TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
 
 ### 7593ea50d2d4
 
-Components: Rust swift-rs@1.0.7
+Components: Rust swift-rs@1.0.9
 
 Source filenames: LICENSE-MIT
 
@@ -11310,7 +11335,7 @@ option.
 
 ### 7bdd5c5e8ad0
 
-Components: Rust tempfile@3.25.0, Rust xattr@1.6.1
+Components: Rust tempfile@3.27.0, Rust xattr@1.6.1
 
 Source filenames: LICENSE-MIT
 
@@ -12464,7 +12489,7 @@ THE SOFTWARE.
 
 ### 859a90323b68
 
-Components: Rust global-hotkey@0.8.0, Rust muda@0.17.1, Rust tray-icon@0.21.3
+Components: Rust global-hotkey@0.8.0, Rust muda@0.17.2, Rust tray-icon@0.21.3
 
 Source filenames: LICENSE-MIT
 
@@ -12494,7 +12519,7 @@ SOFTWARE.
 
 ### 85ad950cce87
 
-Components: Rust anyhow@1.0.104, Rust dtoa@1.0.11, Rust dyn-clone@1.0.20, Rust erased-serde@0.4.9, Rust itoa@1.0.17, Rust itoa@1.0.18, Rust libc@0.2.189, Rust libc@0.2.191, Rust mach2@0.4.3, Rust osakit@0.3.1, Rust prettyplease@0.2.37, Rust proc-macro2@1.0.106, Rust proc-macro2@1.0.107, Rust quote@1.0.44, Rust quote@1.0.47, Rust ref-cast-impl@1.0.25, Rust ref-cast@1.0.25, Rust rustc-hash@2.1.1, Rust semver@1.0.27, Rust serde-untagged@0.1.9, Rust serde@1.0.228, Rust serde@1.0.229, Rust serde_core@1.0.228, Rust serde_core@1.0.229, Rust serde_derive@1.0.228, Rust serde_derive@1.0.229, Rust serde_derive_internals@0.29.1, Rust serde_json@1.0.149, Rust serde_json@1.0.151, Rust serde_repr@0.1.20, Rust syn@2.0.116, Rust syn@3.0.6, Rust thiserror-impl@1.0.69, Rust thiserror-impl@2.0.18, Rust thiserror-impl@2.0.21, Rust thiserror@1.0.69, Rust thiserror@2.0.18, Rust thiserror@2.0.21, Rust typed-path@0.12.3, Rust typeid@1.0.3, Rust unicode-ident@1.0.24, Rust unicode-ident@1.0.26, Rust utf-8@0.7.6, Rust utf8-zero@0.8.1, Rust utf8parse@0.2.2
+Components: Rust anyhow@1.0.104, Rust dtoa@1.0.11, Rust dyn-clone@1.0.20, Rust erased-serde@0.4.9, Rust itoa@1.0.17, Rust itoa@1.0.18, Rust libc@0.2.191, Rust mach2@0.4.3, Rust osakit@0.3.1, Rust prettyplease@0.2.37, Rust proc-macro2@1.0.106, Rust proc-macro2@1.0.107, Rust quote@1.0.44, Rust quote@1.0.47, Rust ref-cast-impl@1.0.25, Rust ref-cast@1.0.25, Rust rustc-hash@2.1.1, Rust semver@1.0.28, Rust serde-untagged@0.1.9, Rust serde@1.0.229, Rust serde_core@1.0.229, Rust serde_derive@1.0.229, Rust serde_derive_internals@0.29.1, Rust serde_json@1.0.154, Rust serde_repr@0.1.20, Rust syn@2.0.116, Rust syn@3.0.4, Rust syn@3.0.9, Rust thiserror-impl@1.0.69, Rust thiserror-impl@2.0.21, Rust thiserror@1.0.69, Rust thiserror@2.0.21, Rust typed-path@0.12.3, Rust typeid@1.0.3, Rust unicode-ident@1.0.24, Rust unicode-ident@1.0.26, Rust utf-8@0.7.6, Rust utf8-zero@0.8.1, Rust utf8parse@0.2.2
 
 Source filenames: LICENSE-APACHE
 
@@ -13061,7 +13086,7 @@ Exhibit B - "Incompatible With Secondary Licenses" Notice
 
 ### 86eb6a41ef64
 
-Components: Rust wry@0.54.2
+Components: Rust wry@0.54.4
 
 Source filenames: LICENSE-MIT
 
@@ -13091,7 +13116,7 @@ SOFTWARE.
 
 ### 8793aa4141de
 
-Components: Rust winnow@0.7.14
+Components: Rust winnow@0.7.14, Rust winnow@1.0.4
 
 Source filenames: LICENSE-MIT
 
@@ -16213,7 +16238,7 @@ DEALINGS IN THE SOFTWARE.
 
 ### 954f335b8baf
 
-Components: Rust arrayvec@0.7.6, Rust atomic-waker@1.1.2, Rust autocfg@1.5.0, Rust autocfg@1.5.1, Rust base64@0.21.7, Rust base64@0.22.1, Rust bitflags@1.3.2, Rust bitflags@2.11.0, Rust bumpalo@3.20.1, Rust camino@1.2.2, Rust cc@1.2.56, Rust cexpr@0.6.0, Rust cfg-if@1.0.4, Rust cfg-if@1.0.5, Rust cmake@0.1.57, Rust cocoa-foundation@0.2.1, Rust cocoa@0.26.1, Rust core-foundation-sys@0.8.7, Rust core-foundation@0.10.1, Rust core-foundation@0.9.4, Rust core-graphics-types@0.2.0, Rust core-graphics@0.24.0, Rust core-graphics@0.25.0, Rust coreaudio-rs@0.11.3, Rust crossbeam-channel@0.5.15, Rust crossbeam-utils@0.8.21, Rust displaydoc@0.2.5, Rust either@1.15.0, Rust equivalent@1.0.2, Rust errno@0.3.14, Rust fastrand@2.3.0, Rust filetime@0.2.27, Rust find-msvc-tools@0.1.9, Rust flate2@1.1.9, Rust fnv@1.0.7, Rust form_urlencoded@1.2.2, Rust fs2@0.4.3, Rust futf@0.1.5, Rust glob@0.3.3, Rust global-hotkey@0.8.0, Rust hashbrown@0.12.3, Rust hashbrown@0.16.1, Rust heck@0.5.0, Rust html5ever@0.29.1, Rust httparse@1.10.1, Rust hyper-rustls@0.27.7, Rust hyper-tls@0.6.0, Rust idna@1.1.0, Rust idna_adapter@1.2.1, Rust indexmap@1.9.3, Rust indexmap@2.13.0, Rust itertools@0.13.0, Rust jobserver@0.1.34, Rust keyboard-types@0.7.0, Rust keyboard-types@0.8.3, Rust lazy_static@1.5.0, Rust lock_api@0.4.14, Rust log@0.4.29, Rust markup5ever@0.14.1, Rust matrixmultiply@0.3.10, Rust matrixmultiply@0.3.11, Rust mime@0.3.17, Rust muda@0.17.1, Rust ndarray@0.17.2, Rust nodrop@0.1.14, Rust num-complex@0.4.6, Rust num-integer@0.1.46, Rust num-integer@0.1.47, Rust num-traits@0.2.19, Rust num_cpus@1.17.0, Rust once_cell@1.21.3, Rust once_cell@1.21.4, Rust parking_lot@0.12.5, Rust parking_lot_core@0.9.12, Rust percent-encoding@2.3.2, Rust png@0.17.16, Rust png@0.18.1, Rust primal-check@0.3.4, Rust proc-macro-hack@0.5.20+deprecated, Rust rawpointer@0.2.1, Rust regex-automata@0.4.14, Rust regex-syntax@0.8.9, Rust regex@1.12.3, Rust rustc_version@0.4.1, Rust rustix@1.1.3, Rust rustls@0.23.46, Rust scopeguard@1.2.0, Rust security-framework-sys@2.16.0, Rust security-framework@3.6.0, Rust serde_with@3.16.1, Rust serde_with_macros@3.16.1, Rust servo_arc@0.2.0, Rust signal-hook-registry@1.4.8, Rust signal-hook@0.3.18, Rust smallvec@1.15.1, Rust smallvec@1.16.2, Rust socket2@0.6.2, Rust stable_deref_trait@1.2.1, Rust string_cache@0.8.9, Rust string_cache_codegen@0.5.4, Rust syn@1.0.109, Rust system-configuration-sys@0.6.0, Rust system-configuration@0.7.0, Rust tar@0.4.46, Rust tempfile@3.25.0, Rust tendril@0.4.3, Rust thread_local@1.1.9, Rust tray-icon@0.21.3, Rust unicode-segmentation@1.12.0, Rust unicode-width@0.2.2, Rust url@2.5.8, Rust uuid@1.21.0, Rust version_check@0.9.5, Rust weezl@0.1.12, Rust window-vibrancy@0.6.0, Rust wry@0.54.2, Rust xattr@1.6.1
+Components: Rust arrayvec@0.7.6, Rust atomic-waker@1.1.2, Rust autocfg@1.5.0, Rust autocfg@1.5.1, Rust base64@0.21.7, Rust base64@0.22.1, Rust base64@0.23.1, Rust bitflags@1.3.2, Rust bitflags@2.11.0, Rust bumpalo@3.20.1, Rust camino@1.2.2, Rust cc@1.2.56, Rust cexpr@0.6.0, Rust cfg-if@1.0.4, Rust cfg-if@1.0.5, Rust cmake@0.1.57, Rust cocoa-foundation@0.2.1, Rust cocoa@0.26.1, Rust core-foundation-sys@0.8.7, Rust core-foundation@0.10.1, Rust core-foundation@0.9.4, Rust core-graphics-types@0.2.0, Rust core-graphics@0.24.0, Rust core-graphics@0.25.0, Rust coreaudio-rs@0.11.3, Rust crossbeam-channel@0.5.15, Rust crossbeam-utils@0.8.21, Rust displaydoc@0.2.5, Rust either@1.15.0, Rust equivalent@1.0.2, Rust errno@0.3.14, Rust fastrand@2.3.0, Rust filetime@0.2.27, Rust find-msvc-tools@0.1.9, Rust flate2@1.1.9, Rust fnv@1.0.7, Rust form_urlencoded@1.2.2, Rust fs2@0.4.3, Rust futf@0.1.5, Rust glob@0.3.3, Rust global-hotkey@0.8.0, Rust hashbrown@0.12.3, Rust hashbrown@0.16.1, Rust heck@0.5.0, Rust html5ever@0.29.1, Rust httparse@1.10.1, Rust hyper-rustls@0.27.7, Rust hyper-tls@0.6.0, Rust idna@1.1.0, Rust idna_adapter@1.2.1, Rust indexmap@1.9.3, Rust indexmap@2.13.0, Rust itertools@0.13.0, Rust jobserver@0.1.34, Rust keyboard-types@0.7.0, Rust keyboard-types@0.8.3, Rust lazy_static@1.5.0, Rust lock_api@0.4.14, Rust log@0.4.29, Rust markup5ever@0.14.1, Rust matrixmultiply@0.3.10, Rust matrixmultiply@0.3.11, Rust mime@0.3.17, Rust muda@0.17.2, Rust ndarray@0.17.2, Rust nodrop@0.1.14, Rust num-complex@0.4.6, Rust num-integer@0.1.46, Rust num-integer@0.1.47, Rust num-traits@0.2.19, Rust num_cpus@1.17.0, Rust once_cell@1.21.3, Rust once_cell@1.21.4, Rust parking_lot@0.12.5, Rust parking_lot_core@0.9.12, Rust percent-encoding@2.3.2, Rust png@0.17.16, Rust png@0.18.1, Rust primal-check@0.3.4, Rust proc-macro-hack@0.5.20+deprecated, Rust rawpointer@0.2.1, Rust regex-automata@0.4.18, Rust regex-syntax@0.8.11, Rust regex@1.13.1, Rust rustc_version@0.4.1, Rust rustix@1.1.5, Rust rustls@0.23.46, Rust scopeguard@1.2.0, Rust security-framework-sys@2.16.0, Rust security-framework@3.6.0, Rust serde_with@3.16.1, Rust serde_with_macros@3.16.1, Rust servo_arc@0.2.0, Rust signal-hook-registry@1.4.8, Rust signal-hook@0.3.18, Rust smallvec@1.15.1, Rust smallvec@1.16.2, Rust socket2@0.6.2, Rust stable_deref_trait@1.2.1, Rust string_cache@0.8.9, Rust string_cache_codegen@0.5.4, Rust syn@1.0.109, Rust system-configuration-sys@0.6.0, Rust system-configuration@0.7.0, Rust tar@0.4.46, Rust tempfile@3.27.0, Rust tendril@0.4.3, Rust thread_local@1.1.9, Rust tray-icon@0.21.3, Rust unicode-segmentation@1.12.0, Rust unicode-width@0.2.2, Rust url@2.5.8, Rust uuid@1.21.0, Rust version_check@0.9.5, Rust weezl@0.1.12, Rust window-vibrancy@0.6.0, Rust wry@0.54.4, Rust xattr@1.6.1
 
 Source filenames: LICENSE-APACHE
 
@@ -16781,6 +16806,216 @@ CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
+~~~~
+
+### 9b689eac99cd
+
+Components: Rust serde_spanned@1.1.2, Rust toml_parser@1.1.5+spec-1.1.0, Rust toml_writer@1.1.3+spec-1.1.0
+
+Source filenames: LICENSE-APACHE
+
+~~~~text
+Apache License
+                           Version 2.0, January 2004
+                        http://www.apache.org/licenses/
+
+   TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
+
+   1. Definitions.
+
+      "License" shall mean the terms and conditions for use, reproduction,
+      and distribution as defined by Sections 1 through 9 of this document.
+
+      "Licensor" shall mean the copyright owner or entity authorized by
+      the copyright owner that is granting the License.
+
+      "Legal Entity" shall mean the union of the acting entity and all
+      other entities that control, are controlled by, or are under common
+      control with that entity. For the purposes of this definition,
+      "control" means (i) the power, direct or indirect, to cause the
+      direction or management of such entity, whether by contract or
+      otherwise, or (ii) ownership of fifty percent (50%) or more of the
+      outstanding shares, or (iii) beneficial ownership of such entity.
+
+      "You" (or "Your") shall mean an individual or Legal Entity
+      exercising permissions granted by this License.
+
+      "Source" form shall mean the preferred form for making modifications,
+      including but not limited to software source code, documentation
+      source, and configuration files.
+
+      "Object" form shall mean any form resulting from mechanical
+      transformation or translation of a Source form, including but
+      not limited to compiled object code, generated documentation,
+      and conversions to other media types.
+
+      "Work" shall mean the work of authorship, whether in Source or
+      Object form, made available under the License, as indicated by a
+      copyright notice that is included in or attached to the work
+      (an example is provided in the Appendix below).
+
+      "Derivative Works" shall mean any work, whether in Source or Object
+      form, that is based on (or derived from) the Work and for which the
+      editorial revisions, annotations, elaborations, or other modifications
+      represent, as a whole, an original work of authorship. For the purposes
+      of this License, Derivative Works shall not include works that remain
+      separable from, or merely link (or bind by name) to the interfaces of,
+      the Work and Derivative Works thereof.
+
+      "Contribution" shall mean any work of authorship, including
+      the original version of the Work and any modifications or additions
+      to that Work or Derivative Works thereof, that is intentionally
+      submitted to Licensor for inclusion in the Work by the copyright owner
+      or by an individual or Legal Entity authorized to submit on behalf of
+      the copyright owner. For the purposes of this definition, "submitted"
+      means any form of electronic, verbal, or written communication sent
+      to the Licensor or its representatives, including but not limited to
+      communication on electronic mailing lists, source code control systems,
+      and issue tracking systems that are managed by, or on behalf of, the
+      Licensor for the purpose of discussing and improving the Work, but
+      excluding communication that is conspicuously marked or otherwise
+      designated in writing by the copyright owner as "Not a Contribution."
+
+      "Contributor" shall mean Licensor and any individual or Legal Entity
+      on behalf of whom a Contribution has been received by Licensor and
+      subsequently incorporated within the Work.
+
+   2. Grant of Copyright License. Subject to the terms and conditions of
+      this License, each Contributor hereby grants to You a perpetual,
+      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+      copyright license to reproduce, prepare Derivative Works of,
+      publicly display, publicly perform, sublicense, and distribute the
+      Work and such Derivative Works in Source or Object form.
+
+   3. Grant of Patent License. Subject to the terms and conditions of
+      this License, each Contributor hereby grants to You a perpetual,
+      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+      (except as stated in this section) patent license to make, have made,
+      use, offer to sell, sell, import, and otherwise transfer the Work,
+      where such license applies only to those patent claims licensable
+      by such Contributor that are necessarily infringed by their
+      Contribution(s) alone or by combination of their Contribution(s)
+      with the Work to which such Contribution(s) was submitted. If You
+      institute patent litigation against any entity (including a
+      cross-claim or counterclaim in a lawsuit) alleging that the Work
+      or a Contribution incorporated within the Work constitutes direct
+      or contributory patent infringement, then any patent licenses
+      granted to You under this License for that Work shall terminate
+      as of the date such litigation is filed.
+
+   4. Redistribution. You may reproduce and distribute copies of the
+      Work or Derivative Works thereof in any medium, with or without
+      modifications, and in Source or Object form, provided that You
+      meet the following conditions:
+
+      (a) You must give any other recipients of the Work or
+          Derivative Works a copy of this License; and
+
+      (b) You must cause any modified files to carry prominent notices
+          stating that You changed the files; and
+
+      (c) You must retain, in the Source form of any Derivative Works
+          that You distribute, all copyright, patent, trademark, and
+          attribution notices from the Source form of the Work,
+          excluding those notices that do not pertain to any part of
+          the Derivative Works; and
+
+      (d) If the Work includes a "NOTICE" text file as part of its
+          distribution, then any Derivative Works that You distribute must
+          include a readable copy of the attribution notices contained
+          within such NOTICE file, excluding those notices that do not
+          pertain to any part of the Derivative Works, in at least one
+          of the following places: within a NOTICE text file distributed
+          as part of the Derivative Works; within the Source form or
+          documentation, if provided along with the Derivative Works; or,
+          within a display generated by the Derivative Works, if and
+          wherever such third-party notices normally appear. The contents
+          of the NOTICE file are for informational purposes only and
+          do not modify the License. You may add Your own attribution
+          notices within Derivative Works that You distribute, alongside
+          or as an addendum to the NOTICE text from the Work, provided
+          that such additional attribution notices cannot be construed
+          as modifying the License.
+
+      You may add Your own copyright statement to Your modifications and
+      may provide additional or different license terms and conditions
+      for use, reproduction, or distribution of Your modifications, or
+      for any such Derivative Works as a whole, provided Your use,
+      reproduction, and distribution of the Work otherwise complies with
+      the conditions stated in this License.
+
+   5. Submission of Contributions. Unless You explicitly state otherwise,
+      any Contribution intentionally submitted for inclusion in the Work
+      by You to the Licensor shall be under the terms and conditions of
+      this License, without any additional terms or conditions.
+      Notwithstanding the above, nothing herein shall supersede or modify
+      the terms of any separate license agreement you may have executed
+      with Licensor regarding such Contributions.
+
+   6. Trademarks. This License does not grant permission to use the trade
+      names, trademarks, service marks, or product names of the Licensor,
+      except as required for reasonable and customary use in describing the
+      origin of the Work and reproducing the content of the NOTICE file.
+
+   7. Disclaimer of Warranty. Unless required by applicable law or
+      agreed to in writing, Licensor provides the Work (and each
+      Contributor provides its Contributions) on an "AS IS" BASIS,
+      WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+      implied, including, without limitation, any warranties or conditions
+      of TITLE, NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A
+      PARTICULAR PURPOSE. You are solely responsible for determining the
+      appropriateness of using or redistributing the Work and assume any
+      risks associated with Your exercise of permissions under this License.
+
+   8. Limitation of Liability. In no event and under no legal theory,
+      whether in tort (including negligence), contract, or otherwise,
+      unless required by applicable law (such as deliberate and grossly
+      negligent acts) or agreed to in writing, shall any Contributor be
+      liable to You for damages, including any direct, indirect, special,
+      incidental, or consequential damages of any character arising as a
+      result of this License or out of the use or inability to use the
+      Work (including but not limited to damages for loss of goodwill,
+      work stoppage, computer failure or malfunction, or any and all
+      other commercial damages or losses), even if such Contributor
+      has been advised of the possibility of such damages.
+
+   9. Accepting Warranty or Additional Liability. While redistributing
+      the Work or Derivative Works thereof, You may choose to offer,
+      and charge a fee for, acceptance of support, warranty, indemnity,
+      or other liability obligations and/or rights consistent with this
+      License. However, in accepting such obligations, You may act only
+      on Your own behalf and on Your sole responsibility, not on behalf
+      of any other Contributor, and only if You agree to indemnify,
+      defend, and hold each Contributor harmless for any liability
+      incurred by, or claims asserted against, such Contributor by reason
+      of your accepting any such warranty or additional liability.
+
+   END OF TERMS AND CONDITIONS
+
+   APPENDIX: How to apply the Apache License to your work.
+
+      To apply the Apache License to your work, attach the following
+      boilerplate notice, with the fields enclosed by brackets "{}"
+      replaced with your own identifying information. (Don't include
+      the brackets!)  The text should be enclosed in the appropriate
+      comment syntax for the file format. We also recommend that a
+      file or class name and description of purpose be included on the
+      same "printed page" as the copyright notice for easier
+      identification within third-party archives.
+
+   Copyright Individual contributors
+
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
 ~~~~
 
 ### 9bd6c6d978b2
@@ -19082,7 +19317,7 @@ The views and conclusions contained in the software and documentation are those 
 
 ### b420d8add23b
 
-Components: Rust futures-channel@0.3.32, Rust futures-core@0.3.32, Rust futures-io@0.3.32, Rust futures-macro@0.3.32, Rust futures-sink@0.3.32, Rust futures-task@0.3.32, Rust futures-util@0.3.32
+Components: Rust futures-channel@0.3.32, Rust futures-core@0.3.34, Rust futures-io@0.3.34, Rust futures-macro@0.3.34, Rust futures-sink@0.3.34, Rust futures-task@0.3.34, Rust futures-util@0.3.34
 
 Source filenames: LICENSE-MIT
 
@@ -19723,7 +19958,7 @@ SOFTWARE.
 
 ### b99f9d43803f
 
-Components: Rust muda@0.17.1
+Components: Rust muda@0.17.2
 
 Source filenames: LICENSE.spdx
 
@@ -20019,7 +20254,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 ### bde59a7e336f
 
-Components: Rust reqwest@0.13.2
+Components: Rust reqwest@0.13.5
 
 Source filenames: LICENSE-MIT
 
@@ -20373,7 +20608,7 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ### c1e08ee9a728
 
-Components: Rust tokio-native-tls@0.3.1, Rust tracing-attributes@0.1.31, Rust tracing-core@0.1.36, Rust tracing-log@0.2.0, Rust tracing-serde@0.2.0, Rust tracing-subscriber@0.3.22, Rust tracing@0.1.44
+Components: Rust tokio-native-tls@0.3.1, Rust tracing-attributes@0.1.31, Rust tracing-core@0.1.36, Rust tracing-log@0.2.0, Rust tracing-serde@0.2.0, Rust tracing-subscriber@0.3.23, Rust tracing@0.1.44
 
 Source filenames: LICENSE
 
@@ -21135,7 +21370,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 ### c96302294382
 
-Components: Rust libc@0.2.189, Rust libc@0.2.191
+Components: Rust libc@0.2.191
 
 Source filenames: LICENSE-MIT
 
@@ -21187,7 +21422,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 ### cc367a7134c2
 
-Components: Rust getrandom@0.1.16, Rust rand@0.7.3, Rust rand@0.8.5, Rust rand_chacha@0.2.2, Rust rand_chacha@0.3.1, Rust rand_core@0.5.1, Rust rand_core@0.6.4
+Components: Rust getrandom@0.1.16, Rust rand@0.7.3, Rust rand@0.8.8, Rust rand_chacha@0.2.2, Rust rand_chacha@0.3.1, Rust rand_core@0.5.1, Rust rand_core@0.6.4
 
 Source filenames: LICENSE-MIT
 
@@ -21383,7 +21618,7 @@ THE SOFTWARE.
 
 ### ce4a94c006fa
 
-Components: Rust chrono@0.4.43
+Components: Rust chrono@0.4.45
 
 Source filenames: LICENSE.txt
 
@@ -22595,7 +22830,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ### d588236a8ad8
 
-Components: Rust swift-rs@1.0.7
+Components: Rust swift-rs@1.0.9
 
 Source filenames: LICENSE-APACHE
 
@@ -25478,7 +25713,7 @@ SOFTWARE.
 
 ### fee4d7ce394c
 
-Components: Rust rand@0.8.5
+Components: Rust rand@0.8.8
 
 Source filenames: LICENSE-APACHE
 

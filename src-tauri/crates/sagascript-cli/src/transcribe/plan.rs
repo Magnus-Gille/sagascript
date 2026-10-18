@@ -16,7 +16,6 @@ use sagascript_core::diarization_report::DecoderEvidence;
 use sagascript_core::error::DictationError;
 use sagascript_core::run_context::RunContext;
 use sagascript_core::settings::{FileModel, Language, Settings, WhisperModel};
-use sagascript_core::transcription::model;
 use sagascript_core::transcription::Glossary;
 #[cfg(feature = "diarization")]
 use sagascript_core::transcription::TranscribeOptions;
@@ -28,7 +27,7 @@ use super::args::TranscribeArgs;
 use super::diarize::CachePolicy;
 #[cfg(feature = "diarization")]
 use super::diarize::{effective_diarization_decoder_evidence, resolve_diarization_options};
-use super::inference::not_downloaded;
+use super::inference::{not_downloaded, InferenceBackend};
 use super::inputs::expand_inputs;
 #[cfg(feature = "diarization")]
 use super::inputs::paths_refer_to_same_file;
@@ -41,6 +40,8 @@ use super::meeting::{meeting_checkpoint, stable_file_sha256, validate_meeting_in
 use super::progress::decoder_progress_value;
 use super::resolve::resolve_file_model_for_run;
 use crate::run_request::RunRequest;
+#[cfg(feature = "diarization")]
+use crate::speaker_args::SpeakerCountArgs;
 
 // ---- the run ----------------------------------------------------------------------
 
@@ -64,16 +65,19 @@ pub(super) enum EnginePlan {
     },
 }
 
-/// Plans a run against the saved settings.
-pub(super) fn plan_run(args: &TranscribeArgs) -> Result<RunPlan, DictationError> {
+/// Plans a run against the saved settings. `backend` is the one the run will
+/// use, and its answer to which models are installed is the preflight's.
+pub(super) fn plan_run(
+    args: &TranscribeArgs,
+    backend: &dyn InferenceBackend,
+) -> Result<RunPlan, DictationError> {
     #[cfg(feature = "diarization")]
     speaker_hint_from_args(args)?;
     let stored = sagascript_core::settings::store::load();
-    plan_run_with(args, stored, model::is_model_downloaded)
+    plan_run_with(args, stored, backend)
 }
 
-/// [`plan_run`] against the given settings and the given idea of which
-/// models are installed.
+/// [`plan_run`] against the given settings.
 ///
 /// The checks run in this order, and the first that fails ends the plan:
 /// language and glossary, the inputs (none, `--meeting-json` scope, `--clipboard`
@@ -82,7 +86,7 @@ pub(super) fn plan_run(args: &TranscribeArgs) -> Result<RunPlan, DictationError>
 pub(super) fn plan_run_with(
     args: &TranscribeArgs,
     stored: Settings,
-    is_downloaded: impl Fn(WhisperModel) -> bool,
+    backend: &dyn InferenceBackend,
 ) -> Result<RunPlan, DictationError> {
     let RunContext {
         language, glossary, ..
@@ -139,7 +143,7 @@ pub(super) fn plan_run_with(
             let cache_may_bypass_model = args.diarize && args.diarize_cache.is_some();
             #[cfg(not(feature = "diarization"))]
             let cache_may_bypass_model = false;
-            if !cache_may_bypass_model && !is_downloaded(model) {
+            if !cache_may_bypass_model && !backend.is_downloaded(model) {
                 return Err(not_downloaded(model));
             }
             EnginePlan::Whisper {
@@ -186,7 +190,7 @@ fn correction_vocabulary(
 /// One input of a run, with everything its processing is told. Built by the
 /// batch (one per file) and by the meeting entry points.
 pub(super) struct FileRequest<'a> {
-    pub(super) args: &'a TranscribeArgs,
+    pub(super) options: &'a FileOptions,
     pub(super) file: &'a Path,
     pub(super) stored: &'a Settings,
     pub(super) language: Language,
@@ -195,9 +199,104 @@ pub(super) struct FileRequest<'a> {
     pub(super) correction_vocabulary: &'a [String],
     /// Cancellation and phase reporting of a meeting job; `None` on the CLI.
     pub(super) control: Option<&'a MeetingControl<'a>>,
-    /// What a diarized run does with `--diarize-cache`; a plain run has no cache.
+}
+
+/// What a file's pipelines read of the command line, and nothing else (#343).
+///
+/// The batch narrows `TranscribeArgs` into it once ([`FileOptions::from_args`]);
+/// the meeting entry points, which have no command line, build the few options
+/// they use directly.
+#[derive(Clone, Debug, Default)]
+pub(super) struct FileOptions {
+    /// `--progress-json`.
+    pub(super) progress_json: bool,
+    /// `--correct-hints`: a plain run repairs words towards the hint, a
+    /// diarized run refuses it.
+    pub(super) correct_hints: bool,
+    pub(super) decoder: DecoderFlags,
+    /// `--diarize` and what goes with it; `None` is a plain run.
     #[cfg(feature = "diarization")]
-    pub(super) cache_policy: CachePolicy,
+    pub(super) diarization: Option<DiarizationFlags>,
+}
+
+/// `--vad`, `--no-vad`, `--beam` and `--parallel`.
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct DecoderFlags {
+    pub(super) vad: bool,
+    pub(super) no_vad: bool,
+    pub(super) beam_size: Option<u32>,
+    pub(super) parallel: Option<usize>,
+}
+
+/// What a diarized run reads of the command line.
+#[cfg(feature = "diarization")]
+#[derive(Clone, Debug)]
+pub(super) struct DiarizationFlags {
+    /// `--diarize-cache` and what the run does with it; `None` is no cache.
+    pub(super) cache: Option<CacheRequest>,
+    /// `--diarize-exclusive-speech-embeddings`.
+    pub(super) exclusive_speech_embeddings: bool,
+    /// `--diarize-threshold`.
+    pub(super) threshold: f32,
+    /// `--diarize-diagnostics`.
+    pub(super) diagnostics: bool,
+    /// `--speakers`, `--min-speakers`, `--max-speakers`, `--force-speakers`,
+    /// validated by the run that uses them.
+    pub(super) speaker_count: SpeakerCountArgs,
+    /// `--meeting-json`: the result is the shared meeting document.
+    pub(super) meeting_json: bool,
+}
+
+#[cfg(feature = "diarization")]
+impl Default for DiarizationFlags {
+    fn default() -> Self {
+        Self {
+            cache: None,
+            exclusive_speech_embeddings: false,
+            threshold: sagascript_core::diarization::DEFAULT_THRESHOLD,
+            diagnostics: false,
+            speaker_count: SpeakerCountArgs::default(),
+            meeting_json: false,
+        }
+    }
+}
+
+/// A diarization cache a run may read and, on a miss, writes: where it is and
+/// which policy governs it.
+#[cfg(feature = "diarization")]
+#[derive(Clone, Debug)]
+pub(super) struct CacheRequest {
+    pub(super) path: PathBuf,
+    pub(super) policy: CachePolicy,
+}
+
+impl FileOptions {
+    /// Narrows the command line to what the pipelines of one file read. A
+    /// command line run always uses `CachePolicy::Normal`.
+    pub(super) fn from_args(args: &TranscribeArgs) -> Self {
+        Self {
+            progress_json: args.progress_json,
+            correct_hints: args.correct_hints,
+            decoder: DecoderFlags {
+                vad: args.vad,
+                no_vad: args.no_vad,
+                beam_size: args.beam_size,
+                parallel: args.parallel,
+            },
+            #[cfg(feature = "diarization")]
+            diarization: args.diarize.then(|| DiarizationFlags {
+                cache: args.diarize_cache.clone().map(|path| CacheRequest {
+                    path,
+                    policy: CachePolicy::Normal,
+                }),
+                exclusive_speech_embeddings: args.diarize_exclusive_speech_embeddings,
+                threshold: args.diarize_threshold,
+                diagnostics: args.diarize_diagnostics,
+                speaker_count: args.speaker_count,
+                meeting_json: args.meeting_json,
+            }),
+        }
+    }
 }
 
 /// How one file will be processed.
@@ -226,6 +325,8 @@ pub(super) struct DiarizationPlan {
     pub(super) decoder_evidence: DecoderEvidence,
     /// `decoder_evidence` as it is attached to every progress event.
     pub(super) decoder_progress: serde_json::Value,
+    /// What the diarize flags say.
+    pub(super) flags: DiarizationFlags,
 }
 
 /// Plans one file. For a diarized run this hashes the source, resolves the
@@ -237,26 +338,21 @@ pub(super) fn plan_file(request: &FileRequest<'_>) -> Result<FilePlan, Dictation
     #[cfg(not(feature = "diarization"))]
     let _ = request;
     #[cfg(feature = "diarization")]
-    let mode = {
-        let diarization = request
-            .args
-            .diarize
-            .then(|| DiarizationPlan::new(request))
-            .transpose()?;
-        if request
-            .args
-            .diarize_cache
-            .as_deref()
-            .is_some_and(|cache_path| paths_refer_to_same_file(request.file, cache_path))
-        {
-            return Err(DictationError::SettingsError(
-                "--diarize-cache must not point to the input recording".to_string(),
-            ));
+    let mode = match &request.options.diarization {
+        Some(flags) => {
+            let plan = DiarizationPlan::new(request, flags)?;
+            if flags
+                .cache
+                .as_ref()
+                .is_some_and(|cache| paths_refer_to_same_file(request.file, &cache.path))
+            {
+                return Err(DictationError::SettingsError(
+                    "--diarize-cache must not point to the input recording".to_string(),
+                ));
+            }
+            FileMode::Diarized(Box::new(plan))
         }
-        match diarization {
-            Some(diarization) => FileMode::Diarized(Box::new(diarization)),
-            None => FileMode::Plain,
-        }
+        None => FileMode::Plain,
     };
     #[cfg(not(feature = "diarization"))]
     let mode = FileMode::Plain;
@@ -265,11 +361,10 @@ pub(super) fn plan_file(request: &FileRequest<'_>) -> Result<FilePlan, Dictation
 
 #[cfg(feature = "diarization")]
 impl DiarizationPlan {
-    fn new(request: &FileRequest<'_>) -> Result<Self, DictationError> {
+    fn new(request: &FileRequest<'_>, flags: &DiarizationFlags) -> Result<Self, DictationError> {
         let FileRequest {
-            args,
+            options,
             file,
-            stored,
             glossary,
             control,
             ..
@@ -278,15 +373,16 @@ impl DiarizationPlan {
         let source_sha256 = stable_file_sha256(file, control)?;
         meeting_checkpoint(control, MeetingPhase::Preparing)?;
         let decoder_prompt = glossary.decoder_prompt();
-        let options = resolve_diarization_options(args, stored)?;
-        let decoder_evidence = effective_diarization_decoder_evidence(&options)?;
-        let decoder_progress = decoder_progress_value(&decoder_evidence, args.meeting_json);
+        let decoder_options = resolve_diarization_options(&options.decoder)?;
+        let decoder_evidence = effective_diarization_decoder_evidence(&decoder_options)?;
+        let decoder_progress = decoder_progress_value(&decoder_evidence, flags.meeting_json);
         Ok(Self {
             source_sha256,
             decoder_prompt,
-            options,
+            options: decoder_options,
             decoder_evidence,
             decoder_progress,
+            flags: flags.clone(),
         })
     }
 }
