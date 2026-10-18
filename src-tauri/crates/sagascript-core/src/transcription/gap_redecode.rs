@@ -20,15 +20,15 @@ use crate::error::DictationError;
 
 const SAMPLE_RATE_HZ: f64 = 16_000.0;
 /// Re-decode at most this fraction of the file...
-pub const MAX_REDECODE_FRACTION: f64 = 0.20;
+pub(crate) const MAX_REDECODE_FRACTION: f64 = 0.20;
 /// ...and never more than this many seconds in total.
-pub const MAX_REDECODE_SECONDS: f64 = 600.0;
+pub(crate) const MAX_REDECODE_SECONDS: f64 = 600.0;
 /// Short files may always spend this much (cost is trivial at this size).
-pub const MIN_REDECODE_BUDGET_SECONDS: f64 = 60.0;
+pub(crate) const MIN_REDECODE_BUDGET_SECONDS: f64 = 60.0;
 /// Spans with a lower share of speech frames are likely noise or music.
-pub const MIN_SPAN_SPEECH_RATIO: f64 = 0.30;
+pub(crate) const MIN_SPAN_SPEECH_RATIO: f64 = 0.30;
 /// Recovered segments below this mean token log-probability are dropped.
-pub const MIN_RECOVERED_AVG_LOGPROB: f32 = -1.0;
+pub(crate) const MIN_RECOVERED_AVG_LOGPROB: f32 = -1.0;
 /// Longest boundary overlap (in words) that is de-duplicated.
 const MAX_BOUNDARY_WORDS: usize = 8;
 /// Shortest boundary overlap (in words) treated as a duplicate.
@@ -186,7 +186,7 @@ where
 
 /// [`redecode_uncovered_speech`] that stops before each slice once `cancelled`
 /// returns true (the caller then discards the partial result).
-pub fn redecode_uncovered_speech_cancellable<F>(
+pub(crate) fn redecode_uncovered_speech_cancellable<F>(
     audio: &[f32],
     segments: Vec<TranscriptSegment>,
     limits: &RedecodeLimits,

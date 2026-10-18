@@ -34,7 +34,7 @@ pub(crate) fn resolve(enabled: bool, name: &str, value: Option<OsString>) -> Opt
 }
 
 /// The value of environment variable `name` if this build honors overrides.
-pub fn env_override(name: &str) -> Option<OsString> {
+pub(crate) fn env_override(name: &str) -> Option<OsString> {
     resolve(ENABLED, name, std::env::var_os(name))
 }
 

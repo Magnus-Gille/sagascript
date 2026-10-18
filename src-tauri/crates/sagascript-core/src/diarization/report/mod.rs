@@ -13,7 +13,7 @@ const MAX_DURATION: f64 = 14_400.0;
 
 /// Floor-clipped 16kHz sample counts can exceed floating-point interval length
 /// by less than one sample. This bound applies only to discrete activity support.
-pub const ACTIVITY_DURATION_TOLERANCE: f64 = 1.0 / 16_000.0 + 1e-9;
+pub(crate) const ACTIVITY_DURATION_TOLERANCE: f64 = 1.0 / 16_000.0 + 1e-9;
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ReportError {
@@ -391,7 +391,7 @@ impl DiarizationReport {
 }
 
 /// Exact union of per-speaker activity, preserving concurrent voices.
-pub fn activity_spans(regions: &[(f64, f64, String)], duration: f64) -> Vec<ActivitySpan> {
+pub(crate) fn activity_spans(regions: &[(f64, f64, String)], duration: f64) -> Vec<ActivitySpan> {
     let mut events = Vec::new();
     for (start, end, speaker) in regions {
         if bounds(*start, *end, duration) && start < end && valid_id(speaker) {

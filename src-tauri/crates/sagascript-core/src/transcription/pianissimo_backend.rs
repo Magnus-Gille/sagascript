@@ -38,7 +38,7 @@ pub const UNSUPPORTED_MESSAGE: &str = crate::models::PIANISSIMO_UNSUPPORTED_MESS
 /// Environment override (development builds only): path of the `sagascript-engine-host` binary.
 pub const ENGINE_HOST_ENV: &str = "SAGASCRIPT_ENGINE_HOST";
 /// Environment override: Core ML compute units (`ane`, `gpu`, `cpu`, `all`).
-pub const COMPUTE_UNITS_ENV: &str = "SAGASCRIPT_ENGINE_COMPUTE_UNITS";
+pub(crate) const COMPUTE_UNITS_ENV: &str = "SAGASCRIPT_ENGINE_COMPUTE_UNITS";
 /// Neural Engine on macOS (Core ML host); the ONNX Runtime host on Windows is CPU-only.
 const DEFAULT_COMPUTE_UNITS_MACOS: &str = "ane";
 const DEFAULT_COMPUTE_UNITS_WINDOWS: &str = "cpu";
@@ -84,7 +84,7 @@ fn macos_major(version: &str) -> Option<u32> {
 
 /// Pure gate: macOS >= 14 on aarch64 and nothing else. `macos_version` is the
 /// `sw_vers -productVersion` string (only meaningful on macOS).
-pub fn platform_supported(os: &str, arch: &str, macos_version: Option<&str>) -> bool {
+pub(crate) fn platform_supported(os: &str, arch: &str, macos_version: Option<&str>) -> bool {
     os == "macos"
         && arch == "aarch64"
         && macos_version
@@ -94,7 +94,7 @@ pub fn platform_supported(os: &str, arch: &str, macos_version: Option<&str>) -> 
 
 /// Full platform gate: the macOS gate, or Windows on ARM once the bundled host
 /// exists. Windows x64 and Linux are never supported.
-pub fn platform_gate(
+pub(crate) fn platform_gate(
     os: &str,
     arch: &str,
     macos_version: Option<&str>,
@@ -279,7 +279,7 @@ pub fn set_load_listener(listener: impl Fn(LoadEvent, LoadSource) + Send + Sync 
 
 /// Message the webview sees for a failed load. The detailed error (which may
 /// contain filesystem paths) stays in the logs.
-pub const GENERIC_LOAD_FAILURE: &str = "Model failed to load";
+pub(crate) const GENERIC_LOAD_FAILURE: &str = "Model failed to load";
 
 /// Webview payload for a load event: `{ state, source, loadMs?, message? }`
 /// with `state` one of `loading | ready | failed | unknown`.
@@ -567,7 +567,7 @@ impl WarmTrigger {
 /// and need some profile on Pianissimo. Key-down warms in both `on_app_start`
 /// and `on_key_down` (an additional trigger after an idle unload) when the
 /// active profile uses Pianissimo. `off` never warms.
-pub fn warm_wanted(
+pub(crate) fn warm_wanted(
     settings: &Settings,
     trigger: WarmTrigger,
     active_profile: Option<&str>,
@@ -583,7 +583,7 @@ pub fn warm_wanted(
 /// [`warm_wanted`] with the platform gate given instead of asked of this
 /// machine, for a caller that decides against a gate of its own (the app's
 /// tests simulate a host that cannot run Pianissimo).
-pub fn warm_wanted_gated(
+pub(crate) fn warm_wanted_gated(
     settings: &Settings,
     trigger: WarmTrigger,
     active_profile: Option<&str>,
@@ -604,7 +604,7 @@ pub fn warm_wanted_gated(
     }
 }
 
-/// Call `warm(reason)` when [`warm_wanted`]. The hook is injected so tests need
+/// Call `warm(reason)` when `warm_wanted`. The hook is injected so tests need
 /// no engine; production passes [`warm_in_background`].
 pub fn warm_on(
     settings: &Settings,
@@ -626,7 +626,7 @@ pub fn profile_change_needs_warm(old: &Settings, new: &Settings) -> bool {
 }
 
 /// [`profile_change_needs_warm`] with the platform gate given instead of asked
-/// of this machine (see [`warm_wanted_gated`]).
+/// of this machine (see `warm_wanted_gated`).
 pub fn profile_change_needs_warm_gated(
     old: &Settings,
     new: &Settings,
@@ -646,7 +646,7 @@ pub fn profile_change_needs_warm_gated(
 
 /// After a memory-pressure unload, key-down and wake warms are skipped for
 /// this long so the engine is not reloaded straight into the same pressure.
-pub const PRESSURE_WARM_COOLDOWN: Duration = Duration::from_secs(5 * 60);
+pub(crate) const PRESSURE_WARM_COOLDOWN: Duration = Duration::from_secs(5 * 60);
 
 static LAST_PRESSURE_UNLOAD: Mutex<Option<Instant>> = Mutex::new(None);
 
@@ -667,7 +667,7 @@ fn shared_client_if_created() -> Option<EngineHostClient> {
 /// Free the engine's model memory when the system reports memory pressure and
 /// no transcription is running. The next utterance reloads (and shows the
 /// loading state). Never starts anything. Returns whether it unloaded, and
-/// starts the [`PRESSURE_WARM_COOLDOWN`] when it did.
+/// starts the `PRESSURE_WARM_COOLDOWN` when it did.
 pub fn unload_if_idle_for_memory_pressure() -> bool {
     let unloaded = shared_client_if_created().is_some_and(|client| client.unload_if_idle());
     if unloaded {
@@ -681,7 +681,7 @@ pub fn unload_if_idle_for_memory_pressure() -> bool {
 
 /// The model is only worth keeping resident while some profile uses Pianissimo.
 /// (Pre-warm `off` is not a reason to unload: it only skips eager loading.)
-pub fn should_unload_when_unused(settings: &Settings) -> bool {
+pub(crate) fn should_unload_when_unused(settings: &Settings) -> bool {
     !settings.any_profile_uses_pianissimo()
 }
 

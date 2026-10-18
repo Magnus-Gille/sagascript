@@ -37,10 +37,10 @@ pub struct DiarizeConfig {
     pub min_gap: f64,
     /// A speaker must be heard for at least this many seconds in total; smaller embedding
     /// clusters are absorbed into the nearest cluster that reaches it. Default
-    /// [`MIN_SPEAKER_SECONDS`].
+    /// `MIN_SPEAKER_SECONDS`.
     pub min_speaker_seconds: f64,
     /// A small cluster is only absorbed into a cluster whose centroid cosine distance is at most
-    /// this; otherwise it stays a distinct speaker. Default [`ABSORB_MAX_DISTANCE`].
+    /// this; otherwise it stays a distinct speaker. Default `ABSORB_MAX_DISTANCE`.
     pub absorb_max_distance: f32,
     /// Optional speaker-count hint (exact, or min and/or max). `None` (the default) leaves
     /// clustering exactly as the threshold decides. With a hint the dendrogram is cut by count
@@ -49,7 +49,7 @@ pub struct DiarizeConfig {
     pub speaker_hint: Option<SpeakerCountHint>,
     /// When a (non-forced) hint asks for fewer speakers than were found, clusters are merged
     /// toward the count only while their centroid cosine distance is at most this. Default
-    /// [`HINT_MERGE_MAX_DISTANCE`].
+    /// `HINT_MERGE_MAX_DISTANCE`.
     pub hint_merge_max_distance: f32,
     /// Experimental opt-in: embed only same-region samples where this track
     /// is active and every other segmentation track is inactive.
@@ -58,7 +58,7 @@ pub struct DiarizeConfig {
 
 /// Distance limit for merging toward a lower speaker-count hint; see
 /// [`DiarizeConfig::hint_merge_max_distance`] and docs/benchmarks/diarization-sv.md.
-pub const HINT_MERGE_MAX_DISTANCE: f32 = 0.9;
+pub(crate) const HINT_MERGE_MAX_DISTANCE: f32 = 0.9;
 
 /// Default agglomerative clustering threshold (cosine distance). The single source of truth
 /// for the CLI, reprocessing and UI defaults; the clap/Svelte literals must match (tests pin
@@ -67,10 +67,10 @@ pub const DEFAULT_THRESHOLD: f32 = 0.34;
 
 /// A speaker must be heard for at least this many seconds in total; smaller
 /// embedding clusters are absorbed into the nearest cluster that reaches it.
-pub const MIN_SPEAKER_SECONDS: f64 = 8.0;
+pub(crate) const MIN_SPEAKER_SECONDS: f64 = 8.0;
 
 /// Maximum centroid cosine distance for absorbing a small cluster (see [`DiarizeConfig`]).
-pub const ABSORB_MAX_DISTANCE: f32 = 0.75;
+pub(crate) const ABSORB_MAX_DISTANCE: f32 = 0.75;
 
 /// Size of one speaker embedding: the output of the WeSpeaker ResNet34-LM model.
 pub const EMBEDDING_DIM: usize = 256;

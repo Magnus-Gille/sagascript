@@ -25,7 +25,7 @@ const XDG_CONFIG_HOME_ENV: &str = "XDG_CONFIG_HOME";
 ///
 /// When set, legacy settings migration is disabled so an isolated session can
 /// never import or mutate the user's normal application settings by accident.
-pub const SETTINGS_PATH_ENV: &str = "SAGASCRIPT_SETTINGS_PATH";
+pub(crate) const SETTINGS_PATH_ENV: &str = "SAGASCRIPT_SETTINGS_PATH";
 
 /// Returns the application data directory (platform-specific).
 /// macOS: ~/Library/Application Support/ai.gille.sagascript/
@@ -42,7 +42,7 @@ pub fn settings_path() -> PathBuf {
 }
 
 /// Returns the directory containing the user-managed configuration files.
-pub fn config_dir() -> PathBuf {
+pub(crate) fn config_dir() -> PathBuf {
     settings_path()
         .parent()
         .map(Path::to_path_buf)

@@ -10,7 +10,7 @@ use thiserror::Error;
 
 use crate::diarization::speaker_hint::SpeakerCountHint;
 
-pub const REPROCESSING_PLAN_SCHEMA_VERSION: u32 = 1;
+pub(crate) const REPROCESSING_PLAN_SCHEMA_VERSION: u32 = 1;
 
 /// The bounded reprocessing operation selected by the caller.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

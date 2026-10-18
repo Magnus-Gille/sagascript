@@ -29,7 +29,7 @@ pub fn models_dir() -> PathBuf {
 ///   if it's not actually empty, e.g. the old app left other files there).
 /// - Both dirs exist: the legacy dir is left untouched — never silently
 ///   clobber a Models dir that's already populated at the new location.
-pub fn migrate_legacy_models_dir(base: &Path) -> PathBuf {
+pub(crate) fn migrate_legacy_models_dir(base: &Path) -> PathBuf {
     let new_dir = base.join("Sagascript").join("Models");
 
     // Migrate from legacy FlowDictate models directory
@@ -65,7 +65,7 @@ pub fn is_model_downloaded(model: WhisperModel) -> bool {
 }
 
 /// Silero VAD model filename (used by whisper.cpp's built-in VAD).
-pub const VAD_MODEL_FILENAME: &str = "ggml-silero-v5.1.2.bin";
+pub(crate) const VAD_MODEL_FILENAME: &str = "ggml-silero-v5.1.2.bin";
 const VAD_MODEL_URL: &str = "https://huggingface.co/ggml-org/whisper-vad/resolve/9ffd54a1e1ee413ddf265af9913beaf518d1639b/ggml-silero-v5.1.2.bin";
 const VAD_MODEL_INTEGRITY: DownloadIntegrity = DownloadIntegrity {
     sha256: "29940d98d42b91fbd05ce489f3ecf7c72f0a42f027e4875919a28fb4c04ea2cf",

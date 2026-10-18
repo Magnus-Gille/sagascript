@@ -13,11 +13,11 @@ use thiserror::Error;
 
 use crate::diarization::eval::evaluation::{EvaluationReport, ScoringRegion, SpeakerTurn};
 
-pub const SHORT_REGION_SECONDS: f64 = 2.0;
-pub const MAX_TIME_SECONDS: f64 = 14_400.0;
-pub const MAX_TURNS: usize = 100_000;
-pub const MAX_SPEAKERS: usize = 64;
-pub const MAX_UEM_REGIONS: usize = 100_000;
+pub(crate) const SHORT_REGION_SECONDS: f64 = 2.0;
+pub(crate) const MAX_TIME_SECONDS: f64 = 14_400.0;
+pub(crate) const MAX_TURNS: usize = 100_000;
+pub(crate) const MAX_SPEAKERS: usize = 64;
+pub(crate) const MAX_UEM_REGIONS: usize = 100_000;
 const MAX_ID_LENGTH: usize = 128;
 
 #[derive(Debug, Error, PartialEq)]

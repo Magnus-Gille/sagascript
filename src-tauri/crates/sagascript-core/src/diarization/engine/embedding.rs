@@ -13,7 +13,7 @@ use crate::diarization::fbank;
 use crate::error::DictationError;
 
 /// Minimum audio samples for a meaningful embedding (25ms = 400 samples)
-pub const MIN_SAMPLES: usize = fbank::N_FFT;
+pub(crate) const MIN_SAMPLES: usize = fbank::N_FFT;
 pub use crate::diarization::EMBEDDING_DIM;
 
 type EmbeddingCallback<'a> =
@@ -178,7 +178,7 @@ fn extract_embeddings_for_segments(
 /// L2-normalize a fixed-size embedding vector.
 /// Non-finite components (NaN/Inf from the ONNX model) are replaced with 0.0
 /// so they cannot propagate into the clustering distance matrix.
-pub fn l2_normalize(mut v: [f32; EMBEDDING_DIM]) -> [f32; EMBEDDING_DIM] {
+pub(crate) fn l2_normalize(mut v: [f32; EMBEDDING_DIM]) -> [f32; EMBEDDING_DIM] {
     for x in &mut v {
         if !x.is_finite() {
             *x = 0.0;
