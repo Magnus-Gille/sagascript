@@ -23,7 +23,9 @@ impl Drop for Slow {
     fn drop(&mut self) {
         if let Some(gate) = &self.gate {
             let _ = gate.begun.lock().unwrap().send(());
-            let _ = gate.resume.lock().unwrap().recv();
+            // Bounded, so that a payload released at the wrong time fails a
+            // test instead of hanging it.
+            let _ = gate.resume.lock().unwrap().recv_timeout(PATIENT);
         }
     }
 }
@@ -245,6 +247,18 @@ fn a_runtime_that_fits_the_cache_is_kept_whole_and_nothing_is_released() {
     let rig = Rig::new();
     let (context, release) = slow();
     let (state, state_release) = slow();
+    // Nobody will let a release finish: were one to start, it ends at once
+    // (the gate is disconnected) after announcing itself on `begun`.
+    let Release {
+        begun: context_began,
+        resume,
+    } = release;
+    drop(resume);
+    let Release {
+        begun: state_began,
+        resume,
+    } = state_release;
+    drop(resume);
     rig.publish(swedish(), context);
     *rig.state.lock().unwrap() = Some(state);
 
@@ -254,6 +268,12 @@ fn a_runtime_that_fits_the_cache_is_kept_whole_and_nothing_is_released() {
     let cached = cached.as_ref().expect("the previous runtime is kept");
     assert_eq!(cached.runtime.key, swedish());
     assert!(cached.state.is_some(), "with its warm state");
-    assert!(release.begun.try_recv().is_err());
-    assert!(state_release.begun.try_recv().is_err());
+    assert!(
+        context_began.try_recv().is_err(),
+        "the context was released"
+    );
+    assert!(
+        state_began.try_recv().is_err(),
+        "the warm state was released"
+    );
 }
