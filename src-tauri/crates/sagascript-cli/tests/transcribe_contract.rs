@@ -1534,8 +1534,15 @@ fn the_public_transcribe_paths_stay_importable() {
 /// Pianissimo runs only where the platform gate lets it (macOS 14+ on Apple
 /// Silicon, Windows on ARM), so this module is compiled for macOS on Apple
 /// Silicon, where CI's macOS lane runs it. The engine host and the model
-/// directory come from the developer overrides, which a debug build honours.
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+/// directory come from the developer overrides, which only a debug build or a
+/// build with the `dev-overrides` feature honours
+/// (`sagascript_core::transcription::dev_overrides::ENABLED`); a release test
+/// build ignores both variables, so the module is left out of it.
+#[cfg(all(
+    target_os = "macos",
+    target_arch = "aarch64",
+    any(debug_assertions, feature = "dev-overrides")
+))]
 mod pianissimo_with_the_fake_host {
     use std::path::Path;
 
