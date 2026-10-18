@@ -53,7 +53,7 @@ pub async fn get_example_info(
   removes.
 - Managed state you can ask for: `State<'_, SharedController>`, `State<'_, SharedWhisper>`,
   `State<'_, Arc<UpdateActivity>>`, `State<'_, HotkeyHealth>`, job slots, plus
-  `tauri::AppHandle`. See `.manage(...)` calls in `main()`.
+  `tauri::AppHandle`. See the `.manage(...)` calls in `manage_app_state` (`launch/startup.rs`).
 - Lock the controller in a short block; a `std::sync::MutexGuard` cannot cross `.await`, and
   blocking work belongs in `tokio::task::spawn_blocking`. Keep the lock order in
   [ARCHITECTURE.md §3](../ARCHITECTURE.md#3-threads-and-locks).
@@ -68,7 +68,7 @@ pub async fn get_example_info(
 
 ## 2. Register it
 
-Add `commands::get_example_info,` to `tauri::generate_handler![...]` in `main()` in
+Add `commands::get_example_info,` to `tauri::generate_handler![...]` in `build_app()` in
 `src-tauri/src/main.rs`. A missing entry compiles, but the app crate's
 `command_map_is_generated_from_the_rust_signatures` test fails.
 
