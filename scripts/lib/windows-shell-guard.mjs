@@ -127,12 +127,14 @@ function commandsOnLine(line, shell) {
 /** The SHA-256 of a script as the guard sees it (its logical command lines joined by "\n"): what an exception can pin. */
 export const scriptHash = (lines) => createHash("sha256").update(lines.join("\n")).digest("hex");
 
+// A line shape matches one command per line, however loose its pattern: `audited.ps1 -A x; cargo test` is not the
+// audited line. (A pipeline appended to the line is for the pattern to refuse: anchor it with `$`.)
 const matchesException = (exception, shell, lines) =>
   exception.shell === shell &&
   (exception.sha256 === scriptHash(lines) ||
     (exception.lines !== undefined &&
       exception.lines.length === lines.length &&
-      exception.lines.every((pattern, index) => pattern.test(lines[index]))));
+      exception.lines.every((pattern, index) => pattern.test(lines[index]) && commandsOnLine(lines[index], shell) === 1)));
 
 /**
  * Whether a step is acceptable. Returns `{ verdict, lines, commands, problem?, exception? }`: `verdict` names why

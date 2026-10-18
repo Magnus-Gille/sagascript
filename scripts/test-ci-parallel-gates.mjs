@@ -352,7 +352,10 @@ const WINDOWS_SHELL_EXCEPTIONS = [
   },
   {
     shell: "powershell",
-    lines: [/^\.\/scripts\/accept-windows-candidate\.ps1 /, /^if \(-not \(Test-Path "[^"]+"\)\) \{ throw "[^"]+" \}$/],
+    lines: [
+      /^\.\/scripts\/accept-windows-candidate\.ps1 -CliExe "[^"]+" -ExpectedVersion \(Get-Content package\.json -Raw \| ConvertFrom-Json\)\.version -Fixture \S+ -OutputPath "[^"]+"$/,
+      /^if \(-not \(Test-Path "[^"]+"\)\) \{ throw "[^"]+" \}$/,
+    ],
     reason:
       "Windows PowerShell 5.1 acceptance (windows-package.yml): one script call that throws on failure, then a cmdlet check of the evidence it wrote. " +
       "No second native command can reset $LASTEXITCODE, and 5.1 has no native-exit preference",

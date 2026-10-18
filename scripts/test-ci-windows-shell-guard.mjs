@@ -154,7 +154,7 @@ test("exceptions are pinned to the audited script, are reported when stale, and 
   const byLines = {
     shell: "powershell",
     reason: "5.1 acceptance",
-    lines: [/^\.\/scripts\/accept\.ps1 /, /^if \(-not \(Test-Path '[^']+'\)\) \{ throw '[^']+' \}$/],
+    lines: [/^\.\/scripts\/accept\.ps1 -Fixture \S+$/, /^if \(-not \(Test-Path '[^']+'\)\) \{ throw '[^']+' \}$/],
   };
   assert.deepEqual(problemsOf(workflow, { exceptions: [byLines] }), []);
   assert.deepEqual(
@@ -165,6 +165,18 @@ test("exceptions are pinned to the audited script, are reported when stale, and 
   // A third line, or another command, is no longer the audited script.
   const edited = workflowWith({ shell: "powershell", script: `${script}\nnpm run check` });
   assert.match(problemsOf(edited, { exceptions: [byLines] }).join("\n"), /runs 3 commands in powershell[\s\S]*matches no step any more/);
+  // A line shape must match one command: a second command chained onto the audited line is not the audited script,
+  // even when the shape has no end anchor, and an anchored shape rejects a pipeline appended to the line.
+  const chained = workflowWith({ shell: "powershell", script: script.replace("a.mp3", "a.mp3; npm run check") });
+  const unanchored = { ...byLines, lines: [/^\.\/scripts\/accept\.ps1 /, byLines.lines[1]] };
+  assert.deepEqual(problemsOf(workflow, { exceptions: [unanchored] }), [], "the unanchored shape still matches the audited script");
+  assert.match(
+    problemsOf(chained, { exceptions: [unanchored] }).join("\n"),
+    /runs 3 commands in powershell[\s\S]*matches no step any more/,
+  );
+  assert.match(problemsOf(chained, { exceptions: [byLines] }).join("\n"), /runs 3 commands in powershell/);
+  const piped = workflowWith({ shell: "powershell", script: script.replace("a.mp3", "a.mp3 | Out-Null") });
+  assert.match(problemsOf(piped, { exceptions: [byLines] }).join("\n"), /runs 2 commands in powershell/);
   // A pin by hash covers any shell, and any edit of the script breaks it.
   const pwsh = workflowWith({ shell: "pwsh", script: "npm run build\nif ($LASTEXITCODE -ne 0) { throw 'build' }\nnpm run check" });
   const hash = scriptHash(scriptLines("npm run build\nif ($LASTEXITCODE -ne 0) { throw 'build' }\nnpm run check", "pwsh"));
