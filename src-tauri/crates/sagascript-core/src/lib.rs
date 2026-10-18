@@ -15,7 +15,6 @@ pub mod fsutil;
 pub mod glossary;
 pub mod machine;
 pub mod meeting;
-pub mod meeting_media;
 pub mod meeting_reprocess;
 pub mod meeting_reprocess_matching;
 pub mod meeting_reprocess_plan;
@@ -28,6 +27,10 @@ pub mod settings;
 pub mod speaker_hint;
 pub mod sync;
 pub mod transcription;
+
+// Old paths of modules that moved into `meeting/` (#372). The CLI and the app still
+// name them; each line goes when the last caller imports the new path.
+pub use crate::meeting::media as meeting_media;
 
 #[cfg(feature = "diarization")]
 pub mod diarization;
