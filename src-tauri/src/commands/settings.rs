@@ -46,8 +46,8 @@ pub async fn set_language(
 /// the profiles menu, which needs the app handle.
 ///
 /// The controller takes what the language change wrote and nothing else
-/// ([`mirror_language_selection`]): the default profile's language, the models
-/// the new language resets, and the legacy model fields. Not the profiles'
+/// ([`mirror_language_selection`]): the language of its own default profile, the
+/// models of its own profiles, and the legacy model fields. Not the profiles'
 /// shortcuts, which the file may hold unregistered. Returns the controller's
 /// copy afterwards, which is what the app runs on.
 pub(super) fn persist_language(
@@ -61,34 +61,77 @@ pub(super) fn persist_language(
             notices = apply_language_selection(settings, language)?;
             Ok::<(), String>(())
         },
-        mirror_language_selection,
+        |memory, written| mirror_language_selection(memory, written, language),
     )
     .map_err(|error| error.to_string())?;
     Ok((persisted.current, notices))
 }
 
-/// What the controller takes over from `Settings::apply_language_selection`:
+/// What the controller takes over from `Settings::apply_language_selection`,
+/// done to the controller's own profiles the way `persist_and_sync` would do the
+/// operation there:
 ///
-/// - `language`, `whisper_model`, `auto_select_model` and `profile_models`, all
-///   written by the operation;
-/// - the language of the default profile, which lives in `hotkey_profiles`. The
-///   profile list stays the controller's (an implicit list becomes an explicit
-///   one, as it does in the file), so the profiles keep the shortcuts the OS
-///   registered, and `language` is the default profile's, as the operation
-///   keeps it.
-///
-/// A profile list that has no profile of that id has nothing to follow.
-fn mirror_language_selection(memory: &mut Settings, written: &Settings) {
-    let default = written.default_profile();
+/// - the language goes to the controller's default profile and to `language`.
+///   The file's default may be another profile (`default_index` falls back to
+///   the first when none is called `default`, and the two lists can be in
+///   another order), but the window shows the controller's, and that is the one
+///   the user changed. The profile list stays the controller's (an implicit one
+///   becomes explicit, as it does in the file), so the profiles keep the
+///   shortcuts the OS registered;
+/// - a model of that profile that the new language cannot use goes back to Auto,
+///   as the operation does for a profile whose language changed;
+/// - the models of the controller's profiles
+///   ([`mirror_models_of_own_profiles`]) and the legacy model fields.
+fn mirror_language_selection(memory: &mut Settings, written: &Settings, language: Language) {
     let mut profiles = memory.resolved_hotkey_profiles();
-    if let Some(profile) = profiles.iter_mut().find(|profile| profile.id == default.id) {
-        profile.language = default.language;
-    }
-    memory.language = profiles[HotkeyProfile::default_index(&profiles)].language;
+    let index = HotkeyProfile::default_index(&profiles);
+    let default = &mut profiles[index];
+    let changed = default.language != language;
+    default.language = language;
+    let default_id = default.id.clone();
     memory.hotkey_profiles = profiles;
+    memory.language = language;
     memory.whisper_model = written.whisper_model;
     memory.auto_select_model = written.auto_select_model;
-    memory.profile_models = written.profile_models.clone();
+    mirror_models_of_own_profiles(memory, written);
+    if changed {
+        reset_model_the_language_cannot_use(memory, &default_id, language);
+    }
+}
+
+/// Go back to Auto for a profile whose explicit model cannot serve `language`
+/// (the controller's counterpart of what the operation does in the file).
+fn reset_model_the_language_cannot_use(
+    memory: &mut Settings,
+    profile_id: &str,
+    language: Language,
+) {
+    let fits = match memory.profile_models.get(profile_id) {
+        Some(FileModelPreference::Whisper(model)) => model.is_compatible_with(language),
+        Some(FileModelPreference::PianissimoOriginal) => language == Language::Swedish,
+        Some(FileModelPreference::Auto) | None => true,
+    };
+    if !fits {
+        memory
+            .profile_models
+            .insert(profile_id.to_string(), FileModelPreference::Auto);
+    }
+}
+
+/// For each profile the controller has, take the file's model of it if the file
+/// has one, else keep the controller's. Never a model for a profile the
+/// controller has none of: after a hot reload that could not register the
+/// file's profiles, the watcher keeps the controller's profile list and its
+/// `profile_models` together, and they differ from the file's. A copy of the
+/// whole map would drop the model of a profile whose shortcut is still
+/// registered (a press on it would fall back to the legacy model) and add
+/// models for profiles nothing registered.
+fn mirror_models_of_own_profiles(memory: &mut Settings, written: &Settings) {
+    for profile in memory.resolved_hotkey_profiles() {
+        if let Some(preference) = written.profile_models.get(&profile.id) {
+            memory.profile_models.insert(profile.id, *preference);
+        }
+    }
 }
 
 /// The language operation both surfaces share (`Settings::apply_language_selection`,
@@ -233,9 +276,10 @@ pub(super) fn persist_profile_model(
     })
 }
 
-/// `set_profile_model` writes the model of one profile: `profile_models`.
+/// `set_profile_model` writes the model of one profile: `profile_models`, the
+/// entries of the controller's own profiles.
 pub(super) fn mirror_profile_models(memory: &mut Settings, written: &Settings) {
-    memory.profile_models = written.profile_models.clone();
+    mirror_models_of_own_profiles(memory, written);
 }
 
 /// `set_whisper_model` also moves the legacy model fields that follow the

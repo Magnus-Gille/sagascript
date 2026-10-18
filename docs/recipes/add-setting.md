@@ -85,8 +85,11 @@ of the controller's copy, so a setter does not repeat it.
   `try_persist_and_replace` replaces the controller's whole copy; **only
   `persist_hotkey_change` uses it**, because it is the one caller that has just registered the
   file's shortcuts with the OS. A language change is a profile's, and the profiles carry the
-  shortcuts: `set_language` takes the default profile's language, never its shortcut
-  (`mirror_language_selection`).
+  shortcuts: `set_language` puts the language on the controller's own default profile, never
+  takes a shortcut from the file (`mirror_language_selection`), and a setter of models
+  copies the file's model only for profiles the controller has
+  (`mirror_models_of_own_profiles`): after a failed hot reload the controller's profiles and
+  their models are a pair that differs from the file's.
   Never `store::save()` an in-memory clone, never write `ctrl.settings_mut()` (it exists in
   tests only), never hold the controller lock across the store call or an `.await`. The
   setter's error type stays `String` until

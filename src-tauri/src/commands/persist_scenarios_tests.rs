@@ -162,6 +162,151 @@ fn a_language_change_follows_the_file_but_keeps_the_controllers_shortcuts() {
     };
 }
 
+/// After a hot reload that could not register the file's profiles, the watcher
+/// keeps the controller's profile list and its models together, as a pair that
+/// differs from the file. A setter hands the controller the models of the
+/// profiles the controller has, never those of profiles only the file has, and
+/// never drops the model of a profile only the controller has: its shortcut is
+/// still registered, and a press on it must run the model the user chose.
+#[test]
+fn a_setter_keeps_the_models_of_the_controllers_own_profiles() {
+    let Some(_) = isolated(
+        module_path!(),
+        "a_setter_keeps_the_models_of_the_controllers_own_profiles",
+        || {
+            let runtime = runtime();
+            let mut problems = Vec::new();
+            let mut checked = Vec::new();
+            for row in ROWS
+                .iter()
+                .filter(|row| !matches!(row.mirror, Mirror::Whole))
+            {
+                let name = row.commands.join("+");
+                // The controller runs a Norwegian default and a Swedish profile
+                // on KB-Whisper Large; the file dropped that profile and has
+                // one the controller never registered.
+                let memory = Settings {
+                    hotkey_profiles: vec![
+                        profile("default", "Control+Shift+Space", Language::Norwegian),
+                        profile("sv", "Control+Alt+S", Language::Swedish),
+                    ],
+                    profile_models: BTreeMap::from([
+                        ("default".to_string(), FileModelPreference::Auto),
+                        (
+                            "sv".to_string(),
+                            FileModelPreference::Whisper(WhisperModel::KbWhisperLarge),
+                        ),
+                    ]),
+                    ..norwegian_settings()
+                };
+                let app = app_with(memory);
+                store::update(|s| {
+                    s.whisper_model = WhisperModel::NbWhisperBase;
+                    s.hotkey_profiles = vec![
+                        profile("default", "Control+Shift+Space", Language::Norwegian),
+                        profile("extra", "Control+Alt+E", Language::Norwegian),
+                    ];
+                    s.profile_models = BTreeMap::from([
+                        ("default".to_string(), FileModelPreference::Auto),
+                        (
+                            "extra".to_string(),
+                            FileModelPreference::Whisper(WhisperModel::NbWhisperBase),
+                        ),
+                    ]);
+                })
+                .expect("the fake file is writable");
+                (row.arrange)();
+
+                (row.run)(&app, &runtime)
+                    .unwrap_or_else(|error| panic!("{name}: the setter failed: {error}"));
+
+                let after = lock_controller(&controller(&app)).settings().clone();
+                if after.profile_models.get("sv")
+                    != Some(&FileModelPreference::Whisper(WhisperModel::KbWhisperLarge))
+                {
+                    problems.push(format!(
+                        "{name}: the controller lost the model of a profile it still has"
+                    ));
+                }
+                if after.profile_models.contains_key("extra") {
+                    problems.push(format!(
+                        "{name}: the controller took the model of a profile only the file has"
+                    ));
+                }
+                let ids: Vec<_> = after
+                    .hotkey_profiles
+                    .iter()
+                    .map(|p| p.id.as_str())
+                    .collect();
+                if ids != ["default", "sv"] {
+                    problems.push(format!(
+                        "{name}: the controller's profiles changed: {ids:?}"
+                    ));
+                }
+                checked.push(name);
+            }
+            assert!(problems.is_empty(), "{}", problems.join("\n"));
+            checked.join("\n")
+        },
+    ) else {
+        return;
+    };
+}
+
+/// A profile called `default` is not mandatory: the default is the first one
+/// when none is. File and controller can then have different defaults (the same
+/// profiles in another order, after a reload that failed), and the user's
+/// choice in the window applies to the controller's, which is the one the
+/// window shows.
+#[test]
+fn a_language_change_lands_on_the_controllers_default_profile() {
+    let Some(_) = isolated(
+        module_path!(),
+        "a_language_change_lands_on_the_controllers_default_profile",
+        || {
+            let first = profile("a", "Control+Alt+A", Language::English);
+            let second = profile("b", "Control+Alt+B", Language::Swedish);
+            let memory = Settings {
+                hotkey: first.shortcut.clone(),
+                language: first.language,
+                hotkey_profiles: vec![first.clone(), second.clone()],
+                profile_models: BTreeMap::from([
+                    ("a".to_string(), FileModelPreference::Auto),
+                    ("b".to_string(), FileModelPreference::Auto),
+                ]),
+                ..Settings::default()
+            };
+            let app = app_with(memory.clone());
+            store::update(|s| {
+                s.hotkey = second.shortcut.clone();
+                s.language = second.language;
+                s.hotkey_profiles = vec![second.clone(), first.clone()];
+                s.profile_models = memory.profile_models.clone();
+            })
+            .expect("the fake file is writable");
+            assert_eq!(store::load().default_profile().id, "b");
+
+            persist_language(&controller(&app), Language::Norwegian).expect("the setter works");
+
+            let after = lock_controller(&controller(&app)).settings().clone();
+            assert_eq!(after.default_profile().id, "a");
+            assert_eq!(after.default_profile().language, Language::Norwegian);
+            assert_eq!(after.language, Language::Norwegian);
+            let other = after.hotkey_profiles.iter().find(|p| p.id == "b");
+            assert_eq!(other.map(|p| p.language), Some(Language::Swedish));
+            assert_eq!(after.resolved_shortcuts(), memory.resolved_shortcuts());
+            assert_eq!(
+                store::load_from(&fake_file()).default_profile().language,
+                Language::Norwegian,
+                "the file's own default is the one the file changed"
+            );
+            "landed".into()
+        },
+    ) else {
+        return;
+    };
+}
+
 /// A file that selects Pianissimo, as copied from a machine that runs it: a
 /// Swedish profile on it next to the Norwegian default, file transcription on
 /// it, and the legacy flag on.

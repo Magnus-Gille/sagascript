@@ -63,6 +63,7 @@ mod mirror_tests {
     use sagascript_core::settings::{
         FileModelPreference, HotkeyMode, HotkeyProfile, Language, Settings, WhisperModel,
     };
+    use std::collections::BTreeMap;
 
     type Mirror = fn(&mut Settings, &Settings);
 
@@ -168,7 +169,7 @@ mod mirror_tests {
         ];
 
         let mut next = memory.clone();
-        mirror_language_selection(&mut next, &written);
+        mirror_language_selection(&mut next, &written, Language::Norwegian);
 
         // The default profile's language is taken, its shortcut is not; the
         // other profile is not the operation's to move at all.
@@ -201,7 +202,7 @@ mod mirror_tests {
         let written = written_ahead_of(&memory);
 
         let mut next = memory.clone();
-        mirror_language_selection(&mut next, &written);
+        mirror_language_selection(&mut next, &written, Language::Norwegian);
 
         assert_eq!(
             next.hotkey_profiles,
@@ -214,19 +215,149 @@ mod mirror_tests {
     }
 
     #[test]
-    fn the_language_mirror_leaves_profiles_the_file_does_not_name() {
+    fn the_language_lands_on_the_controllers_default_profile_whatever_the_files_is() {
+        // No profile called `default` on either side, and another default in the
+        // file: the first profile is the default, and the window shows the
+        // controller's.
         let memory = Settings {
-            hotkey_profiles: vec![profile("work", "Control+Alt+W", Language::English)],
+            hotkey_profiles: vec![
+                profile("work", "Control+Alt+W", Language::English),
+                profile("home", "Control+Alt+H", Language::Swedish),
+            ],
             ..Settings::default()
         };
-        let written = written_ahead_of(&memory);
-        assert_eq!(written.default_profile().id, "default");
+        let mut written = written_ahead_of(&memory);
+        written.hotkey_profiles = vec![
+            profile("home", "Control+Alt+H", Language::Norwegian),
+            profile("work", "Control+Alt+W", Language::English),
+        ];
+        assert_eq!(written.default_profile().id, "home");
 
         let mut next = memory.clone();
-        mirror_language_selection(&mut next, &written);
+        mirror_language_selection(&mut next, &written, Language::Norwegian);
 
-        assert_eq!(next.hotkey_profiles, memory.hotkey_profiles);
-        assert_eq!(next.language, Language::English);
+        assert_eq!(
+            next.hotkey_profiles,
+            vec![
+                profile("work", "Control+Alt+W", Language::Norwegian),
+                profile("home", "Control+Alt+H", Language::Swedish),
+            ]
+        );
+        assert_eq!(next.language, Language::Norwegian);
+        assert_eq!(next.default_profile().id, "work");
+    }
+
+    #[test]
+    fn the_language_mirror_resets_a_model_of_the_default_profile_the_language_cannot_use() {
+        // The file reset the model of its own default; the controller's default
+        // is another profile, whose model nothing in the file touched.
+        let memory = Settings {
+            hotkey_profiles: vec![
+                profile("work", "Control+Alt+W", Language::Swedish),
+                profile("home", "Control+Alt+H", Language::Swedish),
+            ],
+            profile_models: BTreeMap::from([
+                (
+                    "work".to_string(),
+                    FileModelPreference::Whisper(WhisperModel::KbWhisperLarge),
+                ),
+                (
+                    "home".to_string(),
+                    FileModelPreference::Whisper(WhisperModel::KbWhisperLarge),
+                ),
+            ]),
+            ..Settings::default()
+        };
+        let mut written = memory.clone();
+        written.hotkey_profiles = vec![
+            profile("home", "Control+Alt+H", Language::Norwegian),
+            profile("work", "Control+Alt+W", Language::Swedish),
+        ];
+        written
+            .profile_models
+            .insert("home".into(), FileModelPreference::Auto);
+
+        let mut next = memory.clone();
+        mirror_language_selection(&mut next, &written, Language::Norwegian);
+
+        assert_eq!(next.profile_models["work"], FileModelPreference::Auto);
+        // The file's reset reaches the profile it was for.
+        assert_eq!(next.profile_models["home"], FileModelPreference::Auto);
+    }
+
+    #[test]
+    fn the_language_mirror_keeps_a_model_the_language_can_use() {
+        let memory = Settings {
+            hotkey_profiles: vec![profile("default", "Control+Alt+W", Language::English)],
+            profile_models: BTreeMap::from([(
+                "default".to_string(),
+                FileModelPreference::Whisper(WhisperModel::NbWhisperBase),
+            )]),
+            ..Settings::default()
+        };
+        let mut next = memory.clone();
+        mirror_language_selection(&mut next, &memory, Language::Norwegian);
+        assert_eq!(next.profile_models, memory.profile_models);
+    }
+
+    #[test]
+    fn the_mirrors_take_the_models_of_the_controllers_own_profiles_only() {
+        // The controller registered `default` and `sv`; the file lost `sv` and
+        // has `extra`, which nothing registered.
+        let memory = Settings {
+            hotkey_profiles: vec![
+                profile("default", "Control+Shift+Space", Language::Norwegian),
+                profile("sv", "Control+Alt+S", Language::Swedish),
+            ],
+            profile_models: BTreeMap::from([
+                ("default".to_string(), FileModelPreference::Auto),
+                (
+                    "sv".to_string(),
+                    FileModelPreference::Whisper(WhisperModel::KbWhisperLarge),
+                ),
+            ]),
+            ..Settings::default()
+        };
+        let mut written = memory.clone();
+        written.hotkey_profiles = vec![
+            profile("default", "Control+Shift+Space", Language::Norwegian),
+            profile("extra", "Control+Alt+E", Language::Norwegian),
+        ];
+        written.profile_models = BTreeMap::from([
+            (
+                "default".to_string(),
+                FileModelPreference::Whisper(WhisperModel::NbWhisperBase),
+            ),
+            (
+                "extra".to_string(),
+                FileModelPreference::Whisper(WhisperModel::NbWhisperSmall),
+            ),
+        ]);
+        let expected = BTreeMap::from([
+            (
+                "default".to_string(),
+                FileModelPreference::Whisper(WhisperModel::NbWhisperBase),
+            ),
+            (
+                "sv".to_string(),
+                FileModelPreference::Whisper(WhisperModel::KbWhisperLarge),
+            ),
+        ]);
+
+        let mirrors: [(&str, Mirror); 4] = [
+            ("set_profile_model", mirror_profile_models),
+            ("set_whisper_model", mirror_whisper_model),
+            ("set_auto_select_model", mirror_auto_select_model),
+            ("set_pianissimo_dictation", mirror_pianissimo_dictation),
+        ];
+        for (setter, mirror) in mirrors {
+            let mut next = memory.clone();
+            mirror(&mut next, &written);
+            assert_eq!(next.profile_models, expected, "{setter}");
+        }
+        let mut next = memory.clone();
+        mirror_language_selection(&mut next, &written, Language::Norwegian);
+        assert_eq!(next.profile_models, expected, "set_language");
     }
 }
 
