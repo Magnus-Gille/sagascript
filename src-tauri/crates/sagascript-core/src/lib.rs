@@ -15,7 +15,6 @@ pub mod fsutil;
 pub mod glossary;
 pub mod machine;
 pub mod meeting;
-pub mod meeting_reprocess_matching;
 pub mod meeting_reprocess_plan;
 pub mod meeting_reprocess_proposal;
 pub mod models;
