@@ -43,10 +43,7 @@ pub async fn set_hotkey(
     let mut profiles = lock_controller(&controller)
         .settings()
         .resolved_hotkey_profiles();
-    let profile_index = profiles
-        .iter()
-        .position(|profile| profile.id == "default")
-        .unwrap_or(0);
+    let profile_index = HotkeyProfile::default_index(&profiles);
     profiles[profile_index].set_primary_shortcut(shortcut);
     set_hotkey_profiles(app, controller, health, profiles)
         .await

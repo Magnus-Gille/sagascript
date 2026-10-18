@@ -1,6 +1,8 @@
 //! Reading the settings and the setters that change one setting each.
 
-use sagascript_core::settings::{FileModelPreference, Language, Settings, WhisperModel};
+use sagascript_core::settings::{
+    Accessibility, FileModelPreference, Language, ModelResetNotice, Settings, WhisperModel,
+};
 use sagascript_core::transcription::model;
 use tauri::State;
 use tracing::info;
@@ -59,17 +61,16 @@ pub(super) fn persist_language(
     Ok((persisted, notices))
 }
 
-// Keep profile/dictionary validation ahead of all preset mutations.
+/// The language operation both surfaces share (`Settings::apply_language_selection`,
+/// #373), with the notices as the plain messages the command returns. It keeps
+/// the profile and dictionary validation ahead of every other change.
 fn apply_language_selection(
     settings: &mut Settings,
     language: Language,
 ) -> Result<Vec<String>, String> {
-    let notices = sagascript_core::settings::ModelResetNotice::messages(
-        &settings.set_default_profile_language(language)?,
-    );
-    settings.whisper_model = WhisperModel::recommended(language);
-    settings.auto_select_model = true;
-    Ok(notices)
+    settings
+        .apply_language_selection(language)
+        .map(|notices| ModelResetNotice::messages(&notices))
 }
 
 #[tauri::command]
@@ -90,11 +91,7 @@ pub async fn set_whisper_model(
     controller: State<'_, SharedController>,
     model: WhisperModel,
 ) -> Result<(), String> {
-    let id = serde_json::to_value(model)
-        .and_then(serde_json::from_value::<String>)
-        .map_err(|error| error.to_string())?;
-    let profile_id = lock_controller(&controller).settings().default_profile().id;
-    set_profile_model(controller, profile_id, id).await
+    change_profile_model(&controller, |settings| settings.set_whisper_model(model))
 }
 
 #[tauri::command]
@@ -102,13 +99,9 @@ pub async fn set_pianissimo_dictation(
     controller: State<'_, SharedController>,
     enabled: bool,
 ) -> Result<(), String> {
-    let profile_id = lock_controller(&controller).settings().default_profile().id;
-    set_profile_model(
-        controller,
-        profile_id,
-        if enabled { "pianissimo-sv" } else { "auto" }.into(),
-    )
-    .await
+    change_profile_model(&controller, |settings| {
+        settings.set_pianissimo_dictation(enabled)
+    })
 }
 
 #[tauri::command]
@@ -131,15 +124,37 @@ pub async fn set_profile_model(
     model_id: String,
 ) -> Result<(), String> {
     let preference = FileModelPreference::parse_id(&model_id)?;
+    change_profile_model(&controller, |settings| {
+        settings.set_profile_model(&profile_id, preference)
+    })
+}
+
+#[tauri::command]
+pub async fn set_auto_select_model(
+    controller: State<'_, SharedController>,
+    enabled: bool,
+) -> Result<(), String> {
+    change_profile_model(&controller, |settings| {
+        settings.set_auto_select_model(enabled)
+    })
+}
+
+/// A change of a profile's model: the one place the commands above end, with
+/// the operation they apply as `change` (the same `Settings` operations the
+/// CLI's `config` uses, #373). Keeps what `set_profile_model` always did around
+/// it: no change while a dictation is recording, the controller taking over the
+/// whole copy, and the engine unloaded or warmed when the change needs it.
+fn change_profile_model(
+    controller: &SharedController,
+    change: impl FnOnce(&mut Settings) -> Result<(), String>,
+) -> Result<(), String> {
     let _recording_lease =
-        acquire_hotkey_configuration(&controller).map_err(|error| error.to_string())?;
+        acquire_hotkey_configuration(controller).map_err(|error| error.to_string())?;
     // The whole copy, as before: the profile model change may move other
     // fields (the legacy flags, the auto-select state), and the controller
     // compares its previous copy with the written one to decide on a warm-up.
-    let (previous, persisted) = try_persist_and_replace(&controller, |settings| {
-        settings.set_profile_model(&profile_id, preference)
-    })
-    .map_err(|error| error.to_string())?;
+    let (previous, persisted) =
+        try_persist_and_replace(controller, change).map_err(|error| error.to_string())?;
     let warm = sagascript_core::transcription::pianissimo_backend::profile_change_needs_warm(
         &previous, &persisted,
     );
@@ -152,30 +167,6 @@ pub async fn set_profile_model(
 }
 
 #[tauri::command]
-pub async fn set_auto_select_model(
-    controller: State<'_, SharedController>,
-    enabled: bool,
-) -> Result<(), String> {
-    let (profile_id, model_id) = {
-        let ctrl = lock_controller(&controller);
-        let settings = ctrl.settings();
-        let model_id = if enabled {
-            "auto".into()
-        } else {
-            serde_json::to_value(settings.whisper_model)
-                .and_then(serde_json::from_value::<String>)
-                .map_err(|error| error.to_string())?
-        };
-        (settings.default_profile().id, model_id)
-    };
-    set_profile_model(controller, profile_id, model_id).await
-}
-
-fn effective_auto_paste(requested: bool, permission_granted: bool) -> bool {
-    requested && permission_granted
-}
-
-#[tauri::command]
 pub async fn set_auto_paste(
     controller: State<'_, SharedController>,
     enabled: bool,
@@ -185,17 +176,32 @@ pub async fn set_auto_paste(
     #[cfg(not(target_os = "macos"))]
     let permission_granted = true;
 
-    let effective = effective_auto_paste(enabled, permission_granted);
-    persist_and_sync(&controller, |settings| {
-        settings.auto_paste = effective;
-    })
-    .map_err(|error| error.to_string())?;
-    info!("Auto-paste: {effective}");
-    if enabled && !permission_granted {
+    let accessibility = if permission_granted {
+        Accessibility::Granted
+    } else {
+        Accessibility::Denied
+    };
+    let persisted = persist_auto_paste(&controller, enabled, accessibility)?;
+    info!("Auto-paste: {}", persisted.auto_paste);
+    if enabled && !persisted.auto_paste {
         Err("Accessibility permission is required before auto-paste can be enabled".to_string())
     } else {
         Ok(())
     }
+}
+
+/// The persistence half of `set_auto_paste`: the operation both surfaces share
+/// (`Settings::set_auto_paste`, #373) with what the command found out about the
+/// permission. The command adds the OS probe and the refusal the user sees.
+pub(super) fn persist_auto_paste(
+    controller: &SharedController,
+    enabled: bool,
+    accessibility: Accessibility,
+) -> Result<Settings, String> {
+    persist_and_sync(controller, |settings| {
+        settings.set_auto_paste(enabled, accessibility);
+    })
+    .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -262,12 +268,10 @@ pub async fn set_vad_enabled(
     controller: State<'_, SharedController>,
     enabled: bool,
 ) -> Result<(), String> {
-    persist_and_sync(&controller, |settings| {
-        settings.vad_enabled = enabled;
-    })
-    .map_err(|error| error.to_string())?;
+    persist_vad_enabled(&controller, enabled)?;
     // Fetch the Silero VAD model so it's ready for the next dictation. Done
-    // after releasing the lock (no lock held across await).
+    // after releasing the lock (no lock held across await). The CLI does not:
+    // `transcribe --vad` fetches it on first use.
     if enabled {
         info!("Verifying or downloading VAD model...");
         model::download_vad_model(|_, _| {})
@@ -276,6 +280,18 @@ pub async fn set_vad_enabled(
     }
     info!("VAD enabled: {enabled}");
     Ok(())
+}
+
+/// The persistence half of `set_vad_enabled` (`Settings::set_vad_enabled`,
+/// #373); the command adds the model download, which needs the network.
+pub(super) fn persist_vad_enabled(
+    controller: &SharedController,
+    enabled: bool,
+) -> Result<Settings, String> {
+    persist_and_sync(controller, |settings| {
+        settings.set_vad_enabled(enabled);
+    })
+    .map_err(|error| error.to_string())
 }
 
 /// `engine_prewarm`: `off`, `on_app_start` or `on_key_down`.
