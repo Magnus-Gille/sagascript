@@ -16,7 +16,8 @@ fn the_standard_test_vectors() {
 fn any_byte_container_hashes_alike() {
     assert_eq!(sha256_hex(b"abc"), ABC);
     assert_eq!(sha256_hex(b"abc".as_slice()), ABC);
-    assert_eq!(sha256_hex(b"abc".to_vec()), ABC);
+    let owned: Vec<u8> = vec![b'a', b'b', b'c'];
+    assert_eq!(sha256_hex(owned), ABC);
     assert_eq!(sha256_hex(String::from("abc")), ABC);
 }
 

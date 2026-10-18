@@ -1588,11 +1588,11 @@ mod tests {
         assert_eq!(report["coverage"], Value::Null);
         assert_eq!(
             report["reference_file_sha256"],
-            sha256_hex(&std::fs::read(reference_file.path()).unwrap())
+            sha256_hex(std::fs::read(reference_file.path()).unwrap())
         );
         assert_eq!(
             report["manifest_file_sha256"],
-            sha256_hex(&std::fs::read(manifest_file.path()).unwrap())
+            sha256_hex(std::fs::read(manifest_file.path()).unwrap())
         );
         // The command writes the same report, then fails as a check that did
         // not pass (exit 3), not as a command failure (exit 1).
@@ -1866,7 +1866,7 @@ mod tests {
         assert_eq!(receipt["minimum_coverage"], 0.9);
         assert_eq!(
             receipt["manifest_file_sha256"],
-            sha256_hex(&std::fs::read(manifest_file.path()).unwrap())
+            sha256_hex(std::fs::read(manifest_file.path()).unwrap())
         );
         let qualification = qualify(&reference, &manifest, 0.9).unwrap();
         assert_eq!(
