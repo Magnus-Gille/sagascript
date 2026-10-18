@@ -391,7 +391,7 @@ pub async fn transcribe_training_file(
 pub async fn cancel_recording(
     app: tauri::AppHandle,
     controller: State<'_, SharedController>,
-) -> Result<(), String> {
+) -> Result<(), CommandError> {
     let mut ctrl = lock_controller(&controller);
     ctrl.cancel_recording();
     drop(ctrl);

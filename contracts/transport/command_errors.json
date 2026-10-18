@@ -29,9 +29,24 @@
     "message": "Pianissimo engine: Failed to load model at <path>/foo.mlmodelc: The file couldn't be opened.",
     "retryable": false
   },
+  "export_exists": {
+    "code": "export_exists",
+    "message": "That file already exists. Choose a new name; no existing file was changed.",
+    "retryable": false
+  },
   "file_not_found": {
     "code": "file_not_found",
     "message": "File decode error: Failed to open file: No such file or directory (os error 2)",
+    "retryable": false
+  },
+  "invalid_input": {
+    "code": "invalid_input",
+    "message": "Invalid transcription result ID.",
+    "retryable": false
+  },
+  "meeting_stale": {
+    "code": "meeting_stale",
+    "message": "correction expected revision does not match this review",
     "retryable": false
   },
   "model_busy": {
@@ -47,11 +62,6 @@
   "transcription_timed_out": {
     "code": "transcription_timed_out",
     "message": "Transcription timed out after 60s (inference aborted)",
-    "retryable": false
-  },
-  "unclassified": {
-    "code": "unclassified",
-    "message": "Unknown dictation profile 'x'",
     "retryable": false
   },
   "unknown_profile": {

@@ -78,6 +78,11 @@ fn every_variant_keeps_its_text_and_has_a_stable_snake_case_code() {
             "pianissimo_unavailable",
         ),
         (
+            SettingsError::PianissimoNotForDiarization,
+            "Pianissimo supports plain Swedish file transcription only; choose a Whisper file model for diarization",
+            "pianissimo_unavailable",
+        ),
+        (
             SettingsError::PianissimoUnsupported,
             crate::models::PIANISSIMO_UNSUPPORTED_MESSAGE,
             "pianissimo_unavailable",

@@ -35,20 +35,30 @@
 //! | `launch_failed` | the OS could not open System Settings or a web page |
 //! | `accessibility_permission_denied` | the Accessibility permission a setting needs is missing |
 //! | `model_download_failed` | a model the command needed could not be downloaded |
-//! | `unclassified` | no better code exists; each producer is listed in ADR 0006 |
 //!
 //! A failure whose text is fixed for the user but that has a cause worth
 //! keeping is [`CommandError::because`]: the cause is scrubbed, logged and kept
-//! for tests, and never sent to the webview.
+//! as the error's `source()`, and never sent to the webview.
 
 use sagascript_core::error::DictationError;
 use sagascript_core::path_scrub::scrub_paths;
 use sagascript_core::settings::SettingsError;
 use serde::ser::{Serialize, SerializeStruct, Serializer};
 
-// TEMPORARY (removed in this PR's last commit): the variants below are built by
-// the commits that convert the remaining domains.
-#[allow(dead_code)]
+/// The scrubbed text of the error behind a [`CommandError::Caused`]. An `Error`
+/// of its own so `std::error::Error::source` reaches it; holding text rather
+/// than the original error keeps `Debug` and the log free of absolute paths.
+#[derive(Debug)]
+pub struct Cause(String);
+
+impl std::fmt::Display for Cause {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Cause {}
+
 #[derive(Debug, thiserror::Error)]
 pub enum CommandError {
     /// Refused because Sagascript is working on something else (`busy`).
@@ -102,7 +112,8 @@ pub enum CommandError {
     /// The file chosen for an export exists already (`export_exists`).
     #[error("{0}")]
     ExportExists(String),
-    /// The OS could not open System Settings or a web page (`launch_failed`).
+    /// The OS could not open System Settings (`launch_failed`).
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))] // built by macOS-only commands
     #[error("{0}")]
     LaunchFailed(String),
     /// A model the command needed could not be downloaded
@@ -121,16 +132,11 @@ pub enum CommandError {
     #[error("{error}")]
     Caused {
         error: Box<CommandError>,
-        cause: String,
+        #[source]
+        cause: Cause,
     },
-    /// An error that is still a plain string (`unclassified`): no better code
-    /// exists. Built only through [`CommandError::unclassified`], never by a
-    /// bare `String`.
-    #[error("{0}")]
-    Unclassified(String),
 }
 
-#[allow(dead_code)] // TEMPORARY, see the enum
 impl CommandError {
     /// The stable wire code.
     pub fn code(&self) -> &str {
@@ -153,23 +159,16 @@ impl CommandError {
             Self::DownloadFailed(_) => "model_download_failed",
             Self::AccessibilityPermissionDenied(_) => "accessibility_permission_denied",
             Self::Caused { error, .. } => error.code(),
-            Self::Unclassified(_) => "unclassified",
         }
-    }
-
-    /// An error with no better code (`unclassified`). Prefer a specific
-    /// variant; every use is listed in ADR 0006.
-    pub fn unclassified(message: impl Into<String>) -> Self {
-        Self::Unclassified(message.into())
     }
 
     /// `self` with the error that caused it. The user sees `self`'s text; the
     /// cause is scrubbed of absolute paths ([`scrub_paths`]), written to the
-    /// log at once and kept for [`CommandError::cause`]. Use it where a fixed
+    /// log at once and kept as the error's `source()`. Use it where a fixed
     /// message replaces a source error that would otherwise be dropped.
     pub fn because(self, cause: impl std::fmt::Display) -> Self {
-        let cause = scrub_paths(&cause.to_string());
-        tracing::warn!(code = self.code(), %cause, "command failed");
+        let cause = Cause(scrub_paths(&cause.to_string()));
+        tracing::warn!(code = self.code(), cause = %cause, "command failed");
         Self::Caused {
             error: Box::new(self),
             cause,
@@ -180,14 +179,6 @@ impl CommandError {
     /// the complete message; the code is `task_failed`.
     pub fn task_failed(message: impl Into<String>) -> Self {
         Self::Dictation(DictationError::TaskFailed(message.into()))
-    }
-
-    /// The scrubbed cause attached by [`CommandError::because`], if any.
-    pub fn cause(&self) -> Option<&str> {
-        match self {
-            Self::Caused { cause, .. } => Some(cause),
-            _ => None,
-        }
     }
 
     /// Whether the user's action may be repeated (record again, run the file
@@ -244,22 +235,40 @@ through_dictation_error!(
     sagascript_core::diarization_report::ReportError,
 );
 
+impl From<crate::update_activity::ActivityError> for CommandError {
+    fn from(error: crate::update_activity::ActivityError) -> Self {
+        use crate::update_activity::ActivityError;
+        match error {
+            // An update is being installed: the user's action can be repeated
+            // once Sagascript has restarted.
+            ActivityError::UpdateApplying => Self::Busy(error.to_string()),
+            ActivityError::InvalidResultId => Self::InvalidInput(error.to_string()),
+            ActivityError::UnknownPreparation => Self::NotFound(error.to_string()),
+        }
+    }
+}
+
+impl From<crate::update_recovery::RecoveryError> for CommandError {
+    fn from(error: crate::update_recovery::RecoveryError) -> Self {
+        use crate::update_recovery::RecoveryError;
+        match &error {
+            // The draft is too large to keep: the caller's input is the problem.
+            RecoveryError::PayloadTooLarge { .. } | RecoveryError::SnapshotTooLarge { .. } => {
+                Self::InvalidInput(error.to_string())
+            }
+            RecoveryError::InvalidPath(_)
+            | RecoveryError::PathContainsSymlink(_)
+            | RecoveryError::TargetIsNotRegularFile(_)
+            | RecoveryError::Corrupt { .. }
+            | RecoveryError::Serialize(_)
+            | RecoveryError::Io { .. } => Self::Io(error.to_string()),
+        }
+    }
+}
+
 impl From<SettingsError> for CommandError {
     fn from(error: SettingsError) -> Self {
         Self::Settings(error)
-    }
-}
-
-// Transitional: removed once the last command is typed (this PR's final commit).
-impl From<String> for CommandError {
-    fn from(message: String) -> Self {
-        Self::Unclassified(message)
-    }
-}
-
-impl From<&str> for CommandError {
-    fn from(message: &str) -> Self {
-        Self::Unclassified(message.to_owned())
     }
 }
 

@@ -56,7 +56,7 @@ function settingsFile(initial: Partial<SettingsValue> = {}) {
         profile_glossaries: { ...file.current.profile_glossaries, [profileId]: source },
       }),
       undefined,
-      "unclassified",
+      "settings_storage_failed",
     ),
     // The command takes a plain string; the settings file stores the parsed mode.
     set_engine_prewarm: setter(({ mode }) => ({ engine_prewarm: mode as EnginePrewarm })),

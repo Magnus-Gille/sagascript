@@ -161,12 +161,12 @@ fn an_engine_failure_keeps_its_own_code_retry_hint_and_loses_the_path() {
 }
 
 /// The text of a command error is scrubbed again where the app serializes it,
-/// so a path that entered through a plain `String` error (not yet typed, #360
-/// part 2) never reaches the webview either.
+/// so a path that entered through an error's text (a recovery draft's file, a
+/// system error) never reaches the webview either.
 #[test]
 fn the_wire_message_never_carries_an_absolute_path() {
     for error in [
-        CommandError::Unclassified(format!("Could not save: {SWIFT_MESSAGE}")),
+        CommandError::Io(format!("Could not save: {SWIFT_MESSAGE}")),
         CommandError::HotkeyChangeFailed(
             "Failed to register /Users/x/Library/Preferences/a.plist".into(),
         ),
@@ -202,7 +202,6 @@ fn every_code_is_stable_snake_case() {
         CommandError::DownloadFailed("x".into()),
         CommandError::AccessibilityPermissionDenied("x".into()),
         CommandError::InvalidInput("x".into()).because("y"),
-        CommandError::Unclassified("x".into()),
         DictationError::TranscriptionFailed("x".into()).into(),
         DictationError::engine("engine_busy", true, "x").into(),
     ];
@@ -219,15 +218,6 @@ fn every_code_is_stable_snake_case() {
 }
 
 #[test]
-fn plain_strings_become_unclassified_until_their_command_is_typed() {
-    let error = CommandError::from("An update is being applied.");
-    assert_eq!(error.code(), "unclassified");
-    assert_eq!(error.to_string(), "An update is being applied.");
-    let error: CommandError = String::from("x").into();
-    assert!(matches!(error, CommandError::Unclassified(_)));
-}
-
-#[test]
 fn a_fixed_message_keeps_its_cause_for_the_log_and_never_sends_it() {
     let error =
         CommandError::InvalidInput("Could not read a valid, bounded meeting proposal".into())
@@ -237,7 +227,9 @@ fn a_fixed_message_keeps_its_cause_for_the_log_and_never_sends_it() {
         error.to_string(),
         "Could not read a valid, bounded meeting proposal"
     );
-    let cause = error.cause().expect("the cause is kept");
+    let cause = std::error::Error::source(&error)
+        .expect("the cause is kept as the error's source")
+        .to_string();
     assert!(cause.contains("No such file or directory"), "{cause}");
     assert!(
         !cause.contains("/Users/x"),
@@ -288,7 +280,11 @@ fn command_error_fixture_matches_what_rust_sends() {
             profile_id: "default".into()
         }),
         "unknown_profile": wire(SettingsError::UnknownDictationProfile { id: "x".into() }),
-        "unclassified": wire(CommandError::Unclassified("Unknown dictation profile 'x'".into())),
+        "invalid_input": wire(CommandError::InvalidInput("Invalid transcription result ID.".into())),
+        "export_exists": wire(CommandError::ExportExists(
+            "That file already exists. Choose a new name; no existing file was changed.".into()
+        )),
+        "meeting_stale": wire(sagascript_core::meeting_review::MeetingReviewError::ExpectedRevisionMismatch),
     });
     contract::assert_fixture("command_errors.json", &actual);
 }

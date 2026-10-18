@@ -73,6 +73,12 @@ pub enum SettingsError {
     )]
     PianissimoPlainFilesOnly,
 
+    /// The file model is Pianissimo and the run asks for diarization.
+    #[error(
+        "Pianissimo supports plain Swedish file transcription only; choose a Whisper file model for diarization"
+    )]
+    PianissimoNotForDiarization,
+
     /// This system cannot run Pianissimo (selecting it, or downloading its
     /// model).
     #[error("{}", crate::models::PIANISSIMO_UNSUPPORTED_MESSAGE)]
@@ -165,6 +171,7 @@ impl SettingsError {
             | Self::PianissimoRequiresSwedishProfile
             | Self::PianissimoSwedishFilesOnly
             | Self::PianissimoPlainFilesOnly
+            | Self::PianissimoNotForDiarization
             | Self::PianissimoUnsupported => "pianissimo_unavailable",
             Self::InvalidHotkey(_)
             | Self::DuplicateHotkey { .. }

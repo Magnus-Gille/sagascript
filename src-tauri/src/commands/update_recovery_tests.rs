@@ -6,6 +6,49 @@ mod recovery_payload_tests {
     use crate::update_recovery::RecoverySnapshot;
     use serde_json::{json, Value};
 
+    /// The refusals of the draft guard are `invalid_input`; a draft file that
+    /// cannot be used is `io_error`, with the file's path removed on the wire.
+    #[test]
+    fn recovery_failures_say_what_kind_of_failure_they_are() {
+        use crate::command_error::CommandError;
+        use crate::update_recovery::RecoveryError;
+
+        for snapshot in [
+            RecoverySnapshot {
+                schema_version: 2,
+                timestamp: 1,
+                payload: json!({"schema_version": 1}),
+            },
+            RecoverySnapshot {
+                schema_version: 1,
+                timestamp: 1,
+                payload: json!([]),
+            },
+        ] {
+            let error = update_recovery_payload(Some(snapshot)).unwrap_err();
+            assert_eq!(error.code(), "invalid_input");
+            assert!(error.to_string().contains("the stored draft was retained"));
+        }
+
+        let too_large = CommandError::from(RecoveryError::PayloadTooLarge {
+            actual: 9,
+            maximum: 4,
+        });
+        assert_eq!(too_large.code(), "invalid_input");
+
+        let unreadable = CommandError::from(RecoveryError::InvalidPath(
+            "/Users/zoe/Library/Application Support/update-recovery.json".into(),
+        ));
+        assert_eq!(unreadable.code(), "io_error");
+        let wire = crate::contract::to_value(&unreadable);
+        let message = wire["message"].as_str().expect("a message");
+        assert!(message.contains("update-recovery.json"), "{message}");
+        assert!(
+            !message.contains("zoe"),
+            "the account name stays off the wire: {message}"
+        );
+    }
+
     #[test]
     fn missing_snapshot_is_the_only_absent_draft() {
         assert_eq!(update_recovery_payload(None).unwrap(), None);

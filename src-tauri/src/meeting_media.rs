@@ -224,6 +224,24 @@ mod tests {
     use sagascript_testsupport::TempDir;
     use std::{fs::File, io::Write, path::PathBuf};
 
+    /// The attachment slot's lock lost to a panic is `unavailable`: the user
+    /// sees a fixed line, the poison error is the kept cause.
+    #[test]
+    fn a_poisoned_attachment_lock_is_unavailable_with_its_cause_kept() {
+        let state = SharedMeetingAudio::default();
+        let held = state.clone();
+        let _ = std::thread::spawn(move || {
+            let _guard = held.0.lock().expect("first lock");
+            panic!("hold the lock while panicking");
+        })
+        .join();
+        let error = state.0.lock().map(drop).map_err(lock_failed).unwrap_err();
+        assert_eq!(error.code(), "unavailable");
+        assert_eq!(error.to_string(), "Audio attachment lock failed");
+        let cause = std::error::Error::source(&error).expect("the poison error is kept");
+        assert!(cause.to_string().contains("poisoned"), "{cause}");
+    }
+
     /// A file holding `bytes` in its own temporary directory, open for writing.
     /// Fields drop in order: the file is closed before its directory goes.
     struct TestFile {

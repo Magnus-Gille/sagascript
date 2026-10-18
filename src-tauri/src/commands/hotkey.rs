@@ -16,7 +16,7 @@ use crate::hotkey::{HotkeyHealth, HotkeyStatus, OperationalHotkey};
 #[tauri::command]
 pub async fn get_active_hotkey_profile(
     controller: State<'_, SharedController>,
-) -> Result<Option<HotkeyProfile>, String> {
+) -> Result<Option<HotkeyProfile>, CommandError> {
     Ok(lock_controller(&controller)
         .active_hotkey_profile()
         .cloned())
@@ -387,7 +387,7 @@ pub async fn retry_hotkey_registration(
                 let result = crate::hotkey::install_bare_function_key_monitor(&app_for_install);
                 let _ = reply.send(result);
             })
-            .map_err(|error| error.to_string())
+            .map_err(|error| super::main_thread::MainThreadUnreachable(error.to_string()))
         })
         .await?;
         after_monitor_install(reply)?;
@@ -405,7 +405,7 @@ pub async fn retry_hotkey_registration(
 /// which only tells you *a* shortcut is bound, not whether *our* most recent
 /// attempt to bind it succeeded.
 #[tauri::command]
-pub async fn hotkey_status(health: State<'_, HotkeyHealth>) -> Result<HotkeyStatus, String> {
+pub async fn hotkey_status(health: State<'_, HotkeyHealth>) -> Result<HotkeyStatus, CommandError> {
     Ok(health.status())
 }
 

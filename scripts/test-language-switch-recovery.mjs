@@ -88,7 +88,7 @@ function harness({
     async function setProfileGlossary(id, value, expected) {
       calls.push(["dictionary", id, value, expected]);
       if (holdClear) await pauseClear();
-      if (options.clearFailure) throw commandError("unclassified", options.clearFailure);
+      if (options.clearFailure) throw commandError("settings_storage_failed", options.clearFailure);
       if (expected !== stored.profile_glossaries[id]) throw commandError("dictionary_changed_elsewhere", "Dictionary changed elsewhere: default");
       stored.profile_glossaries[id] = value;
       cleared = true;

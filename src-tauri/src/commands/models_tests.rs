@@ -66,3 +66,43 @@ mod lineup_option_tests {
         );
     }
 }
+
+/// A model query for a profile that does not exist rejects with the code of
+/// its settings error, and Pianissimo is refused with its own code where the
+/// host cannot run it.
+#[cfg(test)]
+mod rejection_tests {
+    use super::*;
+    use crate::app_controller::AppController;
+    use std::sync::Mutex;
+    use tauri::Manager;
+
+    #[test]
+    fn a_profile_model_query_for_an_unknown_profile_is_unknown_profile() {
+        let app = tauri::test::mock_app();
+        app.manage::<SharedController>(Mutex::new(AppController::new(Settings::default())));
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("a runtime");
+        let error = runtime
+            .block_on(get_profile_model_info(
+                app.state::<SharedController>(),
+                "nosuch".into(),
+            ))
+            .err()
+            .expect("there is no such profile");
+        assert_eq!(error.code(), "unknown_profile");
+        assert_eq!(error.to_string(), "Unknown profile 'nosuch'");
+    }
+
+    #[test]
+    fn downloading_pianissimo_is_refused_with_its_code_where_it_cannot_run() {
+        assert!(ensure_pianissimo_runs(true).is_ok());
+        let error = ensure_pianissimo_runs(false).expect_err("this host cannot run Pianissimo");
+        assert_eq!(error.code(), "pianissimo_unavailable");
+        assert_eq!(
+            error.to_string(),
+            sagascript_core::transcription::pianissimo_backend::UNSUPPORTED_MESSAGE
+        );
+    }
+}

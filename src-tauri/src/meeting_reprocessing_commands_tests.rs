@@ -13,14 +13,14 @@ fn an_unreadable_proposal_keeps_its_fixed_text_and_its_cause() {
         error.to_string(),
         "Could not read a valid, bounded meeting proposal"
     );
-    let cause = error.cause().expect("the cause is kept");
-    assert!(!cause.is_empty(), "the cause is not empty");
+    let cause = std::error::Error::source(&error).expect("the cause is kept");
+    assert!(!cause.to_string().is_empty(), "the cause is not empty");
 
     let garbage = directory.join("garbage.json");
     std::fs::write(&garbage, b"{ not a proposal").expect("write the file");
     let error = read_proposal_file(&garbage).expect_err("garbage is no proposal");
     assert_eq!(error.code(), "invalid_input");
-    assert!(error.cause().is_some());
+    assert!(std::error::Error::source(&error).is_some());
     // What the webview receives is the code and the fixed text only.
     let wire = crate::contract::to_value(&error);
     assert_eq!(

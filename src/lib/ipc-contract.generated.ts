@@ -23,8 +23,8 @@ type NoArgs = Record<string, never>;
 export interface CommandMap {
   /** `meeting_reprocessing_commands::accept_meeting_proposal(proposal: MeetingReprocessingProposal, current_review: MeetingReview) -> Result<ReviewState, CommandError>` */
   accept_meeting_proposal: { args: { proposal: MeetingReprocessingProposal; currentReview: MeetingReview }; result: MeetingReviewState; error: BackendError };
-  /** `commands::acknowledge_update_result(expected_text: String) -> Result<bool, String>` */
-  acknowledge_update_result: { args: { expectedText: string }; result: boolean; error: string };
+  /** `commands::acknowledge_update_result(expected_text: String) -> Result<bool, CommandError>` */
+  acknowledge_update_result: { args: { expectedText: string }; result: boolean; error: BackendError };
   /** `meeting_review_commands::apply_meeting_corrections(review: MeetingReview, corrections: CorrectionFile) -> Result<ReviewState, CommandError>` */
   apply_meeting_corrections: { args: { review: MeetingReview; corrections: CorrectionFile }; result: MeetingReviewState; error: BackendError };
   /** `commands::apply_training_glossary(heard: String, corrected: String, profile_id: String, accepted: Vec<GlossarySuggestion>) -> Result<(), CommandError>` */
@@ -35,96 +35,96 @@ export interface CommandMap {
   begin_meeting_file: { args: { filePath: string; prompt?: string | null; profileId?: string | null }; result: string; error: BackendError };
   /** `meeting_jobs::begin_meeting_reprocessing(file_path: String, prompt: Option<String>, profile_id: Option<String>, request: ReprocessingRequest) -> Result<String, CommandError>` */
   begin_meeting_reprocessing: { args: { filePath: string; prompt?: string | null; profileId?: string | null; request: ReprocessingRequest }; result: string; error: BackendError };
-  /** `commands::cancel_file_transcription(run_id: String) -> Result<bool, String>` */
-  cancel_file_transcription: { args: { runId: string }; result: boolean; error: string };
+  /** `commands::cancel_file_transcription(run_id: String) -> Result<bool, CommandError>` */
+  cancel_file_transcription: { args: { runId: string }; result: boolean; error: BackendError };
   /** `meeting_jobs::cancel_meeting_job(job_id: String) -> Result<bool, CommandError>` */
   cancel_meeting_job: { args: { jobId: string }; result: boolean; error: BackendError };
-  /** `commands::cancel_recording() -> Result<(), String>` */
-  cancel_recording: { args: NoArgs; result: void; error: string };
-  /** `commands::check_accessibility_permission() -> Result<bool, String>` */
-  check_accessibility_permission: { args: NoArgs; result: boolean; error: string };
-  /** `commands::clear_update_recovery() -> Result<(), String>` */
-  clear_update_recovery: { args: NoArgs; result: void; error: string };
-  /** `commands::complete_update_preparation(nonce: String, error: Option<String>) -> Result<(), String>` */
-  complete_update_preparation: { args: { nonce: string; error?: string | null }; result: void; error: string };
+  /** `commands::cancel_recording() -> Result<(), CommandError>` */
+  cancel_recording: { args: NoArgs; result: void; error: BackendError };
+  /** `commands::check_accessibility_permission() -> Result<bool, CommandError>` */
+  check_accessibility_permission: { args: NoArgs; result: boolean; error: BackendError };
+  /** `commands::clear_update_recovery() -> Result<(), CommandError>` */
+  clear_update_recovery: { args: NoArgs; result: void; error: BackendError };
+  /** `commands::complete_update_preparation(nonce: String, error: Option<String>) -> Result<(), CommandError>` */
+  complete_update_preparation: { args: { nonce: string; error?: string | null }; result: void; error: BackendError };
   /** `commands::copy_transcription_text(text: String) -> Result<(), CommandError>` */
   copy_transcription_text: { args: { text: string }; result: void; error: BackendError };
   /** `meeting_review_commands::create_meeting_review(transcript: MeetingTranscript) -> Result<ReviewState, CommandError>` */
   create_meeting_review: { args: { transcript: MeetingTranscript }; result: MeetingReviewState; error: BackendError };
   /** `meeting_media::detach_meeting_audio(token: String) -> Result<(), CommandError>` */
   detach_meeting_audio: { args: { token: string }; result: void; error: BackendError };
-  /** `commands::download_model(whisper_model: WhisperModel) -> Result<(), String>` */
-  download_model: { args: { whisperModel: string }; result: void; error: string };
-  /** `commands::download_pianissimo_model() -> Result<(), String>` */
-  download_pianissimo_model: { args: NoArgs; result: void; error: string };
-  /** `commands::engine_status() -> Result<EngineStatus, String>` */
-  engine_status: { args: NoArgs; result: EngineStatus; error: string };
-  /** `commands::get_active_hotkey_profile() -> Result<Option<HotkeyProfile>, String>` */
-  get_active_hotkey_profile: { args: NoArgs; result: HotkeyProfile | null; error: string };
-  /** `commands::get_auto_file_model_info(language: Language) -> Result<ModelInfo, String>` */
-  get_auto_file_model_info: { args: { language: Language }; result: WhisperModel; error: string };
-  /** `commands::get_build_info() -> Result<BuildInfo, String>` */
-  get_build_info: { args: NoArgs; result: BuildInfo; error: string };
-  /** `commands::get_dictation_model_info(language: Language) -> Result<ModelInfo, String>` */
-  get_dictation_model_info: { args: { language: Language }; result: WhisperModel; error: string };
-  /** `commands::get_effective_model_info(language: Language) -> Result<ModelInfo, String>` */
-  get_effective_model_info: { args: { language: Language }; result: WhisperModel; error: string };
-  /** `commands::get_engine_load_state() -> Result<serde_json::Value, String>` */
-  get_engine_load_state: { args: NoArgs; result: EngineLoadState; error: string };
-  /** `commands::get_file_model_options(language: Language, include: Option<String>) -> Result<Vec<ModelInfo>, String>` */
-  get_file_model_options: { args: { language: Language; include?: string | null }; result: WhisperModel[]; error: string };
-  /** `commands::get_last_error() -> Result<Option<String>, String>` */
-  get_last_error: { args: NoArgs; result: string | null; error: string };
-  /** `commands::get_last_transcription() -> Result<Option<String>, String>` */
-  get_last_transcription: { args: NoArgs; result: string | null; error: string };
-  /** `commands::get_loaded_model() -> Result<LoadedModelInfo, String>` */
-  get_loaded_model: { args: NoArgs; result: LoadedModelInfo; error: string };
+  /** `commands::download_model(whisper_model: WhisperModel) -> Result<(), CommandError>` */
+  download_model: { args: { whisperModel: string }; result: void; error: BackendError };
+  /** `commands::download_pianissimo_model() -> Result<(), CommandError>` */
+  download_pianissimo_model: { args: NoArgs; result: void; error: BackendError };
+  /** `commands::engine_status() -> Result<EngineStatus, CommandError>` */
+  engine_status: { args: NoArgs; result: EngineStatus; error: BackendError };
+  /** `commands::get_active_hotkey_profile() -> Result<Option<HotkeyProfile>, CommandError>` */
+  get_active_hotkey_profile: { args: NoArgs; result: HotkeyProfile | null; error: BackendError };
+  /** `commands::get_auto_file_model_info(language: Language) -> Result<ModelInfo, CommandError>` */
+  get_auto_file_model_info: { args: { language: Language }; result: WhisperModel; error: BackendError };
+  /** `commands::get_build_info() -> Result<BuildInfo, CommandError>` */
+  get_build_info: { args: NoArgs; result: BuildInfo; error: BackendError };
+  /** `commands::get_dictation_model_info(language: Language) -> Result<ModelInfo, CommandError>` */
+  get_dictation_model_info: { args: { language: Language }; result: WhisperModel; error: BackendError };
+  /** `commands::get_effective_model_info(language: Language) -> Result<ModelInfo, CommandError>` */
+  get_effective_model_info: { args: { language: Language }; result: WhisperModel; error: BackendError };
+  /** `commands::get_engine_load_state() -> Result<serde_json::Value, CommandError>` */
+  get_engine_load_state: { args: NoArgs; result: EngineLoadState; error: BackendError };
+  /** `commands::get_file_model_options(language: Language, include: Option<String>) -> Result<Vec<ModelInfo>, CommandError>` */
+  get_file_model_options: { args: { language: Language; include?: string | null }; result: WhisperModel[]; error: BackendError };
+  /** `commands::get_last_error() -> Result<Option<String>, CommandError>` */
+  get_last_error: { args: NoArgs; result: string | null; error: BackendError };
+  /** `commands::get_last_transcription() -> Result<Option<String>, CommandError>` */
+  get_last_transcription: { args: NoArgs; result: string | null; error: BackendError };
+  /** `commands::get_loaded_model() -> Result<LoadedModelInfo, CommandError>` */
+  get_loaded_model: { args: NoArgs; result: LoadedModelInfo; error: BackendError };
   /** `meeting_jobs::get_meeting_job(job_id: String) -> Result<MeetingSnapshot, CommandError>` */
   get_meeting_job: { args: { jobId: string }; result: MeetingJobSnapshot; error: BackendError };
-  /** `commands::get_model_info() -> Result<Vec<ModelInfo>, String>` */
-  get_model_info: { args: NoArgs; result: WhisperModel[]; error: string };
-  /** `commands::get_platform() -> Result<String, String>` */
-  get_platform: { args: NoArgs; result: string; error: string };
-  /** `commands::get_profile_model_info(profile_id: String) -> Result<ModelInfo, String>` */
-  get_profile_model_info: { args: { profileId: string }; result: WhisperModel; error: string };
+  /** `commands::get_model_info() -> Result<Vec<ModelInfo>, CommandError>` */
+  get_model_info: { args: NoArgs; result: WhisperModel[]; error: BackendError };
+  /** `commands::get_platform() -> Result<String, CommandError>` */
+  get_platform: { args: NoArgs; result: string; error: BackendError };
+  /** `commands::get_profile_model_info(profile_id: String) -> Result<ModelInfo, CommandError>` */
+  get_profile_model_info: { args: { profileId: string }; result: WhisperModel; error: BackendError };
   /** `commands::get_settings() -> Result<Settings, CommandError>` */
   get_settings: { args: NoArgs; result: Settings; error: BackendError };
-  /** `commands::get_state() -> Result<AppState, String>` */
-  get_state: { args: NoArgs; result: AppState; error: string };
+  /** `commands::get_state() -> Result<AppState, CommandError>` */
+  get_state: { args: NoArgs; result: AppState; error: BackendError };
   /** `commands::get_supported_formats() -> Result<Vec<String>, CommandError>` */
   get_supported_formats: { args: NoArgs; result: string[]; error: BackendError };
-  /** `commands::get_update_result_pending(result_id: String) -> Result<bool, String>` */
-  get_update_result_pending: { args: { resultId: string }; result: boolean; error: string };
-  /** `commands::hotkey_status() -> Result<HotkeyStatus, String>` */
-  hotkey_status: { args: NoArgs; result: HotkeyStatus; error: string };
-  /** `commands::is_model_downloaded(whisper_model: WhisperModel) -> Result<bool, String>` */
-  is_model_downloaded: { args: { whisperModel: string }; result: boolean; error: string };
-  /** `commands::is_model_ready() -> Result<bool, String>` */
-  is_model_ready: { args: NoArgs; result: boolean; error: string };
-  /** `commands::load_update_recovery() -> Result<Option<serde_json::Value>, String>` */
-  load_update_recovery: { args: NoArgs; result: UpdateRecoveryPayload | null; error: string };
+  /** `commands::get_update_result_pending(result_id: String) -> Result<bool, CommandError>` */
+  get_update_result_pending: { args: { resultId: string }; result: boolean; error: BackendError };
+  /** `commands::hotkey_status() -> Result<HotkeyStatus, CommandError>` */
+  hotkey_status: { args: NoArgs; result: HotkeyStatus; error: BackendError };
+  /** `commands::is_model_downloaded(whisper_model: WhisperModel) -> Result<bool, CommandError>` */
+  is_model_downloaded: { args: { whisperModel: string }; result: boolean; error: BackendError };
+  /** `commands::is_model_ready() -> Result<bool, CommandError>` */
+  is_model_ready: { args: NoArgs; result: boolean; error: BackendError };
+  /** `commands::load_update_recovery() -> Result<Option<serde_json::Value>, CommandError>` */
+  load_update_recovery: { args: NoArgs; result: UpdateRecoveryPayload | null; error: BackendError };
   /** `meeting_jobs::merge_meeting_speakers(transcript: MeetingTranscript, from_id: String, into_id: String) -> Result<MeetingTranscript, CommandError>` */
   merge_meeting_speakers: { args: { transcript: MeetingTranscript; fromId: string; intoId: string }; result: MeetingTranscript; error: BackendError };
-  /** `commands::microphone_status() -> Result<String, String>` */
-  microphone_status: { args: NoArgs; result: string; error: string };
-  /** `commands::open_accessibility_settings() -> Result<(), String>` */
-  open_accessibility_settings: { args: NoArgs; result: void; error: string };
+  /** `commands::microphone_status() -> Result<String, CommandError>` */
+  microphone_status: { args: NoArgs; result: string; error: BackendError };
+  /** `commands::open_accessibility_settings() -> Result<(), CommandError>` */
+  open_accessibility_settings: { args: NoArgs; result: void; error: BackendError };
   /** `meeting_reprocessing_commands::open_meeting_proposal() -> Result<Option<ProposalState>, CommandError>` */
   open_meeting_proposal: { args: NoArgs; result: ProposalState | null; error: BackendError };
   /** `meeting_review_commands::open_meeting_review() -> Result<Option<ReviewState>, CommandError>` */
   open_meeting_review: { args: NoArgs; result: MeetingReviewState | null; error: BackendError };
-  /** `commands::open_microphone_settings() -> Result<(), String>` */
-  open_microphone_settings: { args: NoArgs; result: void; error: string };
+  /** `commands::open_microphone_settings() -> Result<(), CommandError>` */
+  open_microphone_settings: { args: NoArgs; result: void; error: BackendError };
   /** `meeting_reprocessing_commands::plan_meeting_reprocessing(previous: MeetingReview, mode: ReprocessingMode, threshold: f32, save_cache: bool, prompt: Option<String>, profile_id: Option<String>) -> Result<Option<SelectedReprocessingPlan>, CommandError>` */
   plan_meeting_reprocessing: { args: { previous: MeetingReview; mode: ReprocessingMode; threshold: number; saveCache: boolean; prompt?: string | null; profileId?: string | null }; result: SelectedReprocessingPlan | null; error: BackendError };
   /** `meeting_reprocessing_commands::preview_meeting_proposal(proposal: MeetingReprocessingProposal) -> Result<ProposalState, CommandError>` */
   preview_meeting_proposal: { args: { proposal: MeetingReprocessingProposal }; result: ProposalState; error: BackendError };
   /** `meeting_jobs::rename_meeting_speaker(transcript: MeetingTranscript, speaker_id: String, label: String) -> Result<MeetingTranscript, CommandError>` */
   rename_meeting_speaker: { args: { transcript: MeetingTranscript; speakerId: string; label: string }; result: MeetingTranscript; error: BackendError };
-  /** `commands::request_accessibility_permission() -> Result<(), String>` */
-  request_accessibility_permission: { args: NoArgs; result: void; error: string };
-  /** `commands::request_microphone_access() -> Result<String, String>` */
-  request_microphone_access: { args: NoArgs; result: string; error: string };
+  /** `commands::request_accessibility_permission() -> Result<(), CommandError>` */
+  request_accessibility_permission: { args: NoArgs; result: void; error: BackendError };
+  /** `commands::request_microphone_access() -> Result<String, CommandError>` */
+  request_microphone_access: { args: NoArgs; result: string; error: BackendError };
   /** `meeting_review_commands::reset_meeting_review(review: MeetingReview, expected_revision: String) -> Result<ReviewState, CommandError>` */
   reset_meeting_review: { args: { review: MeetingReview; expectedRevision: string }; result: MeetingReviewState; error: BackendError };
   /** `meeting_reprocessing_commands::resolve_meeting_proposal(proposal: MeetingReprocessingProposal, expected_revision: String, index: usize, operations: Vec<CorrectionOperation>) -> Result<ProposalState, CommandError>` */
@@ -139,8 +139,8 @@ export interface CommandMap {
   save_meeting_review: { args: { review: MeetingReview; format: MeetingExportFormat }; result: boolean; error: BackendError };
   /** `commands::save_transcription_text(text: String, file_name: String, directory: Option<String>) -> Result<bool, CommandError>` */
   save_transcription_text: { args: { text: string; fileName: string; directory?: string | null }; result: boolean; error: BackendError };
-  /** `commands::save_update_recovery(payload: serde_json::Value) -> Result<(), String>` */
-  save_update_recovery: { args: { payload: UpdateRecoveryPayload }; result: void; error: string };
+  /** `commands::save_update_recovery(payload: serde_json::Value) -> Result<(), CommandError>` */
+  save_update_recovery: { args: { payload: UpdateRecoveryPayload }; result: void; error: BackendError };
   /** `commands::set_auto_paste(enabled: bool) -> Result<(), CommandError>` */
   set_auto_paste: { args: { enabled: boolean }; result: void; error: BackendError };
   /** `commands::set_auto_select_model(enabled: bool) -> Result<(), CommandError>` */
@@ -175,8 +175,8 @@ export interface CommandMap {
   set_show_overlay: { args: { enabled: boolean }; result: void; error: BackendError };
   /** `commands::set_temperature_fallback(enabled: bool) -> Result<(), CommandError>` */
   set_temperature_fallback: { args: { enabled: boolean }; result: void; error: BackendError };
-  /** `commands::set_update_result_pending(result_id: String, pending: bool) -> Result<(), String>` */
-  set_update_result_pending: { args: { resultId: string; pending: boolean }; result: void; error: string };
+  /** `commands::set_update_result_pending(result_id: String, pending: bool) -> Result<(), CommandError>` */
+  set_update_result_pending: { args: { resultId: string; pending: boolean }; result: void; error: BackendError };
   /** `commands::set_vad_enabled(enabled: bool) -> Result<(), CommandError>` */
   set_vad_enabled: { args: { enabled: boolean }; result: void; error: BackendError };
   /** `commands::set_whisper_model(model: WhisperModel) -> Result<(), CommandError>` */
@@ -297,24 +297,57 @@ export const COMMAND_NAMES = [
  */
 export const BACKEND_ERROR_COMMANDS = [
   "accept_meeting_proposal",
+  "acknowledge_update_result",
   "apply_meeting_corrections",
   "apply_training_glossary",
   "attach_meeting_audio",
   "begin_meeting_file",
   "begin_meeting_reprocessing",
+  "cancel_file_transcription",
   "cancel_meeting_job",
+  "cancel_recording",
+  "check_accessibility_permission",
+  "clear_update_recovery",
+  "complete_update_preparation",
   "copy_transcription_text",
   "create_meeting_review",
   "detach_meeting_audio",
+  "download_model",
+  "download_pianissimo_model",
+  "engine_status",
+  "get_active_hotkey_profile",
+  "get_auto_file_model_info",
+  "get_build_info",
+  "get_dictation_model_info",
+  "get_effective_model_info",
+  "get_engine_load_state",
+  "get_file_model_options",
+  "get_last_error",
+  "get_last_transcription",
+  "get_loaded_model",
   "get_meeting_job",
+  "get_model_info",
+  "get_platform",
+  "get_profile_model_info",
   "get_settings",
+  "get_state",
   "get_supported_formats",
+  "get_update_result_pending",
+  "hotkey_status",
+  "is_model_downloaded",
+  "is_model_ready",
+  "load_update_recovery",
   "merge_meeting_speakers",
+  "microphone_status",
+  "open_accessibility_settings",
   "open_meeting_proposal",
   "open_meeting_review",
+  "open_microphone_settings",
   "plan_meeting_reprocessing",
   "preview_meeting_proposal",
   "rename_meeting_speaker",
+  "request_accessibility_permission",
+  "request_microphone_access",
   "reset_meeting_review",
   "resolve_meeting_proposal",
   "retry_hotkey_registration",
@@ -322,6 +355,7 @@ export const BACKEND_ERROR_COMMANDS = [
   "save_meeting_proposal",
   "save_meeting_review",
   "save_transcription_text",
+  "save_update_recovery",
   "set_auto_paste",
   "set_auto_select_model",
   "set_beam_size",
@@ -339,6 +373,7 @@ export const BACKEND_ERROR_COMMANDS = [
   "set_profile_model",
   "set_show_overlay",
   "set_temperature_fallback",
+  "set_update_result_pending",
   "set_vad_enabled",
   "set_whisper_model",
   "start_recording",

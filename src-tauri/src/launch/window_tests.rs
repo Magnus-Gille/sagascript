@@ -11,37 +11,39 @@ impl MainWindowVisibility for MockMainWindow {
         self.operations.borrow_mut().push("activate_app");
     }
 
-    fn reset_to_normal_level(&self) -> Result<(), String> {
+    fn reset_to_normal_level(&self) -> Result<(), tauri::Error> {
         self.operations.borrow_mut().push("reset_to_normal_level");
         if self.fail_at == Some("reset_to_normal_level") {
-            Err("window level failed".to_string())
+            Err(tauri::Error::from(std::io::Error::other(
+                "window level failed",
+            )))
         } else {
             Ok(())
         }
     }
 
-    fn unminimize(&self) -> Result<(), String> {
+    fn unminimize(&self) -> Result<(), tauri::Error> {
         self.operations.borrow_mut().push("unminimize");
         if self.fail_at == Some("unminimize") {
-            Err("restore failed".to_string())
+            Err(tauri::Error::from(std::io::Error::other("restore failed")))
         } else {
             Ok(())
         }
     }
 
-    fn show(&self) -> Result<(), String> {
+    fn show(&self) -> Result<(), tauri::Error> {
         self.operations.borrow_mut().push("show");
         if self.fail_at == Some("show") {
-            Err("show failed".to_string())
+            Err(tauri::Error::from(std::io::Error::other("show failed")))
         } else {
             Ok(())
         }
     }
 
-    fn set_focus(&self) -> Result<(), String> {
+    fn set_focus(&self) -> Result<(), tauri::Error> {
         self.operations.borrow_mut().push("set_focus");
         if self.fail_at == Some("set_focus") {
-            Err("focus failed".to_string())
+            Err(tauri::Error::from(std::io::Error::other("focus failed")))
         } else {
             Ok(())
         }
@@ -75,8 +77,10 @@ fn main_window_reveal_reports_the_failed_step_and_stops() {
 
     let error = reveal_existing_main_window(&window).unwrap_err();
 
-    assert!(error.contains("show main window"));
-    assert!(error.contains("show failed"));
+    assert!(matches!(error, WindowError::Show(_)), "{error:?}");
+    let text = error.to_string();
+    assert!(text.contains("show main window"), "{text}");
+    assert!(text.contains("show failed"), "{text}");
     assert_eq!(
         *window.operations.borrow(),
         ["reset_to_normal_level", "unminimize", "show"]

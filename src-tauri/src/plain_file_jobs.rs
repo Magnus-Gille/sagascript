@@ -67,7 +67,9 @@ impl Drop for Lease {
 impl PlainFileJobs {
     fn begin(self: &Arc<Self>, id: String) -> Result<Arc<Lease>, CommandError> {
         if id.is_empty() || id.len() > 128 {
-            return Err("Invalid transcription run ID.".into());
+            return Err(CommandError::InvalidInput(
+                "Invalid transcription run ID.".into(),
+            ));
         }
         let mut active = lock_or_recover(&self.active, ACTIVE_LOCK);
         if active.is_some() {
@@ -354,6 +356,25 @@ pub async fn transcribe(
 
 #[cfg(test)]
 mod tests {
+    /// A run id the frontend never sends is refused as invalid input, and a
+    /// second run while one is active as busy (retryable).
+    #[test]
+    fn begin_refuses_a_bad_id_and_a_second_run_with_codes() {
+        let jobs = Arc::new(PlainFileJobs::default());
+        for id in [String::new(), "x".repeat(129)] {
+            let error = jobs.begin(id).err().expect("the id is refused");
+            assert_eq!(error.code(), "invalid_input");
+            assert_eq!(error.to_string(), "Invalid transcription run ID.");
+        }
+        let _first = jobs.begin("first".into()).expect("the first run starts");
+        let second = jobs
+            .begin("second".into())
+            .err()
+            .expect("one run at a time");
+        assert_eq!(second.code(), "busy");
+        assert!(second.retryable());
+    }
+
     use super::*;
     #[test]
     fn cancel_before_begin_is_sticky_and_pending_storage_is_bounded() {

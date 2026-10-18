@@ -133,7 +133,11 @@ impl AppController {
         self.update_activity = update_activity;
     }
 
-    pub fn set_update_result_pending(&self, result_id: &str, pending: bool) -> Result<(), String> {
+    pub fn set_update_result_pending(
+        &self,
+        result_id: &str,
+        pending: bool,
+    ) -> Result<(), crate::update_activity::ActivityError> {
         self.update_activity.set_result_pending(result_id, pending)
     }
 
@@ -144,7 +148,10 @@ impl AppController {
     /// Acknowledge exactly the result the UI delivered. Hold the controller
     /// lock across text comparison and activity update so a newer result cannot
     /// arrive between them.
-    pub fn acknowledge_update_result(&self, expected_text: &str) -> Result<bool, String> {
+    pub fn acknowledge_update_result(
+        &self,
+        expected_text: &str,
+    ) -> Result<bool, crate::update_activity::ActivityError> {
         if self.last_transcription() != Some(expected_text)
             || !self.is_update_result_pending("live-dictation")
         {
@@ -463,7 +470,7 @@ impl AppController {
         let work_lease = self
             .update_activity
             .begin_work()
-            .map_err(DictationError::TranscriptionFailed)?;
+            .map_err(|error| DictationError::TranscriptionFailed(error.to_string()))?;
 
         let next_generation = self.recording_generation.checked_add(1).ok_or_else(|| {
             DictationError::TranscriptionFailed(

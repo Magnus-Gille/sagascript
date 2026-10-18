@@ -9,6 +9,8 @@ use std::time::Duration;
 
 use tokio::sync::oneshot;
 
+use crate::command_error::CommandError;
+
 /// How the main thread answered.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum MainThreadReply<T> {
@@ -22,14 +24,26 @@ pub(crate) enum MainThreadReply<T> {
     TimedOut,
 }
 
+/// The main thread could not be asked: its event loop is closed. The payload is
+/// the runtime's text.
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
+#[error("{0}")]
+pub(crate) struct MainThreadUnreachable(pub(crate) String);
+
+impl From<MainThreadUnreachable> for CommandError {
+    fn from(error: MainThreadUnreachable) -> Self {
+        Self::Unavailable(error.0)
+    }
+}
+
 /// Hand `dispatch` a sender, let it schedule work on the main thread that
 /// sends its result back, and wait for that result for at most `timeout`
 /// without blocking a worker thread. `dispatch` failing (the main thread
-/// cannot be reached) is returned as its error text.
+/// cannot be reached) is returned as [`MainThreadUnreachable`].
 pub(crate) async fn await_main_thread<T>(
     timeout: Duration,
-    dispatch: impl FnOnce(oneshot::Sender<T>) -> Result<(), String>,
-) -> Result<MainThreadReply<T>, String> {
+    dispatch: impl FnOnce(oneshot::Sender<T>) -> Result<(), MainThreadUnreachable>,
+) -> Result<MainThreadReply<T>, MainThreadUnreachable> {
     let (sender, receiver) = oneshot::channel();
     dispatch(sender)?;
     Ok(match tokio::time::timeout(timeout, receiver).await {

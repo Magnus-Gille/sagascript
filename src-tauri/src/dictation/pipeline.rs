@@ -399,7 +399,7 @@ pub(super) fn stop_recording_and_transcribe(
                     #[cfg(target_os = "macos")]
                     let dispatch_result = app_handle.run_on_main_thread(paste_task);
                     #[cfg(not(target_os = "macos"))]
-                    let dispatch_result: Result<(), String> = {
+                    let dispatch_result: Result<(), tauri::Error> = {
                         // Clipboard focus/paste can block on Windows. Keep its
                         // native UI thread responsive while preserving macOS's
                         // mandatory main-thread execution above.

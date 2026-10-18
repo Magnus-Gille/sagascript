@@ -1,6 +1,6 @@
 import { describe, expect, test, vi } from "vitest";
 import { requestAccessibility, waitForAccessibility } from "./permissions";
-import { mockIpc } from "../test/ipc";
+import { backendError, mockIpc } from "../test/ipc";
 
 const QUICK = { intervalMs: 1 };
 
@@ -65,11 +65,11 @@ describe("waitForAccessibility", () => {
   test("a failing check rejects and stops the polling", async () => {
     const ipc = mockIpc({
       check_accessibility_permission: () => {
-        throw "TCC database unavailable";
+        throw backendError("unavailable", "TCC database unavailable");
       },
     });
 
-    await expect(waitForAccessibility(QUICK)).rejects.toBe("TCC database unavailable");
+    await expect(waitForAccessibility(QUICK)).rejects.toEqual(backendError("unavailable", "TCC database unavailable"));
     await new Promise((resolve) => setTimeout(resolve, 20));
 
     expect(ipc.callsTo("check_accessibility_permission")).toHaveLength(1);
@@ -105,11 +105,11 @@ describe("requestAccessibility", () => {
   test("a failing prompt rejects before any check", async () => {
     const ipc = mockIpc({
       request_accessibility_permission: () => {
-        throw "System Settings did not open";
+        throw backendError("launch_failed", "System Settings did not open");
       },
     });
 
-    await expect(requestAccessibility(QUICK)).rejects.toBe("System Settings did not open");
+    await expect(requestAccessibility(QUICK)).rejects.toEqual(backendError("launch_failed", "System Settings did not open"));
 
     expect(ipc.callsTo("check_accessibility_permission")).toHaveLength(0);
   });
