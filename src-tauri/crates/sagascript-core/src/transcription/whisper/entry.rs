@@ -5,19 +5,18 @@ use whisper_rs::{get_lang_str, FullParams, SamplingStrategy, WhisperState, Whisp
 
 use crate::error::DictationError;
 use crate::models::{Language, WhisperModel};
-use crate::sync::lock_or_recover;
 use crate::transcription::chunking::plan_chunks;
 use crate::transcription::diagnostics::LanguageDetection;
 use crate::transcription::model;
 
-use super::parallel::{MAX_PARALLEL_CHUNKS, MIN_PARALLEL_CHUNK_SAMPLES};
+use super::parallel::{ParallelJob, MAX_PARALLEL_CHUNKS, MIN_PARALLEL_CHUNK_SAMPLES};
 use super::progress::{clamped_progress_callback, started_progress_callback};
-use super::stitch::{assemble_transcript, sanitize_segment_bounds, strip_timestamp_tokens};
+use super::stitch::{display_transcript, sanitize_segment_bounds, strip_timestamp_tokens};
 #[cfg(feature = "diarization")]
 use super::words::dtw_segment_timestamps;
 use super::{
-    ContextProfile, DictationTimings, TranscribeOptions, TranscriptSegment, WhisperBackend,
-    CONTEXT_LOCK,
+    ContextProfile, DictationTimings, TranscribeOptions, TranscribeRequest, TranscriptSegment,
+    WhisperBackend,
 };
 
 /// Mean of per-token log-probabilities; `None` for an empty slice.
@@ -45,6 +44,28 @@ pub(super) fn segment_mean_logprob(
         }
     }
     mean_logprob(&plogs)
+}
+
+/// How a piece of audio is decoded, apart from the audio itself and the state
+/// it runs on.
+#[derive(Clone, Copy)]
+pub(super) struct DecodeSettings<'a> {
+    pub(super) model: WhisperModel,
+    pub(super) language: Language,
+    pub(super) options: &'a TranscribeOptions,
+    /// End-of-text token id of the loaded context; token ids at or above it
+    /// are special tokens, excluded from the avg-logprob diagnostic.
+    pub(super) token_eot: i32,
+}
+
+/// One chunk to decode: its audio, where it starts in the whole recording and
+/// how to decode it.
+#[derive(Clone, Copy)]
+pub(super) struct ChunkJob<'a> {
+    pub(super) audio: &'a [f32],
+    /// Seconds added to every segment time.
+    pub(super) offset_seconds: f64,
+    pub(super) settings: DecodeSettings<'a>,
 }
 
 /// Which decoding call site is asking for flags.
@@ -86,12 +107,39 @@ impl DecodeFlags {
     }
 }
 
-fn has_live_audio_signal(audio: &[f32]) -> Result<bool, DictationError> {
-    if audio.is_empty() {
-        return Err(DictationError::NoAudioCaptured);
+/// Re-decode the dense-speech spans the first pass left uncovered (#273),
+/// once, within the redecode budget. Re-decodes are plain requests: no hooks
+/// and no parallel chunks. A cancel (`cancelled`) during or after the
+/// re-decodes discards the partial result as `Cancelled`.
+///
+/// Split out of [`WhisperBackend::transcribe_with_gap_recovery`] so the
+/// wiring can be tested with a fake `decode`.
+fn recover_gaps(
+    audio: &[f32],
+    language: Language,
+    options: &TranscribeOptions,
+    model: WhisperModel,
+    segments: Vec<TranscriptSegment>,
+    cancelled: &dyn Fn() -> bool,
+    mut decode: impl FnMut(TranscribeRequest<'_>) -> Result<Vec<TranscriptSegment>, DictationError>,
+) -> Result<Vec<TranscriptSegment>, DictationError> {
+    let limits = crate::transcription::gap_redecode::RedecodeLimits::for_audio(
+        audio.len() as f64 / 16_000.0,
+        model.no_speech_threshold(),
+    );
+    let mut redecode_options = options.clone();
+    redecode_options.parallel_chunks = 1;
+    let recovered = crate::transcription::gap_redecode::redecode_uncovered_speech_cancellable(
+        audio,
+        segments,
+        &limits,
+        cancelled,
+        |slice| decode(TranscribeRequest::new(slice, language, &redecode_options)),
+    );
+    if cancelled() {
+        return Err(WhisperBackend::cancelled_error());
     }
-    crate::audio::speech::has_audio_signal(audio)
-        .map_err(|reason| DictationError::TranscriptionFailed(reason.to_string()))
+    Ok(recovered)
 }
 
 impl WhisperBackend {
@@ -110,13 +158,7 @@ impl WhisperBackend {
             return Err(DictationError::NoAudioCaptured);
         }
 
-        let is_multilingual = {
-            let guard = lock_or_recover(&self.context, CONTEXT_LOCK);
-            guard
-                .as_ref()
-                .ok_or(DictationError::ModelNotLoaded)?
-                .is_multilingual()
-        };
+        let is_multilingual = self.active_context()?.is_multilingual();
         if !is_multilingual {
             return Ok(None);
         }
@@ -153,14 +195,39 @@ impl WhisperBackend {
 
     /// Keep selection and inference in one transaction: startup warmup or a
     /// second language must not swap the active context between these steps.
-    /// Blocking; desktop callers must use spawn_blocking.
+    /// The request's hooks are honoured; a `live` request skips near-silent
+    /// audio before any model is acquired. Blocking; desktop callers must use
+    /// spawn_blocking.
     pub fn transcribe_dictation(
         &self,
         model: WhisperModel,
-        audio: &[f32],
-        language: Language,
-        options: &TranscribeOptions,
+        request: TranscribeRequest<'_>,
         timings: &mut DictationTimings,
+    ) -> Result<String, DictationError> {
+        *timings = DictationTimings::default();
+        let Some(request) = request.after_live_guard()? else {
+            return Ok(String::new());
+        };
+        self.dictation_transaction(
+            timings,
+            |timings| {
+                timings.model_cached = !self.needs_reload(model);
+                self.ensure_model_inner(model, ContextProfile::FlashAttention)
+            },
+            || self.transcribe_text(request),
+        )
+    }
+
+    /// The transaction behind [`Self::transcribe_dictation`]: wait for the load
+    /// lock, make the model active (`select`, which also records whether it was
+    /// already resident), then run `infer` while the selection stays pinned,
+    /// timing each step. Split out so the bookkeeping can be tested without a
+    /// loadable model.
+    pub(super) fn dictation_transaction(
+        &self,
+        timings: &mut DictationTimings,
+        select: impl FnOnce(&mut DictationTimings) -> Result<(), DictationError>,
+        infer: impl FnOnce() -> Result<String, DictationError>,
     ) -> Result<String, DictationError> {
         *timings = DictationTimings::default();
         let model_started = Instant::now();
@@ -172,36 +239,15 @@ impl WhisperBackend {
                 return Err(error);
             }
         };
-        timings.model_cached = !self.needs_reload(model);
-        let selection = self.ensure_model_inner(model, ContextProfile::FlashAttention);
+        let selection = select(timings);
         timings.model_ms = model_started.elapsed().as_secs_f64() * 1000.0;
         selection?;
         timings.model_ready_at = Some(Instant::now());
         timings.inference_started = true;
         let inference_started = Instant::now();
-        let result = self.transcribe_sync_with_options(audio, language, options, |_| {}, None);
+        let result = infer();
         timings.inference_ms = inference_started.elapsed().as_secs_f64() * 1000.0;
         result
-    }
-
-    /// Transactional live-microphone transcription. The signal guard runs
-    /// before model selection so empty, invalid, and near-silent captures do
-    /// not acquire or load a model. File/diagnostic callers should continue to
-    /// use [`Self::transcribe_dictation`] so intentional warmups remain raw.
-    pub fn transcribe_live_dictation(
-        &self,
-        model: WhisperModel,
-        audio: &[f32],
-        language: Language,
-        options: &TranscribeOptions,
-        timings: &mut DictationTimings,
-    ) -> Result<String, DictationError> {
-        *timings = DictationTimings::default();
-        if !has_live_audio_signal(audio)? {
-            info!("Skipping near-silent dictation: {} samples", audio.len());
-            return Ok(String::new());
-        }
-        self.transcribe_dictation(model, audio, language, options, timings)
     }
 
     pub fn warmup_model(
@@ -212,9 +258,7 @@ impl WhisperBackend {
         let mut timings = DictationTimings::default();
         self.transcribe_dictation(
             model,
-            &[0.0; 1600],
-            language,
-            &TranscribeOptions::default(),
+            TranscribeRequest::new(&[0.0; 1600], language, &TranscribeOptions::default()),
             &mut timings,
         )?;
         Ok(())
@@ -228,202 +272,96 @@ impl WhisperBackend {
         // 0.1s of silence is enough to build the compute graph and compile the
         // kernels (whisper pads to its 30s window internally regardless).
         let silence = vec![0.0f32; 1600];
-        self.transcribe_sync(&silence, language)?;
+        self.transcribe_text(TranscribeRequest::new(
+            &silence,
+            language,
+            &TranscribeOptions::default(),
+        ))?;
         info!("Whisper warmup complete");
         Ok(())
     }
 
-    /// Run transcription on loaded model (blocking — call from spawn_blocking)
-    pub fn transcribe_sync(
-        &self,
-        audio: &[f32],
-        language: Language,
-    ) -> Result<String, DictationError> {
-        self.transcribe_sync_with_progress(audio, language, |_| {})
-    }
-
-    /// Run transcription with a progress callback that receives percentage (0–100).
-    /// The callback is invoked from the whisper.cpp inference thread.
-    pub fn transcribe_sync_with_progress(
-        &self,
-        audio: &[f32],
-        language: Language,
-        on_progress: impl FnMut(i32) + Send + 'static,
-    ) -> Result<String, DictationError> {
-        self.transcribe_sync_with_progress_and_prompt(audio, language, None, on_progress)
-    }
-
-    /// Like `transcribe_sync_with_progress` but accepts an optional initial prompt
-    /// to prime the decoder with domain-specific vocabulary and context.
-    pub fn transcribe_sync_with_progress_and_prompt(
-        &self,
-        audio: &[f32],
-        language: Language,
-        prompt: Option<&str>,
-        on_progress: impl FnMut(i32) + Send + 'static,
-    ) -> Result<String, DictationError> {
-        let opts = TranscribeOptions {
-            prompt: prompt.map(str::to_string),
-            ..Default::default()
-        };
-        self.transcribe_sync_with_options(audio, language, &opts, on_progress, None)
-    }
-
-    /// Live microphone transcription with a conservative near-silence guard.
-    /// File/diagnostic APIs and intentional silent model warmup remain ungated.
-    pub fn transcribe_live_sync_with_options(
-        &self,
-        audio: &[f32],
-        language: Language,
-        opts: &TranscribeOptions,
-        on_progress: impl FnMut(i32) + Send + 'static,
-    ) -> Result<String, DictationError> {
-        if !has_live_audio_signal(audio)? {
-            info!("Skipping near-silent dictation: {} samples", audio.len());
-            return Ok(String::new());
-        }
-        self.transcribe_sync_with_options(audio, language, opts, on_progress, None)
-    }
-
-    /// Core transcription entry point. Honors the opt-in [`TranscribeOptions`]
-    /// (prompt, beam search, temperature fallback, VAD). Blocking — call from
+    /// Transcribe on the loaded model and return the display text: the raw
+    /// segment texts joined, then display-only non-speech marker normalization
+    /// (see [`display_transcript`]). Timestamped segment text stays raw; use
+    /// [`Self::transcribe_segments`] for it. Blocking — call from
     /// spawn_blocking.
-    ///
-    /// Thin wrapper over [`Self::transcribe_sync_with_options_segments`] that
-    /// concatenates the raw segment texts, then applies display-only
-    /// non-speech marker normalization. Timestamped segment text stays raw.
-    /// `on_encode_start`, when given, fires once compute resources are held
-    /// and mel/encoder work is about to begin (the silent window before the
-    /// first progress callback).
-    pub fn transcribe_sync_with_options(
+    pub fn transcribe_text(
         &self,
-        audio: &[f32],
-        language: Language,
-        opts: &TranscribeOptions,
-        on_progress: impl FnMut(i32) + Send + 'static,
-        on_encode_start: Option<&dyn Fn()>,
+        request: TranscribeRequest<'_>,
     ) -> Result<String, DictationError> {
-        let segments = self.transcribe_sync_with_options_segments(
-            audio,
-            language,
-            opts,
-            on_progress,
-            on_encode_start,
-        )?;
-        let transcript = assemble_transcript(&segments);
-        Ok(crate::transcription::normalize_nonspeech_markers(
-            transcript.trim(),
-            language,
-        ))
+        let language = request.language;
+        let segments = self.transcribe_segments(request)?;
+        Ok(display_transcript(&segments, language))
     }
 
     /// Plain-file transcription with recovery of speech Whisper's windowing
-    /// skipped (#273): runs [`Self::transcribe_sync_with_options_segments`],
-    /// then re-decodes dense-speech uncovered spans once, within a bounded
-    /// budget (see [`crate::transcription::gap_redecode`]). Shared by the CLI and the app's
-    /// plain file transcription; diarization and meeting paths do not use it.
-    pub fn transcribe_sync_with_gap_recovery(
+    /// skipped (#273): runs [`Self::transcribe_segments`], then re-decodes
+    /// dense-speech uncovered spans once, within a bounded budget (see
+    /// [`crate::transcription::gap_redecode`]). The request's hooks observe the
+    /// first pass only. Shared by the CLI and the app's plain file
+    /// transcription; diarization and meeting paths do not use it. The display
+    /// text of the result is [`display_transcript`].
+    pub fn transcribe_with_gap_recovery(
         &self,
-        audio: &[f32],
-        language: Language,
-        opts: &TranscribeOptions,
-        on_progress: impl FnMut(i32) + Send + 'static,
-        on_encode_start: Option<&dyn Fn()>,
+        request: TranscribeRequest<'_>,
     ) -> Result<Vec<TranscriptSegment>, DictationError> {
-        let segments = self.transcribe_sync_with_options_segments(
-            audio,
-            language,
-            opts,
-            on_progress,
-            on_encode_start,
-        )?;
+        // Near-silence is nothing to transcribe, not a first pass that came
+        // back empty and has gaps to recover.
+        let Some(request) = request.after_live_guard()? else {
+            return Ok(Vec::new());
+        };
+        let (audio, language, options) = (request.audio, request.language, request.options);
+        let segments = self.transcribe_segments(request)?;
         let model = self.loaded_model().ok_or(DictationError::ModelNotLoaded)?;
-        let limits = crate::transcription::gap_redecode::RedecodeLimits::for_audio(
-            audio.len() as f64 / 16_000.0,
-            model.no_speech_threshold(),
-        );
-        let mut redecode_opts = opts.clone();
-        redecode_opts.parallel_chunks = 1;
-        let recovered = crate::transcription::gap_redecode::redecode_uncovered_speech_cancellable(
+        recover_gaps(
             audio,
+            language,
+            options,
+            model,
             segments,
-            &limits,
             &|| self.is_cancel_requested(),
-            |slice| {
-                self.transcribe_sync_with_options_segments(
-                    slice,
-                    language,
-                    &redecode_opts,
-                    |_| {},
-                    None,
-                )
-            },
-        );
-        if self.is_cancel_requested() {
-            return Err(Self::cancelled_error());
-        }
-        Ok(recovered)
+            |request| self.transcribe_segments(request),
+        )
     }
 
-    /// Text form of [`Self::transcribe_sync_with_gap_recovery`], with the
-    /// same display normalization as [`Self::transcribe_sync_with_options`].
-    pub fn transcribe_sync_with_gap_recovery_text(
+    /// Core transcription entry point: the individual whisper segments with
+    /// timing and confidence metadata ([`TranscriptSegment`]). Honors the
+    /// request's [`TranscribeOptions`] (prompt, beam search, temperature
+    /// fallback, VAD, parallel chunks) and hooks. Blocking — call from
+    /// spawn_blocking.
+    pub fn transcribe_segments(
         &self,
-        audio: &[f32],
-        language: Language,
-        opts: &TranscribeOptions,
-        on_progress: impl FnMut(i32) + Send + 'static,
-        on_encode_start: Option<&dyn Fn()>,
-    ) -> Result<String, DictationError> {
-        let segments = self.transcribe_sync_with_gap_recovery(
+        request: TranscribeRequest<'_>,
+    ) -> Result<Vec<TranscriptSegment>, DictationError> {
+        let Some(request) = request.after_live_guard()? else {
+            return Ok(Vec::new());
+        };
+        let TranscribeRequest {
             audio,
             language,
-            opts,
-            on_progress,
-            on_encode_start,
-        )?;
-        let transcript = assemble_transcript(&segments);
-        Ok(crate::transcription::normalize_nonspeech_markers(
-            transcript.trim(),
-            language,
-        ))
-    }
-
-    /// Like [`Self::transcribe_sync_with_options`] but returns the individual
-    /// whisper segments with timing and confidence metadata
-    /// ([`TranscriptSegment`]) instead of one joined string. Blocking — call
-    /// from spawn_blocking.
-    pub fn transcribe_sync_with_options_segments(
-        &self,
-        audio: &[f32],
-        language: Language,
-        opts: &TranscribeOptions,
-        on_progress: impl FnMut(i32) + Send + 'static,
-        on_encode_start: Option<&dyn Fn()>,
-    ) -> Result<Vec<TranscriptSegment>, DictationError> {
+            options: opts,
+            hooks,
+            live: _,
+        } = request;
         if audio.is_empty() {
             return Err(DictationError::NoAudioCaptured);
         }
 
-        let model = self.loaded_model().ok_or(DictationError::ModelNotLoaded)?;
-
         // End-of-text token id, used to exclude special tokens from the
         // avg-logprob computation (matching whisper.cpp's confidence examples:
-        // text tokens have id < eot). Read in a short scope so the context
-        // lock is released before with_warm_state re-acquires it.
-        let token_eot = {
-            let guard = lock_or_recover(&self.context, CONTEXT_LOCK);
-            guard
-                .as_ref()
-                .ok_or(DictationError::ModelNotLoaded)?
-                .token_eot()
-        };
+        // text tokens have id < eot). Read from a context handle taken under
+        // one short lock and dropped again, so no runtime lock is held when
+        // with_warm_state acquires the state lock.
+        let (model, token_eot) = self.active_model_and_eot()?;
 
         // Leave 0% (#237) once compute resources are held, i.e. right after
         // `on_encode_start` fires (or on the first real callback), so the
         // phase never goes "transcribing 1%" -> "encoding" and state-lock
         // waiting is not counted as transcribing.
+        let on_progress = hooks.on_progress.unwrap_or_else(|| Box::new(|_| {}));
         let (on_progress, begin_progress) = started_progress_callback(on_progress);
+        let on_encode_start = hooks.on_encode_start;
         let encode_start_then_begin = || {
             if let Some(on_encode_start) = on_encode_start {
                 on_encode_start();
@@ -432,6 +370,12 @@ impl WhisperBackend {
         };
         let on_encode_start: Option<&dyn Fn()> = Some(&encode_start_then_begin);
 
+        let settings = DecodeSettings {
+            model,
+            language,
+            options: opts,
+            token_eot,
+        };
         let chunks = plan_chunks(
             audio,
             opts.parallel_chunks.clamp(1, MAX_PARALLEL_CHUNKS),
@@ -456,41 +400,44 @@ impl WhisperBackend {
                 }
                 self.transcribe_chunk_segments(
                     state,
-                    audio,
-                    0.0,
-                    model,
-                    language,
-                    opts,
-                    token_eot,
+                    ChunkJob {
+                        audio,
+                        offset_seconds: 0.0,
+                        settings,
+                    },
                     on_progress,
                 )
             });
         }
 
-        self.transcribe_parallel_segments(
+        self.transcribe_parallel_segments(ParallelJob {
             audio,
-            &chunks,
-            model,
-            language,
-            opts,
-            token_eot,
-            on_progress,
+            chunks: &chunks,
+            settings,
+            on_progress: Box::new(on_progress),
             on_encode_start,
-        )
+        })
     }
 
-    #[allow(clippy::too_many_arguments)]
+    /// Decode one chunk on `state` and return its segments, shifted by the
+    /// chunk's offset.
     pub(super) fn transcribe_chunk_segments(
         &self,
         state: &mut WhisperState,
-        audio: &[f32],
-        offset_seconds: f64,
-        model: WhisperModel,
-        language: Language,
-        opts: &TranscribeOptions,
-        token_eot: i32,
+        job: ChunkJob<'_>,
         on_progress: impl FnMut(i32) + 'static,
     ) -> Result<Vec<TranscriptSegment>, DictationError> {
+        let ChunkJob {
+            audio,
+            offset_seconds,
+            settings:
+                DecodeSettings {
+                    model,
+                    language,
+                    options: opts,
+                    token_eot,
+                },
+        } = job;
         let mut params = self.full_params(model, language, opts, on_progress)?;
         self.install_abort_callback(&mut params);
         state.full(params, audio).map_err(|error| {

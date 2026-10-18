@@ -12,7 +12,7 @@ use super::pianissimo_backend::{
     cancelled_error, map_engine_error, shared_client, warm_client, with_cancel_bridge,
 };
 use super::whisper_backend::DictationTimings;
-use super::{TranscribeOptions, WhisperBackend};
+use super::{TranscribeOptions, TranscribeRequest, WhisperBackend};
 
 /// Routes one live dictation operation to Whisper or Swedish Pianissimo.
 ///
@@ -60,9 +60,11 @@ impl LiveDictationBackend {
         timings: &mut DictationTimings,
     ) -> Result<String, DictationError> {
         if !self.pianissimo {
-            return self
-                .whisper
-                .transcribe_live_dictation(model, samples, language, options, timings);
+            return self.whisper.transcribe_dictation(
+                model,
+                TranscribeRequest::new(samples, language, options).live(),
+                timings,
+            );
         }
 
         *timings = DictationTimings::default();
