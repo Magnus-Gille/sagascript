@@ -1,6 +1,6 @@
 //! Conservative, deterministic suggestions for teaching a personal glossary.
 
-use crate::glossary::Glossary;
+use crate::glossary::{contains_delimiter, Glossary};
 
 const MAX_REPLACEMENT_WORDS: usize = 4;
 const MAX_REPLACEMENT_BYTES: usize = 96;
@@ -229,6 +229,36 @@ fn same_word(left: &str, right: &str) -> bool {
 
 fn is_bounded(word_count: usize, byte_count: usize) -> bool {
     word_count > 0 && word_count <= MAX_REPLACEMENT_WORDS && byte_count <= MAX_REPLACEMENT_BYTES
+}
+
+/// Whether a reviewer's edit of a preferred spelling is a term the dictionary
+/// can hold: within the bounds a suggestion keeps to (1-4 words, 96 bytes), with
+/// no whitespace around it and none of the characters of the dictionary grammar
+/// ([`contains_delimiter`]).
+pub fn is_reviewable_term(term: &str) -> bool {
+    term == term.trim()
+        && is_bounded(term.split_whitespace().count(), term.len())
+        && !contains_delimiter(term)
+}
+
+/// Add reviewed candidates to `glossary`: an alias candidate stores what was
+/// heard as an alias of the corrected spelling, a hint-only candidate stores the
+/// spelling alone. The one place the CLI (`glossary suggest --apply`) and the
+/// app (the training review) both apply what was reviewed.
+pub fn apply_glossary_candidates(glossary: &mut Glossary, candidates: &[GlossarySuggestion]) {
+    for candidate in candidates {
+        match candidate.kind {
+            GlossarySuggestionKind::Alias => {
+                glossary.upsert(
+                    candidate.canonical.clone(),
+                    vec![candidate.observed.clone()],
+                );
+            }
+            GlossarySuggestionKind::HintOnly => {
+                glossary.upsert(candidate.canonical.clone(), Vec::new());
+            }
+        }
+    }
 }
 
 fn is_represented_hint(glossary: &Glossary, canonical: &str) -> bool {
@@ -611,5 +641,68 @@ mod tests {
         println!(
             "glossary evaluation: recall={recall:.3}, unsafe_alias_rate={unsafe_alias_proposal_rate:.3}, p50={p50}ns, p95={p95}ns"
         );
+    }
+}
+
+#[cfg(test)]
+mod reviewed_tests {
+    use super::*;
+
+    fn candidate(
+        kind: GlossarySuggestionKind,
+        observed: &str,
+        canonical: &str,
+    ) -> GlossarySuggestion {
+        GlossarySuggestion {
+            observed: observed.into(),
+            canonical: canonical.into(),
+            kind,
+            context: String::new(),
+        }
+    }
+
+    #[test]
+    fn reviewed_candidates_become_aliases_and_hints() {
+        let mut glossary = Glossary::parse("Alpha");
+        apply_glossary_candidates(
+            &mut glossary,
+            &[
+                candidate(GlossarySuggestionKind::Alias, "Jille", "Gille"),
+                candidate(GlossarySuggestionKind::HintOnly, "", "Grimnir"),
+                candidate(GlossarySuggestionKind::Alias, "Gile", "Gille"),
+            ],
+        );
+        assert_eq!(glossary.render(), "Alpha\nGille = Jille | Gile\nGrimnir");
+    }
+
+    #[test]
+    fn no_candidate_leaves_the_glossary_as_it_was() {
+        let mut glossary = Glossary::parse("Alpha = a");
+        apply_glossary_candidates(&mut glossary, &[]);
+        assert_eq!(glossary.render(), "Alpha = a");
+    }
+
+    #[test]
+    fn a_reviewed_term_is_one_to_four_words_without_the_grammar() {
+        for good in ["Gille", "Magnus Gille", "one two three four", "Åsa"] {
+            assert!(is_reviewable_term(good), "{good}");
+        }
+        let long = "x".repeat(97);
+        for bad in [
+            "",
+            "   ",
+            " Gille",
+            "Gille ",
+            "one two three four five",
+            long.as_str(),
+            "a,b",
+            "a=b",
+            "a|b",
+            "a\nb",
+            "a\rb",
+        ] {
+            assert!(!is_reviewable_term(bad), "{bad:?}");
+        }
+        assert!(is_reviewable_term(&"x".repeat(96)));
     }
 }

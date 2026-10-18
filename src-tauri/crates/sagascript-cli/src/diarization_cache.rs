@@ -5,12 +5,12 @@ use std::path::{Path, PathBuf};
 use sagascript_core::diarization::{model::DiarizationModel, DiarizationAnalysis, DiarizeConfig};
 use sagascript_core::error::DictationError;
 use sagascript_core::fsutil::{self, PublishError, PublishErrorKind};
+use sagascript_core::hash::sha256_hex;
 use sagascript_core::transcription::diagnostics::{
     CoverageProfile, LanguageDetection, LanguageRegionDiagnostics,
 };
 use sagascript_core::transcription::TranscriptSegment;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 const CACHE_SCHEMA_VERSION: u32 = 6;
 const MAX_CACHE_BYTES: u64 = 256 * 1024 * 1024;
@@ -186,7 +186,7 @@ impl CacheIdentity {
             input_sha256: source_sha256.to_string(),
             language: language.to_string(),
             model: model.to_string(),
-            prompt_sha256: sha256_bytes(prompt.unwrap_or_default().as_bytes()),
+            prompt_sha256: sha256_hex(prompt.unwrap_or_default()),
             decoder_beam_size,
             temperature_fallback,
             vad_model_id: vad_enabled.then(|| VAD_MODEL_ID.to_string()),
@@ -515,25 +515,11 @@ pub(crate) fn publish_error(path: &Path, error: &PublishError) -> DictationError
     }
 }
 
+/// The digest of a test fixture, read whole.
 #[cfg(test)]
 fn sha256_file(path: &Path) -> Result<String, DictationError> {
-    let mut file = File::open(path).map_err(|error| cache_error(path, "hash", error))?;
-    let mut hasher = Sha256::new();
-    let mut buffer = [0_u8; 64 * 1024];
-    loop {
-        let read = file
-            .read(&mut buffer)
-            .map_err(|error| cache_error(path, "hash", error))?;
-        if read == 0 {
-            break;
-        }
-        hasher.update(&buffer[..read]);
-    }
-    Ok(format!("{:x}", hasher.finalize()))
-}
-
-fn sha256_bytes(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    let bytes = std::fs::read(path).map_err(|error| cache_error(path, "hash", error))?;
+    Ok(sha256_hex(bytes))
 }
 
 fn is_lowercase_sha256(value: &str) -> bool {

@@ -9,6 +9,7 @@ pub mod download;
 pub mod error;
 pub mod fsutil;
 pub mod glossary;
+pub mod hash;
 pub mod machine;
 pub mod meeting;
 pub mod models;

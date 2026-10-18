@@ -26,7 +26,7 @@
 //! the CLI's `transcribe` and the app's file transcription share.
 
 use crate::error::DictationError;
-use crate::settings::{HotkeyProfile, Language, Settings, SettingsError};
+use crate::settings::{HotkeyProfile, Language, Settings};
 use crate::transcription::{Glossary, FILE_TRANSCRIBE_BEAM};
 
 /// What a run asked for, already parsed.
@@ -62,14 +62,8 @@ impl RunSelection {
     ) -> Result<Self, DictationError> {
         let profile = match overrides.profile {
             Some(id) => settings
-                .resolved_hotkey_profiles()
-                .into_iter()
-                .find(|profile| profile.id == id)
-                .ok_or_else(|| {
-                    DictationError::from(SettingsError::UnknownDictationProfile {
-                        id: id.to_string(),
-                    })
-                })?,
+                .dictation_profile(id)
+                .map_err(DictationError::from)?,
             None => settings.default_profile(),
         };
         let selection = Self {

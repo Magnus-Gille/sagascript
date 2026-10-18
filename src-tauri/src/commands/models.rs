@@ -1,6 +1,8 @@
 //! Speech models: what each picker offers, what is downloaded or loaded, and
 //! the downloads themselves.
 
+use sagascript_core::machine;
+use sagascript_core::models::ModelInfo as CatalogEntry;
 use sagascript_core::settings::{
     FileModel, FileModelPreference, Language, Settings, SettingsError, WhisperModel,
 };
@@ -37,9 +39,7 @@ pub async fn get_loaded_model(
     let loaded = whisper.loaded_model();
     Ok(LoadedModelInfo {
         effective_model: effective.display_name().to_string(),
-        effective_model_id: serde_json::to_value(effective)
-            .and_then(serde_json::from_value::<String>)
-            .unwrap_or_else(|_| format!("{:?}", effective)),
+        effective_model_id: effective.id().to_string(),
         loaded_model: loaded.map(|m| m.display_name().to_string()),
         is_loaded: loaded == Some(effective),
         is_downloaded: model::is_model_downloaded(effective),
@@ -60,7 +60,6 @@ pub async fn get_model_info(
     let effective = ctrl.settings().dictation_model_for_profile(&profile.id)?;
     Ok(lineup_model_infos(
         profile.language,
-        pianissimo_supported(),
         Some(effective),
         Some(effective),
     ))
@@ -70,48 +69,41 @@ fn pianissimo_supported() -> bool {
     sagascript_core::transcription::pianissimo_backend::runtime_supported_on_this_os()
 }
 
-/// Wire description of one engine choice (Whisper model or Pianissimo).
-fn model_info_for(choice: FileModel, active: bool) -> ModelInfo {
-    match choice {
-        FileModel::Whisper(model) => ModelInfo {
-            id: serde_json::to_value(model)
-                .and_then(serde_json::from_value::<String>)
-                .expect("Whisper model has a stable ID"),
-            display_name: model.display_name().to_string(),
-            description: model.description().to_string(),
-            size_mb: model.size_mb(),
-            downloaded: model::is_model_downloaded(model),
-            active,
-        },
-        FileModel::PianissimoOriginal => ModelInfo {
-            id: "pianissimo-sv".into(),
-            display_name: "Pianissimo".into(),
-            description: if cfg!(windows) {
-                "Swedish file transcription · ONNX Runtime on the CPU · Windows on ARM (Snapdragon)"
-                    .into()
-            } else {
-                "Swedish file transcription · Core ML on the Neural Engine · macOS 14+ on Apple Silicon".into()
-            },
-            size_mb: pianissimo_model_size_mb(),
-            downloaded: pianissimo_model::is_downloaded(),
-            active,
-        },
+/// Wire description of one catalog entry. The picker shows what a download
+/// transfers, which for Pianissimo is its archive, not its size on disk.
+fn wire_info(info: &CatalogEntry, active: bool) -> ModelInfo {
+    ModelInfo {
+        id: info.id.to_string(),
+        display_name: info.display_name.to_string(),
+        description: info.description.to_string(),
+        size_mb: info.download_size_mb,
+        downloaded: info.installed,
+        active,
     }
 }
 
+/// Wire description of one engine choice (Whisper model or Pianissimo).
+fn model_info_for(choice: FileModel, active: bool) -> ModelInfo {
+    wire_info(&machine::model_info(choice), active)
+}
+
+/// The wire form of a picker's entries; `active` marks the selected model.
+fn wire_picker(entries: &[CatalogEntry], active: Option<FileModel>) -> Vec<ModelInfo> {
+    entries
+        .iter()
+        .map(|entry| wire_info(entry, active == Some(entry.model)))
+        .collect()
+}
+
 /// The app's model choices for `language` (after the "Recommended" entry),
-/// with the platform gate injected. `include` keeps a currently selected
+/// from the catalog of this machine. `include` keeps a currently selected
 /// model (for example a retired KB-Whisper Base) visible in the list.
 fn lineup_model_infos(
     language: Language,
-    pianissimo_supported: bool,
     include: Option<FileModel>,
     active: Option<FileModel>,
 ) -> Vec<ModelInfo> {
-    FileModel::app_lineup(language, pianissimo_supported, include)
-        .into_iter()
-        .map(|choice| model_info_for(choice, active == Some(choice)))
-        .collect()
+    wire_picker(&machine::app_picker(language, include), active)
 }
 
 /// Model choices for the pickers. `include` is the currently selected model
@@ -128,17 +120,7 @@ pub async fn get_file_model_options(
             Ok(FileModelPreference::PianissimoOriginal) => Some(FileModel::PianissimoOriginal),
             _ => None,
         });
-    Ok(lineup_model_infos(
-        language,
-        pianissimo_supported(),
-        include,
-        None,
-    ))
-}
-
-/// Download size of the Pianissimo model, in MB, for model listings.
-fn pianissimo_model_size_mb() -> u32 {
-    (pianissimo_model::download_size_bytes() / 1_048_576) as u32
+    Ok(lineup_model_infos(language, include, None))
 }
 
 #[tauri::command]

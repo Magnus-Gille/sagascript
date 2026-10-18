@@ -6,6 +6,15 @@
 
 use regex::Regex;
 
+/// Whether `text` holds a character the dictionary text reserves for its own
+/// grammar: entries end at a newline or a comma, `=` separates a term from its
+/// aliases and `|` the aliases from each other. A term or an alias that holds
+/// one would be read back as something else.
+pub fn contains_delimiter(text: &str) -> bool {
+    text.chars()
+        .any(|character| matches!(character, '\n' | '\r' | ',' | '=' | '|'))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GlossaryEntry {
     pub canonical: String,
@@ -94,6 +103,12 @@ impl Glossary {
 
     pub fn entries(&self) -> &[GlossaryEntry] {
         &self.entries
+    }
+
+    /// Whether any entry has an alias: the exact replacements that only a
+    /// profile with a known language may keep (a hint needs no language).
+    pub fn has_aliases(&self) -> bool {
+        self.entries.iter().any(|entry| !entry.aliases.is_empty())
     }
 
     pub fn upsert(&mut self, canonical: String, aliases: Vec<String>) {
@@ -503,5 +518,35 @@ mod tests {
             glossary.render(),
             "OpenRouter = open router | open vrouter\nmerge = merch"
         );
+    }
+
+    #[test]
+    fn the_grammar_characters_are_the_delimiters() {
+        for text in ["a\nb", "a\rb", "a,b", "a=b", "a|b", "=", "|"] {
+            assert!(contains_delimiter(text), "{text:?}");
+        }
+        for text in [
+            "",
+            "OpenRouter",
+            "open router",
+            "Åsa-Lena",
+            "a.b",
+            "a;b",
+            "a\tb",
+        ] {
+            assert!(!contains_delimiter(text), "{text:?}");
+        }
+        // What the delimiters mean to the parser: one of them splits or joins.
+        assert_eq!(Glossary::parse("a,b").entries().len(), 2);
+        assert_eq!(Glossary::parse("a=b").entries()[0].aliases, ["b"]);
+        assert_eq!(Glossary::parse("a=b|c").entries()[0].aliases, ["b", "c"]);
+    }
+
+    #[test]
+    fn a_glossary_has_aliases_only_if_an_entry_has_one() {
+        assert!(!Glossary::parse("").has_aliases());
+        assert!(!Glossary::parse("Alpha\nBeta, Gamma").has_aliases());
+        assert!(Glossary::parse("Alpha\nBeta = b").has_aliases());
+        assert!(!Glossary::parse("Alpha = ").has_aliases());
     }
 }

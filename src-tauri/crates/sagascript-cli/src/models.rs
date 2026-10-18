@@ -2,11 +2,13 @@ use clap::Args;
 use unicode_width::UnicodeWidthStr;
 
 use sagascript_core::error::DictationError;
-use sagascript_core::settings::{Language, WhisperModel};
+use sagascript_core::machine;
+use sagascript_core::models::ModelInfo;
+use sagascript_core::settings::Language;
 use sagascript_core::transcription::model;
 use sagascript_core::transcription::pianissimo_model;
 
-use super::transcribe::{model_id_string, parse_language, parse_model};
+use super::transcribe::{parse_language, parse_model};
 use crate::output::{errln, outln, Out};
 
 #[derive(Args)]
@@ -26,8 +28,8 @@ pub struct DownloadModelArgs {
 /// listed and usable through an explicit `--model` / `download-model` id.
 pub const HIDDEN_IN_APP_NOTE: &str = "(hidden in app)";
 
-fn list_note(model: WhisperModel, language: Language) -> &'static str {
-    if language == Language::Swedish && model.is_hidden_in_app() {
+fn list_note(info: &ModelInfo, language: Language) -> &'static str {
+    if language == Language::Swedish && info.hidden_in_app {
         HIDDEN_IN_APP_NOTE
     } else {
         ""
@@ -45,15 +47,34 @@ struct ModelRow {
     note: &'static str,
 }
 
-fn whisper_row(model: WhisperModel, language: Language, downloaded: bool) -> ModelRow {
+/// The row of one catalog entry in the list of `language`. The size column is
+/// the size on disk, which for Pianissimo is not what the app's picker shows
+/// (its download).
+fn model_row(info: &ModelInfo, language: Language) -> ModelRow {
     ModelRow {
-        id: model_id_string(model).to_string(),
-        name: model.display_name().to_string(),
-        size: format!("{} MB", model.size_mb()),
-        downloaded: yes_no(downloaded),
+        id: info.id.to_string(),
+        name: info.display_name.to_string(),
+        size: format!("{} MB", info.installed_size_mb),
+        downloaded: yes_no(info.installed),
         language: language.display_name().to_string(),
-        note: list_note(model, language),
+        note: list_note(info, language),
     }
+}
+
+/// The rows of the listed languages, each from that language's catalog.
+fn catalog_rows(
+    languages: &[Language],
+    catalog: impl Fn(Language) -> Vec<ModelInfo>,
+) -> Vec<ModelRow> {
+    languages
+        .iter()
+        .flat_map(|&language| {
+            catalog(language)
+                .iter()
+                .map(|info| model_row(info, language))
+                .collect::<Vec<_>>()
+        })
+        .collect()
 }
 
 fn yes_no(value: bool) -> &'static str {
@@ -123,36 +144,12 @@ pub fn list(args: ListModelsArgs, out: &Out) -> Result<(), DictationError> {
     let languages: Vec<Language> = if let Some(lang_str) = &args.language {
         vec![parse_language(lang_str)?]
     } else {
-        vec![
-            Language::English,
-            Language::Swedish,
-            Language::Norwegian,
-            Language::Finnish,
-            Language::Auto,
-        ]
+        Language::ALL.to_vec()
     };
 
-    let mut rows = Vec::new();
-    for lang in &languages {
-        for &m in WhisperModel::models_for_language(*lang) {
-            rows.push(whisper_row(m, *lang, model::is_model_downloaded(m)));
-        }
-        if *lang == Language::Swedish
-            && sagascript_core::transcription::pianissimo_backend::runtime_supported_on_this_os()
-        {
-            rows.push(ModelRow {
-                id: "pianissimo-sv".into(),
-                name: "Pianissimo".into(),
-                size: format!(
-                    "{} MB",
-                    pianissimo_model::installed_size_bytes() / 1_048_576
-                ),
-                downloaded: yes_no(pianissimo_model::is_downloaded()),
-                language: lang.display_name().to_string(),
-                note: "",
-            });
-        }
-    }
+    // Only the diarization rows below add to it.
+    #[cfg_attr(not(feature = "diarization"), allow(unused_mut))]
+    let mut rows = catalog_rows(&languages, machine::catalog);
 
     // Diarization models (only when no language filter) share the table so
     // their columns line up with the Whisper rows above.
@@ -493,6 +490,21 @@ mod progress_tests {
 #[cfg(test)]
 mod lineup_tests {
     use super::*;
+    use crate::transcribe::model_id_string;
+    use sagascript_core::models::{self, FileModel};
+    use sagascript_core::settings::WhisperModel;
+    use sagascript_core::test_support::model_env::FixedModelEnv;
+
+    fn whisper_row(model: WhisperModel, language: Language, installed: bool) -> ModelRow {
+        let env = FixedModelEnv {
+            downloaded: if installed { vec![model] } else { Vec::new() },
+            ..FixedModelEnv::new()
+        };
+        model_row(
+            &models::model_info(FileModel::Whisper(model), &env),
+            language,
+        )
+    }
 
     #[test]
     fn list_marks_retired_swedish_models_but_keeps_their_ids() {
@@ -519,6 +531,61 @@ mod lineup_tests {
         for model in WhisperModel::models_for_language(Language::Swedish) {
             assert_eq!(parse_model(model_id_string(*model)).unwrap(), *model);
         }
+    }
+
+    fn table(languages: &[Language], env: &FixedModelEnv) -> Vec<String> {
+        format_table(&catalog_rows(languages, |language| {
+            models::catalog(language, env)
+        }))
+    }
+
+    /// Where Pianissimo runs, its row follows the Swedish models, carries its
+    /// size on disk (1 400 MB here; the app's picker shows the 1 000 MB
+    /// download), and says nothing about the app.
+    #[test]
+    fn swedish_list_closes_with_pianissimo_at_its_installed_size() {
+        let env = FixedModelEnv {
+            pianissimo_downloaded: true,
+            downloaded: vec![WhisperModel::KbWhisperLarge],
+            ..FixedModelEnv::with_pianissimo()
+        };
+        assert_eq!(
+            table(&[Language::Swedish], &env),
+            [
+                "MODEL ID           NAME                  SIZE  DOWNLOADED  LANGUAGE",
+                "-------------------------------------------------------------------",
+                "kb-whisper-tiny    KB-Whisper Tiny      40 MB  no          Swedish   (hidden in app)",
+                "kb-whisper-base    KB-Whisper Base      60 MB  no          Swedish   (hidden in app)",
+                "kb-whisper-small   KB-Whisper Small    190 MB  no          Swedish   (hidden in app)",
+                "kb-whisper-medium  KB-Whisper Medium   514 MB  no          Swedish",
+                "kb-whisper-large   KB-Whisper Large   1031 MB  yes         Swedish",
+                "pianissimo-sv      Pianissimo         1400 MB  yes         Swedish",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_host_without_pianissimo_lists_no_pianissimo_row() {
+        let lines = table(&Language::ALL, &FixedModelEnv::new());
+        assert!(lines.iter().all(|line| !line.contains("pianissimo")));
+        // Header, separator and every language's models, once each.
+        let models: usize = Language::ALL
+            .iter()
+            .map(|language| WhisperModel::models_for_language(*language).len())
+            .sum();
+        assert_eq!(lines.len(), 2 + models);
+    }
+
+    #[test]
+    fn the_language_column_is_the_language_listed() {
+        let lines = table(&[Language::Finnish, Language::Auto], &FixedModelEnv::new());
+        // `base` serves both: one row under each language.
+        let base: Vec<&String> = lines
+            .iter()
+            .filter(|line| line.starts_with("base "))
+            .collect();
+        assert_eq!(base.len(), 2, "{lines:#?}");
+        assert!(base[0].contains("Finnish") && base[1].contains("Auto-detect"));
     }
 }
 

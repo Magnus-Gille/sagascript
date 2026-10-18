@@ -64,6 +64,9 @@ fn the_table_has_accepted_and_refused_cases_for_each_operation() {
         "Hotkey",
         "Profiles",
         "ProfileModel",
+        "DictionaryAdd",
+        "InitialPrompt",
+        "Reset",
     ] {
         assert!(accepted.contains(kind), "{kind}: no accepted case");
     }
@@ -75,6 +78,8 @@ fn the_table_has_accepted_and_refused_cases_for_each_operation() {
         "Hotkey",
         "Profiles",
         "ProfileModel",
+        "DictionaryAdd",
+        "Reset",
     ] {
         assert!(refused.contains(kind), "{kind}: no refused case");
     }
@@ -98,4 +103,47 @@ fn a_language_change_starts_the_legacy_model_fields_over_for_both_surfaces() {
         assert!(persisted.auto_select_model);
         assert_eq!(persisted.default_profile().language, Language::Norwegian);
     }
+}
+
+/// The keys `config reset` is a setter for, and the defaults they go back to.
+#[test]
+fn reset_rows_are_the_setters_with_the_default_value() {
+    let defaults = Settings::default();
+    assert_eq!(DEFAULT_HOTKEY, defaults.hotkey);
+    let reset_keys: BTreeSet<&str> = cases()
+        .into_iter()
+        .filter_map(|case| match case.op {
+            Op::Reset(key) => Some(key),
+            _ => None,
+        })
+        .collect();
+    for key in [
+        "language",
+        "hotkey_mode",
+        "show_overlay",
+        "auto_paste",
+        "vad_enabled",
+        "beam_size",
+        "temperature_fallback",
+        "engine_prewarm",
+        "engine_idle_unload_minutes",
+        "file_transcription_model",
+        "hotkey",
+    ] {
+        assert!(reset_keys.contains(key), "{key}: no reset row");
+    }
+    assert!(matches!(reset_as_op("beam_size"), Op::BeamSize(0)));
+    assert!(matches!(reset_as_op("show_overlay"), Op::ShowOverlay(true)));
+    assert!(matches!(
+        reset_as_op("language"),
+        Op::Language(Language::English)
+    ));
+}
+
+/// `config reset` of a legacy model key is not a setter with the default value;
+/// the table says so rather than pretend.
+#[test]
+#[should_panic(expected = "is not the setter with the default value")]
+fn the_legacy_model_keys_have_no_reset_row() {
+    reset_as_op("whisper_model");
 }

@@ -372,13 +372,7 @@ pub(super) fn ensure_known_profile(
     settings: &Settings,
     profile_id: &str,
 ) -> Result<(), CommandError> {
-    settings
-        .resolved_hotkey_profiles()
-        .into_iter()
-        .find(|profile| profile.id == profile_id)
-        .ok_or_else(|| SettingsError::UnknownDictationProfile {
-            id: profile_id.to_string(),
-        })?;
+    settings.dictation_profile(profile_id)?;
     Ok(())
 }
 
