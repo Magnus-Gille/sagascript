@@ -591,7 +591,7 @@ fn print_doctor(report: &DoctorReport, json: bool, out: &Out) -> Result<(), Writ
 // ---- warm -----------------------------------------------------------------
 
 fn warm(seconds: Option<u64>, out: &Out) -> Result<(), DictationError> {
-    let config = pianissimo_backend::engine_config()?;
+    let config = pianissimo_backend::engine_config(&sagascript_core::machine::load())?;
     pianissimo_model::verify_downloaded()?;
     let client = quiet(&config);
     let started = Instant::now();

@@ -238,7 +238,10 @@ fn change_profile_model(
     // Outside the controller lock: an unload talks to the engine host.
     sagascript_core::transcription::pianissimo_backend::unload_if_unused(&changed.settings);
     if changed.warm {
-        sagascript_core::transcription::pianissimo_backend::warm_in_background("profile_change");
+        sagascript_core::transcription::pianissimo_backend::warm_in_background(
+            "profile_change",
+            sagascript_core::machine::load,
+        );
     }
     Ok(())
 }

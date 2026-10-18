@@ -6,6 +6,7 @@ use std::time::Instant;
 
 use crate::error::DictationError;
 use crate::models::{Language, WhisperModel};
+use crate::settings::Settings;
 
 use super::engine_host::{CancelToken, EngineHostClient};
 use super::pianissimo_backend::{
@@ -24,31 +25,62 @@ use super::{TranscribeOptions, TranscribeRequest, WhisperBackend};
 /// and ignores Whisper-only decoder settings.
 pub struct LiveDictationBackend {
     whisper: Arc<WhisperBackend>,
-    pianissimo: bool,
-    /// Explicit engine client (tests); `None` uses the process-global one.
-    engine: Option<EngineHostClient>,
+    engine: Engine,
     cancelled: AtomicBool,
     active_job: Mutex<Option<CancelToken>>,
 }
 
+/// What an operation transcribes with.
+enum Engine {
+    Whisper,
+    /// The process-global engine host. `load_settings` is called when the
+    /// operation attaches to it (see [`LiveDictationBackend::new`]).
+    Pianissimo {
+        load_settings: fn() -> Settings,
+    },
+    /// An explicit engine client (tests).
+    Client(EngineHostClient),
+}
+
 impl LiveDictationBackend {
-    pub fn new(whisper: Arc<WhisperBackend>, pianissimo: bool) -> Self {
-        Self {
+    /// `pianissimo` selects the engine of the operation. For Pianissimo,
+    /// `load_settings` (`machine::load`) is called when the operation attaches
+    /// to the shared engine host, after the audio has been checked and not
+    /// before: the idle setting that engine is configured from is read at that
+    /// moment, as `shared_client` always did. It is never called for Whisper,
+    /// so Whisper dictation reads no settings file.
+    pub fn new(
+        whisper: Arc<WhisperBackend>,
+        pianissimo: bool,
+        load_settings: fn() -> Settings,
+    ) -> Self {
+        Self::with(
             whisper,
-            pianissimo,
-            engine: None,
-            cancelled: AtomicBool::new(false),
-            active_job: Mutex::new(None),
-        }
+            if pianissimo {
+                Engine::Pianissimo { load_settings }
+            } else {
+                Engine::Whisper
+            },
+        )
     }
 
     /// Pianissimo dictation on an explicit engine client instead of the
     /// process-global one.
     pub fn with_engine(whisper: Arc<WhisperBackend>, engine: EngineHostClient) -> Self {
+        Self::with(whisper, Engine::Client(engine))
+    }
+
+    fn with(whisper: Arc<WhisperBackend>, engine: Engine) -> Self {
         Self {
-            engine: Some(engine),
-            ..Self::new(whisper, true)
+            whisper,
+            engine,
+            cancelled: AtomicBool::new(false),
+            active_job: Mutex::new(None),
         }
+    }
+
+    fn is_pianissimo(&self) -> bool {
+        !matches!(self.engine, Engine::Whisper)
     }
 
     pub fn transcribe(
@@ -59,7 +91,7 @@ impl LiveDictationBackend {
         options: &TranscribeOptions,
         timings: &mut DictationTimings,
     ) -> Result<String, DictationError> {
-        if !self.pianissimo {
+        if !self.is_pianissimo() {
             return self.whisper.transcribe_dictation(
                 model,
                 TranscribeRequest::new(samples, language, options).live(),
@@ -103,8 +135,9 @@ impl LiveDictationBackend {
         let model_started = Instant::now();
         let acquired = with_cancel_bridge(&self.cancelled, &token, || {
             match &self.engine {
-                Some(client) => Ok(client.clone()),
-                None => shared_client(),
+                Engine::Client(client) => Ok(client.clone()),
+                Engine::Pianissimo { load_settings } => shared_client(&load_settings()),
+                Engine::Whisper => unreachable!("handled before the audio checks"),
             }
             .and_then(|client| warm_client(&client, &token).map(|warm| (client, warm)))
         });
@@ -172,7 +205,7 @@ impl LiveDictationBackend {
     /// Abort this operation. Cancellation is sticky, covering requests made
     /// before the engine is reached as well as requests during inference.
     pub fn request_abort(&self) {
-        if self.pianissimo {
+        if self.is_pianissimo() {
             self.cancelled.store(true, Ordering::SeqCst);
             if let Ok(active) = self.active_job.lock() {
                 if let Some(token) = active.as_ref() {
@@ -195,10 +228,24 @@ impl LiveDictationBackend {
 mod tests {
     use super::*;
     use crate::transcription::WhisperBackend;
+    use std::sync::atomic::AtomicUsize;
+
+    /// For the paths that must not reach the settings: calling it fails the test.
+    fn settings_must_not_be_read() -> Settings {
+        panic!("the settings file was read where it must not be");
+    }
+
+    fn pianissimo_that_reads_no_settings() -> LiveDictationBackend {
+        LiveDictationBackend::new(
+            Arc::new(WhisperBackend::new()),
+            true,
+            settings_must_not_be_read,
+        )
+    }
 
     #[test]
     fn pianissimo_silence_does_not_load_or_infer() {
-        let backend = LiveDictationBackend::new(Arc::new(WhisperBackend::new()), true);
+        let backend = pianissimo_that_reads_no_settings();
         for audio in [vec![0.0; 1600], vec![0.00001; 1600]] {
             let mut timings = DictationTimings::default();
             let result = backend
@@ -218,7 +265,7 @@ mod tests {
 
     #[test]
     fn pianissimo_invalid_capture_never_starts_model_work() {
-        let backend = LiveDictationBackend::new(Arc::new(WhisperBackend::new()), true);
+        let backend = pianissimo_that_reads_no_settings();
         for audio in [vec![], vec![f32::NAN; 320], vec![f32::INFINITY; 320]] {
             let mut timings = DictationTimings::default();
             assert!(backend
@@ -237,7 +284,7 @@ mod tests {
 
     #[test]
     fn cancellation_before_native_start_does_not_require_a_model() {
-        let backend = LiveDictationBackend::new(Arc::new(WhisperBackend::new()), true);
+        let backend = pianissimo_that_reads_no_settings();
         backend.request_abort();
 
         let mut timings = DictationTimings::default();
@@ -258,7 +305,7 @@ mod tests {
 
     #[test]
     fn pianissimo_adapter_rejects_non_swedish_without_starting_runtime() {
-        let backend = LiveDictationBackend::new(Arc::new(WhisperBackend::new()), true);
+        let backend = pianissimo_that_reads_no_settings();
         let mut timings = DictationTimings::default();
 
         let error = backend
@@ -273,5 +320,52 @@ mod tests {
 
         assert!(error.to_string().contains("only available for Swedish"));
         assert!(!timings.inference_started);
+    }
+
+    /// When the settings are read (#372): where `shared_client` used to read them,
+    /// as the operation attaches to the engine host, and never on the Whisper path.
+    #[test]
+    fn pianissimo_reads_the_settings_once_when_it_attaches_to_the_engine() {
+        static READS: AtomicUsize = AtomicUsize::new(0);
+        fn counted() -> Settings {
+            READS.fetch_add(1, Ordering::SeqCst);
+            Settings::default()
+        }
+        let backend = LiveDictationBackend::new(Arc::new(WhisperBackend::new()), true, counted);
+        let mut timings = DictationTimings::default();
+        // Audio with a signal gets past the checks to the engine; this host has no
+        // engine to run (unsupported, or no bundled host), so the attach fails.
+        let result = backend.transcribe(
+            WhisperModel::Base,
+            &[0.1; 1_600],
+            Language::Swedish,
+            &TranscribeOptions::default(),
+            &mut timings,
+        );
+        assert!(result.is_err());
+        assert!(timings.model_acquisition_started);
+        assert_eq!(READS.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn whisper_dictation_never_reads_the_settings() {
+        let backend = LiveDictationBackend::new(
+            Arc::new(WhisperBackend::new()),
+            false,
+            settings_must_not_be_read,
+        );
+        let mut timings = DictationTimings::default();
+        // Silence is skipped by Whisper's own guard before any model is needed;
+        // the point is that the Whisper path gets that far without the settings.
+        let text = backend
+            .transcribe(
+                WhisperModel::Base,
+                &[0.0; 1_600],
+                Language::Swedish,
+                &TranscribeOptions::default(),
+                &mut timings,
+            )
+            .unwrap();
+        assert!(text.is_empty());
     }
 }

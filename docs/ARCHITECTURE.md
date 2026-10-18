@@ -105,24 +105,27 @@ stdout. `transcribe`'s three output modes live in one `BatchSink` (`transcribe/o
 The layers below are *textual*: the imports of `models/`, `glossary.rs` and `settings/` point
 downward, with one exception (below), and `crates/sagascript-core/tests/module_layering.rs`
 checks that from the source text (every path the code names, `use` groups and renames
-expanded) for the rules marked "tested". The rest is convention. At run time one edge still
-closes a loop, through a compatibility shim.
+expanded) for the rules marked "tested". The rest is convention. The one exception is a
+compatibility shim and closes no loop at run time.
 
 | Layer | Modules | Rule |
 |---|---|---|
 | Leaves | `models/`, `glossary.rs` | `models/` is the model catalog: `WhisperModel` (21 models, ids via `id()` / `from_id()` / `FromStr`, `ALL`), its download URLs and SHA-256 in `sources.rs` (pinned revisions; `scripts/generate-third-party-notices.mjs` only asserts that six reviewed URL prefixes still appear in the model sources, `sources.rs` among them), `FileModel` (a Whisper model or Pianissimo) and `Language`. Imports neither `settings` nor `transcription` (tested) and returns no `whisper_rs` type: `transcription::whisper` (`whisper/words.rs`) maps a model to its DTW preset. `glossary.rs` (personal dictionary parser) imports nothing from the crate (tested). |
 | Settings | `settings/` | Reads the catalog. Imports nothing from `transcription` (tested): what is downloaded and whether Pianissimo can run arrive as arguments, as `LineupEnv` / `MachineProbe` into the store and as the `pianissimo_supported` and readiness arguments of the `*_gated` methods of `Settings`. `ops.rs` is the settings operations of section 2.2; they take the Pianissimo gate and the Accessibility answer (`Accessibility`) the same way. |
-| Runtime | `transcription/` (Whisper, Pianissimo, engine host, model downloads), `audio/`, `download.rs`, `meeting/`, `diarization/` | `transcription` reads `models` and, in `pianissimo_backend` alone, `settings` (the engine config). `transcription::model` and `pianissimo_model` answer whether a model is on disk; `pianissimo_backend::runtime_supported_on_this_os` answers whether Pianissimo runs. |
+| Runtime | `transcription/` (Whisper, Pianissimo, engine host, model downloads), `audio/`, `download.rs`, `meeting/`, `diarization/` | `transcription` reads `models` and the `Settings` type, and never loads the settings file: `pianissimo_backend::{engine_config, shared_client}` take the `Settings` their callers load with `machine::load` (only `settings/` and `machine.rs` name the store; tested). `transcription::model` and `pianissimo_model` answer whether a model is on disk; `pianissimo_backend::runtime_supported_on_this_os` answers whether Pianissimo runs. |
 | Machine | `machine.rs` | The only place that feeds the runtime's answers to settings: `ThisMachine` (a `MachineProbe`), `load` / `update` / `try_update`, and the `Settings` methods without a `_gated` suffix (`dictation_model_for_profile`, `effective_file_model_for`, `warm_model_plan`, `apply_language_selection`, ...), each its `_gated` sibling plus this machine's probe. |
 
-Old paths stay for one release (#372): `settings::{WhisperModel, FileModel, Language}`
-re-export `models`, `transcription::{glossary, Glossary, ...}` re-export `glossary`,
-`settings::store::{load, update, try_update}` re-export `machine`, and `lib.rs` re-exports the
-old top-level paths of the modules that moved into `meeting/` and `diarization/`
-(`meeting_media`, `meeting_review`, `meeting_reprocess`, `meeting_reprocess_plan`,
-`meeting_reprocess_proposal`, `speaker_hint`, `diarization_report` and
-`diarization_{evaluation, qualification, reference, strata}`). Each goes when the CLI and the
-app import the new path.
+Old paths stay for one release (#372). The re-exports of `lib.rs` (the old top-level paths of
+the modules that moved into `meeting/` and `diarization/`: `meeting_media`, `meeting_review`,
+`meeting_reprocess`, `meeting_reprocess_plan`, `meeting_reprocess_proposal`, `speaker_hint`,
+`diarization_report` and `diarization_{evaluation, qualification, reference, strata}`) and the
+one in `settings/store.rs` (`settings::store::{load, update, try_update}`, which re-export
+`machine`) are marked `// Shim (#372)` and `#[doc(hidden)]`; the CLI and the app import the
+new paths, and a test (`nothing_in_the_workspace_uses_a_compatibility_path`) keeps it so. Each
+is deleted after the next release. Two other families of old paths are still imported by the
+CLI and the app and wait for their own change: `settings::{WhisperModel, FileModel, Language}`
+(re-exports of `models`) and `transcription::{glossary, Glossary, ...}` (re-exports of
+`glossary`), with `pianissimo_backend::UNSUPPORTED_MESSAGE`.
 
 **The subsystems.**
 
@@ -167,21 +170,20 @@ gets a directory of its own.
 | `sync` | Poison-tolerant locking ([ADR 0005](adr/0005-mutex-poison-policy.md)), used by `audio`, `download`, `transcription`, the CLI and the app. |
 | `test_support` | Fixtures made of core types for the tests of the crates above core, compiled only under `cfg(test)` or the `test-support` feature (#363). |
 
-**The one edge that goes up, and the loop behind it.** The last re-export is a line in
-`settings/store.rs` that names `machine`, which imports transcription: textually the only
-upward import in `settings/` (tested; the test lists the three paths it allows). At run time
-it closes a loop: `transcription::pianissimo_backend::engine_config` and `shared_client`
-call `settings::store::load()`, which is that shim, so transcription calls `machine::load()`,
-which calls transcription's probes. It is harmless today (the probes do not call back into
-settings) but it is not a layering. Removing it takes, in order: (1) the CLI and the app call
-`machine::{load, update, try_update}`; (2) `engine_config` and `shared_client` receive the
-`Settings` they read instead of loading them, which changes *when* the settings are read, so
-it is a behaviour change of its own and not part of this move; (3) delete the re-export line
-and empty the expected list in the test.
+**The one edge that goes up.** The last re-export is a line in `settings/store.rs` that names
+`machine`, which imports transcription: textually the only upward import in `settings/`
+(tested; the test lists the three paths it allows). It used to close a loop at run time:
+`transcription::pianissimo_backend::engine_config` and `shared_client` called
+`settings::store::load()`, which is that shim, so transcription called `machine::load()`,
+which calls transcription's probes. They now receive the `Settings` they use (`shared_client`
+reads `engine_idle_unload_minutes` only): the CLI and the app call `machine::load()` where the
+read used to happen, and `LiveDictationBackend::new` and `warm_in_background`, which attach to
+the engine later, take `machine::load` as a function and call it at that point, so no settings
+file is read earlier than it was. Deleting the line, after the next release, is then the only
+step left.
 
 **Planned:** the rest of [#372](https://github.com/Magnus-Gille/sagascript/issues/372):
-`pub(crate)` narrowing, a `testing` module for the test seams, and the CLI and the app moving to
-the new paths so the re-exports can go.
+`pub(crate)` narrowing and a `testing` module for the test seams.
 
 ## 2. Data flows
 

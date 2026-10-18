@@ -371,11 +371,13 @@ fn precheck() -> Result<PathBuf, DictationError> {
     Ok(host)
 }
 
-/// Engine-host configuration for the current machine and settings, after the
+/// Engine-host configuration for the current machine and `settings`, after the
 /// platform, host and model-presence checks (no model verification, no spawn).
-pub fn engine_config() -> Result<EngineHostConfig, DictationError> {
+/// The caller loads the settings (`machine::load`): transcription does not read
+/// the settings file (#372).
+pub fn engine_config(settings: &Settings) -> Result<EngineHostConfig, DictationError> {
     let host = precheck()?;
-    Ok(config_for_host(host, &crate::settings::store::load()))
+    Ok(config_for_host(host, settings))
 }
 
 // ---- process-global client ------------------------------------------------
@@ -400,13 +402,18 @@ fn shared_slot() -> &'static Mutex<Option<Shared>> {
 }
 
 /// The one [`EngineHostClient`] of this process. Created lazily (this does not
-/// spawn the host); recreated when the host path, model or idle settings change.
-/// The model artifact is verified once, when the client is created.
-pub fn shared_client() -> Result<EngineHostClient, DictationError> {
+/// spawn the host); recreated when the host path, model or the idle setting of
+/// `settings` (`engine_idle_unload_minutes`, the only field read) changes between
+/// two calls: the next call then verifies the model again, shuts the old client
+/// down and creates a new one (see `client_in_slot`). The model artifact is
+/// verified once per client, when it is created.
+///
+/// The caller loads the settings (`machine::load`) when it asks, as this
+/// function itself did before (#372).
+pub fn shared_client(settings: &Settings) -> Result<EngineHostClient, DictationError> {
     let host = precheck()?;
-    let settings = crate::settings::store::load();
-    let config = config_for_host(host, &settings);
-    let key = shared_key(&config, &settings);
+    let config = config_for_host(host, settings);
+    let key = shared_key(&config, settings);
     client_in_slot(
         shared_slot(),
         key,
@@ -511,8 +518,8 @@ pub fn cached_host_identity() -> Option<(String, Option<String>)> {
 
 /// Start the host if needed and complete `hello` only (no model load) so the
 /// build identity is known. Blocking; call from a blocking context.
-pub fn refresh_host_identity() -> Option<(String, Option<String>)> {
-    if let Ok(client) = shared_client() {
+pub fn refresh_host_identity(settings: &Settings) -> Option<(String, Option<String>)> {
+    if let Ok(client) = shared_client(settings) {
         if let Ok(snapshot) = client.connect() {
             remember_host_identity(&snapshot);
         }
@@ -695,7 +702,11 @@ pub fn unload_if_unused(settings: &Settings) -> bool {
 /// Load the model in the background so the next utterance starts warm. Returns
 /// immediately; never blocks the caller (hotkey path, main thread). Silently
 /// does nothing when Pianissimo is unsupported or not installed.
-pub fn warm_in_background(reason: &'static str) {
+///
+/// `load_settings` (`machine::load`) is called on the warm-up thread, when it
+/// attaches to the shared engine, not by the caller: the settings file is not
+/// read on the hotkey path, and the read happens as late as it always did.
+pub fn warm_in_background(reason: &'static str, load_settings: fn() -> Settings) {
     static IN_FLIGHT: AtomicBool = AtomicBool::new(false);
     if !runtime_supported_on_this_os() || !pianissimo_model::is_downloaded() {
         return;
@@ -718,7 +729,7 @@ pub fn warm_in_background(reason: &'static str) {
         .spawn(move || {
             LOAD_SOURCE.with(|source| source.set(LoadSource::Warm));
             let started = Instant::now();
-            match shared_client()
+            match shared_client(&load_settings())
                 .map_err(|e| e.to_string())
                 .and_then(|client| {
                     if client.snapshot().loaded {
@@ -868,18 +879,22 @@ pub struct PianissimoBackend {
 }
 
 impl PianissimoBackend {
-    pub fn start() -> Result<Self, DictationError> {
+    pub fn start(settings: &Settings) -> Result<Self, DictationError> {
         static NEVER_CANCEL: AtomicBool = AtomicBool::new(false);
-        Self::start_with_cancel(&NEVER_CANCEL)
+        Self::start_with_cancel(&NEVER_CANCEL, settings)
     }
 
     /// Attach to the process-global engine client. Does not load the model; the
-    /// first transcription (or [`Self::warm_up`]) does.
-    pub fn start_with_cancel(cancelled: &AtomicBool) -> Result<Self, DictationError> {
+    /// first transcription (or [`Self::warm_up`]) does. `settings` are the
+    /// current ones (see [`shared_client`]).
+    pub fn start_with_cancel(
+        cancelled: &AtomicBool,
+        settings: &Settings,
+    ) -> Result<Self, DictationError> {
         if cancelled.load(Ordering::SeqCst) {
             return Err(cancelled_error());
         }
-        let client = shared_client()?;
+        let client = shared_client(settings)?;
         if cancelled.load(Ordering::SeqCst) {
             return Err(cancelled_error());
         }

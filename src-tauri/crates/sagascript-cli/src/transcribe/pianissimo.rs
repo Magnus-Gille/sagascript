@@ -134,7 +134,10 @@ pub(super) fn run_pianissimo_batch(
     }
     let load_started = Instant::now();
     let cancel_flag = crate::cancel::flag();
-    let backend = std::sync::Arc::new(PianissimoBackend::start_with_cancel(cancel_flag)?);
+    let backend = std::sync::Arc::new(PianissimoBackend::start_with_cancel(
+        cancel_flag,
+        &sagascript_core::machine::load(),
+    )?);
     if let Some(weight) = args.glossary_boost {
         let mut terms: Vec<String> = glossary
             .entries()

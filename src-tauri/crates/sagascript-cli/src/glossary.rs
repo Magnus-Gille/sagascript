@@ -360,7 +360,9 @@ fn load_training_input(
                 out,
                 "Transcribing training input locally with Pianissimo..."
             );
-            PianissimoBackend::start()?.transcribe(&audio, |_| {})?.text
+            PianissimoBackend::start(&machine::load())?
+                .transcribe(&audio, |_| {})?
+                .text
         }
     };
     Ok(glossary.correct_text(&raw).0)

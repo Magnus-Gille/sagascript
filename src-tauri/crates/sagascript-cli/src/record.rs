@@ -349,7 +349,11 @@ fn transcribe_pianissimo_record(
     duration: f64,
     out: &Out,
 ) -> Result<String, DictationError> {
-    let backend = LiveDictationBackend::new(Arc::new(WhisperBackend::new()), true);
+    let backend = LiveDictationBackend::new(
+        Arc::new(WhisperBackend::new()),
+        true,
+        sagascript_core::machine::load,
+    );
     transcribe_pianissimo_with_progress(duration, out, |progress| {
         progress(0);
         let result = backend.transcribe(

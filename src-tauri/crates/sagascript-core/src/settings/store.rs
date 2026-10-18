@@ -583,22 +583,19 @@ where
     update_locked(&path, legacy_settings_paths(), machine, mutate)
 }
 
-// Shims (#372): the loads and updates that probe *this* machine moved to
-// `crate::machine`, above settings and transcription, so this module no longer
-// imports the transcription code to answer them. These re-exports keep the old
-// paths `settings::store::{load, update, try_update}` working for the CLI and
-// the app. They are the one upward import left in `settings/`, and a loop at
+// Shims (#372): the loads and updates that probe *this* machine live in
+// `crate::machine`, above settings and transcription, so this module does not
+// import the transcription code to answer them. These re-exports keep the old
+// paths `settings::store::{load, update, try_update}` for callers outside the
+// workspace; nothing inside it uses them (tests/module_layering.rs checks that).
+// They are the one upward import left in `settings/`, and no longer a loop at
 // run time: `transcription::pianissimo_backend::{engine_config, shared_client}`
-// call `store::load()` themselves, i.e. this line, so transcription reaches
-// `machine::load()` and `machine` reaches transcription's probes again.
+// take the `Settings` from their callers instead of calling `load` here.
 //
-// Removal prerequisites, in order (tests/module_layering.rs says the same):
-//   1. the CLI and the app call `sagascript_core::machine::{load, update,
-//      try_update}`;
-//   2. `engine_config` and `shared_client` receive the `Settings` instead of
-//      loading them. That changes when the settings are read, so it is a
-//      behaviour change for its own change, not part of the layering move;
-//   3. delete this line and empty the expected list in that test.
+// To remove them, after the next release: delete the line below, and in
+// tests/module_layering.rs the test
+// `only_the_compat_shim_in_the_store_names_the_machine_module` and the
+// `store_shims` assertions.
 // Shim (#372): kept one release; remove after the next release.
 #[doc(hidden)]
 pub use crate::machine::{load, try_update, update};

@@ -6,12 +6,12 @@
 //!        ^
 //!     settings       reads the model catalog; the machine is injected
 //!        ^
-//!  transcription     reads settings (the engine host config)
+//!  transcription     takes settings from its callers (the engine host config)
 //!        ^
 //!     machine        composes settings with transcription's probes
 //! ```
 //!
-//! # The one upward line, and why it exists
+//! # The one upward line
 //!
 //! `settings/store.rs` re-exports `machine::{load, update, try_update}`:
 //!
@@ -20,17 +20,18 @@
 //! ```
 //!
 //! It is a shim for the old paths `settings::store::{load, update, try_update}`,
-//! which nothing in the workspace calls any more, and it is an edge from settings up to
-//! the layer that imports transcription. Behind it is a second, runtime edge:
-//! `transcription::pianissimo_backend::{engine_config, shared_client}` call
-//! `settings::store::load()`, so transcription reaches `machine::load()` and
-//! `machine` reaches transcription's probes again. Removing the line is a
-//! deliberate step, not a clean-up: first the CLI and the app call
-//! `machine::*`, and those two functions receive the `Settings` they read
-//! (which changes *when* the settings are read: behaviour, so a separate
-//! change). Then the expected list in the last layering test becomes empty.
-//! Until then it must name exactly these three paths, so no other `machine`
-//! import can slip in beside them.
+//! kept for one release for callers outside the workspace (nothing in it uses
+//! them: `nothing_in_the_workspace_uses_a_compatibility_path`), and it is an edge
+//! from settings up to the layer that imports transcription. It is no longer a
+//! loop at run time: `transcription::pianissimo_backend::{engine_config,
+//! shared_client}` used to call `settings::store::load()`, so transcription
+//! reached `machine::load()` and `machine` reached transcription's probes
+//! again. They now receive the `Settings` (or, for the two deferred callers, the
+//! function that loads them), and only `settings/` and `machine.rs` name the
+//! store at all (`only_settings_and_the_machine_name_the_store`). Until the line
+//! is deleted, `only_the_compat_shim_in_the_store_names_the_machine_module` lets
+//! it name exactly these three paths, so no other `machine` import can slip in
+//! beside them.
 //!
 //! # What the scan sees
 //!
@@ -421,6 +422,41 @@ fn only_the_compat_shim_in_the_store_names_the_machine_module() {
     );
 }
 
+/// Whether `path` is `crate::a::b..` or the bare `a::b..` for the given modules.
+fn names_path(path: &str, modules: &[&str]) -> bool {
+    let mut segments = path.split("::").peekable();
+    if segments.peek() == Some(&"crate") {
+        segments.next();
+    }
+    modules
+        .iter()
+        .all(|module| segments.next() == Some(*module))
+}
+
+/// Settings are loaded by their callers, never by the code that needs them to
+/// configure itself: outside `settings/` and `machine.rs` (which composes the
+/// store with this machine's probes) no module of core names the store. That is
+/// what `transcription` did in `pianissimo_backend` until #372 part 2b, which
+/// closed a loop at run time through `machine`.
+#[test]
+fn only_settings_and_the_machine_name_the_store() {
+    let found: Vec<_> = tree_paths("")
+        .into_iter()
+        .filter(|(file, path)| {
+            !file.starts_with("settings/")
+                && file != "machine.rs"
+                && file != "machine_tests.rs"
+                && names_path(path, &["settings", "store"])
+        })
+        .collect();
+    assert!(
+        found.is_empty(),
+        "the settings store is named only by settings/ and machine.rs; take a `&Settings` from the \
+         caller (which loads it with `machine::load`) instead:\n{}",
+        report(&found)
+    );
+}
+
 // ---- the compatibility paths have no users -------------------------------
 
 /// The old names `lib.rs` re-exports (`pub use crate::path as name;`, or the
@@ -555,11 +591,8 @@ const SHIM_DEFINITIONS: [&str; 2] = [
 ];
 
 /// Core files that still use a compatibility path, until their own change lands:
-/// `(file, path)`. Empty when nothing is left.
-const STILL_USING_A_COMPAT_PATH: [(&str, &str); 1] = [(
-    "crates/sagascript-core/src/transcription/pianissimo_backend.rs",
-    "crate::settings::store::load",
-)];
+/// `(file, path)`. Empty: nothing is left.
+const STILL_USING_A_COMPAT_PATH: [(&str, &str); 0] = [];
 
 /// "No internal users" (#372, part 2b): the CLI, the app, the tests and the
 /// rest of core name the new paths, so a compatibility path can be deleted
