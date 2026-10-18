@@ -9,6 +9,8 @@
 //!
 //! - `ThisMachine`, the `MachineProbe` of this machine;
 //! - [`load`], [`update`] and [`try_update`], the store entry points with it;
+//! - `ThisMachine` as the `ModelEnv` of the model lists: [`catalog`] (`sagascript
+//!   list-models`), [`app_picker`] (the app's pickers) and [`model_info`] (#373);
 //! - the [`Settings`] methods without a `_gated` suffix (`dictation_model_for_profile`,
 //!   `set_profile_model`, `effective_file_model_for`, ...): each is its `_gated`
 //!   sibling with this machine's probe, so callers that do not inject keep one
@@ -17,7 +19,7 @@
 //! The old paths `settings::store::{load, update, try_update}` re-export the
 //! entry points for one release.
 
-use crate::models::{FileModel, Language, WhisperModel};
+use crate::models::{self, FileModel, Language, ModelEnv, ModelInfo, WhisperModel};
 use crate::settings::{
     store, FileModelPreference, HotkeyProfile, LineupEnv, MachineProbe, ModelResetNotice, Settings,
 };
@@ -55,6 +57,46 @@ impl MachineProbe for ThisMachine {
             whisper_downloaded: &model::is_model_downloaded,
         }
     }
+}
+
+/// The model lists asked of this machine.
+impl ModelEnv for ThisMachine {
+    fn runs_pianissimo(&self) -> bool {
+        pianissimo_supported()
+    }
+
+    fn pianissimo_downloaded(&self) -> bool {
+        pianissimo_model::is_downloaded()
+    }
+
+    fn pianissimo_download_bytes(&self) -> u64 {
+        pianissimo_model::download_size_bytes()
+    }
+
+    fn pianissimo_installed_bytes(&self) -> u64 {
+        pianissimo_model::installed_size_bytes()
+    }
+
+    fn whisper_downloaded(&self, whisper: WhisperModel) -> bool {
+        model::is_model_downloaded(whisper)
+    }
+}
+
+/// One model as the lists show it: [`models::model_info`] on this machine.
+pub fn model_info(choice: FileModel) -> ModelInfo {
+    models::model_info(choice, &ThisMachine)
+}
+
+/// Every model that serves `language`, as `sagascript list-models` prints them:
+/// [`models::catalog`] on this machine.
+pub fn catalog(language: Language) -> Vec<ModelInfo> {
+    models::catalog(language, &ThisMachine)
+}
+
+/// What the app's model pickers offer for `language`: [`models::app_picker`]
+/// on this machine.
+pub fn app_picker(language: Language, include: Option<FileModel>) -> Vec<ModelInfo> {
+    models::app_picker(language, include, &ThisMachine)
 }
 
 /// Load settings from disk, migrating an older settings file (see
