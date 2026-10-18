@@ -8,7 +8,6 @@ pub mod diarization;
 pub mod diarization_evaluation;
 pub mod diarization_qualification;
 pub mod diarization_reference;
-pub mod diarization_report;
 pub mod diarization_strata;
 pub mod download;
 pub mod error;
@@ -32,6 +31,7 @@ pub use crate::meeting::reprocess::proposal as meeting_reprocess_proposal;
 pub use crate::meeting::review as meeting_review;
 
 // Old paths of modules that moved into `diarization/` (#372), same rule.
+pub use crate::diarization::report as diarization_report;
 pub use crate::diarization::speaker_hint;
 
 /// Test fixtures made of core types (#363); see the module documentation.

@@ -1,6 +1,8 @@
 //! Versioned, local diarization evidence. Distances and temporal support are
 //! diagnostic measurements, never calibrated speaker probabilities.
 
+mod projection;
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};

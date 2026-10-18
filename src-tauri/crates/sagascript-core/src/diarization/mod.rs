@@ -145,7 +145,7 @@ impl DiarizationAnalysis {
                         || item.overlap_seconds < 0.0
                         || item.active_speech_seconds
                             > region_seconds
-                                + crate::diarization_report::ACTIVITY_DURATION_TOLERANCE
+                                + crate::diarization::report::ACTIVITY_DURATION_TOLERANCE
                         || item.overlap_seconds > item.active_speech_seconds + 1e-9
                 })
             {

@@ -1,13 +1,13 @@
 //! Diagnostic projection of cached analysis; does not change its labels.
 use std::collections::BTreeMap;
 
-use crate::diarization_report::{
-    activity_spans, AttributionEvidence, DiarizationParameters, DiarizationReport, EmbeddingStatus,
-    RegionEvidence,
+use super::{
+    activity_spans, AttributionEvidence, AttributionReason, DiarizationParameters,
+    DiarizationReport, EmbeddingStatus, RegionEvidence,
 };
 use crate::error::DictationError;
 
-use super::{
+use crate::diarization::{
     is_usable_embedding, DiarizationAnalysis, DiarizeConfig, SpeakerSegment, EMBEDDING_DIM,
 };
 
@@ -133,7 +133,7 @@ impl DiarizationAnalysis {
                 || word.end > duration
                 || word.end < word.start
             {
-                word.reason = crate::diarization_report::AttributionReason::InvalidTimestamp;
+                word.reason = AttributionReason::InvalidTimestamp;
                 word.start = if word.start.is_finite() {
                     word.start.clamp(0.0, duration)
                 } else {
@@ -172,13 +172,13 @@ impl DiarizationAnalysis {
             speaker_hint: config.speaker_hint,
             speaker_hint_outcome: None,
             segmentation_model_sha256: Some(
-                super::model::DiarizationModel::PyannoteSegmentation3
+                crate::diarization::model::DiarizationModel::PyannoteSegmentation3
                     .download_integrity()
                     .sha256
                     .into(),
             ),
             embedding_model_sha256: Some(
-                super::model::DiarizationModel::WeSpeakerResNet34LM
+                crate::diarization::model::DiarizationModel::WeSpeakerResNet34LM
                     .download_integrity()
                     .sha256
                     .into(),

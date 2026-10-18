@@ -9,8 +9,8 @@ use std::fmt;
 
 use serde::{Deserialize, Deserializer, Serialize};
 
+use crate::diarization::report::DiarizationReport;
 use crate::diarization::speaker_hint::{SpeakerCountHint, SpeakerHintOutcome};
-use crate::diarization_report::DiarizationReport;
 
 const SCHEMA_VERSION: u32 = 1;
 const ACTIVITY_SCHEMA_VERSION: u32 = 2;
