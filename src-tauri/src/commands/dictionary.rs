@@ -1,17 +1,15 @@
 //! The personal dictionary: per-profile glossaries and the training suggestions
 //! that extend them.
 
-use sagascript_core::settings::{Language, Settings};
+use sagascript_core::settings::{DictionaryRefusal, Settings};
 use sagascript_core::transcription::{
-    suggest_glossary_candidates, Glossary, GlossarySuggestion, GlossarySuggestionKind,
+    apply_glossary_candidates, is_reviewable_term, suggest_glossary_candidates, Glossary,
+    GlossarySuggestion, GlossarySuggestionKind,
 };
 use tauri::State;
 use tracing::info;
 
-use super::{
-    correct_in_memory, ensure_known_profile, lock_controller, try_persist_and_mirror,
-    SharedController,
-};
+use super::{correct_in_memory, lock_controller, try_persist_and_mirror, SharedController};
 use crate::command_error::CommandError;
 
 #[tauri::command]
@@ -86,18 +84,19 @@ fn reconcile_profile_dictionary_after_conflict(
     }
 }
 
+/// The rule (a profile that detects its language holds no aliases) is core's,
+/// `Settings::ensure_alias_profile`; this is what the training review calls its
+/// refusal.
 fn ensure_learning_profile(settings: &Settings, profile_id: &str) -> Result<(), String> {
-    ensure_known_profile(settings, profile_id)?;
-    if settings
-        .resolved_hotkey_profiles()
-        .iter()
-        .any(|profile| profile.id == profile_id && profile.language == Language::Auto)
-    {
-        return Err(
-            "Deterministic dictionary training requires a profile with an explicit language".into(),
-        );
-    }
-    Ok(())
+    settings
+        .ensure_alias_profile(profile_id)
+        .map_err(|refusal| match refusal {
+            DictionaryRefusal::AutoDetectAliases => {
+                "Deterministic dictionary training requires a profile with an explicit language"
+                    .to_string()
+            }
+            other => other.to_string(),
+        })
 }
 
 /// The fields a dictionary save writes: the controller takes the written
@@ -113,21 +112,12 @@ fn set_profile_glossary_in(
     source: String,
     expected_source: Option<&str>,
 ) -> Result<(), CommandError> {
-    ensure_known_profile(settings, profile_id)?;
-    let auto_language = settings
-        .resolved_hotkey_profiles()
-        .iter()
-        .any(|profile| profile.id == profile_id && profile.language == Language::Auto);
-    if auto_language
-        && Glossary::parse(&source)
-            .entries()
-            .iter()
-            .any(|entry| !entry.aliases.is_empty())
-    {
-        return Err(
-            "Auto-detect profiles support dictionary hints, not deterministic aliases".into(),
-        );
-    }
+    // The rules of the dictionary are core's (unknown profile, then an alias in
+    // an Auto-detect profile); the comparison with what the editor read comes
+    // between them and the write.
+    settings
+        .check_dictionary_source(profile_id, &source)
+        .map_err(|refusal| refusal.to_string())?;
     let current_source = settings
         .profile_glossaries
         .get(profile_id)
@@ -135,8 +125,8 @@ fn set_profile_glossary_in(
         .unwrap_or_default();
     ensure_expected_dictionary_source(current_source, expected_source)?;
     settings
-        .profile_glossaries
-        .insert(profile_id.to_owned(), source);
+        .set_profile_dictionary(profile_id, source)
+        .map_err(|refusal| refusal.to_string())?;
     Ok(())
 }
 
@@ -241,19 +231,7 @@ fn apply_reviewed_training_candidates(
         .entry(profile_id.to_string())
         .or_default();
     let mut scoped = Glossary::parse(source);
-    for candidate in accepted {
-        match candidate.kind {
-            GlossarySuggestionKind::Alias => {
-                scoped.upsert(
-                    candidate.canonical.clone(),
-                    vec![candidate.observed.clone()],
-                );
-            }
-            GlossarySuggestionKind::HintOnly => {
-                scoped.upsert(candidate.canonical.clone(), Vec::new());
-            }
-        }
-    }
+    apply_glossary_candidates(&mut scoped, accepted);
     *source = scoped.render();
     Ok(())
 }
@@ -263,15 +241,7 @@ fn training_term_key(value: &str) -> String {
 }
 
 fn validate_edited_training_candidate(candidate: &GlossarySuggestion) -> Result<(), String> {
-    let canonical = candidate.canonical.trim();
-    if canonical.is_empty()
-        || canonical != candidate.canonical
-        || canonical.len() > 96
-        || canonical.split_whitespace().count() > 4
-        || canonical
-            .chars()
-            .any(|character| matches!(character, '\n' | '\r' | ',' | '=' | '|'))
-    {
+    if !is_reviewable_term(&candidate.canonical) {
         return Err(
             "Edited dictionary terms must be 1-4 words without glossary delimiters".to_string(),
         );

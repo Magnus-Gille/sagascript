@@ -18,10 +18,10 @@ use std::str::FromStr;
 
 use sagascript_core::error::DictationError;
 use sagascript_core::settings::{
-    validate_hotkey, Accessibility, EnginePrewarm, FileModel, FileModelPreference, HotkeyMode,
-    HotkeyProfile, Language, ModelResetNotice, Settings, WhisperModel,
+    validate_hotkey, Accessibility, DictionaryRefusal, EnginePrewarm, FileModel,
+    FileModelPreference, HotkeyMode, HotkeyProfile, Language, ModelResetNotice, Settings,
+    WhisperModel,
 };
-use sagascript_core::transcription::Glossary;
 
 use super::shortcut_warning;
 
@@ -458,21 +458,16 @@ fn whisper_model_value(settings: &Settings) -> String {
 }
 
 /// The old `initial_prompt` command is a compatibility alias for *merging*
-/// default-profile entries and aliases. Never replace a profile dictionary: it may
-/// contain the user's reviewed deterministic aliases and has no implicit
-/// rollback file of its own.
+/// default-profile entries and aliases (`Settings::merge_default_dictionary`).
+/// Never replace a profile dictionary: it may contain the user's reviewed
+/// deterministic aliases and has no implicit rollback file of its own.
 fn append_legacy_hints(settings: &mut Settings, value: &str) -> Result<(), DictationError> {
-    let id = settings.default_profile().id;
-    let source = settings.profile_glossaries.entry(id).or_default();
-    if value.trim().is_empty() && !source.trim().is_empty() {
-        return Err(DictationError::SettingsError(
-            "Use `sagascript glossary clear --yes` to remove reviewed profile entries".into(),
-        ));
-    }
-    let mut glossary = Glossary::parse(source);
-    for entry in Glossary::parse(value).entries() {
-        glossary.upsert(entry.canonical.clone(), entry.aliases.clone());
-    }
-    *source = glossary.render();
-    Ok(())
+    settings.merge_default_dictionary(value).map_err(|refusal| {
+        DictationError::SettingsError(match refusal {
+            DictionaryRefusal::WouldEraseEntries => {
+                "Use `sagascript glossary clear --yes` to remove reviewed profile entries".into()
+            }
+            other => other.to_string(),
+        })
+    })
 }

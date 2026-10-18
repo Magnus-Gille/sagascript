@@ -1,5 +1,5 @@
 use super::*;
-use sagascript_core::settings::HotkeyProfile;
+use sagascript_core::settings::{HotkeyProfile, Language};
 
 #[cfg(test)]
 fn reconcile_global_dictionary_after_conflict(

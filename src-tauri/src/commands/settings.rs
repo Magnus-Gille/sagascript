@@ -372,11 +372,9 @@ pub(super) fn persist_show_overlay(
 
 pub(super) fn ensure_known_profile(settings: &Settings, profile_id: &str) -> Result<(), String> {
     settings
-        .resolved_hotkey_profiles()
-        .into_iter()
-        .find(|profile| profile.id == profile_id)
-        .ok_or_else(|| format!("Unknown dictation profile '{profile_id}'"))?;
-    Ok(())
+        .dictation_profile(profile_id)
+        .map(drop)
+        .map_err(|unknown| unknown.to_string())
 }
 
 #[tauri::command]
