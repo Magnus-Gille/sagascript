@@ -9,7 +9,7 @@
 //
 // Not for tests that run before `npm ci` (the Windows build identity gates in ci.yml's
 // test-windows): they must read text with node:fs only.
-import { readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
 
@@ -42,6 +42,9 @@ function normalizeJob(id, job) {
     needs: list(job.needs),
     condition: job.if === undefined ? undefined : String(job.if),
     runsOn: job["runs-on"],
+    uses: job.uses,
+    strategy: job.strategy,
+    defaultShell: job.defaults?.run?.shell,
     timeoutMinutes: job["timeout-minutes"],
     env: job.env ?? {},
     outputs: job.outputs ?? {},
@@ -56,6 +59,7 @@ export function parseWorkflow(text) {
   const jobs = Object.entries(doc.jobs ?? {}).map(([id, job]) => normalizeJob(id, job));
   return {
     doc,
+    defaultShell: doc.defaults?.run?.shell,
     jobs,
     jobIds: jobs.map((job) => job.id),
     job(id) {
@@ -68,11 +72,27 @@ export function parseWorkflow(text) {
 
 export const loadWorkflow = (file = "ci.yml") => parseWorkflow(readRepoFile(`.github/workflows/${file}`));
 
-/** A local composite action: `{ inputs, steps }`. */
-export function loadAction(name) {
-  const doc = parse(readRepoFile(`.github/actions/${name}/action.yml`));
+/** The file names of every workflow under .github/workflows, sorted. */
+export const workflowFiles = () =>
+  readdirSync(`${REPO_ROOT}.github/workflows`)
+    .filter((file) => /\.ya?ml$/.test(file))
+    .sort();
+
+/** The names of every local action under .github/actions, sorted. */
+export const actionNames = () =>
+  readdirSync(`${REPO_ROOT}.github/actions`, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && existsSync(`${REPO_ROOT}.github/actions/${entry.name}/action.yml`))
+    .map((entry) => entry.name)
+    .sort();
+
+/** Parses the text of a composite action into `{ doc, inputs, steps }`. */
+export function parseAction(text) {
+  const doc = parse(text);
   return { doc, inputs: doc.inputs ?? {}, steps: (doc.runs?.steps ?? []).map(normalizeStep) };
 }
+
+/** A local composite action: `{ inputs, steps }`. */
+export const loadAction = (name) => parseAction(readRepoFile(`.github/actions/${name}/action.yml`));
 
 /** The input a composite action step is called with, falling back to the action's default. */
 export function actionInput(action, step, name) {
