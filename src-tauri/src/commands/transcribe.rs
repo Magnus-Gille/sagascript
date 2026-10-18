@@ -7,7 +7,9 @@ use std::time::Duration;
 use sagascript_core::audio::decoder;
 use sagascript_core::error::DictationError;
 use sagascript_core::settings::{Settings, SettingsError};
-use sagascript_core::transcription::{model, ContextProfile, Glossary, TranscribeOptions};
+use sagascript_core::transcription::{
+    model, ContextProfile, Glossary, TranscribeOptions, TranscribeRequest,
+};
 use tauri::State;
 use tracing::{error, info, warn};
 
@@ -351,16 +353,12 @@ pub async fn transcribe_training_file(
             );
         }
         whisper_ref.with_model(effective_model, ContextProfile::FlashAttention, |backend| {
-            backend.transcribe_sync_with_options(
-                &audio,
-                language,
-                &opts,
+            backend.transcribe_text(TranscribeRequest::new(&audio, language, &opts).on_progress(
                 move |progress| {
                     let _ = progress_app
                         .emit_event(crate::events::event::TRANSCRIPTION_PROGRESS, progress);
                 },
-                None,
-            )
+            ))
         })
     });
 

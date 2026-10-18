@@ -33,6 +33,7 @@ const SCHEMA_PATH = join(REPO_ROOT, "docs/code-health-objective-v1.schema.json")
 const TOOL_DIR = process.env.CODE_HEALTH_TOOL_DIR ?? "";
 const MAX_CAPTURE_BYTES = 128 * 1024 * 1024;
 const MAX_COMMAND_MS = 15 * 60 * 1000;
+export const CI_API_TOOL = Object.freeze({ name: "github-actions-rest-api", version: "2022-11-28" });
 export const KNIP_ARGS = ["--reporter", "json", "--no-progress", "--no-config-hints", "--no-exit-code"];
 
 const config = JSON.parse(readFileSync(CONFIG_PATH, "utf8"));
@@ -1092,7 +1093,7 @@ function collectCi(observedAt) {
       payload,
       included_refs: [payload.run_inventory_ref],
       excluded_refs: [],
-      tool: { name: "GitHub Actions REST API", version: "2022-11-28" },
+      tool: CI_API_TOOL,
       command: "GET /repos/{owner}/{repo}/actions/workflows/ci.yml/runs and attempt-1 jobs with pagination",
       workflowRef,
       scope_policy: {

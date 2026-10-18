@@ -7,7 +7,10 @@ use std::time::Duration;
 use sagascript_core::audio::decoder;
 use sagascript_core::error::DictationError;
 use sagascript_core::settings::{FileModel, SettingsError};
-use sagascript_core::transcription::{recommended_parallel_chunks, ContextProfile, Glossary};
+use sagascript_core::transcription::whisper_backend::display_transcript;
+use sagascript_core::transcription::{
+    recommended_parallel_chunks, ContextProfile, Glossary, TranscribeRequest,
+};
 use tauri::State;
 use tracing::{error, info, warn};
 
@@ -344,16 +347,15 @@ pub async fn transcribe_file(
                     PlainPhase::Encoding,
                 );
             };
-            backend.transcribe_sync_with_gap_recovery_text(
-                &audio,
-                language,
-                &opts,
-                move |pct| {
-                    let _ =
-                        app_progress.emit_event(crate::events::event::TRANSCRIPTION_PROGRESS, pct);
-                },
-                Some(&on_encode_start),
-            )
+            let segments = backend.transcribe_with_gap_recovery(
+                TranscribeRequest::new(&audio, language, &opts)
+                    .on_progress(move |pct| {
+                        let _ = app_progress
+                            .emit_event(crate::events::event::TRANSCRIPTION_PROGRESS, pct);
+                    })
+                    .on_encode_start(&on_encode_start),
+            )?;
+            Ok(display_transcript(&segments, language))
         })
     });
 

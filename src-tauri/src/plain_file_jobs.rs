@@ -5,7 +5,10 @@ use crate::command_error::CommandError;
 use crate::commands::FileTranscriptionContext;
 use crate::events::{EmitEvent, PlainPhase, PlainTranscriptionProgress};
 use sagascript_core::sync::lock_or_recover;
-use sagascript_core::transcription::{pianissimo_backend::PianissimoBackend, Glossary};
+use sagascript_core::transcription::whisper_backend::display_transcript;
+use sagascript_core::transcription::{
+    pianissimo_backend::PianissimoBackend, Glossary, TranscribeRequest,
+};
 use sagascript_core::{
     audio::decoder,
     error::DictationError,
@@ -303,22 +306,21 @@ pub async fn transcribe(
                     };
                     let progress_app = app.clone();
                     let id = run.id.clone();
-                    backend.transcribe_sync_with_gap_recovery_text(
-                        &audio,
-                        context.language,
-                        &options,
-                        move |pct| {
-                            let _ = progress_app.emit_event(
-                                crate::events::event::PLAIN_TRANSCRIPTION_PROGRESS,
-                                PlainTranscriptionProgress {
-                                    run_id: &id,
-                                    phase: PlainPhase::Transcribing,
-                                    percent: Some(pct.clamp(0, 100) as u8),
-                                },
-                            );
-                        },
-                        Some(&encode_start),
-                    )
+                    let segments = backend.transcribe_with_gap_recovery(
+                        TranscribeRequest::new(&audio, context.language, &options)
+                            .on_progress(move |pct| {
+                                let _ = progress_app.emit_event(
+                                    crate::events::event::PLAIN_TRANSCRIPTION_PROGRESS,
+                                    PlainTranscriptionProgress {
+                                        run_id: &id,
+                                        phase: PlainPhase::Transcribing,
+                                        percent: Some(pct.clamp(0, 100) as u8),
+                                    },
+                                );
+                            })
+                            .on_encode_start(&encode_start),
+                    )?;
+                    Ok(display_transcript(&segments, context.language))
                 })?;
             run.check()?;
             progress(PlainPhase::Finalizing, None);

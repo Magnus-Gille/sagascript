@@ -4,7 +4,7 @@
     "unwrap_used": {
       "sagascript": 0,
       "sagascript-cli": 5,
-      "sagascript-core": 5,
+      "sagascript-core": 3,
       "sagascript-engine-protocol": 0,
       "sagascript-testsupport": 0
     },
@@ -18,7 +18,7 @@
     "panic": {
       "sagascript": 0,
       "sagascript-cli": 0,
-      "sagascript-core": 1,
+      "sagascript-core": 0,
       "sagascript-engine-protocol": 0,
       "sagascript-testsupport": 0
     },

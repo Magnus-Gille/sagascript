@@ -528,7 +528,7 @@
           </div>
         {:else if downloading}
           <div class="progress-bar-container">
-            <div class="progress-bar" style="width: {downloadProgress}%"></div>
+            <div class="progress-bar" style:width="{downloadProgress}%"></div>
           </div>
           <p class="progress-text">{formatProgress(downloadProgress)}</p>
         {:else}

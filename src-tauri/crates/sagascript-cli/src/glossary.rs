@@ -11,7 +11,7 @@ use sagascript_core::transcription::pianissimo_backend::PianissimoBackend;
 use sagascript_core::transcription::pianissimo_model;
 use sagascript_core::transcription::{
     suggest_glossary_candidates, Glossary, GlossarySuggestion, GlossarySuggestionKind,
-    WhisperBackend,
+    TranscribeOptions, TranscribeRequest, WhisperBackend,
 };
 
 use crate::output::{errln, outln, Out};
@@ -347,12 +347,11 @@ fn load_training_input(
             );
             let backend = WhisperBackend::new();
             backend.load_model(model)?;
-            backend.transcribe_sync_with_progress_and_prompt(
-                &audio,
-                profile.language,
-                glossary.decoder_prompt().as_deref(),
-                |_| {},
-            )?
+            let options = TranscribeOptions {
+                prompt: glossary.decoder_prompt(),
+                ..TranscribeOptions::default()
+            };
+            backend.transcribe_text(TranscribeRequest::new(&audio, profile.language, &options))?
         }
         FileModel::PianissimoOriginal => {
             errln!(
