@@ -1,6 +1,7 @@
 //! Validated meeting transcripts and deterministic exports.
 
 pub mod media;
+pub mod reprocess;
 pub mod review;
 
 use std::collections::BTreeSet;
