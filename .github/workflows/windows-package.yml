@@ -233,7 +233,11 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
+      # A step with several commands runs under bash (#436): `bash -e` stops at the first failing command, while
+      # pwsh reports only the last native command's exit code, so `release:check` failing in front of a passing
+      # `licenses:check` went green. scripts/test-ci-parallel-gates.mjs enforces this for every Windows job.
       - name: Verify release metadata and licenses
+        shell: bash
         run: |
           npm run release:check
           npm run licenses:check
@@ -247,6 +251,7 @@ jobs:
         run: npm run test:unit
 
       - name: Build and check frontend
+        shell: bash
         run: |
           npm run build
           npm run check
@@ -254,13 +259,18 @@ jobs:
       # Ownership of the Windows tests (#358): ci.yml's test-windows, a required check, owns them on
       # a pull request and runs these same workspace commands (scripts/ci/cargo-gates.mjs), so a pull
       # request does not repeat them on either architecture. They stay for releases (workflow_call
-      # from prebuild-release.yml) and manual runs, whose candidates are gated here. In this pwsh
-      # step only the LAST command's exit code counts: a failing test or lint here never failed the
-      # job; test-windows is where it does (x64; ARM64 tests run only here, on releases and manual runs).
+      # from prebuild-release.yml) and manual runs, whose candidates are gated here. Under pwsh only the
+      # LAST command's exit code counted, so this step gated nothing and ARM64 tests had no gate at all
+      # (#436). It stays in pwsh, not bash: Git Bash rewrites the ARM64 build environment exported above
+      # (CMAKE_CXX_FLAGS=/EHsc /utf-8 arrives as "C:/Program Files/Git/EHsc /utf-8"), which would change
+      # how whisper.cpp is compiled. The two preference lines make any native command that exits
+      # non-zero stop the step, as bash -e would.
       - name: Test and lint Rust workspace
         if: github.event_name != 'pull_request'
         working-directory: src-tauri
         run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           # `cargo check --workspace` is omitted: clippy --all-targets below is a strict superset.
           cargo test --workspace
           cargo clippy --workspace --all-targets -- -D warnings
