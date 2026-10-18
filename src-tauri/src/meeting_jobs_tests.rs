@@ -314,6 +314,51 @@ fn write_new_export_refuses_existing_symlink_without_changing_target_or_link() {
     assert!(staging_files(scratch.path()).is_empty());
 }
 
+/// The note about a staging file that could not be removed names the file and
+/// the folder the user chose, and carries no absolute path of its own: the
+/// webview scrubs a folder out of a message, so a note that was only a path
+/// would read `<path>/.sagascript-….tmp`.
+#[test]
+fn a_leftover_staging_file_is_named_without_its_folder() {
+    use sagascript_core::test_support::FaultyFs;
+    let scratch = TempDir::new();
+    let destination = scratch.path().join("meeting.txt");
+
+    let error = write_new_export_with(
+        &destination,
+        b"exact export",
+        &FaultyFs::new().failing_link(1).failing_remove(),
+    )
+    .expect_err("the commit fails and the staging file stays");
+
+    assert_eq!(error.code(), "io_error");
+    let text = error.to_string();
+    assert!(
+        text.starts_with("The export was not saved, but its private temporary file ."),
+        "{text}"
+    );
+    assert!(
+        text.contains(" could not be removed from the folder you chose ("),
+        "{text}"
+    );
+    assert!(text.ends_with("). Remove that file manually."), "{text}");
+    let folder = scratch.path().to_string_lossy().into_owned();
+    assert!(!text.contains(&folder), "no folder in the note: {text}");
+    // The file it names is really there, in the folder of the export.
+    let staging = staging_files(scratch.path());
+    assert_eq!(staging.len(), 1);
+    assert!(
+        text.contains(
+            &staging[0]
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned()
+        ),
+        "{text}"
+    );
+}
+
 #[test]
 fn write_new_export_failures_say_what_kind_of_failure_they_are() {
     let scratch = TempDir::new();

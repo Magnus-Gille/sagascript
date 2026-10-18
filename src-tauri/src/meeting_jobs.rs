@@ -523,10 +523,16 @@ fn write_new_export_with(
     ops: &dyn sagascript_core::fsutil::PublishFs,
 ) -> Result<(), CommandError> {
     use sagascript_core::fsutil::{publish_new_with, Leftover, PublishErrorKind};
+    // The file is named, not located: the webview never gets a folder (ADR
+    // 0006), and the staging file lies in the folder the user chose for the
+    // export, which the note says.
     let unsaved_note = |leftover: &Leftover| {
+        let name = leftover
+            .path
+            .file_name()
+            .map_or_else(|| "(unnamed)".into(), |name| name.to_string_lossy());
         format!(
-            "The export was not saved, but its private temporary file could not be removed: {} ({}). Remove that temporary file manually.",
-            leftover.path.display(),
+            "The export was not saved, but its private temporary file {name} could not be removed from the folder you chose ({}). Remove that file manually.",
             leftover.error
         )
     };

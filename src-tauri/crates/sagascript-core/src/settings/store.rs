@@ -713,9 +713,14 @@ fn save_over(
                 );
                 Ok(())
             }
+            // The copy is named, not located: the app scrubs a folder out of
+            // an error's text (ADR 0006), and the copy lies next to the file.
             Err(error) => Err(SettingsError::storage(format!(
-                "{error} (the invalid original settings file is preserved at {})",
-                recovered.copy.display()
+                "{error} (the invalid original settings file is preserved as {}, next to the settings file)",
+                recovered
+                    .copy
+                    .file_name()
+                    .map_or_else(|| "(unnamed)".into(), |name| name.to_string_lossy())
             ))),
         };
     }

@@ -1537,6 +1537,39 @@ fn schema_error_preserves_original_bytes_before_field_update() {
     });
 }
 
+/// When the rewrite fails after the invalid file was copied, the error says
+/// which copy holds the original and where it lies without a folder: the app
+/// scrubs a folder out of an error's text.
+#[test]
+fn a_failed_rewrite_names_the_recovery_copy_without_its_folder() {
+    with_temp_settings(|path| {
+        fs::write(&path, SCHEMA_INVALID_SETTINGS).unwrap();
+
+        let error = update_at(&path, |settings| {
+            settings
+                .profile_glossaries
+                .insert("../escape".into(), "words".into());
+        })
+        .unwrap_err()
+        .to_string();
+
+        let copy = recovery_copy_path(&path, 0);
+        assert_file_bytes(&copy, SCHEMA_INVALID_SETTINGS);
+        let name = copy.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(
+            error.ends_with(&format!(
+                "(the invalid original settings file is preserved as {name}, next to the settings file)"
+            )),
+            "{error}"
+        );
+        let folder = path.parent().unwrap().to_string_lossy().into_owned();
+        assert!(
+            !error.contains(&folder),
+            "no folder in the message: {error}"
+        );
+    });
+}
+
 #[test]
 fn repeated_invalid_files_never_overwrite_an_earlier_recovery_copy() {
     with_temp_settings(|path| {
