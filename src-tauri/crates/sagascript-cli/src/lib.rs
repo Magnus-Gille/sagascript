@@ -687,7 +687,7 @@ fn dispatch(command: Command, out: &Out) -> Result<(), CliError> {
             sagascript_core::settings::store::update(|settings| {
                 settings.has_completed_onboarding = false;
             })
-            .map_err(DictationError::SettingsError)?;
+            .map_err(DictationError::from)?;
             errln!(
                 out,
                 "Onboarding reset. The setup wizard will run on next launch."

@@ -18,14 +18,32 @@
 //!   run the file again) and is expected to succeed; not that the same call
 //!   may be repeated (ADR 0006).
 //!
-//! The command domains the GUI matched on message text are converted: dictation
-//! and transcription, hotkeys, the dictionary and file transcription. The rest
-//! still return `Result<T, String>` until #360 part 2; a `String` converts into
-//! [`CommandError::Unclassified`] so a typed command can call them with `?`.
-//! The number of `Unclassified` call sites is what part 2 has left to type.
+//! Every command returns `Result<T, CommandError>` (#360 part 2). The codes a
+//! command can add to [`DictationError::code`] and [`SettingsError::code`]:
+//!
+//! | code | meaning |
+//! |---|---|
+//! | `busy` | Sagascript is working on something else; the user's action can be repeated later (retryable) |
+//! | `not_recording`, `cancelled`, `dictionary_changed_elsewhere` | the state a recording or a dictionary save expected is not there |
+//! | `hotkey_invalid`, `hotkey_change_failed` | a shortcut that cannot be used, or that the OS refused |
+//! | `invalid_input` | the command refused its arguments or the user's choice (a bad id, an empty text, a file that is not allowed) |
+//! | `not_found` | the job or item the command names is no longer there |
+//! | `unavailable` | the command cannot run in this build, window or state (a feature not built in, a lock that was lost) |
+//! | `io_error` | reading or writing a local file or folder failed |
+//! | `clipboard_failed` | the system clipboard refused the text |
+//! | `export_exists` | the file chosen for an export exists; exports never overwrite |
+//! | `launch_failed` | the OS could not open System Settings or a web page |
+//! | `accessibility_permission_denied` | the Accessibility permission a setting needs is missing |
+//! | `model_download_failed` | a model the command needed could not be downloaded |
+//! | `unclassified` | no better code exists; each producer is listed in ADR 0006 |
+//!
+//! A failure whose text is fixed for the user but that has a cause worth
+//! keeping is [`CommandError::because`]: the cause is scrubbed, logged and kept
+//! for tests, and never sent to the webview.
 
 use sagascript_core::error::DictationError;
 use sagascript_core::path_scrub::scrub_paths;
+use sagascript_core::settings::SettingsError;
 use serde::ser::{Serialize, SerializeStruct, Serializer};
 
 #[derive(Debug, thiserror::Error)]
@@ -54,11 +72,57 @@ pub enum CommandError {
     /// (`hotkey_change_failed`).
     #[error("{0}")]
     HotkeyChangeFailed(String),
+    /// A settings operation refused a change or could not read or write the
+    /// settings, with the code of its [`SettingsError`] (`invalid_setting_value`,
+    /// `model_incompatible`, `dictionary_blocks_language_change`,
+    /// `settings_storage_failed`, …).
+    #[error(transparent)]
+    Settings(SettingsError),
     /// A dictation, transcription, audio or file error, with its own code.
     #[error(transparent)]
     Dictation(DictationError),
-    /// An error that is still a plain string (`unclassified`). Transitional:
-    /// each producer gets a code of its own in #360 part 2.
+    /// The command refused its arguments or the user's choice (`invalid_input`).
+    #[error("{0}")]
+    InvalidInput(String),
+    /// The job or item the command names is no longer there (`not_found`).
+    #[error("{0}")]
+    NotFound(String),
+    /// The command cannot run in this build, window or state (`unavailable`).
+    #[error("{0}")]
+    Unavailable(String),
+    /// Reading or writing a local file or folder failed (`io_error`).
+    #[error("{0}")]
+    Io(String),
+    /// The system clipboard refused the text (`clipboard_failed`).
+    #[error("{0}")]
+    Clipboard(String),
+    /// The file chosen for an export exists already (`export_exists`).
+    #[error("{0}")]
+    ExportExists(String),
+    /// The OS could not open System Settings or a web page (`launch_failed`).
+    #[error("{0}")]
+    LaunchFailed(String),
+    /// A model the command needed could not be downloaded
+    /// (`model_download_failed`, the code of
+    /// [`DictationError::ModelDownloadFailed`], with this command's text).
+    #[error("{0}")]
+    DownloadFailed(String),
+    /// A setting needs the Accessibility permission and it is missing
+    /// (`accessibility_permission_denied`, the code of
+    /// [`DictationError::AccessibilityPermissionDenied`], with this command's text).
+    #[error("{0}")]
+    AccessibilityPermissionDenied(String),
+    /// `error`, whose text the user sees, with the cause that produced it. The
+    /// cause is scrubbed of absolute paths when it is attached and logged then;
+    /// it is never sent to the webview. See [`CommandError::because`].
+    #[error("{error}")]
+    Caused {
+        error: Box<CommandError>,
+        cause: String,
+    },
+    /// An error that is still a plain string (`unclassified`): no better code
+    /// exists. Built only through [`CommandError::unclassified`], never by a
+    /// bare `String`.
     #[error("{0}")]
     Unclassified(String),
 }
@@ -73,8 +137,46 @@ impl CommandError {
             Self::DictionaryChangedElsewhere => "dictionary_changed_elsewhere",
             Self::HotkeyInvalid(_) => "hotkey_invalid",
             Self::HotkeyChangeFailed(_) => "hotkey_change_failed",
+            Self::Settings(error) => error.code(),
             Self::Dictation(error) => error.code(),
+            Self::InvalidInput(_) => "invalid_input",
+            Self::NotFound(_) => "not_found",
+            Self::Unavailable(_) => "unavailable",
+            Self::Io(_) => "io_error",
+            Self::Clipboard(_) => "clipboard_failed",
+            Self::ExportExists(_) => "export_exists",
+            Self::LaunchFailed(_) => "launch_failed",
+            Self::DownloadFailed(_) => "model_download_failed",
+            Self::AccessibilityPermissionDenied(_) => "accessibility_permission_denied",
+            Self::Caused { error, .. } => error.code(),
             Self::Unclassified(_) => "unclassified",
+        }
+    }
+
+    /// An error with no better code (`unclassified`). Prefer a specific
+    /// variant; every use is listed in ADR 0006.
+    pub fn unclassified(message: impl Into<String>) -> Self {
+        Self::Unclassified(message.into())
+    }
+
+    /// `self` with the error that caused it. The user sees `self`'s text; the
+    /// cause is scrubbed of absolute paths ([`scrub_paths`]), written to the
+    /// log at once and kept for [`CommandError::cause`]. Use it where a fixed
+    /// message replaces a source error that would otherwise be dropped.
+    pub fn because(self, cause: impl std::fmt::Display) -> Self {
+        let cause = scrub_paths(&cause.to_string());
+        tracing::warn!(code = self.code(), %cause, "command failed");
+        Self::Caused {
+            error: Box::new(self),
+            cause,
+        }
+    }
+
+    /// The scrubbed cause attached by [`CommandError::because`], if any.
+    pub fn cause(&self) -> Option<&str> {
+        match self {
+            Self::Caused { cause, .. } => Some(cause),
+            _ => None,
         }
     }
 
@@ -86,6 +188,7 @@ impl CommandError {
         match self {
             Self::Busy(_) => true,
             Self::Dictation(error) => error.retryable(),
+            Self::Caused { error, .. } => error.retryable(),
             _ => false,
         }
     }
@@ -105,6 +208,13 @@ impl From<DictationError> for CommandError {
     }
 }
 
+impl From<SettingsError> for CommandError {
+    fn from(error: SettingsError) -> Self {
+        Self::Settings(error)
+    }
+}
+
+// Transitional: removed once the last command is typed (this PR's final commit).
 impl From<String> for CommandError {
     fn from(message: String) -> Self {
         Self::Unclassified(message)

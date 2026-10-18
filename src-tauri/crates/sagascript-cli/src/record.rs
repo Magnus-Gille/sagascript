@@ -283,7 +283,7 @@ fn resolve_record_model_for_profile(
     if explicit.is_none() && language == profile.language {
         let (whisper, pianissimo) = stored
             .live_model_for_profile(&profile.id)
-            .map_err(DictationError::SettingsError)?;
+            .map_err(DictationError::from)?;
         return Ok(if pianissimo {
             RecordModel::Pianissimo
         } else {

@@ -52,8 +52,8 @@ const PERSIST_LOCK: &str = "settings.persist";
 /// `change` runs twice, so it must not depend on the copy it is given beyond
 /// the fields it assigns; the setters assign a value they were handed.
 ///
-/// `Err` is the file's own error ([`CommandError::Unclassified`] until
-/// #360 part 2 types the settings store); the controller is left as it was.
+/// `Err` is the file's own error ([`CommandError::Settings`], with the code of
+/// its `SettingsError`); the controller is left as it was.
 pub(crate) fn persist_and_sync(
     controller: &SharedController,
     change: impl Fn(&mut Settings),
@@ -114,26 +114,13 @@ fn persist<E: Into<CommandError>>(
     follow: impl FnOnce(&Settings, &Settings) -> Settings,
 ) -> Result<(Settings, Settings), CommandError> {
     let _one_writer = lock_or_recover(&PERSIST, PERSIST_LOCK);
-    // The store reports a refusal as text. The typed error is carried out of
-    // the closure beside it, so the caller gets the error it produced.
-    let mut refusal: Option<CommandError> = None;
-    let written = store::try_update(|settings| {
-        change(settings).map_err(|error| {
-            let error: CommandError = error.into();
-            let text = error.to_string();
-            refusal = Some(error);
-            text
-        })
-    });
-    match written {
-        Ok(written) => {
-            let mut ctrl = lock_controller(controller);
-            let next = follow(ctrl.settings(), &written);
-            let previous = ctrl.update_settings(next);
-            Ok((previous, written))
-        }
-        Err(text) => Err(refusal.unwrap_or(CommandError::Unclassified(text))),
-    }
+    // The store hands back the error type of `change` unchanged, and converts
+    // its own failures (a settings file that cannot be written) into it.
+    let written = store::try_update::<CommandError, _>(|settings| change(settings).map_err(Into::into))?;
+    let mut ctrl = lock_controller(controller);
+    let next = follow(ctrl.settings(), &written);
+    let previous = ctrl.update_settings(next);
+    Ok((previous, written))
 }
 
 /// Correct the controller's copy without writing the file: after a refused

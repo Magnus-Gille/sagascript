@@ -53,7 +53,7 @@ pub(super) fn profiles_with_default_shortcut(
     settings: &Settings,
     shortcut: String,
 ) -> Result<Vec<HotkeyProfile>, CommandError> {
-    validate_hotkey(&shortcut).map_err(CommandError::HotkeyInvalid)?;
+    validate_hotkey(&shortcut).map_err(|error| CommandError::HotkeyInvalid(error.to_string()))?;
     let mut profiles = settings.resolved_hotkey_profiles();
     let profile_index = HotkeyProfile::default_index(&profiles);
     profiles[profile_index].set_primary_shortcut(shortcut);

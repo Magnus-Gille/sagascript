@@ -2,6 +2,7 @@ use serde::Serialize;
 use thiserror::Error;
 
 use crate::path_scrub::scrub_paths;
+use crate::settings::SettingsError;
 
 /// Errors that can occur during dictation workflow.
 ///
@@ -58,8 +59,18 @@ pub enum DictationError {
     #[error("Model download failed: {0}")]
     ModelDownloadFailed(String),
 
+    /// A settings problem the CLI reports in its own words (a bad flag, an
+    /// unknown key). `settings_error`. A refusal or failure of the settings
+    /// operations themselves is [`DictationError::Settings`], with a code of its
+    /// own.
     #[error("Settings error: {0}")]
     SettingsError(String),
+
+    /// A settings operation refused a change or failed (a model that does not
+    /// fit the language, an invalid shortcut, a settings file that could not be
+    /// written). The code is the [`SettingsError`]'s own.
+    #[error("Settings error: {0}")]
+    Settings(SettingsError),
 
     #[error("Application launch error: {0}")]
     ApplicationLaunchError(String),
@@ -152,6 +163,7 @@ impl DictationError {
             Self::AudioCaptureError(_) => "audio_capture_error",
             Self::ModelDownloadFailed(_) => "model_download_failed",
             Self::SettingsError(_) => "settings_error",
+            Self::Settings(error) => error.code(),
             Self::ApplicationLaunchError(_) => "application_launch_error",
             Self::PasteError(_) => "paste_error",
             Self::FileDecodeError(_) => "file_decode_error",
@@ -173,6 +185,12 @@ impl DictationError {
             Self::Engine(failure) => failure.retryable(),
             _ => false,
         }
+    }
+}
+
+impl From<SettingsError> for DictationError {
+    fn from(error: SettingsError) -> Self {
+        Self::Settings(error)
     }
 }
 

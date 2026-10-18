@@ -166,8 +166,9 @@ async fn stop_and_transcribe_impl(
             match ctrl.settings().live_model_for_profile(&profile_id) {
                 Ok(choice) => choice,
                 Err(error) => {
-                    let completion = ctrl.finish_transcription(Err(error.clone()));
-                    return Err(completion.err().unwrap_or(error).into());
+                    // The controller hands back the text it was given.
+                    let _ = ctrl.finish_transcription(Err(error.to_string()));
+                    return Err(error.into());
                 }
             };
         let opts = build_transcribe_options_for_profile(ctrl.settings(), Some(&profile_id));

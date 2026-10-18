@@ -453,7 +453,7 @@ impl AppController {
         let session_model = match self
             .settings
             .dictation_model_for_profile(&profile.id)
-            .map_err(DictationError::SettingsError)?
+            .map_err(DictationError::from)?
         {
             FileModel::Whisper(model) => serde_json::to_value(model)
                 .map_err(|error| DictationError::SettingsError(error.to_string()))?,
