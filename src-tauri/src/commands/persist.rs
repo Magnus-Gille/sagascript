@@ -178,8 +178,16 @@ fn persist<E: Into<CommandError>>(
             let pianissimo_supported = host_runs_pianissimo();
             let mut ctrl = lock_controller(controller);
             let mut current = follow(ctrl.settings(), &written);
-            current.demote_unsupported_pianissimo(pianissimo_supported);
+            // Quietly: the startup load warned about each demoted selection,
+            // and every setter would say it again.
+            let demoted = current.demote_unsupported_pianissimo_quietly(pianissimo_supported);
             let previous = ctrl.update_settings(current.clone());
+            drop(ctrl);
+            if demoted {
+                tracing::debug!(
+                    "The written settings select Pianissimo, which this host cannot run; the controller keeps them demoted"
+                );
+            }
             Ok(Persisted {
                 written,
                 previous,
