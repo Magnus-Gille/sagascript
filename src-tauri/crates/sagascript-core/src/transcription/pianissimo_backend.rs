@@ -406,14 +406,50 @@ pub fn shared_client() -> Result<EngineHostClient, DictationError> {
     let host = precheck()?;
     let settings = crate::settings::store::load();
     let config = config_for_host(host, &settings);
-    let key = SharedKey {
+    let key = shared_key(&config, &settings);
+    client_in_slot(
+        shared_slot(),
+        key,
+        pianissimo_model::verify_downloaded,
+        |old| {
+            if let Some(old) = old {
+                old.client.shutdown();
+            }
+            // Audio a killed app or CLI left in the PCM temp dir (once per process).
+            super::engine_host::pipeline::sweep_stale_pcm_dirs_in_background(
+                config.temp_dir.clone().unwrap_or_else(std::env::temp_dir),
+            );
+            EngineHostClient::new(config)
+        },
+    )
+}
+
+/// What identifies the client a `config` and the idle setting would create.
+fn shared_key(config: &EngineHostConfig, settings: &Settings) -> SharedKey {
+    SharedKey {
         host: config.host_path.clone(),
         model_dir: config.load.model_dir.clone(),
         model_id: config.load.model_id.clone(),
         compute_units: config.load.compute_units.clone(),
         idle_minutes: settings.engine_idle_unload_minutes,
-    };
-    let mut slot = shared_slot().lock().map_err(|_| {
+    }
+}
+
+/// The decision of [`shared_client`] on its `slot`, apart from where the key
+/// and the client come from:
+///
+/// - the slot holds a client with this `key`: that client, nothing else runs;
+/// - otherwise `verify_model` runs first, and when it fails the slot keeps the
+///   client it had (the error is the caller's);
+/// - then `replace` is given the client being retired (`None` for the first
+///   one) and returns the new client, which goes into the slot.
+fn client_in_slot(
+    slot: &Mutex<Option<Shared>>,
+    key: SharedKey,
+    verify_model: impl FnOnce() -> Result<(), DictationError>,
+    replace: impl FnOnce(Option<Shared>) -> EngineHostClient,
+) -> Result<EngineHostClient, DictationError> {
+    let mut slot = slot.lock().map_err(|_| {
         DictationError::TranscriptionFailed("Pianissimo client lock was poisoned".into())
     })?;
     if let Some(shared) = slot.as_ref() {
@@ -421,15 +457,8 @@ pub fn shared_client() -> Result<EngineHostClient, DictationError> {
             return Ok(shared.client.clone());
         }
     }
-    pianissimo_model::verify_downloaded()?;
-    if let Some(old) = slot.take() {
-        old.client.shutdown();
-    }
-    // Audio a killed app or CLI left in the PCM temp dir (once per process).
-    super::engine_host::pipeline::sweep_stale_pcm_dirs_in_background(
-        config.temp_dir.clone().unwrap_or_else(std::env::temp_dir),
-    );
-    let client = EngineHostClient::new(config);
+    verify_model()?;
+    let client = replace(slot.take());
     *slot = Some(Shared {
         key,
         client: client.clone(),
@@ -1128,6 +1157,146 @@ mod tests {
 
         assert!(shutdown_slot(&slot), "the client was not shut down");
         assert!(slot.lock().is_ok_and(|slot| slot.is_none()));
+    }
+
+    // ---- the shared client and the settings it was made from ----------------
+    //
+    // `shared_client` caches one client per process, keyed by the host path, the
+    // model, the compute units and `engine_idle_unload_minutes`. These tests pin
+    // what a change of that setting between two calls does: the next call finds a
+    // different key, verifies the model again, retires the old client (the caller
+    // shuts it down) and creates a new one; an unchanged key hands out the same
+    // client without any of that.
+
+    fn key_with_idle_minutes(idle_minutes: u32) -> SharedKey {
+        SharedKey {
+            idle_minutes,
+            ..shared_for_test().key
+        }
+    }
+
+    /// A slot plus counters for what `client_in_slot` ran.
+    #[derive(Default)]
+    struct Calls {
+        verified: std::cell::Cell<u32>,
+        created: std::cell::Cell<u32>,
+        retired: std::cell::RefCell<Vec<EngineHostClient>>,
+    }
+
+    fn client_for(
+        slot: &Mutex<Option<Shared>>,
+        idle_minutes: u32,
+        calls: &Calls,
+    ) -> EngineHostClient {
+        client_in_slot(
+            slot,
+            key_with_idle_minutes(idle_minutes),
+            || {
+                calls.verified.set(calls.verified.get() + 1);
+                Ok(())
+            },
+            |old| {
+                calls.created.set(calls.created.get() + 1);
+                calls
+                    .retired
+                    .borrow_mut()
+                    .extend(old.map(|shared| shared.client));
+                idle_client()
+            },
+        )
+        .expect("verification passes")
+    }
+
+    #[test]
+    fn the_same_settings_give_the_same_client_without_verifying_again() {
+        let slot = Mutex::new(None);
+        let calls = Calls::default();
+        let first = client_for(&slot, 10, &calls);
+        let second = client_for(&slot, 10, &calls);
+        assert!(std::sync::Arc::ptr_eq(&first.inner, &second.inner));
+        assert_eq!(
+            (calls.verified.get(), calls.created.get()),
+            (1, 1),
+            "the model is verified once, when the client is created"
+        );
+        assert!(calls.retired.borrow().is_empty());
+    }
+
+    #[test]
+    fn a_changed_idle_setting_between_calls_replaces_the_client() {
+        let slot = Mutex::new(None);
+        let calls = Calls::default();
+        let before = client_for(&slot, 10, &calls);
+        let after = client_for(&slot, 3, &calls);
+        assert!(
+            !std::sync::Arc::ptr_eq(&before.inner, &after.inner),
+            "a new idle setting is a new client"
+        );
+        assert_eq!(
+            (calls.verified.get(), calls.created.get()),
+            (2, 2),
+            "the replacement verifies the model again"
+        );
+        let retired = calls.retired.borrow();
+        assert_eq!(
+            retired.len(),
+            1,
+            "the old client is handed back to be shut down"
+        );
+        assert!(std::sync::Arc::ptr_eq(&retired[0].inner, &before.inner));
+        // And the slot now holds the new one: asking again changes nothing.
+        let again = client_for(&slot, 3, &calls);
+        assert!(std::sync::Arc::ptr_eq(&again.inner, &after.inner));
+        assert_eq!(calls.created.get(), 2);
+    }
+
+    #[test]
+    fn going_back_to_an_earlier_setting_is_a_replacement_too() {
+        // The slot holds one client, not one per setting.
+        let slot = Mutex::new(None);
+        let calls = Calls::default();
+        let a = client_for(&slot, 10, &calls);
+        let _b = client_for(&slot, 3, &calls);
+        let c = client_for(&slot, 10, &calls);
+        assert!(!std::sync::Arc::ptr_eq(&a.inner, &c.inner));
+        assert_eq!(calls.created.get(), 3);
+        assert_eq!(calls.retired.borrow().len(), 2);
+    }
+
+    #[test]
+    fn a_failed_model_check_keeps_the_client_the_slot_had() {
+        let slot = Mutex::new(None);
+        let calls = Calls::default();
+        let kept = client_for(&slot, 10, &calls);
+        let refused = client_in_slot(
+            &slot,
+            key_with_idle_minutes(3),
+            || {
+                Err(DictationError::TranscriptionFailed(
+                    "model changed on disk".into(),
+                ))
+            },
+            |_| unreachable!("nothing is replaced when the model check fails"),
+        );
+        assert!(refused.is_err());
+        let still = client_for(&slot, 10, &calls);
+        assert!(std::sync::Arc::ptr_eq(&kept.inner, &still.inner));
+        assert!(calls.retired.borrow().is_empty());
+    }
+
+    #[test]
+    fn the_key_takes_the_idle_minutes_from_the_settings_it_is_given() {
+        let config = |minutes| {
+            let settings = Settings {
+                engine_idle_unload_minutes: minutes,
+                ..Settings::default()
+            };
+            let config = config_for_host("/nonexistent/host".into(), &settings);
+            shared_key(&config, &settings)
+        };
+        assert_eq!(config(7).idle_minutes, 7);
+        assert_ne!(config(7), config(0));
+        assert_eq!(config(7), config(7));
     }
 
     #[test]
