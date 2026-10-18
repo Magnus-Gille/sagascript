@@ -88,17 +88,28 @@ fn args(op: &Op) -> Vec<String> {
                 .map(String::from)
                 .into()
         }
+        Op::DictionaryAdd {
+            profile,
+            term,
+            aliases,
+        } => {
+            let mut args: Vec<String> = ["glossary", "add", term, "--profile", profile]
+                .map(String::from)
+                .into();
+            for alias in *aliases {
+                args.extend(["--alias".to_string(), alias.to_string()]);
+            }
+            args
+        }
+        Op::InitialPrompt(text) => set("initial_prompt", (*text).into()),
+        Op::Reset(key) => ["config", "reset", key].map(String::from).into(),
     }
 }
 
 /// Run one row; returns the CLI's verdict.
 fn run(case: &Case) {
     let settings = fake_settings();
-    std::fs::write(
-        settings.path(),
-        serde_json::to_string_pretty(&case.start).expect("settings serialize"),
-    )
-    .expect("write the starting settings");
+    std::fs::write(settings.path(), case.file_text()).expect("write the starting settings");
     let before = store::load_from(settings.path());
 
     let mut command = Command::new(env!("CARGO_BIN_EXE_sagascript"));

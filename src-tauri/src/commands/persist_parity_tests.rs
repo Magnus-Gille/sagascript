@@ -18,7 +18,7 @@
 use sagascript_core::machine;
 use sagascript_core::settings::store;
 use sagascript_core::test_support::settings_ops_table::{
-    assert_persisted, cases, Case, Op, Surface,
+    assert_persisted, cases, dictionary_text_with, reset_as_op, Case, Op, Surface,
 };
 
 use super::*;
@@ -80,6 +80,32 @@ fn run_op(app: &App, runtime: &tokio::runtime::Runtime, op: &Op) -> Result<(), S
             id.to_string(),
             model.id().to_string(),
         )),
+        Op::DictionaryAdd {
+            profile,
+            term,
+            aliases,
+        } => {
+            // The editor saves the text it read with the entry added to it.
+            let read = machine::load()
+                .profile_glossaries
+                .get(*profile)
+                .cloned()
+                .unwrap_or_default();
+            let source = dictionary_text_with(&read, term, aliases);
+            runtime
+                .block_on(set_profile_glossary(
+                    state,
+                    profile.to_string(),
+                    source,
+                    Some(read),
+                ))
+                .map_err(text)
+        }
+        Op::InitialPrompt(prompt) => runtime
+            .block_on(set_initial_prompt(state, prompt.to_string(), None))
+            .map_err(text),
+        // The app has no reset: choosing the default value is the setter.
+        Op::Reset(key) => run_op(app, runtime, &reset_as_op(key)),
     }
 }
 
@@ -111,11 +137,7 @@ fn clear_the_fake_directory() {
 fn run_row(runtime: &tokio::runtime::Runtime, case: &Case) {
     clear_the_fake_directory();
     let file = fake_file();
-    std::fs::write(
-        &file,
-        serde_json::to_string_pretty(&case.start).expect("settings serialize"),
-    )
-    .expect("write the starting settings");
+    std::fs::write(&file, case.file_text()).expect("write the starting settings");
     let before = store::load_from(&file);
     // The controller holds the settings as the app loaded them.
     let app = app_with(machine::load());
