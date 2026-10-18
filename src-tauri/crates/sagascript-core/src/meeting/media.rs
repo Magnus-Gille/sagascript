@@ -1,5 +1,5 @@
 //! Explicit, source-bound, read-only audio attachment. Never copies recordings.
-use sha2::{Digest, Sha256};
+use crate::hash::StreamingSha256;
 use std::{
     fs::File,
     io::{Read, Seek, SeekFrom},
@@ -35,7 +35,7 @@ pub struct MeetingAudio {
 }
 
 fn read_digest_and_header<R: Read>(reader: &mut R) -> Result<(Vec<u8>, String, u64), MediaError> {
-    let mut digest = Sha256::new();
+    let mut digest = StreamingSha256::new();
     let mut buffer = [0u8; 64 * 1024];
     let mut header = Vec::with_capacity(64);
     let mut total = 0u64;
@@ -52,7 +52,7 @@ fn read_digest_and_header<R: Read>(reader: &mut R) -> Result<(Vec<u8>, String, u
         header.extend_from_slice(&buffer[..count.min(header_remaining)]);
         digest.update(&buffer[..count]);
     }
-    Ok((header, format!("{:x}", digest.finalize()), total))
+    Ok((header, digest.finish_hex(), total))
 }
 
 impl MeetingAudio {

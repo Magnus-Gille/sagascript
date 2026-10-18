@@ -455,6 +455,15 @@ impl Settings {
         profiles[HotkeyProfile::default_index(&profiles)].clone()
     }
 
+    /// The dictation profile with this id (#373): the one lookup behind every
+    /// "Unknown dictation profile" refusal of the CLI and the app.
+    pub fn dictation_profile(&self, id: &str) -> Result<HotkeyProfile, SettingsError> {
+        self.resolved_hotkey_profiles()
+            .into_iter()
+            .find(|profile| profile.id == id)
+            .ok_or_else(|| SettingsError::UnknownDictationProfile { id: id.to_owned() })
+    }
+
     /// Preserve the effective live model of every existing profile before
     /// global model preferences stop being consulted for live dictation.
     /// Applied by settings migration step 3; never replaces a profile's model.
@@ -1073,12 +1082,7 @@ impl Settings {
                     && self
                         .profile_glossaries
                         .get(&profile.id)
-                        .is_some_and(|source| {
-                            Glossary::parse(source)
-                                .entries()
-                                .iter()
-                                .any(|entry| !entry.aliases.is_empty())
-                        })
+                        .is_some_and(|source| Glossary::parse(source).has_aliases())
             })
         }) {
             return Err(SettingsError::DictionaryBlocksLanguageChange {
@@ -1157,12 +1161,7 @@ impl Settings {
             && self
                 .profile_glossaries
                 .get("default")
-                .is_some_and(|source| {
-                    Glossary::parse(source)
-                        .entries()
-                        .iter()
-                        .any(|entry| !entry.aliases.is_empty())
-                })
+                .is_some_and(|source| Glossary::parse(source).has_aliases())
         {
             return Err(SettingsError::DictionaryBlocksLanguageChange {
                 profile_id: "default".to_string(),

@@ -8,12 +8,12 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Number, Value};
-use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::diarization::eval::reference::{
     ReferenceActivity, ReferenceDocument, ReferenceError, ReferenceInterval, ReferenceStatus,
 };
+use crate::hash::sha256_hex;
 
 const SPLITS: [&str; 3] = ["train", "dev", "eval"];
 const HUMAN_REVIEWER_FORBIDDEN: [&str; 9] = [
@@ -858,16 +858,6 @@ fn escape_ascii(value: &str) -> String {
     }
     output.push('"');
     output
-}
-
-fn sha256_hex(value: &[u8]) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(value);
-    hasher
-        .finalize()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
 }
 
 fn resolve_window_id(

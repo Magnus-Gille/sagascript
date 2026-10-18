@@ -5,8 +5,8 @@ use std::io::{Read, Write};
 use std::path::Path;
 
 use sagascript_core::error::DictationError;
+use sagascript_core::hash::StreamingSha256;
 use serde::Serialize;
-use sha2::{Digest, Sha256};
 
 const MAX_REPORT_BYTES: usize = 16 * 1024 * 1024;
 const MAX_INPUT_BYTES: u64 = 128 * 1024 * 1024;
@@ -52,7 +52,7 @@ pub(crate) fn input_digest(path: &Path) -> Result<String, DictationError> {
             "Could not open quality fixture for hashing: {error}"
         ))
     })?;
-    let mut digest = Sha256::new();
+    let mut digest = StreamingSha256::new();
     let mut buffer = [0_u8; 32 * 1024];
     let mut total_bytes = 0_u64;
     loop {
@@ -70,16 +70,16 @@ pub(crate) fn input_digest(path: &Path) -> Result<String, DictationError> {
         }
         digest.update(&buffer[..count]);
     }
-    Ok(format!("{:x}", digest.finalize()))
+    Ok(digest.finish_hex())
 }
 
 pub(crate) fn decoded_digest(samples: &[f32]) -> String {
-    let mut digest = Sha256::new();
+    let mut digest = StreamingSha256::new();
     digest.update(b"sagascript-pcm-f32le-16000-v1\0");
     for sample in samples {
         digest.update(sample.to_le_bytes());
     }
-    format!("{:x}", digest.finalize())
+    digest.finish_hex()
 }
 
 pub(crate) fn write_private_new(path: &Path, value: &impl Serialize) -> Result<(), DictationError> {

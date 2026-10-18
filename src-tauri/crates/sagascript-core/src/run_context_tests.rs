@@ -1,4 +1,5 @@
 use super::*;
+use crate::settings::SettingsError;
 
 fn profile(id: &str, language: Language) -> HotkeyProfile {
     HotkeyProfile {

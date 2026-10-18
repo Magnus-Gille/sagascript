@@ -4,14 +4,15 @@ use clap::{Args, Subcommand};
 
 use sagascript_core::audio::decoder::decode_audio_file;
 use sagascript_core::error::DictationError;
+use sagascript_core::glossary::contains_delimiter;
 use sagascript_core::machine;
 use sagascript_core::settings;
-use sagascript_core::settings::{FileModel, Language, SettingsError};
+use sagascript_core::settings::{DictionaryRefusal, FileModel};
 use sagascript_core::transcription::model;
 use sagascript_core::transcription::pianissimo_backend::PianissimoBackend;
 use sagascript_core::transcription::pianissimo_model;
 use sagascript_core::transcription::{
-    suggest_glossary_candidates, Glossary, GlossarySuggestion, GlossarySuggestionKind,
+    apply_glossary_candidates, suggest_glossary_candidates, Glossary, GlossarySuggestionKind,
     TranscribeOptions, TranscribeRequest, WhisperBackend,
 };
 
@@ -138,28 +139,19 @@ fn add(
         .iter()
         .map(|alias| validate_component("alias", alias))
         .collect::<Result<Vec<_>, _>>()?;
+    // Refuse before taking the settings lock: the same operation on a copy.
     let current = machine::load();
     let profile_id = resolved_profile_id(&current, profile)?;
-    if profile.is_some() {
-        validate_profile(&current, &profile_id)?;
-    }
-    if !aliases.is_empty() {
-        validate_learning_profile(&current, &profile_id)?;
-    }
+    current
+        .clone()
+        .add_dictionary_entry(&profile_id, &term, &aliases)
+        .map_err(learning_refusal)?;
 
     machine::try_update::<DictationError, _>(|stored| {
         let profile_id = resolved_profile_id(stored, profile)?;
-        if profile.is_some() {
-            validate_profile(stored, &profile_id)?;
-        }
-        if !aliases.is_empty() {
-            validate_learning_profile(stored, &profile_id)?;
-        }
-        let source = glossary_source_mut(stored, profile)?;
-        let mut glossary = Glossary::parse(source);
-        glossary.upsert(term.clone(), aliases.clone());
-        *source = glossary.render();
-        Ok(())
+        stored
+            .add_dictionary_entry(&profile_id, &term, &aliases)
+            .map_err(learning_refusal)
     })?;
     errln!(out, "Saved personal dictionary term: {term}");
     Ok(())
@@ -246,7 +238,7 @@ fn suggest(
                 .entry(profile_id.clone())
                 .or_default();
             let mut scoped = Glossary::parse(source);
-            apply_candidates(&mut scoped, &reviewed);
+            apply_glossary_candidates(&mut scoped, &reviewed);
             *source = scoped.render();
             Ok(())
         })?;
@@ -362,22 +354,6 @@ fn load_training_input(
     Ok(glossary.correct_text(&raw).0)
 }
 
-fn apply_candidates(glossary: &mut Glossary, candidates: &[GlossarySuggestion]) {
-    for candidate in candidates {
-        match candidate.kind {
-            GlossarySuggestionKind::Alias => {
-                glossary.upsert(
-                    candidate.canonical.clone(),
-                    vec![candidate.observed.clone()],
-                );
-            }
-            GlossarySuggestionKind::HintOnly => {
-                glossary.upsert(candidate.canonical.clone(), Vec::new());
-            }
-        }
-    }
-}
-
 fn glossary_source<'a>(
     stored: &'a settings::Settings,
     profile: Option<&str>,
@@ -416,36 +392,30 @@ fn resolved_profile_id(
 
 fn validate_profile(stored: &settings::Settings, profile: &str) -> Result<(), DictationError> {
     stored
-        .resolved_hotkey_profiles()
-        .into_iter()
-        .find(|candidate| candidate.id == profile)
-        .ok_or_else(|| {
-            DictationError::from(SettingsError::UnknownDictationProfile {
-                id: profile.to_string(),
-            })
-        })?;
-    Ok(())
+        .dictation_profile(profile)
+        .map(drop)
+        .map_err(DictationError::from)
 }
 
+/// The rule (a profile that detects its language holds no aliases) is core's,
+/// `Settings::ensure_alias_profile`; this is what the CLI calls its refusal.
 fn validate_learning_profile(
     stored: &settings::Settings,
     profile: &str,
 ) -> Result<(), DictationError> {
-    let profile = stored
-        .resolved_hotkey_profiles()
-        .into_iter()
-        .find(|candidate| candidate.id == profile)
-        .ok_or_else(|| {
-            DictationError::from(SettingsError::UnknownDictationProfile {
-                id: profile.to_string(),
-            })
-        })?;
-    if profile.language == Language::Auto {
-        return Err(DictationError::SettingsError(
+    stored
+        .ensure_alias_profile(profile)
+        .map_err(learning_refusal)
+}
+
+fn learning_refusal(refusal: DictionaryRefusal) -> DictationError {
+    match refusal {
+        DictionaryRefusal::Settings(error) => DictationError::from(error),
+        DictionaryRefusal::AutoDetectAliases => DictationError::SettingsError(
             "Glossary learning requires a profile with an explicit language".to_string(),
-        ));
+        ),
+        other => DictationError::SettingsError(other.to_string()),
     }
-    Ok(())
 }
 
 fn validate_component(label: &str, value: &str) -> Result<String, DictationError> {
@@ -455,10 +425,7 @@ fn validate_component(label: &str, value: &str) -> Result<String, DictationError
             "Glossary {label} cannot be empty"
         )));
     }
-    if value
-        .chars()
-        .any(|character| matches!(character, '\n' | '\r' | ',' | '=' | '|'))
-    {
+    if contains_delimiter(value) {
         return Err(DictationError::SettingsError(format!(
             "Glossary {label} cannot contain a newline, comma, '=' or '|'"
         )));

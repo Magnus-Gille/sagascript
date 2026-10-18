@@ -13,11 +13,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::SystemTime;
 
 #[cfg(feature = "diarization")]
-use sha2::{Digest, Sha256};
-
-#[cfg(feature = "diarization")]
 use sagascript_core::diarization::DiarizedSegment;
 use sagascript_core::error::DictationError;
+#[cfg(feature = "diarization")]
+use sagascript_core::hash::StreamingSha256;
 #[cfg(feature = "diarization")]
 use sagascript_core::meeting::{MeetingSegmentInput, MeetingSpeaker, MeetingTranscript};
 #[cfg(feature = "diarization")]
@@ -155,7 +154,7 @@ pub(crate) fn stable_file_sha256(
             "Meeting input changed while opening; refusing output".to_string(),
         ));
     }
-    let mut hasher = Sha256::new();
+    let mut hasher = StreamingSha256::new();
     let mut buffer = [0_u8; CHUNK_SIZE];
     let mut bytes_read = 0_u64;
     {
@@ -210,11 +209,7 @@ pub(crate) fn stable_file_sha256(
             "Meeting input changed while hashing; refusing output".to_string(),
         ));
     }
-    Ok(hasher
-        .finalize()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect())
+    Ok(hasher.finish_hex())
 }
 
 #[cfg(feature = "diarization")]
