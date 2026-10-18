@@ -417,7 +417,7 @@ fn report_receipt(
 }
 
 fn resolve_runtime(args: &RuntimeArgs) -> Result<RuntimeInputs, DictationError> {
-    resolve_runtime_from(args, sagascript_core::settings::store::load())
+    resolve_runtime_from(args, sagascript_core::machine::load())
 }
 
 /// [`resolve_runtime`] against given settings, so tests resolve fixtures.

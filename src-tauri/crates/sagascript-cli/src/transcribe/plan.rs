@@ -68,7 +68,7 @@ pub(super) enum EnginePlan {
 pub(super) fn plan_run(args: &TranscribeArgs) -> Result<RunPlan, DictationError> {
     #[cfg(feature = "diarization")]
     speaker_hint_from_args(args)?;
-    let stored = sagascript_core::settings::store::load();
+    let stored = sagascript_core::machine::load();
     plan_run_with(args, stored, model::is_model_downloaded)
 }
 

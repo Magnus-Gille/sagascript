@@ -15,6 +15,7 @@
 //! written to the file and loaded the way the app loads it, so the controller
 //! holds what the file holds.
 
+use sagascript_core::machine;
 use sagascript_core::settings::store;
 use sagascript_core::test_support::settings_ops_table::{
     assert_persisted, cases, Case, Op, Surface,
@@ -63,7 +64,7 @@ fn run_op(app: &App, runtime: &tokio::runtime::Runtime, op: &Op) -> Result<(), S
         Op::Profiles(edit) => {
             // The frontend sends the whole resulting list and chooses a model
             // with a command of its own.
-            let (profiles, model) = edit.resulting(&store::load())?;
+            let (profiles, model) = edit.resulting(&machine::load())?;
             persist_hotkey(app, HotkeyChange::Profiles(profiles))?;
             match model {
                 Some((id, choice)) => runtime.block_on(set_profile_model(
@@ -117,7 +118,7 @@ fn run_row(runtime: &tokio::runtime::Runtime, case: &Case) {
     .expect("write the starting settings");
     let before = store::load_from(&file);
     // The controller holds the settings as the app loaded them.
-    let app = app_with(store::load());
+    let app = app_with(machine::load());
 
     let ran = run_op(&app, runtime, &case.op);
 

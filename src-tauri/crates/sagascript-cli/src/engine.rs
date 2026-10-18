@@ -152,10 +152,7 @@ impl Probe {
             (path, source)
         });
         let config = host.as_ref().map(|(path, _)| {
-            pianissimo_backend::config_for_host(
-                path.clone(),
-                &sagascript_core::settings::store::load(),
-            )
+            pianissimo_backend::config_for_host(path.clone(), &sagascript_core::machine::load())
         });
         Self {
             supported: pianissimo_backend::runtime_supported_on_this_os(),

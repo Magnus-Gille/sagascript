@@ -81,7 +81,7 @@ impl<'a> From<&'a RecordArgs> for RunRequest<'a> {
 }
 
 pub fn run(args: RecordArgs, out: &Out) -> Result<(), DictationError> {
-    let stored = sagascript_core::settings::store::load();
+    let stored = sagascript_core::machine::load();
     let request = RunRequest::from(&args);
     let selection = request.select(&stored)?;
     let profile = &selection.profile;
