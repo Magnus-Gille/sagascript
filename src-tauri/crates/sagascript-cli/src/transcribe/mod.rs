@@ -17,7 +17,10 @@
 //! - `vocab_correction`: glossary aliases and the opt-in one-edit hint repair;
 //! - `language_detection`, `language_regions`: the language check and the sampled
 //!   region detection, with their diagnostics;
-//! - `diarize`: the diarization cache policy, decoder options and concurrent analysis;
+//! - `services`: the collaborators a file run is handed (the Whisper backend and,
+//!   with diarization, the speaker analysis), which a test replaces;
+//! - `diarize`: the diarization cache policy, the speaker analysis seam, decoder
+//!   options and concurrent analysis;
 //! - `meeting`: the meeting entry points the app and reprocessing call, with their
 //!   cancellation control and source hashing;
 //! - `pianissimo`: the Pianissimo (engine host) path;
@@ -51,6 +54,7 @@ mod plain;
 mod plan;
 mod progress;
 mod resolve;
+mod services;
 mod source;
 mod vocab_correction;
 
@@ -74,47 +78,63 @@ pub use self::resolve::{
 };
 
 #[cfg(feature = "diarization")]
-use self::diarize::CachePolicy;
+use self::diarize::OnnxAnalyzer;
 #[cfg(feature = "diarization")]
 use self::diarized::run_diarized;
-use self::inference::InferenceBackend;
-use self::output::{BatchExecution, BatchSink, FileTranscription};
-use self::pianissimo::run_pianissimo_batch;
+use self::output::{BatchExecution, BatchSink, Clipboard, FileTranscription, SystemClipboard};
+use self::pianissimo::{run_pianissimo_batch, InstalledPianissimo, PianissimoBatch};
 use self::plain::run_plain;
-use self::plan::{plan_file, plan_run, EnginePlan, FileMode, FileRequest, RunPlan};
+use self::plan::{plan_file, plan_run, EnginePlan, FileMode, FileOptions, FileRequest, RunPlan};
 use self::progress::emit_progress;
+use self::services::Services;
+use crate::cancel::Canceller;
 
 pub fn run(args: TranscribeArgs, out: &Out) -> Result<(), DictationError> {
     crate::cancel::install();
+    // The one place the process-wide canceller is named for a command line run.
+    let canceller = &crate::cancel::GLOBAL;
     let progress_json = args.progress_json;
     let started = Instant::now();
-    let result = run_inner(args, out);
-    if crate::cancel::is_cancelled() {
+    let result = run_inner(args, canceller, out);
+    if canceller.is_cancelled() {
         emit_progress(out, progress_json, started, "cancelled", None);
     }
     result
 }
 
-fn run_inner(args: TranscribeArgs, out: &Out) -> Result<(), DictationError> {
+/// Plans the run and hands it to its engine, wired to the process: the real
+/// backends, the system clipboard, and `canceller`.
+fn run_inner(args: TranscribeArgs, canceller: &Canceller, out: &Out) -> Result<(), DictationError> {
+    // One backend for the run: it answers the plan's model preflight and, if the
+    // plan picks Whisper, does the work.
+    let backend = std::sync::Arc::new(WhisperBackend::new());
     let RunPlan {
         stored,
         language,
         glossary,
         files,
         engine,
-    } = plan_run(&args)?;
+    } = plan_run(&args, &*backend)?;
     match engine {
-        EnginePlan::Pianissimo => {
-            run_pianissimo_batch(&args, &files, &stored, language, &glossary, out)
-        }
+        EnginePlan::Pianissimo => run_pianissimo_batch(
+            &PianissimoBatch {
+                args: &args,
+                files: &files,
+                language,
+                glossary: &glossary,
+                clipboard: &SystemClipboard,
+            },
+            &InstalledPianissimo,
+            canceller,
+            out,
+        ),
         EnginePlan::Whisper {
             model,
             correction_vocabulary,
         } => {
-            let backend = std::sync::Arc::new(WhisperBackend::new());
             let _abort_whisper = {
                 let backend = backend.clone();
-                crate::cancel::register(move || backend.request_cancel())
+                canceller.register(move || backend.request_cancel())
             };
             run_whisper_batch(
                 &WhisperBatch {
@@ -125,17 +145,22 @@ fn run_inner(args: TranscribeArgs, out: &Out) -> Result<(), DictationError> {
                     model,
                     glossary: &glossary,
                     correction_vocabulary: &correction_vocabulary,
+                    clipboard: &SystemClipboard,
                 },
-                &*backend,
-                &crate::cancel::GLOBAL,
+                Services {
+                    backend: &*backend,
+                    #[cfg(feature = "diarization")]
+                    analyzer: &OnnxAnalyzer,
+                    canceller,
+                },
                 out,
             )
         }
     }
 }
 
-/// What a Whisper batch needs besides the backend, the canceller and the
-/// output: the planned run.
+/// What a Whisper batch needs besides its [`Services`] and the output: the
+/// planned run, and where `--clipboard` puts the transcript.
 struct WhisperBatch<'a> {
     args: &'a TranscribeArgs,
     files: &'a [PathBuf],
@@ -144,9 +169,10 @@ struct WhisperBatch<'a> {
     model: WhisperModel,
     glossary: &'a Glossary,
     correction_vocabulary: &'a [String],
+    clipboard: &'a dyn Clipboard,
 }
 
-/// Transcribes the files one after another with `backend`, writing each
+/// Transcribes the files one after another with `services`, writing each
 /// outcome as it is done and the batch's summary at the end.
 ///
 /// Model loading is lazy so a validated diarization-cache hit never maps
@@ -154,8 +180,7 @@ struct WhisperBatch<'a> {
 /// sequential, so one flag safely preserves the load-once behavior.
 fn run_whisper_batch(
     batch: &WhisperBatch<'_>,
-    backend: &dyn InferenceBackend,
-    canceller: &crate::cancel::Canceller,
+    services: Services<'_>,
     out: &Out,
 ) -> Result<(), DictationError> {
     let WhisperBatch {
@@ -166,19 +191,21 @@ fn run_whisper_batch(
         model,
         glossary,
         correction_vocabulary,
+        clipboard,
     } = *batch;
     let mut model_loaded = false;
+    let options = FileOptions::from_args(args);
 
     let mut sink = BatchSink::new(args, files.len());
     let (processed, failures) = process_batch_with(
-        canceller,
+        services.canceller,
         files,
         args.fail_fast,
         |index, file| {
             errln!(out, "[{}/{}] {}", index + 1, files.len(), file.display());
             transcribe_file(
                 &FileRequest {
-                    args,
+                    options: &options,
                     file,
                     stored,
                     language,
@@ -186,15 +213,13 @@ fn run_whisper_batch(
                     glossary,
                     correction_vocabulary,
                     control: None,
-                    #[cfg(feature = "diarization")]
-                    cache_policy: CachePolicy::Normal,
                 },
-                backend,
+                services,
                 &mut model_loaded,
                 out,
             )
         },
-        |execution| sink.emit(out, args, execution),
+        |execution| sink.emit(out, args, clipboard, execution),
     )?;
     sink.finish(out)?;
 
@@ -205,19 +230,6 @@ fn run_whisper_batch(
         )));
     }
     Ok(())
-}
-
-fn process_batch<F, E>(
-    files: &[PathBuf],
-    fail_fast: bool,
-    process: F,
-    emit: E,
-) -> Result<(usize, usize), DictationError>
-where
-    F: FnMut(usize, &Path) -> Result<FileTranscription, DictationError>,
-    E: FnMut(BatchExecution) -> Result<(), DictationError>,
-{
-    process_batch_with(&crate::cancel::GLOBAL, files, fail_fast, process, emit)
 }
 
 fn process_batch_with<F, E>(
@@ -258,7 +270,7 @@ where
 /// resident.
 fn transcribe_file(
     request: &FileRequest<'_>,
-    backend: &dyn InferenceBackend,
+    services: Services<'_>,
     model_loaded: &mut bool,
     out: &Out,
 ) -> Result<FileTranscription, DictationError> {
@@ -269,11 +281,11 @@ fn transcribe_file(
             request,
             plan.started,
             *diarization,
-            backend,
+            services,
             model_loaded,
             out,
         ),
-        FileMode::Plain => run_plain(request, plan.started, backend, model_loaded, out),
+        FileMode::Plain => run_plain(request, plan.started, services, model_loaded, out),
     }
 }
 
