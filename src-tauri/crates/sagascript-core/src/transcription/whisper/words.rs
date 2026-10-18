@@ -8,14 +8,13 @@ use whisper_rs::{FullParams, SamplingStrategy, WhisperVadParams};
 
 use crate::error::DictationError;
 use crate::models::{Language, WhisperModel};
-use crate::sync::lock_or_recover;
 use crate::transcription::model;
 
 use super::entry::{segment_mean_logprob, whisper_threads, DecodeFlags, DecodePath};
 use super::stitch::strip_timestamp_tokens;
 use super::{
     effective_diarization_decoder_config, ContextProfile, TranscribeOptions, TranscriptSegment,
-    WhisperBackend, CONTEXT_LOCK,
+    WhisperBackend,
 };
 
 /// Timestamped transcript plus phase timings used by the diarization path.
@@ -232,14 +231,7 @@ impl WhisperBackend {
         granularity: Granularity,
         options: &TranscribeOptions,
     ) -> Result<DiarizationTranscription, DictationError> {
-        let model = self.loaded_model().ok_or(DictationError::ModelNotLoaded)?;
-        let token_eot = {
-            let guard = lock_or_recover(&self.context, CONTEXT_LOCK);
-            guard
-                .as_ref()
-                .ok_or(DictationError::ModelNotLoaded)?
-                .token_eot()
-        };
+        let (model, token_eot) = self.active_model_and_eot()?;
 
         let n_threads = whisper_threads();
         let no_speech_thold = model.no_speech_threshold();

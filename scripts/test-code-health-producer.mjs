@@ -19,7 +19,12 @@ import {
   parseRustComplexity,
   wholeSecondUtc,
 } from "./lib/code-health-producer.mjs";
-import { collectRustCliCoverage, command, safeFailureDiagnostic as safeProducerFailureDiagnostic } from "./code-health-produce.mjs";
+import {
+  CI_API_TOOL,
+  collectRustCliCoverage,
+  command,
+  safeFailureDiagnostic as safeProducerFailureDiagnostic,
+} from "./code-health-produce.mjs";
 import { validateObjective, validateObjectiveSeries } from "./lib/code-health-objective.mjs";
 import { seriesKey } from "./lib/code-health-policy.mjs";
 import { summarizeCohorts } from "./ci-cohort-timings.mjs";
@@ -512,6 +517,71 @@ test("CI cohort uses attempt 1 despite a successful retry and preserves job outc
   assert.equal(timings.cohorts[0].attempt, 1);
   assert.equal(timings.cohorts[0].counts.outcomes.failure, 1);
   assert.equal(timings.cohorts[0].ledger[0].attempt, 1);
+});
+
+test("measured CI cohort uses a schema-safe tool identity", () => {
+  const scope = config.scopes.find((item) => item.name === "ci-release");
+  const normalized = normalizeCiCohort({
+    runs: [
+      {
+        id: 42,
+        head_sha: "c".repeat(40),
+        run_attempt: 2,
+        event: "push",
+        head_branch: "main",
+        created_at: at(0),
+        workflow_config_digest: digest,
+        status: "completed",
+        conclusion: "success",
+        attempt1_jobs: expectedJobs.map((name, index) => ({
+          id: 1001 + index,
+          name,
+          status: "completed",
+          conclusion: "success",
+          steps: [],
+        })),
+      },
+    ],
+    expectedJobIds: expectedJobs,
+    windowStart: "2026-09-11T00:00:00Z",
+    windowEnd: "2026-10-09T00:00:00Z",
+    workflowConfigDigest: digest,
+    repoRoot,
+  });
+  const payload = buildCiFirstAttemptPayload({
+    normalizedRuns: normalized.runs,
+    windowStart: "2026-09-11T00:00:00Z",
+    windowEnd: "2026-10-09T00:00:00Z",
+    workflowConfigDigest: digest,
+    expectedJobIds: expectedJobs,
+    runInventoryRef: "ref:ci-main-push-28-day",
+  });
+  const objective = createObjective(
+    scope,
+    { commitSha: commit, runRef, attempt: 1, observedAt },
+    {
+      ci_first_attempt: {
+        status: "measured",
+        payload,
+        tool: CI_API_TOOL,
+        command: "GET /repos/{owner}/{repo}/actions/workflows/ci.yml/runs",
+        included_refs: [payload.run_inventory_ref],
+        excluded_refs: [],
+        scope_policy: {
+          workflow: config.ci.workflow,
+          branch: config.ci.branch,
+          event: config.ci.event,
+          window_days: config.ci.window_days,
+          expected_job_ids: expectedJobs,
+          limits: config.ci.limits,
+          attempt_policy: config.ci.attempt_policy,
+          scope_version: "main-push-current-config-ci-v2",
+        },
+      },
+    },
+  );
+  const validation = validateObjective(schema, objective);
+  assert.equal(validation.valid, true, validation.schemaErrors.join("; "));
 });
 
 test("CI cohort excludes historical workflow configurations and measures current runs only", () => {

@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use sagascript_core::audio::decoder::decode_audio_file;
 use sagascript_core::settings::{Language, WhisperModel};
 use sagascript_core::transcription::model;
-use sagascript_core::transcription::whisper_backend::WhisperBackend;
+use sagascript_core::transcription::whisper_backend::{TranscribeRequest, WhisperBackend};
 use sagascript_core::transcription::TranscribeOptions;
 
 fn words(text: &str) -> Vec<String> {
@@ -74,7 +74,7 @@ fn long_swedish_file_does_not_drop_words() {
         ..Default::default()
     };
     let text = backend
-        .transcribe_sync_with_options(&audio, Language::Swedish, &opts, |_| {}, None)
+        .transcribe_text(TranscribeRequest::new(&audio, Language::Swedish, &opts))
         .expect("transcribe");
 
     let reference = words(&std::fs::read_to_string(reference).expect("read reference"));
