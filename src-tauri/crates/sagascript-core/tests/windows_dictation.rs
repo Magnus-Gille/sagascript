@@ -25,7 +25,9 @@ use std::thread;
 use sagascript_core::audio::decoder::decode_audio_file;
 use sagascript_core::settings::{Language, WhisperModel};
 use sagascript_core::transcription::model;
-use sagascript_core::transcription::whisper_backend::{DictationTimings, WhisperBackend};
+use sagascript_core::transcription::whisper_backend::{
+    DictationTimings, TranscribeRequest, WhisperBackend,
+};
 use sagascript_core::transcription::TranscribeOptions;
 
 const ENGLISH_AUDIO_ENV: &str = "SAGASCRIPT_WINDOWS_ENGLISH_AUDIO";
@@ -102,11 +104,9 @@ fn english_fixture_reuses_loaded_runtime() {
 
     let mut first_timings = DictationTimings::default();
     let first = backend
-        .transcribe_live_dictation(
+        .transcribe_dictation(
             WhisperModel::BaseEn,
-            &audio,
-            Language::English,
-            &options,
+            TranscribeRequest::new(&audio, Language::English, &options).live(),
             &mut first_timings,
         )
         .expect("first English fixture transcription should succeed");
@@ -118,11 +118,9 @@ fn english_fixture_reuses_loaded_runtime() {
 
     let mut second_timings = DictationTimings::default();
     let second = backend
-        .transcribe_live_dictation(
+        .transcribe_dictation(
             WhisperModel::BaseEn,
-            &audio,
-            Language::English,
-            &options,
+            TranscribeRequest::new(&audio, Language::English, &options).live(),
             &mut second_timings,
         )
         .expect("second English fixture transcription should succeed");
@@ -177,11 +175,9 @@ fn concurrent_warmup_switching_keeps_bilingual_runtime_selection_atomic() {
     for repetition in 0..2 {
         let mut english_timings = DictationTimings::default();
         let english = backend
-            .transcribe_live_dictation(
+            .transcribe_dictation(
                 WhisperModel::BaseEn,
-                &english_audio,
-                Language::English,
-                &options,
+                TranscribeRequest::new(&english_audio, Language::English, &options).live(),
                 &mut english_timings,
             )
             .expect("English fixture transcription should succeed");
@@ -193,11 +189,9 @@ fn concurrent_warmup_switching_keeps_bilingual_runtime_selection_atomic() {
 
         let mut swedish_timings = DictationTimings::default();
         let swedish = backend
-            .transcribe_live_dictation(
+            .transcribe_dictation(
                 WhisperModel::KbWhisperBase,
-                &swedish_audio,
-                Language::Swedish,
-                &options,
+                TranscribeRequest::new(&swedish_audio, Language::Swedish, &options).live(),
                 &mut swedish_timings,
             )
             .expect("Swedish fixture transcription should succeed");

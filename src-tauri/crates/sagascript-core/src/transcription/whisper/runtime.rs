@@ -561,11 +561,12 @@ impl WhisperBackend {
         self.runtime_slots().active_context()
     }
 
-    /// The active model and its context handle, read under one lock.
-    pub(super) fn active_model_and_context(
-        &self,
-    ) -> Result<(WhisperModel, Arc<WhisperContext>), DictationError> {
-        self.runtime_slots().active_model_and_context()
+    /// The active model and the end-of-text token id of its context, read
+    /// under one lock. The context handle is released again before this
+    /// returns: nothing keeps a displaced context alive.
+    pub(super) fn active_model_and_eot(&self) -> Result<(WhisperModel, i32), DictationError> {
+        let (model, context) = self.runtime_slots().active_model_and_context()?;
+        Ok((model, context.token_eot()))
     }
 
     /// Check whether selecting this model in the default flash-attention

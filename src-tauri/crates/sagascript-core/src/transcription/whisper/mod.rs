@@ -3,6 +3,7 @@
 //!
 //! - `runtime`: model load, the warm secondary runtime, the bounded state and
 //!   load locks, abort and cancel;
+//! - `request`: `TranscribeRequest`, one transcription as data;
 //! - `entry`: the transcription entry points and the decoding parameters;
 //! - `parallel`: long-file chunking across several Whisper states;
 //! - `stitch`: joining overlapping chunk results and assembling the transcript;
@@ -23,13 +24,15 @@ use crate::models::WhisperModel;
 mod entry;
 mod parallel;
 mod progress;
+mod request;
 mod runtime;
 mod stitch;
 #[cfg(feature = "diarization")]
 mod words;
 
 pub use parallel::{recommended_parallel_chunks, MAX_PARALLEL_CHUNKS};
-pub use stitch::{assemble_transcript, contains_no_speech_marker};
+pub use request::{TranscribeHooks, TranscribeRequest};
+pub use stitch::{assemble_transcript, contains_no_speech_marker, display_transcript};
 #[cfg(feature = "diarization")]
 pub use words::{
     group_tokens_into_words, DiarizationTranscription, DiarizationTranscriptionTimings, TokenTiming,

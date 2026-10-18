@@ -231,8 +231,7 @@ impl WhisperBackend {
         granularity: Granularity,
         options: &TranscribeOptions,
     ) -> Result<DiarizationTranscription, DictationError> {
-        let (model, context) = self.active_model_and_context()?;
-        let token_eot = context.token_eot();
+        let (model, token_eot) = self.active_model_and_eot()?;
 
         let n_threads = whisper_threads();
         let no_speech_thold = model.no_speech_threshold();

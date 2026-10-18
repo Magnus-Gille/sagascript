@@ -31,8 +31,9 @@ pub use glossary_suggestions::{
 pub use live_dictation::LiveDictationBackend;
 pub use postprocess::normalize_nonspeech_markers;
 pub use whisper_backend::{
-    recommended_parallel_chunks, ContextProfile, TranscribeOptions, TranscriptSegment,
-    WhisperBackend, FILE_TRANSCRIBE_BEAM, WARM_MODEL_CACHE_BUDGET_MB, WARM_MODEL_CACHE_MAX_MODELS,
+    recommended_parallel_chunks, ContextProfile, TranscribeHooks, TranscribeOptions,
+    TranscribeRequest, TranscriptSegment, WhisperBackend, FILE_TRANSCRIBE_BEAM,
+    WARM_MODEL_CACHE_BUDGET_MB, WARM_MODEL_CACHE_MAX_MODELS,
 };
 #[cfg(feature = "diarization")]
 pub use whisper_backend::{DiarizationTranscription, DiarizationTranscriptionTimings};

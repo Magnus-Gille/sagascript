@@ -1,6 +1,6 @@
 use super::*;
 use crate::models::Language;
-use crate::transcription::whisper::{DictationTimings, TranscribeOptions};
+use crate::transcription::whisper::{DictationTimings, TranscribeOptions, TranscribeRequest};
 
 #[cfg(test)]
 mod packaged_x64_cpu_tests {
@@ -403,9 +403,11 @@ mod warm_state_tests {
             let mut timings = DictationTimings::default();
             let result = backend.transcribe_dictation(
                 WhisperModel::Base,
-                &[0.0; 8_000],
-                Language::English,
-                &TranscribeOptions::default(),
+                TranscribeRequest::new(
+                    &[0.0; 8_000],
+                    Language::English,
+                    &TranscribeOptions::default(),
+                ),
                 &mut timings,
             );
             assert!(
@@ -587,9 +589,11 @@ mod lock_protocol_tests {
 
         let result = backend.transcribe_dictation(
             MODEL,
-            &[0.0; 8_000],
-            Language::English,
-            &TranscribeOptions::default(),
+            TranscribeRequest::new(
+                &[0.0; 8_000],
+                Language::English,
+                &TranscribeOptions::default(),
+            ),
             &mut timings,
         );
 
