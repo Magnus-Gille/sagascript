@@ -11,7 +11,7 @@ use serde_json::{Map, Number, Value};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-use crate::diarization_reference::{
+use crate::diarization::eval::reference::{
     ReferenceActivity, ReferenceDocument, ReferenceError, ReferenceInterval, ReferenceStatus,
 };
 
@@ -885,8 +885,8 @@ fn resolve_window_id(
 
 fn containing_window<'a>(
     interval: &ReferenceInterval,
-    windows: &'a [crate::diarization_reference::ReferenceWindow],
-) -> Option<&'a crate::diarization_reference::ReferenceWindow> {
+    windows: &'a [crate::diarization::eval::reference::ReferenceWindow],
+) -> Option<&'a crate::diarization::eval::reference::ReferenceWindow> {
     windows
         .iter()
         .find(|window| interval.start >= window.start && interval.end <= window.end)

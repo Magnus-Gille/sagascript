@@ -1,6 +1,8 @@
 //! Versioned, local diarization evidence. Distances and temporal support are
 //! diagnostic measurements, never calibrated speaker probabilities.
 
+mod projection;
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
@@ -158,9 +160,9 @@ pub struct DiarizationReport {
     #[serde(default)]
     pub diagnostics_included: bool,
     #[serde(default)]
-    pub speaker_hint: Option<crate::speaker_hint::SpeakerCountHint>,
+    pub speaker_hint: Option<crate::diarization::speaker_hint::SpeakerCountHint>,
     #[serde(default)]
-    pub speaker_hint_outcome: Option<crate::speaker_hint::SpeakerHintOutcome>,
+    pub speaker_hint_outcome: Option<crate::diarization::speaker_hint::SpeakerHintOutcome>,
     #[serde(default)]
     pub segmentation_model_sha256: Option<String>,
     #[serde(default)]

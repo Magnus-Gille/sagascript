@@ -27,7 +27,7 @@
         "src-tauri/crates/sagascript-core/src/transcription/whisper/runtime.rs",
         "src-tauri/crates/sagascript-core/src/transcription/whisper/stitch.rs",
         "src-tauri/crates/sagascript-core/src/transcription/whisper/words.rs",
-        "src-tauri/crates/sagascript-core/src/diarization_evaluation.rs",
+        "src-tauri/crates/sagascript-core/src/diarization/eval/evaluation.rs",
         "src-tauri/crates/sagascript-core/src/download.rs"
       ],
       "rust-cli": [

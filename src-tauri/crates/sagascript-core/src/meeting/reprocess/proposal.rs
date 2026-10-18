@@ -11,12 +11,12 @@ use serde::{de::Error as DeError, Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-use crate::meeting::MeetingTranscript;
-use crate::meeting_reprocess::{preview_migration, MigrationPreview, MigrationStatus};
-use crate::meeting_review::{
+use crate::meeting::reprocess::{preview_migration, MigrationPreview, MigrationStatus};
+use crate::meeting::review::{
     CorrectionFile, CorrectionOperation, MeetingReview, MeetingReviewError,
     MAX_CORRECTION_OPERATIONS, MAX_REVIEW_GENERATION, REVIEW_SCHEMA_VERSION,
 };
+use crate::meeting::MeetingTranscript;
 
 pub const REPROCESS_PROPOSAL_SCHEMA_VERSION: u32 = 1;
 pub const MAX_SERIALIZED_PROPOSAL_BYTES: usize = 72 * 1024 * 1024;
