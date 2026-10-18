@@ -368,6 +368,39 @@ mod entry_point_tests {
         ));
     }
 
+    /// The guard is spent once, at the top: near-silence is "nothing to
+    /// transcribe", not a first pass that came back empty and now needs its
+    /// gaps recovered (which would also need a model, to read its thresholds).
+    #[test]
+    fn live_gap_recovery_skips_near_silence_without_a_model_or_a_second_pass() {
+        let backend = WhisperBackend::new();
+        let options = TranscribeOptions::default();
+
+        let skipped = backend
+            .transcribe_with_gap_recovery(
+                TranscribeRequest::new(&SILENCE, Language::English, &options).live(),
+            )
+            .expect("near-silence is skipped, not an error");
+        assert!(skipped.is_empty());
+
+        assert!(matches!(
+            backend.transcribe_with_gap_recovery(
+                TranscribeRequest::new(&[], Language::English, &options).live()
+            ),
+            Err(DictationError::NoAudioCaptured)
+        ));
+        let audible = tone();
+        assert!(
+            matches!(
+                backend.transcribe_with_gap_recovery(
+                    TranscribeRequest::new(&audible, Language::English, &options).live()
+                ),
+                Err(DictationError::ModelNotLoaded)
+            ),
+            "speech goes on to the decoder, which needs a model"
+        );
+    }
+
     #[test]
     fn a_dictation_request_goes_through_the_load_lock() {
         let backend = Arc::new(WhisperBackend::new());

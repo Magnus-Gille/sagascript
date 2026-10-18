@@ -306,6 +306,11 @@ impl WhisperBackend {
         &self,
         request: TranscribeRequest<'_>,
     ) -> Result<Vec<TranscriptSegment>, DictationError> {
+        // Near-silence is nothing to transcribe, not a first pass that came
+        // back empty and has gaps to recover.
+        let Some(request) = request.after_live_guard()? else {
+            return Ok(Vec::new());
+        };
         let (audio, language, options) = (request.audio, request.language, request.options);
         let segments = self.transcribe_segments(request)?;
         let model = self.loaded_model().ok_or(DictationError::ModelNotLoaded)?;
