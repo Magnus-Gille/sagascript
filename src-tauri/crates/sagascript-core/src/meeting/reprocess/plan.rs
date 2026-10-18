@@ -8,7 +8,7 @@ use serde::{de::Error as DeError, Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-use crate::speaker_hint::SpeakerCountHint;
+use crate::diarization::speaker_hint::SpeakerCountHint;
 
 pub const REPROCESSING_PLAN_SCHEMA_VERSION: u32 = 1;
 

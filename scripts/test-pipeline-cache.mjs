@@ -93,7 +93,7 @@ test("Windows candidates cache only verified models with a candidate primary key
   );
   assert.match(
     cache,
-    /key: windows-models-package-\$\{\{ matrix\.architecture \}\}-\$\{\{ hashFiles\('src-tauri\/crates\/sagascript-core\/src\/settings\/manager\.rs', 'src-tauri\/crates\/sagascript-core\/src\/transcription\/model\.rs', 'src-tauri\/crates\/sagascript-core\/src\/diarization\/model\.rs'\) \}\}/,
+    /key: windows-models-package-\$\{\{ matrix\.architecture \}\}-\$\{\{ hashFiles\('src-tauri\/crates\/sagascript-core\/src\/models\/sources\.rs', 'src-tauri\/crates\/sagascript-core\/src\/transcription\/pianissimo_model\.rs', 'src-tauri\/crates\/sagascript-core\/src\/transcription\/model\.rs', 'src-tauri\/crates\/sagascript-core\/src\/diarization\/model\.rs'\) \}\}/,
   );
   assert.match(cache, /restore-keys:[\s\S]*windows-models-package-\$\{\{ matrix\.architecture \}\}-[\s\S]*windows-models-/);
   const nativeGate = windowsWorkflow.indexOf("name: Gate real Windows transcription");

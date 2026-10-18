@@ -218,7 +218,7 @@ mod tests {
     #[test]
     fn matches_root_reviewed_fixtures() {
         let fixtures: Vec<Fixture> = serde_json::from_str(include_str!(
-            "../../../../scripts/fixtures/meeting-reprocess-matching.json"
+            "../../../../../../scripts/fixtures/meeting-reprocess-matching.json"
         ))
         .expect("root-reviewed matching fixtures should parse");
 
