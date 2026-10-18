@@ -153,7 +153,10 @@
   `commands/hotkey.rs` are macOS-only and are only logged or mapped to `launch_failed` (they can
   be compiled by the macOS runner alone). The settings internals that still use `String`
   (`settings/migrations.rs`, `settings/lenient.rs`) feed `SettingsLoadError`, which is typed.
-- **Part 2b** (not done): the `error` event's payload is still a plain string, `FileTranscription`
+- **Part 2b** (not done): `apply_hotkey_change` flattens a `SettingsError` into `hotkey_invalid`
+  (`commands/hotkey.rs`, `hotkey/configuration.rs`), so a profile refusal such as
+  `dictionary_blocks_language_change` or `model_incompatible` reaches the Settings window as
+  `hotkey_invalid` there; the `error` event's payload is still a plain string, `FileTranscription`
   shows a backend `cancelled` as a failure, the hotkey path shows a `Cancelled` as
   `UiState::Error` rather than a quiet end, and the "Try again" (restarting the action, decision 6)
   and "Download the model again" buttons are not wired to `backendErrorRecovery`.
