@@ -26,7 +26,12 @@
 //     nested directory or an `action.yaml` is not seen.
 import { createHash } from "node:crypto";
 
-/** The first two command lines of a multi-command pwsh script, in either order. Both are needed: the native-exit preference only acts under the error preference. */
+/**
+ * The first two command lines of a multi-command pwsh script, in either order. The native-exit preference acts only
+ * under `$ErrorActionPreference = 'Stop'`. The runner already prepends that line to a pwsh script (the step log shows
+ * it), so the explicit line is not what makes the step safe today: it keeps the step from depending on the runner's
+ * wrapper. Both lines stay in the steps, and the guard requires both, because they are explicit and harmless.
+ */
 export const PWSH_PREFERENCES = [
   { name: "$ErrorActionPreference = 'Stop'", pattern: /^\$ErrorActionPreference\s*=\s*(['"])Stop\1\s*;?$/i },
   { name: "$PSNativeCommandUseErrorActionPreference = $true", pattern: /^\$PSNativeCommandUseErrorActionPreference\s*=\s*\$true\s*;?$/i },
