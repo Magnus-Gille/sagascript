@@ -1,6 +1,6 @@
 use super::*;
 use crate::models::Language;
-use crate::transcription::whisper::{DictationTimings, TranscribeOptions};
+use crate::transcription::whisper::{DictationTimings, TranscribeOptions, TranscribeRequest};
 
 #[cfg(test)]
 mod packaged_x64_cpu_tests {
@@ -105,33 +105,38 @@ mod warm_model_cache_tests {
         );
     }
 
+    fn loaded(key: RuntimeKey, ctx: &'static str) -> Loaded<&'static str> {
+        Loaded {
+            key,
+            ctx: Arc::new(ctx),
+        }
+    }
+
     #[test]
     fn cached_runtime_switch_preserves_both_warm_payloads() {
         let swedish = key(WhisperModel::KbWhisperBase, ContextProfile::FlashAttention);
         let english = key(WhisperModel::BaseEn, ContextProfile::FlashAttention);
-        let mut active_key = Some(swedish);
-        let mut active_context = Some("swedish-context");
+        let mut active = Some(loaded(swedish, "swedish-context"));
         let mut active_state = Some("swedish-state");
         let mut cached = Some(CachedWhisperRuntime {
-            key: english,
-            context: "english-context",
+            runtime: loaded(english, "english-context"),
             state: Some("english-state"),
         });
 
         assert!(activate_cached_runtime(
             english,
-            &mut active_key,
-            &mut active_context,
+            &mut active,
             &mut active_state,
             &mut cached,
         ));
-        assert_eq!(active_key, Some(english));
-        assert_eq!(active_context, Some("english-context"));
+        let active = active.unwrap();
+        assert_eq!(active.key, english);
+        assert_eq!(*active.ctx, "english-context");
         assert_eq!(active_state, Some("english-state"));
 
         let cached = cached.unwrap();
-        assert_eq!(cached.key, swedish);
-        assert_eq!(cached.context, "swedish-context");
+        assert_eq!(cached.runtime.key, swedish);
+        assert_eq!(*cached.runtime.ctx, "swedish-context");
         assert_eq!(cached.state, Some("swedish-state"));
     }
 
@@ -139,26 +144,49 @@ mod warm_model_cache_tests {
     fn cache_miss_leaves_active_and_secondary_unchanged() {
         let swedish = key(WhisperModel::KbWhisperBase, ContextProfile::FlashAttention);
         let english = key(WhisperModel::BaseEn, ContextProfile::FlashAttention);
-        let mut active_key = Some(swedish);
-        let mut active_context = Some("swedish-context");
+        let mut active = Some(loaded(swedish, "swedish-context"));
         let mut active_state = Some("swedish-state");
         let mut cached = Some(CachedWhisperRuntime {
-            key: english,
-            context: "english-context",
+            runtime: loaded(english, "english-context"),
             state: Some("english-state"),
         });
 
         assert!(!activate_cached_runtime(
             key(WhisperModel::NbWhisperBase, ContextProfile::FlashAttention,),
-            &mut active_key,
-            &mut active_context,
+            &mut active,
             &mut active_state,
             &mut cached,
         ));
-        assert_eq!(active_key, Some(swedish));
-        assert_eq!(active_context, Some("swedish-context"));
+        let active = active.unwrap();
+        assert_eq!(active.key, swedish);
+        assert_eq!(*active.ctx, "swedish-context");
         assert_eq!(active_state, Some("swedish-state"));
-        assert_eq!(cached.as_ref().unwrap().key, english);
+        assert_eq!(cached.as_ref().unwrap().runtime.key, english);
+    }
+
+    /// The old guard `active_key.is_none() || active_context.is_none()`: with
+    /// nothing active there is nothing to put in the secondary slot's place.
+    #[test]
+    fn nothing_active_leaves_the_secondary_in_place() {
+        let english = key(WhisperModel::BaseEn, ContextProfile::FlashAttention);
+        let mut active: Option<Loaded<&'static str>> = None;
+        let mut active_state = None;
+        let mut cached = Some(CachedWhisperRuntime {
+            runtime: loaded(english, "english-context"),
+            state: Some("english-state"),
+        });
+
+        assert!(!activate_cached_runtime(
+            english,
+            &mut active,
+            &mut active_state,
+            &mut cached,
+        ));
+        assert!(active.is_none());
+        assert_eq!(active_state, None);
+        let cached = cached.unwrap();
+        assert_eq!(cached.runtime.key, english);
+        assert_eq!(cached.state, Some("english-state"));
     }
 }
 
@@ -337,12 +365,12 @@ mod warm_state_tests {
         let holder = Arc::clone(&backend);
         let panicked = thread::spawn(move || {
             let _state = holder.state.lock().unwrap();
-            let _context = holder.context.lock().unwrap();
+            let _context = holder.loaded_runtime.lock().unwrap();
             panic!("injected panic mid-inference (#359)");
         })
         .join();
         assert!(panicked.is_err());
-        assert!(backend.state.is_poisoned() && backend.context.is_poisoned());
+        assert!(backend.state.is_poisoned() && backend.loaded_runtime.is_poisoned());
 
         let res = backend.with_warm_state_grace(Duration::from_millis(0), |_state| Ok(()));
         assert!(
@@ -375,9 +403,11 @@ mod warm_state_tests {
             let mut timings = DictationTimings::default();
             let result = backend.transcribe_dictation(
                 WhisperModel::Base,
-                &[0.0; 8_000],
-                Language::English,
-                &TranscribeOptions::default(),
+                TranscribeRequest::new(
+                    &[0.0; 8_000],
+                    Language::English,
+                    &TranscribeOptions::default(),
+                ),
                 &mut timings,
             );
             assert!(
@@ -393,8 +423,9 @@ mod warm_state_tests {
 
 /// Characterisation of the load lock and the abort and cancel flags (#371),
 /// pinned before `whisper_backend.rs` is split. Nothing here needs model
-/// weights: a runtime key can be published without a context, and every
-/// assertion stops at the lock, flag or error that comes before FFI.
+/// weights: every assertion stops at the lock, flag or error that comes
+/// before FFI. An active runtime owns its context, so the tests that need
+/// one run on `Fakes`, the generic runtime slots with unit payloads.
 #[cfg(test)]
 mod lock_protocol_tests {
     use super::*;
@@ -410,13 +441,34 @@ mod lock_protocol_tests {
         }
     }
 
-    /// A backend whose active runtime is published without a context, so
-    /// `ensure_model*` sees the model as already active and never reads a
-    /// model file.
-    fn backend_with_active_runtime() -> Arc<WhisperBackend> {
-        let backend = Arc::new(WhisperBackend::new());
-        *backend.loaded_runtime.lock().unwrap() = Some(key(ContextProfile::FlashAttention));
-        backend
+    /// The runtime slots with unit payloads: what the lookups read, without a
+    /// native context (which would need a model file).
+    struct Fakes {
+        state: Mutex<Option<()>>,
+        loaded_runtime: Mutex<Option<Loaded<()>>>,
+        cached_runtime: Mutex<Option<CachedWhisperRuntime<(), ()>>>,
+    }
+
+    impl Fakes {
+        /// A runtime that is already active, as after a successful load.
+        fn with_active_runtime() -> Arc<Self> {
+            Arc::new(Self {
+                state: Mutex::new(None),
+                loaded_runtime: Mutex::new(Some(Loaded {
+                    key: key(ContextProfile::FlashAttention),
+                    ctx: Arc::new(()),
+                })),
+                cached_runtime: Mutex::new(None),
+            })
+        }
+
+        fn slots(&self) -> RuntimeSlots<'_, (), ()> {
+            RuntimeSlots {
+                state: &self.state,
+                loaded_runtime: &self.loaded_runtime,
+                cached_runtime: &self.cached_runtime,
+            }
+        }
     }
 
     /// Hold `load_lock` on a background thread, as a transcription in flight
@@ -435,11 +487,11 @@ mod lock_protocol_tests {
         (release_tx, handle)
     }
 
-    fn poison_lock<T: Send + 'static>(
-        backend: &Arc<WhisperBackend>,
-        pick: fn(&WhisperBackend) -> &Mutex<T>,
+    fn poison_lock<O: Send + Sync + 'static, T: 'static>(
+        owner: &Arc<O>,
+        pick: fn(&O) -> &Mutex<T>,
     ) {
-        let holder = Arc::clone(backend);
+        let holder = Arc::clone(owner);
         let panicked = thread::spawn(move || {
             let _guard = pick(&holder).lock().unwrap();
             panic!("injected panic to poison a whisper lock");
@@ -489,7 +541,7 @@ mod lock_protocol_tests {
     /// budget-length tests below cost about one budget in wall time.
     #[test]
     fn ensure_model_reports_model_busy_once_the_budget_expires_while_a_load_is_in_flight() {
-        let backend = backend_with_active_runtime();
+        let backend = Arc::new(WhisperBackend::new());
         let (release, holder) = hold_load_lock(&backend);
 
         let started = Instant::now();
@@ -503,12 +555,10 @@ mod lock_protocol_tests {
         assert!(waited >= WARM_STATE_GRACE, "gave up early after {waited:?}");
         release.send(()).unwrap();
         holder.join().unwrap();
-
-        // Once the holder is gone the already-active runtime is accepted
-        // without loading anything.
-        backend
-            .ensure_model_with_profile(MODEL, ContextProfile::FlashAttention)
-            .expect("an active runtime needs no load");
+        assert!(
+            backend.load_lock.try_lock().is_ok(),
+            "the refused caller leaves the lock free once the holder is gone"
+        );
     }
 
     #[test]
@@ -533,15 +583,17 @@ mod lock_protocol_tests {
 
     #[test]
     fn dictation_reports_model_busy_and_marks_only_model_acquisition_as_started() {
-        let backend = backend_with_active_runtime();
+        let backend = Arc::new(WhisperBackend::new());
         let (release, holder) = hold_load_lock(&backend);
         let mut timings = DictationTimings::default();
 
         let result = backend.transcribe_dictation(
             MODEL,
-            &[0.0; 8_000],
-            Language::English,
-            &TranscribeOptions::default(),
+            TranscribeRequest::new(
+                &[0.0; 8_000],
+                Language::English,
+                &TranscribeOptions::default(),
+            ),
             &mut timings,
         );
 
@@ -560,16 +612,21 @@ mod lock_protocol_tests {
 
     #[test]
     fn with_model_keeps_the_load_lock_for_the_callback_and_releases_it_afterwards() {
-        let backend = backend_with_active_runtime();
+        let backend = WhisperBackend::new();
 
+        // `with_model` is `pinned` with `ensure_model_inner` as the selection;
+        // an active runtime needs a context, so the selection is a stand-in.
         let value = backend
-            .with_model(MODEL, ContextProfile::FlashAttention, |pinned| {
-                assert!(
-                    matches!(pinned.load_lock.try_lock(), Err(TryLockError::WouldBlock)),
-                    "the model selection stays pinned while the callback runs"
-                );
-                Ok(42)
-            })
+            .pinned(
+                || Ok(()),
+                || {
+                    assert!(
+                        matches!(backend.load_lock.try_lock(), Err(TryLockError::WouldBlock)),
+                        "the model selection stays pinned while the callback runs"
+                    );
+                    Ok(42)
+                },
+            )
             .unwrap();
         assert_eq!(value, 42);
         assert!(
@@ -578,19 +635,35 @@ mod lock_protocol_tests {
         );
 
         let failed: Result<(), _> =
-            backend.with_model(MODEL, ContextProfile::FlashAttention, |_| {
-                Err(DictationError::NoAudioCaptured)
-            });
+            backend.pinned(|| Ok(()), || Err(DictationError::NoAudioCaptured));
         assert!(matches!(failed, Err(DictationError::NoAudioCaptured)));
         assert!(
             backend.load_lock.try_lock().is_ok(),
             "released after an error"
         );
+
+        let mut callback_ran = false;
+        let refused: Result<(), _> = backend.pinned(
+            || Err(DictationError::ModelNotLoaded),
+            || {
+                callback_ran = true;
+                Ok(())
+            },
+        );
+        assert!(matches!(refused, Err(DictationError::ModelNotLoaded)));
+        assert!(
+            !callback_ran,
+            "a failed selection never reaches the callback"
+        );
+        assert!(
+            backend.load_lock.try_lock().is_ok(),
+            "released after a failed selection"
+        );
     }
 
     #[test]
     fn a_poisoned_load_lock_refuses_every_entry_that_selects_a_model() {
-        let backend = backend_with_active_runtime();
+        let backend = Arc::new(WhisperBackend::new());
         poison_lock(&backend, |backend| &backend.load_lock);
         let mut callback_ran = false;
 
@@ -619,17 +692,21 @@ mod lock_protocol_tests {
 
     #[test]
     fn the_active_runtime_answers_the_lookups_without_a_context() {
-        let backend = backend_with_active_runtime();
+        let fakes = Fakes::with_active_runtime();
+        let slots = fakes.slots();
 
-        assert_eq!(backend.loaded_model(), Some(MODEL));
+        assert_eq!(slots.loaded_model(), Some(MODEL));
         assert_eq!(
-            backend.loaded_context_profile(),
+            slots.loaded_context_profile(),
             Some(ContextProfile::FlashAttention)
         );
-        assert_eq!(backend.resident_models(), vec![MODEL]);
-        assert!(!backend.needs_reload(MODEL));
-        assert!(backend.needs_reload_with_profile(MODEL, ContextProfile::TokenAlignment));
-        assert!(backend.needs_reload(WhisperModel::BaseEn));
+        assert_eq!(slots.resident_models(), vec![MODEL]);
+        assert!(!slots.needs_reload(key(ContextProfile::FlashAttention)));
+        assert!(slots.needs_reload(key(ContextProfile::TokenAlignment)));
+        assert!(slots.needs_reload(RuntimeKey {
+            model: WhisperModel::BaseEn,
+            profile: ContextProfile::FlashAttention,
+        }));
     }
 
     #[test]
@@ -644,15 +721,20 @@ mod lock_protocol_tests {
 
     #[test]
     fn dictation_with_an_active_runtime_marks_the_model_cached_before_it_fails_without_a_context() {
-        let backend = backend_with_active_runtime();
+        let backend = WhisperBackend::new();
         let mut timings = DictationTimings::default();
 
-        let result = backend.transcribe_dictation(
-            MODEL,
-            &[0.0; 8_000],
-            Language::English,
-            &TranscribeOptions::default(),
+        // An active runtime without a context cannot be built any more, so the
+        // selection and the inference are stand-ins: the selection finds the
+        // runtime resident (what `needs_reload` reports for an active runtime,
+        // see the lookups test above) and the inference finds no context.
+        let result = backend.dictation_transaction(
             &mut timings,
+            |timings| {
+                timings.model_cached = true;
+                Ok(())
+            },
+            || Err(DictationError::ModelNotLoaded),
         );
 
         assert!(matches!(result, Err(DictationError::ModelNotLoaded)));
@@ -666,7 +748,7 @@ mod lock_protocol_tests {
 
     #[test]
     fn language_detection_checks_audio_before_the_context() {
-        let backend = backend_with_active_runtime();
+        let backend = WhisperBackend::new();
 
         assert!(matches!(
             backend.detect_language(&[]),
@@ -682,36 +764,111 @@ mod lock_protocol_tests {
     /// whole, so a poisoned lock is recovered as it is, not cleared.
     #[test]
     fn a_poisoned_runtime_identity_is_recovered_as_it_is() {
-        let backend = backend_with_active_runtime();
-        poison_lock(&backend, |backend| &backend.loaded_runtime);
-        assert!(backend.loaded_runtime.is_poisoned());
+        let fakes = Fakes::with_active_runtime();
+        poison_lock(&fakes, |fakes| &fakes.loaded_runtime);
+        assert!(fakes.loaded_runtime.is_poisoned());
 
-        assert_eq!(backend.loaded_model(), Some(MODEL));
+        assert_eq!(fakes.slots().loaded_model(), Some(MODEL));
         assert!(
-            !backend.loaded_runtime.is_poisoned(),
+            !fakes.loaded_runtime.is_poisoned(),
             "reported once, then cleared"
         );
-        assert!(!backend.needs_reload(MODEL));
+        assert!(!fakes
+            .slots()
+            .needs_reload(key(ContextProfile::FlashAttention)));
     }
 
     #[test]
     fn a_poisoned_context_is_recovered_and_still_reports_no_model() {
         let backend = Arc::new(WhisperBackend::new());
-        poison_lock(&backend, |backend| &backend.context);
+        poison_lock(&backend, |backend| &backend.loaded_runtime);
 
         assert!(matches!(
             backend.detect_language(&[0.1; 16_000]),
             Err(DictationError::ModelNotLoaded)
         ));
-        assert!(!backend.context.is_poisoned());
+        assert!(!backend.loaded_runtime.is_poisoned());
+    }
+
+    /// The merged lock must not make lookups wait for a state to be built
+    /// from the context (kernel compilation, GPU buffers): the context is
+    /// cloned out and the lock released before it is used.
+    #[test]
+    fn a_context_handle_is_used_without_holding_the_runtime_lock() {
+        let fakes = Fakes::with_active_runtime();
+        let slots = fakes.slots();
+
+        let handle = slots
+            .active_context()
+            .expect("an active runtime has a context");
+
+        assert!(
+            fakes.loaded_runtime.try_lock().is_ok(),
+            "the lock is free while the handle is in use"
+        );
+        assert_eq!(slots.loaded_model(), Some(MODEL));
+        assert!(!slots.needs_reload(key(ContextProfile::FlashAttention)));
+        drop(handle);
+    }
+
+    #[test]
+    fn the_model_and_the_context_handle_are_read_together() {
+        let fakes = Fakes::with_active_runtime();
+        let slots = fakes.slots();
+
+        let (model, handle) = slots.active_model_and_context().unwrap();
+        let stored = slots.active_context().unwrap();
+
+        assert_eq!(model, MODEL);
+        assert!(
+            Arc::ptr_eq(&handle, &stored),
+            "the same context, not a copy"
+        );
+    }
+
+    #[test]
+    fn without_an_active_runtime_there_is_no_context_handle() {
+        let fakes = Fakes::with_active_runtime();
+        *fakes.loaded_runtime.lock().unwrap() = None;
+        let slots = fakes.slots();
+
+        assert!(matches!(
+            slots.active_context(),
+            Err(DictationError::ModelNotLoaded)
+        ));
+        assert!(matches!(
+            slots.active_model_and_context(),
+            Err(DictationError::ModelNotLoaded)
+        ));
+        assert_eq!(slots.loaded_model(), None);
+    }
+
+    #[test]
+    fn resident_models_list_the_active_model_first_and_the_secondary_after_it() {
+        let fakes = Fakes::with_active_runtime();
+        *fakes.cached_runtime.lock().unwrap() = Some(CachedWhisperRuntime {
+            runtime: Loaded {
+                key: RuntimeKey {
+                    model: WhisperModel::BaseEn,
+                    profile: ContextProfile::FlashAttention,
+                },
+                ctx: Arc::new(()),
+            },
+            state: None,
+        });
+
+        assert_eq!(
+            fakes.slots().resident_models(),
+            vec![MODEL, WhisperModel::BaseEn]
+        );
     }
 
     #[test]
     fn a_poisoned_secondary_runtime_slot_is_recovered_as_empty() {
-        let backend = backend_with_active_runtime();
-        poison_lock(&backend, |backend| &backend.cached_runtime);
+        let fakes = Fakes::with_active_runtime();
+        poison_lock(&fakes, |fakes| &fakes.cached_runtime);
 
-        assert_eq!(backend.resident_models(), vec![MODEL]);
-        assert!(!backend.cached_runtime.is_poisoned());
+        assert_eq!(fakes.slots().resident_models(), vec![MODEL]);
+        assert!(!fakes.cached_runtime.is_poisoned());
     }
 }

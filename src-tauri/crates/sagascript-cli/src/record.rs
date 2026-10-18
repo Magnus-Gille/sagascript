@@ -12,7 +12,9 @@ use sagascript_core::settings::{HotkeyProfile, Language, Settings, WhisperModel}
 use sagascript_core::transcription::live_dictation::LiveDictationBackend;
 use sagascript_core::transcription::model;
 use sagascript_core::transcription::pianissimo_model;
-use sagascript_core::transcription::{Glossary, TranscribeOptions, WhisperBackend};
+use sagascript_core::transcription::{
+    Glossary, TranscribeOptions, TranscribeRequest, WhisperBackend,
+};
 
 use crate::output::{errln, outln, Out, WriteError};
 use crate::run_request::RunRequest;
@@ -217,19 +219,18 @@ pub fn run(args: RecordArgs, out: &Out) -> Result<(), DictationError> {
                     ProgressStyle::with_template("  Transcribing [{bar:40}] {pos}%").unwrap(),
                 );
                 let pb_cb = pb.clone();
-                let text = backend.transcribe_live_sync_with_options(
-                    &audio,
-                    language,
-                    &opts,
-                    move |pct| {
-                        crate::set_transcription_progress(&pb_cb, pct);
-                    },
+                let text = backend.transcribe_text(
+                    TranscribeRequest::new(&audio, language, &opts)
+                        .live()
+                        .on_progress(move |pct| {
+                            crate::set_transcription_progress(&pb_cb, pct);
+                        }),
                 )?;
                 pb.finish_and_clear();
                 text
             } else {
                 errln!(out, "Transcribing...");
-                backend.transcribe_live_sync_with_options(&audio, language, &opts, |_| {})?
+                backend.transcribe_text(TranscribeRequest::new(&audio, language, &opts).live())?
             };
             (text, model_id_string(model))
         }

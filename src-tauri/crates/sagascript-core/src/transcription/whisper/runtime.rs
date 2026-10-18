@@ -16,8 +16,8 @@ use crate::transcription::model;
 #[cfg(feature = "diarization")]
 use super::words::dtw_preset;
 use super::{
-    CachedWhisperRuntime, ContextProfile, RuntimeKey, WhisperBackend, CACHED_RUNTIME_LOCK,
-    CONTEXT_LOCK, LOADED_RUNTIME_LOCK, STATE_LOCK, WARM_MODEL_CACHE_BUDGET_MB,
+    CachedWhisperRuntime, ContextProfile, Loaded, RuntimeKey, WhisperBackend, CACHED_RUNTIME_LOCK,
+    LOADED_RUNTIME_LOCK, STATE_LOCK, WARM_MODEL_CACHE_BUDGET_MB,
 };
 
 #[cfg(any(test, all(target_os = "windows", target_arch = "x86_64")))]
@@ -82,41 +82,152 @@ fn can_cache_pair(active: RuntimeKey, secondary: RuntimeKey) -> bool {
             <= WARM_MODEL_CACHE_BUDGET_MB
 }
 
+/// Swap the active runtime (and its warm state) with the secondary one when
+/// the secondary is the `desired` runtime. Returns `false`, changing nothing,
+/// when there is no secondary, it is a different runtime, or nothing is
+/// active to put in its place.
 fn activate_cached_runtime<C, S>(
     desired: RuntimeKey,
-    active_key: &mut Option<RuntimeKey>,
-    active_context: &mut Option<C>,
+    active: &mut Option<Loaded<C>>,
     active_state: &mut Option<S>,
     cached: &mut Option<CachedWhisperRuntime<C, S>>,
 ) -> bool {
     let Some(cached_runtime) = cached.take() else {
         return false;
     };
-    if cached_runtime.key != desired || active_key.is_none() || active_context.is_none() {
-        *cached = Some(cached_runtime);
-        return false;
+    match active.take() {
+        Some(active_runtime) if cached_runtime.runtime.key == desired => {
+            let CachedWhisperRuntime { runtime, state } = cached_runtime;
+            *cached = Some(CachedWhisperRuntime {
+                runtime: active_runtime,
+                state: active_state.take(),
+            });
+            *active = Some(runtime);
+            *active_state = state;
+            true
+        }
+        unchanged => {
+            *active = unchanged;
+            *cached = Some(cached_runtime);
+            false
+        }
     }
-
-    let active_runtime = CachedWhisperRuntime {
-        key: active_key.take().unwrap(),
-        context: active_context.take().unwrap(),
-        state: active_state.take(),
-    };
-    *active_key = Some(cached_runtime.key);
-    *active_context = Some(cached_runtime.context);
-    *active_state = cached_runtime.state;
-    *cached = Some(active_runtime);
-    true
 }
 
-/// The four mutexes a runtime swap takes together, borrowed so that the swap
-/// and the warm-state protocol are generic over their payloads: the backend
-/// passes the native `WhisperContext` and `WhisperState`, tests pass fakes.
+/// The three mutexes a runtime swap takes together, in this order (the
+/// backend's `load_lock` is held around them by the caller), borrowed so that
+/// the swap and the warm-state protocol are generic over their payloads: the
+/// backend passes the native `WhisperContext` and `WhisperState`, tests pass
+/// fakes.
 struct RuntimeSlots<'a, C, S> {
     state: &'a Mutex<Option<S>>,
-    context: &'a Mutex<Option<C>>,
-    loaded_runtime: &'a Mutex<Option<RuntimeKey>>,
+    loaded_runtime: &'a Mutex<Option<Loaded<C>>>,
     cached_runtime: &'a Mutex<Option<CachedWhisperRuntime<C, S>>>,
+}
+
+impl<C, S> RuntimeSlots<'_, C, S> {
+    fn active_key(&self) -> Option<RuntimeKey> {
+        lock_or_recover(self.loaded_runtime, LOADED_RUNTIME_LOCK)
+            .as_ref()
+            .map(|loaded| loaded.key)
+    }
+
+    fn cached_key(&self) -> Option<RuntimeKey> {
+        lock_or_recover(self.cached_runtime, CACHED_RUNTIME_LOCK)
+            .as_ref()
+            .map(|runtime| runtime.runtime.key)
+    }
+
+    fn loaded_model(&self) -> Option<WhisperModel> {
+        self.active_key().map(|key| key.model)
+    }
+
+    fn loaded_context_profile(&self) -> Option<ContextProfile> {
+        self.active_key().map(|key| key.profile)
+    }
+
+    /// Models resident in memory, active first.
+    fn resident_models(&self) -> Vec<WhisperModel> {
+        let active = self.loaded_model();
+        let cached = self.cached_key().map(|key| key.model);
+        active.into_iter().chain(cached).collect()
+    }
+
+    fn availability(&self, desired: RuntimeKey) -> ModelAvailability {
+        let active = self.active_key();
+        let cached = self.cached_key();
+        model_availability(active, cached, desired)
+    }
+
+    /// Whether selecting `desired` requires opening model weights.
+    fn needs_reload(&self, desired: RuntimeKey) -> bool {
+        self.availability(desired) == ModelAvailability::Missing
+    }
+
+    /// A handle to the active context, taken under the lock and used after it
+    /// is released: `ModelNotLoaded` when nothing is loaded.
+    ///
+    /// Building a state from a context can take a while (kernel compilation
+    /// and GPU buffers). Done under `loaded_runtime`, every lookup of the
+    /// active model (`loaded_model`, `needs_reload`, the UI's model query)
+    /// would wait for it. The callers that build a state hold the state lock,
+    /// which keeps a swap out, so the context cannot change underneath them.
+    fn active_context(&self) -> Result<Arc<C>, DictationError> {
+        lock_or_recover(self.loaded_runtime, LOADED_RUNTIME_LOCK)
+            .as_ref()
+            .map(|loaded| Arc::clone(&loaded.ctx))
+            .ok_or(DictationError::ModelNotLoaded)
+    }
+
+    /// The active model and the context handle, read together.
+    fn active_model_and_context(&self) -> Result<(WhisperModel, Arc<C>), DictationError> {
+        lock_or_recover(self.loaded_runtime, LOADED_RUNTIME_LOCK)
+            .as_ref()
+            .map(|loaded| (loaded.key.model, Arc::clone(&loaded.ctx)))
+            .ok_or(DictationError::ModelNotLoaded)
+    }
+}
+
+/// What a runtime swap pushed out of the slots and nothing can use again.
+///
+/// Dropping a native context or state frees model weights and GPU buffers,
+/// which takes long enough to matter. A swap therefore hands these back
+/// instead of dropping them under its locks, and the caller drops them once
+/// the state, runtime and cache locks are released. Lookups of the active
+/// model (`loaded_model`, `needs_reload`, `resident_models`) and callers that
+/// take only the state lock (a transcription on the loaded model, as the CLI
+/// makes with `transcribe_text` and `detect_language`) are not held up by
+/// the teardown.
+///
+/// What this does not change: a load, and with it the publish, runs under
+/// `load_lock`, so everything that goes through that lock (the dictation
+/// transaction, `with_model` and `pinned`, `ensure_model*`, `load_model*`)
+/// still waits out the teardown and reports `ModelBusy` after the grace
+/// budget.
+///
+/// Memory: for a moment the peak can be the old context and its state plus
+/// the new context and its state, because a caller that takes only the state
+/// lock can build a state on the new runtime while the old context is still
+/// being freed on the loading thread. The bound of two resident contexts
+/// still holds.
+#[must_use = "drop the displaced payloads only after the locks are released"]
+struct Displaced<C, S> {
+    /// A warm state that belonged to no runtime.
+    orphan_state: Option<S>,
+    /// The previous active runtime, when it does not fit the cache budget
+    /// next to the new one.
+    rejected: Option<CachedWhisperRuntime<C, S>>,
+    /// The previous secondary runtime, replaced by the previous active one.
+    replaced_secondary: Option<CachedWhisperRuntime<C, S>>,
+}
+
+impl<C, S> Displaced<C, S> {
+    /// Free the payloads, in the order they were displaced.
+    fn release(self) {
+        drop(self.orphan_state);
+        drop(self.rejected);
+        drop(self.replaced_secondary);
+    }
 }
 
 /// Publish a freshly loaded context as the active runtime.
@@ -130,34 +241,54 @@ fn publish_runtime<C, S>(
     // When the old/new pair fits the explicit cache budget, move the old
     // context and its reusable warm state into the secondary slot. The next
     // switch can then restore both without touching disk or rebuilding the
-    // state. Lock order is state -> context -> loaded_runtime -> cache,
-    // matching activate_cached_profile().
+    // state. Lock order is state -> loaded_runtime -> cache, matching
+    // activate_cached_slots().
     //
     // The state lock is acquired with the same bounded policy as
     // with_warm_state: if a stuck inference pins it past the grace budget,
     // return ModelBusy (dropping the freshly loaded `ctx` cleanly and
     // letting ensure_model release load_lock) instead of blocking a model
     // switch forever behind a wedged transcription.
-    let mut state = lock_state_slot_bounded(slots.state, grace)?;
-    let mut context = lock_or_recover(slots.context, CONTEXT_LOCK);
-    let mut loaded_runtime = lock_or_recover(slots.loaded_runtime, LOADED_RUNTIME_LOCK);
-    let previous = match (loaded_runtime.take(), context.take()) {
-        (Some(key), Some(context)) => Some(CachedWhisperRuntime {
-            key,
-            context,
-            state: state.take(),
-        }),
-        (None, None) => None,
-        _ => panic!("whisper model/context invariant violated"),
+    //
+    // What the swap displaces is released after the locks, see `Displaced`.
+    let displaced = {
+        let mut state = lock_state_slot_bounded(slots.state, grace)?;
+        let mut loaded_runtime = lock_or_recover(slots.loaded_runtime, LOADED_RUNTIME_LOCK);
+        let previous = loaded_runtime
+            .replace(Loaded {
+                key: desired_key,
+                ctx: Arc::new(ctx),
+            })
+            .map(|runtime| CachedWhisperRuntime {
+                runtime,
+                state: state.take(),
+            });
+        // A warm state left without a runtime belongs to no context.
+        let orphan_state = state.take();
+
+        let mut cached = lock_or_recover(slots.cached_runtime, CACHED_RUNTIME_LOCK);
+        let (kept, rejected) = match previous {
+            Some(runtime) if can_cache_pair(desired_key, runtime.runtime.key) => {
+                (Some(runtime), None)
+            }
+            other => (None, other),
+        };
+        let replaced_secondary = std::mem::replace(&mut *cached, kept);
+        Displaced {
+            orphan_state,
+            rejected,
+            replaced_secondary,
+        }
     };
-
-    *context = Some(ctx);
-    *loaded_runtime = Some(desired_key);
-    *state = None;
-
-    let mut cached = lock_or_recover(slots.cached_runtime, CACHED_RUNTIME_LOCK);
-    *cached = previous.filter(|runtime| can_cache_pair(desired_key, runtime.key));
+    displaced.release();
     Ok(())
+}
+
+/// Empty the secondary slot, releasing what it held after its lock is let go
+/// (see [`Displaced`]).
+fn discard_secondary<C, S>(slots: &RuntimeSlots<'_, C, S>) {
+    let discarded = lock_or_recover(slots.cached_runtime, CACHED_RUNTIME_LOCK).take();
+    drop(discarded);
 }
 
 /// Swap the active and secondary runtimes while preserving both warm
@@ -169,17 +300,10 @@ fn activate_cached_slots<C, S>(
     grace: Duration,
 ) -> Result<(), DictationError> {
     let mut state = lock_state_slot_bounded(slots.state, grace)?;
-    let mut context = lock_or_recover(slots.context, CONTEXT_LOCK);
     let mut loaded_runtime = lock_or_recover(slots.loaded_runtime, LOADED_RUNTIME_LOCK);
     let mut cached = lock_or_recover(slots.cached_runtime, CACHED_RUNTIME_LOCK);
 
-    if !activate_cached_runtime(
-        desired,
-        &mut loaded_runtime,
-        &mut context,
-        &mut state,
-        &mut cached,
-    ) {
+    if !activate_cached_runtime(desired, &mut loaded_runtime, &mut state, &mut cached) {
         return Err(DictationError::ModelNotLoaded);
     }
 
@@ -233,7 +357,6 @@ impl WhisperBackend {
     fn runtime_slots(&self) -> RuntimeSlots<'_, WhisperContext, WhisperState> {
         RuntimeSlots {
             state: &self.state,
-            context: &self.context,
             loaded_runtime: &self.loaded_runtime,
             cached_runtime: &self.cached_runtime,
         }
@@ -410,7 +533,7 @@ impl WhisperBackend {
         // its weights are being opened. Keep the active runtime available for
         // rollback, but discard the secondary before allocating the new
         // context so transient memory remains bounded to two model contexts.
-        lock_or_recover(&self.cached_runtime, CACHED_RUNTIME_LOCK).take();
+        discard_secondary(&self.runtime_slots());
 
         let ctx = WhisperContext::new_with_params(
             model_path.to_str().ok_or_else(|| {
@@ -434,21 +557,36 @@ impl WhisperBackend {
 
     /// Get the currently loaded model
     pub fn loaded_model(&self) -> Option<WhisperModel> {
-        lock_or_recover(&self.loaded_runtime, LOADED_RUNTIME_LOCK).map(|key| key.model)
+        self.runtime_slots().loaded_model()
     }
 
     /// Get the immutable context profile of the active runtime.
     pub fn loaded_context_profile(&self) -> Option<ContextProfile> {
-        lock_or_recover(&self.loaded_runtime, LOADED_RUNTIME_LOCK).map(|key| key.profile)
+        self.runtime_slots().loaded_context_profile()
     }
 
     /// Models currently resident in memory, active first.
     pub fn resident_models(&self) -> Vec<WhisperModel> {
-        let active = self.loaded_model();
-        let cached = lock_or_recover(&self.cached_runtime, CACHED_RUNTIME_LOCK)
-            .as_ref()
-            .map(|runtime| runtime.key.model);
-        active.into_iter().chain(cached).collect()
+        self.runtime_slots().resident_models()
+    }
+
+    /// A handle to the active context; see [`RuntimeSlots::active_context`].
+    ///
+    /// Pairing invariant: a state stored in `self.state` must be built from
+    /// the context this returns UNDER the state lock, as `with_warm_state_grace`
+    /// and the parallel path do. A runtime swap needs that lock, so the state
+    /// and its context cannot be separated. A state built from a handle taken
+    /// without the state lock could end up next to a different context.
+    pub(super) fn active_context(&self) -> Result<Arc<WhisperContext>, DictationError> {
+        self.runtime_slots().active_context()
+    }
+
+    /// The active model and the end-of-text token id of its context, read
+    /// under one lock. The context handle is released again before this
+    /// returns: nothing keeps a displaced context alive.
+    pub(super) fn active_model_and_eot(&self) -> Result<(WhisperModel, i32), DictationError> {
+        let (model, context) = self.runtime_slots().active_model_and_context()?;
+        Ok((model, context.token_eot()))
     }
 
     /// Check whether selecting this model in the default flash-attention
@@ -468,11 +606,7 @@ impl WhisperBackend {
             model: desired_model,
             profile,
         };
-        let active = *lock_or_recover(&self.loaded_runtime, LOADED_RUNTIME_LOCK);
-        let cached = lock_or_recover(&self.cached_runtime, CACHED_RUNTIME_LOCK)
-            .as_ref()
-            .map(|runtime| runtime.key);
-        model_availability(active, cached, desired) == ModelAvailability::Missing
+        self.runtime_slots().needs_reload(desired)
     }
 
     /// Ensure the correct model is active in the default flash-attention
@@ -505,9 +639,23 @@ impl WhisperBackend {
         profile: ContextProfile,
         callback: impl FnOnce(&Self) -> Result<R, DictationError>,
     ) -> Result<R, DictationError> {
+        self.pinned(
+            || self.ensure_model_inner(model, profile),
+            || callback(self),
+        )
+    }
+
+    /// Run `callback` with `load_lock` held, after `select` has made the
+    /// wanted runtime active. Split out of [`Self::with_model`] so the pinning
+    /// can be tested without a loadable model.
+    pub(super) fn pinned<R>(
+        &self,
+        select: impl FnOnce() -> Result<(), DictationError>,
+        callback: impl FnOnce() -> Result<R, DictationError>,
+    ) -> Result<R, DictationError> {
         let _load = self.lock_load_bounded()?;
-        self.ensure_model_inner(model, profile)?;
-        callback(self)
+        select()?;
+        callback()
     }
 
     pub(super) fn ensure_model_inner(
@@ -519,11 +667,7 @@ impl WhisperBackend {
             model: desired_model,
             profile,
         };
-        let active = *lock_or_recover(&self.loaded_runtime, LOADED_RUNTIME_LOCK);
-        let cached = lock_or_recover(&self.cached_runtime, CACHED_RUNTIME_LOCK)
-            .as_ref()
-            .map(|runtime| runtime.key);
-        match model_availability(active, cached, desired) {
+        match self.runtime_slots().availability(desired) {
             ModelAvailability::Active => {}
             ModelAvailability::Cached => {
                 self.activate_cached_profile(desired)?;
@@ -543,8 +687,9 @@ impl WhisperBackend {
                 Ok(guard) => return Ok(guard),
                 Err(TryLockError::Poisoned(_)) => {
                     // This mutex protects the multi-field runtime transaction,
-                    // not merely its unit payload. A panic can leave context,
-                    // runtime identity or warm state partially updated/poisoned.
+                    // not merely its unit payload. A panic can leave the active
+                    // runtime, the secondary runtime or the warm state partially
+                    // updated or poisoned.
                     // Do not recover the guard and reuse potentially invalid
                     // native state, or misreport a permanent fault as contention
                     // (the fail-closed exception in ADR 0005).
@@ -567,9 +712,9 @@ impl WhisperBackend {
     }
 
     /// Run a closure with the reusable warm state, creating it lazily and
-    /// locking the context only briefly to do so. The context mutex is NOT held
-    /// across the closure, so a long-running inference no longer blocks model
-    /// (re)load. The state lock serializes concurrent transcriptions, which is
+    /// taking the context handle only briefly to do so. No runtime lock is held
+    /// across the closure, so a long-running inference no longer blocks lookups
+    /// of the active model or model (re)load. The state lock serializes concurrent transcriptions, which is
     /// required anyway — a single whisper state cannot run two `full()` calls at
     /// once.
     ///
@@ -600,9 +745,9 @@ impl WhisperBackend {
             &self.state,
             grace,
             || {
-                // Lock order state -> context, matching load_model()'s atomic swap.
-                let ctx_guard = lock_or_recover(&self.context, CONTEXT_LOCK);
-                let ctx = ctx_guard.as_ref().ok_or(DictationError::ModelNotLoaded)?;
+                // Lock order state -> loaded_runtime, matching the runtime
+                // swap. The lock is held only to take the context handle.
+                let ctx = self.active_context()?;
                 ctx.create_state().map_err(|e| {
                     DictationError::TranscriptionFailed(format!(
                         "Failed to create whisper state: {e}"
@@ -681,3 +826,7 @@ mod tests;
 #[cfg(test)]
 #[path = "runtime_protocol_tests.rs"]
 mod protocol_tests;
+
+#[cfg(test)]
+#[path = "runtime_release_tests.rs"]
+mod release_tests;

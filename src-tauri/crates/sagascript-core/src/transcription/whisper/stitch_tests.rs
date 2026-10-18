@@ -575,6 +575,41 @@ mod stitch_characterisation_tests {
     }
 
     #[test]
+    fn display_transcript_is_the_assembled_text_trimmed_and_normalized() {
+        use crate::models::Language;
+
+        // Whisper pads its text with a leading space; none of it survives at the edges.
+        let padded = [segment(0.0, 1.0, " Hello"), segment(1.0, 2.0, " world. ")];
+        assert_eq!(
+            display_transcript(&padded, Language::English),
+            "Hello world."
+        );
+
+        // A hallucination Whisper marked as no-speech is dropped from the text.
+        let marked = [
+            segment(0.0, 1.0, " Hi"),
+            segment(1.0, 2.0, "<|nospeech|> thanks for watching"),
+        ];
+        assert_eq!(display_transcript(&marked, Language::English), "Hi");
+
+        // A run of music words collapses to the language's marker, for display
+        // only: the raw segment keeps what Whisper emitted.
+        let music = [segment(0.0, 3.0, " Music Music Music")];
+        assert_eq!(display_transcript(&music, Language::English), "[MUSIC]");
+        assert_eq!(music[0].text, " Music Music Music");
+        // The marker is the configured language's.
+        let swedish = [segment(0.0, 3.0, " Musik Musik Musik")];
+        assert_eq!(display_transcript(&swedish, Language::Swedish), "[MUSIK]");
+    }
+
+    #[test]
+    fn display_transcript_of_nothing_is_empty() {
+        use crate::models::Language;
+
+        assert_eq!(display_transcript(&[], Language::Swedish), "");
+    }
+
+    #[test]
     fn segment_bounds_never_leave_the_audio_or_run_backwards() {
         assert_eq!(sanitize_segment_bounds(1.0, 2.0, -3.0, 0.0), (0.0, 0.0));
         assert_eq!(sanitize_segment_bounds(1.0, 2.0, f64::NAN, 0.0), (0.0, 0.0));

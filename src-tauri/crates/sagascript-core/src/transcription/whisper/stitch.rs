@@ -1,3 +1,5 @@
+use crate::models::Language;
+
 use super::TranscriptSegment;
 
 /// Return whether a raw Whisper segment contains its exact no-speech marker.
@@ -51,6 +53,16 @@ pub fn assemble_transcript(segments: &[TranscriptSegment]) -> String {
     }
 
     separate_sentence_boundaries(&transcript)
+}
+
+/// The text a user sees for a transcription: the assembled transcript, trimmed,
+/// with display-only non-speech marker normalization (music and blank-audio
+/// markers). Timestamped segment text stays raw.
+pub fn display_transcript(segments: &[TranscriptSegment], language: Language) -> String {
+    crate::transcription::normalize_nonspeech_markers(
+        assemble_transcript(segments).trim(),
+        language,
+    )
 }
 
 const MIN_STITCH_ANCHOR_WORDS: usize = 4;

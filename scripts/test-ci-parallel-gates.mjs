@@ -3,10 +3,20 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { actionInput, commandLines, gateInvocation, loadAction, loadWorkflow, parseWorkflow } from "./lib/ci-workflow.mjs";
+import {
+  actionInput,
+  actionNames,
+  commandLines,
+  gateInvocation,
+  loadAction,
+  loadWorkflow,
+  parseWorkflow,
+  workflowFiles,
+} from "./lib/ci-workflow.mjs";
 import { gatesFor } from "./ci/cargo-gates.mjs";
 import { laneProblems } from "./ci/assert-lanes.mjs";
 import { importGraph } from "./lib/import-graph.mjs";
+import { windowsShellAudit } from "./lib/windows-shell-guard.mjs";
 
 // The parallel lanes of ci.yml (#358): what each one needs, how the shared setup action and the
 // aggregators are wired, and that the aggregators fail closed. The workflow is parsed, not matched.
@@ -320,16 +330,58 @@ test("the workflow parses the same with CRLF line endings, as on a Windows check
   assert.ok(!classify.run.includes("\r"), "scripts stay free of carriage returns");
 });
 
-test("a multi-command step of a Windows lane runs under bash: pwsh reports only the last native command's exit code", () => {
-  // `npm run test:frontend` failing in front of a passing `npm run format:check` went green in a first draft of this file.
+test("ci.yml has two Windows lanes, and the setup action they share names its shell in every run step", () => {
   const windowsJobs = workflow.jobs.filter((job) => /^windows/.test(job.runsOn));
   assert.deepEqual(windowsJobs.map((job) => job.id).sort(), ["build-windows", "test-windows"]);
-  for (const job of windowsJobs) {
-    for (const step of job.steps.filter((candidate) => candidate.run !== "")) {
-      if (commandLines(step).length > 1) assert.equal(step.shell, "bash", `${job.id}: "${step.name}" runs several commands`);
-    }
-  }
   for (const step of loadAction("setup").steps.filter((candidate) => candidate.run !== "")) {
     assert.equal(step.shell, "bash", `the setup action's "${step.name}" must name its shell (and runs on Windows)`);
+  }
+});
+
+// The only multi-command steps on a Windows runner that are neither `shell: bash` nor a pwsh script that starts
+// with the native-exit preferences (scripts/lib/windows-shell-guard.mjs). Each is pinned to the audited script
+// (by its lines or its SHA-256, comments and indentation aside), so editing the step fails this test until it is
+// audited again; the failure message carries the new hash.
+const WINDOWS_SHELL_EXCEPTIONS = [
+  {
+    shell: "pwsh",
+    sha256: "83c64c77c59bb3d0ac4f90cf93737c523c8e19afa07e08580c6cf4d8a95ede6f",
+    reason:
+      "Gate real Windows transcription (windows-package.yml): every native command has its own $LASTEXITCODE check, and a failing " +
+      "transcription prints its captured stdout and stderr before it throws, which the native-exit preference would skip",
+  },
+  {
+    shell: "powershell",
+    lines: [
+      /^\.\/scripts\/accept-windows-candidate\.ps1 -CliExe "[^"]+" -ExpectedVersion \(Get-Content package\.json -Raw \| ConvertFrom-Json\)\.version -Fixture \S+ -OutputPath "[^"]+"$/,
+      /^if \(-not \(Test-Path "[^"]+"\)\) \{ throw "[^"]+" \}$/,
+    ],
+    reason:
+      "Windows PowerShell 5.1 acceptance (windows-package.yml): one script call that throws on failure, then a cmdlet check of the evidence it wrote. " +
+      "No second native command can reset $LASTEXITCODE, and 5.1 has no native-exit preference",
+  },
+];
+
+test("no multi-command run: on a Windows runner, in any workflow or local action, runs without a stop at the first failure (#436)", () => {
+  // pwsh reports only the last native command's exit code: `npm run release:check` failing in front of a passing
+  // `npm run licenses:check` went green in windows-package.yml. A step passes when it is a single command, names
+  // shell: bash, or starts with the native-exit preferences. A reusable workflow (workflow_call) counts like any other.
+  const files = workflowFiles();
+  assert.ok(files.includes("ci.yml") && files.includes("windows-package.yml"), `workflows found: ${files}`);
+  const { rows, problems } = windowsShellAudit({
+    workflows: files.map((file) => ({ file, workflow: loadWorkflow(file) })),
+    actions: actionNames().map((name) => ({ name, action: loadAction(name) })),
+    exceptions: WINDOWS_SHELL_EXCEPTIONS,
+  });
+  assert.deepEqual(problems, []);
+  // The audit saw the Windows jobs of both workflows that have them, so a parser that silently skips jobs cannot pass.
+  const seen = new Set(rows.map((row) => row.where));
+  for (const where of [
+    "ci.yml > test-windows",
+    "ci.yml > build-windows",
+    "windows-package.yml > build-windows-candidate",
+    "action setup",
+  ]) {
+    assert.ok(seen.has(where), `${where} was audited`);
   }
 });

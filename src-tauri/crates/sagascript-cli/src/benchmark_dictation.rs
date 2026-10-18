@@ -8,7 +8,9 @@ use sagascript_core::audio::decoder::decode_audio_file;
 use sagascript_core::error::DictationError;
 use sagascript_core::settings::Language;
 use sagascript_core::transcription::model;
-use sagascript_core::transcription::whisper_backend::{DictationTimings, WhisperBackend};
+use sagascript_core::transcription::whisper_backend::{
+    DictationTimings, TranscribeRequest, WhisperBackend,
+};
 use sagascript_core::transcription::TranscribeOptions;
 
 use super::benchmark_config;
@@ -256,8 +258,11 @@ fn measure(args: BenchmarkDictationArgs, out: &Out) -> Result<Checks, DictationE
 
     let cold_started = Instant::now();
     let mut cold_timings = DictationTimings::default();
-    let cold_text =
-        backend.transcribe_live_dictation(model, &audio, language, &options, &mut cold_timings)?;
+    let cold_text = backend.transcribe_dictation(
+        model,
+        TranscribeRequest::new(&audio, language, &options).live(),
+        &mut cold_timings,
+    )?;
     let cold_total_ms = cold_started.elapsed().as_secs_f64() * 1000.0;
     validate_text(
         "cold run",
@@ -296,8 +301,11 @@ fn measure(args: BenchmarkDictationArgs, out: &Out) -> Result<Checks, DictationE
     for iteration in 0..args.iterations {
         let started = Instant::now();
         let mut timings = DictationTimings::default();
-        let text =
-            backend.transcribe_live_dictation(model, &audio, language, &options, &mut timings)?;
+        let text = backend.transcribe_dictation(
+            model,
+            TranscribeRequest::new(&audio, language, &options).live(),
+            &mut timings,
+        )?;
         let total_ms = started.elapsed().as_secs_f64() * 1000.0;
         let text_nonempty = !text.trim().is_empty();
         warm_text_nonempty_count += usize::from(text_nonempty);

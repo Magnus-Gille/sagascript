@@ -17,7 +17,7 @@ use sagascript_core::transcription::diagnostics::{LanguageDetection, LanguageReg
 #[cfg(feature = "diarization")]
 use sagascript_core::transcription::DiarizationTranscription;
 use sagascript_core::transcription::{
-    model, ContextProfile, TranscribeOptions, TranscriptSegment, WhisperBackend,
+    model, ContextProfile, TranscribeOptions, TranscribeRequest, TranscriptSegment, WhisperBackend,
 };
 
 use super::language_detection::{detect_file_language, LanguageProbe};
@@ -101,12 +101,10 @@ impl InferenceBackend for WhisperBackend {
         on_progress: Box<dyn FnMut(i32) + Send>,
         on_encode_start: &dyn Fn(),
     ) -> Result<Vec<TranscriptSegment>, DictationError> {
-        self.transcribe_sync_with_gap_recovery(
-            audio,
-            language,
-            options,
-            on_progress,
-            Some(on_encode_start),
+        self.transcribe_with_gap_recovery(
+            TranscribeRequest::new(audio, language, options)
+                .on_progress(on_progress)
+                .on_encode_start(on_encode_start),
         )
     }
 
