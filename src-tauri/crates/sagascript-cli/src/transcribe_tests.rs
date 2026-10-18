@@ -9,6 +9,8 @@ use super::meeting::{meeting_checkpoint, validate_meeting_input_scope};
 use super::output::*;
 #[cfg(feature = "diarization")]
 use super::pianissimo::*;
+#[cfg(feature = "diarization")]
+use super::plan::{CacheRequest, DiarizationFlags};
 use super::progress::*;
 use super::vocab_correction::*;
 use super::*;
@@ -179,7 +181,8 @@ fn batch_continues_after_item_failure_by_default() {
     ];
     let mut visited = Vec::new();
     let mut executions = Vec::new();
-    let counts = process_batch(
+    let counts = process_batch_with(
+        &crate::cancel::Canceller::new(),
         &files,
         false,
         |_, file| {
@@ -216,7 +219,8 @@ fn batch_continues_after_item_failure_by_default() {
 fn batch_fail_fast_stops_after_first_failure() {
     let files = vec![PathBuf::from("bad.wav"), PathBuf::from("never.wav")];
     let mut executions = Vec::new();
-    let counts = process_batch(
+    let counts = process_batch_with(
+        &crate::cancel::Canceller::new(),
         &files,
         true,
         |_, file| {
@@ -506,41 +510,25 @@ fn cached_transcribe_uses_coarse_coverage_across_threshold_sweep() {
     };
     assert_eq!(loaded.coverage_segments.as_ref().unwrap()[1].end, 11.0);
 
-    let args_for_threshold = |threshold| TranscribeArgs {
-        progress_json: false,
-        files: vec![input.clone()],
-        recursive: false,
-        language: Some("en".to_string()),
-        profile: None,
-        model: Some("tiny.en".to_string()),
-        json: true,
-        jsonl: false,
-        fail_fast: true,
-        clipboard: false,
-        diarize: true,
-        diarize_exclusive_speech_embeddings: false,
-        meeting_json: false,
-        diarize_threshold: threshold,
-        diarize_diagnostics: false,
-        speaker_count: crate::speaker_args::SpeakerCountArgs::default(),
-        diarize_cache: Some(cache.clone()),
-        prompt: Some("alpha".to_string()),
-        prompt_file: None,
-        glossary_boost: None,
-        boost_terms_file: None,
-        correct_hints: false,
-        vad: false,
-        no_vad: false,
-        beam_size: None,
-        parallel: None,
+    let options_for_threshold = |threshold| FileOptions {
+        diarization: Some(DiarizationFlags {
+            cache: Some(CacheRequest {
+                path: cache.clone(),
+                policy: CachePolicy::Normal,
+            }),
+            threshold,
+            ..DiarizationFlags::default()
+        }),
+        ..FileOptions::default()
     };
+    let canceller = crate::cancel::Canceller::new();
     let run = |threshold| {
-        let args = args_for_threshold(threshold);
+        let options = options_for_threshold(threshold);
         let backend = WhisperBackend::new();
         let mut model_loaded = false;
         transcribe_file(
             &FileRequest {
-                args: &args,
+                options: &options,
                 file: &input,
                 stored: &Settings::default(),
                 language: Language::English,
@@ -548,9 +536,12 @@ fn cached_transcribe_uses_coarse_coverage_across_threshold_sweep() {
                 glossary: &Glossary::parse("alpha"),
                 correction_vocabulary: &[],
                 control: None,
-                cache_policy: CachePolicy::Normal,
             },
-            &backend,
+            Services {
+                backend: &backend,
+                analyzer: &OnnxAnalyzer,
+                canceller: &canceller,
+            },
             &mut model_loaded,
             &Out::capture().0,
         )
@@ -1397,41 +1388,29 @@ mod diarize_threshold_tests {
 
     #[test]
     fn diarized_decoder_flags_resolve_to_effective_options() {
-        let cli =
-            TestCli::try_parse_from(["sagascript", "f.wav", "--diarize", "--beam", "4", "--vad"])
-                .unwrap();
-        let options = resolve_diarization_options(&cli.args, &Settings::default()).unwrap();
+        // The diarized decoder reads the flags alone: saved settings (a saved
+        // beam of 5, VAD enabled, no temperature fallback) are not an input.
+        let decoder = |flags: &[&str]| {
+            let argv = ["sagascript", "f.wav", "--diarize"]
+                .into_iter()
+                .chain(flags.iter().copied());
+            FileOptions::from_args(&TestCli::try_parse_from(argv).unwrap().args).decoder
+        };
+
+        let options = resolve_diarization_options(&decoder(&["--beam", "4", "--vad"])).unwrap();
         assert_eq!(options.beam_size, 4);
         assert!(options.vad_model_path.is_some());
 
-        let stored = Settings {
-            beam_size: 5,
-            vad_enabled: true,
-            temperature_fallback: false,
-            ..Settings::default()
-        };
-        let defaulted = TestCli::try_parse_from(["sagascript", "f.wav", "--diarize"]).unwrap();
-        let options = resolve_diarization_options(&defaulted.args, &stored).unwrap();
+        let options = resolve_diarization_options(&decoder(&[])).unwrap();
         assert_eq!(options.beam_size, 0);
         assert!(options.vad_model_path.is_none());
         assert!(options.temperature_fallback);
 
-        let no_vad =
-            TestCli::try_parse_from(["sagascript", "f.wav", "--diarize", "--no-vad"]).unwrap();
-        let options = resolve_diarization_options(&no_vad.args, &stored).unwrap();
+        let options = resolve_diarization_options(&decoder(&["--no-vad"])).unwrap();
         assert_eq!(options.beam_size, 0);
         assert!(options.vad_model_path.is_none());
 
-        let invalid_saved = Settings {
-            beam_size: 99,
-            ..stored
-        };
-        let options = resolve_diarization_options(&defaulted.args, &invalid_saved).unwrap();
-        assert_eq!(options.beam_size, 0);
-        let explicit =
-            TestCli::try_parse_from(["sagascript", "f.wav", "--diarize", "--beam", "2", "--vad"])
-                .unwrap();
-        let options = resolve_diarization_options(&explicit.args, &invalid_saved).unwrap();
+        let options = resolve_diarization_options(&decoder(&["--beam", "2", "--vad"])).unwrap();
         assert_eq!(options.beam_size, 2);
         assert!(options.vad_model_path.is_some());
         assert!(options.temperature_fallback);
@@ -1644,15 +1623,114 @@ mod batch_sink_contract_tests {
         DictationError::FileDecodeError("corrupt fixture".to_string())
     }
 
+    /// A clipboard nothing may reach: the sink was not asked for `--clipboard`.
+    struct NoClipboard;
+
+    impl Clipboard for NoClipboard {
+        fn copy(&self, _: &str) -> Result<(), DictationError> {
+            panic!("the clipboard was not asked for");
+        }
+    }
+
+    /// A clipboard that keeps what it is given, or refuses it.
+    struct RecordingClipboard {
+        copies: std::cell::RefCell<Vec<String>>,
+        failure: Option<fn() -> DictationError>,
+    }
+
+    impl RecordingClipboard {
+        fn new() -> Self {
+            Self {
+                copies: std::cell::RefCell::default(),
+                failure: None,
+            }
+        }
+
+        fn refusing(failure: fn() -> DictationError) -> Self {
+            Self {
+                failure: Some(failure),
+                ..Self::new()
+            }
+        }
+    }
+
+    impl Clipboard for RecordingClipboard {
+        fn copy(&self, text: &str) -> Result<(), DictationError> {
+            if let Some(failure) = self.failure {
+                return Err(failure());
+            }
+            self.copies.borrow_mut().push(text.to_string());
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn clipboard_gets_the_plain_text_before_the_result_is_written() {
+        for flags in [
+            &["--clipboard"][..],
+            &["--clipboard", "--json"],
+            &["--clipboard", "--jsonl"],
+        ] {
+            let args = args_for(flags);
+            let (out, captured) = Out::capture();
+            let clipboard = RecordingClipboard::new();
+            let mut sink = BatchSink::new(&args, 1);
+
+            sink.emit(&out, &args, &clipboard, ok("a.wav", "only"))
+                .unwrap();
+            sink.finish(&out).unwrap();
+
+            // The plain text, whatever the output mode writes to stdout.
+            assert_eq!(*clipboard.copies.borrow(), ["only"], "{flags:?}");
+            assert_eq!(captured.stderr(), "Copied to clipboard.\n", "{flags:?}");
+        }
+    }
+
+    #[test]
+    fn a_clipboard_that_refuses_ends_the_batch_and_the_result_is_not_written() {
+        let args = args_for(&["--clipboard"]);
+        let (out, captured) = Out::capture();
+        let clipboard = RecordingClipboard::refusing(|| {
+            DictationError::PasteError("Clipboard error: no display".to_string())
+        });
+        let mut sink = BatchSink::new(&args, 1);
+
+        let error = sink
+            .emit(&out, &args, &clipboard, ok("a.wav", "only"))
+            .unwrap_err();
+
+        assert!(matches!(error, DictationError::PasteError(_)), "{error:?}");
+        assert_eq!(captured.stdout(), "");
+        assert_eq!(captured.stderr(), "", "no `Copied to clipboard.`");
+    }
+
+    #[test]
+    fn a_failed_input_is_never_copied_and_without_the_flag_nothing_is() {
+        let args = args_for(&["--clipboard"]);
+        let (out, _) = Out::capture();
+        let clipboard = RecordingClipboard::new();
+        let mut sink = BatchSink::new(&args, 1);
+        sink.emit(&out, &args, &clipboard, failed("bad.wav", decode_error()))
+            .unwrap();
+        assert!(clipboard.copies.borrow().is_empty());
+
+        let args = args_for(&[]);
+        let mut sink = BatchSink::new(&args, 1);
+        sink.emit(&out, &args, &NoClipboard, ok("a.wav", "only"))
+            .unwrap();
+    }
+
     #[test]
     fn plain_prints_a_header_per_input_only_when_there_are_several() {
         let args = args_for(&[]);
         let (out, captured) = Out::capture();
         let mut sink = BatchSink::new(&args, 2);
-        sink.emit(&out, &args, ok("a.wav", "first")).unwrap();
-        sink.emit(&out, &args, failed("bad.wav", decode_error()))
+        sink.emit(&out, &args, &NoClipboard, ok("a.wav", "first"))
             .unwrap();
-        sink.emit(&out, &args, ok("b.wav", "second")).unwrap();
+        sink.emit(&out, &args, &NoClipboard, failed("bad.wav", decode_error()))
+            .unwrap();
+        sink.emit(&out, &args, &NoClipboard, ok("b.wav", "second"))
+            .unwrap();
         sink.finish(&out).unwrap();
         assert_eq!(
             captured.stdout(),
@@ -1665,7 +1743,8 @@ mod batch_sink_contract_tests {
 
         let (out, captured) = Out::capture();
         let mut sink = BatchSink::new(&args, 1);
-        sink.emit(&out, &args, ok("a.wav", "only")).unwrap();
+        sink.emit(&out, &args, &NoClipboard, ok("a.wav", "only"))
+            .unwrap();
         sink.finish(&out).unwrap();
         assert_eq!(captured.stdout(), "only\n");
         assert_eq!(captured.stderr(), "");
@@ -1676,7 +1755,8 @@ mod batch_sink_contract_tests {
         let args = args_for(&["--json"]);
         let (out, captured) = Out::capture();
         let mut sink = BatchSink::new(&args, 1);
-        sink.emit(&out, &args, ok("a.wav", "only")).unwrap();
+        sink.emit(&out, &args, &NoClipboard, ok("a.wav", "only"))
+            .unwrap();
         assert_eq!(captured.stdout(), "", "nothing is written before finish");
         sink.finish(&out).unwrap();
         assert_eq!(
@@ -1691,7 +1771,7 @@ mod batch_sink_contract_tests {
         let args = args_for(&["--json"]);
         let (out, captured) = Out::capture();
         let mut sink = BatchSink::new(&args, 1);
-        sink.emit(&out, &args, failed("a.wav", decode_error()))
+        sink.emit(&out, &args, &NoClipboard, failed("a.wav", decode_error()))
             .unwrap();
         sink.finish(&out).unwrap();
         assert_eq!(
@@ -1709,10 +1789,12 @@ mod batch_sink_contract_tests {
         let args = args_for(&["--json"]);
         let (out, captured) = Out::capture();
         let mut sink = BatchSink::new(&args, 3);
-        sink.emit(&out, &args, ok("a.wav", "first")).unwrap();
-        sink.emit(&out, &args, failed("bad.wav", decode_error()))
+        sink.emit(&out, &args, &NoClipboard, ok("a.wav", "first"))
             .unwrap();
-        sink.emit(&out, &args, ok("b.wav", "second")).unwrap();
+        sink.emit(&out, &args, &NoClipboard, failed("bad.wav", decode_error()))
+            .unwrap();
+        sink.emit(&out, &args, &NoClipboard, ok("b.wav", "second"))
+            .unwrap();
         sink.finish(&out).unwrap();
         // Item keys are written in the order status, source, result|error; the
         // payload inside `result` is a sorted-key JSON value.
@@ -1761,12 +1843,13 @@ mod batch_sink_contract_tests {
         let args = args_for(&["--jsonl"]);
         let (out, captured) = Out::capture();
         let mut sink = BatchSink::new(&args, 2);
-        sink.emit(&out, &args, ok("a.wav", "first")).unwrap();
+        sink.emit(&out, &args, &NoClipboard, ok("a.wav", "first"))
+            .unwrap();
         assert_eq!(
             captured.stdout(),
             "{\"status\":\"ok\",\"source\":\"a.wav\",\"result\":{\"file\":\"a.wav\",\"text\":\"first\"}}\n"
         );
-        sink.emit(&out, &args, failed("bad.wav", decode_error()))
+        sink.emit(&out, &args, &NoClipboard, failed("bad.wav", decode_error()))
             .unwrap();
         sink.finish(&out).unwrap();
         assert_eq!(
@@ -1796,6 +1879,7 @@ mod batch_sink_contract_tests {
         sink.emit(
             &out,
             &args,
+            &NoClipboard,
             BatchExecution {
                 source: PathBuf::from("a.wav"),
                 output: Ok(FileTranscription {
@@ -1817,7 +1901,9 @@ mod batch_sink_contract_tests {
         let args = args_for(&["--diarize", "--meeting-json"]);
         let (out, captured) = Out::capture();
         let mut sink = BatchSink::new(&args, 1);
-        let error = sink.emit(&out, &args, ok("a.wav", "text")).unwrap_err();
+        let error = sink
+            .emit(&out, &args, &NoClipboard, ok("a.wav", "text"))
+            .unwrap_err();
         assert_eq!(
             error.to_string(),
             "Transcription failed: meeting JSON was not produced by the diarized pipeline"
@@ -2001,10 +2087,6 @@ mod language_check_seam_tests {
     }
 
     impl DetectorLoader for FakeLoader<'_> {
-        fn is_downloaded(&self, model: WhisperModel) -> bool {
-            self.scenario.installed.contains(&model)
-        }
-
         fn load(
             &self,
             model: WhisperModel,
@@ -2049,9 +2131,17 @@ mod language_check_seam_tests {
             log: Rc::clone(&log),
         };
         let (out, captured) = Out::capture();
-        let result =
-            detect_file_language_with(&out, &loader, &direct, &[0.1; 160], transcription_model)
-                .unwrap();
+        // Which models are installed is the backend's answer; here, the scenario's.
+        let installed = |model: WhisperModel| scenario.installed.contains(&model);
+        let result = detect_file_language_with(
+            &out,
+            &loader,
+            &direct,
+            &installed,
+            &[0.1; 160],
+            transcription_model,
+        )
+        .unwrap();
         drop(direct);
         // The transcription backend's own probe is the caller's, not the check's.
         let events: Vec<Event> = log

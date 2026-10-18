@@ -10,8 +10,9 @@
 use sagascript_core::error::DictationError;
 use sagascript_core::settings::WhisperModel;
 use sagascript_core::transcription::diagnostics::LanguageDetection;
-use sagascript_core::transcription::model;
 use sagascript_core::transcription::WhisperBackend;
+
+use super::inference::InferenceBackend;
 
 use crate::output::{errln, Out};
 
@@ -40,11 +41,11 @@ impl LanguageProbe for WhisperBackend {
 }
 
 /// Where the language check gets the extra detectors it needs for a
-/// language-optimized model, and which models it may use. The only way to
-/// obtain a detector is [`DetectorLoader::load`], which takes an
-/// [`EncoderPolicy`].
+/// language-optimized model. The only way to obtain a detector is
+/// [`DetectorLoader::load`], which takes an [`EncoderPolicy`]. Which models are
+/// installed is not asked here: the run has one answer to that, the
+/// transcription backend's ([`InferenceBackend::is_downloaded`]).
 pub(super) trait DetectorLoader {
-    fn is_downloaded(&self, model: WhisperModel) -> bool;
     fn load(
         &self,
         model: WhisperModel,
@@ -57,10 +58,6 @@ pub(super) trait DetectorLoader {
 struct InstalledDetectors;
 
 impl DetectorLoader for InstalledDetectors {
-    fn is_downloaded(&self, model: WhisperModel) -> bool {
-        model::is_model_downloaded(model)
-    }
-
     fn load(
         &self,
         model: WhisperModel,
@@ -77,7 +74,7 @@ impl DetectorLoader for InstalledDetectors {
 
 pub(super) fn detect_file_language(
     out: &Out,
-    transcription_backend: &dyn LanguageProbe,
+    transcription_backend: &dyn InferenceBackend,
     audio: &[f32],
     transcription_model: WhisperModel,
 ) -> Result<Option<LanguageDetection>, DictationError> {
@@ -85,15 +82,20 @@ pub(super) fn detect_file_language(
         out,
         &InstalledDetectors,
         transcription_backend,
+        &|candidate| transcription_backend.is_downloaded(candidate),
         audio,
         transcription_model,
     )
 }
 
+/// The language check, over its detectors (`detectors`), the transcription
+/// backend's own probe and its answer to which models are installed
+/// (`is_downloaded`, which picks the neutral and the accurate detector).
 pub(super) fn detect_file_language_with(
     out: &Out,
     detectors: &dyn DetectorLoader,
     transcription_probe: &dyn LanguageProbe,
+    is_downloaded: &dyn Fn(WhisperModel) -> bool,
     audio: &[f32],
     transcription_model: WhisperModel,
 ) -> Result<Option<LanguageDetection>, DictationError> {
@@ -104,9 +106,7 @@ pub(super) fn detect_file_language_with(
         return transcription_probe.detect_language(audio);
     }
 
-    let Some(detection_model) =
-        neutral_language_detection_model(|candidate| detectors.is_downloaded(candidate))
-    else {
+    let Some(detection_model) = neutral_language_detection_model(is_downloaded) else {
         errln!(
             out,
             "Warning: language mismatch check skipped because no neutral multilingual model is downloaded."
@@ -132,10 +132,8 @@ pub(super) fn detect_file_language_with(
     // contexts alive here would needlessly increase peak memory.
     drop(detection_backend);
 
-    let Some(accurate_model) = accurate_language_detection_model(
-        |candidate| detectors.is_downloaded(candidate),
-        detection_model,
-    ) else {
+    let Some(accurate_model) = accurate_language_detection_model(is_downloaded, detection_model)
+    else {
         return Ok(Some(initial));
     };
     errln!(
