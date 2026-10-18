@@ -313,7 +313,9 @@ spellings; each surface keeps its own error text). Each decision where the two u
 | `hotkey` | The default profile is the one called `default`, else the first (`HotkeyProfile::default_index`), as the app's `set_hotkey` and `config reset hotkey` always chose it. `config set hotkey` used to write `hotkey` alone when no profile was called `default`, which no binding reads. Registering the shortcut with the OS stays in the app. |
 | profile list and profile model (`config profiles create\|update\|remove`, `set_hotkey_profiles`, `set_profile_model`) | One operation, `apply_profiles_change(profiles, model)`. The CLI applies the list and a model given in the same command in one step and refuses all of it if the model does not fit; the app sends the list and the model as two commands. The parity table therefore holds only edits whose model fits. |
 | `file_transcription_model`, `show_overlay`, `beam_size`, `temperature_fallback`, `engine_prewarm`, `engine_idle_unload_minutes`, `hotkey_mode` | A field (or `replace_hotkey_mode`) on both sides; no operation of their own. The parity table pins that neither surface adds anything. |
-| `initial_prompt` | **Kept difference, part 2:** `config set initial_prompt` merges entries into the default profile's dictionary and never erases an alias; the app's `set_initial_prompt` replaces a profile's dictionary. Documented in `config set --help`; `glossary_ops` is the planned fix. |
+| a profile's dictionary (`glossary add`, `glossary suggest --apply`, `config set initial_prompt`; `set_profile_glossary`, `set_initial_prompt`, the training review) | The rules are one implementation, `settings/glossary_ops.rs` (#373 part 2): the profile has to exist (`Settings::dictation_profile`), a profile that detects its language (`Auto`) keeps hints but no aliases (`ensure_alias_profile`, `check_dictionary_source`), a term holds none of `\n \r , = \|` (`glossary::contains_delimiter`), and a reviewed suggestion is applied the same way (`apply_glossary_candidates`). Each surface words its own refusal (`DictionaryRefusal`), so its codes and texts did not change: "Glossary learning requires...", "Deterministic dictionary training requires...", "Auto-detect profiles support dictionary hints...". Stays in the surface: the app's compare-and-set against what the editor read, the CLI's listing and clearing of a dictionary whose profile was removed. **Kept difference:** `config set initial_prompt` merges into the default profile's dictionary (`merge_default_dictionary`), never erases an alias and does not apply the `Auto` rule; the app's `set_initial_prompt` replaces the dictionary and refuses aliases for `Auto`. Named in the parity table (`differs_in`) and in `config set --help`. |
+| `config reset KEY` | The setter with the default value, on both surfaces, for the keys that are one (`language`, `hotkey_mode`, `show_overlay`, `auto_paste`, `vad_enabled`, `beam_size`, `temperature_fallback`, `engine_prewarm`, `engine_idle_unload_minutes`, `file_transcription_model`, `hotkey`); the app has no reset, so its side of a row is the setter. Not a row: `whisper_model`, `auto_select_model` and `pianissimo_dictation`, whose reset puts the profile's model back to Auto and moves one legacy field, which no setter does (part 2 of the legacy triple, below). **Not decided:** `config reset hotkey` on a profile with explicit push-to-talk or toggle bindings leaves them, and so the shortcut, where it was; the setter moves them. The row names it. |
+| a settings file with steps pending (an older release's file) | Both surfaces migrate it when they write (`store::try_update_with`) and end where the operation on the migrated settings ends: rows start from a file with no `schema_version` and no profile models, a file at schema 3, and a newer release's file. The Swedish lineup step needs machine state, so the rows' files record it and what is pending is the same on every machine. |
 
 Side effects stay in each surface and arrive as arguments (`Accessibility`, `pianissimo_supported`):
 registering shortcuts with the OS, the VAD download, the Accessibility probe, the profiles menu and
@@ -327,7 +329,8 @@ from a starting `Settings`, and `expected` computes with core alone what a surfa
 persisted (and nothing at all for an operation core refuses). The CLI runs every row through the real
 `sagascript config` (`crates/sagascript-cli/tests/settings_parity.rs`), the app through its real
 setters on Tauri's mock runtime in a child process on a fake settings file
-(`commands/persist_parity_tests.rs`); both compare against the table, so they are equal through core
+(`commands/persist_parity_tests.rs`); both compare against the table (96 rows, 16 of them refusals,
+8 starting from a file of an older release), so they are equal through core
 and the app needs nothing from the CLI crate. A new operation that both surfaces perform gets a
 `Settings` method, a row, and a call from each surface (docs/recipes/add-setting.md).
 
@@ -587,24 +590,25 @@ replaces the remaining source-text tests in the `ui` group with component tests.
 - `main.rs` was split in [#369](https://github.com/Magnus-Gille/sagascript/issues/369) and
   `commands.rs` in [#370](https://github.com/Magnus-Gille/sagascript/issues/370); update this map
   when files move.
-- Left for part 2 of [#373](https://github.com/Magnus-Gille/sagascript/issues/373) (part 1 is
-  section 2.2): the GUI's model pick keeps the legacy fields in step (`set_profile_model` leaves
+- Left over from [#373](https://github.com/Magnus-Gille/sagascript/issues/373) (parts 1 and 2 are
+  section 2.2). Each of these changes what a surface persists or prints, so each is a decision of
+  its own: the GUI's model pick keeping the legacy fields in step (`set_profile_model` leaves
   `whisper_model`, `auto_select_model` and `pianissimo_dictation` as they were; today only the three
   commands the GUI never calls, `config set` and a language change move them); the legacy triple
   consistent in itself (`pianissimo_dictation` false when `config set whisper_model` or a change to
   Auto chooses a Whisper model, and true only while Pianissimo is chosen: a downgrade case of ADR 0007,
-  rule 3); the `whisper_model` list of `config set --help` generated from `WhisperModel::ALL` (it lists
-  11 of the 21 models; generating it changes help text, so it is a decision of its own); `config reset`
-  and starts with a pending migration as rows of the parity table; `models::catalog(language)` so that `list-models --json` and the app's model picker
-  list the same models (the CLI sizes with `installed_size_bytes`, the app with
-  `download_size_bytes`); one `sha256_hex` (four helpers remain); `glossary_ops`, one validation of
-  a profile's dictionary (two sets remain, and `config set initial_prompt` merges where
-  `set_initial_prompt` replaces); the exact search `find(|c| c.id == "default")` of the issue no
-  longer occurs, and the choice of the default profile is `HotkeyProfile::default_index` for the
-  operations above, while `Settings::set_legacy_language` and `warm_model_plan_gated` still spell
-  it out; the app's
-  `commands/models.rs` still turns a model into its id through serde; the summary in `config
-  --help` (`lib.rs`) lists 6 of the 15 keys.
+  rule 3; `config reset` of the three keys belongs here, as it moves one legacy field only); the
+  `whisper_model` list of `config set --help` generated from `WhisperModel::ALL` (it lists 11 of the 21
+  models; generating it changes help text); `config set initial_prompt` merging where
+  `set_initial_prompt` replaces, and accepting aliases for a profile that detects its language where
+  the app refuses; `config reset hotkey` leaving explicit bindings; the model lists, which are one
+  `models::catalog` / `app_picker` but keep two sizes for Pianissimo (`list-models` the size on disk,
+  the picker the download, the same in MB today) and `list-models` has no `--json`, as the ticket
+  assumed; `list-models` marks the models the app hides without regard to the platform (where
+  Pianissimo runs the picker also leaves out KB-Whisper Medium, which the list does not mark);
+  `Settings::set_legacy_language` and `warm_model_plan_gated` still spell the choice of the default
+  profile out (`HotkeyProfile::default_index` is it everywhere else); `app_controller.rs` still turns a
+  model into its id through serde; the summary in `config --help` (`lib.rs`) lists 6 of the 15 keys.
 - Most `async` Tauri commands in `commands/` have no `.await` and call synchronous helpers
   that write the settings file (`persist_and_sync` → `store::update`, under the settings file
   lock) on a Tokio worker. Model downloads and Pianissimo installs already do their file work
