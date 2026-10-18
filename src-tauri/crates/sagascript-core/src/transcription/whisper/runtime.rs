@@ -571,6 +571,12 @@ impl WhisperBackend {
     }
 
     /// A handle to the active context; see [`RuntimeSlots::active_context`].
+    ///
+    /// Pairing invariant: a state stored in `self.state` must be built from
+    /// the context this returns UNDER the state lock, as `with_warm_state_grace`
+    /// and the parallel path do. A runtime swap needs that lock, so the state
+    /// and its context cannot be separated. A state built from a handle taken
+    /// without the state lock could end up next to a different context.
     pub(super) fn active_context(&self) -> Result<Arc<WhisperContext>, DictationError> {
         self.runtime_slots().active_context()
     }
