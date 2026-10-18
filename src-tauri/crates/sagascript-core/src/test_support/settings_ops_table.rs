@@ -205,11 +205,12 @@ pub fn reset_as_op(key: &str) -> Op {
 #[derive(Debug, Clone)]
 pub struct Case {
     pub name: String,
-    /// The settings the case starts from; ignored when there is a
-    /// [`legacy_file`](Self::legacy_file).
+    /// The settings the case starts from, as a surface loads them. With a
+    /// [`legacy_file`](Self::legacy_file) these are the settings that file loads as
+    /// (`store::load_from`, which `tests/settings_parity.rs` checks).
     pub start: Settings,
-    /// A settings file of an older release, verbatim, instead of `start`: it has
-    /// steps pending that the surface must run when it writes.
+    /// A settings file of an older release, verbatim, instead of the serialized
+    /// `start`: it has steps pending that the surface must run when it writes.
     pub legacy_file: Option<String>,
     pub op: Op,
     /// The settings fields in which the two surfaces store different values for
@@ -223,18 +224,6 @@ impl Case {
         self.legacy_file.clone().unwrap_or_else(|| {
             serde_json::to_string_pretty(&self.start).expect("settings serialize")
         })
-    }
-
-    /// The settings as a surface loads that file, before it runs (`store::load_from`:
-    /// the steps that need no machine state are applied).
-    pub fn loaded_start(&self) -> Settings {
-        let Some(text) = &self.legacy_file else {
-            return self.start.clone();
-        };
-        let dir = tempfile::tempdir().expect("a temporary directory");
-        let path = dir.path().join("sagascript-settings.json");
-        std::fs::write(&path, text).expect("write the legacy file");
-        crate::settings::store::load_from(&path)
     }
 }
 
@@ -458,8 +447,10 @@ impl Table {
         self.0.last_mut().expect("a case was just added")
     }
 
-    fn add_legacy(&mut self, name: &str, file: String, op: Op) {
-        self.add(name, english(), op).legacy_file = Some(file);
+    /// A case that starts from a file of an older release, which loads as
+    /// `loaded`.
+    fn add_legacy(&mut self, name: &str, file: String, loaded: Settings, op: Op) {
+        self.add(name, loaded, op).legacy_file = Some(file);
     }
 }
 
@@ -959,22 +950,27 @@ pub fn cases() -> Vec<Case> {
     // A settings file of an older release, with steps pending: both surfaces
     // migrate it when they write, and then end where the operation on the
     // migrated settings ends.
-    let mut legacy = |name: &str, file: String, op: Op| {
-        table.add_legacy(name, file, op);
+    // The dictionaries step gives every profile a dictionary, empty here.
+    let migrated = with_a_dictionary("");
+    let mut legacy = |name: &str, file: String, loaded: Settings, op: Op| {
+        table.add_legacy(name, file, loaded, op);
     };
     legacy(
         "file before profile models, beam_size",
         legacy_before_profile_models(),
+        migrated.clone(),
         Op::BeamSize(5),
     );
     legacy(
         "file before profile models, language",
         legacy_before_profile_models(),
+        migrated.clone(),
         Op::Language(Language::Norwegian),
     );
     legacy(
         "file before profile models, profile model",
         legacy_before_profile_models(),
+        migrated.clone(),
         Op::ProfileModel {
             id: "default",
             model: Whisper(WhisperModel::BaseEn),
@@ -983,26 +979,31 @@ pub fn cases() -> Vec<Case> {
     legacy(
         "file before profile models, a new profile",
         legacy_before_profile_models(),
+        migrated.clone(),
         created(Language::English, None),
     );
     legacy(
         "file at version 3, show_overlay",
         legacy_at_version_3(),
+        migrated.clone(),
         Op::ShowOverlay(false),
     );
     legacy(
         "file at version 3, a dictionary entry",
         legacy_at_version_3(),
+        migrated.clone(),
         entry("default", "Grimnir", &["grimmer"]),
     );
     legacy(
         "file at version 3, reset beam_size",
         legacy_at_version_3(),
+        migrated.clone(),
         Op::Reset("beam_size"),
     );
     legacy(
         "file from a newer release, vad_enabled",
         from_a_newer_release(),
+        english(),
         Op::VadEnabled(true),
     );
     table.0
@@ -1111,7 +1112,7 @@ pub fn dictionary_text_with(current: &str, term: &str, aliases: &[&str]) -> Stri
 }
 
 /// The top-level settings fields in which `a` and `b` differ.
-pub(crate) fn differing_fields(a: &Settings, b: &Settings) -> Vec<String> {
+pub fn differing_fields(a: &Settings, b: &Settings) -> Vec<String> {
     let (Value::Object(a), Value::Object(b)) = (
         serde_json::to_value(a).expect("settings serialize"),
         serde_json::to_value(b).expect("settings serialize"),
