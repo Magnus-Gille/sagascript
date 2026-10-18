@@ -1,5 +1,15 @@
 use super::*;
 
+// These tests ask no machine anything (#372): the operations that depend on it are
+// the `_gated` ones, given the answers a host with neither engine nor model has.
+// The same on every OS, so they read alike on a Mac that runs Pianissimo and one
+// that has models downloaded.
+const PIANISSIMO_SUPPORTED: bool = false;
+
+fn nothing_downloaded(_: FileModel) -> bool {
+    false
+}
+
 #[test]
 fn pianissimo_dictation_defaults_off_and_roundtrips() {
     let default = Settings::default();
@@ -287,17 +297,20 @@ fn removed_profile_glossary_stays_inert_and_reserves_its_old_id() {
         .insert("removed".to_string(), "Lovable = love a ball".to_string());
 
     let error = settings
-        .replace_hotkey_profiles(vec![
-            HotkeyProfile::legacy_default("Control+Shift+Space".to_string(), Language::Swedish),
-            HotkeyProfile {
-                id: "removed".to_string(),
-                name: "Reused".to_string(),
-                shortcut: "Control+Option+Space".to_string(),
-                language: Language::English,
-                push_to_talk_shortcut: None,
-                toggle_shortcut: None,
-            },
-        ])
+        .replace_hotkey_profiles_gated(
+            vec![
+                HotkeyProfile::legacy_default("Control+Shift+Space".to_string(), Language::Swedish),
+                HotkeyProfile {
+                    id: "removed".to_string(),
+                    name: "Reused".to_string(),
+                    shortcut: "Control+Option+Space".to_string(),
+                    language: Language::English,
+                    push_to_talk_shortcut: None,
+                    toggle_shortcut: None,
+                },
+            ],
+            PIANISSIMO_SUPPORTED,
+        )
         .unwrap_err();
 
     assert!(error.contains("inactive personal dictionary"));
@@ -318,17 +331,20 @@ fn empty_removed_profile_glossary_does_not_reserve_its_old_id() {
         .insert("removed".to_string(), "  \n".to_string());
 
     settings
-        .replace_hotkey_profiles(vec![
-            HotkeyProfile::legacy_default("Control+Shift+Space".to_string(), Language::Swedish),
-            HotkeyProfile {
-                id: "removed".to_string(),
-                name: "Reused".to_string(),
-                shortcut: "Control+Option+Space".to_string(),
-                language: Language::English,
-                push_to_talk_shortcut: None,
-                toggle_shortcut: None,
-            },
-        ])
+        .replace_hotkey_profiles_gated(
+            vec![
+                HotkeyProfile::legacy_default("Control+Shift+Space".to_string(), Language::Swedish),
+                HotkeyProfile {
+                    id: "removed".to_string(),
+                    name: "Reused".to_string(),
+                    shortcut: "Control+Option+Space".to_string(),
+                    language: Language::English,
+                    push_to_talk_shortcut: None,
+                    toggle_shortcut: None,
+                },
+            ],
+            PIANISSIMO_SUPPORTED,
+        )
         .unwrap();
 }
 
@@ -343,10 +359,13 @@ fn profile_with_dictionary_cannot_change_language_in_place() {
         .insert("default".to_string(), "mergea = mördsa".to_string());
 
     let error = settings
-        .replace_hotkey_profiles(vec![HotkeyProfile::legacy_default(
-            "Control+Shift+Space".to_string(),
-            Language::English,
-        )])
+        .replace_hotkey_profiles_gated(
+            vec![HotkeyProfile::legacy_default(
+                "Control+Shift+Space".to_string(),
+                Language::English,
+            )],
+            PIANISSIMO_SUPPORTED,
+        )
         .unwrap_err();
 
     assert!(error.contains("personal dictionary"));
@@ -365,7 +384,7 @@ fn migrated_hint_only_dictionary_does_not_lock_profile_language() {
         .profile_glossaries
         .insert("default".into(), "OpenRouter".into());
     settings
-        .set_default_profile_language(Language::English)
+        .set_default_profile_language_gated(Language::English, PIANISSIMO_SUPPORTED)
         .unwrap();
     assert_eq!(settings.default_profile().language, Language::English);
     assert_eq!(settings.profile_glossaries["default"], "OpenRouter");
@@ -529,18 +548,28 @@ fn profiles_choose_independent_compatible_dictation_models() {
     );
 
     assert_eq!(
-        settings.dictation_model_for_profile("swedish").unwrap(),
+        settings
+            .dictation_model_for_profile_gated("swedish", PIANISSIMO_SUPPORTED)
+            .unwrap(),
         FileModel::PianissimoOriginal
     );
     assert_eq!(
-        settings.dictation_model_for_profile("english").unwrap(),
+        settings
+            .dictation_model_for_profile_gated("english", PIANISSIMO_SUPPORTED)
+            .unwrap(),
         FileModel::Whisper(WhisperModel::BaseEn)
     );
     assert!(settings
-        .set_profile_model("english", FileModelPreference::PianissimoOriginal)
+        .set_profile_model_gated(
+            "english",
+            FileModelPreference::PianissimoOriginal,
+            PIANISSIMO_SUPPORTED
+        )
         .is_err());
     assert_eq!(
-        settings.dictation_model_for_profile("english").unwrap(),
+        settings
+            .dictation_model_for_profile_gated("english", PIANISSIMO_SUPPORTED)
+            .unwrap(),
         FileModel::Whisper(WhisperModel::BaseEn)
     );
 }
@@ -566,10 +595,10 @@ fn incompatible_language_change_resets_only_that_profile_to_auto_with_notice() {
     let mut english = swedish;
     english.language = Language::English;
     let notices = settings
-        .replace_hotkey_profiles(vec![
-            english,
-            profile("other", "Super+O", Language::Swedish),
-        ])
+        .replace_hotkey_profiles_gated(
+            vec![english, profile("other", "Super+O", Language::Swedish)],
+            PIANISSIMO_SUPPORTED,
+        )
         .unwrap();
     assert_eq!(notices.len(), 1);
     assert_eq!(notices[0].profile_id, "default");
@@ -583,7 +612,9 @@ fn incompatible_language_change_resets_only_that_profile_to_auto_with_notice() {
         FileModelPreference::Auto
     );
     assert_eq!(
-        settings.dictation_model_for_profile("default").unwrap(),
+        settings
+            .dictation_model_for_profile_gated("default", PIANISSIMO_SUPPORTED)
+            .unwrap(),
         FileModel::Whisper(WhisperModel::BaseEn)
     );
     assert_eq!(
@@ -600,13 +631,14 @@ fn incompatible_whisper_model_is_reset_with_notice_naming_both_models() {
         ..Default::default()
     };
     settings
-        .set_profile_model(
+        .set_profile_model_gated(
             "default",
             FileModelPreference::Whisper(WhisperModel::KbWhisperBase),
+            PIANISSIMO_SUPPORTED,
         )
         .unwrap();
     let notices = settings
-        .set_default_profile_language(Language::English)
+        .set_default_profile_language_gated(Language::English, PIANISSIMO_SUPPORTED)
         .unwrap();
     assert_eq!(notices.len(), 1);
     assert!(
@@ -636,11 +668,17 @@ fn compatible_language_change_keeps_explicit_model_without_notice() {
         ..Default::default()
     };
     settings
-        .set_profile_model("default", FileModelPreference::Whisper(WhisperModel::Base))
+        .set_profile_model_gated(
+            "default",
+            FileModelPreference::Whisper(WhisperModel::Base),
+            PIANISSIMO_SUPPORTED,
+        )
         .unwrap();
     let mut norwegian = profile("default", "Super+E", Language::Norwegian);
     norwegian.name = "default".into();
-    let notices = settings.replace_hotkey_profiles(vec![norwegian]).unwrap();
+    let notices = settings
+        .replace_hotkey_profiles_gated(vec![norwegian], PIANISSIMO_SUPPORTED)
+        .unwrap();
     assert!(notices.is_empty());
     assert_eq!(
         settings.profile_models["default"],
@@ -656,23 +694,28 @@ fn reapplying_or_compatibly_changing_default_language_keeps_selected_model() {
         ..Default::default()
     };
     settings
-        .set_profile_model(
+        .set_profile_model_gated(
             "default",
             FileModelPreference::Whisper(WhisperModel::KbWhisperBase),
+            PIANISSIMO_SUPPORTED,
         )
         .unwrap();
     settings
-        .set_default_profile_language(Language::Swedish)
+        .set_default_profile_language_gated(Language::Swedish, PIANISSIMO_SUPPORTED)
         .unwrap();
     assert_eq!(
         settings.profile_models["default"],
         FileModelPreference::Whisper(WhisperModel::KbWhisperBase)
     );
     settings
-        .set_profile_model("default", FileModelPreference::Whisper(WhisperModel::Base))
+        .set_profile_model_gated(
+            "default",
+            FileModelPreference::Whisper(WhisperModel::Base),
+            PIANISSIMO_SUPPORTED,
+        )
         .unwrap();
     settings
-        .set_default_profile_language(Language::English)
+        .set_default_profile_language_gated(Language::English, PIANISSIMO_SUPPORTED)
         .unwrap();
     assert_eq!(
         settings.profile_models["default"],
@@ -779,10 +822,13 @@ fn legacy_settings_resolve_to_one_default_hotkey_profile() {
 fn hotkey_profiles_roundtrip_and_lookup_aliases() {
     let mut settings = Settings::default();
     settings
-        .replace_hotkey_profiles(vec![
-            profile("default", "Control+Shift+A", Language::English),
-            profile("swedish", "Option+Space", Language::Swedish),
-        ])
+        .replace_hotkey_profiles_gated(
+            vec![
+                profile("default", "Control+Shift+A", Language::English),
+                profile("swedish", "Option+Space", Language::Swedish),
+            ],
+            PIANISSIMO_SUPPORTED,
+        )
         .unwrap();
     let json = serde_json::to_string(&settings).unwrap();
     let loaded: Settings = serde_json::from_str(&json).unwrap();
@@ -797,11 +843,10 @@ fn hotkey_profiles_roundtrip_and_lookup_aliases() {
 fn legacy_profile_binding_uses_global_push_or_toggle_mode() {
     let mut settings = Settings::default();
     settings
-        .replace_hotkey_profiles(vec![profile(
-            "default",
-            "Control+Shift+A",
-            Language::English,
-        )])
+        .replace_hotkey_profiles_gated(
+            vec![profile("default", "Control+Shift+A", Language::English)],
+            PIANISSIMO_SUPPORTED,
+        )
         .unwrap();
 
     settings.hotkey_mode = HotkeyMode::PushToTalk;
@@ -824,7 +869,9 @@ fn explicit_profile_bindings_resolve_both_modes_independent_of_global_mode() {
         hotkey_mode: HotkeyMode::Toggle,
         ..Settings::default()
     };
-    settings.replace_hotkey_profiles(vec![explicit]).unwrap();
+    settings
+        .replace_hotkey_profiles_gated(vec![explicit], PIANISSIMO_SUPPORTED)
+        .unwrap();
 
     let bindings = settings.resolved_hotkey_bindings();
     assert_eq!(bindings.len(), 2);
@@ -880,7 +927,7 @@ fn legacy_hotkey_update_tracks_explicit_primary_binding() {
     push_to_talk.push_to_talk_shortcut = Some("Control+Shift+Q".to_string());
     let mut settings = Settings::default();
     settings
-        .replace_hotkey_profiles(vec![push_to_talk])
+        .replace_hotkey_profiles_gated(vec![push_to_talk], PIANISSIMO_SUPPORTED)
         .unwrap();
     settings
         .try_set_legacy_hotkey("Control+Shift+R".to_string())
@@ -895,7 +942,9 @@ fn legacy_hotkey_update_tracks_explicit_primary_binding() {
     let mut toggle = profile("default", "Control+Shift+P", Language::English);
     toggle.toggle_shortcut = Some("Control+Shift+Q".to_string());
     let mut settings = Settings::default();
-    settings.replace_hotkey_profiles(vec![toggle]).unwrap();
+    settings
+        .replace_hotkey_profiles_gated(vec![toggle], PIANISSIMO_SUPPORTED)
+        .unwrap();
     settings
         .try_set_legacy_hotkey("Control+Shift+R".to_string())
         .unwrap();
@@ -923,10 +972,13 @@ fn the_default_profile_is_the_one_called_default_else_the_first() {
 fn legacy_hotkey_update_edits_the_first_profile_when_none_is_called_default() {
     let mut settings = Settings::default();
     settings
-        .replace_hotkey_profiles(vec![
-            profile("english", "Super+E", Language::English),
-            profile("swedish", "Super+S", Language::Swedish),
-        ])
+        .replace_hotkey_profiles_gated(
+            vec![
+                profile("english", "Super+E", Language::English),
+                profile("swedish", "Super+S", Language::Swedish),
+            ],
+            PIANISSIMO_SUPPORTED,
+        )
         .unwrap();
     assert_eq!(settings.default_profile().id, "english");
     settings
@@ -956,10 +1008,13 @@ fn legacy_hotkey_update_without_explicit_profiles_moves_the_implicit_one() {
 fn replacing_profiles_syncs_legacy_fields_from_default() {
     let mut settings = Settings::default();
     settings
-        .replace_hotkey_profiles(vec![
-            profile("swedish", "Option+Space", Language::Swedish),
-            profile("default", "Control+Shift+E", Language::English),
-        ])
+        .replace_hotkey_profiles_gated(
+            vec![
+                profile("swedish", "Option+Space", Language::Swedish),
+                profile("default", "Control+Shift+E", Language::English),
+            ],
+            PIANISSIMO_SUPPORTED,
+        )
         .unwrap();
     assert_eq!(settings.hotkey, "Control+Shift+E");
     assert_eq!(settings.language, Language::English);
@@ -1087,7 +1142,11 @@ fn selected_file_model_must_match_language() {
         ..Default::default()
     };
     assert!(settings
-        .effective_file_model_for(Language::English)
+        .effective_file_model_for_gated(
+            Language::English,
+            PIANISSIMO_SUPPORTED,
+            &nothing_downloaded
+        )
         .is_err());
 
     let settings = Settings {
@@ -1095,11 +1154,19 @@ fn selected_file_model_must_match_language() {
         ..Default::default()
     };
     assert_eq!(
-        settings.effective_file_model_for(Language::Swedish),
+        settings.effective_file_model_for_gated(
+            Language::Swedish,
+            PIANISSIMO_SUPPORTED,
+            &nothing_downloaded
+        ),
         Ok(FileModel::PianissimoOriginal)
     );
     assert!(settings
-        .effective_file_model_for(Language::Norwegian)
+        .effective_file_model_for_gated(
+            Language::Norwegian,
+            PIANISSIMO_SUPPORTED,
+            &nothing_downloaded
+        )
         .is_err());
 }
 
@@ -1117,7 +1184,11 @@ fn file_model_preference_does_not_change_live_model_resolution() {
         WhisperModel::Medium
     );
     assert_eq!(
-        settings.effective_file_model_for(Language::Swedish),
+        settings.effective_file_model_for_gated(
+            Language::Swedish,
+            PIANISSIMO_SUPPORTED,
+            &nothing_downloaded
+        ),
         Ok(FileModel::PianissimoOriginal)
     );
 }
@@ -1191,10 +1262,13 @@ fn warm_model_plan_includes_swedish_and_english_base_models() {
         ..Default::default()
     };
     settings
-        .replace_hotkey_profiles(vec![
-            profile("default", "Super+S", Language::Swedish),
-            profile("english", "Super+E", Language::English),
-        ])
+        .replace_hotkey_profiles_gated(
+            vec![
+                profile("default", "Super+S", Language::Swedish),
+                profile("english", "Super+E", Language::English),
+            ],
+            PIANISSIMO_SUPPORTED,
+        )
         .unwrap();
     settings
         .set_profile_model_gated(
@@ -1222,10 +1296,13 @@ fn warm_model_plan_skips_pianissimo_profiles_but_keeps_whisper_profiles() {
         ..Default::default()
     };
     settings
-        .replace_hotkey_profiles(vec![
-            profile("default", "Super+S", Language::Swedish),
-            profile("english", "Super+E", Language::English),
-        ])
+        .replace_hotkey_profiles_gated(
+            vec![
+                profile("default", "Super+S", Language::Swedish),
+                profile("english", "Super+E", Language::English),
+            ],
+            PIANISSIMO_SUPPORTED,
+        )
         .unwrap();
     settings
         .set_profile_model_gated("default", FileModelPreference::PianissimoOriginal, true)
@@ -1237,7 +1314,10 @@ fn warm_model_plan_skips_pianissimo_profiles_but_keeps_whisper_profiles() {
     );
 
     settings
-        .replace_hotkey_profiles(vec![profile("default", "Super+S", Language::Swedish)])
+        .replace_hotkey_profiles_gated(
+            vec![profile("default", "Super+S", Language::Swedish)],
+            PIANISSIMO_SUPPORTED,
+        )
         .unwrap();
     assert!(settings.warm_model_plan_gated(2, 384, false).is_empty());
 }
@@ -1250,16 +1330,27 @@ fn warm_model_plan_deduplicates_multilingual_model() {
         ..Default::default()
     };
     settings
-        .replace_hotkey_profiles(vec![
-            profile("default", "Super+S", Language::Swedish),
-            profile("english", "Super+E", Language::English),
-        ])
+        .replace_hotkey_profiles_gated(
+            vec![
+                profile("default", "Super+S", Language::Swedish),
+                profile("english", "Super+E", Language::English),
+            ],
+            PIANISSIMO_SUPPORTED,
+        )
         .unwrap();
     settings
-        .set_profile_model("default", FileModelPreference::Whisper(WhisperModel::Base))
+        .set_profile_model_gated(
+            "default",
+            FileModelPreference::Whisper(WhisperModel::Base),
+            PIANISSIMO_SUPPORTED,
+        )
         .unwrap();
     settings
-        .set_profile_model("english", FileModelPreference::Whisper(WhisperModel::Base))
+        .set_profile_model_gated(
+            "english",
+            FileModelPreference::Whisper(WhisperModel::Base),
+            PIANISSIMO_SUPPORTED,
+        )
         .unwrap();
 
     assert_eq!(
@@ -1272,10 +1363,13 @@ fn warm_model_plan_deduplicates_multilingual_model() {
 fn warm_model_plan_moves_default_profile_to_front() {
     let mut settings = Settings::default();
     settings
-        .replace_hotkey_profiles(vec![
-            profile("english", "Super+E", Language::English),
-            profile("default", "Super+S", Language::Swedish),
-        ])
+        .replace_hotkey_profiles_gated(
+            vec![
+                profile("english", "Super+E", Language::English),
+                profile("default", "Super+S", Language::Swedish),
+            ],
+            PIANISSIMO_SUPPORTED,
+        )
         .unwrap();
     settings
         .set_profile_model_gated(
@@ -1298,10 +1392,13 @@ fn warm_model_plan_moves_default_profile_to_front() {
 fn warm_model_plan_budget_and_zero_capacity_keep_primary() {
     let mut settings = Settings::default();
     settings
-        .replace_hotkey_profiles(vec![
-            profile("default", "Super+S", Language::Swedish),
-            profile("english", "Super+E", Language::English),
-        ])
+        .replace_hotkey_profiles_gated(
+            vec![
+                profile("default", "Super+S", Language::Swedish),
+                profile("english", "Super+E", Language::English),
+            ],
+            PIANISSIMO_SUPPORTED,
+        )
         .unwrap();
     settings
         .set_profile_model_gated(
