@@ -4,12 +4,11 @@ use tracing::info;
 
 use crate::error::DictationError;
 use crate::models::{Language, WhisperModel};
-use crate::sync::lock_or_recover;
 use crate::transcription::chunking::AudioChunk;
 
 use super::progress::{parallel_progress_callback, ParallelProgress};
 use super::stitch::stitch_chunk_results;
-use super::{TranscribeOptions, TranscriptSegment, WhisperBackend, CONTEXT_LOCK};
+use super::{TranscribeOptions, TranscriptSegment, WhisperBackend};
 
 /// Parallel file transcription is deliberately bounded: each state owns GPU
 /// buffers and a Metal command queue, so unbounded fan-out quickly wastes RAM.
@@ -68,8 +67,7 @@ impl WhisperBackend {
 
         self.with_warm_state(|warm_state| {
             let mut secondary_states = {
-                let context = lock_or_recover(&self.context, CONTEXT_LOCK);
-                let context = context.as_ref().ok_or(DictationError::ModelNotLoaded)?;
+                let context = self.active_context()?;
                 (1..chunks.len())
                     .map(|_| {
                         context.create_state().map_err(|error| {

@@ -438,7 +438,7 @@ sequenceDiagram
 | Tray state (`SharedUpdateMenuState`, `SharedStatusItem`, `SharedProfileMenuState`) | `updater/mod.rs`, `tray/mod.rs` | Short critical sections. |
 | Job slots (`MeetingJobs`, `SharedMeetingAudio`, `PlainFileJobs` fields) | `meeting_jobs.rs`, `meeting_media.rs`, `plain_file_jobs.rs` | One active job each. |
 | `LoggingService` (`log_file`, `dictation_session_id`) | `logging/service.rs` | Taken inside controller methods. |
-| `WhisperBackend` (`load_lock`, `state`, `context`, `loaded_runtime`, `cached_runtime`) | `transcription/whisper/` (struct and poison policy in `mod.rs`, locks and abort protocol in `runtime.rs`) | `load_lock` and `state` are taken with a bounded wait (`lock_load_bounded`, `lock_state_slot_bounded`, `WARM_STATE_GRACE`), returning `ModelBusy` instead of blocking. The runtime swaps take `state`, `context`, `loaded_runtime`, then `cached_runtime` (`publish_runtime`, `activate_cached_slots`); `with_state_slot` takes `state`, then `context`. |
+| `WhisperBackend` (`load_lock`, `state`, `loaded_runtime`, `cached_runtime`) | `transcription/whisper/` (struct, lock order and poison policy in `mod.rs`, locks and abort protocol in `runtime.rs`) | `load_lock` and `state` are taken with a bounded wait (`lock_load_bounded`, `lock_state_slot_bounded`, `WARM_STATE_GRACE`), returning `ModelBusy` instead of blocking. `loaded_runtime` holds the active model identity and its native context as one value (`Option<Loaded>`), so one cannot exist without the other. The runtime swaps take `state`, `loaded_runtime`, then `cached_runtime` (`publish_runtime`, `activate_cached_slots`); `with_state_slot` takes `state`, then `loaded_runtime` only to clone out the context handle (`active_context`). |
 | Engine host (`lifecycle`, `state`, `boost`; process `routing`, `stdin`, `child`) | `engine_host/client.rs`, `process.rs` | `lifecycle` serializes start/load/unload/shutdown; it is released while a restart backoff is slept. `stdin` only guards the writer thread's queue, never a write. |
 | Pianissimo `shared_slot` and load-state statics | `pianissimo_backend.rs` | Process-global client. |
 | Others | `AudioCaptureService` buffers (`audio/capture.rs`), `GLOBAL_DICTATION` (`logging/service.rs`), the download `verification_cache` and `download.http_clients` client cache (`download.rs`), `LiveDictationBackend.active_job`, `PianissimoBackend.active`, `HostProcess` `stderr_tail`/`reader`, the CLI `Canceller` (`cancel.rs`) | Leaf locks. The capture buffers are taken under `SharedController` by start/stop and without it by the capture worker and cpal callback. |
@@ -459,9 +459,9 @@ Observed acquisition order (outer → inner). Nothing enforces it; keep new code
      `health.operational_hotkey()` under the controller guard; no reverse order exists.
 5. `PlainFileJobs.active` → `pending_cancels`.
 6. Engine host `lifecycle` → `state`.
-7. Whisper `load_lock` → `state` → `context` → `loaded_runtime` → `cached_runtime` (comment in
-   `WhisperBackend::load_model_inner`). Both outer locks are try-locks with a grace period, so
-   an inversion surfaces as `ModelBusy`, not as a deadlock.
+7. Whisper `load_lock` → `state` → `loaded_runtime` → `cached_runtime` (comment above the lock
+   names in `transcription/whisper/mod.rs`). Both outer locks are try-locks with a grace period,
+   so an inversion surfaces as `ModelBusy`, not as a deadlock.
 
 **Poison policy ([ADR 0005](adr/0005-mutex-poison-policy.md)):** `[profile.release]` deliberately
 does not set `panic = "abort"`, so a panic while a lock is held poisons it. Locks recover instead

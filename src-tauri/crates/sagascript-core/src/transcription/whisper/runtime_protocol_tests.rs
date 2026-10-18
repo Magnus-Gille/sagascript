@@ -286,12 +286,13 @@ mod warm_state_protocol_tests {
         assert!(!rig.slot.is_poisoned());
     }
 
-    /// ARCHITECTURE.md lock order: state, then context. Creating the state
-    /// takes the context while the state lock is held.
+    /// ARCHITECTURE.md lock order: state, then the runtime (identity and
+    /// context are one lock). Creating the state takes the runtime lock while
+    /// the state lock is held.
     #[test]
     fn the_backend_takes_the_context_while_holding_the_state_lock() {
         let backend = Arc::new(WhisperBackend::new());
-        let context = backend.context.lock().unwrap();
+        let context = backend.loaded_runtime.lock().unwrap();
         let worker = {
             let backend = Arc::clone(&backend);
             thread::spawn(move || backend.with_warm_state_grace(PATIENT, |_| Ok(())))
@@ -350,8 +351,7 @@ mod runtime_swap_tests {
 
     struct Fakes {
         state: Mutex<Option<Probe>>,
-        context: Mutex<Option<Probe>>,
-        loaded: Mutex<Option<RuntimeKey>>,
+        loaded: Mutex<Option<Loaded<Probe>>>,
         cached: Mutex<Option<CachedWhisperRuntime<Probe, Probe>>>,
         released: Arc<AtomicU32>,
     }
@@ -369,7 +369,6 @@ mod runtime_swap_tests {
         fn new() -> Arc<Self> {
             Arc::new(Self {
                 state: Mutex::new(None),
-                context: Mutex::new(None),
                 loaded: Mutex::new(None),
                 cached: Mutex::new(None),
                 released: Arc::new(AtomicU32::new(0)),
@@ -386,7 +385,6 @@ mod runtime_swap_tests {
         fn slots(&self) -> RuntimeSlots<'_, Probe, Probe> {
             RuntimeSlots {
                 state: &self.state,
-                context: &self.context,
                 loaded_runtime: &self.loaded,
                 cached_runtime: &self.cached,
             }
@@ -405,14 +403,15 @@ mod runtime_swap_tests {
         }
 
         fn snapshot(&self) -> Snapshot {
+            let loaded = self.loaded.lock().unwrap();
             Snapshot {
-                active: *self.loaded.lock().unwrap(),
-                context: self.context.lock().unwrap().as_ref().map(|p| p.name),
+                active: loaded.as_ref().map(|runtime| runtime.key),
+                context: loaded.as_ref().map(|runtime| runtime.ctx.name),
                 state: self.state.lock().unwrap().as_ref().map(|p| p.name),
                 cached: self.cached.lock().unwrap().as_ref().map(|runtime| {
                     (
-                        runtime.key,
-                        runtime.context.name,
+                        runtime.runtime.key,
+                        runtime.runtime.ctx.name,
                         runtime.state.as_ref().map(|p| p.name),
                     )
                 }),
@@ -645,44 +644,21 @@ mod runtime_swap_tests {
         })
     }
 
-    // The documented lock order is state -> context -> loaded_runtime -> cache.
-    // Seen from outside: while a swap waits on one lock it holds every earlier
-    // lock and none of the later ones.
+    // The documented lock order is state -> loaded_runtime (identity and context
+    // together) -> cache. Seen from outside: while a swap waits on one lock it
+    // holds every earlier lock and none of the later ones.
 
     #[test]
     fn a_swap_takes_the_state_lock_before_the_context() {
-        for (name, swap) in each_swap() {
-            let fakes = Fakes::new();
-            let blocker = fakes.context.lock().unwrap();
-            let worker = spawn_swap(&fakes, swap);
-
-            wait_until_held(&fakes.state);
-            assert!(
-                !is_held(&fakes.loaded),
-                "{name}: identity taken before the context"
-            );
-            assert!(
-                !is_held(&fakes.cached),
-                "{name}: cache taken before the context"
-            );
-
-            drop(blocker);
-            worker.join().unwrap();
-        }
-    }
-
-    #[test]
-    fn a_swap_takes_the_context_before_the_runtime_identity() {
         for (name, swap) in each_swap() {
             let fakes = Fakes::new();
             let blocker = fakes.loaded.lock().unwrap();
             let worker = spawn_swap(&fakes, swap);
 
             wait_until_held(&fakes.state);
-            wait_until_held(&fakes.context);
             assert!(
                 !is_held(&fakes.cached),
-                "{name}: cache taken before the identity"
+                "{name}: cache taken before the context"
             );
 
             drop(blocker);
@@ -698,7 +674,6 @@ mod runtime_swap_tests {
             let worker = spawn_swap(&fakes, swap);
 
             wait_until_held(&fakes.state);
-            wait_until_held(&fakes.context);
             wait_until_held(&fakes.loaded);
 
             drop(blocker);

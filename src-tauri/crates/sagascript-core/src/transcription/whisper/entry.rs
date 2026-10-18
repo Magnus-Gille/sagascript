@@ -5,7 +5,6 @@ use whisper_rs::{get_lang_str, FullParams, SamplingStrategy, WhisperState, Whisp
 
 use crate::error::DictationError;
 use crate::models::{Language, WhisperModel};
-use crate::sync::lock_or_recover;
 use crate::transcription::chunking::plan_chunks;
 use crate::transcription::diagnostics::LanguageDetection;
 use crate::transcription::model;
@@ -17,7 +16,6 @@ use super::stitch::{assemble_transcript, sanitize_segment_bounds, strip_timestam
 use super::words::dtw_segment_timestamps;
 use super::{
     ContextProfile, DictationTimings, TranscribeOptions, TranscriptSegment, WhisperBackend,
-    CONTEXT_LOCK,
 };
 
 /// Mean of per-token log-probabilities; `None` for an empty slice.
@@ -110,13 +108,7 @@ impl WhisperBackend {
             return Err(DictationError::NoAudioCaptured);
         }
 
-        let is_multilingual = {
-            let guard = lock_or_recover(&self.context, CONTEXT_LOCK);
-            guard
-                .as_ref()
-                .ok_or(DictationError::ModelNotLoaded)?
-                .is_multilingual()
-        };
+        let is_multilingual = self.active_context()?.is_multilingual();
         if !is_multilingual {
             return Ok(None);
         }
@@ -162,6 +154,27 @@ impl WhisperBackend {
         options: &TranscribeOptions,
         timings: &mut DictationTimings,
     ) -> Result<String, DictationError> {
+        self.dictation_transaction(
+            timings,
+            |timings| {
+                timings.model_cached = !self.needs_reload(model);
+                self.ensure_model_inner(model, ContextProfile::FlashAttention)
+            },
+            || self.transcribe_sync_with_options(audio, language, options, |_| {}, None),
+        )
+    }
+
+    /// The transaction behind [`Self::transcribe_dictation`]: wait for the load
+    /// lock, make the model active (`select`, which also records whether it was
+    /// already resident), then run `infer` while the selection stays pinned,
+    /// timing each step. Split out so the bookkeeping can be tested without a
+    /// loadable model.
+    pub(super) fn dictation_transaction(
+        &self,
+        timings: &mut DictationTimings,
+        select: impl FnOnce(&mut DictationTimings) -> Result<(), DictationError>,
+        infer: impl FnOnce() -> Result<String, DictationError>,
+    ) -> Result<String, DictationError> {
         *timings = DictationTimings::default();
         let model_started = Instant::now();
         timings.model_acquisition_started = true;
@@ -172,14 +185,13 @@ impl WhisperBackend {
                 return Err(error);
             }
         };
-        timings.model_cached = !self.needs_reload(model);
-        let selection = self.ensure_model_inner(model, ContextProfile::FlashAttention);
+        let selection = select(timings);
         timings.model_ms = model_started.elapsed().as_secs_f64() * 1000.0;
         selection?;
         timings.model_ready_at = Some(Instant::now());
         timings.inference_started = true;
         let inference_started = Instant::now();
-        let result = self.transcribe_sync_with_options(audio, language, options, |_| {}, None);
+        let result = infer();
         timings.inference_ms = inference_started.elapsed().as_secs_f64() * 1000.0;
         result
     }
@@ -405,19 +417,13 @@ impl WhisperBackend {
             return Err(DictationError::NoAudioCaptured);
         }
 
-        let model = self.loaded_model().ok_or(DictationError::ModelNotLoaded)?;
-
         // End-of-text token id, used to exclude special tokens from the
         // avg-logprob computation (matching whisper.cpp's confidence examples:
-        // text tokens have id < eot). Read in a short scope so the context
-        // lock is released before with_warm_state re-acquires it.
-        let token_eot = {
-            let guard = lock_or_recover(&self.context, CONTEXT_LOCK);
-            guard
-                .as_ref()
-                .ok_or(DictationError::ModelNotLoaded)?
-                .token_eot()
-        };
+        // text tokens have id < eot). Read from a context handle taken under
+        // one short lock, so no runtime lock is held when with_warm_state
+        // acquires the state lock.
+        let (model, context) = self.active_model_and_context()?;
+        let token_eot = context.token_eot();
 
         // Leave 0% (#237) once compute resources are held, i.e. right after
         // `on_encode_start` fires (or on the first real callback), so the

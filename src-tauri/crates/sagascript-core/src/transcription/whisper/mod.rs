@@ -35,17 +35,34 @@ pub use words::{
     group_tokens_into_words, DiarizationTranscription, DiarizationTranscriptionTimings, TokenTiming,
 };
 
+// Lock order (docs/ARCHITECTURE.md section 3), outermost first:
+//
+//     load_lock -> state -> loaded_runtime -> cached_runtime
+//
+// - `load_lock` serializes model loads and selection; dictation and
+//   `with_model` hold it across inference. `state` serializes inference on the
+//   one reusable `WhisperState`. Both are taken with a bounded wait
+//   (`WARM_STATE_GRACE`), so an inversion or a stuck holder surfaces as
+//   `ModelBusy` instead of a deadlock.
+// - `loaded_runtime` holds the active model identity and its native context as
+//   one value, `Option<Loaded>`: there is no state in which one exists without
+//   the other. A runtime swap (`publish_runtime`, `activate_cached_slots`)
+//   takes `state`, then `loaded_runtime`, then `cached_runtime`. Everything
+//   else only takes `loaded_runtime` briefly, never while holding
+//   `cached_runtime`; the context is cloned out of it (`active_context`)
+//   instead of being used under the lock, so a lookup never waits for a state
+//   to be built.
+// - Progress locks only guard counters and are leaves.
+//
 // Poison policy (ADR 0005). `state` holds the reusable whisper inference
 // state; a panic mid-inference leaves it mid-compute, so recovery discards it
-// (the same cleanup as an abort; it is rebuilt lazily). `context`,
-// `loaded_runtime` and `cached_runtime` each hold one `Option` that is only
-// replaced whole, so they are recovered as-is. The multi-lock runtime
-// transaction (load or cache swap) always runs under `load_lock`, whose
-// poison keeps failing closed with an actionable error (see
-// `lock_load_bounded`): those individual recoveries never resume a
-// half-finished swap. Progress locks only guard counters.
+// (the same cleanup as an abort; it is rebuilt lazily). `loaded_runtime` and
+// `cached_runtime` each hold one `Option` that is only replaced whole, so they
+// are recovered as-is. The multi-lock runtime transaction (load or cache swap)
+// always runs under `load_lock`, whose poison keeps failing closed with an
+// actionable error (see `lock_load_bounded`): those individual recoveries
+// never resume a half-finished swap.
 const STATE_LOCK: &str = "whisper.state";
-const CONTEXT_LOCK: &str = "whisper.context";
 const LOADED_RUNTIME_LOCK: &str = "whisper.loaded_runtime";
 const CACHED_RUNTIME_LOCK: &str = "whisper.cached_runtime";
 const PROGRESS_LOCK: &str = "whisper.progress";
@@ -229,14 +246,13 @@ pub struct TranscriptSegment {
 /// because transcription is blocking and we must not hold the AppController
 /// lock across async boundaries.
 pub struct WhisperBackend {
-    /// Loaded whisper context (model weights). None until load_model() is called.
-    context: Mutex<Option<WhisperContext>>,
     /// Reusable inference state, kept warm across utterances so we don't pay
     /// whisper/Metal state-init (kernel compile + GPU buffer alloc) on every
     /// call. Created lazily on first transcription; reset to None on model reload.
     state: Mutex<Option<WhisperState>>,
-    /// Currently loaded model and immutable context profile.
-    loaded_runtime: Mutex<Option<RuntimeKey>>,
+    /// The active runtime: model, immutable context profile and the context
+    /// holding its weights. None until `load_model()` is called.
+    loaded_runtime: Mutex<Option<Loaded>>,
     /// One bounded secondary runtime. Its context and reusable state stay warm
     /// so a bilingual hotkey switch can swap runtimes without reopening model
     /// weights or recompiling inference state.
@@ -253,9 +269,23 @@ pub struct WhisperBackend {
     load_lock: Mutex<()>,
 }
 
-struct CachedWhisperRuntime<C = WhisperContext, S = WhisperState> {
+/// The active runtime: which model and profile is loaded, and the context that
+/// holds its weights. Both live in one value behind one lock, so an identity
+/// without a context, or a context without an identity, cannot be represented.
+///
+/// The context is shared (`Arc`) only so that a reader can take a handle and
+/// release the lock before using it (see `active_context`). Handles are
+/// short-lived, held for one native call; if a swap displaces the runtime
+/// meanwhile, the last handle frees the context.
+struct Loaded<C = WhisperContext> {
     key: RuntimeKey,
-    context: C,
+    ctx: Arc<C>,
+}
+
+/// A runtime kept warm in the secondary slot: its identity and context, and
+/// the reusable state that was warm for it.
+struct CachedWhisperRuntime<C = WhisperContext, S = WhisperState> {
+    runtime: Loaded<C>,
     state: Option<S>,
 }
 
@@ -287,7 +317,6 @@ impl WhisperBackend {
         crate::transcription::native_log::install();
 
         Self {
-            context: Mutex::new(None),
             state: Mutex::new(None),
             loaded_runtime: Mutex::new(None),
             cached_runtime: Mutex::new(None),
