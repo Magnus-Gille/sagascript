@@ -53,7 +53,11 @@ jobs:
           $PSVersionTable.PSVersion.ToString()
           $env:PROCESSOR_ARCHITECTURE
 
+      # First run: CMAKE_CXX_FLAGS arrived as "C:/Program Files/Git/EHsc /utf-8" on both runners (MSYS path
+      # conversion), so this step is expected to fail; it is kept to record that.
       - name: Under bash, tools are found and the exported environment arrives unchanged
+        id: bash_env
+        continue-on-error: true
         shell: bash
         working-directory: src-tauri
         run: |
@@ -121,11 +125,13 @@ jobs:
         if: ${{ always() }}
         shell: bash
         env:
+          BASH_ENV_OUTCOME: ${{ steps.bash_env.outcome }}
           BASH_FIRST: ${{ steps.bash_first.outcome }}
           BASH_CARGO: ${{ steps.bash_cargo.outcome }}
           PWSH_HEADER: ${{ steps.pwsh_header.outcome }}
           PWSH_CONTROL: ${{ steps.pwsh_control.outcome }}
         run: |
+          echo "bash, tools found and environment unchanged: $BASH_ENV_OUTCOME (failure = the environment changed)"
           echo "bash, npm run <missing> then npm --version: $BASH_FIRST (want failure)"
           echo "bash, cargo build <missing> then cargo --version: $BASH_CARGO (want failure)"
           echo "pwsh with the preferences, cmd exit 3 then exit 0: $PWSH_HEADER (want failure)"
