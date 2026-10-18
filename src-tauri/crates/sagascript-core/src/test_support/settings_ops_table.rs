@@ -608,7 +608,7 @@ pub fn cases() -> Vec<Case> {
         swedish_pinned(),
         Op::Profiles(ProfileEdit::Update {
             id: "work",
-            shortcut: Some("Super+X"),
+            shortcut: Some("Super+Y"),
             language: None,
             model: None,
         }),
