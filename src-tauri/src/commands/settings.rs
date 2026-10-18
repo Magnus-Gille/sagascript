@@ -9,8 +9,8 @@ use tauri::State;
 use tracing::info;
 
 use super::{
-    acquire_hotkey_configuration, lock_controller, persist_and_sync, try_persist_and_mirror,
-    SharedController,
+    acquire_hotkey_configuration, host_runs_pianissimo, lock_controller, persist_and_sync,
+    try_persist_and_mirror, SharedController,
 };
 
 #[tauri::command]
@@ -266,9 +266,12 @@ pub(super) fn persist_profile_model(
 ) -> Result<ProfileModelChange, String> {
     let persisted =
         try_persist_and_mirror(controller, change, mirror).map_err(|error| error.to_string())?;
-    let warm = sagascript_core::transcription::pianissimo_backend::profile_change_needs_warm(
+    // The gate the copies were demoted by, so the decision and the demotion
+    // cannot disagree about the host.
+    let warm = sagascript_core::transcription::pianissimo_backend::profile_change_needs_warm_gated(
         &persisted.previous,
         &persisted.current,
+        host_runs_pianissimo(),
     );
     Ok(ProfileModelChange {
         settings: persisted.current,

@@ -125,6 +125,10 @@ const ROWS: &[Row] = &[
         commands: &["set_language"],
         // The default profile's language (inside `hotkey_profiles`), the models
         // the language resets, and the legacy model fields that start over.
+        // `hotkey_profiles` equals the file here only because the table's
+        // controller and file agree on the profile list; when they differ, the
+        // controller keeps its own list and shortcuts and takes only the
+        // language, onto its own default profile (the scenarios).
         mirror: Mirror::Field(&[
             "language",
             "whisper_model",

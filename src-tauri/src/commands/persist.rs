@@ -140,8 +140,9 @@ pub(crate) fn try_persist_and_replace<E: Into<CommandError>>(
 }
 
 /// Whether this host can run Pianissimo: the gate the controller's copy is
-/// demoted by, as `store::load` demotes the startup copy.
-fn host_runs_pianissimo() -> bool {
+/// demoted by, as `store::load` demotes the startup copy, and the gate the
+/// warm decision after a profile model change is made against.
+pub(super) fn host_runs_pianissimo() -> bool {
     #[cfg(test)]
     if let Some(forced) = FORCED_PIANISSIMO_SUPPORT.with(std::cell::Cell::get) {
         return forced;
@@ -205,7 +206,9 @@ thread_local! {
 }
 
 /// Test seam: while the guard lives, this thread's setters treat the host as one
-/// that cannot run Pianissimo, whatever machine the test runs on. The tests that
+/// that cannot run Pianissimo, whatever machine the test runs on: the demotion of
+/// the controller's copy and the profile model change's warm decision
+/// (`persist_profile_model`) both ask [`host_runs_pianissimo`]. The tests that
 /// use it run in a child process of their own (`isolated`) and call the setters
 /// on the thread that holds the guard.
 #[cfg(test)]
