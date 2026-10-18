@@ -2,7 +2,8 @@
 
 - Status: Accepted (2026-10-14). Part 1 of [#360](https://github.com/Magnus-Gille/sagascript/issues/360)
   implements it for dictation, transcription, hotkeys, the dictionary and file transcription;
-  part 2a (decisions 7 and 8) types the rest of the app crate and the settings; part 2b is
+  part 2a (decisions 7 and 8) types the rest of the app crate and the settings; part 2b
+  (decision 9) types the `error` event and wires the recovery; what it consciously leaves is
   listed under Consequences.
 - Related: [#347](https://github.com/Magnus-Gille/sagascript/issues/347) (generated `CommandMap`),
   [#364](https://github.com/Magnus-Gille/sagascript/issues/364) (CLI error object),
@@ -34,14 +35,16 @@
    is the one list for workflow errors (the variant name in snake_case, or an engine failure's
    own `engine_*` code); the CLI's JSON error object uses the same function, so there is one
    vocabulary. `CommandError` adds `busy`, `not_recording`, `cancelled`,
-   `dictionary_changed_elsewhere`, `hotkey_invalid`, `hotkey_change_failed` and, since part 2a,
-   the codes of decision 8. A cancellation has one representation (`cancelled`). The transitional
+   `dictionary_changed_elsewhere`, `hotkey_invalid`, `hotkey_change_failed`, since part 2a the
+   codes of decision 8 and, since part 2b, `paste_error` (the code `DictationError` already
+   has, with the paste task's own text, for the `error` event). A cancellation has one representation (`cancelled`). The transitional
    `unclassified` of part 1 is gone: after part 2a nothing produced it, and a `String` no longer
    converts into a `CommandError`.
 3. **The frontend matches only on `code`**: `isBackendError(error, code)`. `message` is shown
    (`toErrorMessage`) and never parsed. Every command is typed since part 2a; the generated
    `CommandMap` still says which shape a signature has (`error: string | BackendError`,
    `BACKEND_ERROR_COMMANDS`), and the IPC fake fails a test whose rejection has the other shape.
+   The `error` event carries the same object (`EventMap.error` is a `BackendError`, decision 9).
 4. **Engine failures** are `DictationError::Engine(EngineFailure)`, a struct with private
    `code`, `retryable` and `message`, built only by `EngineFailure::new`. A variant's fields are
    always public, so `Engine { code, retryable, message }` could be built unscrubbed; and
@@ -97,6 +100,32 @@
    Where a fixed message replaces a source error, `CommandError::because` scrubs the cause, logs
    it and keeps it as the error's `source()`; it never reaches the webview.
 
+9. **Events, cancellation and recovery (part 2b).**
+   - The `error` event's payload is the `{ code, message, retryable }` of a failed command
+     (`&CommandError` in `events.rs`, `BackendError` in `EventMap`, fixture
+     `contracts/transport/events.json`). The hotkey pipeline sends a dictation failure with its own
+     code and retry hint, a profile-model refusal as `CommandError::Settings`, and a failed paste as
+     `CommandError::PasteFailed` (`paste_error`). The message is the text it always was, with absolute
+     paths removed.
+   - A hotkey dictation whose transcription ends `cancelled` ends quietly: idle, overlay hidden, no
+     `error` event, no `UiState::Error`, no last error and no latency record (`latency-report`
+     reads three outcomes). File transcription shows a backend `cancelled` as cancelled, with the
+     wording of its Stop button ("Transcription was cancelled.").
+   - `apply_hotkey_change` rejects a refusal of the settings with the `SettingsError`'s code
+     (`dictionary_blocks_language_change`, `model_incompatible`, `inactive_profile_dictionary`,
+     `profile_invalid`, …). Only a failure of the shortcuts themselves is `hotkey_invalid` (a
+     shortcut that does not parse) or `hotkey_change_failed` (the OS refused, a rollback failed, the
+     registration moved underneath the change, the settings could not be saved after the OS accepted
+     the shortcuts).
+   - The Dictate tab's "Try it out" error and a failed file in the Transcribe tab offer
+     `backendErrorRecovery(error)`: "Try again" when the action may be repeated, "Download the model
+     again" for `engine_model_missing` and `engine_model_load_failed`. "Try again" restarts the
+     action (decision 6): a new recording, or the same file with its profile and prompt as a new job;
+     it never repeats `stop_and_transcribe`. The download runs the Pianissimo model's download (it
+     checks an installed model and fetches it again when it is missing or damaged), shows the
+     window's usual progress and then offers "Try again"; a failed download offers itself again.
+     Plain text (the restored last error) has no code and offers nothing.
+
 ## Consequences
 
 - Rewording a message cannot change behaviour; a new failure that needs its own handling needs
@@ -121,11 +150,13 @@
 
   Other `settings_error` objects stay: they are the CLI's own wording for a flag or a
   combination (`--model auto`, an unknown `--language`, `--speakers`, Pianissimo with
-  `--diarize`, a missing corrected transcript). `settings_storage_failed` cannot appear in a JSON
-  run today: settings are read without failing, and the one JSON command that writes them,
-  `glossary suggest --apply`, keeps reporting a store failure as `settings_error` text. The
-  plain-text commands (`config`, `glossary add|remove|clear`) print the same lines as before;
-  their JSON objects do not exist. `run_context_cli.rs`, `transcribe_contract.rs` and
+  `--diarize`, a missing corrected transcript). `settings_storage_failed` appears in one JSON run:
+  settings are read without failing, and the one JSON command that writes them,
+  `glossary suggest --apply`, reported a store failure as `settings_error` until part 2b, which
+  gives it the code of its `SettingsError` (same text). The plain-text commands (`config`,
+  `glossary add|remove|clear`) print the same lines as before, except that `glossary remove|clear`
+  with an unknown `--profile` printed "Settings error: " twice and now print it once; their JSON
+  objects do not exist. `run_context_cli.rs`, `transcribe_contract.rs` and
   `output_contract.rs` pin the codes.
 - The scrubber is a heuristic for text it does not control. It removes the account name from
   every path in a recognised spelling (decision 5). Known non-goals:
@@ -151,12 +182,24 @@
   and `paste/completion.rs` carry text the Settings window or the paste task reported;
   `platform/macos.rs`, `hotkey/macos_bare.rs`, `updater/signed.rs` and the macOS monitor reply in
   `commands/hotkey.rs` are macOS-only and are only logged or mapped to `launch_failed` (they can
-  be compiled by the macOS runner alone). The settings internals that still use `String`
-  (`settings/migrations.rs`, `settings/lenient.rs`) feed `SettingsLoadError`, which is typed.
-- **Part 2b** (not done): `apply_hotkey_change` flattens a `SettingsError` into `hotkey_invalid`
-  (`commands/hotkey.rs`, `hotkey/configuration.rs`), so a profile refusal such as
-  `dictionary_blocks_language_change` or `model_incompatible` reaches the Settings window as
-  `hotkey_invalid` there; the `error` event's payload is still a plain string, `FileTranscription`
-  shows a backend `cancelled` as a failure, the hotkey path shows a `Cancelled` as
-  `UiState::Error` rather than a quiet end, and the "Try again" (restarting the action, decision 6)
-  and "Download the model again" buttons are not wired to `backendErrorRecovery`.
+  be compiled by the macOS runner alone). The settings internals that still used `String`
+  (`settings/migrations.rs`, `settings/lenient.rs`, `store::decode_object`) fed
+  `SettingsLoadError`, which is typed; part 2b types them too.
+- **Part 2b** (done): decision 9, and the settings internals above (`lenient::decode` and
+  `store::decode_object` return the `serde_json::Error`, the migration steps a `StepError`; the
+  texts the store reports are unchanged and pinned), and the CLI's glossary editor
+  (`try_update::<DictationError, _>` in `add`, `remove`, `clear` and `suggest --apply`, which gave
+  the doubled "Settings error: " its single prefix). The app crate's production count stays at 14
+  (decision 8's list). What it consciously leaves:
+  - `validate_hotkey_for_platform` returns a `String`: it is the complete text of
+    `SettingsError::InvalidHotkey`, and no caller tells its nine reasons apart, so an enum would only
+    be formatted back to the same strings.
+  - `SettingsError` converts into a `String` (`From`), for the settings test tables.
+  - The meeting (diarized) import offers no recovery buttons: its failure arrives as the text of the
+    job's snapshot (`MeetingSnapshot.error`, data on the wire), not as a rejection with a code.
+  - The Dictate tab's own recording shows a `cancelled` rejection of `stop_and_transcribe` as the
+    text "Transcription cancelled." and nothing else; ending it quietly there too is a UI choice
+    this part did not make.
+  - "Download the model again" downloads the Pianissimo model, the one whose host reports
+    `engine_model_missing` and `engine_model_load_failed`; `backendErrorRecovery` maps no other
+    code, so a missing Whisper model has no such button.
