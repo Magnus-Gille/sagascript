@@ -34,10 +34,7 @@ all-features = true
 # - unmaintained: fxhash, proc-macro-error and unic-* (tauri's HTML-parsing and
 #   codegen stacks), instant (below notify 7), number_prefix (below indicatif
 #   0.17);
-# - unsound: glib 0.18 (GTK3), rand 0.7/0.8 (build-time phf codegen), and two
-#   with fixed releases a lockfile bump would pick up: anyhow 1.0.101
-#   (RUSTSEC-2026-0190, via tauri; fixed in 1.0.103) and memmap2 0.9.10
-#   (RUSTSEC-2026-0186, via enigo's Linux keyboard stack; fixed in 0.9.11).
+# - unsound: glib 0.18 (GTK3) and rand 0.7/0.8 (build-time phf codegen).
 unsound = "workspace"
 unmaintained = "workspace"
 # An ignore needs the advisory id and a reason, and should be rare.
