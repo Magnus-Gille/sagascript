@@ -17,6 +17,8 @@ use sagascript_core::transcription::diagnostics::{
 #[cfg(feature = "diarization")]
 use sagascript_core::transcription::TranscriptSegment;
 
+#[cfg(feature = "diarization")]
+use super::diarize::DiarizationAnalyzer;
 use super::meeting::MeetingControl;
 #[cfg(feature = "diarization")]
 use super::meeting::{meeting_checkpoint, MeetingPhase};
@@ -194,6 +196,7 @@ pub(super) struct Acquired<'a> {
 pub(super) fn acquire_source<'a>(
     request: &FileRequest<'a>,
     plan: &DiarizationPlan,
+    analyzer: &dyn DiarizationAnalyzer,
     progress: &Progress,
     out: &Out,
 ) -> Result<Acquired<'a>, DictationError> {
@@ -231,7 +234,7 @@ pub(super) fn acquire_source<'a>(
     };
     let cache_lookup_seconds = cache_lookup_started.elapsed().as_secs_f64();
 
-    if hit.is_none() && !sagascript_core::diarization::model::all_models_downloaded() {
+    if hit.is_none() && !analyzer.models_downloaded() {
         return Err(DictationError::DiarizationError(
             "Diarization models not found. Run: sagascript download-model diarization".to_string(),
         ));

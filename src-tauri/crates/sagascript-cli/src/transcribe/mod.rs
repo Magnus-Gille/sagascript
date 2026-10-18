@@ -17,7 +17,10 @@
 //! - `vocab_correction`: glossary aliases and the opt-in one-edit hint repair;
 //! - `language_detection`, `language_regions`: the language check and the sampled
 //!   region detection, with their diagnostics;
-//! - `diarize`: the diarization cache policy, decoder options and concurrent analysis;
+//! - `services`: the collaborators a file run is handed (the Whisper backend and,
+//!   with diarization, the speaker analysis), which a test replaces;
+//! - `diarize`: the diarization cache policy, the speaker analysis seam, decoder
+//!   options and concurrent analysis;
 //! - `meeting`: the meeting entry points the app and reprocessing call, with their
 //!   cancellation control and source hashing;
 //! - `pianissimo`: the Pianissimo (engine host) path;
@@ -51,6 +54,7 @@ mod plain;
 mod plan;
 mod progress;
 mod resolve;
+mod services;
 mod source;
 mod vocab_correction;
 
@@ -74,15 +78,15 @@ pub use self::resolve::{
 };
 
 #[cfg(feature = "diarization")]
-use self::diarize::CachePolicy;
+use self::diarize::{CachePolicy, OnnxAnalyzer};
 #[cfg(feature = "diarization")]
 use self::diarized::run_diarized;
-use self::inference::InferenceBackend;
 use self::output::{BatchExecution, BatchSink, FileTranscription};
 use self::pianissimo::run_pianissimo_batch;
 use self::plain::run_plain;
 use self::plan::{plan_file, plan_run, EnginePlan, FileMode, FileRequest, RunPlan};
 use self::progress::emit_progress;
+use self::services::Services;
 
 pub fn run(args: TranscribeArgs, out: &Out) -> Result<(), DictationError> {
     crate::cancel::install();
@@ -126,7 +130,11 @@ fn run_inner(args: TranscribeArgs, out: &Out) -> Result<(), DictationError> {
                     glossary: &glossary,
                     correction_vocabulary: &correction_vocabulary,
                 },
-                &*backend,
+                Services {
+                    backend: &*backend,
+                    #[cfg(feature = "diarization")]
+                    analyzer: &OnnxAnalyzer,
+                },
                 &crate::cancel::GLOBAL,
                 out,
             )
@@ -146,7 +154,7 @@ struct WhisperBatch<'a> {
     correction_vocabulary: &'a [String],
 }
 
-/// Transcribes the files one after another with `backend`, writing each
+/// Transcribes the files one after another with `services`, writing each
 /// outcome as it is done and the batch's summary at the end.
 ///
 /// Model loading is lazy so a validated diarization-cache hit never maps
@@ -154,7 +162,7 @@ struct WhisperBatch<'a> {
 /// sequential, so one flag safely preserves the load-once behavior.
 fn run_whisper_batch(
     batch: &WhisperBatch<'_>,
-    backend: &dyn InferenceBackend,
+    services: Services<'_>,
     canceller: &crate::cancel::Canceller,
     out: &Out,
 ) -> Result<(), DictationError> {
@@ -189,7 +197,7 @@ fn run_whisper_batch(
                     #[cfg(feature = "diarization")]
                     cache_policy: CachePolicy::Normal,
                 },
-                backend,
+                services,
                 &mut model_loaded,
                 out,
             )
@@ -258,7 +266,7 @@ where
 /// resident.
 fn transcribe_file(
     request: &FileRequest<'_>,
-    backend: &dyn InferenceBackend,
+    services: Services<'_>,
     model_loaded: &mut bool,
     out: &Out,
 ) -> Result<FileTranscription, DictationError> {
@@ -269,11 +277,11 @@ fn transcribe_file(
             request,
             plan.started,
             *diarization,
-            backend,
+            services,
             model_loaded,
             out,
         ),
-        FileMode::Plain => run_plain(request, plan.started, backend, model_loaded, out),
+        FileMode::Plain => run_plain(request, plan.started, services.backend, model_loaded, out),
     }
 }
 

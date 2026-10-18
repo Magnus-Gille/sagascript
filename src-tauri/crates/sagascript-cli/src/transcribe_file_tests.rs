@@ -19,6 +19,7 @@ use sagascript_core::transcription::diagnostics::LanguageDetection;
 use sagascript_testsupport::TempDir;
 use serde_json::{json, Value};
 
+use super::inference::InferenceBackend;
 use super::language_detection::LanguageProbe;
 use super::*;
 use sagascript_core::transcription::{ContextProfile, TranscribeOptions, TranscriptSegment};
@@ -359,7 +360,11 @@ fn run_batch_with(
             glossary: &plan.glossary,
             correction_vocabulary: &plan.vocabulary,
         },
-        backend,
+        Services {
+            backend,
+            #[cfg(feature = "diarization")]
+            analyzer: &OnnxAnalyzer,
+        },
         canceller,
         &out,
     );

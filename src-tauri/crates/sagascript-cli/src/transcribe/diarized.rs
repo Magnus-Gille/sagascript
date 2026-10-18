@@ -29,7 +29,7 @@ use super::args::speaker_hint_from_args;
 use super::diarize::{
     canonicalize_coverage_segments, run_diarization_analysis, CachePolicy, DiarizationPerformance,
 };
-use super::inference::{prepare_language, verify_vad_model, InferenceBackend, LanguageEvidence};
+use super::inference::{prepare_language, verify_vad_model, LanguageEvidence};
 use super::meeting::{
     meeting_checkpoint, meeting_transcript_from_plain_segments, verify_meeting_source_unchanged,
     MeetingControl, MeetingPhase,
@@ -41,6 +41,7 @@ use super::output::{
 use super::plan::{DiarizationPlan, FileRequest};
 use super::progress::Progress;
 use super::resolve::model_id_string;
+use super::services::Services;
 use super::source::{acquire_source, Acquired, CacheTarget, Source};
 use crate::output::{errln, Out};
 
@@ -65,7 +66,7 @@ pub(super) fn run_diarized(
     request: &FileRequest<'_>,
     started: Instant,
     plan: DiarizationPlan,
-    backend: &dyn InferenceBackend,
+    services: Services<'_>,
     model_loaded: &mut bool,
     out: &Out,
 ) -> Result<FileTranscription, DictationError> {
@@ -77,6 +78,7 @@ pub(super) fn run_diarized(
         cache_policy,
         ..
     } = *request;
+    let backend = services.backend;
     let progress = Progress::new(
         out,
         args.progress_json,
@@ -87,7 +89,7 @@ pub(super) fn run_diarized(
         source,
         cache,
         cache_lookup_seconds,
-    } = acquire_source(request, &plan, &progress, out)?;
+    } = acquire_source(request, &plan, services.analyzer, &progress, out)?;
     let duration = source.duration_seconds();
     let coverage_profile = source.coverage_profile();
 
@@ -183,7 +185,7 @@ pub(super) fn run_diarized(
     let analyzed = obtain_analysis(
         source,
         &AnalysisRequest {
-            backend,
+            services,
             language,
             prompt: run.plan.decoder_prompt.as_deref(),
             config: &run.config,
@@ -468,7 +470,7 @@ impl DiarizedRun<'_> {
 
 /// What `obtain_analysis` needs besides the source and the output.
 struct AnalysisRequest<'a> {
-    backend: &'a dyn InferenceBackend,
+    services: Services<'a>,
     language: sagascript_core::settings::Language,
     prompt: Option<&'a str>,
     config: &'a DiarizeConfig,
@@ -500,7 +502,7 @@ fn obtain_analysis(
     out: &Out,
 ) -> Result<Analyzed, DictationError> {
     let AnalysisRequest {
-        backend,
+        services,
         language,
         prompt,
         config,
@@ -532,7 +534,7 @@ fn obtain_analysis(
     let parallel_started = Instant::now();
     meeting_checkpoint(control, MeetingPhase::Analyzing)?;
     let (analysis, diarization_timings, mut transcription) =
-        run_diarization_analysis(&audio.samples, backend, language, prompt, config, options)?;
+        run_diarization_analysis(&audio.samples, services, language, prompt, config, options)?;
     transcription.coverage_segments = canonicalize_coverage_segments(
         transcription.coverage_segments,
         coverage_profile.duration_seconds(),

@@ -28,13 +28,15 @@ use sagascript_core::transcription::{Glossary, WhisperBackend};
 #[cfg(feature = "diarization")]
 use super::args::TranscribeArgs;
 #[cfg(feature = "diarization")]
-use super::diarize::CachePolicy;
+use super::diarize::{CachePolicy, OnnxAnalyzer};
 #[cfg(feature = "diarization")]
 use super::inputs::paths_refer_to_same_file;
 #[cfg(feature = "diarization")]
 use super::plan::FileRequest;
 #[cfg(feature = "diarization")]
 use super::resolve::model_id_string;
+#[cfg(feature = "diarization")]
+use super::services::Services;
 #[cfg(feature = "diarization")]
 use super::transcribe_file;
 #[cfg(feature = "diarization")]
@@ -474,7 +476,10 @@ fn transcribe_meeting_file_inner(
             control,
             cache_policy,
         },
-        backend,
+        Services {
+            backend,
+            analyzer: &OnnxAnalyzer,
+        },
         &mut model_loaded,
         &Out::stdio(),
     )?;

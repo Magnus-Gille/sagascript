@@ -550,7 +550,10 @@ fn cached_transcribe_uses_coarse_coverage_across_threshold_sweep() {
                 control: None,
                 cache_policy: CachePolicy::Normal,
             },
-            &backend,
+            Services {
+                backend: &backend,
+                analyzer: &OnnxAnalyzer,
+            },
             &mut model_loaded,
             &Out::capture().0,
         )
