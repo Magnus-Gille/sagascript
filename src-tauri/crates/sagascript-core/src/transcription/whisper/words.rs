@@ -64,64 +64,6 @@ pub(super) fn dtw_preset(model: WhisperModel) -> whisper_rs::DtwModelPreset {
 }
 
 impl WhisperBackend {
-    /// Transcribe audio and return per-segment timestamps.
-    ///
-    /// For audio longer than 30s, uses overlapping 30s windows to prevent
-    /// the Whisper decoder from drifting or looping on long recordings.
-    pub fn transcribe_sync_with_timestamps(
-        &self,
-        audio: &[f32],
-        language: Language,
-        prompt: Option<&str>,
-    ) -> Result<Vec<(f64, f64, String)>, DictationError> {
-        if audio.is_empty() {
-            return Err(DictationError::NoAudioCaptured);
-        }
-        // Process full audio in one call — whisper.cpp handles long audio internally
-        // via its own sliding window. With no_timestamps=true + DTW there is no
-        // looping risk, and the internal context is better than manual chunking.
-        Ok(self
-            .transcribe_chunk_timestamps_profiled(
-                audio,
-                language,
-                0.0,
-                prompt,
-                Granularity::Segment,
-                &TranscribeOptions::default(),
-            )?
-            .segments)
-    }
-
-    /// Transcribe audio and return per-word timestamps.
-    ///
-    /// Uses DTW per-token timing from whisper.cpp to group BPE tokens into words,
-    /// producing fine-grained `(start, end, word)` tuples. This is the preferred
-    /// input for the diarization merge pipeline because it avoids collapsing a
-    /// multi-speaker Whisper segment into a single speaker label.
-    ///
-    /// Falls through to empty if DTW timestamps are unavailable (caller should
-    /// fall back to `transcribe_sync_with_timestamps`).
-    pub fn transcribe_sync_with_word_timestamps(
-        &self,
-        audio: &[f32],
-        language: Language,
-        prompt: Option<&str>,
-    ) -> Result<Vec<(f64, f64, String)>, DictationError> {
-        if audio.is_empty() {
-            return Err(DictationError::NoAudioCaptured);
-        }
-        Ok(self
-            .transcribe_chunk_timestamps_profiled(
-                audio,
-                language,
-                0.0,
-                prompt,
-                Granularity::Word,
-                &TranscribeOptions::default(),
-            )?
-            .segments)
-    }
-
     /// Transcribe audio at the finest timestamp granularity available for
     /// speaker attribution.
     ///
