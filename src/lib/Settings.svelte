@@ -2130,8 +2130,16 @@
     }
   }
 
-  /** "Try again" under the Dictate tab's error: a new recording, whose button then has the focus. */
+  /**
+   * "Try again" under the Dictate tab's error: a new recording, whose button has
+   * the focus. The Try again button goes away as the recording starts
+   * (`clearTestError()`), so the focus moves first, and not only when
+   * `start_recording` answers: it is never on the page in between. The record
+   * button is enabled here: the cases that disable it are all part of the
+   * busy state that disables Try again.
+   */
   async function onDictateRetry(): Promise<void> {
+    testRecordButton?.focus();
     await onTestRecord();
     await tick();
     testRecordButton?.focus();

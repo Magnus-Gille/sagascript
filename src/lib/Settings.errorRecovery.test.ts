@@ -270,6 +270,28 @@ describe("focus", () => {
     await waitFor(() => expect(stop).toHaveFocus());
   });
 
+  test("focus is on the recording button while the new recording is being started, never on the page", async () => {
+    const start = deferred<void>();
+    let starts = 0;
+    const { user } = await startAndStop(commandErrors.model_busy, {
+      start_recording: () => {
+        starts += 1;
+        return starts === 1 ? undefined : start.promise;
+      },
+    });
+    const retry = await screen.findByRole("button", { name: "Try again" });
+
+    await user.click(retry);
+
+    // The second `start_recording` is still in flight, and the Try again button
+    // is gone: the focus is already where the recording will show.
+    await waitFor(() => expect(starts).toBe(2));
+    expect(document.activeElement).not.toBe(document.body);
+    expect(screen.getByRole("button", { name: "Start recording" })).toHaveFocus();
+    start.resolve();
+    expect(await screen.findByRole("button", { name: "Stop recording" })).toHaveFocus();
+  });
+
   test("Try again that could not start a recording leaves focus on the Start button", async () => {
     let starts = 0;
     const { user } = await startAndStop(commandErrors.model_busy, {
