@@ -168,7 +168,7 @@ fn write_cache(step: &CacheWrite<'_>, out: &Out) -> Result<f64, DictationError> 
         exclusive_speech_embeddings,
     } = *step;
     let cache_write_started = Instant::now();
-    let cache = crate::diarization_cache::DiarizationCache::new_with_coverage_segments_and_policy(
+    let cache = sagascript_core::diarization::cache::DiarizationCache::new_with_coverage_segments_and_policy(
         target.identity.clone(),
         analysis.clone(),
         transcription.segments.clone(),
@@ -180,7 +180,7 @@ fn write_cache(step: &CacheWrite<'_>, out: &Out) -> Result<f64, DictationError> 
     );
     match target.policy {
         CachePolicy::Normal => {
-            crate::diarization_cache::save(&target.path, &cache)?;
+            sagascript_core::diarization::cache::save(&target.path, &cache)?;
             let seconds = cache_write_started.elapsed().as_secs_f64();
             errln!(
                 out,
@@ -190,7 +190,7 @@ fn write_cache(step: &CacheWrite<'_>, out: &Out) -> Result<f64, DictationError> 
             Ok(seconds)
         }
         CachePolicy::RefreshNew => {
-            crate::diarization_cache::save_new(&target.path, &cache)?;
+            sagascript_core::diarization::cache::save_new(&target.path, &cache)?;
             Ok(cache_write_started.elapsed().as_secs_f64())
         }
     }

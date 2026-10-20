@@ -4,16 +4,15 @@ use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 use std::time::{Duration, Instant};
 
 use tracing::{info, warn};
-#[cfg(feature = "diarization")]
-use whisper_rs::{DtwMode, DtwParameters};
-use whisper_rs::{FullParams, WhisperContext, WhisperContextParameters, WhisperState};
+use whisper_rs::{
+    DtwMode, DtwParameters, FullParams, WhisperContext, WhisperContextParameters, WhisperState,
+};
 
 use crate::error::DictationError;
 use crate::models::WhisperModel;
 use crate::sync::{lock_or_recover, recover_poisoned};
 use crate::transcription::model;
 
-#[cfg(feature = "diarization")]
 use super::words::dtw_preset;
 use super::{
     CachedWhisperRuntime, ContextProfile, Loaded, RuntimeKey, WhisperBackend, CACHED_RUNTIME_LOCK,
@@ -35,6 +34,33 @@ fn require_packaged_x64_cpu(
             "Unrecognized Windows x64 build CPU policy; install a verified Sagascript build.".into(),
         )),
     }
+}
+
+/// The parameters a context profile fixes when its model is loaded.
+///
+/// Token alignment (DTW) is a whisper.cpp context option, and whisper.cpp is
+/// linked into every build, so every build can load either profile. Only the
+/// diarization pipeline asks for `TokenAlignment`; the `diarization` feature
+/// gates that pipeline and its ONNX dependencies, not this.
+fn context_parameters(
+    model: WhisperModel,
+    profile: ContextProfile,
+) -> WhisperContextParameters<'static> {
+    let mut ctx_params = WhisperContextParameters::default();
+    match profile {
+        ContextProfile::FlashAttention => {
+            ctx_params.flash_attn(true);
+        }
+        ContextProfile::TokenAlignment => {
+            ctx_params.dtw_parameters(DtwParameters {
+                mode: DtwMode::ModelPreset {
+                    model_preset: dtw_preset(model),
+                },
+                ..DtwParameters::default()
+            });
+        }
+    }
+    ctx_params
 }
 
 /// How long `with_warm_state` waits for the state mutex before giving up with
@@ -502,25 +528,7 @@ impl WhisperBackend {
             model_path.display()
         );
 
-        let mut ctx_params = WhisperContextParameters::default();
-        match profile {
-            ContextProfile::FlashAttention => {
-                ctx_params.flash_attn(true);
-            }
-            ContextProfile::TokenAlignment => {
-                #[cfg(feature = "diarization")]
-                ctx_params.dtw_parameters(DtwParameters {
-                    mode: DtwMode::ModelPreset {
-                        model_preset: dtw_preset(whisper_model),
-                    },
-                    ..DtwParameters::default()
-                });
-                #[cfg(not(feature = "diarization"))]
-                return Err(DictationError::TranscriptionFailed(
-                    "Token-alignment context requires the diarization feature".to_string(),
-                ));
-            }
-        };
+        let ctx_params = context_parameters(whisper_model, profile);
 
         // whisper.cpp's Metal backend registration assumes that macOS returns
         // a GPU device and crashes on a null device before it can return an
@@ -822,6 +830,10 @@ impl WhisperBackend {
 #[cfg(test)]
 #[path = "runtime_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "runtime_context_tests.rs"]
+mod context_tests;
 
 #[cfg(test)]
 #[path = "runtime_protocol_tests.rs"]

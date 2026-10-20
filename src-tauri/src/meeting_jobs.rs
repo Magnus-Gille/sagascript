@@ -40,13 +40,13 @@ pub struct MeetingSnapshot {
     error: Option<String>,
     transcript: Option<MeetingTranscript>,
     #[cfg(feature = "diarization")]
-    reprocessing: Option<sagascript_cli::meeting_reprocessing::ReprocessingResult>,
+    reprocessing: Option<sagascript_core::meeting::reprocess::orchestrate::ReprocessingResult>,
 }
 
 enum JobOutput {
     Import(Box<MeetingTranscript>),
     #[cfg(feature = "diarization")]
-    Reprocessing(Box<sagascript_cli::meeting_reprocessing::ReprocessingResult>),
+    Reprocessing(Box<sagascript_core::meeting::reprocess::orchestrate::ReprocessingResult>),
 }
 
 #[derive(Deserialize)]
@@ -91,7 +91,7 @@ impl MeetingJob {
 /// The snapshot's `phase`: the closed enum's wire name, never text or a
 /// source path. The frontend labels these in src/lib/meeting-progress.ts.
 #[cfg(any(feature = "diarization", test))]
-fn phase_name(phase: sagascript_cli::transcribe::MeetingPhase) -> String {
+fn phase_name(phase: sagascript_core::meeting::control::MeetingPhase) -> String {
     serde_json::to_value(phase)
         .ok()
         .and_then(|value| value.as_str().map(str::to_owned))
@@ -212,9 +212,8 @@ async fn begin_job(
             let processing_cancel = cancelled.clone();
             let processing_backend = backend.clone();
             let mut worker = tauri::async_runtime::spawn_blocking(move || {
-                use sagascript_cli::transcribe::{
-                    transcribe_meeting_file_with_control, MeetingControl,
-                };
+                use sagascript_cli::transcribe::transcribe_meeting_file_with_control;
+                use sagascript_core::meeting::control::MeetingControl;
                 let progress = |phase| {
                     if let Ok(mut slot) = processing_state.0.lock() {
                         if let Some(job) =
@@ -231,9 +230,8 @@ async fn begin_job(
                     progress: &progress,
                 };
                 if let Some(request) = request {
-                    use sagascript_cli::meeting_reprocessing::{
-                        execute_reprocessing, ReprocessingInput,
-                    };
+                    use sagascript_cli::meeting_reprocessing::execute_reprocessing;
+                    use sagascript_core::meeting::reprocess::orchestrate::ReprocessingInput;
                     let input = ReprocessingInput {
                         audio: std::path::Path::new(&file_path),
                         cache: request.cache_path.as_deref().map(std::path::Path::new),

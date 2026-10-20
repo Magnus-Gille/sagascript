@@ -18,14 +18,16 @@ use sagascript_core::settings::{FileModel, Language, Settings, WhisperModel};
 use sagascript_core::transcription::{Glossary, WhisperBackend};
 use serde_json::json;
 
-use crate::meeting_proposal::{ensure_output_absent, read_json, write_json_new};
-use crate::meeting_reprocessing::{
-    ensure_distinct_outputs, execute_with_model_check, plan_reprocessing, CommitError,
-    NativeBackend, PublishReceipt, ReprocessingInput, WorkBackend,
-};
+use crate::meeting_proposal::write_json_new;
+use crate::meeting_reprocessing::NativeBackend;
 use crate::output::{errln, Out};
 use crate::run_request::RunRequest;
 use crate::speaker_args::SpeakerCountArgs;
+use sagascript_core::meeting::reprocess::io::{ensure_output_absent, publish_error, read_json};
+use sagascript_core::meeting::reprocess::orchestrate::{
+    ensure_distinct_outputs, execute_with_model_check, plan_reprocessing, CommitError,
+    PublishReceipt, ReprocessingInput, WorkBackend,
+};
 
 const MAX_REPROCESSING_JSON_BYTES: usize = 24 * 1024 * 1024;
 
@@ -245,8 +247,7 @@ fn exists(path: &Path) -> bool {
 }
 
 fn check_output_folder(path: &Path) -> Result<(), DictationError> {
-    sagascript_core::fsutil::check_destination_folder(path)
-        .map_err(|error| crate::meeting_proposal::publish_error(&error))
+    sagascript_core::fsutil::check_destination_folder(path).map_err(|error| publish_error(&error))
 }
 
 /// Private staging files are hidden siblings of an output that a killed run
@@ -337,6 +338,7 @@ fn execute_and_publish(
         input,
         args.cache_output.as_deref(),
         None,
+        crate::GIT_HASH,
         models_available,
         backend,
     )?;
@@ -482,9 +484,9 @@ fn parse_threshold(value: &str) -> Result<f32, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::meeting_reprocessing::{CommitError, WorkBackend};
     use crate::transcribe::MeetingControl;
     use clap::Parser;
+    use sagascript_core::meeting::reprocess::orchestrate::{CommitError, WorkBackend};
     use sagascript_core::meeting::review::MeetingReview;
     use sagascript_core::test_support::meeting_transcript;
     use sagascript_testsupport::{sha256_hex, TempDir};
@@ -819,15 +821,16 @@ mod tests {
             _control: Option<&MeetingControl<'_>>,
         ) -> Result<sagascript_core::meeting::MeetingTranscript, DictationError> {
             if let Some(path) = cache_output {
-                let identity = crate::diarization_cache::CacheIdentity::for_source_sha256(
-                    &input.previous.original.source_sha256,
-                    "en",
-                    "base",
-                    None,
-                )?;
+                let identity =
+                    sagascript_core::diarization::cache::CacheIdentity::for_source_sha256(
+                        &input.previous.original.source_sha256,
+                        "en",
+                        "base",
+                        None,
+                    )?;
                 let analysis = serde_json::from_str(r#"{"raw_segments":[],"embeddings":[]}"#)
                     .expect("empty synthetic analysis");
-                let cache = crate::diarization_cache::DiarizationCache::new(
+                let cache = sagascript_core::diarization::cache::DiarizationCache::new(
                     identity,
                     analysis,
                     vec![(0.0, 1.0, "hello".to_string())],
@@ -837,7 +840,7 @@ mod tests {
                     None,
                     None,
                 );
-                crate::diarization_cache::save_new(path, &cache)?;
+                sagascript_core::diarization::cache::save_new(path, &cache)?;
             }
             if let Some(hook) = self.during_inference.as_mut() {
                 hook();

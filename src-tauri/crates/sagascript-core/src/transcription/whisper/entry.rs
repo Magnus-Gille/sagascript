@@ -12,7 +12,6 @@ use crate::transcription::model;
 use super::parallel::{ParallelJob, MAX_PARALLEL_CHUNKS, MIN_PARALLEL_CHUNK_SAMPLES};
 use super::progress::{clamped_progress_callback, started_progress_callback};
 use super::stitch::{display_transcript, sanitize_segment_bounds, strip_timestamp_tokens};
-#[cfg(feature = "diarization")]
 use super::words::dtw_segment_timestamps;
 use super::{
     ContextProfile, DictationTimings, TranscribeOptions, TranscribeRequest, TranscriptSegment,
@@ -75,7 +74,6 @@ pub(super) enum DecodePath {
     /// record and every other text path that goes through `full_params`.
     Text { segment_timestamps: bool },
     /// Word-timestamp / diarization / meeting path.
-    #[cfg(feature = "diarization")]
     WordTimestamps,
 }
 
@@ -98,7 +96,6 @@ impl DecodeFlags {
                 no_timestamps: false,
                 token_timestamps: segment_timestamps,
             },
-            #[cfg(feature = "diarization")]
             DecodePath::WordTimestamps => Self {
                 no_timestamps: false,
                 token_timestamps: true,
@@ -461,30 +458,20 @@ impl WhisperBackend {
                     continue;
                 }
             };
-            let raw_bounds = {
-                #[cfg(feature = "diarization")]
-                {
-                    if opts.segment_timestamps {
-                        dtw_segment_timestamps(&segment, 0.0).unwrap_or_else(|| {
-                            (
-                                segment.start_timestamp() as f64 / 100.0,
-                                segment.end_timestamp() as f64 / 100.0,
-                            )
-                        })
-                    } else {
-                        (
-                            segment.start_timestamp() as f64 / 100.0,
-                            segment.end_timestamp() as f64 / 100.0,
-                        )
-                    }
-                }
-                #[cfg(not(feature = "diarization"))]
-                {
+            let raw_bounds = if opts.segment_timestamps {
+                // `None` when the context has no DTW (a flash-attention
+                // context never does): the segment's own timestamps stand.
+                dtw_segment_timestamps(&segment, 0.0).unwrap_or_else(|| {
                     (
                         segment.start_timestamp() as f64 / 100.0,
                         segment.end_timestamp() as f64 / 100.0,
                     )
-                }
+                })
+            } else {
+                (
+                    segment.start_timestamp() as f64 / 100.0,
+                    segment.end_timestamp() as f64 / 100.0,
+                )
             };
             let (start, end) =
                 sanitize_segment_bounds(raw_bounds.0, raw_bounds.1, chunk_duration, previous_end);

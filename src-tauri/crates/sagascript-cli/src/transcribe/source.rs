@@ -32,9 +32,9 @@ use super::resolve::model_id_string;
 #[cfg(feature = "diarization")]
 use super::services::Services;
 use crate::cancel::Canceller;
-#[cfg(feature = "diarization")]
-use crate::diarization_cache::{CacheIdentity, CacheLookup, DiarizationCache};
 use crate::output::{errln, Out};
+#[cfg(feature = "diarization")]
+use sagascript_core::diarization::cache::{CacheIdentity, CacheLookup, DiarizationCache};
 
 /// A file decoded to what Whisper takes: 16 kHz mono samples.
 pub(super) struct DecodedAudio {
@@ -143,7 +143,7 @@ impl CachedRun {
     /// Takes what a validated cache hit brings.
     ///
     /// The `Err` below is unreachable through [`lookup_cache`]: the loader
-    /// (`diarization_cache::load_internal`) answers a cache without coarse
+    /// (`diarization::cache::load_internal`) answers a cache without coarse
     /// coverage segments with `Miss("coarse coverage segments are missing")`,
     /// so the run computes instead, and only a cache that has them is a
     /// `Hit`. The branch stays as a typed error, never a panic, in case the
@@ -302,7 +302,7 @@ fn lookup_cache(
     exclusive_speech_embeddings: bool,
     out: &Out,
 ) -> Result<Option<Box<DiarizationCache>>, DictationError> {
-    match crate::diarization_cache::load_with_analysis_policy(
+    match sagascript_core::diarization::cache::load_with_analysis_policy(
         &target.path,
         &target.identity,
         exclusive_speech_embeddings,

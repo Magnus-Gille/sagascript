@@ -1,25 +1,25 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use sagascript_core::diarization::DiarizationAnalysis;
-use sagascript_core::meeting::reprocess::plan::ReprocessingMode;
-use sagascript_core::meeting::review::MeetingReview;
-use sagascript_core::meeting::MeetingTranscript;
-use sagascript_core::settings::{Language, WhisperModel};
-use sagascript_core::test_support::meeting_transcript;
-use sagascript_core::transcription::Glossary;
+use crate::diarization::DiarizationAnalysis;
+use crate::glossary::Glossary;
+use crate::meeting::reprocess::plan::ReprocessingMode;
+use crate::meeting::review::MeetingReview;
+use crate::meeting::MeetingTranscript;
+use crate::models::{Language, WhisperModel};
+use crate::test_support::meeting_transcript;
 use sagascript_testsupport::{sha256_hex, TempDir};
 
-use sagascript_core::test_support::FaultyFs;
+use crate::test_support::FaultyFs;
 
 use super::{
     execute_with, execute_with_model_check, plan_reprocessing, plan_reprocessing_with_model_check,
     CommitError, PendingPublication, ReprocessingInput, WorkBackend,
 };
-use crate::diarization_cache::{self, CacheIdentity, DiarizationCache};
-use crate::transcribe::{MeetingControl, MeetingPhase};
-use sagascript_core::diarization::DiarizeConfig as CoreDiarizeConfig;
-use sagascript_core::error::DictationError;
+use crate::diarization::cache::{self as diarization_cache, CacheIdentity, DiarizationCache};
+use crate::diarization::DiarizeConfig as CoreDiarizeConfig;
+use crate::error::DictationError;
+use crate::meeting::control::{MeetingControl, MeetingPhase};
 
 #[derive(Default)]
 struct CountingBackend {
@@ -30,7 +30,7 @@ struct CountingBackend {
     fail_analyze: bool,
     fail_full: bool,
     cancel_during_analyze: bool,
-    last_full_hint: Option<sagascript_core::diarization::speaker_hint::SpeakerCountHint>,
+    last_full_hint: Option<crate::diarization::speaker_hint::SpeakerCountHint>,
     /// Behave like the real full pipeline: save a new cache at the path it is
     /// given with `save_new`, as `transcribe_file` does mid-inference.
     write_cache: bool,
@@ -85,7 +85,7 @@ impl WorkBackend for CountingBackend {
         &mut self,
         input: &ReprocessingInput<'_>,
         _threshold: f32,
-        speaker_hint: Option<sagascript_core::diarization::speaker_hint::SpeakerCountHint>,
+        speaker_hint: Option<crate::diarization::speaker_hint::SpeakerCountHint>,
         cache_output: Option<&Path>,
         control: Option<&MeetingControl<'_>>,
     ) -> Result<MeetingTranscript, DictationError> {
@@ -127,10 +127,7 @@ fn synthetic_cache(source_sha256: &str) -> DiarizationCache {
         identity,
         analysis,
         vec![(0.0, 1.0, "cached transcript".to_string())],
-        sagascript_core::transcription::diagnostics::CoverageProfile::from_audio(&vec![
-            0.1;
-            16_000
-        ]),
+        crate::transcription::diagnostics::CoverageProfile::from_audio(&vec![0.1; 16_000]),
         None,
         None,
     )
@@ -205,19 +202,17 @@ fn assert_counts(backend: &CountingBackend, decode: usize, analyze: usize, full:
 #[test]
 fn selective_reprocessing_preserves_explicit_decoder_policy_and_acoustic_report() {
     let mut fixture = Fixture::new(true);
-    let options = sagascript_core::transcription::TranscribeOptions {
+    let options = crate::transcription::TranscribeOptions {
         beam_size: 2,
         temperature_fallback: true,
         vad_model_path: Some("synthetic-vad-path".into()),
         segment_timestamps: true,
         ..Default::default()
     };
-    let decoder: sagascript_core::diarization::report::DecoderEvidence =
-        sagascript_core::transcription::whisper_backend::effective_diarization_decoder_config(
-            &options,
-        )
-        .unwrap()
-        .into();
+    let decoder: crate::diarization::report::DecoderEvidence =
+        crate::transcription::whisper_backend::effective_diarization_decoder_config(&options)
+            .unwrap()
+            .into();
     let analysis: DiarizationAnalysis =
         serde_json::from_str(r#"{"raw_segments":[],"embeddings":[],"region_activity_support":[]}"#)
             .unwrap();
@@ -331,9 +326,9 @@ fn work_modes_invoke_only_their_selected_backend_stages() {
 
 #[test]
 fn speaker_hint_flows_through_plan_execution_and_persistence_in_every_mode() {
-    use sagascript_core::diarization::speaker_hint::SpeakerCountHint;
-    use sagascript_core::meeting::reprocess::plan::ReprocessingPlan;
-    use sagascript_core::meeting::reprocess::proposal::MeetingReprocessingProposal;
+    use crate::diarization::speaker_hint::SpeakerCountHint;
+    use crate::meeting::reprocess::plan::ReprocessingPlan;
+    use crate::meeting::reprocess::proposal::MeetingReprocessingProposal;
 
     let hint = SpeakerCountHint::exact(2);
     let fixture = Fixture::new(true);
@@ -457,6 +452,7 @@ fn missing_rediarization_models_fail_before_decode_or_analysis() {
         &input,
         None,
         None,
+        "test-revision",
         || false,
         &mut backend,
     )
@@ -558,7 +554,7 @@ fn directory_names(dir: &Path) -> Vec<String> {
     names
 }
 
-fn full_plan(fixture: &Fixture) -> sagascript_core::meeting::reprocess::plan::ReprocessingPlan {
+fn full_plan(fixture: &Fixture) -> crate::meeting::reprocess::plan::ReprocessingPlan {
     plan_reprocessing(&fixture.input(None), ReprocessingMode::Full, 0.75, None).expect("full plan")
 }
 
@@ -721,6 +717,7 @@ fn staged_full_run(fixture: &Fixture, cache_output: &Path, proposal: &Path) -> P
         &fixture.input(None),
         Some(cache_output),
         None,
+        "test-revision",
         || true,
         &mut backend,
     )
@@ -754,14 +751,15 @@ fn staging_publishes_nothing_and_commit_publishes_the_cache_then_the_proposal() 
         directory_names(fixture.root()),
         ["new-cache.json", "proposal.json", "synthetic-audio.bin"]
     );
-    let published = crate::meeting_proposal::read_proposal(&proposal).expect("valid proposal");
+    let published =
+        crate::meeting::reprocess::io::read_proposal(&proposal).expect("valid proposal");
     assert_eq!(published, receipt_proposal(&fixture));
 }
 
 fn receipt_proposal(
     fixture: &Fixture,
-) -> sagascript_core::meeting::reprocess::proposal::MeetingReprocessingProposal {
-    sagascript_core::meeting::reprocess::proposal::MeetingReprocessingProposal::new(
+) -> crate::meeting::reprocess::proposal::MeetingReprocessingProposal {
+    crate::meeting::reprocess::proposal::MeetingReprocessingProposal::new(
         fixture.previous.clone(),
         fixture.previous.original.clone(),
     )
@@ -854,6 +852,7 @@ fn the_cache_left_by_a_failed_second_publication_recovers_the_proposal_without_i
         &input,
         None,
         None,
+        "test-revision",
         || true,
         &mut backend,
     )
@@ -869,7 +868,7 @@ fn the_cache_left_by_a_failed_second_publication_recovers_the_proposal_without_i
         directory_names(fixture.root()),
         ["new-cache.json", "proposal.json", "synthetic-audio.bin"]
     );
-    crate::meeting_proposal::read_proposal(&proposal).expect("valid recovered proposal");
+    crate::meeting::reprocess::io::read_proposal(&proposal).expect("valid recovered proposal");
 }
 
 #[test]
@@ -983,13 +982,14 @@ fn a_run_killed_between_the_publications_is_detectable_and_its_staged_proposal_u
     // Detection: the cache exists, the proposal does not, and the survivor is listed.
     assert!(cache_output.is_file() && !proposal.exists());
     assert_eq!(
-        sagascript_core::fsutil::staging_leftovers(&proposal),
+        crate::fsutil::staging_leftovers(&proposal),
         std::slice::from_ref(&survivor)
     );
     // Recovery by hand: it was complete before the cache was published.
-    crate::meeting_proposal::read_proposal(&survivor).expect("the survivor is a valid proposal");
+    crate::meeting::reprocess::io::read_proposal(&survivor)
+        .expect("the survivor is a valid proposal");
     std::fs::rename(&survivor, &proposal).expect("rename the survivor");
-    crate::meeting_proposal::read_proposal(&proposal).expect("valid proposal");
+    crate::meeting::reprocess::io::read_proposal(&proposal).expect("valid proposal");
 }
 
 #[test]
@@ -1057,7 +1057,7 @@ fn a_run_that_produced_no_cache_publishes_nothing() {
 
 #[test]
 fn finish_keeps_the_validated_result_when_only_the_staging_file_cannot_be_removed() {
-    use sagascript_core::test_support::FaultyFs;
+    use crate::test_support::FaultyFs;
     let fixture = Fixture::new(false);
     let input = fixture.input(None);
     let plan = full_plan(&fixture);
@@ -1072,6 +1072,7 @@ fn finish_keeps_the_validated_result_when_only_the_staging_file_cannot_be_remove
         &input,
         Some(&cache_output),
         None,
+        "test-revision",
         || true,
         &mut backend,
     )
@@ -1125,7 +1126,7 @@ fn logged_while(work: impl FnOnce()) -> String {
 
 #[test]
 fn a_staging_file_left_after_finish_is_logged_without_the_users_path() {
-    use sagascript_core::test_support::FaultyFs;
+    use crate::test_support::FaultyFs;
     let fixture = Fixture::new(false);
     let input = fixture.input(None);
     let plan = full_plan(&fixture);
@@ -1140,6 +1141,7 @@ fn a_staging_file_left_after_finish_is_logged_without_the_users_path() {
         &input,
         Some(&cache_output),
         None,
+        "test-revision",
         || true,
         &mut backend,
     )

@@ -2,28 +2,29 @@
 //!
 //! Proposal files are deliberately separate from active review files.  This
 //! module only reads validated JSON and publishes user-selected outputs; it
-//! does not infer, select, or persist any work plan.
+//! does not infer, select, or persist any work plan. The bounded reading and
+//! the no-replace publication are core's (`meeting::reprocess::io`, #374); this
+//! module adds the clap command and the stderr warning for a staging file that
+//! could not be removed.
 
-use std::fs::{self, File};
-use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 use clap::{Args, Subcommand};
 use sagascript_core::error::DictationError;
-use sagascript_core::fsutil::{self, PublishError, PublishErrorKind};
+use sagascript_core::fsutil;
+use sagascript_core::meeting::reprocess::io::{self as meeting_io, json_line, read_json};
 use sagascript_core::meeting::reprocess::proposal::{
     MeetingReprocessingProposal, ProposalError, MAX_SERIALIZED_PROPOSAL_BYTES,
 };
 use sagascript_core::meeting::review::{CorrectionOperation, MeetingReview};
 use sagascript_core::meeting::MeetingTranscript;
-use serde::{de::DeserializeOwned, Serialize};
+use serde::Serialize;
 
 use crate::output::{errln, Out};
 
 const MAX_REVIEW_BYTES: usize = 24 * 1024 * 1024;
 const MAX_TRANSCRIPT_BYTES: usize = 24 * 1024 * 1024;
 const MAX_OPERATIONS_BYTES: usize = 24 * 1024 * 1024;
-const MAX_IO_CONTEXT_CHARS: usize = 160;
 
 #[derive(Args, Debug)]
 pub struct ProposalArgs {
@@ -128,100 +129,12 @@ pub fn run(args: ProposalArgs, out: &Out) -> Result<(), DictationError> {
     }
 }
 
-pub(crate) fn read_json<T: DeserializeOwned>(
-    path: &Path,
-    limit: usize,
-    kind: &str,
-) -> Result<T, DictationError> {
-    let bytes = read_bounded(path, limit, kind)?;
-    serde_json::from_slice(&bytes).map_err(|_| {
-        DictationError::FileDecodeError(format!(
-            "meeting {kind} input is invalid JSON or fails its schema validation"
-        ))
-    })
-}
-
-fn read_bounded(path: &Path, limit: usize, kind: &str) -> Result<Vec<u8>, DictationError> {
-    let metadata = fs::metadata(path)
-        .map_err(|error| io_error("meeting input could not be inspected", error))?;
-    if !metadata.is_file() {
-        return Err(DictationError::FileDecodeError(format!(
-            "meeting {kind} input must be a regular file"
-        )));
-    }
-    let file =
-        File::open(path).map_err(|error| io_error("meeting input could not be opened", error))?;
-    let metadata = file
-        .metadata()
-        .map_err(|error| io_error("opened meeting input could not be inspected", error))?;
-    if !metadata.is_file() {
-        return Err(DictationError::FileDecodeError(format!(
-            "meeting {kind} input must be a regular file"
-        )));
-    }
-    if metadata.len() > limit as u64 {
-        return Err(DictationError::FileDecodeError(format!(
-            "meeting {kind} input exceeds its size limit"
-        )));
-    }
-    let mut bytes = Vec::new();
-    file.take(limit as u64 + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|error| io_error("meeting input could not be read", error))?;
-    if bytes.len() > limit {
-        return Err(DictationError::FileDecodeError(format!(
-            "meeting {kind} input exceeds its size limit"
-        )));
-    }
-    Ok(bytes)
-}
-
 pub(crate) fn write_json_new<T: Serialize>(
     path: &Path,
     value: &T,
     out: &Out,
 ) -> Result<(), DictationError> {
     write_atomic_new(path, &json_line(value)?, out)
-}
-
-/// The serialized document: compact JSON and a newline.
-fn json_line<T: Serialize>(value: &T) -> Result<Vec<u8>, DictationError> {
-    let mut bytes = serde_json::to_vec(value).map_err(|_| serialization_error())?;
-    bytes.push(b'\n');
-    Ok(bytes)
-}
-
-/// Serialize `value` and stage it privately beside `path` without publishing
-/// anything. Serialization and write errors surface here, before a caller
-/// publishes any related artifact (#342).
-#[cfg(feature = "diarization")]
-pub(crate) fn stage_json_new<T: Serialize>(
-    path: &Path,
-    value: &T,
-) -> Result<fsutil::StagedFile, DictationError> {
-    fsutil::StagedFile::create(path, &json_line(value)?).map_err(|error| publish_error(&error))
-}
-
-/// Read a validated proposal selected by a caller such as the desktop UI.
-pub fn read_proposal(path: &Path) -> Result<MeetingReprocessingProposal, DictationError> {
-    read_json(path, MAX_SERIALIZED_PROPOSAL_BYTES, "proposal")
-}
-
-/// Fail when anything, even a dangling symlink, exists at `path`: the cheap
-/// check before expensive work that ends in publishing a new file. Publication
-/// itself never replaces a file either way.
-#[cfg(feature = "diarization")]
-pub(crate) fn ensure_output_absent(path: &Path) -> Result<(), DictationError> {
-    match fs::symlink_metadata(path) {
-        Ok(_) => Err(DictationError::FileDecodeError(
-            "meeting output already exists; no existing file was changed".to_string(),
-        )),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(DictationError::FileDecodeError(format!(
-            "meeting output could not be inspected: {}",
-            error
-        ))),
-    }
 }
 
 /// Publish `bytes` as the new file `path` ([`fsutil::publish_new`]). A private
@@ -237,8 +150,7 @@ fn write_atomic_new_with(
     ops: &dyn fsutil::PublishFs,
     out: &Out,
 ) -> Result<(), DictationError> {
-    let published =
-        fsutil::publish_new_with(path, bytes, ops).map_err(|error| publish_error(&error))?;
+    let published = meeting_io::write_atomic_new_with(path, bytes, ops)?;
     if published.leftover.is_some() {
         errln!(
             out,
@@ -248,42 +160,6 @@ fn write_atomic_new_with(
         );
     }
     Ok(())
-}
-
-/// The error for a publication that did not happen; no existing file was
-/// changed, and a staging file that could not be removed is named.
-pub(crate) fn publish_error(error: &PublishError) -> DictationError {
-    let kind_message = match &error.kind {
-        PublishErrorKind::AlreadyExists => {
-            "meeting output already exists; no existing file was changed".to_string()
-        }
-        PublishErrorKind::NoFileName => {
-            "meeting output could not be created: the destination has no file name".to_string()
-        }
-        PublishErrorKind::ParentUnavailable(source) => {
-            io_context("meeting output folder could not be inspected", source)
-        }
-        PublishErrorKind::ParentNotDirectory => {
-            "meeting output folder must be a directory".to_string()
-        }
-        PublishErrorKind::Stage(source) => {
-            io_context("meeting output could not be created", source)
-        }
-        PublishErrorKind::NothingStaged => {
-            "meeting output could not be published: nothing was staged".to_string()
-        }
-        PublishErrorKind::Commit(source) => {
-            io_context("meeting output could not be published", source)
-        }
-    };
-    match &error.leftover {
-        None => DictationError::FileDecodeError(kind_message),
-        Some(leftover) => DictationError::FileDecodeError(format!(
-            "{kind_message}; its private temporary file {} could not be removed: {}",
-            leftover.path.display(),
-            truncated(&leftover.error)
-        )),
-    }
 }
 
 fn write_stdout_json<T: Serialize>(value: &T, out: &Out) -> Result<(), DictationError> {
@@ -296,28 +172,6 @@ fn proposal_transform_error(_error: ProposalError) -> DictationError {
     )
 }
 
-fn serialization_error() -> DictationError {
-    DictationError::TranscriptionFailed(
-        "meeting proposal could not be serialized by its validated contract".into(),
-    )
-}
-
-fn io_error(action: &str, error: io::Error) -> DictationError {
-    DictationError::FileDecodeError(io_context(action, &error))
-}
-
-fn io_context(action: &str, error: &io::Error) -> String {
-    format!("{action}: {}", truncated(error))
-}
-
-fn truncated(error: &io::Error) -> String {
-    error
-        .to_string()
-        .chars()
-        .take(MAX_IO_CONTEXT_CHARS)
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -325,6 +179,7 @@ mod tests {
     use sagascript_core::test_support::meeting_transcript;
     use sagascript_testsupport::TempDir;
     use serde_json::json;
+    use std::fs;
 
     fn transcript(source: &str, first_text: &str) -> MeetingTranscript {
         meeting_transcript()
