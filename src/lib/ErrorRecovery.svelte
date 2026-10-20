@@ -32,7 +32,11 @@
 </script>
 
 {#if recovery}
-  <div class="error-recovery">
+  <!-- aria-live: the relabel (a finished download turns the button into "Try
+       again") is a change inside this region, which a screen reader announces.
+       The region that holds the label is the one that says it; the download bar
+       is another element and does not say that the model is ready. -->
+  <div class="error-recovery" aria-live="polite">
     <button class="secondary" type="button" aria-disabled={busy ? "true" : undefined} onclick={act}>
       {recovery === "retry" ? "Try again" : "Download the model again"}
     </button>

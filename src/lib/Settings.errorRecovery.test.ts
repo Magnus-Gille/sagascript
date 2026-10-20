@@ -351,6 +351,24 @@ describe("focus", () => {
 
 // The error and the button that follows it are announced when they appear.
 describe("announcement", () => {
+  test("the relabel from Download the model again to Try again happens in one polite live region", async () => {
+    const download = deferred<void>();
+    const { ipc } = await renderSettings(settingsBackend({ download_pianissimo_model: () => download.promise }));
+    ipc.emit("error", commandErrors.engine_model_missing);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Download the model again" }));
+    const region = document.querySelector<HTMLElement>(".test-section .error-recovery")!;
+    expect(region).toHaveAttribute("aria-live", "polite");
+
+    download.resolve();
+
+    await screen.findByRole("button", { name: "Try again" });
+    // The same region, so what changes in it is announced; a region that
+    // was inserted with its content would not be.
+    expect(document.querySelector(".test-section .error-recovery")).toBe(region);
+    expect(region).toHaveTextContent("Try again");
+  });
+
   test("the Dictate tab's error is an alert", async () => {
     const { ipc } = await renderSettings(settingsBackend());
 
