@@ -175,9 +175,7 @@ test("a missing engine model offers the download, then Try again", async () => {
   await user.click(downloadButton);
 
   await waitFor(() => expect(ipc.callsTo("download_pianissimo_model")).toHaveLength(1));
-  await waitFor(() =>
-    expect(screen.getByRole("button", { name: "Download the model again" })).toHaveAttribute("aria-disabled", "true"),
-  );
+  await waitFor(() => expect(screen.getByRole("button", { name: "Download the model again" })).toHaveAttribute("aria-disabled", "true"));
   download.resolve();
   const retry = await screen.findByRole("button", { name: "Try again" });
   expect(downloadAgain()).toBeNull();
