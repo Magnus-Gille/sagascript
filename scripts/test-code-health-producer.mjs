@@ -243,10 +243,169 @@ test("Rust complexity counts function-body complexity once and uses a strict thr
   );
 });
 
+// The analyzer reports an error for a selected file in which it finds no function, and the producer
+// fails the whole scope on it (parseRustComplexity), so a scope may list only files with a function.
+// This is the dependency-free check of that rule: the pull-request lane has no analyzer installed.
+// It reads what the analyzer counts as a function: an `fn` with a body, outside comments, string
+// literals and `macro_rules!` bodies. A trait method without a body is not one. (A file whose only
+// functions are closures would need the analyzer; the real files all agree with this reading.)
+function blankRustNoise(source) {
+  let result = "";
+  let index = 0;
+  const blank = (from, to) => {
+    for (let offset = from; offset < to; offset += 1) result += source[offset] === "\n" ? "\n" : " ";
+  };
+  const consumeQuoted = (quote) => {
+    let cursor = quote + 1;
+    while (cursor < source.length) {
+      if (source[cursor] === "\\") cursor += 2;
+      else if (source[cursor++] === '"') break;
+    }
+    return cursor;
+  };
+  const consumeRaw = (prefixEnd) => {
+    let cursor = prefixEnd;
+    while (source[cursor] === "#") cursor += 1;
+    if (source[cursor] !== '"') return null;
+    const terminator = `"${source.slice(prefixEnd, cursor)}`;
+    const close = source.indexOf(terminator, cursor + 1);
+    return close < 0 ? source.length : close + terminator.length;
+  };
+
+  while (index < source.length) {
+    const rawPrefixEnd = source[index] === "r" ? index + 1 : source.startsWith("br", index) ? index + 2 : null;
+    if (rawPrefixEnd !== null) {
+      const end = consumeRaw(rawPrefixEnd);
+      if (end !== null) {
+        blank(index, end);
+        index = end;
+        continue;
+      }
+    }
+    const quote = source[index] === '"' ? index : source.startsWith('b"', index) ? index + 1 : null;
+    if (quote !== null) {
+      const end = consumeQuoted(quote);
+      blank(index, end);
+      index = end;
+      continue;
+    }
+    const char = source.slice(index).match(/^b?'(?:\\[\s\S]|[^\\'])'/);
+    if (char) {
+      blank(index, index + char[0].length);
+      index += char[0].length;
+      continue;
+    }
+    if (source.startsWith("//", index)) {
+      const end = source.indexOf("\n", index + 2);
+      const stop = end < 0 ? source.length : end;
+      blank(index, stop);
+      index = stop;
+      continue;
+    }
+    if (source.startsWith("/*", index)) {
+      const start = index;
+      let depth = 1;
+      index += 2;
+      while (index < source.length && depth > 0) {
+        if (source.startsWith("/*", index)) {
+          depth += 1;
+          index += 2;
+        } else if (source.startsWith("*/", index)) {
+          depth -= 1;
+          index += 2;
+        } else {
+          index += 1;
+        }
+      }
+      blank(start, index);
+      continue;
+    }
+    result += source[index++];
+  }
+  return result;
+}
+
+function withoutMacroRules(code) {
+  let result = "";
+  let from = 0;
+  for (const match of code.matchAll(/\bmacro_rules!\s*[A-Za-z_]\w*\s*(?=[{([])/g)) {
+    if (match.index < from) continue;
+    let depth = 0;
+    let end = match.index + match[0].length;
+    do {
+      const char = code[end];
+      if (char === "{" || char === "(" || char === "[") depth += 1;
+      else if (char === "}" || char === ")" || char === "]") depth -= 1;
+      end += 1;
+    } while (depth > 0 && end < code.length);
+    result += code.slice(from, match.index);
+    from = end;
+  }
+  return result + code.slice(from);
+}
+
+function declaresRustFunction(source) {
+  const code = withoutMacroRules(blankRustNoise(source));
+  for (const match of code.matchAll(/\bfn\s+[A-Za-z_]\w*/g)) {
+    // The signature ends at the first `{` (a body) or `;` (a trait method without one) outside
+    // parentheses and brackets, where `[u8; 4]` has a `;` of its own.
+    let depth = 0;
+    for (let index = match.index + match[0].length; index < code.length; index += 1) {
+      const char = code[index];
+      if (char === "(" || char === "[") depth += 1;
+      else if (char === ")" || char === "]") depth -= 1;
+      else if (depth === 0 && char === ";") break;
+      else if (depth === 0 && char === "{") return true;
+    }
+  }
+  return false;
+}
+
+test("declaresRustFunction reads a function the way the complexity analyzer counts one", () => {
+  for (const source of [
+    "fn plain() {}",
+    "impl A { pub(crate) async fn method(&self) -> u8 { 1 } }",
+    "fn sized(bytes: [u8; 4]) -> [u8; 2] {\n    [0; 2]\n}",
+    "trait T { fn required(&self); fn provided(&self) {} }",
+    "fn generic<T>(value: T) -> T\nwhere\n    T: Fn(u8) -> u8,\n{\n    value\n}",
+    '/* outer /* inner */ " */\npub fn f() { let _ = "x"; }',
+    'const STRING: &str = "/* fn quoted() {} */ // text";\nconst RAW: &str = r###"/* fn raw() {} */"###;\nconst CHAR: char = \'/\';\npub fn literals() {}',
+  ]) {
+    assert.equal(declaresRustFunction(source), true, source);
+  }
+  for (const source of [
+    "",
+    "//! A module of a struct and a mention of fn services() in prose.\npub struct Services;",
+    '/* fn commented() {} */\nconst NAME: &str = "fn quoted() {}";',
+    'const RAW: &str = r#"fn raw() {}"#;',
+    "pub trait Narrate { fn narrate(&self, line: &str); fn flush(&self); }",
+    "macro_rules! forward {\n    ($($ty:ty),+) => {$(\n        impl From<$ty> for E { fn from(e: $ty) -> Self { E(e.to_string()) } }\n    )+};\n}\nforward!(A, B);",
+    "pub mod a;\npub use a::B;\ntype F = fn(u8) -> u8;",
+  ]) {
+    assert.equal(declaresRustFunction(source), false, source);
+  }
+});
+
+test("every file selected for complexity declares a function, or the producer fails the scope", () => {
+  for (const [scope, paths] of Object.entries(config.complexity.scopes)) {
+    for (const path of paths) {
+      assert.ok(existsSync(join(repoRoot, path)), `${path} is listed in complexity.scopes.${scope} but does not exist`);
+      assert.ok(
+        declaresRustFunction(readFileSync(join(repoRoot, path), "utf8")),
+        `${path} is listed in complexity.scopes.${scope} of docs/code-health-producer-v1.json but declares no function: ` +
+          `rust-code-analysis then emits no functions for it and the producer fails the whole scope as producer-error. ` +
+          `Remove it from the scope (a module that only re-exports, or only declares types, has nothing to measure).`,
+      );
+    }
+  }
+});
+
 test("the rust-cli complexity scope lists every production module of the transcribe command", () => {
   // The scope names files, so a module added to transcribe/ (or to a directory module inside it)
   // would silently drop out of the measurement until someone remembers to list it. Test files
-  // (tests.rs, *_tests.rs) are not measured.
+  // (tests.rs, *_tests.rs) are not measured, and neither are modules without a function (see
+  // declaresRustFunction): the producer fails the scope on one, so a module that gains its first
+  // function has to be listed from then on.
   const directory = "src-tauri/crates/sagascript-cli/src/transcribe";
   const productionModules = (dir) =>
     readdirSync(join(repoRoot, dir), { withFileTypes: true }).flatMap((entry) => {
@@ -254,12 +413,14 @@ test("the rust-cli complexity scope lists every production module of the transcr
       if (entry.isDirectory()) return productionModules(path);
       return entry.name.endsWith(".rs") && !/(^|_)tests\.rs$/.test(entry.name) ? [path] : [];
     });
-  const modules = productionModules(directory).sort();
+  const modules = productionModules(directory)
+    .filter((path) => declaresRustFunction(readFileSync(join(repoRoot, path), "utf8")))
+    .sort();
   const configured = config.complexity.scopes["rust-cli"];
   assert.deepEqual(
     configured.filter((path) => path.startsWith(`${directory}/`)).sort(),
     modules,
-    "docs/code-health-producer-v1.json complexity.scopes.rust-cli must list exactly the production files of transcribe/",
+    "docs/code-health-producer-v1.json complexity.scopes.rust-cli must list exactly the production files of transcribe/ that declare a function",
   );
   for (const path of configured) assert.ok(existsSync(join(repoRoot, path)), `${path} is listed in the rust-cli scope but does not exist`);
 });
