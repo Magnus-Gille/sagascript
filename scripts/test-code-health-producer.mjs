@@ -249,7 +249,81 @@ test("Rust complexity counts function-body complexity once and uses a strict thr
 // It reads what the analyzer counts as a function: an `fn` with a body, outside comments, string
 // literals and `macro_rules!` bodies. A trait method without a body is not one. (A file whose only
 // functions are closures would need the analyzer; the real files all agree with this reading.)
-const RUST_NOISE = /\/\/[^\n]*|\/\*[\s\S]*?\*\/|b?r(#*)"[\s\S]*?"\1|b?"(?:\\[\s\S]|[^"\\])*"|b?'(?:\\.|[^\\'])'/g;
+function blankRustNoise(source) {
+  let result = "";
+  let index = 0;
+  const blank = (from, to) => {
+    for (let offset = from; offset < to; offset += 1) result += source[offset] === "\n" ? "\n" : " ";
+  };
+  const consumeQuoted = (quote) => {
+    let cursor = quote + 1;
+    while (cursor < source.length) {
+      if (source[cursor] === "\\") cursor += 2;
+      else if (source[cursor++] === '"') break;
+    }
+    return cursor;
+  };
+  const consumeRaw = (prefixEnd) => {
+    let cursor = prefixEnd;
+    while (source[cursor] === "#") cursor += 1;
+    if (source[cursor] !== '"') return null;
+    const terminator = `"${source.slice(prefixEnd, cursor)}`;
+    const close = source.indexOf(terminator, cursor + 1);
+    return close < 0 ? source.length : close + terminator.length;
+  };
+
+  while (index < source.length) {
+    const rawPrefixEnd = source[index] === "r" ? index + 1 : source.startsWith("br", index) ? index + 2 : null;
+    if (rawPrefixEnd !== null) {
+      const end = consumeRaw(rawPrefixEnd);
+      if (end !== null) {
+        blank(index, end);
+        index = end;
+        continue;
+      }
+    }
+    const quote = source[index] === '"' ? index : source.startsWith('b"', index) ? index + 1 : null;
+    if (quote !== null) {
+      const end = consumeQuoted(quote);
+      blank(index, end);
+      index = end;
+      continue;
+    }
+    const char = source.slice(index).match(/^b?'(?:\\[\s\S]|[^\\'])'/);
+    if (char) {
+      blank(index, index + char[0].length);
+      index += char[0].length;
+      continue;
+    }
+    if (source.startsWith("//", index)) {
+      const end = source.indexOf("\n", index + 2);
+      const stop = end < 0 ? source.length : end;
+      blank(index, stop);
+      index = stop;
+      continue;
+    }
+    if (source.startsWith("/*", index)) {
+      const start = index;
+      let depth = 1;
+      index += 2;
+      while (index < source.length && depth > 0) {
+        if (source.startsWith("/*", index)) {
+          depth += 1;
+          index += 2;
+        } else if (source.startsWith("*/", index)) {
+          depth -= 1;
+          index += 2;
+        } else {
+          index += 1;
+        }
+      }
+      blank(start, index);
+      continue;
+    }
+    result += source[index++];
+  }
+  return result;
+}
 
 function withoutMacroRules(code) {
   let result = "";
@@ -271,7 +345,7 @@ function withoutMacroRules(code) {
 }
 
 function declaresRustFunction(source) {
-  const code = withoutMacroRules(source.replace(RUST_NOISE, " "));
+  const code = withoutMacroRules(blankRustNoise(source));
   for (const match of code.matchAll(/\bfn\s+[A-Za-z_]\w*/g)) {
     // The signature ends at the first `{` (a body) or `;` (a trait method without one) outside
     // parentheses and brackets, where `[u8; 4]` has a `;` of its own.
@@ -294,6 +368,8 @@ test("declaresRustFunction reads a function the way the complexity analyzer coun
     "fn sized(bytes: [u8; 4]) -> [u8; 2] {\n    [0; 2]\n}",
     "trait T { fn required(&self); fn provided(&self) {} }",
     "fn generic<T>(value: T) -> T\nwhere\n    T: Fn(u8) -> u8,\n{\n    value\n}",
+    '/* outer /* inner */ " */\npub fn f() { let _ = "x"; }',
+    'const STRING: &str = "/* fn quoted() {} */ // text";\nconst RAW: &str = r###"/* fn raw() {} */"###;\nconst CHAR: char = \'/\';\npub fn literals() {}',
   ]) {
     assert.equal(declaresRustFunction(source), true, source);
   }
