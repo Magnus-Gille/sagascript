@@ -970,6 +970,14 @@ mod running_jobs {
         }
     }
 
+    struct CancelOnDrop(Arc<AtomicBool>);
+
+    impl Drop for CancelOnDrop {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
     // ---- begin_meeting_file / begin_meeting_reprocessing ----------------------------------
 
     #[test]
@@ -1043,6 +1051,16 @@ mod running_jobs {
                 Err("cancelled".into())
             })
             .expect("the job starts");
+        let cleanup = CancelOnDrop(
+            app.jobs
+                .0
+                .lock()
+                .expect("job slot")
+                .as_ref()
+                .expect("the job is in its slot")
+                .cancelled
+                .clone(),
+        );
         running.recv().expect("the worker is running");
 
         let cancelled = {
@@ -1058,6 +1076,7 @@ mod running_jobs {
         assert_eq!(done.error, None, "a cancel is not an error");
         assert!(done.transcript.is_none());
         assert_eq!(app.dictation_state(), AppState::Idle);
+        drop(cleanup);
     }
 
     #[test]
@@ -1091,7 +1110,7 @@ mod running_jobs {
         let (_, supervisor) = app
             .begin(None, move |_| {
                 started.send(()).expect("the test listens");
-                held.recv().expect("the test lets go");
+                let _ = held.recv();
                 Ok(JobOutput::Import(Box::new(valid_transcript())))
             })
             .expect("the first job starts");
@@ -1126,6 +1145,7 @@ mod running_jobs {
     #[tokio::test(start_paused = true)]
     async fn a_job_past_its_timeout_is_cancelled_and_its_backend_aborted_until_the_worker_ends() {
         let (jobs, cancelled) = supervised_job();
+        let cleanup = CancelOnDrop(cancelled.clone());
         let aborts = AtomicUsize::new(0);
         let (started, running) = tokio::sync::oneshot::channel();
         let flag = cancelled.clone();
@@ -1159,6 +1179,16 @@ mod running_jobs {
             assert_eq!(aborts.load(Ordering::SeqCst), 0);
             // Past it: the next look cancels.
             tokio::time::advance(JOB_LIMITS.tick * 4).await;
+            for _ in 0..8 {
+                if cancelled.load(Ordering::SeqCst) {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+            assert!(
+                cancelled.load(Ordering::SeqCst),
+                "the supervisor must cancel the worker after its timeout"
+            );
         };
 
         let ((result, timed_out), ()) = tokio::join!(supervision, clock);
@@ -1184,6 +1214,7 @@ mod running_jobs {
             JobStatus::Cancelling,
             "until the worker has ended the job is cancelling, not over"
         );
+        drop(cleanup);
     }
 
     #[tokio::test(start_paused = true)]
