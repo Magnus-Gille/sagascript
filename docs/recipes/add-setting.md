@@ -120,6 +120,10 @@ of the controller's copy, so a setter does not repeat it.
   the table fails when a surface persists something else than the operation does. Decide a
   difference on purpose and write it in `Case::differs_in` and in
   [ARCHITECTURE.md §2.2](../ARCHITECTURE.md#22-settings-layers-disk--store--appcontroller--watcher--frontend).
+  A key whose `reset` is the setter with the default value also gets an `Op::Reset` row
+  (`reset_as_op`), and a change to the shape of the file a `Case::legacy_file` row: both surfaces
+  have to migrate it when they write. Rules about a profile's dictionary are
+  `settings/glossary_ops.rs`; a surface words its own refusal from `DictionaryRefusal`.
 - Side effects go after the persist call (`set_show_overlay`, `set_vad_enabled`). A setter that
   needs the `AppHandle` (the profiles menu, the overlay window) splits its persistence half into
   a plain function, as `persist_language` and `persist_show_overlay` do, so the table test can

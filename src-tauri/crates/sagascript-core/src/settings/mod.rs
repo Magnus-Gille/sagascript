@@ -1,4 +1,5 @@
 mod error;
+mod glossary_ops;
 mod hotkey;
 mod lenient;
 pub mod manager;
@@ -8,6 +9,7 @@ mod probes;
 pub mod store;
 
 pub use error::SettingsError;
+pub use glossary_ops::DictionaryRefusal;
 pub use hotkey::{canonical_hotkey, validate_hotkey};
 pub use manager::*;
 pub use migrations::SCHEMA_VERSION;

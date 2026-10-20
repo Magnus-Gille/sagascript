@@ -234,16 +234,11 @@ fn truncated(name: &str) -> String {
 /// A name that had to be cut keeps a hash of the whole name, so two names that
 /// share their first [`MAX_STAGING_NAME_UNITS`] units do not share a stem.
 fn staging_stem(name: &str) -> String {
-    use sha2::{Digest, Sha256};
     let kept = truncated(name);
     if kept.len() == name.len() {
         return format!(".{kept}");
     }
-    let digest = Sha256::digest(name.as_bytes());
-    let hash = digest
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
+    let hash = crate::hash::sha256_hex(name);
     format!(".{kept}-{}", &hash[..NAME_HASH_DIGITS])
 }
 

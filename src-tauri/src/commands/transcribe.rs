@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use sagascript_core::audio::decoder;
 use sagascript_core::error::DictationError;
-use sagascript_core::settings::{Settings, SettingsError};
+use sagascript_core::settings::Settings;
 use sagascript_core::transcription::{
     model, ContextProfile, Glossary, TranscribeOptions, TranscribeRequest,
 };
@@ -83,15 +83,7 @@ pub async fn start_training_recording(
     profile_id: String,
 ) -> Result<(), CommandError> {
     let mut ctrl = lock_controller(&controller);
-    ensure_known_profile(ctrl.settings(), &profile_id)?;
-    let profile = ctrl
-        .settings()
-        .resolved_hotkey_profiles()
-        .into_iter()
-        .find(|profile| profile.id == profile_id)
-        .ok_or_else(|| SettingsError::UnknownDictationProfile {
-            id: profile_id.clone(),
-        })?;
+    let profile = ctrl.settings().dictation_profile(&profile_id)?;
     gui_start_recording_result(ctrl.start_training_recording_for_profile(profile))
 }
 

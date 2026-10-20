@@ -32,10 +32,11 @@ const ROOT_AND_ERROR: [&str; 2] = ["lib", "error"];
 
 /// Cross-cutting modules that belong to no one subsystem. Each has a row in the
 /// table in `docs/ARCHITECTURE.md` section 1.1 saying why.
-const CROSS_CUTTING: [&str; 9] = [
+const CROSS_CUTTING: [&str; 10] = [
     "download",
     "fsutil",
     "glossary",
+    "hash",
     "machine",
     "path_scrub",
     "run_context",

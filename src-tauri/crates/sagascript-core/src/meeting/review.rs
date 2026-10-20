@@ -8,9 +8,9 @@
 use std::fmt;
 
 use serde::{de::Error as DeError, Deserialize, Deserializer, Serialize};
-use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+use crate::hash::sha256_hex;
 use crate::meeting::{MeetingError, MeetingExportFormat, MeetingTranscript};
 
 pub const REVIEW_SCHEMA_VERSION: u32 = 1;
@@ -608,8 +608,7 @@ fn serialized_size<T: Serialize>(value: &T) -> Result<usize, MeetingReviewError>
 
 fn hash_json<T: Serialize>(value: &T) -> Result<String, MeetingReviewError> {
     let bytes = serde_json::to_vec(value).map_err(|_| MeetingReviewError::Serialization)?;
-    let digest = Sha256::digest(bytes);
-    Ok(digest.iter().map(|byte| format!("{byte:02x}")).collect())
+    Ok(sha256_hex(bytes))
 }
 
 impl fmt::Display for CorrectionOperation {
