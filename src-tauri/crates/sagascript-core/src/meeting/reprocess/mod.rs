@@ -1,11 +1,20 @@
-//! Pure migration previews for selective meeting reprocessing.
+//! Selective meeting reprocessing.
 //!
-//! A preview starts from a newly inferred transcript and replays the previous
-//! review's correction operations in order.  It never mutates the previous
-//! review and never publishes the candidate; callers must resolve every
-//! conflict before accepting the result.
+//! This module is the pure migration preview: it starts from a newly inferred transcript and
+//! replays the previous review's correction operations in order.  It never mutates the previous
+//! review and never publishes the candidate; callers must resolve every conflict before accepting
+//! the result.
+//!
+//! Its submodules: [`matching`] (segments and speakers), [`plan`] (what work a reprocessing
+//! needs), [`proposal`] (the saved proposal), [`io`] (bounded reading and no-replace writing of
+//! those documents, #374) and, with the `diarization` feature, `orchestrate` (planning from the
+//! files and executing a plan behind the `WorkBackend` seam, with the staged publication of its
+//! outputs, #374).
 
+pub mod io;
 pub mod matching;
+#[cfg(feature = "diarization")]
+pub mod orchestrate;
 pub mod plan;
 pub mod proposal;
 

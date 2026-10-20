@@ -1,24 +1,17 @@
 //! Diarized meeting runs (#343): the entry points the app and the reprocessing
-//! pipeline call, their progress and cancellation control, and the hashing that
-//! binds a meeting document to the exact bytes it was made from.
+//! pipeline call. Their progress and cancellation control, the hashing that binds a
+//! meeting document to the exact bytes it was made from and the assembly of the
+//! document live in core's `meeting/` (#374).
 
-#[cfg(feature = "diarization")]
-use std::collections::HashSet;
-#[cfg(feature = "diarization")]
-use std::io::Read;
 #[cfg(feature = "diarization")]
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-#[cfg(feature = "diarization")]
-use std::time::SystemTime;
 
 #[cfg(feature = "diarization")]
-use sagascript_core::diarization::DiarizedSegment;
 use sagascript_core::error::DictationError;
 #[cfg(feature = "diarization")]
-use sagascript_core::hash::StreamingSha256;
+use sagascript_core::meeting::source::checked_meeting_metadata;
 #[cfg(feature = "diarization")]
-use sagascript_core::meeting::{MeetingSegmentInput, MeetingSpeaker, MeetingTranscript};
+use sagascript_core::meeting::MeetingTranscript;
 #[cfg(feature = "diarization")]
 use sagascript_core::settings::{Language, Settings, WhisperModel};
 #[cfg(feature = "diarization")]
@@ -31,251 +24,23 @@ use super::inputs::paths_refer_to_same_file;
 #[cfg(feature = "diarization")]
 use super::plan::{CacheRequest, DiarizationFlags, FileOptions, FileRequest};
 #[cfg(feature = "diarization")]
-use super::resolve::model_id_string;
-#[cfg(feature = "diarization")]
 use super::services::Services;
 #[cfg(feature = "diarization")]
 use super::transcribe_file;
 #[cfg(feature = "diarization")]
 use crate::output::Out;
 
+// The control, the phases and the hashing moved to core (#374); the paths of the CLI's own
+// modules, and of the app until it imports core, stay.
 #[cfg(feature = "diarization")]
-const MAX_MEETING_INPUT_BYTES: u64 = 2 * 1024 * 1024 * 1024;
-
-#[derive(Clone, Copy, Debug, serde::Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum MeetingPhase {
-    Preparing,
-    Decoding,
-    LoadingModel,
-    Analyzing,
-    Clustering,
-    Finalizing,
-}
-
-pub struct MeetingControl<'a> {
-    pub cancellation: &'a AtomicBool,
-    pub progress: &'a (dyn Fn(MeetingPhase) + Sync),
-}
-
-impl MeetingControl<'_> {
-    pub fn check(&self) -> Result<(), DictationError> {
-        if self.cancellation.load(Ordering::Acquire) {
-            return Err(DictationError::Cancelled);
-        }
-        Ok(())
-    }
-}
-
+pub(crate) use sagascript_core::meeting::assemble::meeting_transcript_from_plain_segments;
 #[cfg(feature = "diarization")]
-pub(super) fn meeting_checkpoint(
-    control: Option<&MeetingControl<'_>>,
-    phase: MeetingPhase,
-) -> Result<(), DictationError> {
-    if let Some(control) = control {
-        control.check()?;
-        (control.progress)(phase);
-        control.check()?;
-    }
-    Ok(())
-}
-
+pub(super) use sagascript_core::meeting::control::meeting_checkpoint;
+pub use sagascript_core::meeting::control::{MeetingControl, MeetingPhase};
 #[cfg(feature = "diarization")]
-pub(super) fn meeting_check(control: Option<&MeetingControl<'_>>) -> Result<(), DictationError> {
-    if let Some(control) = control {
-        control.check()?;
-    }
-    Ok(())
-}
-
-#[cfg(feature = "diarization")]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct MeetingFileMetadata {
-    len: u64,
-    modified: SystemTime,
-}
-
-#[cfg(feature = "diarization")]
-fn checked_meeting_metadata(
-    metadata: std::fs::Metadata,
-    context: &str,
-) -> Result<MeetingFileMetadata, DictationError> {
-    if !metadata.is_file() {
-        return Err(DictationError::FileDecodeError(format!(
-            "Meeting input {context} is not a regular file"
-        )));
-    }
-    if metadata.len() > MAX_MEETING_INPUT_BYTES {
-        return Err(DictationError::FileDecodeError(
-            "Meeting input exceeds the 2 GiB hashing limit".to_string(),
-        ));
-    }
-    let modified = metadata.modified().map_err(|error| {
-        DictationError::FileDecodeError(format!(
-            "Meeting input {context} modification time is unavailable: {error}"
-        ))
-    })?;
-    Ok(MeetingFileMetadata {
-        len: metadata.len(),
-        modified,
-    })
-}
-
-#[cfg(feature = "diarization")]
-pub(crate) fn stable_file_sha256(
-    file: &Path,
-    control: Option<&MeetingControl<'_>>,
-) -> Result<String, DictationError> {
-    const CHUNK_SIZE: usize = 64 * 1024;
-    let path_before = std::fs::metadata(file).map_err(|error| {
-        DictationError::FileDecodeError(format!(
-            "Failed to inspect meeting input '{}': {error}",
-            file.display()
-        ))
-    })?;
-    let path_before = checked_meeting_metadata(path_before, "path")?;
-    let mut reader = std::fs::File::open(file).map_err(|error| {
-        DictationError::FileDecodeError(format!(
-            "Failed to read meeting input '{}': {error}",
-            file.display()
-        ))
-    })?;
-    let handle_before = checked_meeting_metadata(
-        reader.metadata().map_err(|error| {
-            DictationError::FileDecodeError(format!(
-                "Failed to inspect opened meeting input '{}': {error}",
-                file.display()
-            ))
-        })?,
-        "opened handle",
-    )?;
-    if path_before != handle_before {
-        return Err(DictationError::FileDecodeError(
-            "Meeting input changed while opening; refusing output".to_string(),
-        ));
-    }
-    let mut hasher = StreamingSha256::new();
-    let mut buffer = [0_u8; CHUNK_SIZE];
-    let mut bytes_read = 0_u64;
-    {
-        let mut limited_reader = (&mut reader).take(MAX_MEETING_INPUT_BYTES + 1);
-        loop {
-            meeting_check(control)?;
-            let count = limited_reader.read(&mut buffer).map_err(|error| {
-                DictationError::FileDecodeError(format!(
-                    "Failed to read meeting input '{}': {error}",
-                    file.display()
-                ))
-            })?;
-            if count == 0 {
-                break;
-            }
-            bytes_read = bytes_read.checked_add(count as u64).ok_or_else(|| {
-                DictationError::FileDecodeError(
-                    "Meeting input size exceeded safe hashing bounds".to_string(),
-                )
-            })?;
-            hasher.update(&buffer[..count]);
-            meeting_check(control)?;
-        }
-    }
-    if bytes_read > MAX_MEETING_INPUT_BYTES {
-        return Err(DictationError::FileDecodeError(
-            "Meeting input exceeds the 2 GiB hashing limit".to_string(),
-        ));
-    }
-    let handle_after = checked_meeting_metadata(
-        reader.metadata().map_err(|error| {
-            DictationError::FileDecodeError(format!(
-                "Failed to inspect opened meeting input '{}': {error}",
-                file.display()
-            ))
-        })?,
-        "opened handle",
-    )?;
-    let path_after = std::fs::metadata(file).map_err(|error| {
-        DictationError::FileDecodeError(format!(
-            "Failed to inspect meeting input '{}': {error}",
-            file.display()
-        ))
-    })?;
-    let path_after = checked_meeting_metadata(path_after, "path")?;
-    if bytes_read != path_before.len
-        || path_before != handle_before
-        || handle_before != handle_after
-        || path_before != path_after
-    {
-        return Err(DictationError::FileDecodeError(
-            "Meeting input changed while hashing; refusing output".to_string(),
-        ));
-    }
-    Ok(hasher.finish_hex())
-}
-
-#[cfg(feature = "diarization")]
-pub(crate) fn verify_meeting_source_unchanged(
-    file: &Path,
-    source_sha256: &str,
-    control: Option<&MeetingControl<'_>>,
-) -> Result<(), DictationError> {
-    let after = stable_file_sha256(file, control)?;
-    if after != source_sha256 {
-        return Err(DictationError::FileDecodeError(
-            "Meeting input changed during transcription; refusing output".to_string(),
-        ));
-    }
-    Ok(())
-}
-
-#[cfg(feature = "diarization")]
-pub(crate) fn meeting_transcript_from_plain_segments(
-    source_sha256: String,
-    language: Language,
-    model: WhisperModel,
-    duration: f64,
-    plain_segments: &[DiarizedSegment],
-) -> Result<MeetingTranscript, DictationError> {
-    let mut speakers = Vec::new();
-    let mut seen = HashSet::new();
-    for segment in plain_segments {
-        if seen.insert(segment.speaker.clone()) {
-            speakers.push(MeetingSpeaker {
-                id: segment.speaker.clone(),
-                label: segment.speaker.clone(),
-            });
-        }
-    }
-    let segments = plain_segments
-        .iter()
-        .map(|segment| MeetingSegmentInput {
-            start: segment.start,
-            // Whisper can timestamp the last padded window past the decoded
-            // audio. Clamp only finite ends here; invalid starts/non-finite
-            // values still fail the shared validator, and legacy outputs stay
-            // unchanged. Do not mutate the source diarization segments.
-            end: if segment.end.is_finite() && duration.is_finite() {
-                segment.end.min(duration)
-            } else {
-                segment.end
-            },
-            text: segment.text.clone(),
-            speaker: segment.speaker.clone(),
-        })
-        .collect();
-    MeetingTranscript::new(
-        source_sha256,
-        language.whisper_code().unwrap_or("auto"),
-        model_id_string(model),
-        duration,
-        segments,
-        speakers,
-    )
-    .map_err(|_| {
-        DictationError::TranscriptionFailed(
-            "Diarized meeting segments failed shared transcript validation".to_string(),
-        )
-    })
-}
+pub(crate) use sagascript_core::meeting::source::{
+    stable_file_sha256, verify_meeting_source_unchanged,
+};
 
 /// Run the diarized file pipeline and return the validated shared meeting
 /// document without loading settings, writing settings, or emitting stdout.

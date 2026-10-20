@@ -45,30 +45,7 @@ pub(super) fn assemble_diarized_plain_text(segments: &[DiarizedSegment]) -> Stri
 }
 
 #[cfg(feature = "diarization")]
-pub(crate) fn prepare_diarized_plain_segments(
-    segments: &[DiarizedSegment],
-    language: Language,
-    glossary: &Glossary,
-) -> Vec<DiarizedSegment> {
-    let filtered = segments
-        .iter()
-        .filter(|segment| !contains_no_speech_marker(&segment.text))
-        .cloned()
-        .collect::<Vec<_>>();
-    let mut consolidated = sagascript_core::diarization::merge::consolidate(&filtered);
-    for segment in &mut consolidated {
-        segment.text = normalize_nonspeech_markers(&segment.text, language);
-    }
-    let fragments = consolidated
-        .iter()
-        .map(|segment| segment.text.as_str())
-        .collect::<Vec<_>>();
-    let (corrected_fragments, _) = glossary.correct_fragments(&fragments);
-    for (segment, text) in consolidated.iter_mut().zip(corrected_fragments) {
-        segment.text = text;
-    }
-    consolidated
-}
+pub(crate) use sagascript_core::meeting::assemble::prepare_diarized_plain_segments;
 
 /// What the plain path knows when the backend has answered.
 pub(super) struct PlainInput<'a> {

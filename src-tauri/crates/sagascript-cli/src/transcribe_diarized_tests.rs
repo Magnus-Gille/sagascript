@@ -19,12 +19,12 @@ use sagascript_core::diarization::{DiarizationAnalysis, DiarizationTimings, Diar
 use sagascript_core::transcription::DiarizationTranscriptionTimings;
 
 use super::*;
-use crate::diarization_cache::{load, CacheIdentity, CacheLookup};
 use crate::transcribe::diarize::CachePolicy;
 use crate::transcribe::diarize::{
     analyze_in_sequence, analyze_overlapped, AnalysisOutcome, DiarizationAnalyzer,
 };
 use crate::transcribe::plan::{CacheRequest, DiarizationFlags};
+use sagascript_core::diarization::cache::{load, CacheIdentity, CacheLookup};
 
 /// Long enough for two speakers of five and six seconds.
 const SECONDS: usize = 12;

@@ -484,28 +484,29 @@ fn cached_transcribe_uses_coarse_coverage_across_threshold_sweep() {
     let coverage_segments =
         canonicalize_coverage_segments(coverage_segments, coverage_profile.duration_seconds());
     assert_eq!(coverage_segments[1].end, 11.0);
-    let source_identity = crate::diarization_cache::CacheIdentity::for_input(
+    let source_identity = sagascript_core::diarization::cache::CacheIdentity::for_input(
         &input,
         "en",
         model_id_string(WhisperModel::TinyEn),
         Some("alpha"),
     )
     .unwrap();
-    let cache_value = crate::diarization_cache::DiarizationCache::new_with_coverage_segments(
-        source_identity.clone(),
-        analysis,
-        vec![
-            (1.0, 1.0, "first".to_string()),
-            (9.0, 9.0, "second".to_string()),
-        ],
-        coverage_segments,
-        coverage_profile,
-        None,
-        None,
-    );
-    crate::diarization_cache::save(&cache, &cache_value).unwrap();
-    let loaded = crate::diarization_cache::load(&cache, &source_identity).unwrap();
-    let crate::diarization_cache::CacheLookup::Hit(loaded) = loaded else {
+    let cache_value =
+        sagascript_core::diarization::cache::DiarizationCache::new_with_coverage_segments(
+            source_identity.clone(),
+            analysis,
+            vec![
+                (1.0, 1.0, "first".to_string()),
+                (9.0, 9.0, "second".to_string()),
+            ],
+            coverage_segments,
+            coverage_profile,
+            None,
+            None,
+        );
+    sagascript_core::diarization::cache::save(&cache, &cache_value).unwrap();
+    let loaded = sagascript_core::diarization::cache::load(&cache, &source_identity).unwrap();
+    let sagascript_core::diarization::cache::CacheLookup::Hit(loaded) = loaded else {
         panic!("canonicalized coarse coverage should produce a cache hit");
     };
     assert_eq!(loaded.coverage_segments.as_ref().unwrap()[1].end, 11.0);
@@ -561,109 +562,6 @@ fn cached_transcribe_uses_coarse_coverage_across_threshold_sweep() {
         assert_eq!(json["warnings"], strict["warnings"]);
         assert_eq!(json["warnings"][0]["code"], "uncovered_speech");
     }
-}
-
-#[cfg(feature = "diarization")]
-#[test]
-fn meeting_document_uses_plain_segments_and_canonical_metadata() {
-    let segments = vec![
-        DiarizedSegment {
-            start: 1.0,
-            end: 2.0,
-            speaker: "SPEAKER_1".to_string(),
-            text: "second".to_string(),
-        },
-        DiarizedSegment {
-            start: 0.0,
-            end: 1.0,
-            speaker: "SPEAKER_0".to_string(),
-            text: "first".to_string(),
-        },
-        DiarizedSegment {
-            start: 2.0,
-            end: 3.0,
-            speaker: "SPEAKER_1".to_string(),
-            text: "third".to_string(),
-        },
-    ];
-    let document = meeting_transcript_from_plain_segments(
-        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_string(),
-        Language::Swedish,
-        WhisperModel::KbWhisperBase,
-        3.0,
-        &segments,
-    )
-    .expect("plain diarized segments are valid");
-
-    assert_eq!(document.language, "sv");
-    assert_eq!(document.model, "kb-whisper-base");
-    assert_eq!(document.segments[0].id, "seg-000001");
-    assert_eq!(document.segments[0].text, "first");
-    assert_eq!(document.segments[1].text, "second");
-    assert_eq!(document.speakers[0].id, "SPEAKER_1");
-    assert_eq!(document.speakers[0].label, "SPEAKER_1");
-}
-
-#[cfg(feature = "diarization")]
-#[test]
-fn meeting_document_clamps_finite_padded_end_without_mutating_source() {
-    let segments = vec![DiarizedSegment {
-        start: 0.5,
-        end: 1.2,
-        speaker: "S0".into(),
-        text: "last word".into(),
-    }];
-    let document = meeting_transcript_from_plain_segments(
-        "0".repeat(64),
-        Language::English,
-        WhisperModel::BaseEn,
-        1.0,
-        &segments,
-    )
-    .expect("last padded Whisper window can overshoot decoded audio");
-    assert_eq!(document.segments[0].start, 0.5);
-    assert_eq!(document.segments[0].end, 1.0);
-    assert_eq!(document.segments[0].text, "last word");
-    assert_eq!(segments[0].end, 1.2);
-}
-
-#[cfg(feature = "diarization")]
-#[test]
-fn meeting_document_still_rejects_nonfinite_and_outside_starts() {
-    for (start, end) in [
-        (0.5, f64::NAN),
-        (0.5, f64::INFINITY),
-        (1.1, 1.2),
-        (-0.1, 0.5),
-    ] {
-        let segments = vec![DiarizedSegment {
-            start,
-            end,
-            speaker: "S0".into(),
-            text: "invalid".into(),
-        }];
-        assert!(meeting_transcript_from_plain_segments(
-            "0".repeat(64),
-            Language::English,
-            WhisperModel::BaseEn,
-            1.0,
-            &segments,
-        )
-        .is_err());
-    }
-}
-
-#[cfg(feature = "diarization")]
-#[test]
-fn meeting_source_hash_is_bounded_and_detects_mutation() {
-    let directory = TempDir::new();
-    let path = directory.join("meeting-hash.wav");
-    std::fs::write(&path, b"first bytes").expect("fixture write");
-    let before = stable_file_sha256(&path, None).expect("hash fixture");
-    assert_eq!(before.len(), 64);
-    assert!(before.bytes().all(|byte| byte.is_ascii_hexdigit()));
-    std::fs::write(&path, b"other bytes").expect("mutate fixture");
-    assert!(verify_meeting_source_unchanged(&path, &before, None).is_err());
 }
 
 #[cfg(feature = "diarization")]

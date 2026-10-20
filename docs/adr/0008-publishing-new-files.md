@@ -12,7 +12,7 @@
 Exports, reprocessing proposals and reusable analysis caches are user-named new files that must
 never replace an existing one. Three copies of "temp file, fsync, hard link, remove temp" existed,
 each with its own answer to what is on disk when a step fails: `write_atomic_new`
-(`meeting_proposal.rs`), `save_new` (`diarization_cache.rs`) and `write_new_export`
+(then `meeting_proposal.rs`, now core's `meeting/reprocess/io.rs`), `save_new` (then `diarization_cache.rs`, now core's `diarization/cache.rs`) and `write_new_export`
 (`meeting_jobs.rs`). They differed in what a failed temp cleanup after a successful publication
 means, and none said what happens between two related publications.
 
@@ -57,7 +57,7 @@ output names was refused by the existence check (#342).
    other. The last output is the completion marker. No cross-file atomicity is promised.
 4. **Reprocessing.** `execute` stages the cache privately during inference and the proposal after
    it, re-reads the review, then publishes the cache and then the proposal
-   (`meeting_reprocessing.rs`). Every failure before the first publication leaves no output and
+   (`meeting/reprocess/orchestrate.rs`, core). Every failure before the first publication leaves no output and
    the same command can run again. Only the failure of the proposal publication leaves a complete
    cache without a proposal, never the reverse. A `recluster` plan from that cache recovers the
    proposal without inference, but only while the decoder settings (beam size, VAD, temperature
@@ -77,7 +77,7 @@ output names was refused by the existence check (#342).
 - The cache is no longer visible at its destination during the long inference; the stderr line
   `Saved reusable diarization cache: PATH` now appears when it is published, after the checks.
 - `fsutil::publish_new` is the call for any new "never replace" output. `download.rs`, the
-  settings store and `diarization_cache::save` replace by design and keep their own install
+  settings store and `diarization::cache::save` replace by design and keep their own install
   paths; `download.rs` (#368) shares only the fsync policy (`sync_durably`, `sync_unsupported`).
 - Known gap: making the recovery independent of the settings would mean planning a selective run
   from the decoder options recorded in the cache's own identity instead of from the previous
