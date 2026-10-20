@@ -109,8 +109,12 @@
      paths removed.
    - A hotkey dictation whose transcription ends `cancelled` ends quietly: idle, overlay hidden, no
      `error` event, no `UiState::Error`, no last error and no latency record (`latency-report`
-     reads three outcomes). File transcription shows a backend `cancelled` as cancelled, with the
-     wording of its Stop button ("Transcription was cancelled.").
+     reads three outcomes). The quiet branch is defensive: in the hotkey path `Cancelled` can come
+     only from the pipeline's own timeout abort (reported as `transcription_timed_out`), Whisper's
+     sticky cancel (set only by the CLI) and the engine host's `cancelled` (its job's own cancel
+     token, or stdin EOF at app exit), so nothing reaches it in production today; it fixes the rule
+     for when a cancel source is added. File transcription shows a backend `cancelled` as
+     cancelled, with the wording of its Stop button ("Transcription was cancelled.").
    - `apply_hotkey_change` rejects a refusal of the settings with the `SettingsError`'s code
      (`dictionary_blocks_language_change`, `model_incompatible`, `inactive_profile_dictionary`,
      `profile_invalid`, …). Only a failure of the shortcuts themselves is `hotkey_invalid` (a
@@ -123,8 +127,14 @@
      action (decision 6): a new recording, or the same file with its profile and prompt as a new job;
      it never repeats `stop_and_transcribe`. The download runs the Pianissimo model's download (it
      checks an installed model and fetches it again when it is missing or damaged), shows the
-     window's usual progress and then offers "Try again"; a failed download offers itself again.
-     Plain text (the restored last error) has no code and offers nothing.
+     window's usual progress and then offers "Try again"; a failed download offers itself again
+     only where it can pass (`model_download_failed`, an `engine_model_*` code or a retryable
+     failure), and a refusal such as `pianissimo_unavailable` or `invalid_input` shows its error and
+     nothing else, so the offer cannot loop. Plain text (the restored last error) has no code and
+     offers nothing. The button is `aria-disabled` and guarded while a download runs, one button
+     carries both labels, and the focus is moved explicitly where a button goes away (a new
+     recording's button, the new job's tab), so it never falls to the page; the errors are
+     `role="alert"`.
 
 ## Consequences
 
