@@ -832,6 +832,10 @@ impl WhisperBackend {
 mod tests;
 
 #[cfg(test)]
+#[path = "runtime_context_tests.rs"]
+mod context_tests;
+
+#[cfg(test)]
 #[path = "runtime_protocol_tests.rs"]
 mod protocol_tests;
 
