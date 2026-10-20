@@ -3,11 +3,11 @@
 
 use std::time::Instant;
 
-use sagascript_core::diarization::{DiarizationAnalysis, DiarizationTimings, DiarizeConfig};
-use sagascript_core::error::DictationError;
-use sagascript_core::settings::Language;
-use sagascript_core::transcription::diagnostics::CoverageProfile;
-use sagascript_core::transcription::{
+use crate::diarization::{DiarizationAnalysis, DiarizationTimings, DiarizeConfig};
+use crate::error::DictationError;
+use crate::models::Language;
+use crate::transcription::diagnostics::CoverageProfile;
+use crate::transcription::{
     DiarizationTranscription, DiarizationTranscriptionTimings, TranscribeOptions, TranscriptSegment,
 };
 
@@ -15,10 +15,11 @@ use super::super::diarize::{
     canonicalize_coverage_segments, run_diarization_analysis, CachePolicy, DiarizationPerformance,
 };
 use super::super::inference::LanguageEvidence;
-use super::super::meeting::{meeting_checkpoint, MeetingControl, MeetingPhase};
+use super::super::narrate::errln;
+use super::super::narrate::Narrator;
 use super::super::services::Services;
 use super::super::source::{CacheTarget, Source};
-use crate::output::{errln, Out};
+use crate::meeting::control::{meeting_checkpoint, MeetingControl, MeetingPhase};
 
 /// What [`obtain_analysis`] needs besides the source and the output.
 pub(super) struct AnalysisRequest<'a> {
@@ -71,7 +72,7 @@ pub(super) fn record_analysis(performance: &mut DiarizationPerformance, analyzed
 pub(super) fn obtain_analysis(
     source: Source,
     request: &AnalysisRequest<'_>,
-    out: &Out,
+    out: &dyn Narrator,
 ) -> Result<Analyzed, DictationError> {
     let AnalysisRequest {
         services,
@@ -158,7 +159,7 @@ struct CacheWrite<'a> {
 /// never replaces: the path is a private staging path, and the reprocessing
 /// caller publishes the cache (and says so) only after validating the whole
 /// run (#342).
-fn write_cache(step: &CacheWrite<'_>, out: &Out) -> Result<f64, DictationError> {
+fn write_cache(step: &CacheWrite<'_>, out: &dyn Narrator) -> Result<f64, DictationError> {
     let CacheWrite {
         target,
         analysis,
@@ -168,7 +169,7 @@ fn write_cache(step: &CacheWrite<'_>, out: &Out) -> Result<f64, DictationError> 
         exclusive_speech_embeddings,
     } = *step;
     let cache_write_started = Instant::now();
-    let cache = sagascript_core::diarization::cache::DiarizationCache::new_with_coverage_segments_and_policy(
+    let cache = crate::diarization::cache::DiarizationCache::new_with_coverage_segments_and_policy(
         target.identity.clone(),
         analysis.clone(),
         transcription.segments.clone(),
@@ -180,7 +181,7 @@ fn write_cache(step: &CacheWrite<'_>, out: &Out) -> Result<f64, DictationError> 
     );
     match target.policy {
         CachePolicy::Normal => {
-            sagascript_core::diarization::cache::save(&target.path, &cache)?;
+            crate::diarization::cache::save(&target.path, &cache)?;
             let seconds = cache_write_started.elapsed().as_secs_f64();
             errln!(
                 out,
@@ -190,7 +191,7 @@ fn write_cache(step: &CacheWrite<'_>, out: &Out) -> Result<f64, DictationError> 
             Ok(seconds)
         }
         CachePolicy::RefreshNew => {
-            sagascript_core::diarization::cache::save_new(&target.path, &cache)?;
+            crate::diarization::cache::save_new(&target.path, &cache)?;
             Ok(cache_write_started.elapsed().as_secs_f64())
         }
     }

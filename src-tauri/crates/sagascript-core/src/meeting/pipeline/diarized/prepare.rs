@@ -1,20 +1,20 @@
 //! The first steps of a diarized run (#343): what the run knows about the
 //! audio's language, and the settings the analysis is configured with.
 
-use sagascript_core::diarization::speaker_hint::SpeakerCountHint;
-use sagascript_core::diarization::DiarizeConfig;
-use sagascript_core::error::DictationError;
-use sagascript_core::transcription::{model, ContextProfile};
+use crate::diarization::speaker_hint::SpeakerCountHint;
+use crate::diarization::DiarizeConfig;
+use crate::error::DictationError;
+use crate::transcription::{model, ContextProfile};
 
-use super::super::args::validated_speaker_hint;
 use super::super::diarize::DiarizationPerformance;
 use super::super::inference::{prepare_language, verify_vad_model, LanguageEvidence};
-use super::super::meeting::{meeting_checkpoint, MeetingPhase};
+use super::super::narrate::errln;
+use super::super::narrate::Narrator;
 use super::super::plan::{DiarizationPlan, FileOptions, FileRequest};
 use super::super::progress::Progress;
 use super::super::services::Services;
 use super::super::source::Source;
-use crate::output::{errln, Out};
+use crate::meeting::control::{meeting_checkpoint, MeetingPhase};
 
 /// What [`settle_language`] needs besides the batch's memory of its model.
 pub(super) struct LanguageRequest<'a> {
@@ -33,7 +33,7 @@ pub(super) fn settle_language(
     step: &LanguageRequest<'_>,
     model_loaded: &mut bool,
     progress: &Progress,
-    out: &Out,
+    out: &dyn Narrator,
 ) -> Result<LanguageEvidence, DictationError> {
     let LanguageRequest {
         request,
@@ -109,7 +109,7 @@ pub(super) struct Configured {
 /// the run uses.
 pub(super) fn configure(
     step: &ConfigureRequest<'_>,
-    out: &Out,
+    out: &dyn Narrator,
 ) -> Result<Configured, DictationError> {
     let ConfigureRequest {
         request,
@@ -140,7 +140,7 @@ pub(super) fn configure(
         acceleration.coreml_status
     );
 
-    let speaker_hint = validated_speaker_hint(&flags.speaker_count)?;
+    let speaker_hint = flags.speaker_count.validated()?;
     let config = DiarizeConfig {
         threshold: flags.threshold,
         speaker_hint,

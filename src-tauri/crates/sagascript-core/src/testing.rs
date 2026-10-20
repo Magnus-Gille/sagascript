@@ -18,6 +18,20 @@ use std::path::{Path, PathBuf};
 use crate::settings::{store, LineupEnv, Settings};
 use crate::transcription::engine_host::client::TestHook;
 use crate::transcription::engine_host::{EngineHostClient, EngineHostConfig};
+#[cfg(feature = "diarization")]
+use crate::{
+    diarization::speaker_hint::SpeakerCountHint,
+    error::DictationError,
+    glossary::Glossary,
+    meeting::control::MeetingControl,
+    meeting::pipeline::{
+        entry,
+        plan::{CacheRequest, FileOptions},
+        services::Services,
+    },
+    meeting::MeetingTranscript,
+    models::{Language, WhisperModel},
+};
 
 /// The startup load of the settings file at `path` (legacy locations imported
 /// from `legacy_sources`, every pending migration run) with fixed machine state
@@ -44,4 +58,34 @@ pub fn set_engine_test_hook(
 /// this on a timer).
 pub fn run_idle_check_now(client: &EngineHostClient) {
     client.run_idle_check_now();
+}
+
+/// One meeting run on the given `services` and `options`, as the app and reprocessing make it
+/// with their own: [`entry::transcribe_meeting_file_inner`]. A test drives the diarized pipeline
+/// through a scripted backend and analyzer without the models.
+#[cfg(feature = "diarization")]
+#[allow(clippy::too_many_arguments)]
+pub fn transcribe_meeting_file_with(
+    file: &Path,
+    stored: &Settings,
+    language: Language,
+    model: WhisperModel,
+    glossary: &Glossary,
+    services: Services<'_>,
+    control: Option<&MeetingControl<'_>>,
+    options: &FileOptions,
+) -> Result<MeetingTranscript, DictationError> {
+    entry::transcribe_meeting_file_inner(
+        file, stored, language, model, glossary, services, control, options,
+    )
+}
+
+/// The options of a meeting run, which has no command line: [`entry::meeting_options`].
+#[cfg(feature = "diarization")]
+pub fn meeting_options(
+    threshold: f32,
+    speaker_hint: Option<SpeakerCountHint>,
+    cache: Option<CacheRequest>,
+) -> FileOptions {
+    entry::meeting_options(threshold, speaker_hint, cache)
 }

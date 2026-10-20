@@ -16,17 +16,18 @@ use sagascript_core::transcription::pianissimo_model;
 use sagascript_core::transcription::Glossary;
 
 use super::args::TranscribeArgs;
-use super::output::{BatchSink, Clipboard, FileTranscription};
+use super::output::{BatchSink, Clipboard};
 use super::process_batch_with;
-use super::progress::emit_progress;
 use crate::cancel::Canceller;
 use crate::output::{errln, Out};
+use sagascript_core::meeting::pipeline::outcome::FileTranscription;
+use sagascript_core::meeting::pipeline::progress::emit_progress;
 
 // ---- the engine host as a run uses it ----------------------------------------------
 
 /// A started Pianissimo engine: what a batch asks of it once it exists.
 ///
-/// The same pattern as [`InferenceBackend`](super::inference::InferenceBackend):
+/// The same pattern as [`InferenceBackend`](sagascript_core::meeting::pipeline::inference::InferenceBackend):
 /// `PianissimoBackend` (the engine-host client) is the one implementation that
 /// ships, and a test supplies its own, so the batch (its checks, its cancellation,
 /// its per-file results and its context biasing) runs without the engine host.

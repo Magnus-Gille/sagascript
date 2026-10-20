@@ -425,6 +425,32 @@ test("the rust-cli complexity scope lists every production module of the transcr
   for (const path of configured) assert.ok(existsSync(join(repoRoot, path)), `${path} is listed in the rust-cli scope but does not exist`);
 });
 
+test("the rust-core complexity scope lists every production module of the file pipeline", () => {
+  // The file pipeline moved from the CLI's transcribe/ to core's meeting/pipeline/ (#374). Same
+  // rule as for the CLI: a module added there would drop out of the measurement until someone
+  // remembers to list it. Three files are not listed because the analyzer finds no function in
+  // them, which it reports as an error for a selected file: services.rs is one struct, narrate.rs
+  // a trait and a macro, and mod.rs only lists modules.
+  const directory = "src-tauri/crates/sagascript-core/src/meeting/pipeline";
+  const unmeasured = new Set([`${directory}/narrate.rs`, `${directory}/mod.rs`, `${directory}/services.rs`]);
+  const productionModules = (dir) =>
+    readdirSync(join(repoRoot, dir), { withFileTypes: true }).flatMap((entry) => {
+      const path = `${dir}/${entry.name}`;
+      if (entry.isDirectory()) return productionModules(path);
+      return entry.name.endsWith(".rs") && !/(^|_)tests\.rs$/.test(entry.name) ? [path] : [];
+    });
+  const modules = productionModules(directory)
+    .filter((path) => !unmeasured.has(path))
+    .sort();
+  const configured = config.complexity.scopes["rust-core"];
+  assert.deepEqual(
+    configured.filter((path) => path.startsWith(`${directory}/`)).sort(),
+    modules,
+    "docs/code-health-producer-v1.json complexity.scopes.rust-core must list exactly the production files of meeting/pipeline/",
+  );
+  for (const path of configured) assert.ok(existsSync(join(repoRoot, path)), `${path} is listed in the rust-core scope but does not exist`);
+});
+
 test("Rust coverage labels inline tests and keeps inactive or non-emitted files out of the denominator", () => {
   const parsed = parseExportedCoverage(fixture("rust-coverage.json"), {
     repoRoot: "/workspace/sagascript",

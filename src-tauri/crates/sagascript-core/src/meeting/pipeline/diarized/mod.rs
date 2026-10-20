@@ -20,14 +20,14 @@
 
 use std::time::Instant;
 
-use sagascript_core::error::DictationError;
+use crate::error::DictationError;
 
-use super::output::FileTranscription;
+use super::narrate::Narrator;
+use super::outcome::FileTranscription;
 use super::plan::{DiarizationPlan, FileRequest};
 use super::progress::Progress;
 use super::services::Services;
 use super::source::{acquire_source, Acquired};
-use crate::output::Out;
 
 mod analysis;
 mod prepare;
@@ -43,13 +43,13 @@ use self::result::{assemble_result, AssembleRequest};
 use self::speakers::{cluster_speakers, merge_speakers, ClusterRequest, MergeRequest};
 
 /// Runs the diarized path for one file.
-pub(super) fn run_diarized(
+pub fn run_diarized(
     request: &FileRequest<'_>,
     started: Instant,
     plan: DiarizationPlan,
     services: Services<'_>,
     model_loaded: &mut bool,
-    out: &Out,
+    out: &dyn Narrator,
 ) -> Result<FileTranscription, DictationError> {
     let FileRequest {
         options,
@@ -146,6 +146,7 @@ pub(super) fn run_diarized(
             config: &config,
             duration,
             progress: &progress,
+            build_revision: services.build_revision,
         },
         out,
     )?;

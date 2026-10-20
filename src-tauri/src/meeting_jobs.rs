@@ -3,6 +3,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+#[cfg(feature = "diarization")]
+use sagascript_core::meeting::control::MeetingControl;
 use sagascript_core::meeting::{MeetingExportFormat, MeetingTranscript};
 use sagascript_core::transcription::WhisperBackend;
 use serde::{Deserialize, Serialize};
@@ -165,179 +167,309 @@ async fn begin_job(
     }
     #[cfg(feature = "diarization")]
     {
-        let mut slot = jobs.0.lock().map_err(|_| lock_error())?;
-        if slot.as_ref().is_some_and(|job| job.snapshot.status.busy()) {
-            return Err(CommandError::Busy(
-                "A meeting import is still running or cancelling. Wait for it to finish.".into(),
-            ));
-        }
-        let id = uuid::Uuid::new_v4().to_string();
-        let mut ctrl = lock_controller(&controller);
-        let settings = ctrl.settings().clone();
-        let context =
-            file_transcription_context(&settings, profile_id.as_deref(), prompt.as_deref())?;
-        if !ctrl.begin_meeting_job(&id) {
-            return Err(CommandError::Busy(
-                "Finish the current dictation before importing a meeting.".into(),
-            ));
-        }
-        let backend = Arc::new(WhisperBackend::new());
-        let cancelled = Arc::new(AtomicBool::new(false));
-        let started_at = Instant::now();
-        *slot = Some(MeetingJob {
-            snapshot: MeetingSnapshot {
-                id: id.clone(),
-                status: JobStatus::Running,
-                phase: "preparing".into(),
-                elapsed_ms: 0,
-                phase_elapsed_ms: 0,
-                error: None,
-                transcript: None,
-                reprocessing: None,
-            },
-            backend: Some(backend.clone()),
-            started_at,
-            phase_started_at: started_at,
-            cancelled: cancelled.clone(),
-        });
-        drop(ctrl);
-        drop(slot);
+        start_job(
+            &app,
+            jobs.inner(),
+            &controller,
+            file_path,
+            prompt,
+            profile_id,
+            request,
+            |start| Box::new(NativeWork(start)),
+        )
+        .map(|(id, _supervisor)| id)
+    }
+}
 
-        let state = jobs.inner().clone();
-        let worker_id = id.clone();
-        let _ = app.emit_event(crate::events::event::STATE_CHANGED, UiState::Transcribing);
-        tauri::async_runtime::spawn(async move {
-            let processing_state = state.clone();
-            let processing_id = worker_id.clone();
-            let processing_cancel = cancelled.clone();
-            let processing_backend = backend.clone();
-            let mut worker = tauri::async_runtime::spawn_blocking(move || {
-                use sagascript_cli::transcribe::transcribe_meeting_file_with_control;
-                use sagascript_core::meeting::control::MeetingControl;
-                let progress = |phase| {
-                    if let Ok(mut slot) = processing_state.0.lock() {
-                        if let Some(job) =
-                            slot.as_mut().filter(|job| job.snapshot.id == processing_id)
-                        {
-                            if job.snapshot.status == JobStatus::Running {
-                                job.set_phase(phase_name(phase), Instant::now());
-                            }
-                        }
-                    }
-                };
-                let control = MeetingControl {
-                    cancellation: &processing_cancel,
-                    progress: &progress,
-                };
-                if let Some(request) = request {
-                    use sagascript_cli::meeting_reprocessing::execute_reprocessing;
-                    use sagascript_core::meeting::reprocess::orchestrate::ReprocessingInput;
-                    let input = ReprocessingInput {
-                        audio: std::path::Path::new(&file_path),
-                        cache: request.cache_path.as_deref().map(std::path::Path::new),
-                        previous: &request.previous,
-                        language: context.language,
-                        model: context.model,
-                        glossary: &context.glossary,
-                    };
-                    execute_reprocessing(
-                        &request.plan,
-                        &request.expected_revision,
-                        &input,
-                        &settings,
-                        &processing_backend,
-                        request.cache_output.as_deref().map(std::path::Path::new),
-                        Some(&control),
-                    )
-                    .map(|result| JobOutput::Reprocessing(Box::new(result)))
-                    .map_err(|error| error.to_string())
-                } else {
-                    transcribe_meeting_file_with_control(
-                        std::path::Path::new(&file_path),
-                        &settings,
-                        context.language,
-                        context.model,
-                        &context.glossary,
-                        &processing_backend,
-                        &control,
-                    )
-                    .map(|document| JobOutput::Import(Box::new(document)))
-                    .map_err(|error| error.to_string())
-                }
-            });
-            let started = Instant::now();
-            let mut tick = tokio::time::interval(Duration::from_millis(100));
-            let mut timed_out = false;
-            let result = loop {
-                tokio::select! {
-                    result = &mut worker => break result.unwrap_or_else(|error| {
-                        tracing::error!(%error, "Meeting worker failed to join");
-                        Err("Meeting worker stopped unexpectedly. The previous transcript was not replaced.".into())
-                    }),
-                    _ = tick.tick() => {
-                        if started.elapsed() >= Duration::from_secs(1800) {
-                            timed_out = true;
-                            cancelled.store(true, Ordering::SeqCst);
-                            if let Ok(mut slot) = state.0.lock() {
-                                if let Some(job) = slot.as_mut().filter(|job| job.snapshot.id == worker_id) {
-                                    job.snapshot.status = JobStatus::Cancelling;
-                                }
-                            }
-                        }
-                        if cancelled.load(Ordering::SeqCst) {
-                            // The backend clears stale aborts between native calls. Keep
-                            // signalling THIS job's backend until the actual worker exits.
-                            backend.request_abort();
+/// How long a meeting job may run before it is cancelled, and how often the supervisor looks.
+#[cfg(any(feature = "diarization", test))]
+#[derive(Clone, Copy)]
+struct JobLimits {
+    timeout: Duration,
+    tick: Duration,
+}
+
+#[cfg(any(feature = "diarization", test))]
+const JOB_LIMITS: JobLimits = JobLimits {
+    timeout: Duration::from_secs(1800),
+    tick: Duration::from_millis(100),
+};
+
+/// What a job is started with, for the factory of its work.
+#[cfg(feature = "diarization")]
+struct JobStart {
+    file_path: String,
+    settings: sagascript_core::settings::Settings,
+    context: crate::commands::FileTranscriptionContext,
+    request: Option<ReprocessingRequest>,
+    backend: Arc<WhisperBackend>,
+}
+
+/// The heavy half of a meeting job, run on a blocking worker thread. The app's is
+/// [`NativeWork`]; a test brings a scripted one, which is how the job's timeout, cancel, join
+/// and success paths are tested without models.
+#[cfg(feature = "diarization")]
+trait JobWork: Send + 'static {
+    fn run(self: Box<Self>, control: &MeetingControl<'_>) -> Result<JobOutput, String>;
+}
+
+/// The production work: the diarized meeting pipeline, or a reprocessing on the native backend.
+#[cfg(feature = "diarization")]
+struct NativeWork(JobStart);
+
+#[cfg(feature = "diarization")]
+impl JobWork for NativeWork {
+    fn run(self: Box<Self>, control: &MeetingControl<'_>) -> Result<JobOutput, String> {
+        use sagascript_core::meeting::pipeline::entry::transcribe_meeting_file_with_control;
+        use sagascript_core::meeting::reprocess::native::execute_reprocessing;
+        use sagascript_core::meeting::reprocess::orchestrate::ReprocessingInput;
+
+        let JobStart {
+            file_path,
+            settings,
+            context,
+            request,
+            backend,
+        } = self.0;
+        if let Some(request) = request {
+            let input = ReprocessingInput {
+                audio: std::path::Path::new(&file_path),
+                cache: request.cache_path.as_deref().map(std::path::Path::new),
+                previous: &request.previous,
+                language: context.language,
+                model: context.model,
+                glossary: &context.glossary,
+            };
+            execute_reprocessing(
+                &request.plan,
+                &request.expected_revision,
+                &input,
+                &settings,
+                &backend,
+                request.cache_output.as_deref().map(std::path::Path::new),
+                Some(control),
+                env!("GIT_HASH"),
+            )
+            .map(|result| JobOutput::Reprocessing(Box::new(result)))
+            .map_err(|error| error.to_string())
+        } else {
+            transcribe_meeting_file_with_control(
+                std::path::Path::new(&file_path),
+                &settings,
+                context.language,
+                context.model,
+                &context.glossary,
+                &backend,
+                control,
+                env!("GIT_HASH"),
+            )
+            .map(|document| JobOutput::Import(Box::new(document)))
+            .map_err(|error| error.to_string())
+        }
+    }
+}
+
+/// Registers a job, takes the controller's meeting lease and starts it: a blocking worker that
+/// runs the work `make_work` builds, and a supervisor task that watches it. Returns the job's id
+/// and the supervisor, which ends when the job has ended and its lease is released.
+#[cfg(feature = "diarization")]
+#[allow(clippy::too_many_arguments)]
+fn start_job<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    jobs: &SharedMeetingJobs,
+    controller: &SharedController,
+    file_path: String,
+    prompt: Option<String>,
+    profile_id: Option<String>,
+    request: Option<ReprocessingRequest>,
+    make_work: impl FnOnce(JobStart) -> Box<dyn JobWork>,
+) -> Result<(String, tauri::async_runtime::JoinHandle<()>), CommandError> {
+    let mut slot = jobs.0.lock().map_err(|_| lock_error())?;
+    if slot.as_ref().is_some_and(|job| job.snapshot.status.busy()) {
+        return Err(CommandError::Busy(
+            "A meeting import is still running or cancelling. Wait for it to finish.".into(),
+        ));
+    }
+    let id = uuid::Uuid::new_v4().to_string();
+    let mut ctrl = lock_controller(controller);
+    let settings = ctrl.settings().clone();
+    let context = file_transcription_context(&settings, profile_id.as_deref(), prompt.as_deref())?;
+    if !ctrl.begin_meeting_job(&id) {
+        return Err(CommandError::Busy(
+            "Finish the current dictation before importing a meeting.".into(),
+        ));
+    }
+    let backend = Arc::new(WhisperBackend::new());
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let started_at = Instant::now();
+    *slot = Some(MeetingJob {
+        snapshot: MeetingSnapshot {
+            id: id.clone(),
+            status: JobStatus::Running,
+            phase: "preparing".into(),
+            elapsed_ms: 0,
+            phase_elapsed_ms: 0,
+            error: None,
+            transcript: None,
+            reprocessing: None,
+        },
+        backend: Some(backend.clone()),
+        started_at,
+        phase_started_at: started_at,
+        cancelled: cancelled.clone(),
+    });
+    drop(ctrl);
+    drop(slot);
+
+    let work = make_work(JobStart {
+        file_path,
+        settings,
+        context,
+        request,
+        backend: backend.clone(),
+    });
+    let state = jobs.clone();
+    let worker_id = id.clone();
+    let app = app.clone();
+    let _ = app.emit_event(crate::events::event::STATE_CHANGED, UiState::Transcribing);
+    let supervisor = tauri::async_runtime::spawn(async move {
+        let processing_state = state.clone();
+        let processing_id = worker_id.clone();
+        let processing_cancel = cancelled.clone();
+        let worker = tauri::async_runtime::spawn_blocking(move || {
+            let progress = |phase| {
+                if let Ok(mut slot) = processing_state.0.lock() {
+                    if let Some(job) = slot.as_mut().filter(|job| job.snapshot.id == processing_id)
+                    {
+                        if job.snapshot.status == JobStatus::Running {
+                            job.set_phase(phase_name(phase), Instant::now());
                         }
                     }
                 }
             };
-            // Do not detach native work on timeout/cancel, or release its lease early.
-            // This block runs only after spawn_blocking and its scoped children joined.
-            let mut released = false;
-            if let Ok(mut slot) = state.0.lock() {
-                if let Some(job) = slot.as_mut().filter(|job| job.snapshot.id == worker_id) {
-                    // Freeze the durations only once the actual worker has exited.
-                    job.snapshot = job.snapshot_at(Instant::now());
-                    let has_result = match &result {
-                        Ok(JobOutput::Import(_)) => true,
-                        #[cfg(feature = "diarization")]
-                        Ok(JobOutput::Reprocessing(_)) => true,
-                        _ => false,
-                    };
-                    released = release_meeting_lease(
-                        &app.state::<SharedController>(),
-                        &worker_id,
-                        has_result,
-                    );
-                    if released {
-                        finish_snapshot(
-                            &mut job.snapshot,
-                            result,
-                            cancelled.load(Ordering::SeqCst),
-                            timed_out,
-                        );
-                    } else {
-                        finish_snapshot(
-                            &mut job.snapshot,
-                            Err(lock_error().to_string()),
-                            false,
-                            false,
-                        );
+            let control = MeetingControl {
+                cancellation: &processing_cancel,
+                progress: &progress,
+            };
+            work.run(&control)
+        });
+        let (result, timed_out) = supervise(
+            &state,
+            &worker_id,
+            &cancelled,
+            &|| backend.request_abort(),
+            worker,
+            JOB_LIMITS,
+        )
+        .await;
+        // Do not detach native work on timeout/cancel, or release its lease early.
+        // This runs only after the worker (spawn_blocking and its scoped children) joined.
+        let released = finish_job(
+            &state,
+            &worker_id,
+            result,
+            &cancelled,
+            timed_out,
+            |has_result| {
+                release_meeting_lease(&app.state::<SharedController>(), &worker_id, has_result)
+            },
+        );
+        if released {
+            let _ = app.emit_event(crate::events::event::STATE_CHANGED, UiState::Idle);
+        } else {
+            tracing::error!("Meeting worker exited but its controller lease could not be released");
+        }
+    });
+    Ok((id, supervisor))
+}
+
+/// Watches a job's worker until it has exited: every `limits.tick`, a job past `limits.timeout`
+/// is marked cancelling and its cancel flag raised, and a raised flag (that, or a user's cancel)
+/// keeps `abort` signalling the job's backend until the worker really ends, because the backend
+/// clears stale aborts between native calls. Returns the worker's result, with a join failure
+/// turned into an error text, and whether the job timed out.
+#[cfg(any(feature = "diarization", test))]
+async fn supervise<E: std::fmt::Display>(
+    state: &MeetingJobs,
+    worker_id: &str,
+    cancelled: &AtomicBool,
+    abort: &(dyn Fn() + Sync),
+    mut worker: impl std::future::Future<Output = Result<Result<JobOutput, String>, E>> + Unpin,
+    limits: JobLimits,
+) -> (Result<JobOutput, String>, bool) {
+    let started = tokio::time::Instant::now();
+    let mut tick = tokio::time::interval(limits.tick);
+    let mut timed_out = false;
+    let result = loop {
+        tokio::select! {
+            result = &mut worker => break result.unwrap_or_else(|error| {
+                tracing::error!(%error, "Meeting worker failed to join");
+                Err("Meeting worker stopped unexpectedly. The previous transcript was not replaced.".into())
+            }),
+            _ = tick.tick() => {
+                if started.elapsed() >= limits.timeout {
+                    timed_out = true;
+                    cancelled.store(true, Ordering::SeqCst);
+                    if let Ok(mut slot) = state.0.lock() {
+                        if let Some(job) = slot.as_mut().filter(|job| job.snapshot.id == worker_id) {
+                            job.snapshot.status = JobStatus::Cancelling;
+                        }
                     }
-                    job.backend = None;
+                }
+                if cancelled.load(Ordering::SeqCst) {
+                    // The backend clears stale aborts between native calls. Keep
+                    // signalling THIS job's backend until the actual worker exits.
+                    abort();
                 }
             }
+        }
+    };
+    (result, timed_out)
+}
+
+/// Ends a job whose worker has exited: freezes its durations, hands the controller back through
+/// `release` (which gets whether the job has a result) and writes the final snapshot. Returns
+/// whether the lease was released; a job whose lease could not be released fails.
+#[cfg(any(feature = "diarization", test))]
+fn finish_job(
+    state: &MeetingJobs,
+    worker_id: &str,
+    result: Result<JobOutput, String>,
+    cancelled: &AtomicBool,
+    timed_out: bool,
+    release: impl FnOnce(bool) -> bool,
+) -> bool {
+    let mut released = false;
+    if let Ok(mut slot) = state.0.lock() {
+        if let Some(job) = slot.as_mut().filter(|job| job.snapshot.id == worker_id) {
+            // Freeze the durations only once the actual worker has exited.
+            job.snapshot = job.snapshot_at(Instant::now());
+            let has_result = match &result {
+                Ok(JobOutput::Import(_)) => true,
+                #[cfg(feature = "diarization")]
+                Ok(JobOutput::Reprocessing(_)) => true,
+                _ => false,
+            };
+            released = release(has_result);
             if released {
-                let _ = app.emit_event(crate::events::event::STATE_CHANGED, UiState::Idle);
+                finish_snapshot(
+                    &mut job.snapshot,
+                    result,
+                    cancelled.load(Ordering::SeqCst),
+                    timed_out,
+                );
             } else {
-                tracing::error!(
-                    "Meeting worker exited but its controller lease could not be released"
+                finish_snapshot(
+                    &mut job.snapshot,
+                    Err(lock_error().to_string()),
+                    false,
+                    false,
                 );
             }
-        });
-        Ok(id)
+            job.backend = None;
+        }
     }
+    released
 }
 
 /// Hand the controller back after the meeting worker exited: track a pending

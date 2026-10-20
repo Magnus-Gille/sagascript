@@ -11,29 +11,29 @@
 use std::path::PathBuf;
 use std::time::Instant;
 
-use sagascript_core::error::DictationError;
-use sagascript_core::settings::{Language, WhisperModel};
-use sagascript_core::transcription::diagnostics::{LanguageDetection, LanguageRegionDiagnostics};
+use crate::error::DictationError;
+use crate::models::{Language, WhisperModel};
+use crate::transcription::diagnostics::{LanguageDetection, LanguageRegionDiagnostics};
 #[cfg(feature = "diarization")]
-use sagascript_core::transcription::DiarizationTranscription;
-use sagascript_core::transcription::{
+use crate::transcription::DiarizationTranscription;
+use crate::transcription::{
     model, ContextProfile, TranscribeOptions, TranscribeRequest, TranscriptSegment, WhisperBackend,
 };
 
 use super::language_detection::{detect_file_language, LanguageProbe};
 use super::language_regions::detect_file_language_regions;
+use super::narrate::errln;
+use super::narrate::Narrator;
 use super::plan::FileRequest;
 use super::progress::Progress;
-use super::resolve::model_id_string;
 use super::services::Services;
-use crate::output::{errln, Out};
 
 /// A Whisper backend: it can load a model, classify the language of audio
 /// (through [`LanguageProbe`]) and transcribe it.
 ///
 /// `Sync` because the diarized path overlaps the Whisper half with the
 /// diarization analysis on another thread.
-pub(super) trait InferenceBackend: LanguageProbe + Sync {
+pub trait InferenceBackend: LanguageProbe + Sync {
     /// Whether the weights of `model` are installed.
     fn is_downloaded(&self, model: WhisperModel) -> bool;
 
@@ -121,19 +121,19 @@ impl InferenceBackend for WhisperBackend {
 }
 
 /// The error for a model whose weights are not installed.
-pub(super) fn not_downloaded(model: WhisperModel) -> DictationError {
+pub fn not_downloaded(model: WhisperModel) -> DictationError {
     DictationError::TranscriptionFailed(format!(
         "Model '{}' is not downloaded. Run: sagascript download-model {}",
         model.display_name(),
-        model_id_string(model)
+        model.id()
     ))
 }
 
 /// Loads `model` into `backend` once per batch: `loaded` is the batch's
 /// memory of it, so a validated cache hit that never needs the weights does
 /// not pay for them, and a batch pays once. Returns the seconds spent.
-pub(super) fn ensure_model_loaded(
-    out: &Out,
+pub fn ensure_model_loaded(
+    out: &dyn Narrator,
     backend: &dyn InferenceBackend,
     model: WhisperModel,
     profile: ContextProfile,
@@ -155,27 +155,27 @@ pub(super) fn ensure_model_loaded(
 /// What a run learns about the audio's language, and what it cost: the model
 /// load, the language check of the whole file and the sampled region check.
 /// A diarization cache hit brings its own, from the run that wrote it.
-pub(super) struct LanguageEvidence {
+pub struct LanguageEvidence {
     // Only the diarized run's performance report reads the two timings.
     #[cfg_attr(not(feature = "diarization"), allow(dead_code))]
-    pub(super) model_load_seconds: f64,
-    pub(super) detected_language: Option<LanguageDetection>,
-    pub(super) language_regions: Option<LanguageRegionDiagnostics>,
+    pub model_load_seconds: f64,
+    pub detected_language: Option<LanguageDetection>,
+    pub language_regions: Option<LanguageRegionDiagnostics>,
     #[cfg_attr(not(feature = "diarization"), allow(dead_code))]
-    pub(super) language_detection_seconds: f64,
+    pub language_detection_seconds: f64,
 }
 
 /// Loads the model (once per batch) and checks the language of `audio`.
 /// A check that cannot run is a warning on stderr, not a failure of the file;
 /// a cancel after the load, or after the check, ends the run.
-pub(super) fn prepare_language(
+pub fn prepare_language(
     request: &FileRequest<'_>,
     services: Services<'_>,
     audio: &[f32],
     profile: ContextProfile,
     model_loaded: &mut bool,
     progress: &Progress,
-    out: &Out,
+    out: &dyn Narrator,
 ) -> Result<LanguageEvidence, DictationError> {
     let FileRequest {
         language, model, ..
@@ -219,9 +219,9 @@ pub(super) fn prepare_language(
 
 /// Says it is checking the Silero VAD model and has `backend` make sure it is
 /// on disk; returns where it is.
-pub(super) fn verify_vad_model(
+pub fn verify_vad_model(
     backend: &dyn InferenceBackend,
-    out: &Out,
+    out: &dyn Narrator,
 ) -> Result<PathBuf, DictationError> {
     errln!(out, "Verifying Silero VAD model...");
     backend.ensure_vad_model()

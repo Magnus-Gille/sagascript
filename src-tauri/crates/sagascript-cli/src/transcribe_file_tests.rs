@@ -21,10 +21,10 @@ use sagascript_core::transcription::DiarizationTranscription;
 use sagascript_testsupport::TempDir;
 use serde_json::{json, Value};
 
-use super::inference::InferenceBackend;
-use super::language_detection::{detect_file_language, LanguageProbe};
 use super::plan::plan_run_with;
 use super::*;
+use sagascript_core::meeting::pipeline::inference::InferenceBackend;
+use sagascript_core::meeting::pipeline::language_detection::{detect_file_language, LanguageProbe};
 use sagascript_core::transcription::{ContextProfile, TranscribeOptions, TranscriptSegment};
 
 // ---- the scripted backend -----------------------------------------------------
@@ -539,6 +539,7 @@ fn run_batch_in(
             #[cfg(feature = "diarization")]
             analyzer: &OnnxAnalyzer,
             canceller,
+            build_revision: "test-revision",
         },
         out,
     )
@@ -1812,8 +1813,8 @@ mod assembling_the_plain_result {
     };
 
     use super::*;
-    use crate::transcribe::inference::LanguageEvidence;
     use crate::transcribe::output::{assemble_plain_result, PlainInput, PlainResult};
+    use sagascript_core::meeting::pipeline::inference::LanguageEvidence;
 
     fn evidence(
         detected_language: Option<LanguageDetection>,

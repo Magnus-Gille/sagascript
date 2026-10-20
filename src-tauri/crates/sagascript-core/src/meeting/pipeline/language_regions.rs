@@ -1,10 +1,11 @@
 //! Sampled language-region detection for long auto-language files (#343).
 
 use super::language_detection::LanguageProbe;
-use crate::output::{errln, Out};
-use sagascript_core::error::DictationError;
-use sagascript_core::settings::Language;
-use sagascript_core::transcription::diagnostics::{
+use super::narrate::errln;
+use super::narrate::Narrator;
+use crate::error::DictationError;
+use crate::models::Language;
+use crate::transcription::diagnostics::{
     analyze_language_windows, LanguageDetection, LanguageRegionDiagnostics, LanguageWindow,
 };
 
@@ -14,15 +15,15 @@ const LANGUAGE_WINDOW_SAMPLES: usize = LANGUAGE_WINDOW_SECONDS * 16_000;
 
 const LANGUAGE_REDETECTION_MIN_SECONDS: usize = 60;
 
-pub(super) const LANGUAGE_REDETECTION_MAX_WINDOWS: usize = 60;
+pub const LANGUAGE_REDETECTION_MAX_WINDOWS: usize = 60;
 
 const LANGUAGE_WINDOW_MIN_RMS: f64 = 0.0015;
 
 /// Re-evaluate only long auto-language files. The sampling cap keeps detection
 /// bounded for multi-hour sources; this function is called independently for
 /// each source when native batch mode invokes the single-file pipeline.
-pub(super) fn detect_file_language_regions(
-    out: &Out,
+pub fn detect_file_language_regions(
+    out: &dyn Narrator,
     backend: &dyn LanguageProbe,
     audio: &[f32],
     configured_language: Language,
@@ -32,8 +33,8 @@ pub(super) fn detect_file_language_regions(
     })
 }
 
-pub(super) fn detect_language_regions_with(
-    out: &Out,
+pub fn detect_language_regions_with(
+    out: &dyn Narrator,
     audio: &[f32],
     configured_language: Language,
     mut detect: impl FnMut(&[f32]) -> Result<Option<LanguageDetection>, DictationError>,
@@ -72,13 +73,13 @@ pub(super) fn detect_language_regions_with(
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct PlannedLanguageWindow {
+pub struct PlannedLanguageWindow {
     sequence: usize,
     start_sample: usize,
     end_sample: usize,
 }
 
-pub(super) fn language_window_plan(
+pub fn language_window_plan(
     audio_samples: usize,
     configured_language: Language,
 ) -> Vec<PlannedLanguageWindow> {
