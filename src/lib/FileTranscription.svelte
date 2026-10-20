@@ -1,6 +1,7 @@
 <script lang="ts">
   import { drainUpdateWork } from "./update-preparation";
-  import { toErrorMessage } from "./errors";
+  import { backendErrorRecovery, downloadFailureRecovery, isBackendError, toErrorMessage, type BackendErrorRecovery } from "./errors";
+  import ErrorRecovery from "./ErrorRecovery.svelte";
   import MeetingReprocessing from "./MeetingReprocessing.svelte";
   import {
     planMeetingReprocessing, beginMeetingReprocessing, previewMeetingProposal,
@@ -40,7 +41,7 @@
   import type { FileJob, FileJobStatus } from "./transcription-queue";
   let {
     job, otherBusy, active, openReview = false, initialRecoveryFile = null, initialRecoveryMeeting = null,
-    onComplete, onBusyChange, onMissingFile, onAttentionChange,
+    onComplete, onBusyChange, onMissingFile, onRetry, retryRefusal, onDownloadModel, downloadBusy, updatePreparing, onAttentionChange,
     onFileRecoveryChange = () => undefined, onMeetingRecoveryChange = () => undefined,
   }: {
     job: FileJob;
@@ -52,6 +53,16 @@
     onComplete: (id: string, status: FileJobStatus) => void;
     onBusyChange: (id: string, busy: boolean) => void;
     onMissingFile: (path: string) => void;
+    /** Run this job's file again as a new job ("Try again"). False when nothing was queued. */
+    onRetry: (job: FileJob) => boolean;
+    /** Why the last "Try again" was refused, shown beside the button; empty when it was not. */
+    retryRefusal: string;
+    /** Download the engine's model again; rejects when the download fails. */
+    onDownloadModel: () => Promise<void>;
+    /** A download is running, so another cannot start. */
+    downloadBusy: boolean;
+    /** An update is being prepared: nothing new starts (the panel is inert meanwhile). */
+    updatePreparing: boolean;
     onAttentionChange: (id: string, needsRetry: boolean) => void;
     onFileRecoveryChange?: (entry: UpdateRecoveryFile | null) => void;
     onMeetingRecoveryChange?: (entry: UpdateRecoveryMeeting | null) => void;
@@ -107,6 +118,9 @@
   let transcriptionProgress: number = $state(0);
   let transcriptionResult: string = $state("");
   let transcribeError: string = $state("");
+  /** The way out of `transcribeError`, decided by the error's code (`backendErrorRecovery`). */
+  let transcribeRecovery: BackendErrorRecovery | null = $state(null);
+  let modelDownloading = $state(false);
   let meetingReview: MeetingReviewDocument | null = $state(null);
   let meetingTranscript: MeetingTranscript | null = $state(null);
   let meetingJobId: string | null = $state(null);
@@ -407,6 +421,7 @@
     transcribing = true;
     transcriptionProgress = 0;
     transcribeError = "";
+    transcribeRecovery = null;
     transcriptionResult = "";
     meetingError = "";
     meetingPollingFailed = false;
@@ -452,6 +467,7 @@
     transcribing = true;
     transcriptionProgress = 0;
     transcribeError = "";
+    transcribeRecovery = null;
     transcriptionResult = "";
     plainRunId = job.id;
     plainRequestStarted = false;
@@ -487,8 +503,12 @@
       if (transcriptionResult.trim()) void revealTranscriptionResult();
     } catch (error) {
       if (isMissingTranscribeFileError(error)) onMissingFile(filePath);
-      plainStages = finishStages(plainStages, cancellingPlain ? "cancelled" : "failed");
-      transcribeError = cancellingPlain ? "Transcription was cancelled." : toErrorMessage(error, "Transcription failed");
+      // Stop was pressed, or the backend ended the run as cancelled by itself
+      // (ADR 0006): a cancelled run, not a failure.
+      const cancelled = cancellingPlain || isBackendError(error, "cancelled");
+      plainStages = finishStages(plainStages, cancelled ? "cancelled" : "failed");
+      transcribeError = cancelled ? "Transcription was cancelled." : toErrorMessage(error, "Transcription failed");
+      transcribeRecovery = cancelled ? null : backendErrorRecovery(error);
     } finally {
       progress?.dispose();
       clearInterval(timer);
@@ -497,6 +517,27 @@
       cancellingPlain = false;
       transcribing = false;
       transcriptionProgress = 0;
+    }
+  }
+
+  /** "Try again": the file runs again as a new job; this one stays as it failed. */
+  function retryFile(): void {
+    if (onRetry(job)) transcribeRecovery = null;
+  }
+
+  /** "Download the model again"; when it is there, the run can be repeated. */
+  async function downloadModelAgain(): Promise<void> {
+    if (modelDownloading || downloadBusy) return;
+    modelDownloading = true;
+    try {
+      await onDownloadModel();
+      transcribeRecovery = "retry";
+    } catch (failure) {
+      transcribeError = toErrorMessage(failure, "Speech engine download failed.");
+      // The download again, only where it can pass; a refusal offers nothing.
+      transcribeRecovery = downloadFailureRecovery(failure);
+    } finally {
+      modelDownloading = false;
     }
   }
 
@@ -828,7 +869,10 @@
             {/if}
           {/if}
         {#if transcribeError}
-          <div class="transcribe-error">{transcribeError}</div>
+          <div class="transcribe-error" role="alert">{transcribeError}</div>
+          <ErrorRecovery recovery={transcribeRecovery} busy={modelDownloading || downloadBusy || updatePreparing}
+            onRetry={retryFile} onDownloadModel={() => void downloadModelAgain()} />
+          {#if retryRefusal}<div class="transcribe-error" role="alert">{retryRefusal}</div>{/if}
         {/if}
 
         {#if meetingError && !meetingTranscript}

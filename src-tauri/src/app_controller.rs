@@ -680,6 +680,14 @@ impl AppController {
         self.logging.end_dictation_session();
     }
 
+    /// Called after a transcription ended because it was stopped on request
+    /// (`DictationError::Cancelled`). A quiet end (ADR 0006): back to Idle like
+    /// a recording cancelled before it started, without recording an error and
+    /// without replacing the last useful transcript.
+    pub fn on_transcription_cancelled(&mut self) {
+        self.complete_cancelled_recording();
+    }
+
     /// Complete a transcription attempt and restore the controller to Idle.
     ///
     /// Keeping this transition in the state machine prevents callers from
@@ -1119,6 +1127,42 @@ mod tests {
         ctrl.on_no_speech_detected();
         assert!(ctrl.session_data.is_none());
         assert!(ctrl.release_started.is_none());
+    }
+
+    #[test]
+    fn a_cancelled_transcription_ends_quietly_without_an_error() {
+        let mut ctrl = default_controller();
+        ctrl.state = AppState::Transcribing;
+        ctrl.last_transcription = Some("Previous useful result".to_string());
+        ctrl.last_error = None;
+        ctrl.active_hotkey_shortcut = Some("control+shift+space".to_string());
+        ctrl.toggle_stop_requested = true;
+        ctrl.session_data = Some(serde_json::json!({
+            "language": "en",
+            "model": "base.en",
+            "phases_ms": {},
+        }));
+        ctrl.release_started = Some(Instant::now());
+
+        ctrl.on_transcription_cancelled();
+
+        assert_eq!(ctrl.state(), AppState::Idle);
+        assert_eq!(
+            ctrl.last_error(),
+            None,
+            "a cancellation is not an error to show"
+        );
+        assert_eq!(ctrl.last_transcription(), Some("Previous useful result"));
+        assert!(ctrl.session_data.is_none(), "the session is over");
+        assert!(ctrl.release_started.is_none());
+        assert!(ctrl.active_hotkey_shortcut.is_none());
+        assert!(!ctrl.toggle_stop_requested);
+
+        // An error shown earlier stays what it was, as after no speech.
+        ctrl.last_error = Some("stale error".to_string());
+        ctrl.state = AppState::Transcribing;
+        ctrl.on_transcription_cancelled();
+        assert_eq!(ctrl.last_error(), Some("stale error"));
     }
 
     // -- Recording elapsed --

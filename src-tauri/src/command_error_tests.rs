@@ -201,6 +201,7 @@ fn every_code_is_stable_snake_case() {
         CommandError::LaunchFailed("x".into()),
         CommandError::DownloadFailed("x".into()),
         CommandError::AccessibilityPermissionDenied("x".into()),
+        CommandError::PasteFailed("x".into()),
         CommandError::InvalidInput("x".into()).because("y"),
         DictationError::TranscriptionFailed("x".into()).into(),
         DictationError::engine("engine_busy", true, "x").into(),
@@ -276,6 +277,13 @@ fn command_error_fixture_matches_what_rust_sends() {
             &format!("Pianissimo engine: {SWIFT_MESSAGE}"),
         )),
         "engine_busy": wire(DictationError::engine("engine_busy", true, "Pianissimo engine: queue full")),
+        "engine_model_missing": wire(DictationError::engine(
+            "engine_model_missing",
+            false,
+            "Pianissimo engine: Model directory does not exist: /Users/x/Library/Application Support/Sagascript/models/foo",
+        )),
+        "no_audio_captured": wire(DictationError::NoAudioCaptured),
+        "paste_error": wire(CommandError::PasteFailed("Accessibility permission denied".into())),
         "dictionary_blocks_language_change": wire(SettingsError::DictionaryBlocksLanguageChange {
             profile_id: "default".into()
         }),

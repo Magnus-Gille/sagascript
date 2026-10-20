@@ -130,6 +130,22 @@ fn rollback_for(previous: &OperationalHotkey) -> Rollback<'_> {
     }
 }
 
+/// The settings `update` would produce from `stored`, with the notices about
+/// profile models it reset, or the refusal.
+///
+/// A refusal rejects with the code of its [`SettingsError`]
+/// (`dictionary_blocks_language_change`, `profile_invalid`, `model_incompatible`,
+/// …), so the Settings window can tell a blocked language change from a shortcut
+/// that cannot be used (ADR 0006).
+fn prepare_candidate(
+    update: &HotkeyChange,
+    stored: &Settings,
+) -> Result<(Settings, Vec<String>), CommandError> {
+    update
+        .prepare_with_notices(stored)
+        .map_err(CommandError::Settings)
+}
+
 fn apply_hotkey_change(
     app: tauri::AppHandle,
     controller: State<'_, SharedController>,
@@ -139,9 +155,7 @@ fn apply_hotkey_change(
     let _transition = health.transition_guard();
     let _recording_lease = acquire_hotkey_configuration(&controller)?;
     let old_settings = lock_controller(&controller).settings().clone();
-    let (candidate, notices) = update
-        .prepare_with_notices(&sagascript_core::machine::load())
-        .map_err(|error| CommandError::HotkeyInvalid(error.to_string()))?;
+    let (candidate, notices) = prepare_candidate(&update, &sagascript_core::machine::load())?;
     let new_shortcuts = candidate.resolved_shortcuts();
     let new_primary = candidate.hotkey.clone();
     let old_shortcut = old_settings.hotkey.clone();

@@ -4,7 +4,9 @@
 import { screen, waitFor } from "@testing-library/svelte";
 import { describe, expect, test } from "vitest";
 import { deferred } from "../test/deferred";
+import { backendError } from "../test/ipc";
 import { renderSettings, settingsBackend } from "../test/settings";
+import commandErrors from "../../contracts/transport/command_errors.json";
 
 const editor = () => screen.getByPlaceholderText("Click here and use your hotkey, or press the button above");
 
@@ -51,5 +53,40 @@ describe("state-changed", () => {
 
     await waitFor(() => expect(ipc.calls.slice(before).map((call) => call.command)).toContain("get_profile_model_info"));
     expect(ipc.calls.slice(before)[0].command).toBe("get_settings");
+  });
+});
+
+describe("error", () => {
+  // The hotkey path sends the typed error `{ code, message, retryable }` that a
+  // failed command rejects with (ADR 0006, #360 part 2b); the window shows the
+  // message as it showed the string before.
+  test("a typed error from the hotkey path shows its message in the Dictate tab", async () => {
+    const { ipc } = await renderSettings(settingsBackend());
+
+    ipc.emit("error", backendError("transcription_failed", "Transcription failed: no model"));
+
+    expect(await screen.findByText("Transcription failed: no model")).toBeInTheDocument();
+    expect(document.querySelector(".test-section .transcribe-error")?.textContent).toBe("Transcription failed: no model");
+  });
+
+  test("the message of the real wire error reaches the window without a path", async () => {
+    const { ipc } = await renderSettings(settingsBackend());
+
+    ipc.emit("error", commandErrors.engine_model_missing);
+
+    await waitFor(() =>
+      expect(document.querySelector(".test-section .transcribe-error")?.textContent).toBe(commandErrors.engine_model_missing.message),
+    );
+    expect(document.body.textContent).not.toContain("/Users/");
+  });
+
+  test("a new successful result clears the error", async () => {
+    const { ipc } = await renderSettings(settingsBackend());
+    ipc.emit("error", backendError("busy", "Sagascript is busy.", true));
+    await screen.findByText("Sagascript is busy.");
+
+    ipc.emit("transcription-result", "Hej");
+
+    await waitFor(() => expect(screen.queryByText("Sagascript is busy.")).toBeNull());
   });
 });
