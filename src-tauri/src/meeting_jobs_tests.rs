@@ -852,3 +852,389 @@ mod transport_contract {
         assert_eq!(statuses, all, "the fixture covers every job status");
     }
 }
+
+/// The life of a job (#374): `start_job` is what `begin_meeting_file` and
+/// `begin_meeting_reprocessing` call, with a scripted work in place of the models; `supervise`
+/// is its timeout, cancel and join handling, run on a paused clock. Nothing waits for time to
+/// pass: a worker is held at a channel until the test lets it go, and the clock is advanced by
+/// the test.
+#[cfg(feature = "diarization")]
+mod running_jobs {
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::{mpsc, Mutex};
+
+    use sagascript_core::meeting::reprocess::plan::{
+        ReprocessingContext, ReprocessingMode, ReprocessingPlan,
+    };
+    use tauri::test::MockRuntime;
+    use tauri::Manager;
+
+    use super::*;
+    use crate::app_controller::{AppController, AppState};
+
+    type Output = Result<JobOutput, String>;
+
+    /// The scripted work: what the models would have done, as a closure over the job's control.
+    struct Scripted(Box<dyn FnOnce(&MeetingControl<'_>) -> Output + Send>);
+
+    impl JobWork for Scripted {
+        fn run(self: Box<Self>, control: &MeetingControl<'_>) -> Output {
+            (self.0)(control)
+        }
+    }
+
+    /// A mock app with the job slot and the controller a real one manages.
+    struct App {
+        app: tauri::App<MockRuntime>,
+        jobs: SharedMeetingJobs,
+    }
+
+    impl App {
+        fn new() -> Self {
+            let app = tauri::test::mock_app();
+            app.manage::<SharedController>(Mutex::new(AppController::new(
+                sagascript_core::settings::Settings::default(),
+            )));
+            Self {
+                app,
+                jobs: Arc::new(MeetingJobs::default()),
+            }
+        }
+
+        /// What `begin_meeting_file` does (`request` None) or `begin_meeting_reprocessing` does
+        /// (`Some`), with `work` for the models.
+        fn begin(
+            &self,
+            request: Option<ReprocessingRequest>,
+            work: impl FnOnce(&MeetingControl<'_>) -> Output + Send + 'static,
+        ) -> Result<(String, tauri::async_runtime::JoinHandle<()>), CommandError> {
+            start_job(
+                self.app.handle(),
+                &self.jobs,
+                &self.app.state::<SharedController>(),
+                "recording.wav".into(),
+                None,
+                None,
+                request,
+                |_| Box::new(Scripted(Box::new(work))),
+            )
+        }
+
+        /// The job once its supervisor has ended: lease released, final snapshot written.
+        fn finished(&self, supervisor: tauri::async_runtime::JoinHandle<()>) -> MeetingSnapshot {
+            tauri::async_runtime::block_on(supervisor).expect("the supervisor ends");
+            self.snapshot()
+        }
+
+        fn snapshot(&self) -> MeetingSnapshot {
+            self.jobs
+                .0
+                .lock()
+                .expect("job slot")
+                .as_ref()
+                .expect("a job")
+                .snapshot_at(Instant::now())
+        }
+
+        fn dictation_state(&self) -> AppState {
+            crate::commands::lock_controller(&self.app.state::<SharedController>()).state()
+        }
+
+        fn update_result_pending(&self, id: &str) -> bool {
+            crate::commands::lock_controller(&self.app.state::<SharedController>())
+                .is_update_result_pending(&format!("meeting:{id}"))
+        }
+    }
+
+    fn reprocessing_request() -> ReprocessingRequest {
+        let sha = "a".repeat(64);
+        let plan = ReprocessingPlan::new(
+            ReprocessingMode::Full,
+            ReprocessingContext {
+                source_sha256: sha.clone(),
+                previous_revision: sha.clone(),
+                transcription_context_sha256: sha.clone(),
+                analysis_context_sha256: sha,
+                cache_sha256: None,
+            },
+            0.34,
+        )
+        .expect("a valid plan");
+        ReprocessingRequest {
+            expected_revision: plan.revision.clone(),
+            plan,
+            previous: sagascript_core::meeting::review::MeetingReview::new(valid_transcript())
+                .expect("a valid review"),
+            cache_path: None,
+            cache_output: None,
+        }
+    }
+
+    // ---- begin_meeting_file / begin_meeting_reprocessing ----------------------------------
+
+    #[test]
+    fn a_meeting_import_that_succeeds_completes_with_its_transcript_and_gives_the_controller_back()
+    {
+        let app = App::new();
+        let (id, supervisor) = app
+            .begin(None, |_| {
+                Ok(JobOutput::Import(Box::new(valid_transcript())))
+            })
+            .expect("the job starts");
+
+        let done = app.finished(supervisor);
+
+        assert_eq!(done.id, id);
+        assert_eq!(done.status, JobStatus::Completed);
+        assert_eq!(done.transcript, Some(valid_transcript()));
+        assert!(done.reprocessing.is_none());
+        assert_eq!(done.error, None);
+        assert_eq!(app.dictation_state(), AppState::Idle);
+        assert!(
+            app.update_result_pending(&id),
+            "a finished result holds back an update until the user has dealt with it"
+        );
+    }
+
+    #[test]
+    fn a_reprocessing_that_succeeds_completes_with_its_proposal_and_no_transcript() {
+        let app = App::new();
+        let (_, supervisor) = app
+            .begin(Some(reprocessing_request()), |_| {
+                Ok(JobOutput::Reprocessing(Box::new(reprocessing_result())))
+            })
+            .expect("the job starts");
+
+        let done = app.finished(supervisor);
+
+        assert_eq!(done.status, JobStatus::Completed);
+        assert!(done.reprocessing.is_some());
+        assert!(done.transcript.is_none());
+        assert_eq!(app.dictation_state(), AppState::Idle);
+    }
+
+    #[test]
+    fn a_worker_that_fails_fails_the_job_with_its_text_and_leaves_no_result() {
+        let app = App::new();
+        let (id, supervisor) = app
+            .begin(None, |_| Err("the file could not be decoded".into()))
+            .expect("the job starts");
+
+        let done = app.finished(supervisor);
+
+        assert_eq!(done.status, JobStatus::Failed);
+        assert_eq!(done.error.as_deref(), Some("the file could not be decoded"));
+        assert!(done.transcript.is_none() && done.reprocessing.is_none());
+        assert_eq!(app.dictation_state(), AppState::Idle);
+        assert!(!app.update_result_pending(&id));
+    }
+
+    #[test]
+    fn a_cancel_ends_the_job_cancelled_when_the_worker_stops_at_its_next_checkpoint() {
+        let app = App::new();
+        let (started, running) = mpsc::channel();
+        let (id, supervisor) = app
+            .begin(None, move |control| {
+                started.send(()).expect("the test listens");
+                // A checkpoint is a look at the flag, as the pipeline's are.
+                while control.check().is_ok() {
+                    std::thread::yield_now();
+                }
+                Err("cancelled".into())
+            })
+            .expect("the job starts");
+        running.recv().expect("the worker is running");
+
+        let cancelled = {
+            let mut slot = app.jobs.0.lock().expect("job slot");
+            cancel_job(&mut slot, &id).expect("the job is known")
+        };
+        assert!(cancelled, "a running job can be cancelled");
+        assert_eq!(app.snapshot().status, JobStatus::Cancelling);
+
+        let done = app.finished(supervisor);
+
+        assert_eq!(done.status, JobStatus::Cancelled);
+        assert_eq!(done.error, None, "a cancel is not an error");
+        assert!(done.transcript.is_none());
+        assert_eq!(app.dictation_state(), AppState::Idle);
+    }
+
+    #[test]
+    fn a_worker_that_panics_is_a_failed_job_that_gives_the_controller_back() {
+        let app = App::new();
+        let (_, supervisor) = app
+            .begin(None, |_| {
+                panic!("injected panic in the meeting worker (#374)")
+            })
+            .expect("the job starts");
+
+        let done = app.finished(supervisor);
+
+        assert_eq!(done.status, JobStatus::Failed);
+        assert_eq!(
+            done.error.as_deref(),
+            Some("Meeting worker stopped unexpectedly. The previous transcript was not replaced.")
+        );
+        assert_eq!(
+            app.dictation_state(),
+            AppState::Idle,
+            "a lost worker must not keep the controller's lease"
+        );
+    }
+
+    #[test]
+    fn a_second_import_is_refused_while_one_runs_and_allowed_after() {
+        let app = App::new();
+        let (hold, held) = mpsc::channel::<()>();
+        let (started, running) = mpsc::channel();
+        let (_, supervisor) = app
+            .begin(None, move |_| {
+                started.send(()).expect("the test listens");
+                held.recv().expect("the test lets go");
+                Ok(JobOutput::Import(Box::new(valid_transcript())))
+            })
+            .expect("the first job starts");
+        running.recv().expect("the worker is running");
+
+        let refused = app.begin(None, |_| Err("must never run".into()));
+        assert!(
+            matches!(refused, Err(CommandError::Busy(_))),
+            "{:?}",
+            refused.map(|(id, _)| id)
+        );
+
+        hold.send(()).expect("the worker waits");
+        app.finished(supervisor);
+        let (_, next) = app
+            .begin(None, |_| Err("ended".into()))
+            .expect("a finished job makes room for the next");
+        assert_eq!(app.finished(next).status, JobStatus::Failed);
+    }
+
+    // ---- the supervisor: timeout, cancel and join, on a paused clock -----------------------
+
+    /// A running job in a slot of its own, and the flag its worker watches.
+    fn supervised_job() -> (MeetingJobs, Arc<AtomicBool>) {
+        let jobs = MeetingJobs::default();
+        let job = job("job-1", JobStatus::Running);
+        let cancelled = job.cancelled.clone();
+        *jobs.0.lock().expect("job slot") = Some(job);
+        (jobs, cancelled)
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_job_past_its_timeout_is_cancelled_and_its_backend_aborted_until_the_worker_ends() {
+        let (jobs, cancelled) = supervised_job();
+        let aborts = AtomicUsize::new(0);
+        let (started, running) = tokio::sync::oneshot::channel();
+        let flag = cancelled.clone();
+        let worker = tokio::task::spawn_blocking(move || {
+            started.send(()).expect("the test listens");
+            // Held until the supervisor raises the flag; the worker never ends by itself.
+            while !flag.load(Ordering::SeqCst) {
+                std::thread::yield_now();
+            }
+            Err::<JobOutput, String>("stopped at a checkpoint".into())
+        });
+        let abort = || {
+            aborts.fetch_add(1, Ordering::SeqCst);
+        };
+        let supervision = supervise(&jobs, "job-1", &cancelled, &abort, worker, JOB_LIMITS);
+        let clock = async {
+            running.await.expect("the worker is running");
+            // Just under the limit: nothing happens.
+            tokio::time::advance(JOB_LIMITS.timeout - JOB_LIMITS.tick * 2).await;
+            assert!(!cancelled.load(Ordering::SeqCst), "not yet due");
+            assert_eq!(
+                jobs.0
+                    .lock()
+                    .expect("job slot")
+                    .as_ref()
+                    .expect("a job")
+                    .snapshot
+                    .status,
+                JobStatus::Running
+            );
+            assert_eq!(aborts.load(Ordering::SeqCst), 0);
+            // Past it: the next look cancels.
+            tokio::time::advance(JOB_LIMITS.tick * 4).await;
+        };
+
+        let ((result, timed_out), ()) = tokio::join!(supervision, clock);
+
+        assert!(timed_out);
+        assert!(
+            cancelled.load(Ordering::SeqCst),
+            "the timeout raises the cancel flag"
+        );
+        assert!(
+            aborts.load(Ordering::SeqCst) >= 1,
+            "the backend is told to stop"
+        );
+        assert_eq!(result.err().as_deref(), Some("stopped at a checkpoint"));
+        assert_eq!(
+            jobs.0
+                .lock()
+                .expect("job slot")
+                .as_ref()
+                .expect("a job")
+                .snapshot
+                .status,
+            JobStatus::Cancelling,
+            "until the worker has ended the job is cancelling, not over"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_timed_out_job_ends_failed_with_the_timeout_text_and_never_as_a_result() {
+        let (jobs, cancelled) = supervised_job();
+        cancelled.store(true, Ordering::SeqCst);
+        let mut released_with = None;
+
+        let released = finish_job(
+            &jobs,
+            "job-1",
+            Ok(JobOutput::Import(Box::new(valid_transcript()))),
+            &cancelled,
+            true,
+            |has_result| {
+                released_with = Some(has_result);
+                true
+            },
+        );
+
+        assert!(released);
+        assert_eq!(released_with, Some(true));
+        let slot = jobs.0.lock().expect("job slot");
+        let snapshot = &slot.as_ref().expect("a job").snapshot;
+        assert_eq!(snapshot.status, JobStatus::Failed);
+        assert_eq!(
+            snapshot.error.as_deref(),
+            Some(
+                "Meeting import timed out and has stopped. Try a shorter file or a smaller model."
+            )
+        );
+        assert!(snapshot.transcript.is_none(), "a late result is dropped");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_lease_that_cannot_be_released_fails_the_job_instead_of_hiding_it() {
+        let (jobs, cancelled) = supervised_job();
+
+        let released = finish_job(
+            &jobs,
+            "job-1",
+            Ok(JobOutput::Import(Box::new(valid_transcript()))),
+            &cancelled,
+            false,
+            |_| false,
+        );
+
+        assert!(!released);
+        let slot = jobs.0.lock().expect("job slot");
+        let snapshot = &slot.as_ref().expect("a job").snapshot;
+        assert_eq!(snapshot.status, JobStatus::Failed);
+        assert!(snapshot.transcript.is_none());
+    }
+}

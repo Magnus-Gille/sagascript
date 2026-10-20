@@ -84,6 +84,10 @@ tauri = { version = "2", features = ["test"] }
 # Parses the command signatures to generate the frontend's CommandMap
 # (src/contract/command_map.rs, #347). Already in the tree via serde_derive.
 syn = { version = "2", features = ["full", "visit"] }
+# The paused clock of the meeting job tests (`#[tokio::test(start_paused = true)]`, #374): the
+# supervisor's timeout is tested by advancing time, not by waiting for it. A feature of a crate
+# that is already a dependency, for test builds only.
+tokio = { version = "1", features = ["test-util"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # notify 7 requires one native macOS backend feature even when this app uses
