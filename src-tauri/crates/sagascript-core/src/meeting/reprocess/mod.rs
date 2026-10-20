@@ -7,6 +7,8 @@
 
 pub mod io;
 pub mod matching;
+#[cfg(feature = "diarization")]
+pub mod orchestrate;
 pub mod plan;
 pub mod proposal;
 

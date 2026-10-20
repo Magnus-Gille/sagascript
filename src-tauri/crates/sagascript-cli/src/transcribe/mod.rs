@@ -60,17 +60,11 @@ mod vocab_correction;
 
 pub use self::args::TranscribeArgs;
 #[cfg(feature = "diarization")]
-pub(crate) use self::meeting::{
-    meeting_transcript_from_plain_segments, stable_file_sha256, verify_meeting_source_unchanged,
-};
-#[cfg(feature = "diarization")]
 pub use self::meeting::{
     transcribe_meeting_file, transcribe_meeting_file_full, transcribe_meeting_file_with_control,
 };
 pub use self::meeting::{MeetingControl, MeetingPhase};
 pub use self::output::copy_to_clipboard;
-#[cfg(feature = "diarization")]
-pub(crate) use self::output::prepare_diarized_plain_segments;
 pub(crate) use self::resolve::{effective_glossary, resolve_one_run_prompt};
 pub use self::resolve::{
     model_id_string, parse_language, parse_model, resolve_effective_model, resolve_file_model,

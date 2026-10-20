@@ -155,3 +155,21 @@ pub fn verify_meeting_source_unchanged(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sagascript_testsupport::TempDir;
+
+    #[test]
+    fn meeting_source_hash_is_bounded_and_detects_mutation() {
+        let directory = TempDir::new();
+        let path = directory.join("meeting-hash.wav");
+        std::fs::write(&path, b"first bytes").expect("fixture write");
+        let before = stable_file_sha256(&path, None).expect("hash fixture");
+        assert_eq!(before.len(), 64);
+        assert!(before.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        std::fs::write(&path, b"other bytes").expect("mutate fixture");
+        assert!(verify_meeting_source_unchanged(&path, &before, None).is_err());
+    }
+}

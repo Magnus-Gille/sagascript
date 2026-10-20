@@ -32,7 +32,7 @@ fn snapshot(id: &str, status: JobStatus) -> MeetingSnapshot {
 }
 
 #[cfg(feature = "diarization")]
-fn reprocessing_result() -> sagascript_cli::meeting_reprocessing::ReprocessingResult {
+fn reprocessing_result() -> sagascript_core::meeting::reprocess::orchestrate::ReprocessingResult {
     let previous = sagascript_core::meeting::review::MeetingReview::new(valid_transcript())
         .expect("valid synthetic review");
     let proposal = sagascript_core::meeting::reprocess::proposal::MeetingReprocessingProposal::new(
@@ -40,7 +40,7 @@ fn reprocessing_result() -> sagascript_cli::meeting_reprocessing::ReprocessingRe
         previous.original.clone(),
     )
     .expect("valid synthetic proposal");
-    sagascript_cli::meeting_reprocessing::ReprocessingResult {
+    sagascript_core::meeting::reprocess::orchestrate::ReprocessingResult {
         proposal,
         required_work: sagascript_core::meeting::reprocess::plan::RequiredWork {
             decode_audio: false,
@@ -432,12 +432,12 @@ fn finished_meeting_releases_its_lease_from_a_poisoned_controller() {
 /// `finish_snapshot`), and parsed by the frontend's `MeetingJobSnapshot`
 /// type (src/test/transport.test.ts).
 mod transport_contract {
-    use sagascript_cli::transcribe::MeetingPhase;
     use sagascript_core::diarization::report::{
         ActivitySpan, AsrSegmentEvidence, AttributionEvidence, AttributionReason, DecoderEvidence,
         DiarizationParameters, DiarizationReport, EmbeddingStatus, RegionEvidence, SpeakerSupport,
     };
     use sagascript_core::diarization::speaker_hint::{SpeakerCountHint, SpeakerHintOutcome};
+    use sagascript_core::meeting::control::MeetingPhase;
     use sagascript_core::meeting::{MeetingSegmentInput, MeetingSpeaker};
     use serde_json::{Map, Value};
 
@@ -608,7 +608,7 @@ mod transport_contract {
     /// A finished reprocessing run: a reviewed meeting (two correction
     /// operations, the first already resolved) and its re-clustered proposal.
     #[cfg(feature = "diarization")]
-    fn reprocessing() -> sagascript_cli::meeting_reprocessing::ReprocessingResult {
+    fn reprocessing() -> sagascript_core::meeting::reprocess::orchestrate::ReprocessingResult {
         use sagascript_core::meeting::reprocess::proposal::MeetingReprocessingProposal;
         use sagascript_core::meeting::review::{
             CorrectionFile, CorrectionOperation, MeetingReview,
@@ -638,7 +638,7 @@ mod transport_contract {
         let proposal = proposal
             .resolve(&proposal.revision.clone(), 0, vec![rename])
             .expect("valid resolution");
-        sagascript_cli::meeting_reprocessing::ReprocessingResult {
+        sagascript_core::meeting::reprocess::orchestrate::ReprocessingResult {
             proposal,
             required_work: sagascript_core::meeting::reprocess::plan::RequiredWork {
                 decode_audio: false,
@@ -648,7 +648,7 @@ mod transport_contract {
                 embeddings: false,
                 clustering: true,
             },
-            timings: sagascript_cli::meeting_reprocessing::ReprocessingTimings {
+            timings: sagascript_core::meeting::reprocess::orchestrate::ReprocessingTimings {
                 validation_seconds: 0.25,
                 decode_seconds: 0.0,
                 analysis_seconds: 0.0,

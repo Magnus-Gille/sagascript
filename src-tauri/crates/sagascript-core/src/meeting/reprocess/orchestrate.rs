@@ -25,7 +25,7 @@
 //!    and no proposal, never the reverse. A selective run from that cache
 //!    recovers the proposal without recomputation.
 //!
-//! Every publication is no-replace ([`sagascript_core::fsutil`]); no existing
+//! Every publication is no-replace ([`crate::fsutil`]); no existing
 //! file is overwritten or deleted. Callers whose proposal stays in memory (the
 //! desktop app) use [`StagedReprocessing::finish`], which publishes the cache.
 
@@ -34,29 +34,34 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use sagascript_core::diarization::report::{AsrSegmentEvidence, DecoderEvidence};
-use sagascript_core::diarization::speaker_hint::SpeakerCountHint;
-use sagascript_core::diarization::{
-    self, merge::merge_with_diagnostics, DiarizationAnalysis, DiarizeConfig, TimestampedSegment,
-};
-use sagascript_core::error::DictationError;
-use sagascript_core::fsutil::{Leftover, PublishFs, RealFs, StagedFile};
-use sagascript_core::hash::sha256_hex;
-use sagascript_core::meeting::reprocess::plan::{
-    ReprocessingContext, ReprocessingMode, ReprocessingPlan, RequiredWork,
-};
-use sagascript_core::meeting::reprocess::proposal::MeetingReprocessingProposal;
-use sagascript_core::meeting::review::MeetingReview;
-use sagascript_core::meeting::MeetingTranscript;
-use sagascript_core::settings::{Language, Settings, WhisperModel};
-use sagascript_core::transcription::{Glossary, TranscribeOptions, WhisperBackend};
 use serde::Serialize;
 
-use crate::transcribe::{self, MeetingControl, MeetingPhase};
-use sagascript_core::diarization::cache::{
+use crate::diarization::cache::{
     self as diarization_cache, AnalysisIdentity, CacheIdentity, CacheLookup, DiarizationCache,
 };
-use sagascript_core::meeting::reprocess::io as meeting_proposal;
+use crate::diarization::report::{AsrSegmentEvidence, DecoderEvidence};
+use crate::diarization::speaker_hint::SpeakerCountHint;
+use crate::diarization::{
+    self, merge::merge_with_diagnostics, DiarizationAnalysis, DiarizeConfig, TimestampedSegment,
+};
+use crate::error::DictationError;
+use crate::fsutil::{Leftover, PublishFs, RealFs, StagedFile};
+use crate::glossary::Glossary;
+use crate::hash::sha256_hex;
+use crate::meeting::assemble::{
+    meeting_transcript_from_plain_segments, prepare_diarized_plain_segments,
+};
+use crate::meeting::control::{MeetingControl, MeetingPhase};
+use crate::meeting::reprocess::io as meeting_proposal;
+use crate::meeting::reprocess::plan::{
+    ReprocessingContext, ReprocessingMode, ReprocessingPlan, RequiredWork,
+};
+use crate::meeting::reprocess::proposal::MeetingReprocessingProposal;
+use crate::meeting::review::MeetingReview;
+use crate::meeting::source::{stable_file_sha256, verify_meeting_source_unchanged};
+use crate::meeting::MeetingTranscript;
+use crate::models::{Language, WhisperModel};
+use crate::transcription::TranscribeOptions;
 
 pub struct ReprocessingInput<'a> {
     pub audio: &'a Path,
@@ -104,7 +109,7 @@ pub fn plan_reprocessing(
         mode,
         threshold,
         control,
-        sagascript_core::diarization::model::all_models_downloaded,
+        crate::diarization::model::all_models_downloaded,
     )
 }
 
@@ -286,57 +291,7 @@ impl PendingPublication {
     }
 }
 
-/// Execute exactly the validated plan and publish a requested new cache once
-/// the run is validated, for callers whose proposal stays in memory. A new
-/// cache output is opt-in and only supported for full recomputation; it never
-/// replaces an existing artifact. See [`execute_reprocessing_staged`] to
-/// publish the proposal as well.
-#[allow(clippy::too_many_arguments)]
-pub fn execute_reprocessing(
-    plan: &ReprocessingPlan,
-    expected_plan_revision: &str,
-    input: &ReprocessingInput<'_>,
-    stored: &Settings,
-    whisper: &WhisperBackend,
-    cache_output: Option<&Path>,
-    control: Option<&MeetingControl<'_>>,
-) -> Result<ReprocessingResult, DictationError> {
-    execute_reprocessing_staged(
-        plan,
-        expected_plan_revision,
-        input,
-        stored,
-        whisper,
-        cache_output,
-        control,
-    )?
-    .finish()
-}
-
-/// Execute exactly the validated plan, leaving a requested new cache staged
-/// and unpublished; see the module documentation for what to do next.
-#[allow(clippy::too_many_arguments)]
-pub fn execute_reprocessing_staged(
-    plan: &ReprocessingPlan,
-    expected_plan_revision: &str,
-    input: &ReprocessingInput<'_>,
-    stored: &Settings,
-    whisper: &WhisperBackend,
-    cache_output: Option<&Path>,
-    control: Option<&MeetingControl<'_>>,
-) -> Result<StagedReprocessing, DictationError> {
-    execute_with_model_check(
-        plan,
-        expected_plan_revision,
-        input,
-        cache_output,
-        control,
-        sagascript_core::diarization::model::all_models_downloaded,
-        &mut NativeBackend { stored, whisper },
-    )
-}
-
-pub(crate) trait WorkBackend {
+pub trait WorkBackend {
     fn decode(
         &mut self,
         audio: &Path,
@@ -358,53 +313,6 @@ pub(crate) trait WorkBackend {
     ) -> Result<MeetingTranscript, DictationError>;
 }
 
-pub(crate) struct NativeBackend<'a> {
-    pub(crate) stored: &'a Settings,
-    pub(crate) whisper: &'a WhisperBackend,
-}
-
-impl WorkBackend for NativeBackend<'_> {
-    fn decode(
-        &mut self,
-        audio: &Path,
-        control: Option<&MeetingControl<'_>>,
-    ) -> Result<Vec<f32>, DictationError> {
-        sagascript_core::audio::decoder::decode_audio_file_with_control(audio, &|| check(control))
-    }
-
-    fn analyze(
-        &mut self,
-        audio: &[f32],
-        config: &DiarizeConfig,
-        control: Option<&MeetingControl<'_>>,
-    ) -> Result<DiarizationAnalysis, DictationError> {
-        diarization::analyze_with_control(audio, config, &|| check(control))
-            .map(|(analysis, _)| analysis)
-    }
-
-    fn full(
-        &mut self,
-        input: &ReprocessingInput<'_>,
-        threshold: f32,
-        speaker_hint: Option<SpeakerCountHint>,
-        cache_output: Option<&Path>,
-        control: Option<&MeetingControl<'_>>,
-    ) -> Result<MeetingTranscript, DictationError> {
-        transcribe::transcribe_meeting_file_full(
-            input.audio,
-            self.stored,
-            input.language,
-            input.model,
-            input.glossary,
-            self.whisper,
-            control,
-            threshold,
-            speaker_hint,
-            cache_output,
-        )
-    }
-}
-
 #[cfg(test)]
 fn execute_with(
     plan: &ReprocessingPlan,
@@ -420,21 +328,26 @@ fn execute_with(
         input,
         cache_output,
         control,
+        "test-revision",
         || true,
         backend,
     )?
     .finish()
 }
 
-/// Testable execution seam. Production callers must use
-/// [`execute_reprocessing`] or [`execute_reprocessing_staged`], which supply the
-/// real local-model availability check independently of planning.
-pub(crate) fn execute_with_model_check(
+/// Testable execution seam. Production callers use the CLI's `execute_reprocessing` or
+/// `execute_reprocessing_staged`, which supply the real local-model availability check
+/// independently of planning and the native backend. `build_revision` is the source revision of
+/// the running build, which the diarization report of a selective run records (core has no build
+/// identity of its own).
+#[allow(clippy::too_many_arguments)]
+pub fn execute_with_model_check(
     plan: &ReprocessingPlan,
     expected_plan_revision: &str,
     input: &ReprocessingInput<'_>,
     cache_output: Option<&Path>,
     control: Option<&MeetingControl<'_>>,
+    build_revision: &str,
     models_available: impl FnOnce() -> bool,
     backend: &mut impl WorkBackend,
 ) -> Result<StagedReprocessing, DictationError> {
@@ -511,11 +424,7 @@ pub(crate) fn execute_with_model_check(
                 .map(|(start, end, text)| TimestampedSegment { start, end, text })
                 .collect::<Vec<_>>();
             let (merged, attributions) = merge_with_diagnostics(&speakers, &words);
-            let plain = transcribe::prepare_diarized_plain_segments(
-                &merged,
-                input.language,
-                input.glossary,
-            );
+            let plain = prepare_diarized_plain_segments(&merged, input.language, input.glossary);
             let duration = cached.coverage_profile.duration_seconds();
             let include_diagnostics = input
                 .previous
@@ -530,7 +439,7 @@ pub(crate) fn execute_with_model_check(
                 include_diagnostics,
                 prepared.context.source_sha256.clone(),
                 duration,
-                crate::GIT_HASH.into(),
+                build_revision.into(),
                 env!("CARGO_PKG_VERSION").into(),
             )?;
             report.decoder = Some(prepared.decoder.clone());
@@ -549,7 +458,7 @@ pub(crate) fn execute_with_model_check(
                     })
                     .collect();
             }
-            let transcript = transcribe::meeting_transcript_from_plain_segments(
+            let transcript = meeting_transcript_from_plain_segments(
                 prepared.context.source_sha256.clone(),
                 input.language,
                 input.model,
@@ -591,9 +500,9 @@ fn verify_inputs_unchanged(
     control: Option<&MeetingControl<'_>>,
 ) -> Result<(), DictationError> {
     checkpoint(control, MeetingPhase::Finalizing)?;
-    transcribe::verify_meeting_source_unchanged(input.audio, &context.source_sha256, control)?;
+    verify_meeting_source_unchanged(input.audio, &context.source_sha256, control)?;
     if let (Some(path), Some(expected)) = (input.cache, context.cache_sha256.as_ref()) {
-        if transcribe::stable_file_sha256(path, control)? != *expected {
+        if stable_file_sha256(path, control)? != *expected {
             return Err(failure(
                 "cache changed during reprocessing; request a new plan",
             ));
@@ -629,7 +538,7 @@ fn reserve_cache(destination: &Path) -> Result<StagedFile, DictationError> {
 
 /// The proposal and the cache are two files and must not be one path: the
 /// second publication would fail after the first succeeded.
-pub(crate) fn ensure_distinct_outputs(left: &Path, right: &Path) -> Result<(), DictationError> {
+pub fn ensure_distinct_outputs(left: &Path, right: &Path) -> Result<(), DictationError> {
     let left = output_identity(left);
     let right = output_identity(right);
     if left == right {
@@ -665,10 +574,10 @@ fn prepare(
             "full mode does not read a cache; selective modes require an explicit cache",
         ));
     }
-    let source_sha256 = transcribe::stable_file_sha256(input.audio, control)?;
+    let source_sha256 = stable_file_sha256(input.audio, control)?;
     let prompt = input.glossary.decoder_prompt();
     let language = input.language.whisper_code().unwrap_or("auto");
-    let model = transcribe::model_id_string(input.model);
+    let model = input.model.id();
     let previous_report = input.previous.original.diarization.as_ref();
     let options = if mode == ReprocessingMode::Full {
         legacy_decoder_options()
@@ -678,7 +587,7 @@ fn prepare(
             options.beam_size = decoder.beam_size;
             options.temperature_fallback = decoder.temperature_fallback;
             options.vad_model_path = decoder.vad_enabled.then(|| {
-                sagascript_core::transcription::model::vad_model_path()
+                crate::transcription::model::vad_model_path()
                     .to_string_lossy()
                     .into_owned()
             });
@@ -686,10 +595,8 @@ fn prepare(
         options
     };
     let decoder: DecoderEvidence =
-        sagascript_core::transcription::whisper_backend::effective_diarization_decoder_config(
-            &options,
-        )?
-        .into();
+        crate::transcription::whisper_backend::effective_diarization_decoder_config(&options)?
+            .into();
     if mode != ReprocessingMode::Full
         && previous_report
             .and_then(|report| report.decoder.as_ref())
@@ -710,7 +617,7 @@ fn prepare(
         AnalysisIdentity::current_with_policy(exclusive_speech_embeddings),
     ))?;
     let (cache_sha256, cache) = if let Some(path) = input.cache {
-        let before = transcribe::stable_file_sha256(path, control)?;
+        let before = stable_file_sha256(path, control)?;
         let identity = CacheIdentity::for_source_sha256_with_options(
             &source_sha256,
             language,
@@ -739,14 +646,14 @@ fn prepare(
                 )))
             }
         };
-        if transcribe::stable_file_sha256(path, control)? != before {
+        if stable_file_sha256(path, control)? != before {
             return Err(failure("cache changed while planning; request a new plan"));
         }
         (Some(before), Some(cached))
     } else {
         (None, None)
     };
-    transcribe::verify_meeting_source_unchanged(input.audio, &source_sha256, control)?;
+    verify_meeting_source_unchanged(input.audio, &source_sha256, control)?;
     Ok(Prepared {
         context: ReprocessingContext {
             source_sha256,
@@ -814,5 +721,5 @@ fn failure(message: &str) -> DictationError {
 }
 
 #[cfg(test)]
-#[path = "meeting_reprocessing_tests.rs"]
+#[path = "orchestrate_tests.rs"]
 mod tests;

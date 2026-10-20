@@ -135,7 +135,7 @@ pub async fn plan_meeting_reprocessing(
             } else {
                 None
             };
-            let input = sagascript_cli::meeting_reprocessing::ReprocessingInput {
+            let input = sagascript_core::meeting::reprocess::orchestrate::ReprocessingInput {
                 audio: &audio,
                 cache: cache.as_deref(),
                 previous: &previous,
@@ -143,7 +143,7 @@ pub async fn plan_meeting_reprocessing(
                 model: context.model,
                 glossary: &context.glossary,
             };
-            let plan = sagascript_cli::meeting_reprocessing::plan_reprocessing(
+            let plan = sagascript_core::meeting::reprocess::orchestrate::plan_reprocessing(
                 &input, mode, threshold, None,
             )?;
             let path_string = |path: std::path::PathBuf| {
