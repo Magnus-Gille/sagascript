@@ -5,7 +5,10 @@
 //! (source hash, language, model, prompt, decoder) and the [`AnalysisIdentity`] of the models that
 //! analysed it. A lookup answers [`CacheLookup::Hit`] only for the identity it was asked for; every
 //! other case is a [`CacheLookup::Miss`] with the reason. Nothing here needs the ONNX engine: the
-//! cache is compiled in every build, and the CLI and the app write and read it through this module.
+//! cache is compiled in every build. The CLI's diarized `transcribe` and `meeting reprocess`
+//! commands read and write it through this module; the app never names it, and reaches a cache
+//! only through reprocessing: planning (`meeting::reprocess::orchestrate::plan_reprocessing`, in
+//! core) and, to execute a plan, the CLI's `execute_reprocessing`.
 //!
 //! The constructors and loaders that only tests need are compiled under `cfg(test)` or the
 //! `test-support` feature, like `test_support`.
