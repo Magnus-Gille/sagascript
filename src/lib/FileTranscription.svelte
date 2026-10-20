@@ -865,7 +865,7 @@
             {/if}
           {/if}
         {#if transcribeError}
-          <div class="transcribe-error">{transcribeError}</div>
+          <div class="transcribe-error" role="alert">{transcribeError}</div>
           <ErrorRecovery recovery={transcribeRecovery} busy={modelDownloading || downloadBusy}
             onRetry={retryFile} onDownloadModel={() => void downloadModelAgain()} />
         {/if}

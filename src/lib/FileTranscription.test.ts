@@ -1,7 +1,7 @@
 // FileTranscription.svelte inside Settings (#362): a plain run listens for its
 // own progress events from before the native work starts until it ends.
 import { emit } from "@tauri-apps/api/event";
-import { screen, waitFor } from "@testing-library/svelte";
+import { screen, waitFor, within } from "@testing-library/svelte";
 import userEvent from "@testing-library/user-event";
 import { expect, test } from "vitest";
 import { deferred, settle } from "../test/deferred";
@@ -298,4 +298,12 @@ test.each([
   expect(downloadAgain()).toBeNull();
   expect(tryAgain()).toBeNull();
   expect(ipc.callsTo("download_pianissimo_model")).toHaveLength(1);
+});
+
+test("a failed run's error is an alert, announced with its button", async () => {
+  await dropAndReject(commandErrors.model_busy, "/audio/announced.wav");
+
+  const panel = screen.getByRole("tabpanel");
+  const alert = await within(panel).findByRole("alert");
+  expect(alert).toHaveTextContent(commandErrors.model_busy.message);
 });

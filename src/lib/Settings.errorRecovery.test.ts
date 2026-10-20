@@ -3,7 +3,7 @@
 // `stop_and_transcribe` of audio that is gone) when the backend says the
 // action may be repeated, and "Download the model again" when the engine's
 // model is missing or does not load. The text of the error never decides.
-import { screen, waitFor } from "@testing-library/svelte";
+import { screen, waitFor, within } from "@testing-library/svelte";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, test } from "vitest";
 import { deferred, settle } from "../test/deferred";
@@ -324,5 +324,25 @@ describe("focus", () => {
 
     await screen.findByRole("button", { name: "Try again" });
     expect(editor).toHaveFocus();
+  });
+});
+
+// The error and the button that follows it are announced when they appear.
+describe("announcement", () => {
+  test("the Dictate tab's error is an alert", async () => {
+    const { ipc } = await renderSettings(settingsBackend());
+
+    ipc.emit("error", commandErrors.model_busy);
+
+    const section = document.querySelector<HTMLElement>(".test-section")!;
+    const alert = await within(section).findByRole("alert");
+    expect(alert).toHaveTextContent(commandErrors.model_busy.message);
+  });
+
+  test("a restored plain-text error is an alert too", async () => {
+    await renderSettings(settingsBackend({ get_last_error: () => "No audio was captured. Please try again." }));
+
+    const section = document.querySelector<HTMLElement>(".test-section")!;
+    expect(await within(section).findByRole("alert")).toHaveTextContent("No audio was captured. Please try again.");
   });
 });

@@ -2605,7 +2605,7 @@
             {/if}
           </button>
           {#if testError}
-            <div class="transcribe-error">{testError}</div>
+            <div class="transcribe-error" role="alert">{testError}</div>
             <ErrorRecovery recovery={testRecovery}
               busy={updatePreparing || downloads.busy || dictationModelSaving || dictateButtonAction(backendDictationState, testOwnsRecording) !== "start"}
               onRetry={() => void onDictateRetry()} onDownloadModel={() => void onDictateDownloadModel()} />
