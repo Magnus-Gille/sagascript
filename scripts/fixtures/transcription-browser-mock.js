@@ -119,7 +119,8 @@ window.qa = {
   },
   activePreparationNonce: () => activePreparationNonce,
   dictationResult: (text) => emit("transcription-result", text),
-  dictationError: (text) => emit("error", text),
+  // The `error` event is the typed { code, message, retryable } of a failed command (ADR 0006).
+  dictationError: (text, code = "transcription_failed", retryable = false) => emit("error", { code, message: text, retryable }),
   blockRecovery: (kind) => {
     window.qaRecoveryGates ??= {};
     window.qaRecoveryGates[kind] = { blocked: true, started: false, resolve: null };

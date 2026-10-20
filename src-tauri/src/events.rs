@@ -184,6 +184,7 @@ pub mod event {
     #[cfg(test)]
     use super::Consumer;
     use super::{ModelDownloadProgress, PlainPhase, PlainTranscriptionProgress, UiState};
+    use crate::command_error::CommandError;
     use crate::hotkey::HotkeyStatus;
     use sagascript_core::settings::HotkeyProfile;
 
@@ -205,10 +206,12 @@ pub mod event {
             consumer = Consumer::Gui,
             scope = None;
 
-        /// A user-facing dictation error message. Producer: the hotkey
-        /// pipeline. Consumer: Settings.svelte.
+        /// A dictation error for the user, as the typed `{ code, message,
+        /// retryable }` a failed command rejects with (`BackendError` in
+        /// src/lib/errors.ts; ADR 0006). Producer: the hotkey pipeline.
+        /// Consumer: Settings.svelte.
         ERROR: Error = "error",
-            payload<'a> = &'a str,
+            payload<'a> = &'a CommandError,
             consumer = Consumer::Gui,
             scope = None;
 

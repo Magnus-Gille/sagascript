@@ -153,8 +153,9 @@ pub enum SettingsError {
     Storage(String),
 }
 
-/// The display text, for a caller that reports plain text (the CLI's glossary
-/// editor, which has always flattened what its closures report). Like
+/// The display text, for a caller that reports plain text: today the test
+/// helpers (`test_support`, the app's persist tests), which compare refusals by
+/// their text. Production code keeps the typed error (ADR 0006). Like
 /// `From<DictationError> for String`.
 impl From<SettingsError> for String {
     fn from(error: SettingsError) -> String {

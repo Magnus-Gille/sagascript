@@ -213,7 +213,7 @@ export const engineLoadState = object(
 export const eventPayloads = {
   "state-changed": literal("idle", "recording", "loading_model", "transcribing", "error", "settings_reloaded"),
   "transcription-result": string,
-  error: string,
+  error: backendError,
   "model-download-progress": object({ progress: number }, { ignored: ["model", "downloaded", "total"] }),
   "model-ready": literal(null),
   "plain-transcription-progress": object({

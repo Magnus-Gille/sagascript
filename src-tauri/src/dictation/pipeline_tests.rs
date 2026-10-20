@@ -50,3 +50,98 @@ fn an_engine_failure_reaches_the_error_event_without_the_users_path() {
         "Pianissimo engine: Failed to load model at <path>/foo.mlmodelc: boom"
     );
 }
+
+/// The `error` event carries `{ code, message, retryable }` (ADR 0006, #360
+/// part 2b): the failure's own code and retry hint, and the text it always
+/// carried, so the Settings window decides "Try again" and "Download the model
+/// again" by code and shows what it showed before.
+#[test]
+fn the_error_event_carries_the_code_the_retry_hint_and_the_same_text() {
+    use sagascript_core::error::DictationError;
+
+    let engine_busy = DictationError::engine("engine_busy", true, "Pianissimo engine: queue full");
+    let cases = [
+        (DictationError::ModelBusy, "model_busy", true),
+        (DictationError::NoAudioCaptured, "no_audio_captured", true),
+        (
+            DictationError::TranscriptionFailed("no model".into()),
+            "transcription_failed",
+            false,
+        ),
+        (dictation_timed_out(), "transcription_timed_out", false),
+        (
+            dictation_task_failed("task 7 panicked"),
+            "task_failed",
+            false,
+        ),
+        (engine_busy, "engine_busy", true),
+    ];
+    for (error, code, retryable) in cases {
+        let event = dictation_failure_event(&error);
+        assert_eq!(event.code(), code, "{error}");
+        assert_eq!(event.retryable(), retryable, "{error}");
+        assert_eq!(event.message(), dictation_failure_text(&error), "{code}");
+        assert_eq!(
+            crate::contract::to_value(&event),
+            serde_json::json!({
+                "code": code,
+                "message": dictation_failure_text(&error),
+                "retryable": retryable,
+            })
+        );
+    }
+}
+
+/// The Swift host's failure arrives in the `error` event with its own code
+/// (`backendErrorRecovery` offers the model download for it) and without the
+/// user's home directory.
+#[test]
+fn an_engine_failure_event_keeps_its_code_and_loses_the_path() {
+    use sagascript_core::error::DictationError;
+
+    let engine = DictationError::engine(
+        "engine_model_missing",
+        false,
+        "Pianissimo engine: Model directory does not exist: /Users/x/Library/Application Support/Sagascript/models/foo",
+    );
+    let wire = crate::contract::to_value(dictation_failure_event(&engine));
+    assert_eq!(wire["code"], "engine_model_missing");
+    assert_eq!(wire["retryable"], false);
+    assert_eq!(
+        wire["message"],
+        "Pianissimo engine: Model directory does not exist: <path>/foo"
+    );
+    assert!(!wire.to_string().contains("/Users/x"), "{wire}");
+}
+
+/// A transcription that was stopped on request is not a failure: the hotkey
+/// path ends it quietly instead of raising the error state, the `error` event
+/// and the controller's last error (ADR 0006, #360 part 2b). Every other error
+/// still fails the dictation.
+#[test]
+fn a_cancelled_transcription_ends_quietly_and_every_other_error_fails() {
+    use sagascript_core::error::DictationError;
+
+    assert_eq!(
+        transcription_end(&DictationError::Cancelled),
+        TranscriptionEnd::Quiet
+    );
+    for error in [
+        DictationError::ModelBusy,
+        DictationError::ModelNotLoaded,
+        DictationError::NoAudioCaptured,
+        DictationError::TranscriptionFailed("no model".into()),
+        dictation_timed_out(),
+        dictation_task_failed("task 7 panicked"),
+        DictationError::engine("engine_busy", true, "queue full"),
+        DictationError::engine("engine_crashed", false, "host exited"),
+        DictationError::AudioCaptureError("no device".into()),
+        DictationError::MicrophonePermissionDenied,
+    ] {
+        assert_eq!(
+            transcription_end(&error),
+            TranscriptionEnd::Failed,
+            "{error}"
+        );
+    }
+}

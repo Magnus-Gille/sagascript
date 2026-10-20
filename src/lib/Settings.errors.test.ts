@@ -99,3 +99,47 @@ describe("the dictionary conflict", () => {
     expect(screen.queryByText(hint)).toBeNull();
   });
 });
+
+// `set_hotkey_profiles` (a profile-editor save) used to reject every refusal of
+// the settings as `hotkey_invalid`. It now carries the code of the refusal
+// (ADR 0006, #360 part 2b). Nothing in the window branches on `hotkey_invalid`
+// or on any of these codes for a profile save, so the person sees the same
+// text as before, once, and no other recovery opens.
+describe("a refused profile-editor save", () => {
+  const refusals = [
+    backendError(
+      "dictionary_blocks_language_change",
+      "Profile 'default' has a personal dictionary; clear it before changing the profile language",
+    ),
+    backendError("model_incompatible", "Model 'Tiny (English)' is incompatible with profile 'default'"),
+    backendError(
+      "inactive_profile_dictionary",
+      "Profile id 'default' has an inactive personal dictionary; choose a new id to avoid reactivating old aliases",
+    ),
+    backendError("profile_invalid", "Profile 'default' name must be 40 characters or fewer"),
+    backendError("hotkey_invalid", "Duplicate hotkey 'Ctrl+Shift+Space'"),
+  ];
+
+  test.each(refusals)("$code shows its message and puts the language back", async (refusal) => {
+    const { ipc } = await renderSettings(
+      settingsBackend({
+        set_hotkey_profiles: () => {
+          throw refusal;
+        },
+      }),
+    );
+    const user = userEvent.setup();
+    const language = await screen.findByRole("combobox", { name: "Svenska language" });
+
+    await user.selectOptions(language, "English");
+
+    await waitFor(() => expect(ipc.callsTo("set_hotkey_profiles")).toHaveLength(1));
+    const shown = await screen.findAllByText(refusal.message);
+    expect(shown.length).toBeGreaterThan(0);
+    expect(language).toHaveValue("sv");
+    // The window recovers from a blocked change of the default language (the
+    // `set_language` setter); a profile save has no such panel.
+    expect(screen.queryByRole("button", { name: /Clear default dictionary/ })).toBeNull();
+    expect(ipc.callsTo("set_language")).toHaveLength(0);
+  });
+});

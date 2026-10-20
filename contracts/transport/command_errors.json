@@ -29,6 +29,11 @@
     "message": "Pianissimo engine: Failed to load model at <path>/foo.mlmodelc: The file couldn't be opened.",
     "retryable": false
   },
+  "engine_model_missing": {
+    "code": "engine_model_missing",
+    "message": "Pianissimo engine: Model directory does not exist: <path>/foo",
+    "retryable": false
+  },
   "export_exists": {
     "code": "export_exists",
     "message": "That file already exists. Choose a new name; no existing file was changed.",
@@ -54,9 +59,19 @@
     "message": "Transcription engine is busy — a previous transcription may still be running. Please try again in a moment.",
     "retryable": true
   },
+  "no_audio_captured": {
+    "code": "no_audio_captured",
+    "message": "No audio was captured. Please try again.",
+    "retryable": true
+  },
   "not_recording": {
     "code": "not_recording",
     "message": "No training recording is active",
+    "retryable": false
+  },
+  "paste_error": {
+    "code": "paste_error",
+    "message": "Accessibility permission denied",
     "retryable": false
   },
   "transcription_timed_out": {

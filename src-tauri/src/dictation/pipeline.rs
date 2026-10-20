@@ -4,6 +4,7 @@ use tauri::Manager;
 use tracing::{error, info, warn};
 
 use crate::app_controller::{self, StopRecordingOutcome};
+use crate::command_error::CommandError;
 use crate::commands::{self, lock_controller, SharedController, SharedWhisper};
 use crate::events::{self, EmitEvent, UiState};
 use crate::launch::open_settings_window;
@@ -19,6 +20,31 @@ const TRANSCRIPTION_TIMEOUT_SECS: u64 = 60;
 /// event and the controller's last error (pipeline_tests.rs pins it; ADR 0006).
 fn dictation_failure_text(error: &sagascript_core::error::DictationError) -> String {
     error.to_string()
+}
+
+/// The `error` event of a failed dictation: the error's own code and retry hint
+/// and the text of [`dictation_failure_text`], without absolute paths
+/// ([`CommandError::message`]).
+fn dictation_failure_event(error: &sagascript_core::error::DictationError) -> CommandError {
+    CommandError::from(error.clone())
+}
+
+/// How the hotkey path ends a dictation whose transcription returned an error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TranscriptionEnd {
+    /// Stopped on request (`cancelled`): back to idle, nothing to show. Not a
+    /// failure (ADR 0006).
+    Quiet,
+    /// A failure: the error event, the overlay's error state, the controller's
+    /// last error.
+    Failed,
+}
+
+fn transcription_end(error: &sagascript_core::error::DictationError) -> TranscriptionEnd {
+    match error {
+        sagascript_core::error::DictationError::Cancelled => TranscriptionEnd::Quiet,
+        _ => TranscriptionEnd::Failed,
+    }
 }
 
 /// The dictation outran [`TRANSCRIPTION_TIMEOUT_SECS`] and was aborted.
@@ -109,7 +135,8 @@ pub(super) fn stop_recording_and_transcribe(
                     overlay::hide(app);
                     update_tray_status(app, "idle");
                 });
-                let _ = app_handle.emit_event(events::event::ERROR, &msg);
+                let _ =
+                    app_handle.emit_event(events::event::ERROR, &dictation_failure_event(&failure));
                 let _ = app_handle.emit_event(events::event::STATE_CHANGED, UiState::Idle);
                 return;
             }
@@ -186,9 +213,8 @@ pub(super) fn stop_recording_and_transcribe(
         };
         let (language, effective_model, opts, glossary, use_pianissimo) = match selection {
             Ok(selection) => selection,
-            Err(error) => {
-                // The `error` event still carries plain text (#360 part 2b).
-                let error = error.to_string();
+            Err(refusal) => {
+                let error = refusal.to_string();
                 error!("Cannot resolve profile model: {error}");
                 if let Err(finish_error) =
                     lock_controller(&ctrl).finish_transcription(Err(error.clone()))
@@ -200,7 +226,8 @@ pub(super) fn stop_recording_and_transcribe(
                     update_tray_status(app, "idle");
                 });
                 let _ = app_handle.emit_event(events::event::STATE_CHANGED, UiState::Idle);
-                let _ = app_handle.emit_event(events::event::ERROR, &error);
+                let _ =
+                    app_handle.emit_event(events::event::ERROR, &CommandError::Settings(refusal));
                 return;
             }
         };
@@ -468,7 +495,8 @@ pub(super) fn stop_recording_and_transcribe(
                         serde_json::json!({ "outcome": "paste_error", "pasteOutcome": paste_outcome }),
                     );
                     let _ = app_handle.emit_event(events::event::TRANSCRIPTION_RESULT, &text);
-                    let _ = app_handle.emit_event(events::event::ERROR, &message);
+                    let _ = app_handle
+                        .emit_event(events::event::ERROR, &CommandError::PasteFailed(message));
                     let _ = app_handle.emit_event(events::event::STATE_CHANGED, UiState::Idle);
                     let open_copy_fallback =
                         paste_completion::should_open_copy_fallback(paste_outcome);
@@ -503,6 +531,20 @@ pub(super) fn stop_recording_and_transcribe(
                 });
                 info!("Transcription flow complete, app should remain running");
             }
+            Err(e) if transcription_end(&e) == TranscriptionEnd::Quiet => {
+                // Stopped on request: not a failure. Back to idle like a
+                // dictation without speech; no error event, no error state, no
+                // last error. No latency record either: the stopped run is no
+                // completed dictation (`latency-report` knows three outcomes).
+                info!("Transcription cancelled: {e}");
+                lock_controller(&ctrl).on_transcription_cancelled();
+                let _ = app_handle.emit_event(events::event::STATE_CHANGED, UiState::Idle);
+                dispatch_to_main(&app_handle, |app| {
+                    overlay::hide(app);
+                    update_tray_status(app, "idle");
+                });
+                info!("Cancelled flow complete; back to idle");
+            }
             Err(e) => {
                 error!("Transcription failed: {e}");
                 let mut c = lock_controller(&ctrl);
@@ -525,7 +567,7 @@ pub(super) fn stop_recording_and_transcribe(
                 let failure = dictation_failure_text(&e);
                 c.on_transcription_error(&failure);
                 drop(c);
-                let _ = app_handle.emit_event(events::event::ERROR, &failure);
+                let _ = app_handle.emit_event(events::event::ERROR, &dictation_failure_event(&e));
                 // Let the overlay show its error state briefly before hiding.
                 let _ = app_handle.emit_event(events::event::STATE_CHANGED, UiState::Error);
                 let _ = app_handle.emit_event(events::event::STATE_CHANGED, UiState::Idle);
