@@ -178,6 +178,23 @@ describe("Download the model again", () => {
     expect(downloadAgain()).toBeNull();
   });
 
+  test("a new error with the very same text during the download keeps its own recovery", async () => {
+    const download = deferred<void>();
+    const { ipc } = await renderSettings(settingsBackend({ download_pianissimo_model: () => download.promise }));
+    ipc.emit("error", backendError("engine_model_missing", "The model is not usable."));
+    await userEvent.setup().click(await screen.findByRole("button", { name: "Download the model again" }));
+    await waitFor(() => expect(ipc.callsTo("download_pianissimo_model")).toHaveLength(1));
+
+    // The text is the same; the code is one nobody can repeat.
+    ipc.emit("error", backendError("transcription_timed_out", "The model is not usable."));
+    download.resolve();
+
+    await settle();
+    expect(dictateError()?.textContent).toBe("The model is not usable.");
+    expect(tryAgain()).toBeNull();
+    expect(downloadAgain()).toBeNull();
+  });
+
   test("a failed download shows its error and can be tried again", async () => {
     const { ipc } = await renderSettings(
       settingsBackend({
