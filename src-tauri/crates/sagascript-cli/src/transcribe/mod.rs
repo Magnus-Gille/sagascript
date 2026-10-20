@@ -43,11 +43,15 @@ mod args;
 mod diarize;
 #[cfg(feature = "diarization")]
 mod diarized;
+#[cfg(feature = "diarization")]
+mod entry;
+mod file_plan;
 mod inference;
 mod inputs;
 mod language_detection;
 mod language_regions;
 mod meeting;
+mod outcome;
 mod output;
 mod pianissimo;
 mod plain;
@@ -60,10 +64,9 @@ mod vocab_correction;
 
 pub use self::args::TranscribeArgs;
 #[cfg(feature = "diarization")]
-pub use self::meeting::{
+pub use self::entry::{
     transcribe_meeting_file, transcribe_meeting_file_full, transcribe_meeting_file_with_control,
 };
-pub use self::meeting::{MeetingControl, MeetingPhase};
 pub use self::output::copy_to_clipboard;
 pub(crate) use self::resolve::{effective_glossary, resolve_one_run_prompt};
 pub use self::resolve::{
@@ -75,10 +78,12 @@ pub use self::resolve::{
 use self::diarize::OnnxAnalyzer;
 #[cfg(feature = "diarization")]
 use self::diarized::run_diarized;
-use self::output::{BatchExecution, BatchSink, Clipboard, FileTranscription, SystemClipboard};
+use self::file_plan::{plan_file, FileMode, FileRequest};
+use self::outcome::FileTranscription;
+use self::output::{BatchExecution, BatchSink, Clipboard, SystemClipboard};
 use self::pianissimo::{run_pianissimo_batch, InstalledPianissimo, PianissimoBatch};
 use self::plain::run_plain;
-use self::plan::{plan_file, plan_run, EnginePlan, FileMode, FileOptions, FileRequest, RunPlan};
+use self::plan::{file_options, plan_run, EnginePlan, RunPlan};
 use self::progress::emit_progress;
 use self::services::Services;
 use crate::cancel::Canceller;
@@ -189,7 +194,7 @@ fn run_whisper_batch(
         clipboard,
     } = *batch;
     let mut model_loaded = false;
-    let options = FileOptions::from_args(args);
+    let options = file_options(args);
 
     let mut sink = BatchSink::new(args, files.len());
     let (processed, failures) = process_batch_with(

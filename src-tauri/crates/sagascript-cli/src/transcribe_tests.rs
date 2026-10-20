@@ -1,16 +1,21 @@
 use super::args::*;
 #[cfg(feature = "diarization")]
 use super::diarize::*;
+#[cfg(feature = "diarization")]
+use super::file_plan::{paths_refer_to_same_file, CacheRequest, DiarizationFlags};
+#[cfg(feature = "diarization")]
+use super::file_plan::{FileOptions, FileRequest};
 use super::inputs::*;
 use super::language_detection::*;
 use super::language_regions::*;
 #[cfg(feature = "diarization")]
-use super::meeting::{meeting_checkpoint, validate_meeting_input_scope};
+use super::meeting::validate_meeting_input_scope;
+use super::outcome::*;
 use super::output::*;
 #[cfg(feature = "diarization")]
 use super::pianissimo::*;
 #[cfg(feature = "diarization")]
-use super::plan::{CacheRequest, DiarizationFlags};
+use super::plan::file_options;
 use super::progress::*;
 use super::vocab_correction::*;
 use super::*;
@@ -18,6 +23,10 @@ use super::*;
 use sagascript_core::diarization::report::DecoderEvidence;
 #[cfg(feature = "diarization")]
 use sagascript_core::diarization::DiarizedSegment;
+#[cfg(feature = "diarization")]
+use sagascript_core::meeting::assemble::prepare_diarized_plain_segments;
+#[cfg(feature = "diarization")]
+use sagascript_core::meeting::control::{meeting_checkpoint, MeetingControl, MeetingPhase};
 use sagascript_core::settings::FileModel;
 use sagascript_core::settings::{FileModelPreference, HotkeyProfile};
 use sagascript_core::transcription::diagnostics::LanguageDetection;
@@ -1293,7 +1302,7 @@ mod diarize_threshold_tests {
             let argv = ["sagascript", "f.wav", "--diarize"]
                 .into_iter()
                 .chain(flags.iter().copied());
-            FileOptions::from_args(&TestCli::try_parse_from(argv).unwrap().args).decoder
+            file_options(&TestCli::try_parse_from(argv).unwrap().args).decoder
         };
 
         let options = resolve_diarization_options(&decoder(&["--beam", "4", "--vad"])).unwrap();

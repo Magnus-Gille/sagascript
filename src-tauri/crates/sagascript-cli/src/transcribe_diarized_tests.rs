@@ -23,7 +23,7 @@ use crate::transcribe::diarize::CachePolicy;
 use crate::transcribe::diarize::{
     analyze_in_sequence, analyze_overlapped, AnalysisOutcome, DiarizationAnalyzer,
 };
-use crate::transcribe::plan::{CacheRequest, DiarizationFlags};
+use crate::transcribe::file_plan::{CacheRequest, DiarizationFlags, FileOptions};
 use sagascript_core::diarization::cache::{load, CacheIdentity, CacheLookup};
 
 /// Long enough for two speakers of five and six seconds.
@@ -802,10 +802,10 @@ fn a_cancel_while_decoding_keeps_a_previous_cache() {
 // ---- the meeting entry points: typed options, no command line --------------------------------
 
 use crate::transcribe::args::validated_speaker_hint;
-use crate::transcribe::meeting::{
-    meeting_options, stable_file_sha256, transcribe_meeting_file_inner,
-};
+use crate::transcribe::entry::{meeting_options, transcribe_meeting_file_inner};
 use sagascript_core::diarization::speaker_hint::SpeakerCountHint;
+use sagascript_core::meeting::control::{MeetingControl, MeetingPhase};
+use sagascript_core::meeting::source::stable_file_sha256;
 use sagascript_core::meeting::MeetingTranscript;
 
 /// One meeting run as the app and reprocessing make it: the options of

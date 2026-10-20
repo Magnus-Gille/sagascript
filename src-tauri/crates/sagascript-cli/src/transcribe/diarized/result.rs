@@ -9,6 +9,7 @@ use sagascript_core::diarization::report::DiarizationReport;
 use sagascript_core::diarization::speaker_hint::{SpeakerCountHint, SpeakerHintOutcome};
 use sagascript_core::diarization::DiarizedSegment;
 use sagascript_core::error::DictationError;
+use sagascript_core::meeting::assemble::prepare_diarized_plain_segments;
 use sagascript_core::meeting::MeetingTranscript;
 use sagascript_core::settings::Language;
 use sagascript_core::transcription::diagnostics::{analyze_coverage_profile, CoverageProfile};
@@ -17,19 +18,16 @@ use sagascript_core::transcription::{
 };
 
 use super::super::diarize::DiarizationPerformance;
+use super::super::file_plan::{DiarizationFlags, FileRequest};
 use super::super::inference::LanguageEvidence;
-use super::super::meeting::{
-    meeting_checkpoint, meeting_transcript_from_plain_segments, MeetingPhase,
+use super::super::outcome::{
+    assemble_diarized_plain_text, combined_warnings, emit_warnings, FileTranscription,
 };
-use super::super::output::{
-    assemble_diarized_plain_text, combined_warnings, emit_warnings,
-    prepare_diarized_plain_segments, FileTranscription,
-};
-use super::super::plan::{DiarizationFlags, FileRequest};
 use super::super::progress::Progress;
-use super::super::resolve::model_id_string;
 use super::speakers::Merged;
 use crate::output::errln;
+use sagascript_core::meeting::assemble::meeting_transcript_from_plain_segments;
+use sagascript_core::meeting::control::{meeting_checkpoint, MeetingPhase};
 use sagascript_core::meeting::pipeline::narrate::Narrator;
 
 /// What [`assemble_result`] needs.
@@ -156,7 +154,7 @@ pub(super) fn assemble_result(
         "segments": text.segments,
         "speakers": text.speakers,
         "language": language,
-        "model": model_id_string(model),
+        "model": model.id(),
         "file": file.display().to_string(),
         "duration_seconds": duration,
         "coverage_ratio": coverage.coverage_ratio,

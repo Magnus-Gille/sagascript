@@ -20,11 +20,10 @@ use sagascript_core::transcription::{
     model, ContextProfile, TranscribeOptions, TranscribeRequest, TranscriptSegment, WhisperBackend,
 };
 
+use super::file_plan::FileRequest;
 use super::language_detection::{detect_file_language, LanguageProbe};
 use super::language_regions::detect_file_language_regions;
-use super::plan::FileRequest;
 use super::progress::Progress;
-use super::resolve::model_id_string;
 use super::services::Services;
 use crate::output::errln;
 use sagascript_core::meeting::pipeline::narrate::Narrator;
@@ -126,7 +125,7 @@ pub(super) fn not_downloaded(model: WhisperModel) -> DictationError {
     DictationError::TranscriptionFailed(format!(
         "Model '{}' is not downloaded. Run: sagascript download-model {}",
         model.display_name(),
-        model_id_string(model)
+        model.id()
     ))
 }
 

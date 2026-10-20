@@ -16,7 +16,8 @@ use sagascript_core::transcription::pianissimo_model;
 use sagascript_core::transcription::Glossary;
 
 use super::args::TranscribeArgs;
-use super::output::{BatchSink, Clipboard, FileTranscription};
+use super::outcome::FileTranscription;
+use super::output::{BatchSink, Clipboard};
 use super::process_batch_with;
 use super::progress::emit_progress;
 use crate::cancel::Canceller;

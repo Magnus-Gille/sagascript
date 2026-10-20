@@ -15,9 +15,10 @@ use sagascript_core::transcription::{
     recommended_parallel_chunks, ContextProfile, TranscribeOptions, TranscriptSegment,
 };
 
+use super::file_plan::FileRequest;
 use super::inference::{prepare_language, verify_vad_model, InferenceBackend};
-use super::output::{assemble_plain_result, emit_warnings, FileTranscription, PlainInput};
-use super::plan::FileRequest;
+use super::outcome::{emit_warnings, FileTranscription};
+use super::output::{assemble_plain_result, PlainInput};
 use super::progress::Progress;
 use super::services::Services;
 use super::source::{decode_file, DecodedAudio};

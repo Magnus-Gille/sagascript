@@ -20,7 +20,7 @@ use sagascript_core::transcription::{
 };
 
 #[cfg(feature = "diarization")]
-use super::plan::DecoderFlags;
+use super::file_plan::DecoderFlags;
 #[cfg(feature = "diarization")]
 use super::services::Services;
 

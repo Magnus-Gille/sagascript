@@ -22,8 +22,8 @@ use std::time::Instant;
 
 use sagascript_core::error::DictationError;
 
-use super::output::FileTranscription;
-use super::plan::{DiarizationPlan, FileRequest};
+use super::file_plan::{DiarizationPlan, FileRequest};
+use super::outcome::FileTranscription;
 use super::progress::Progress;
 use super::services::Services;
 use super::source::{acquire_source, Acquired};

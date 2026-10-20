@@ -13,13 +13,12 @@ use sagascript_core::diarization::{
 use sagascript_core::error::DictationError;
 use sagascript_core::transcription::TranscriptSegment;
 
-use super::super::meeting::{
-    meeting_checkpoint, verify_meeting_source_unchanged, MeetingControl, MeetingPhase,
-};
-use super::super::plan::{DiarizationPlan, FileRequest};
+use super::super::file_plan::{DiarizationPlan, FileRequest};
 use super::super::progress::Progress;
 use crate::output::errln;
+use sagascript_core::meeting::control::{meeting_checkpoint, MeetingControl, MeetingPhase};
 use sagascript_core::meeting::pipeline::narrate::Narrator;
+use sagascript_core::meeting::source::verify_meeting_source_unchanged;
 
 /// What [`cluster_speakers`] needs.
 pub(super) struct ClusterRequest<'a> {

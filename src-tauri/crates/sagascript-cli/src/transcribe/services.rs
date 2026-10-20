@@ -25,5 +25,6 @@ pub(super) struct Services<'a> {
     pub(super) canceller: &'a Canceller,
     /// The source revision of the running build: a diarization report records it, and core has
     /// no build identity of its own.
+    #[cfg_attr(not(feature = "diarization"), allow(dead_code))]
     pub(super) build_revision: &'a str,
 }

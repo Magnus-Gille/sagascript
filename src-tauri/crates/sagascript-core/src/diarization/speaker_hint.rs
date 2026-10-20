@@ -41,6 +41,13 @@ pub struct SpeakerCountFlags {
 }
 
 impl SpeakerCountFlags {
+    /// The validated hint as a run reports a bad one: a settings error that names the flags.
+    pub fn validated(&self) -> Result<Option<SpeakerCountHint>, crate::error::DictationError> {
+        self.hint().map_err(|message| {
+            crate::error::DictationError::SettingsError(format!("--speakers: {message}"))
+        })
+    }
+
     /// The validated hint, or `None` when no flag was given.
     pub fn hint(&self) -> Result<Option<SpeakerCountHint>, String> {
         match self.force_speakers {

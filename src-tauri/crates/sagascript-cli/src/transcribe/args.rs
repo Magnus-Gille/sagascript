@@ -185,9 +185,7 @@ impl<'a> From<&'a TranscribeArgs> for RunRequest<'a> {
 pub(super) fn validated_speaker_hint(
     counts: &sagascript_core::diarization::speaker_hint::SpeakerCountFlags,
 ) -> Result<Option<sagascript_core::diarization::speaker_hint::SpeakerCountHint>, DictationError> {
-    counts
-        .hint()
-        .map_err(|message| DictationError::SettingsError(format!("--speakers: {message}")))
+    counts.validated()
 }
 
 /// The validated speaker-count hint from `--speakers`/`--min-speakers`/`--max-speakers`.

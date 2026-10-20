@@ -1463,9 +1463,10 @@ fn the_public_transcribe_paths_stay_importable() {
 
         use sagascript_cli::transcribe::{
             transcribe_meeting_file, transcribe_meeting_file_full,
-            transcribe_meeting_file_with_control, MeetingControl, MeetingPhase,
+            transcribe_meeting_file_with_control,
         };
         use sagascript_core::diarization::speaker_hint::SpeakerCountHint;
+        use sagascript_core::meeting::control::{MeetingControl, MeetingPhase};
         use sagascript_core::meeting::MeetingTranscript;
         use sagascript_core::transcription::{Glossary, WhisperBackend};
 

@@ -19,20 +19,18 @@ use sagascript_core::transcription::TranscriptSegment;
 
 #[cfg(feature = "diarization")]
 use super::diarize::CachePolicy;
-use super::meeting::MeetingControl;
 #[cfg(feature = "diarization")]
-use super::meeting::{meeting_checkpoint, MeetingPhase};
-#[cfg(feature = "diarization")]
-use super::plan::{DiarizationPlan, FileRequest};
+use super::file_plan::{DiarizationPlan, FileRequest};
 use super::progress::Progress;
-#[cfg(feature = "diarization")]
-use super::resolve::model_id_string;
 #[cfg(feature = "diarization")]
 use super::services::Services;
 use crate::cancel::Canceller;
 use crate::output::errln;
 #[cfg(feature = "diarization")]
 use sagascript_core::diarization::cache::{CacheIdentity, CacheLookup, DiarizationCache};
+use sagascript_core::meeting::control::MeetingControl;
+#[cfg(feature = "diarization")]
+use sagascript_core::meeting::control::{meeting_checkpoint, MeetingPhase};
 use sagascript_core::meeting::pipeline::narrate::Narrator;
 
 /// A file decoded to what Whisper takes: 16 kHz mono samples.
@@ -227,7 +225,7 @@ pub(super) fn acquire_source(
             CacheIdentity::for_source_sha256_with_options(
                 &plan.source_sha256,
                 language.whisper_code().unwrap_or("auto"),
-                model_id_string(model),
+                model.id(),
                 plan.decoder_prompt.as_deref(),
                 plan.options.beam_size,
                 plan.options.temperature_fallback,

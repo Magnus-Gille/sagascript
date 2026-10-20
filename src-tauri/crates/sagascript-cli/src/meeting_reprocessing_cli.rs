@@ -484,8 +484,8 @@ fn parse_threshold(value: &str) -> Result<f32, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::transcribe::MeetingControl;
     use clap::Parser;
+    use sagascript_core::meeting::control::MeetingControl;
     use sagascript_core::meeting::reprocess::orchestrate::{CommitError, WorkBackend};
     use sagascript_core::meeting::review::MeetingReview;
     use sagascript_core::test_support::meeting_transcript;

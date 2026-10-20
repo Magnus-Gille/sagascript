@@ -15,10 +15,10 @@ use super::super::diarize::{
     canonicalize_coverage_segments, run_diarization_analysis, CachePolicy, DiarizationPerformance,
 };
 use super::super::inference::LanguageEvidence;
-use super::super::meeting::{meeting_checkpoint, MeetingControl, MeetingPhase};
 use super::super::services::Services;
 use super::super::source::{CacheTarget, Source};
 use crate::output::errln;
+use sagascript_core::meeting::control::{meeting_checkpoint, MeetingControl, MeetingPhase};
 use sagascript_core::meeting::pipeline::narrate::Narrator;
 
 /// What [`obtain_analysis`] needs besides the source and the output.
