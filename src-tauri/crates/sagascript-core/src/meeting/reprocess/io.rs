@@ -4,12 +4,18 @@
 //! Reading is bounded: a regular file, opened once, never larger than the caller's limit.
 //! Writing never replaces a file ([`fsutil`], ADR 0008): a document is published complete or not
 //! at all, and a private staging file that could not be removed afterwards is reported to the
-//! caller (a [`Published`] with a leftover, or the error text that names it), never hidden. Every
-//! failure is a fixed [`DictationError::FileDecodeError`] text that names no path of the
-//! document itself: a proposal holds a transcript, and these messages end up in logs and in the UI.
+//! caller (a [`Published`] with a leftover, or the error text that names it), never hidden.
 //!
-//! The CLI's `meeting proposal` and `meeting reprocess` commands and the app's commands read and
-//! write through this module; the CLI adds its own warning on stderr for a leftover.
+//! Every failure is a [`DictationError::FileDecodeError`] whose text says what failed and, where
+//! there is one, appends the OS error text (cut to 160 characters, except by
+//! [`ensure_output_absent`], which appends it whole). It never contains the document: a proposal
+//! holds a transcript, and these messages end up in logs and in the UI. The only path a text
+//! names is that of a private staging file that could not be removed (see [`publish_error`]),
+//! which sits beside the output the caller chose.
+//!
+//! The CLI's `meeting proposal` and `meeting reprocess` commands read and write through this
+//! module, and add their own warning on stderr for a leftover; the app reads a proposal through
+//! [`read_proposal`] and writes none.
 
 use std::fs::{self, File};
 use std::io::{self, Read};
