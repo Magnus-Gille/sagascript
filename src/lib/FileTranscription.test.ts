@@ -375,3 +375,22 @@ test("while the model list is refreshed after a download, no file's button can s
   await waitFor(() => expect(first).toHaveTextContent("Try again"));
   expect(ipc.callsTo("download_pianissimo_model")).toHaveLength(1);
 });
+
+test("Try again shows as busy while an update is being prepared", async () => {
+  const { ipc } = await dropAndReject(commandErrors.model_busy, "/audio/updating.wav");
+  ipc.handle("complete_update_preparation", () => undefined);
+  ipc.handle("save_update_recovery", () => undefined);
+  const retry = await screen.findByRole("button", { name: "Try again" });
+  expect(retry).not.toHaveAttribute("aria-disabled", "true");
+
+  ipc.emit("update-preparing", "nonce-1");
+
+  await waitFor(() => expect(ipc.callsTo("complete_update_preparation")).toHaveLength(1));
+  await waitFor(() => expect(retry).toHaveAttribute("aria-disabled", "true"));
+  await userEvent.setup().click(retry);
+  expect(ipc.callsTo("transcribe_file")).toHaveLength(1);
+
+  // The update stops after preparation: the button is available again.
+  ipc.emit("update-aborted", "Synthetic failure");
+  await waitFor(() => expect(retry).not.toHaveAttribute("aria-disabled", "true"));
+});

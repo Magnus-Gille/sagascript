@@ -41,7 +41,7 @@
   import type { FileJob, FileJobStatus } from "./transcription-queue";
   let {
     job, otherBusy, active, openReview = false, initialRecoveryFile = null, initialRecoveryMeeting = null,
-    onComplete, onBusyChange, onMissingFile, onRetry, retryRefusal, onDownloadModel, downloadBusy, onAttentionChange,
+    onComplete, onBusyChange, onMissingFile, onRetry, retryRefusal, onDownloadModel, downloadBusy, updatePreparing, onAttentionChange,
     onFileRecoveryChange = () => undefined, onMeetingRecoveryChange = () => undefined,
   }: {
     job: FileJob;
@@ -61,6 +61,8 @@
     onDownloadModel: () => Promise<void>;
     /** A download is running, so another cannot start. */
     downloadBusy: boolean;
+    /** An update is being prepared: nothing new starts (the panel is inert meanwhile). */
+    updatePreparing: boolean;
     onAttentionChange: (id: string, needsRetry: boolean) => void;
     onFileRecoveryChange?: (entry: UpdateRecoveryFile | null) => void;
     onMeetingRecoveryChange?: (entry: UpdateRecoveryMeeting | null) => void;
@@ -868,7 +870,7 @@
           {/if}
         {#if transcribeError}
           <div class="transcribe-error" role="alert">{transcribeError}</div>
-          <ErrorRecovery recovery={transcribeRecovery} busy={modelDownloading || downloadBusy}
+          <ErrorRecovery recovery={transcribeRecovery} busy={modelDownloading || downloadBusy || updatePreparing}
             onRetry={retryFile} onDownloadModel={() => void downloadModelAgain()} />
           {#if retryRefusal}<div class="transcribe-error" role="alert">{retryRefusal}</div>{/if}
         {/if}

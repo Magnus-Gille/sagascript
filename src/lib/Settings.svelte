@@ -2798,6 +2798,7 @@
               retryRefusal={retryRefusals[job.id] ?? ""}
               onDownloadModel={downloadEngineModelAgain}
               downloadBusy={downloads.busy || engineModelDownloading}
+              {updatePreparing}
               onAttentionChange={updateFileAttention}
               initialRecoveryFile={fileRecoveryEntries.find((entry) => entry.job_id === job.id) ?? null}
               initialRecoveryMeeting={meetingRecoveryEntries.find((entry) => entry.job_id === job.id) ?? null}
