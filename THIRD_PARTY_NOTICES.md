@@ -810,7 +810,7 @@ attribution as well. No matching CoreML encoder is supplied for the fine-tune.
 | undici-types | 8.9.0 | MIT | [upstream](https://www.npmjs.com/package/undici-types/v/8.9.0) |
 | uri-js | 4.4.1 | BSD-2-Clause | [upstream](https://www.npmjs.com/package/uri-js/v/4.4.1) |
 | util-deprecate | 1.0.2 | MIT | [upstream](https://www.npmjs.com/package/util-deprecate/v/1.0.2) |
-| vite | 6.4.3 | MIT | [upstream](https://www.npmjs.com/package/vite/v/6.4.3) |
+| vite | 6.4.4 | MIT | [upstream](https://www.npmjs.com/package/vite/v/6.4.4) |
 | vitefu | 1.1.1 | MIT | [upstream](https://www.npmjs.com/package/vitefu/v/1.1.1) |
 | vitest | 5.0.2 | MIT | [upstream](https://www.npmjs.com/package/vitest/v/5.0.2) |
 | whatwg-mimetype | 3.0.0 | MIT | [upstream](https://www.npmjs.com/package/whatwg-mimetype/v/3.0.0) |
@@ -13413,7 +13413,7 @@ SOFTWARE.
 
 ### 8a292beae225
 
-Components: npm vite@6.4.3
+Components: npm vite@6.4.4
 
 Source filenames: LICENSE.md
 
