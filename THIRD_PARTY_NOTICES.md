@@ -360,7 +360,7 @@ attribution as well. No matching CoreML encoder is supplied for the fine-tune.
 | rustls | 0.23.46 | Apache-2.0 OR ISC OR MIT | [upstream](https://github.com/rustls/rustls) |
 | rustls-pki-types | 1.14.0 | MIT OR Apache-2.0 | [upstream](https://github.com/rustls/pki-types) |
 | rustls-platform-verifier | 0.6.2 | MIT OR Apache-2.0 | [upstream](https://github.com/rustls/rustls-platform-verifier) |
-| rustls-webpki | 0.103.15 | ISC | [upstream](https://github.com/rustls/webpki) |
+| rustls-webpki | 0.103.16 | ISC | [upstream](https://github.com/rustls/webpki) |
 | same-file | 1.0.6 | Unlicense/MIT | [upstream](https://github.com/BurntSushi/same-file) |
 | schemars | 0.8.22 | MIT | [upstream](https://github.com/GREsau/schemars) |
 | schemars | 0.9.0 | MIT | [upstream](https://github.com/GREsau/schemars) |
@@ -503,7 +503,7 @@ attribution as well. No matching CoreML encoder is supplied for the fine-tune.
 | version_check | 0.9.5 | MIT/Apache-2.0 | [upstream](https://github.com/SergioBenitez/version_check) |
 | walkdir | 2.5.0 | Unlicense/MIT | [upstream](https://github.com/BurntSushi/walkdir) |
 | want | 0.3.1 | MIT | [upstream](https://github.com/seanmonstar/want) |
-| webpki-root-certs | 1.0.6 | CDLA-Permissive-2.0 | [upstream](https://github.com/rustls/webpki-roots) |
+| webpki-root-certs | 1.0.10 | CDLA-Permissive-2.0 | [upstream](https://github.com/rustls/webpki-roots) |
 | weezl | 0.1.12 | MIT OR Apache-2.0 | [upstream](https://github.com/image-rs/weezl) |
 | whisper-rs | 0.15.1 | Unlicense | [upstream](https://codeberg.org/tazz4843/whisper-rs) |
 | whisper-rs-sys | 0.14.1 | Unlicense | [upstream](https://codeberg.org/tazz4843/whisper-rs) |
@@ -5500,7 +5500,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 ### 3ac27594ed56
 
-Components: Rust rustls-webpki@0.103.15
+Components: Rust rustls-webpki@0.103.16
 
 Source filenames: LICENSE
 
@@ -22634,7 +22634,7 @@ limitations under the License.
 
 ### d30183ec6610
 
-Components: Rust webpki-root-certs@1.0.6
+Components: Rust webpki-root-certs@1.0.10
 
 Source filenames: LICENSE
 
