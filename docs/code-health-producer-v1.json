@@ -50,7 +50,6 @@
         "src-tauri/crates/sagascript-cli/src/transcribe/plan.rs",
         "src-tauri/crates/sagascript-cli/src/transcribe/progress.rs",
         "src-tauri/crates/sagascript-cli/src/transcribe/resolve.rs",
-        "src-tauri/crates/sagascript-cli/src/transcribe/services.rs",
         "src-tauri/crates/sagascript-cli/src/transcribe/source.rs",
         "src-tauri/crates/sagascript-cli/src/transcribe/vocab_correction.rs",
         "src-tauri/crates/sagascript-cli/src/diarization.rs"
