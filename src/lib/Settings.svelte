@@ -1996,6 +1996,13 @@
   }
 
   /**
+   * True from the press of "Download the model again" to the end of the model
+   * list's refresh after it, longer than `downloads.busy`, which ends with the
+   * download itself: in between the button must not start a second one.
+   */
+  let engineModelDownloading = $state(false);
+
+  /**
    * Download the speech engine's model again: what "Download the model again"
    * does for `engine_model_missing` and `engine_model_load_failed`, the codes
    * of the Pianissimo engine. The download first checks an installed model and
@@ -2003,22 +2010,27 @@
    * other download; rejects when the download fails.
    */
   async function downloadEngineModelAgain(): Promise<void> {
+    engineModelDownloading = true;
     downloads.start(
       PIANISSIMO_ID,
       fileModelOptions.find((model) => model.id === PIANISSIMO_ID)?.display_name ?? "Pianissimo",
     );
     try {
-      await downloadModelById(PIANISSIMO_ID);
+      try {
+        await downloadModelById(PIANISSIMO_ID);
+      } finally {
+        downloads.finish();
+      }
+      fileModelDiskRevision += 1;
+      await refreshProfileModels(settings?.hotkey_profiles ?? []);
     } finally {
-      downloads.finish();
+      engineModelDownloading = false;
     }
-    fileModelDiskRevision += 1;
-    await refreshProfileModels(settings?.hotkey_profiles ?? []);
   }
 
   /** "Download the model again" under the Dictate tab's error. */
   async function onDictateDownloadModel(): Promise<void> {
-    if (updatePreparing || downloads.busy) return;
+    if (updatePreparing || downloads.busy || engineModelDownloading) return;
     const revision = dictationEventRevision;
     try {
       await downloadEngineModelAgain();
@@ -2634,7 +2646,7 @@
           {#if testError}
             <div class="transcribe-error" role="alert">{testError}</div>
             <ErrorRecovery recovery={testRecovery}
-              busy={updatePreparing || downloads.busy || dictationModelSaving || dictateButtonAction(backendDictationState, testOwnsRecording) !== "start"}
+              busy={updatePreparing || downloads.busy || engineModelDownloading || dictationModelSaving || dictateButtonAction(backendDictationState, testOwnsRecording) !== "start"}
               onRetry={() => void onDictateRetry()} onDownloadModel={() => void onDictateDownloadModel()} />
           {/if}
           <textarea
@@ -2785,7 +2797,7 @@
               onRetry={retryFileJob}
               retryRefusal={retryRefusals[job.id] ?? ""}
               onDownloadModel={downloadEngineModelAgain}
-              downloadBusy={downloads.busy}
+              downloadBusy={downloads.busy || engineModelDownloading}
               onAttentionChange={updateFileAttention}
               initialRecoveryFile={fileRecoveryEntries.find((entry) => entry.job_id === job.id) ?? null}
               initialRecoveryMeeting={meetingRecoveryEntries.find((entry) => entry.job_id === job.id) ?? null}

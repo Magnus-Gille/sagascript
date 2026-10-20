@@ -6,7 +6,7 @@ import userEvent from "@testing-library/user-event";
 import { expect, test } from "vitest";
 import { deferred, settle } from "../test/deferred";
 import { backendError } from "../test/ipc";
-import { renderSettings, settingsBackend, settingsValue, swedishProfile } from "../test/settings";
+import { pianissimo, renderSettings, settingsBackend, settingsValue, swedishProfile } from "../test/settings";
 import commandErrors from "../../contracts/transport/command_errors.json";
 
 test("a plain transcription listens for progress while it runs, and stops when it ends", async () => {
@@ -339,4 +339,39 @@ test("a failed run's error is an alert, announced with its button", async () => 
   const panel = screen.getByRole("tabpanel");
   const alert = await within(panel).findByRole("alert");
   expect(alert).toHaveTextContent(commandErrors.model_busy.message);
+});
+
+test("while the model list is refreshed after a download, no file's button can start another", async () => {
+  const download = deferred<void>();
+  const refresh = deferred<typeof pianissimo>();
+  let holdRefresh = false;
+  const { ipc } = await renderSettings(
+    settingsBackend({
+      transcribe_file: () => {
+        throw commandErrors.engine_model_missing;
+      },
+      download_pianissimo_model: () => download.promise,
+      get_profile_model_info: () => (holdRefresh ? refresh.promise : pianissimo),
+      set_update_result_pending: () => undefined,
+    }),
+  );
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("button", { name: "Transcribe" }));
+  await emit("tauri://drag-drop", { paths: ["/audio/one.wav", "/audio/two.wav"], position: { x: 0, y: 0 } });
+  await waitFor(() => expect(screen.getAllByRole("tab", { name: /failed/ })).toHaveLength(2));
+  const buttons = () => screen.getAllByRole("button", { name: "Download the model again", hidden: true });
+  await waitFor(() => expect(buttons()).toHaveLength(2));
+  const [first, second] = buttons();
+  await user.click(first);
+  await waitFor(() => expect(ipc.callsTo("download_pianissimo_model")).toHaveLength(1));
+  const before = ipc.callsTo("get_profile_model_info").length;
+  holdRefresh = true;
+
+  download.resolve();
+  await waitFor(() => expect(ipc.callsTo("get_profile_model_info").length).toBeGreaterThan(before));
+
+  expect(second).toHaveAttribute("aria-disabled", "true");
+  refresh.resolve(pianissimo);
+  await waitFor(() => expect(first).toHaveTextContent("Try again"));
+  expect(ipc.callsTo("download_pianissimo_model")).toHaveLength(1);
 });

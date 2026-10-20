@@ -8,7 +8,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, test } from "vitest";
 import { deferred, settle } from "../test/deferred";
 import { backendError } from "../test/ipc";
-import { renderSettings, settingsBackend } from "../test/settings";
+import { pianissimo, renderSettings, settingsBackend } from "../test/settings";
 import commandErrors from "../../contracts/transport/command_errors.json";
 
 const tryAgain = () => screen.queryByRole("button", { name: "Try again" });
@@ -232,6 +232,38 @@ describe("Download the model again", () => {
     expect(dictateError()?.textContent).toBe("The model is not usable.");
     expect(tryAgain()).toBeNull();
     expect(downloadAgain()).toBeNull();
+  });
+
+  test("the button stays busy until the model list is refreshed, so a press cannot start a second download", async () => {
+    const download = deferred<void>();
+    const refresh = deferred<typeof pianissimo>();
+    let holdRefresh = false;
+    const { ipc } = await renderSettings(
+      settingsBackend({
+        download_pianissimo_model: () => download.promise,
+        get_profile_model_info: () => (holdRefresh ? refresh.promise : pianissimo),
+      }),
+    );
+    ipc.emit("error", commandErrors.engine_model_missing);
+    const user = userEvent.setup();
+    const button = await screen.findByRole("button", { name: "Download the model again" });
+    await user.click(button);
+    await waitFor(() => expect(ipc.callsTo("download_pianissimo_model")).toHaveLength(1));
+    const before = ipc.callsTo("get_profile_model_info").length;
+    holdRefresh = true;
+
+    // The download is over; the window is reading the models again.
+    download.resolve();
+    await waitFor(() => expect(ipc.callsTo("get_profile_model_info").length).toBeGreaterThan(before));
+
+    expect(button).toHaveAttribute("aria-disabled", "true");
+    await user.click(button);
+    expect(ipc.callsTo("download_pianissimo_model")).toHaveLength(1);
+
+    refresh.resolve(pianissimo);
+    const retry = await screen.findByRole("button", { name: "Try again" });
+    expect(retry).not.toHaveAttribute("aria-disabled", "true");
+    expect(ipc.callsTo("download_pianissimo_model")).toHaveLength(1);
   });
 
   test("a failed download shows its error and can be tried again", async () => {
