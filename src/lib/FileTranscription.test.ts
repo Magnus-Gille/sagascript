@@ -245,10 +245,43 @@ test("a Try again the window cannot queue stays on screen and keeps the focus", 
 
   await user.click(retry);
 
-  expect(await screen.findByText(/profile for this file is no longer available/)).toBeInTheDocument();
+  // The refusal is announced, and shown in the failed file's panel beside the
+  // button that was pressed, once: not above the tab strip, out of sight.
+  const refusal = await within(screen.getByRole("tabpanel")).findByText(/profile for this file is no longer available/);
+  expect(refusal).toHaveAttribute("role", "alert");
+  expect(screen.getAllByText(/profile for this file is no longer available/)).toHaveLength(1);
   expect(ipc.callsTo("transcribe_file")).toHaveLength(1);
   expect(screen.getByRole("button", { name: "Try again" })).toBe(retry);
   expect(retry).toHaveFocus();
+
+  // The next Try again that can be queued takes the refusal away.
+  ipc.handle("get_settings", () => settingsValue());
+  ipc.emit("state-changed", "settings_reloaded");
+  await settle();
+  await user.click(retry);
+  await waitFor(() => expect(ipc.callsTo("transcribe_file")).toHaveLength(2));
+  expect(screen.queryByText(/profile for this file is no longer available/)).toBeNull();
+});
+
+test("a Re-run the window cannot queue is announced", async () => {
+  const { ipc } = await renderSettings(
+    settingsBackend({
+      transcribe_file: () => "Text",
+      set_update_result_pending: () => undefined,
+    }),
+  );
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("button", { name: "Transcribe" }));
+  await emit("tauri://drag-drop", { paths: ["/audio/rerun.wav"], position: { x: 0, y: 0 } });
+  await screen.findByDisplayValue("Text");
+  ipc.handle("get_settings", () => settingsValue({ hotkey_profiles: [{ ...swedishProfile, id: "other", name: "Other" }] }));
+  ipc.emit("state-changed", "settings_reloaded");
+  await settle();
+
+  await user.click(screen.getByRole("button", { name: "Re-run" }));
+
+  const refusal = await screen.findByText(/profile for this file is no longer available/);
+  expect(refusal).toHaveAttribute("role", "alert");
 });
 
 test("a model download keeps focus on its button and hands it to the Try again that follows", async () => {

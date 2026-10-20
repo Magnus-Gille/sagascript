@@ -822,20 +822,25 @@
   function retryLastTranscription(): void {
     const run = recentTranscriptions.find(run => run.path === selectedRerunPath);
     if (!run) return;
-    rerunFile(run);
+    const refusal = rerunRefusal(run);
+    rerunError = refusal ?? "";
+    if (refusal === null) queueRerun(run);
+  }
+
+  /** Why a file cannot run again, or null: the profile it ran with is gone. */
+  function rerunRefusal(run: RecentTranscription): string | null {
+    return run.profileId && !profileForId(run.profileId)
+      ? "The profile for this file is no longer available. Choose a profile and open the file again."
+      : null;
   }
 
   /**
-   * Run a file again as a new job: what Re-run does, and what "Try again" does
-   * for a run that failed in a way the backend says can be repeated (ADR 0006).
-   * Both keep the file's profile, dictionary prompt and diarization choice.
+   * Run a file again as a new job, and select it: what Re-run does, and what
+   * "Try again" does for a run that failed in a way the backend says can be
+   * repeated (ADR 0006). Both keep the file's profile, dictionary prompt and
+   * diarization choice. Returns the new job's id.
    */
-  function rerunFile(run: RecentTranscription): string | null {
-    if (run.profileId && !profileForId(run.profileId)) {
-      rerunError = "The profile for this file is no longer available. Choose a profile and open the file again.";
-      return null;
-    }
-    rerunError = "";
+  function queueRerun(run: RecentTranscription): string {
     recentTranscriptions = rememberTranscription(recentTranscriptions, run);
     // A fresh queued job preserves every previous result and review. Only the
     // serial scheduler can start it; model/decoder settings apply at execution.
@@ -846,15 +851,29 @@
     return jobs[0].id;
   }
 
+  /** Why a "Try again" under a failed file was refused, by the job's id: shown in that file's panel. */
+  let retryRefusals = $state<Record<string, string>>({});
+
   /**
    * "Try again" under a failed file: the same file, profile and prompt, as a new
    * job, whose tab then has the focus (the button that was pressed goes away with
-   * the panel it was in). False when nothing was queued.
+   * the panel it was in). False when nothing was queued; a refusal is shown in the
+   * file's own panel, next to the button, and not above the tab strip.
    */
   function retryFileJob(job: FileJob): boolean {
     if (updatePreparing) return false;
-    const id = rerunFile({ path: job.path, profileId: job.profileId, prompt: job.prompt ?? "", diarize: job.diarize });
-    if (id === null) return false;
+    const run = { path: job.path, profileId: job.profileId, prompt: job.prompt ?? "", diarize: job.diarize };
+    const refusal = rerunRefusal(run);
+    if (refusal !== null) {
+      retryRefusals = { ...retryRefusals, [job.id]: refusal };
+      return false;
+    }
+    if (job.id in retryRefusals) {
+      const others = { ...retryRefusals };
+      delete others[job.id];
+      retryRefusals = others;
+    }
+    const id = queueRerun(run);
     void tick().then(() => document.getElementById(`file-tab-${id}`)?.focus());
     return true;
   }
@@ -2726,7 +2745,7 @@
             Open saved meeting...
           </button>
         </div>
-        {#if rerunError}<div class="transcribe-error">{rerunError}</div>{/if}
+        {#if rerunError}<div class="transcribe-error" role="alert">{rerunError}</div>{/if}
 
         <div class="formats-hint">
           Supported: {supportedFormats.map(f => f.toUpperCase()).join(", ") || "WAV, MP3, M4A, AAC, MP4, MOV, OGG, WEBM, FLAC"}
@@ -2756,6 +2775,7 @@
               openReview={savedReviewIds.includes(job.id)} onComplete={completeFile} onBusyChange={updateFileBusy}
               onMissingFile={forgetMissingFile}
               onRetry={retryFileJob}
+              retryRefusal={retryRefusals[job.id] ?? ""}
               onDownloadModel={downloadEngineModelAgain}
               downloadBusy={downloads.busy}
               onAttentionChange={updateFileAttention}

@@ -41,7 +41,7 @@
   import type { FileJob, FileJobStatus } from "./transcription-queue";
   let {
     job, otherBusy, active, openReview = false, initialRecoveryFile = null, initialRecoveryMeeting = null,
-    onComplete, onBusyChange, onMissingFile, onRetry, onDownloadModel, downloadBusy, onAttentionChange,
+    onComplete, onBusyChange, onMissingFile, onRetry, retryRefusal, onDownloadModel, downloadBusy, onAttentionChange,
     onFileRecoveryChange = () => undefined, onMeetingRecoveryChange = () => undefined,
   }: {
     job: FileJob;
@@ -55,6 +55,8 @@
     onMissingFile: (path: string) => void;
     /** Run this job's file again as a new job ("Try again"). False when nothing was queued. */
     onRetry: (job: FileJob) => boolean;
+    /** Why the last "Try again" was refused, shown beside the button; empty when it was not. */
+    retryRefusal: string;
     /** Download the engine's model again; rejects when the download fails. */
     onDownloadModel: () => Promise<void>;
     /** A download is running, so another cannot start. */
@@ -868,6 +870,7 @@
           <div class="transcribe-error" role="alert">{transcribeError}</div>
           <ErrorRecovery recovery={transcribeRecovery} busy={modelDownloading || downloadBusy}
             onRetry={retryFile} onDownloadModel={() => void downloadModelAgain()} />
+          {#if retryRefusal}<div class="transcribe-error" role="alert">{retryRefusal}</div>{/if}
         {/if}
 
         {#if meetingError && !meetingTranscript}

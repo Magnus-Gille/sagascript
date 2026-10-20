@@ -234,7 +234,7 @@ test("re-run appends a fresh job with the selected request's options and obeys t
     compile(`
     let fileJobs = [current], recentTranscriptions = [request], selectedRerunPath = request.path;
     let selectedFileId = current.id, rerunError = '';
-    ${functions(settingsSource, ["retryLastTranscription", "rerunFile"])}
+    ${functions(settingsSource, ["retryLastTranscription", "rerunRefusal", "queueRerun"])}
     retryLastTranscription(); return { fileJobs, selectedFileId, rerunError };`),
   );
   const result = factory(...Object.values(deps), current, request);
@@ -264,9 +264,9 @@ test("Try again under a failed file queues the same file with its options as a n
       "updatePreparing",
       compile(`
       let fileJobs = [failed], recentTranscriptions = [], selectedRerunPath = '';
-      let selectedFileId = failed.id, rerunError = '';
-      ${functions(settingsSource, ["rerunFile", "retryFileJob"])}
-      const queued = retryFileJob(failed); return { queued, fileJobs, selectedFileId, rerunError, recentTranscriptions };`),
+      let selectedFileId = failed.id, rerunError = '', retryRefusals = {};
+      ${functions(settingsSource, ["rerunRefusal", "queueRerun", "retryFileJob"])}
+      const queued = retryFileJob(failed); return { queued, fileJobs, selectedFileId, rerunError, retryRefusals, recentTranscriptions };`),
     );
     const result = factory(...Object.values(deps), failed, updatePreparing);
     await Promise.resolve();
@@ -286,6 +286,7 @@ test("Try again under a failed file queues the same file with its options as a n
   );
   assert.equal(result.selectedFileId, added.id);
   assert.equal(result.rerunError, "");
+  assert.deepEqual(result.retryRefusals, {});
   assert.deepEqual(result.focused, [`file-tab-${added.id}`], "the new job's tab takes the focus");
 
   const preparing = await run(true);
@@ -295,6 +296,7 @@ test("Try again under a failed file queues the same file with its options as a n
   const gone = await run(false, false);
   assert.equal(gone.queued, false);
   assert.equal(gone.fileJobs.length, 1);
-  assert.match(gone.rerunError, /profile for this file is no longer available/);
+  assert.equal(gone.rerunError, "", "the Re-run line above the tab strip is not used for a Try again");
+  assert.match(gone.retryRefusals[failed.id], /profile for this file is no longer available/);
   assert.deepEqual(gone.focused, []);
 });
