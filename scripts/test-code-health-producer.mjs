@@ -254,7 +254,7 @@ const RUST_NOISE = /\/\/[^\n]*|\/\*[\s\S]*?\*\/|b?r(#*)"[\s\S]*?"\1|b?"(?:\\[\s\
 function withoutMacroRules(code) {
   let result = "";
   let from = 0;
-  for (const match of code.matchAll(/\bmacro_rules!\s*[A-Za-z_]\w*\s*(?=[{(\[])/g)) {
+  for (const match of code.matchAll(/\bmacro_rules!\s*[A-Za-z_]\w*\s*(?=[{([])/g)) {
     if (match.index < from) continue;
     let depth = 0;
     let end = match.index + match[0].length;
