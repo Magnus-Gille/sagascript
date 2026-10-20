@@ -10,21 +10,21 @@
 #[cfg(feature = "diarization")]
 use super::diarize::DiarizationAnalyzer;
 use super::inference::InferenceBackend;
-use crate::cancel::Canceller;
+use crate::meeting::control::Canceller;
 
 /// The collaborators of a file run. Cheap to copy: it only borrows.
 #[derive(Clone, Copy)]
-pub(super) struct Services<'a> {
+pub struct Services<'a> {
     /// Loads the model, checks the language and transcribes.
-    pub(super) backend: &'a dyn InferenceBackend,
+    pub backend: &'a dyn InferenceBackend,
     /// The speaker analysis of a diarized run.
     #[cfg(feature = "diarization")]
-    pub(super) analyzer: &'a dyn DiarizationAnalyzer,
+    pub analyzer: &'a dyn DiarizationAnalyzer,
     /// Where a cancel is asked and where the long steps (decoding, the
     /// language check, the batch between files) look for it.
-    pub(super) canceller: &'a Canceller,
+    pub canceller: &'a Canceller,
     /// The source revision of the running build: a diarization report records it, and core has
     /// no build identity of its own.
     #[cfg_attr(not(feature = "diarization"), allow(dead_code))]
-    pub(super) build_revision: &'a str,
+    pub build_revision: &'a str,
 }

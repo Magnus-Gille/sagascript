@@ -19,12 +19,12 @@ use sagascript_core::diarization::{DiarizationAnalysis, DiarizationTimings, Diar
 use sagascript_core::transcription::DiarizationTranscriptionTimings;
 
 use super::*;
-use crate::transcribe::diarize::CachePolicy;
-use crate::transcribe::diarize::{
+use sagascript_core::diarization::cache::{load, CacheIdentity, CacheLookup};
+use sagascript_core::meeting::pipeline::diarize::CachePolicy;
+use sagascript_core::meeting::pipeline::diarize::{
     analyze_in_sequence, analyze_overlapped, AnalysisOutcome, DiarizationAnalyzer,
 };
-use crate::transcribe::file_plan::{CacheRequest, DiarizationFlags, FileOptions};
-use sagascript_core::diarization::cache::{load, CacheIdentity, CacheLookup};
+use sagascript_core::meeting::pipeline::plan::{CacheRequest, DiarizationFlags, FileOptions};
 
 /// Long enough for two speakers of five and six seconds.
 const SECONDS: usize = 12;
@@ -802,11 +802,11 @@ fn a_cancel_while_decoding_keeps_a_previous_cache() {
 // ---- the meeting entry points: typed options, no command line --------------------------------
 
 use crate::transcribe::args::validated_speaker_hint;
-use crate::transcribe::entry::{meeting_options, transcribe_meeting_file_inner};
 use sagascript_core::diarization::speaker_hint::SpeakerCountHint;
 use sagascript_core::meeting::control::{MeetingControl, MeetingPhase};
 use sagascript_core::meeting::source::stable_file_sha256;
 use sagascript_core::meeting::MeetingTranscript;
+use sagascript_core::testing::{meeting_options, transcribe_meeting_file_with};
 
 /// One meeting run as the app and reprocessing make it: the options of
 /// `meeting_options`, the given backend and analyzer.
@@ -817,7 +817,7 @@ fn meeting(
     analyzer: &ScriptedAnalyzer,
     control: Option<&MeetingControl<'_>>,
 ) -> Result<MeetingTranscript, DictationError> {
-    transcribe_meeting_file_inner(
+    transcribe_meeting_file_with(
         &fx.file,
         &Settings::default(),
         Language::English,
@@ -1067,7 +1067,7 @@ fn a_meeting_job_reports_its_phases_in_order() {
 
 // ---- a cache that cannot be trusted -----------------------------------------------------------
 
-use crate::transcribe::source::CachedRun;
+use sagascript_core::meeting::pipeline::source::CachedRun;
 
 #[test]
 fn a_cache_without_coarse_coverage_segments_is_a_miss_and_is_recomputed() {

@@ -15,17 +15,17 @@ use sagascript_core::transcription::Glossary;
 #[cfg(feature = "diarization")]
 use super::args::speaker_hint_from_args;
 use super::args::TranscribeArgs;
-#[cfg(feature = "diarization")]
-use super::diarize::CachePolicy;
-#[cfg(feature = "diarization")]
-use super::file_plan::{CacheRequest, DiarizationFlags};
-use super::file_plan::{DecoderFlags, FileOptions};
-use super::inference::{not_downloaded, InferenceBackend};
 use super::inputs::expand_inputs;
 #[cfg(feature = "diarization")]
 use super::meeting::validate_meeting_input_scope;
 use super::resolve::resolve_file_model_for_run;
 use crate::run_request::RunRequest;
+#[cfg(feature = "diarization")]
+use sagascript_core::meeting::pipeline::diarize::CachePolicy;
+use sagascript_core::meeting::pipeline::inference::{not_downloaded, InferenceBackend};
+#[cfg(feature = "diarization")]
+use sagascript_core::meeting::pipeline::plan::{CacheRequest, DiarizationFlags};
+use sagascript_core::meeting::pipeline::plan::{DecoderFlags, FileOptions};
 
 // ---- the run ----------------------------------------------------------------------
 

@@ -3,22 +3,22 @@
 
 use std::time::Instant;
 
-use sagascript_core::diarization::merge::merge_with_diagnostics;
-use sagascript_core::diarization::report::DiarizationReport;
-use sagascript_core::diarization::speaker_hint::SpeakerHintOutcome;
-use sagascript_core::diarization::{
+use crate::diarization::merge::merge_with_diagnostics;
+use crate::diarization::report::DiarizationReport;
+use crate::diarization::speaker_hint::SpeakerHintOutcome;
+use crate::diarization::{
     cluster_with_outcome, DiarizationAnalysis, DiarizeConfig, DiarizedSegment, SpeakerSegment,
     TimestampedSegment,
 };
-use sagascript_core::error::DictationError;
-use sagascript_core::transcription::TranscriptSegment;
+use crate::error::DictationError;
+use crate::transcription::TranscriptSegment;
 
-use super::super::file_plan::{DiarizationPlan, FileRequest};
+use super::super::narrate::errln;
+use super::super::narrate::Narrator;
+use super::super::plan::{DiarizationPlan, FileRequest};
 use super::super::progress::Progress;
-use crate::output::errln;
-use sagascript_core::meeting::control::{meeting_checkpoint, MeetingControl, MeetingPhase};
-use sagascript_core::meeting::pipeline::narrate::Narrator;
-use sagascript_core::meeting::source::verify_meeting_source_unchanged;
+use crate::meeting::control::{meeting_checkpoint, MeetingControl, MeetingPhase};
+use crate::meeting::source::verify_meeting_source_unchanged;
 
 /// What [`cluster_speakers`] needs.
 pub(super) struct ClusterRequest<'a> {
@@ -142,14 +142,12 @@ pub(super) fn merge_speakers(
     report.asr_segments = coverage_segments
         .iter()
         .filter(|_| diagnostics)
-        .map(
-            |segment| sagascript_core::diarization::report::AsrSegmentEvidence {
-                start: segment.start,
-                end: segment.end,
-                avg_logprob: segment.avg_logprob,
-                no_speech_prob: Some(segment.no_speech_prob),
-            },
-        )
+        .map(|segment| crate::diarization::report::AsrSegmentEvidence {
+            start: segment.start,
+            end: segment.end,
+            avg_logprob: segment.avg_logprob,
+            no_speech_prob: Some(segment.no_speech_prob),
+        })
         .collect();
     report
         .validate()

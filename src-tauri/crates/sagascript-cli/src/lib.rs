@@ -17,8 +17,6 @@ pub mod latency;
 pub mod meeting;
 pub mod meeting_proposal;
 #[cfg(feature = "diarization")]
-pub mod meeting_reprocessing;
-#[cfg(feature = "diarization")]
 pub mod meeting_reprocessing_cli;
 pub mod models;
 pub mod open;

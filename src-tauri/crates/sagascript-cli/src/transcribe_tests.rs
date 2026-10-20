@@ -1,22 +1,12 @@
 use super::args::*;
-#[cfg(feature = "diarization")]
-use super::diarize::*;
-#[cfg(feature = "diarization")]
-use super::file_plan::{paths_refer_to_same_file, CacheRequest, DiarizationFlags};
-#[cfg(feature = "diarization")]
-use super::file_plan::{FileOptions, FileRequest};
 use super::inputs::*;
-use super::language_detection::*;
-use super::language_regions::*;
 #[cfg(feature = "diarization")]
 use super::meeting::validate_meeting_input_scope;
-use super::outcome::*;
 use super::output::*;
 #[cfg(feature = "diarization")]
 use super::pianissimo::*;
 #[cfg(feature = "diarization")]
 use super::plan::file_options;
-use super::progress::*;
 use super::vocab_correction::*;
 use super::*;
 #[cfg(feature = "diarization")]
@@ -26,7 +16,16 @@ use sagascript_core::diarization::DiarizedSegment;
 #[cfg(feature = "diarization")]
 use sagascript_core::meeting::assemble::prepare_diarized_plain_segments;
 #[cfg(feature = "diarization")]
-use sagascript_core::meeting::control::{meeting_checkpoint, MeetingControl, MeetingPhase};
+use sagascript_core::meeting::pipeline::diarize::*;
+use sagascript_core::meeting::pipeline::language_detection::*;
+use sagascript_core::meeting::pipeline::language_regions::*;
+#[cfg(feature = "diarization")]
+use sagascript_core::meeting::pipeline::outcome::*;
+#[cfg(feature = "diarization")]
+use sagascript_core::meeting::pipeline::plan::{CacheRequest, DiarizationFlags};
+#[cfg(feature = "diarization")]
+use sagascript_core::meeting::pipeline::plan::{FileOptions, FileRequest};
+use sagascript_core::meeting::pipeline::progress::*;
 use sagascript_core::settings::FileModel;
 use sagascript_core::settings::{FileModelPreference, HotkeyProfile};
 use sagascript_core::transcription::diagnostics::LanguageDetection;
@@ -37,8 +36,6 @@ use sagascript_core::transcription::whisper_backend::contains_no_speech_marker;
 use sagascript_core::transcription::TranscribeOptions;
 use sagascript_core::transcription::TranscriptSegment;
 use sagascript_testsupport::TempDir;
-#[cfg(feature = "diarization")]
-use std::sync::atomic::Ordering;
 
 #[cfg(feature = "diarization")]
 #[test]
@@ -130,25 +127,6 @@ fn ordinary_progress_event_is_unchanged_without_decoder_snapshot() {
         progress_event_with_decoder("transcribing", Some(50), Some(3), Some(3), 42, None);
     assert_eq!(through_snapshot_helper, ordinary);
     assert!(through_snapshot_helper.get("decoder").is_none());
-}
-
-#[cfg(feature = "diarization")]
-#[test]
-fn cache_path_cannot_alias_the_input_recording() {
-    let root = TempDir::new();
-    let input = root.join("recording.m4a");
-    let other = root.join("cache.json");
-    std::fs::write(&input, b"audio").unwrap();
-    std::fs::write(&other, b"cache").unwrap();
-
-    assert!(paths_refer_to_same_file(&input, &input));
-    assert!(!paths_refer_to_same_file(&input, &other));
-    #[cfg(unix)]
-    {
-        let hard_link = root.join("recording-cache.json");
-        std::fs::hard_link(&input, &hard_link).unwrap();
-        assert!(paths_refer_to_same_file(&input, &hard_link));
-    }
 }
 
 #[test]
@@ -572,68 +550,6 @@ fn cached_transcribe_uses_coarse_coverage_across_threshold_sweep() {
         assert_eq!(json["warnings"], strict["warnings"]);
         assert_eq!(json["warnings"][0]["code"], "uncovered_speech");
     }
-}
-
-#[cfg(feature = "diarization")]
-#[test]
-fn meeting_control_precancel_checks_before_file_or_model_access() {
-    use std::sync::atomic::AtomicBool;
-
-    let cancellation = AtomicBool::new(true);
-    let progress = |_| panic!("cancelled job must not emit progress");
-    let control = MeetingControl {
-        cancellation: &cancellation,
-        progress: &progress,
-    };
-    let backend = WhisperBackend::new();
-    let error = transcribe_meeting_file_with_control(
-        Path::new("/definitely/missing/meeting.wav"),
-        &Settings::default(),
-        Language::English,
-        WhisperModel::Base,
-        &Glossary::parse(""),
-        &backend,
-        &control,
-    )
-    .expect_err("pre-cancelled job must fail");
-    assert!(matches!(error, DictationError::Cancelled), "{error:?}");
-    assert!(cancellation.load(Ordering::Acquire));
-}
-
-#[cfg(feature = "diarization")]
-#[test]
-fn meeting_control_emits_ordered_phases_and_never_clears_cancellation() {
-    use std::sync::atomic::AtomicBool;
-    use std::sync::{Arc, Mutex};
-
-    let cancellation = AtomicBool::new(false);
-    let phases = Arc::new(Mutex::new(Vec::new()));
-    let observed = Arc::clone(&phases);
-    let progress = move |phase| observed.lock().expect("phase lock").push(phase);
-    let control = MeetingControl {
-        cancellation: &cancellation,
-        progress: &progress,
-    };
-    let expected = [
-        MeetingPhase::Preparing,
-        MeetingPhase::Decoding,
-        MeetingPhase::LoadingModel,
-        MeetingPhase::Analyzing,
-        MeetingPhase::Clustering,
-        MeetingPhase::Finalizing,
-    ];
-    for phase in expected {
-        meeting_checkpoint(Some(&control), phase).expect("checkpoint is live");
-    }
-    assert_eq!(*phases.lock().expect("phase lock"), expected);
-    assert_eq!(
-        serde_json::to_string(&MeetingPhase::LoadingModel).expect("phase serializes"),
-        "\"loading_model\""
-    );
-
-    cancellation.store(true, Ordering::Release);
-    assert!(meeting_checkpoint(Some(&control), MeetingPhase::Finalizing).is_err());
-    assert!(cancellation.load(Ordering::Acquire));
 }
 
 #[cfg(feature = "diarization")]

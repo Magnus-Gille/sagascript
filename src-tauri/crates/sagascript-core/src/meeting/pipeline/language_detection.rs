@@ -7,15 +7,15 @@
 //! stop code inside the loader from fetching something, which review and
 //! `language_detection_never_downloads_an_encoder` have to catch.
 
-use sagascript_core::error::DictationError;
-use sagascript_core::settings::WhisperModel;
-use sagascript_core::transcription::diagnostics::LanguageDetection;
-use sagascript_core::transcription::WhisperBackend;
+use crate::error::DictationError;
+use crate::settings::WhisperModel;
+use crate::transcription::diagnostics::LanguageDetection;
+use crate::transcription::WhisperBackend;
 
 use super::inference::InferenceBackend;
 
-use crate::output::errln;
-use sagascript_core::meeting::pipeline::narrate::Narrator;
+use super::narrate::errln;
+use super::narrate::Narrator;
 
 /// What loading a model for a language check may do about its Core ML
 /// encoder (#343). Local mode makes no network request after setup, so the
@@ -26,12 +26,12 @@ use sagascript_core::meeting::pipeline::narrate::Narrator;
 /// and `language_detection_never_downloads_an_encoder` (in
 /// `transcribe_tests.rs`) have to change with it, on purpose.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum EncoderPolicy {
+pub enum EncoderPolicy {
     NoDownload,
 }
 
 /// A loaded Whisper context that can name the language of 16 kHz audio.
-pub(super) trait LanguageProbe {
+pub trait LanguageProbe {
     fn detect_language(&self, audio: &[f32]) -> Result<Option<LanguageDetection>, DictationError>;
 }
 
@@ -46,7 +46,7 @@ impl LanguageProbe for WhisperBackend {
 /// [`DetectorLoader::load`], which takes an [`EncoderPolicy`]. Which models are
 /// installed is not asked here: the run has one answer to that, the
 /// transcription backend's ([`InferenceBackend::is_downloaded`]).
-pub(super) trait DetectorLoader {
+pub trait DetectorLoader {
     fn load(
         &self,
         model: WhisperModel,
@@ -73,7 +73,7 @@ impl DetectorLoader for InstalledDetectors {
     }
 }
 
-pub(super) fn detect_file_language(
+pub fn detect_file_language(
     out: &dyn Narrator,
     transcription_backend: &dyn InferenceBackend,
     audio: &[f32],
@@ -92,7 +92,7 @@ pub(super) fn detect_file_language(
 /// The language check, over its detectors (`detectors`), the transcription
 /// backend's own probe and its answer to which models are installed
 /// (`is_downloaded`, which picks the neutral and the accurate detector).
-pub(super) fn detect_file_language_with(
+pub fn detect_file_language_with(
     out: &dyn Narrator,
     detectors: &dyn DetectorLoader,
     transcription_probe: &dyn LanguageProbe,
@@ -148,7 +148,7 @@ pub(super) fn detect_file_language_with(
     accurate_backend.detect_language(audio)
 }
 
-pub(super) fn neutral_language_detection_model(
+pub fn neutral_language_detection_model(
     is_downloaded: impl Fn(WhisperModel) -> bool,
 ) -> Option<WhisperModel> {
     // Start with a small neutral model so the common, confident case stays
@@ -165,7 +165,7 @@ pub(super) fn neutral_language_detection_model(
     .find(|&candidate| is_downloaded(candidate))
 }
 
-pub(super) fn accurate_language_detection_model(
+pub fn accurate_language_detection_model(
     is_downloaded: impl Fn(WhisperModel) -> bool,
     exclude: WhisperModel,
 ) -> Option<WhisperModel> {

@@ -1,62 +1,36 @@
-//! Diarized meeting runs (#343): the entry points the app and the reprocessing
-//! pipeline call. Their progress and cancellation control, the hashing that binds a
-//! meeting document to the exact bytes it was made from and the assembly of the
-//! document live in core's `meeting/` (#374).
+//! A meeting job's entry points (#343, #374): what the app calls to import a meeting and what
+//! reprocessing calls to recompute one in full.
+//!
+//! Both run the diarized file pipeline of [`super::diarized`] on a request that has no command
+//! line: typed options ([`meeting_options`]) with the meeting document as the result. Their
+//! progress and cancellation come from the caller's [`MeetingControl`]; their narration goes to
+//! the process's stderr ([`StderrNarrator`]), as the CLI's does for the same lines.
 
-#[cfg(feature = "diarization")]
-use sagascript_core::meeting::control::MeetingControl;
-
-#[cfg(feature = "diarization")]
 use std::path::Path;
 
-#[cfg(feature = "diarization")]
-use sagascript_core::error::DictationError;
-#[cfg(feature = "diarization")]
-use sagascript_core::meeting::MeetingTranscript;
-#[cfg(feature = "diarization")]
-use sagascript_core::settings::{Language, Settings, WhisperModel};
-#[cfg(feature = "diarization")]
-use sagascript_core::transcription::{Glossary, WhisperBackend};
+use crate::error::DictationError;
+use crate::glossary::Glossary;
+use crate::meeting::control::{Canceller, MeetingControl};
+use crate::meeting::MeetingTranscript;
+use crate::models::{Language, WhisperModel};
+use crate::settings::Settings;
+use crate::transcription::WhisperBackend;
 
-#[cfg(feature = "diarization")]
 use super::diarize::{CachePolicy, OnnxAnalyzer};
-#[cfg(feature = "diarization")]
-use super::file_plan::paths_refer_to_same_file;
-#[cfg(feature = "diarization")]
-use super::file_plan::{CacheRequest, DiarizationFlags, FileOptions, FileRequest};
-#[cfg(feature = "diarization")]
+use super::diarized::run_diarized;
+use super::narrate::StderrNarrator;
+use super::plan::{
+    paths_refer_to_same_file, plan_file, CacheRequest, DiarizationFlags, FileMode, FileOptions,
+    FileRequest,
+};
 use super::services::Services;
-#[cfg(feature = "diarization")]
-use super::transcribe_file;
-#[cfg(feature = "diarization")]
-use crate::output::Out;
-
-/// Run the diarized file pipeline and return the validated shared meeting
-/// document without loading settings, writing settings, or emitting stdout.
-#[cfg(feature = "diarization")]
-pub fn transcribe_meeting_file(
-    file: &Path,
-    stored: &Settings,
-    language: Language,
-    model: WhisperModel,
-    glossary: &Glossary,
-    backend: &WhisperBackend,
-) -> Result<MeetingTranscript, DictationError> {
-    transcribe_meeting_file_inner(
-        file,
-        stored,
-        language,
-        model,
-        glossary,
-        process_services(backend),
-        None,
-        &meeting_options(sagascript_core::diarization::DEFAULT_THRESHOLD, None, None),
-    )
-}
 
 /// Run the diarized file pipeline with explicit progress and cancellation
 /// control. The caller owns the flag and must not clear it during a job.
-#[cfg(feature = "diarization")]
+///
+/// `build_revision` is the source revision of the running build, which the diarization report
+/// records: core has no build identity of its own.
+#[allow(clippy::too_many_arguments)]
 pub fn transcribe_meeting_file_with_control(
     file: &Path,
     stored: &Settings,
@@ -65,17 +39,19 @@ pub fn transcribe_meeting_file_with_control(
     glossary: &Glossary,
     backend: &WhisperBackend,
     control: &MeetingControl<'_>,
+    build_revision: &str,
 ) -> Result<MeetingTranscript, DictationError> {
     control.check()?;
+    let canceller = Canceller::new();
     transcribe_meeting_file_inner(
         file,
         stored,
         language,
         model,
         glossary,
-        process_services(backend),
+        process_services(backend, &canceller, build_revision),
         Some(control),
-        &meeting_options(sagascript_core::diarization::DEFAULT_THRESHOLD, None, None),
+        &meeting_options(crate::diarization::DEFAULT_THRESHOLD, None, None),
     )
 }
 
@@ -84,7 +60,6 @@ pub fn transcribe_meeting_file_with_control(
 /// nothing exists there. It is a private staging path: the reprocessing
 /// orchestration publishes the cache at the user's destination after it has
 /// validated the run (#342), so this function never creates a user-visible file.
-#[cfg(feature = "diarization")]
 #[allow(clippy::too_many_arguments)]
 pub fn transcribe_meeting_file_full(
     file: &Path,
@@ -95,8 +70,9 @@ pub fn transcribe_meeting_file_full(
     backend: &WhisperBackend,
     control: Option<&MeetingControl<'_>>,
     threshold: f32,
-    speaker_hint: Option<sagascript_core::diarization::speaker_hint::SpeakerCountHint>,
+    speaker_hint: Option<crate::diarization::speaker_hint::SpeakerCountHint>,
     cache_output: Option<&Path>,
+    build_revision: &str,
 ) -> Result<MeetingTranscript, DictationError> {
     if !threshold.is_finite() {
         return Err(DictationError::SettingsError(
@@ -133,13 +109,14 @@ pub fn transcribe_meeting_file_full(
     if let Some(control) = control {
         control.check()?;
     }
+    let canceller = Canceller::new();
     transcribe_meeting_file_inner(
         file,
         stored,
         language,
         model,
         glossary,
-        process_services(backend),
+        process_services(backend, &canceller, build_revision),
         control,
         &meeting_options(
             threshold,
@@ -152,34 +129,35 @@ pub fn transcribe_meeting_file_full(
     )
 }
 
-/// The services of a meeting job in the app or of reprocessing: the Whisper
-/// backend the caller owns, the ONNX analysis and the process-wide canceller
-/// (which the app never installs a handler for; its jobs cancel through their
-/// `MeetingControl`).
-#[cfg(feature = "diarization")]
-fn process_services(backend: &WhisperBackend) -> Services<'_> {
+/// The services of a meeting job in the app or of reprocessing: the Whisper backend the caller
+/// owns, the ONNX analysis and a canceller of the job's own that nothing ever cancels (a meeting
+/// job cancels through its [`MeetingControl`], and no signal handler is installed for it).
+fn process_services<'a>(
+    backend: &'a WhisperBackend,
+    canceller: &'a Canceller,
+    build_revision: &'a str,
+) -> Services<'a> {
     Services {
         backend,
         analyzer: &OnnxAnalyzer,
-        canceller: &crate::cancel::GLOBAL,
-        build_revision: crate::GIT_HASH,
+        canceller,
+        build_revision,
     }
 }
 
 /// The options of a meeting run, which has no command line: the diarized
 /// pipeline with the meeting document as its result, the given clustering
 /// threshold, speaker-count hint and cache, and nothing else switched on.
-#[cfg(feature = "diarization")]
-pub(super) fn meeting_options(
+pub(crate) fn meeting_options(
     threshold: f32,
-    speaker_hint: Option<sagascript_core::diarization::speaker_hint::SpeakerCountHint>,
+    speaker_hint: Option<crate::diarization::speaker_hint::SpeakerCountHint>,
     cache: Option<CacheRequest>,
 ) -> FileOptions {
     FileOptions {
         diarization: Some(DiarizationFlags {
             cache,
             threshold,
-            speaker_count: sagascript_core::diarization::speaker_hint::SpeakerCountFlags {
+            speaker_count: crate::diarization::speaker_hint::SpeakerCountFlags {
                 speakers: speaker_hint
                     .and_then(|hint| hint.exact)
                     .filter(|_| !speaker_hint.is_some_and(|h| h.force)),
@@ -194,9 +172,8 @@ pub(super) fn meeting_options(
     }
 }
 
-#[cfg(feature = "diarization")]
 #[allow(clippy::too_many_arguments)]
-pub(super) fn transcribe_meeting_file_inner(
+pub(crate) fn transcribe_meeting_file_inner(
     file: &Path,
     stored: &Settings,
     language: Language,
@@ -207,30 +184,123 @@ pub(super) fn transcribe_meeting_file_inner(
     options: &FileOptions,
 ) -> Result<MeetingTranscript, DictationError> {
     let mut model_loaded = false;
-    // The pipeline's progress lines go to the process's stderr, as they did
-    // before the output layer; the meeting document is the return value.
-    // This private `Out` must never write stdout: it is not the run's `Out`,
-    // so a stdout write here would escape its closed-pipe handling and the
-    // error-object bookkeeping of `exit::conclude`. `transcribe_file` writes
-    // it with `errln!` only.
-    let output = transcribe_file(
-        &FileRequest {
-            options,
-            file,
-            stored,
-            language,
-            model,
-            glossary,
-            correction_vocabulary: &[],
-            control,
-        },
-        services,
-        &mut model_loaded,
-        &Out::stdio(),
-    )?;
+    let request = FileRequest {
+        options,
+        file,
+        stored,
+        language,
+        model,
+        glossary,
+        correction_vocabulary: &[],
+        control,
+    };
+    // The pipeline's progress lines go to the process's stderr; the meeting document is the
+    // return value, and nothing is written to stdout.
+    let plan = plan_file(&request)?;
+    let output = match plan.mode {
+        FileMode::Diarized(diarization) => run_diarized(
+            &request,
+            plan.started,
+            *diarization,
+            services,
+            &mut model_loaded,
+            &StderrNarrator,
+        )?,
+        FileMode::Plain => {
+            return Err(DictationError::TranscriptionFailed(
+                "Diarized meeting transcript was not produced".to_string(),
+            ))
+        }
+    };
     output.meeting.ok_or_else(|| {
         DictationError::TranscriptionFailed(
             "Diarized meeting transcript was not produced".to_string(),
         )
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::Ordering;
+
+    #[test]
+    fn meeting_control_precancel_checks_before_file_or_model_access() {
+        use std::sync::atomic::AtomicBool;
+
+        let cancellation = AtomicBool::new(true);
+        let progress = |_| panic!("cancelled job must not emit progress");
+        let control = MeetingControl {
+            cancellation: &cancellation,
+            progress: &progress,
+        };
+        let backend = WhisperBackend::new();
+        let error = transcribe_meeting_file_with_control(
+            Path::new("/definitely/missing/meeting.wav"),
+            &Settings::default(),
+            Language::English,
+            WhisperModel::Base,
+            &Glossary::parse(""),
+            &backend,
+            &control,
+            "test-revision",
+        )
+        .expect_err("pre-cancelled job must fail");
+        assert!(matches!(error, DictationError::Cancelled), "{error:?}");
+        assert!(cancellation.load(Ordering::Acquire));
+    }
+
+    /// The signatures the app and reprocessing call (#374; they were pinned in the CLI's contract
+    /// test while the CLI owned them) and the phase names the app maps to its job states.
+    #[test]
+    fn the_entry_points_keep_the_signatures_their_callers_use() {
+        use crate::diarization::speaker_hint::SpeakerCountHint;
+        use crate::meeting::control::MeetingPhase;
+
+        let _: fn(
+            &Path,
+            &Settings,
+            Language,
+            WhisperModel,
+            &Glossary,
+            &WhisperBackend,
+            &MeetingControl<'_>,
+            &str,
+        ) -> Result<MeetingTranscript, DictationError> = transcribe_meeting_file_with_control;
+        let _: fn(
+            &Path,
+            &Settings,
+            Language,
+            WhisperModel,
+            &Glossary,
+            &WhisperBackend,
+            Option<&MeetingControl<'_>>,
+            f32,
+            Option<SpeakerCountHint>,
+            Option<&Path>,
+            &str,
+        ) -> Result<MeetingTranscript, DictationError> = transcribe_meeting_file_full;
+        let names: Vec<String> = [
+            MeetingPhase::Preparing,
+            MeetingPhase::Decoding,
+            MeetingPhase::LoadingModel,
+            MeetingPhase::Analyzing,
+            MeetingPhase::Clustering,
+            MeetingPhase::Finalizing,
+        ]
+        .iter()
+        .map(|phase| serde_json::to_string(phase).expect("phase serializes"))
+        .collect();
+        assert_eq!(
+            names,
+            [
+                "\"preparing\"",
+                "\"decoding\"",
+                "\"loading_model\"",
+                "\"analyzing\"",
+                "\"clustering\"",
+                "\"finalizing\""
+            ]
+        );
+    }
 }

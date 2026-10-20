@@ -10,14 +10,15 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 #[cfg(feature = "diarization")]
-use sagascript_core::diarization::report::DecoderEvidence;
+use crate::diarization::report::DecoderEvidence;
 #[cfg(feature = "diarization")]
-use sagascript_core::diarization::speaker_hint::SpeakerCountFlags;
-use sagascript_core::error::DictationError;
-use sagascript_core::settings::{Language, Settings, WhisperModel};
-use sagascript_core::transcription::Glossary;
+use crate::diarization::speaker_hint::SpeakerCountFlags;
+use crate::error::DictationError;
+use crate::glossary::Glossary;
+use crate::models::{Language, WhisperModel};
+use crate::settings::Settings;
 #[cfg(feature = "diarization")]
-use sagascript_core::transcription::TranscribeOptions;
+use crate::transcription::TranscribeOptions;
 
 #[cfg(feature = "diarization")]
 use super::diarize::CachePolicy;
@@ -25,24 +26,24 @@ use super::diarize::CachePolicy;
 use super::diarize::{effective_diarization_decoder_evidence, resolve_diarization_options};
 #[cfg(feature = "diarization")]
 use super::progress::decoder_progress_value;
-use sagascript_core::meeting::control::MeetingControl;
+use crate::meeting::control::MeetingControl;
 #[cfg(feature = "diarization")]
-use sagascript_core::meeting::control::{meeting_checkpoint, MeetingPhase};
+use crate::meeting::control::{meeting_checkpoint, MeetingPhase};
 #[cfg(feature = "diarization")]
-use sagascript_core::meeting::source::stable_file_sha256;
+use crate::meeting::source::stable_file_sha256;
 
 /// One input of a run, with everything its processing is told. Built by the
 /// batch (one per file) and by the meeting entry points.
-pub(super) struct FileRequest<'a> {
-    pub(super) options: &'a FileOptions,
-    pub(super) file: &'a Path,
-    pub(super) stored: &'a Settings,
-    pub(super) language: Language,
-    pub(super) model: WhisperModel,
-    pub(super) glossary: &'a Glossary,
-    pub(super) correction_vocabulary: &'a [String],
+pub struct FileRequest<'a> {
+    pub options: &'a FileOptions,
+    pub file: &'a Path,
+    pub stored: &'a Settings,
+    pub language: Language,
+    pub model: WhisperModel,
+    pub glossary: &'a Glossary,
+    pub correction_vocabulary: &'a [String],
     /// Cancellation and phase reporting of a meeting job; `None` on the CLI.
-    pub(super) control: Option<&'a MeetingControl<'a>>,
+    pub control: Option<&'a MeetingControl<'a>>,
 }
 
 /// What a file's pipelines read of the command line, and nothing else (#343).
@@ -51,44 +52,44 @@ pub(super) struct FileRequest<'a> {
 /// the meeting entry points, which have no command line, build the few options
 /// they use directly.
 #[derive(Clone, Debug, Default)]
-pub(super) struct FileOptions {
+pub struct FileOptions {
     /// `--progress-json`.
-    pub(super) progress_json: bool,
+    pub progress_json: bool,
     /// `--correct-hints`: a plain run repairs words towards the hint, a
     /// diarized run refuses it.
-    pub(super) correct_hints: bool,
-    pub(super) decoder: DecoderFlags,
+    pub correct_hints: bool,
+    pub decoder: DecoderFlags,
     /// `--diarize` and what goes with it; `None` is a plain run.
     #[cfg(feature = "diarization")]
-    pub(super) diarization: Option<DiarizationFlags>,
+    pub diarization: Option<DiarizationFlags>,
 }
 
 /// `--vad`, `--no-vad`, `--beam` and `--parallel`.
 #[derive(Clone, Copy, Debug, Default)]
-pub(super) struct DecoderFlags {
-    pub(super) vad: bool,
-    pub(super) no_vad: bool,
-    pub(super) beam_size: Option<u32>,
-    pub(super) parallel: Option<usize>,
+pub struct DecoderFlags {
+    pub vad: bool,
+    pub no_vad: bool,
+    pub beam_size: Option<u32>,
+    pub parallel: Option<usize>,
 }
 
 /// What a diarized run reads of the command line.
 #[cfg(feature = "diarization")]
 #[derive(Clone, Debug)]
-pub(super) struct DiarizationFlags {
+pub struct DiarizationFlags {
     /// `--diarize-cache` and what the run does with it; `None` is no cache.
-    pub(super) cache: Option<CacheRequest>,
+    pub cache: Option<CacheRequest>,
     /// `--diarize-exclusive-speech-embeddings`.
-    pub(super) exclusive_speech_embeddings: bool,
+    pub exclusive_speech_embeddings: bool,
     /// `--diarize-threshold`.
-    pub(super) threshold: f32,
+    pub threshold: f32,
     /// `--diarize-diagnostics`.
-    pub(super) diagnostics: bool,
+    pub diagnostics: bool,
     /// `--speakers`, `--min-speakers`, `--max-speakers`, `--force-speakers`,
     /// validated by the run that uses them.
-    pub(super) speaker_count: SpeakerCountFlags,
+    pub speaker_count: SpeakerCountFlags,
     /// `--meeting-json`: the result is the shared meeting document.
-    pub(super) meeting_json: bool,
+    pub meeting_json: bool,
 }
 
 #[cfg(feature = "diarization")]
@@ -97,7 +98,7 @@ impl Default for DiarizationFlags {
         Self {
             cache: None,
             exclusive_speech_embeddings: false,
-            threshold: sagascript_core::diarization::DEFAULT_THRESHOLD,
+            threshold: crate::diarization::DEFAULT_THRESHOLD,
             diagnostics: false,
             speaker_count: SpeakerCountFlags::default(),
             meeting_json: false,
@@ -109,19 +110,19 @@ impl Default for DiarizationFlags {
 /// which policy governs it.
 #[cfg(feature = "diarization")]
 #[derive(Clone, Debug)]
-pub(super) struct CacheRequest {
-    pub(super) path: PathBuf,
-    pub(super) policy: CachePolicy,
+pub struct CacheRequest {
+    pub path: PathBuf,
+    pub policy: CachePolicy,
 }
 
 /// How one file will be processed.
-pub(super) struct FilePlan {
+pub struct FilePlan {
     /// When the file's work began; every `elapsed_ms` counts from here.
-    pub(super) started: Instant,
-    pub(super) mode: FileMode,
+    pub started: Instant,
+    pub mode: FileMode,
 }
 
-pub(super) enum FileMode {
+pub enum FileMode {
     Plain,
     #[cfg(feature = "diarization")]
     Diarized(Box<DiarizationPlan>),
@@ -129,25 +130,25 @@ pub(super) enum FileMode {
 
 /// What a diarized run fixes before it looks at the audio.
 #[cfg(feature = "diarization")]
-pub(super) struct DiarizationPlan {
+pub struct DiarizationPlan {
     /// SHA-256 of the source, taken (and checked again at the end) so the
     /// meeting document is bound to the bytes it was made from.
-    pub(super) source_sha256: String,
+    pub source_sha256: String,
     /// The glossary's decoder prompt, part of the cache identity.
-    pub(super) decoder_prompt: Option<String>,
+    pub decoder_prompt: Option<String>,
     /// The decoder settings the diarized path uses.
-    pub(super) options: TranscribeOptions,
-    pub(super) decoder_evidence: DecoderEvidence,
+    pub options: TranscribeOptions,
+    pub decoder_evidence: DecoderEvidence,
     /// `decoder_evidence` as it is attached to every progress event.
-    pub(super) decoder_progress: serde_json::Value,
+    pub decoder_progress: serde_json::Value,
     /// What the diarize flags say.
-    pub(super) flags: DiarizationFlags,
+    pub flags: DiarizationFlags,
 }
 
 /// Plans one file. For a diarized run this hashes the source, resolves the
 /// decoder and checks `--diarize-cache` does not point at the recording, in
 /// that order.
-pub(super) fn plan_file(request: &FileRequest<'_>) -> Result<FilePlan, DictationError> {
+pub fn plan_file(request: &FileRequest<'_>) -> Result<FilePlan, DictationError> {
     let started = Instant::now();
     // A plain-only build has no mode to choose.
     #[cfg(not(feature = "diarization"))]
@@ -205,7 +206,7 @@ impl DiarizationPlan {
 /// Whether `left` and `right` are the same file: the same path once resolved, or on Unix the
 /// same device and inode (a hard link).
 #[cfg(feature = "diarization")]
-pub(super) fn paths_refer_to_same_file(left: &Path, right: &Path) -> bool {
+pub(crate) fn paths_refer_to_same_file(left: &Path, right: &Path) -> bool {
     if let (Ok(left), Ok(right)) = (std::fs::canonicalize(left), std::fs::canonicalize(right)) {
         if left == right {
             return true;
@@ -219,4 +220,28 @@ pub(super) fn paths_refer_to_same_file(left: &Path, right: &Path) -> bool {
         }
     }
     false
+}
+
+#[cfg(all(test, feature = "diarization"))]
+mod tests {
+    use super::*;
+    use sagascript_testsupport::TempDir;
+
+    #[test]
+    fn cache_path_cannot_alias_the_input_recording() {
+        let root = TempDir::new();
+        let input = root.join("recording.m4a");
+        let other = root.join("cache.json");
+        std::fs::write(&input, b"audio").unwrap();
+        std::fs::write(&other, b"cache").unwrap();
+
+        assert!(paths_refer_to_same_file(&input, &input));
+        assert!(!paths_refer_to_same_file(&input, &other));
+        #[cfg(unix)]
+        {
+            let hard_link = root.join("recording-cache.json");
+            std::fs::hard_link(&input, &hard_link).unwrap();
+            assert!(paths_refer_to_same_file(&input, &hard_link));
+        }
+    }
 }

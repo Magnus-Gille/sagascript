@@ -15,14 +15,16 @@ use sagascript_core::transcription::{
     recommended_parallel_chunks, ContextProfile, TranscribeOptions, TranscriptSegment,
 };
 
-use super::file_plan::FileRequest;
-use super::inference::{prepare_language, verify_vad_model, InferenceBackend};
-use super::outcome::{emit_warnings, FileTranscription};
 use super::output::{assemble_plain_result, PlainInput};
-use super::progress::Progress;
-use super::services::Services;
-use super::source::{decode_file, DecodedAudio};
 use crate::output::{errln, Out};
+use sagascript_core::meeting::pipeline::inference::{
+    prepare_language, verify_vad_model, InferenceBackend,
+};
+use sagascript_core::meeting::pipeline::outcome::{emit_warnings, FileTranscription};
+use sagascript_core::meeting::pipeline::plan::FileRequest;
+use sagascript_core::meeting::pipeline::progress::Progress;
+use sagascript_core::meeting::pipeline::services::Services;
+use sagascript_core::meeting::pipeline::source::{decode_file, DecodedAudio};
 
 /// Runs the plain path for one file.
 pub(super) fn run_plain(

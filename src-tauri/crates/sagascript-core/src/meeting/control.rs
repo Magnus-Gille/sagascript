@@ -189,4 +189,39 @@ mod tests {
             "cancel before registration must still abort"
         );
     }
+
+    #[test]
+    fn meeting_control_emits_ordered_phases_and_never_clears_cancellation() {
+        use std::sync::atomic::AtomicBool;
+        use std::sync::{Arc, Mutex};
+
+        let cancellation = AtomicBool::new(false);
+        let phases = Arc::new(Mutex::new(Vec::new()));
+        let observed = Arc::clone(&phases);
+        let progress = move |phase| observed.lock().expect("phase lock").push(phase);
+        let control = MeetingControl {
+            cancellation: &cancellation,
+            progress: &progress,
+        };
+        let expected = [
+            MeetingPhase::Preparing,
+            MeetingPhase::Decoding,
+            MeetingPhase::LoadingModel,
+            MeetingPhase::Analyzing,
+            MeetingPhase::Clustering,
+            MeetingPhase::Finalizing,
+        ];
+        for phase in expected {
+            meeting_checkpoint(Some(&control), phase).expect("checkpoint is live");
+        }
+        assert_eq!(*phases.lock().expect("phase lock"), expected);
+        assert_eq!(
+            serde_json::to_string(&MeetingPhase::LoadingModel).expect("phase serializes"),
+            "\"loading_model\""
+        );
+
+        cancellation.store(true, Ordering::Release);
+        assert!(meeting_checkpoint(Some(&control), MeetingPhase::Finalizing).is_err());
+        assert!(cancellation.load(Ordering::Acquire));
+    }
 }

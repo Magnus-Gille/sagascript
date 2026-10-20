@@ -13,12 +13,12 @@ use sagascript_core::transcription::whisper_backend::assemble_transcript;
 use sagascript_core::transcription::{normalize_nonspeech_markers, Glossary, TranscriptSegment};
 
 use super::args::TranscribeArgs;
-use super::inference::LanguageEvidence;
-use super::outcome::{combined_warnings, FileTranscription};
 use super::resolve::model_id_string;
 use super::vocab_correction::{apply_glossary_corrections, apply_hint_corrections};
 use crate::exit::{dictation_error_code, ErrorObject, JsonOutput};
 use crate::output::{errln, outln, Out, WriteError};
+use sagascript_core::meeting::pipeline::inference::LanguageEvidence;
+use sagascript_core::meeting::pipeline::outcome::{combined_warnings, FileTranscription};
 
 /// What the plain path knows when the backend has answered.
 pub(super) struct PlainInput<'a> {

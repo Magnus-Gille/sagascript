@@ -1,30 +1,30 @@
 //! What one file's pipeline hands back (#343): the result, the plain text of a diarized run and
 //! the warnings both pipelines print.
 
+use super::narrate::Narrator;
 #[cfg(feature = "diarization")]
-use sagascript_core::diarization::DiarizedSegment;
-use sagascript_core::meeting::pipeline::narrate::Narrator;
+use crate::diarization::DiarizedSegment;
 #[cfg(feature = "diarization")]
-use sagascript_core::meeting::MeetingTranscript;
-use sagascript_core::settings::Language;
+use crate::meeting::MeetingTranscript;
+use crate::models::Language;
 
-use crate::output::errln;
-use sagascript_core::transcription::diagnostics::{
+use super::narrate::errln;
+use crate::transcription::diagnostics::{
     language_mismatch_warning, CoverageDiagnostics, LanguageDetection, TranscriptionWarning,
 };
 #[cfg(feature = "diarization")]
-use sagascript_core::transcription::whisper_backend::contains_no_speech_marker;
+use crate::transcription::whisper_backend::contains_no_speech_marker;
 
 #[derive(Debug)]
-pub(super) struct FileTranscription {
-    pub(super) json: serde_json::Value,
-    pub(super) plain: String,
+pub struct FileTranscription {
+    pub json: serde_json::Value,
+    pub plain: String,
     #[cfg(feature = "diarization")]
-    pub(super) meeting: Option<MeetingTranscript>,
+    pub meeting: Option<MeetingTranscript>,
 }
 
 #[cfg(feature = "diarization")]
-pub(super) fn assemble_diarized_plain_text(segments: &[DiarizedSegment]) -> String {
+pub fn assemble_diarized_plain_text(segments: &[DiarizedSegment]) -> String {
     segments
         .iter()
         .filter(|segment| !contains_no_speech_marker(&segment.text))
@@ -33,7 +33,7 @@ pub(super) fn assemble_diarized_plain_text(segments: &[DiarizedSegment]) -> Stri
         .join("\n")
 }
 
-pub(super) fn combined_warnings(
+pub fn combined_warnings(
     coverage: &CoverageDiagnostics,
     configured_language: Language,
     detected_language: Option<&LanguageDetection>,
@@ -47,7 +47,7 @@ pub(super) fn combined_warnings(
     warnings
 }
 
-pub(super) fn emit_warnings(out: &dyn Narrator, warnings: &[TranscriptionWarning]) {
+pub fn emit_warnings(out: &dyn Narrator, warnings: &[TranscriptionWarning]) {
     for warning in warnings {
         errln!(out, "Warning [{}]: {}", warning.code, warning.message);
     }

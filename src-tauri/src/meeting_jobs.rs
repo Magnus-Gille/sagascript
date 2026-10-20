@@ -212,8 +212,8 @@ async fn begin_job(
             let processing_cancel = cancelled.clone();
             let processing_backend = backend.clone();
             let mut worker = tauri::async_runtime::spawn_blocking(move || {
-                use sagascript_cli::transcribe::transcribe_meeting_file_with_control;
                 use sagascript_core::meeting::control::MeetingControl;
+                use sagascript_core::meeting::pipeline::entry::transcribe_meeting_file_with_control;
                 let progress = |phase| {
                     if let Ok(mut slot) = processing_state.0.lock() {
                         if let Some(job) =
@@ -230,7 +230,7 @@ async fn begin_job(
                     progress: &progress,
                 };
                 if let Some(request) = request {
-                    use sagascript_cli::meeting_reprocessing::execute_reprocessing;
+                    use sagascript_core::meeting::reprocess::native::execute_reprocessing;
                     use sagascript_core::meeting::reprocess::orchestrate::ReprocessingInput;
                     let input = ReprocessingInput {
                         audio: std::path::Path::new(&file_path),
@@ -248,6 +248,7 @@ async fn begin_job(
                         &processing_backend,
                         request.cache_output.as_deref().map(std::path::Path::new),
                         Some(&control),
+                        env!("GIT_HASH"),
                     )
                     .map(|result| JobOutput::Reprocessing(Box::new(result)))
                     .map_err(|error| error.to_string())
@@ -260,6 +261,7 @@ async fn begin_job(
                         &context.glossary,
                         &processing_backend,
                         &control,
+                        env!("GIT_HASH"),
                     )
                     .map(|document| JobOutput::Import(Box::new(document)))
                     .map_err(|error| error.to_string())
