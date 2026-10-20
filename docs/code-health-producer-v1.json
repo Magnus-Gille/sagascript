@@ -42,7 +42,6 @@
         "src-tauri/crates/sagascript-core/src/meeting/pipeline/outcome.rs",
         "src-tauri/crates/sagascript-core/src/meeting/pipeline/plan.rs",
         "src-tauri/crates/sagascript-core/src/meeting/pipeline/progress.rs",
-        "src-tauri/crates/sagascript-core/src/meeting/pipeline/services.rs",
         "src-tauri/crates/sagascript-core/src/meeting/pipeline/source.rs"
       ],
       "rust-cli": [

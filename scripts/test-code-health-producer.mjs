@@ -267,10 +267,15 @@ test("the rust-cli complexity scope lists every production module of the transcr
 test("the rust-core complexity scope lists every production module of the file pipeline", () => {
   // The file pipeline moved from the CLI's transcribe/ to core's meeting/pipeline/ (#374). Same
   // rule as for the CLI: a module added there would drop out of the measurement until someone
-  // remembers to list it. narrate.rs is a trait and a macro, with nothing to measure, and mod.rs
-  // only lists modules.
+  // remembers to list it. Three files are not listed because the analyzer finds no function in
+  // them, which it reports as an error for a selected file: services.rs is one struct, narrate.rs
+  // a trait and a macro, and mod.rs only lists modules.
   const directory = "src-tauri/crates/sagascript-core/src/meeting/pipeline";
-  const unmeasured = new Set([`${directory}/narrate.rs`, `${directory}/mod.rs`]);
+  const unmeasured = new Set([
+    `${directory}/narrate.rs`,
+    `${directory}/mod.rs`,
+    `${directory}/services.rs`,
+  ]);
   const productionModules = (dir) =>
     readdirSync(join(repoRoot, dir), { withFileTypes: true }).flatMap((entry) => {
       const path = `${dir}/${entry.name}`;
