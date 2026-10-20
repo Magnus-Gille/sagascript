@@ -510,7 +510,7 @@ settings watcher runs each event under `catch_unwind`; its health is
 | app | `updater-smoke-test` | off | `SIGNED_UPDATE_MANIFEST_URL` → `http://127.0.0.1:34827/latest.json`; enabled only by `.github/workflows/test-build.yml`. |
 | app, core, CLI | `dev-overrides` | off | Release builds honor `SAGASCRIPT_ENGINE_HOST` / `SAGASCRIPT_PIANISSIMO_MODEL_DIR` (`transcription/dev_overrides.rs`; debug builds always do). |
 | core | `record` | off | `audio::capture` / `AudioCaptureService` (cpal; ALSA on Linux). The app always enables it. |
-| core | `diarization` | off | `ort`, `rustfft`, `kodama`, `ndarray`; `meeting/reprocess/orchestrate.rs` (it clusters through the engine); `diarization/engine/` (and the re-exports of its old paths from `diarization`); the `diarize_eval` example; DTW word timestamps in `transcription/whisper/words.rs`. |
+| core | `diarization` | off | `ort`, `rustfft`, `kodama`, `ndarray`; `meeting/reprocess/orchestrate.rs` (it clusters through the engine); `diarization/engine/` (and the re-exports of its old paths from `diarization`); the `diarize_eval` example. |
 | CLI | `record` | on | The `record` subcommand. |
 | CLI | `diarization` | on | `--diarize`, `meeting_reprocessing*` (the `meeting reprocess` command and the native backend), `speaker_args`. |
 | ORT host | `dev-overrides` | off | Release builds honor `ORT_DYLIB_PATH`. |
@@ -519,6 +519,14 @@ Feature unification: `cargo test --workspace` builds core with `record` and `dia
 (enabled by the app and CLI). CI therefore also runs core and CLI per package to keep the
 no-feature builds honest, and asserts that `cargo tree -p sagascript-cli --no-default-features`
 contains no cpal/ALSA.
+
+DTW word timestamps (`transcription/whisper/words.rs`, `ContextProfile::TokenAlignment`) have no
+feature (#371). DTW is a whisper.cpp context option and whisper.cpp is linked into every build;
+`words.rs` uses only `whisper-rs` and core types, none of the `diarization` feature's dependencies.
+So the lean CLI and a core built without features load a token-alignment context and run the word
+tests; the `diarization` feature gates the ONNX speaker pipeline that asks for it, not the timestamps.
+Do not put a `cfg(feature = "diarization")` on code in `transcription/whisper/` unless it names `ort`,
+`ndarray`, `rustfft` or `kodama`.
 
 ## 5. Where tests live and how CI runs them
 

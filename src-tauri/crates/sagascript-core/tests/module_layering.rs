@@ -504,6 +504,89 @@ fn only_the_diarization_engine_names_its_optional_crates() {
     );
 }
 
+// ---- Whisper word timestamps have no feature (#371) ----------------------
+
+/// Whether `source` names the `diarization` feature in code: a
+/// `cfg(feature = "diarization")`, a `cfg(not(..))` or `cfg_attr` of it, or
+/// `cfg!(..)`, however it is spaced or wrapped over lines. Line comments are
+/// not read, so a comment may explain why there is no gate. `\n` and `\r\n`
+/// line ends read alike.
+fn names_the_diarization_feature(source: &str) -> bool {
+    let code: String = source
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let squeezed: String = code.chars().filter(|c| !c.is_whitespace()).collect();
+    squeezed.contains("feature=\"diarization\"")
+}
+
+/// DTW word timestamps are a whisper.cpp option and whisper.cpp is linked into
+/// every build, so `transcription/whisper/` (tests included) and the
+/// re-exports in `transcription/mod.rs` have no feature gate. The `diarization`
+/// feature is for the code that names `ort`, `ndarray`, `rustfft` or `kodama`,
+/// which only `diarization/engine/` may do
+/// (`only_the_diarization_engine_names_its_optional_crates`). A gate here would
+/// again leave the DTW code and its tests out of a build without the feature
+/// and bring back the runtime error of a token-alignment context.
+#[test]
+fn the_whisper_module_has_no_diarization_gate() {
+    let root = src();
+    let mut files = Vec::new();
+    rust_files(&root.join("transcription/whisper"), &mut files);
+    files.push(root.join("transcription/mod.rs"));
+    files.sort();
+    assert!(
+        files.len() > 10,
+        "expected the whisper module's files, found {files:?}"
+    );
+    let found: Vec<String> = files
+        .iter()
+        .filter(|file| names_the_diarization_feature(&fs::read_to_string(file).unwrap()))
+        .map(|file| {
+            file.strip_prefix(&root)
+                .unwrap()
+                .to_string_lossy()
+                .replace('\\', "/")
+        })
+        .collect();
+    assert!(
+        found.is_empty(),
+        "DTW word timestamps are always compiled (#371): no `feature = \"diarization\"` in \
+         transcription/whisper/ or transcription/mod.rs, only code that names ort, ndarray, \
+         rustfft or kodama belongs behind that feature, and that lives in diarization/engine/:\n{}",
+        found.join("\n")
+    );
+}
+
+#[test]
+fn the_diarization_feature_is_found_however_it_is_spelled_and_not_in_comments() {
+    for gated in [
+        "#[cfg(feature = \"diarization\")]\nmod words;\n",
+        "#[cfg(not(feature = \"diarization\"))]\nfn f() {}\n",
+        "#[cfg(all(test, feature=\"diarization\"))]\nmod t {}\n",
+        "#[cfg(\n    feature =\n        \"diarization\"\n)]\nfn f() {}\n",
+        "#[cfg_attr(feature = \"diarization\", derive(Debug))]\nstruct S;\n",
+        "fn f() -> bool { cfg!(feature = \"diarization\") }\n",
+    ] {
+        assert!(names_the_diarization_feature(gated), "{gated}");
+        let crlf = gated.replace('\n', "\r\n");
+        assert!(names_the_diarization_feature(&crlf), "{crlf}");
+    }
+    for clean in [
+        "// no `cfg(feature = \"diarization\")` here\nfn f() {}\n",
+        "/// `feature = \"diarization\"` gates the speaker pipeline\nfn f() {}\n",
+        "#[cfg(feature = \"record\")]\nfn f() {}\n",
+        "#[cfg(test)]\nmod diarization {}\n",
+    ] {
+        assert!(!names_the_diarization_feature(clean), "{clean}");
+        assert!(
+            !names_the_diarization_feature(&clean.replace('\n', "\r\n")),
+            "{clean}"
+        );
+    }
+}
+
 // ---- the compatibility paths have no users -------------------------------
 
 /// The old names `lib.rs` re-exports (`pub use crate::path as name;`, or the
