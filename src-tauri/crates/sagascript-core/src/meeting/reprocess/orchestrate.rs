@@ -195,7 +195,10 @@ impl StagedReprocessing {
     }
 
     /// [`finish`](Self::finish) on the given filesystem operations.
-    pub fn finish_with(self, ops: &dyn PublishFs) -> Result<ReprocessingResult, DictationError> {
+    pub(crate) fn finish_with(
+        self,
+        ops: &dyn PublishFs,
+    ) -> Result<ReprocessingResult, DictationError> {
         let Self { result, cache } = self;
         if let Some(cache) = cache {
             let destination = cache.destination().to_path_buf();

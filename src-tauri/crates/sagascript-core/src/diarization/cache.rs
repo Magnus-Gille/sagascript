@@ -66,7 +66,7 @@ pub struct AnalysisIdentity {
 }
 
 impl AnalysisIdentity {
-    pub fn current_with_policy(exclusive_speech_embeddings: bool) -> Self {
+    pub(crate) fn current_with_policy(exclusive_speech_embeddings: bool) -> Self {
         Self {
             segmentation_sha256: DiarizationModel::PyannoteSegmentation3
                 .download_integrity()
@@ -301,7 +301,8 @@ pub fn load_with_analysis_policy(
     load_internal(path, expected, false, exclusive_speech_embeddings)
 }
 
-pub fn load_for_rediarization(
+#[cfg(any(feature = "diarization", test))]
+pub(crate) fn load_for_rediarization(
     path: &Path,
     expected: &CacheIdentity,
 ) -> Result<CacheLookup, DictationError> {
@@ -498,7 +499,7 @@ fn save_new_with(
 
 /// The error a failed [`save_new`] or cache publication reports; `path` is the
 /// destination the caller asked for.
-pub fn publish_error(path: &Path, error: &PublishError) -> DictationError {
+pub(crate) fn publish_error(path: &Path, error: &PublishError) -> DictationError {
     let cleanup = match &error.leftover {
         Some(leftover) => format!(
             "; its private temporary file {} could not be removed: {}",

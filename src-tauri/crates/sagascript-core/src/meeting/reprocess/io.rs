@@ -77,15 +77,10 @@ fn read_bounded(path: &Path, limit: usize, kind: &str) -> Result<Vec<u8>, Dictat
     Ok(bytes)
 }
 
-/// Publish `value` as the new file `path`: compact JSON and a newline, never replacing anything.
+/// Publish `bytes` (a document from [`json_line`]) as the new file `path`
+/// ([`fsutil::publish_new_with`]) on the given filesystem operations, never replacing anything.
 /// A private staging file that could not be removed is in the receipt's `leftover`; the document
 /// is complete regardless.
-pub fn write_json_new<T: Serialize>(path: &Path, value: &T) -> Result<Published, DictationError> {
-    write_atomic_new_with(path, &json_line(value)?, &fsutil::RealFs)
-}
-
-/// Publish `bytes` as the new file `path` ([`fsutil::publish_new_with`]) on the given filesystem
-/// operations.
 pub fn write_atomic_new_with(
     path: &Path,
     bytes: &[u8],
@@ -104,7 +99,8 @@ pub fn json_line<T: Serialize>(value: &T) -> Result<Vec<u8>, DictationError> {
 /// Serialize `value` and stage it privately beside `path` without publishing
 /// anything. Serialization and write errors surface here, before a caller
 /// publishes any related artifact (#342).
-pub fn stage_json_new<T: Serialize>(
+#[cfg(any(feature = "diarization", test))]
+pub(crate) fn stage_json_new<T: Serialize>(
     path: &Path,
     value: &T,
 ) -> Result<fsutil::StagedFile, DictationError> {
@@ -196,6 +192,10 @@ mod tests {
     use crate::test_support::FaultyFs;
     use sagascript_testsupport::TempDir;
     use serde_json::json;
+
+    fn write_json_new(path: &Path, value: &serde_json::Value) -> Result<Published, DictationError> {
+        write_atomic_new_with(path, &json_line(value)?, &fsutil::RealFs)
+    }
 
     #[test]
     fn read_json_is_bounded_and_says_what_was_wrong_without_the_path() {
