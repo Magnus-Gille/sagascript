@@ -18,7 +18,7 @@ use sagascript_core::settings::{FileModel, Language, Settings, WhisperModel};
 use sagascript_core::transcription::{Glossary, WhisperBackend};
 use serde_json::json;
 
-use crate::meeting_proposal::{ensure_output_absent, read_json, write_json_new};
+use crate::meeting_proposal::write_json_new;
 use crate::meeting_reprocessing::{
     ensure_distinct_outputs, execute_with_model_check, plan_reprocessing, CommitError,
     NativeBackend, PublishReceipt, ReprocessingInput, WorkBackend,
@@ -26,6 +26,7 @@ use crate::meeting_reprocessing::{
 use crate::output::{errln, Out};
 use crate::run_request::RunRequest;
 use crate::speaker_args::SpeakerCountArgs;
+use sagascript_core::meeting::reprocess::io::{ensure_output_absent, publish_error, read_json};
 
 const MAX_REPROCESSING_JSON_BYTES: usize = 24 * 1024 * 1024;
 
@@ -245,8 +246,7 @@ fn exists(path: &Path) -> bool {
 }
 
 fn check_output_folder(path: &Path) -> Result<(), DictationError> {
-    sagascript_core::fsutil::check_destination_folder(path)
-        .map_err(|error| crate::meeting_proposal::publish_error(&error))
+    sagascript_core::fsutil::check_destination_folder(path).map_err(|error| publish_error(&error))
 }
 
 /// Private staging files are hidden siblings of an output that a killed run

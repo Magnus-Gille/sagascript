@@ -45,7 +45,7 @@ fn read_proposal_file(
     path: &std::path::Path,
 ) -> Result<sagascript_core::meeting::reprocess::proposal::MeetingReprocessingProposal, CommandError>
 {
-    sagascript_cli::meeting_proposal::read_proposal(path).map_err(|error| {
+    sagascript_core::meeting::reprocess::io::read_proposal(path).map_err(|error| {
         CommandError::InvalidInput("Could not read a valid, bounded meeting proposal".into())
             .because(error)
     })

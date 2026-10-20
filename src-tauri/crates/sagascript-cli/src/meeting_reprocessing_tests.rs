@@ -756,7 +756,8 @@ fn staging_publishes_nothing_and_commit_publishes_the_cache_then_the_proposal() 
         directory_names(fixture.root()),
         ["new-cache.json", "proposal.json", "synthetic-audio.bin"]
     );
-    let published = crate::meeting_proposal::read_proposal(&proposal).expect("valid proposal");
+    let published =
+        sagascript_core::meeting::reprocess::io::read_proposal(&proposal).expect("valid proposal");
     assert_eq!(published, receipt_proposal(&fixture));
 }
 
@@ -871,7 +872,8 @@ fn the_cache_left_by_a_failed_second_publication_recovers_the_proposal_without_i
         directory_names(fixture.root()),
         ["new-cache.json", "proposal.json", "synthetic-audio.bin"]
     );
-    crate::meeting_proposal::read_proposal(&proposal).expect("valid recovered proposal");
+    sagascript_core::meeting::reprocess::io::read_proposal(&proposal)
+        .expect("valid recovered proposal");
 }
 
 #[test]
@@ -989,9 +991,10 @@ fn a_run_killed_between_the_publications_is_detectable_and_its_staged_proposal_u
         std::slice::from_ref(&survivor)
     );
     // Recovery by hand: it was complete before the cache was published.
-    crate::meeting_proposal::read_proposal(&survivor).expect("the survivor is a valid proposal");
+    sagascript_core::meeting::reprocess::io::read_proposal(&survivor)
+        .expect("the survivor is a valid proposal");
     std::fs::rename(&survivor, &proposal).expect("rename the survivor");
-    crate::meeting_proposal::read_proposal(&proposal).expect("valid proposal");
+    sagascript_core::meeting::reprocess::io::read_proposal(&proposal).expect("valid proposal");
 }
 
 #[test]

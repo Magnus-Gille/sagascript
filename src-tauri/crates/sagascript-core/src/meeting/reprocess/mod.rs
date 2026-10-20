@@ -5,6 +5,7 @@
 //! review and never publishes the candidate; callers must resolve every
 //! conflict before accepting the result.
 
+pub mod io;
 pub mod matching;
 pub mod plan;
 pub mod proposal;
