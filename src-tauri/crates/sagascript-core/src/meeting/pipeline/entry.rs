@@ -253,6 +253,7 @@ mod tests {
     /// The signatures the app and reprocessing call (#374; they were pinned in the CLI's contract
     /// test while the CLI owned them) and the phase names the app maps to its job states.
     #[test]
+    #[allow(clippy::type_complexity)] // the pinned signatures are the point
     fn the_entry_points_keep_the_signatures_their_callers_use() {
         use crate::diarization::speaker_hint::SpeakerCountHint;
         use crate::meeting::control::MeetingPhase;
