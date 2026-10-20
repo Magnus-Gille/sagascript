@@ -1041,6 +1041,8 @@ mod running_jobs {
     fn a_cancel_ends_the_job_cancelled_when_the_worker_stops_at_its_next_checkpoint() {
         let app = App::new();
         let (started, running) = mpsc::channel();
+        let (checkpoint_tx, checkpoint_reached) = mpsc::channel();
+        let (release_worker, worker_held) = mpsc::channel();
         let (id, supervisor) = app
             .begin(None, move |control| {
                 started.send(()).expect("the test listens");
@@ -1048,6 +1050,8 @@ mod running_jobs {
                 while control.check().is_ok() {
                     std::thread::yield_now();
                 }
+                checkpoint_tx.send(()).expect("the test listens");
+                let _ = worker_held.recv();
                 Err("cancelled".into())
             })
             .expect("the job starts");
@@ -1068,7 +1072,11 @@ mod running_jobs {
             cancel_job(&mut slot, &id).expect("the job is known")
         };
         assert!(cancelled, "a running job can be cancelled");
+        checkpoint_reached
+            .recv()
+            .expect("the worker reached its cancellation checkpoint");
         assert_eq!(app.snapshot().status, JobStatus::Cancelling);
+        release_worker.send(()).expect("the worker is held");
 
         let done = app.finished(supervisor);
 
