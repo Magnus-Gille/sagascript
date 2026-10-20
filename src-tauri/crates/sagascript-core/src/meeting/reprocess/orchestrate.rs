@@ -52,7 +52,7 @@ use crate::meeting::assemble::{
     meeting_transcript_from_plain_segments, prepare_diarized_plain_segments,
 };
 use crate::meeting::control::{MeetingControl, MeetingPhase};
-use crate::meeting::reprocess::io as meeting_proposal;
+use crate::meeting::reprocess::io as proposal_io;
 use crate::meeting::reprocess::plan::{
     ReprocessingContext, ReprocessingMode, ReprocessingPlan, RequiredWork,
 };
@@ -221,7 +221,7 @@ impl StagedReprocessing {
         if let Some(cache) = &cache {
             ensure_distinct_outputs(output, cache.destination())?;
         }
-        let proposal = meeting_proposal::stage_json_new(output, &result.proposal)?;
+        let proposal = proposal_io::stage_json_new(output, &result.proposal)?;
         Ok(PendingPublication {
             cache,
             proposal,
@@ -252,8 +252,7 @@ impl PendingPublication {
             timings,
         } = self;
         let proposal_path = proposal.destination().to_path_buf();
-        meeting_proposal::ensure_output_absent(&proposal_path)
-            .map_err(CommitError::NothingPublished)?;
+        proposal_io::ensure_output_absent(&proposal_path).map_err(CommitError::NothingPublished)?;
         let mut leftovers = Vec::new();
         let mut cache_path = None;
         if let Some(cache) = cache {
@@ -270,7 +269,7 @@ impl PendingPublication {
         match proposal.publish_with(ops) {
             Ok(published) => leftovers.extend(published.leftover),
             Err(error) => {
-                let cause = meeting_proposal::publish_error(&error);
+                let cause = proposal_io::publish_error(&error);
                 return Err(match cache_path {
                     Some(cache) => CommitError::CacheOnly {
                         cache,
