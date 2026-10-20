@@ -146,6 +146,7 @@ fn run_inner(args: TranscribeArgs, canceller: &Canceller, out: &Out) -> Result<(
                     #[cfg(feature = "diarization")]
                     analyzer: &OnnxAnalyzer,
                     canceller,
+                    build_revision: crate::GIT_HASH,
                 },
                 out,
             )

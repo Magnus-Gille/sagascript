@@ -79,6 +79,8 @@ pub(super) struct MergeRequest<'a> {
     pub(super) config: &'a DiarizeConfig,
     pub(super) duration: f64,
     pub(super) progress: &'a Progress,
+    /// The source revision the report records.
+    pub(super) build_revision: &'a str,
 }
 
 /// The words merged into the speakers, with the report that explains it.
@@ -107,6 +109,7 @@ pub(super) fn merge_speakers(
         config,
         duration,
         progress,
+        build_revision,
     } = step;
     let FileRequest { file, control, .. } = *request;
     let diagnostics = plan.flags.diagnostics;
@@ -132,7 +135,7 @@ pub(super) fn merge_speakers(
         diagnostics,
         plan.source_sha256.clone(),
         duration,
-        crate::GIT_HASH.into(),
+        build_revision.into(),
         env!("CARGO_PKG_VERSION").into(),
     )?;
     report.decoder = Some(plan.decoder_evidence.clone());

@@ -173,6 +173,7 @@ fn process_services(backend: &WhisperBackend) -> Services<'_> {
         backend,
         analyzer: &OnnxAnalyzer,
         canceller: &crate::cancel::GLOBAL,
+        build_revision: crate::GIT_HASH,
     }
 }
 
@@ -189,7 +190,7 @@ pub(super) fn meeting_options(
         diarization: Some(DiarizationFlags {
             cache,
             threshold,
-            speaker_count: crate::speaker_args::SpeakerCountArgs {
+            speaker_count: sagascript_core::diarization::speaker_hint::SpeakerCountFlags {
                 speakers: speaker_hint
                     .and_then(|hint| hint.exact)
                     .filter(|_| !speaker_hint.is_some_and(|h| h.force)),

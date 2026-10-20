@@ -23,4 +23,7 @@ pub(super) struct Services<'a> {
     /// Where a cancel is asked and where the long steps (decoding, the
     /// language check, the batch between files) look for it.
     pub(super) canceller: &'a Canceller,
+    /// The source revision of the running build: a diarization report records it, and core has
+    /// no build identity of its own.
+    pub(super) build_revision: &'a str,
 }

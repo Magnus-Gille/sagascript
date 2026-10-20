@@ -183,7 +183,7 @@ impl<'a> From<&'a TranscribeArgs> for RunRequest<'a> {
 /// The validated speaker-count hint of the speaker-count flags.
 #[cfg(feature = "diarization")]
 pub(super) fn validated_speaker_hint(
-    counts: &crate::speaker_args::SpeakerCountArgs,
+    counts: &sagascript_core::diarization::speaker_hint::SpeakerCountFlags,
 ) -> Result<Option<sagascript_core::diarization::speaker_hint::SpeakerCountHint>, DictationError> {
     counts
         .hint()
@@ -195,7 +195,7 @@ pub(super) fn validated_speaker_hint(
 pub(super) fn speaker_hint_from_args(
     args: &TranscribeArgs,
 ) -> Result<Option<sagascript_core::diarization::speaker_hint::SpeakerCountHint>, DictationError> {
-    let hint = validated_speaker_hint(&args.speaker_count)?;
+    let hint = validated_speaker_hint(&args.speaker_count.into())?;
     if hint.is_some() && !args.diarize {
         return Err(DictationError::SettingsError(
             "--speakers, --min-speakers, --max-speakers and --force-speakers require --diarize"

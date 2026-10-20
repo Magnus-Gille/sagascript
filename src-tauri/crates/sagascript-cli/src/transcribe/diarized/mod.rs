@@ -146,6 +146,7 @@ pub(super) fn run_diarized(
             config: &config,
             duration,
             progress: &progress,
+            build_revision: services.build_revision,
         },
         out,
     )?;

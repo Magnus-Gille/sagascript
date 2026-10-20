@@ -41,7 +41,7 @@ use super::progress::decoder_progress_value;
 use super::resolve::resolve_file_model_for_run;
 use crate::run_request::RunRequest;
 #[cfg(feature = "diarization")]
-use crate::speaker_args::SpeakerCountArgs;
+use sagascript_core::diarization::speaker_hint::SpeakerCountFlags;
 
 // ---- the run ----------------------------------------------------------------------
 
@@ -242,7 +242,7 @@ pub(super) struct DiarizationFlags {
     pub(super) diagnostics: bool,
     /// `--speakers`, `--min-speakers`, `--max-speakers`, `--force-speakers`,
     /// validated by the run that uses them.
-    pub(super) speaker_count: SpeakerCountArgs,
+    pub(super) speaker_count: SpeakerCountFlags,
     /// `--meeting-json`: the result is the shared meeting document.
     pub(super) meeting_json: bool,
 }
@@ -255,7 +255,7 @@ impl Default for DiarizationFlags {
             exclusive_speech_embeddings: false,
             threshold: sagascript_core::diarization::DEFAULT_THRESHOLD,
             diagnostics: false,
-            speaker_count: SpeakerCountArgs::default(),
+            speaker_count: SpeakerCountFlags::default(),
             meeting_json: false,
         }
     }
@@ -292,7 +292,7 @@ impl FileOptions {
                 exclusive_speech_embeddings: args.diarize_exclusive_speech_embeddings,
                 threshold: args.diarize_threshold,
                 diagnostics: args.diarize_diagnostics,
-                speaker_count: args.speaker_count,
+                speaker_count: args.speaker_count.into(),
                 meeting_json: args.meeting_json,
             }),
         }

@@ -29,6 +29,32 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
+/// The speaker-count flags of a run as they were given: `--speakers`, `--min-speakers`,
+/// `--max-speakers` and `--force-speakers` (#374). A surface that parses them (the CLI's clap
+/// arguments) builds one; the run turns it into the hint with [`SpeakerCountFlags::hint`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SpeakerCountFlags {
+    pub speakers: Option<usize>,
+    pub min_speakers: Option<usize>,
+    pub max_speakers: Option<usize>,
+    pub force_speakers: Option<usize>,
+}
+
+impl SpeakerCountFlags {
+    /// The validated hint, or `None` when no flag was given.
+    pub fn hint(&self) -> Result<Option<SpeakerCountHint>, String> {
+        match self.force_speakers {
+            Some(n) => Ok(Some(SpeakerCountHint::forced(n))),
+            None => SpeakerCountHint::from_parts(
+                self.speakers,
+                self.min_speakers,
+                self.max_speakers,
+                false,
+            ),
+        }
+    }
+}
+
 /// What a hinted run delivered: whether the final speaker count satisfies the hint, and the count.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SpeakerHintOutcome {

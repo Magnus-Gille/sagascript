@@ -542,6 +542,7 @@ fn cached_transcribe_uses_coarse_coverage_across_threshold_sweep() {
                 backend: &backend,
                 analyzer: &OnnxAnalyzer,
                 canceller: &canceller,
+                build_revision: "test-revision",
             },
             &mut model_loaded,
             &Out::capture().0,

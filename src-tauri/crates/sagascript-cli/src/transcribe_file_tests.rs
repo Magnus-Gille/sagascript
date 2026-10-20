@@ -539,6 +539,7 @@ fn run_batch_in(
             #[cfg(feature = "diarization")]
             analyzer: &OnnxAnalyzer,
             canceller,
+            build_revision: "test-revision",
         },
         out,
     )
