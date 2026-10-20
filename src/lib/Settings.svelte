@@ -217,6 +217,7 @@
   let testError: string = $state("");
   /** The way out of `testError`, decided by the error's code (`backendErrorRecovery`); null for plain text. */
   let testRecovery: BackendErrorRecovery | null = $state(null);
+  let testRecordButton: HTMLButtonElement | undefined = $state();
   function showTestError(failure: unknown, fallback: string): void {
     testError = toErrorMessage(failure, fallback);
     testRecovery = backendErrorRecovery(failure);
@@ -829,10 +830,10 @@
    * for a run that failed in a way the backend says can be repeated (ADR 0006).
    * Both keep the file's profile, dictionary prompt and diarization choice.
    */
-  function rerunFile(run: RecentTranscription): void {
+  function rerunFile(run: RecentTranscription): string | null {
     if (run.profileId && !profileForId(run.profileId)) {
       rerunError = "The profile for this file is no longer available. Choose a profile and open the file again.";
-      return;
+      return null;
     }
     rerunError = "";
     recentTranscriptions = rememberTranscription(recentTranscriptions, run);
@@ -842,12 +843,20 @@
       prompt: run.prompt || null, diarize: run.diarize }, () => crypto.randomUUID());
     fileJobs = [...fileJobs, ...jobs];
     selectedFileId = jobs[0].id;
+    return jobs[0].id;
   }
 
-  /** "Try again" under a failed file: the same file, profile and prompt, as a new job. */
-  function retryFileJob(job: FileJob): void {
-    if (updatePreparing) return;
-    rerunFile({ path: job.path, profileId: job.profileId, prompt: job.prompt ?? "", diarize: job.diarize });
+  /**
+   * "Try again" under a failed file: the same file, profile and prompt, as a new
+   * job, whose tab then has the focus (the button that was pressed goes away with
+   * the panel it was in). False when nothing was queued.
+   */
+  function retryFileJob(job: FileJob): boolean {
+    if (updatePreparing) return false;
+    const id = rerunFile({ path: job.path, profileId: job.profileId, prompt: job.prompt ?? "", diarize: job.diarize });
+    if (id === null) return false;
+    void tick().then(() => document.getElementById(`file-tab-${id}`)?.focus());
+    return true;
   }
 
   function updateFileBusy(id: string, busy: boolean): void {
@@ -2101,6 +2110,13 @@
     }
   }
 
+  /** "Try again" under the Dictate tab's error: a new recording, whose button then has the focus. */
+  async function onDictateRetry(): Promise<void> {
+    await onTestRecord();
+    await tick();
+    testRecordButton?.focus();
+  }
+
   function onTranscribeProfileChange(e: Event) {
     const nextProfileId = (e.target as HTMLSelectElement).value;
     transcribeProfileId = profileForId(nextProfileId)?.id ?? selectedTranscribeProfile()?.id ?? null;
@@ -2568,6 +2584,7 @@
           <div class="test-section-label">Try it out</div>
           <button
             class="test-record-btn"
+            bind:this={testRecordButton}
             class:recording={testRecording}
             class:transcribing={testTranscribing}
             onclick={onTestRecord}
@@ -2590,7 +2607,7 @@
             <div class="transcribe-error">{testError}</div>
             <ErrorRecovery recovery={testRecovery}
               busy={updatePreparing || downloads.busy || dictationModelSaving || dictateButtonAction(backendDictationState, testOwnsRecording) !== "start"}
-              onRetry={() => void onTestRecord()} onDownloadModel={() => void onDictateDownloadModel()} />
+              onRetry={() => void onDictateRetry()} onDownloadModel={() => void onDictateDownloadModel()} />
           {/if}
           <textarea
             class="test-result"

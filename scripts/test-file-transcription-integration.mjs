@@ -247,10 +247,17 @@ test("re-run appends a fresh job with the selected request's options and obeys t
   assert.equal(queue.nextQueuedFile(queue.updateFileJob(result.fileJobs, current.id, "completed"), false).id, added.id);
 });
 
-test("Try again under a failed file queues the same file with its options as a new job, once the window allows it", () => {
+test("Try again under a failed file queues the same file with its options as a new job, once the window allows it", async () => {
   const failed = { id: "failed", path: "/chosen.wav", profileId: "swedish", prompt: "Astrid", diarize: false, status: "failed" };
-  const run = (updatePreparing, profileExists = true) => {
-    const deps = { ...queue, ...recent, profileForId: (id) => (profileExists ? id === "swedish" : false) };
+  const run = async (updatePreparing, profileExists = true) => {
+    const focused = [];
+    const deps = {
+      ...queue,
+      ...recent,
+      profileForId: (id) => (profileExists ? id === "swedish" : false),
+      tick: () => Promise.resolve(),
+      document: { getElementById: (id) => ({ focus: () => focused.push(id) }) },
+    };
     const factory = new Function(
       ...Object.keys(deps),
       "failed",
@@ -259,12 +266,16 @@ test("Try again under a failed file queues the same file with its options as a n
       let fileJobs = [failed], recentTranscriptions = [], selectedRerunPath = '';
       let selectedFileId = failed.id, rerunError = '';
       ${functions(settingsSource, ["rerunFile", "retryFileJob"])}
-      retryFileJob(failed); return { fileJobs, selectedFileId, rerunError, recentTranscriptions };`),
+      const queued = retryFileJob(failed); return { queued, fileJobs, selectedFileId, rerunError, recentTranscriptions };`),
     );
-    return factory(...Object.values(deps), failed, updatePreparing);
+    const result = factory(...Object.values(deps), failed, updatePreparing);
+    await Promise.resolve();
+    await Promise.resolve();
+    return { ...result, focused };
   };
 
-  const result = run(false);
+  const result = await run(false);
+  assert.equal(result.queued, true);
   assert.equal(result.fileJobs[0], failed, "the failed job stays as it failed");
   const added = result.fileJobs[1];
   assert.equal(added.status, "queued");
@@ -275,9 +286,15 @@ test("Try again under a failed file queues the same file with its options as a n
   );
   assert.equal(result.selectedFileId, added.id);
   assert.equal(result.rerunError, "");
+  assert.deepEqual(result.focused, [`file-tab-${added.id}`], "the new job's tab takes the focus");
 
-  assert.equal(run(true).fileJobs.length, 1, "nothing is queued while an update is being prepared");
-  const gone = run(false, false);
+  const preparing = await run(true);
+  assert.equal(preparing.queued, false);
+  assert.equal(preparing.fileJobs.length, 1, "nothing is queued while an update is being prepared");
+  assert.deepEqual(preparing.focused, []);
+  const gone = await run(false, false);
+  assert.equal(gone.queued, false);
   assert.equal(gone.fileJobs.length, 1);
   assert.match(gone.rerunError, /profile for this file is no longer available/);
+  assert.deepEqual(gone.focused, []);
 });

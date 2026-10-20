@@ -55,7 +55,7 @@ describe("Try again", () => {
     ipc.emit("error", backendError("engine_busy", "Pianissimo engine: queue full", true));
 
     const button = await screen.findByRole("button", { name: "Try again" });
-    expect(button).toBeEnabled();
+    expect(button).not.toHaveAttribute("aria-disabled", "true");
     expect(dictateError()?.textContent).toBe("Pianissimo engine: queue full");
     expect(downloadAgain()).toBeNull();
 
@@ -120,7 +120,7 @@ describe("Try again", () => {
 
     ipc.emit("state-changed", "transcribing");
 
-    await waitFor(() => expect(tryAgain()).toBeDisabled());
+    await waitFor(() => expect(tryAgain()).toHaveAttribute("aria-disabled", "true"));
   });
 });
 
@@ -132,7 +132,7 @@ describe("Download the model again", () => {
     const { ipc } = await renderSettings(settingsBackend());
     ipc.emit("error", failure);
 
-    expect(await screen.findByRole("button", { name: "Download the model again" })).toBeEnabled();
+    expect(await screen.findByRole("button", { name: "Download the model again" })).not.toHaveAttribute("aria-disabled", "true");
     expect(dictateError()?.textContent).toBe(failure.message);
     expect(tryAgain()).toBeNull();
   });
@@ -151,7 +151,7 @@ describe("Download the model again", () => {
     expect(ipc.callsTo("download_model")).toHaveLength(0);
     // The progress the window shows for every download, and no second click.
     await waitFor(() => expect(document.querySelector(".download-status-label")?.textContent).toBe("Downloading Pianissimo..."));
-    expect(screen.getByRole("button", { name: "Download the model again" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Download the model again" })).toHaveAttribute("aria-disabled", "true");
 
     download.resolve();
 
@@ -192,9 +192,81 @@ describe("Download the model again", () => {
     await user.click(await screen.findByRole("button", { name: "Download the model again" }));
 
     await waitFor(() => expect(dictateError()?.textContent).toBe("Model download failed: offline"));
-    expect(await screen.findByRole("button", { name: "Download the model again" })).toBeEnabled();
+    expect(await screen.findByRole("button", { name: "Download the model again" })).not.toHaveAttribute("aria-disabled", "true");
     expect(tryAgain()).toBeNull();
     await user.click(screen.getByRole("button", { name: "Download the model again" }));
     await waitFor(() => expect(ipc.callsTo("download_pianissimo_model")).toHaveLength(2));
+  });
+});
+
+// Focus must not fall to the page at a recovery transition: a keyboard or
+// screen-reader user would lose their place (#360 review). The button is
+// `aria-disabled` and guarded, not `disabled`, while a download runs, so it
+// keeps the focus it has; one button carries both labels, so the focus stays on
+// it when a finished download turns it into "Try again".
+describe("focus", () => {
+  test("Try again moves focus to the recording button it started", async () => {
+    const { user } = await startAndStop(commandErrors.model_busy);
+
+    await user.click(await screen.findByRole("button", { name: "Try again" }));
+
+    const stop = await screen.findByRole("button", { name: "Stop recording" });
+    await waitFor(() => expect(stop).toHaveFocus());
+  });
+
+  test("Try again that could not start a recording leaves focus on the Start button", async () => {
+    let starts = 0;
+    const { user } = await startAndStop(commandErrors.model_busy, {
+      start_recording: () => {
+        starts += 1;
+        if (starts > 1) throw commandErrors.busy;
+      },
+    });
+    // The second start fails.
+    await user.click(await screen.findByRole("button", { name: "Try again" }));
+
+    const start = await screen.findByRole("button", { name: "Start recording" });
+    await waitFor(() => expect(start).toHaveFocus());
+  });
+
+  test("a download keeps focus on its button while it runs, and the Try again that follows has it", async () => {
+    const download = deferred<void>();
+    const { ipc } = await renderSettings(settingsBackend({ download_pianissimo_model: () => download.promise }));
+    ipc.emit("error", commandErrors.engine_model_missing);
+    const user = userEvent.setup();
+    const button = await screen.findByRole("button", { name: "Download the model again" });
+
+    await user.click(button);
+
+    await waitFor(() => expect(ipc.callsTo("download_pianissimo_model")).toHaveLength(1));
+    expect(button).toHaveAttribute("aria-disabled", "true");
+    expect(button).not.toBeDisabled();
+    expect(button).toHaveFocus();
+    // Busy means busy: a second activation does nothing.
+    await user.click(button);
+    await user.keyboard("{Enter}");
+    expect(ipc.callsTo("download_pianissimo_model")).toHaveLength(1);
+
+    download.resolve();
+
+    const retry = await screen.findByRole("button", { name: "Try again" });
+    expect(retry).toHaveFocus();
+    expect(retry).not.toHaveAttribute("aria-disabled", "true");
+  });
+
+  test("a download does not take focus from where the person moved meanwhile", async () => {
+    const download = deferred<void>();
+    const { ipc } = await renderSettings(settingsBackend({ download_pianissimo_model: () => download.promise }));
+    ipc.emit("error", commandErrors.engine_model_missing);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Download the model again" }));
+    await waitFor(() => expect(ipc.callsTo("download_pianissimo_model")).toHaveLength(1));
+    const editor = screen.getByPlaceholderText("Click here and use your hotkey, or press the button above");
+    editor.focus();
+
+    download.resolve();
+
+    await screen.findByRole("button", { name: "Try again" });
+    expect(editor).toHaveFocus();
   });
 });

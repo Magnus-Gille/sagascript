@@ -53,8 +53,8 @@
     onComplete: (id: string, status: FileJobStatus) => void;
     onBusyChange: (id: string, busy: boolean) => void;
     onMissingFile: (path: string) => void;
-    /** Run this job's file again as a new job ("Try again"). */
-    onRetry: (job: FileJob) => void;
+    /** Run this job's file again as a new job ("Try again"). False when nothing was queued. */
+    onRetry: (job: FileJob) => boolean;
     /** Download the engine's model again; rejects when the download fails. */
     onDownloadModel: () => Promise<void>;
     /** A download is running, so another cannot start. */
@@ -518,8 +518,7 @@
 
   /** "Try again": the file runs again as a new job; this one stays as it failed. */
   function retryFile(): void {
-    transcribeRecovery = null;
-    onRetry(job);
+    if (onRetry(job)) transcribeRecovery = null;
   }
 
   /** "Download the model again"; when it is there, the run can be repeated. */

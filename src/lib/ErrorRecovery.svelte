@@ -4,6 +4,11 @@
   // reads the error's `code` and `retryable` and never its text: "Try again"
   // restarts the user's action (record again, run the file again), "Download
   // the model again" repairs the engine's model.
+  //
+  // One button carries both labels, so a finished download turns "Download the
+  // model again" into "Try again" without losing the focus the person has on
+  // it. While the action cannot start it is `aria-disabled` and guarded, not
+  // `disabled`: a disabled button drops the focus to the page.
   import type { BackendErrorRecovery } from "./errors";
 
   let {
@@ -18,20 +23,24 @@
     onRetry: () => void;
     onDownloadModel: () => void;
   } = $props();
+
+  function act(): void {
+    if (busy) return;
+    if (recovery === "retry") onRetry();
+    else if (recovery === "download_model") onDownloadModel();
+  }
 </script>
 
-{#if recovery === "retry"}
+{#if recovery}
   <div class="error-recovery">
-    <button class="secondary" type="button" onclick={onRetry} disabled={busy}>Try again</button>
-  </div>
-{:else if recovery === "download_model"}
-  <div class="error-recovery">
-    <button class="secondary" type="button" onclick={onDownloadModel} disabled={busy}>Download the model again</button>
+    <button class="secondary" type="button" aria-disabled={busy ? "true" : undefined} onclick={act}>
+      {recovery === "retry" ? "Try again" : "Download the model again"}
+    </button>
   </div>
 {/if}
 
 <style>
   .error-recovery { margin-top: 8px; }
   .error-recovery button { margin: 0; }
-  button:disabled { opacity: 0.5; cursor: default; }
+  button[aria-disabled="true"] { opacity: 0.5; cursor: default; }
 </style>

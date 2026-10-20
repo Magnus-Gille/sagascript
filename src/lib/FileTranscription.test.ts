@@ -4,9 +4,9 @@ import { emit } from "@tauri-apps/api/event";
 import { screen, waitFor } from "@testing-library/svelte";
 import userEvent from "@testing-library/user-event";
 import { expect, test } from "vitest";
-import { deferred } from "../test/deferred";
+import { deferred, settle } from "../test/deferred";
 import { backendError } from "../test/ipc";
-import { renderSettings, settingsBackend } from "../test/settings";
+import { renderSettings, settingsBackend, settingsValue, swedishProfile } from "../test/settings";
 import commandErrors from "../../contracts/transport/command_errors.json";
 
 test("a plain transcription listens for progress while it runs, and stops when it ends", async () => {
@@ -135,7 +135,7 @@ test("Try again runs the same file again as a new job and keeps the failed one",
 test("Try again is offered by the retry hint, whatever the message says", async () => {
   await dropAndReject(backendError("engine_busy", "Pianissimo engine: queue full", true), "/audio/queued.wav");
 
-  expect(await screen.findByRole("button", { name: "Try again" })).toBeEnabled();
+  expect(await screen.findByRole("button", { name: "Try again" })).not.toHaveAttribute("aria-disabled", "true");
   expect(downloadAgain()).toBeNull();
 });
 
@@ -175,7 +175,9 @@ test("a missing engine model offers the download, then Try again", async () => {
   await user.click(downloadButton);
 
   await waitFor(() => expect(ipc.callsTo("download_pianissimo_model")).toHaveLength(1));
-  await waitFor(() => expect(screen.getByRole("button", { name: "Download the model again" })).toBeDisabled());
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "Download the model again" })).toHaveAttribute("aria-disabled", "true"),
+  );
   download.resolve();
   const retry = await screen.findByRole("button", { name: "Try again" });
   expect(downloadAgain()).toBeNull();
@@ -195,6 +197,89 @@ test("a failed download shows its error and offers the download again", async ()
   await userEvent.setup().click(await screen.findByRole("button", { name: "Download the model again" }));
 
   expect(await screen.findByText("Model download failed: offline")).toBeInTheDocument();
-  expect(await screen.findByRole("button", { name: "Download the model again" })).toBeEnabled();
+  expect(await screen.findByRole("button", { name: "Download the model again" })).not.toHaveAttribute("aria-disabled", "true");
   expect(tryAgain()).toBeNull();
+});
+
+// Focus must not fall to the page at a recovery transition (#360 review).
+test("Try again moves focus to the tab of the new job", async () => {
+  let calls = 0;
+  await renderSettings(
+    settingsBackend({
+      transcribe_file: () => {
+        calls += 1;
+        if (calls === 1) throw commandErrors.model_busy;
+        return new Promise<string>(() => undefined);
+      },
+      set_update_result_pending: () => undefined,
+    }),
+  );
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("button", { name: "Transcribe" }));
+  await emit("tauri://drag-drop", { paths: ["/audio/interview.wav"], position: { x: 0, y: 0 } });
+
+  await user.click(await screen.findByRole("button", { name: "Try again" }));
+
+  await waitFor(() => expect(screen.getAllByRole("tab", { name: /interview\.wav/ })).toHaveLength(2));
+  const [, newest] = screen.getAllByRole("tab", { name: /interview\.wav/ });
+  expect(newest).toHaveAttribute("aria-selected", "true");
+  await waitFor(() => expect(newest).toHaveFocus());
+});
+
+test("a Try again the window cannot queue stays on screen and keeps the focus", async () => {
+  const { ipc } = await renderSettings(
+    settingsBackend({
+      transcribe_file: () => {
+        throw commandErrors.model_busy;
+      },
+      set_update_result_pending: () => undefined,
+    }),
+  );
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("button", { name: "Transcribe" }));
+  await emit("tauri://drag-drop", { paths: ["/audio/gone-profile.wav"], position: { x: 0, y: 0 } });
+  const retry = await screen.findByRole("button", { name: "Try again" });
+  // The profile the file ran with is removed meanwhile.
+  ipc.handle("get_settings", () => settingsValue({ hotkey_profiles: [{ ...swedishProfile, id: "other", name: "Other" }] }));
+  ipc.emit("state-changed", "settings_reloaded");
+  await waitFor(() => expect(ipc.callsTo("get_settings").length).toBeGreaterThan(1));
+  await settle();
+
+  await user.click(retry);
+
+  expect(await screen.findByText(/profile for this file is no longer available/)).toBeInTheDocument();
+  expect(ipc.callsTo("transcribe_file")).toHaveLength(1);
+  expect(screen.getByRole("button", { name: "Try again" })).toBe(retry);
+  expect(retry).toHaveFocus();
+});
+
+test("a model download keeps focus on its button and hands it to the Try again that follows", async () => {
+  const download = deferred<void>();
+  const { ipc } = await renderSettings(
+    settingsBackend({
+      transcribe_file: () => {
+        throw commandErrors.engine_model_missing;
+      },
+      download_pianissimo_model: () => download.promise,
+      set_update_result_pending: () => undefined,
+    }),
+  );
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("button", { name: "Transcribe" }));
+  await emit("tauri://drag-drop", { paths: ["/audio/swedish.wav"], position: { x: 0, y: 0 } });
+  const button = await screen.findByRole("button", { name: "Download the model again" });
+
+  await user.click(button);
+
+  await waitFor(() => expect(ipc.callsTo("download_pianissimo_model")).toHaveLength(1));
+  expect(button).toHaveAttribute("aria-disabled", "true");
+  expect(button).not.toBeDisabled();
+  expect(button).toHaveFocus();
+  await user.click(button);
+  expect(ipc.callsTo("download_pianissimo_model")).toHaveLength(1);
+
+  download.resolve();
+
+  const retry = await screen.findByRole("button", { name: "Try again" });
+  expect(retry).toHaveFocus();
 });
