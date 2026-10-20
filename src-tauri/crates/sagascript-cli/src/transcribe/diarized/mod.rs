@@ -27,7 +27,7 @@ use super::plan::{DiarizationPlan, FileRequest};
 use super::progress::Progress;
 use super::services::Services;
 use super::source::{acquire_source, Acquired};
-use crate::output::Out;
+use sagascript_core::meeting::pipeline::narrate::Narrator;
 
 mod analysis;
 mod prepare;
@@ -49,7 +49,7 @@ pub(super) fn run_diarized(
     plan: DiarizationPlan,
     services: Services<'_>,
     model_loaded: &mut bool,
-    out: &Out,
+    out: &dyn Narrator,
 ) -> Result<FileTranscription, DictationError> {
     let FileRequest {
         options,

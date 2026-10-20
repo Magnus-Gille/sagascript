@@ -1,12 +1,14 @@
 //! `--progress-json` events (#343): the phase table and the writers. Events go
 //! to stderr, one compact JSON object per line; stdout stays the transcript.
 
+use std::sync::Arc;
 use std::time::Instant;
 
 #[cfg(feature = "diarization")]
 use sagascript_core::diarization::report::DecoderEvidence;
 
-use crate::output::{errln, Out};
+use crate::output::errln;
+use sagascript_core::meeting::pipeline::narrate::Narrator;
 
 /// Where one file's `--progress-json` events go, and what they carry: the
 /// stream, whether events are wanted, the file's start (their `elapsed_ms`
@@ -15,7 +17,7 @@ use crate::output::{errln, Out};
 /// clone.
 #[derive(Clone)]
 pub(super) struct Progress {
-    out: Out,
+    out: Arc<dyn Narrator>,
     enabled: bool,
     started: Instant,
     decoder: Option<serde_json::Value>,
@@ -23,13 +25,13 @@ pub(super) struct Progress {
 
 impl Progress {
     pub(super) fn new(
-        out: &Out,
+        out: &dyn Narrator,
         enabled: bool,
         started: Instant,
         decoder: Option<serde_json::Value>,
     ) -> Self {
         Self {
-            out: out.clone(),
+            out: out.handle(),
             enabled,
             started,
             decoder,
@@ -39,7 +41,7 @@ impl Progress {
     /// One phase event, with the decoder settings when the run has them.
     pub(super) fn phase(&self, phase: &str, percent: Option<u8>) {
         emit_progress_with_decoder(
-            &self.out,
+            &*self.out,
             self.enabled,
             self.started,
             phase,
@@ -52,7 +54,7 @@ impl Progress {
     #[cfg(feature = "diarization")]
     pub(super) fn meeting_phase(&self, phase: &str) {
         emit_meeting_progress(
-            &self.out,
+            &*self.out,
             self.enabled,
             self.started,
             phase,
@@ -103,7 +105,7 @@ pub(super) fn progress_event_with_decoder(
 }
 
 pub(super) fn emit_progress(
-    out: &Out,
+    out: &dyn Narrator,
     enabled: bool,
     started: Instant,
     phase: &str,
@@ -125,7 +127,7 @@ pub(super) fn emit_progress(
 }
 
 pub(super) fn emit_progress_with_decoder(
-    out: &Out,
+    out: &dyn Narrator,
     enabled: bool,
     started: Instant,
     phase: &str,
@@ -150,7 +152,7 @@ pub(super) fn emit_progress_with_decoder(
 
 #[cfg(feature = "diarization")]
 pub(super) fn emit_meeting_progress(
-    out: &Out,
+    out: &dyn Narrator,
     enabled: bool,
     started: Instant,
     phase: &str,

@@ -26,7 +26,8 @@ use super::plan::FileRequest;
 use super::progress::Progress;
 use super::resolve::model_id_string;
 use super::services::Services;
-use crate::output::{errln, Out};
+use crate::output::errln;
+use sagascript_core::meeting::pipeline::narrate::Narrator;
 
 /// A Whisper backend: it can load a model, classify the language of audio
 /// (through [`LanguageProbe`]) and transcribe it.
@@ -133,7 +134,7 @@ pub(super) fn not_downloaded(model: WhisperModel) -> DictationError {
 /// memory of it, so a validated cache hit that never needs the weights does
 /// not pay for them, and a batch pays once. Returns the seconds spent.
 pub(super) fn ensure_model_loaded(
-    out: &Out,
+    out: &dyn Narrator,
     backend: &dyn InferenceBackend,
     model: WhisperModel,
     profile: ContextProfile,
@@ -175,7 +176,7 @@ pub(super) fn prepare_language(
     profile: ContextProfile,
     model_loaded: &mut bool,
     progress: &Progress,
-    out: &Out,
+    out: &dyn Narrator,
 ) -> Result<LanguageEvidence, DictationError> {
     let FileRequest {
         language, model, ..
@@ -221,7 +222,7 @@ pub(super) fn prepare_language(
 /// on disk; returns where it is.
 pub(super) fn verify_vad_model(
     backend: &dyn InferenceBackend,
-    out: &Out,
+    out: &dyn Narrator,
 ) -> Result<PathBuf, DictationError> {
     errln!(out, "Verifying Silero VAD model...");
     backend.ensure_vad_model()

@@ -14,7 +14,8 @@ use sagascript_core::transcription::WhisperBackend;
 
 use super::inference::InferenceBackend;
 
-use crate::output::{errln, Out};
+use crate::output::errln;
+use sagascript_core::meeting::pipeline::narrate::Narrator;
 
 /// What loading a model for a language check may do about its Core ML
 /// encoder (#343). Local mode makes no network request after setup, so the
@@ -73,7 +74,7 @@ impl DetectorLoader for InstalledDetectors {
 }
 
 pub(super) fn detect_file_language(
-    out: &Out,
+    out: &dyn Narrator,
     transcription_backend: &dyn InferenceBackend,
     audio: &[f32],
     transcription_model: WhisperModel,
@@ -92,7 +93,7 @@ pub(super) fn detect_file_language(
 /// backend's own probe and its answer to which models are installed
 /// (`is_downloaded`, which picks the neutral and the accurate detector).
 pub(super) fn detect_file_language_with(
-    out: &Out,
+    out: &dyn Narrator,
     detectors: &dyn DetectorLoader,
     transcription_probe: &dyn LanguageProbe,
     is_downloaded: &dyn Fn(WhisperModel) -> bool,

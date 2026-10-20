@@ -25,6 +25,7 @@ use super::resolve::model_id_string;
 use super::vocab_correction::{apply_glossary_corrections, apply_hint_corrections};
 use crate::exit::{dictation_error_code, ErrorObject, JsonOutput};
 use crate::output::{errln, outln, Out, WriteError};
+use sagascript_core::meeting::pipeline::narrate::Narrator;
 
 #[derive(Debug)]
 pub(super) struct FileTranscription {
@@ -303,7 +304,7 @@ pub(super) fn combined_warnings(
     warnings
 }
 
-pub(super) fn emit_warnings(out: &Out, warnings: &[TranscriptionWarning]) {
+pub(super) fn emit_warnings(out: &dyn Narrator, warnings: &[TranscriptionWarning]) {
     for warning in warnings {
         errln!(out, "Warning [{}]: {}", warning.code, warning.message);
     }

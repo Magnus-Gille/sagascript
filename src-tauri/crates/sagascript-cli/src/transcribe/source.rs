@@ -7,8 +7,6 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::time::Instant;
 
-use indicatif::{ProgressBar, ProgressStyle};
-
 #[cfg(feature = "diarization")]
 use sagascript_core::diarization::DiarizationAnalysis;
 use sagascript_core::error::DictationError;
@@ -32,9 +30,10 @@ use super::resolve::model_id_string;
 #[cfg(feature = "diarization")]
 use super::services::Services;
 use crate::cancel::Canceller;
-use crate::output::{errln, Out};
+use crate::output::errln;
 #[cfg(feature = "diarization")]
 use sagascript_core::diarization::cache::{CacheIdentity, CacheLookup, DiarizationCache};
+use sagascript_core::meeting::pipeline::narrate::Narrator;
 
 /// A file decoded to what Whisper takes: 16 kHz mono samples.
 pub(super) struct DecodedAudio {
@@ -59,33 +58,23 @@ pub(super) fn decode_file(
     canceller: &Canceller,
     control: Option<&MeetingControl<'_>>,
     progress: &Progress,
-    out: &Out,
+    out: &dyn Narrator,
 ) -> Result<DecodedAudio, DictationError> {
     errln!(out, "Decoding {}...", file.display());
     let decode_started = Instant::now();
-    // Byte-fraction decode bar for large files (#237): small files
-    // decode sub-second, so only bar above 8 MB to avoid flicker.
+    // Byte-fraction decode bar for large files (#237), if the narrator draws one.
     let decode_len = std::fs::metadata(file).map(|m| m.len()).unwrap_or(0);
-    let decode_bar = (decode_len > 8_000_000).then(|| {
-        let pb = ProgressBar::new(100);
-        pb.set_style(ProgressStyle::with_template("  Decoding [{bar:40}] {pos}%").unwrap());
-        pb
-    });
+    let decode_bar = out.decode_bar(decode_len);
     let on_decode = |pct: u8| {
         progress.phase("decoding", Some(pct));
-        if let Some(pb) = &decode_bar {
-            pb.set_position(pct as u64);
+        if let Some(bar) = &decode_bar {
+            bar.decoding(pct);
         }
     };
     let on_resample = |pct: u8| {
         progress.phase("resampling", Some(pct));
-        if let Some(pb) = &decode_bar {
-            if pct == 0 {
-                pb.set_style(
-                    ProgressStyle::with_template("  Resampling [{bar:40}] {pos}%").unwrap(),
-                );
-            }
-            pb.set_position(pct as u64);
+        if let Some(bar) = &decode_bar {
+            bar.resampling(pct);
         }
     };
     let checkpoint = || {
@@ -99,8 +88,8 @@ pub(super) fn decode_file(
         &on_decode,
         &on_resample,
     )?;
-    if let Some(pb) = decode_bar {
-        pb.finish_and_clear();
+    if let Some(bar) = decode_bar {
+        bar.finish();
     }
     let audio = DecodedAudio {
         decode_resample_seconds: decode_started.elapsed().as_secs_f64(),
@@ -220,7 +209,7 @@ pub(super) fn acquire_source(
     plan: &DiarizationPlan,
     services: Services<'_>,
     progress: &Progress,
-    out: &Out,
+    out: &dyn Narrator,
 ) -> Result<Acquired, DictationError> {
     let FileRequest {
         file,
@@ -300,7 +289,7 @@ pub(super) fn acquire_source(
 fn lookup_cache(
     target: &CacheTarget,
     exclusive_speech_embeddings: bool,
-    out: &Out,
+    out: &dyn Narrator,
 ) -> Result<Option<Box<DiarizationCache>>, DictationError> {
     match sagascript_core::diarization::cache::load_with_analysis_policy(
         &target.path,

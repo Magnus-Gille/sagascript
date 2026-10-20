@@ -29,7 +29,8 @@ use super::super::plan::{DiarizationFlags, FileRequest};
 use super::super::progress::Progress;
 use super::super::resolve::model_id_string;
 use super::speakers::Merged;
-use crate::output::{errln, Out};
+use crate::output::errln;
+use sagascript_core::meeting::pipeline::narrate::Narrator;
 
 /// What [`assemble_result`] needs.
 pub(super) struct AssembleRequest<'a> {
@@ -108,7 +109,7 @@ fn shape_text(
 pub(super) fn assemble_result(
     step: AssembleRequest<'_>,
     mut performance: DiarizationPerformance,
-    out: &Out,
+    out: &dyn Narrator,
 ) -> Result<FileTranscription, DictationError> {
     let AssembleRequest {
         request,

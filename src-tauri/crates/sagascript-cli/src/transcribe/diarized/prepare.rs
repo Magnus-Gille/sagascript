@@ -14,7 +14,8 @@ use super::super::plan::{DiarizationPlan, FileOptions, FileRequest};
 use super::super::progress::Progress;
 use super::super::services::Services;
 use super::super::source::Source;
-use crate::output::{errln, Out};
+use crate::output::errln;
+use sagascript_core::meeting::pipeline::narrate::Narrator;
 
 /// What [`settle_language`] needs besides the batch's memory of its model.
 pub(super) struct LanguageRequest<'a> {
@@ -33,7 +34,7 @@ pub(super) fn settle_language(
     step: &LanguageRequest<'_>,
     model_loaded: &mut bool,
     progress: &Progress,
-    out: &Out,
+    out: &dyn Narrator,
 ) -> Result<LanguageEvidence, DictationError> {
     let LanguageRequest {
         request,
@@ -109,7 +110,7 @@ pub(super) struct Configured {
 /// the run uses.
 pub(super) fn configure(
     step: &ConfigureRequest<'_>,
-    out: &Out,
+    out: &dyn Narrator,
 ) -> Result<Configured, DictationError> {
     let ConfigureRequest {
         request,

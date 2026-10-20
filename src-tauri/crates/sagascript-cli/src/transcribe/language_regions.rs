@@ -1,8 +1,9 @@
 //! Sampled language-region detection for long auto-language files (#343).
 
 use super::language_detection::LanguageProbe;
-use crate::output::{errln, Out};
+use crate::output::errln;
 use sagascript_core::error::DictationError;
+use sagascript_core::meeting::pipeline::narrate::Narrator;
 use sagascript_core::settings::Language;
 use sagascript_core::transcription::diagnostics::{
     analyze_language_windows, LanguageDetection, LanguageRegionDiagnostics, LanguageWindow,
@@ -22,7 +23,7 @@ const LANGUAGE_WINDOW_MIN_RMS: f64 = 0.0015;
 /// bounded for multi-hour sources; this function is called independently for
 /// each source when native batch mode invokes the single-file pipeline.
 pub(super) fn detect_file_language_regions(
-    out: &Out,
+    out: &dyn Narrator,
     backend: &dyn LanguageProbe,
     audio: &[f32],
     configured_language: Language,
@@ -33,7 +34,7 @@ pub(super) fn detect_file_language_regions(
 }
 
 pub(super) fn detect_language_regions_with(
-    out: &Out,
+    out: &dyn Narrator,
     audio: &[f32],
     configured_language: Language,
     mut detect: impl FnMut(&[f32]) -> Result<Option<LanguageDetection>, DictationError>,

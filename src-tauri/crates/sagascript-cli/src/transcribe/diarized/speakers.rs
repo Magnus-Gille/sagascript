@@ -18,7 +18,8 @@ use super::super::meeting::{
 };
 use super::super::plan::{DiarizationPlan, FileRequest};
 use super::super::progress::Progress;
-use crate::output::{errln, Out};
+use crate::output::errln;
+use sagascript_core::meeting::pipeline::narrate::Narrator;
 
 /// What [`cluster_speakers`] needs.
 pub(super) struct ClusterRequest<'a> {
@@ -38,7 +39,7 @@ pub(super) struct Clustered {
 /// Groups the analysis into speaker segments, applying the speaker-count hint.
 pub(super) fn cluster_speakers(
     step: &ClusterRequest<'_>,
-    out: &Out,
+    out: &dyn Narrator,
 ) -> Result<Clustered, DictationError> {
     let ClusterRequest {
         analysis,
@@ -91,7 +92,10 @@ pub(super) struct Merged {
 
 /// Merges the speakers into the words and builds the diarization report,
 /// checking it and the source file one last time.
-pub(super) fn merge_speakers(step: MergeRequest<'_>, out: &Out) -> Result<Merged, DictationError> {
+pub(super) fn merge_speakers(
+    step: MergeRequest<'_>,
+    out: &dyn Narrator,
+) -> Result<Merged, DictationError> {
     let MergeRequest {
         request,
         plan,

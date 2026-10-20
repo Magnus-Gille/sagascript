@@ -18,7 +18,8 @@ use super::super::inference::LanguageEvidence;
 use super::super::meeting::{meeting_checkpoint, MeetingControl, MeetingPhase};
 use super::super::services::Services;
 use super::super::source::{CacheTarget, Source};
-use crate::output::{errln, Out};
+use crate::output::errln;
+use sagascript_core::meeting::pipeline::narrate::Narrator;
 
 /// What [`obtain_analysis`] needs besides the source and the output.
 pub(super) struct AnalysisRequest<'a> {
@@ -71,7 +72,7 @@ pub(super) fn record_analysis(performance: &mut DiarizationPerformance, analyzed
 pub(super) fn obtain_analysis(
     source: Source,
     request: &AnalysisRequest<'_>,
-    out: &Out,
+    out: &dyn Narrator,
 ) -> Result<Analyzed, DictationError> {
     let AnalysisRequest {
         services,
@@ -158,7 +159,7 @@ struct CacheWrite<'a> {
 /// never replaces: the path is a private staging path, and the reprocessing
 /// caller publishes the cache (and says so) only after validating the whole
 /// run (#342).
-fn write_cache(step: &CacheWrite<'_>, out: &Out) -> Result<f64, DictationError> {
+fn write_cache(step: &CacheWrite<'_>, out: &dyn Narrator) -> Result<f64, DictationError> {
     let CacheWrite {
         target,
         analysis,
