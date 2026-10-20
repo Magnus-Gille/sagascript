@@ -281,3 +281,21 @@ test("a model download keeps focus on its button and hands it to the Try again t
   const retry = await screen.findByRole("button", { name: "Try again" });
   expect(retry).toHaveFocus();
 });
+
+test.each([
+  ["pianissimo_unavailable", backendError("pianissimo_unavailable", "Pianissimo is not available on this system.")],
+  ["invalid_input", backendError("invalid_input", "That did not work.")],
+])("a download refused with %s shows the error and offers nothing, so it cannot loop", async (_code, refusal) => {
+  const { ipc } = await dropAndReject(commandErrors.engine_model_missing, "/audio/refused.wav");
+  ipc.handle("download_pianissimo_model", () => {
+    throw refusal;
+  });
+
+  await userEvent.setup().click(await screen.findByRole("button", { name: "Download the model again" }));
+
+  expect(await screen.findByText(refusal.message)).toBeInTheDocument();
+  await settle();
+  expect(downloadAgain()).toBeNull();
+  expect(tryAgain()).toBeNull();
+  expect(ipc.callsTo("download_pianissimo_model")).toHaveLength(1);
+});

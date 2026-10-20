@@ -178,6 +178,45 @@ describe("Download the model again", () => {
     expect(downloadAgain()).toBeNull();
   });
 
+  test.each([
+    ["pianissimo_unavailable", backendError("pianissimo_unavailable", "Pianissimo is not available on this system.")],
+    ["invalid_input", backendError("invalid_input", "That did not work.")],
+  ])("a download refused with %s shows the error and offers nothing, so it cannot loop", async (_code, refusal) => {
+    const { ipc } = await renderSettings(
+      settingsBackend({
+        download_pianissimo_model: () => {
+          throw refusal;
+        },
+      }),
+    );
+    ipc.emit("error", commandErrors.engine_model_missing);
+
+    await userEvent.setup().click(await screen.findByRole("button", { name: "Download the model again" }));
+
+    await waitFor(() => expect(dictateError()?.textContent).toBe(refusal.message));
+    await settle();
+    expect(downloadAgain()).toBeNull();
+    expect(tryAgain()).toBeNull();
+    expect(ipc.callsTo("download_pianissimo_model")).toHaveLength(1);
+  });
+
+  test("a retryable failure of the download offers the download again, not a new recording", async () => {
+    const { ipc } = await renderSettings(
+      settingsBackend({
+        download_pianissimo_model: () => {
+          throw commandErrors.busy;
+        },
+      }),
+    );
+    ipc.emit("error", commandErrors.engine_model_missing);
+
+    await userEvent.setup().click(await screen.findByRole("button", { name: "Download the model again" }));
+
+    await waitFor(() => expect(dictateError()?.textContent).toBe(commandErrors.busy.message));
+    expect(await screen.findByRole("button", { name: "Download the model again" })).toBeInTheDocument();
+    expect(tryAgain()).toBeNull();
+  });
+
   test("a new error with the very same text during the download keeps its own recovery", async () => {
     const download = deferred<void>();
     const { ipc } = await renderSettings(settingsBackend({ download_pianissimo_model: () => download.promise }));

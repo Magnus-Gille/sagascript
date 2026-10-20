@@ -59,7 +59,7 @@
     type WhisperModel,
     type HotkeyProfile,
   } from "./api";
-  import { backendErrorRecovery, isBackendError, toErrorMessage, type BackendErrorRecovery } from "./errors";
+  import { backendErrorRecovery, downloadFailureRecovery, isBackendError, toErrorMessage, type BackendErrorRecovery } from "./errors";
   import ErrorRecovery from "./ErrorRecovery.svelte";
   import { open } from "@tauri-apps/plugin-dialog";
   import { PIANISSIMO_ID, downloadModelById, useModelDownloads } from "./models.svelte";
@@ -2009,8 +2009,8 @@
       if (dictationEventRevision === revision) testRecovery = "retry";
     } catch (failure) {
       showTestError(failure, "Speech engine download failed.");
-      // Whatever the code, the download is what the person asked for: offer it again.
-      testRecovery = backendErrorRecovery(failure) ?? "download_model";
+      // The download again, only where it can pass; a refusal offers nothing.
+      testRecovery = downloadFailureRecovery(failure);
     }
   }
 

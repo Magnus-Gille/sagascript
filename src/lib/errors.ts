@@ -65,3 +65,20 @@ export function backendErrorRecovery(error: unknown): BackendErrorRecovery | nul
   if (error.code === "engine_model_missing" || error.code === "engine_model_load_failed") return "download_model";
   return error.retryable ? "retry" : null;
 }
+
+/**
+ * What to offer after "Download the model again" itself failed: the download
+ * again when it may pass the next time (the download failed, the engine's model
+ * is still the problem, or the backend says the action may be repeated), and
+ * otherwise nothing. A refusal such as `pianissimo_unavailable` or
+ * `invalid_input` fails the same way every time, and offering the download
+ * again for it would loop for ever. Always the download, never "Try again":
+ * the person's action was the download.
+ */
+export function downloadFailureRecovery(error: unknown): BackendErrorRecovery | null {
+  if (!isBackendError(error)) return null;
+  if (error.code === "model_download_failed" || error.retryable || backendErrorRecovery(error) === "download_model") {
+    return "download_model";
+  }
+  return null;
+}

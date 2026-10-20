@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { backendErrorRecovery, isBackendError, toErrorMessage, type BackendError } from "./errors";
+import { backendErrorRecovery, downloadFailureRecovery, isBackendError, toErrorMessage, type BackendError } from "./errors";
 
 const busy: BackendError = { code: "busy", message: "Sagascript is busy.", retryable: true };
 
@@ -90,5 +90,30 @@ describe("backendErrorRecovery", () => {
     expect(backendErrorRecovery("Transcription failed")).toBeNull();
     expect(backendErrorRecovery(new Error("x"))).toBeNull();
     expect(backendErrorRecovery(undefined)).toBeNull();
+  });
+});
+
+describe("downloadFailureRecovery", () => {
+  test("a download that failed may be repeated when the failure can pass", () => {
+    expect(downloadFailureRecovery({ code: "model_download_failed", message: "Model download failed: offline", retryable: false })).toBe(
+      "download_model",
+    );
+    // Retryable: the user's action (the download) may be repeated, whatever the code.
+    expect(downloadFailureRecovery(busy)).toBe("download_model");
+    for (const code of ["engine_model_missing", "engine_model_load_failed"]) {
+      expect(downloadFailureRecovery({ code, message: "x", retryable: false }), code).toBe("download_model");
+    }
+  });
+
+  test("a refusal that fails the same way every time offers nothing, so the offer cannot loop", () => {
+    for (const code of ["pianissimo_unavailable", "invalid_input", "settings_storage_failed", "unavailable", "io_error"]) {
+      expect(downloadFailureRecovery({ code, message: "x", retryable: false }), code).toBeNull();
+    }
+  });
+
+  test("what is not a backend error offers nothing", () => {
+    expect(downloadFailureRecovery("Model download failed")).toBeNull();
+    expect(downloadFailureRecovery(new Error("x"))).toBeNull();
+    expect(downloadFailureRecovery(undefined)).toBeNull();
   });
 });

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { drainUpdateWork } from "./update-preparation";
-  import { backendErrorRecovery, isBackendError, toErrorMessage, type BackendErrorRecovery } from "./errors";
+  import { backendErrorRecovery, downloadFailureRecovery, isBackendError, toErrorMessage, type BackendErrorRecovery } from "./errors";
   import ErrorRecovery from "./ErrorRecovery.svelte";
   import MeetingReprocessing from "./MeetingReprocessing.svelte";
   import {
@@ -530,8 +530,8 @@
       transcribeRecovery = "retry";
     } catch (failure) {
       transcribeError = toErrorMessage(failure, "Speech engine download failed.");
-      // Whatever the code, the download is what the person asked for: offer it again.
-      transcribeRecovery = backendErrorRecovery(failure) ?? "download_model";
+      // The download again, only where it can pass; a refusal offers nothing.
+      transcribeRecovery = downloadFailureRecovery(failure);
     } finally {
       modelDownloading = false;
     }
