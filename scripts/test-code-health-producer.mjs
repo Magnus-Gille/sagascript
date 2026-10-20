@@ -271,11 +271,7 @@ test("the rust-core complexity scope lists every production module of the file p
   // them, which it reports as an error for a selected file: services.rs is one struct, narrate.rs
   // a trait and a macro, and mod.rs only lists modules.
   const directory = "src-tauri/crates/sagascript-core/src/meeting/pipeline";
-  const unmeasured = new Set([
-    `${directory}/narrate.rs`,
-    `${directory}/mod.rs`,
-    `${directory}/services.rs`,
-  ]);
+  const unmeasured = new Set([`${directory}/narrate.rs`, `${directory}/mod.rs`, `${directory}/services.rs`]);
   const productionModules = (dir) =>
     readdirSync(join(repoRoot, dir), { withFileTypes: true }).flatMap((entry) => {
       const path = `${dir}/${entry.name}`;
