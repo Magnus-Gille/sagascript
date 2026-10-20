@@ -3,22 +3,22 @@
 
 use std::time::Instant;
 
-use sagascript_core::diarization::merge::merge_with_diagnostics;
-use sagascript_core::diarization::report::DiarizationReport;
-use sagascript_core::diarization::speaker_hint::SpeakerHintOutcome;
-use sagascript_core::diarization::{
+use crate::diarization::merge::merge_with_diagnostics;
+use crate::diarization::report::DiarizationReport;
+use crate::diarization::speaker_hint::SpeakerHintOutcome;
+use crate::diarization::{
     cluster_with_outcome, DiarizationAnalysis, DiarizeConfig, DiarizedSegment, SpeakerSegment,
     TimestampedSegment,
 };
-use sagascript_core::error::DictationError;
-use sagascript_core::transcription::TranscriptSegment;
+use crate::error::DictationError;
+use crate::transcription::TranscriptSegment;
 
-use super::super::meeting::{
-    meeting_checkpoint, verify_meeting_source_unchanged, MeetingControl, MeetingPhase,
-};
+use super::super::narrate::errln;
+use super::super::narrate::Narrator;
 use super::super::plan::{DiarizationPlan, FileRequest};
 use super::super::progress::Progress;
-use crate::output::{errln, Out};
+use crate::meeting::control::{meeting_checkpoint, MeetingControl, MeetingPhase};
+use crate::meeting::source::verify_meeting_source_unchanged;
 
 /// What [`cluster_speakers`] needs.
 pub(super) struct ClusterRequest<'a> {
@@ -38,7 +38,7 @@ pub(super) struct Clustered {
 /// Groups the analysis into speaker segments, applying the speaker-count hint.
 pub(super) fn cluster_speakers(
     step: &ClusterRequest<'_>,
-    out: &Out,
+    out: &dyn Narrator,
 ) -> Result<Clustered, DictationError> {
     let ClusterRequest {
         analysis,
@@ -78,6 +78,8 @@ pub(super) struct MergeRequest<'a> {
     pub(super) config: &'a DiarizeConfig,
     pub(super) duration: f64,
     pub(super) progress: &'a Progress,
+    /// The source revision the report records.
+    pub(super) build_revision: &'a str,
 }
 
 /// The words merged into the speakers, with the report that explains it.
@@ -91,7 +93,10 @@ pub(super) struct Merged {
 
 /// Merges the speakers into the words and builds the diarization report,
 /// checking it and the source file one last time.
-pub(super) fn merge_speakers(step: MergeRequest<'_>, out: &Out) -> Result<Merged, DictationError> {
+pub(super) fn merge_speakers(
+    step: MergeRequest<'_>,
+    out: &dyn Narrator,
+) -> Result<Merged, DictationError> {
     let MergeRequest {
         request,
         plan,
@@ -103,6 +108,7 @@ pub(super) fn merge_speakers(step: MergeRequest<'_>, out: &Out) -> Result<Merged
         config,
         duration,
         progress,
+        build_revision,
     } = step;
     let FileRequest { file, control, .. } = *request;
     let diagnostics = plan.flags.diagnostics;
@@ -128,7 +134,7 @@ pub(super) fn merge_speakers(step: MergeRequest<'_>, out: &Out) -> Result<Merged
         diagnostics,
         plan.source_sha256.clone(),
         duration,
-        crate::GIT_HASH.into(),
+        build_revision.into(),
         env!("CARGO_PKG_VERSION").into(),
     )?;
     report.decoder = Some(plan.decoder_evidence.clone());
@@ -136,14 +142,12 @@ pub(super) fn merge_speakers(step: MergeRequest<'_>, out: &Out) -> Result<Merged
     report.asr_segments = coverage_segments
         .iter()
         .filter(|_| diagnostics)
-        .map(
-            |segment| sagascript_core::diarization::report::AsrSegmentEvidence {
-                start: segment.start,
-                end: segment.end,
-                avg_logprob: segment.avg_logprob,
-                no_speech_prob: Some(segment.no_speech_prob),
-            },
-        )
+        .map(|segment| crate::diarization::report::AsrSegmentEvidence {
+            start: segment.start,
+            end: segment.end,
+            avg_logprob: segment.avg_logprob,
+            no_speech_prob: Some(segment.no_speech_prob),
+        })
         .collect();
     report
         .validate()

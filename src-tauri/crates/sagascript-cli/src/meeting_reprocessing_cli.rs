@@ -19,11 +19,11 @@ use sagascript_core::transcription::{Glossary, WhisperBackend};
 use serde_json::json;
 
 use crate::meeting_proposal::write_json_new;
-use crate::meeting_reprocessing::NativeBackend;
 use crate::output::{errln, Out};
 use crate::run_request::RunRequest;
 use crate::speaker_args::SpeakerCountArgs;
 use sagascript_core::meeting::reprocess::io::{ensure_output_absent, publish_error, read_json};
+use sagascript_core::meeting::reprocess::native::NativeBackend;
 use sagascript_core::meeting::reprocess::orchestrate::{
     ensure_distinct_outputs, execute_with_model_check, plan_reprocessing, CommitError,
     PublishReceipt, ReprocessingInput, WorkBackend,
@@ -213,6 +213,7 @@ fn run_execute(args: ExecuteArgs, out: &Out) -> Result<(), DictationError> {
         &mut NativeBackend {
             stored: &runtime.stored,
             whisper: &whisper,
+            build_revision: crate::GIT_HASH,
         },
         &RealFs,
         out,
@@ -484,8 +485,8 @@ fn parse_threshold(value: &str) -> Result<f32, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::transcribe::MeetingControl;
     use clap::Parser;
+    use sagascript_core::meeting::control::MeetingControl;
     use sagascript_core::meeting::reprocess::orchestrate::{CommitError, WorkBackend};
     use sagascript_core::meeting::review::MeetingReview;
     use sagascript_core::test_support::meeting_transcript;

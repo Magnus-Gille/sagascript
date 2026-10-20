@@ -1,12 +1,14 @@
 //! `--progress-json` events (#343): the phase table and the writers. Events go
 //! to stderr, one compact JSON object per line; stdout stays the transcript.
 
+use std::sync::Arc;
 use std::time::Instant;
 
 #[cfg(feature = "diarization")]
-use sagascript_core::diarization::report::DecoderEvidence;
+use crate::diarization::report::DecoderEvidence;
 
-use crate::output::{errln, Out};
+use super::narrate::errln;
+use super::narrate::Narrator;
 
 /// Where one file's `--progress-json` events go, and what they carry: the
 /// stream, whether events are wanted, the file's start (their `elapsed_ms`
@@ -14,22 +16,22 @@ use crate::output::{errln, Out};
 /// Owns what it needs, so a progress callback of another thread can hold a
 /// clone.
 #[derive(Clone)]
-pub(super) struct Progress {
-    out: Out,
+pub struct Progress {
+    out: Arc<dyn Narrator>,
     enabled: bool,
     started: Instant,
     decoder: Option<serde_json::Value>,
 }
 
 impl Progress {
-    pub(super) fn new(
-        out: &Out,
+    pub fn new(
+        out: &dyn Narrator,
         enabled: bool,
         started: Instant,
         decoder: Option<serde_json::Value>,
     ) -> Self {
         Self {
-            out: out.clone(),
+            out: out.handle(),
             enabled,
             started,
             decoder,
@@ -37,9 +39,9 @@ impl Progress {
     }
 
     /// One phase event, with the decoder settings when the run has them.
-    pub(super) fn phase(&self, phase: &str, percent: Option<u8>) {
+    pub fn phase(&self, phase: &str, percent: Option<u8>) {
         emit_progress_with_decoder(
-            &self.out,
+            &*self.out,
             self.enabled,
             self.started,
             phase,
@@ -50,9 +52,9 @@ impl Progress {
 
     /// One phase of a diarized run: indeterminate, without a step number.
     #[cfg(feature = "diarization")]
-    pub(super) fn meeting_phase(&self, phase: &str) {
+    pub fn meeting_phase(&self, phase: &str) {
         emit_meeting_progress(
-            &self.out,
+            &*self.out,
             self.enabled,
             self.started,
             phase,
@@ -61,7 +63,7 @@ impl Progress {
     }
 }
 
-pub(super) fn progress_step(phase: &str) -> Option<u8> {
+pub fn progress_step(phase: &str) -> Option<u8> {
     match phase {
         "decoding" => Some(1),
         "resampling" | "loading" | "language_detection" | "preparing" | "encoding" => Some(2),
@@ -70,7 +72,7 @@ pub(super) fn progress_step(phase: &str) -> Option<u8> {
     }
 }
 
-pub(super) fn progress_event(
+pub fn progress_event(
     phase: &str,
     percent: Option<u8>,
     step: Option<u8>,
@@ -87,7 +89,7 @@ pub(super) fn progress_event(
     })
 }
 
-pub(super) fn progress_event_with_decoder(
+pub fn progress_event_with_decoder(
     phase: &str,
     percent: Option<u8>,
     step: Option<u8>,
@@ -102,8 +104,8 @@ pub(super) fn progress_event_with_decoder(
     event
 }
 
-pub(super) fn emit_progress(
-    out: &Out,
+pub fn emit_progress(
+    out: &dyn Narrator,
     enabled: bool,
     started: Instant,
     phase: &str,
@@ -124,8 +126,8 @@ pub(super) fn emit_progress(
     }
 }
 
-pub(super) fn emit_progress_with_decoder(
-    out: &Out,
+pub fn emit_progress_with_decoder(
+    out: &dyn Narrator,
     enabled: bool,
     started: Instant,
     phase: &str,
@@ -149,8 +151,8 @@ pub(super) fn emit_progress_with_decoder(
 }
 
 #[cfg(feature = "diarization")]
-pub(super) fn emit_meeting_progress(
-    out: &Out,
+pub fn emit_meeting_progress(
+    out: &dyn Narrator,
     enabled: bool,
     started: Instant,
     phase: &str,
@@ -173,10 +175,7 @@ pub(super) fn emit_meeting_progress(
 }
 
 #[cfg(feature = "diarization")]
-pub(super) fn decoder_progress_value(
-    decoder: &DecoderEvidence,
-    meeting_json: bool,
-) -> serde_json::Value {
+pub fn decoder_progress_value(decoder: &DecoderEvidence, meeting_json: bool) -> serde_json::Value {
     if meeting_json {
         // Native meeting JSON serializes typed f32 fields directly. Match that
         // wire representation without changing the legacy JSON report format.

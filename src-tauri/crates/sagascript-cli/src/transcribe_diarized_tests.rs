@@ -19,12 +19,12 @@ use sagascript_core::diarization::{DiarizationAnalysis, DiarizationTimings, Diar
 use sagascript_core::transcription::DiarizationTranscriptionTimings;
 
 use super::*;
-use crate::transcribe::diarize::CachePolicy;
-use crate::transcribe::diarize::{
+use sagascript_core::diarization::cache::{load, CacheIdentity, CacheLookup};
+use sagascript_core::meeting::pipeline::diarize::CachePolicy;
+use sagascript_core::meeting::pipeline::diarize::{
     analyze_in_sequence, analyze_overlapped, AnalysisOutcome, DiarizationAnalyzer,
 };
-use crate::transcribe::plan::{CacheRequest, DiarizationFlags};
-use sagascript_core::diarization::cache::{load, CacheIdentity, CacheLookup};
+use sagascript_core::meeting::pipeline::plan::{CacheRequest, DiarizationFlags, FileOptions};
 
 /// Long enough for two speakers of five and six seconds.
 const SECONDS: usize = 12;
@@ -246,6 +246,7 @@ fn diarize(
             backend,
             analyzer,
             canceller: &crate::cancel::Canceller::new(),
+            build_revision: "test-revision",
         },
         control,
         &out,
@@ -458,6 +459,7 @@ fn cli_run(
             backend,
             analyzer,
             canceller: &crate::cancel::Canceller::new(),
+            build_revision: "test-revision",
         },
         &out,
     );
@@ -746,6 +748,7 @@ fn a_cancel_while_decoding_stops_before_the_analysis_and_writes_no_cache() {
                 backend: &backend,
                 analyzer: &analyzer,
                 canceller: &canceller,
+                build_revision: "test-revision",
             },
             None,
             &out,
@@ -781,6 +784,7 @@ fn a_cancel_while_decoding_keeps_a_previous_cache() {
             backend: &backend,
             analyzer: &analyzer,
             canceller: &canceller,
+            build_revision: "test-revision",
         },
         None,
         &out,
@@ -798,11 +802,11 @@ fn a_cancel_while_decoding_keeps_a_previous_cache() {
 // ---- the meeting entry points: typed options, no command line --------------------------------
 
 use crate::transcribe::args::validated_speaker_hint;
-use crate::transcribe::meeting::{
-    meeting_options, stable_file_sha256, transcribe_meeting_file_inner,
-};
 use sagascript_core::diarization::speaker_hint::SpeakerCountHint;
+use sagascript_core::meeting::control::{MeetingControl, MeetingPhase};
+use sagascript_core::meeting::source::stable_file_sha256;
 use sagascript_core::meeting::MeetingTranscript;
+use sagascript_core::testing::{meeting_options, transcribe_meeting_file_with};
 
 /// One meeting run as the app and reprocessing make it: the options of
 /// `meeting_options`, the given backend and analyzer.
@@ -813,7 +817,7 @@ fn meeting(
     analyzer: &ScriptedAnalyzer,
     control: Option<&MeetingControl<'_>>,
 ) -> Result<MeetingTranscript, DictationError> {
-    transcribe_meeting_file_inner(
+    transcribe_meeting_file_with(
         &fx.file,
         &Settings::default(),
         Language::English,
@@ -823,6 +827,7 @@ fn meeting(
             backend,
             analyzer,
             canceller: &crate::cancel::Canceller::new(),
+            build_revision: "test-revision",
         },
         control,
         options,
@@ -1062,7 +1067,7 @@ fn a_meeting_job_reports_its_phases_in_order() {
 
 // ---- a cache that cannot be trusted -----------------------------------------------------------
 
-use crate::transcribe::source::CachedRun;
+use sagascript_core::meeting::pipeline::source::CachedRun;
 
 #[test]
 fn a_cache_without_coarse_coverage_segments_is_a_miss_and_is_recomputed() {
@@ -1152,6 +1157,7 @@ fn a_cache_path_that_is_the_recording_is_refused_before_any_work() {
             backend: &backend,
             analyzer: &analyzer,
             canceller: &crate::cancel::Canceller::new(),
+            build_revision: "test-revision",
         },
         &mut model_loaded,
         &out,
@@ -1217,6 +1223,7 @@ fn analysis_outcome(
             backend,
             analyzer,
             canceller: &crate::cancel::Canceller::new(),
+            build_revision: "test-revision",
         },
         Language::English,
         None,
