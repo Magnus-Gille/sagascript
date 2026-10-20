@@ -77,8 +77,10 @@ describe("command_errors", () => {
 
   test("the retry and download choices follow the code and the retry hint", () => {
     const recovery = (variant: string) => backendErrorRecovery(variants().get(variant));
-    expect(recovery("engine_model_load_failed")).toBe("download_model");
-    for (const retryable of ["busy", "model_busy", "engine_busy"]) {
+    for (const missing of ["engine_model_missing", "engine_model_load_failed"]) {
+      expect(recovery(missing), missing).toBe("download_model");
+    }
+    for (const retryable of ["busy", "model_busy", "engine_busy", "no_audio_captured"]) {
       expect(variants().get(retryable)!.retryable, retryable).toBe(true);
       expect(recovery(retryable), retryable).toBe("retry");
     }
@@ -94,6 +96,7 @@ describe("command_errors", () => {
       "invalid_input",
       "export_exists",
       "meeting_stale",
+      "paste_error",
     ]) {
       expect(recovery(final), final).toBeNull();
     }

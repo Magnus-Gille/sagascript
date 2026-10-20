@@ -59,7 +59,8 @@
     type WhisperModel,
     type HotkeyProfile,
   } from "./api";
-  import { isBackendError, toErrorMessage } from "./errors";
+  import { backendErrorRecovery, downloadFailureRecovery, isBackendError, toErrorMessage, type BackendErrorRecovery } from "./errors";
+  import ErrorRecovery from "./ErrorRecovery.svelte";
   import { open } from "@tauri-apps/plugin-dialog";
   import { PIANISSIMO_ID, downloadModelById, useModelDownloads } from "./models.svelte";
   import { requestAccessibility } from "./permissions";
@@ -214,6 +215,17 @@
   let testOwnsRecording: boolean = $state(false);
   let testResult: string = $state("");
   let testError: string = $state("");
+  /** The way out of `testError`, decided by the error's code (`backendErrorRecovery`); null for plain text. */
+  let testRecovery: BackendErrorRecovery | null = $state(null);
+  let testRecordButton: HTMLButtonElement | undefined = $state();
+  function showTestError(failure: unknown, fallback: string): void {
+    testError = toErrorMessage(failure, fallback);
+    testRecovery = backendErrorRecovery(failure);
+  }
+  function clearTestError(): void {
+    testError = "";
+    testRecovery = null;
+  }
   let testResultActionMessage: string = $state("");
   let testResultRecoveryPending: boolean = $state(false);
   let testResultEdited: boolean = $state(false);
@@ -697,9 +709,9 @@
   }
 
   let dictationEventRevision = 0;
-  const errorEvents = useTauriEvent("error", (message) => {
+  const errorEvents = useTauriEvent("error", (failure) => {
     dictationEventRevision++;
-    testError = message;
+    showTestError(failure, "Transcription failed");
     requestTabChange("dictate");
   });
   const resultEvents = useTauriEvent("transcription-result", (text) => {
@@ -712,7 +724,7 @@
     observedNativeDictation = text;
     nativeEditorOrigin = { text, lineage: dictationEditorLineage };
     testResult = text;
-    testError = "";
+    clearTestError();
   });
 
   onMount(() => {
@@ -728,7 +740,9 @@
         // already visible in the editor. Otherwise updater preparation waits
         // forever for an event that preceded listener registration.
         observedNativeDictation = text;
+        // The last error is plain text: it has no code to decide a recovery by.
         testError = error ?? "";
+        testRecovery = null;
         if (text && !testResult.trim()) {
           observedNativeDictation = text;
           liveDictationRevision++;
@@ -808,11 +822,25 @@
   function retryLastTranscription(): void {
     const run = recentTranscriptions.find(run => run.path === selectedRerunPath);
     if (!run) return;
-    if (run.profileId && !profileForId(run.profileId)) {
-      rerunError = "The profile for this file is no longer available. Choose a profile and open the file again.";
-      return;
-    }
-    rerunError = "";
+    const refusal = rerunRefusal(run);
+    rerunError = refusal ?? "";
+    if (refusal === null) queueRerun(run);
+  }
+
+  /** Why a file cannot run again, or null: the profile it ran with is gone. */
+  function rerunRefusal(run: RecentTranscription): string | null {
+    return run.profileId && !profileForId(run.profileId)
+      ? "The profile for this file is no longer available. Choose a profile and open the file again."
+      : null;
+  }
+
+  /**
+   * Run a file again as a new job, and select it: what Re-run does, and what
+   * "Try again" does for a run that failed in a way the backend says can be
+   * repeated (ADR 0006). Both keep the file's profile, dictionary prompt and
+   * diarization choice. Returns the new job's id.
+   */
+  function queueRerun(run: RecentTranscription): string {
     recentTranscriptions = rememberTranscription(recentTranscriptions, run);
     // A fresh queued job preserves every previous result and review. Only the
     // serial scheduler can start it; model/decoder settings apply at execution.
@@ -820,6 +848,34 @@
       prompt: run.prompt || null, diarize: run.diarize }, () => crypto.randomUUID());
     fileJobs = [...fileJobs, ...jobs];
     selectedFileId = jobs[0].id;
+    return jobs[0].id;
+  }
+
+  /** Why a "Try again" under a failed file was refused, by the job's id: shown in that file's panel. */
+  let retryRefusals = $state<Record<string, string>>({});
+
+  /**
+   * "Try again" under a failed file: the same file, profile and prompt, as a new
+   * job, whose tab then has the focus (the button that was pressed goes away with
+   * the panel it was in). False when nothing was queued; a refusal is shown in the
+   * file's own panel, next to the button, and not above the tab strip.
+   */
+  function retryFileJob(job: FileJob): boolean {
+    if (updatePreparing) return false;
+    const run = { path: job.path, profileId: job.profileId, prompt: job.prompt ?? "", diarize: job.diarize };
+    const refusal = rerunRefusal(run);
+    if (refusal !== null) {
+      retryRefusals = { ...retryRefusals, [job.id]: refusal };
+      return false;
+    }
+    if (job.id in retryRefusals) {
+      const others = { ...retryRefusals };
+      delete others[job.id];
+      retryRefusals = others;
+    }
+    const id = queueRerun(run);
+    void tick().then(() => document.getElementById(`file-tab-${id}`)?.focus());
+    return true;
   }
 
   function updateFileBusy(id: string, busy: boolean): void {
@@ -1169,7 +1225,7 @@
       // outdates the restore that waits for the listeners above.
       dictationEventRevision++;
       liveDictationRevision++;
-      testError = "";
+      clearTestError();
     }
 
     if (nextState === "settings_reloaded") {
@@ -1939,6 +1995,56 @@
     }
   }
 
+  /**
+   * True from the press of "Download the model again" to the end of the model
+   * list's refresh after it, longer than `downloads.busy`, which ends with the
+   * download itself: in between the button must not start a second one.
+   */
+  let engineModelDownloading = $state(false);
+
+  /**
+   * Download the speech engine's model again: what "Download the model again"
+   * does for `engine_model_missing` and `engine_model_load_failed`, the codes
+   * of the Pianissimo engine. The download first checks an installed model and
+   * fetches it again when it is missing or damaged. Progress shows like any
+   * other download; rejects when the download fails.
+   */
+  async function downloadEngineModelAgain(): Promise<void> {
+    engineModelDownloading = true;
+    downloads.start(
+      PIANISSIMO_ID,
+      fileModelOptions.find((model) => model.id === PIANISSIMO_ID)?.display_name ?? "Pianissimo",
+    );
+    try {
+      try {
+        await downloadModelById(PIANISSIMO_ID);
+      } finally {
+        downloads.finish();
+      }
+      fileModelDiskRevision += 1;
+      await refreshProfileModels(settings?.hotkey_profiles ?? []);
+    } finally {
+      engineModelDownloading = false;
+    }
+  }
+
+  /** "Download the model again" under the Dictate tab's error. */
+  async function onDictateDownloadModel(): Promise<void> {
+    if (updatePreparing || downloads.busy || engineModelDownloading) return;
+    const revision = dictationEventRevision;
+    try {
+      await downloadEngineModelAgain();
+      // The model is there: the action can be repeated. Unless another event
+      // replaced the error meanwhile (even one with the same text): that one
+      // decides its own recovery.
+      if (dictationEventRevision === revision) testRecovery = "retry";
+    } catch (failure) {
+      showTestError(failure, "Speech engine download failed.");
+      // The download again, only where it can pass; a refusal offers nothing.
+      testRecovery = downloadFailureRecovery(failure);
+    }
+  }
+
   /** The recommended model to suggest for a Swedish profile still on a retired model. */
   function retiredModelSuggestion(profile: HotkeyProfile): WhisperModel | null {
     const current = profileModels[profile.id];
@@ -2007,7 +2113,7 @@
       testRecording = false;
       testTranscribing = true;
       backendDictationState = "transcribing";
-      testError = "";
+      clearTestError();
       try {
         const text = await stopAndTranscribe();
         observedNativeDictation = text;
@@ -2015,14 +2121,14 @@
         testResultRecoveryPending = true;
         testResult = testResult ? testResult + " " + text : text;
       } catch (e) {
-        testError = toErrorMessage(e, "Transcription failed");
+        showTestError(e, "Transcription failed");
       } finally {
         testTranscribing = false;
         backendDictationState = "idle";
       }
     } else {
       // Start recording
-      testError = "";
+      clearTestError();
       try {
         await startRecording();
         testOwnsRecording = true;
@@ -2031,9 +2137,24 @@
       } catch (e) {
         testOwnsRecording = false;
         backendDictationState = "idle";
-        testError = toErrorMessage(e, "Failed to start recording");
+        showTestError(e, "Failed to start recording");
       }
     }
+  }
+
+  /**
+   * "Try again" under the Dictate tab's error: a new recording, whose button has
+   * the focus. The Try again button goes away as the recording starts
+   * (`clearTestError()`), so the focus moves first, and not only when
+   * `start_recording` answers: it is never on the page in between. The record
+   * button is enabled here: the cases that disable it are all part of the
+   * busy state that disables Try again.
+   */
+  async function onDictateRetry(): Promise<void> {
+    testRecordButton?.focus();
+    await onTestRecord();
+    await tick();
+    testRecordButton?.focus();
   }
 
   function onTranscribeProfileChange(e: Event) {
@@ -2503,6 +2624,7 @@
           <div class="test-section-label">Try it out</div>
           <button
             class="test-record-btn"
+            bind:this={testRecordButton}
             class:recording={testRecording}
             class:transcribing={testTranscribing}
             onclick={onTestRecord}
@@ -2522,7 +2644,10 @@
             {/if}
           </button>
           {#if testError}
-            <div class="transcribe-error">{testError}</div>
+            <div class="transcribe-error" role="alert">{testError}</div>
+            <ErrorRecovery recovery={testRecovery}
+              busy={updatePreparing || downloads.busy || engineModelDownloading || dictationModelSaving || dictateButtonAction(backendDictationState, testOwnsRecording) !== "start"}
+              onRetry={() => void onDictateRetry()} onDownloadModel={() => void onDictateDownloadModel()} />
           {/if}
           <textarea
             class="test-result"
@@ -2640,7 +2765,7 @@
             Open saved meeting...
           </button>
         </div>
-        {#if rerunError}<div class="transcribe-error">{rerunError}</div>{/if}
+        {#if rerunError}<div class="transcribe-error" role="alert">{rerunError}</div>{/if}
 
         <div class="formats-hint">
           Supported: {supportedFormats.map(f => f.toUpperCase()).join(", ") || "WAV, MP3, M4A, AAC, MP4, MOV, OGG, WEBM, FLAC"}
@@ -2669,6 +2794,11 @@
                 || Object.entries(fileBusy).some(([id, busy]) => id !== job.id && busy)}
               openReview={savedReviewIds.includes(job.id)} onComplete={completeFile} onBusyChange={updateFileBusy}
               onMissingFile={forgetMissingFile}
+              onRetry={retryFileJob}
+              retryRefusal={retryRefusals[job.id] ?? ""}
+              onDownloadModel={downloadEngineModelAgain}
+              downloadBusy={downloads.busy || engineModelDownloading}
+              {updatePreparing}
               onAttentionChange={updateFileAttention}
               initialRecoveryFile={fileRecoveryEntries.find((entry) => entry.job_id === job.id) ?? null}
               initialRecoveryMeeting={meetingRecoveryEntries.find((entry) => entry.job_id === job.id) ?? null}

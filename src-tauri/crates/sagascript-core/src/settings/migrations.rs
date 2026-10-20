@@ -64,7 +64,7 @@ const ONBOARDING_KEY: &str = "has_completed_onboarding";
 #[derive(Debug)]
 pub(crate) struct MigrationError {
     step: &'static str,
-    reason: String,
+    reason: StepError,
 }
 
 impl std::fmt::Display for MigrationError {
@@ -73,9 +73,29 @@ impl std::fmt::Display for MigrationError {
     }
 }
 
+/// Why a step could not run. The text is what the store reports after the
+/// step's name ([`MigrationError`]); no caller branches on the reason.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum StepError {
+    /// The settings object cannot be read as [`Settings`] at all (see
+    /// [`super::lenient::decode`]).
+    #[error(transparent)]
+    Decode(serde_json::Error),
+    /// The migrated settings could not be written back as an object.
+    #[error(transparent)]
+    Encode(serde_json::Error),
+    /// The migrated settings serialized as something other than an object.
+    #[error("settings did not serialize as an object")]
+    NotAnObject,
+    /// Test-only fault injection ([`FailStep`]).
+    #[cfg(test)]
+    #[error("injected failure")]
+    Injected,
+}
+
 /// A step's error is its reason; [`migrate`] names the step.
-type PureStep = fn(&mut Object) -> Result<(), String>;
-type MachineStep = fn(&mut Object, &dyn MachineProbe) -> Result<(), String>;
+type PureStep = fn(&mut Object) -> Result<(), StepError>;
+type MachineStep = fn(&mut Object, &dyn MachineProbe) -> Result<(), StepError>;
 
 enum Apply {
     Pure(PureStep),
@@ -210,7 +230,7 @@ pub(crate) fn migrate(
         #[cfg(test)]
         let result = result.map(|result| {
             if FAIL_STEP.with(std::cell::Cell::get) == Some(step.version) {
-                Err("injected failure".to_string())
+                Err(StepError::Injected)
             } else {
                 result
             }
@@ -279,7 +299,7 @@ pub(crate) fn canonical_onboarding_key(object: &mut Object) {
 /// values, and every save writes them there and drops the embedded keys.
 /// What remains here is an embedded profile dictionary whose id cannot name
 /// a file: it is dropped.
-fn dictionary_files(object: &mut Object) -> Result<(), String> {
+fn dictionary_files(object: &mut Object) -> Result<(), StepError> {
     if let Some(Value::Object(dictionaries)) = object.get_mut("profile_glossaries") {
         dictionaries.retain(|profile_id, _| {
             if let Err(error) = super::store::validate_profile_file_id(profile_id) {
@@ -316,20 +336,20 @@ fn profile_models_recorded(object: &Object) -> bool {
 /// Step 3. A file without explicit profiles gets its default profile, and
 /// each profile without a model gets the one the old global selection gave
 /// it (see [`Settings::materialize_profile_models`]).
-fn profile_models(object: &mut Object) -> Result<(), String> {
+fn profile_models(object: &mut Object) -> Result<(), StepError> {
     with_settings(object, Settings::materialize_profile_models)
 }
 
 /// Step 4. The global dictionary's entries become hints in every profile
 /// dictionary (see [`Settings::migrate_global_glossary_to_profiles`]).
-fn profile_dictionaries(object: &mut Object) -> Result<(), String> {
+fn profile_dictionaries(object: &mut Object) -> Result<(), StepError> {
     with_settings(object, Settings::migrate_global_glossary_to_profiles)
 }
 
 /// Step 5. Swedish profiles move off the retired KB-Whisper models where
 /// that keeps dictation working on this machine (see
 /// [`Settings::migrate_swedish_lineup`]).
-fn swedish_lineup(object: &mut Object, machine: &dyn MachineProbe) -> Result<(), String> {
+fn swedish_lineup(object: &mut Object, machine: &dyn MachineProbe) -> Result<(), StepError> {
     with_settings(object, |settings| {
         // Probe the machine only while the one-time migration is pending.
         if settings.model_lineup_version < MODEL_LINEUP_VERSION {
@@ -340,7 +360,7 @@ fn swedish_lineup(object: &mut Object, machine: &dyn MachineProbe) -> Result<(),
 
 /// Step 6. Users still on the old engine warm-up defaults move to the new
 /// ones (see [`Settings::migrate_engine_defaults`]).
-fn engine_defaults(object: &mut Object) -> Result<(), String> {
+fn engine_defaults(object: &mut Object) -> Result<(), StepError> {
     with_settings(object, |settings| {
         settings.migrate_engine_defaults();
     })
@@ -351,15 +371,18 @@ fn engine_defaults(object: &mut Object) -> Result<(), String> {
 /// not, stays exactly as it was. A field that does not decode is read as
 /// its default (see [`super::lenient`]) and never written back: it stays for
 /// the store's final decode to reset and report.
-fn with_settings(object: &mut Object, migrate: impl FnOnce(&mut Settings)) -> Result<(), String> {
-    let decoded = super::lenient::decode(object)?;
+fn with_settings(
+    object: &mut Object,
+    migrate: impl FnOnce(&mut Settings),
+) -> Result<(), StepError> {
+    let decoded = super::lenient::decode(object).map_err(StepError::Decode)?;
     let before = decoded.settings;
     let mut after = before.clone();
     migrate(&mut after);
     let as_object = |settings: &Settings| match serde_json::to_value(settings) {
         Ok(Value::Object(object)) => Ok(object),
-        Ok(_) => Err("settings did not serialize as an object".to_string()),
-        Err(e) => Err(e.to_string()),
+        Ok(_) => Err(StepError::NotAnObject),
+        Err(e) => Err(StepError::Encode(e)),
     };
     let before = as_object(&before)?;
     for (key, value) in as_object(&after)? {
@@ -827,6 +850,33 @@ mod tests {
         assert_eq!(current(), Some(3));
         drop(outer);
         assert_eq!(current(), None);
+    }
+
+    /// The store reports a failed step as "<step> migration failed: <reason>"
+    /// (`SettingsParseError::Schema`); the typed reasons read as the strings
+    /// they replaced.
+    #[test]
+    fn a_failed_step_is_reported_by_name_and_reason() {
+        let _failing = FailStep::enable(3);
+        let mut file = object(json!({"language": "sv"}));
+        let error = migrate(&mut file, 2, None).expect_err("step 3 is made to fail");
+        assert_eq!(
+            error.to_string(),
+            "profile models migration failed: injected failure"
+        );
+
+        let decode = serde_json::from_value::<Settings>(json!({"beam_size": "wide"}))
+            .expect_err("a string is not a beam size");
+        let text = decode.to_string();
+        assert_eq!(StepError::Decode(decode).to_string(), text);
+        let encode = serde_json::to_value(std::collections::BTreeMap::from([((1, 2), 3)]))
+            .expect_err("a pair is not a JSON key");
+        let text = encode.to_string();
+        assert_eq!(StepError::Encode(encode).to_string(), text);
+        assert_eq!(
+            StepError::NotAnObject.to_string(),
+            "settings did not serialize as an object"
+        );
     }
 
     #[test]
