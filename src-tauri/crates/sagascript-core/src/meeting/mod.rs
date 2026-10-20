@@ -2,12 +2,20 @@
 //!
 //! This module is the transcript document. Its submodules: [`media`] (the audio attached to a
 //! meeting), [`review`] (replayable corrections) and [`reprocess`] (migrating a review onto a new
-//! transcript). All of it is pure and compiled in every build (#372).
+//! transcript). All of it is compiled in every build (#372), except what reprocessing needs the
+//! ONNX engine for (`reprocess::orchestrate`, behind the `diarization` feature, #374).
+//!
+//! What a meeting run is made of (#374): [`control`] (cancellation and the phases a job reports),
+//! [`source`] (the hash that binds a document to the recording it was made from) and
+//! [`assemble`] (the document from the speaker segments of a diarized run).
 
+pub mod assemble;
+pub mod control;
 mod dictation_error;
 pub mod media;
 pub mod reprocess;
 pub mod review;
+pub mod source;
 
 use std::collections::BTreeSet;
 use std::fmt;
