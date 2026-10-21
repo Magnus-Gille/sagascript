@@ -177,6 +177,25 @@ test("a proposal from an older review cannot be accepted", () => {
   callbacks.unmount();
 });
 
+test("a current proposal with unresolved conflicts cannot be accepted", async () => {
+  const callbacks = renderReprocessing({ proposal: conflictProposal() });
+  const accept = screen.getByRole("button", { name: "Accept proposal" });
+  expect(accept).toBeDisabled();
+  expect(screen.getByText("All conflicts must be resolved before accepting this proposal.")).toBeInTheDocument();
+
+  await userEvent.setup().click(accept);
+  expect(callbacks.onAccept).not.toHaveBeenCalled();
+
+  const confirm = vi.fn().mockReturnValue(true);
+  vi.stubGlobal("confirm", confirm);
+  Object.defineProperty(window, "confirm", { configurable: true, value: confirm });
+  await callbacks.updateProps({ proposal: appliedProposal() });
+  expect(screen.getByRole("button", { name: "Accept proposal" })).toBeEnabled();
+  await userEvent.setup().click(screen.getByRole("button", { name: "Accept proposal" }));
+  expect(callbacks.onAccept).toHaveBeenCalledOnce();
+  callbacks.unmount();
+});
+
 test("only the first conflict can be resolved, empty corrections are refused, and target edits are retained", async () => {
   const callbacks = renderReprocessing({ proposal: conflictProposal(2) });
   const user = userEvent.setup();
