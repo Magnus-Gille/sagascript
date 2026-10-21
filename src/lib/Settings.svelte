@@ -65,6 +65,8 @@
   import { PIANISSIMO_ID, downloadModelById, useModelDownloads } from "./models.svelte";
   import { requestAccessibility } from "./permissions";
   import { loadPlatform } from "./platform";
+  import { createModelCatalogController } from "./modelCatalogController";
+  import { createSettingsTransactionController, type SaveOutcome } from "./settingsTransactionController";
   import { useDragDropEvent, useTauriEvent } from "./tauri-events.svelte";
   import {
     dictateButtonAction,
@@ -119,7 +121,6 @@
   // working; Settings suggests the recommended model instead of switching silently.
   const retiredSwedishModelIds = ["kb-whisper-tiny", "kb-whisper-base", "kb-whisper-small"];
   let profileModelErrors: Record<string, string> = $state({});
-  let profileModelRefresh = 0;
 
   let platform: string = $state("unknown");
 
@@ -1038,28 +1039,35 @@
   const fileModelSelection = $derived.by(() => settings?.file_transcription_model);
   let fileModelDiskRevision = $state(0);
 
+  type FileModelCatalogQuery = { language: Language; selected?: string };
+  const fileModelCatalogController = createModelCatalogController<FileModelCatalogQuery, {
+    options: WhisperModel[];
+    automatic: WhisperModel;
+    recommended: WhisperModel;
+  }>({
+    load: async ({ language, selected }) => {
+      const [options, automatic, recommended] = await Promise.all([
+        getFileModelOptions(language, selected && selected !== "auto" ? selected : undefined),
+        getAutoFileModelInfo(language),
+        getEffectiveModelInfo(language),
+      ]);
+      return { options, automatic, recommended };
+    },
+    publish: ({ options, automatic, recommended }) => {
+      fileModelOptions = Array.isArray(options) ? options : [];
+      fileAutoModel = automatic;
+      fileRecommendedModel = recommended;
+    },
+    reject: (error) => { fileModelError = toErrorMessage(error); },
+  });
+
   $effect(() => {
     const language = fileModelLanguage;
     void fileModelDiskRevision;
     if (language === null) return;
-    let stale = false;
     const selected = fileModelSelection;
-    void Promise.all([
-      getFileModelOptions(language, selected && selected !== "auto" ? selected : undefined),
-      getAutoFileModelInfo(language),
-      getEffectiveModelInfo(language),
-    ])
-      .then(([options, automatic, recommended]) => {
-        if (!stale) {
-          fileModelOptions = Array.isArray(options) ? options : [];
-          fileAutoModel = automatic;
-          fileRecommendedModel = recommended;
-        }
-      })
-      .catch((error) => {
-        if (!stale) fileModelError = toErrorMessage(error);
-      });
-    return () => { stale = true; };
+    const request = fileModelCatalogController.request({ language, selected });
+    return request.cancel;
   });
 
   async function onFileModelChange(event: Event): Promise<void> {
@@ -1096,16 +1104,10 @@
     fileModelError = "";
     try {
       await downloadModelById(id);
-      const options = await getFileModelOptions(
-        transcribeLanguage(),
-        id !== "auto" ? id : undefined,
-      );
-      fileModelOptions = Array.isArray(options) ? options : [];
-      const language = transcribeLanguage();
-      [fileAutoModel, fileRecommendedModel] = await Promise.all([
-        getAutoFileModelInfo(language),
-        getEffectiveModelInfo(language),
-      ]);
+      await fileModelCatalogController.request({
+        language: transcribeLanguage(),
+        selected: id !== "auto" ? id : undefined,
+      }).done;
     } catch (error) {
       fileModelError = toErrorMessage(error);
     } finally { downloads.finish(); }
@@ -1154,34 +1156,44 @@
 
   let dictationModelSaving = $state(false);
 
-  async function refreshProfileModels(profiles: HotkeyProfile[]) {
-    const generation = ++profileModelRefresh;
-    try {
+  const profileModelCatalogController = createModelCatalogController<HotkeyProfile[], {
+    models: Record<string, WhisperModel>;
+    options: Record<string, WhisperModel[]>;
+    recommended: Record<string, WhisperModel>;
+  }>({
+    load: async (profiles) => {
       const entries = await Promise.all(
-        profiles.map(async (profile) => [
-          profile.id,
-          profile.id === draftProfileId
+        profiles.map(async (profile) => {
+          const model = profile.id === draftProfileId
             ? await getEffectiveModelInfo(profile.language)
-            : await getProfileModelInfo(profile.id),
-          await getFileModelOptions(
+            : await getProfileModelInfo(profile.id);
+          // Keep this lookup after the model-info await: a settings read that
+          // settles while that invoke is pending decides the selected model.
+          const selected = settings?.profile_models?.[profile.id];
+          const options = await getFileModelOptions(
             profile.language,
-            settings?.profile_models?.[profile.id] && settings.profile_models[profile.id] !== "auto"
-              ? settings.profile_models[profile.id]
-              : undefined,
-          ),
-          await getEffectiveModelInfo(profile.language),
-        ] as const),
+            selected && selected !== "auto" ? selected : undefined,
+          );
+          const recommended = await getEffectiveModelInfo(profile.language);
+          return [profile.id, model, options, recommended] as const;
+        }),
       );
-      if (generation === profileModelRefresh) {
-        profileModels = Object.fromEntries(entries.map(([id, model]) => [id, model]));
-        profileModelOptions = Object.fromEntries(entries.map(([id, , options]) => [id, options]));
-        profileRecommended = Object.fromEntries(entries.map(([id, , , recommended]) => [id, recommended]));
-      }
-    } catch (e) {
-      if (generation === profileModelRefresh) {
-        settingsError = toErrorMessage(e, "Failed to check speech engines.");
-      }
-    }
+      return {
+        models: Object.fromEntries(entries.map(([id, model]) => [id, model])),
+        options: Object.fromEntries(entries.map(([id, , options]) => [id, options])),
+        recommended: Object.fromEntries(entries.map(([id, , , recommended]) => [id, recommended])),
+      };
+    },
+    publish: ({ models, options, recommended }) => {
+      profileModels = models;
+      profileModelOptions = options;
+      profileRecommended = recommended;
+    },
+    reject: (error) => { settingsError = toErrorMessage(error, "Failed to check speech engines."); },
+  });
+
+  async function refreshProfileModels(profiles: HotkeyProfile[]): Promise<void> {
+    await profileModelCatalogController.request(profiles).done;
   }
 
   // The listeners below register as the component initializes, before the
@@ -1314,6 +1326,8 @@
     })();
     return () => {
       activePreparationNonce = null;
+      fileModelCatalogController.dispose();
+      profileModelCatalogController.dispose();
     };
   });
 
@@ -1432,10 +1446,6 @@
   /** Why a change was not sent while the window cannot tell what is saved. */
   const unconfirmedBlock = "This change was not sent: the window could not confirm the last saved change. Reload settings first.";
 
-  type SaveOutcome<T> =
-    | { saved: false; error: unknown }
-    | { saved: true; result: T; confirmed: boolean };
-
   /**
    * One settings change followed by its read-back, kept apart (#341):
    * - `saved: false`: the backend rejected the change (or the window held it
@@ -1450,23 +1460,16 @@
    * so this hold only catches what stays enabled, such as the dictionary Save.
    * `afterSave` runs as soon as the change is saved, before the read-back.
    */
-  async function saveSetting<T>(mutate: () => Promise<T>, afterSave?: (result: T) => void): Promise<SaveOutcome<T>> {
-    if (settingsUnconfirmed) return { saved: false, error: unconfirmedBlock };
-    let result: T;
-    try {
-      result = await mutate();
-    } catch (error) {
-      return { saved: false, error };
-    }
-    afterSave?.(result);
-    try {
-      await readSettings(true);
-    } catch (error) {
-      markSettingsUnconfirmed(error, true);
-      return { saved: true, result, confirmed: false };
-    }
-    if (restampUnconfirmed(true)) return { saved: true, result, confirmed: false };
-    return { saved: true, result, confirmed: true };
+  const settingsTransactionController = createSettingsTransactionController({
+    isUnconfirmed: () => settingsUnconfirmed !== null,
+    unconfirmedError: unconfirmedBlock,
+    readBack: () => readSettings(true),
+    markUnconfirmed: markSettingsUnconfirmed,
+    restamp: restampUnconfirmed,
+  });
+
+  function saveSetting<T>(mutate: () => Promise<T>, afterSave?: (result: T) => void): Promise<SaveOutcome<T>> {
+    return settingsTransactionController.save(mutate, afterSave);
   }
 
   /**
