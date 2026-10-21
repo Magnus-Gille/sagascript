@@ -7,8 +7,12 @@
 //! nothing here may wait while it holds the lock of the shared controller.
 
 mod engine;
+mod inference_wait;
 mod pipeline;
 mod trigger;
+
+#[cfg(test)]
+mod inference_wait_tests;
 
 pub(crate) use engine::warm_models_at_startup;
 pub(crate) use trigger::handle_hotkey_event;
