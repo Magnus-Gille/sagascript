@@ -223,7 +223,8 @@ Each branch also fixes and prunes its component's entries in `eslint-suppression
 can drop `.svelte` from `.prettierignore` once no source-text test reads its component.
 
 - **B1, Settings.svelte:** the Settings portions of `test-meeting-integration.mjs` (file-job
-  options and “Open saved meeting”), the Settings portions of `test-release-surface.mjs`
+  payload/source wiring; rendered busy controls and “Open saved meeting” are covered below),
+  the Settings portions of `test-release-surface.mjs`
   (Dictate, Advanced and profile engines), and the retained `retryLastTranscription` private
   case in `test-file-transcription-integration.mjs`.
 - **B2, FileTranscription.svelte and the meeting components:** the two retained private
@@ -231,8 +232,10 @@ can drop `.svelte` from `.prettierignore` once no source-text test reads its com
   wiring checks in `test-meeting-integration.mjs`, and all five retained private executions in
   `test-meeting-reprocessing-integration.mjs`. The latter still covers review-revision and
   polling-generation invalidation, timer lifecycle/reset, and queued dirty/busy rechecks.
-- **B3, Onboarding.svelte and App.svelte:** the onboarding and window portions of
-  `test-release-surface.mjs` (release group). Finnish selectors, onboarding behavior, overlay
+- **B3, Onboarding.svelte:** the remaining onboarding and backend window portions of
+  `test-release-surface.mjs` (release group). The App source read is removed: rendered completion
+  covers its Settings transition and frontend hide IPC, while the backend command check remains.
+  Finnish selectors, onboarding behavior, overlay
   labels and the frontend `Language` type are already covered by rendered/module tests below.
 
 The current `ui` manifest has six entries. `test-finnish-language.mjs` now keeps only CLI/core
@@ -252,6 +255,8 @@ lifecycle/reset, and the two queued dirty/busy transitions).
 | Settings dictionary and glossary editing | `src/lib/Settings.dictionary.test.ts` (`personal dictionary editor`) and `src/lib/Settings.glossaryScopes.test.ts` (`profile dictionary scopes`) cover Save, Discard, Stay, profile scopes, refreshes, conflicts and retries; `src/lib/Settings.languageRecovery.test.ts` covers `a language change a personal dictionary blocks`. |
 | Meeting reprocessing and its proposal controls | `src/lib/MeetingReprocessing.test.ts` covers `stale selected plans cannot execute against a newer review`, `proposal replacement and discard require confirmation`, and persistence gates; `src/lib/FileTranscription.meetingReprocessing.test.ts` covers rendered reprocessing and clock behavior. |
 | File transcription flow | `src/lib/FileTranscription.flow.test.ts` covers `dropped files use one run-scoped progress listener`, `Stop keeps a file running until native settlement`, and saved-option `Re-run`; `src/lib/FileTranscription.test.ts` retains the other rendered retry/result cases. The three private file cases above remain registered. |
+| Settings meeting controls and saved reviews | `src/lib/Settings.meetingFlows.test.ts` holds begin acknowledgement and terminal polling separately: diarization/context remain disabled until completed, failed or cancelled settlement. Saved-review success renders the returned transcript; picker cancellation waits for a cancelled job; errors remain visible. All saved-review cases assert no new transcription. Replaces only the `disabled={transcribing}` and “Open saved meeting” source assertions; API/payload/source wiring checks remain. |
+| App onboarding completion | `src/App.onboarding.test.ts` renders first-start onboarding and completes it through the actual controls. Deferred completion acknowledgement gates Settings; other URL parameters survive, listeners are released, and frontend IPC never hides the window. Replaces the three App source assertions in `test-release-surface.mjs`; the log-message assertion was incidental wording. The Rust command's no-hide source check stays: mocked IPC cannot prove native window visibility. |
 | Meeting polling | `src/lib/FileTranscription.meetingPolling.test.ts` covers retrying the same job after a poll error, waiting for the cancelled terminal snapshot after cancellation acknowledgement, and reporting a completed job that has no transcript. |
 | Meeting clock | `src/lib/FileTranscription.meetingReprocessing.test.ts` covers `the rendered meeting clock interpolates native time and ignores a stale poll` and `reprocessing resets the same rendered meeting clock before accepting its native timing`. |
 | MeetingReview actions | `src/lib/MeetingReview.actions.test.ts` covers `Rename applies`, `Discard restores`, `Save and each export button`, persistence gating and `a rejected save` recovery. |

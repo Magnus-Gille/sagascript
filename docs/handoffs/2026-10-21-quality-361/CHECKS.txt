@@ -1,0 +1,56 @@
+Local acceptance, Linux, 2026-10-21
+
+Implementation: eight rendered tests, five obsolete frontend source assertions retired.
+No production Rust/Svelte, dependency, workflow, release or updater changes.
+The old Rust onboarding no-hide source assertion and all eight private harness cases remain.
+
+PASS: initial focused baseline, 18 tests, before adding the new coverage.
+PASS: final focused tests, 8 tests in two files; full Vitest, 602 tests in 53 files.
+PASS: Svelte/TypeScript, zero errors/warnings; ESLint; Prettier; git diff --check.
+PASS: every Node group (ui, ci, release, code-health); final node-ci 265/265.
+PASS: frontend build using locked Vite 6.4.4.
+PASS: existing three Playwright suites, fresh browser contexts and synthetic IPC.
+      Meeting progress screenshot visually inspected; native app/TCC/paste not exercised.
+PASS: cargo check --workspace --locked --offline.
+PASS: cargo test --workspace --locked --offline: 2297 passed, 0 failed, 3 ignored.
+PASS: cargo clippy --workspace --all-targets --locked --offline -- -D warnings.
+PASS: cargo build -p sagascript-cli --no-default-features --locked --offline.
+PASS: lean CLI --help and --version (1.4.5, source/build identity present).
+PASS: standalone lean CLI clippy --all-targets -- -D warnings and cargo test,
+      both with --no-default-features --locked --offline.
+
+Sensitivity: five temporary production mutants in a separate archive copy all fail the
+new tests (mutation-results.json); the clean tests pass. Mutants remove profile disabling,
+remove diarization/context disabling, discard a saved review, suppress completion routing,
+and introduce a frontend window-hide call. None is present in the task worktree.
+The first profile mutant survived, revealing missing observable parity with the old
+source assertion. Profile was added to all before-ack, after-ack, polling and terminal
+checkpoints. The mutant then failed. This is recorded rather than counted as an initial pass.
+
+Corrections and environment limits:
+- Initial onboarding test had four TypeScript diagnostics; corrected before acceptance.
+  A per-instance window spy was replaced with a prototype spy because getCurrentWindow()
+  constructs a fresh object. The hide mutant proves the final assertion is sensitive.
+- The restricted executor returned EPERM from Node spawnSync while reporting status 0
+  and empty pipes. A minimal child-output reproducer passed with normal approved execution.
+  Original failed/partial logs remain in the task evidence directory.
+- Restricted Rust workspace run failed the existing SIGINT cancellation test (no ack).
+  Same source passed all workspace tests in approved execution, including that exact test.
+  A diagnostic invocation with an incomplete --exact name selected zero tests; it is
+  not verification evidence. No signal test or timing threshold was changed.
+- A shared node_modules symlink failed the existing license-origin checks. The exact
+  offline installation was copied under the worktree; all 265 node-ci checks then passed.
+- Dependencies: isolated bwrap, no network, empty environment/personal HOME, lifecycle
+  scripts disabled. Cached lockfile dependencies plus only the missing Vite 6.4.4 archive,
+  downloaded from its locked registry URL and verified against its integrity digest.
+
+Delegation: native gpt-6-luna/high requested for both leaves, actual model/effort unknown
+(the harness exposes no runtime identity). Meeting leaf: partial initially (profile parity
+added after conductor mutation check), final pass. Onboarding leaf: partial initially
+(type errors and spy scope corrected), final pass after conductor integration/checks.
+Conductor retains review, integration and all external mutations.
+
+Scope remains partial for #361. #344/#375/#379 and unmatched private/native claims remain
+open. Internal environment follow-up is tracked separately in a private operations repository.
+Provider CI, immutable review, push/PR and merge receipts follow in the PR and final receipt.
+Raw local logs and previous attempts are retained in the task evidence directory.
