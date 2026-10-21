@@ -37,6 +37,13 @@ npm run verify:fast       # checks the setup; its preflight names anything missi
 cargo tauri dev
 ```
 
+Before the first Cargo build, and separately after dependency or lockfile updates, cache locked
+dependencies with `cargo fetch --locked --manifest-path
+src-tauri/Cargo.toml` (and repeat for `src-tauri/engine-host/ort/Cargo.toml` when working on
+the standalone ORT host) using your approved dependency setup. Verification never fetches or
+installs dependencies; keep the Cargo registry/git cache and target directory on disk-backed
+storage.
+
 Two things a fresh clone or worktree needs before the checks below work:
 
 - `npm run build` creates `dist/`. Every cargo command that compiles the app crate (`cargo
@@ -75,7 +82,9 @@ On Linux, verify checks the repository and the effective Cargo target/build dire
 Cargo build, test, check, clippy, or run steps. It fails closed when those paths are on
 memory-backed filesystems such as tmpfs; set `CARGO_TARGET_DIR` to a disk-backed path and run
 verify again. The check follows Cargo metadata and does not run for rustfmt, frontend-only, or
-synthetic checks.
+synthetic checks. If its locked offline metadata probe reports a cold cache, run the approved
+`cargo fetch --locked --manifest-path ...` command first; no network access is attempted by
+verify.
 
 ```bash
 npm run verify:fast                      # inner loop: rustfmt, app clippy, svelte-check, Prettier, ESLint, unit and UI node tests

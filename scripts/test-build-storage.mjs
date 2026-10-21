@@ -28,7 +28,9 @@ if (process.env.FAKE_CARGO_COUNTER) appendFileSync(process.env.FAKE_CARGO_COUNTE
 if (process.env.FAKE_CARGO_FAIL) { console.error("metadata unavailable"); process.exit(2); }
 if (!process.argv.includes("--locked")) { console.error("metadata was not locked"); process.exit(3); }
 const target = process.env.FAKE_CARGO_TARGET ?? resolve(process.cwd(), process.env.CARGO_TARGET_DIR ?? ".cargo-config-target");
-process.stdout.write(JSON.stringify({ target_directory: resolve(process.cwd(), target) }));
+const metadata = { target_directory: resolve(process.cwd(), target) };
+if (!process.env.FAKE_CARGO_OMIT_BUILD) metadata.build_directory = resolve(process.cwd(), process.env.FAKE_CARGO_BUILD ?? ".cargo-build-dir");
+process.stdout.write(JSON.stringify(metadata));
 `,
   );
   chmodSync(command, 0o755);
@@ -147,10 +149,13 @@ test("uses Cargo metadata output and rejects a target on tmpfs", async (t) => {
   const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
   const cargoBin = fakeCargo(t);
   const target = fixture(t);
+  const build = fixture(t);
   const oldPath = process.env.PATH;
   const oldTarget = process.env.FAKE_CARGO_TARGET;
+  const oldBuild = process.env.FAKE_CARGO_BUILD;
   process.env.PATH = `${cargoBin}:${oldPath ?? ""}`;
   process.env.FAKE_CARGO_TARGET = target;
+  process.env.FAKE_CARGO_BUILD = build;
   try {
     const result = await preflight([{ id: "cargo-config-target", steps: [{ run: "cargo check", cwd: "src-tauri" }], requires: [] }], {
       root,
@@ -158,7 +163,7 @@ test("uses Cargo metadata output and rejects a target on tmpfs", async (t) => {
       prerequisites: {},
       values: {},
       storageProbe: (paths, options) =>
-        probeBuildStorage(paths, { ...options, statfs: (path) => ({ type: path === target ? TMPFS : EXT4 }) }),
+        probeBuildStorage(paths, { ...options, statfs: (path) => ({ type: path === build ? TMPFS : EXT4 }) }),
     });
     assert.equal(result.missing.length, 1);
     assert.match(result.missing[0].missing, /tmpfs/);
@@ -167,6 +172,8 @@ test("uses Cargo metadata output and rejects a target on tmpfs", async (t) => {
     process.env.PATH = oldPath;
     if (oldTarget === undefined) delete process.env.FAKE_CARGO_TARGET;
     else process.env.FAKE_CARGO_TARGET = oldTarget;
+    if (oldBuild === undefined) delete process.env.FAKE_CARGO_BUILD;
+    else process.env.FAKE_CARGO_BUILD = oldBuild;
   }
 });
 
@@ -211,6 +218,38 @@ test("per-step CARGO_TARGET_DIR overrides the process environment", async (t) =>
   }
 });
 
+test("marks the clippy policy wrapper as a Cargo workspace check", async (t) => {
+  const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+  const cargoBin = fakeCargo(t);
+  const target = fixture(t);
+  const oldPath = process.env.PATH;
+  const oldTarget = process.env.FAKE_CARGO_TARGET;
+  process.env.PATH = `${cargoBin}:${oldPath ?? ""}`;
+  process.env.FAKE_CARGO_TARGET = target;
+  try {
+    const policy = CHECKS.find((check) => check.id === "clippy-policy");
+    const result = await preflight([policy], {
+      root,
+      platform: "linux",
+      prerequisites: {
+        rust: { label: "Rust", probe: async () => ({ ok: true }) },
+        "linux-libs": { label: "Linux libraries", probe: async () => ({ ok: true }) },
+        "frontend-dist": { label: "dist", probe: async () => ({ ok: true }) },
+      },
+      values: {},
+      storageProbe: (paths, options) =>
+        probeBuildStorage(paths, { ...options, statfs: (path) => ({ type: path === target ? TMPFS : EXT4 }) }),
+    });
+    assert.equal(result.missing.length, 1);
+    assert.match(result.missing[0].missing, /tmpfs/);
+    assert.match(result.missing[0].neededBy.join(","), /clippy-policy/);
+  } finally {
+    process.env.PATH = oldPath;
+    if (oldTarget === undefined) delete process.env.FAKE_CARGO_TARGET;
+    else process.env.FAKE_CARGO_TARGET = oldTarget;
+  }
+});
+
 test("skips metadata when Rust is already missing and reports metadata/probe failures", async (t) => {
   const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
   const cargoBin = fakeCargo(t);
@@ -238,6 +277,7 @@ test("skips metadata when Rust is already missing and reports metadata/probe fai
       { root, platform: "linux", prerequisites: {}, values: {} },
     );
     assert.match(metadataFailure.missing[0].missing, /metadata unavailable/);
+    assert.match(metadataFailure.missing[0].fix, /cargo fetch --locked --manifest-path src-tauri\/Cargo\.toml/);
     delete process.env.FAKE_CARGO_FAIL;
 
     const probeFailure = await preflight([{ id: "cargo-probe-failure", steps: [{ run: "cargo check", cwd: "src-tauri" }], requires: [] }], {

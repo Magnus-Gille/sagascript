@@ -18,7 +18,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, realpathSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { formatBudget, formatDuration, runProcessTree, signalExitCode, trapTerminationSignals } from "./lib/process-tree.mjs";
 import { probeBuildStorage } from "./lib/build-storage.mjs";
@@ -49,7 +49,8 @@ const nodeTests = (group) =>
  * Each check:
  *   id, area      names for --only/--skip (an area selects all its checks)
  *   steps         commands run in order:
- *                 { run, cwd, argv?, env?, forbidOutput?, requireOutput?, outputValue? }.
+ *                 { run, cwd, argv?, env?, cargoWorkspace?, forbidOutput?, requireOutput?, outputValue? }.
+ *                 `cargoWorkspace` marks a wrapper step that invokes Cargo from that workspace.
  *                 {name} in argv/env is replaced: gitHead, cargoTargetDir,
  *                 freshTempDir (a new temporary directory), msrvToolchain,
  *                 or a value an earlier step stored with outputValue (its
@@ -252,7 +253,7 @@ export const CHECKS = [
     id: "clippy-policy",
     area: "clippy",
     title: "Clippy policy counts must not rise (src-tauri/clippy-policy-baseline.json, measured on Linux)",
-    steps: [step("node scripts/clippy-policy.mjs")],
+    steps: [step("node scripts/clippy-policy.mjs", undefined, { cargoWorkspace: "src-tauri" })],
     sets: ["default"],
     // The baseline counts Linux code; macOS- and Windows-only code would differ.
     platforms: LINUX,
@@ -797,7 +798,7 @@ const STORAGE_CARGO_COMMANDS = new Set(["build", "check", "clippy", "run", "test
 
 function storageCargoStep(stepDefinition) {
   const [program, command] = splitCommand(stepDefinition.run);
-  return program === "cargo" && STORAGE_CARGO_COMMANDS.has(command);
+  return Boolean(stepDefinition.cargoWorkspace) || (program === "cargo" && STORAGE_CARGO_COMMANDS.has(command));
 }
 
 function cargoStorageEnv(stepDefinition) {
@@ -809,12 +810,16 @@ function cargoStorageEnv(stepDefinition) {
   return env;
 }
 
-function cargoStorageFailure(cwd, detail) {
+function cargoStorageFailure(root, cwd, detail) {
+  const manifest = relative(root, join(cwd, "Cargo.toml")) || "Cargo.toml";
   return {
     path: cwd,
     location: cwd,
     message: `Cargo storage metadata failed for ${cwd}: ${detail}`,
-    fix: "Ensure offline cargo metadata works, or set CARGO_TARGET_DIR=/path/to/disk/target and run verify again.",
+    fix:
+      `Cache locked dependencies with cargo fetch --locked --manifest-path ${manifest} using your approved dependency setup, ` +
+      "then rerun verify; it never fetches automatically. If storage is memory-backed, set " +
+      "CARGO_TARGET_DIR=/path/to/disk/target.",
   };
 }
 
@@ -827,23 +832,25 @@ function storageForCargoChecks(checks, root, platform, synthetic = false, storag
   const metadataKeys = new Set();
   const failures = [];
   for (const stepDefinition of cargoSteps) {
-    const cwd = resolve(root, stepDefinition.cwd ?? ".");
+    const cwd = resolve(root, stepDefinition.cargoWorkspace ?? stepDefinition.cwd ?? ".");
     const env = cargoStorageEnv(stepDefinition);
     const key = JSON.stringify([cwd, env]);
     if (metadataKeys.has(key)) continue;
     metadataKeys.add(key);
     const result = quiet("cargo", ["metadata", "--no-deps", "--format-version", "1", "--offline", "--locked"], { cwd, env });
     if (!result.ok) {
-      failures.push(cargoStorageFailure(cwd, result.stderr.trim() || result.error?.message || "unknown error"));
+      failures.push(cargoStorageFailure(root, cwd, result.stderr.trim() || result.error?.message || "unknown error"));
       continue;
     }
+    let metadata;
     try {
-      const metadata = JSON.parse(result.stdout);
+      metadata = JSON.parse(result.stdout);
       if (typeof metadata.target_directory !== "string") throw new Error("metadata has no target_directory");
-      paths.push(metadata.target_directory);
+      paths.push(resolve(cwd, metadata.target_directory));
     } catch (error) {
-      failures.push(cargoStorageFailure(cwd, error.message));
+      failures.push(cargoStorageFailure(root, cwd, error.message));
     }
+    if (typeof metadata?.build_directory === "string") paths.push(resolve(cwd, metadata.build_directory));
     if (env.CARGO_BUILD_BUILD_DIR) paths.push(resolve(cwd, env.CARGO_BUILD_BUILD_DIR));
   }
   if (failures.length > 0) return { ok: false, failures };
