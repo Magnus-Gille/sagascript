@@ -126,7 +126,7 @@ test("does not inspect storage on non-Linux platforms", () => {
   assert.equal(result.ok, true);
 });
 
-test("skips metadata for fmt and frontend-only checks", async (t) => {
+test("skips metadata for fmt and frontend-only checks", async () => {
   const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
   const prerequisites = { rust: { label: "Rust", probe: async () => ({ ok: true }) } };
   const values = {};
