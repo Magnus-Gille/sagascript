@@ -140,10 +140,7 @@ test("Cargo dev/test profiles keep only line-table debug info by default", () =>
   ];
   for (const [name, manifest] of manifests) {
     for (const profileName of ["dev", "test"]) {
-      const block = new RegExp(
-        `^\\[profile\\.${profileName}\\]\\n([\\s\\S]*?)(?=^\\[|(?![\\s\\S]))`,
-        "m",
-      ).exec(manifest)?.[1];
+      const block = new RegExp(`^\\[profile\\.${profileName}\\]\\n([\\s\\S]*?)(?=^\\[|(?![\\s\\S]))`, "m").exec(manifest)?.[1];
       assert.ok(block !== undefined, `${name} must define [profile.${profileName}]`);
       assert.match(block, /^debug\s*=\s*["']line-tables-only["']\s*$/m);
       assert.doesNotMatch(

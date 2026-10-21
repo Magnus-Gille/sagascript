@@ -134,12 +134,13 @@ test("skips metadata for fmt and frontend-only checks", async (t) => {
   const fmtResult = await preflight([fmt], { root, platform: "linux", prerequisites, values });
   assert.deepEqual(fmtResult.missing, []);
 
-  const frontendResult = await preflight(
-    [{ id: "frontend", steps: [{ run: "npm run test:unit" }], requires: [] }],
-    { root: join(root, "does-not-exist"), platform: "linux", prerequisites, values: {} },
-  );
+  const frontendResult = await preflight([{ id: "frontend", steps: [{ run: "npm run test:unit" }], requires: [] }], {
+    root: join(root, "does-not-exist"),
+    platform: "linux",
+    prerequisites,
+    values: {},
+  });
   assert.deepEqual(frontendResult.missing, []);
-
 });
 
 test("uses Cargo metadata output and rejects a target on tmpfs", async (t) => {
@@ -151,17 +152,14 @@ test("uses Cargo metadata output and rejects a target on tmpfs", async (t) => {
   process.env.PATH = `${cargoBin}:${oldPath ?? ""}`;
   process.env.FAKE_CARGO_TARGET = target;
   try {
-    const result = await preflight(
-      [{ id: "cargo-config-target", steps: [{ run: "cargo check", cwd: "src-tauri" }], requires: [] }],
-      {
-        root,
-        platform: "linux",
-        prerequisites: {},
-        values: {},
-        storageProbe: (paths, options) =>
-          probeBuildStorage(paths, { ...options, statfs: (path) => ({ type: path === target ? TMPFS : EXT4 }) }),
-      },
-    );
+    const result = await preflight([{ id: "cargo-config-target", steps: [{ run: "cargo check", cwd: "src-tauri" }], requires: [] }], {
+      root,
+      platform: "linux",
+      prerequisites: {},
+      values: {},
+      storageProbe: (paths, options) =>
+        probeBuildStorage(paths, { ...options, statfs: (path) => ({ type: path === target ? TMPFS : EXT4 }) }),
+    });
     assert.equal(result.missing.length, 1);
     assert.match(result.missing[0].missing, /tmpfs/);
     assert.match(result.missing[0].fix, /CARGO_TARGET_DIR/);
@@ -184,11 +182,13 @@ test("per-step CARGO_TARGET_DIR overrides the process environment", async (t) =>
   const checked = [];
   try {
     const result = await preflight(
-      [{
-        id: "cargo-step-target",
-        steps: [{ run: "cargo check", cwd: "src-tauri", env: { CARGO_TARGET_DIR: stepTarget, CARGO_BUILD_BUILD_DIR: "../build-dir" } }],
-        requires: [],
-      }],
+      [
+        {
+          id: "cargo-step-target",
+          steps: [{ run: "cargo check", cwd: "src-tauri", env: { CARGO_TARGET_DIR: stepTarget, CARGO_BUILD_BUILD_DIR: "../build-dir" } }],
+          requires: [],
+        },
+      ],
       {
         root,
         platform: "linux",
@@ -222,7 +222,12 @@ test("skips metadata when Rust is already missing and reports metadata/probe fai
   try {
     const rustMissing = await preflight(
       [{ id: "cargo-rust-missing", steps: [{ run: "cargo check", cwd: "src-tauri" }], requires: ["rust"] }],
-      { root, platform: "linux", prerequisites: { rust: { label: "Rust", probe: async () => ({ ok: false, missing: "rust missing" }) } }, values: {} },
+      {
+        root,
+        platform: "linux",
+        prerequisites: { rust: { label: "Rust", probe: async () => ({ ok: false, missing: "rust missing" }) } },
+        values: {},
+      },
     );
     assert.match(rustMissing.missing[0].missing, /rust missing/);
     assert.throws(() => statSync(counter), { code: "ENOENT" });
@@ -235,22 +240,19 @@ test("skips metadata when Rust is already missing and reports metadata/probe fai
     assert.match(metadataFailure.missing[0].missing, /metadata unavailable/);
     delete process.env.FAKE_CARGO_FAIL;
 
-    const probeFailure = await preflight(
-      [{ id: "cargo-probe-failure", steps: [{ run: "cargo check", cwd: "src-tauri" }], requires: [] }],
-      {
-        root,
-        platform: "linux",
-        prerequisites: {},
-        values: {},
-        storageProbe: (paths, options) =>
-          probeBuildStorage(paths, {
-            ...options,
-            statfs: () => {
-              throw new Error("statfs unavailable");
-            },
-          }),
-      },
-    );
+    const probeFailure = await preflight([{ id: "cargo-probe-failure", steps: [{ run: "cargo check", cwd: "src-tauri" }], requires: [] }], {
+      root,
+      platform: "linux",
+      prerequisites: {},
+      values: {},
+      storageProbe: (paths, options) =>
+        probeBuildStorage(paths, {
+          ...options,
+          statfs: () => {
+            throw new Error("statfs unavailable");
+          },
+        }),
+    });
     assert.match(probeFailure.missing[0].missing, /statfs unavailable/);
   } finally {
     process.env.PATH = oldPath;
