@@ -161,6 +161,17 @@ missing Windows SHA256 file, `windows-beta-VERSION` release, or (in CI only,
 `GITHUB_ACTIONS=true`) acceptance JSON from a skip into a failure. It exits non-zero
 on any failure.
 
+If the verifier itself needs a correction after promotion, merge and review that
+correction first. Then dispatch `verify-release-draft.yml` on `main` with the
+original Release run ID, version and exact 40-character release SHA from its
+accepted receipt. This read-only workflow requires a successful promotion and
+unpublished stable/Windows drafts, downloads the original draft snapshot with
+Windows acceptance evidence, and matches every file to the current GitHub asset
+inventory, size and SHA-256 digest before running the full verifier. It never
+rebuilds, signs, creates or publishes a release. The receipt records both the
+verifier revision and the unchanged application revision. Do not move the tag to
+the verifier fix or weaken the checks to obtain a successful result.
+
 Windows beta publication is a separate owner action: the promote step drafts the
 `windows-beta-VERSION` prerelease from the exact prebuilt x64 artifacts; publish it
 only as a prerelease after the Windows acceptance you require, and verify the

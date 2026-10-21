@@ -42,8 +42,12 @@ class Host:
             args, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.PIPE, text=True, bufsize=1
         )
+        self.stdout_fd = self.process.stdout.fileno()
+        self.stdout_buffer = bytearray()
+        self.stdout_eof = False
         self.next_id = 1
         self.pending = {}
+        self.request_ops = {}
 
     def send(self, op, **fields):
         request_id = self.next_id
@@ -52,31 +56,72 @@ class Host:
         request.update(fields)
         self.process.stdin.write(json.dumps(request, ensure_ascii=False) + "\n")
         self.process.stdin.flush()
+        self.request_ops[request_id] = op
         return request_id
 
-    def read_line(self, timeout=30):
-        ready, _, _ = select.select([self.process.stdout], [], [], timeout)
-        if not ready:
-            fail(f"timed out waiting for host response; stderr={self.stderr_tail()!r}")
-        line = self.process.stdout.readline()
-        if not line:
-            fail(f"host exited before response; returncode={self.process.poll()} stderr={self.stderr_tail()!r}")
+    def read_line(self, timeout=30, request_context=None):
+        deadline = time.monotonic() + timeout
+        while True:
+            newline = self.stdout_buffer.find(b"\n")
+            if newline >= 0:
+                line = bytes(self.stdout_buffer[:newline])
+                del self.stdout_buffer[:newline + 1]
+                return self._parse_line(line, request_context)
+            if self.stdout_eof:
+                if self.stdout_buffer:
+                    line = bytes(self.stdout_buffer)
+                    self.stdout_buffer.clear()
+                    return self._parse_line(line, request_context)
+                context = f" while waiting for {request_context}" if request_context else ""
+                fail(
+                    f"host exited before response{context}; returncode={self.process.poll()} "
+                    f"stderr={self.stderr_tail()!r}"
+                )
+
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                context = f" while waiting for {request_context}" if request_context else ""
+                fail(f"timed out waiting for host response{context}; stderr={self.stderr_tail()!r}")
+            ready, _, _ = select.select([self.stdout_fd], [], [], remaining)
+            if not ready:
+                context = f" while waiting for {request_context}" if request_context else ""
+                fail(f"timed out waiting for host response{context}; stderr={self.stderr_tail()!r}")
+            chunk = os.read(self.stdout_fd, 4096)
+            if chunk:
+                self.stdout_buffer.extend(chunk)
+            else:
+                self.stdout_eof = True
+
+    def _parse_line(self, line, request_context=None):
         try:
-            return json.loads(line)
+            text = line.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            context = f" while waiting for {request_context}" if request_context else ""
+            fail(f"stdout was not UTF-8{context}: {exc}")
+        try:
+            return json.loads(text)
         except json.JSONDecodeError as exc:
-            fail(f"stdout was not JSONL: {line!r}: {exc}")
+            context = f" while waiting for {request_context}" if request_context else ""
+            fail(f"stdout was not JSONL{context}: {exc}")
+
+    def request_context(self, request_id):
+        op = self.request_ops.get(request_id, "unknown")
+        return f"id {request_id} (op {op!r})"
 
     def wait_for(self, request_id, timeout=30):
         if request_id in self.pending:
             return self.pending.pop(request_id)
+        context = self.request_context(request_id)
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            response = self.read_line(max(0.01, deadline - time.monotonic()))
+            response = self.read_line(max(0.01, deadline - time.monotonic()), context)
             if response.get("id") == request_id and "ok" in response:
+                self.request_ops.pop(request_id, None)
                 return response
             if "id" in response and "ok" in response:
                 self.pending[response["id"]] = response
-        fail(f"timed out waiting for id {request_id}")
+                self.request_ops.pop(response["id"], None)
+        fail(f"timed out waiting for {context}")
 
     def stderr_tail(self, limit=1000, budget=1 << 20):
         """The last `limit` characters the host has written to stderr so far, without blocking.
