@@ -1,11 +1,13 @@
 pub mod configuration;
 pub mod health;
 mod registration;
+pub(crate) mod transition;
 
 #[cfg(target_os = "macos")]
 mod macos_bare;
 
 pub use health::{HotkeyHealth, HotkeyStatus, OperationalHotkey};
+pub(crate) use registration::NativeRegistrar;
 pub use registration::{register_shortcuts, unregister_shortcuts};
 
 #[cfg(target_os = "macos")]

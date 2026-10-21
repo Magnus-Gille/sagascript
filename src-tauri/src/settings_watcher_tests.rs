@@ -1,4 +1,194 @@
 use super::*;
+
+#[derive(Default)]
+struct FakeRegistrar {
+    calls: Vec<String>,
+    register_results: std::collections::VecDeque<Result<(), String>>,
+    unregister_results: std::collections::VecDeque<Result<(), String>>,
+}
+
+impl hotkey::transition::Registrar for FakeRegistrar {
+    fn register(&mut self, shortcuts: &[String]) -> Result<(), String> {
+        self.calls.push(format!("register:{}", shortcuts.join(",")));
+        self.register_results.pop_front().unwrap_or(Ok(()))
+    }
+
+    fn unregister(&mut self, shortcuts: &[String]) -> Result<(), String> {
+        self.calls
+            .push(format!("unregister:{}", shortcuts.join(",")));
+        self.unregister_results.pop_front().unwrap_or(Ok(()))
+    }
+}
+
+fn registered(shortcut: &str) -> OperationalHotkey {
+    OperationalHotkey::Registered(vec![shortcut.to_string()])
+}
+
+#[test]
+fn invalid_watcher_settings_are_rejected_without_os_calls() {
+    let mut registrar = FakeRegistrar::default();
+    let result = transition_settings_hotkeys(
+        &registered("old"),
+        &["new".into()],
+        Some("invalid profile".into()),
+        &mut registrar,
+    );
+
+    assert!(matches!(
+        result,
+        Err(SettingsHotkeyTransitionError::Invalid(error)) if error == "invalid profile"
+    ));
+    assert!(registrar.calls.is_empty());
+}
+
+#[test]
+fn watcher_unknown_previous_state_is_refused_without_os_calls() {
+    let mut registrar = FakeRegistrar::default();
+    let error = transition_settings_hotkeys(
+        &OperationalHotkey::Unknown,
+        &["new".into()],
+        None,
+        &mut registrar,
+    )
+    .expect_err("unknown previous state must be refused");
+    let SettingsHotkeyTransitionError::Registration(failure) = error else {
+        panic!("expected registration failure")
+    };
+
+    assert_eq!(failure.operational, OperationalHotkey::Unknown);
+    assert_eq!(
+        watcher_registration_diagnostic(failure.cause),
+        "failed to unregister previous hotkeys: registration state is unknown after an earlier OS error; restart Sagascript"
+    );
+    assert!(registrar.calls.is_empty());
+}
+
+#[test]
+fn watcher_old_unregister_failure_is_unknown_and_keeps_its_diagnostic() {
+    let mut registrar = FakeRegistrar {
+        unregister_results: [Err("old unregister".into())].into(),
+        ..FakeRegistrar::default()
+    };
+    let error =
+        transition_settings_hotkeys(&registered("old"), &["new".into()], None, &mut registrar)
+            .expect_err("failed old unregister must stop the transition");
+    let SettingsHotkeyTransitionError::Registration(failure) = error else {
+        panic!("expected registration failure")
+    };
+
+    assert_eq!(failure.operational, OperationalHotkey::Unknown);
+    assert_eq!(
+        watcher_registration_diagnostic(failure.cause),
+        "failed to unregister previous hotkeys: old unregister"
+    );
+    assert_eq!(registrar.calls, ["unregister:old"]);
+}
+
+#[test]
+fn watcher_cleanup_failure_is_unknown_and_never_restores_old() {
+    let mut registrar = FakeRegistrar {
+        register_results: [Err("new registration".into())].into(),
+        unregister_results: [Ok(()), Err("partial cleanup".into())].into(),
+        ..FakeRegistrar::default()
+    };
+    let error =
+        transition_settings_hotkeys(&registered("old"), &["new".into()], None, &mut registrar)
+            .expect_err("new registration failure must run rollback");
+    let SettingsHotkeyTransitionError::Registration(failure) = error else {
+        panic!("expected registration failure")
+    };
+
+    assert_eq!(failure.operational, OperationalHotkey::Unknown);
+    assert_eq!(
+        watcher_registration_diagnostic(failure.cause),
+        "failed to register new hotkey profiles: new registration; partial-registration cleanup failed: partial cleanup"
+    );
+    assert_eq!(
+        registrar.calls,
+        ["unregister:old", "register:new", "unregister:new"]
+    );
+}
+
+#[test]
+fn watcher_restore_failure_records_inactive_and_could_not_be_restored() {
+    let mut registrar = FakeRegistrar {
+        register_results: [Err("new registration".into()), Err("restore old".into())].into(),
+        unregister_results: [Ok(()), Ok(())].into(),
+        ..FakeRegistrar::default()
+    };
+    let error =
+        transition_settings_hotkeys(&registered("old"), &["new".into()], None, &mut registrar)
+            .expect_err("new registration failure must run rollback");
+    let SettingsHotkeyTransitionError::Registration(failure) = error else {
+        panic!("expected registration failure")
+    };
+
+    assert_eq!(failure.operational, OperationalHotkey::Inactive);
+    assert_eq!(
+        watcher_registration_diagnostic(failure.cause),
+        "failed to register new hotkey profiles: new registration; previous profiles could not be restored"
+    );
+    assert_eq!(
+        registrar.calls,
+        [
+            "unregister:old",
+            "register:new",
+            "unregister:new",
+            "register:old"
+        ]
+    );
+}
+
+#[test]
+fn watcher_failure_restores_five_hotkey_fields_and_keeps_other_incoming_settings() {
+    use sagascript_core::settings::{
+        FileModelPreference, HotkeyMode, HotkeyProfile, Language, Settings, WhisperModel,
+    };
+
+    let mut previous = Settings::default();
+    previous.hotkey = "Control+Shift+Space".into();
+    previous.hotkey_mode = HotkeyMode::PushToTalk;
+    previous.language = Language::Swedish;
+    previous.hotkey_profiles = vec![HotkeyProfile {
+        id: "default".into(),
+        name: "Previous profile".into(),
+        shortcut: previous.hotkey.clone(),
+        language: Language::Swedish,
+        push_to_talk_shortcut: None,
+        toggle_shortcut: None,
+    }];
+    previous.profile_models.insert(
+        "default".into(),
+        FileModelPreference::Whisper(WhisperModel::Tiny),
+    );
+    previous.initial_prompt = "previous prompt".into();
+
+    let mut incoming = Settings::default();
+    incoming.hotkey = "Control+Alt+K".into();
+    incoming.hotkey_mode = HotkeyMode::Toggle;
+    incoming.language = Language::English;
+    incoming.hotkey_profiles = vec![HotkeyProfile {
+        id: "default".into(),
+        name: "Incoming profile".into(),
+        shortcut: incoming.hotkey.clone(),
+        language: Language::English,
+        push_to_talk_shortcut: None,
+        toggle_shortcut: None,
+    }];
+    incoming.profile_models.insert(
+        "default".into(),
+        FileModelPreference::Whisper(WhisperModel::TinyEn),
+    );
+    incoming.initial_prompt = "new prompt".into();
+    restore_previous_hotkey_settings(&mut incoming, &previous);
+
+    assert_eq!(incoming.hotkey, previous.hotkey);
+    assert_eq!(incoming.hotkey_mode, previous.hotkey_mode);
+    assert_eq!(incoming.language, previous.language);
+    assert_eq!(incoming.profile_models, previous.profile_models);
+    assert_eq!(incoming.hotkey_profiles, previous.hotkey_profiles);
+    assert_eq!(incoming.initial_prompt, "new prompt");
+}
 #[cfg(target_os = "macos")]
 use sagascript_testsupport::TempDir;
 

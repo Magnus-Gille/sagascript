@@ -13,8 +13,63 @@ use tracing::{error, info};
 use crate::commands::{self, lock_controller, SharedController};
 use crate::events::{self, EmitEvent, UiState};
 use crate::hotkey;
+use crate::hotkey::transition::{self, RollbackOutcome, TransitionFailure, TransitionFailureCause};
+use crate::hotkey::{NativeRegistrar, OperationalHotkey};
 use crate::launch::load_settings_with_permission_gate;
 use crate::tray::update_profiles_menu;
+
+#[derive(Debug)]
+enum SettingsHotkeyTransitionError {
+    Invalid(String),
+    Registration(TransitionFailure),
+}
+
+/// Validation stays ahead of all OS work. Keeping this caller seam separate
+/// lets the watcher retain its settings restoration and diagnostic contract.
+fn transition_settings_hotkeys(
+    previous: &OperationalHotkey,
+    new: &[String],
+    validation_error: Option<String>,
+    registrar: &mut impl hotkey::transition::Registrar,
+) -> Result<OperationalHotkey, SettingsHotkeyTransitionError> {
+    if let Some(error) = validation_error {
+        return Err(SettingsHotkeyTransitionError::Invalid(error));
+    }
+    transition::apply(previous, new, registrar).map_err(SettingsHotkeyTransitionError::Registration)
+}
+
+fn watcher_registration_diagnostic(cause: TransitionFailureCause) -> String {
+    match cause {
+        TransitionFailureCause::PreviousUnknown => "failed to unregister previous hotkeys: registration state is unknown after an earlier OS error; restart Sagascript".to_string(),
+        TransitionFailureCause::UnregisterOld { error } => {
+            format!("failed to unregister previous hotkeys: {error}")
+        }
+        TransitionFailureCause::RegisterNew { error, rollback } => match rollback {
+            RollbackOutcome::CleanupFailed(cleanup_error) => format!(
+                "failed to register new hotkey profiles: {error}; partial-registration cleanup failed: {cleanup_error}"
+            ),
+            RollbackOutcome::RestoreFailed(_) => format!(
+                "failed to register new hotkey profiles: {error}; previous profiles could not be restored"
+            ),
+            RollbackOutcome::Restored(_) => format!(
+                "failed to register new hotkey profiles: {error}; previous profiles restored"
+            ),
+        },
+    }
+}
+
+/// Restore the settings fields that participate in shortcut configuration.
+/// Other incoming settings continue to hot-reload after a shortcut failure.
+fn restore_previous_hotkey_settings(
+    settings: &mut sagascript_core::settings::Settings,
+    old: &sagascript_core::settings::Settings,
+) {
+    settings.hotkey = old.hotkey.clone();
+    settings.language = old.language;
+    settings.profile_models = old.profile_models.clone();
+    settings.hotkey_profiles = old.hotkey_profiles.clone();
+    settings.hotkey_mode = old.hotkey_mode;
+}
 
 /// Whether a filesystem event may reflect creation or replacement of a user
 /// configuration file.
@@ -166,85 +221,41 @@ pub(crate) fn start_settings_watcher(app: tauri::AppHandle) {
 
             let old_shortcuts = old_settings.resolved_shortcuts();
             let new_shortcuts = new_settings.resolved_shortcuts();
-            let validation_error = new_settings.validate_shortcut_configuration().err();
+            let validation_error = new_settings
+                .validate_shortcut_configuration()
+                .err()
+                .map(|error| error.to_string());
             if new_shortcuts != old_shortcuts || validation_error.is_some() {
                 info!("Settings watcher: hotkey profiles changed");
                 // A panic between unregister and register must not leave
                 // health claiming the old shortcuts are still registered.
                 let _registration_change = health.registration_change();
                 let old_operational = health.operational_hotkey();
-                let unregister_error = if validation_error.is_none() {
-                    match &old_operational {
-                        hotkey::OperationalHotkey::Registered(shortcuts) => hotkey::unregister_shortcuts(
-                            &app,
-                            shortcuts,
+                let mut registrar = NativeRegistrar::new(&app);
+                let result = transition_settings_hotkeys(
+                    &old_operational,
+                    &new_shortcuts,
+                    validation_error,
+                    &mut registrar,
+                );
+                let change = match result {
+                    Ok(operational) => health.record(&new_settings.hotkey, None, operational),
+                    Err(SettingsHotkeyTransitionError::Invalid(error)) => {
+                        restore_previous_hotkey_settings(&mut new_settings, &old_settings);
+                        health.record(
+                            &old_settings.hotkey,
+                            Some(format!("{error}; previous hotkey profiles remain active")),
+                            old_operational,
                         )
-                            .err()
-                            .map(|error| error.to_string()),
-                        hotkey::OperationalHotkey::Inactive => None,
-                        hotkey::OperationalHotkey::Unknown => Some(
-                            "registration state is unknown after an earlier OS error; restart Sagascript".to_string(),
-                        ),
                     }
-                } else {
-                    None
-                };
-
-                let change = if let Some(error) = validation_error {
-                    new_settings.hotkey = old_settings.hotkey.clone();
-                    new_settings.language = old_settings.language;
-                    new_settings.profile_models = old_settings.profile_models.clone();
-                    new_settings.hotkey_profiles = old_settings.hotkey_profiles.clone();
-                    new_settings.hotkey_mode = old_settings.hotkey_mode;
-                    health.record(
-                        &old_settings.hotkey,
-                        Some(format!("{error}; previous hotkey profiles remain active")),
-                        old_operational,
-                    )
-                } else if let Some(error) = unregister_error {
-                    new_settings.hotkey = old_settings.hotkey.clone();
-                    new_settings.language = old_settings.language;
-                    new_settings.profile_models = old_settings.profile_models.clone();
-                    new_settings.hotkey_profiles = old_settings.hotkey_profiles.clone();
-                    new_settings.hotkey_mode = old_settings.hotkey_mode;
-                    health.record(
-                        &old_settings.hotkey,
-                        Some(format!("failed to unregister previous hotkeys: {error}")),
-                        hotkey::OperationalHotkey::Unknown,
-                    )
-                } else {
-                    match hotkey::register_shortcuts(&app, &new_shortcuts) {
-                        Ok(()) => health.record(
-                            &new_settings.hotkey,
-                            None,
-                            hotkey::OperationalHotkey::registered_many(&new_shortcuts),
-                        ),
-                        Err(error) => {
-                            new_settings.hotkey = old_settings.hotkey.clone();
-                            new_settings.language = old_settings.language;
-                            new_settings.profile_models = old_settings.profile_models.clone();
-                            new_settings.hotkey_profiles = old_settings.hotkey_profiles.clone();
-                            new_settings.hotkey_mode = old_settings.hotkey_mode;
-                            match hotkey::unregister_shortcuts(&app, &new_shortcuts) {
-                                Err(cleanup_error) => health.record(
-                                    &old_settings.hotkey,
-                                    Some(format!("failed to register new hotkey profiles: {error}; partial-registration cleanup failed: {cleanup_error}")),
-                                    hotkey::OperationalHotkey::Unknown,
-                                ),
-                                Ok(()) => {
-                                    let restored = match &old_operational {
-                                        hotkey::OperationalHotkey::Registered(shortcuts) => hotkey::register_shortcuts(&app, shortcuts).is_ok(),
-                                        hotkey::OperationalHotkey::Inactive => true,
-                                        hotkey::OperationalHotkey::Unknown => false,
-                                    };
-                                    health.record(
-                                        &old_settings.hotkey,
-                                        Some(format!("failed to register new hotkey profiles: {error}; previous profiles {}", if restored { "restored" } else { "could not be restored" })),
-                                        if restored { old_operational } else { hotkey::OperationalHotkey::Inactive },
-                                    )
-                                }
-                            }
-                        }
+                    Err(SettingsHotkeyTransitionError::Registration(failure)) => {
+                        restore_previous_hotkey_settings(&mut new_settings, &old_settings);
+                        let health_error = watcher_registration_diagnostic(failure.cause);
+                        health.record(
+                            &old_settings.hotkey,
+                            Some(health_error),
+                            failure.operational,
+                        )
                     }
                 };
                 if change.changed {

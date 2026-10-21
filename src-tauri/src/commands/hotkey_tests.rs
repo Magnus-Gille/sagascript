@@ -1,26 +1,90 @@
 use super::*;
 
 #[test]
-fn a_failed_change_restores_what_was_registered() {
-    let registered = OperationalHotkey::Registered(vec!["Control+Shift+Space".into()]);
-    assert_eq!(
-        rollback_for(&registered),
-        Rollback::Restore(&["Control+Shift+Space".to_string()])
+fn healthy_identical_shortcuts_keep_the_persist_only_fast_path() {
+    let shortcuts = vec!["Control+Shift+Space".to_string()];
+    let registered = OperationalHotkey::Registered(shortcuts.clone());
+
+    assert!(healthy_shortcuts_are_identical(
+        &shortcuts,
+        &shortcuts,
+        &registered,
+        false
+    ));
+    assert!(!healthy_shortcuts_are_identical(
+        &shortcuts,
+        &shortcuts,
+        &registered,
+        true
+    ));
+    assert!(!healthy_shortcuts_are_identical(
+        &["Control+Alt+K".to_string()],
+        &shortcuts,
+        &registered,
+        false
+    ));
+    assert!(!healthy_shortcuts_are_identical(
+        &shortcuts,
+        &shortcuts,
+        &OperationalHotkey::Unknown,
+        false
+    ));
+}
+
+#[test]
+fn command_registration_failure_mapping_keeps_cleanup_and_restore_diagnostics() {
+    let (cleanup_health, cleanup_message) = command_registration_failure_diagnostics(
+        crate::hotkey::transition::TransitionFailureCause::RegisterNew {
+            error: "new denied".into(),
+            rollback: crate::hotkey::transition::RollbackOutcome::CleanupFailed(
+                "cleanup denied".into(),
+            ),
+        },
     );
     assert_eq!(
-        rollback_for(&OperationalHotkey::Inactive),
-        Rollback::NothingActive
+        cleanup_health.as_deref(),
+        Some("new registration failed: new denied; partial registration cleanup failed: cleanup denied; operational state is unknown")
+    );
+    assert_eq!(
+        cleanup_message,
+        "Failed to register hotkey profiles: new denied; cleanup failed: cleanup denied"
+    );
+
+    let (restore_health, restore_message) = command_registration_failure_diagnostics(
+        crate::hotkey::transition::TransitionFailureCause::RegisterNew {
+            error: "new denied".into(),
+            rollback: crate::hotkey::transition::RollbackOutcome::RestoreFailed(
+                "restore denied".into(),
+            ),
+        },
+    );
+    assert_eq!(
+        restore_health.as_deref(),
+        Some("new registration failed: new denied; restoring previous hotkeys also failed: restore denied")
+    );
+    assert_eq!(
+        restore_message,
+        "Failed to register hotkey profiles: new denied"
     );
 }
 
-/// The unknown state is refused before a change touches the OS, so a rollback
-/// does not start from it. If it ever did, the rollback restores nothing
-/// rather than guessing, and the health record keeps saying unknown.
 #[test]
-fn an_unknown_previous_state_restores_nothing() {
+fn command_persistence_rollback_keeps_health_diagnostics() {
+    use crate::hotkey::transition::RollbackOutcome;
+
     assert_eq!(
-        rollback_for(&OperationalHotkey::Unknown),
-        Rollback::StateUnknown
+        persistence_rollback_health_error(&RollbackOutcome::CleanupFailed("cleanup denied".into()))
+            .as_deref(),
+        Some("failed to unregister unpersisted hotkeys; operational state is unknown")
+    );
+    assert_eq!(
+        persistence_rollback_health_error(&RollbackOutcome::RestoreFailed("restore denied".into()))
+            .as_deref(),
+        Some("failed to restore previous hotkeys: restore denied")
+    );
+    assert_eq!(
+        persistence_rollback_health_error(&RollbackOutcome::Restored(OperationalHotkey::Inactive)),
+        None
     );
 }
 

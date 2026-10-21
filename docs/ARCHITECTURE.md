@@ -467,6 +467,11 @@ sequenceDiagram
 
 Observed acquisition order (outer → inner). Nothing enforces it; keep new code consistent:
 
+Shortcut replacement order and rollback outcomes live in `hotkey/transition.rs` behind the
+`Registrar` seam. `NativeRegistrar` delegates to the existing Tauri registration functions;
+the command and settings watcher retain their own locks, health messages, settings handling,
+and events. Startup and retry registration remain separate paths.
+
 1. `HotkeyHealth.transition` is held for a whole hotkey transaction (`apply_hotkey_change`,
    settings watcher). Inside it the controller lock and the settings file lock are each taken
    and released in turn, never nested. The configuration lease (`acquire_hotkey_configuration`)
