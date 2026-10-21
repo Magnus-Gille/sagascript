@@ -1,4 +1,27 @@
+use super::transition::Registrar;
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
+
+/// Adapter from the shared pure transition seam to the existing Tauri
+/// registration functions. Native behavior and thread placement stay here.
+pub(crate) struct NativeRegistrar<'a> {
+    app: &'a tauri::AppHandle,
+}
+
+impl<'a> NativeRegistrar<'a> {
+    pub(crate) fn new(app: &'a tauri::AppHandle) -> Self {
+        Self { app }
+    }
+}
+
+impl Registrar for NativeRegistrar<'_> {
+    fn register(&mut self, shortcuts: &[String]) -> Result<(), String> {
+        register_shortcuts(self.app, shortcuts).map_err(|error| error.to_string())
+    }
+
+    fn unregister(&mut self, shortcuts: &[String]) -> Result<(), String> {
+        unregister_shortcuts(self.app, shortcuts).map_err(|error| error.to_string())
+    }
+}
 
 fn bare_extended_function_key_number(shortcut: &str) -> Option<u8> {
     // Strict parity with src/lib/hotkey.ts canUseBareHotkey (/^F(\d{1,2})$/i):

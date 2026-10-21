@@ -2,6 +2,7 @@
 //! registration, and reporting the registration health.
 
 use sagascript_core::settings::{validate_hotkey, HotkeyMode, HotkeyProfile, Settings};
+use std::fmt::Display;
 use tauri::State;
 use tracing::{error, info};
 
@@ -11,7 +12,8 @@ use super::{lock_controller, try_persist_and_replace, SharedController};
 use crate::command_error::CommandError;
 use crate::events::EmitEvent;
 use crate::hotkey::configuration::HotkeyChange;
-use crate::hotkey::{HotkeyHealth, HotkeyStatus, OperationalHotkey};
+use crate::hotkey::transition::{self, RollbackOutcome, TransitionFailureCause};
+use crate::hotkey::{HotkeyHealth, HotkeyStatus, NativeRegistrar, OperationalHotkey};
 
 #[tauri::command]
 pub async fn get_active_hotkey_profile(
@@ -109,27 +111,6 @@ pub(super) fn persist_hotkey_change(
     .map(|persisted| persisted.current)
 }
 
-/// What a failed hotkey change does about the shortcuts registered before it.
-#[derive(Debug, PartialEq, Eq)]
-enum Rollback<'a> {
-    /// Register these again.
-    Restore(&'a [String]),
-    /// Nothing was registered, so there is nothing to put back.
-    NothingActive,
-    /// The previous state is unknown. A change is refused before it touches the
-    /// OS in that state, so a rollback does not start from here; if one ever
-    /// did, nothing is registered again and nothing is claimed about what is.
-    StateUnknown,
-}
-
-fn rollback_for(previous: &OperationalHotkey) -> Rollback<'_> {
-    match previous {
-        OperationalHotkey::Registered(shortcuts) => Rollback::Restore(shortcuts),
-        OperationalHotkey::Inactive => Rollback::NothingActive,
-        OperationalHotkey::Unknown => Rollback::StateUnknown,
-    }
-}
-
 /// The settings `update` would produce from `stored`, with the notices about
 /// profile models it reset, or the refusal.
 ///
@@ -144,6 +125,130 @@ fn prepare_candidate(
     update
         .prepare_with_notices(stored)
         .map_err(CommandError::Settings)
+}
+
+fn healthy_shortcuts_are_identical(
+    new: &[String],
+    old: &[String],
+    operational: &OperationalHotkey,
+    registration_failed: bool,
+) -> bool {
+    new == old && operational.matches(new) && !registration_failed
+}
+
+fn command_registration_failure_diagnostics(
+    cause: TransitionFailureCause,
+) -> (Option<String>, String) {
+    match cause {
+        TransitionFailureCause::PreviousUnknown => {
+            let message = "Hotkey registration state is unknown after an earlier OS error; restart Sagascript before changing profiles".to_string();
+            (Some(message.clone()), message)
+        }
+        TransitionFailureCause::UnregisterOld { error } => (
+            Some(format!(
+                "failed to unregister active hotkeys: {error}; operational state is unknown"
+            )),
+            format!("Failed to unregister active hotkeys: {error}"),
+        ),
+        TransitionFailureCause::RegisterNew { error, rollback } => match rollback {
+            RollbackOutcome::CleanupFailed(cleanup_error) => (
+                Some(format!("new registration failed: {error}; partial registration cleanup failed: {cleanup_error}; operational state is unknown")),
+                format!("Failed to register hotkey profiles: {error}; cleanup failed: {cleanup_error}"),
+            ),
+            RollbackOutcome::RestoreFailed(restore_error) => (
+                Some(format!("new registration failed: {error}; restoring previous hotkeys also failed: {restore_error}")),
+                format!("Failed to register hotkey profiles: {error}"),
+            ),
+            RollbackOutcome::Restored(OperationalHotkey::Inactive) => (
+                Some("no previous hotkey was active".to_string()),
+                format!("Failed to register hotkey profiles: {error}"),
+            ),
+            RollbackOutcome::Restored(OperationalHotkey::Registered(_)) => {
+                (None, format!("Failed to register hotkey profiles: {error}"))
+            }
+            RollbackOutcome::Restored(OperationalHotkey::Unknown) => (
+                Some(format!("new registration failed: {error}; the previous hotkey state was unknown")),
+                format!("Failed to register hotkey profiles: {error}"),
+            ),
+        },
+    }
+}
+
+fn persistence_rollback_health_error(rollback: &RollbackOutcome) -> Option<String> {
+    match rollback {
+        RollbackOutcome::CleanupFailed(_) => Some(
+            "failed to unregister unpersisted hotkeys; operational state is unknown".to_string(),
+        ),
+        RollbackOutcome::RestoreFailed(error) => {
+            Some(format!("failed to restore previous hotkeys: {error}"))
+        }
+        RollbackOutcome::Restored(_) => None,
+    }
+}
+
+struct HotkeyChangeContext<'a> {
+    old_primary: &'a str,
+    new_primary: &'a str,
+    old_operational: &'a OperationalHotkey,
+    new_shortcuts: &'a [String],
+}
+
+/// Finish a command hotkey change after its healthy-identical fast path.
+/// Registration and persistence are injected so the sequence can be exercised
+/// without a Tauri app or real settings I/O.
+fn commit_registered_hotkey_change<T, E: Display>(
+    context: HotkeyChangeContext<'_>,
+    health: &HotkeyHealth,
+    registrar: &mut impl transition::Registrar,
+    persist: impl FnOnce() -> Result<T, E>,
+    mut emit: impl FnMut(crate::hotkey::HotkeyStatusChange),
+) -> Result<T, CommandError> {
+    let operational =
+        match transition::apply(context.old_operational, context.new_shortcuts, registrar) {
+            Ok(operational) => operational,
+            Err(failure) => {
+                if let TransitionFailureCause::UnregisterOld { error } = &failure.cause {
+                    error!("Failed to unregister operational hotkeys: {error}");
+                }
+                let (health_error, message) =
+                    command_registration_failure_diagnostics(failure.cause);
+                let change = health.record(context.old_primary, health_error, failure.operational);
+                if change.changed {
+                    emit(change);
+                }
+                return Err(CommandError::HotkeyChangeFailed(message));
+            }
+        };
+
+    // Preserve the existing pending record before persistence. It deliberately
+    // does not emit an event; only the final success or rollback does.
+    health.record(
+        context.old_primary,
+        Some("hotkey profile change is pending persistence".to_string()),
+        OperationalHotkey::registered_many(context.new_shortcuts),
+    );
+
+    let persisted = match persist() {
+        Ok(persisted) => persisted,
+        Err(save_error) => {
+            let rollback =
+                transition::rollback(context.old_operational, context.new_shortcuts, registrar);
+            let health_error = persistence_rollback_health_error(&rollback);
+            let change = health.record(context.old_primary, health_error, rollback.operational());
+            if change.changed {
+                emit(change);
+            }
+            return Err(CommandError::HotkeyChangeFailed(format!(
+                "Failed to persist hotkey profiles: {save_error}"
+            )));
+        }
+    };
+
+    let change = health.record(context.new_primary, None, operational);
+    if change.changed {
+        emit(change);
+    }
+    Ok(persisted)
 }
 
 fn apply_hotkey_change(
@@ -168,10 +273,12 @@ fn apply_hotkey_change(
     }
 
     let old_shortcuts = old_settings.resolved_shortcuts();
-    if new_shortcuts == old_shortcuts
-        && old_operational.matches(&new_shortcuts)
-        && !health.is_failed()
-    {
+    if healthy_shortcuts_are_identical(
+        &new_shortcuts,
+        &old_shortcuts,
+        &old_operational,
+        health.is_failed(),
+    ) {
         let persisted = persist_hotkey_change(&controller, &update, &new_shortcuts)
             .map_err(|error| CommandError::HotkeyChangeFailed(error.to_string()))?;
         let change = health.record(&new_primary, None, old_operational);
@@ -185,142 +292,26 @@ fn apply_hotkey_change(
         return Ok(notices);
     }
 
-    if let OperationalHotkey::Registered(old_shortcuts) = &old_operational {
-        if let Err(error) = crate::hotkey::unregister_shortcuts(&app, old_shortcuts) {
-            error!("Failed to unregister operational hotkeys: {error}");
-            let change = health.record(
-                &old_shortcut,
-                Some(format!(
-                    "failed to unregister active hotkeys: {error}; operational state is unknown"
-                )),
-                OperationalHotkey::Unknown,
-            );
-            if change.changed {
-                let _ = app.emit_event(
-                    crate::events::event::HOTKEY_REGISTRATION_CHANGED,
-                    &change.status,
-                );
-            }
-            return Err(CommandError::HotkeyChangeFailed(format!(
-                "Failed to unregister active hotkeys: {error}"
-            )));
-        }
-    }
-
-    if let Err(error) = crate::hotkey::register_shortcuts(&app, &new_shortcuts) {
-        if let Err(cleanup_error) = crate::hotkey::unregister_shortcuts(&app, &new_shortcuts) {
-            let change = health.record(
-                &old_shortcut,
-                Some(format!("new registration failed: {error}; partial registration cleanup failed: {cleanup_error}; operational state is unknown")),
-                OperationalHotkey::Unknown,
-            );
-            if change.changed {
-                let _ = app.emit_event(
-                    crate::events::event::HOTKEY_REGISTRATION_CHANGED,
-                    &change.status,
-                );
-            }
-            return Err(CommandError::HotkeyChangeFailed(format!(
-                "Failed to register hotkey profiles: {error}; cleanup failed: {cleanup_error}"
-            )));
-        }
-        let change = match rollback_for(&old_operational) {
-            Rollback::Restore(old_shortcuts) => match crate::hotkey::register_shortcuts(&app, old_shortcuts) {
-                Ok(()) => health.record(&old_shortcut, None, old_operational.clone()),
-                Err(rollback_error) => {
-                    health.record(
-                        &old_shortcut,
-                        Some(format!("new registration failed: {error}; restoring previous hotkeys also failed: {rollback_error}")),
-                        OperationalHotkey::Inactive,
-                    )
-                }
-            },
-            Rollback::NothingActive => health.record(
-                &old_shortcut,
-                Some("no previous hotkey was active".to_string()),
-                OperationalHotkey::Inactive,
-            ),
-            Rollback::StateUnknown => health.record(
-                &old_shortcut,
-                Some(format!("new registration failed: {error}; the previous hotkey state was unknown")),
-                OperationalHotkey::Unknown,
-            ),
-        };
-        if change.changed {
+    let mut registrar = NativeRegistrar::new(&app);
+    let persisted = commit_registered_hotkey_change(
+        HotkeyChangeContext {
+            old_primary: &old_shortcut,
+            new_primary: &new_primary,
+            old_operational: &old_operational,
+            new_shortcuts: &new_shortcuts,
+        },
+        &health,
+        &mut registrar,
+        || persist_hotkey_change(&controller, &update, &new_shortcuts),
+        |change| {
             let _ = app.emit_event(
                 crate::events::event::HOTKEY_REGISTRATION_CHANGED,
                 &change.status,
             );
-        }
-        return Err(CommandError::HotkeyChangeFailed(format!(
-            "Failed to register hotkey profiles: {error}"
-        )));
-    }
-
-    health.record(
-        &old_shortcut,
-        Some("hotkey profile change is pending persistence".to_string()),
-        OperationalHotkey::registered_many(&new_shortcuts),
-    );
-
-    let persisted = match persist_hotkey_change(&controller, &update, &new_shortcuts) {
-        Ok(settings) => settings,
-        Err(save_error) => {
-            let unregister_error = crate::hotkey::unregister_shortcuts(&app, &new_shortcuts).err();
-            let rollback_error = if unregister_error.is_none() {
-                match rollback_for(&old_operational) {
-                    Rollback::Restore(old_shortcuts) => {
-                        crate::hotkey::register_shortcuts(&app, old_shortcuts).err()
-                    }
-                    Rollback::NothingActive | Rollback::StateUnknown => None,
-                }
-            } else {
-                None
-            };
-            let unknown = unregister_error.is_some();
-            let restored_operational = if unknown {
-                OperationalHotkey::Unknown
-            } else if rollback_error.is_some() {
-                OperationalHotkey::Inactive
-            } else {
-                old_operational.clone()
-            };
-            let health_error = unknown
-                .then(|| {
-                    "failed to unregister unpersisted hotkeys; operational state is unknown"
-                        .to_string()
-                })
-                .or_else(|| {
-                    rollback_error
-                        .as_ref()
-                        .map(|error| format!("failed to restore previous hotkeys: {error}"))
-                });
-            let change = health.record(&old_shortcut, health_error, restored_operational);
-            if change.changed {
-                let _ = app.emit_event(
-                    crate::events::event::HOTKEY_REGISTRATION_CHANGED,
-                    &change.status,
-                );
-            }
-            return Err(CommandError::HotkeyChangeFailed(format!(
-                "Failed to persist hotkey profiles: {save_error}"
-            )));
-        }
-    };
+        },
+    )?;
 
     info!("Hotkey set to: {}", persisted.hotkey);
-
-    let change = health.record(
-        &new_primary,
-        None,
-        OperationalHotkey::registered_many(&new_shortcuts),
-    );
-    if change.changed {
-        let _ = app.emit_event(
-            crate::events::event::HOTKEY_REGISTRATION_CHANGED,
-            &change.status,
-        );
-    }
 
     crate::update_profiles_menu(&app, &persisted.resolved_hotkey_profiles());
 
