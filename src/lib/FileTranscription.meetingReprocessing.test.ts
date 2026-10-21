@@ -393,9 +393,11 @@ test("the rendered meeting clock interpolates native time and ignores a stale po
   vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
   let now = 100;
   const performanceNow = vi.spyOn(performance, "now").mockImplementation(() => now);
+  const beginResponse = deferred<string>();
   const stalePoll = deferred<MeetingJobSnapshot>();
   const terminalPoll = deferred<MeetingJobSnapshot>();
   let pollCount = 0;
+  let view: ReturnType<typeof render> | undefined;
   const completedSnapshot: MeetingJobSnapshot = {
     id: "clock-job",
     status: "completed",
@@ -408,7 +410,7 @@ test("the rendered meeting clock interpolates native time and ignores a stale po
 
   try {
     const ipc = mockIpc({
-      begin_meeting_file: () => "clock-job",
+      begin_meeting_file: () => beginResponse.promise,
       get_meeting_job: ({ jobId }) => {
         pollCount += 1;
         if (pollCount === 1) {
@@ -431,13 +433,20 @@ test("the rendered meeting clock interpolates native time and ignores a stale po
       },
     });
     mockWindows("main");
-    render(FileTranscription, {
+    view = render(FileTranscription, {
       props: componentProps(null, "clock-file", "running"),
     });
 
     const progress = await screen.findByLabelText("Meeting progress");
+    expect(within(progress).getByText("Elapsed: 00:00")).toBeInTheDocument();
+    expect(within(progress).getByText("This stage: 00:00")).toBeInTheDocument();
+    expect(within(progress).getByText("No status response yet — processing may still be running.")).toBeInTheDocument();
+    expect(within(progress).queryByText("Status checked just now")).toBeNull();
+
+    beginResponse.resolve("clock-job");
     await within(progress).findByText("Elapsed: 02:05");
     expect(within(progress).getByText("This stage: 01:05")).toBeInTheDocument();
+    expect(within(progress).getByText("Status checked just now")).toBeInTheDocument();
 
     const waitForPollCount = async (expected: number): Promise<void> => {
       const deadline = Date.now() + 2_000;
@@ -451,6 +460,14 @@ test("the rendered meeting clock interpolates native time and ignores a stale po
     now = 1_100;
     await vi.advanceTimersByTimeAsync(1_000);
     expect(within(progress).getByText("Elapsed: 02:06")).toBeInTheDocument();
+    expect(within(progress).getByText("This stage: 01:06")).toBeInTheDocument();
+    expect(within(progress).getByText("Status checked 1 second ago")).toBeInTheDocument();
+
+    now = 2_100;
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(ipc.callsTo("get_meeting_job")).toHaveLength(2);
+    expect(within(progress).getByText("Elapsed: 02:07")).toBeInTheDocument();
+    expect(within(progress).getByText("This stage: 01:07")).toBeInTheDocument();
 
     stalePoll.resolve({
       id: "clock-job",
@@ -463,14 +480,201 @@ test("the rendered meeting clock interpolates native time and ignores a stale po
     });
 
     await waitForPollCount(3);
-    expect(within(progress).getByText("Elapsed: 02:06")).toBeInTheDocument();
+    // The third request can only start after the serialized poll loop has applied the stale response.
+    expect(within(progress).getByText("Elapsed: 02:07")).toBeInTheDocument();
+    expect(within(progress).getByText("This stage: 01:07")).toBeInTheDocument();
+    expect(within(progress).getByText("Status checked just now")).toBeInTheDocument();
     expect(within(progress).getByRole("heading", { name: "Processing meeting" })).toBeInTheDocument();
 
     terminalPoll.resolve(completedSnapshot);
     expect(await within(progress).findByText("Meeting processing complete")).toBeInTheDocument();
     expect(within(progress).getByText("Elapsed: 02:06")).toBeInTheDocument();
     expect(within(progress).getByText("This stage: 00:01")).toBeInTheDocument();
+    expect(within(progress).queryByText("Elapsed: 02:07")).toBeNull();
+
+    now = 3_100;
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(within(progress).getByText("Elapsed: 02:06")).toBeInTheDocument();
+    expect(within(progress).getByText("This stage: 00:01")).toBeInTheDocument();
   } finally {
+    view?.unmount();
+    beginResponse.resolve("clock-job");
+    stalePoll.resolve({
+      id: "clock-job",
+      status: "running",
+      phase: "analyzing",
+      elapsed_ms: 120_000,
+      phase_elapsed_ms: 60_000,
+      error: null,
+      transcript: null,
+    });
+    terminalPoll.resolve(completedSnapshot);
+    await tick();
+    performanceNow.mockRestore();
+    vi.useRealTimers();
+  }
+});
+
+test("reprocessing resets the same rendered meeting clock before accepting its native timing", async () => {
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  let now = 100;
+  const performanceNow = vi.spyOn(performance, "now").mockImplementation(() => now);
+  const delayedInitialPoll = deferred<MeetingJobSnapshot>();
+  const delayedInitialTerminalPoll = deferred<MeetingJobSnapshot>();
+  const secondRunBegin = deferred<string>();
+  const delayedReprocessingPoll = deferred<MeetingJobSnapshot>();
+  let pollCount = 0;
+  let view: ReturnType<typeof render> | undefined;
+
+  const waitForPollCount = async (ipc: IpcMock, expected: number): Promise<void> => {
+    const deadline = Date.now() + 2_000;
+    while (ipc.callsTo("get_meeting_job").length < expected && Date.now() < deadline) {
+      await new Promise((resolve) => window.setTimeout(resolve, 5));
+    }
+    expect(ipc.callsTo("get_meeting_job")).toHaveLength(expected);
+  };
+
+  try {
+    const ipc = mockIpc({
+      begin_meeting_file: () => "import-job",
+      begin_meeting_reprocessing: () => secondRunBegin.promise,
+      create_meeting_review: () => currentReviewState,
+      plan_meeting_reprocessing: () => selectedPlan,
+      get_meeting_job: ({ jobId }) => {
+        pollCount += 1;
+        if (pollCount === 1) {
+          return {
+            id: jobId,
+            status: "running",
+            phase: "analyzing",
+            elapsed_ms: 5_000,
+            phase_elapsed_ms: 3_000,
+            error: null,
+            transcript: null,
+          };
+        }
+        if (pollCount === 2) return delayedInitialPoll.promise;
+        if (pollCount === 3) return delayedInitialTerminalPoll.promise;
+        if (pollCount === 4) return delayedReprocessingPoll.promise;
+        return {
+          id: jobId,
+          status: "completed",
+          phase: "finalizing",
+          elapsed_ms: 25_000,
+          phase_elapsed_ms: 12_000,
+          error: null,
+          transcript: null,
+        };
+      },
+    });
+    mockWindows("main");
+    view = render(FileTranscription, {
+      props: componentProps(null, "same-clock-file", "running"),
+    });
+
+    const progress = await screen.findByLabelText("Meeting progress");
+    await within(progress).findByText("Elapsed: 00:05");
+    expect(within(progress).getByText("This stage: 00:03")).toBeInTheDocument();
+    await waitForPollCount(ipc, 2);
+
+    now = 3_100;
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(within(progress).getByText("Elapsed: 00:08")).toBeInTheDocument();
+    expect(within(progress).getByText("This stage: 00:06")).toBeInTheDocument();
+    expect(within(progress).getByText("Status checked 3 seconds ago")).toBeInTheDocument();
+
+    delayedInitialPoll.resolve({
+      id: "import-job",
+      status: "running",
+      phase: "analyzing",
+      elapsed_ms: 4_000,
+      phase_elapsed_ms: 2_000,
+      error: null,
+      transcript: null,
+    });
+    await waitForPollCount(ipc, 3);
+    expect(within(progress).getByText("Elapsed: 00:08")).toBeInTheDocument();
+    expect(within(progress).getByText("This stage: 00:06")).toBeInTheDocument();
+    expect(within(progress).getByText("Status checked just now")).toBeInTheDocument();
+
+    delayedInitialTerminalPoll.resolve({
+      id: "import-job",
+      status: "completed",
+      phase: "finalizing",
+      elapsed_ms: 9_000,
+      phase_elapsed_ms: 1_000,
+      error: null,
+      transcript: importedTranscript,
+    });
+
+    expect(await screen.findByRole("heading", { name: "Reprocess a meeting" })).toBeInTheDocument();
+    expect(await within(progress).findByText("Meeting processing complete")).toBeInTheDocument();
+    expect(within(progress).getByText("Elapsed: 00:09")).toBeInTheDocument();
+    expect(within(progress).getByText("This stage: 00:01")).toBeInTheDocument();
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Plan reprocessing" }));
+    await screen.findByRole("heading", { name: "Selected plan" });
+    await user.click(screen.getByRole("button", { name: "Execute selected Recluster plan" }));
+
+    expect(within(progress).getByRole("heading", { name: "Processing meeting" })).toBeInTheDocument();
+    expect(within(progress).getByText("Elapsed: 00:00")).toBeInTheDocument();
+    expect(within(progress).getByText("This stage: 00:00")).toBeInTheDocument();
+    expect(within(progress).getByText("No status response yet — processing may still be running.")).toBeInTheDocument();
+    expect(within(progress).queryByText("Status checked just now")).toBeNull();
+
+    secondRunBegin.resolve("reprocessing-job");
+    await waitForPollCount(ipc, 4);
+    expect(ipc.callsTo("begin_meeting_reprocessing")).toHaveLength(1);
+    expect(within(progress).getByText("Elapsed: 00:00")).toBeInTheDocument();
+    expect(within(progress).getByText("This stage: 00:00")).toBeInTheDocument();
+    expect(within(progress).getByText("No status response yet — processing may still be running.")).toBeInTheDocument();
+
+    delayedReprocessingPoll.resolve({
+      id: "reprocessing-job",
+      status: "running",
+      phase: "decoding",
+      elapsed_ms: 25_000,
+      phase_elapsed_ms: 12_000,
+      error: null,
+      transcript: null,
+    });
+    await within(progress).findByText("Elapsed: 00:25");
+    expect(within(progress).getByText("This stage: 00:12")).toBeInTheDocument();
+    expect(within(progress).getByText("Status checked just now")).toBeInTheDocument();
+    expect(within(progress).getByText("Decoding audio")).toBeInTheDocument();
+    expect(within(progress).getByText("Reading the audio track.")).toBeInTheDocument();
+  } finally {
+    view?.unmount();
+    delayedInitialPoll.resolve({
+      id: "import-job",
+      status: "running",
+      phase: "analyzing",
+      elapsed_ms: 4_000,
+      phase_elapsed_ms: 2_000,
+      error: null,
+      transcript: null,
+    });
+    delayedInitialTerminalPoll.resolve({
+      id: "import-job",
+      status: "completed",
+      phase: "finalizing",
+      elapsed_ms: 9_000,
+      phase_elapsed_ms: 1_000,
+      error: null,
+      transcript: importedTranscript,
+    });
+    secondRunBegin.resolve("reprocessing-job");
+    delayedReprocessingPoll.resolve({
+      id: "reprocessing-job",
+      status: "completed",
+      phase: "finalizing",
+      elapsed_ms: 25_000,
+      phase_elapsed_ms: 12_000,
+      error: null,
+      transcript: null,
+    });
+    await tick();
     performanceNow.mockRestore();
     vi.useRealTimers();
   }
