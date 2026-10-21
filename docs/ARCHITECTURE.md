@@ -51,7 +51,7 @@ App crate modules (`src-tauri/src/`):
 | `app_controller.rs` | `AppController`: dictation state (`AppState`), audio capture, in-memory `Settings` copy, session logging. |
 | `events.rs` | Event catalogue: every event's name, payload type, producer and consumer (`events::event::*`); emit with `EmitEvent::emit_event`, since a raw `tauri::Emitter::emit` is a clippy error. |
 | `contract/` | Tests only: the shared fixture helper and the `CommandMap` generator (`command_map.rs`, parses `generate_handler!` and the command signatures with `syn`; a registered `commands::name` is looked up in `commands/mod.rs` and the files below it). |
-| `hotkey/` | Shortcut registration, `HotkeyHealth`, bare F-key monitor `macos_bare.rs`. |
+| `hotkey/` | Shortcut registration, startup selection/cleanup (`startup.rs`), runtime replacement/rollback (`transition.rs`), `HotkeyHealth`, bare F-key monitor `macos_bare.rs`. |
 | `paste/` | `PasteService` (clipboard + simulated paste: enigo on macOS/Windows, `xdotool` on Linux). `paste/completion.rs` (completion wait) is mounted from `main.rs` via `#[path]` as `crate::paste_completion`. |
 | `platform/`, `overlay.rs`, `focus_diag.rs`, `logging/` | Per-OS helpers (`platform::mic_permission()`: the macOS microphone permission and its `unsafe` AVFoundation calls; `platform/macos.rs`), recording indicator window, focus diagnostics, app log file. |
 | `plain_file_jobs.rs`, `meeting_*.rs` | File-transcription and meeting job slots, cancel, deadlines. |
@@ -497,7 +497,16 @@ Observed acquisition order (outer → inner). Nothing enforces it; keep new code
 Shortcut replacement order and rollback outcomes live in `hotkey/transition.rs` behind the
 `Registrar` seam. `NativeRegistrar` delegates to the existing Tauri registration functions;
 the command and settings watcher retain their own locks, health messages, settings handling,
-and events. Startup and retry registration remain separate paths.
+and events. Startup uses `hotkey/startup.rs`: `prepare` validates the whole saved
+profile configuration and selects its shortcuts or the safe fallback; `apply`
+registers that set and cleans up the entire attempted set if registration fails.
+Its result distinguishes registered, inactive after successful cleanup, and unknown
+after failed cleanup. The launch caller releases the controller lock before
+registration and retains diagnostic logging, health recording and event emission.
+Startup runs synchronously before the settings watcher starts; it does not acquire
+the runtime transition guard. The native registrar and its thread placement are
+unchanged. Startup tests inject the same `Registrar` seam as the transition tests;
+they exercise production selection and cleanup without Tauri or real OS shortcuts.
 
 1. `HotkeyHealth.transition` is held for a whole hotkey transaction (`apply_hotkey_change`,
    settings watcher). Inside it the controller lock and the settings file lock are each taken

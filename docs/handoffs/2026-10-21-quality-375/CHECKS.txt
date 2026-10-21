@@ -1,0 +1,51 @@
+Local acceptance — 2026-10-21, Linux
+
+PASS: extracted seam before relocation: cargo test -p sagascript launch::,
+      33 tests. Includes the new 12-case registration matrix.
+PASS: after relocation: cargo test -p sagascript hotkey::,
+      57 tests, including existing transition/caller tests.
+PASS: cargo check --workspace --locked --offline.
+PASS: cargo test --workspace --locked --offline:
+      2302 passed, 0 failed, 3 ignored (existing ignored tests retained).
+PASS: cargo clippy --workspace --all-targets --locked --offline -- -D warnings.
+PASS: lean CLI build, test and strict all-targets Clippy, each with
+      -p sagascript-cli --no-default-features --locked --offline.
+      Lean tests: 439 passed, 0 failed, 0 ignored. --help/--version smoke passed;
+      the development binary identifies 1.4.5 and the base with a dirty marker.
+PASS: rustfmt for both workspaces; Svelte check; Prettier; ESLint; Vitest
+      (602 tests); all Node ui/ci/release/code-health groups. Existing skips remain.
+PASS: frontend build and git diff --check.
+
+Parity assertions: original health mapper body and its tests are byte-identical;
+native registration file differs only in function visibility. Version, lockfiles
+and dependency declarations are unchanged. rg 'unregister_all|register_shortcut'
+returns only hotkey/registration.rs; hotkey/ has zero allow(dead_code) attributes.
+Launch retains settings/controller lookup, released lock before registration,
+warning/error/info diagnostics, health.record and conditional event emission.
+
+Sensitivity: all four isolated mutants fail real assertions (exit 101, no compile
+errors); see mutation-results.json. Restore hashes match the candidate and its
+11 focused startup tests pass. Mutants bypass whole-profile validation, omit
+cleanup, truncate cleanup to the first binding, or report Inactive on cleanup
+failure. None is present in the task worktree.
+
+Dependency preparation: lockfile unchanged; cached offline npm installation in a
+network-isolated environment with explicit empty environment, independent HOME,
+no personal credentials, and lifecycle scripts disabled. No host installation.
+Rust checks use locked offline dependencies and a task-owned build cache.
+
+Delegation: native gpt-6-luna/high requested for two focused reads and a bounded
+startup-test/mutation leaf; runtime model/effort unknown. Reads: pass. Test leaf:
+initial partial (conductor requested explicit multi-profile failure cases and
+independent expected arguments), final pass after integration/checks. Mutation
+leaf: pass; its message mistakenly quoted 33 clean tests, while its raw log and
+saved summary correctly show 11. The conductor verified and uses the raw count.
+
+Limits: these tests characterize the current extracted startup seam before its
+module move. They do not reconstruct pre-PR-493 caller characterization. Native
+OS registration, signed-app/TCC and physical GUI acceptance were not exercised.
+The macOS reserved-shortcut cases require the macOS CI job. Existing runtime
+transition behavior is unchanged. No broader #375/#344/#361 completion claimed.
+
+Independent immutable review, provider CI and merge receipts follow in the PR.
+Raw local logs, original intermediate patch, hashes and mutant patches retained.
