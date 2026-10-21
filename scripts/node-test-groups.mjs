@@ -42,7 +42,6 @@ export const TEST_GROUPS = {
     "scripts/test-language-switch-recovery.mjs",
     "scripts/test-meeting-integration.mjs",
     "scripts/test-meeting-reprocessing-integration.mjs",
-    "scripts/test-meeting-reprocessing.mjs",
   ],
   ci: [
     "scripts/diarization_sv/test_reference_review.mjs",
