@@ -4,8 +4,8 @@
 // docs/testing/frontend.md. Update recovery: Settings.recovery.test.ts.
 import { screen, waitFor, within } from "@testing-library/svelte";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, test } from "vitest";
-import type { HotkeyProfile } from "./api";
+import { describe, expect, expectTypeOf, test } from "vitest";
+import type { HotkeyProfile, Language } from "./api";
 import { PIANISSIMO_ID } from "./models.svelte";
 import {
   engineStatus,
@@ -26,6 +26,10 @@ const englishProfile: HotkeyProfile = {
   push_to_talk_shortcut: null,
   toggle_shortcut: "Ctrl+Alt+E",
 };
+
+test("the frontend language contract stays limited to the supported values", () => {
+  expectTypeOf<Language>().toEqualTypeOf<"en" | "sv" | "no" | "fi" | "auto">();
+});
 
 /** True when `first` comes before `second` in document order. */
 function precedes(first: Element, second: Element): boolean {
@@ -120,6 +124,47 @@ describe("Dictate: profiles and recording shortcuts", () => {
 
     await userEvent.setup().selectOptions(pickers[1], "small.en");
     await waitFor(() => expect(ipc.callsTo("set_profile_model")).toEqual([{ profileId: "english", modelId: "small.en" }]));
+  });
+
+  test("Finnish saves through Settings, appears in profile choices, and loads the Finnish file-model lineup", async () => {
+    let savedSettings = settingsValue();
+    const finnishModel = whisperModel("base", "Finnish Base fixture", { size_mb: 137, downloaded: false });
+    const { ipc } = await renderSettings(
+      settingsBackend({
+        get_settings: () => savedSettings,
+        set_language: ({ language }) => {
+          savedSettings = {
+            ...savedSettings,
+            language,
+            hotkey_profiles: savedSettings.hotkey_profiles.map((profile) =>
+              profile.id === "default" ? { ...profile, language } : profile,
+            ),
+          };
+          return [];
+        },
+        get_file_model_options: ({ language }) => (language === "fi" ? [finnishModel] : [kbWhisperMedium]),
+      }),
+    );
+
+    await userEvent.setup().click(screen.getByRole("button", { name: "Settings" }));
+    const defaultLanguage = screen.getByRole("combobox", { name: "Default profile language" });
+    expect(defaultLanguage).toHaveValue("sv");
+    expect(optionLabels(defaultLanguage)).toContain("Finnish");
+    await userEvent.setup().selectOptions(defaultLanguage, "fi");
+    await waitFor(() => expect(ipc.callsTo("set_language")).toEqual([{ language: "fi" }]));
+    await waitFor(() => expect(defaultLanguage).toHaveValue("fi"));
+
+    await userEvent.setup().click(screen.getByRole("button", { name: "Dictate" }));
+    expect(screen.getByRole("combobox", { name: "Svenska language" })).toHaveValue("fi");
+
+    await userEvent.setup().click(screen.getByRole("button", { name: "Transcribe" }));
+    const profile = screen.getByRole("combobox", { name: "Profile (optional)" });
+    expect(optionLabels(profile)).toContain("Svenska · Finnish");
+    await waitFor(() => expect(screen.getByText("Finnish", { selector: ".active-config-value" })).toBeInTheDocument());
+    const modelPicker = screen.getByRole("combobox", { name: "File transcription model" });
+    await waitFor(() => expect(optionLabels(modelPicker)).toContain("Finnish Base fixture · 137 MB · download needed"));
+    expect(ipc.callsTo("get_file_model_options")).toContainEqual({ language: "fi", include: null });
+    expect(ipc.unmocked).toEqual([]);
   });
 });
 

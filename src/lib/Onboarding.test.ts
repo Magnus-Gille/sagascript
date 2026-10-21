@@ -7,7 +7,7 @@ import { describe, expect, test, vi } from "vitest";
 import Onboarding from "./Onboarding.svelte";
 import { deferred } from "../test/deferred";
 import { backendError, mockIpc, type CommandHandlers } from "../test/ipc";
-import { kbWhisperMedium, pianissimo, settingsValue } from "../test/settings";
+import { kbWhisperMedium, pianissimo, settingsValue, whisperModel } from "../test/settings";
 
 /** A first start on Windows: no permission steps (language, download, ready). */
 function backend(overrides: CommandHandlers = {}): CommandHandlers {
@@ -37,6 +37,59 @@ async function chooseSwedish(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByRole("button", { name: "SV Svenska" }));
   await user.click(screen.getByRole("button", { name: "Continue" }));
 }
+
+async function chooseFinnish(user: ReturnType<typeof userEvent.setup>) {
+  const english = screen.getByRole("button", { name: "EN English" });
+  const finnish = screen.getByRole("button", { name: "FI Suomi" });
+  expect(english).toHaveAttribute("aria-pressed", "true");
+  expect(finnish).toHaveAttribute("aria-pressed", "false");
+  await user.click(finnish);
+  expect(finnish).toHaveAttribute("aria-pressed", "true");
+  expect(english).toHaveAttribute("aria-pressed", "false");
+  await user.click(screen.getByRole("button", { name: "Continue" }));
+}
+
+describe("Finnish onboarding", () => {
+  test("choosing Finnish saves fi and downloads the backend-recommended Base model", async () => {
+    const catalogBase = whisperModel("base", "Catalog Base fixture", { size_mb: 188 });
+    const { ipc, user } = await renderOnboarding(
+      backend({
+        get_effective_model_info: ({ language }) => {
+          expect(language).toBe("fi");
+          return catalogBase;
+        },
+      }),
+    );
+
+    await chooseFinnish(user);
+
+    expect(await screen.findByText("Speech engine ready")).toBeInTheDocument();
+    expect(screen.getByText(/Preparing the local speech engine \(188 MB\)/)).toBeInTheDocument();
+    expect(ipc.callsTo("set_language")).toEqual([{ language: "fi" }]);
+    expect(ipc.callsTo("get_effective_model_info")).toEqual([{ language: "fi" }]);
+    expect(ipc.callsTo("download_model")).toEqual([{ whisperModel: "base" }]);
+    expect(ipc.callsTo("download_pianissimo_model")).toEqual([]);
+  });
+
+  test("when the recommendation is unavailable, Finnish falls back to Base and shows 142 MB", async () => {
+    const { ipc, user } = await renderOnboarding(
+      backend({
+        get_effective_model_info: () => {
+          throw backendError("unavailable", "model lineup unavailable");
+        },
+      }),
+    );
+
+    await chooseFinnish(user);
+
+    expect(await screen.findByText("Speech engine ready")).toBeInTheDocument();
+    expect(screen.getByText(/Preparing the local speech engine \(142 MB\)/)).toBeInTheDocument();
+    expect(ipc.callsTo("set_language")).toEqual([{ language: "fi" }]);
+    expect(ipc.callsTo("get_effective_model_info")).toEqual([{ language: "fi" }]);
+    expect(ipc.callsTo("download_model")).toEqual([{ whisperModel: "base" }]);
+    expect(ipc.callsTo("download_pianissimo_model")).toEqual([]);
+  });
+});
 
 describe("speech engine download", () => {
   test("Swedish downloads the model the backend recommends (Pianissimo where supported)", async () => {
