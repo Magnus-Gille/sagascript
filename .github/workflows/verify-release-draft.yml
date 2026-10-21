@@ -18,6 +18,11 @@ on:
         required: true
         type: string
 
+      draft_manifest:
+        description: Fresh provider JSON snapshot of draft IDs, flags and asset digests (see RELEASING.md)
+        required: true
+        type: string
+
 permissions:
   contents: read
   actions: read
@@ -30,13 +35,14 @@ jobs:
       RELEASE_RUN_ID: ${{ inputs.release_run_id }}
       RELEASE_VERSION: ${{ inputs.version }}
       RELEASE_SHA: ${{ inputs.release_sha }}
+      DRAFT_MANIFEST: ${{ inputs.draft_manifest }}
     steps:
       - name: Checkout reviewed verifier
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           persist-credentials: false
 
-      - name: Validate source run, exact release SHA and unpublished drafts
+      - name: Validate source run, exact release SHA and supplied draft snapshot
         env:
           GH_TOKEN: ${{ github.token }}
         run: node scripts/prepare-draft-reverification.mjs preflight
@@ -49,7 +55,7 @@ jobs:
           run-id: ${{ inputs.release_run_id }}
           github-token: ${{ github.token }}
 
-      - name: Match every snapshot file to the current draft asset digest
+      - name: Match every artifact file to the supplied draft asset digest
         env:
           GH_TOKEN: ${{ github.token }}
         run: node scripts/prepare-draft-reverification.mjs verify-assets

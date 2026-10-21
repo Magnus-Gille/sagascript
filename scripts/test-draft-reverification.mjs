@@ -5,10 +5,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { parse } from "yaml";
-import { expectedFromEnvironment, validateSource, verifyAssets } from "./prepare-draft-reverification.mjs";
+import { draftMetadataFromManifest, expectedFromEnvironment, validateSource, verifyAssets } from "./prepare-draft-reverification.mjs";
 
 const workflowPath = new URL("../.github/workflows/verify-release-draft.yml", import.meta.url);
+const helperPath = new URL("./prepare-draft-reverification.mjs", import.meta.url);
 const workflowText = readFileSync(workflowPath, "utf8").replace(/\r\n?/g, "\n");
+const helperText = readFileSync(helperPath, "utf8");
 const workflow = parse(workflowText);
 
 const SHA = "a".repeat(40);
@@ -48,6 +50,19 @@ function sourceFixture() {
       prerelease: true,
       assets: [{ ...windows }],
     },
+  };
+}
+
+function manifestFixture() {
+  const source = sourceFixture();
+  return {
+    schema_version: 1,
+    repo: EXPECTED.repo,
+    version: EXPECTED.version,
+    sha: EXPECTED.sha,
+    capturedAt: "2026-10-21T12:34:56.000Z",
+    release: source.release,
+    windowsRelease: source.windowsRelease,
   };
 }
 
@@ -100,6 +115,32 @@ test("validateSource rejects missing or invalid asset digests and sizes", () => 
   assertRejected((source) => (source.release.assets[0].size = -1), /invalid asset size/);
   assertRejected((source) => (source.release.assets[0].size = Number.MAX_SAFE_INTEGER + 1), /invalid asset size/);
   assertRejected((source) => (source.release.assets[0].size = "4"), /invalid asset size/);
+});
+
+test("draftMetadataFromManifest accepts the captured stable and Windows draft snapshot", () => {
+  const manifest = manifestFixture();
+  assert.deepEqual(draftMetadataFromManifest(manifest, EXPECTED), {
+    release: manifest.release,
+    windowsRelease: manifest.windowsRelease,
+    snapshotCapturedAt: manifest.capturedAt,
+  });
+});
+
+test("draftMetadataFromManifest rejects invalid schema, identity, timestamp, and release IDs", () => {
+  const cases = [
+    [(manifest) => (manifest.schema_version = 2), /unsupported draft manifest schema/],
+    [(manifest) => (manifest.repo = "other/repo"), /repository mismatch/],
+    [(manifest) => (manifest.version = "1.4.6"), /version mismatch/],
+    [(manifest) => (manifest.sha = "b".repeat(40)), /release SHA mismatch/],
+    [(manifest) => (manifest.capturedAt = "not-a-timestamp"), /capture timestamp/],
+    [(manifest) => (manifest.release.id = 0), /release IDs/],
+    [(manifest) => delete manifest.windowsRelease.id, /release IDs/],
+  ];
+  for (const [mutator, message] of cases) {
+    const manifest = manifestFixture();
+    mutator(manifest);
+    assert.throws(() => draftMetadataFromManifest(manifest, EXPECTED), message);
+  }
 });
 
 test("expectedFromEnvironment accepts reviewed main dispatch inputs", () => {
@@ -219,6 +260,7 @@ test("verify-release-draft workflow is manual, read-only, pinned, and reuses the
   assert.equal(workflow.on.workflow_dispatch.inputs.release_run_id.required, true);
   assert.equal(workflow.on.workflow_dispatch.inputs.version.required, true);
   assert.equal(workflow.on.workflow_dispatch.inputs.release_sha.required, true);
+  assert.equal(workflow.on.workflow_dispatch.inputs.draft_manifest.required, true);
   assert.deepEqual(Object.keys(workflow.on), ["workflow_dispatch"]);
   assert.deepEqual(workflow.permissions, { contents: "read", actions: "read" });
   assert.deepEqual(Object.keys(workflow.jobs), ["verify-drafts"]);
@@ -230,6 +272,7 @@ test("verify-release-draft workflow is manual, read-only, pinned, and reuses the
     RELEASE_RUN_ID: "${{ inputs.release_run_id }}",
     RELEASE_VERSION: "${{ inputs.version }}",
     RELEASE_SHA: "${{ inputs.release_sha }}",
+    DRAFT_MANIFEST: "${{ inputs.draft_manifest }}",
   });
 
   const actionSteps = job.steps.filter((step) => step.uses);
@@ -250,4 +293,5 @@ test("verify-release-draft workflow is manual, read-only, pinned, and reuses the
   assert.doesNotMatch(workflowText, /contents:\s*write|secrets\.|environment\s*:/);
   assert.doesNotMatch(workflowText, /gh\s+release|publish-release|cargo\s+(build|install)|tauri\s+build/);
   assert.doesNotMatch(workflowText, /if:\s*.*(success\(\)|failure\(\)|cancelled\(\))/);
+  assert.doesNotMatch(helperText, /\/releases\/tags\//);
 });

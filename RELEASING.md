@@ -163,14 +163,24 @@ on any failure.
 
 If the verifier itself needs a correction after promotion, merge and review that
 correction first. Then dispatch `verify-release-draft.yml` on `main` with the
-original Release run ID, version and exact 40-character release SHA from its
-accepted receipt. This read-only workflow requires a successful promotion and
-unpublished stable/Windows drafts, downloads the original draft snapshot with
-Windows acceptance evidence, and matches every file to the current GitHub asset
-inventory, size and SHA-256 digest before running the full verifier. It never
-rebuilds, signs, creates or publishes a release. The receipt records both the
-verifier revision and the unchanged application revision. Do not move the tag to
-the verifier fix or weaken the checks to obtain a successful result.
+original Release run ID, version, exact 40-character release SHA from its accepted
+receipt, and a fresh `draft_manifest` JSON snapshot. The authorized operator reads
+the stable and Windows draft metadata by release ID and supplies
+`{ schema_version: 1, repo, version, sha, capturedAt, release, windowsRelease }`.
+Each release needs `id`, `tag_name`, `draft`, `prerelease`, and `assets`; each
+asset needs `id`, `name`, `size`, and its provider `digest` (`sha256:…`).
+
+The workflow keeps a read-only token: draft discovery needs privileges it does
+not hold, so it validates the supplied snapshot, not live draft metadata. It
+requires a successful original promotion, downloads its draft snapshot and
+Windows acceptance evidence, and matches every file to the supplied inventory,
+size and SHA-256 digest before running the full verifier. The operator must
+re-read the live draft IDs, flags and asset digests before dispatch and after
+success, confirming they still match the recorded snapshot. Retain both readbacks
+with the CI receipt, which distinguishes verifier and application revisions.
+
+This path never rebuilds, signs, creates or publishes a release. Do not move the
+tag to the verifier fix or weaken the checks to obtain a successful result.
 
 Windows beta publication is a separate owner action: the promote step drafts the
 `windows-beta-VERSION` prerelease from the exact prebuilt x64 artifacts; publish it

@@ -58,15 +58,15 @@ export function verifyAssets(directory, source) {
     assert.deepEqual(
       readdirSync(path).sort(),
       metadata.assets.map((asset) => asset.name).sort(),
-      "downloaded snapshot and live draft asset inventories differ",
+      "downloaded snapshot and supplied draft snapshot asset inventories differ",
     );
     for (const asset of metadata.assets) {
       const file = join(path, asset.name);
       const stat = lstatSync(file);
       assert.ok(stat.isFile() && !stat.isSymbolicLink(), "asset is not a regular file");
-      assert.equal(stat.size, asset.size, "asset size differs from live draft: " + asset.name);
+      assert.equal(stat.size, asset.size, "asset size differs from supplied draft snapshot: " + asset.name);
       const digest = "sha256:" + createHash("sha256").update(readFileSync(file)).digest("hex");
-      assert.equal(digest, asset.digest, "asset hash differs from live draft: " + asset.name);
+      assert.equal(digest, asset.digest, "asset hash differs from supplied draft snapshot: " + asset.name);
       verified.push({ releaseId: metadata.id, assetId: asset.id, name: asset.name, size: stat.size, digest });
     }
   }
@@ -89,15 +89,33 @@ export function expectedFromEnvironment(env = process.env) {
   return expected;
 }
 
+// Draft discovery requires privileges the read-only job deliberately lacks.
+// The authorized operator supplies a fresh provider snapshot and checks live
+// state again after verification; CI binds that snapshot to the source artifact.
+export function draftMetadataFromManifest(manifest, expected) {
+  assert.equal(manifest.schema_version, 1, "unsupported draft manifest schema");
+  assert.equal(manifest.repo, expected.repo, "draft manifest repository mismatch");
+  assert.equal(manifest.version, expected.version, "draft manifest version mismatch");
+  assert.equal(manifest.sha, expected.sha, "draft manifest release SHA mismatch");
+  assert.ok(
+    typeof manifest.capturedAt === "string" && Number.isFinite(Date.parse(manifest.capturedAt)),
+    "draft manifest needs its capture timestamp",
+  );
+  for (const metadata of [manifest.release, manifest.windowsRelease]) {
+    assert.ok(Number.isSafeInteger(metadata?.id) && metadata.id > 0, "draft manifest needs release IDs");
+  }
+  return { release: manifest.release, windowsRelease: manifest.windowsRelease, snapshotCapturedAt: manifest.capturedAt };
+}
+
 function fetchSource(expected) {
   const api = (path) => JSON.parse(execFileSync("gh", ["api", path], { encoding: "utf8", timeout: 30_000 }));
   const base = "repos/" + expected.repo;
+  const metadata = draftMetadataFromManifest(JSON.parse(process.env.DRAFT_MANIFEST ?? ""), expected);
   return {
     run: api(base + "/actions/runs/" + expected.runId),
     jobs: api(base + "/actions/runs/" + expected.runId + "/jobs?per_page=100").jobs,
     tagCommit: api(base + "/commits/v" + expected.version),
-    release: api(base + "/releases/tags/v" + expected.version),
-    windowsRelease: api(base + "/releases/tags/windows-beta-" + expected.version),
+    ...metadata,
   };
 }
 
@@ -110,6 +128,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   const receipt = {
     checkedAt: new Date().toISOString(),
     verifierSha: process.env.GITHUB_SHA,
+    snapshotCapturedAt: source.snapshotCapturedAt,
     ...expected,
     releaseId: source.release.id,
     windowsReleaseId: source.windowsRelease.id,
