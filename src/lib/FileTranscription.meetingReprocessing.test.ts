@@ -84,6 +84,16 @@ function noCorrectionReview(transcript: MeetingTranscript, revision: string, ori
   };
 }
 
+// `create_meeting_review` returns MeetingReview::new(importedTranscript): the
+// fixture's original hash is retained, but the constructor starts at generation
+// zero with no batches and computes this revision from its serde payload.
+const importedReview = noCorrectionReview(
+  importedTranscript,
+  "668400f77910581ef62e7e03f6dc83de085e2e1d8f0a7b4186856be189c50b35",
+  currentReview.original_revision,
+);
+const importedReviewState: MeetingReviewState = { review: importedReview, transcript: importedTranscript };
+
 const selectedPlan: SelectedReprocessingPlan = {
   file_path: "/recordings/meeting.wav",
   cache_path: null,
@@ -101,6 +111,37 @@ const selectedPlan: SelectedReprocessingPlan = {
     threshold: 0.34,
     required_work: reprocessingResult.required_work,
     revision: "selected-plan-revision",
+  },
+};
+
+// These ordered fields match ReprocessingPlan::RevisionPayload and
+// RequiredWork. The revision is SHA-256 of Rust's compact serde_json payload;
+// its exact bytes are recorded in the companion fixture evidence. The
+// previous_revision binds the plan to the fresh imported review.
+const clockSelectedPlan: SelectedReprocessingPlan = {
+  file_path: "/recordings/meeting.wav",
+  cache_path: "/recordings/meeting-cache.json",
+  cache_output: null,
+  plan: {
+    schema_version: 1,
+    mode: "recluster",
+    context: {
+      source_sha256: importedTranscript.source_sha256,
+      previous_revision: importedReview.revision,
+      transcription_context_sha256: "c".repeat(64),
+      analysis_context_sha256: "d".repeat(64),
+      cache_sha256: "e".repeat(64),
+    },
+    threshold: 0.34,
+    required_work: {
+      decode_audio: false,
+      transcription: false,
+      language_detection: false,
+      segmentation: false,
+      embeddings: false,
+      clustering: true,
+    },
+    revision: "ad99e84a2dd7fb67818d32505a744a7738f33f078abf63a7161d30c01a067ca9",
   },
 };
 
@@ -538,8 +579,8 @@ test("reprocessing resets the same rendered meeting clock before accepting its n
     const ipc = mockIpc({
       begin_meeting_file: () => "import-job",
       begin_meeting_reprocessing: () => secondRunBegin.promise,
-      create_meeting_review: () => currentReviewState,
-      plan_meeting_reprocessing: () => selectedPlan,
+      create_meeting_review: () => importedReviewState,
+      plan_meeting_reprocessing: () => clockSelectedPlan,
       get_meeting_job: ({ jobId }) => {
         pollCount += 1;
         if (pollCount === 1) {
@@ -608,6 +649,8 @@ test("reprocessing resets the same rendered meeting clock before accepting its n
     });
 
     expect(await screen.findByRole("heading", { name: "Reprocess a meeting" })).toBeInTheDocument();
+    expect(ipc.callsTo("create_meeting_review")).toEqual([{ transcript: importedTranscript }]);
+    expect(screen.getByRole("textbox", { name: "Edit transcript segment at 0:03" })).toHaveValue(importedTranscript.segments[1].text);
     expect(await within(progress).findByText("Meeting processing complete")).toBeInTheDocument();
     expect(within(progress).getByText("Elapsed: 00:09")).toBeInTheDocument();
     expect(within(progress).getByText("This stage: 00:01")).toBeInTheDocument();
@@ -615,6 +658,18 @@ test("reprocessing resets the same rendered meeting clock before accepting its n
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "Plan reprocessing" }));
     await screen.findByRole("heading", { name: "Selected plan" });
+    expect(ipc.callsTo("plan_meeting_reprocessing")).toEqual([
+      {
+        previous: importedReview,
+        mode: "recluster",
+        threshold: 0.34,
+        saveCache: false,
+        prompt: "Use the recorded speaker names",
+        profileId: "interview-profile",
+      },
+    ]);
+    expect(clockSelectedPlan.plan.context.previous_revision).toBe(importedReview.revision);
+    expect(clockSelectedPlan.plan.revision).toBe("ad99e84a2dd7fb67818d32505a744a7738f33f078abf63a7161d30c01a067ca9");
     await user.click(screen.getByRole("button", { name: "Execute selected Recluster plan" }));
 
     expect(within(progress).getByRole("heading", { name: "Processing meeting" })).toBeInTheDocument();
@@ -626,6 +681,15 @@ test("reprocessing resets the same rendered meeting clock before accepting its n
     secondRunBegin.resolve("reprocessing-job");
     await waitForPollCount(ipc, 4);
     expect(ipc.callsTo("begin_meeting_reprocessing")).toHaveLength(1);
+    expect(ipc.callsTo("begin_meeting_reprocessing")[0]).toMatchObject({
+      filePath: clockSelectedPlan.file_path,
+      request: {
+        plan: clockSelectedPlan.plan,
+        expected_revision: clockSelectedPlan.plan.revision,
+        previous: importedReview,
+        cache_path: clockSelectedPlan.cache_path,
+      },
+    });
     expect(within(progress).getByText("Elapsed: 00:00")).toBeInTheDocument();
     expect(within(progress).getByText("This stage: 00:00")).toBeInTheDocument();
     expect(within(progress).getByText("No status response yet — processing may still be running.")).toBeInTheDocument();
