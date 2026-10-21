@@ -61,6 +61,7 @@ export const TEST_GROUPS = {
     "scripts/test-clippy-policy.mjs",
     "scripts/test-dependency-policy.mjs",
     "scripts/test-engine-host-identity.mjs",
+    "scripts/test-engine-host-conformance-reader.mjs",
     "scripts/test-frontend-test-groups.mjs",
     "scripts/test-npm-license-policy.mjs",
     "scripts/test-pipeline-cache.mjs",
@@ -70,6 +71,7 @@ export const TEST_GROUPS = {
     "scripts/test-workflow-hardening.mjs",
   ],
   release: [
+    "scripts/test-draft-reverification.mjs",
     "scripts/test-frontend-reuse.mjs",
     "scripts/test-generate-updater-manifest.mjs",
     "scripts/test-generate-updater-smoke-config.mjs",
