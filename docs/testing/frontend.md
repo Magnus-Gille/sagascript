@@ -222,22 +222,45 @@ Split by the component a branch has to change, so B1–B3 can run in parallel. A
 Each branch also fixes and prunes its component's entries in `eslint-suppressions.json` and
 can drop `.svelte` from `.prettierignore` once no source-text test reads its component.
 
-- **B1, Settings.svelte:** `test-language-glossary.mjs`, `test-language-switch-recovery.mjs`
-  and `test-dictionary-explicit-save.mjs` (both `vm`: extract the dictionary editor and
-  language-switch recovery into `.svelte.ts` controllers), `test-finnish-language.mjs`, the
-  Settings parts of `test-meeting-integration.mjs` (file job options, "Open saved meeting")
-  and of `test-release-surface.mjs` (Dictate, Advanced, profile engines), and the
-  `retryLastTranscription` case of `test-file-transcription-integration.mjs`.
-- **B2, FileTranscription.svelte and the meeting components:** the rest of
-  `test-file-transcription-integration.mjs` (`new Function` harness: extract the plain-run and
-  meeting-job controllers), `test-meeting-reprocessing-integration.mjs` (`vm`),
-  `test-file-transcription-recovery.mjs`, `test-meeting-integration.mjs`,
-  `test-meeting-reprocessing.mjs` (MeetingReprocessing.svelte).
-- **B3, Onboarding.svelte and App.svelte:** the onboarding and window parts of
-  `test-release-surface.mjs` (release group) and the Onboarding check of
-  `test-finnish-language.mjs` (coordinate the file with B1).
+- **B1, Settings.svelte:** the Settings portions of `test-meeting-integration.mjs` (file-job
+  options and “Open saved meeting”), the Settings portions of `test-release-surface.mjs`
+  (Dictate, Advanced and profile engines), and the retained `retryLastTranscription` private
+  case in `test-file-transcription-integration.mjs`.
+- **B2, FileTranscription.svelte and the meeting components:** the two retained private
+  FileTranscription cases in `test-file-transcription-integration.mjs`, the remaining source
+  wiring checks in `test-meeting-integration.mjs`, and all five retained private executions in
+  `test-meeting-reprocessing-integration.mjs`. The latter still covers review-revision and
+  polling-generation invalidation, timer lifecycle/reset, and queued dirty/busy rechecks.
+- **B3, Onboarding.svelte and App.svelte:** the onboarding and window portions of
+  `test-release-surface.mjs` (release group). Finnish selectors, onboarding behavior, overlay
+  labels and the frontend `Language` type are already covered by rendered/module tests below.
+
+The current `ui` manifest has six entries. `test-finnish-language.mjs` now keeps only CLI/core
+language and model-registry checks; `test-frontend-errors-source.mjs` tests the source harness
+loader, not component behavior; it remains until private harness users are gone.
+`test-file-transcription-recovery.mjs` is updater recovery coverage that should coordinate with
+the updater owner. Eight private-state executions remain in the two narrowed integration scripts;
+retain each until matching behavior is proven: three file-flow cases (same-instance handler
+re-entry, a held pre-submit queue, and an older selected request behind another running job) and
+five meeting-reprocessing cases (independent review/generation invalidation, the full timer
+lifecycle/reset, and the two queued dirty/busy transitions).
+
+## Completed rendered migrations
+
+| Former source or harness coverage | Rendered/module coverage now present |
+|---|---|
+| Settings dictionary and glossary editing | `src/lib/Settings.dictionary.test.ts` (`personal dictionary editor`) and `src/lib/Settings.glossaryScopes.test.ts` (`profile dictionary scopes`) cover Save, Discard, Stay, profile scopes, refreshes, conflicts and retries; `src/lib/Settings.languageRecovery.test.ts` covers `a language change a personal dictionary blocks`. |
+| Meeting reprocessing and its proposal controls | `src/lib/MeetingReprocessing.test.ts` covers `stale selected plans cannot execute against a newer review`, `proposal replacement and discard require confirmation`, and persistence gates; `src/lib/FileTranscription.meetingReprocessing.test.ts` covers rendered reprocessing and clock behavior. |
+| File transcription flow | `src/lib/FileTranscription.flow.test.ts` covers `dropped files use one run-scoped progress listener`, `Stop keeps a file running until native settlement`, and saved-option `Re-run`; `src/lib/FileTranscription.test.ts` retains the other rendered retry/result cases. The three private file cases above remain registered. |
+| Meeting polling | `src/lib/FileTranscription.meetingPolling.test.ts` covers retrying the same job after a poll error, waiting for the cancelled terminal snapshot after cancellation acknowledgement, and reporting a completed job that has no transcript. |
+| Meeting clock | `src/lib/FileTranscription.meetingReprocessing.test.ts` covers `the rendered meeting clock interpolates native time and ignores a stale poll` and `reprocessing resets the same rendered meeting clock before accepting its native timing`. |
+| MeetingReview actions | `src/lib/MeetingReview.actions.test.ts` covers `Rename applies`, `Discard restores`, `Save and each export button`, persistence gating and `a rejected save` recovery. |
+| Finnish selectors, onboarding, overlay and frontend type | `src/lib/Settings.test.ts` (`Finnish saves through Settings` and `the frontend language contract stays limited`), `src/lib/Onboarding.test.ts` (`choosing Finnish saves` and the recommendation fallback), and `src/lib/overlay-state.test.ts` (`the English overlay names a Finnish dictation profile`) cover the rendered controls, model/readback behavior, onboarding defaults and overlay label. CLI/core Finnish checks remain in `scripts/test-finnish-language.mjs`. |
 
 ## Settings pilot: old assertion → new test
+
+The counts in this pilot section are historical A2 measurements; they are retained for the
+original mapping and are not a current suite inventory.
 
 `scripts/test-settings-layout.mjs` (6 tests, 48 assert calls) and
 `scripts/test-settings-recovery.mjs` (14 tests, 97) were removed. Their claims are tested by 49
