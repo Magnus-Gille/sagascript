@@ -244,6 +244,10 @@ sequenceDiagram
   `crates/sagascript-core/src/transcription/live_dictation.rs` (Whisper via
   `transcription/whisper/` (still importable as `transcription::whisper_backend`), Pianissimo via
   `pianissimo_backend.rs` and the engine host, 2.4).
+- `dictation/inference_wait.rs` owns only the asynchronous wait/abort/grace policy used by the
+  live pipeline; model selection and inference remain one blocking transaction, and the caller
+  retains timing, error, and logging behavior. This is the first small seam for #344; broader
+  orchestration, generation, and whole-cycle boundaries remain in the existing pipeline.
 - Callback thread: `tauri-plugin-global-shortcut` calls `handle_hotkey_event` inline from
   `global-hotkey`. On macOS that is the main thread (Carbon handler; the `macos_bare` NSEvent
   monitors too); on Windows key-down arrives on the main thread and key-up on a spawned
