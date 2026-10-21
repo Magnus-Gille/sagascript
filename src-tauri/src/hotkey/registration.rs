@@ -70,7 +70,7 @@ pub enum RegistrationError {
     Plugin(#[from] tauri_plugin_global_shortcut::Error),
 }
 
-pub fn register_shortcuts(
+fn register_shortcuts(
     app: &tauri::AppHandle,
     shortcuts: &[String],
 ) -> Result<(), RegistrationError> {
@@ -103,7 +103,7 @@ pub fn register_shortcuts(
     Ok(())
 }
 
-pub fn unregister_shortcuts(
+fn unregister_shortcuts(
     app: &tauri::AppHandle,
     shortcuts: &[String],
 ) -> Result<(), RegistrationError> {
