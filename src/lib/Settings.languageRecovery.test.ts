@@ -5,6 +5,7 @@ import { screen, waitFor } from "@testing-library/svelte";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, test } from "vitest";
 import commandErrors from "../../contracts/transport/command_errors.json";
+import getSettingsContract from "../../contracts/transport/get_settings.json";
 import type { HotkeyProfile, Settings as SettingsValue } from "./api";
 import { backendError, type CommandHandlers } from "../test/ipc";
 import { deferred, type Deferred } from "../test/deferred";
@@ -23,6 +24,7 @@ const blocked = (profileId: string) =>
 interface RecoveryBackendOptions {
   profiles?: HotkeyProfile[];
   dictionaries?: Record<string, string>;
+  initialPrompt?: string;
   clearFailure?: string;
   retryFailure?: string;
   readFailureAfterRetry?: string;
@@ -41,6 +43,7 @@ function recoveryBackend(options: RecoveryBackendOptions = {}) {
   let stored: SettingsValue = settingsValue({
     language: targetLanguage,
     hotkey_profiles: profiles,
+    initial_prompt: options.initialPrompt ?? "",
     profile_glossaries: options.dictionaries ?? { default: "merge = merch", other: "other = words" },
   });
   let languageCalls = 0;
@@ -59,7 +62,15 @@ function recoveryBackend(options: RecoveryBackendOptions = {}) {
       if (failSettingsReads) {
         throw backendError("unavailable", options.readFailureAfterRetry ?? "settings read failed");
       }
-      return structuredClone(stored);
+      const frontendSettings = structuredClone(stored);
+      if (frontendSettings.hotkey_profiles.length === 0) {
+        // An empty list is internal-only: #347's shared get_settings fixture
+        // reflects Rust settings_for_frontend/resolved_hotkey_profiles, which
+        // returns this resolved legacy profile to Settings.
+        const legacyProfile = getSettingsContract.default.hotkey_profiles[0];
+        frontendSettings.hotkey_profiles = [{ ...legacyProfile, language: frontendSettings.language, shortcut: frontendSettings.hotkey }];
+      }
+      return frontendSettings;
     },
     set_language: ({ language }) => {
       languageCalls += 1;
@@ -174,6 +185,37 @@ describe("a language change a personal dictionary blocks", () => {
     expect(fixture.current().profile_glossaries).toEqual({ work: "", other: "other = words" });
     expect(screen.getByDisplayValue("Other · English")).toBeInTheDocument();
     expect(dictionary).toHaveValue("other unsaved draft");
+  });
+
+  test("recovers the implicit default dictionary without changing the global prompt", async () => {
+    const initialPrompt = "global hints";
+    const expectedSource = "merge = merch";
+    const fixture = recoveryBackend({
+      profiles: [],
+      dictionaries: { default: expectedSource },
+      initialPrompt,
+    });
+    expect(fixture.current().hotkey_profiles).toEqual([]);
+    const { ipc } = await renderSettings(fixture.handlers);
+    const user = await openSettingsTab();
+    const { language, preview } = await requestBlockedChange(user);
+
+    expect(preview).toHaveValue(expectedSource);
+    await user.click(screen.getByRole("button", { name: "Clear default dictionary and switch to English" }));
+
+    await waitFor(() => expect(language).toHaveDisplayValue("English"));
+    const recoveryCalls = ipc.calls.filter((call) => call.command === "set_language" || call.command === "set_profile_glossary");
+    expect(recoveryCalls).toEqual([
+      { command: "set_language", args: { language: "en" } },
+      {
+        command: "set_profile_glossary",
+        args: { profileId: "default", source: "", expectedSource },
+      },
+      { command: "set_language", args: { language: "en" } },
+    ]);
+    expect(fixture.current().profile_glossaries.default).toBe("");
+    expect(fixture.current().initial_prompt).toBe(initialPrompt);
+    expect(language).toHaveDisplayValue("English");
   });
 
   test("uses the profile named default even when it is not first", async () => {
