@@ -49,6 +49,66 @@ async function chooseFinnish(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByRole("button", { name: "Continue" }));
 }
 
+describe("default onboarding language", () => {
+  test("keeps English selected when persisted language is auto", async () => {
+    const settingsRead = deferred<ReturnType<typeof settingsValue>>();
+    let settingsSettled = false;
+    const { ipc, user } = await renderOnboarding(
+      backend({
+        get_settings: async () => {
+          try {
+            return await settingsRead.promise;
+          } finally {
+            settingsSettled = true;
+          }
+        },
+      }),
+    );
+
+    await waitFor(() => expect(ipc.callsTo("get_settings")).toHaveLength(1));
+    settingsRead.resolve(settingsValue({ language: "auto", has_completed_onboarding: false }));
+    await waitFor(() => expect(settingsSettled).toBe(true));
+
+    const english = screen.getByRole("button", { name: "EN English" });
+    const finnish = screen.getByRole("button", { name: "FI Suomi" });
+    expect(english).toHaveAttribute("aria-pressed", "true");
+    expect(finnish).toHaveAttribute("aria-pressed", "false");
+
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+
+    await waitFor(() => expect(ipc.callsTo("set_language")).toEqual([{ language: "en" }]));
+  });
+
+  test("keeps English selected when persisted settings cannot be read", async () => {
+    const settingsRead = deferred<ReturnType<typeof settingsValue>>();
+    let settingsSettled = false;
+    const { ipc, user } = await renderOnboarding(
+      backend({
+        get_settings: async () => {
+          try {
+            return await settingsRead.promise;
+          } finally {
+            settingsSettled = true;
+          }
+        },
+      }),
+    );
+
+    await waitFor(() => expect(ipc.callsTo("get_settings")).toHaveLength(1));
+    settingsRead.reject(backendError("unavailable", "settings read failed"));
+    await waitFor(() => expect(settingsSettled).toBe(true));
+
+    const english = screen.getByRole("button", { name: "EN English" });
+    const finnish = screen.getByRole("button", { name: "FI Suomi" });
+    expect(english).toHaveAttribute("aria-pressed", "true");
+    expect(finnish).toHaveAttribute("aria-pressed", "false");
+
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+
+    await waitFor(() => expect(ipc.callsTo("set_language")).toEqual([{ language: "en" }]));
+  });
+});
+
 describe("Finnish onboarding", () => {
   test("choosing Finnish saves fi and downloads the backend-recommended Base model", async () => {
     const catalogBase = whisperModel("base", "Catalog Base fixture", { size_mb: 188 });
