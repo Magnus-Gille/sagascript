@@ -3,6 +3,7 @@ use std::time::{Duration, Instant};
 use tauri::Manager;
 use tracing::{error, info, warn};
 
+use super::inference_wait::{wait_for_inference, WaitOutcome};
 use crate::app_controller::{self, StopRecordingOutcome};
 use crate::command_error::CommandError;
 use crate::commands::{self, lock_controller, SharedController, SharedWhisper};
@@ -286,9 +287,18 @@ pub(super) fn stop_recording_and_transcribe(
                 (result, timings)
             });
 
-            let timeout = Duration::from_secs(TRANSCRIPTION_TIMEOUT_SECS);
-            match tokio::time::timeout(timeout, &mut fut).await {
-                Ok(Ok((r, timings))) => {
+            match wait_for_inference(
+                &mut fut,
+                Duration::from_secs(TRANSCRIPTION_TIMEOUT_SECS),
+                Duration::from_secs(ABORT_GRACE_SECS),
+                || {
+                    warn!("Transcription timed out after {TRANSCRIPTION_TIMEOUT_SECS}s — requesting abort");
+                    live_backend.request_abort();
+                },
+            )
+            .await
+            {
+                WaitOutcome::Completed(Ok((r, timings))) => {
                     let mut c = lock_controller(&ctrl);
                     if timings.model_acquisition_started {
                         model_load_ms = Some(timings.model_ms);
@@ -312,23 +322,18 @@ pub(super) fn stop_recording_and_transcribe(
                     }
                     r
                 }
-                Ok(Err(e)) => Err(dictation_task_failed(e)),
-                Err(_) => {
-                    warn!("Transcription timed out after {TRANSCRIPTION_TIMEOUT_SECS}s — requesting abort");
-                    live_backend.request_abort();
-                    // Brief grace for the aborted inference to unwind; log which
-                    // outcome occurred so a genuine hang is visible.
-                    match tokio::time::timeout(Duration::from_secs(ABORT_GRACE_SECS), &mut fut)
-                        .await
-                    {
-                        Ok(_) => {
-                            info!("Aborted transcription task exited — warm-state lock released")
-                        }
-                        Err(_) => error!(
+                WaitOutcome::Completed(Err(e)) => Err(dictation_task_failed(e)),
+                WaitOutcome::TimedOut { unwound } => {
+                    // Report whether the timeout-triggered abort unwound within
+                    // the grace period so a genuine hang is visible.
+                    if unwound {
+                        info!("Aborted transcription task exited — warm-state lock released")
+                    } else {
+                        error!(
                             "Transcription task still running {ABORT_GRACE_SECS}s after abort — \
                              warm state may stay locked until it unwinds; further transcriptions \
                              will report ModelBusy rather than block forever"
-                        ),
+                        );
                     }
                     Err(dictation_timed_out())
                 }
