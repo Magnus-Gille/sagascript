@@ -40,7 +40,7 @@ cargo tauri dev
 Before the first Cargo build, and separately after dependency or lockfile updates, cache locked
 dependencies with `cargo fetch --locked --manifest-path
 src-tauri/Cargo.toml` (and repeat for `src-tauri/engine-host/ort/Cargo.toml` when working on
-the standalone ORT host) using your approved dependency setup. Verification never fetches or
+the standalone ORT host) using your approved dependency setup. The storage preflight never fetches or
 installs dependencies; keep the Cargo registry/git cache and target directory on disk-backed
 storage.
 
@@ -83,8 +83,7 @@ Cargo build, test, check, clippy, or run steps. It fails closed when those paths
 memory-backed filesystems such as tmpfs; set `CARGO_TARGET_DIR` to a disk-backed path and run
 verify again. The check follows Cargo metadata and does not run for rustfmt, frontend-only, or
 synthetic checks. If its locked offline metadata probe reports a cold cache, run the approved
-`cargo fetch --locked --manifest-path ...` command first; no network access is attempted by
-verify.
+`cargo fetch --locked --manifest-path ...` command first; the storage preflight does not attempt network access.
 
 ```bash
 npm run verify:fast                      # inner loop: rustfmt, app clippy, svelte-check, Prettier, ESLint, unit and UI node tests
