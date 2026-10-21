@@ -1,0 +1,15 @@
+{
+  "at": "2026-10-21T11:34:49.749825+00:00",
+  "repository": "Magnus-Gille/sagascript",
+  "authorization": "Magnus explicitly requested all own work pushed and a startup message for his configured remote environment. No new coding, merge, release or automation scope.",
+  "provider_refs": {
+    "refs/heads/codex/frontend-test-migration-notes": "2c16dcfc69d89523ddda57117e0a773d893485e9",
+    "refs/heads/codex/meeting-polling-ui-tests": "b303f297824ef290e564169145e52f375e028e34",
+    "refs/heads/main": "1fd4a365532e0dfea4bf13eed8b7829f8d1c512d"
+  },
+  "readback": "exact matches",
+  "branch_contents": "Both local-only leaf commits have identical touched files in accepted main; branches preserve their original commit identities.",
+  "mutation": "Created two new branches with normal non-force git push. No existing ref overwritten.",
+  "recovery": "Keep archival branches; correction via additional reviewed commit if needed. No branch deletion authorized.",
+  "workflow_effects": "Read current workflow triggers: branch push outside main triggers no configured workflow; no PR, tag or release created."
+}

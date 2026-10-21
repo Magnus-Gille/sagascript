@@ -1,0 +1,10 @@
+{
+  "baseRefOid": "9310d23784c8c62191f00d6ca281e3dd88777d5f",
+  "headRefOid": "2a04fc460ad7f4a74f3ca1dc55136625c5ce6854",
+  "mergeCommit": {
+    "oid": "2b0216ae91c4e6fe171c00c35570de018a13a5e3"
+  },
+  "mergedAt": "2026-10-20T23:09:57Z",
+  "state": "MERGED",
+  "url": "https://github.com/Magnus-Gille/sagascript/pull/489"
+}

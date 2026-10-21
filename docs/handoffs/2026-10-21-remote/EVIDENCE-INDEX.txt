@@ -1,0 +1,39 @@
+BEVISINDEX
+Alla filer i evidence/ är tidsstämplad historik. Börja med START-HERE.txt; äldre text kan innehålla utgångna instruktioner, gamla väntelägen och lokala sökvägar. Kvittot gäller sin exakta SHA och tid, inte godtycklig framtida main. Full historik finns kvar lokalt; detta är det portabla, explicita urval som krävs för fortsatt arbete, inte en kopia av hela agentens privata cache.
+
+Aktuell integration och verifiering:
+- pr501-final-provider-verification.json: root slutavstämning av main, 17 kontroller och oförändrade releasebindings.
+- pr501-final-check-runs.json / pr501-final-workflow-runs.json: underliggande providerdata.
+- pr501-premerge-receipt.json / pr501-merge-receipt.json / pr501-integrated-commit.json: bas, slutkandidat, tree, föräldrar och merge.
+- pr499-automatic-integration-receipt.json: samma merge, ingen extra mergeoperation.
+- frontend-combined-review-c24276d7.txt: full kombinerad oberoende granskning. Tidigare bundle/followup/polling-reviews anger utvecklingen och begränsningarna.
+- meeting-polling-checks-c24276d7/: kommandon, exakta tider, returkoder och lokala testloggar.
+- source-publication-audit.json / handoff-leaf-push-receipt.json: inventering av alla task-worktrees och de två ytterligare arkivgrenarna.
+
+Tidigare delmål:
+- pr486/487/488/489/490/491/492/493/495/498-premerge-receipt.json och respektive merge-receipt (491 heter merge-binding) binder de tio tidigare integrationerna.
+- dictation-wait-review-309c87af.txt, hotkey-transition-review-163c69f7.txt, settings-345-review-91e0e793.txt och 493-base-integration-review.txt ger reviewbegränsningar för tidigare delar.
+- SECOND-EXTENSION-REPORT-FINAL.txt och SECOND-EXTENSION-DELEGATION.txt ger resultat och modell-/nyttologg. Rapportens generella påstående om rena arbetsgrenar korrigeras i START-HERE.txt.
+
+Windows:
+- pr501-windows-diagnosis/diagnosis.txt: förstafelets faktiska Rust-panic. Dess föreslagna ”nästa åtgärd” är historisk; ett omförsök HAR därefter gjorts och passerat.
+- failure-excerpts.txt: numrerade utdrag ur originaljobbloggen och originalfilens SHA256; full logg kan hämtas via GitHub job 119166259548.
+- metadata.json-filer: originaljobben. Fulla råloggar är inte medkopierade.
+- pr501-windows-before-retry.json / retry-audit.json / retry-command.json / retry-receipt.json: beslut och exakt ett accepterat omförsök. Slutligt grönt läge bevisas i final-provider-verification och final-workflow-runs, inte en köad retriesnapshot.
+- ordering-evidence.txt: möjlig framtida observationspunkt, ingen implementerad fix.
+
+Release:
+- release-145-artifact-verification.json: initiala 33 manifest-/hashkontroller; dess ”pending aftertag” är ett historiskt mellansteg.
+- release-145-reverification-monitor.json / release-145-reverification-postflight.json: 18/18 PASS och root-avstämning av run 39533272024, inklusive signatur/notarisering och engine-host conformance.
+- release-145-reverification-artifact/draft-reverification-receipt.json: fryst SHA, verifierrevision, utkast/asset-ID:n och 16 digestbindings.
+- pr501-final-release-*.json samt final-provider-verification: senaste opublicerade draftläge och oförändrad stabil 1.4.4. Kontrollera live state före nytt beslut, utför ingen releaseåtgärd bara för att filerna finns.
+
+Bakgrund och kvarvarande arbete:
+- remaining-frontend-inventory.txt: tre föreslagna testpaket med paritetsbegränsningar, läsande underlag.
+- WAVE3-PREP.txt: historisk arkitekturförberedelse från före #492/#493. Delar är redan implementerade; återanvänd inte som aktuell backlog. NEXT-WORK.txt anger gränserna.
+- historical-pr486-already-integrated.patch.json: kvarlämnad dirty patch vars kod redan finns i accepterad main. Arkiv, ska inte appliceras på main.
+- historical-pr486-pre-rustsec-failure.json: äldre terminal CI-failure före beroendefixen; senare kvitton ersätter den som acceptansstatus.
+
+Deterministisk paketkontroll: kör sha256sum -c SHA256SUMS från denna katalog (macOS: shasum -a 256 -c SHA256SUMS). Det verifierar filintegritet, inte bygg- eller produktbeteende. Testresultaten ovan kommer från den faktiska tidigare verifierade revisionen. Inget nytt appbygge görs enbart för dokumentationsöverföringen.
+
+Portabla textkopior har normaliserat slutblanksteg/extra tomma slutrader där Git annars rapporterade whitespacefel. TEXT-NORMALIZATION.json binder ursprungliga och arkiverade SHA256. Historiska patchens exakta bytes bevaras i JSON-strängen och dess originalhash. Originalkvitton lokalt är oförändrade.

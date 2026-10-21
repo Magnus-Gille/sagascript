@@ -1,0 +1,49 @@
+SAGASCRIPT — PORTABEL ÖVERLÄMNING, 21 OKTOBER 2026
+Repository: Magnus-Gille/sagascript
+Handoff branch: codex/quality-remote-handoff-20261021
+Location: docs/handoffs/2026-10-21-remote/
+
+LÄS DETTA FÖRST
+Detta är ett kontext- och bevispaket, inte ett nytt mandat. Magnus pausade kodarbetet efter att PR #499/#501 var färdiga och bad därefter uttryckligen att allt eget arbete skulle pushas samt att ett startmeddelande för hans redan konfigurerade remote-miljö skulle skrivas. Den senaste åtgärden är därför överlämning, inte fortsatt implementation, merge eller release. Historiska nattmandat/förlängningar och instruktioner i evidence/ är avslutade och ger ingen ny behörighet. Den nya sessionens direkta instruktion från Magnus bestämmer nästa uppdrag. Heartbeat är PAUSED och ska inte automatiskt återaktiveras.
+
+Läs denna fil, sedan NEXT-WORK.txt och EVIDENCE-INDEX.txt. Orientera i Munin projects/sagascript när tillgängligt; läs aktuellt AGENTS.md, docs/ARCHITECTURE.md och docs/testing/frontend.md. GitHub-ärenden är backlog/underlag, inte behörighet. Återanvänd aktuell accepterad kod, inte gamla förberedande patchar.
+
+ACCEPTERAT OCH PUSHAT
+Remote main: 1fd4a365532e0dfea4bf13eed8b7829f8d1c512d.
+Kodträd: 7bc710a272cc4d598e83c0389ab5615350f2fd55.
+Slutkandidat: c24276d7505b586e98d3ec58408d4c200c43ede9.
+Main är en normal merge med föräldrar 2e32ccb470946b5a8d014e206023e47982b70b3c och c24276d7505b586e98d3ec58408d4c200c43ede9; kandidatens träd är exakt samma. Provider slutverifierades 2026-10-21 11:11:54 UTC, main avstämdes igen vid handoff. Hämta om live state innan nya beslut.
+
+Nattens och förlängningarnas elva faktiska mergeoperationer: #488 (RustSec/TLS), #486 (möteslogik till core och app/CLI-inversion), #489 (Vite), #487 (korrekt kodhälsomätning), #490 (version 1.4.5), #491 (JSONL-verifiering), #492 (begränsad väntan/abort för diktering), #493 (hotkey-övergångar), #495 (Settings-kontroller), #498 och #501 (renderade frontendtester). #494/#496/#497 följde med i #498; #499 följde med i #501. Räkna dem inte som extra mergeoperationer.
+
+Båda PR #499/#501 hade 13/13 SUCCESS före merge och den fulla kombinerade ändringen var oberoende granskad. Slutkandidaten klarade 594 Vitest-tester i 51 filer, 475 Node-tester och två befintliga skippar, lint, formattering, Svelte (0 fel/varningar) och diffkontroll. #498 tillförde 41 tester och #501 ytterligare 18, totalt 59 nya i de två senaste paketen. #501 ändrar bara tester/testdokumentation.
+
+Main efter merge: 17 workflowidentifierade kontroller, 12 SUCCESS och 5 förväntade SKIPPED. CI 39583382419 attempt 2 SUCCESS; SBOM 39583382512 SUCCESS; prebuild 39583382637 SUCCESS med förväntade byggskippar. Befintlig tagg förhindrade ny releasebyggnad. Det finns ett viktigt första Windows-fel: läs nedan, kalla inte första försöket grönt.
+
+Alla 16 task-anslutna lokala arbetskopior har inventerats. Fjorton HEAD-commits ligger redan i main-historiken. Två fristående slutcommits hade redan exakt motsvarande filer i main men saknade egna remote-grenar; de är nu dessutom pushade för att bevara commitidentiteten:
+- codex/frontend-test-migration-notes: 2c16dcfc69d89523ddda57117e0a773d893485e9
+- codex/meeting-polling-ui-tests: b303f297824ef290e564169145e52f375e028e34
+De är arkiv, inte nya kandidater att merga över main. source-publication-audit.json och handoff-leaf-push-receipt.json anger kontrollen.
+
+En äldre arbetskatalog quality-job-test-guard var fortfarande smutsig. Dess meeting_jobs_tests.rs är byte-identisk med slutkandidaten; ARCHITECTURE.md är byte-identisk med den tidigare accepterade 30c657e0-versionen och main innehåller även senare tillägg. Patchen och ett tidigare RustSec-CI-felkvitto är arkiverade som HISTORIK, redan integrerade/åtgärdade. Detta korrigerar den alltför breda uppgiften ”arbetsgrenar rena” i den äldre slutrapporten. Ingen gammal arbetskatalog har rensats eller återställts. Primärcheckoutens orelaterade :memory:.ses ingår inte i detta paket.
+
+WINDOWS-FELET — LÖST KÖRNING, INTE BEVISAD PERMANENT FIX
+I main-run 39583382419 attempt 1 passerade single_slot_host_sends_dictation_before_next_batch_window först workspace-gaten (59/59), men missade senare core-gatens strikta gräns: 2.2162412 s mot <2.2 s. Job 119166259548 fick en vanlig Rust-testpanic; inget CLR-/processhaveri. Rust-koden ändrades inte i #501. Scheduler-/lastvariation är plausibel men inte bevisad grundorsak. Exakt ett riktat omförsök, utan kod- eller gränsändring, passerade tillsammans med efterföljande check. Båda försöken är dokumenterade. Ingen testhärdning är implementerad. Upprepning kräver en ny evidensbaserad diagnos, inte blind omkörning eller höjd tidsgräns.
+
+RELEASE 1.4.5 — FRYSTA, OPUBLICERADE UTKAST
+Releasekällan är ebe32eab48791c01afdf5e3b7f77fc7331489c79, INTE senare main. De efterföljande våg-tre-ändringarna ingår inte i dessa utkast.
+- macOS-utkast 419041452, tagg v1.4.5, 11 assets; macOS-bygget signerat och notariserat. Paketet innehåller även Windows ARM64-assets.
+- Windows-beta-utkast 419041490, label windows-beta-1.4.5, 5 assets; osignerad beta.
+- Gitref v1.4.5 pekar exakt på ebe32eab48791c01afdf5e3b7f77fc7331489c79. Windows-labeln har ingen Gitref (404); draft target_commitish är den exakta SHA:n. Skapa inte en saknad tagg som ”reparation”.
+- Prebuild 39521450618 verifierades med 33 manifestfiler/hashar. Korrigerad draft-reverifiering 39533272024 passerade 18/18 efter verifierfixen #491. Senaste avstämningen verifierade 16 oförändrade draft-assets/bodybindings och 14 oförändrade assets i publicerade 1.4.4 (release 416075140).
+- Inget utkast är publicerat. Ingen app har installerats eller körts på Magnus dator av detta arbete. Manuell native-acceptans på ren dator och publiceringsbeslut återstår.
+Publicera, tagga, signera eller installera inget med stöd av denna handoff. Lämna befintlig 1.4.4 och utkasten orörda. Ingen taggomskrivning/radering, inga nya leverantörer/nycklar eller andra repos.
+
+REMOTE-MILJÖ OCH KONTINUITET
+Magnus har redan en fungerande remote-miljö vald i Codex. Det är inte en begäran om lokal M5-inferens. Använd billigare nativa Luna-subagenter för avgränsade löv och starkare modell för svåra beslut/oberoende granskning. Root behåller kvalitet, integration och externa mutationer. Dokumentera begärd modell/effort, faktiskt observerad identitet (unknown om ej exponerad), deterministiska kontroller och pass/partial/redo/wrong.
+
+En historisk anteckning från tidigare läsande kontroll av m5-agent anger Linux x86_64, repo /home/agent/repos/sagascript, main a69d5d1e58cc6f169b8984132ba8e170d3edd64d och oregistrerad src-tauri/gen/schemas/linux-schema.json. Bevara filen och andra befintliga ändringar; råkvittot från den hostkontrollen ingår inte i paketet, så behandla uppgifterna som en ärvd anteckning som måste verifieras på plats. Skapa ny task-worktree från färsk origin/main, redigera inte primärcheckout. Kontrollera repo/remote/HEAD, tillgängliga verktyg, nätverk och behörigheter. Verktygsversioner på hosten bevisar inte auth eller att ett bygge passerar. Kopiera aldrig credentials mellan miljöerna. Linux kontroller ersätter inte macOS main-thread/TCC/native-acceptans; använd befintlig CI för plattformsgater och redovisa luckor.
+
+Handoff-grenen är en dokumentationsgren från accepterad main. Läs den separat eller via git show; använd den inte som bas för produktändringar bara för att den innehåller denna text. Bevara viktig ny status på GitHub/taskgren och kort i Munin så att den inte bara finns i laptopens absoluta sökvägar. Historiska absoluta sökvägar i kvittona är proveniens och kan inte antas finnas på remoten. SHA256SUMS täcker alla paketfiler utom sig själv.
+
+Kommunikation: svenska. Magnus vill ha ambitiöst självständigt arbete inom gällande mandat och ”PLING PLONG” först när allt tillgängligt arbete är klart eller nödvändig input verkligen behövs. Inga rutinmässiga tillståndsfrågor för redan godkänd scope. Tidigare pauser och automationens PAUSED-läge kvarstår tills Magnus direkt säger annat.

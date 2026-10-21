@@ -1,0 +1,18 @@
+{
+  "verified_at": "2026-10-21T10:16:32.804193+00:00",
+  "head": "c24276d7505b586e98d3ec58408d4c200c43ede9",
+  "base": "2e32ccb470946b5a8d014e206023e47982b70b3c",
+  "merge_commit": "1fd4a365532e0dfea4bf13eed8b7829f8d1c512d",
+  "tree": "7bc710a272cc4d598e83c0389ab5615350f2fd55",
+  "parents": [
+    "2e32ccb470946b5a8d014e206023e47982b70b3c",
+    "c24276d7505b586e98d3ec58408d4c200c43ede9"
+  ],
+  "merged_at": "2026-10-21T10:16:29Z",
+  "command_exit": 0,
+  "pr499_state": "MERGED",
+  "pr499_merge_commit": {
+    "oid": "1fd4a365532e0dfea4bf13eed8b7829f8d1c512d"
+  },
+  "main_after": "1fd4a365532e0dfea4bf13eed8b7829f8d1c512d"
+}

@@ -1,0 +1,39 @@
+{
+  "run": 39489233057,
+  "run_url": "https://github.com/Magnus-Gille/sagascript/actions/runs/39489233057",
+  "head": "30c657e012dd5a3777d377b283a1602f7b3fc6ed",
+  "observed_at": "2026-10-20T20:28:43Z",
+  "status": "completed",
+  "conclusion": "failure",
+  "counts": {"passed": 8, "failed": 2, "pending": 0},
+  "passed": [
+    "scope",
+    "msrv-linux",
+    "test-windows",
+    "build-macos",
+    "build-windows",
+    "test-macos",
+    "check-macos",
+    "check-windows"
+  ],
+  "job_urls": {
+    "scope": "https://github.com/Magnus-Gille/sagascript/actions/runs/39489233057/job/118857609123",
+    "msrv-linux": "https://github.com/Magnus-Gille/sagascript/actions/runs/39489233057/job/118857684471",
+    "test-windows": "https://github.com/Magnus-Gille/sagascript/actions/runs/39489233057/job/118857684493",
+    "test-linux": "https://github.com/Magnus-Gille/sagascript/actions/runs/39489233057/job/118857684509",
+    "build-macos": "https://github.com/Magnus-Gille/sagascript/actions/runs/39489233057/job/118857684536",
+    "build-windows": "https://github.com/Magnus-Gille/sagascript/actions/runs/39489233057/job/118857684613",
+    "test-macos": "https://github.com/Magnus-Gille/sagascript/actions/runs/39489233057/job/118857684694",
+    "check-linux": "https://github.com/Magnus-Gille/sagascript/actions/runs/39489233057/job/118860140163",
+    "check-macos": "https://github.com/Magnus-Gille/sagascript/actions/runs/39489233057/job/118865865211",
+    "check-windows": "https://github.com/Magnus-Gille/sagascript/actions/runs/39489233057/job/118868280140"
+  },
+  "failed": {
+    "test-linux": "https://github.com/Magnus-Gille/sagascript/actions/runs/39489233057/job/118857684509",
+    "check-linux": "https://github.com/Magnus-Gille/sagascript/actions/runs/39489233057/job/118860140163"
+  },
+  "linux_failure": {
+    "cause": "cargo-deny advisory database rejects existing locked rustls-webpki 0.103.15 and webpki-root-certs 1.0.6; lockfile matches main",
+    "log": "/private/tmp/sagascript-job118857684509-api.log"
+  }
+}

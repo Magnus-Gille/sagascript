@@ -1,0 +1,91 @@
+# Remaining frontend rendered-coverage inventory
+
+Inspected checkout: `/Users/magnus/.codex/worktrees/quality-meeting-component-tests/sagascript`
+
+HEAD: `c24276d7505b586e98d3ec58408d4c200c43ede9` (clean). Read `AGENTS.md`,
+`docs/testing/frontend.md`, `scripts/test-meeting-integration.mjs`,
+`scripts/test-release-surface.mjs`, and the directly relevant rendered tests. No repository
+files were changed. The eight private-state harness executions and updater cases 483/259/466/376
+were excluded as requested.
+
+## Candidates
+
+### 1. Meeting options disable while an import is active — high confidence
+
+* Source-text assertion: `scripts/test-meeting-integration.mjs:27`:
+  `assert.match(settingsSource, /disabled=\{transcribing\}/);`
+* Relevant rendered controls: `src/lib/Settings.svelte:2728` disables the “Speaker
+  diarization” checkbox and `:2745` disables “Extra context for this file” when the derived
+  `transcribing` state is true.
+* User action: open Transcribe, set meeting options, drop a file with diarization enabled, and
+  observe that both controls become disabled while the meeting job is active. Resolve
+  `begin_meeting_file`, then wait for `get_meeting_job` to return a terminal snapshot before
+  verifying that the controls become usable again; the start acknowledgement alone is not the
+  terminal condition.
+* Existing setup: extend the deferred meeting fixture in
+  `src/lib/FileTranscription.flow.test.ts:308-360` (`firstBegin`, `renderSettings`, `drop`, and
+  `begin_meeting_file`) with a terminal-success variant. In the current fixture,
+  `:314-321` makes every polled job immediately return a failed terminal snapshot; the first
+  attempt rejects at `:339` and never polls, while the second attempt resolves a job ID and then
+  polls that immediate terminal failure at `:359`. A focused lifecycle case should resolve the
+  initial begin call to a job ID, assert the controls remain disabled through the acknowledgement,
+  and release them only after the corresponding terminal `get_meeting_job` snapshot.
+* Equivalence limit: this proves the controls' observable disabled/enabled lifecycle through the
+  rendered start-acknowledgement and terminal-poll boundary. It does not prove the exact
+  `transcribing` expression or every other control that happens to use that state. The adjacent
+  source assertions at lines 28-30 are already covered by the same test's `begin_meeting_file`
+  payload assertions (`:330-337`) and by `Settings.glossaryScopes.test.ts:314-352`; do not
+  duplicate those.
+
+### 2. Settings “Open saved meeting” invokes the saved-review path — high confidence
+
+* Source-text assertion: `scripts/test-meeting-integration.mjs:105`:
+  `assert.match(settingsSource, /Open saved meeting/);`
+  The API wrapper name is already covered separately by `src/lib/api.test.ts:199`, but no
+  rendered Settings test was found for the button-to-`open_meeting_review` flow.
+* User action: open Transcribe and click “Open saved meeting...”; verify the saved-review IPC
+  call and that the returned review is rendered in the meeting editor, without starting a new
+  `begin_meeting_file` or ordinary `transcribe_file` job.
+* Existing setup: use `renderSettings`/`settingsBackend` from `src/test/settings.ts:93-119`,
+  override `open_meeting_review`, and reuse the valid transport-backed review state from
+  `src/lib/FileTranscription.meetingPolling.test.ts:31-53` (or the equivalent state in
+  `FileTranscription.meetingReprocessing.test.ts:16-95`).
+* Equivalence limit: this covers the user-visible Settings button and the resulting review
+  render plus IPC behavior. It does not independently prove the source-only label string or
+  the Rust implementation behind `open_meeting_review`; the typed API contract remains the
+  existing coverage for the latter.
+
+### 3. Completing onboarding leaves the main Settings window visible — medium-high confidence
+
+* Source-text assertions: `scripts/test-release-surface.mjs:209-217`, especially
+  `assert.doesNotMatch(appSource, /getCurrentWindow\(\)\.hide\(\)/);`,
+  `assert.match(appSource, /showOnboarding = false/);`, and the completion-command
+  `assert.doesNotMatch(completionCommand, /\.hide\(\)/);`.
+* User action: render `App` with incomplete settings, complete the Windows onboarding flow, and
+  verify that the onboarding view is replaced by the Settings header/tabs and that
+  `set_onboarding_completed` was called.
+* Existing setup: reuse the Windows command fixture shape in
+  `src/lib/Onboarding.test.ts:13-34` (`backend`/`renderOnboarding`) and the Settings mount
+  answers in `src/test/settings.ts:93-119` (`settingsBackend`); combine them in an App render
+  with `mockIpc` and `mockWindows("main")` as needed by Settings.
+* Equivalence limit: rendered continuity proves the observable window transition and completion
+  action. It cannot prove the Rust command body has no hidden `hide()` branch, so the static
+  backend assertion at `:213-217` would require a separate backend/source check if retained.
+
+## Non-candidates checked for duplication
+
+`src/lib/Settings.test.ts:74-279` covers the Dictate/profile, Advanced/Pianissimo, and file-model
+release-surface behavior. `src/lib/Onboarding.test.ts:52-218` and
+`src/lib/Onboarding.accessibility.test.ts:62-169` cover language selection, recommendation
+downloads, the final setup copy, and accessibility behavior. Existing meeting flow tests cover
+the selected profile/prompt/diarization payloads; only the active-control lifecycle and saved
+review button remain direct rendered gaps in the requested Settings area.
+
+## Leaf execution metadata
+
+Requested worker model: `gpt-5.6-luna`; requested effort: `high`; runtime observed: `unknown`.
+Usefulness: `partial` pending root review; promote to `pass` if the corrected terminal-state
+distinction is accepted as grounded.
+
+
+Root follow-up: verified the referenced first begin rejects and never polls, while the second begin resolves an ID and receives a failed terminal snapshot in the current fixture. Candidate1 was corrected to distinguish acknowledgement from terminal completion. This is useful planning evidence, not implemented or accepted behavior coverage. Adoption: partial before correction, pass as a bounded read-only inventory after correction; no new feature/test completion is counted.

@@ -1,0 +1,13 @@
+Överlämningskontroll 21 oktober 2026
+
+Scope: endast docs/handoffs/2026-10-21-remote på separat gren från 1fd4a365532e0dfea4bf13eed8b7829f8d1c512d. Ingen produktkod, konfiguration, workflow eller dependency ändrad. Två historiska slutgrenar pushade separat; deras ändrade filer matchar main byte för byte.
+
+Root: inventerade samtliga 16 task-worktrees; 14 HEAD är ancestors till färskt hämtad origin/main. Två separata slutcommits har identiska ändrade filer i main och är bevarade som egna remote-grenar med exakt readback. Alla tre branch-pushmål ligger utanför main och matchar inga befintliga push-workflowtriggers. Ingen force, merge, PR, tagg, release eller automation utförd i överlämningen.
+
+Bunden faktakontroll: befintlig native worker m5_handoff_evidence, begärd GPT-5.6 Luna/high, faktiskt observerad modell/effort unknown. Ingen subdelegation, nätverk, SSH eller skrivning tillåten i lövet. Första audit verifierade dirty-ändringarnas redan integrerade proveniens och identifierade det additiva historiska CI-kvittot. Andra audit verifierade SHA/tree/parents, 13/13 premerge, 17 postmerge, releasebindings och 18/18, manifest och normalisering. Ett saknat råkvitto för hostobservationen flaggades; root märkte därför uppgiften uttryckligen som ärvd och att den måste verifieras på plats. Nytta: pass. Root behåller slutbedömning/publicering.
+
+Deterministiskt: git diff --cached --check, JSON-parse, komplett SHA256-manifest utan extra/saknade/duplicerade filer, identitet mellan explicit valt källpaket och staged kopia, patchpayloadens originalhash och normaliseringshashar kontrollerade. Credential-mönsterscan kompletterade explicit filallowlist och innehållsgranskning; den är inte ett bevis för all möjlig hemlighetsdetektion. Inga .env*, secrets/**, credentials, node_modules, target, releasebinaries eller orelaterade filer medföljer.
+
+Ett initialt diff --check hittade whitespace i arkiverade kontextrader/loggar. Patchen bevarades exakt som JSON-sträng, tre textkopior normaliserades med före/efter-hashar, och kontrollen passerade därefter. Originalfilerna är orörda. Inga app-/Rusttester kördes om för denna dokumentationsöverföring; tidigare testkvitton anger exakt revision och begränsningar.
+
+Mandatet för överlämningen: Magnus bad uttryckligen att pusha allt eget arbete och ge ett startmeddelande för hans redan konfigurerade remote-miljö. Kodarbetet förblir pausat i denna chatt. Paketet utvidgar inte mandatet; ny session följer Magnus direkta instruktion. Återhämtning är läsning av oförändrad main/historik och vid behov en ny korrigeringscommit på dokumentationsgrenen; ingen destruktiv städning eller branchradering.

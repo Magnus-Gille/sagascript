@@ -1,0 +1,38 @@
+Decision: APPROVE (scoped source review; delivery/readiness conditional on all 13 fresh CI checks)
+
+Owning repository: Magnus-Gille/sagascript
+Review worktree: /Users/magnus/.codex/worktrees/quality-dictation-wait/sagascript
+Base: 817573cb1a4e77efade15f503a8d8e645eeba866
+Candidate: 309c87af16984123248b694d2825b1a316750c40
+Configured reviewer model/effort: gpt-6.1-sol / high
+Runtime-observed model/effort: unknown / unknown
+Review mode: fresh independent read-only review; no subdelegation
+Scope: all five candidate/base changed files (inference_wait.rs, inference_wait_tests.rs, pipeline.rs, dictation/mod.rs, docs/ARCHITECTURE.md).
+
+Findings: No correctness or regression findings requiring changes.
+
+Reasoning:
+- The helper is private and borrows the same Unpin future for the initial timeout and grace timeout. Both timeout wrappers own only temporary mutable references; dropping them does not drop or restart the underlying JoinHandle.
+- Timeout control flow calls the FnOnce abort callback exactly once, then starts the same bounded grace period as the base. Initial completion preserves the entire output, including JoinError. Success, inference failure, or join failure during grace are consumed only as completion evidence and cannot replace TimedOut.
+- The production callback retains the actual LiveDictationBackend::request_abort call and warning. Constants remain 60 seconds plus 5 seconds. Model selection/inference remain one spawn_blocking transaction. Caller-owned timing/cache updates, error conversion, unwind logs and timeout error construction remain equivalent to the base.
+- The extraction adds no Send requirement regression at the concrete call site: the callback borrows the Arc backend already held across the original awaits; it is consumed on timeout. Dropping/cancelling the wait does not call abort implicitly or abort the blocking task, matching the prior enclosing future behavior. A grace timeout leaves the original future available; if the caller then drops its JoinHandle it detaches as before.
+- Exact-deadline polling inherits Tokio timeout ordering from the base. This change introduces no custom tie-breaking or new deadline behavior.
+- No native, capture, paste, controller, event or CLI behavior changes occur in the diff. The architecture text correctly limits this work to #344 part 1 rather than claiming broader orchestration or a fixed whole-cycle bug.
+
+Independent checks:
+- git rev-parse HEAD: exact candidate, before and after review.
+- git status --porcelain=v1: empty, before and after review.
+- git diff --check BASE CANDIDATE: PASS.
+- cargo fmt --all -- --check from src-tauri: PASS.
+- cargo test --offline in /private/tmp/sagascript-inference-wait-test, using absolute paths to the actual candidate module and tests and existing Tokio 1.50.0: PASS, 6 tests, 0 failed; doc tests 0.
+- The scratch library emits two dead_code warnings because its non-test library excludes the production caller; these are not app findings.
+
+Test evidence covers immediate success/error output, original cancellation JoinError/id, completion before deadline, abort count and exact initial deadline, grace success/error remaining timeout, exact grace expiry, and the same borrowed receiver being awaitable after grace expiry.
+Reported mutation evidence was inspected in the supplied test evidence document; mutations were not independently rerun during this review.
+
+Optional coverage opportunity (not blocking): a focused test that drops the helper future during the initial wait and during grace could directly pin cancellation/drop behavior. Existing borrowed structure is sufficient to establish preservation for this extraction.
+
+Limits:
+- No full app/workspace compilation, workspace tests, Clippy, lean CLI build, deployed-state checks, microphone/model/UI/paste interaction or CI run was performed by this reviewer.
+- Full app integration and all 13 fresh required CI checks remain pending and must pass before readiness. Focused scratch tests are not integration evidence.
+- No network, installs, external mutations, repository edits, release actions, settings or secret access were performed. This receipt is the only file written.

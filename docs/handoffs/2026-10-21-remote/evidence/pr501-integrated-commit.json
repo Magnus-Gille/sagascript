@@ -1,0 +1,40 @@
+{
+  "sha": "1fd4a365532e0dfea4bf13eed8b7829f8d1c512d",
+  "node_id": "C_kwDOQ_uDptoAKDFmZDRhMzY1NTMyZTBkZmVhNGJmMTNlZWQ4Yjc4MjlmOGQxYzUxMmQ",
+  "url": "https://api.github.com/repos/Magnus-Gille/sagascript/git/commits/1fd4a365532e0dfea4bf13eed8b7829f8d1c512d",
+  "html_url": "https://github.com/Magnus-Gille/sagascript/commit/1fd4a365532e0dfea4bf13eed8b7829f8d1c512d",
+  "author": {
+    "name": "Magnus Gille",
+    "email": "magnus.gille@outlook.com",
+    "date": "2026-10-21T10:16:29Z"
+  },
+  "committer": {
+    "name": "GitHub",
+    "email": "noreply@github.com",
+    "date": "2026-10-21T10:16:29Z"
+  },
+  "tree": {
+    "sha": "7bc710a272cc4d598e83c0389ab5615350f2fd55",
+    "url": "https://api.github.com/repos/Magnus-Gille/sagascript/git/trees/7bc710a272cc4d598e83c0389ab5615350f2fd55"
+  },
+  "message": "Merge pull request #501 from Magnus-Gille/codex/meeting-polling-and-test-inventory\n\ntest(frontend): add language and meeting regression coverage",
+  "parents": [
+    {
+      "sha": "2e32ccb470946b5a8d014e206023e47982b70b3c",
+      "url": "https://api.github.com/repos/Magnus-Gille/sagascript/git/commits/2e32ccb470946b5a8d014e206023e47982b70b3c",
+      "html_url": "https://github.com/Magnus-Gille/sagascript/commit/2e32ccb470946b5a8d014e206023e47982b70b3c"
+    },
+    {
+      "sha": "c24276d7505b586e98d3ec58408d4c200c43ede9",
+      "url": "https://api.github.com/repos/Magnus-Gille/sagascript/git/commits/c24276d7505b586e98d3ec58408d4c200c43ede9",
+      "html_url": "https://github.com/Magnus-Gille/sagascript/commit/c24276d7505b586e98d3ec58408d4c200c43ede9"
+    }
+  ],
+  "verification": {
+    "verified": true,
+    "reason": "valid",
+    "signature": "-----BEGIN PGP SIGNATURE-----\n\nwsFcBAABCAAQBQJq2JD9CRC1aQ7uu5UhlAAAwG4QAGUN04muLmb+mI/CyEFASDoM\nDq4HOjwd5WRzK7EfQzzdGSUy5mhdbidPSC9h/2Ehyd4VIbbgG0NbE3lzqb6VS7GP\n0Jmyp8HZ9+J2aiNWtYCUWsOTLBRYNjXSQQ9j4IQMQ8fYfeYMkLnV111abU/jGHJN\nd22rAcOFmZGlX4Ttfo/YNziasZB3+ya+rQqrJT3QTLW3ZptRrCnYKG2nsDtv8bNY\nQHAllL+Jugjt1G1HFlxPu/zmKLc1ILN8zAz3Y3QO5vDpp7j+x9r7kq7krRtiHhL6\nxHw6NdM2/sj5Vnlu329NWzI9+LWxyucbJZyrCyNa+eXrBvBY0YozGhU/ydlra+3W\nHndiXVcoIigjnftNdpTEmFq6F63wk4S0Wp628NANIVLi70RIMqDLf47nOjHV23OG\n3bQgccxiy1f3dfwVcQdl8R7nwrV2A95Rk+SDxW9WbCuNFGZ2pdy/frBEpXNgD/ke\nOW0ANouMnSGUwqffwJuQNFaBFTQ22NeMoAgSqocNE1+uElaizrkI/wsdHVq/jRip\nKJRm7arwDGi6MpIs6Ycpk/CyVEKr1Z2b7mPT4b6GWmEt6YyUpp7X8KiLhUIjyXFz\n/OO6HdlVOzBdLZgTqGE0T24FEXYJDiKNMBhGVCJJ2xgm4/+FUnO8ZMYyAapqhL/O\nqZXVSjxcV1KWsrlE1INK\n=6qOb\n-----END PGP SIGNATURE-----\n",
+    "payload": "tree 7bc710a272cc4d598e83c0389ab5615350f2fd55\nparent 2e32ccb470946b5a8d014e206023e47982b70b3c\nparent c24276d7505b586e98d3ec58408d4c200c43ede9\nauthor Magnus Gille <magnus.gille@outlook.com> 1792577789 +0200\ncommitter GitHub <noreply@github.com> 1792577789 +0200\n\nMerge pull request #501 from Magnus-Gille/codex/meeting-polling-and-test-inventory\n\ntest(frontend): add language and meeting regression coverage",
+    "verified_at": "2026-10-21T10:16:29Z"
+  }
+}

@@ -1,0 +1,20 @@
+[
+  {
+    "file": "evidence/meeting-polling-checks-c24276d7/lint.log",
+    "original_sha256": "aadab08eddc7ccfb7dec47dad062b160a8f0538ef48e45f4f76819d38eade13b",
+    "archived_sha256": "0652251193bf671902dd4a2abfa1351e04ea18ddc650c2c5a02822d561c4c5da",
+    "transformation": "Trailing whitespace and surplus blank EOF lines removed; no text/order changes."
+  },
+  {
+    "file": "evidence/meeting-polling-checks-c24276d7/unit.log",
+    "original_sha256": "d69a5e52a84978386bd63ad20c19c0ae58ad2a145f561d3fb7896ed30893ef49",
+    "archived_sha256": "041eca48536c00f4dcf6910b13c0b264e923185bbb6c8643d179ee5e660b4ab8",
+    "transformation": "Trailing whitespace and surplus blank EOF lines removed; no text/order changes."
+  },
+  {
+    "file": "evidence/pr501-windows-diagnosis/failure-excerpts.txt",
+    "original_sha256": "2669a09811268b4b0a8153a40a0faa47bb2a66903c6883722caa989951d53986",
+    "archived_sha256": "161a327b6c85f40cf94b4c928dc0d706be97d158704b11b2df7dd8b332784f7b",
+    "transformation": "Trailing whitespace and surplus blank EOF lines removed; no text/order changes."
+  }
+]

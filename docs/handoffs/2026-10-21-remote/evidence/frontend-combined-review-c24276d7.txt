@@ -1,0 +1,51 @@
+Independent full-range integration review receipt
+
+Disposition: APPROVE — engineering review of the complete combined range.
+Repository: Magnus-Gille/sagascript
+Worktree: /Users/magnus/.codex/worktrees/quality-meeting-component-tests/sagascript
+Branch: codex/meeting-polling-and-test-inventory
+Actual accepted main base for this review: 2e32ccb470946b5a8d014e206023e47982b70b3c
+Combined candidate HEAD: c24276d7505b586e98d3ec58408d4c200c43ede9
+Candidate tree: 7bc710a272cc4d598e83c0389ab5615350f2fd55
+Contained reviewed PR #499 HEAD: 1b27bd5b4c83df8db1409697f492ed5d98ca022a
+Requested reviewer route: native current-session gpt-6.1-sol / xhigh.
+Runtime-observed model and effort: unknown; no metadata exposed either value.
+
+Range and integrity
+Verified clean exact HEAD before and after assessment. Both the accepted main base and the exact #499 head are ancestors of the combined candidate; merge-base checks returned those exact revisions. The commit chain is linear from 2e32 through the #499 commits and 1b27, then the documentation and meeting-polling/fixture follow-up commits. No #499 change was rebased, replaced, or omitted in the combined candidate. The six inherited #499 paths outside the shared clock file are byte-unchanged from the approved #499 revision.
+
+The FULL accepted-base-to-candidate diff contains exactly these nine paths:
+- docs/testing/frontend.md
+- scripts/test-finnish-language.mjs
+- scripts/test-meeting-integration.mjs
+- src/lib/FileTranscription.meetingPolling.test.ts
+- src/lib/FileTranscription.meetingReprocessing.test.ts
+- src/lib/MeetingReview.actions.test.ts
+- src/lib/Onboarding.test.ts
+- src/lib/Settings.test.ts
+- src/lib/overlay-state.test.ts
+
+All nine are in the accepted test/documentation scope. There are no production, dependency, configuration, workflow, updater, or authority-policy changes. No repository edits, external mutations, publication, merge, subdelegation, installation, credential reads, or native app/audio use occurred in this review. Only this requested evidence receipt was written.
+
+Full combined assessment
+No actionable findings or unresolved integration concerns.
+
+The combined range retains meaningful rendered/module coverage for Finnish Settings callbacks/readback/catalog, Finnish onboarding selection/recommendation/fallback, explicit English defaults for auto settings and failed settings reads, the exact Language union under the Svelte type check, and the actual overlay helper. The initial default review's possible-surviving-mutant counterfactual was not empirically established: the supplied mutation log also failed the two earlier Finnish cases. The accepted correction supplies direct fallback-branch evidence; this receipt does not claim the older suite survived that mutation.
+
+MeetingReview tests exercise public correction, Discard, merge-clear, Save and all-five-export callbacks. Dirty/busy/pending persistence checks have clean/idle positive controls, false outcomes do not claim success, and rejected Save recovery is asserted. Its synthetic source and content-derived review hashes were corrected and independently checked in the earlier exact-revision review.
+
+The shared clock file integrates the later constructor/plan correction without removing the earlier pending-poll interpolation, stale same-phase non-regression, exact backward terminal override, terminal freeze, or same-render import -> Plan -> Execute reset assertions. It now uses the unmodified imported transcript, generation zero and empty correction history, a derived fresh review revision, a revision-bound recluster plan, and the actual recorded create/plan/begin IPC requests. The fresh review and plan revisions were independently recomputed in the c242 review. Original transcript identity/hash is reused from the backend-owned transport fixture after equality checking; no new Rust runtime validation is claimed.
+
+New polling cases complement that clock coverage: a poll error holds the queue and raises attention until a same-job retry completes; cancellation acknowledgement retains positive busy state until the deferred terminal snapshot; completion without a transcript produces the expected error, no review, and failed queue completion. Their asynchronous boundaries and teardown remain appropriate. The unchanged shared setup unmounts components before resetting IPC; unchanged Vitest configuration isolates files and restores mocks. No interaction requiring a new test run was found.
+
+Programmatic comparison against the ACTUAL accepted base confirms that the first two meeting-integration test bodies, both retained private integration scripts, shared setup, and Vitest configuration are unchanged. The source assertions removed from the third meeting case are covered by the reviewed rendered behavior; the remaining API, playback, privacy, diagnostics and recovery checks persist. Documentation correctly reports six UI manifest entries, eight retained private executions, historical pilot counts, updater-owner exclusion/coordination, and partial #361 completion.
+
+Evidence and verification
+Re-read the authoritative meeting-polling-checks-c24276d7 receipt and all six raw logs at the exact candidate: 51 files / 594 Vitest tests passed; frontend 475 passed, 2 skipped, 0 failed; lint and formatting passed; Svelte check 0 errors/0 warnings; diff check passed; final receipt HEAD is exact and clean. Although that receipt names 1b27 as its diff base, its full unit/frontend/lint/format/type commands ran over the entire c242 checkout, including the inherited #499 changes. Expanding the review comparison to accepted base 2e32 changes the adjudicated range, not tested candidate bytes, so those complete checks remain applicable.
+
+Earlier independent focused checks and source/digest verification are recorded in frontend-followup-review-1b27bd5b.txt, frontend-followup-clock-fixture-adjudication.txt, and meeting-polling-review-c24276d7.txt. This adjudication rechecked full-range ancestry, exact scope, preservation and full-range git diff --check; it did not redundantly rerun all tests in the absence of a new concern.
+
+Integration endpoint and limits
+The engineering approval covers normal integration of the ENTIRE nine-path 2e32..c242 candidate, including #499, rather than only the follow-up delta. Its ancestry supports the root's chosen aggregate #501 route without first changing the accepted base through a separate #499 merge. Provider merge metadata is not established by Git ancestry alone. The root must still apply its existing fresh 13/13 SUCCESS gates for BOTH PRs on the unchanged accepted base, guard the exact aggregate head, and read back the resulting provider parents/tree and both PR states. Automatic MERGED status for #499 must be verified, not inferred as an already-observed fact.
+
+This receipt neither claims CI is currently green nor grants external-action authority. CI/ARM64 runtime outcomes, native transcription/backend execution, actual cache/context validity, macOS permissions/audio, merge readiness under the root's gates, and deployment state are outside this frontend engineering review. Mocked context hashes/cache paths remain explicit stand-ins, two existing frontend skips remain, eight private cases remain unchanged, and #361 remains partial.

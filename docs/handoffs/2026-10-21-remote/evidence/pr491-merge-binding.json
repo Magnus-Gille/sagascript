@@ -1,0 +1,20 @@
+{
+  "checkedAt": "2026-10-21T02:28:21.838495+00:00",
+  "pr": 491,
+  "merged_at": "2026-10-21T02:28:02Z",
+  "reviewed_head": "43b4bacec6c17eecc9fb32b8ad6e9c2b054ccfae",
+  "verifier_sha": "817573cb1a4e77efade15f503a8d8e645eeba866",
+  "tree": "892f78d9c305a01827b230c2926974082a2105b5",
+  "parents": [
+    {
+      "sha": "ebe32eab48791c01afdf5e3b7f77fc7331489c79",
+      "url": "https://api.github.com/repos/Magnus-Gille/sagascript/commits/ebe32eab48791c01afdf5e3b7f77fc7331489c79",
+      "html_url": "https://github.com/Magnus-Gille/sagascript/commit/ebe32eab48791c01afdf5e3b7f77fc7331489c79"
+    },
+    {
+      "sha": "43b4bacec6c17eecc9fb32b8ad6e9c2b054ccfae",
+      "url": "https://api.github.com/repos/Magnus-Gille/sagascript/commits/43b4bacec6c17eecc9fb32b8ad6e9c2b054ccfae",
+      "html_url": "https://github.com/Magnus-Gille/sagascript/commit/43b4bacec6c17eecc9fb32b8ad6e9c2b054ccfae"
+    }
+  ]
+}

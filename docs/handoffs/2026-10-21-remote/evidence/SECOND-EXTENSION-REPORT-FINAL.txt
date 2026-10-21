@@ -1,0 +1,33 @@
+SLUTRAPPORT — verifierad 21 oktober2026 kl13.11 svensk tid; därefter paus på Magnus begäran
+
+PR #501 och #499 är integrerade via en gemensam normal merge den 21 oktober kl.12.16 svensk tid. GitHub bekräftar merge-commit 1fd4a365532e0dfea4bf13eed8b7829f8d1c512d, rätt föräldrar och exakt granskat kodträd. #499 följde automatiskt med genom sin historik. Båda PR:arna hade 13 av 13 gröna kontroller före merge och hela ändringen var oberoende granskad.
+
+Denna leverans tillför 18 tester för finskt språkval, onboardingens standardval, mötesredigering och export, tidsvisning, ombearbetning, pollningsfel, återförsök och avbrytning. Tillsammans med #498:s 41 tidigare tester är det 59 nya tester i de två senaste integrerade paketen. Den slutliga frontendkandidaten klarade 594 Vitest-tester och 475 Node-tester; två befintliga plattformsskippar kvarstår. Lint, formattering och Svelte-kontroll passerade. #501 ändrar endast testkod och testdokumentation.
+
+Efterkontroller på main: SLUTVERIFIERADE kl13.11 svensk tid. Root hämtade färsk providerdata: exakt main1fd4a365532e0dfea4bf13eed8b7829f8d1c512d, alla17 workflowidentifierade kontroller terminala,12SUCCESS och5förväntadeSKIPPED. macOS och Linux passerade första gången. Windows hade först en normal Rust-testpanic i ett befintligt tidsberoende test:2,2162412sekunder mot strikt2,2sekunder. Samma test passerade tidigare i samma jobb; Rust-koden är oförändrad i denna leverans. Ett enda riktat omförsök med oförändrad kod/testgräns passerade, inklusive efterföljande kontroller. Orsaken bakom tidsvariationen är inte bevisad och inget påstående om permanent flakfix görs. Råloggar, första felet, omförsöket och ett läsande underlag för bättre ordningskontroll är sparade. Ingen sådan teständring har genomförts.
+
+Nattens nio faktiska mergeoperationer var #488, #486, #489, #487, #490, #491, #492, #493 och #495. Efter förlängningarna tillkom #498 och nu #501: totalt elva. PR #494/#496/#497 respektive #499 räknas inte igen; de integrerades genom de två samlade paketen.
+
+Release 1.4.5 är ett separat, fryst utkast på ebe32eab48791c01afdf5e3b7f77fc7331489c79. macOS-utkastet är signerat och notariserat; Windows-beta är osignerad. De senare kodkvalitetsändringarna ingår inte i dessa redan byggda utkast. Den färska slutavstämningen kl13.11 svensk tid bekräftade 16 oförändrade tillgångar i utkasten och 14 oförändrade tillgångar i publicerade 1.4.4. Inget utkast är publicerat och ingen app har installerats eller körts på Magnus dator. Manuell acceptans på en ren dator och publiceringsbeslut återstår.
+
+#345 är slutfört. #344, #375 och #361 är fortfarande partiella; bland annat återstår native-acceptans och åtta äldre privata testkörningar. #379 väntar på tidigare beroenden. Updater-arbetet ligger kvar hos sin ägare. Läsande underlag till nästa testdel finns i remaining-frontend-inventory.txt men den är inte implementerad.
+
+Subagenter: avgränsade uppgifter och CI-bevakning använde billigare Luna med High eller Extra High efter uppgiftens svårighet. Oberoende slutgranskning begärdes med native Sol6.1/Extra High; körmiljön exponerade inte faktisk runtimeidentitet. Root kontrollerade diffar, testkvitton, providerstatus och merge. Faktaauditens första svar rättades efter att root hittat en äldre snapshot; slutversionen stöds av konkreta kvitton.
+
+Arbetsgrenar är bevarade och rena. Primärcheckout är orörd med sin sedan tidigare oregistrerade :memory:.ses; lokal main ska inte förväxlas med verifierad remote main. Heartbeat är pausad. Ingen ny release, tagg, signering, installation eller destruktiv städning har gjorts under den sista förlängningen.
+
+Det går inte att belägga batteritid eller sovtid från arbetskvittona. De visar vad som slutfördes och när, inte datorns energikälla.
+
+Centrala kvitton:
+- pr501-merge-receipt.json, pr501-premerge-receipt.json, pr501-integrated-commit.json
+- pr499-automatic-integration-receipt.json
+- frontend-combined-review-c24276d7.txt
+- meeting-polling-checks-c24276d7/receipt.json
+- pr501-postmerge-ci.json (första felet och grönt omförsök2 bevarade)
+- pr501-final-provider-verification.json, pr501-final-check-runs.json, pr501-final-workflow-runs.json
+- pr501-windows-diagnosis/diagnosis.txt och ordering-evidence.txt; pr501-windows-retry-*.json
+- SECOND-EXTENSION-DELEGATION.txt
+- pr501-final-local-state.json och pr501-automation-paused.json
+- final-report-facts-audit.txt; äldre MORNING-REPORT.txt och EXTENSION-REPORT-FINAL.txt är tidsstämplad historik
+
+PAUS: Magnus bad därefter uttryckligen om paus och status. Alla subagenter är avslutade. Inga nya uppgifter, körningar, repo- eller GitHub-ändringar startas förrän Magnus återupptar. Heartbeat förblir PAUSED. Nästa kodarbete är ett nytt avgränsat paket; befintliga releaseutkast publiceras inte automatiskt.

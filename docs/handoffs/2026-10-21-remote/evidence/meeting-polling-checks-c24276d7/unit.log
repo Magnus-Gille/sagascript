@@ -1,0 +1,15 @@
+
+> sagascript@1.4.5 test:unit
+> vitest run
+
+
+ RUN  v5.0.2 /Users/magnus/.codex/worktrees/quality-meeting-component-tests/sagascript
+
+
+ Test Files  51 passed (51)
+      Tests  594 passed (594)
+   Start at  11:32:32
+   Duration  14.26s (tests 34%, environment 24%, transform 22%, setup 17%, import 3%)
+
+    Isolate  51 workers spawned · ~820ms startup each (spawn + environment, per file)
+             at least ~3.83s faster with isolate: false — reuses workers across files instead of one per file

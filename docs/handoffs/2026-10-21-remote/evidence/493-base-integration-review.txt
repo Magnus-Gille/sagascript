@@ -1,0 +1,44 @@
+Independent read-only integration review — accepted PR 493 into PRs 494–497
+Repository: Magnus-Gille/sagascript
+Accepted base: 4680b82fdcc46ab001a86b3da088f60f57962067
+Previous base: d707e412b88f244f3b32d765dbe2b852623e222f
+Requested reviewer model/effort: gpt-6.1-sol / high. Runtime-observed concrete model/effort: unknown.
+Mode: native current-session Codex review; no subagents.
+
+Verdicts (code integration only)
+PR 494 a3e4842040d08426b03d4db1e00d507c8a8ebb32: APPROVE, conditional on required fresh hosted CI passing for this exact head. No supported integration finding.
+PR 495 62df08dc517e88fc6fbcfc3803757aef00985a8a: APPROVE, conditional on required fresh hosted CI passing for this exact head. No supported Settings/hotkey boundary finding.
+PR 496 0dec3517e7c5061b813566a4782c33f56696405c: APPROVE code integration only, conditional on required fresh hosted CI passing for this exact head. READINESS REMAINS GATED by the unresolved prior hosted PowerShell stack-overflow failure; this approval does not dismiss that failure or authorize a rerun.
+PR 497 8ab9ef7d276283b68f2f5ff09f456cf91b54b583: APPROVE, conditional on required fresh hosted CI passing for this exact head. No supported integration finding.
+
+Scope and reused reviews
+This is a fresh narrow integration review, not another full semantic review of the accepted tasks. Read the four integration receipts, all final-head metadata and check logs under 493-base-checks/, summary.txt, pr496-macos-failure/diagnosis.md, and the original final receipts: hotkey-transition-review-163c69f7.txt, meeting-361-review-daea2509.txt, settings-345-review-91e0e793.txt, dictionary-361-review-bc5bd62b.txt, glossary-361-review-2eb2bb47.txt. The parent reports accepted PR 493 passed 13/13 hosted checks; this review did not query external state.
+
+Independent Git evidence
+Verified exact HEAD and clean status in each named worktree. Each integrated commit has the corresponding previously reviewed head plus accepted base as its two parents. Independently recomputed both directions of stable patch identity, rather than trusting receipt fields:
+- 494 task: 975f903a305f3dfef05982627e934e07ddf4a552
+- 495 task: 6d2f2f8b64aac7d8114e121950745f4d0aee6b08
+- 496 task: 9da84d13d9956397c904daa6685620268374f36f
+- 497 task: 9dc75e7a7b53b142d5af9e450ba86224d18aee77
+For every PR, previous-base..old-head equals accepted-base..new-head, and previous-base..accepted-base equals old-head..new-head. The latter incoming patch is aee3c1a2887739ac9d6968ea0773f5bb0aca1b66 in all four cases.
+All task-path contents, including deletion state, compare byte-identically with their original reviewed heads, except PR 495 docs/ARCHITECTURE.md. All eight incoming hotkey source/test files compare byte-identically with the accepted base in every head. There are no shared task/incoming paths for 494, 496 or 497. PR 495 shares only docs/ARCHITECTURE.md; inspected both deltas and confirmed its frontend controller guidance and the incoming hotkey-transition paragraph are both retained in separate sections. Independent git diff --check accepted-base..head passes for all four.
+
+Settings/hotkey interaction
+Inspected Settings.svelte setter callers, settingsTransactionController.ts, typed API payloads, set_language persistence/mirroring, set_hotkey_profiles/apply_hotkey_change, transition.rs, NativeRegistrar, and watcher orchestration. PR 495's production frontend/controller files are unchanged from its reviewed old head. The incoming change has no frontend, transport API, language setter, configuration-preparation, controller or persistence-helper delta.
+The extracted settings transaction still invokes the mutation once, returns the original rejection as saved:false, calls afterSave only after a resolved mutation and before readback, and reports a failed readback as saved:true/confirmed:false without retrying the write. The unchanged hotkey setter still returns notices or CommandError; command transition/recording leases, prepare-before-registration, healthy-identical fast path, persistence-after-registration and rollback remain on the Rust side. The helper is synchronous and introduces no await crossing those guards. NativeRegistrar delegates to the existing registration functions. Watcher validation, panic registration guard, restoration of shortcut-related fields, health/event handling, and deferred reload while recording remain with its caller. Settings profile edits/capture continue through the same set_hotkey_profiles IPC, and dictionary/language recovery remains its separate CAS flow. No new bypass, retry, stale shortcut adoption or lock interaction is supported by this integration.
+
+Final-head deterministic evidence inspected (conductor-run, not reviewer rerun)
+494: Vitest 42 files / 521 passed; Node 523 passed / 2 skipped / 0 failed; diff-check exit 0.
+495: Vitest 44 files / 535 passed; Node 515 passed / 2 skipped / 0 failed; diff-check exit 0.
+496: Vitest 42 files / 523 passed; Node 513 passed / 2 skipped / 0 failed; diff-check exit 0.
+497: Vitest 42 files / 519 passed; Node 516 passed / 2 skipped / 0 failed; diff-check exit 0.
+All unit/frontend logs end EXIT_CODE: 0 and their metadata bind the exact heads above. These broad results now include the final assertion corrections. The documented initial 494 sandbox cache-write EPERM and authorized unchanged-source successful retry are preserved in summary.txt. No Rust/native heavy checks were run locally; required final-head hosted checks remain necessary.
+
+Limits and gates retained
+- Task #375 historical pre-refactor caller-baseline execution remains NOT RUN. Accepted helper execution and hosted CI cannot be relabeled as that baseline or full #375 acceptance.
+- The #361 dictionary synthetic private-state combination, glossary synthetic saving states, remaining diarize/createFileJobs and blank-context/null source-pinned slices, and mocked IPC's inability to prove backend dictionary consumption remain as documented. These test migrations do not close all of #361.
+- PR 496's prior test-macos failure (job 119028327872, run 39540774741) remains unresolved. Its child PowerShell process emitted Stack overflow in six negative verifier cases. Read the diagnosis; identical source/runtime passing in three other jobs supports a runtime/process hypothesis, not proof. Independently verified no old-to-integrated change to .github, scripts, package/lock, Vitest config, Settings.svelte or the dictionary test. Source identity and local passing tests do not erase the failed hosted result. The parent-authorized one normal CI execution at the integrated head must provide fresh evidence; no manual rerun was performed or authorized here. A repeated failure requires renewed diagnosis, not waived checks.
+
+Only this receipt was written. No source, Git, external, native-app, dependency, real settings/user-data or secret access/mutation; no network or subdelegation. Review approval grants no publication, merge, deployment, failure waiver or scope-expansion authority. The conductor owns drafts, hosted-CI readback and remaining gates.
+Delegation result: pass for this bounded integration review; requested model/effort recorded above, runtime observation unknown.
+Recorded UTC: 2026-10-21T04:07:56.714060+00:00

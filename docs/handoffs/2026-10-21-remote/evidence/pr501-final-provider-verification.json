@@ -1,0 +1,52 @@
+{
+  "verified_at": "2026-10-21T11:11:54.234838+00:00",
+  "main": "1fd4a365532e0dfea4bf13eed8b7829f8d1c512d",
+  "postmerge_checks": {
+    "total": 17,
+    "success": 12,
+    "expected_skips": 5,
+    "workflow_run_ids": [
+      "39583382419",
+      "39583382512",
+      "39583382637"
+    ]
+  },
+  "pr499_and_pr501_merged_at_same_sha": true,
+  "frozen_release_sha": "ebe32eab48791c01afdf5e3b7f77fc7331489c79",
+  "mac_git_tag": {
+    "ref": "refs/tags/v1.4.5",
+    "node_id": "REF_kwDOQ_uDprByZWZzL3RhZ3MvdjEuNC41",
+    "url": "https://api.github.com/repos/Magnus-Gille/sagascript/git/refs/tags/v1.4.5",
+    "object": {
+      "sha": "ebe32eab48791c01afdf5e3b7f77fc7331489c79",
+      "type": "commit",
+      "url": "https://api.github.com/repos/Magnus-Gille/sagascript/git/commits/ebe32eab48791c01afdf5e3b7f77fc7331489c79"
+    }
+  },
+  "windows_draft_target_sha": "ebe32eab48791c01afdf5e3b7f77fc7331489c79",
+  "windows_git_tag": "404: draft label only, no existing Git ref claimed",
+  "releases": [
+    {
+      "id": 419041452,
+      "tag": "v1.4.5",
+      "draft": true,
+      "assets": 11,
+      "body_and_asset_bindings_unchanged": true
+    },
+    {
+      "id": 419041490,
+      "tag": "windows-beta-1.4.5",
+      "draft": true,
+      "assets": 5,
+      "body_and_asset_bindings_unchanged": true
+    },
+    {
+      "id": 416075140,
+      "tag": "v1.4.4",
+      "draft": false,
+      "assets": 14,
+      "body_and_asset_bindings_unchanged": true
+    }
+  ],
+  "method": "Read-only provider metadata and immutable asset binding comparison; no new binary execution or release mutation"
+}

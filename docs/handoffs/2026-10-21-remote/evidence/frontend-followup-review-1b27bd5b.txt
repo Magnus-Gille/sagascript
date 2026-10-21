@@ -1,0 +1,35 @@
+Independent engineering follow-up review receipt
+
+Disposition: APPROVE
+Repository: Magnus-Gille/sagascript
+Worktree: /Users/magnus/.codex/worktrees/quality-frontend-regressions/sagascript
+Branch: codex/frontend-language-and-meeting-tests
+Accepted base: 2e32ccb470946b5a8d014e206023e47982b70b3c
+Reviewed corrected HEAD: 1b27bd5b4c83df8db1409697f492ed5d98ca022a
+Prior reviewed HEAD: bbc77eddf2adbb8f7f2b0050cd42dda219eb514c
+Requested route: native current-session gpt-6.1-sol / xhigh.
+Runtime-observed model and effort: unknown; no metadata exposed either value.
+
+Integrity and delta
+Verified corrected HEAD and clean git status before and after review. The overall diff still contains exactly the seven assigned test paths. The delta from the prior candidate contains only src/lib/Onboarding.test.ts and src/lib/MeetingReview.actions.test.ts: two explicit default-language cases, documented source hash, corrected derived review hashes, and generation zero. No production, configuration, dependency, or workflow delta is present. The earlier review receipt was preserved unchanged. No candidate edits or other mutations beyond the requested receipt and the ordinary approved test cache write were performed.
+
+Reassessment of findings
+
+P2 default-language coverage: addressed.
+The added tests defer get_settings, verify that it was called, settle it with language=auto or a typed backend error, and await handler settlement before asserting the rendered English/Finnish pressed states. They then click Continue without choosing another language and assert the public set_language callback receives en. These cover both fallback branches directly and exercise their public behavior instead of depending on an internal variable spelling.
+The supplied red log confirms both new cases fail when initial selectedLanguage changes from en to fi; the restored production source passes. It also shows the two existing Finnish cases fail the same mutation. Consequently, the old-tests-survive counterfactual in the initial review was not empirically established and should not be cited as a demonstrated surviving mutant. The correction provides explicit fallback-branch evidence; it is not evidence that every earlier test survived. Production bytes are restored, and the corrected HEAD contains no production change.
+
+P3 review-fixture fidelity: addressed.
+The source digest is now SHA-256 of the literal synthetic UTF-8 input documented next to the fixture. original_revision and revision match the source-derived serde transcript and generation-zero RevisionPayload encodings. I independently recomputed all three hashes with Python and obtained exact equality with the committed values. I inspected the Rust struct declaration order, f64 fields, omitted None options, validation rules, and hash_json implementation. The remaining fixture values satisfy the relevant transcript structural constraints. This is source-derived contract verification plus independent digest computation; neither the supplied evidence nor this receipt claims an executed Rust validation of this fixture.
+
+Regression assessment
+No new actionable findings in the correction delta. The initial review's other coverage conclusions continue to apply because those test bytes are unchanged: actual Finnish settings/onboarding/overlay behavior, exact Language union type assertion, serialized pending-poll clock interpolation and stale-snapshot handling, exact terminal-time override/freeze, same-instance import-to-reprocessing clock reset, and public meeting review callback/persistence behavior. The first two meeting-integration bodies and the remaining integration/legacy VM checks remain unchanged. Scope is partial #361.
+
+Verification at corrected HEAD
+- Read frontend-followup-checks-final/receipt.json and all six logs: 50 files/591 Vitest tests passed; frontend 475 passed, 2 skipped, 0 failed; lint and format passed; Svelte check 0 errors/0 warnings; base-to-HEAD diff check passed; receipt ends at the exact clean reviewed SHA.
+- Independently ran existing Onboarding and MeetingReview.actions tests: 2 files, 16 tests passed. The initial sandbox invocation stopped before executing tests on Vite cache EPERM; the same exact command passed with ordinary command-specific cache approval.
+- Independently recomputed source/original/review SHA-256 values: all 3 matched.
+- Independently ran git diff --check against the accepted base: passed.
+
+Remaining limitations
+Frontend callbacks and IPC are mocked. This approval does not establish native transcription, Rust runtime acceptance of the fixture, macOS audio/TCC behavior, deployment state, or completion of the remaining #361 migration. Existing full-check skips remain two and are not introduced by this patch. Publication/merge/release actions were outside this review leaf; the root retains its existing delivery and fresh-CI requirements.

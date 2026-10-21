@@ -1,0 +1,125 @@
+{
+  "checkedAt": "2026-10-21T02:29:47.846Z",
+  "verifierSha": "817573cb1a4e77efade15f503a8d8e645eeba866",
+  "snapshotCapturedAt": "2026-10-21T02:28:53.739711+00:00",
+  "repo": "Magnus-Gille/sagascript",
+  "version": "1.4.5",
+  "sha": "ebe32eab48791c01afdf5e3b7f77fc7331489c79",
+  "runId": "39526373954",
+  "releaseId": 419041452,
+  "windowsReleaseId": 419041490,
+  "assets": [
+    {
+      "releaseId": 419041452,
+      "assetId": 660986913,
+      "name": "SHA256SUMS",
+      "size": 339,
+      "digest": "sha256:5755a448181e2bd42b2f5bfb02eb63ddc5bd94ebe521b71ebb8275040fdc3fc3"
+    },
+    {
+      "releaseId": 419041452,
+      "assetId": 660986912,
+      "name": "SHA256SUMS-Windows-arm64",
+      "size": 503,
+      "digest": "sha256:e392443c3c782b39c3f243f7d7960f68eed40ab1fb6ab30f1f60169bd46b3f17"
+    },
+    {
+      "releaseId": 419041452,
+      "assetId": 660986916,
+      "name": "Sagascript-Windows-arm64-CLI.exe",
+      "size": 31640576,
+      "digest": "sha256:a85202cb803e9f658c1c60d0570ab3651e4b95daff1f4a3909692d01303f9e2f"
+    },
+    {
+      "releaseId": 419041452,
+      "assetId": 660986911,
+      "name": "Sagascript-Windows-arm64-Portable.exe",
+      "size": 43025920,
+      "digest": "sha256:99bfcfe3a4e7e09ae62a223f98cf856517d4ce6d2d611360b0c1f45ab6a41737"
+    },
+    {
+      "releaseId": 419041452,
+      "assetId": 660986914,
+      "name": "Sagascript-Windows-arm64-Portable.zip",
+      "size": 32784655,
+      "digest": "sha256:8e00b6282242f1c5ca9598198669ac8cea9c84bf91bffcc5164022ed96f109ef"
+    },
+    {
+      "releaseId": 419041452,
+      "assetId": 660986928,
+      "name": "Sagascript-Windows-arm64-Setup.exe",
+      "size": 20652567,
+      "digest": "sha256:a3d91563ca3a617607c36dc6c52112d47f2747ccfe9286ddb433577e587cc9c0"
+    },
+    {
+      "releaseId": 419041452,
+      "assetId": 660986924,
+      "name": "Sagascript-Windows-arm64.msi",
+      "size": 41267200,
+      "digest": "sha256:173cfa506c31a805a18ba0f246f3c621747cf2e5a756624e2dc943616e1a279f"
+    },
+    {
+      "releaseId": 419041452,
+      "assetId": 660986948,
+      "name": "Sagascript.app.tar.gz",
+      "size": 17374020,
+      "digest": "sha256:4f7567a36c33c7dfcfd34fddaf3d3510428d854d167d7b99d7c781d562dd82e5"
+    },
+    {
+      "releaseId": 419041452,
+      "assetId": 660986956,
+      "name": "Sagascript.app.tar.gz.sig",
+      "size": 408,
+      "digest": "sha256:d57a0dc3db56385d350106b2e72d445c3a8dadc123333dc591bed86aad55a3ae"
+    },
+    {
+      "releaseId": 419041452,
+      "assetId": 660986976,
+      "name": "Sagascript.dmg",
+      "size": 17443131,
+      "digest": "sha256:870601b197c514a72a48e9a880edd44e3ad9452e62153e6bde7b1e32feb34072"
+    },
+    {
+      "releaseId": 419041452,
+      "assetId": 660986978,
+      "name": "latest.json",
+      "size": 613,
+      "digest": "sha256:3023d782b3818d25a316777c9746f932f54320f3ffae09a84613c1ad68658069"
+    },
+    {
+      "releaseId": 419041490,
+      "assetId": 660987057,
+      "name": "SHA256SUMS-Windows-x64",
+      "size": 391,
+      "digest": "sha256:6cc0fae860d328bcf03c76d1e8bcbde6a5fc5846ae525ece21699c8c56e178aa"
+    },
+    {
+      "releaseId": 419041490,
+      "assetId": 660987056,
+      "name": "Sagascript-Windows-x64-CLI.exe",
+      "size": 35675648,
+      "digest": "sha256:7218ea80e371e76d026484d5f9b0cb326a0256fd44370d96a41d90662c499b1a"
+    },
+    {
+      "releaseId": 419041490,
+      "assetId": 660987059,
+      "name": "Sagascript-Windows-x64-Portable.exe",
+      "size": 49169408,
+      "digest": "sha256:bc6d8f56d553c9c275894a7e1bbf7879a0ea29e1a915dade7c35b60881c2d75c"
+    },
+    {
+      "releaseId": 419041490,
+      "assetId": 660987050,
+      "name": "Sagascript-Windows-x64-Setup.exe",
+      "size": 19603840,
+      "digest": "sha256:77594dacd8507b54543174f6e8b31f1aedcf771d18260bfaefef407f2ae9e8ed"
+    },
+    {
+      "releaseId": 419041490,
+      "assetId": 660987058,
+      "name": "Sagascript-Windows-x64.msi",
+      "size": 37691392,
+      "digest": "sha256:ea16abdbaafff758ac9ecc96d5e153c025d9fdaaf262feeb3422fc8c842f095e"
+    }
+  ]
+}

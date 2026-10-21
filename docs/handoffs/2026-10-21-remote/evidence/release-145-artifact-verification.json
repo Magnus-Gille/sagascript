@@ -1,0 +1,14 @@
+{
+  "at": "2026-10-21T01:15:17.656705+00:00",
+  "run": 39521450618,
+  "release_sha": "ebe32eab48791c01afdf5e3b7f77fc7331489c79",
+  "tree_sha": "fb4d6acb232f1e4317b78cfb3f1831947252e995",
+  "all33_manifest_files_hash_size_identity": "pass",
+  "mac_archive_path_traversal_check": "pass",
+  "mac_bundle_version": "1.4.5",
+  "mac_bundle_identifier": "ai.gille.sagascript",
+  "updater_version_url_signature_file_equality": "pass",
+  "artifact_execution_on_owner_host": false,
+  "signature_notarization_startup_installed_cli_pianissimo_engine_protocol": "all named CI steps SUCCESS; release-145-prebuild-complete-jobs.json",
+  "draft_verification": "pending aftertag"
+}

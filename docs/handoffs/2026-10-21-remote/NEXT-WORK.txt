@@ -1,0 +1,26 @@
+KVARVARANDE ARBETE — PLANERINGSUNDERLAG, INTE MANDAT
+
+Utgångspunkt: accepterad main 1fd4a365532e0dfea4bf13eed8b7829f8d1c512d. Hämta färska ärenden #351, #344, #375, #361 och #379 innan nästa paket avgränsas. #345 är färdigt. #344/#375/#361 är partiella; markera dem inte färdiga från antalet tester. #379 och senare delar, inklusive #381, följer dokumenterad beroendeordning. Updater #483/#259/#466/#376 ägs av annan arbetsström och är exkluderade.
+
+Bakgrund som ska bevaras:
+Claude hade påbörjat kodkvalitetsarbete när krediterna tog slut. Övertagandet återställde sammanhanget kring #374/PR486 och kodhälsoomfattningen/PR487. Magnus valde uttryckligen GEMENSAM app/CLI-binär; separat uppdelning hör till senare beslut. Möteslogik kunde flyttas till core utan att bryta detta. CLI-ekvivalens, lokal transkribering, befintliga produktbeteenden och build-identitet ska bevaras. Vid det ursprungliga övertagandet återfanns också ett avbrutet mutationstest som lagt false && framför mötesjobbens timeoutvillkor. Det återställdes till då publicerad HEAD efter att rätt testprocesser stoppats; detta var ett testmutantspår, inte önskad produktkod. Gamla remote-worktrees/testprocesser får därför inte antas vara aktuella kandidater. Mätningar får inte förbättras genom att utelämna CLI/core eller byta nämnare. Förberedelser inför 1.4.5 blockerades av belagda RustSec/Vite-varningar, vilka rättades genom granskade PR:ar. Senare våg-tre-arbete är inte inbyggt i de frysta releaseutkasten.
+
+#344: större arbete återstår i dikteringens livscykel.
+#492 begränsade inference-väntan och abort/unwind; det ersätter inte hela kravet. Återstående orkestrering behöver kontrollerbara capture/inference/paste/event-adaptrar och klocka, explicita generationer och terminalutfall, precis en avslutning, skydd mot sena resultat och gamla köade sidoeffekter, dubbel/orphan stop, tomt ljud, capture/model-fel, timeout/slow unwind, pastefel och utebliven callback. Text/recovery ska bevaras. Native main-thread/paste/TCC-acceptans och latensgater får inte ersättas med fakes. Root äger designbeslut; delegera bara tydligt avgränsade, deterministiskt verifierbara löv. Ändrad native-integration som kräver signerad testbuild behöver faktiskt mandat för rätt revision; gammalt 1.4.5-signeringstillstånd gäller inte ny kod.
+
+#375: hotkey-övergångar är extraherade och aktuella tester finns.
+#493 levererade granskad del. Den historiska körningen av karakteriseringstester FÖRE refaktoreringen utfördes inte; påstå inte det retroaktivt. Läs aktuell kod/issue och dokumentera exakt återstående acceptans. Den äldre WAVE3-PREP.txt beskriver även design innan #493 och är inte en lista över ännu ogjort arbete. Bevara Unknown/Inactive/Registered, rollback, fem återställda settingsfält, persist-only snabbväg och lock/panic-guard-beteenden tills annat är godkänt.
+
+#361: flytt från källtext/private-state-harness till verkligt renderade komponenttester.
+Mycket är färdigt men åtta äldre privata harness-körningar kvarstår, se aktuellt docs/testing/frontend.md. Behåll varje gammal kontroll tills motsvarande observerbara beteende verkligen täcks. Om en syntetisk privat state inte går att nå via kontrollerna: redovisa luckan i stället för att fabricera UI-paritet. Mockad IPC bevisar frontendens payload/visning men inte Rust/backend/native-konsumtion. Tre avgränsade kandidater i evidence/remaining-frontend-inventory.txt är endast läsande planering, inte implementerade:
+1. Mötesinställningar förblir disabled efter begin-ack och blir enabled först efter terminal poll.
+2. Settings ”Open saved meeting” anropar rätt IPC och visar review utan att starta nytt jobb.
+3. Avslutad onboarding visar Settings; UI-test kan inte ensamt bevisa frånvaro av backend-hide().
+
+Windows timingtest:
+Det finns läsande analys och observationskarta men ingen kodfix. Fakehostens ops.log registrerar avkodad requestordning och ID, inte prioritet eller slutförande. En ordningsassertion behöver dessutom kausal synkronisering; en ny loggrad ensam ersätter inte tidskravet. Återskapa och avgränsa före ändring, bevara originalfel och omförsök. Ingen blind retry.
+
+Verifiering i ny miljö:
+Läs aktuellt AGENTS.md och scripts/verify.mjs; använd deklarerade kontroller och isolerade fixtures. Nytt worktree behöver frontend dist innan app-crate kan kompileras. Hämta endast deklarerade beroenden inom faktiskt tillåten isolering; en tom katalog/HOME är inte ensam en säkerhetsgräns. Ingen host-wide installation eller credential-kopiering. För relevant ändring: red/green-regression, fokusprov, proportionerliga breda kontroller, independent cross-model review efter deterministiska kontroller. Ett nytt head kräver förnyat berört bevisläge, inte automatiskt ett nytt mandat. Grön gammal CI är inte färsk kandidat-CI. Saknad native-acceptans ska stå öppet.
+
+Nästa sammanhängande paket ska lämnas reviewbart med diff, kontroller, kvarvarande luckor och kvitton. Merge/release behöver den nya sessionens aktuella uttryckliga mandat och gällande säkerhetsgrindar. Paketet ger inte sådan behörighet.

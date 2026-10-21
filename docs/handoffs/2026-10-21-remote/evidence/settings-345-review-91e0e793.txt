@@ -1,0 +1,34 @@
+Independent corrected-candidate review — Settings controllers #345 / bounded #361 migration
+Date: 2026-10-21 03:36 UTC
+Repository: Magnus-Gille/sagascript
+Immutable candidate: 91e0e7931d92a1de1745dc2947bd99926ca6d6f5
+Accepted base: d707e412b88f244f3b32d765dbe2b852623e222f
+Prior reviewed candidate: c51cdf854143fbfd441c232ada4ee30d92f1e601
+Correction before integration: 3612c15a4b1ea07a6819d39ef5ec6892b26249f1
+Reviewer requested model/effort: gpt-6.1-sol / xhigh. Runtime-observed model/effort: unknown.
+
+Verdict: APPROVE, conditional on fresh hosted CI for the immutable candidate or its identically reviewed successor. No unresolved grounded findings in the #345 controller extraction or the one-script #361 recovery-test migration. This review does not close all of #361, authorize publication/merge/deployment, or replace the accepted base's separate review.
+
+Scope and continuity
+This delta review reuses settings-345-review-c51cdf85.txt for the controller extraction, original 12-case migration and original deterministic evidence. It inspects the one-file test correction, the actual Rust/frontend transport contract, integration patch identity, the current baseline-file hashes, and refreshed deterministic-check receipts. Source/external/native/user-data/credential/dependency mutations were not performed. This receipt is the only additional reviewer write. No reviewer test rerun was needed after inspecting the correction and conductor-run focused/full receipts.
+
+Resolved P2
+The prior review correctly identified the dropped explicit global-prompt preservation assertion. Its suggested literal empty-profile frontend fixture was too broad: src-tauri/src/commands/settings.rs:18-32 proves get_settings calls settings_for_frontend, which materializes resolved_hotkey_profiles for an internally empty list. manager.rs:928-936 resolves a legacy default using the saved language and hotkey. commands/settings_tests.rs:451-483 and contracts/transport/get_settings.json pin the materialized default profile. A literal empty frontend list is not the production transport contract and does not require a production fix.
+The corrected recoveryBackend keeps profiles: [] internally and materializes the frontend default from the shared get_settings fixture, applying the stored language/hotkey. Its new rendered test at Settings.languageRecovery.test.ts:190 starts from an internally empty list, a saved default dictionary and nonempty "global hints" initial_prompt. It verifies the preview, exact ordered set_language(en) / set_profile_glossary(default, empty, expectedSource) / set_language(en) IPC, the cleared saved dictionary, English shown after recovery, and unchanged initial_prompt. This retains the removed VM script's substantive legacy/global-prompt contract through the actual rendered component and typed IPC boundary. The accepted P2 is resolved.
+
+Integration checks performed independently
+- HEAD was exactly 91e0e7931d92a1de1745dc2947bd99926ca6d6f5 and worktree clean.
+- git diff --check accepted-base..candidate passed.
+- Stable patch IDs were recomputed, not only read from the supplied JSON: task patch 817573cb..3612c15a and d707e412..91e0e793 both equal 6d2f2f8b64aac7d8114e121950745f4d0aee6b08. Accepted-base patch 817573cb..d707e412 and integrated-base patch 3612c15a..91e0e793 both equal caa20ad690b92c8e2cadaaa78c58bd8f0839eccd. The settings patch and accepted base patch are preserved.
+- The accepted base adds five files of dictation-wait work (including its architecture paragraph); it does not change Settings.svelte. The previously reviewed Settings.svelte, both controllers, catalog component test and controller unit tests compare byte-identically to c51cdf85. The correction changes only Settings.languageRecovery.test.ts.
+- Original 59 baseline-test files were rehashed and still match the baseline receipt exactly: Settings.readback.test.ts 45fc804d85f186c15409e8db127afaebf914b31010379ba6227e2de96d40f25c; Settings.saving.test.ts 02780d7f3d1cefbb1fee9313060c4d722a6265c445cd9c9ba25f5c8bb7451747; Settings.test.ts e2dd9e0ff246d5640639ae6ccff19ae9630585129bf4db432158deeb6f55c56f.
+
+Validation receipts inspected
+- Full Vitest: 44 files, 535 passed.
+- Full Node: 517 total, 506 passed, 11 platform skips, zero failed.
+- ESLint passed; Prettier passed; Svelte 0 errors / 0 warnings; Vite build passed.
+- Exact integrated candidate focused recovery run: 1 file / 13 tests passed (settings-345-integrated-focused.log).
+- The previously reported three isolated browser suites and visual verification remain applicable to the settings production code, which is unchanged. No native-app install/run or TCC validation is claimed.
+- Hosted CI is pending and remains the final condition; conductor owns publication and merge decisions.
+
+Delegation usefulness: pass. Independent review found and resolved one coverage-parity gap; the final delta review confirms the correction and nonconflicting accepted-base integration.

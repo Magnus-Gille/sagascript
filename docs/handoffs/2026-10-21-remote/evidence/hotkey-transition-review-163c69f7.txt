@@ -1,0 +1,50 @@
+Independent read-only final integration binding — hotkey transition / PR 493
+
+Verdict: APPROVE final integration code at 163c69f7efe025b980858578a7bced7f31c5dc9f, conditional on required hosted CI passing for this exact revision. No supported integration finding remains.
+Task acceptance remains partial/conditional: historical pre-refactor caller-baseline execution is NOT RUN, and final-head CI is pending. This receipt does not authorize claiming full acceptance of task 375 or bypassing either limit.
+
+Repository: Magnus-Gille/sagascript
+Worktree: /Users/magnus/.codex/worktrees/quality-hotkey-transition/sagascript
+Previously reviewed hotkey head: ba2b7356393a41bf1b5502147f63707e8a20d5a5
+Original common base: 817573cb1a4e77efade15f503a8d8e645eeba866
+Accepted incoming base: d707e412b88f244f3b32d765dbe2b852623e222f
+Final integration head: 163c69f7efe025b980858578a7bced7f31c5dc9f
+Observed merge parents: ba2b7356393a41bf1b5502147f63707e8a20d5a5 d707e412b88f244f3b32d765dbe2b852623e222f
+Parent-specified requested reviewer model/effort: gpt-6.1-sol / xhigh
+Runtime-observed concrete model/effort: unknown
+Review mode: native current-session Codex; no subdelegation.
+
+Scope
+Narrow integration binding only. Reused the completed semantic/test review in hotkey-transition-review-ba2b7356.txt. Inspected the merge parents and common base, independently reproduced both stable patch identities, checked byte identity of the reviewed hotkey files and incoming dictation files, read the changed incoming production code and documentation, and examined the relevant lease/transition interaction. Did not re-review or broaden the separately accepted PR 492 task.
+
+Independent integration proofs
+1. git merge-base ba2b7356 d707e412 returned the original exact base 817573cb1a4e77efade15f503a8d8e645eeba866.
+2. Stable patch ID of original-base..ba2b7356 and incoming-base..final-head is identical:
+   aee3c1a2887739ac9d6968ea0773f5bb0aca1b66.
+3. Stable patch ID of original-base..incoming-base and ba2b7356..final-head is identical:
+   caa20ad690b92c8e2cadaaa78c58bd8f0839eccd.
+4. git diff --quiet ba2b7356 final-head for all eight hotkey command/watcher/registration/transition source and test files passed. Their contents are byte-for-byte unchanged from the reviewed head.
+5. git diff --quiet incoming-base final-head for the four incoming dictation source/test files passed. Those contents exactly match the accepted incoming base.
+6. The only path shared between the two deltas is docs/ARCHITECTURE.md. The inference-wait and hotkey-transition descriptions occupy separate sections and both remain present.
+These results independently agree with the supplied pr493-base-integration-receipt.json. No merge conflict resolution or unreviewed hybrid hotkey implementation was introduced.
+
+Interaction assessment
+The accepted incoming delta adds dictation/inference_wait.rs, its tests/module wiring, and replaces the pipeline's inline timeout/abort/grace wait with that helper. It does not modify AppController hotkey configuration lease methods, hotkey health, registration transitions, command/watcher settings handling, native adapters, or their callers. The helper preserves the existing borrowed inference future, completion/error/timeout branch mapping, abort request and grace ordering. No new controller-lock scope crosses an await, and no new path into hotkey registration or configuration leases is introduced by the integration. The hotkey transition lock, recording lease order, watcher panic guard, rollback outcomes and caller orchestration remain the exact reviewed code.
+No supported interaction regression was found.
+
+Checks independently executed at the final integration revision
+PASS: git diff --check d707e412b88f244f3b32d765dbe2b852623e222f 163c69f7efe025b980858578a7bced7f31c5dc9f.
+PASS: cargo fmt --all -- --check from src-tauri.
+PASS: clean worktree status and exact HEAD readback.
+PASS: patch identities and byte-identity checks described above.
+The unchanged shared-module 13-test execution and earlier detailed code review remain in the ba2b7356 receipt; no redundant app/native execution was performed for this binding.
+
+Caller-test and CI evidence
+The local sanitized receipt pr493-ba2b7356-caller-test-receipt.txt records all nine actual command/watcher helper tests passing in macOS job 119015071115, run 39536696126, at ba2b7356393a41bf1b5502147f63707e8a20d5a5. This is genuine prior-head app/caller execution evidence and covers the helper code that is unchanged in the integration. It is not final-head hosted CI evidence. No external job lookup or live-state mutation was performed during this narrow review.
+Required hosted CI for 163c69f7efe025b980858578a7bced7f31c5dc9f remains pending; superseded/cancelled older checks must not be treated as its final acceptance.
+The historical pre-refactor caller execution remains NOT RUN. Source comparison, prior-head helper tests and final-head CI cannot be relabeled as that missing historical baseline. The broader task 375 scope is still partial as previously recorded; the code approval here does not erase that limit.
+
+Boundaries
+No code edits, commits, dependencies, real settings I/O, native/hotkey/app execution, external actions or secret access occurred. Only this requested immutable review receipt was written. Approval is confined to this exact code integration and does not authorize publication, merge, deployment, scope expansion or acceptance-gate bypass.
+
+Recorded UTC: 2026-10-21T03:32:16.244017+00:00

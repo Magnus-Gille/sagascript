@@ -1,0 +1,125 @@
+{
+  "checked_at": "2026-10-20T21:24:52.545009+00:00",
+  "head": "90ba88f7bac8f6abded38bef401203a15d1c189b",
+  "base": "b24eb5a0d3ea1c0c3ee5de1fdfcedc98cdabad63",
+  "checks": [
+    {
+      "link": "https://github.com/Magnus-Gille/sagascript/actions/runs/39493904644/job/118885088359",
+      "name": "check-linux",
+      "state": "SUCCESS",
+      "workflow": "CI"
+    },
+    {
+      "link": "https://github.com/Magnus-Gille/sagascript/actions/runs/39493904644/job/118882180352",
+      "name": "check-macos",
+      "state": "SUCCESS",
+      "workflow": "CI"
+    },
+    {
+      "link": "https://github.com/Magnus-Gille/sagascript/actions/runs/39493904644/job/118881640731",
+      "name": "check-windows",
+      "state": "SUCCESS",
+      "workflow": "CI"
+    },
+    {
+      "link": "https://github.com/Magnus-Gille/sagascript/actions/runs/39493904644/job/118873932218",
+      "name": "test-macos",
+      "state": "SUCCESS",
+      "workflow": "CI"
+    },
+    {
+      "link": "https://github.com/Magnus-Gille/sagascript/actions/runs/39493904644/job/118873931783",
+      "name": "build-macos",
+      "state": "SUCCESS",
+      "workflow": "CI"
+    },
+    {
+      "link": "https://github.com/Magnus-Gille/sagascript/actions/runs/39493904644/job/118873931781",
+      "name": "build-windows",
+      "state": "SUCCESS",
+      "workflow": "CI"
+    },
+    {
+      "link": "https://github.com/Magnus-Gille/sagascript/actions/runs/39493904644/job/118873932012",
+      "name": "test-linux",
+      "state": "SUCCESS",
+      "workflow": "CI"
+    },
+    {
+      "link": "https://github.com/Magnus-Gille/sagascript/actions/runs/39493904644/job/118873931748",
+      "name": "msrv-linux",
+      "state": "SUCCESS",
+      "workflow": "CI"
+    },
+    {
+      "link": "https://github.com/Magnus-Gille/sagascript/actions/runs/39493904644/job/118873931977",
+      "name": "test-windows",
+      "state": "SUCCESS",
+      "workflow": "CI"
+    },
+    {
+      "link": "https://github.com/Magnus-Gille/sagascript/actions/runs/39493904650/job/118873857811",
+      "name": "collect",
+      "state": "SUCCESS",
+      "workflow": "Informational code health"
+    },
+    {
+      "link": "https://github.com/Magnus-Gille/sagascript/actions/runs/39493905744/job/118873862074",
+      "name": "Build Windows arm64 candidate",
+      "state": "SUCCESS",
+      "workflow": "Windows Package Candidate"
+    },
+    {
+      "link": "https://github.com/Magnus-Gille/sagascript/actions/runs/39493905744/job/118873861515",
+      "name": "Build Windows x64 candidate",
+      "state": "SUCCESS",
+      "workflow": "Windows Package Candidate"
+    },
+    {
+      "link": "https://github.com/Magnus-Gille/sagascript/actions/runs/39493904644/job/118873858383",
+      "name": "scope",
+      "state": "SUCCESS",
+      "workflow": "CI"
+    }
+  ],
+  "rules": [
+    {
+      "type": "pull_request",
+      "parameters": {
+        "required_approving_review_count": 0,
+        "dismiss_stale_reviews_on_push": false,
+        "required_reviewers": [],
+        "require_code_owner_review": false,
+        "require_last_push_approval": false,
+        "required_review_thread_resolution": false,
+        "require_extra_approval_for_unattributed_changes": true,
+        "allowed_merge_methods": [
+          "merge",
+          "squash",
+          "rebase"
+        ]
+      },
+      "ruleset_source_type": "Repository",
+      "ruleset_source": "Magnus-Gille/sagascript",
+      "ruleset_id": 13091396
+    },
+    {
+      "type": "required_status_checks",
+      "parameters": {
+        "strict_required_status_checks_policy": true,
+        "do_not_enforce_on_create": false,
+        "required_status_checks": [
+          {
+            "context": "check-macos"
+          },
+          {
+            "context": "check-windows"
+          }
+        ]
+      },
+      "ruleset_source_type": "Repository",
+      "ruleset_source": "Magnus-Gille/sagascript",
+      "ruleset_id": 13091396
+    }
+  ]
+}

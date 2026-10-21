@@ -1,0 +1,6 @@
+
+> sagascript@1.4.5 format:check
+> prettier --check .
+
+Checking formatting...
+All matched files use Prettier code style!

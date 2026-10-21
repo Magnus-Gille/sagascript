@@ -1,0 +1,77 @@
+{
+  "head": "c24276d7505b586e98d3ec58408d4c200c43ede9",
+  "base": "1b27bd5b4c83df8db1409697f492ed5d98ca022a",
+  "results": [
+    {
+      "name": "unit",
+      "command": [
+        "npm",
+        "run",
+        "test:unit"
+      ],
+      "started_at": "2026-10-21T09:32:31.484642+00:00",
+      "finished_at": "2026-10-21T09:32:46.590963+00:00",
+      "exit": 0
+    },
+    {
+      "name": "frontend",
+      "command": [
+        "npm",
+        "run",
+        "test:frontend"
+      ],
+      "started_at": "2026-10-21T09:32:31.484808+00:00",
+      "finished_at": "2026-10-21T09:32:51.863269+00:00",
+      "exit": 0
+    },
+    {
+      "name": "lint",
+      "command": [
+        "npm",
+        "run",
+        "lint"
+      ],
+      "started_at": "2026-10-21T09:32:31.484855+00:00",
+      "finished_at": "2026-10-21T09:32:44.443041+00:00",
+      "exit": 0
+    },
+    {
+      "name": "format",
+      "command": [
+        "npm",
+        "run",
+        "format:check"
+      ],
+      "started_at": "2026-10-21T09:32:44.443265+00:00",
+      "finished_at": "2026-10-21T09:32:49.596579+00:00",
+      "exit": 0
+    },
+    {
+      "name": "svelte",
+      "command": [
+        "npx",
+        "--no-install",
+        "svelte-check",
+        "--tsconfig",
+        "./tsconfig.json"
+      ],
+      "started_at": "2026-10-21T09:32:46.591088+00:00",
+      "finished_at": "2026-10-21T09:32:50.271377+00:00",
+      "exit": 0
+    },
+    {
+      "name": "diff",
+      "command": [
+        "git",
+        "diff",
+        "--check",
+        "1b27bd5b4c83df8db1409697f492ed5d98ca022a..HEAD"
+      ],
+      "started_at": "2026-10-21T09:32:49.596691+00:00",
+      "finished_at": "2026-10-21T09:32:49.618594+00:00",
+      "exit": 0
+    }
+  ],
+  "final_head": "c24276d7505b586e98d3ec58408d4c200c43ede9",
+  "final_status": ""
+}

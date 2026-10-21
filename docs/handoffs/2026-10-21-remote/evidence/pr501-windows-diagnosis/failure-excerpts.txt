@@ -1,0 +1,125 @@
+Original SHA256: 43ee658f60281ee66b18f08a46b553920ad862163acf12a4def559fc214c3732
+Source: GitHub Actions job 119166259548, run 39583382419 attempt 1.
+Full log remains available at provider/local original evidence; excerpts preserve line numbers.
+
+Original lines 89-139:
+89: 2026-10-21T10:16:49.9129061Z ##[group]Fetching the repository
+90: 2026-10-21T10:16:49.9142324Z [command]"C:\Program Files\Git\bin\git.exe" -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +1fd4a365532e0dfea4bf13eed8b7829f8d1c512d:refs/remotes/origin/main
+91: 2026-10-21T10:16:51.6549490Z From https://github.com/Magnus-Gille/sagascript
+92: 2026-10-21T10:16:51.6550716Z  * [new ref]         1fd4a365532e0dfea4bf13eed8b7829f8d1c512d -> origin/main
+93: 2026-10-21T10:16:51.6661382Z [command]"C:\Program Files\Git\bin\git.exe" branch --list --remote origin/main
+94: 2026-10-21T10:16:51.8383004Z   origin/main
+95: 2026-10-21T10:16:51.8442558Z [command]"C:\Program Files\Git\bin\git.exe" rev-parse refs/remotes/origin/main
+96: 2026-10-21T10:16:51.9035516Z 1fd4a365532e0dfea4bf13eed8b7829f8d1c512d
+97: 2026-10-21T10:16:51.9091473Z ##[endgroup]
+98: 2026-10-21T10:16:51.9094091Z ##[group]Determining the checkout info
+99: 2026-10-21T10:16:51.9094957Z ##[endgroup]
+100: 2026-10-21T10:16:51.9108438Z [command]"C:\Program Files\Git\bin\git.exe" sparse-checkout disable
+101: 2026-10-21T10:16:51.9772572Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset-all extensions.worktreeConfig
+102: 2026-10-21T10:16:52.0188321Z ##[group]Checking out the ref
+103: 2026-10-21T10:16:52.0197096Z [command]"C:\Program Files\Git\bin\git.exe" checkout --progress --force -B main refs/remotes/origin/main
+104: 2026-10-21T10:16:52.4688719Z Switched to a new branch 'main'
+105: 2026-10-21T10:16:52.4750377Z branch 'main' set up to track 'origin/main'.
+106: 2026-10-21T10:16:52.4803796Z ##[endgroup]
+107: 2026-10-21T10:16:52.5324664Z [command]"C:\Program Files\Git\bin\git.exe" log -1 --format=%H
+108: 2026-10-21T10:16:52.5671450Z 1fd4a365532e0dfea4bf13eed8b7829f8d1c512d
+109: 2026-10-21T10:16:52.6217016Z Prepare all required actions
+110: 2026-10-21T10:16:52.6217666Z Getting action download info
+111: 2026-10-21T10:16:52.7630493Z Download action repository 'actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1' (SHA:ece7cb06caefa5fff74198d8649806c4678c61a1)
+112: 2026-10-21T10:16:52.9039141Z Download action repository 'dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f' (SHA:e2a55d2ffb04f378e9626c28d38b36d230d1e12f)
+113: 2026-10-21T10:16:53.0702672Z Download action repository 'actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38' (SHA:249970729cb0ef3589644e2896645e5dc5ba9c38)
+114: 2026-10-21T10:16:53.3746120Z Download action repository 'Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6' (SHA:6323deb102c322ba6fcbdcafc7e3dddab59af2b6)
+115: 2026-10-21T10:16:53.8406346Z Download action repository 'actions/cache@caa296126883cff596d87d8935842f9db880ef25' (SHA:caa296126883cff596d87d8935842f9db880ef25)
+116: 2026-10-21T10:16:54.1670858Z ##[group]Run ./.github/actions/setup
+117: 2026-10-21T10:16:54.1671149Z with:
+118: 2026-10-21T10:16:54.1671339Z   rust-components: clippy
+119: 2026-10-21T10:16:54.1672901Z   cache-key: sagascript-ci-checks
+120: 2026-10-21T10:16:54.1674108Z   cache-workspaces: src-tauri
+121: src-tauri/engine-host/ort
+122:
+123: 2026-10-21T10:16:54.1674506Z   npm-ci: false
+124: 2026-10-21T10:16:54.1674688Z   python: true
+125: 2026-10-21T10:16:54.1674983Z   rust: true
+126: 2026-10-21T10:16:54.1675164Z   native-build: false
+127: 2026-10-21T10:16:54.1675356Z   linux-deps: false
+128: 2026-10-21T10:16:54.1675540Z env:
+129: 2026-10-21T10:16:54.1675731Z   CARGO_PROFILE_DEV_DEBUG: line-tables-only
+130: 2026-10-21T10:16:54.1676018Z   CARGO_PROFILE_TEST_DEBUG: line-tables-only
+131: 2026-10-21T10:16:54.1676274Z ##[endgroup]
+132: 2026-10-21T10:16:54.1736327Z ##[start-action display=Install Tauri system dependencies;id=__self.__run]
+133: 2026-10-21T10:16:54.1754100Z ##[end-action id=__self.__run;outcome=skipped;conclusion=skipped;duration_ms=0]
+134: 2026-10-21T10:16:54.1756137Z ##[start-action display=Select evaluation Python runtime;id=__self.__actions_setup-python]
+135: 2026-10-21T10:16:54.1960765Z ##[group]Run actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+136: 2026-10-21T10:16:54.1961143Z with:
+137: 2026-10-21T10:16:54.1961332Z   python-version: 3.12
+138: 2026-10-21T10:16:54.1961533Z   check-latest: false
+139: 2026-10-21T10:16:54.1964300Z   token: ***
+
+Original lines 3938-3954:
+3938: 2026-10-21T10:19:35.5523820Z ##[group]Run node scripts/ci/cargo-gates.mjs --os windows
+3939: 2026-10-21T10:19:35.5524308Z [36;1mnode scripts/ci/cargo-gates.mjs --os windows[0m
+3940: 2026-10-21T10:19:35.5595834Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+3941: 2026-10-21T10:19:35.5596175Z env:
+3942: 2026-10-21T10:19:35.5596372Z   CARGO_PROFILE_DEV_DEBUG: line-tables-only
+3943: 2026-10-21T10:19:35.5596666Z   CARGO_PROFILE_TEST_DEBUG: line-tables-only
+3944: 2026-10-21T10:19:35.5597021Z   pythonLocation: C:\hostedtoolcache\windows\Python\3.12.10\x64
+3945: 2026-10-21T10:19:35.5597477Z   PKG_CONFIG_PATH: C:\hostedtoolcache\windows\Python\3.12.10\x64/lib/pkgconfig
+3946: 2026-10-21T10:19:35.5597918Z   Python_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.12.10\x64
+3947: 2026-10-21T10:19:35.5598307Z   Python2_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.12.10\x64
+3948: 2026-10-21T10:19:35.5598695Z   Python3_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.12.10\x64
+3949: 2026-10-21T10:19:35.5599025Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+3950: 2026-10-21T10:19:35.5599306Z   CARGO_INCREMENTAL: 0
+3951: 2026-10-21T10:19:35.5599504Z   CARGO_TERM_COLOR: always
+3952: 2026-10-21T10:19:35.5599709Z   CACHE_ON_FAILURE: false
+3953: 2026-10-21T10:19:35.5599911Z ##[endgroup]
+3954: 2026-10-21T10:19:35.8894922Z ##[group]cargo clippy --workspace --all-targets -- -D warnings  (src-tauri)
+
+Original lines 7590-7596:
+7590: 2026-10-21T10:29:09.5537551Z test interactive_request_gets_a_reserved_host_slot ... ok
+7591: 2026-10-21T10:29:12.0563691Z test slow_uninterruptible_window_times_out_promptly_and_keeps_the_host ... ok
+7592: 2026-10-21T10:29:18.0403003Z test single_slot_host_sends_dictation_before_next_batch_window ... ok
+7593: 2026-10-21T10:29:18.0403339Z
+7594: 2026-10-21T10:29:18.0403689Z test result: ok. 59 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 21.60s
+7595: 2026-10-21T10:29:18.0404145Z
+7596: 2026-10-21T10:29:18.0443586Z [1m[92m     Running[0m tests\longform_deletions.rs (target\debug\deps\longform_deletions-46c25573e94c0c7c.exe)
+
+Original lines 9028-9066:
+9028: 2026-10-21T10:32:56.4922301Z test single_slot_host_sends_dictation_before_next_batch_window ... FAILED
+9029: 2026-10-21T10:32:56.4977074Z test snapshot_leads_a_slow_host_unload_and_requests_wait_for_it ... ok
+9030: 2026-10-21T10:32:56.5350737Z test temp_pcm_is_removed_after_error ... ok
+9031: 2026-10-21T10:32:56.5773852Z test startup_sweep_removes_only_pcm_dirs_of_dead_owners ... ok
+9032: 2026-10-21T10:32:56.5991733Z test unload_if_idle_frees_a_loaded_model_and_the_next_use_reloads ... ok
+9033: 2026-10-21T10:32:56.9339752Z test window_timeout_is_reported_and_host_stays_usable ... ok
+9034: 2026-10-21T10:32:57.9982567Z test interactive_request_gets_a_reserved_host_slot ... ok
+9035: 2026-10-21T10:33:00.5356845Z test slow_uninterruptible_window_times_out_promptly_and_keeps_the_host ... ok
+9036: 2026-10-21T10:33:00.5357534Z
+9037: 2026-10-21T10:33:00.5357681Z failures:
+9038: 2026-10-21T10:33:00.5357792Z
+9039: 2026-10-21T10:33:00.5358083Z ---- single_slot_host_sends_dictation_before_next_batch_window stdout ----
+9040: 2026-10-21T10:33:00.5358392Z
+9041: 2026-10-21T10:33:00.5358949Z thread 'single_slot_host_sends_dictation_before_next_batch_window' (4456) panicked at crates\sagascript-core\tests\engine_host.rs:1217:5:
+9042: 2026-10-21T10:33:00.5359655Z dictation waited behind another batch window: 2.2162412s
+9043: 2026-10-21T10:33:00.5360166Z note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+9044: 2026-10-21T10:33:00.5360461Z
+9045: 2026-10-21T10:33:00.5360467Z
+9046: 2026-10-21T10:33:00.5360548Z failures:
+9047: 2026-10-21T10:33:00.5360829Z     single_slot_host_sends_dictation_before_next_batch_window
+9048: 2026-10-21T10:33:00.5361073Z
+9049: 2026-10-21T10:33:00.5361430Z test result: FAILED. 58 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 14.62s
+9050: 2026-10-21T10:33:00.5361793Z
+9051: 2026-10-21T10:33:00.5382704Z [1m[91merror[0m: test failed, to rerun pass `-p sagascript-core --test engine_host`
+9052: 2026-10-21T10:33:00.5455306Z ##[endgroup]
+9053: 2026-10-21T10:33:00.5487597Z ##[error]cargo test -p sagascript-core (src-tauri) exited with status 101
+9054: 2026-10-21T10:33:00.5498374Z Cargo gates (windows, main): 3 passed, 1 failed, 4 not run
+9055: 2026-10-21T10:33:00.5498655Z
+9056: 2026-10-21T10:33:00.5498770Z | Gate | Result | Seconds |
+9057: 2026-10-21T10:33:00.5499039Z |---|---|---|
+9058: 2026-10-21T10:33:00.5499622Z | `cargo clippy --workspace --all-targets -- -D warnings` (src-tauri) | passed | 228 |
+9059: 2026-10-21T10:33:00.5500996Z | `cargo test --workspace` (src-tauri) | passed | 360 |
+9060: 2026-10-21T10:33:00.5505824Z | `cargo clippy -p sagascript-core --all-targets -- -D warnings` (src-tauri) | passed | 82 |
+9061: 2026-10-21T10:33:00.5508984Z | `cargo test -p sagascript-core` (src-tauri) | exited with status 101 | 135 |
+9062: 2026-10-21T10:33:00.5512147Z | `cargo clippy -p sagascript-cli --all-targets --no-default-features -- -D warnings` (src-tauri) | not run (an earlier gate failed) | |
+9063: 2026-10-21T10:33:00.5517136Z | `cargo test -p sagascript-cli --no-default-features` (src-tauri) | not run (an earlier gate failed) | |
+9064: 2026-10-21T10:33:00.5519105Z | `cargo clippy --all-targets --locked -- -D warnings` (src-tauri/engine-host/ort) | not run (an earlier gate failed) | |
+9065: 2026-10-21T10:33:00.5581093Z | `cargo test --locked` (src-tauri/engine-host/ort) | not run (an earlier gate failed) | |
+9066: 2026-10-21T10:33:00.6618348Z ##[error]Process completed with exit code 1.

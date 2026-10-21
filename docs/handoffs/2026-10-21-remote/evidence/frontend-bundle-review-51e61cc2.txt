@@ -1,0 +1,46 @@
+APPROVE 51e61cc2361c3e9718ebbc02cfc0681529915d3f — conditional on required fresh hosted CI for this exact bundle head.
+No supported integration finding remains. This approves the bounded test-only integration; it does not close all of #361 or authorize publication, supersession, merge, release or deployment.
+
+Repository: Magnus-Gille/sagascript
+Worktree: /Users/magnus/.codex/worktrees/quality-frontend-regressions/sagascript
+Branch: codex/frontend-regression-tests
+Exact reviewed HEAD: 51e61cc2361c3e9718ebbc02cfc0681529915d3f
+Accepted PR 495 base: 1f43aada9c566cddb37aa604778d45da830305d7
+Requested reviewer model/effort: gpt-6.1-sol / high. Runtime-observed concrete model/effort: unknown.
+Mode: native read-only current-session Codex; no subagents.
+
+Scope and independent identity checks
+Reused the semantic reviews in 493-base-integration-review.txt, meeting-flow-review-cc16d271.txt and file-flow-review-d466517e.txt, and the original meeting/dictionary/glossary final reviews carried by the first receipt. Read the identity JSON as an input, then independently checked Git objects and worktree state. The three review-artifact SHA-256 hashes match the identity receipt.
+- HEAD and branch match above; the worktree is clean before and after review; accepted base is an ancestor.
+- The base-to-bundle diff contains exactly the expected eleven test paths: five new rendered test files, two reduced legacy integration harnesses, three removed legacy harnesses, and scripts/node-test-groups.mjs. No production, fixture, contract, dependency, Vitest configuration or workflow delta exists.
+- Independently compared all seven surviving task files byte-for-byte with their reviewed source heads:
+  a3e4842040d08426b03d4db1e00d507c8a8ebb32: MeetingReprocessing.test.ts;
+  0dec3517e7c5061b813566a4782c33f56696405c: Settings.dictionary.test.ts;
+  8ab9ef7d276283b68f2f5ff09f456cf91b54b583: Settings.glossaryScopes.test.ts;
+  cc16d271d9a5caec282e44b342d4fe75f1761398: FileTranscription.meetingReprocessing.test.ts and test-meeting-reprocessing-integration.mjs;
+  d466517e4c1fbd85419de890b51bcace5382cae9: FileTranscription.flow.test.ts and test-file-transcription-integration.mjs.
+  All match exactly. The three removed legacy harnesses are absent both in their reviewed task heads and this bundle.
+- Accepted base's entire tree matches the reviewed Settings candidate 62df08dc517e88fc6fbcfc3803757aef00985a8a. Bundle Settings.svelte, both extracted controllers, FileTranscription.svelte, src/test helpers, contracts, package/lock and Vitest config match that accepted base exactly. The production code used by the prior standalone rendered test reviews is otherwise unchanged.
+- Independently ran git diff --check accepted-base..bundle: PASS.
+
+Shared manifest and combined behavior
+The resolved manifest bytes equal the accepted PR 495 manifest with exactly three full lines removed: test-dictionary-explicit-save.mjs, test-language-glossary.mjs and test-meeting-reprocessing.mjs. No other manifest change is present, including to the retained partial migrations. Imported the unchanged runner's discovery/classification functions without executing test suites: 53 discovered files, 53 registered entries, zero duplicate/missing/stale classification problems (ui 6, ci 24, release 21, codeHealth 2).
+The two partially migrated harnesses remain registered. Read their retained cases and the parity maps; inspected final frontend log entries showing all eight actual retained executions passing: three file-flow private-handler/queue cases plus five meeting revision/generation/timer/queued-state cases.
+Settings-based tests still mount the actual current Settings component through the unchanged typed settingsBackend/renderSettings helpers, so the accepted file/profile catalog controllers and settings transaction controller run in that path. The integration changes neither controller callbacks nor setter arguments/readback ordering. File-flow tests exercise Settings/FileTranscription with the current controller-backed model queries; meeting-flow tests mount the unchanged FileTranscription directly. Inspected their helper/teardown boundaries: per-test IPC, normal component unmount before mock removal, deferred work settlement and timer restoration are retained. Vitest setup/configuration and isolation are unchanged. There is no production-code merge resolution or new shared fixture/global mutation in this integration. No supported compatibility or cross-suite interaction regression was found.
+
+Deterministic evidence inspected after all changes
+Read frontend-bundle-checks/metadata.txt and all six final logs. They bind clean HEAD 51e61cc2361c3e9718ebbc02cfc0681529915d3f to accepted base 1f43aada9c566cddb37aa604778d45da830305d7:
+- Full Vitest: 49 files, 576 passed; exit 0.
+- Full frontend Node: 478 total, 476 passed, 2 skipped, zero failed; exit 0.
+- ESLint and Prettier: pass; exit 0.
+- Svelte check: zero errors, zero warnings; exit 0.
+- Diff check: pass; exit 0.
+These are conductor-run exact-bundle checks, inspected by this reviewer; no broad test rerun was needed. The reviewer additionally performed the read-only Git identity/diff checks and manifest classification above. No local heavy Rust/native testing is claimed; fresh required hosted CI must bind the final bundle head before readiness. Older per-task green CI is supporting evidence only.
+
+Coverage limits and prior failure retained accurately
+#361 remains partial. Eight exact private legacy executions remain registered and are not relabeled as rendered coverage: file same-instance re-entry, held pre-submission queue, selected saved request behind a different running job; meeting independent revision and generation invalidation, full timer lifecycle/reset, and two queued dirty/busy transitions. The multi-entry recent-selector interaction remains unverified as a rendered path and is not diagnosed here as a product defect. Dictionary/glossary synthetic saving/private-state combinations remain outside the claimed rendered coverage. The glossary's diarize/createFileJobs and blank-context/null static slices remain source-pinned, and mocked IPC does not prove backend dictionary consumption. Meeting fixture revision placeholders do not prove Rust hash validation. Historical #375 pre-refactor caller-baseline execution remains NOT RUN; this frontend bundle supplies none.
+Read the saved pr496-ci.json: it records all 13 checks completed successfully on exact 0dec3517e7c5061b813566a4782c33f56696405c, including test-macos job 119036049887 in run 39542531504. Thus the prior six-case PowerShell stack-overflow failure did not recur on its normal integrated-head CI execution. The earlier cause remains unproven; no source fix is claimed. This newer receipt supersedes only the old pending-CI/non-recurrence gate for that prior exact head, not the fresh bundle-CI requirement. No external CI lookup or rerun occurred in this review.
+
+Only this review artifact was written. No source/Git/external/native-app/user-data/dependency mutations, secret access, network or subdelegation occurred. The conductor owns publication, exact-head CI readback and verification of supersession before closing the original three PRs. No new release is covered.
+Delegation result: pass; requested model/effort and unknown runtime observation recorded above.
+Recorded UTC: 2026-10-21T05:26:30.339774+00:00

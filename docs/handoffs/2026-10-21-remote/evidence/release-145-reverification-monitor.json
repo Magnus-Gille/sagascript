@@ -1,0 +1,40 @@
+{
+  "runId": 39533272024,
+  "jobId": 119003944243,
+  "verifierSha": "817573cb1a4e77efade15f503a8d8e645eeba866",
+  "releaseSha": "ebe32eab48791c01afdf5e3b7f77fc7331489c79",
+  "status": "completed",
+  "conclusion": "success",
+  "job": {
+    "name": "verify-drafts",
+    "status": "completed",
+    "conclusion": "success"
+  },
+  "checks": [
+    "macOS assets present (dmg, tar.gz, sig, latest.json, SHA256SUMS)",
+    "SHA256SUMS matches macOS assets",
+    "latest.json version, URL and signature",
+    "Mount DMG and copy app",
+    "codesign --verify --deep --strict",
+    "Team ID 7C6WF6GFZ4, Developer ID, hardened runtime",
+    "spctl: Notarized Developer ID",
+    "stapler validate (app)",
+    "stapler validate (dmg)",
+    "Release verifier (arch, engine host, entitlements, Gatekeeper)",
+    "app/CLI/host --version = 1.4.5 + ebe32ea (not dirty)",
+    "Updater archive: stapled, Gatekeeper, version",
+    "Pianissimo smoke (engine doctor + transcription contains 'hongkong')",
+    "Engine-host conformance, full run with the Pianissimo model (bundled host)",
+    "Windows arm64: SHA256 file matches artifacts",
+    "Windows arm64: acceptance JSON reports 1.4.5 @ ebe32ea",
+    "Windows x64: SHA256 file matches artifacts",
+    "Windows x64: acceptance JSON reports 1.4.5 @ ebe32ea"
+  ],
+  "counts": {
+    "checks": 18,
+    "pass": 18,
+    "fail": 0
+  },
+  "log": "release-145-reverification.log",
+  "recordedAt": "2026-10-21T02:33:17Z"
+}

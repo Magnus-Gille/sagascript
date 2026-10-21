@@ -1,0 +1,12 @@
+{
+  "at": "2026-10-21T10:38:36.712428+00:00",
+  "repository": "Magnus-Gille/sagascript",
+  "sha": "1fd4a365532e0dfea4bf13eed8b7829f8d1c512d",
+  "run": "39583382419",
+  "job": "119166259548",
+  "action": "ONE targeted retry of failed test-windows and provider-dependent jobs, unchanged code/tests",
+  "authorization": "Magnus continued scoped499/501 diagnosis and verification until14CEST on21October2026",
+  "evidence": "Existing single_slot_host_sends_dictation_before_next_batch_window passed in workspace gate, then missed strict2.2s threshold by16.241ms in core gate; no Rust changes in candidate. Plausible scheduling jitter, underlying cause unproven; not an infrastructure crash.",
+  "stop": "If recurrence, diagnose new evidence; no second blind retry or threshold weakening",
+  "recovery": "Read back run state; preserve failed logs. No merge/tag/release/code mutation. Unknown dispatch outcome must be reconciled before further action."
+}

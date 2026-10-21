@@ -1,0 +1,63 @@
+Sagascript PR #501 — Windows CI diagnosis
+
+Identity
+  Repository: Magnus-Gille/sagascript
+  CI run: 39583382419, attempt 1, workflow CI, merge SHA
+    1fd4a365532e0dfea4bf13eed8b7829f8d1c512d
+  PR source/candidate: c24276d7505b586e98d3ec58408d4c200c43ede9
+  PR base: 2e32ccb470946b5a8d014e206023e47982b70b3c
+  Failed job: test-windows, job 119166259548, attempt 1, completed failure
+    (Windows Server 2025 / windows-2025-vs2026; 2026-10-21T10:16:44Z–10:33:08Z)
+  Dependent summary: check-windows, job 119172973961, attempt 1, completed failure
+    (Ubuntu 24.04; 2026-10-21T10:33:12Z–10:33:18Z)
+
+Raw evidence saved beside this file:
+  test-windows-119166259548.log
+  check-windows-119172973961.log
+  test-windows-119166259548.metadata.json
+  check-windows-119172973961.metadata.json
+  run-39583382419.metadata.json
+
+Observed failure
+  - The Windows job checked out the exact merge SHA (test log lines 89–139).
+  - Cargo gates ran from `node scripts/ci/cargo-gates.mjs --os windows`
+    (lines 3938–3954).
+  - `cargo clippy --workspace --all-targets -- -D warnings` passed.
+  - `cargo test --workspace` passed. In that gate, the same
+    `single_slot_host_sends_dictation_before_next_batch_window` test passed
+    with 59/59 tests green (lines 7592–7594).
+  - `cargo clippy -p sagascript-core --all-targets -- -D warnings` passed.
+  - The later targeted `cargo test -p sagascript-core` run failed with 58
+    passed / 1 failed, Cargo exit status 101 (lines 7855 and 9028–9066).
+  - Exact assertion: `crates\\sagascript-core\\tests\\engine_host.rs:1217:5`,
+    `dictation waited behind another batch window: 2.2162412s`; the test
+    requires `< Duration::from_millis(2200)` (lines 9039–9051).
+  - No process crash, stack overflow, CLR error, timeout, or infrastructure
+    termination appears in the failed job. This is a normal Rust test panic.
+  - `check-windows` only reports `test-windows: result is "failure", expected
+    "success" (docs_only=false)` and exits 1 (summary log lines 140–169).
+
+Scope comparison
+  The base-to-candidate diff contains only frontend test files, frontend test
+  scripts, and docs/testing/frontend.md. It contains no `src-tauri` changes and
+  does not change `crates/sagascript-core/tests/engine_host.rs` or the Cargo
+  gates. The observed failing test is therefore outside PR #501's changed
+  paths.
+
+Diagnosis
+  Direct cause (high confidence): an existing timing assertion missed its
+  2.2-second threshold by 16.241 ms during the targeted core test run.
+  Plausible underlying cause (medium confidence): Windows scheduler/runner
+  jitter or load around the 1.5-second fake batch delay. The same test passed
+  earlier in the same job, then failed in a later targeted invocation, which
+  demonstrates order/load sensitivity rather than a deterministic assertion
+  against this PR's changed code.
+  Classification: test assertion/timing flake; not an infrastructure crash.
+  PR relevance: no demonstrated relevance to PR #501's frontend/docs changes.
+
+Smallest deterministic next action
+  If a new CI decision is required, run the exact failing test once in a fresh
+  Windows environment and record whether it reproduces. A repeat would require
+  a separately scoped test-hardening investigation; a pass would support
+  treating this run as transient timing noise. No rerun was performed here,
+  and this file does not authorize one.

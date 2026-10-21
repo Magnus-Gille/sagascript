@@ -1,0 +1,184 @@
+{
+  "baseRefOid": "9310d23784c8c62191f00d6ca281e3dd88777d5f",
+  "headRefOid": "2a04fc460ad7f4a74f3ca1dc55136625c5ce6854",
+  "isDraft": true,
+  "mergeStateStatus": "CLEAN",
+  "mergeable": "MERGEABLE",
+  "state": "OPEN",
+  "statusCheckRollup": [
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-20T22:34:32Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/Magnus-Gille/sagascript/actions/runs/39509095394/job/118925325051",
+      "name": "scope",
+      "startedAt": "2026-10-20T22:34:25Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-20T22:34:42Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/Magnus-Gille/sagascript/actions/runs/39509095441/job/118925325422",
+      "name": "collect",
+      "startedAt": "2026-10-20T22:34:30Z",
+      "status": "COMPLETED",
+      "workflowName": "Informational code health"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-20T23:03:25Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/Magnus-Gille/sagascript/actions/runs/39509095391/job/118925325898",
+      "name": "Build Windows x64 candidate",
+      "startedAt": "2026-10-20T22:34:26Z",
+      "status": "COMPLETED",
+      "workflowName": "Windows Package Candidate"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-20T23:03:42Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/Magnus-Gille/sagascript/actions/runs/39509095391/job/118925325557",
+      "name": "Build Windows arm64 candidate",
+      "startedAt": "2026-10-20T22:34:25Z",
+      "status": "COMPLETED",
+      "workflowName": "Windows Package Candidate"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-20T22:50:54Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/Magnus-Gille/sagascript/actions/runs/39509095394/job/118925393060",
+      "name": "test-macos",
+      "startedAt": "2026-10-20T22:34:40Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-20T22:40:10Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/Magnus-Gille/sagascript/actions/runs/39509095394/job/118925393110",
+      "name": "build-macos",
+      "startedAt": "2026-10-20T22:34:39Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-20T22:44:30Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/Magnus-Gille/sagascript/actions/runs/39509095394/job/118925393076",
+      "name": "test-linux",
+      "startedAt": "2026-10-20T22:34:35Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-20T22:39:03Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/Magnus-Gille/sagascript/actions/runs/39509095394/job/118925393065",
+      "name": "msrv-linux",
+      "startedAt": "2026-10-20T22:34:35Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-20T22:55:56Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/Magnus-Gille/sagascript/actions/runs/39509095394/job/118925393113",
+      "name": "test-windows",
+      "startedAt": "2026-10-20T22:34:35Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-20T22:46:30Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/Magnus-Gille/sagascript/actions/runs/39509095394/job/118925393197",
+      "name": "build-windows",
+      "startedAt": "2026-10-20T22:34:36Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-20T22:51:01Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/Magnus-Gille/sagascript/actions/runs/39509095394/job/118931744892",
+      "name": "check-macos",
+      "startedAt": "2026-10-20T22:50:57Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-20T22:44:40Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/Magnus-Gille/sagascript/actions/runs/39509095394/job/118929305629",
+      "name": "check-linux",
+      "startedAt": "2026-10-20T22:44:33Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-20T22:56:04Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/Magnus-Gille/sagascript/actions/runs/39509095394/job/118933653091",
+      "name": "check-windows",
+      "startedAt": "2026-10-20T22:55:59Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    }
+  ],
+  "checkedAt": "2026-10-20T23:09:27Z",
+  "rules": [
+    {
+      "type": "pull_request",
+      "parameters": {
+        "required_approving_review_count": 0,
+        "dismiss_stale_reviews_on_push": false,
+        "required_reviewers": [],
+        "require_code_owner_review": false,
+        "require_last_push_approval": false,
+        "required_review_thread_resolution": false,
+        "require_extra_approval_for_unattributed_changes": true,
+        "allowed_merge_methods": [
+          "merge",
+          "squash",
+          "rebase"
+        ]
+      },
+      "ruleset_source_type": "Repository",
+      "ruleset_source": "Magnus-Gille/sagascript",
+      "ruleset_id": 13091396
+    },
+    {
+      "type": "required_status_checks",
+      "parameters": {
+        "strict_required_status_checks_policy": true,
+        "do_not_enforce_on_create": false,
+        "required_status_checks": [
+          {
+            "context": "check-macos"
+          },
+          {
+            "context": "check-windows"
+          }
+        ]
+      },
+      "ruleset_source_type": "Repository",
+      "ruleset_source": "Magnus-Gille/sagascript",
+      "ruleset_id": 13091396
+    }
+  ],
+  "authorization": "Directly approved NIGHT-MANDATE.txt through2026-10-21T06:00Z",
+  "review": "Independent gpt-6.1-sol/xhigh, no findings, exact patchdigest verified",
+  "recovery": "Reviewed revert PR if necessary; no tag/release/site deployment or branch deletion"
+}

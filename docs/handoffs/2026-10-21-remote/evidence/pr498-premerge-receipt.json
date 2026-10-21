@@ -1,0 +1,143 @@
+{
+  "baseRefOid": "1f43aada9c566cddb37aa604778d45da830305d7",
+  "headRefOid": "51e61cc2361c3e9718ebbc02cfc0681529915d3f",
+  "isDraft": true,
+  "mergeStateStatus": "CLEAN",
+  "mergeable": "MERGEABLE",
+  "number": 498,
+  "state": "OPEN",
+  "statusCheckRollup": [
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-21T05:30:05Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/Magnus-Gille/sagascript/actions/runs/39549884838/job/119056420564",
+      "name": "scope",
+      "startedAt": "2026-10-21T05:29:58Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-21T05:30:12Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/Magnus-Gille/sagascript/actions/runs/39549884802/job/119056420056",
+      "name": "collect",
+      "startedAt": "2026-10-21T05:30:01Z",
+      "status": "COMPLETED",
+      "workflowName": "Informational code health"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-21T06:05:33Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/Magnus-Gille/sagascript/actions/runs/39549884791/job/119056420184",
+      "name": "Build Windows x64 candidate",
+      "startedAt": "2026-10-21T05:29:58Z",
+      "status": "COMPLETED",
+      "workflowName": "Windows Package Candidate"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-21T05:58:14Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/Magnus-Gille/sagascript/actions/runs/39549884791/job/119056420012",
+      "name": "Build Windows arm64 candidate",
+      "startedAt": "2026-10-21T05:29:58Z",
+      "status": "COMPLETED",
+      "workflowName": "Windows Package Candidate"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-21T05:45:57Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/Magnus-Gille/sagascript/actions/runs/39549884838/job/119056470709",
+      "name": "test-macos",
+      "startedAt": "2026-10-21T05:30:14Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-21T05:36:05Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/Magnus-Gille/sagascript/actions/runs/39549884838/job/119056470710",
+      "name": "build-macos",
+      "startedAt": "2026-10-21T05:30:13Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-21T05:44:49Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/Magnus-Gille/sagascript/actions/runs/39549884838/job/119056470612",
+      "name": "test-linux",
+      "startedAt": "2026-10-21T05:30:08Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-21T05:31:22Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/Magnus-Gille/sagascript/actions/runs/39549884838/job/119056470727",
+      "name": "msrv-linux",
+      "startedAt": "2026-10-21T05:30:08Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-21T05:50:45Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/Magnus-Gille/sagascript/actions/runs/39549884838/job/119056470619",
+      "name": "test-windows",
+      "startedAt": "2026-10-21T05:30:09Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-21T05:44:32Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/Magnus-Gille/sagascript/actions/runs/39549884838/job/119056470753",
+      "name": "build-windows",
+      "startedAt": "2026-10-21T05:30:09Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-21T05:46:07Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/Magnus-Gille/sagascript/actions/runs/39549884838/job/119061218748",
+      "name": "check-macos",
+      "startedAt": "2026-10-21T05:46:00Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-21T05:44:57Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/Magnus-Gille/sagascript/actions/runs/39549884838/job/119060866135",
+      "name": "check-linux",
+      "startedAt": "2026-10-21T05:44:51Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-21T05:50:55Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/Magnus-Gille/sagascript/actions/runs/39549884838/job/119062649937",
+      "name": "check-windows",
+      "startedAt": "2026-10-21T05:50:48Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    }
+  ],
+  "url": "https://github.com/Magnus-Gille/sagascript/pull/498",
+  "checked_at": "2026-10-21T08:36:09.652502+00:00"
+}

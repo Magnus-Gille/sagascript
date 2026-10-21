@@ -1,0 +1,36 @@
+Independent engineering review receipt
+
+Disposition: APPROVE
+Repository: Magnus-Gille/sagascript
+Worktree: /Users/magnus/.codex/worktrees/quality-meeting-component-tests/sagascript
+Branch: codex/meeting-polling-and-test-inventory
+Accepted base: 1b27bd5b4c83df8db1409697f492ed5d98ca022a
+Reviewed HEAD: c24276d7505b586e98d3ec58408d4c200c43ede9
+Requested route: native current-session gpt-6.1-sol / xhigh.
+Runtime-observed model and effort: unknown; no metadata exposed either value.
+
+Scope and integrity
+Verified the exact HEAD and clean git status before and after review. The complete base-to-HEAD diff contains only docs/testing/frontend.md, new src/lib/FileTranscription.meetingPolling.test.ts, and src/lib/FileTranscription.meetingReprocessing.test.ts. No production, configuration, workflow, dependency, updater, or retained legacy test changed. The inherited PR #499 candidate was treated as the already-reviewed base; this receipt assesses the new three-file delta and its relevant integration paths. No repository edits, subagents, installation, publication, GitHub writes, memory writes, native app/audio use, or secret reads were performed. The only write beyond this receipt was the command-approved test cache.
+
+Findings
+No actionable findings in this delta.
+
+Coverage and async assessment
+The three new tests render the real FileTranscription component with the typed IPC harness and public callback spies. The poll-error case verifies that the queue stays positively busy and attention is raised, retries through the actual control without beginning another import, polls the same job identity, initializes a review from the completed transcript, and releases busy/attention with exactly one completed callback. The cancellation case defers both cancellation acknowledgement and the terminal poll; it verifies positive busy state before acknowledgement, waits for the cancelling UI that is set after acknowledgement, then verifies no completion/release until the cancelled terminal snapshot. Exact recorded job identities and final callback counts provide positive terminal controls. The missing-transcript case is an explicit malformed/edge completion path: actionable error, failed queue completion, no review initialization or transcript editor, and busy released.
+
+The held cancellation promises are settled and the component unmounted in finally. The shared test setup unmounts other rendered components before resetting IPC. The real poll timer and component clock are cleaned up through the normal component teardown. I found no material timing race, stale private-handler coupling, or teardown defect in these cases. These are IPC-mocked integration tests, not execution of native jobs.
+
+Constructor and plan correction
+The earlier non-blocking clock-fixture discrepancy is corrected. create_meeting_review now returns generation zero with no batches, the exact imported transcript as original and materialized transcript, and its fresh derived revision. The test asserts the create command argument and visible imported text. Plan receives that fresh review; the selected plan context binds its previous_revision to the fresh review; the begin request carries that plan, expected revision, previous review, and cache path. The same-instance import -> Plan -> Execute pending-begin reset assertions and later native timing assertions remain intact.
+
+I independently checked equality between the backend completed transcript and backend prior review original, and independently recomputed the source-ordered fresh review revision and clock plan revision: both matched the committed values. The original transcript digest is reused from that existing backend-owned fixture; I do not claim an independent full nested Rust serde hash or an executed Rust validation. The context hashes and cache path remain explicit test stand-ins, so native cache existence/context matching and backend plan execution are not claimed. The recluster mode, non-null cache identity, required-work flags, and derived plan payload are coherent with the inspected source contract.
+
+Documentation
+The actual UI manifest contains six entries. The two unchanged private integration scripts retain three file-flow cases plus five meeting-reprocessing executions, including independent review/generation invalidation, timer lifecycle/reset, and the two queued dirty/busy rechecks. The referenced rendered test files and named behavior exist. The document distinguishes retained checks, updater-owner coordination, historical pilot counts, and completed rendered coverage. It does not claim all #361 migration work is complete.
+
+Verification
+Read the authoritative exact-HEAD receipt and all six raw logs in meeting-polling-checks-c24276d7/: 51 files/594 unit tests passed; frontend 475 passed, 2 skipped, 0 failed; lint and format passed; Svelte check 0 errors/0 warnings; diff check passed; final recorded HEAD is the exact clean reviewed SHA. Older leaf evidence was treated as historical claims, not substituted for these final logs.
+Independently ran the two affected meeting component suites with ordinary command-specific Vite-cache approval: 2 files/9 tests passed. Independently recomputed fresh review and plan revisions, checked backend transcript equality, inspected the manifest/private-case inventory, and ran base-to-HEAD git diff --check: passed.
+
+Limits
+This approval covers this frontend test/documentation delta. It does not establish native transcription, full Rust runtime fixture acceptance, actual cache/context validity, macOS permissions/audio, ARM64 runtime or CI outcomes, merge readiness, or deployment. Existing two frontend-suite skips remain outside this delta. The eight private executions remain unchanged and #361 remains partial; updater work remains excluded. The root retains its independent delivery and fresh-CI gates.

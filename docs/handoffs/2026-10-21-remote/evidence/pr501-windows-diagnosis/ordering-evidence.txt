@@ -1,0 +1,30 @@
+# Ordering evidence map
+
+Inspected repository: `/Users/magnus/.codex/worktrees/quality-meeting-component-tests/sagascript`, HEAD `c24276d7505b586e98d3ec58408d4c200c43ede9`. The worktree is clean. Read its `AGENTS.md`; no repository edits or tests were made.
+
+## Existing test signals
+
+- `tests/engine_host.rs:1180-1223`, `single_slot_host_sends_dictation_before_next_batch_window`, configures `FAKE_MAX_IN_FLIGHT=1`, `FAKE_BATCH_DELAY_MS=1500`, and `FAKE_LOG` (1183-1189). A file transcription of 47 seconds runs on another thread (1191-1197).
+- Its `windows` closure reads `ops.log` and counts `transcribe_window` entries (1199-1204). The test waits until at least one is logged before starting the dictation timer (1205-1208), then synchronously calls `transcribe_dictation` and checks its result (1209-1213). It asserts only total elapsed time under 2200 ms (1214-1219), then that the file job remains in progress and eventually completes (1221-1222). It does not inspect log order after dictation starts.
+- `ops_of` at `tests/engine_host.rs:1060-1066` reads the whole file, splits lines, and discards every field after the first space. So its current test use cannot distinguish a batch window from the interactive dictation window, although the raw file retains each request ID.
+
+## Writer and synchronization semantics
+
+- In `tests/support/fake_engine_host.rs:126-136`, `log(op, id)` opens `FAKE_LOG` with create+append and writes `{op} {id}\n` using `writeln!`. It does not explicitly flush or sync; the local `File` drops on return. Each fake-host request is handled synchronously by its stdin loop: after successful decode, `main` calls `log(op.name(), id)` immediately before `handle(&host, id, op)` (`fake_engine_host.rs:168-188`, especially 185-187). Thus line order reflects the fake host's decoded-request order, not completion order. The record is made before request handling/admission.
+- For window requests, the decoded request includes `priority`; `handle` then queues a job with a rank and starts `run_window` (`fake_engine_host.rs:279-284, 335-357`). The fake host acquires a slot inside `run_window` (`fake_engine_host.rs:422-440`), waits for its delay (`465-480`), and only then writes the result (`504-512`). The current log therefore indicates receipt/dispatch, not slot acquisition or completion.
+- `transcribe_file_samples` defaults to batch priority and `transcribe_dictation` supplies interactive priority (`engine_host/pipeline.rs:432-440`, `414-429`). `submit_window` acquires the local slot and calls `proc.send(&window_op(req))` at `engine_host/client.rs:537-595`, with priority copied into the wire op at 700-714.
+- `HostProcess::send` registers/encodes a request and queues its writer job (`engine_host/process.rs:296-317`). The writer thread performs `write_all` and `flush`, then signals completion via `job.done` (`process.rs:491-504`); `send` returns its `Pending` only after receiving that successful write result (`process.rs:318-350`). This is client-side write completion. It is distinct from fake-host decode/log receipt and from transcription response completion.
+
+## Capability gap and smallest observable
+
+The raw `ops.log` is already an ordered arrival trace, and its IDs distinguish requests, but neither the log nor the test records which `transcribe_window` is batch versus interactive. The test's count is taken before dictation starts, and the elapsed-time assertion is indirect evidence only. Therefore the existing signals cannot prove that the interactive dictation request arrived before the next batch request.
+
+Smallest additional observable: have the fake host's existing `transcribe_window` log include the already-decoded priority (for example, operation, priority, request ID), preserving append order; assert the post-start sequence contains the initial batch arrival, then interactive arrival, before the next batch arrival. This would prove fake-host receipt order. It would still describe receipt/dispatch, not request completion; completion would require a separate completion record or response correlation.
+
+## Source comparison and execution metadata
+
+The named merged SHA `1fd4a365532e0dfea4bf13eed8b7829f8d1c512d` is not present in either accessible repository object database (`git cat-file` reports bad object), so a direct comparison against that SHA could not be independently performed here. At requested HEAD, the worktree has no modifications. The task states this is the same tree as that merge; that relationship is not independently verified in this checkout.
+
+Requested execution model/effort: native GPT-6 Luna / high. Runtime-observed model/effort: unknown. Usefulness: pending root assessment.
+
+Root adoption: pass as a read-only capability map, not a patch or root-cause determination. Root independently bound current candidate tree 7bc710a272cc4d598e83c0389ab5615350f2fd55 to the provider-verified merge receipt; absence of the merge object locally does not invalidate that exact tree binding. Ordered priority logging would establish host receipt order, but a robust replacement must also establish that an interactive request is waiting while the first batch window is held. The existing pre-start log observation alone is not that synchronization. No test/threshold changes made or authorized by this map. Runtime-observed model remains unknown.
