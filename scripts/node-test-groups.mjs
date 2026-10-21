@@ -77,6 +77,7 @@ export const TEST_GROUPS = {
     "scripts/test-record-release-downloads.mjs",
     "scripts/test-release-promotion.mjs",
     "scripts/test-release-surface.mjs",
+    "scripts/test-release-version-consistency.mjs",
     "scripts/test-release-updater-startup.mjs",
     "scripts/test-report-windows-arm64-native.mjs",
     "scripts/test-smoke-signed-app-start.mjs",
