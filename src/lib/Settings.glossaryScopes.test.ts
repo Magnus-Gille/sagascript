@@ -265,11 +265,55 @@ describe("profile dictionary scopes", () => {
       expectedSource: "Default source",
     });
   });
+
+  test("a late compare-and-swap conflict annotates a recovered draft after its profile is removed", async () => {
+    let persisted = settingsValue({
+      hotkey_profiles: [swedishProfile, workProfile],
+      profile_glossaries: { default: "Default source", work: "Work source" },
+    });
+    const save = deferred<void>();
+    const { ipc } = await renderSettings(
+      settingsBackend({
+        get_settings: () => persisted,
+        set_profile_glossary: () => save.promise,
+      }),
+    );
+    const user = await openSettingsTab();
+    const scope = dictionaryScope();
+    const dictionary = screen.getByRole("textbox", { name: "Personal dictionary" });
+
+    await user.clear(dictionary);
+    await user.type(dictionary, "Draft from removed profile");
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(ipc.callsTo("set_profile_glossary")).toHaveLength(1));
+
+    // External settings reload removes the saved scope before its write rejects.
+    persisted = settingsValue({
+      hotkey_profiles: [workProfile],
+      profile_glossaries: { work: "Work source" },
+    });
+    ipc.emit("state-changed", "settings_reloaded");
+    await waitFor(() => expect(scope).toHaveValue("work"));
+    const recovery = await screen.findByRole("textbox", { name: "Unsaved draft for default" });
+    expect(recovery).toHaveValue("Draft from removed profile");
+    expect(screen.queryByText(/the saved dictionary changed elsewhere/i)).not.toBeInTheDocument();
+
+    save.reject(backendError("dictionary_changed_elsewhere", "The saved dictionary moved on."));
+    await waitFor(() => {
+      expect(scope).toBeEnabled();
+      expect(dictionary).toBeEnabled();
+    });
+
+    expect(scope).toHaveValue("work");
+    expect(dictionary).toHaveValue("Work source");
+    expect(recovery).toHaveValue("Draft from removed profile");
+    await waitFor(() => expect(recovery.parentElement).toHaveTextContent(/the saved dictionary changed elsewhere/i));
+  });
 });
 
 test("file transcription uses the selected profile for both language display and its dictionary", async () => {
   const snapshot: SettingsValue = settingsValue({
-    hotkey_profiles: [swedishProfile, workProfile],
+    hotkey_profiles: [workProfile, swedishProfile],
     profile_glossaries: { default: "Swedish dictionary", work: "Finnish dictionary" },
   });
   const { ipc } = await renderSettings(
