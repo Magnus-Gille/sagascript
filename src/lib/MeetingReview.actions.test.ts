@@ -8,7 +8,8 @@ import { deferred } from "../test/deferred";
 
 const transcript: MeetingTranscript = {
   schema_version: 1,
-  source_sha256: "meeting-source",
+  // SHA-256 of UTF-8 "MeetingReview.actions.test.ts synthetic source bytes v1" (no newline).
+  source_sha256: "84e029fa9fd68ed5510cb4e8f1a0b811abfc4b60c4a9c1e7a80552296107c83a",
   language: "en",
   model: "test-model",
   duration_seconds: 8,
@@ -22,10 +23,10 @@ const transcript: MeetingTranscript = {
 const review: Review = {
   schema_version: 1,
   original: transcript,
-  original_revision: "original-revision",
-  generation: 1,
+  original_revision: "ff19c40d1243fa53db0fd782e432d3dcb65a1380cefa4bd3320b30f8ae4b459a",
+  generation: 0,
   batches: [],
-  revision: "review-revision",
+  revision: "f3bec86d9f1132df14fa67413303779e30d9277868d31015ed95d7fd9a167e03",
 };
 
 function renderReview(overrides: Partial<ComponentProps<typeof MeetingReview>> = {}) {
