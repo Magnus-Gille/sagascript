@@ -189,8 +189,9 @@ describe("personal dictionary editor", () => {
       const confirm = vi.fn().mockReturnValue(true);
       vi.stubGlobal("confirm", confirm);
       expect(window.confirm).toBe(confirm);
-      const { ipc, textarea, user } = await openDictionary();
+      const { ipc, textarea, user } = await openDictionary(customisedSettings);
 
+      await user.clear(textarea);
       await user.type(textarea, "OpenAI = open eye");
       await user.click(screen.getByRole("button", { name: "Dictate" }));
       const dialog = screen.getByRole("dialog", { name: "Unsaved dictionary changes" });
@@ -210,8 +211,17 @@ describe("personal dictionary editor", () => {
         expect(ipc.callsTo("set_profile_glossary")).toEqual([]);
       } else {
         await screen.findByRole("button", { name: "Start recording" });
+        await user.click(screen.getByRole("button", { name: "Settings" }));
+        const restoredTextarea = (await screen.findByRole("textbox", { name: "Personal dictionary" })) as HTMLTextAreaElement;
+        expect(screen.queryByRole("dialog", { name: "Unsaved dictionary changes" })).toBeNull();
+        expect(restoredTextarea).toHaveValue(decision === "Save" ? "OpenAI = open eye" : "mergea = mördsa");
+        expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
+        expect(screen.getByRole("button", { name: "Discard changes" })).toBeDisabled();
+        expect(confirm).not.toHaveBeenCalled();
         if (decision === "Save") {
-          expect(ipc.callsTo("set_profile_glossary")).toEqual([{ profileId: "default", source: "OpenAI = open eye", expectedSource: "" }]);
+          expect(ipc.callsTo("set_profile_glossary")).toEqual([
+            { profileId: "swedish", source: "OpenAI = open eye", expectedSource: "mergea = mördsa" },
+          ]);
         } else {
           expect(ipc.callsTo("set_profile_glossary")).toEqual([]);
         }
