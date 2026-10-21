@@ -55,6 +55,28 @@ common changes, follow the recipes in [docs/recipes/](docs/recipes/README.md).
 `npm run verify` is the one entry point; [scripts/verify.mjs](scripts/verify.mjs) defines every
 check (command, working directory, platforms, prerequisites, time budget, CI lanes).
 
+Routine Cargo dev/test builds use `debug = "line-tables-only"`, matching CI while preserving
+debug assertions, overflow checks, optimization levels, and panic behavior. For a one-off run
+that needs full debug information, opt in through Cargo's profile environment variables:
+
+```bash
+# From src-tauri/; set both profiles when a test builds dev-profile dependencies.
+CARGO_PROFILE_DEV_DEBUG=full CARGO_PROFILE_TEST_DEBUG=full cargo test --workspace
+
+# For the standalone ORT host, use the same variables with its manifest.
+CARGO_PROFILE_DEV_DEBUG=full CARGO_PROFILE_TEST_DEBUG=full \
+  cargo test --manifest-path engine-host/ort/Cargo.toml
+```
+
+The same `CARGO_PROFILE_DEV_DEBUG=full` override applies to `cargo tauri dev` when inspecting
+the app in a full-debug build.
+
+On Linux, verify checks the repository and the effective Cargo target/build directories before
+Cargo build, test, check, clippy, or run steps. It fails closed when those paths are on
+memory-backed filesystems such as tmpfs; set `CARGO_TARGET_DIR` to a disk-backed path and run
+verify again. The check follows Cargo metadata and does not run for rustfmt, frontend-only, or
+synthetic checks.
+
 ```bash
 npm run verify:fast                      # inner loop: rustfmt, app clippy, svelte-check, Prettier, ESLint, unit and UI node tests
 npm run verify                           # before a PR: every default check for this OS

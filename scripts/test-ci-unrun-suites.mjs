@@ -14,6 +14,7 @@ const action = loadAction("setup");
 const devOverrides = readRepoFile("src-tauri/crates/sagascript-core/src/transcription/dev_overrides.rs");
 const workspaceManifest = readRepoFile("src-tauri/Cargo.toml");
 const ortManifest = readRepoFile("src-tauri/engine-host/ort/Cargo.toml");
+const contributing = readRepoFile("CONTRIBUTING.md");
 
 const gateLines = (os) => gatesFor({ os }).map((gate) => `${gate.cwd}: ${commandOf(gate)}`);
 const stepIndex = (jobId, predicate) => workflow.job(jobId).steps.findIndex(predicate);
@@ -130,6 +131,38 @@ test("test-linux runs the release-only dev-override guard in the release profile
       name,
     );
   }
+});
+
+test("Cargo dev/test profiles keep only line-table debug info by default", () => {
+  const manifests = [
+    ["main workspace", workspaceManifest],
+    ["ORT host workspace", ortManifest],
+  ];
+  for (const [name, manifest] of manifests) {
+    for (const profileName of ["dev", "test"]) {
+      const block = new RegExp(
+        `^\\[profile\\.${profileName}\\]\\n([\\s\\S]*?)(?=^\\[|(?![\\s\\S]))`,
+        "m",
+      ).exec(manifest)?.[1];
+      assert.ok(block !== undefined, `${name} must define [profile.${profileName}]`);
+      assert.match(block, /^debug\s*=\s*["']line-tables-only["']\s*$/m);
+      assert.doesNotMatch(
+        block,
+        /^(debug-assertions|overflow-checks|opt-level|panic)\s*=/m,
+        `${name} must retain Cargo defaults outside debug-info selection`,
+      );
+    }
+  }
+
+  const release = /^\[profile\.release\]\n([\s\S]*?)(?=^\[|(?![\s\S]))/m.exec(workspaceManifest)?.[1];
+  assert.ok(release !== undefined, "main workspace must define [profile.release]");
+  assert.match(release, /^opt-level\s*=\s*3\s*$/m);
+  assert.match(release, /^lto\s*=\s*["']thin["']\s*$/m);
+  assert.match(release, /^codegen-units\s*=\s*1\s*$/m);
+  assert.doesNotMatch(release, /^(debug-assertions|overflow-checks|panic)\s*=/m);
+
+  assert.match(contributing, /CARGO_PROFILE_DEV_DEBUG=full/);
+  assert.match(contributing, /CARGO_PROFILE_TEST_DEBUG=full/);
 });
 
 test("test-windows runs the full frontend suite after npm ci and before Cargo work", () => {

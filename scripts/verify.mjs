@@ -21,6 +21,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { formatBudget, formatDuration, runProcessTree, signalExitCode, trapTerminationSignals } from "./lib/process-tree.mjs";
+import { probeBuildStorage } from "./lib/build-storage.mjs";
 import { findPackageDirectory } from "./lib/node-packages.mjs";
 
 export const REPO_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -792,6 +793,63 @@ export const PREREQUISITES = {
   "playwright-chromium": { label: "Playwright Chromium", probe: probePlaywrightChromium },
 };
 
+const STORAGE_CARGO_COMMANDS = new Set(["build", "check", "clippy", "run", "test"]);
+
+function storageCargoStep(stepDefinition) {
+  const [program, command] = splitCommand(stepDefinition.run);
+  return program === "cargo" && STORAGE_CARGO_COMMANDS.has(command);
+}
+
+function cargoStorageEnv(stepDefinition) {
+  const env = {};
+  for (const key of ["CARGO_TARGET_DIR", "CARGO_BUILD_BUILD_DIR"]) {
+    if (process.env[key] !== undefined) env[key] = process.env[key];
+    if (stepDefinition.env?.[key] !== undefined) env[key] = stepDefinition.env[key];
+  }
+  return env;
+}
+
+function cargoStorageFailure(cwd, detail) {
+  return {
+    path: cwd,
+    location: cwd,
+    message: `Cargo storage metadata failed for ${cwd}: ${detail}`,
+    fix: "Ensure offline cargo metadata works, or set CARGO_TARGET_DIR=/path/to/disk/target and run verify again.",
+  };
+}
+
+function storageForCargoChecks(checks, root, platform, synthetic = false, storageProbe = probeBuildStorage) {
+  if (synthetic || platform !== "linux" || !existsSync(join(root, "src-tauri", "Cargo.toml"))) return { ok: true, failures: [] };
+  const cargoSteps = checks.flatMap((check) => check.steps.filter(storageCargoStep));
+  if (cargoSteps.length === 0) return { ok: true, failures: [] };
+
+  const paths = [root];
+  const metadataKeys = new Set();
+  const failures = [];
+  for (const stepDefinition of cargoSteps) {
+    const cwd = resolve(root, stepDefinition.cwd ?? ".");
+    const env = cargoStorageEnv(stepDefinition);
+    const key = JSON.stringify([cwd, env]);
+    if (metadataKeys.has(key)) continue;
+    metadataKeys.add(key);
+    const result = quiet("cargo", ["metadata", "--no-deps", "--format-version", "1", "--offline", "--locked"], { cwd, env });
+    if (!result.ok) {
+      failures.push(cargoStorageFailure(cwd, result.stderr.trim() || result.error?.message || "unknown error"));
+      continue;
+    }
+    try {
+      const metadata = JSON.parse(result.stdout);
+      if (typeof metadata.target_directory !== "string") throw new Error("metadata has no target_directory");
+      paths.push(metadata.target_directory);
+    } catch (error) {
+      failures.push(cargoStorageFailure(cwd, error.message));
+    }
+    if (env.CARGO_BUILD_BUILD_DIR) paths.push(resolve(cwd, env.CARGO_BUILD_BUILD_DIR));
+  }
+  if (failures.length > 0) return { ok: false, failures };
+  return storageProbe(paths, { platform });
+}
+
 function npmPackageResolvable(root, name) {
   return findPackageDirectory(root, name) !== null;
 }
@@ -800,7 +858,7 @@ function npmPackageResolvable(root, name) {
  * Probe every prerequisite the checks need. Returns { missing: [...], notes: [...] }
  * where each missing entry is { missing, fix, neededBy }.
  */
-export async function preflight(checks, { root, platform, prerequisites, values }) {
+export async function preflight(checks, { root, platform, prerequisites, values, synthetic = false, storageProbe = probeBuildStorage }) {
   const ctx = { root, platform, values };
   const neededBy = new Map();
   for (const check of checks) {
@@ -813,6 +871,7 @@ export async function preflight(checks, { root, platform, prerequisites, values 
   const missing = [];
   const notes = [];
   const npmMissing = [];
+  let rustMissing = false;
   for (const [requirement, users] of neededBy) {
     if (requirement.startsWith("npm:")) {
       const name = requirement.slice(4);
@@ -823,7 +882,10 @@ export async function preflight(checks, { root, platform, prerequisites, values 
     if (!prerequisite) throw new Error(`check requires unknown prerequisite "${requirement}"`);
     const result = await prerequisite.probe(ctx);
     if (result.note) notes.push(result.note);
-    if (!result.ok) missing.push({ missing: result.missing ?? prerequisite.label, fix: result.fix, neededBy: users });
+    if (!result.ok) {
+      missing.push({ missing: result.missing ?? prerequisite.label, fix: result.fix, neededBy: users });
+      if (requirement === "rust") rustMissing = true;
+    }
   }
   if (npmMissing.length > 0) {
     missing.unshift({
@@ -831,6 +893,15 @@ export async function preflight(checks, { root, platform, prerequisites, values 
       fix: "npm ci",
       neededBy: [...new Set(npmMissing.flatMap(({ users }) => users))],
     });
+  }
+  if (!rustMissing) {
+    const storage = storageForCargoChecks(checks, root, platform, synthetic, storageProbe);
+    if (!storage.ok) {
+      const cargoUsers = checks.filter((check) => check.steps.some(storageCargoStep)).map((check) => check.id);
+      for (const failure of storage.failures) {
+        missing.push({ missing: failure.message, fix: failure.fix, neededBy: cargoUsers });
+      }
+    }
   }
   return { missing, notes };
 }
@@ -1004,7 +1075,7 @@ export function formatList(checks, platform) {
 // Running.
 
 function cargoTargetDir(root) {
-  const result = quiet("cargo", ["metadata", "--format-version", "1", "--no-deps"], {
+  const result = quiet("cargo", ["metadata", "--format-version", "1", "--no-deps", "--offline", "--locked"], {
     cwd: join(root, "src-tauri"),
     maxBuffer: 64 * 1024 * 1024,
   });
@@ -1179,7 +1250,7 @@ export function formatSummary(results, { platform, totalMs, optIn }) {
 
 async function loadConfig(io) {
   const configPath = process.env.SAGASCRIPT_VERIFY_CONFIG;
-  if (!configPath) return { checks: CHECKS, prerequisites: PREREQUISITES, root: REPO_ROOT, killGraceMs: 5000 };
+  if (!configPath) return { checks: CHECKS, prerequisites: PREREQUISITES, root: REPO_ROOT, killGraceMs: 5000, synthetic: false };
   // Test hook (see the file header): synthetic checks for the runner's tests.
   io.err(
     `verify: SAGASCRIPT_VERIFY_CONFIG is set: running the test checks in ${configPath}, ` + "not the ones defined in scripts/verify.mjs",
@@ -1200,6 +1271,7 @@ async function loadConfig(io) {
     prerequisites: { ...PREREQUISITES, ...config.prerequisites },
     root: config.root ?? REPO_ROOT,
     killGraceMs: config.killGraceMs ?? 5000,
+    synthetic: true,
   };
 }
 
@@ -1239,6 +1311,7 @@ export async function main(argv, io = STDIO) {
     platform,
     prerequisites: config.prerequisites,
     values,
+    synthetic: config.synthetic,
   });
   if (missing.length > 0) {
     io.err(formatPreflightError(missing));
