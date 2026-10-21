@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-// Source-text assertions over the meeting UI, left for phase B of #361. The
-// module tests moved to Vitest: polling behaviour to
+// The remaining source-text assertions cover integrations still awaiting
+// phase B of #361. Polling behaviour moved to Vitest, to
 // src/lib/meeting-job-client.test.ts, draft snapshots (now
 // src/lib/meeting-review-drafts.ts) to meeting-review-drafts.test.ts, and
 // draft reconciliation to meeting-types.test.ts.
@@ -61,30 +61,20 @@ test("polling is serialized, stale generations are ignored, and cancellation wai
   assert.match(fileTranscriptionSource, /generation !== meetingPollGeneration \|\| meetingJobId !== jobId/);
 });
 
-test("meeting review exposes explicit corrections, playback, and all export formats", () => {
+test("meeting review keeps API, playback, privacy, diagnostics, and recovery wiring", () => {
   for (const field of ["schema_version", "source_sha256", "language", "model", "duration_seconds", "segments", "speakers"]) {
     assert.match(typesSource, new RegExp(`\\b${field}\\b`));
   }
-  for (const format of ["plain", "markdown", "json", "srt", "vtt"]) {
-    assert.match(reviewSource, new RegExp(`format: "${format}"`));
-  }
+  // Rendered action behavior is covered through the component's public props
+  // in src/lib/MeetingReview.actions.test.ts. Keep API, parent wiring, media,
+  // privacy, diagnostics, and recovery checks here until those flows move.
   assert.match(reviewSource, /onApply: \(operations: CorrectionOperation\[\]\) => Promise<void>/);
   assert.match(reviewSource, /onUndo: \(\) => Promise<void>/);
   assert.match(reviewSource, /onReset: \(\) => Promise<void>/);
   assert.match(reviewSource, /onSave: \(\) => Promise<boolean>/);
   assert.match(reviewSource, /onExport: \(format: MeetingExportFormat\) => Promise<boolean>/);
-  assert.match(reviewSource, /Save review/);
-  assert.match(reviewSource, /Unapplied edits are not included in saves\/exports/);
-  assert.match(reviewSource, /function persistenceDisabled\(\): boolean/);
-  assert.match(reviewSource, /disabled=\{persistenceDisabled\(\)\}/);
-  assert.match(reviewSource, /const hasUnsavedDrafts = \$derived\.by/);
-  assert.match(reviewSource, /function discardMerge\(speakerId: string\)/);
-  assert.match(reviewSource, /Clear merge selection/);
-  assert.match(reviewSource, /actionNotice/);
   assert.match(reviewSource, /if \(!active && audioEl\) audioEl\.pause\(\)/);
   assert.match(reviewSource, /Audio pauses when you switch tabs\. Audio access ends when you quit Sagascript/);
-  assert.match(reviewSource, /Apply/);
-  assert.match(reviewSource, /Discard/);
   assert.match(reviewSource, /convertFileSrc\(attachment\.token, "meeting-audio"\)/);
   assert.match(reviewSource, /onwheel=\{disableFollow\}/);
   assert.match(reviewSource, /ontouchmove=\{disableFollow\}/);
