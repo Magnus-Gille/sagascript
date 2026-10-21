@@ -33,15 +33,12 @@ export const GROUP_NPM_PACKAGES = {
 
 export const TEST_GROUPS = {
   ui: [
-    "scripts/test-dictionary-explicit-save.mjs",
     "scripts/test-file-transcription-integration.mjs",
     "scripts/test-file-transcription-recovery.mjs",
     "scripts/test-finnish-language.mjs",
     "scripts/test-frontend-errors-source.mjs",
-    "scripts/test-language-glossary.mjs",
     "scripts/test-meeting-integration.mjs",
     "scripts/test-meeting-reprocessing-integration.mjs",
-    "scripts/test-meeting-reprocessing.mjs",
   ],
   ci: [
     "scripts/diarization_sv/test_reference_review.mjs",

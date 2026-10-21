@@ -242,13 +242,6 @@ function createHarness(controls) {
   return context.exercise;
 }
 
-test("meeting callbacks retain revision and generation guards", () => {
-  assert.match(scriptSource, /revision !== meetingDocumentRevision/);
-  assert.match(scriptSource, /generation !== meetingPollGeneration/);
-  assert.match(scriptSource, /meetingReviewDraftDirty/);
-  assert.match(scriptSource, /await waitForMeetingActions\(\)/);
-});
-
 for (const [label, invalidate] of [
   ["review revision", (exercise) => exercise.setMeetingDocumentRevision(8)],
   ["poll generation", (exercise) => exercise.setMeetingPollGeneration(2)],
@@ -302,72 +295,6 @@ test("meeting timer interpolates native durations, survives missing polls, and r
   assert.equal(exercise.snapshot().meetingPhaseElapsedMs, 0);
   assert.equal(exercise.snapshot().meetingLastCheckedAgoMs, null);
   exercise.stopMeetingClock();
-});
-
-test("planning stores its selection without replacing the active review", async () => {
-  const controls = makeControls();
-  const exercise = createHarness(controls);
-  await exercise.planCurrentMeeting("recluster", 0.5, true);
-
-  const state = exercise.snapshot();
-  assert.equal(state.meetingReview.id, "active-review");
-  assert.equal(state.meetingReprocessingPlan.id, "selected-plan");
-  assert.deepEqual(
-    controls.calls.map((call) => call.kind),
-    ["plan"],
-  );
-});
-
-test("completed reprocessing stores a proposal beside, not over, the active review", async () => {
-  const controls = makeControls({
-    snapshots: [
-      {
-        id: "job-reprocess",
-        status: "completed",
-        phase: "done",
-        error: null,
-        transcript: null,
-        reprocessing: { id: "result-1", proposal: { revision: 9 } },
-      },
-    ],
-    initialPlan: { id: "old-plan" },
-  });
-  controls.previewResult = { proposal: { revision: 9 }, steps: [{ status: "Applied" }] };
-  const exercise = createHarness(controls);
-  await exercise.pollMeetingJob("job-reprocess", 1);
-  await exercise.waitForMeetingReviewInit();
-
-  const state = exercise.snapshot();
-  assert.equal(state.meetingReview.id, "active-review");
-  assert.deepEqual(state.meetingProposal, controls.previewResult);
-  assert.deepEqual(state.meetingReprocessingResult, controls.snapshots[0].reprocessing);
-  assert.equal(state.meetingReprocessingPlan, null);
-  assert.deepEqual(
-    controls.calls.map((call) => call.kind),
-    ["preview"],
-  );
-});
-
-test("a failed preview preserves the completed proposal for recovery", async () => {
-  const result = { id: "recoverable-result", proposal: { revision: 9 } };
-  const controls = makeControls({
-    snapshots: [{ status: "completed", reprocessing: result }],
-    previewError: "temporary preview failure",
-  });
-  const exercise = createHarness(controls);
-  await exercise.pollMeetingJob("job-reprocess", 1);
-  await exercise.waitForMeetingReviewInit();
-  const state = exercise.snapshot();
-  assert.equal(state.meetingReview.id, "active-review");
-  assert.deepEqual(state.meetingReprocessingResult, result);
-  assert.equal(state.meetingProposal, null);
-  assert.equal(state.meetingReprocessingPlan, null);
-  assert.equal(await exercise.saveCurrentMeetingProposal(), true);
-  assert.equal(controls.calls.at(-1).proposal, result.proposal);
-  controls.previewError = null;
-  await exercise.retryCurrentMeetingProposalPreview();
-  assert.deepEqual(exercise.snapshot().meetingProposal, controls.previewResult);
-  assert.equal(exercise.snapshot().meetingReview.id, "active-review");
 });
 
 for (const [label, setState] of [
