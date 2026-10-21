@@ -14,7 +14,7 @@ use crate::commands::{self, lock_controller, SharedController};
 use crate::events::{self, EmitEvent, UiState};
 use crate::hotkey;
 use crate::hotkey::transition::{self, RollbackOutcome, TransitionFailure, TransitionFailureCause};
-use crate::hotkey::{NativeRegistrar, OperationalHotkey};
+use crate::hotkey::{HotkeyHealth, HotkeyStatusChange, NativeRegistrar, OperationalHotkey};
 use crate::launch::load_settings_with_permission_gate;
 use crate::tray::update_profiles_menu;
 
@@ -69,6 +69,62 @@ fn restore_previous_hotkey_settings(
     settings.profile_models = old.profile_models.clone();
     settings.hotkey_profiles = old.hotkey_profiles.clone();
     settings.hotkey_mode = old.hotkey_mode;
+}
+
+/// Apply the settings watcher's real hotkey-change path through an injected
+/// registrar, retaining watcher validation, field restoration, health, and
+/// changed-event behavior in one testable caller seam.
+fn apply_watched_hotkey_change(
+    old_settings: &sagascript_core::settings::Settings,
+    new_settings: &mut sagascript_core::settings::Settings,
+    health: &HotkeyHealth,
+    registrar: &mut impl hotkey::transition::Registrar,
+    mut emit: impl FnMut(HotkeyStatusChange),
+) {
+    let old_shortcuts = old_settings.resolved_shortcuts();
+    let new_shortcuts = new_settings.resolved_shortcuts();
+    let validation_error = new_settings
+        .validate_shortcut_configuration()
+        .err()
+        .map(|error| error.to_string());
+    if new_shortcuts == old_shortcuts && validation_error.is_none() {
+        return;
+    }
+
+    info!("Settings watcher: hotkey profiles changed");
+    // A panic between unregister and register must not leave health claiming
+    // the old shortcuts are still registered.
+    let _registration_change = health.registration_change();
+    let old_operational = health.operational_hotkey();
+    let result = transition_settings_hotkeys(
+        &old_operational,
+        &new_shortcuts,
+        validation_error,
+        registrar,
+    );
+    let change = match result {
+        Ok(operational) => health.record(&new_settings.hotkey, None, operational),
+        Err(SettingsHotkeyTransitionError::Invalid(error)) => {
+            restore_previous_hotkey_settings(new_settings, old_settings);
+            health.record(
+                &old_settings.hotkey,
+                Some(format!("{error}; previous hotkey profiles remain active")),
+                old_operational,
+            )
+        }
+        Err(SettingsHotkeyTransitionError::Registration(failure)) => {
+            restore_previous_hotkey_settings(new_settings, old_settings);
+            let health_error = watcher_registration_diagnostic(failure.cause);
+            health.record(
+                &old_settings.hotkey,
+                Some(health_error),
+                failure.operational,
+            )
+        }
+    };
+    if change.changed {
+        emit(change);
+    }
 }
 
 /// Whether a filesystem event may reflect creation or replacement of a user
@@ -219,50 +275,17 @@ pub(crate) fn start_settings_watcher(app: tauri::AppHandle) {
                 c.settings().clone()
             };
 
-            let old_shortcuts = old_settings.resolved_shortcuts();
-            let new_shortcuts = new_settings.resolved_shortcuts();
-            let validation_error = new_settings
-                .validate_shortcut_configuration()
-                .err()
-                .map(|error| error.to_string());
-            if new_shortcuts != old_shortcuts || validation_error.is_some() {
-                info!("Settings watcher: hotkey profiles changed");
-                // A panic between unregister and register must not leave
-                // health claiming the old shortcuts are still registered.
-                let _registration_change = health.registration_change();
-                let old_operational = health.operational_hotkey();
-                let mut registrar = NativeRegistrar::new(&app);
-                let result = transition_settings_hotkeys(
-                    &old_operational,
-                    &new_shortcuts,
-                    validation_error,
-                    &mut registrar,
-                );
-                let change = match result {
-                    Ok(operational) => health.record(&new_settings.hotkey, None, operational),
-                    Err(SettingsHotkeyTransitionError::Invalid(error)) => {
-                        restore_previous_hotkey_settings(&mut new_settings, &old_settings);
-                        health.record(
-                            &old_settings.hotkey,
-                            Some(format!("{error}; previous hotkey profiles remain active")),
-                            old_operational,
-                        )
-                    }
-                    Err(SettingsHotkeyTransitionError::Registration(failure)) => {
-                        restore_previous_hotkey_settings(&mut new_settings, &old_settings);
-                        let health_error = watcher_registration_diagnostic(failure.cause);
-                        health.record(
-                            &old_settings.hotkey,
-                            Some(health_error),
-                            failure.operational,
-                        )
-                    }
-                };
-                if change.changed {
+            let mut registrar = NativeRegistrar::new(&app);
+            apply_watched_hotkey_change(
+                &old_settings,
+                &mut new_settings,
+                &health,
+                &mut registrar,
+                |change| {
                     let _ =
                         app.emit_event(events::event::HOTKEY_REGISTRATION_CHANGED, &change.status);
-                }
-            }
+                },
+            );
 
             // Update controller with all new settings
             let profiles = new_settings.resolved_hotkey_profiles();

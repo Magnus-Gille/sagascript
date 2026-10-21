@@ -1,4 +1,50 @@
 use super::*;
+use crate::hotkey::transition::Registrar;
+use std::collections::VecDeque;
+
+#[derive(Default)]
+struct FakeRegistrar {
+    calls: Vec<String>,
+    register_results: VecDeque<Result<(), String>>,
+    unregister_results: VecDeque<Result<(), String>>,
+}
+
+impl Registrar for FakeRegistrar {
+    fn register(&mut self, shortcuts: &[String]) -> Result<(), String> {
+        self.calls.push(format!("register:{}", shortcuts.join(",")));
+        self.register_results.pop_front().unwrap_or(Ok(()))
+    }
+
+    fn unregister(&mut self, shortcuts: &[String]) -> Result<(), String> {
+        self.calls
+            .push(format!("unregister:{}", shortcuts.join(",")));
+        self.unregister_results.pop_front().unwrap_or(Ok(()))
+    }
+}
+
+fn command_context<'a>(
+    old_operational: &'a OperationalHotkey,
+    new_shortcuts: &'a [String],
+) -> HotkeyChangeContext<'a> {
+    HotkeyChangeContext {
+        old_primary: "old-primary",
+        new_primary: "new-primary",
+        old_operational,
+        new_shortcuts,
+    }
+}
+
+fn registered(shortcut: &str) -> OperationalHotkey {
+    OperationalHotkey::Registered(vec![shortcut.to_string()])
+}
+
+fn assert_pending_persistence(health: &HotkeyHealth) {
+    assert_eq!(
+        health.status().error.as_deref(),
+        Some("hotkey profile change is pending persistence")
+    );
+    assert_eq!(health.operational_hotkey(), registered("new"));
+}
 
 #[test]
 fn healthy_identical_shortcuts_keep_the_persist_only_fast_path() {
@@ -85,6 +131,268 @@ fn command_persistence_rollback_keeps_health_diagnostics() {
     assert_eq!(
         persistence_rollback_health_error(&RollbackOutcome::Restored(OperationalHotkey::Inactive)),
         None
+    );
+}
+
+#[test]
+fn actual_command_helper_rolls_back_after_persistence_failure_and_emits_final_status() {
+    let health = HotkeyHealth::new("old-primary");
+    let old_operational = registered("old");
+    health.record("old-primary", None, old_operational.clone());
+    let mut registrar = FakeRegistrar {
+        register_results: [Ok(()), Ok(())].into(),
+        unregister_results: [Ok(()), Ok(())].into(),
+        ..FakeRegistrar::default()
+    };
+    let new_shortcuts = vec!["new".to_string()];
+    let mut persist_calls = 0;
+    let mut emitted = Vec::new();
+
+    let result = commit_registered_hotkey_change(
+        command_context(&old_operational, &new_shortcuts),
+        &health,
+        &mut registrar,
+        || {
+            persist_calls += 1;
+            assert_pending_persistence(&health);
+            Err::<(), _>("disk full")
+        },
+        |change| emitted.push(change),
+    );
+
+    assert_eq!(persist_calls, 1);
+    assert_eq!(
+        registrar.calls,
+        [
+            "unregister:old",
+            "register:new",
+            "unregister:new",
+            "register:old"
+        ]
+    );
+    assert_eq!(
+        result.expect_err("persistence must fail").to_string(),
+        "Failed to persist hotkey profiles: disk full"
+    );
+    assert_eq!(health.operational_hotkey(), registered("old"));
+    assert!(health.status().ok);
+    assert_eq!(health.status().shortcut, "old-primary");
+    assert_eq!(emitted.len(), 1);
+    assert!(emitted[0].changed);
+    assert_eq!(emitted[0].status, health.status());
+    assert_eq!(emitted[0].status.error, None);
+    assert_eq!(emitted[0].status.shortcuts, vec!["old".to_string()]);
+}
+
+#[test]
+fn actual_command_helper_records_cleanup_failure_and_does_not_restore_old() {
+    let health = HotkeyHealth::new("old-primary");
+    let old_operational = registered("old");
+    health.record("old-primary", None, old_operational.clone());
+    let mut registrar = FakeRegistrar {
+        register_results: [Ok(()), Err("restore old failed".into())].into(),
+        unregister_results: [Ok(()), Err("cleanup new failed".into())].into(),
+        ..FakeRegistrar::default()
+    };
+    let new_shortcuts = vec!["new".to_string()];
+    let mut persist_calls = 0;
+    let mut emitted = Vec::new();
+
+    let result = commit_registered_hotkey_change(
+        command_context(&old_operational, &new_shortcuts),
+        &health,
+        &mut registrar,
+        || {
+            persist_calls += 1;
+            assert_pending_persistence(&health);
+            Err::<(), _>("disk full")
+        },
+        |change| emitted.push(change),
+    );
+
+    assert_eq!(persist_calls, 1);
+    assert_eq!(
+        registrar.calls,
+        ["unregister:old", "register:new", "unregister:new"]
+    );
+    assert_eq!(
+        result.expect_err("persistence must fail").to_string(),
+        "Failed to persist hotkey profiles: disk full"
+    );
+    assert_eq!(health.operational_hotkey(), OperationalHotkey::Unknown);
+    assert_eq!(
+        health.status().error.as_deref(),
+        Some("failed to unregister unpersisted hotkeys; operational state is unknown")
+    );
+    assert_eq!(emitted.len(), 1);
+    assert!(emitted[0].changed);
+    assert_eq!(emitted[0].status, health.status());
+}
+
+#[test]
+fn actual_command_helper_restore_failure_leaves_inactive_and_reports_it() {
+    let health = HotkeyHealth::new("old-primary");
+    let old_operational = registered("old");
+    health.record("old-primary", None, old_operational.clone());
+    let mut registrar = FakeRegistrar {
+        register_results: [Ok(()), Err("restore old failed".into())].into(),
+        unregister_results: [Ok(()), Ok(())].into(),
+        ..FakeRegistrar::default()
+    };
+    let new_shortcuts = vec!["new".to_string()];
+    let mut persist_calls = 0;
+    let mut emitted = Vec::new();
+
+    let result = commit_registered_hotkey_change(
+        command_context(&old_operational, &new_shortcuts),
+        &health,
+        &mut registrar,
+        || {
+            persist_calls += 1;
+            assert_pending_persistence(&health);
+            Err::<(), _>("disk full")
+        },
+        |change| emitted.push(change),
+    );
+
+    assert_eq!(persist_calls, 1);
+    assert_eq!(
+        registrar.calls,
+        [
+            "unregister:old",
+            "register:new",
+            "unregister:new",
+            "register:old"
+        ]
+    );
+    assert_eq!(
+        result.expect_err("persistence must fail").to_string(),
+        "Failed to persist hotkey profiles: disk full"
+    );
+    assert_eq!(health.operational_hotkey(), OperationalHotkey::Inactive);
+    assert_eq!(
+        health.status().error.as_deref(),
+        Some("failed to restore previous hotkeys: restore old failed")
+    );
+    assert_eq!(emitted.len(), 1);
+    assert!(emitted[0].changed);
+    assert_eq!(emitted[0].status, health.status());
+}
+
+#[test]
+fn actual_command_helper_persistence_failure_from_inactive_stays_inactive() {
+    let health = HotkeyHealth::new("old-primary");
+    health.record("old-primary", None, OperationalHotkey::Inactive);
+    let mut registrar = FakeRegistrar {
+        register_results: [Ok(())].into(),
+        unregister_results: [Ok(())].into(),
+        ..FakeRegistrar::default()
+    };
+    let new_shortcuts = vec!["new".to_string()];
+    let old_operational = OperationalHotkey::Inactive;
+    let mut persist_calls = 0;
+    let mut emitted = Vec::new();
+
+    let result = commit_registered_hotkey_change(
+        command_context(&old_operational, &new_shortcuts),
+        &health,
+        &mut registrar,
+        || {
+            persist_calls += 1;
+            assert_pending_persistence(&health);
+            Err::<(), _>("disk full")
+        },
+        |change| emitted.push(change),
+    );
+
+    assert_eq!(persist_calls, 1);
+    assert_eq!(registrar.calls, ["register:new", "unregister:new"]);
+    assert!(result.is_err());
+    assert_eq!(health.operational_hotkey(), OperationalHotkey::Inactive);
+    assert_eq!(health.status().error, None);
+    assert_eq!(emitted.len(), 1);
+    assert!(emitted[0].changed);
+    assert_eq!(emitted[0].status, health.status());
+}
+
+#[test]
+fn actual_command_helper_success_commits_and_emits_new_health_once() {
+    let health = HotkeyHealth::new("old-primary");
+    let old_operational = registered("old");
+    health.record("old-primary", None, old_operational.clone());
+    let mut registrar = FakeRegistrar::default();
+    let new_shortcuts = vec!["new".to_string()];
+    let mut persist_calls = 0;
+    let mut emitted = Vec::new();
+
+    let result = commit_registered_hotkey_change(
+        command_context(&old_operational, &new_shortcuts),
+        &health,
+        &mut registrar,
+        || {
+            persist_calls += 1;
+            assert_pending_persistence(&health);
+            Ok::<_, &'static str>("persisted")
+        },
+        |change| emitted.push(change),
+    );
+
+    assert_eq!(result.unwrap(), "persisted");
+    assert_eq!(persist_calls, 1);
+    assert_eq!(registrar.calls, ["unregister:old", "register:new"]);
+    assert_eq!(health.operational_hotkey(), registered("new"));
+    assert!(health.status().ok);
+    assert_eq!(health.status().shortcut, "new-primary");
+    assert_eq!(emitted.len(), 1);
+    assert!(emitted[0].changed);
+    assert_eq!(emitted[0].status, health.status());
+    assert_eq!(emitted[0].status.shortcuts, vec!["new".to_string()]);
+}
+
+#[test]
+fn actual_command_helper_registration_failure_does_not_persist() {
+    let health = HotkeyHealth::new("old-primary");
+    health.record("old-primary", None, registered("old"));
+    let mut registrar = FakeRegistrar {
+        register_results: [Err("new registration failed".into()), Ok(())].into(),
+        unregister_results: [Ok(()), Ok(())].into(),
+        ..FakeRegistrar::default()
+    };
+    let new_shortcuts = vec!["new".to_string()];
+    let old_operational = registered("old");
+    let mut persist_calls = 0;
+    let mut emitted = Vec::new();
+
+    let result = commit_registered_hotkey_change(
+        command_context(&old_operational, &new_shortcuts),
+        &health,
+        &mut registrar,
+        || {
+            persist_calls += 1;
+            Ok::<_, &'static str>(())
+        },
+        |change| emitted.push(change),
+    );
+
+    assert_eq!(persist_calls, 0);
+    assert_eq!(
+        registrar.calls,
+        [
+            "unregister:old",
+            "register:new",
+            "unregister:new",
+            "register:old"
+        ]
+    );
+    assert_eq!(
+        result.expect_err("registration must fail").to_string(),
+        "Failed to register hotkey profiles: new registration failed"
+    );
+    assert_eq!(health.operational_hotkey(), registered("old"));
+    assert_eq!(health.status().error, None);
+    assert!(
+        emitted.is_empty(),
+        "identical restored status is deduplicated"
     );
 }
 
