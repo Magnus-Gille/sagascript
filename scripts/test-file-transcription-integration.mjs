@@ -4,6 +4,11 @@ import test from "node:test";
 import ts from "typescript";
 import { frontendErrorsSource, inlineFrontendErrors } from "./lib/frontend-errors-source.mjs";
 
+// These three original source-harness cases preserve claims that current UI
+// controls cannot reproduce exactly: re-entering the same private handler,
+// holding its private meeting-action gate, and choosing an older saved request
+// while another job is running. Rendered equivalents cover the observable
+// flows where controls expose them; parity details live in the task evidence.
 const fileSource = await readFile(new URL("../src/lib/FileTranscription.svelte", import.meta.url), "utf8");
 const settingsSource = await readFile(new URL("../src/lib/Settings.svelte", import.meta.url), "utf8");
 const compile = (source) =>
@@ -127,102 +132,6 @@ test("Stop before submission cancels locally without starting native inference",
   assert.equal(h.state().transcribing, false);
 });
 
-test("Stop keeps the worker busy until settlement; backend success wins the cancellation race", async () => {
-  const h = fileHarness("/audio/one.wav", { cancelFileTranscription: async () => false });
-  const run = h.start();
-  await flush();
-  await h.cancel();
-  assert.equal(h.state().transcribing, true);
-  assert.equal(h.state().cancellingPlain, true);
-  h.native.resolve("authoritative success");
-  await run;
-  assert.equal(h.state().plainStages.status, "completed");
-  assert.equal(h.state().transcriptionResult, "authoritative success");
-  assert.equal(h.state().transcribeError, "");
-  assert.equal(h.state().resultActionMessage, "Finished before Stop took effect.");
-});
-
-test("late cancellation reply cannot alter a settled result", async () => {
-  const cancel = deferred();
-  const h = fileHarness("/audio/one.wav", { cancelFileTranscription: () => cancel.promise });
-  const run = h.start();
-  await flush();
-  const stop = h.cancel();
-  h.native.resolve("finished");
-  await run;
-  cancel.reject(new Error("late cancel failure"));
-  await stop;
-  assert.equal(h.state().transcribeError, "");
-  assert.equal(h.state().plainStages.status, "completed");
-});
-
-test("failed Stop followed by native success does not mark a successful file failed", async () => {
-  const h = fileHarness("/audio/one.wav", {
-    cancelFileTranscription: async () => {
-      throw new Error("cancel unavailable");
-    },
-  });
-  const run = h.start();
-  await flush();
-  await h.cancel();
-  assert.equal(h.state().transcribeError, "cancel unavailable");
-  h.native.resolve("finished");
-  await run;
-  assert.equal(h.state().transcribeError, "");
-  assert.equal(h.state().plainStages.status, "completed");
-});
-
-test("accepted cancellation discards partial output and missing sources notify only their own path", async () => {
-  const h = fileHarness("/audio/one.wav");
-  const run = h.start();
-  await flush();
-  await h.cancel();
-  h.native.reject(new Error("cancelled"));
-  await run;
-  assert.equal(h.state().plainStages.status, "cancelled");
-  assert.equal(h.state().transcriptionResult, "");
-  const missing = fileHarness("/audio/missing.wav");
-  const attempt = missing.start();
-  await flush();
-  // The backend says so by code; the text is not what decides.
-  missing.native.reject({
-    code: "file_not_found",
-    message: "File decode error: Failed to open file: No such file or directory (os error 2)",
-    retryable: false,
-  });
-  await attempt;
-  assert.ok(missing.calls.some((call) => call[0] === "missing" && call[1] === "/audio/missing.wav"));
-  assert.match(missing.state().transcribeError, /No such file or directory/);
-  const looksMissing = fileHarness("/audio/other.wav");
-  const otherAttempt = looksMissing.start();
-  await flush();
-  looksMissing.native.reject("File decode error: Failed to open file: No such file or directory (os error 2)");
-  await otherAttempt;
-  assert.ok(!looksMissing.calls.some((call) => call[0] === "missing"), "message text alone must not forget the file");
-});
-
-test("each result saves and copies its own output and source even while another file is busy", async () => {
-  const first = fileHarness("/first/same.wav");
-  const firstRun = first.start();
-  await flush();
-  first.native.resolve("first text");
-  await firstRun;
-  const second = fileHarness("/second/same.wav");
-  const secondRun = second.start();
-  await flush();
-  await first.save();
-  await first.copy();
-  assert.deepEqual(first.calls.slice(-2), [
-    ["save", "first text", "same.txt", "/first"],
-    ["copy", "first text"],
-  ]);
-  assert.equal(second.state().transcribing, true);
-  second.native.resolve("second text");
-  await secondRun;
-  await second.save();
-  assert.deepEqual(second.calls.at(-1), ["save", "second text", "same.txt", "/second"]);
-});
-
 test("re-run appends a fresh job with the selected request's options and obeys the serial scheduler", () => {
   const current = { id: "existing", path: "/other.wav", profileId: null, prompt: null, diarize: false, status: "running" };
   const request = { path: "/chosen.wav", profileId: "swedish", prompt: "Astrid", diarize: true };
@@ -245,58 +154,4 @@ test("re-run appends a fresh job with the selected request's options and obeys t
   assert.deepEqual({ path: added.path, profileId: added.profileId, prompt: added.prompt, diarize: added.diarize }, request);
   assert.equal(queue.nextQueuedFile(result.fileJobs, false), null);
   assert.equal(queue.nextQueuedFile(queue.updateFileJob(result.fileJobs, current.id, "completed"), false).id, added.id);
-});
-
-test("Try again under a failed file queues the same file with its options as a new job, once the window allows it", async () => {
-  const failed = { id: "failed", path: "/chosen.wav", profileId: "swedish", prompt: "Astrid", diarize: false, status: "failed" };
-  const run = async (updatePreparing, profileExists = true) => {
-    const focused = [];
-    const deps = {
-      ...queue,
-      ...recent,
-      profileForId: (id) => (profileExists ? id === "swedish" : false),
-      tick: () => Promise.resolve(),
-      document: { getElementById: (id) => ({ focus: () => focused.push(id) }) },
-    };
-    const factory = new Function(
-      ...Object.keys(deps),
-      "failed",
-      "updatePreparing",
-      compile(`
-      let fileJobs = [failed], recentTranscriptions = [], selectedRerunPath = '';
-      let selectedFileId = failed.id, rerunError = '', retryRefusals = {};
-      ${functions(settingsSource, ["rerunRefusal", "queueRerun", "retryFileJob"])}
-      const queued = retryFileJob(failed); return { queued, fileJobs, selectedFileId, rerunError, retryRefusals, recentTranscriptions };`),
-    );
-    const result = factory(...Object.values(deps), failed, updatePreparing);
-    await Promise.resolve();
-    await Promise.resolve();
-    return { ...result, focused };
-  };
-
-  const result = await run(false);
-  assert.equal(result.queued, true);
-  assert.equal(result.fileJobs[0], failed, "the failed job stays as it failed");
-  const added = result.fileJobs[1];
-  assert.equal(added.status, "queued");
-  assert.notEqual(added.id, failed.id);
-  assert.deepEqual(
-    { path: added.path, profileId: added.profileId, prompt: added.prompt, diarize: added.diarize },
-    { path: failed.path, profileId: failed.profileId, prompt: failed.prompt, diarize: failed.diarize },
-  );
-  assert.equal(result.selectedFileId, added.id);
-  assert.equal(result.rerunError, "");
-  assert.deepEqual(result.retryRefusals, {});
-  assert.deepEqual(result.focused, [`file-tab-${added.id}`], "the new job's tab takes the focus");
-
-  const preparing = await run(true);
-  assert.equal(preparing.queued, false);
-  assert.equal(preparing.fileJobs.length, 1, "nothing is queued while an update is being prepared");
-  assert.deepEqual(preparing.focused, []);
-  const gone = await run(false, false);
-  assert.equal(gone.queued, false);
-  assert.equal(gone.fileJobs.length, 1);
-  assert.equal(gone.rerunError, "", "the Re-run line above the tab strip is not used for a Try again");
-  assert.match(gone.retryRefusals[failed.id], /profile for this file is no longer available/);
-  assert.deepEqual(gone.focused, []);
 });
