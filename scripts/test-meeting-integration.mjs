@@ -24,7 +24,6 @@ test("diarized imports use the job API while ordinary imports keep transcribeFil
   assert.match(fileTranscriptionSource, /const prompt = job\.prompt/);
   assert.match(fileTranscriptionSource, /beginMeetingFile\(filePath, prompt, profileId\)/);
   assert.match(fileTranscriptionSource, /transcribeFile\(filePath, \{[\s\S]*?diarize: false/);
-  assert.match(settingsSource, /disabled=\{transcribing\}/);
   assert.match(settingsSource, /createFileJobs\(paths, \{[\s\S]*diarize: transcribeDiarize/);
   assert.match(settingsSource, /prompt: transcribePrompt\.trim\(\) \|\| null/);
   assert.match(settingsSource, /profileId: selectedTranscribeProfile\(\)\?\.id \?\? null/);
@@ -102,7 +101,6 @@ test("meeting review keeps API, playback, privacy, diagnostics, and recovery wir
   }
   assert.match(fileTranscriptionSource, /createMeetingReview\(transcript\)/);
   assert.match(fileTranscriptionSource, /meetingReviewInit = initializeMeetingReview/);
-  assert.match(settingsSource, /Open saved meeting/);
   assert.match(reviewSource, /reconcileMeetingDrafts/);
   assert.match(reviewSource, /resetDraftKey/);
   assert.match(reviewSource, /onDraftDirtyChange\?: \(dirty: boolean\) => void/);

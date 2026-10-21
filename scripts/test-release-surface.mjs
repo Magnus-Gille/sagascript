@@ -50,7 +50,6 @@ const [mainRsSource, ...moduleSources] = await Promise.all(
 const mainSource = [mainRsSource, ...moduleSources].join("\n");
 const startupSource = await readFile(new URL("launch/startup.rs", appShellDirectory), "utf8");
 const commandsSource = await readFile(new URL("../src-tauri/src/commands/settings.rs", import.meta.url), "utf8");
-const appSource = await readFile(new URL("../src/App.svelte", import.meta.url), "utf8");
 const brandMarkSource = await readFile(new URL("../assets/brand/sagascript-mark.svg", import.meta.url), "utf8");
 const appIconSource = await readFile(new URL("../assets/brand/sagascript-app-icon.svg", import.meta.url), "utf8");
 const faviconSource = await readFile(new URL("../site/public/favicon.svg", import.meta.url), "utf8");
@@ -206,10 +205,8 @@ test("deliberate macOS reopen requests reveal Settings", () => {
   );
 });
 
-test("finishing onboarding keeps the main Settings window visible", () => {
-  assert.doesNotMatch(appSource, /getCurrentWindow\(\)\.hide\(\)/);
-  assert.doesNotMatch(appSource, /Failed to hide completed onboarding window/);
-  assert.match(appSource, /showOnboarding = false/);
+// The rendered App test owns frontend visibility; retain this backend-only command check.
+test("onboarding completion command does not hide the main window", () => {
   const commandStart = commandsSource.indexOf("pub async fn set_onboarding_completed");
   const commandEnd = commandsSource.indexOf("\n#[tauri::command]", commandStart + 1);
   assert.ok(commandStart >= 0 && commandEnd > commandStart);
