@@ -299,7 +299,30 @@ sequenceDiagram
 | Store | `crates/sagascript-core/src/settings/store.rs` | `load_with`, `load_from`, `save`, `update_with`, `try_update_with` take the machine state as a `MachineProbe`; `machine::{load, update, try_update}` are them with this machine's probes (`store::{load, update, try_update}` re-export those for one release); cross-process `fs2` lock on `<file>.json.lock`; read-merge-write keeps unknown keys; atomic rename. |
 | AppController | `app_controller.rs` | In-memory copy: `settings()`, `update_settings()` (`settings_mut()` in tests only). Dictation reads it at use time. It can differ from the file on purpose: the watcher keeps the registered shortcuts after a failed reload, and a host that cannot run Pianissimo demotes a selection of it in this copy only. |
 | Watcher | `start_settings_watcher` in `settings_watcher.rs` | `PollWatcher` on macOS, `RecommendedWatcher` elsewhere; filter `configuration_event_may_affect`; waits while a dictation records (`acquire_hotkey_configuration`). Fires for the app's own writes too (harmless reload). |
-| Frontend | `getSettings()` / setters in `src/lib/api.ts`; `saveSetting()`, `applySetting()` and the `settings_reloaded` listener in `Settings.svelte` | Re-reads after a write. A rejected setter saved nothing; a saved change whose re-read fails is reported as saved, never repeated and never rolled back: the window shows a Reload settings notice, disables the controls that save a setting and sends no further change until a read succeeds. Reads are settled in the order they were issued, so a late answer, success or failure, cannot replace or hide a newer one ([#341](https://github.com/Magnus-Gille/sagascript/issues/341)). |
+| Frontend | `getSettings()` / setters in `src/lib/api.ts`; `settingsTransactionController.ts`, `modelCatalogController.ts`, `applySetting()` and the `settings_reloaded` listener in `Settings.svelte` | Re-reads after a write. A rejected setter saved nothing; a saved change whose re-read fails is reported as saved, never repeated and never rolled back: the window shows a Reload settings notice, disables the controls that save a setting and sends no further change until a read succeeds. Reads are settled in the order they were issued, so a late answer, success or failure, cannot replace or hide a newer one ([#341](https://github.com/Magnus-Gille/sagascript/issues/341)). File and profile model catalog requests publish only the latest complete result and are invalidated on unmount. Clearing a blocking dictionary and retrying its language change remains a separate compare-and-swap recovery flow. |
+
+**Adding a frontend setting.** `Settings.svelte` owns the runes, visible notices,
+control values and settings-read ordering. `settingsTransactionController.ts` owns
+the write/read-back outcome: `saved: false` means no confirmed write; `saved: true`
+with `confirmed: false` means the write completed but its read-back is uncertain.
+Never retry the write just because that read-back failed. Add the typed API setter,
+then use `applyScalarSetting` for a value that does not affect model selection, or
+`applySetting` when profile models need refreshing. For example, the existing beam
+size handler calls `await applyScalarSetting(() => setBeamSize(value))` and restores
+the native select's previous value only when that call reports an unsaved change.
+Use `saveSetting` directly when the caller needs the typed result or an `afterSave`
+callback (for example, ending hotkey capture); that callback runs before read-back.
+Add a rendered control test for rejection and for a successful write whose read-back
+fails, using the typed mock IPC helpers in `src/test/settings.ts`.
+
+`modelCatalogController.ts` owns request generation, cancellation and disposal;
+the component's injected `load`, `publish` and `reject` callbacks own query composition
+and UI state. File and profile catalogs use separate controller instances. Refresh
+the existing instance instead of issuing an independent query: only the latest
+complete answer may publish, and cancelling an older effect cannot cancel a newer
+manual refresh. Dispose both instances when the component unmounts. The explicit
+dictionary-clear/language-retry recovery transaction remains separate because it
+coordinates two writes with compare-and-swap and its own recovery state.
 
 Rules: write through `store::update`/`try_update` (never `save()` a possibly stale clone);
 release the file lock before taking the controller lock; the watcher replays only hotkey
