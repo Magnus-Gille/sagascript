@@ -102,11 +102,11 @@
   const overlapDuration = $derived(overlapSpans.reduce((total, span) => total + Math.max(0, span.end - span.start), 0));
   const fallbackRegionCount = $derived(acousticReport?.regions.filter((region) => region.used_track_fallback).length ?? 0);
   const attributionReasons = $derived.by(() => {
-    const counts = new Map<string, number>();
+    const counts: Record<string, number> = Object.create(null);
     for (const attribution of acousticReport?.attributions ?? []) {
-      counts.set(attribution.reason, (counts.get(attribution.reason) ?? 0) + 1);
+      counts[attribution.reason] = (counts[attribution.reason] ?? 0) + 1;
     }
-    return [...counts.entries()].sort(([left], [right]) => left.localeCompare(right));
+    return Object.entries(counts).sort(([left], [right]) => left.localeCompare(right));
   });
   const activeSegments = $derived(audioUrl ? activeSegmentsAtTime(transcript.segments, playbackTime) : []);
   const activeIds = $derived(new Set(activeSegments.map((segment) => segment.id)));

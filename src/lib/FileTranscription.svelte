@@ -10,8 +10,10 @@
   import type {
     ReprocessingMode, SelectedReprocessingPlan, ProposalState, ReprocessingResult,
   } from "./meeting-reprocessing-types";
+  import { acceptMeetingProposalForCurrentReview, executeMeetingPlan } from "./meeting-reprocessing-flow";
   import { onDestroy, tick, untrack } from "svelte";
-  import { subscribeTauriEvent, type Subscription } from "./tauri-events.svelte";
+  import { subscribeTauriEvent } from "./tauri-events.svelte";
+  import { createPlainTranscriptionRun } from "./plain-transcription-run";
   import TranscriptionStages from "./TranscriptionStages.svelte";
   import MeetingProgress from "./MeetingProgress.svelte";
   import { initialStages, startStages, acceptRunProgress, finishStages } from "./transcribe-stages";
@@ -101,8 +103,7 @@
   let transcribing: boolean = $state(false);
   let plainStages = $state(initialStages());
   let cancellingPlain = $state(false);
-  let plainRunId: string | null = null;
-  let plainRequestStarted = false;
+  let plainTimer: ReturnType<typeof setInterval> | undefined;
   let transcribeElapsedSec = $state(0);
   let resultActionMessage = $state("");
   let transcribeResultSection: HTMLDivElement | undefined = $state();
@@ -115,11 +116,68 @@
       saveResultButton?.focus({ preventScroll: true });
     }
   }
-  let transcriptionProgress: number = $state(0);
   let transcriptionResult: string = $state("");
   let transcribeError: string = $state("");
   /** The way out of `transcribeError`, decided by the error's code (`backendErrorRecovery`). */
   let transcribeRecovery: BackendErrorRecovery | null = $state(null);
+  const plainTranscriptionRun = createPlainTranscriptionRun({
+    waitForMeetingActions,
+    subscribeProgress: (handler) => subscribeTauriEvent("plain-transcription-progress", handler),
+    transcribeFile,
+    cancelFileTranscription,
+    onStart: () => {
+      ++meetingPollGeneration;
+      ++meetingDocumentRevision;
+      meetingError = "";
+      meetingJobStatus = null;
+      transcribing = true;
+
+      transcribeError = "";
+      transcribeRecovery = null;
+      transcriptionResult = "";
+      cancellingPlain = false;
+      plainStages = startStages();
+      resultActionMessage = "";
+      const startedAt = Date.now();
+      // Elapsed time is feedback, never measured compute progress.
+      plainTimer = setInterval(() => { transcribeElapsedSec = Math.floor((Date.now() - startedAt) / 1000); }, 500);
+    },
+    onProgress: (payload) => {
+      plainStages = acceptRunProgress(plainStages, payload.runId, payload);
+    },
+    onCancelledBeforeSubmission: () => {
+      plainStages = finishStages(plainStages, "cancelled");
+      transcribeError = "Transcription was cancelled.";
+    },
+    onResult: (text, cancellationRequested) => {
+      transcriptionResult = text;
+      if (cancellationRequested) resultActionMessage = "Finished before Stop took effect.";
+      transcribeError = "";
+      plainStages = finishStages(plainStages, "completed");
+      if (transcriptionResult.trim()) void revealTranscriptionResult();
+    },
+    onError: (error, cancellationRequested, path) => {
+      if (isMissingTranscribeFileError(error)) onMissingFile(path);
+      // Stop was pressed, or the backend ended the run as cancelled by itself
+      // (ADR 0006): a cancelled run, not a failure.
+      const cancelled = cancellationRequested || isBackendError(error, "cancelled");
+      plainStages = finishStages(plainStages, cancelled ? "cancelled" : "failed");
+      transcribeError = cancelled ? "Transcription was cancelled." : toErrorMessage(error, "Transcription failed");
+      transcribeRecovery = cancelled ? null : backendErrorRecovery(error);
+    },
+    onFinished: () => {
+      if (plainTimer !== undefined) clearInterval(plainTimer);
+      plainTimer = undefined;
+      cancellingPlain = false;
+      transcribing = false;
+
+    },
+    onCancelRequested: () => { cancellingPlain = true; },
+    onCancelError: (error) => {
+      if (transcribing && !transcribeError) transcribeError = toErrorMessage(error, "Could not request cancellation. The transcription is still running.");
+      cancellingPlain = false;
+    },
+  });
   let modelDownloading = $state(false);
   let meetingReview: MeetingReviewDocument | null = $state(null);
   let meetingTranscript: MeetingTranscript | null = $state(null);
@@ -348,7 +406,7 @@
             meetingJobId = null;
             transcribing = false;
             meetingPollingFailed = false;
-            transcriptionProgress = 0;
+
             if (snapshot.status === "completed" && snapshot.reprocessing) {
               const result = snapshot.reprocessing;
               // Keep the completed work even if the separate preview request fails.
@@ -419,7 +477,7 @@
     // document succeeds. Pending edits finish before the import starts below;
     // successful replacement still invalidates any stale action revision.
     transcribing = true;
-    transcriptionProgress = 0;
+
     transcribeError = "";
     transcribeRecovery = null;
     transcriptionResult = "";
@@ -460,64 +518,12 @@
       return;
     }
 
-    ++meetingPollGeneration;
-    ++meetingDocumentRevision;
-    meetingError = "";
-    meetingJobStatus = null;
-    transcribing = true;
-    transcriptionProgress = 0;
-    transcribeError = "";
-    transcribeRecovery = null;
-    transcriptionResult = "";
-    plainRunId = job.id;
-    plainRequestStarted = false;
-    cancellingPlain = false;
-    plainStages = startStages();
-    resultActionMessage = "";
-    const startedAt = Date.now();
-    // Elapsed time is feedback, never measured compute progress.
-    const timer = setInterval(() => { transcribeElapsedSec = Math.floor((Date.now() - startedAt) / 1000); }, 500);
-    let progress: Subscription | undefined;
-    try {
-      await waitForMeetingActions();
-      // Register before invoking native work so even the first event is scoped.
-      progress = subscribeTauriEvent("plain-transcription-progress", (payload) => {
-        plainStages = acceptRunProgress(plainStages, plainRunId, payload);
-      });
-      await progress.ready;
-      if (cancellingPlain) {
-        plainStages = finishStages(plainStages, "cancelled");
-        transcribeError = "Transcription was cancelled.";
-        return;
-      }
-      plainRequestStarted = true;
-      transcriptionResult = await transcribeFile(filePath, {
-        prompt: prompt ?? undefined,
-        diarize: false,
-        profileId: profileId ?? undefined,
-        runId: plainRunId,
-      });
-      if (cancellingPlain) resultActionMessage = "Finished before Stop took effect.";
-      transcribeError = "";
-      plainStages = finishStages(plainStages, "completed");
-      if (transcriptionResult.trim()) void revealTranscriptionResult();
-    } catch (error) {
-      if (isMissingTranscribeFileError(error)) onMissingFile(filePath);
-      // Stop was pressed, or the backend ended the run as cancelled by itself
-      // (ADR 0006): a cancelled run, not a failure.
-      const cancelled = cancellingPlain || isBackendError(error, "cancelled");
-      plainStages = finishStages(plainStages, cancelled ? "cancelled" : "failed");
-      transcribeError = cancelled ? "Transcription was cancelled." : toErrorMessage(error, "Transcription failed");
-      transcribeRecovery = cancelled ? null : backendErrorRecovery(error);
-    } finally {
-      progress?.dispose();
-      clearInterval(timer);
-      plainRunId = null;
-      plainRequestStarted = false;
-      cancellingPlain = false;
-      transcribing = false;
-      transcriptionProgress = 0;
-    }
+    return plainTranscriptionRun.start({
+      path: filePath,
+      prompt: prompt ?? undefined,
+      profileId: profileId ?? undefined,
+      runId: job.id,
+    });
   }
 
   /** "Try again": the file runs again as a new job; this one stays as it failed. */
@@ -543,18 +549,7 @@
 
   async function cancelPlainTranscription(): Promise<void> {
     if (!canCancelPlainTranscription({ transcribing, meetingJobStatus, cancellingPlain })) return;
-    cancellingPlain = true;
-    if (!plainRequestStarted || !plainRunId) return;
-    const runId = plainRunId;
-    try {
-      await cancelFileTranscription(runId);
-      if (plainRunId !== runId) return;
-      // Backend success remains authoritative if Stop lost the race.
-    } catch (error) {
-      if (plainRunId !== runId) return;
-      if (transcribing && !transcribeError) transcribeError = toErrorMessage(error, "Could not request cancellation. The transcription is still running.");
-      cancellingPlain = false;
-    }
+    await plainTranscriptionRun.cancel();
   }
 
   async function copyTranscriptionResult(): Promise<void> {
@@ -605,14 +600,6 @@
     meetingError = "";
     transcribing = true;
     void pollMeetingJob(meetingJobId, meetingPollGeneration);
-  }
-
-  async function renameMeetingReviewSpeaker(id: string, label: string): Promise<void> {
-    await applyMeetingReviewOperations([{ kind: "rename_speaker", speaker_id: id, label }]);
-  }
-
-  async function mergeMeetingReviewSpeakers(fromId: string, intoId: string): Promise<void> {
-    await applyMeetingReviewOperations([{ kind: "merge_speakers", from_id: fromId, into_id: intoId }]);
   }
 
   async function exportMeetingReview(format: MeetingExportFormat): Promise<boolean> {
@@ -736,37 +723,42 @@
   }
 
   async function executeCurrentMeetingPlan(): Promise<void> {
-    if (otherBusy || transcribing || meetingReprocessingBusy || meetingReviewDraftDirty || !meetingReprocessingPlan) return;
-    await waitForMeetingActions();
-    const selected = meetingReprocessingPlan;
-    const review = meetingReview;
-    if (!review || !selected || otherBusy || transcribing || meetingReprocessingBusy || meetingReviewDraftDirty) return;
-    if (selected.plan.context.previous_revision !== review.revision) {
-      throw new Error("The review changed. Prepare a new plan; your corrections have been kept.");
-    }
-    const generation = ++meetingPollGeneration;
-    transcribing = true;
-    meetingError = "";
-    meetingPollingFailed = false;
-    meetingJobStatus = "running";
-    meetingPhase = "Preparing reprocessing";
-    startMeetingClock();
-    try {
-      const id = await beginMeetingReprocessing(selected, review,
-        job.prompt, job.profileId);
-      if (!id) throw new Error("Reprocessing did not return a job ID.");
-      meetingJobId = id;
-      meetingResultId = id;
-      void pollMeetingJob(id, generation);
-    } catch (error) {
-      transcribing = false;
-      meetingJobId = null;
-      meetingJobStatus = "failed";
-      meetingError = toErrorMessage(error, "Reprocessing failed; the previous review is unchanged.");
-      updateMeetingClock();
-      stopMeetingClock();
-      throw error;
-    }
+    await executeMeetingPlan({
+      read: () => ({
+        otherBusy,
+        transcribing,
+        reprocessingBusy: meetingReprocessingBusy,
+        draftDirty: meetingReviewDraftDirty,
+        plan: meetingReprocessingPlan,
+        review: meetingReview,
+      }),
+      waitForActions: waitForMeetingActions,
+      execute: async (selected, review) => {
+        const generation = ++meetingPollGeneration;
+        transcribing = true;
+        meetingError = "";
+        meetingPollingFailed = false;
+        meetingJobStatus = "running";
+        meetingPhase = "Preparing reprocessing";
+        startMeetingClock();
+        try {
+          const id = await beginMeetingReprocessing(selected, review,
+            job.prompt, job.profileId);
+          if (!id) throw new Error("Reprocessing did not return a job ID.");
+          meetingJobId = id;
+          meetingResultId = id;
+          void pollMeetingJob(id, generation);
+        } catch (error) {
+          transcribing = false;
+          meetingJobId = null;
+          meetingJobStatus = "failed";
+          meetingError = toErrorMessage(error, "Reprocessing failed; the previous review is unchanged.");
+          updateMeetingClock();
+          stopMeetingClock();
+          throw error;
+        }
+      },
+    });
   }
 
   async function resolveCurrentMeetingProposal(index: number, operations: CorrectionOperation[]): Promise<void> {
@@ -784,15 +776,18 @@
     meetingReprocessingBusy = true;
     try {
       await enqueueMeetingAction(async (review, revision) => {
-        const proposal = meetingProposal;
-        const generation = meetingPollGeneration;
-        if (!proposal || meetingReviewDraftDirty) return false;
-        const state = await acceptMeetingProposal(proposal.proposal, review);
-        if (revision !== meetingDocumentRevision || generation !== meetingPollGeneration
-          || meetingReviewDraftDirty || proposal.proposal.revision !== meetingProposal?.proposal.revision) {
-          throw new Error("The review changed before acceptance. It has not been replaced.");
-        }
-        acceptMeetingReview(state, generation, true);
+        return acceptMeetingProposalForCurrentReview({
+          revision,
+          review,
+          read: () => ({
+            documentRevision: meetingDocumentRevision,
+            pollGeneration: meetingPollGeneration,
+            draftDirty: meetingReviewDraftDirty,
+            proposal: meetingProposal,
+          }),
+          accept: (proposal, currentReview) => acceptMeetingProposal(proposal.proposal, currentReview),
+          apply: (state, generation) => acceptMeetingReview(state, generation, true),
+        });
       });
     } finally { meetingReprocessingBusy = false; }
   }

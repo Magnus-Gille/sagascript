@@ -204,7 +204,7 @@
         if (!isPollCurrent(generation)) return;
         startMicrophonePoll(generation);
       }
-    } catch (e) {
+    } catch {
       if (!isPollCurrent(generation)) return;
       // Prevent spinner getting stuck
       const fallback = await microphoneStatus().catch(() => "not_determined");
@@ -396,7 +396,7 @@
   </div>
 
   <div class="progress">
-    {#each getSteps() as _, i}
+    {#each getSteps() as step, i (step)}
       <div
         class="dot"
         class:active={i === stepIndex()}
@@ -731,7 +731,7 @@
         {#if micStatus === "authorized" || platform !== "macos"}
           <div class="hotkey-display">
             <div class="hotkey-keys">
-              {#each hotkeyParts as part, i}
+              {#each hotkeyParts as part, i (i)}
                 {#if i > 0}<span class="key-sep">+</span>{/if}
                 <kbd>{part}</kbd>
               {/each}

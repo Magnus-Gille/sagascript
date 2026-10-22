@@ -172,3 +172,40 @@ test("Open saved meeting reports an IPC error and does not start a transcription
   expect(ipc.callsTo("begin_meeting_file")).toHaveLength(0);
   expect(ipc.callsTo("transcribe_file")).toHaveLength(0);
 });
+
+test("switching result tabs and a failed later import preserve the earlier meeting's unsaved draft", async () => {
+  const begin = deferred<string>();
+  const confirm = vi.fn(() => true);
+  vi.stubGlobal("confirm", confirm);
+  const { ipc, view } = await renderSettings(
+    meetingSettingsBackend({
+      open_meeting_review: () => savedReview,
+      begin_meeting_file: () => begin.promise,
+    }),
+  );
+  const user = userEvent.setup();
+  await openTranscribeTab(user);
+  await user.click(screen.getByRole("button", { name: "Open saved meeting..." }));
+  const editor = await screen.findByDisplayValue(transcript.segments[0].text);
+  await user.clear(editor);
+  await user.type(editor, "Keep this unapplied correction");
+  const savedTab = screen.getByRole("tab", { selected: true });
+  await user.click(screen.getByRole("checkbox", { name: "Speaker diarization" }));
+  await drop(["/recordings/new-failing-meeting.wav"]);
+  await waitFor(() => expect(ipc.callsTo("begin_meeting_file")).toHaveLength(1));
+  expect(editor).toBeInTheDocument();
+  expect(editor).not.toBeVisible();
+  await user.click(savedTab);
+  expect(screen.getByDisplayValue("Keep this unapplied correction")).toBe(editor);
+  expect(editor).toBeVisible();
+  await user.click(screen.getByRole("tab", { name: /new-failing-meeting.wav/ }));
+  begin.reject(backendError("file_decode", "The second recording cannot be decoded."));
+  await screen.findByText("The second recording cannot be decoded.");
+  await user.click(savedTab);
+  expect(screen.getByDisplayValue("Keep this unapplied correction")).toBe(editor);
+  expect(screen.getByRole("button", { name: "Save review" })).toBeDisabled();
+  expect(confirm).not.toHaveBeenCalled();
+  expect(ipc.callsTo("open_meeting_review")).toHaveLength(1);
+  view.unmount();
+  vi.unstubAllGlobals();
+});

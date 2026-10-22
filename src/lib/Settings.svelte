@@ -43,7 +43,6 @@
     stopAndTranscribe,
     copyTranscriptionText,
     saveTranscriptionText,
-    setUpdateResultPending,
     getUpdateResultPending,
     acknowledgeUpdateResult,
     saveUpdateRecovery,
@@ -264,7 +263,6 @@
   type DictationDelivery = {
     text: string;
     lineage: number;
-    wasRecovered: boolean;
     wasEdited: boolean;
     nativeSourceText: string | null;
     recoveredText: string | null;
@@ -648,7 +646,6 @@
     return {
       text,
       lineage,
-      wasRecovered: recoveredDictationActive,
       wasEdited: testResultEdited,
       nativeSourceText: nativeEditorOrigin?.lineage === lineage ? nativeEditorOrigin.text : null,
       recoveredText: recoveredDictationText,
@@ -658,7 +655,7 @@
   }
 
   async function markTestResultDelivered(delivery: DictationDelivery): Promise<boolean> {
-    const { text, lineage, wasRecovered, wasEdited, nativeSourceText, recoveredText, persistedText, persistedRevision } = delivery;
+    const { text, lineage, wasEdited, nativeSourceText, recoveredText, persistedText, persistedRevision } = delivery;
     const nativePending = await getUpdateResultPending("live-dictation");
     const nativeText = nativePending ? await getLastTranscription() : null;
     const matchesNative = lineage === dictationEditorLineage && nativePending && (nativeText === text
@@ -900,7 +897,7 @@
   }
 
   function onResultTabKeydown(event: KeyboardEvent, index: number): void {
-    let next = index;
+    let next: number;
     if (event.key === "ArrowRight") next = (index + 1) % fileJobs.length;
     else if (event.key === "ArrowLeft") next = (index + fileJobs.length - 1) % fileJobs.length;
     else if (event.key === "Home") next = 0;
@@ -2515,7 +2512,7 @@
                 </select>
               </label>
               <div class="shortcut-grid">
-                {#each shortcutControls as shortcutControl}
+                {#each shortcutControls as shortcutControl (shortcutControl.slot)}
                   <div class="shortcut-control">
                     <span class="shortcut-label">{shortcutControl.label}</span>
                     {#if recordingProfileId === profile.id && recordingShortcutSlot === shortcutControl.slot}
@@ -2601,7 +2598,7 @@
             <div class="hotkey-error" role="status">⚠ {brightnessKeyWarning}</div>
           {/if}
           <div class="hotkey-hint">
-            Each shortcut above is independent and either or both may be configured. Use a modifier ({modifierNames().meta}, {modifierNames().ctrl}, {modifierNames().alt}, Shift) + key{#if supportedBareFunctionKeyRange(platform)}, or {supportedBareFunctionKeyRange(platform)} by itself{/if}.{#if platform === "macos"}{" "}Bare F13–F24 requires Accessibility permission: macOS sends keyboard events to Sagascript, which immediately ignores everything except bare F13–F24 and never stores or sends them.{/if}
+            Each shortcut above is independent and either or both may be configured. Use a modifier ({modifierNames().meta}, {modifierNames().ctrl}, {modifierNames().alt}, Shift) + key{#if supportedBareFunctionKeyRange(platform)}, or {supportedBareFunctionKeyRange(platform)} by itself{/if}.{#if platform === "macos"}&#32;Bare F13–F24 requires Accessibility permission: macOS sends keyboard events to Sagascript, which immediately ignores everything except bare F13–F24 and never stores or sends them.{/if}
           </div>
         </div>
 
@@ -2968,7 +2965,7 @@
               <div class="field advanced-field">
                 <label for="engine-idle">Unload after idle</label>
                 <select id="engine-idle" value={settings.engine_idle_unload_minutes} onchange={onEngineIdleChange} disabled={settingsLocked}>
-                  {#each engineIdleChoices as minutes}
+                  {#each engineIdleChoices as minutes (minutes)}
                     <option value={minutes}>{minutes === 0 ? "Never" : `${minutes} minutes`}</option>
                   {/each}
                   {#if !engineIdleChoices.includes(settings.engine_idle_unload_minutes)}

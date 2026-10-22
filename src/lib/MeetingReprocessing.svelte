@@ -2,7 +2,6 @@
   import type { CorrectionOperation, MeetingSegment, MeetingSpeaker } from "./meeting-types";
   import { toErrorMessage } from "./errors";
   import type {
-    MigrationStep,
     ProposalState,
     RequiredWork,
     ReprocessingMode,
@@ -351,7 +350,7 @@
       </div>
     </div>
     <div class="mode-list" role="radiogroup" aria-label="Reprocessing mode">
-      {#each Object.entries(modeDescriptions) as [value, description]}
+      {#each Object.entries(modeDescriptions) as [value, description] (value)}
         {@const option = value as ReprocessingMode}
         <label class:chosen={mode === option} class="mode-card">
           <input type="radio" name={idPrefix + "reprocessing-mode"} value={option} checked={mode === option} disabled={isBusy()} onchange={() => selectMode(option)} />
@@ -413,7 +412,7 @@
         {#if selected.cache_output}<div><dt>New cache output</dt><dd>{selected.cache_output}</dd></div>{/if}
       </dl>
       <div class="work-grid" aria-label="Required work">
-        {#each workItems(selected.plan.required_work) as item}
+        {#each workItems(selected.plan.required_work) as item (item.label)}
           <span class:required={item.required} class="work-item">{item.required ? "Run" : "Skip"}: {item.label}</span>
         {/each}
       </div>
@@ -467,7 +466,7 @@
               {#if step.status === "applied"}
                 <div class="mapped-list">
                   <span class="subheading">Mapped disposition</span>
-                  {#each step.mapped ?? [] as mapped}<p>{operationSummary(mapped)}</p>{/each}
+                  {#each step.mapped ?? [] as mapped, mappedIndex (mappedIndex)}<p>{operationSummary(mapped)}</p>{/each}
                 </div>
               {:else if activeConflict}
                 <div class="resolution" aria-label={`Resolve conflict ${index + 1}`}>
@@ -578,10 +577,10 @@
     <section class="panel result-panel" aria-labelledby={idPrefix + "result-title"}>
       <div class="section-heading"><div><h2 id={idPrefix + "result-title"}>Reprocessing result</h2><p>Measured work and timing from the completed operation.</p></div></div>
       <div class="work-grid" aria-label="Completed work">
-        {#each workItems(result.required_work) as item}<span class:required={item.required} class="work-item">{item.required ? "Ran" : "Skipped"}: {item.label}</span>{/each}
+        {#each workItems(result.required_work) as item (item.label)}<span class:required={item.required} class="work-item">{item.required ? "Ran" : "Skipped"}: {item.label}</span>{/each}
       </div>
       <dl class="timing-grid">
-        {#each timingItems() as [label, seconds]}<div><dt>{label}</dt><dd>{seconds.toFixed(2)}s</dd></div>{/each}
+        {#each timingItems() as [label, seconds] (label)}<div><dt>{label}</dt><dd>{seconds.toFixed(2)}s</dd></div>{/each}
       </dl>
     </section>
   {/if}
