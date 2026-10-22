@@ -11,7 +11,7 @@ description = "Test-only helpers shared by the Sagascript workspace: temporary d
 # It must not depend on sagascript-core (core's own unit tests use it; see
 # src/lib.rs). Both dependencies are already in Cargo.lock through core.
 [dependencies]
-sha2 = "0.10"
+sha2 = "0.11"
 tempfile = "3"
 
 [lints]
