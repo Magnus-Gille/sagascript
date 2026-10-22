@@ -43,5 +43,13 @@ windows-sys = { version = "0.52", features = ["Win32_Foundation", "Win32_System_
 # so a shipped host only ever loads the ONNX Runtime DLL beside it.
 dev-overrides = []
 
+# Match the main workspace and CI for routine local dev/test builds. Only
+# debug-info volume changes; all other profile defaults remain inherited.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.test]
+debug = "line-tables-only"
+
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("cargo-clippy"))'] }
