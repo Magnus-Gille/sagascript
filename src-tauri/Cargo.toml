@@ -142,6 +142,15 @@ updater-smoke-test = []
 # Development builds only: honor SAGASCRIPT_ENGINE_HOST / SAGASCRIPT_PIANISSIMO_MODEL_DIR in release.
 dev-overrides = ["sagascript-core/dev-overrides", "sagascript-cli/dev-overrides"]
 
+# Keep routine local dev/test artifacts aligned with CI's line-table-only debug
+# setting. This changes debug-info volume only; Cargo's debug assertions,
+# overflow checks, opt levels, and panic behavior retain their built-in values.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.test]
+debug = "line-tables-only"
+
 # Optimize the Rust DSP/glue (rubato resampler, symphonia decode, audio mixing)
 # in release builds. whisper.cpp itself is compiled -O3 by whisper-rs's build
 # script in release; use `cargo tauri build` for production (`cargo tauri dev`
