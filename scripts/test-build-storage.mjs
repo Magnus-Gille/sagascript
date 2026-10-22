@@ -244,7 +244,7 @@ test("skips metadata when Rust is already missing and reports metadata/probe fai
     { root, platform: "linux", prerequisites: {}, values: {}, metadataRunner: metadataStub({ fail: true }).runner },
   );
   assert.match(metadataFailure.missing[0].missing, /metadata unavailable/);
-  assert.match(metadataFailure.missing[0].fix, /cargo fetch --locked --manifest-path src-tauri\/Cargo\.toml/);
+  assert.ok(metadataFailure.missing[0].fix.includes(`cargo fetch --locked --manifest-path ${join("src-tauri", "Cargo.toml")}`));
 
   const probeMetadata = metadataStub({ target: fixture(t) });
   const probeFailure = await preflight([{ id: "cargo-probe-failure", steps: [{ run: "cargo check", cwd: "src-tauri" }], requires: [] }], {
