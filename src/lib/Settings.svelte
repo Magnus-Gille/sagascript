@@ -2632,8 +2632,8 @@
             Each shortcut above is independent and either or both may be configured. Use a modifier ({modifierNames().meta}, {modifierNames()
               .ctrl}, {modifierNames().alt}, Shift) + key{#if supportedBareFunctionKeyRange(platform)}, or {supportedBareFunctionKeyRange(
                 platform,
-              )} by itself{/if}.{#if platform === "macos"}&#32;Bare F13–F24 requires Accessibility permission: macOS sends keyboard events
-              to Sagascript, which immediately ignores everything except bare F13–F24 and never stores or sends them.{/if}
+              )} by itself{/if}. {#if platform === "macos"}Bare F13–F24 requires Accessibility permission: macOS sends keyboard events to
+              Sagascript, which immediately ignores everything except bare F13–F24 and never stores or sends them.{/if}
           </div>
         </div>
 

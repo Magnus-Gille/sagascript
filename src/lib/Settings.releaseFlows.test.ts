@@ -37,3 +37,8 @@ test("Advanced keeps decoder controls behind its disclosure while Dictate contro
   expect(fallback).not.toBeVisible();
   expect(vad).not.toBeVisible();
 });
+
+test("the macOS shortcut explanation separates the optional Accessibility sentence", async () => {
+  await renderSettings(settingsBackend({ get_platform: () => "macos", check_accessibility_permission: () => true }));
+  expect(screen.getByText(/Each shortcut above is independent/)).toHaveTextContent(/by itself\. Bare F13–F24 requires Accessibility/);
+});
