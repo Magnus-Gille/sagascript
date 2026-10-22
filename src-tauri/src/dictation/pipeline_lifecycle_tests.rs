@@ -104,6 +104,7 @@ struct Observed {
     spawned: Vec<JoinHandle<()>>,
     defer_ui: bool,
     queued_ui: Vec<RuntimeCallback>,
+    before_finish_apply: Option<RuntimeCallback>,
     queued_paste: Vec<RuntimeCallback>,
     paste_dispatched: Arc<tokio::sync::Notify>,
     inference_abort_handles: Vec<AbortHandle>,
@@ -129,6 +130,7 @@ impl Default for Observed {
             spawned: Vec::new(),
             defer_ui: false,
             queued_ui: Vec::new(),
+            before_finish_apply: None,
             queued_paste: Vec::new(),
             paste_dispatched: Arc::new(tokio::sync::Notify::new()),
             inference_abort_handles: Vec::new(),
@@ -232,6 +234,10 @@ impl FakeRuntime {
 
     fn defer_ui_dispatch(&self, defer: bool) {
         self.observed.lock().unwrap().defer_ui = defer;
+    }
+
+    fn before_next_finish_apply(&self, callback: impl FnOnce(FakeRuntime) + Send + 'static) {
+        self.observed.lock().unwrap().before_finish_apply = Some(Box::new(callback));
     }
 
     fn drain_ui(&self) {
@@ -395,6 +401,14 @@ impl DictationRuntime for FakeRuntime {
     }
 
     fn apply_ui(&self, action: UiAction) {
+        let before_apply = if matches!(action, UiAction::Finish { .. }) {
+            self.observed.lock().unwrap().before_finish_apply.take()
+        } else {
+            None
+        };
+        if let Some(before_apply) = before_apply {
+            before_apply(self.clone());
+        }
         self.observed.lock().unwrap().actions.push(action);
     }
 
@@ -1418,6 +1432,85 @@ async fn queued_ui_callbacks_can_drain_while_the_same_generation_is_idle() {
     );
     assert_eq!(runtime.controller().state(), AppState::Idle);
     assert_eq!(runtime.controller().recording_generation(), generation);
+}
+
+#[tokio::test(start_paused = true)]
+async fn queued_finish_applies_before_a_competing_recording_can_start() {
+    let runtime = FakeRuntime::new(
+        false,
+        Ok(Vec::new()),
+        InferencePlan::Immediate(Ok("unused".into())),
+        PastePlan::Return(Ok(())),
+    );
+    runtime.defer_ui_dispatch(true);
+    let generation = runtime.start_recording();
+    run_started(&runtime, generation).await;
+    assert_eq!(runtime.controller().state(), AppState::Idle);
+    assert!(runtime.actions().is_empty());
+
+    let (attempted_tx, attempted_rx) = std::sync::mpsc::channel();
+    let thread = Arc::new(Mutex::new(None));
+    let thread_for_hook = thread.clone();
+    runtime.before_next_finish_apply(move |runtime| {
+        *thread_for_hook.lock().unwrap() = Some(std::thread::spawn(move || {
+            match runtime.controller.try_lock() {
+                Ok(mut controller) => {
+                    let profile = controller.settings().resolved_hotkey_profiles()[0].clone();
+                    assert!(controller.state() == AppState::Idle);
+                    assert!(controller.start_recording_for_profile(profile).unwrap());
+                    let finish_applied = runtime
+                        .observed
+                        .lock()
+                        .unwrap()
+                        .actions
+                        .iter()
+                        .any(|action| matches!(action, UiAction::Finish { .. }));
+                    let new_generation = controller.recording_generation();
+                    drop(controller);
+                    attempted_tx.send(()).unwrap();
+                    (new_generation, finish_applied)
+                }
+                Err(std::sync::TryLockError::WouldBlock) => {
+                    attempted_tx.send(()).unwrap();
+                    let mut controller = runtime.controller();
+                    let profile = controller.settings().resolved_hotkey_profiles()[0].clone();
+                    assert!(controller.state() == AppState::Idle);
+                    assert!(controller.start_recording_for_profile(profile).unwrap());
+                    let finish_applied = runtime
+                        .observed
+                        .lock()
+                        .unwrap()
+                        .actions
+                        .iter()
+                        .any(|action| matches!(action, UiAction::Finish { .. }));
+                    (controller.recording_generation(), finish_applied)
+                }
+                Err(std::sync::TryLockError::Poisoned(_)) => {
+                    panic!("controller mutex should not be poisoned")
+                }
+            }
+        }));
+        attempted_rx
+            .recv()
+            .expect("competing recording thread should reach its lock attempt");
+    });
+
+    runtime.drain_ui();
+    let thread = thread
+        .lock()
+        .unwrap()
+        .take()
+        .expect("finish hook should spawn one competing recording thread");
+    let (new_generation, finish_applied_before_new_start) = thread
+        .join()
+        .expect("competing recording thread should complete");
+
+    assert!(new_generation > generation);
+    assert!(
+        finish_applied_before_new_start,
+        "the queued Finish must be applied before a competing recording starts"
+    );
+    assert_eq!(runtime.controller().state(), AppState::Recording);
 }
 
 #[tokio::test(start_paused = true)]

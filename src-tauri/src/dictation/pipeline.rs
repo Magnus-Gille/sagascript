@@ -127,20 +127,21 @@ fn dispatch_ui(runtime: &impl DictationRuntime, generation: u64, action: UiActio
     runtime.dispatch(move |runtime| {
         // Native dispatch may run after the pipeline has finished or another
         // recording/meeting has started. Check at execution, not at enqueue.
-        let current = {
-            let c = runtime.controller();
-            let expected_state = match &action {
-                UiAction::Tray("idle") | UiAction::Finish { .. } | UiAction::HideOverlay => {
-                    app_controller::AppState::Idle
-                }
-                UiAction::Tray(_) => app_controller::AppState::Transcribing,
-            };
-            c.recording_generation() == generation
-                && c.state() == expected_state
-                && (expected_state != app_controller::AppState::Transcribing
-                    || c.active_hotkey_profile().is_some())
+        let c = runtime.controller();
+        let expected_state = match &action {
+            UiAction::Tray("idle") | UiAction::Finish { .. } | UiAction::HideOverlay => {
+                app_controller::AppState::Idle
+            }
+            UiAction::Tray(_) => app_controller::AppState::Transcribing,
         };
-        if current {
+        if c.recording_generation() == generation
+            && c.state() == expected_state
+            && (expected_state != app_controller::AppState::Transcribing
+                || c.active_hotkey_profile().is_some())
+        {
+            // Keep validation and the short main-thread UI commit indivisible
+            // with respect to a new controller transition. These UI adapters
+            // must not reacquire the controller or wait for a worker.
             runtime.apply_ui(action);
         }
     });

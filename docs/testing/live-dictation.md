@@ -6,7 +6,9 @@ main-thread UI dispatch and paste service. Tests replace those external boundari
 they do not implement a second pipeline. `LiveSession` consumes a generation-bound
 terminal outcome and checks that the controller still owns the processing session.
 
-Queued native callbacks validate both generation and state when they execute. A queued
+Queued native callbacks validate both generation and state when they execute. UI validation
+and the synchronous UI commit share the controller guard so another recording cannot start
+between them; the UI adapters must not reacquire that guard or wait for a worker. A queued
 paste whose completion receiver has already expired does not begin. A paste that has
 already begun may still complete after the two-second wait; the existing timeout warning,
 retained text and decision not to move focus to a copy window remain in effect.
@@ -28,7 +30,7 @@ The capture-adapter tests additionally exercise the real controller's public met
 | Deadline, abort and grace | Both `inference_timeout_*` tests assert one abort, 60-second deadline and the 5-second grace outcome; generic `inference_wait_tests` retain boundary tests. |
 | Paste success, failure, dispatch failure, closed channel, timeout | `paste_failures_keep_recognized_text_and_choose_copy_fallback_by_outcome` and queued-paste tests assert distinct errors, retained text, pending result and fallback behavior. |
 | Late responses | `timed_out_old_inference_finishing_after_new_session_cannot_change_it`; stale paste callback test checks the new recording and retained result. |
-| Queued UI and delayed overlay | `stale_queued_ui_cannot_hide_or_relabel_a_new_recording`, `stale_error_overlay_callback_rechecks_when_main_thread_executes_it`, `old_terminal_ui_is_discarded_after_a_new_session_also_finishes`. The last case requires the generation guard even when both sessions have reached Idle. |
+| Queued UI and delayed overlay | `stale_queued_ui_cannot_hide_or_relabel_a_new_recording`, `stale_error_overlay_callback_rechecks_when_main_thread_executes_it`, `old_terminal_ui_is_discarded_after_a_new_session_also_finishes`. The last case requires the generation guard even when both sessions have reached Idle. `queued_finish_applies_before_a_competing_recording_can_start` uses a thread/channel barrier at UI apply to prove that a new recording cannot interleave after validation. |
 | Settings read timing and frozen shortcut | `pipeline_reads_model_options_after_release_and_autopaste_after_inference_while_binding_stays_frozen` changes settings across actual async boundaries. |
 | Cleanup and private session metadata | `every_terminal_path_logs_once_releases_its_work_and_allows_the_next_session` reads actual JSONL, counts session records and work/result leases, rejects unexpected payload keys/content, retries a duplicate stop and starts the next session. |
 

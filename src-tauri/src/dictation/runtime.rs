@@ -46,6 +46,8 @@ pub(super) trait DictationRuntime: Clone + Send + Sync + 'static {
     fn controller(&self) -> MutexGuard<'_, AppController>;
     fn emit_event<E: Event>(&self, event: E, payload: E::Payload<'_>) -> tauri::Result<()>;
     fn dispatch(&self, task: impl FnOnce(Self) + Send + 'static);
+    /// Called on the UI thread while the controller guard protects the checked
+    /// generation. Must not reacquire that guard or wait for a worker.
     fn apply_ui(&self, action: UiAction);
     fn focus_log(&self, event: &'static str, data: serde_json::Value);
     fn now(&self) -> Instant;
