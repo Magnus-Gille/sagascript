@@ -152,10 +152,7 @@
     downloadProgress = 0;
 
     try {
-      await awaitDownloadCompletion(
-        downloadRecommendedModel(selectedLanguage),
-        markDownloadComplete,
-      );
+      await awaitDownloadCompletion(downloadRecommendedModel(selectedLanguage), markDownloadComplete);
       // The command result is authoritative. `model-ready` remains useful for
       // live progress, but a fast verification may emit it before listeners
       // finish registering.
@@ -224,8 +221,7 @@
       await requestAccessibilityPermission();
     } catch (e) {
       if (isCancelled()) return;
-      accessibilityError =
-        toErrorMessage(e, "Failed to request Accessibility permission. Please try again.");
+      accessibilityError = toErrorMessage(e, "Failed to request Accessibility permission. Please try again.");
       accessibilityChecking = false;
       return;
     }
@@ -239,8 +235,7 @@
       if (isCancelled()) return;
       stopPoll();
       accessibilityChecking = false;
-      accessibilityError =
-        toErrorMessage(e, "Failed to check Accessibility permission. Please try again.");
+      accessibilityError = toErrorMessage(e, "Failed to check Accessibility permission. Please try again.");
       return;
     }
     if (!granted) return;
@@ -263,8 +258,7 @@
       // Reopen the pane without asking macOS to show its modal permission prompt again.
       await openAccessibilitySettings();
     } catch (e) {
-      accessibilityError =
-        toErrorMessage(e, "Failed to open Accessibility settings. Please try again.");
+      accessibilityError = toErrorMessage(e, "Failed to open Accessibility settings. Please try again.");
     } finally {
       accessibilityOpening = false;
     }
@@ -278,8 +272,7 @@
       await setAutoPaste(true);
       nextStep();
     } catch (e) {
-      accessibilityError =
-        toErrorMessage(e, "Failed to enable auto-paste. Please try again.");
+      accessibilityError = toErrorMessage(e, "Failed to enable auto-paste. Please try again.");
     } finally {
       accessibilityChecking = false;
     }
@@ -296,8 +289,7 @@
       await setAutoPaste(false);
       nextStep();
     } catch (e) {
-      accessibilityError =
-        toErrorMessage(e, "Failed to disable auto-paste. Please try again.");
+      accessibilityError = toErrorMessage(e, "Failed to disable auto-paste. Please try again.");
     } finally {
       savingManualPaste = false;
     }
@@ -397,11 +389,7 @@
 
   <div class="progress">
     {#each getSteps() as step, i (step)}
-      <div
-        class="dot"
-        class:active={i === stepIndex()}
-        class:completed={i < stepIndex()}
-      ></div>
+      <div class="dot" class:active={i === stepIndex()} class:completed={i < stepIndex()}></div>
     {/each}
   </div>
 
@@ -419,26 +407,19 @@
               stroke-linecap="round"
               stroke-linejoin="round"
             />
-            <path
-              d="M26 34l3-8 3 8M27 32h4"
-              stroke="var(--accent)"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            />
+            <path d="M26 34l3-8 3 8M27 32h4" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
           </svg>
         </div>
         <h1>Set up Sagascript</h1>
         <p class="description">
-          Choose your first profile's language. Its recommended local model is
-          selected automatically; you can add more profiles later.
+          Choose your first profile's language. Its recommended local model is selected automatically; you can add more profiles later.
         </p>
         <div class="language-options">
           <button
             class="language-option"
             class:selected={selectedLanguage === "en"}
             aria-pressed={selectedLanguage === "en"}
-            onclick={() => selectedLanguage = "en"}
+            onclick={() => (selectedLanguage = "en")}
           >
             <span class="lang-flag">EN</span>
             <span class="lang-name">English</span>
@@ -447,7 +428,7 @@
             class="language-option"
             class:selected={selectedLanguage === "sv"}
             aria-pressed={selectedLanguage === "sv"}
-            onclick={() => selectedLanguage = "sv"}
+            onclick={() => (selectedLanguage = "sv")}
           >
             <span class="lang-flag">SV</span>
             <span class="lang-name">Svenska</span>
@@ -456,7 +437,7 @@
             class="language-option"
             class:selected={selectedLanguage === "no"}
             aria-pressed={selectedLanguage === "no"}
-            onclick={() => selectedLanguage = "no"}
+            onclick={() => (selectedLanguage = "no")}
           >
             <span class="lang-flag">NO</span>
             <span class="lang-name">Norsk</span>
@@ -465,7 +446,7 @@
             class="language-option"
             class:selected={selectedLanguage === "fi"}
             aria-pressed={selectedLanguage === "fi"}
-            onclick={() => selectedLanguage = "fi"}
+            onclick={() => (selectedLanguage = "fi")}
           >
             <span class="lang-flag">FI</span>
             <span class="lang-name">Suomi</span>
@@ -478,17 +459,13 @@
           </div>
         {/if}
         <div class="actions">
-          <button
-            class="primary"
-            onclick={selectLanguageAndContinue}
-            disabled={languageSaving || platform === null}
-          >
+          <button class="primary" onclick={selectLanguageAndContinue} disabled={languageSaving || platform === null}>
             {platform === null ? "Preparing…" : languageSaving ? "Saving…" : "Continue"}
           </button>
         </div>
       </div>
 
-    <!-- Download -->
+      <!-- Download -->
     {:else if currentStep === "download"}
       <div class="step">
         <div class="icon">
@@ -505,8 +482,8 @@
         </div>
         <h1>Setting up speech engine</h1>
         <p class="description">
-          Preparing the local speech engine ({recommendedSizeMb !== null ? `${recommendedSizeMb} MB` : engineSize[selectedLanguage]}).
-          Your recordings are processed on this device.
+          Preparing the local speech engine ({recommendedSizeMb !== null ? `${recommendedSizeMb} MB` : engineSize[selectedLanguage]}). Your
+          recordings are processed on this device.
         </p>
 
         {#if downloadError}
@@ -538,30 +515,19 @@
         {/if}
       </div>
 
-    <!-- Microphone (macOS only) -->
+      <!-- Microphone (macOS only) -->
     {:else if currentStep === "microphone"}
       <div class="step">
         <div class="icon">
           <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
             <rect width="48" height="48" rx="12" fill="var(--accent-dim)" />
-            <path
-              d="M24 12a4 4 0 0 0-4 4v8a4 4 0 0 0 8 0v-8a4 4 0 0 0-4-4z"
-              stroke="var(--accent)"
-              stroke-width="2"
-              fill="none"
-            />
-            <path
-              d="M16 22v2a8 8 0 0 0 16 0v-2M24 32v4m-4 0h8"
-              stroke="var(--accent)"
-              stroke-width="2"
-              stroke-linecap="round"
-            />
+            <path d="M24 12a4 4 0 0 0-4 4v8a4 4 0 0 0 8 0v-8a4 4 0 0 0-4-4z" stroke="var(--accent)" stroke-width="2" fill="none" />
+            <path d="M16 22v2a8 8 0 0 0 16 0v-2M24 32v4m-4 0h8" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" />
           </svg>
         </div>
         <h1>Microphone Access</h1>
         <p class="description">
-          Sagascript can record your voice for live dictation. All audio is
-          processed locally on your device — nothing leaves your device.
+          Sagascript can record your voice for live dictation. All audio is processed locally on your device — nothing leaves your device.
         </p>
 
         {#if micStatus === "authorized"}
@@ -572,7 +538,6 @@
           <div class="actions">
             <button class="primary" onclick={nextStep}>Continue</button>
           </div>
-
         {:else if micStatus === "denied"}
           <div class="status-indicator">
             <span class="status-dot"></span>
@@ -587,11 +552,16 @@
               <span class="button-spinner"></span>
               Waiting — Open System Settings
             </button>
-            <button class="secondary" onclick={() => { stopPoll(); nextStep(); }}>
+            <button
+              class="secondary"
+              onclick={() => {
+                stopPoll();
+                nextStep();
+              }}
+            >
               I don't need this — I'll only transcribe files
             </button>
           </div>
-
         {:else if micStatus === "restricted"}
           <div class="status-indicator">
             <span class="status-dot"></span>
@@ -600,7 +570,6 @@
           <div class="actions">
             <button class="secondary" onclick={nextStep}>Skip</button>
           </div>
-
         {:else if micStatus === "unsupported"}
           <div class="status-indicator">
             <span class="status-dot"></span>
@@ -609,7 +578,6 @@
           <div class="actions">
             <button class="primary" onclick={nextStep}>Skip</button>
           </div>
-
         {:else}
           <!-- not_determined or checking -->
           <div class="status-indicator">
@@ -625,14 +593,20 @@
                 Grant Microphone Access
               {/if}
             </button>
-            <button class="secondary" onclick={() => { stopPoll(); nextStep(); }}>
+            <button
+              class="secondary"
+              onclick={() => {
+                stopPoll();
+                nextStep();
+              }}
+            >
               I don't need this — I'll only transcribe files
             </button>
           </div>
         {/if}
       </div>
 
-    <!-- Accessibility (macOS only) -->
+      <!-- Accessibility (macOS only) -->
     {:else if currentStep === "accessibility"}
       <div class="step">
         <div class="icon">
@@ -650,9 +624,8 @@
         </div>
         <h1>Accessibility Permission</h1>
         <p class="description">
-          This lets Sagascript paste transcribed text directly into any app
-          after you dictate. Without it, text goes to your clipboard and you
-          paste manually.
+          This lets Sagascript paste transcribed text directly into any app after you dictate. Without it, text goes to your clipboard and
+          you paste manually.
         </p>
 
         <div class="status-indicator" class:granted={accessibilityGranted}>
@@ -672,11 +645,7 @@
               {accessibilityChecking ? "Saving…" : "Continue"}
             </button>
           {:else if accessibilityChecking}
-            <button
-              class="primary"
-              onclick={reopenAccessibilitySettings}
-              disabled={accessibilityOpening}
-            >
+            <button class="primary" onclick={reopenAccessibilitySettings} disabled={accessibilityOpening}>
               {#if accessibilityOpening}
                 <span class="button-spinner"></span>
                 Opening…
@@ -688,12 +657,8 @@
               I'll paste manually
             </button>
           {:else}
-            <button class="primary" onclick={grantAccessibility}>
-              Open System Settings
-            </button>
-            <button class="secondary" onclick={skipAccessibility} disabled={savingManualPaste}>
-              I'll paste manually
-            </button>
+            <button class="primary" onclick={grantAccessibility}> Open System Settings </button>
+            <button class="secondary" onclick={skipAccessibility} disabled={savingManualPaste}> I'll paste manually </button>
           {/if}
         </div>
         {#if accessibilityError}
@@ -704,19 +669,13 @@
         {/if}
       </div>
 
-    <!-- Ready -->
+      <!-- Ready -->
     {:else if currentStep === "ready"}
       <div class="step">
         <div class="icon">
           <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
             <rect width="48" height="48" rx="12" fill="var(--accent-dim)" />
-            <path
-              d="M17 25l5 5 10-12"
-              stroke="var(--accent)"
-              stroke-width="2.5"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            />
+            <path d="M17 25l5 5 10-12" stroke="var(--accent)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" />
           </svg>
         </div>
         <h1>You're All Set!</h1>
@@ -746,8 +705,8 @@
           </div>
         {:else}
           <p class="description">
-            Open the <strong>Transcribe</strong> tab to convert audio files to text.
-            You can grant microphone access later in Settings if you want live dictation.
+            Open the <strong>Transcribe</strong> tab to convert audio files to text. You can grant microphone access later in Settings if you
+            want live dictation.
           </p>
         {/if}
 
@@ -805,7 +764,9 @@
     height: 8px;
     border-radius: 50%;
     background: var(--border);
-    transition: background 0.3s, transform 0.3s;
+    transition:
+      background 0.3s,
+      transform 0.3s;
   }
 
   .dot.active {
@@ -835,8 +796,14 @@
   }
 
   @keyframes fadeIn {
-    from { opacity: 0; transform: translateY(8px); }
-    to { opacity: 1; transform: translateY(0); }
+    from {
+      opacity: 0;
+      transform: translateY(8px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
   }
 
   .icon {
@@ -882,7 +849,9 @@
     border: 2px solid var(--border);
     border-radius: 10px;
     cursor: pointer;
-    transition: border-color 0.2s, background 0.2s;
+    transition:
+      border-color 0.2s,
+      background 0.2s;
     min-width: 90px;
   }
 
@@ -1006,7 +975,9 @@
   }
 
   @keyframes spin {
-    to { transform: rotate(360deg); }
+    to {
+      transform: rotate(360deg);
+    }
   }
 
   /* Hotkey display */
