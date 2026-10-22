@@ -171,6 +171,97 @@ fn start_paste(
     Ok(receiver)
 }
 
+struct LivePasteOutcome {
+    outcome: &'static str,
+    error: Option<String>,
+    key_up_to_completed_ms: Option<u64>,
+}
+
+async fn perform_paste(
+    runtime: &impl DictationRuntime,
+    session: &LiveSession,
+    generation: u64,
+    text: &str,
+    key_up_at: Instant,
+) -> Option<LivePasteOutcome> {
+    // Check if auto-paste is enabled (lock briefly)
+    let should_paste = {
+        let c = runtime.controller();
+        c.settings().auto_paste
+    };
+
+    if !should_paste {
+        return Some(LivePasteOutcome {
+            outcome: "disabled",
+            error: None,
+            key_up_to_completed_ms: None,
+        });
+    }
+
+    // Auto-paste MUST run on the main thread — enigo's macOS TIS APIs
+    // crash (SIGABRT) if called from a tokio worker thread.
+    let text_for_paste = text.to_owned();
+    let paste_started = runtime.now();
+    runtime.restore_paste_target().await;
+    if !session.is_processing(&runtime.controller()) {
+        return None;
+    }
+
+    let outcome;
+    let error;
+    let key_up_to_completed_ms;
+    match start_paste(runtime, generation, text_for_paste) {
+        Err(e) => {
+            error!("Failed to dispatch paste to main thread: {e}");
+            outcome = "dispatch_failed";
+            error = Some(
+                "Could not dispatch automatic paste. Copy the recognized text from Dictate."
+                    .to_string(),
+            );
+            key_up_to_completed_ms = None;
+        }
+        Ok(paste_rx) => {
+            let completion = paste_completion::wait(
+                paste_rx,
+                Duration::from_millis(PASTE_COMPLETION_TIMEOUT_MS),
+            )
+            .await;
+            outcome = completion.outcome;
+            error = completion.error;
+            info!(
+                paste_ms = runtime
+                    .now()
+                    .saturating_duration_since(paste_started)
+                    .as_millis() as u64,
+                key_up_to_paste_ms = elapsed_ms(key_up_at, runtime.now()),
+                outcome,
+                "Dictation paste finished"
+            );
+            if completion.call_completed {
+                key_up_to_completed_ms = Some(elapsed_ms(key_up_at, runtime.now()));
+            } else {
+                if outcome == "timed_out" {
+                    warn!("Auto-paste completion timed out after {PASTE_COMPLETION_TIMEOUT_MS}ms");
+                }
+                key_up_to_completed_ms = None;
+            }
+        }
+    }
+    if !session.is_processing(&runtime.controller()) {
+        return None;
+    }
+    runtime.controller().record_phase(
+        "clipboard_focus_paste",
+        runtime.now().saturating_duration_since(paste_started),
+    );
+
+    Some(LivePasteOutcome {
+        outcome,
+        error,
+        key_up_to_completed_ms,
+    })
+}
+
 async fn run(
     runtime: impl DictationRuntime,
     remaining: Option<Duration>,
@@ -415,63 +506,14 @@ async fn run(
                 return;
             }
 
-            // Check if auto-paste is enabled (lock briefly)
-            let should_paste = {
-                let c = runtime.controller();
-                c.settings().auto_paste
+            let Some(LivePasteOutcome {
+                outcome: paste_outcome,
+                error: paste_error,
+                key_up_to_completed_ms: key_up_to_paste_completed_ms,
+            }) = perform_paste(&runtime, &session, generation, &text, key_up_at).await
+            else {
+                return;
             };
-
-            let mut paste_outcome = "disabled";
-            let mut key_up_to_paste_completed_ms = None;
-            let mut paste_error = None;
-            if should_paste {
-                // Auto-paste MUST run on the main thread — enigo's macOS TIS APIs
-                // crash (SIGABRT) if called from a tokio worker thread.
-                let text_for_paste = text.clone();
-                let paste_started = runtime.now();
-                runtime.restore_paste_target().await;
-                if !session.is_processing(&runtime.controller()) {
-                    return;
-                }
-                match start_paste(&runtime, generation, text_for_paste) {
-                    Err(e) => {
-                        error!("Failed to dispatch paste to main thread: {e}");
-                        paste_outcome = "dispatch_failed";
-                        paste_error = Some("Could not dispatch automatic paste. Copy the recognized text from Dictate.".to_string());
-                    }
-                    Ok(paste_rx) => {
-                        let completion = paste_completion::wait(
-                            paste_rx,
-                            Duration::from_millis(PASTE_COMPLETION_TIMEOUT_MS),
-                        )
-                        .await;
-                        paste_outcome = completion.outcome;
-                        paste_error = completion.error;
-                        info!(
-                            paste_ms = runtime
-                                .now()
-                                .saturating_duration_since(paste_started)
-                                .as_millis() as u64,
-                            key_up_to_paste_ms = elapsed_ms(key_up_at, runtime.now()),
-                            outcome = completion.outcome,
-                            "Dictation paste finished"
-                        );
-                        if completion.call_completed {
-                            key_up_to_paste_completed_ms =
-                                Some(elapsed_ms(key_up_at, runtime.now()));
-                        } else if paste_outcome == "timed_out" {
-                            warn!("Auto-paste completion timed out after {PASTE_COMPLETION_TIMEOUT_MS}ms");
-                        }
-                    }
-                }
-                if !session.is_processing(&runtime.controller()) {
-                    return;
-                }
-                runtime.controller().record_phase(
-                    "clipboard_focus_paste",
-                    runtime.now().saturating_duration_since(paste_started),
-                );
-            }
 
             session.finish(
                 &runtime,
