@@ -823,7 +823,7 @@ function cargoStorageFailure(root, cwd, detail) {
   };
 }
 
-function storageForCargoChecks(checks, root, platform, synthetic = false, storageProbe = probeBuildStorage) {
+function storageForCargoChecks(checks, root, platform, synthetic = false, storageProbe = probeBuildStorage, metadataRunner = quiet) {
   if (synthetic || platform !== "linux" || !existsSync(join(root, "src-tauri", "Cargo.toml"))) return { ok: true, failures: [] };
   const cargoSteps = checks.flatMap((check) => check.steps.filter(storageCargoStep));
   if (cargoSteps.length === 0) return { ok: true, failures: [] };
@@ -837,7 +837,7 @@ function storageForCargoChecks(checks, root, platform, synthetic = false, storag
     const key = JSON.stringify([cwd, env]);
     if (metadataKeys.has(key)) continue;
     metadataKeys.add(key);
-    const result = quiet("cargo", ["metadata", "--no-deps", "--format-version", "1", "--offline", "--locked"], { cwd, env });
+    const result = metadataRunner("cargo", ["metadata", "--no-deps", "--format-version", "1", "--offline", "--locked"], { cwd, env });
     if (!result.ok) {
       failures.push(cargoStorageFailure(root, cwd, result.stderr.trim() || result.error?.message || "unknown error"));
       continue;
@@ -865,7 +865,10 @@ function npmPackageResolvable(root, name) {
  * Probe every prerequisite the checks need. Returns { missing: [...], notes: [...] }
  * where each missing entry is { missing, fix, neededBy }.
  */
-export async function preflight(checks, { root, platform, prerequisites, values, synthetic = false, storageProbe = probeBuildStorage }) {
+export async function preflight(
+  checks,
+  { root, platform, prerequisites, values, synthetic = false, storageProbe = probeBuildStorage, metadataRunner = quiet },
+) {
   const ctx = { root, platform, values };
   const neededBy = new Map();
   for (const check of checks) {
@@ -902,7 +905,7 @@ export async function preflight(checks, { root, platform, prerequisites, values,
     });
   }
   if (!rustMissing) {
-    const storage = storageForCargoChecks(checks, root, platform, synthetic, storageProbe);
+    const storage = storageForCargoChecks(checks, root, platform, synthetic, storageProbe, metadataRunner);
     if (!storage.ok) {
       const cargoUsers = checks.filter((check) => check.steps.some(storageCargoStep)).map((check) => check.id);
       for (const failure of storage.failures) {

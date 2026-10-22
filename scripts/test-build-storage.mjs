@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, mkdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, statSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,25 +16,18 @@ function fixture(t) {
   return root;
 }
 
-function fakeCargo(t) {
-  const directory = fixture(t);
-  const command = join(directory, "cargo");
-  writeFileSync(
-    command,
-    `#!/usr/bin/env node
-import { appendFileSync } from "node:fs";
-import { resolve } from "node:path";
-if (process.env.FAKE_CARGO_COUNTER) appendFileSync(process.env.FAKE_CARGO_COUNTER, "called\\n");
-if (process.env.FAKE_CARGO_FAIL) { console.error("metadata unavailable"); process.exit(2); }
-if (!process.argv.includes("--locked")) { console.error("metadata was not locked"); process.exit(3); }
-const target = process.env.FAKE_CARGO_TARGET ?? resolve(process.cwd(), process.env.CARGO_TARGET_DIR ?? ".cargo-config-target");
-const metadata = { target_directory: resolve(process.cwd(), target) };
-if (!process.env.FAKE_CARGO_OMIT_BUILD) metadata.build_directory = resolve(process.cwd(), process.env.FAKE_CARGO_BUILD ?? ".cargo-build-dir");
-process.stdout.write(JSON.stringify(metadata));
-`,
-  );
-  chmodSync(command, 0o755);
-  return directory;
+function metadataStub({ target, build, fail = false } = {}) {
+  const calls = [];
+  const runner = (command, args, options) => {
+    calls.push({ command, args, ...options });
+    if (fail) return { ok: false, stdout: "", stderr: "metadata unavailable", error: null };
+    const metadata = {
+      target_directory: target ?? resolve(options.cwd, options.env?.CARGO_TARGET_DIR ?? ".cargo-config-target"),
+    };
+    if (build !== undefined) metadata.build_directory = build;
+    return { ok: true, stdout: JSON.stringify(metadata), stderr: "", error: null };
+  };
+  return { calls, runner };
 }
 
 test("rejects an absent target through a symlink mounted on tmpfs", (t) => {
@@ -145,48 +138,35 @@ test("skips metadata for fmt and frontend-only checks", async () => {
   assert.deepEqual(frontendResult.missing, []);
 });
 
-test("uses Cargo metadata output and rejects a target on tmpfs", async (t) => {
+test("uses Cargo metadata output and rejects a configured build directory on tmpfs", async (t) => {
   const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-  const cargoBin = fakeCargo(t);
   const target = fixture(t);
   const build = fixture(t);
-  const oldPath = process.env.PATH;
-  const oldTarget = process.env.FAKE_CARGO_TARGET;
-  const oldBuild = process.env.FAKE_CARGO_BUILD;
-  process.env.PATH = `${cargoBin}:${oldPath ?? ""}`;
-  process.env.FAKE_CARGO_TARGET = target;
-  process.env.FAKE_CARGO_BUILD = build;
-  try {
-    const result = await preflight([{ id: "cargo-config-target", steps: [{ run: "cargo check", cwd: "src-tauri" }], requires: [] }], {
-      root,
-      platform: "linux",
-      prerequisites: {},
-      values: {},
-      storageProbe: (paths, options) =>
-        probeBuildStorage(paths, { ...options, statfs: (path) => ({ type: path === build ? TMPFS : EXT4 }) }),
-    });
-    assert.equal(result.missing.length, 1);
-    assert.match(result.missing[0].missing, /tmpfs/);
-    assert.match(result.missing[0].fix, /CARGO_TARGET_DIR/);
-  } finally {
-    process.env.PATH = oldPath;
-    if (oldTarget === undefined) delete process.env.FAKE_CARGO_TARGET;
-    else process.env.FAKE_CARGO_TARGET = oldTarget;
-    if (oldBuild === undefined) delete process.env.FAKE_CARGO_BUILD;
-    else process.env.FAKE_CARGO_BUILD = oldBuild;
-  }
+  const metadata = metadataStub({ target, build });
+  const result = await preflight([{ id: "cargo-config-target", steps: [{ run: "cargo check", cwd: "src-tauri" }], requires: [] }], {
+    root,
+    platform: "linux",
+    prerequisites: {},
+    values: {},
+    metadataRunner: metadata.runner,
+    storageProbe: (paths, options) => probeBuildStorage(paths, { ...options, statfs: (path) => ({ type: path === build ? TMPFS : EXT4 }) }),
+  });
+  assert.equal(result.missing.length, 1);
+  assert.match(result.missing[0].missing, /tmpfs/);
+  assert.match(result.missing[0].fix, /CARGO_TARGET_DIR/);
+  assert.equal(metadata.calls[0].command, "cargo");
+  assert.deepEqual(metadata.calls[0].args, ["metadata", "--no-deps", "--format-version", "1", "--offline", "--locked"]);
+  assert.equal(metadata.calls[0].cwd, join(root, "src-tauri"));
 });
 
 test("per-step CARGO_TARGET_DIR overrides the process environment", async (t) => {
   const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-  const cargoBin = fakeCargo(t);
   const processTarget = fixture(t);
   const stepTarget = fixture(t);
-  const oldPath = process.env.PATH;
   const oldTarget = process.env.CARGO_TARGET_DIR;
-  process.env.PATH = `${cargoBin}:${oldPath ?? ""}`;
   process.env.CARGO_TARGET_DIR = processTarget;
   const checked = [];
+  const metadata = metadataStub();
   try {
     const result = await preflight(
       [
@@ -201,6 +181,7 @@ test("per-step CARGO_TARGET_DIR overrides the process environment", async (t) =>
         platform: "linux",
         prerequisites: {},
         values: {},
+        metadataRunner: metadata.runner,
         storageProbe: (paths, options) => {
           checked.push(...paths);
           return probeBuildStorage(paths, { ...options, statfs: () => ({ type: EXT4 }) });
@@ -211,8 +192,8 @@ test("per-step CARGO_TARGET_DIR overrides the process environment", async (t) =>
     assert.ok(checked.includes(stepTarget));
     assert.ok(!checked.includes(processTarget));
     assert.ok(checked.includes(resolve(root, "build-dir")));
+    assert.equal(metadata.calls[0].env.CARGO_TARGET_DIR, stepTarget);
   } finally {
-    process.env.PATH = oldPath;
     if (oldTarget === undefined) delete process.env.CARGO_TARGET_DIR;
     else process.env.CARGO_TARGET_DIR = oldTarget;
   }
@@ -220,84 +201,65 @@ test("per-step CARGO_TARGET_DIR overrides the process environment", async (t) =>
 
 test("marks the clippy policy wrapper as a Cargo workspace check", async (t) => {
   const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-  const cargoBin = fakeCargo(t);
   const target = fixture(t);
-  const oldPath = process.env.PATH;
-  const oldTarget = process.env.FAKE_CARGO_TARGET;
-  process.env.PATH = `${cargoBin}:${oldPath ?? ""}`;
-  process.env.FAKE_CARGO_TARGET = target;
-  try {
-    const policy = CHECKS.find((check) => check.id === "clippy-policy");
-    const result = await preflight([policy], {
-      root,
-      platform: "linux",
-      prerequisites: {
-        rust: { label: "Rust", probe: async () => ({ ok: true }) },
-        "linux-libs": { label: "Linux libraries", probe: async () => ({ ok: true }) },
-        "frontend-dist": { label: "dist", probe: async () => ({ ok: true }) },
-      },
-      values: {},
-      storageProbe: (paths, options) =>
-        probeBuildStorage(paths, { ...options, statfs: (path) => ({ type: path === target ? TMPFS : EXT4 }) }),
-    });
-    assert.equal(result.missing.length, 1);
-    assert.match(result.missing[0].missing, /tmpfs/);
-    assert.match(result.missing[0].neededBy.join(","), /clippy-policy/);
-  } finally {
-    process.env.PATH = oldPath;
-    if (oldTarget === undefined) delete process.env.FAKE_CARGO_TARGET;
-    else process.env.FAKE_CARGO_TARGET = oldTarget;
-  }
+  const metadata = metadataStub({ target });
+  const policy = CHECKS.find((check) => check.id === "clippy-policy");
+  const result = await preflight([policy], {
+    root,
+    platform: "linux",
+    prerequisites: {
+      rust: { label: "Rust", probe: async () => ({ ok: true }) },
+      "linux-libs": { label: "Linux libraries", probe: async () => ({ ok: true }) },
+      "frontend-dist": { label: "dist", probe: async () => ({ ok: true }) },
+    },
+    values: {},
+    metadataRunner: metadata.runner,
+    storageProbe: (paths, options) =>
+      probeBuildStorage(paths, { ...options, statfs: (path) => ({ type: path === target ? TMPFS : EXT4 }) }),
+  });
+  assert.equal(result.missing.length, 1);
+  assert.match(result.missing[0].missing, /tmpfs/);
+  assert.match(result.missing[0].neededBy.join(","), /clippy-policy/);
+  assert.equal(metadata.calls[0].cwd, join(root, "src-tauri"));
 });
 
 test("skips metadata when Rust is already missing and reports metadata/probe failures", async (t) => {
   const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-  const cargoBin = fakeCargo(t);
-  const counter = join(fixture(t), "counter");
-  const oldPath = process.env.PATH;
-  const oldCounter = process.env.FAKE_CARGO_COUNTER;
-  process.env.PATH = `${cargoBin}:${oldPath ?? ""}`;
-  process.env.FAKE_CARGO_COUNTER = counter;
-  try {
-    const rustMissing = await preflight(
-      [{ id: "cargo-rust-missing", steps: [{ run: "cargo check", cwd: "src-tauri" }], requires: ["rust"] }],
-      {
-        root,
-        platform: "linux",
-        prerequisites: { rust: { label: "Rust", probe: async () => ({ ok: false, missing: "rust missing" }) } },
-        values: {},
-      },
-    );
-    assert.match(rustMissing.missing[0].missing, /rust missing/);
-    assert.throws(() => statSync(counter), { code: "ENOENT" });
-
-    process.env.FAKE_CARGO_FAIL = "1";
-    const metadataFailure = await preflight(
-      [{ id: "cargo-metadata-failure", steps: [{ run: "cargo check", cwd: "src-tauri" }], requires: [] }],
-      { root, platform: "linux", prerequisites: {}, values: {} },
-    );
-    assert.match(metadataFailure.missing[0].missing, /metadata unavailable/);
-    assert.match(metadataFailure.missing[0].fix, /cargo fetch --locked --manifest-path src-tauri\/Cargo\.toml/);
-    delete process.env.FAKE_CARGO_FAIL;
-
-    const probeFailure = await preflight([{ id: "cargo-probe-failure", steps: [{ run: "cargo check", cwd: "src-tauri" }], requires: [] }], {
+  const rustMetadata = metadataStub();
+  const rustMissing = await preflight(
+    [{ id: "cargo-rust-missing", steps: [{ run: "cargo check", cwd: "src-tauri" }], requires: ["rust"] }],
+    {
       root,
       platform: "linux",
-      prerequisites: {},
+      prerequisites: { rust: { label: "Rust", probe: async () => ({ ok: false, missing: "rust missing" }) } },
       values: {},
-      storageProbe: (paths, options) =>
-        probeBuildStorage(paths, {
-          ...options,
-          statfs: () => {
-            throw new Error("statfs unavailable");
-          },
-        }),
-    });
-    assert.match(probeFailure.missing[0].missing, /statfs unavailable/);
-  } finally {
-    process.env.PATH = oldPath;
-    if (oldCounter === undefined) delete process.env.FAKE_CARGO_COUNTER;
-    else process.env.FAKE_CARGO_COUNTER = oldCounter;
-    delete process.env.FAKE_CARGO_FAIL;
-  }
+      metadataRunner: rustMetadata.runner,
+    },
+  );
+  assert.match(rustMissing.missing[0].missing, /rust missing/);
+  assert.equal(rustMetadata.calls.length, 0);
+
+  const metadataFailure = await preflight(
+    [{ id: "cargo-metadata-failure", steps: [{ run: "cargo check", cwd: "src-tauri" }], requires: [] }],
+    { root, platform: "linux", prerequisites: {}, values: {}, metadataRunner: metadataStub({ fail: true }).runner },
+  );
+  assert.match(metadataFailure.missing[0].missing, /metadata unavailable/);
+  assert.match(metadataFailure.missing[0].fix, /cargo fetch --locked --manifest-path src-tauri\/Cargo\.toml/);
+
+  const probeMetadata = metadataStub({ target: fixture(t) });
+  const probeFailure = await preflight([{ id: "cargo-probe-failure", steps: [{ run: "cargo check", cwd: "src-tauri" }], requires: [] }], {
+    root,
+    platform: "linux",
+    prerequisites: {},
+    values: {},
+    metadataRunner: probeMetadata.runner,
+    storageProbe: (paths, options) =>
+      probeBuildStorage(paths, {
+        ...options,
+        statfs: () => {
+          throw new Error("statfs unavailable");
+        },
+      }),
+  });
+  assert.match(probeFailure.missing[0].missing, /statfs unavailable/);
 });
