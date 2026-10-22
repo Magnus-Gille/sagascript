@@ -44,7 +44,14 @@
 {/if}
 
 <style>
-  .error-recovery { margin-top: 8px; }
-  .error-recovery button { margin: 0; }
-  button[aria-disabled="true"] { opacity: 0.5; cursor: default; }
+  .error-recovery {
+    margin-top: 8px;
+  }
+  .error-recovery button {
+    margin: 0;
+  }
+  button[aria-disabled="true"] {
+    opacity: 0.5;
+    cursor: default;
+  }
 </style>

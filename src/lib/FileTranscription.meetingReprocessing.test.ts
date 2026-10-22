@@ -479,6 +479,7 @@ test("the rendered meeting clock interpolates native time and ignores a stale po
     });
 
     const progress = await screen.findByLabelText("Meeting progress");
+    expect(vi.getTimerCount()).toBe(1);
     expect(within(progress).getByText("Elapsed: 00:00")).toBeInTheDocument();
     expect(within(progress).getByText("This stage: 00:00")).toBeInTheDocument();
     expect(within(progress).getByText("No status response yet — processing may still be running.")).toBeInTheDocument();
@@ -529,12 +530,14 @@ test("the rendered meeting clock interpolates native time and ignores a stale po
 
     terminalPoll.resolve(completedSnapshot);
     expect(await within(progress).findByText("Meeting processing complete")).toBeInTheDocument();
+    expect(vi.getTimerCount()).toBe(0);
     expect(within(progress).getByText("Elapsed: 02:06")).toBeInTheDocument();
     expect(within(progress).getByText("This stage: 00:01")).toBeInTheDocument();
     expect(within(progress).queryByText("Elapsed: 02:07")).toBeNull();
 
     now = 3_100;
     await vi.advanceTimersByTimeAsync(1_000);
+    expect(vi.getTimerCount()).toBe(0);
     expect(within(progress).getByText("Elapsed: 02:06")).toBeInTheDocument();
     expect(within(progress).getByText("This stage: 00:01")).toBeInTheDocument();
   } finally {
@@ -615,6 +618,7 @@ test("reprocessing resets the same rendered meeting clock before accepting its n
 
     const progress = await screen.findByLabelText("Meeting progress");
     await within(progress).findByText("Elapsed: 00:05");
+    expect(vi.getTimerCount()).toBe(1);
     expect(within(progress).getByText("This stage: 00:03")).toBeInTheDocument();
     await waitForPollCount(ipc, 2);
 
@@ -652,6 +656,7 @@ test("reprocessing resets the same rendered meeting clock before accepting its n
     expect(ipc.callsTo("create_meeting_review")).toEqual([{ transcript: importedTranscript }]);
     expect(screen.getByRole("textbox", { name: "Edit transcript segment at 0:03" })).toHaveValue(importedTranscript.segments[1].text);
     expect(await within(progress).findByText("Meeting processing complete")).toBeInTheDocument();
+    expect(vi.getTimerCount()).toBe(0);
     expect(within(progress).getByText("Elapsed: 00:09")).toBeInTheDocument();
     expect(within(progress).getByText("This stage: 00:01")).toBeInTheDocument();
 
@@ -672,6 +677,7 @@ test("reprocessing resets the same rendered meeting clock before accepting its n
     expect(clockSelectedPlan.plan.revision).toBe("ad99e84a2dd7fb67818d32505a744a7738f33f078abf63a7161d30c01a067ca9");
     await user.click(screen.getByRole("button", { name: "Execute selected Recluster plan" }));
 
+    expect(vi.getTimerCount()).toBe(1);
     expect(within(progress).getByRole("heading", { name: "Processing meeting" })).toBeInTheDocument();
     expect(within(progress).getByText("Elapsed: 00:00")).toBeInTheDocument();
     expect(within(progress).getByText("This stage: 00:00")).toBeInTheDocument();
@@ -704,10 +710,14 @@ test("reprocessing resets the same rendered meeting clock before accepting its n
       transcript: null,
     });
     await within(progress).findByText("Elapsed: 00:25");
+    expect(vi.getTimerCount()).toBe(1);
     expect(within(progress).getByText("This stage: 00:12")).toBeInTheDocument();
     expect(within(progress).getByText("Status checked just now")).toBeInTheDocument();
     expect(within(progress).getByText("Decoding audio")).toBeInTheDocument();
     expect(within(progress).getByText("Reading the audio track.")).toBeInTheDocument();
+    view.unmount();
+    view = undefined;
+    expect(vi.getTimerCount()).toBe(0);
   } finally {
     view?.unmount();
     delayedInitialPoll.resolve({

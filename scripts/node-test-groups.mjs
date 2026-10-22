@@ -25,21 +25,14 @@ export const GROUP_DESCRIPTIONS = {
 // starting, so a checkout without `npm ci` gets one clear error instead of a
 // failure per file. Groups not listed need nothing beyond Node itself.
 export const GROUP_NPM_PACKAGES = {
-  ui: ["typescript"],
+  ui: [],
   // scripts/lib/ci-workflow.mjs parses the workflows with `yaml` (#358).
   ci: ["vite", "yaml"],
   release: ["yaml"],
 };
 
 export const TEST_GROUPS = {
-  ui: [
-    "scripts/test-file-transcription-integration.mjs",
-    "scripts/test-file-transcription-recovery.mjs",
-    "scripts/test-finnish-language.mjs",
-    "scripts/test-frontend-errors-source.mjs",
-    "scripts/test-meeting-integration.mjs",
-    "scripts/test-meeting-reprocessing-integration.mjs",
-  ],
+  ui: ["scripts/test-file-transcription-recovery.mjs", "scripts/test-finnish-language.mjs"],
   ci: [
     "scripts/diarization_sv/test_reference_review.mjs",
     "scripts/test-browser-mock-commands.mjs",

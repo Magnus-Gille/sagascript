@@ -3,8 +3,8 @@
 How the Svelte/TypeScript frontend is tested ([ADR 0004](../adr/0004-test-strategy.md),
 [#361](https://github.com/Magnus-Gille/sagascript/issues/361)). Status: Vitest with unit and
 component tests (happy-dom, `@testing-library/svelte`), the typed IPC mock, Prettier and
-ESLint are in place; the Settings pilot replaced two source-text tests (mapping below). Phase B
-replaces the rest. happy-dom and ESLint bring BSD-2-Clause and BlueOak-1.0.0 packages, which
+ESLint are in place. The Settings pilot and component migration replaced the private
+source harnesses (mappings below); the updater-owned recovery source test remains. happy-dom and ESLint bring BSD-2-Clause and BlueOak-1.0.0 packages, which
 the owner accepted for dev tooling only
 ([decision](https://github.com/Magnus-Gille/sagascript/issues/361#issuecomment-6153321272)):
 `scripts/lib/npm-license-policy.mjs` accepts them only for `"dev": true` packages outside the
@@ -20,7 +20,7 @@ a real `vite build` bundles, emits or reads) and `npm run licenses:check` (relea
 | Unit and component (Vitest) | `src/**/*.test.ts`, next to the module or component | `npm run test:unit` (`npm run test:unit:coverage`: report in `coverage/`, no gate) |
 | Lint (ESLint) | `src/`, `scripts/`, `tests/`; `eslint.config.js` | `npm run lint` |
 | Browser flows (Playwright) | `scripts/qa-*.mjs` against `scripts/fixtures/transcription-browser-mock.js` | `npm run test:browser` |
-| Legacy source-text tests | `scripts/test-*.mjs`: the `ui` group of `scripts/node-test-groups.mjs` and the component checks in `test-release-surface.mjs` (`release` group) | `npm run test:ui`, `npm run test:release`; being replaced (phase B), add none |
+| Legacy source-text tests | `scripts/test-file-transcription-recovery.mjs` (updater owner); native assertions in Finnish/release scripts | `npm run test:ui`, `npm run test:release`; add no component source assertions |
 
 ## Where tests live
 
@@ -173,13 +173,12 @@ typescript-eslint (including `no-explicit-any` and `no-unused-vars`) and eslint-
 over `src/`, and the Node scripts in `scripts/` and `tests/`. Prettier formats; ESLint does
 not.
 
-- `eslint-suppressions.json` records the 84 findings that existed when ESLint was introduced
-  (76 as of #362, which typed the event handlers; 55 as of #360, which removed the last
-  `any` annotations), as counts per file and rule: no `no-explicit-any` is left, and most of the
-  rest is in the Settings, Onboarding, FileTranscription and meeting components, one in
-  `profile-shortcuts.ts`, the others in `scripts/`. A new
-  finding fails, also in a listed file. Fixing one makes ESLint ask for
-  `npx eslint --prune-suppressions`; commit the smaller file. Do not run `--suppress-all`.
+- `eslint-suppressions.json` retains existing tooling findings in `scripts/`. There are
+  no component or other `src/` entries. New findings fail. Prune resolved entries with
+  `npx eslint --prune-suppressions`; never run `--suppress-all`.
+- Prettier includes Svelte components except `FileTranscription.svelte`, whose updater-owned
+  source-text recovery test remains unchanged. Remove that one exclusion when its owner
+  migrates the test. Formatting is verified separately from semantic behavior.
 - Two choices in the configuration itself: `no-regex-spaces` is off for `scripts/` and
   `tests/` (the workflow tests match YAML indentation literally), and `scripts/qa-*.mjs` get
   browser globals for their `page.evaluate()` callbacks.
@@ -215,38 +214,19 @@ asks `downloadModelById(id)` instead of choosing the command.
 5. Delete the replaced `scripts/test-*.mjs` file (and its `node-test-groups.mjs` entry) in
    the same PR.
 
-## Remaining source-text tests (phase B)
+## Remaining source-text boundary
 
-Split by the component a branch has to change, so B1–B3 can run in parallel. Assertions over
-`api.ts` text (`invoke("…", { … })`) are superseded by `src/lib/api.test.ts`: delete them.
-Each branch also fixes and prunes its component's entries in `eslint-suppressions.json` and
-can drop `.svelte` from `.prettierignore` once no source-text test reads its component.
+The `ui` manifest has two entries: `test-finnish-language.mjs` retains CLI/core and
+model-registry checks; `test-file-transcription-recovery.mjs` remains with the updater
+owner. Native window and command-registration checks remain in `test-release-surface.mjs`:
+mocked frontend IPC does not prove native behavior. This migration does not close the
+updater-owned remainder of #361.
 
-- **B1, Settings.svelte:** the Settings portions of `test-meeting-integration.mjs` (file-job
-  payload/source wiring; rendered busy controls and “Open saved meeting” are covered below),
-  the Settings portions of `test-release-surface.mjs`
-  (Dictate, Advanced and profile engines), and the retained `retryLastTranscription` private
-  case in `test-file-transcription-integration.mjs`.
-- **B2, FileTranscription.svelte and the meeting components:** the two retained private
-  FileTranscription cases in `test-file-transcription-integration.mjs`, the remaining source
-  wiring checks in `test-meeting-integration.mjs`, and all five retained private executions in
-  `test-meeting-reprocessing-integration.mjs`. The latter still covers review-revision and
-  polling-generation invalidation, timer lifecycle/reset, and queued dirty/busy rechecks.
-- **B3, Onboarding.svelte:** the remaining onboarding and backend window portions of
-  `test-release-surface.mjs` (release group). The App source read is removed: rendered completion
-  covers its Settings transition and frontend hide IPC, while the backend command check remains.
-  Finnish selectors, onboarding behavior, overlay
-  labels and the frontend `Language` type are already covered by rendered/module tests below.
-
-The current `ui` manifest has six entries. `test-finnish-language.mjs` now keeps only CLI/core
-language and model-registry checks; `test-frontend-errors-source.mjs` tests the source harness
-loader, not component behavior; it remains until private harness users are gone.
-`test-file-transcription-recovery.mjs` is updater recovery coverage that should coordinate with
-the updater owner. Eight private-state executions remain in the two narrowed integration scripts;
-retain each until matching behavior is proven: three file-flow cases (same-instance handler
-re-entry, a held pre-submit queue, and an older selected request behind another running job) and
-five meeting-reprocessing cases (independent review/generation invalidation, the full timer
-lifecycle/reset, and the two queued dirty/busy transitions).
+The file and meeting integration scripts, their `frontend-errors-source.mjs` loader and
+loader test have been removed after their behaviors passed in production-used typed modules,
+rendered components and Chromium. There are no remaining private component executions in
+those migrated flows. The detailed parity map below distinguishes behavior from incidental
+source identifiers, exact syntax and property declarations.
 
 ## Completed rendered migrations
 
@@ -254,8 +234,8 @@ lifecycle/reset, and the two queued dirty/busy transitions).
 |---|---|
 | Settings dictionary and glossary editing | `src/lib/Settings.dictionary.test.ts` (`personal dictionary editor`) and `src/lib/Settings.glossaryScopes.test.ts` (`profile dictionary scopes`) cover Save, Discard, Stay, profile scopes, refreshes, conflicts and retries; `src/lib/Settings.languageRecovery.test.ts` covers `a language change a personal dictionary blocks`. |
 | Meeting reprocessing and its proposal controls | `src/lib/MeetingReprocessing.test.ts` covers `stale selected plans cannot execute against a newer review`, `proposal replacement and discard require confirmation`, and persistence gates; `src/lib/FileTranscription.meetingReprocessing.test.ts` covers rendered reprocessing and clock behavior. |
-| File transcription flow | `src/lib/FileTranscription.flow.test.ts` covers `dropped files use one run-scoped progress listener`, `Stop keeps a file running until native settlement`, and saved-option `Re-run`; `src/lib/FileTranscription.test.ts` retains the other rendered retry/result cases. The three private file cases above remain registered. |
-| Settings meeting controls and saved reviews | `src/lib/Settings.meetingFlows.test.ts` holds begin acknowledgement and terminal polling separately: diarization/context remain disabled until completed, failed or cancelled settlement. Saved-review success renders the returned transcript; picker cancellation waits for a cancelled job; errors remain visible. All saved-review cases assert no new transcription. Replaces only the `disabled={transcribing}` and “Open saved meeting” source assertions; API/payload/source wiring checks remain. |
+| File transcription flow | `src/lib/FileTranscription.flow.test.ts` covers `dropped files use one run-scoped progress listener`, `Stop keeps a file running until native settlement`, and saved-option `Re-run`; `src/lib/FileTranscription.test.ts` retains the other rendered retry/result cases. Same-instance re-entry and held pre-submit cancellation use `plain-transcription-run.test.ts`; the older saved request uses `scripts/qa-rerun-selection.mjs` in Chromium. |
+| Settings meeting controls and saved reviews | `src/lib/Settings.meetingFlows.test.ts` holds begin acknowledgement and terminal polling separately: diarization/context remain disabled until completed, failed or cancelled settlement. Saved-review success renders the returned transcript; picker cancellation waits for a cancelled job; errors remain visible. All saved-review cases assert no new transcription. The same suite preserves an earlier unsaved draft while switching tabs and while a later import fails; `api.test.ts` verifies exact wrapper payloads. |
 | App onboarding completion | `src/App.onboarding.test.ts` renders first-start onboarding and completes it through the actual controls. Deferred completion acknowledgement gates Settings; other URL parameters survive, listeners are released, and frontend IPC never hides the window. Replaces the three App source assertions in `test-release-surface.mjs`; the log-message assertion was incidental wording. The Rust command's no-hide source check stays: mocked IPC cannot prove native window visibility. |
 | Meeting polling | `src/lib/FileTranscription.meetingPolling.test.ts` covers retrying the same job after a poll error, waiting for the cancelled terminal snapshot after cancellation acknowledgement, and reporting a completed job that has no transcript. |
 | Meeting clock | `src/lib/FileTranscription.meetingReprocessing.test.ts` covers `the rendered meeting clock interpolates native time and ignores a stale poll` and `reprocessing resets the same rendered meeting clock before accepting its native timing`. |
@@ -298,3 +278,50 @@ the failed-read test: Vitest fails a run with an unhandled rejection).
 | recovery: cleanup failure does not fail Copy or Save (3) | "when cleanup cannot read the drafts, Copy still succeeds …" |
 | recovery: every stale nonce continuation is fenced (13) | "an aborted or superseded preparation never stores or acknowledges anything"; "… aborted while it waits behind another recovery write …"; "… aborted while its snapshot is being written is not acknowledged"; "a superseded preparation that fails leaves the newer one in charge"; "a failed write is reported for the active preparation, not after an abort" |
 | recovery: the native result drains before the queued capture and read (8) | "a native result still in transit is delivered to the editor before the snapshot"; the IPC order in the snapshot test |
+
+## Release-surface and selected-request migration (#361)
+
+These replacements execute the components with typed IPC, or the actual Svelte select
+binding in Chromium. The browser scripts are registered in `npm run test:browser` and
+run in fresh contexts against synthetic IPC. They do not claim native Mac acceptance.
+
+| Former source assertion | Executed behavior and evidence |
+|---|---|
+| Only Dictate, Transcribe and Settings navigation | `Settings.test.ts`: the header test asserts the complete ordered tab list. The private `activeTab` identifier was incidental. |
+| Model selection outside Advanced; decoder controls inside | `Settings.test.ts`: each profile's model lineup; `Settings.releaseFlows.test.ts`: model available initially, Advanced opens/closes decoding mode, temperature fallback and VAD. |
+| Ordinary overlay and dictionary controls outside Advanced | `Settings.releaseFlows.test.ts`: both controls remain present with the disclosure closed. |
+| Language first, no welcome, platform-appropriate steps and local-processing copy | `Onboarding.test.ts`: portable setup opens directly on language, progresses to download/ready; macOS also visits microphone/Accessibility. |
+| Automatic hidden recommendation, skip after failure and missing-engine warning | `Onboarding.test.ts`: backend-recommended downloads, download progress/readiness, hidden engine name and failed-download skip flow. |
+| Missing profile engine action, model name and stable 152px layout | `Settings.downloads.test.ts` exercises download/ready/error and IPC; `qa-profile-download-layout.mjs` measures action, row and neighbor before download and at 1%/99%, requiring unchanged geometry and single-line, unclipped text. |
+| Backend loading/transcribing cannot start a conflicting recording | `Settings.releaseFlows.test.ts` injects loading and idle; `Settings.events.test.ts` exercises hotkey recording and transcribing state events. |
+| Platform pending and language save block duplicate submission; four languages including Finnish | `Onboarding.test.ts`: disabled Preparing/Saving clicks produce no additional IPC; four choices and Finnish aria-pressed/save/download checks. |
+| Reopening Accessibility Settings does not restart prompt/poll ownership | `Onboarding.test.ts` holds the permission request, reopens once without new request/check, then grants and advances the clock: the original operation still completes and retries registration once. `api.test.ts` covers the wrapper; the native registration source check remains. |
+| F03: older selected request queues behind another active job with its saved options | `qa-rerun-selection.mjs` drives the actual recent-file select. It distinguishes English/Astrid saved options from current Swedish/Bjorn options, asserts fresh run IDs and serial native submissions, and reruns a saved diarized meeting behind a plain job. Existing `FileTranscription.flow.test.ts` retains saved-option and retry wiring coverage. |
+
+The F03 browser test is needed because happy-dom does not consistently expose a selected
+option through `option:checked`, which Svelte's select binding uses. No product behavior
+was changed to accommodate that test environment. The other seven private cases are
+mapped below. Updater recovery source coverage is owned separately and remains unchanged.
+
+
+## File and meeting harness parity
+
+| Former claim | Executed replacement |
+|---|---|
+| F01 same handler re-entry during a live plain run | `plain-transcription-run.test.ts`: starts the same controller twice while submission is held, observes exactly one IPC and one progress subscription. `FileTranscription.flow.test.ts` exercises the rendered caller. |
+| F02 Stop while the meeting action queue holds submission | Same module test holds `waitForMeetingActions`, cancels, then releases it: no native transcription or native cancellation, one local terminal cleanup. |
+| F04 review revision and F05 poll generation invalidate late acceptance independently | `meeting-reprocessing-flow.test.ts` changes each field separately while acceptance is deferred; `apply` remains uncalled and the existing conflict error is preserved. Rendered reprocessing tests cover actual component wiring. |
+| F06 interpolation, late/missing polls, exact terminal clock, stop/restart/unmount | `FileTranscription.meetingReprocessing.test.ts` drives native snapshots and fake time; interval count is one while active, zero after terminal/unmount, one after restart. |
+| F07 dirty draft and F08 another busy action arise while the queue is held | `meeting-reprocessing-flow.test.ts` changes each condition after requesting execution and before releasing the queue; neither reaches execution IPC. |
+| Plain/diarized routing, profile/context, keyed panels | `api.test.ts`, `Settings.meetingFlows.test.ts`, `FileTranscription.flow.test.ts` and the rerun browser script assert actual payloads and routing. A saved meeting's edited DOM node survives tab switches, a new import and that import's failure; no discard prompt or reread occurs. The old internal same-panel re-import assertion is superseded by the public result-tab workflow, which creates a new job. |
+| Serialized action queue and recovery after rejection | `FileTranscription.reviewIntegration.test.ts` holds Undo, queues Plan reprocessing, observes no plan IPC until Undo rejects, then observes the plan against the retained review. The typed run/meeting helpers separately prove their held-queue gates. |
+| Save/export/undo/reset and pending recovery | `FileTranscription.reviewIntegration.test.ts` tests Save and every export format through actual IPC, clearing recovery only after successful persistence. `MeetingReview.actions.test.ts` covers refusal/error and dirty/busy gates; media/diagnostic tests drive Undo/Reset callbacks and confirmation. |
+| Playback, local attachment, stale attachment cleanup | `MeetingReview.media.test.ts` checks the opaque `meeting-audio` token URL, no highlight without attachment, half-open segment highlights, seek without autoplay, pause on inactive, detach on unmount, scroll-follow opt-out and playback error. Parent integration unmounts before a deferred attachment returns and asserts exactly one detach. These are boundary mocks, not OS audio acceptance. |
+| Diagnostics and safe rendering | `MeetingReview.diagnostics.test.ts` compares edited versus original segments, caps overlap rows at 100, explains omitted/missing evidence and avoids calibrated confidence claims. `MeetingReview.media.test.ts` renders markup-like transcript text as text. |
+| Local-only review interactions and no autoplay | Diagnostic tests spy on fetch, local storage, AudioContext and MediaRecorder while editing, attaching, seeking, saving, exporting, undoing, resetting and detaching; none is called. Media `play` is also uncalled. This proves the exercised flows, not arbitrary future code paths or native transport security. |
+| Types, draft reconciliation and polling | `api.test.ts` binds every wrapper to the generated Rust signatures; `transport.test.ts` checks payloads. `meeting-review-drafts.test.ts`, `meeting-types.test.ts`, `meeting-playback.test.ts` and `meeting-job-client.test.ts` retain pure contract tests; rendered polling tests cover retry, missing transcript and terminal cancellation. |
+
+Exact markup, function names and source spelling were incidental assertions and have no
+runtime replacement. Public behaviors, data contracts, privacy claims and concurrency cases
+remain explicit above. Native backend registration/window assertions and updater-owned source
+coverage were retained; no claim of globally zero source inspection is made.

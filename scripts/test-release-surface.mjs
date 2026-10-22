@@ -21,9 +21,6 @@ test("Finnish models document the generic default and pinned optional specialist
   }
 });
 
-const settingsSource = await readFile(new URL("../src/lib/Settings.svelte", import.meta.url), "utf8");
-const onboardingSource = await readFile(new URL("../src/lib/Onboarding.svelte", import.meta.url), "utf8");
-const apiSource = await readFile(new URL("../src/lib/api.ts", import.meta.url), "utf8");
 // The Rust code these assertions inspect used to be src-tauri/src/main.rs alone. #369 split it into
 // modules, so the text is main.rs followed by the modules its code moved to, without their test
 // files and without the three update modules (updates, activity, recovery) that already were files
@@ -58,125 +55,10 @@ const siteCssSource = await readFile(new URL("../site/app/globals.css", import.m
 const sitePageSource = await readFile(new URL("../site/app/page.tsx", import.meta.url), "utf8");
 const siteLayoutSource = await readFile(new URL("../site/app/layout.tsx", import.meta.url), "utf8");
 
-test("release navigation exposes only Dictate, Transcribe, and Settings", () => {
-  for (const label of ["Dictate", "Transcribe", "Settings"]) {
-    assert.match(settingsSource, new RegExp(`>\\s*${label}\\s*<`));
-  }
-  assert.doesNotMatch(settingsSource, />\s*Teach\s*</);
-  assert.doesNotMatch(settingsSource, /activeTab\s*===\s*["']teach["']/);
-});
-
-test("dictation model choice is visible while decoder controls stay behind Advanced", () => {
-  const advancedStart = settingsSource.indexOf('<details class="advanced-section">');
-  const advancedEnd = settingsSource.indexOf("</details>", advancedStart);
-  assert.ok(advancedStart >= 0, "Advanced disclosure is missing");
-  assert.ok(advancedEnd > advancedStart, "Advanced disclosure is not closed");
-
-  const advancedSource = settingsSource.slice(advancedStart, advancedEnd);
-  assert.match(advancedSource, /<summary>Advanced<\/summary>/);
-  assert.doesNotMatch(advancedSource, /Manual model choice/);
-  assert.match(advancedSource, /Decoding mode/);
-  assert.match(advancedSource, /Temperature fallback/);
-  assert.match(advancedSource, /Voice activity detection/);
-
-  const dictateSource = settingsSource.slice(0, advancedStart);
-  assert.match(dictateSource, /Speech model for \{profile\.name\}/);
-  assert.match(dictateSource, /profileModelOptions\[profile\.id\]/);
-});
-
-test("ordinary settings keep the useful controls outside Advanced", () => {
-  const advancedStart = settingsSource.indexOf('<details class="advanced-section">');
-  const ordinarySource = settingsSource.slice(0, advancedStart);
-
-  assert.match(ordinarySource, /Show recording overlay/);
-  assert.match(ordinarySource, /Personal dictionary/);
-});
-
-test("onboarding starts with language instead of a disposable welcome step", () => {
-  assert.match(onboardingSource, /currentStep:\s*Step\s*=\s*\$state\("language"\)/);
-  assert.doesNotMatch(onboardingSource, /type Step = [^\n]*"welcome"/);
-  assert.doesNotMatch(onboardingSource, /Welcome to Sagascript/);
-});
-
-test("cross-platform onboarding copy never identifies every device as a Mac", () => {
-  const renderedMarkup = onboardingSource
-    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "")
-    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, "")
-    .replace(/<!--[\s\S]*?-->/g, "");
-  const visibleCopy = renderedMarkup
-    .replace(/\{[^{}]*\}/g, " ")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/\s+/g, " ");
-
-  assert.doesNotMatch(visibleCopy, /\bmac(?:os)?\b/i);
-  assert.match(visibleCopy, /recommended local model is selected automatically/);
-  assert.match(visibleCopy, /recordings are processed on this device/);
-  assert.match(
-    onboardingSource,
-    /if \(platform === "macos"\) \{\s*return \["language", "download", "microphone", "accessibility", "ready"\];\s*\}\s*return \["language", "download", "ready"\];/s,
-  );
-});
-
-test("onboarding automatically prepares one hidden recommended engine", () => {
-  assert.match(onboardingSource, /nextStep\(\);\s*void startDownload\(\);/s);
-  assert.match(onboardingSource, /local speech engine/i);
-  assert.doesNotMatch(onboardingSource, /modelInfo\[selectedLanguage\]\.name/);
-  assert.match(onboardingSource, /Continue without speech engine/);
-  assert.match(onboardingSource, /Speech engine is not installed yet/);
-});
-
-test("dictation profiles expose missing speech engines without opening Advanced", () => {
-  const advancedStart = settingsSource.indexOf('<details class="advanced-section">');
-  const ordinarySource = settingsSource.slice(0, advancedStart);
-
-  assert.match(ordinarySource, /getProfileModelInfo/);
-  assert.match(ordinarySource, /Download speech engine/);
-  assert.match(ordinarySource, /profileModels\[profile\.id\]\.display_name/);
-  assert.match(ordinarySource, /class="link-btn profile-engine-action"/);
-  assert.match(
-    settingsSource,
-    /\.profile-engine-action\s*\{[^}]*flex:\s*0 0 152px;[^}]*white-space:\s*nowrap;[^}]*overflow:\s*hidden;/,
-    "download progress must keep a stable layout slot while its label changes",
-  );
-});
-
-test("Dictate reflects backend loading and transcription instead of offering a conflicting start", () => {
-  assert.match(settingsSource, /backendDictationState/);
-  assert.match(settingsSource, /dictateButtonAction\(backendDictationState, testOwnsRecording\)/);
-  assert.match(settingsSource, /Recording via hotkey\.\.\./);
-  assert.match(settingsSource, /\["idle", "recording", "loading_model", "transcribing"\]\.includes\(nextState\)/);
-  assert.match(settingsSource, /backendDictationState === "loading_model"/);
-  assert.match(settingsSource, /Preparing speech engine\.\.\./);
-});
-
-test("onboarding prevents duplicate setup requests and exposes language selection", () => {
-  assert.match(onboardingSource, /let platform: string \| null = \$state\(null\)/);
-  assert.match(onboardingSource, /if \(languageSaving \|\| platform === null\) return;/);
-  assert.match(onboardingSource, /disabled=\{languageSaving \|\| platform === null\}/);
-  assert.match(onboardingSource, /platform === null \? "Preparing…"/);
-  assert.equal((onboardingSource.match(/aria-pressed=\{selectedLanguage ===/g) ?? []).length, 4);
-  assert.match(onboardingSource, /selectedLanguage === "fi"/);
-});
-
-test("Accessibility onboarding reopens System Settings without prompting again", () => {
-  const reopenStart = onboardingSource.indexOf("async function reopenAccessibilitySettings");
-  const reopenEnd = onboardingSource.indexOf("\n  }", reopenStart);
-
-  assert.ok(reopenStart >= 0, "Accessibility reopen helper is missing");
-  assert.ok(reopenEnd > reopenStart, "Accessibility reopen helper is not closed");
-
-  const reopenSource = onboardingSource.slice(reopenStart, reopenEnd);
-  assert.match(reopenSource, /await openAccessibilitySettings\(\)/);
-  assert.doesNotMatch(reopenSource, /requestAccessibilityPermission|beginPollOperation|startPoll/);
-  assert.match(
-    apiSource,
-    /export async function openAccessibilitySettings\(\): Promise<void> \{\s*return invoke\("open_accessibility_settings"\);/,
-  );
+// Rendered Settings/Onboarding tests and browser layout coverage replace the
+// frontend source assertions; native registration still requires this check.
+test("Accessibility settings command is registered with Tauri", () => {
   assert.match(mainSource, /commands::open_accessibility_settings,/, "Accessibility settings command is not registered with Tauri");
-  assert.match(
-    onboardingSource,
-    /\{:else if accessibilityChecking\}[\s\S]*onclick=\{reopenAccessibilitySettings\}[\s\S]*Open Accessibility Settings Again/,
-  );
 });
 
 test("tray uses compact macOS markers and a real Windows icon", () => {
