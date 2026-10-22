@@ -98,8 +98,14 @@ impl AppController {
     }
 
     pub(crate) fn with_capture(settings: Settings, audio: impl Capture + 'static) -> Self {
-        let logging = LoggingService::new();
+        Self::with_services(settings, audio, LoggingService::new())
+    }
 
+    pub(crate) fn with_services(
+        settings: Settings,
+        audio: impl Capture + 'static,
+        logging: LoggingService,
+    ) -> Self {
         info!("Sagascript starting up...");
         logging.log(
             "info",
@@ -634,13 +640,7 @@ impl AppController {
                 warn!("Could not track the pending live transcription result: {error}");
             }
         }
-        self.state = AppState::Idle;
-        self.active_work_lease = None;
-        self.active_hotkey_profile = None;
-        self.active_hotkey_shortcut = None;
-        self.toggle_stop_requested = false;
-        self.toggle_key_down = false;
-        self.training_recording = false;
+        self.clear_recording_state();
         self.logging.end_dictation_session();
     }
 
@@ -648,13 +648,7 @@ impl AppController {
     /// useful transcript or surfacing an error.
     pub fn on_no_speech_detected(&mut self) {
         self.end_session("no_speech");
-        self.state = AppState::Idle;
-        self.active_work_lease = None;
-        self.active_hotkey_profile = None;
-        self.active_hotkey_shortcut = None;
-        self.toggle_stop_requested = false;
-        self.toggle_key_down = false;
-        self.training_recording = false;
+        self.clear_recording_state();
         self.logging.log(
             "info",
             "Transcription",
@@ -677,13 +671,7 @@ impl AppController {
     pub fn on_transcription_error(&mut self, error: &str) {
         self.end_session("error");
         self.last_error = Some(error.to_string());
-        self.state = AppState::Idle;
-        self.active_work_lease = None;
-        self.active_hotkey_profile = None;
-        self.active_hotkey_shortcut = None;
-        self.toggle_stop_requested = false;
-        self.toggle_key_down = false;
-        self.training_recording = false;
+        self.clear_recording_state();
         self.logging.end_dictation_session();
     }
 
@@ -723,15 +711,19 @@ impl AppController {
     /// Cancel recording without transcribing
     pub fn complete_cancelled_recording(&mut self) {
         self.end_session("cancelled");
+        self.clear_recording_state();
+        self.active_hotkey_mode = None;
+        self.logging.end_dictation_session();
+    }
+
+    fn clear_recording_state(&mut self) {
         self.state = AppState::Idle;
         self.active_work_lease = None;
         self.active_hotkey_profile = None;
-        self.active_hotkey_mode = None;
         self.active_hotkey_shortcut = None;
         self.toggle_stop_requested = false;
         self.toggle_key_down = false;
         self.training_recording = false;
-        self.logging.end_dictation_session();
     }
 
     /// Cancel recording without transcribing

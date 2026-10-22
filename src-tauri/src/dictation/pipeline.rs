@@ -5,6 +5,9 @@ use tracing::{error, info, warn};
 
 use super::inference_wait::{wait_for_inference, WaitOutcome};
 use super::runtime::{DesktopRuntime, DictationRuntime, InferenceRequest, UiAction};
+
+#[path = "session.rs"]
+mod session;
 use crate::app_controller::{self, StopRecordingOutcome};
 use crate::command_error::CommandError;
 use crate::commands;
@@ -14,6 +17,7 @@ use crate::focus_diag;
 use crate::paste_completion;
 #[cfg(target_os = "macos")]
 use crate::platform;
+use session::{LiveSession, TerminalOutcome};
 
 /// Maximum time to wait for whisper inference before aborting (seconds)
 const TRANSCRIPTION_TIMEOUT_SECS: u64 = 60;
@@ -119,16 +123,48 @@ pub(super) fn request_stop(runtime: impl DictationRuntime) {
     });
 }
 
-fn dispatch_ui(runtime: &impl DictationRuntime, action: UiAction) {
-    runtime.dispatch(move |runtime| runtime.apply_ui(action));
+fn dispatch_ui(runtime: &impl DictationRuntime, generation: u64, action: UiAction) {
+    runtime.dispatch(move |runtime| {
+        // Native dispatch may run after the pipeline has finished or another
+        // recording/meeting has started. Check at execution, not at enqueue.
+        let current = {
+            let c = runtime.controller();
+            let expected_state = match &action {
+                UiAction::Tray("idle") | UiAction::Finish { .. } | UiAction::HideOverlay => {
+                    app_controller::AppState::Idle
+                }
+                UiAction::Tray(_) => app_controller::AppState::Transcribing,
+            };
+            c.recording_generation() == generation
+                && c.state() == expected_state
+                && (expected_state != app_controller::AppState::Transcribing
+                    || c.active_hotkey_profile().is_some())
+        };
+        if current {
+            runtime.apply_ui(action);
+        }
+    });
 }
 
 fn start_paste(
     runtime: &impl DictationRuntime,
+    generation: u64,
     text: String,
 ) -> Result<oneshot::Receiver<Result<(), String>>, String> {
     let (sender, receiver) = oneshot::channel();
     runtime.dispatch_paste(move |runtime| {
+        // A callback that has not begun is discardable after completion or a
+        // new session. Once native paste begins it may still finish late; keep
+        // the existing timeout warning and manual-recovery behavior.
+        let current = {
+            let c = runtime.controller();
+            c.recording_generation() == generation
+                && c.state() == app_controller::AppState::Transcribing
+                && c.active_hotkey_profile().is_some()
+        };
+        if !current || sender.is_closed() {
+            return;
+        }
         let _ = sender.send(runtime.paste(&text));
     })?;
     Ok(receiver)
@@ -140,6 +176,7 @@ async fn run(
     generation: u64,
     key_up_at: Instant,
 ) {
+    let session = LiveSession::new(generation);
     // Min-duration top-up delay, offloaded so the UI thread stays responsive.
     if let Some(rem) = remaining {
         runtime.sleep(rem).await;
@@ -158,15 +195,7 @@ async fn run(
         StopRecordingOutcome::Failed(failure) => {
             let msg = failure.to_string();
             error!("Recording stop failed: {msg}");
-            dispatch_ui(
-                &runtime,
-                UiAction::Finish {
-                    last_result: None,
-                    open_copy_fallback: false,
-                },
-            );
-            let _ = runtime.emit_event(events::event::ERROR, &dictation_failure_event(&failure));
-            let _ = runtime.emit_event(events::event::STATE_CHANGED, UiState::Idle);
+            session.finish(&runtime, TerminalOutcome::CaptureFailed(failure), None);
             return;
         }
         StopRecordingOutcome::Stopped(audio) => {
@@ -183,13 +212,14 @@ async fn run(
     // never leaves the user without feedback while inference/paste runs.
     // Show the transcribing state — re-dispatched to the main
     // thread now that this runs on a worker.
-    dispatch_ui(&runtime, UiAction::Tray("transcribing"));
+    dispatch_ui(&runtime, generation, UiAction::Tray("transcribing"));
     let _ = runtime.emit_event(events::event::STATE_CHANGED, UiState::Transcribing);
 
     if audio.is_empty() {
-        {
-            let mut c = runtime.controller();
-            c.log_dictation_performance(serde_json::json!({
+        session.finish(
+            &runtime,
+            TerminalOutcome::EmptyAudio,
+            Some(serde_json::json!({
                 "outcome": "no_speech",
                 "keyUpToCaptureStoppedMs": key_up_to_capture_stopped_ms,
                 "keyUpToModelReadyMs": null,
@@ -197,17 +227,8 @@ async fn run(
                 "whisperMs": null,
                 "keyUpToPasteCompletedMs": null,
                 "totalMs": elapsed_ms(key_up_at, runtime.now()),
-            }));
-            c.on_no_speech_detected();
-        }
-        dispatch_ui(
-            &runtime,
-            UiAction::Finish {
-                last_result: None,
-                open_copy_fallback: false,
-            },
+            })),
         );
-        let _ = runtime.emit_event(events::event::STATE_CHANGED, UiState::Idle);
         return;
     }
 
@@ -217,6 +238,9 @@ async fn run(
     // Extract what we need for transcription (lock briefly)
     let selection = {
         let c = runtime.controller();
+        if !session.is_processing(&c) {
+            return;
+        }
         let profile_id = c
             .active_hotkey_profile()
             .map(|profile| profile.id.clone())
@@ -240,21 +264,11 @@ async fn run(
         Err(refusal) => {
             let error = refusal.to_string();
             error!("Cannot resolve profile model: {error}");
-            if let Err(finish_error) = runtime
-                .controller()
-                .finish_transcription(Err(error.clone()))
-            {
-                error!("Profile-model failure completion: {finish_error}");
-            }
-            dispatch_ui(
+            session.finish(
                 &runtime,
-                UiAction::Finish {
-                    last_result: None,
-                    open_copy_fallback: false,
-                },
+                TerminalOutcome::ModelSelectionFailed(refusal),
+                None,
             );
-            let _ = runtime.emit_event(events::event::STATE_CHANGED, UiState::Idle);
-            let _ = runtime.emit_event(events::event::ERROR, &CommandError::Settings(refusal));
             return;
         }
     };
@@ -278,7 +292,7 @@ async fn run(
     // Show model loading status in tray
     if !model_was_warm {
         let _ = runtime.emit_event(events::event::STATE_CHANGED, UiState::LoadingModel);
-        dispatch_ui(&runtime, UiAction::Tray("loading_model"));
+        dispatch_ui(&runtime, generation, UiAction::Tray("loading_model"));
     }
 
     // Model selection and inference stay in one bounded transaction on
@@ -315,6 +329,7 @@ async fn run(
             {
                 WaitOutcome::Completed(Ok((r, timings))) => {
                     let mut c = runtime.controller();
+                    if !session.is_processing(&c) { return; }
                     if timings.model_acquisition_started {
                         model_load_ms = Some(timings.model_ms);
                         model_was_warm = timings.model_cached;
@@ -355,6 +370,9 @@ async fn run(
             }
     };
 
+    if !session.is_processing(&runtime.controller()) {
+        return;
+    }
     let key_up_to_whisper_complete_ms =
         whisper_ms.and_then(|_| elapsed_ms_if_success(&result, key_up_at, runtime.now()));
     let postprocess_started = runtime.now();
@@ -372,32 +390,25 @@ async fn run(
             );
 
             if text.trim().is_empty() {
-                let mut c = runtime.controller();
-                c.log_dictation_performance(serde_json::json!({
-                    "outcome": "no_speech",
-                    "model": model_name,
-                    "language": language_name,
-                    "modelWasWarm": model_was_warm,
-                    "beamSize": beam_size,
-                    "temperatureFallback": temperature_fallback,
-                    "vadEnabled": vad_enabled,
-                    "keyUpToCaptureStoppedMs": key_up_to_capture_stopped_ms,
-                    "modelLoadMs": model_load_ms,
-                    "keyUpToModelReadyMs": key_up_to_model_ready_ms,
-                    "whisperMs": whisper_ms,
-                    "keyUpToWhisperCompleteMs": key_up_to_whisper_complete_ms,
-                    "keyUpToPasteCompletedMs": null,
-                    "totalMs": elapsed_ms(key_up_at, runtime.now()),
-                }));
-                c.on_no_speech_detected();
-                drop(c);
-                let _ = runtime.emit_event(events::event::STATE_CHANGED, UiState::Idle);
-                dispatch_ui(
+                session.finish(
                     &runtime,
-                    UiAction::Finish {
-                        last_result: None,
-                        open_copy_fallback: false,
-                    },
+                    TerminalOutcome::NoSpeech,
+                    Some(serde_json::json!({
+                        "outcome": "no_speech",
+                        "model": model_name,
+                        "language": language_name,
+                        "modelWasWarm": model_was_warm,
+                        "beamSize": beam_size,
+                        "temperatureFallback": temperature_fallback,
+                        "vadEnabled": vad_enabled,
+                        "keyUpToCaptureStoppedMs": key_up_to_capture_stopped_ms,
+                        "modelLoadMs": model_load_ms,
+                        "keyUpToModelReadyMs": key_up_to_model_ready_ms,
+                        "whisperMs": whisper_ms,
+                        "keyUpToWhisperCompleteMs": key_up_to_whisper_complete_ms,
+                        "keyUpToPasteCompletedMs": null,
+                        "totalMs": elapsed_ms(key_up_at, runtime.now()),
+                    })),
                 );
                 info!("No speech detected; returning to idle without paste");
                 return;
@@ -418,7 +429,10 @@ async fn run(
                 let text_for_paste = text.clone();
                 let paste_started = runtime.now();
                 runtime.restore_paste_target().await;
-                match start_paste(&runtime, text_for_paste) {
+                if !session.is_processing(&runtime.controller()) {
+                    return;
+                }
+                match start_paste(&runtime, generation, text_for_paste) {
                     Err(e) => {
                         error!("Failed to dispatch paste to main thread: {e}");
                         paste_outcome = "dispatch_failed";
@@ -449,75 +463,39 @@ async fn run(
                         }
                     }
                 }
+                if !session.is_processing(&runtime.controller()) {
+                    return;
+                }
                 runtime.controller().record_phase(
                     "clipboard_focus_paste",
                     runtime.now().saturating_duration_since(paste_started),
                 );
             }
 
-            let mut c = runtime.controller();
-            c.log_dictation_performance(serde_json::json!({
-                "outcome": "success",
-                "model": model_name,
-                "language": language_name,
-                "modelWasWarm": model_was_warm,
-                "beamSize": beam_size,
-                "temperatureFallback": temperature_fallback,
-                "vadEnabled": vad_enabled,
-                "keyUpToCaptureStoppedMs": key_up_to_capture_stopped_ms,
-                "modelLoadMs": model_load_ms,
-                "keyUpToModelReadyMs": key_up_to_model_ready_ms,
-                "whisperMs": whisper_ms,
-                "keyUpToWhisperCompleteMs": key_up_to_whisper_complete_ms,
-                "pasteOutcome": paste_outcome,
-                "keyUpToPasteCompletedMs": key_up_to_paste_completed_ms,
-                "totalMs": elapsed_ms(key_up_at, runtime.now()),
-            }));
-            if let Some(message) = paste_error {
-                // Log the phase event while correlation is still active,
-                // then finish the terminal session exactly once as error.
-                // The successful recognition remains available for copy.
-                c.preserve_transcription(&text);
-                if let Err(error) = c.set_update_result_pending("live-dictation", true) {
-                    warn!("Could not mark failed paste result for recovery: {error}");
-                }
-                c.on_transcription_error(&message);
-                drop(c);
-                runtime.focus_log(
-                    "result_emitted_to_ui",
-                    serde_json::json!({ "outcome": "paste_error", "pasteOutcome": paste_outcome }),
-                );
-                let _ = runtime.emit_event(events::event::TRANSCRIPTION_RESULT, &text);
-                let _ =
-                    runtime.emit_event(events::event::ERROR, &CommandError::PasteFailed(message));
-                let _ = runtime.emit_event(events::event::STATE_CHANGED, UiState::Idle);
-                let open_copy_fallback = paste_completion::should_open_copy_fallback(paste_outcome);
-                dispatch_ui(
-                    &runtime,
-                    UiAction::Finish {
-                        last_result: None,
-                        open_copy_fallback,
-                    },
-                );
-                return;
-            }
-            c.on_transcription_success(&text);
-            if paste_outcome == "succeeded" {
-                if let Err(error) = c.set_update_result_pending("live-dictation", false) {
-                    warn!("Could not clear successfully pasted result from recovery: {error}");
-                }
-            }
-            drop(c);
-
-            let _ = runtime.emit_event(events::event::TRANSCRIPTION_RESULT, &text);
-            let _ = runtime.emit_event(events::event::STATE_CHANGED, UiState::Idle);
-            let text_for_tray = text.clone();
-            dispatch_ui(
+            session.finish(
                 &runtime,
-                UiAction::Finish {
-                    last_result: Some(text_for_tray),
-                    open_copy_fallback: false,
+                TerminalOutcome::Recognized {
+                    text,
+                    paste_outcome,
+                    paste_error,
                 },
+                Some(serde_json::json!({
+                    "outcome": "success",
+                    "model": model_name,
+                    "language": language_name,
+                    "modelWasWarm": model_was_warm,
+                    "beamSize": beam_size,
+                    "temperatureFallback": temperature_fallback,
+                    "vadEnabled": vad_enabled,
+                    "keyUpToCaptureStoppedMs": key_up_to_capture_stopped_ms,
+                    "modelLoadMs": model_load_ms,
+                    "keyUpToModelReadyMs": key_up_to_model_ready_ms,
+                    "whisperMs": whisper_ms,
+                    "keyUpToWhisperCompleteMs": key_up_to_whisper_complete_ms,
+                    "pasteOutcome": paste_outcome,
+                    "keyUpToPasteCompletedMs": key_up_to_paste_completed_ms,
+                    "totalMs": elapsed_ms(key_up_at, runtime.now()),
+                })),
             );
             info!("Transcription flow complete, app should remain running");
         }
@@ -527,45 +505,31 @@ async fn run(
             // last error. No latency record either: the stopped run is no
             // completed dictation (`latency-report` knows three outcomes).
             info!("Transcription cancelled: {e}");
-            runtime.controller().on_transcription_cancelled();
-            let _ = runtime.emit_event(events::event::STATE_CHANGED, UiState::Idle);
-            dispatch_ui(
-                &runtime,
-                UiAction::Finish {
-                    last_result: None,
-                    open_copy_fallback: false,
-                },
-            );
+            session.finish(&runtime, TerminalOutcome::Cancelled, None);
             info!("Cancelled flow complete; back to idle");
         }
         Err(e) => {
             error!("Transcription failed: {e}");
-            let mut c = runtime.controller();
-            c.log_dictation_performance(serde_json::json!({
-                "outcome": "error",
-                "model": model_name,
-                "language": language_name,
-                "modelWasWarm": model_was_warm,
-                "beamSize": beam_size,
-                "temperatureFallback": temperature_fallback,
-                "vadEnabled": vad_enabled,
-                "keyUpToCaptureStoppedMs": key_up_to_capture_stopped_ms,
-                "modelLoadMs": model_load_ms,
-                "keyUpToModelReadyMs": key_up_to_model_ready_ms,
-                "whisperMs": whisper_ms,
-                "keyUpToWhisperCompleteMs": key_up_to_whisper_complete_ms,
-                "keyUpToPasteCompletedMs": null,
-                "totalMs": elapsed_ms(key_up_at, runtime.now()),
-            }));
-            let failure = dictation_failure_text(&e);
-            c.on_transcription_error(&failure);
-            drop(c);
-            let _ = runtime.emit_event(events::event::ERROR, &dictation_failure_event(&e));
-            // Let the overlay show its error state briefly before hiding.
-            let _ = runtime.emit_event(events::event::STATE_CHANGED, UiState::Error);
-            let _ = runtime.emit_event(events::event::STATE_CHANGED, UiState::Idle);
-            dispatch_ui(&runtime, UiAction::Tray("idle"));
-            hide_overlay_after_error(runtime.clone());
+            session.finish(
+                &runtime,
+                TerminalOutcome::Failed(e),
+                Some(serde_json::json!({
+                    "outcome": "error",
+                    "model": model_name,
+                    "language": language_name,
+                    "modelWasWarm": model_was_warm,
+                    "beamSize": beam_size,
+                    "temperatureFallback": temperature_fallback,
+                    "vadEnabled": vad_enabled,
+                    "keyUpToCaptureStoppedMs": key_up_to_capture_stopped_ms,
+                    "modelLoadMs": model_load_ms,
+                    "keyUpToModelReadyMs": key_up_to_model_ready_ms,
+                    "whisperMs": whisper_ms,
+                    "keyUpToWhisperCompleteMs": key_up_to_whisper_complete_ms,
+                    "keyUpToPasteCompletedMs": null,
+                    "totalMs": elapsed_ms(key_up_at, runtime.now()),
+                })),
+            );
             info!("Error flow complete, app should remain running");
         }
     }
@@ -631,7 +595,7 @@ const OVERLAY_ERROR_VISIBLE: Duration = Duration::from_millis(2500);
 
 /// Hide the overlay after its error state has been readable, unless a new
 /// dictation started in the meantime.
-fn hide_overlay_after_error(runtime: impl DictationRuntime) {
+fn hide_overlay_after_error(runtime: impl DictationRuntime, generation: u64) {
     let task_runtime = runtime.clone();
     runtime.spawn(async move {
         task_runtime.sleep(OVERLAY_ERROR_VISIBLE).await;
@@ -640,7 +604,7 @@ fn hide_overlay_after_error(runtime: impl DictationRuntime) {
             app_controller::AppState::Idle
         );
         if idle {
-            dispatch_ui(&task_runtime, UiAction::HideOverlay);
+            dispatch_ui(&task_runtime, generation, UiAction::HideOverlay);
         }
     });
 }
