@@ -162,7 +162,7 @@ pub(crate) fn handle_hotkey_event(
                     }
                 }
                 HotkeyDownResult::StopRecording => {
-                    stop_recording_and_transcribe(app, &ctrl);
+                    stop_recording_and_transcribe(app);
                 }
                 HotkeyDownResult::NoOp => {}
             }
@@ -191,7 +191,7 @@ fn handle_hotkey_release(
         return;
     }
 
-    stop_recording_and_transcribe(app, ctrl);
+    stop_recording_and_transcribe(app);
 }
 
 #[cfg(test)]

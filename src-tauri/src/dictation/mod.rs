@@ -9,6 +9,7 @@
 mod engine;
 mod inference_wait;
 mod pipeline;
+mod runtime;
 mod trigger;
 
 #[cfg(test)]

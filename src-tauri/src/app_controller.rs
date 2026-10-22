@@ -4,11 +4,14 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 use tracing::{info, warn};
 
+pub(crate) use self::capture::Capture;
 use crate::logging::log_events;
 use crate::logging::LoggingService;
 use sagascript_core::audio::AudioCaptureService;
 use sagascript_core::error::DictationError;
 use sagascript_core::settings::{canonical_hotkey, FileModel, HotkeyMode, HotkeyProfile, Settings};
+
+mod capture;
 
 /// Result of handling a hotkey-down event
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -64,7 +67,7 @@ impl AppState {
 /// Central coordinator for the dictation workflow
 pub struct AppController {
     state: AppState,
-    audio: AudioCaptureService,
+    audio: Box<dyn Capture>,
     logging: LoggingService,
     settings: Settings,
     recording_start: Option<Instant>,
@@ -91,6 +94,10 @@ pub struct AppController {
 
 impl AppController {
     pub fn new(settings: Settings) -> Self {
+        Self::with_capture(settings, AudioCaptureService::new())
+    }
+
+    pub(crate) fn with_capture(settings: Settings, audio: impl Capture + 'static) -> Self {
         let logging = LoggingService::new();
 
         info!("Sagascript starting up...");
@@ -103,7 +110,7 @@ impl AppController {
 
         Self {
             state: AppState::Idle,
-            audio: AudioCaptureService::new(),
+            audio: Box::new(audio),
             logging,
             settings,
             recording_start: None,
@@ -438,7 +445,7 @@ impl AppController {
         start_capture: F,
     ) -> Result<bool, DictationError>
     where
-        F: FnOnce(&mut AudioCaptureService) -> Result<(), DictationError>,
+        F: FnOnce(&mut dyn Capture) -> Result<(), DictationError>,
     {
         let mode = self.settings.hotkey_mode;
         let shortcut = profile.shortcut.clone();
@@ -453,7 +460,7 @@ impl AppController {
         start_capture: F,
     ) -> Result<bool, DictationError>
     where
-        F: FnOnce(&mut AudioCaptureService) -> Result<(), DictationError>,
+        F: FnOnce(&mut dyn Capture) -> Result<(), DictationError>,
     {
         if self.state != AppState::Idle || self.hotkey_configuration_changing {
             warn!("Cannot start recording: state is {:?}", self.state);
@@ -499,7 +506,7 @@ impl AppController {
             "auto_paste": self.settings.auto_paste,
         }));
         self.release_started = None;
-        if let Err(error) = start_capture(&mut self.audio) {
+        if let Err(error) = start_capture(self.audio.as_mut()) {
             let message = error.to_string();
             self.on_transcription_error(&message);
             return Err(error);
