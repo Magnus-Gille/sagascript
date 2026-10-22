@@ -1,0 +1,41 @@
+Sagascript startup hotkey ownership — 2026-10-21
+
+Refs #375 and the #351 dependency order. Scope remains partial for #375.
+Base: 1c6db4be7884134a62627ae668a00e1dacfd759e, fresh origin/main.
+Owner mandate: one bounded quality package through reviewed PR, fresh complete
+CI and normal guarded merge. No release publication, draft edits, signing/tags,
+owner-machine installation, credentials, destructive cleanup or nightly follow-up.
+Updater ownership remains separate. Shared app/CLI binary, local transcription
+and existing product behavior are required invariants.
+
+The last external native-registration caller was startup. Extract its existing
+whole-profile validation, selected/fallback shortcut set, register/cleanup sequence
+and health mapping into hotkey/startup.rs using the existing Registrar seam.
+Launch retains controller-lock scope, diagnostic logging, health.record and event
+emission. Startup is synchronous before the watcher; no transition guard is added.
+Native adapter bodies and thread placement are unchanged. Native registration
+functions become private to their module.
+
+Before moving the extracted helper out of launch/, run the production seam's
+selection and registration tests. Afterwards retain the existing health mapper
+tests verbatim, replace the older candidate-only test copy with real seam tests,
+and prove sensitivity using four isolated mutants. This is current characterization;
+it does not establish the requested historical pre-PR-493 caller baseline.
+
+Acceptance: whole configuration validation; all resolved bindings in order;
+exact register/cleanup order and full attempted-set arguments; no cleanup on
+success; successful cleanup => Inactive; failed cleanup => Unknown; unchanged
+health diagnostics. Preserve settings and existing runtime-transition coverage.
+Local workspace/lean Rust gates, frontend/contract checks, isolated mutations,
+independent immutable review and all configured provider CI precede merge.
+Recovery: normal reviewed revert of this bounded PR; no data migration.
+
+Limits: injected tests do not establish real OS registration, macOS TCC, native
+window behavior or signed-app acceptance. Historical pre-493 characterization,
+whole-session lifecycle work in #344, and remaining #361 frontend migrations
+remain outstanding. No broader issue completion is claimed.
+
+Delegation: focused reads, tests and isolated mutation execution requested native
+gpt-6-luna/high. Runtime model/effort are not exposed and remain unknown. The
+conductor owns production design, integration, acceptance and external mutations.
+Independent review and provider receipts are recorded in the PR.

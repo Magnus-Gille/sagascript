@@ -1,0 +1,88 @@
+{
+  "source_sha256": "682f08980486cc9a7af991fc96537f5e1d6fcdc0b755c4e9390ef0d8965fd0d9",
+  "all_restored_hashes_match": true,
+  "clean_tests_passed": 11,
+  "results": [
+    {
+      "name": "prepare-validation-bypassed",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "sagascript",
+        "hotkey::startup",
+        "--locked",
+        "--offline"
+      ],
+      "exit_code": 101,
+      "failing_tests": [
+        "hotkey::startup::tests::invalid_secondary_profile_uses_fallback_without_mutating_settings",
+        "hotkey::startup::tests::duplicate_binding_uses_fallback_without_mutating_settings",
+        "hotkey::startup::tests::startup_registration_matrix_cleans_only_failed_attempts_and_reports_health"
+      ]
+    },
+    {
+      "name": "cleanup-omitted",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "sagascript",
+        "hotkey::startup",
+        "--locked",
+        "--offline"
+      ],
+      "exit_code": 101,
+      "failing_tests": [
+        "hotkey::startup::tests::startup_registration_matrix_cleans_only_failed_attempts_and_reports_health"
+      ]
+    },
+    {
+      "name": "cleanup-truncated",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "sagascript",
+        "hotkey::startup",
+        "--locked",
+        "--offline"
+      ],
+      "exit_code": 101,
+      "failing_tests": [
+        "hotkey::startup::tests::startup_registration_matrix_cleans_only_failed_attempts_and_reports_health"
+      ]
+    },
+    {
+      "name": "cleanup-failure-mapped-inactive",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "sagascript",
+        "hotkey::startup",
+        "--locked",
+        "--offline"
+      ],
+      "exit_code": 101,
+      "failing_tests": [
+        "hotkey::startup::health_tests::a_failed_cleanup_after_a_failed_registration_leaves_the_os_state_unknown",
+        "hotkey::startup::tests::startup_registration_matrix_cleans_only_failed_attempts_and_reports_health"
+      ]
+    },
+    {
+      "name": "clean-candidate",
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "sagascript",
+        "hotkey::startup",
+        "--locked",
+        "--offline"
+      ],
+      "exit_code": 0,
+      "failing_tests": []
+    }
+  ]
+}
