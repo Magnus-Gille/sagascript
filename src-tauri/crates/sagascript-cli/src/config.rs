@@ -3,7 +3,8 @@ use clap::{Args, Subcommand};
 use sagascript_core::error::DictationError;
 use sagascript_core::machine;
 use sagascript_core::settings::{
-    self, FileModelPreference, HotkeyProfile, Language, ModelResetNotice, Settings, SettingsError,
+    self, FileModelPreference, HotkeyMode, HotkeyProfile, Language, ModelResetNotice, Settings,
+    SettingsError,
 };
 
 use crate::output::{errln, outln, Out};
@@ -344,7 +345,9 @@ fn cmd_profiles(action: ProfileAction, out: &Out) -> Result<(), DictationError> 
                 .map(FileModelPreference::parse_id)
                 .transpose()
                 .map_err(DictationError::from)?;
-            let mut profiles = machine::load().resolved_hotkey_profiles();
+            let loaded_settings = machine::load();
+            let hotkey_mode = loaded_settings.hotkey_mode;
+            let mut profiles = loaded_settings.resolved_hotkey_profiles();
             let profile = profiles
                 .iter_mut()
                 .find(|profile| profile.id == id)
@@ -354,21 +357,15 @@ fn cmd_profiles(action: ProfileAction, out: &Out) -> Result<(), DictationError> 
             if let Some(name) = name {
                 profile.name = name;
             }
-            if let Some(hotkey) = hotkey {
-                profile.set_primary_shortcut(hotkey);
-            }
-            if clear_push_to_talk_shortcut {
-                profile.push_to_talk_shortcut = None;
-            }
-            if clear_toggle_shortcut {
-                profile.toggle_shortcut = None;
-            }
-            if let Some(shortcut) = push_to_talk_shortcut {
-                profile.push_to_talk_shortcut = Some(shortcut);
-            }
-            if let Some(shortcut) = toggle_shortcut {
-                profile.toggle_shortcut = Some(shortcut);
-            }
+            apply_profile_shortcut_update(
+                profile,
+                hotkey,
+                push_to_talk_shortcut,
+                toggle_shortcut,
+                clear_push_to_talk_shortcut,
+                clear_toggle_shortcut,
+                hotkey_mode,
+            );
             if let Some(language) = language {
                 profile.language = language;
             }
@@ -424,6 +421,69 @@ fn persist_profiles(
         Ok(())
     })?;
     Ok(notices)
+}
+
+/// Apply the CLI's profile shortcut options while retaining a legacy-only
+/// profile's effective binding when the command adds the other mode.
+///
+/// The GUI makes this migration in `profileWithShortcut`: a legacy push
+/// profile receiving a toggle binding keeps the legacy shortcut as explicit
+/// push-to-talk, and vice versa. Preserve the pre-update explicit state so a
+/// command that intentionally clears an explicit binding cannot recreate it as
+/// a migrated legacy binding in the same update; an explicit clear of the old
+/// global mode also wins over adding the other mode.
+fn apply_profile_shortcut_update(
+    profile: &mut HotkeyProfile,
+    hotkey: Option<String>,
+    push_to_talk_shortcut: Option<String>,
+    toggle_shortcut: Option<String>,
+    clear_push_to_talk_shortcut: bool,
+    clear_toggle_shortcut: bool,
+    hotkey_mode: HotkeyMode,
+) {
+    let had_explicit_binding =
+        profile.push_to_talk_shortcut.is_some() || profile.toggle_shortcut.is_some();
+    let adds_push_to_talk = push_to_talk_shortcut.is_some();
+    let adds_toggle = toggle_shortcut.is_some();
+    let clears_legacy_slot = match hotkey_mode {
+        HotkeyMode::PushToTalk => clear_push_to_talk_shortcut,
+        HotkeyMode::Toggle => clear_toggle_shortcut,
+    };
+
+    if let Some(hotkey) = hotkey {
+        profile.set_primary_shortcut(hotkey);
+    }
+    if clear_push_to_talk_shortcut {
+        profile.push_to_talk_shortcut = None;
+    }
+    if clear_toggle_shortcut {
+        profile.toggle_shortcut = None;
+    }
+    if let Some(shortcut) = push_to_talk_shortcut {
+        profile.push_to_talk_shortcut = Some(shortcut);
+    }
+    if let Some(shortcut) = toggle_shortcut {
+        profile.toggle_shortcut = Some(shortcut);
+    }
+
+    // GUI profileWithShortcut only migrates a legacy-only profile when one
+    // explicit slot is added and it is different from the old global mode.
+    if had_explicit_binding || clears_legacy_slot || adds_push_to_talk == adds_toggle {
+        return;
+    }
+    if profile.shortcut.trim().is_empty() {
+        return;
+    }
+
+    match (hotkey_mode, adds_push_to_talk) {
+        (HotkeyMode::PushToTalk, false) if profile.push_to_talk_shortcut.is_none() => {
+            profile.push_to_talk_shortcut = Some(profile.shortcut.clone());
+        }
+        (HotkeyMode::Toggle, true) if profile.toggle_shortcut.is_none() => {
+            profile.toggle_shortcut = Some(profile.shortcut.clone());
+        }
+        _ => {}
+    }
 }
 
 fn print_notices(notices: &[ModelResetNotice], out: &Out) {
@@ -952,6 +1012,205 @@ mod tests {
         assert_eq!(settings.hotkey_profiles, before.hotkey_profiles);
         settings = before;
         assert_eq!(settings.default_profile().language, Language::Swedish);
+    }
+
+    fn shortcut_test_profile(shortcut: &str) -> HotkeyProfile {
+        HotkeyProfile {
+            id: "default".to_string(),
+            name: "Default".to_string(),
+            shortcut: shortcut.to_string(),
+            language: Language::English,
+            push_to_talk_shortcut: None,
+            toggle_shortcut: None,
+        }
+    }
+
+    fn apply_shortcut_update_for_test(
+        profile: HotkeyProfile,
+        hotkey: Option<String>,
+        push_to_talk_shortcut: Option<String>,
+        toggle_shortcut: Option<String>,
+        clear_push_to_talk_shortcut: bool,
+        clear_toggle_shortcut: bool,
+        hotkey_mode: HotkeyMode,
+    ) -> HotkeyProfile {
+        let mut settings = Settings {
+            hotkey_mode,
+            hotkey_profiles: vec![profile],
+            ..Default::default()
+        };
+        let mut profiles = settings.resolved_hotkey_profiles();
+        apply_profile_shortcut_update(
+            &mut profiles[0],
+            hotkey,
+            push_to_talk_shortcut,
+            toggle_shortcut,
+            clear_push_to_talk_shortcut,
+            clear_toggle_shortcut,
+            hotkey_mode,
+        );
+        settings.apply_profiles_change(profiles, None).unwrap();
+        settings.hotkey_profiles.remove(0)
+    }
+
+    #[test]
+    fn profiles_update_legacy_push_adds_toggle_without_dropping_push() {
+        let legacy = "Control+Alt+Shift+Space";
+        let profile = apply_shortcut_update_for_test(
+            shortcut_test_profile(legacy),
+            None,
+            None,
+            Some("Control+Alt+Shift+T".to_string()),
+            false,
+            false,
+            HotkeyMode::PushToTalk,
+        );
+
+        assert_eq!(profile.shortcut, legacy);
+        assert_eq!(profile.push_to_talk_shortcut.as_deref(), Some(legacy));
+        assert_eq!(
+            profile.toggle_shortcut.as_deref(),
+            Some("Control+Alt+Shift+T")
+        );
+    }
+
+    #[test]
+    fn profiles_update_legacy_toggle_adds_push_without_dropping_toggle() {
+        let legacy = "Control+Alt+Shift+Space";
+        let profile = apply_shortcut_update_for_test(
+            shortcut_test_profile(legacy),
+            None,
+            Some("Control+Alt+Shift+P".to_string()),
+            None,
+            false,
+            false,
+            HotkeyMode::Toggle,
+        );
+
+        assert_eq!(profile.shortcut, "Control+Alt+Shift+P");
+        assert_eq!(
+            profile.push_to_talk_shortcut.as_deref(),
+            Some("Control+Alt+Shift+P")
+        );
+        assert_eq!(profile.toggle_shortcut.as_deref(), Some(legacy));
+    }
+
+    #[test]
+    fn profiles_update_same_mode_replacement_does_not_migrate_legacy_slot() {
+        let profile = apply_shortcut_update_for_test(
+            shortcut_test_profile("Control+Alt+Shift+Space"),
+            None,
+            Some("Control+Alt+Shift+P".to_string()),
+            None,
+            false,
+            false,
+            HotkeyMode::PushToTalk,
+        );
+
+        assert_eq!(profile.shortcut, "Control+Alt+Shift+P");
+        assert_eq!(
+            profile.push_to_talk_shortcut.as_deref(),
+            Some("Control+Alt+Shift+P")
+        );
+        assert!(profile.toggle_shortcut.is_none());
+    }
+
+    #[test]
+    fn profiles_update_explicit_same_slot_replacement_keeps_other_slot_unchanged() {
+        let profile = HotkeyProfile {
+            id: "default".to_string(),
+            name: "Default".to_string(),
+            shortcut: "Control+Alt+Shift+P".to_string(),
+            language: Language::English,
+            push_to_talk_shortcut: Some("Control+Alt+Shift+P".to_string()),
+            toggle_shortcut: None,
+        };
+
+        let profile = apply_shortcut_update_for_test(
+            profile,
+            None,
+            Some("Control+Alt+Shift+N".to_string()),
+            None,
+            false,
+            false,
+            HotkeyMode::PushToTalk,
+        );
+
+        assert_eq!(
+            profile.push_to_talk_shortcut.as_deref(),
+            Some("Control+Alt+Shift+N")
+        );
+        assert_eq!(profile.shortcut, "Control+Alt+Shift+N");
+        assert!(profile.toggle_shortcut.is_none());
+    }
+
+    #[test]
+    fn profiles_update_clear_unrelated_binding_preserves_updated_binding() {
+        let profile = HotkeyProfile {
+            id: "default".to_string(),
+            name: "Default".to_string(),
+            shortcut: "Control+Alt+Shift+P".to_string(),
+            language: Language::English,
+            push_to_talk_shortcut: Some("Control+Alt+Shift+P".to_string()),
+            toggle_shortcut: Some("Control+Alt+Shift+T".to_string()),
+        };
+
+        let profile = apply_shortcut_update_for_test(
+            profile,
+            None,
+            Some("Control+Alt+Shift+N".to_string()),
+            None,
+            false,
+            true,
+            HotkeyMode::PushToTalk,
+        );
+
+        assert_eq!(
+            profile.push_to_talk_shortcut.as_deref(),
+            Some("Control+Alt+Shift+N")
+        );
+        assert_eq!(profile.shortcut, "Control+Alt+Shift+N");
+        assert!(profile.toggle_shortcut.is_none());
+    }
+
+    #[test]
+    fn profiles_update_clear_legacy_push_wins_over_adding_toggle() {
+        let profile = apply_shortcut_update_for_test(
+            shortcut_test_profile("Control+Alt+Shift+Space"),
+            None,
+            None,
+            Some("Control+Alt+Shift+T".to_string()),
+            true,
+            false,
+            HotkeyMode::PushToTalk,
+        );
+
+        assert_eq!(profile.shortcut, "Control+Alt+Shift+T");
+        assert!(profile.push_to_talk_shortcut.is_none());
+        assert_eq!(
+            profile.toggle_shortcut.as_deref(),
+            Some("Control+Alt+Shift+T")
+        );
+    }
+
+    #[test]
+    fn profiles_update_clear_legacy_toggle_wins_over_adding_push() {
+        let profile = apply_shortcut_update_for_test(
+            shortcut_test_profile("Control+Alt+Shift+Space"),
+            None,
+            Some("Control+Alt+Shift+P".to_string()),
+            None,
+            false,
+            true,
+            HotkeyMode::Toggle,
+        );
+
+        assert_eq!(profile.shortcut, "Control+Alt+Shift+P");
+        assert_eq!(
+            profile.push_to_talk_shortcut.as_deref(),
+            Some("Control+Alt+Shift+P")
+        );
+        assert!(profile.toggle_shortcut.is_none());
     }
 
     #[test]
