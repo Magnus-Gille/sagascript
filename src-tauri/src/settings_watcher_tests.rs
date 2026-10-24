@@ -279,6 +279,165 @@ fn actual_watcher_helper_restores_hotkey_fields_after_registration_failure() {
 }
 
 #[test]
+fn actual_watcher_helper_success_keeps_incoming_settings_and_records_registration() {
+    use sagascript_core::settings::{HotkeyMode, Language, WhisperModel};
+
+    let previous = settings_with_hotkey(
+        "Control+Shift+Space",
+        Language::Swedish,
+        HotkeyMode::PushToTalk,
+        WhisperModel::Tiny,
+        "old prompt",
+    );
+    let mut incoming = settings_with_hotkey(
+        "Control+Alt+K",
+        Language::English,
+        HotkeyMode::Toggle,
+        WhisperModel::TinyEn,
+        "new prompt",
+    );
+    let health = HotkeyHealth::new(&previous.hotkey);
+    health.record(&previous.hotkey, None, registered(&previous.hotkey));
+    let mut registrar = FakeRegistrar::default();
+    let mut emitted = Vec::new();
+
+    apply_watched_hotkey_change(
+        &previous,
+        &mut incoming,
+        &health,
+        &mut registrar,
+        |change| emitted.push(change),
+    );
+
+    assert_eq!(
+        registrar.calls,
+        ["unregister:Control+Shift+Space", "register:Control+Alt+K",]
+    );
+    assert_eq!(incoming.hotkey, "Control+Alt+K");
+    assert_eq!(incoming.language, Language::English);
+    assert_eq!(incoming.hotkey_mode, HotkeyMode::Toggle);
+    assert_eq!(incoming.hotkey_profiles[0].shortcut, "Control+Alt+K");
+    assert_eq!(incoming.initial_prompt, "new prompt");
+    assert_eq!(health.operational_hotkey(), registered("Control+Alt+K"));
+    assert!(health.status().ok);
+    assert_eq!(health.status().shortcut, "Control+Alt+K");
+    assert_eq!(health.status().error, None);
+    assert_eq!(emitted.len(), 1);
+    assert!(emitted[0].changed);
+    assert_eq!(emitted[0].status, health.status());
+}
+
+#[test]
+fn actual_watcher_helper_old_unregister_failure_restores_only_hotkey_fields() {
+    use sagascript_core::settings::{HotkeyMode, Language, WhisperModel};
+
+    let previous = settings_with_hotkey(
+        "Control+Shift+Space",
+        Language::Swedish,
+        HotkeyMode::PushToTalk,
+        WhisperModel::Tiny,
+        "old prompt",
+    );
+    let mut incoming = settings_with_hotkey(
+        "Control+Alt+K",
+        Language::English,
+        HotkeyMode::Toggle,
+        WhisperModel::TinyEn,
+        "new prompt",
+    );
+    let health = HotkeyHealth::new(&previous.hotkey);
+    health.record(&previous.hotkey, None, registered(&previous.hotkey));
+    let mut registrar = FakeRegistrar {
+        unregister_results: [Err("old unregister failed".into())].into(),
+        ..FakeRegistrar::default()
+    };
+    let mut emitted = Vec::new();
+
+    apply_watched_hotkey_change(
+        &previous,
+        &mut incoming,
+        &health,
+        &mut registrar,
+        |change| emitted.push(change),
+    );
+
+    assert_eq!(registrar.calls, ["unregister:Control+Shift+Space"]);
+    assert_eq!(incoming.hotkey, previous.hotkey);
+    assert_eq!(incoming.language, previous.language);
+    assert_eq!(incoming.profile_models, previous.profile_models);
+    assert_eq!(incoming.hotkey_profiles, previous.hotkey_profiles);
+    assert_eq!(incoming.hotkey_mode, previous.hotkey_mode);
+    assert_eq!(incoming.initial_prompt, "new prompt");
+    assert_eq!(health.operational_hotkey(), OperationalHotkey::Unknown);
+    assert_eq!(
+        health.status().error.as_deref(),
+        Some("failed to unregister previous hotkeys: old unregister failed")
+    );
+    assert_eq!(emitted.len(), 1);
+    assert!(emitted[0].changed);
+    assert_eq!(emitted[0].status, health.status());
+}
+
+#[test]
+fn actual_watcher_helper_cleanup_failure_restores_only_hotkey_fields() {
+    use sagascript_core::settings::{HotkeyMode, Language, WhisperModel};
+
+    let previous = settings_with_hotkey(
+        "Control+Shift+Space",
+        Language::Swedish,
+        HotkeyMode::PushToTalk,
+        WhisperModel::Tiny,
+        "old prompt",
+    );
+    let mut incoming = settings_with_hotkey(
+        "Control+Alt+K",
+        Language::English,
+        HotkeyMode::Toggle,
+        WhisperModel::TinyEn,
+        "new prompt",
+    );
+    let health = HotkeyHealth::new(&previous.hotkey);
+    health.record(&previous.hotkey, None, registered(&previous.hotkey));
+    let mut registrar = FakeRegistrar {
+        register_results: [Err("new registration failed".into())].into(),
+        unregister_results: [Ok(()), Err("cleanup failed".into())].into(),
+        ..FakeRegistrar::default()
+    };
+    let mut emitted = Vec::new();
+
+    apply_watched_hotkey_change(
+        &previous,
+        &mut incoming,
+        &health,
+        &mut registrar,
+        |change| emitted.push(change),
+    );
+
+    assert_eq!(
+        registrar.calls,
+        [
+            "unregister:Control+Shift+Space",
+            "register:Control+Alt+K",
+            "unregister:Control+Alt+K",
+        ]
+    );
+    assert_eq!(incoming.hotkey, previous.hotkey);
+    assert_eq!(incoming.language, previous.language);
+    assert_eq!(incoming.profile_models, previous.profile_models);
+    assert_eq!(incoming.hotkey_profiles, previous.hotkey_profiles);
+    assert_eq!(incoming.hotkey_mode, previous.hotkey_mode);
+    assert_eq!(incoming.initial_prompt, "new prompt");
+    assert_eq!(health.operational_hotkey(), OperationalHotkey::Unknown);
+    assert_eq!(
+        health.status().error.as_deref(),
+        Some("failed to register new hotkey profiles: new registration failed; partial-registration cleanup failed: cleanup failed")
+    );
+    assert_eq!(emitted.len(), 1);
+    assert!(emitted[0].changed);
+    assert_eq!(emitted[0].status, health.status());
+}
+
+#[test]
 fn actual_watcher_helper_validation_restores_fields_without_os_calls() {
     use sagascript_core::settings::{HotkeyMode, Language, WhisperModel};
 

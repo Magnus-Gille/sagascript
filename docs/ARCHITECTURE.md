@@ -520,6 +520,12 @@ they exercise production selection and cleanup without Tauri or real OS shortcut
    and → `LoggingService` locks.
    - (4b) `SharedController` → `HotkeyHealth.state`: `handle_hotkey_event` reads
      `health.operational_hotkey()` under the controller guard; no reverse order exists.
+   - (4c) Live dictation's queued UI callback keeps `SharedController` through its
+     generation/state check and synchronous main-thread UI commit. Tray updates
+     briefly take `HotkeyHealth.state` and `SharedStatusItem`; neither has a reverse
+     path to the controller. The UI adapters must not reacquire the controller or
+     wait for a worker. This prevents a new recording from starting between an old
+     callback's validation and its overlay/tray/window changes.
 5. `PlainFileJobs.active` → `pending_cancels`.
 6. Engine host `lifecycle` → `state`.
 7. Whisper `load_lock` → `state` → `loaded_runtime` → `cached_runtime` (comment above the lock

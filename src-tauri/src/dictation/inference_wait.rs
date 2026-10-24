@@ -2,7 +2,7 @@ use std::future::Future;
 use std::time::Duration;
 
 /// Result of waiting for inference and, after a timeout, for its abort grace period.
-pub(super) enum WaitOutcome<T> {
+pub(crate) enum WaitOutcome<T> {
     /// The task completed before the initial deadline.
     Completed(T),
     /// The initial deadline elapsed and abort was requested.
@@ -13,7 +13,7 @@ pub(super) enum WaitOutcome<T> {
 ///
 /// The future remains borrowed throughout, so a caller may continue awaiting it after the
 /// grace period without restarting or cancelling the underlying task.
-pub(super) async fn wait_for_inference<F, A>(
+pub(crate) async fn wait_for_inference<F, A>(
     task: &mut F,
     timeout: Duration,
     abort_grace: Duration,
