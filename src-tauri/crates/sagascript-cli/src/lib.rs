@@ -21,6 +21,7 @@ pub mod meeting_reprocessing_cli;
 pub mod models;
 pub mod open;
 pub mod output;
+pub mod permissions;
 pub(crate) mod run_request;
 #[cfg(feature = "diarization")]
 pub mod speaker_args;
@@ -510,6 +511,13 @@ EXAMPLES:
     )]
     Config(config::ConfigArgs),
 
+    /// Inspect microphone permission for this CLI process without changing it.
+    #[command(
+        long_about = "Inspect microphone permission for this CLI process. This command is read-only: it does not access saved settings, record audio, or request a permission prompt. The report describes this CLI process and does not inspect the running Sagascript GUI app.",
+        after_long_help = "EXAMPLES:\n  sagascript permissions status\n  sagascript permissions status --json"
+    )]
+    Permissions(permissions::PermissionsArgs),
+
     /// Manage global hint terms and explicit profile-scoped aliases used by live and batch transcription
     #[command(
         long_about = "Add preferred spellings and optional exact mishearings. Global and one-run terms prime Whisper as hint-only context; deterministic aliases require a selected known profile with an explicit language. No stored text is migrated or deleted.",
@@ -639,6 +647,10 @@ fn json_output(command: &Command) -> Option<JsonOutput> {
             | engine::EngineAction::Doctor { json: true, .. } => Some(JsonOutput::Pretty),
             _ => None,
         },
+        Command::Permissions(args) => match args.action {
+            permissions::PermissionsAction::Status { json: true } => Some(JsonOutput::Pretty),
+            _ => None,
+        },
         Command::Glossary(args) => match args.action {
             glossary::GlossaryAction::Suggest { json: true, .. } => Some(JsonOutput::Compact),
             _ => None,
@@ -690,6 +702,7 @@ fn dispatch(command: Command, out: &Out) -> Result<(), CliError> {
             );
         }
         Command::Config(args) => config::run(args, out)?,
+        Command::Permissions(args) => permissions::run(args, out)?,
         Command::Engine(args) => return engine::run(args, out),
         Command::Glossary(args) => glossary::run(args, out)?,
         Command::Formats => formats(out)?,
