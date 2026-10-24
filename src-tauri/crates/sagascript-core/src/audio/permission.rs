@@ -46,15 +46,29 @@ pub fn microphone_permission() -> MicrophonePermissionReport {
 #[cfg(feature = "record")]
 pub(crate) fn capture_permission_status(
     raw: MicrophonePermissionStatus,
-) -> MicrophonePermissionStatus {
+) -> Result<MicrophonePermissionStatus, crate::error::DictationError> {
     #[cfg(target_os = "macos")]
     {
-        refresh_denied(raw, macos::recheck_denied)
+        prepare_capture_permission(raw, macos::request_initial, macos::recheck_denied)
     }
     #[cfg(not(target_os = "macos"))]
     {
-        raw
+        Ok(raw)
     }
+}
+
+#[cfg(any(all(target_os = "macos", feature = "record"), test))]
+fn prepare_capture_permission(
+    raw: MicrophonePermissionStatus,
+    request_initial: impl FnOnce() -> bool,
+    refresh: impl FnOnce() -> bool,
+) -> Result<MicrophonePermissionStatus, crate::error::DictationError> {
+    // Hotkeys may call this on the main thread with the controller locked.
+    // Return before capture; never wait for the user or start recording later.
+    if raw == MicrophonePermissionStatus::NotDetermined && request_initial() {
+        return Err(crate::error::DictationError::MicrophonePermissionPending);
+    }
+    Ok(refresh_denied(raw, refresh))
 }
 
 #[cfg(any(target_os = "macos", test))]
@@ -81,8 +95,8 @@ mod macos {
     unsafe extern "C" {}
 
     // Match the existing GUI recovery behavior: requestAccess rechecks an
-    // already-determined denial without opening a stream. Never call this for
-    // not_determined: its initial prompting remains owned by the capture flow.
+    // already-determined denial without opening a stream. Initial requests
+    // use a separate nonblocking path below.
     #[cfg(feature = "record")]
     pub(super) fn recheck_denied() -> bool {
         let (tx, rx) = std::sync::mpsc::channel();
@@ -93,6 +107,23 @@ mod macos {
             }
         })
         .copy();
+        if !request_access(&completion) {
+            return false;
+        }
+        rx.recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap_or(false)
+    }
+
+    #[cfg(feature = "record")]
+    pub(super) fn request_initial() -> bool {
+        // AVFoundation retains this block until the user answers. It owns no
+        // controller or capture state; a subsequent explicit start re-queries.
+        let completion = block::ConcreteBlock::new(|_granted: bool| {}).copy();
+        request_access(&completion)
+    }
+
+    #[cfg(feature = "record")]
+    fn request_access(completion: &block::Block<(bool,), ()>) -> bool {
         unsafe {
             let (Some(device), Some(string)) =
                 (Class::get("AVCaptureDevice"), Class::get("NSString"))
@@ -139,11 +170,10 @@ mod macos {
                 return false;
             }
             let _: () =
-                msg_send![device, requestAccessForMediaType: media completionHandler: &*completion];
+                msg_send![device, requestAccessForMediaType: media completionHandler: completion];
             let _: () = msg_send![media, release];
         }
-        rx.recv_timeout(std::time::Duration::from_secs(2))
-            .unwrap_or(false)
+        true
     }
 
     pub(super) fn query() -> (MicrophonePermissionStatus, bool) {
@@ -257,5 +287,52 @@ mod recovery_tests {
                 status
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod initial_request_tests {
+    use super::*;
+    #[test]
+    fn initial_prompt_returns_pending_before_capture() {
+        let result = prepare_capture_permission(
+            MicrophonePermissionStatus::NotDetermined,
+            || true,
+            || panic!("must not refresh initial request"),
+        );
+        assert!(matches!(
+            result,
+            Err(crate::error::DictationError::MicrophonePermissionPending)
+        ));
+    }
+    #[test]
+    fn resolved_denial_does_not_request_initial_permission() {
+        let result = prepare_capture_permission(
+            MicrophonePermissionStatus::Denied,
+            || panic!("must not prompt again"),
+            || false,
+        )
+        .unwrap();
+        assert!(result.capture_denied());
+    }
+    #[test]
+    fn resolved_grant_neither_prompts_nor_refreshes() {
+        let result = prepare_capture_permission(
+            MicrophonePermissionStatus::Authorized,
+            || panic!("must not prompt"),
+            || panic!("must not refresh"),
+        )
+        .unwrap();
+        assert_eq!(result, MicrophonePermissionStatus::Authorized);
+    }
+    #[test]
+    fn unbundled_cli_retains_host_owned_first_use() {
+        let result = prepare_capture_permission(
+            MicrophonePermissionStatus::NotDetermined,
+            || false,
+            || panic!("must not refresh"),
+        )
+        .unwrap();
+        assert_eq!(result, MicrophonePermissionStatus::NotDetermined);
     }
 }

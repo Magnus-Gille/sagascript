@@ -324,7 +324,13 @@ to two seconds; authorized capture does not wait for it.
 
 Both GUI and CLI recording use the shared capture preflight. Explicit `denied`
 or `restricted` states return `microphone_permission_denied` before opening input.
-`not_determined` preserves the existing OS first-use flow. The GUI capture log
+For a bundled app with a microphone usage description, `not_determined` queues
+an OS permission request without waiting on the recording/main thread and returns
+retryable `microphone_permission_pending` before opening input. The controller
+stays idle: answer the dialog, then explicitly start recording again. A later
+start re-queries permission; nothing records automatically when permission is
+granted. An unbundled CLI retains its host-owned first-use flow because it cannot
+safely issue an app-scoped request without a usage description. The GUI capture log
 records only permission status and bundle-context presence, never audio content,
 so its own observation can be compared without assuming CLI/GUI attribution is
 identical. These diagnostics do not replace physical hotkey/focus or microphone

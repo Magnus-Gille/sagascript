@@ -93,7 +93,7 @@ impl AudioCaptureService {
     pub fn start_capture(&mut self) -> Result<(), DictationError> {
         let permission = super::permission::microphone_permission();
         info!(status = ?permission.status, in_app_bundle = permission.in_app_bundle, "Microphone permission preflight");
-        let effective = super::permission::capture_permission_status(permission.status);
+        let effective = super::permission::capture_permission_status(permission.status)?;
         info!(status = ?effective, "Microphone permission capture decision");
         self.start_capture_with_permission(effective)
     }

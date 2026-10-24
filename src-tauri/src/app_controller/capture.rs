@@ -122,6 +122,25 @@ mod tests {
     }
 
     #[test]
+    fn pending_permission_keeps_controller_idle_without_consuming_generation() {
+        let shared = Arc::new(Mutex::new(FakeState {
+            start_result: Some(Err(DictationError::MicrophonePermissionPending)),
+            ..FakeState::default()
+        }));
+        let mut controller = controller(shared.clone());
+        let profile = default_profile(&controller);
+
+        assert!(matches!(
+            controller.start_recording_for_profile(profile),
+            Err(DictationError::MicrophonePermissionPending)
+        ));
+
+        assert_eq!(controller.recording_generation(), 0);
+        assert_eq!(controller.state(), AppState::Idle);
+        assert_eq!(shared.lock().unwrap().starts, 1);
+    }
+
+    #[test]
     fn public_stop_failure_cleans_up_recording() {
         let shared = Arc::new(Mutex::new(FakeState {
             stop_result: Some(Err(DictationError::TranscriptionFailed(
