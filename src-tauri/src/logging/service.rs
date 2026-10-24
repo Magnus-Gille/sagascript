@@ -105,7 +105,7 @@ impl LoggingService {
     /// Construct against an explicit log file path. Test seam for
     /// `new()` — production code always goes through `new()`, which derives
     /// the path from `log_directory()`.
-    fn new_with_path(log_path: PathBuf) -> Self {
+    pub(crate) fn new_with_path(log_path: PathBuf) -> Self {
         let app_session_id = format!("app-{}", &Uuid::new_v4().to_string()[..8]);
         let log_dir = log_path
             .parent()
