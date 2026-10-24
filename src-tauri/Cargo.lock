@@ -4469,7 +4469,7 @@ checksum = "b39cdef0fa800fc44525c84ccb54a029961a8215f9619753635a9c0d2538d46d"
 
 [[package]]
 name = "sagascript"
-version = "1.4.5"
+version = "1.4.6"
 dependencies = [
  "arboard",
  "block",
@@ -4509,7 +4509,7 @@ dependencies = [
 
 [[package]]
 name = "sagascript-cli"
-version = "1.4.5"
+version = "1.4.6"
 dependencies = [
  "arboard",
  "clap",
@@ -4532,7 +4532,7 @@ dependencies = [
 
 [[package]]
 name = "sagascript-core"
-version = "1.4.5"
+version = "1.4.6"
 dependencies = [
  "cpal",
  "dirs 6.0.0",
@@ -4566,7 +4566,7 @@ dependencies = [
 
 [[package]]
 name = "sagascript-engine-protocol"
-version = "1.4.5"
+version = "1.4.6"
 dependencies = [
  "serde",
  "serde_json",
@@ -4575,7 +4575,7 @@ dependencies = [
 
 [[package]]
 name = "sagascript-testsupport"
-version = "1.4.5"
+version = "1.4.6"
 dependencies = [
  "sha2",
  "tempfile",
