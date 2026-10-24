@@ -80,7 +80,7 @@ describe("command_errors", () => {
     for (const missing of ["engine_model_missing", "engine_model_load_failed"]) {
       expect(recovery(missing), missing).toBe("download_model");
     }
-    for (const retryable of ["busy", "model_busy", "engine_busy", "no_audio_captured"]) {
+    for (const retryable of ["busy", "model_busy", "engine_busy", "no_audio_captured", "microphone_permission_pending"]) {
       expect(variants().get(retryable)!.retryable, retryable).toBe(true);
       expect(recovery(retryable), retryable).toBe("retry");
     }
@@ -100,6 +100,14 @@ describe("command_errors", () => {
     ]) {
       expect(recovery(final), final).toBeNull();
     }
+  });
+
+  test("pending microphone permission keeps its typed wire payload", () => {
+    expect(variants().get("microphone_permission_pending")).toEqual({
+      code: "microphone_permission_pending",
+      message: "Microphone permission is awaiting your response. Choose Allow in the macOS dialog, then start recording again.",
+      retryable: true,
+    });
   });
 });
 
