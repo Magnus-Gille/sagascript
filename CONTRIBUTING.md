@@ -296,3 +296,36 @@ should happen only for the identity transition, not on every update.
 4. Open a pull request with a clear description of what you changed and why.
 
 Keep PRs focused -- one feature or fix per PR. If you're planning a large change, open an issue first to discuss the approach.
+
+### Read-only microphone diagnostics
+
+Run the same bundle binary used by the GUI:
+
+```sh
+Sagascript.app/Contents/MacOS/sagascript permissions status --json
+```
+
+The versioned report describes **the current CLI process**, not a separately
+running GUI process. It neither opens audio input nor requests permission or
+reads saved settings. On macOS it reports the raw AVFoundation state and whether
+this process has an app bundle identity. `unsupported` on other platforms means
+this probe cannot determine permission; it does not assert a grant. `unknown`
+means the platform query did not return a recognized state. AVFoundation may
+cache state within a process; after changing an OS grant, restart the exact app
+with its existing profile before comparing observations.
+
+The read-only report retains the raw status. Capture separately rechecks an
+already-determined denial through AVFoundation, matching the existing GUI
+recovery behavior; it does not request access for an undetermined state. A failed
+or timed-out recheck preserves the denial. This recheck requires a nonempty
+`NSMicrophoneUsageDescription` in the current process bundle; without it, capture
+retains the denial without requesting access. The denied-state recheck is bounded
+to two seconds; authorized capture does not wait for it.
+
+Both GUI and CLI recording use the shared capture preflight. Explicit `denied`
+or `restricted` states return `microphone_permission_denied` before opening input.
+`not_determined` preserves the existing OS first-use flow. The GUI capture log
+records only permission status and bundle-context presence, never audio content,
+so its own observation can be compared without assuming CLI/GUI attribution is
+identical. These diagnostics do not replace physical hotkey/focus or microphone
+acceptance and never reset TCC permissions.

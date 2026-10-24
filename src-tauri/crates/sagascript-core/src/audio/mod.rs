@@ -3,6 +3,7 @@
 #[cfg(feature = "record")]
 pub mod capture;
 pub mod decoder;
+pub mod permission;
 pub mod resample;
 pub mod speech;
 pub mod wav;

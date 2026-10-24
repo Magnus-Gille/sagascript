@@ -7,8 +7,9 @@
 //! nothing here may wait while it holds the lock of the shared controller.
 
 mod engine;
-mod inference_wait;
+pub(crate) mod inference_wait;
 mod pipeline;
+mod runtime;
 mod trigger;
 
 #[cfg(test)]
