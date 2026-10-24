@@ -30,7 +30,7 @@
       "sagascript-testsupport": 0
     },
     "too_many_lines": {
-      "sagascript": 5,
+      "sagascript": 2,
       "sagascript-cli": 4,
       "sagascript-core": 6,
       "sagascript-engine-protocol": 0,

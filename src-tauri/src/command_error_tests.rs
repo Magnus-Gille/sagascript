@@ -46,6 +46,14 @@ fn dictation_errors_keep_their_code_and_retry_hint() {
     );
     assert_eq!(wire(DictationError::ModelBusy)["retryable"], true);
     assert_eq!(
+        wire(DictationError::MicrophonePermissionPending),
+        json!({
+            "code": "microphone_permission_pending",
+            "message": "Microphone permission is awaiting your response. Choose Allow in the macOS dialog, then start recording again.",
+            "retryable": true,
+        })
+    );
+    assert_eq!(
         wire(DictationError::NoAudioCaptured)["code"],
         "no_audio_captured"
     );
@@ -205,6 +213,7 @@ fn every_code_is_stable_snake_case() {
         CommandError::InvalidInput("x".into()).because("y"),
         DictationError::TranscriptionFailed("x".into()).into(),
         DictationError::engine("engine_busy", true, "x").into(),
+        DictationError::MicrophonePermissionPending.into(),
     ];
     for error in errors {
         let code = error.code().to_owned();
@@ -282,6 +291,7 @@ fn command_error_fixture_matches_what_rust_sends() {
             false,
             "Pianissimo engine: Model directory does not exist: /Users/x/Library/Application Support/Sagascript/models/foo",
         )),
+        "microphone_permission_pending": wire(DictationError::MicrophonePermissionPending),
         "no_audio_captured": wire(DictationError::NoAudioCaptured),
         "paste_error": wire(CommandError::PasteFailed("Accessibility permission denied".into())),
         "dictionary_blocks_language_change": wire(SettingsError::DictionaryBlocksLanguageChange {

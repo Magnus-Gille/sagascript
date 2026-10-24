@@ -59,6 +59,11 @@
     "message": "Transcription engine is busy — a previous transcription may still be running. Please try again in a moment.",
     "retryable": true
   },
+  "microphone_permission_pending": {
+    "code": "microphone_permission_pending",
+    "message": "Microphone permission is awaiting your response. Choose Allow in the macOS dialog, then start recording again.",
+    "retryable": true
+  },
   "no_audio_captured": {
     "code": "no_audio_captured",
     "message": "No audio was captured. Please try again.",

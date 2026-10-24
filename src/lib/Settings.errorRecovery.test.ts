@@ -79,6 +79,16 @@ describe("Try again", () => {
     await waitFor(() => expect(ipc.callsTo("start_recording")).toHaveLength(2));
   });
 
+  test("is offered while microphone permission is pending", async () => {
+    const { ipc } = await renderSettings(settingsBackend({ start_recording: () => undefined }));
+    ipc.emit("error", commandErrors.microphone_permission_pending);
+
+    await waitFor(() => expect(dictateError()?.textContent).toBe(commandErrors.microphone_permission_pending.message));
+    await userEvent.setup().click(await screen.findByRole("button", { name: "Try again" }));
+
+    await waitFor(() => expect(ipc.callsTo("start_recording")).toHaveLength(1));
+  });
+
   test.each([
     ["transcription_timed_out", commandErrors.transcription_timed_out],
     ["cancelled", commandErrors.cancelled],
