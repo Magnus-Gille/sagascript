@@ -3,8 +3,14 @@ use super::*;
 #[test]
 fn elapsed_ms_if_success_only_marks_successful_operations_complete() {
     let start = Instant::now();
-    assert!(elapsed_ms_if_success::<(), ()>(&Ok(()), start).is_some());
-    assert!(elapsed_ms_if_success::<(), ()>(&Err(()), start).is_none());
+    assert!(
+        elapsed_ms_if_success::<(), ()>(&Ok(()), start, start + Duration::from_millis(12))
+            .is_some()
+    );
+    assert!(
+        elapsed_ms_if_success::<(), ()>(&Err(()), start, start + Duration::from_millis(12))
+            .is_none()
+    );
 }
 
 /// The texts the hotkey path puts in the `error` event and the controller's

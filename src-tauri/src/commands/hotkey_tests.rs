@@ -1,6 +1,7 @@
 use super::*;
 use crate::hotkey::transition::Registrar;
 use std::collections::VecDeque;
+use std::sync::Mutex;
 
 #[derive(Default)]
 struct FakeRegistrar {
@@ -44,6 +45,15 @@ fn assert_pending_persistence(health: &HotkeyHealth) {
         Some("hotkey profile change is pending persistence")
     );
     assert_eq!(health.operational_hotkey(), registered("new"));
+}
+
+fn assert_lifecycle_configuration_released(controller: &SharedController) {
+    let mut controller = lock_controller(controller);
+    assert!(
+        controller.begin_hotkey_configuration_change(),
+        "a later recording/configuration attempt must not be blocked by a leaked lease"
+    );
+    controller.end_hotkey_configuration_change();
 }
 
 #[test]
@@ -394,6 +404,108 @@ fn actual_command_helper_registration_failure_does_not_persist() {
         emitted.is_empty(),
         "identical restored status is deduplicated"
     );
+}
+
+#[test]
+fn actual_command_helper_old_unregister_failure_does_not_persist_and_releases_lifecycle() {
+    let controller = Mutex::new(crate::app_controller::AppController::new(
+        sagascript_core::settings::Settings::default(),
+    ));
+    let health = HotkeyHealth::new("old-primary");
+    let old_operational = registered("old");
+    health.record("old-primary", None, old_operational.clone());
+    let mut registrar = FakeRegistrar {
+        unregister_results: [Err("old unregister failed".into())].into(),
+        ..FakeRegistrar::default()
+    };
+    let new_shortcuts = vec!["new".to_string()];
+    let mut persist_calls = 0;
+    let mut emitted = Vec::new();
+
+    let result = {
+        let _recording_lease = acquire_hotkey_configuration(&controller).unwrap();
+        commit_registered_hotkey_change(
+            command_context(&old_operational, &new_shortcuts),
+            &health,
+            &mut registrar,
+            || {
+                persist_calls += 1;
+                Ok::<_, &'static str>(())
+            },
+            |change| emitted.push(change),
+        )
+    };
+
+    assert_eq!(persist_calls, 0);
+    assert_eq!(registrar.calls, ["unregister:old"]);
+    let error = result.expect_err("old unregister failure must reject the change");
+    assert_eq!(error.code(), "hotkey_change_failed");
+    assert_eq!(
+        error.to_string(),
+        "Failed to unregister active hotkeys: old unregister failed"
+    );
+    assert_eq!(health.operational_hotkey(), OperationalHotkey::Unknown);
+    assert_eq!(
+        health.status().error.as_deref(),
+        Some("failed to unregister active hotkeys: old unregister failed; operational state is unknown")
+    );
+    assert_eq!(emitted.len(), 1);
+    assert!(emitted[0].changed);
+    assert_eq!(emitted[0].status, health.status());
+    assert_lifecycle_configuration_released(&controller);
+}
+
+#[test]
+fn actual_command_helper_cleanup_failure_does_not_persist_and_releases_lifecycle() {
+    let controller = Mutex::new(crate::app_controller::AppController::new(
+        sagascript_core::settings::Settings::default(),
+    ));
+    let health = HotkeyHealth::new("old-primary");
+    let old_operational = registered("old");
+    health.record("old-primary", None, old_operational.clone());
+    let mut registrar = FakeRegistrar {
+        register_results: [Err("new registration failed".into())].into(),
+        unregister_results: [Ok(()), Err("cleanup failed".into())].into(),
+        ..FakeRegistrar::default()
+    };
+    let new_shortcuts = vec!["new".to_string()];
+    let mut persist_calls = 0;
+    let mut emitted = Vec::new();
+
+    let result = {
+        let _recording_lease = acquire_hotkey_configuration(&controller).unwrap();
+        commit_registered_hotkey_change(
+            command_context(&old_operational, &new_shortcuts),
+            &health,
+            &mut registrar,
+            || {
+                persist_calls += 1;
+                Ok::<_, &'static str>(())
+            },
+            |change| emitted.push(change),
+        )
+    };
+
+    assert_eq!(persist_calls, 0);
+    assert_eq!(
+        registrar.calls,
+        ["unregister:old", "register:new", "unregister:new"]
+    );
+    let error = result.expect_err("new registration and cleanup failures must reject the change");
+    assert_eq!(error.code(), "hotkey_change_failed");
+    assert_eq!(
+        error.to_string(),
+        "Failed to register hotkey profiles: new registration failed; cleanup failed: cleanup failed"
+    );
+    assert_eq!(health.operational_hotkey(), OperationalHotkey::Unknown);
+    assert_eq!(
+        health.status().error.as_deref(),
+        Some("new registration failed: new registration failed; partial registration cleanup failed: cleanup failed; operational state is unknown")
+    );
+    assert_eq!(emitted.len(), 1);
+    assert!(emitted[0].changed);
+    assert_eq!(emitted[0].status, health.status());
+    assert_lifecycle_configuration_released(&controller);
 }
 
 #[test]
