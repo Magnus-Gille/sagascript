@@ -235,6 +235,14 @@ function runCargoLinkSmoke(data) {
     Object.assign(env, testCase.overrides);
     const run = spawnSync(result.wrappers.cargoWrapper, ["build", "--locked", "--offline"], { cwd: project, encoding: "utf8", env });
     assert.equal(run.status, 0, `${testCase.name} cargo smoke failed: ${run.stderr}`);
+    if (testCase.name === "config") {
+      const clippy = spawnSync(result.wrappers.cargoWrapper, ["clippy", "--locked", "--offline", "--", "-D", "warnings"], {
+        cwd: project,
+        encoding: "utf8",
+        env,
+      });
+      assert.equal(clippy.status, 0, `generated compiler shim must support cargo clippy: ${clippy.stderr}`);
+    }
     const configInvocations = parseCapturedRustcArgs(argsLog);
     assert.ok(
       configInvocations.some((args) => args.includes("--crate-name") && args.includes("runtime_arg_smoke")),
@@ -414,7 +422,7 @@ test("honors RUSTUP_TOOLCHAIN through rustup without falling back to PATH rustc"
     assert.equal(readFileSync(rustupArgs, "utf8"), "run requested-toolchain rustc --print sysroot");
     assert.equal(
       readFileSync(requestedCargoArgs, "utf8").trim(),
-      `${join(data.requestedSysroot, "lib")}|${join(data.root, "bin", "rustc-with-compiler-runtime")}|${data.requestedRustc}|build --offline`,
+      `${join(data.requestedSysroot, "lib")}|${join(data.root, "bin", "compiler", "rustc")}|${data.requestedRustc}|build --offline`,
     );
     assert.equal(existsSync(defaultCargoArgs), false, "runtime override must not invoke prepared cargo");
   } finally {

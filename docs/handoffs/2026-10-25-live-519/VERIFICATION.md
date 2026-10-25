@@ -27,3 +27,11 @@ An ad-hoc signed QA app from the initial candidate passed package identity, enti
 ## Outstanding gates
 
 See [NATIVE-ACCEPTANCE.md](NATIVE-ACCEPTANCE.md): exact candidate test authorization, actual permissions and routes, headphones and speakers, echo/doubletalk, export/stop, at least 30 minutes of measured Swedish latency/quality/resource behavior, and Magnus's real-meeting acceptance. Provider checks must also pass on the published candidate before merge.
+
+## First provider CI and corrections
+
+Draft PR #521 published candidate `27ef58be00399a4360f80136baa5c7eb0423e5ea`. Rereview found all three original defects fixed and no new findings (same configured reviewer, runtime identity unavailable). Both provider MSRV jobs passed. Provider CI exposed two additional build-environment gaps: Windows Git checkout converted the hash-verified legal files to CRLF, and Clippy requires the compiler shim's basename to be `rustc`.
+
+Both failures were reproduced in local regressions before fixes. A `-text` attribute preserves all nine original legal files; a Windows-style checkout test verifies their hashes. The compiler shim now lives at `compiler/rustc`, outside PATH, and the native smoke includes actual Clippy through the existing wrapper chain. The 27 focused helper/license tests, formatting/lint/Node CI, whole-workspace Clippy through the newly generated helper, and release guard pass. The source runtime and UI are unchanged by these CI corrections. Updated provider checks and rereview are still required.
+
+Delegation evidence: a native Luna/high leaf reproduced 0/9 then 9/9 matching hashes in isolated Git fixtures (runtime model/effort unknown, usefulness pass); root implemented and verified the fixes.

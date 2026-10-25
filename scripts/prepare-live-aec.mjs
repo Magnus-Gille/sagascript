@@ -259,7 +259,11 @@ function prepareWrappers(wrapperDir, mesonPath, ninjaPath, cargoPath, rustLibrar
   const mesonWrapper = join(wrapperDir, "meson");
   const ninjaWrapper = join(wrapperDir, "ninja");
   const cargoWrapper = join(wrapperDir, "cargo");
-  const rustcWrapper = join(wrapperDir, "rustc-with-compiler-runtime");
+  // Clippy recognizes Cargo wrapper mode by the compiler basename "rustc".
+  // Keep the shim off PATH so direct rustc discovery still finds the toolchain.
+  const compilerShimDir = join(wrapperDir, "compiler");
+  ensureDirectory(compilerShimDir, "compiler shim directory");
+  const rustcWrapper = join(compilerShimDir, "rustc");
   writeOwnedWrapper(
     mesonWrapper,
     `#!/bin/sh\n${WRAPPER_MARKER}\nif [ "\${1-}" = "setup" ]; then\n  shift\n  exec ${shellQuote(mesonPath)} setup --wrap-mode=forcefallback "$@"\nfi\nexec ${shellQuote(mesonPath)} "$@"\n`,
