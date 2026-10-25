@@ -262,6 +262,8 @@ jobs:
       - name: Test frontend release surface
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           # Node's PATH lookup can miss pwsh on ARM64 even though this step uses it.
           $env:SAGASCRIPT_PWSH = Join-Path $PSHOME 'pwsh.exe'
           if (-not (Test-Path -LiteralPath $env:SAGASCRIPT_PWSH -PathType Leaf)) {
