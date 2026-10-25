@@ -35,3 +35,13 @@ Draft PR #521 published candidate `27ef58be00399a4360f80136baa5c7eb0423e5ea`. Re
 Both failures were reproduced in local regressions before fixes. A `-text` attribute preserves all nine original legal files; a Windows-style checkout test verifies their hashes. The compiler shim now lives at `compiler/rustc`, outside PATH, and the native smoke includes actual Clippy through the existing wrapper chain. The 27 focused helper/license tests, formatting/lint/Node CI, whole-workspace Clippy through the newly generated helper, and release guard pass. The source runtime and UI are unchanged by these CI corrections. Updated provider checks and rereview are still required.
 
 Delegation evidence: a native Luna/high leaf reproduced 0/9 then 9/9 matching hashes in isolated Git fixtures (runtime model/effort unknown, usefulness pass); root implemented and verified the fixes.
+
+## Linux policy correction
+
+Candidate `e486afb85546ab44042d57b6aa67e4045359053b` passed both required provider checks (`check-macos`, `check-windows`), both release builds and both MSRV jobs. Linux's ordinary Cargo gates passed, but its separate production Clippy policy rejected ten new findings: one `unwrap_used` in segment history and nine `expect_used` in timeline initialization/draining. The normal macOS verification matrix does not measure this Linux baseline. A direct production-core policy pass on macOS reproduced all ten findings.
+
+The correction handles optional timestamp state explicitly and drains each front audio chunk through one checked borrow and bounded iterators. Valid sample placement, gaps and retention accounting must remain unchanged. Neither lint suppression nor a baseline increase is permitted for this repair. The runtime change requires renewed candidate verification and a rebuilt QA artifact before native acceptance; the earlier `27ef58be` QA app is not the current candidate.
+
+After the correction, the same direct production-core pass reports zero policy findings in live code (ten before). All 71 focused live tests, workspace Clippy and Rust formatting pass. The complete workspace tests pass again: 2,490 passed, three ignored, no failures. The first local attempt failed because the sandbox denied loopback HTTP fixtures; the unchanged suite passed with that fixture capability approved. This macOS evidence does not replace the pending Linux baseline run.
+
+The bounded implementation leaf used native `gpt-5.6-luna`/high (runtime identity unavailable). Usefulness: partial; root requested a simpler borrow structure, inspected the resulting patch and independently ran policy, Clippy and workspace tests. No lint baseline or acceptance gate changed.

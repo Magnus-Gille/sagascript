@@ -391,14 +391,15 @@ impl Segmenter {
         }
         if self.history.is_empty() {
             self.history_start = Some(start_sample);
-        } else if self
-            .history_start
-            .unwrap()
-            .saturating_add(self.history.len() as u64)
-            != start_sample
-        {
-            self.history.clear();
-            self.history_start = Some(start_sample);
+        } else {
+            match self.history_start {
+                Some(history_start)
+                    if history_start.saturating_add(self.history.len() as u64) == start_sample => {}
+                _ => {
+                    self.history.clear();
+                    self.history_start = Some(start_sample);
+                }
+            }
         }
         self.history.extend(samples.iter().copied());
         while self.history.len() > limit {

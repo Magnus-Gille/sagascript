@@ -159,14 +159,10 @@ impl NativeTimeline {
             }
             self.resampler = Some(resampler);
         } else {
-            let rate = self
-                .input_rate
-                .expect("initialized with first host timestamp");
-            let expected_host = expected_host_ns(
-                self.first_host_ns.expect("first host timestamp"),
-                self.native_samples_seen,
-                rate,
-            )?;
+            let (Some(rate), Some(first_host_ns)) = (self.input_rate, self.first_host_ns) else {
+                return Err(TimelineError::InvalidTimestamp);
+            };
+            let expected_host = expected_host_ns(first_host_ns, self.native_samples_seen, rate)?;
             let host_offset = host_ns as i128 - expected_host as i128;
             let expected_anchor = self
                 .anchor_sample
@@ -286,11 +282,12 @@ impl NativeTimeline {
         let mut frame = [0.0; 160];
         let mut cursor = start_sample;
 
-        while cursor < end_sample && !self.chunks.is_empty() {
-            let (chunk_start, chunk_len) = {
-                let chunk = self.chunks.front().expect("checked non-empty");
-                (chunk.start_sample, chunk.samples.len())
+        while cursor < end_sample {
+            let Some(chunk) = self.chunks.front_mut() else {
+                break;
             };
+            let chunk_start = chunk.start_sample;
+            let chunk_len = chunk.samples.len();
             let chunk_end = chunk_start
                 .checked_add(chunk_len as u64)
                 .ok_or(TimelineError::InvalidTimestamp)?;
@@ -303,48 +300,34 @@ impl NativeTimeline {
                 cursor = chunk_start.min(end_sample);
                 continue;
             }
-            if chunk_start < cursor {
-                let trim = (cursor - chunk_start) as usize;
-                let trim = trim.min(chunk_len);
-                let chunk = self.chunks.front_mut().expect("checked non-empty");
-                for _ in 0..trim {
-                    chunk.samples.pop_front();
-                }
+
+            let trim = (cursor - chunk_start) as usize;
+            let trim = trim.min(chunk_len);
+            if trim > 0 {
+                for _ in chunk.samples.drain(..trim) {}
                 chunk.start_sample += trim as u64;
                 self.retained_samples -= trim;
-                if trim == chunk_len {
-                    self.chunks.pop_front();
-                    continue;
-                }
             }
+            if chunk.samples.is_empty() {
+                self.chunks.pop_front();
+                continue;
+            }
+
             let count = (end_sample - cursor) as usize;
-            let count = count.min(
-                self.chunks
-                    .front()
-                    .expect("checked non-empty")
-                    .samples
-                    .len(),
-            );
+            let count = count.min(chunk.samples.len());
             let frame_offset = (cursor - start_sample) as usize;
-            let chunk = self.chunks.front_mut().expect("checked non-empty");
-            for sample in frame[frame_offset..frame_offset + count].iter_mut() {
-                *sample = chunk.samples.pop_front().expect("counted sample");
+            for (sample, value) in frame[frame_offset..frame_offset + count]
+                .iter_mut()
+                .zip(chunk.samples.drain(..count))
+            {
+                *sample = value;
             }
             self.retained_samples -= count;
             cursor += count as u64;
-            let empty = self
-                .chunks
-                .front()
-                .expect("checked non-empty")
-                .samples
-                .is_empty();
-            if empty {
+            if chunk.samples.is_empty() {
                 self.chunks.pop_front();
             } else {
-                self.chunks
-                    .front_mut()
-                    .expect("checked non-empty")
-                    .start_sample += count as u64;
+                chunk.start_sample += count as u64;
             }
         }
         self.drained_cursor = end_sample;
