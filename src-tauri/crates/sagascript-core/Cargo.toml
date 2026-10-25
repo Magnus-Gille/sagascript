@@ -59,6 +59,9 @@ libc = "0.2"
 # Windows and Linux use the CPU backend (Vulkan is a separate, currently-broken opt-in).
 [target.'cfg(target_os = "macos")'.dependencies]
 objc = "0.2"
+webrtc-audio-processing = { version = "=2.1.0", features = ["bundled"], optional = true }
+objc2 = { version = "0.6", optional = true }
+objc2-foundation = { version = "0.3.2", optional = true }
 block = "0.1"
 whisper-rs = { version = "0.15", features = ["coreml", "metal", "tracing_backend"] }
 
@@ -71,7 +74,7 @@ whisper-rs = { version = "0.15", features = ["tracing_backend"] }
 
 [features]
 default = []
-record = ["dep:cpal"]
+record = ["dep:cpal", "dep:objc2", "dep:objc2-foundation", "dep:webrtc-audio-processing"]
 diarization = ["dep:ort", "dep:rustfft", "dep:kodama", "dep:ndarray"]
 # Honor SAGASCRIPT_ENGINE_HOST / SAGASCRIPT_PIANISSIMO_MODEL_DIR in a release build.
 # Off by default: signed builds must not trust the environment for the sidecar or model.

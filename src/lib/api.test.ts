@@ -211,6 +211,16 @@ const contracts: Contract[] = [
   contract(api.openMicrophoneSettings, [], "open_microphone_settings", {}),
   contract(api.getPlatform, [], "get_platform", {}),
   contract(api.setOnboardingCompleted, [], "set_onboarding_completed", {}),
+  contract(api.liveMeetingSupported, [], "live_meeting_supported", {}),
+  contract(api.beginLiveMeeting, [], "begin_live_meeting", {}),
+  contract(api.getLiveMeeting, [], "get_live_meeting", {}),
+  contract(api.stopLiveMeeting, ["session-1"], "stop_live_meeting", { sessionId: "session-1" }),
+  contract(api.discardLiveMeeting, ["session-1"], "discard_live_meeting", { sessionId: "session-1" }),
+  contract(api.saveLiveMeetingText, ["session-1", "markdown"], "save_live_meeting_text", {
+    sessionId: "session-1",
+    format: "markdown",
+  }),
+  contract(api.saveLiveMeetingAudio, ["session-1"], "save_live_meeting_audio", { sessionId: "session-1" }),
   contract(reprocessing.planMeetingReprocessing, [review, "recluster", 0.5, true, "names", "default"], "plan_meeting_reprocessing", {
     previous: review,
     mode: "recluster",

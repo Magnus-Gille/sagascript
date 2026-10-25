@@ -101,3 +101,7 @@ runs:
       name: Install npm dependencies
       shell: bash
       run: npm ci
+
+    - if: ${{ runner.os == 'macOS' && inputs.rust != 'false' }}
+      name: Prepare static live audio processing
+      uses: ./.github/actions/setup-live-aec

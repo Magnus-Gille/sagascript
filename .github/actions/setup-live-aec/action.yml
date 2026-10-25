@@ -1,0 +1,20 @@
+name: Prepare static live audio processing
+description: Pinned build tools and verified Abseil sources for macOS WebRTC AEC3.
+runs:
+  using: composite
+  steps:
+    - name: Select Python for native build tools
+      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+      with:
+        python-version: "3.12"
+    - name: Prepare private build tools and source cache
+      shell: bash
+      run: |
+        set -euo pipefail
+        aec_root=$(mktemp -d "$RUNNER_TEMP/live-aec.XXXXXX")
+        python -m venv "$aec_root/venv"
+        "$aec_root/venv/bin/python" -m pip install --disable-pip-version-check --no-deps --only-binary=:all: --require-hashes --index-url https://pypi.org/simple -r scripts/live-aec-build-requirements.txt
+        curl --fail --location --proto '=https' --tlsv1.2 --connect-timeout 15 --max-time 180 https://github.com/abseil/abseil-cpp/releases/download/20240722.0/abseil-cpp-20240722.0.tar.gz -o "$aec_root/source.tar.gz"
+        curl --fail --location --proto '=https' --tlsv1.2 --connect-timeout 15 --max-time 180 https://wrapdb.mesonbuild.com/v2/abseil-cpp_20240722.0-3/get_patch -o "$aec_root/patch.zip"
+        rustup component add llvm-tools
+        node scripts/prepare-live-aec.mjs --python "$aec_root/venv/bin/python" --venv "$aec_root/venv" --rustc "$(rustup which rustc)" --cache-dir "$aec_root/cache" --wrapper-dir "$aec_root/bin" --source-archive "$aec_root/source.tar.gz" --patch-archive "$aec_root/patch.zip" --github-env "$GITHUB_ENV" --github-path "$GITHUB_PATH"

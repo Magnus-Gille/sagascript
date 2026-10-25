@@ -1,4 +1,28 @@
 <script lang="ts">
+  import LiveMeetingPanel from "./LiveMeetingPanel.svelte";
+  import {
+    liveMeetingSupported,
+    beginLiveMeeting,
+    getLiveMeeting,
+    stopLiveMeeting,
+    discardLiveMeeting,
+    saveLiveMeetingText,
+    saveLiveMeetingAudio,
+  } from "./api";
+  let liveSupported = $state(false);
+  const liveApi = {
+    load: getLiveMeeting,
+    start: beginLiveMeeting,
+    stop: stopLiveMeeting,
+    discard: discardLiveMeeting,
+    saveText: async (id: string) => {
+      await saveLiveMeetingText(id, "markdown");
+    },
+    saveAudio: async (id: string) => {
+      await saveLiveMeetingAudio(id);
+    },
+  };
+
   import { drainUpdateWork, UpdatePreparationTimeoutError } from "./update-preparation";
   import FileTranscription from "./FileTranscription.svelte";
   import { createFileJobs, nextQueuedFile, updateFileJob, fileJobName, type FileJob, type FileJobStatus } from "./transcription-queue";
@@ -90,7 +114,7 @@
   let fileRecommendedModel: WhisperModel | null = $state(null);
   let fileModelError = $state("");
   let fileModelSaving = $state(false);
-  type SettingsTab = "dictate" | "transcribe" | "settings";
+  type SettingsTab = "dictate" | "transcribe" | "live" | "settings";
   let activeTab: SettingsTab = $state("dictate");
   // One download at a time; its progress follows the backend's events.
   const downloads = useModelDownloads();
@@ -1265,7 +1289,7 @@
 
   // Listen for tab navigation from tray menu
   useTauriEvent("navigate_tab", (t) => {
-    if (t === "dictate" || t === "transcribe" || t === "settings") {
+    if (t === "dictate" || t === "transcribe" || t === "live" || t === "settings") {
       requestTabChange(t);
     }
   });
@@ -1312,6 +1336,10 @@
         const loaded = await readSettings();
         await refreshProfileModels(loaded.hotkey_profiles);
         platform = await loadPlatform();
+        liveSupported = await liveMeetingSupported().catch((error) => {
+          console.warn("Could not check live meeting support", error);
+          return false;
+        });
         if (platform === "macos") {
           accessibilityGranted = await checkAccessibilityPermission();
         }
@@ -1326,7 +1354,7 @@
         // Check URL params for initial tab
         const params = new URLSearchParams(window.location.search);
         const tab = params.get("tab");
-        if (tab === "dictate" || tab === "transcribe" || tab === "settings") {
+        if (tab === "dictate" || tab === "transcribe" || tab === "live" || tab === "settings") {
           requestTabChange(tab);
         }
       } catch (e) {
@@ -2402,6 +2430,9 @@
     <button class="tab" class:active={activeTab === "transcribe"} onclick={() => requestTabChange("transcribe")} disabled={languageSaving}>
       Transcribe
     </button>
+    <button class="tab" class:active={activeTab === "live"} onclick={() => requestTabChange("live")} disabled={languageSaving}
+      >Live meeting</button
+    >
     <button class="tab" class:active={activeTab === "settings"} onclick={() => requestTabChange("settings")} disabled={languageSaving}>
       Settings
     </button>
@@ -2940,6 +2971,13 @@
         {/each}
       </section>
 
+      {#if activeTab === "live"}
+        <p class="hotkey-hint">
+          Swedish · local Pianissimo. Uses your default microphone and all system audio, including other apps and notifications. Audio is
+          held temporarily until you save or discard it. Exported WAV: microphone on the left, system audio on the right.
+        </p>
+        <LiveMeetingPanel api={liveApi} supported={liveSupported} />
+      {/if}
       {#if activeTab === "settings"}
         <div class="field">
           <label for="language">Default profile language</label>

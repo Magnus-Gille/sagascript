@@ -1,0 +1,82 @@
+{
+  "schema_version": 1,
+  "files": [
+    {
+      "filename": "webrtc/LICENSE",
+      "source_path_relative": "webrtc/LICENSE",
+      "version": "2.1.0",
+      "sha256": "ab00a482b6a3902e40211b43c5d0441962ea99b6cc7c25c0f243fa270b78d482",
+      "source_archive_sha256": "f8f6c2b4b20a03b165378172f0dbe23c49b2630b70091026589afbe04e79cd3e"
+    },
+    {
+      "filename": "webrtc/PATENTS",
+      "source_path_relative": "webrtc/PATENTS",
+      "version": "2.1.0",
+      "sha256": "01462e2068d1a04c2274f3389773014c14ed9bc3446b28303543bd3e3c064145",
+      "source_archive_sha256": "f8f6c2b4b20a03b165378172f0dbe23c49b2630b70091026589afbe04e79cd3e"
+    },
+    {
+      "filename": "webrtc/common_audio/third_party/ooura/LICENSE",
+      "source_path_relative": "webrtc/common_audio/third_party/ooura/LICENSE",
+      "version": "2.1.0",
+      "sha256": "25b7731b70c77ecd5f3bb19303fbaa99be18860f81d44f71da670fdcd04829db",
+      "source_archive_sha256": "f8f6c2b4b20a03b165378172f0dbe23c49b2630b70091026589afbe04e79cd3e"
+    },
+    {
+      "filename": "webrtc/common_audio/third_party/spl_sqrt_floor/LICENSE",
+      "source_path_relative": "webrtc/common_audio/third_party/spl_sqrt_floor/LICENSE",
+      "version": "2.1.0",
+      "sha256": "41d791701e3e1c1073470403de7e342442d1e6a2af72681023b13a2f45f2125c",
+      "source_archive_sha256": "f8f6c2b4b20a03b165378172f0dbe23c49b2630b70091026589afbe04e79cd3e"
+    },
+    {
+      "filename": "webrtc/modules/third_party/fft/LICENSE",
+      "source_path_relative": "webrtc/modules/third_party/fft/LICENSE",
+      "version": "2.1.0",
+      "sha256": "6fdbabd2c95c5efc6f1e46175278239afb9343120a3022ed0e0cb04267a6aeb3",
+      "source_archive_sha256": "f8f6c2b4b20a03b165378172f0dbe23c49b2630b70091026589afbe04e79cd3e"
+    },
+    {
+      "filename": "webrtc/third_party/pffft/LICENSE",
+      "source_path_relative": "webrtc/third_party/pffft/LICENSE",
+      "version": "2.1.0",
+      "sha256": "a46200592eb193853527250da098e6bb0c75424e7a2c7db8da526c4f301c3d88",
+      "source_archive_sha256": "f8f6c2b4b20a03b165378172f0dbe23c49b2630b70091026589afbe04e79cd3e"
+    },
+    {
+      "filename": "webrtc/third_party/rnnoise/COPYING",
+      "source_path_relative": "webrtc/third_party/rnnoise/COPYING",
+      "version": "2.1.0",
+      "sha256": "e2f59ff41d9d03adc3dcf3deff170f8c8cf4a6eb4a9b174762a7656d23200ffa",
+      "source_archive_sha256": "f8f6c2b4b20a03b165378172f0dbe23c49b2630b70091026589afbe04e79cd3e"
+    },
+    {
+      "filename": "abseil/LICENSE",
+      "source_path_relative": "LICENSE",
+      "version": "20240722.0-3",
+      "sha256": "c79a7fea0e3cac04cd43f20e7b648e5a0ff8fa5344e644b0ee09ca1162b62747",
+      "source_archive_sha256": "f50e5ac311a81382da7fa75b97310e4b9006474f9560ac46f54a9967f07d4ae3"
+    },
+    {
+      "filename": "abseil/LICENSE.build",
+      "source_path_relative": "LICENSE.build",
+      "version": "20240722.0-3",
+      "sha256": "7939f4c45423cec4a18236ad0a88570e33508dd7462e07b1038001f90ece65fb",
+      "source_archive_sha256": "f50e5ac311a81382da7fa75b97310e4b9006474f9560ac46f54a9967f07d4ae3"
+    }
+  ],
+  "source_archives": {
+    "webrtc-audio-processing-sys-2.1.0.crate": {
+      "version": "2.1.0",
+      "sha256": "f8f6c2b4b20a03b165378172f0dbe23c49b2630b70091026589afbe04e79cd3e"
+    },
+    "abseil-cpp-20240722.0.tar.gz": {
+      "version": "20240722.0-3",
+      "sha256": "f50e5ac311a81382da7fa75b97310e4b9006474f9560ac46f54a9967f07d4ae3"
+    },
+    "abseil-cpp_20240722.0-3_patch.zip": {
+      "version": "20240722.0-3",
+      "sha256": "12dd8df1488a314c53e3751abd2750cf233b830651d168b6a9f15e7d0cf71f7b"
+    }
+  }
+}

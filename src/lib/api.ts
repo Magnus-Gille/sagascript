@@ -396,3 +396,25 @@ export async function getPlatform(): Promise<string> {
 export async function setOnboardingCompleted(): Promise<void> {
   return invoke("set_onboarding_completed");
 }
+
+export async function liveMeetingSupported(): Promise<boolean> {
+  return invoke("live_meeting_supported");
+}
+export async function beginLiveMeeting(): Promise<void> {
+  return invoke("begin_live_meeting");
+}
+export async function getLiveMeeting(): Promise<import("./live-meeting-types").LiveSnapshot | null> {
+  return invoke("get_live_meeting");
+}
+export async function stopLiveMeeting(sessionId: string): Promise<void> {
+  return invoke("stop_live_meeting", { sessionId });
+}
+export async function discardLiveMeeting(sessionId: string): Promise<void> {
+  return invoke("discard_live_meeting", { sessionId });
+}
+export async function saveLiveMeetingText(sessionId: string, format: MeetingExportFormat): Promise<boolean> {
+  return invoke("save_live_meeting_text", { sessionId, format });
+}
+export async function saveLiveMeetingAudio(sessionId: string): Promise<boolean> {
+  return invoke("save_live_meeting_audio", { sessionId });
+}

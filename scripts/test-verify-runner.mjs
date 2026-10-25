@@ -97,6 +97,7 @@ test("--list prints every check with its area, set, platforms and commands, and 
   }
   assert.match(result.stdout, /^swift +swift +default +macOS /m);
   assert.match(result.stdout, /^browser +browser +opt-in /m);
+  assert.match(result.stdout, /^msrv-live-macos +msrv +opt-in +macOS /m);
   assert.match(result.stdout, /^clippy-app +clippy +fast /m);
   assert.match(result.stdout, /^test-workspace .*\n.*\n +needs: rust, linux-libs, frontend-dist$/m);
   assert.match(result.stdout, /^core-test .*\n.*\n +needs: rust$/m);
@@ -137,6 +138,8 @@ test("selection: default, fast, --only by check or area, --skip and platform ski
   ]);
   assert.deepEqual(ids(selectChecks(CHECKS, parseArgs(["--only=browser"]), "linux")), ["browser"]);
   assert.equal(skipped(selectChecks(CHECKS, parseArgs(["--skip", "python"]), "linux"))["python-dictation-eval"], "--skip");
+  assert.deepEqual(ids(selectChecks(CHECKS, parseArgs(["--only=msrv-live-macos"]), "darwin")), ["msrv-live-macos"]);
+  assert.equal(skipped(selectChecks(CHECKS, parseArgs(["--only=msrv-live-macos"]), "linux"))["msrv-live-macos"], "macOS only");
 
   assert.throws(() => selectChecks(CHECKS, parseArgs(["--only", "nope"]), "linux"), /unknown check or area nope/);
   assert.throws(() => parseArgs(["--fast", "--only", "fmt"]), /cannot be combined/);

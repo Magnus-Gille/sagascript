@@ -24,6 +24,7 @@ mod events;
 mod focus_diag;
 mod hotkey;
 mod launch;
+mod live_meeting_commands;
 mod meeting_jobs;
 mod meeting_media;
 mod meeting_media_range;
@@ -216,6 +217,13 @@ fn build_app(gui_launch_mode: GuiLaunchMode) -> tauri::App {
             commands::complete_update_preparation,
             commands::save_transcription_text,
             commands::copy_transcription_text,
+            live_meeting_commands::live_meeting_supported,
+            live_meeting_commands::begin_live_meeting,
+            live_meeting_commands::get_live_meeting,
+            live_meeting_commands::stop_live_meeting,
+            live_meeting_commands::discard_live_meeting,
+            live_meeting_commands::save_live_meeting_text,
+            live_meeting_commands::save_live_meeting_audio,
             meeting_jobs::begin_meeting_file,
             meeting_jobs::begin_meeting_reprocessing,
             meeting_reprocessing_commands::plan_meeting_reprocessing,

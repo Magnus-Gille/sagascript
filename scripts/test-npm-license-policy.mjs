@@ -78,6 +78,15 @@ test("the generator's synthetic policy cases pass (also run by the release gate)
   assert.match(output, /dev-only npm license policy passed/);
 });
 
+test("the generator verifies the vendored live AEC legal texts and overrides", () => {
+  const output = execFileSync(
+    process.execPath,
+    [fileURLToPath(new URL("./generate-third-party-notices.mjs", import.meta.url)), "--test-live-aec-licenses"],
+    { encoding: "utf8" },
+  );
+  assert.match(output, /live AEC license override validation passed/);
+});
+
 test("the two dev-only license families are not in the runtime list", () => {
   for (const license of reviewedDevOnlyNpmLicenses) {
     assert.ok(!reviewedNpmLicenses.has(license), `${license} is reviewed for dev-only tooling only`);

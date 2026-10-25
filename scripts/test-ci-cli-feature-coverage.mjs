@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { gateInvocation, loadWorkflow, readRepoFile } from "./lib/ci-workflow.mjs";
-import { OSES, commandOf, gatesFor } from "./ci/cargo-gates.mjs";
+import { GATES, OSES, commandOf, gatesFor } from "./ci/cargo-gates.mjs";
 
 // How CI covers the Cargo features of the CLI and of core (#81, #358). Structural: the gate list
 // that every lane runs, not the text of ci.yml.
@@ -83,8 +83,8 @@ test("core is gated explicitly with and without diarization, and the lean CLI wi
     ]),
   );
   assert.ok(
-    all.every((gate) => gate.args[0] !== "check" || gate.profile === "msrv"),
-    "no plain cargo check outside the MSRV profile",
+    GATES.every((gate) => gate.args[0] !== "check" || ["msrv", "msrv-live"].includes(gate.profile)),
+    "no plain cargo check outside the MSRV profiles",
   );
   // The lean CLI, which strips diarization with record, is linted and tested on every OS.
   for (const jobId of Object.keys(lanes)) {
