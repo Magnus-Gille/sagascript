@@ -123,7 +123,9 @@ fn emit(
     if blocked {
         return Err(failure("Acceptance preflight blocked; inspect the report"));
     }
-    write_result.map_err(|_| failure("Could not write acceptance report to stdout"))
+    write_result.map_err(|_| failure("Could not write acceptance report to stdout"))?;
+    out.flush()
+        .map_err(|_| failure("Could not flush acceptance report to stdout"))
 }
 
 #[cfg(test)]
@@ -235,6 +237,21 @@ mod receipt_tests {
             }
         }
         let (out, _) = Out::capture_stderr(Broken);
+        let result = emit(passed(), true, None, &out);
+        assert_eq!(crate::exit::conclude(result, None, &out, None).code(), 1);
+    }
+    #[test]
+    fn failed_final_flush_is_failure_even_when_writes_succeed() {
+        struct FlushBroken;
+        impl std::io::Write for FlushBroken {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Err(std::io::ErrorKind::BrokenPipe.into())
+            }
+        }
+        let (out, _) = Out::capture_stderr(FlushBroken);
         let result = emit(passed(), true, None, &out);
         assert_eq!(crate::exit::conclude(result, None, &out, None).code(), 1);
     }
