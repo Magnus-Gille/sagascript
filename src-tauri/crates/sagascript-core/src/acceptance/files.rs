@@ -108,7 +108,12 @@ fn check_components(path: &Path) -> Result<(), FixtureError> {
     let mut current = Path::new("").to_path_buf();
     for component in path.components() {
         match component {
-            Component::Prefix(prefix) => current.push(prefix.as_os_str()),
+            Component::Prefix(prefix) => {
+                // A Windows drive prefix is not a filesystem entry until its
+                // root component is appended (notably canonical \\?\ paths).
+                current.push(prefix.as_os_str());
+                continue;
+            }
             Component::RootDir => current.push(component.as_os_str()),
             Component::CurDir => continue,
             Component::ParentDir => current.push(component.as_os_str()),
@@ -193,7 +198,8 @@ mod tests {
     #[test]
     fn reads_only_boolean_and_rejects_bad_json_shapes() {
         let dir = TempDir::new();
-        let path = dir.join("fixture.json");
+        let root = fs::canonicalize(dir.path()).unwrap();
+        let path = root.join("fixture.json");
         for (json, expected) in [
             (
                 br#"{"has_completed_onboarding":true,"other":{"private":"x"}}"#.as_slice(),
@@ -229,21 +235,22 @@ mod tests {
     #[test]
     fn fixture_missing_directory_and_size_are_rejected_without_mutation() {
         let dir = TempDir::new();
-        let missing = dir.join("missing.json");
+        let root = fs::canonicalize(dir.path()).unwrap();
+        let missing = root.join("missing.json");
         assert_eq!(
             read_onboarding_fixture(&missing),
             Err(FixtureError::Unavailable)
         );
-        let folder = dir.join("folder");
+        let folder = root.join("folder");
         fs::create_dir(&folder).unwrap();
         assert_eq!(read_onboarding_fixture(&folder), Err(FixtureError::Invalid));
-        let too_big = dir.join("large.json");
+        let too_big = root.join("large.json");
         fs::write(&too_big, vec![b' '; MAX_FIXTURE_BYTES as usize + 1]).unwrap();
         assert_eq!(
             read_onboarding_fixture(&too_big),
             Err(FixtureError::TooLarge)
         );
-        let mut entries = fs::read_dir(dir.path())
+        let mut entries = fs::read_dir(&root)
             .unwrap()
             .map(|entry| entry.unwrap().file_name().into_string().unwrap())
             .collect::<Vec<_>>();
@@ -260,19 +267,20 @@ mod tests {
     fn fixture_rejects_symlinks_and_receipt_publication_is_exclusive() {
         use std::os::unix::fs::{symlink, PermissionsExt};
         let dir = TempDir::new();
-        let target = dir.join("target.json");
+        let root = fs::canonicalize(dir.path()).unwrap();
+        let target = root.join("target.json");
         fs::write(&target, br#"{"has_completed_onboarding":true}"#).unwrap();
-        let link = dir.join("link.json");
+        let link = root.join("link.json");
         symlink(&target, &link).unwrap();
         assert_eq!(read_onboarding_fixture(&link), Err(FixtureError::Invalid));
-        let dangling = dir.join("dangling.json");
-        symlink(dir.join("absent"), &dangling).unwrap();
+        let dangling = root.join("dangling.json");
+        symlink(root.join("absent"), &dangling).unwrap();
         assert_eq!(
             read_onboarding_fixture(&dangling),
             Err(FixtureError::Invalid)
         );
 
-        let receipt = dir.join("receipt.bin");
+        let receipt = root.join("receipt.bin");
         write_receipt_new(&receipt, b"receipt").unwrap();
         assert_eq!(fs::read(&receipt).unwrap(), b"receipt");
         assert_eq!(
@@ -332,6 +340,7 @@ mod tests {
     #[test]
     fn receipt_staging_sync_and_publish_failures_publish_nothing() {
         let dir = TempDir::new();
+        let root = fs::canonicalize(dir.path()).unwrap();
         let cases = [
             (
                 "create",
@@ -347,7 +356,7 @@ mod tests {
             ),
         ];
         for (name, ops) in cases {
-            let destination = dir.join(format!("{name}.receipt"));
+            let destination = root.join(format!("{name}.receipt"));
             assert!(write_receipt_new_with(&destination, b"receipt", &ops).is_err());
             assert!(!destination.exists());
             assert!(crate::fsutil::staging_leftovers(&destination).is_empty());
@@ -357,7 +366,8 @@ mod tests {
     #[test]
     fn receipt_write_failure_does_not_create_destination() {
         let dir = TempDir::new();
-        let path = dir.join("absent").join("receipt");
+        let root = fs::canonicalize(dir.path()).unwrap();
+        let path = root.join("absent").join("receipt");
         assert!(write_receipt_new(&path, b"receipt").is_err());
         assert!(!path.exists());
     }
