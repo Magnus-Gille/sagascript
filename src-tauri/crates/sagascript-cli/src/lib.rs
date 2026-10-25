@@ -4,6 +4,7 @@
 // policy lints"); tests may still print (src-tauri/clippy.toml).
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
+pub mod acceptance;
 pub(crate) mod benchmark_config;
 pub mod benchmark_dictation;
 mod benchmark_quality;
@@ -517,6 +518,12 @@ EXAMPLES:
         after_long_help = "EXAMPLES:\n  sagascript permissions status\n  sagascript permissions status --json"
     )]
     Permissions(permissions::PermissionsArgs),
+    /// Read-only acceptance diagnostics for the current process.
+    #[command(
+        long_about = "Inspect the current process against an expected clean source revision, without recording, permission prompts, engine startup or implicit settings access. Reports remaining manual checks; it does not control or inspect another GUI process.",
+        after_long_help = "EXAMPLES:\n  sagascript acceptance preflight --expect-revision <40-character-sha> --json"
+    )]
+    Acceptance(acceptance::AcceptanceArgs),
 
     /// Manage global hint terms and explicit profile-scoped aliases used by live and batch transcription
     #[command(
@@ -647,6 +654,10 @@ fn json_output(command: &Command) -> Option<JsonOutput> {
             | engine::EngineAction::Doctor { json: true, .. } => Some(JsonOutput::Pretty),
             _ => None,
         },
+        Command::Acceptance(args) => match args.action {
+            acceptance::AcceptanceAction::Preflight { json: true, .. } => Some(JsonOutput::Pretty),
+            _ => None,
+        },
         Command::Permissions(args) => match args.action {
             permissions::PermissionsAction::Status { json: true } => Some(JsonOutput::Pretty),
             _ => None,
@@ -703,6 +714,7 @@ fn dispatch(command: Command, out: &Out) -> Result<(), CliError> {
         }
         Command::Config(args) => config::run(args, out)?,
         Command::Permissions(args) => permissions::run(args, out)?,
+        Command::Acceptance(args) => return acceptance::run(args, out),
         Command::Engine(args) => return engine::run(args, out),
         Command::Glossary(args) => glossary::run(args, out)?,
         Command::Formats => formats(out)?,

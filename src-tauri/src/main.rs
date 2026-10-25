@@ -239,6 +239,7 @@ fn build_app(gui_launch_mode: GuiLaunchMode) -> tauri::App {
             meeting_media::detach_meeting_audio,
             commands::get_supported_formats,
             commands::check_accessibility_permission,
+            commands::acceptance_preflight,
             commands::request_accessibility_permission,
             commands::open_accessibility_settings,
             commands::microphone_status,

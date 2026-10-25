@@ -73,7 +73,14 @@ function identity(repo) {
 function gateAccepts(repo) {
   const result = spawnSync(process.execPath, [join(repo.cwd, "scripts/ci-build-identity.mjs"), "--verify"], {
     cwd: repo.cwd,
-    env: { ...repo.env, GITHUB_SHA: repo.sha, SAGASCRIPT_GIT_HASH: repo.sha, SAGASCRIPT_BUILD_DATE: "2026-10-12" },
+    env: {
+      ...repo.env,
+      GITHUB_SHA: repo.sha,
+      SAGASCRIPT_GIT_HASH: repo.sha,
+      SAGASCRIPT_BUILD_DATE: "2026-10-12",
+      SAGASCRIPT_SOURCE_REVISION_INPUT: repo.sha,
+      SAGASCRIPT_SOURCE_DIRTY_INPUT: "false",
+    },
     encoding: "utf8",
   });
   return result.status === 0;

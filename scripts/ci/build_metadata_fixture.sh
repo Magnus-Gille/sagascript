@@ -23,7 +23,9 @@ EOF
 : > "$fixture/src/lib.rs"
 cat > "$fixture/src/main.rs" <<'EOF'
 fn main() {
-    println!("{} {}", env!("SAGASCRIPT_CLI_GIT_HASH"), env!("SAGASCRIPT_CLI_BUILD_DATE"));
+    println!("{} {} {} {}",
+        env!("SAGASCRIPT_CLI_GIT_HASH"), env!("SAGASCRIPT_CLI_BUILD_DATE"),
+        env!("SAGASCRIPT_SOURCE_REVISION"), env!("SAGASCRIPT_SOURCE_DIRTY"));
 }
 EOF
 cat > "$fixture/.gitignore" <<'EOF'
@@ -44,6 +46,7 @@ build_count() {
     shift
     local elapsed_ms
     (cd "$fixture" && env -u SAGASCRIPT_GIT_HASH -u SAGASCRIPT_BUILD_DATE \
+        -u SAGASCRIPT_SOURCE_REVISION_INPUT -u SAGASCRIPT_SOURCE_DIRTY_INPUT \
         GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
         CARGO_TARGET_DIR="$fixture/target" "$@" /usr/bin/time -p cargo build --offline -vv) > "$log" 2>&1
     local count
@@ -76,17 +79,26 @@ assert_text() {
 # The patched build keeps env invalidation but avoids nonexistent Git paths
 # when CI supplied both identity values.
 clean_fixture
-ci_first=$(build_count "$evidence_root/ci-1.log" SAGASCRIPT_GIT_HASH=ci-hash SAGASCRIPT_BUILD_DATE=2026-09-08)
-ci_same=$(build_count "$evidence_root/ci-2.log" SAGASCRIPT_GIT_HASH=ci-hash SAGASCRIPT_BUILD_DATE=2026-09-08)
-ci_changed=$(build_count "$evidence_root/ci-3.log" SAGASCRIPT_GIT_HASH=ci-hash-2 SAGASCRIPT_BUILD_DATE=2026-09-08)
-ci_date_changed=$(build_count "$evidence_root/ci-date.log" SAGASCRIPT_GIT_HASH=ci-hash-2 SAGASCRIPT_BUILD_DATE=2026-09-09)
+fixture_sha=$(git -C "$fixture" rev-parse HEAD)
+ci_first=$(build_count "$evidence_root/ci-1.log" SAGASCRIPT_GIT_HASH=ci-hash SAGASCRIPT_BUILD_DATE=2026-09-08 SAGASCRIPT_SOURCE_REVISION_INPUT="$fixture_sha" SAGASCRIPT_SOURCE_DIRTY_INPUT=false)
+ci_same=$(build_count "$evidence_root/ci-2.log" SAGASCRIPT_GIT_HASH=ci-hash SAGASCRIPT_BUILD_DATE=2026-09-08 SAGASCRIPT_SOURCE_REVISION_INPUT="$fixture_sha" SAGASCRIPT_SOURCE_DIRTY_INPUT=false)
+ci_changed=$(build_count "$evidence_root/ci-3.log" SAGASCRIPT_GIT_HASH=ci-hash-2 SAGASCRIPT_BUILD_DATE=2026-09-08 SAGASCRIPT_SOURCE_REVISION_INPUT="$fixture_sha" SAGASCRIPT_SOURCE_DIRTY_INPUT=false)
+ci_date_changed=$(build_count "$evidence_root/ci-date.log" SAGASCRIPT_GIT_HASH=ci-hash-2 SAGASCRIPT_BUILD_DATE=2026-09-09 SAGASCRIPT_SOURCE_REVISION_INPUT="$fixture_sha" SAGASCRIPT_SOURCE_DIRTY_INPUT=false)
 assert_eq "$ci_first" 1 "first CI metadata build"
 assert_eq "$ci_same" 0 "unchanged CI metadata build"
 assert_eq "$ci_changed" 1 "changed CI metadata build"
 assert_eq "$ci_date_changed" 1 "changed CI build date"
-assert_text "$(cat "$evidence_root/ci-1.identity")" "ci-hash 2026-09-08" "CI identity output"
-assert_text "$(cat "$evidence_root/ci-3.identity")" "ci-hash-2 2026-09-08" "changed CI identity output"
-assert_text "$(cat "$evidence_root/ci-date.identity")" "ci-hash-2 2026-09-09" "changed CI date identity"
+assert_text "$(cat "$evidence_root/ci-1.identity")" "ci-hash 2026-09-08 $fixture_sha false" "CI identity output"
+assert_text "$(cat "$evidence_root/ci-3.identity")" "ci-hash-2 2026-09-08 $fixture_sha false" "changed CI identity output"
+assert_text "$(cat "$evidence_root/ci-date.identity")" "ci-hash-2 2026-09-09 $fixture_sha false" "changed CI date identity"
+
+# Explicit malformed source inputs are unknown, never replaced by Git fallback.
+invalid_revision=$(build_count "$evidence_root/invalid-revision.log" SAGASCRIPT_GIT_HASH=ci-hash SAGASCRIPT_BUILD_DATE=2026-09-08 SAGASCRIPT_SOURCE_REVISION_INPUT=short SAGASCRIPT_SOURCE_DIRTY_INPUT=false)
+assert_eq "$invalid_revision" 1 "invalid source revision metadata"
+assert_text "$(cat "$evidence_root/invalid-revision.identity")" "ci-hash 2026-09-08 unknown false" "invalid revision is unknown"
+invalid_dirty=$(build_count "$evidence_root/invalid-dirty.log" SAGASCRIPT_GIT_HASH=ci-hash SAGASCRIPT_BUILD_DATE=2026-09-08 SAGASCRIPT_SOURCE_REVISION_INPUT="$fixture_sha" SAGASCRIPT_SOURCE_DIRTY_INPUT=clean)
+assert_eq "$invalid_dirty" 1 "invalid source dirty metadata"
+assert_text "$(cat "$evidence_root/invalid-dirty.identity")" "ci-hash 2026-09-08 $fixture_sha unknown" "invalid dirty state is unknown"
 
 # A hosted checkout without packed-refs still reproduces the old perpetual
 # rebuild for local fallback identity.
@@ -119,8 +131,8 @@ assert_eq "$partial_date_missing_first" 1 "first date-only metadata build"
 assert_eq "$partial_date_missing_same" 1 "date-only metadata fallback build"
 initial_hash=$(git -C "$fixture" rev-parse --short HEAD)
 initial_date=$(git -C "$fixture" show -s --format=%cs HEAD)
-assert_text "$(cat "$evidence_root/partial-missing-1.identity")" "ci-hash $initial_date" "hash-only fallback identity"
-assert_text "$(cat "$evidence_root/partial-date-missing-1.identity")" "$initial_hash 2026-09-08" "date-only fallback identity"
+assert_text "$(cat "$evidence_root/partial-missing-1.identity")" "ci-hash $initial_date $fixture_sha false" "hash-only fallback identity"
+assert_text "$(cat "$evidence_root/partial-date-missing-1.identity")" "$initial_hash 2026-09-08 $fixture_sha false" "date-only fallback identity"
 
 # With present Git metadata, partial CI values still use local fallback and
 # an unchanged build is clean.
@@ -134,8 +146,8 @@ partial_date_present_first=$(build_count "$evidence_root/partial-date-present-1.
 partial_date_present_same=$(build_count "$evidence_root/partial-date-present-2.log" SAGASCRIPT_BUILD_DATE=2026-09-08)
 assert_eq "$partial_date_present_first" 1 "first date-only metadata build with refs"
 assert_eq "$partial_date_present_same" 0 "unchanged date-only metadata build with refs"
-assert_text "$(cat "$evidence_root/partial-present-1.identity")" "ci-hash $initial_date" "hash-only identity with refs"
-assert_text "$(cat "$evidence_root/partial-date-present-1.identity")" "$initial_hash 2026-09-08" "date-only identity with refs"
+assert_text "$(cat "$evidence_root/partial-present-1.identity")" "ci-hash $initial_date $fixture_sha false" "hash-only identity with refs"
+assert_text "$(cat "$evidence_root/partial-date-present-1.identity")" "$initial_hash 2026-09-08 $fixture_sha false" "date-only identity with refs"
 
 # Establish a clean local warm build before changing source, so the source
 # case below measures the source watcher rather than a cold target.
@@ -150,17 +162,17 @@ source_changed=$(build_count "$evidence_root/source.log")
 assert_eq "$source_changed" 1 "source change"
 expected_hash=$(git -C "$fixture" rev-parse --short HEAD)
 expected_date=$(git -C "$fixture" show -s --format=%cs HEAD)
-assert_text "$(cat "$evidence_root/source.identity")" "$expected_hash-dirty $expected_date" "dirty source identity"
+assert_text "$(cat "$evidence_root/source.identity")" "$expected_hash-dirty $expected_date $fixture_sha true" "dirty source identity"
 
 # Complete CI identity must still rebuild for a source change while retaining
 # the explicit identity values.
-ci_source_warm=$(build_count "$evidence_root/ci-source-warm.log" SAGASCRIPT_GIT_HASH=ci-hash SAGASCRIPT_BUILD_DATE=2026-09-08)
-ci_source_same=$(build_count "$evidence_root/ci-source-same.log" SAGASCRIPT_GIT_HASH=ci-hash SAGASCRIPT_BUILD_DATE=2026-09-08)
+ci_source_warm=$(build_count "$evidence_root/ci-source-warm.log" SAGASCRIPT_GIT_HASH=ci-hash SAGASCRIPT_BUILD_DATE=2026-09-08 SAGASCRIPT_SOURCE_REVISION_INPUT="$fixture_sha" SAGASCRIPT_SOURCE_DIRTY_INPUT=false)
+ci_source_same=$(build_count "$evidence_root/ci-source-same.log" SAGASCRIPT_GIT_HASH=ci-hash SAGASCRIPT_BUILD_DATE=2026-09-08 SAGASCRIPT_SOURCE_REVISION_INPUT="$fixture_sha" SAGASCRIPT_SOURCE_DIRTY_INPUT=false)
 assert_eq "$ci_source_same" 0 "complete CI source baseline is fresh"
 printf '// complete CI source change\n' >> "$fixture/src/lib.rs"
-ci_source_changed=$(build_count "$evidence_root/ci-source.log" SAGASCRIPT_GIT_HASH=ci-hash SAGASCRIPT_BUILD_DATE=2026-09-08)
+ci_source_changed=$(build_count "$evidence_root/ci-source.log" SAGASCRIPT_GIT_HASH=ci-hash SAGASCRIPT_BUILD_DATE=2026-09-08 SAGASCRIPT_SOURCE_REVISION_INPUT="$fixture_sha" SAGASCRIPT_SOURCE_DIRTY_INPUT=false)
 assert_eq "$ci_source_changed" 1 "source change with complete CI metadata"
-assert_text "$(cat "$evidence_root/ci-source.identity")" "ci-hash 2026-09-08" "complete CI source identity"
+assert_text "$(cat "$evidence_root/ci-source.identity")" "ci-hash 2026-09-08 $fixture_sha false" "complete CI source identity"
 
 local_before_commit=$(build_count "$evidence_root/local-before-commit.log")
 local_before_commit_same=$(build_count "$evidence_root/local-before-commit-same.log")
@@ -170,14 +182,29 @@ git -C "$fixture" commit -qm source-change
 commit_changed=$(build_count "$evidence_root/commit.log")
 assert_eq "$commit_changed" 1 "commit change"
 new_hash=$(git -C "$fixture" rev-parse --short HEAD)
+new_full_hash=$(git -C "$fixture" rev-parse HEAD)
 new_date=$(git -C "$fixture" show -s --format=%cs HEAD)
-assert_text "$(cat "$evidence_root/commit.identity")" "$new_hash $new_date" "committed source identity"
+assert_text "$(cat "$evidence_root/commit.identity")" "$new_hash $new_date $new_full_hash false" "committed source identity"
 git -C "$fixture" checkout -qb fixture-branch
 branch_changed=$(build_count "$evidence_root/branch.log")
 assert_eq "$branch_changed" 1 "branch change"
-assert_text "$(cat "$evidence_root/branch.identity")" "$new_hash $new_date" "branch source identity"
+assert_text "$(cat "$evidence_root/branch.identity")" "$new_hash $new_date $new_full_hash false" "branch source identity"
 
-printf 'build metadata fixture passed: missing/present refs, complete/partial CI metadata, source, branch, and commit cases\n'
+# A source archive with no .git directory cannot claim a revision or clean state.
+archive_root="$fixture_root/archive"
+archive="$archive_root/src-tauri/crates/sagascript-cli"
+mkdir -p "$archive" "$archive_root/src-tauri/crates/sagascript-core/src"
+: > "$archive_root/src-tauri/Cargo.lock"
+: > "$archive_root/src-tauri/crates/sagascript-core/Cargo.toml"
+git -C "$fixture" archive HEAD | tar -x -C "$archive"
+(cd "$archive" && env -u SAGASCRIPT_GIT_HASH -u SAGASCRIPT_BUILD_DATE \
+    -u SAGASCRIPT_SOURCE_REVISION_INPUT -u SAGASCRIPT_SOURCE_DIRTY_INPUT \
+    GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
+    CARGO_TARGET_DIR="$archive/target" cargo build --offline -q)
+archive_identity=$(cd "$archive" && ./target/debug/build-metadata-fixture)
+assert_text "$archive_identity" "unknown unknown unknown unknown" "source archive identity"
+
+printf 'build metadata fixture passed: missing/present refs, complete/partial CI metadata, source, archive, branch, and commit cases\n'
 for log in ci-1 ci-2 ci-3 ci-date absent-1 absent-2 refs-1 refs-2 partial-missing-1 partial-missing-2 partial-date-missing-1 partial-date-missing-2 partial-present-1 partial-present-2 partial-date-present-1 partial-date-present-2 local-warm-1 local-warm-2 source ci-source commit branch; do
     printf '%s: ' "$log"
     cat "$evidence_root/$log.meta"

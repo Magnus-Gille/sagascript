@@ -26,6 +26,57 @@ fn local_git_hash() -> String {
     }
 }
 
+fn local_source_revision() -> String {
+    command_output(&["rev-parse", "HEAD"])
+        .filter(|revision| revision.len() == 40 && revision.bytes().all(|b| b.is_ascii_hexdigit()))
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn local_source_dirty() -> String {
+    match command_output(&["status", "--porcelain=v1", "--untracked-files=all"]) {
+        Some(status) => (!status.is_empty()).to_string(),
+        None => "unknown".to_string(),
+    }
+}
+
+fn source_revision() -> String {
+    match std::env::var_os("SAGASCRIPT_SOURCE_REVISION_INPUT") {
+        Some(raw) => match raw.to_str() {
+            Some(revision)
+                if revision.len() == 40 && revision.bytes().all(|b| b.is_ascii_hexdigit()) =>
+            {
+                revision.to_string()
+            }
+            _ => "unknown".to_string(),
+        },
+        None => local_source_revision(),
+    }
+}
+
+fn source_dirty() -> String {
+    match std::env::var_os("SAGASCRIPT_SOURCE_DIRTY_INPUT") {
+        Some(raw) => match raw.to_str() {
+            Some("true") => "true".to_string(),
+            Some("false") => "false".to_string(),
+            _ => "unknown".to_string(),
+        },
+        None => local_source_dirty(),
+    }
+}
+
+fn valid_source_revision_input() -> bool {
+    std::env::var("SAGASCRIPT_SOURCE_REVISION_INPUT").is_ok_and(|revision| {
+        revision.len() == 40 && revision.bytes().all(|b| b.is_ascii_hexdigit())
+    })
+}
+
+fn valid_source_dirty_input() -> bool {
+    matches!(
+        std::env::var("SAGASCRIPT_SOURCE_DIRTY_INPUT").as_deref(),
+        Ok("true" | "false")
+    )
+}
+
 fn emit_source_rerun_triggers() {
     // Watch CLI and core source without watching the package root, which can
     // include target/ and cause the build script to rebuild itself forever.
@@ -61,11 +112,15 @@ fn has_complete_ci_metadata() -> bool {
     ["SAGASCRIPT_GIT_HASH", "SAGASCRIPT_BUILD_DATE"]
         .into_iter()
         .all(|key| std::env::var(key).is_ok_and(|value| !value.is_empty()))
+        && valid_source_revision_input()
+        && valid_source_dirty_input()
 }
 
 fn main() {
     println!("cargo:rerun-if-env-changed=SAGASCRIPT_GIT_HASH");
     println!("cargo:rerun-if-env-changed=SAGASCRIPT_BUILD_DATE");
+    println!("cargo:rerun-if-env-changed=SAGASCRIPT_SOURCE_REVISION_INPUT");
+    println!("cargo:rerun-if-env-changed=SAGASCRIPT_SOURCE_DIRTY_INPUT");
     // CI supplies the complete source identity. Avoid watching Git paths in
     // that mode: hosted checkouts commonly omit packed-refs, and Cargo treats
     // a missing watched path as dirty on every invocation. Local builds keep
@@ -86,4 +141,9 @@ fn main() {
 
     println!("cargo:rustc-env=SAGASCRIPT_CLI_GIT_HASH={git_hash}");
     println!("cargo:rustc-env=SAGASCRIPT_CLI_BUILD_DATE={build_date}");
+    println!(
+        "cargo:rustc-env=SAGASCRIPT_SOURCE_REVISION={}",
+        source_revision()
+    );
+    println!("cargo:rustc-env=SAGASCRIPT_SOURCE_DIRTY={}", source_dirty());
 }

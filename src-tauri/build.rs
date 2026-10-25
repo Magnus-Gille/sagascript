@@ -26,6 +26,44 @@ fn local_git_hash() -> String {
     }
 }
 
+fn local_source_revision() -> String {
+    command_output(&["rev-parse", "HEAD"])
+        .filter(|revision| revision.len() == 40 && revision.bytes().all(|b| b.is_ascii_hexdigit()))
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn local_source_dirty() -> String {
+    match command_output(&["status", "--porcelain=v1", "--untracked-files=all"]) {
+        Some(status) => (!status.is_empty()).to_string(),
+        None => "unknown".to_string(),
+    }
+}
+
+fn source_revision() -> String {
+    match std::env::var_os("SAGASCRIPT_SOURCE_REVISION_INPUT") {
+        Some(raw) => match raw.to_str() {
+            Some(revision)
+                if revision.len() == 40 && revision.bytes().all(|b| b.is_ascii_hexdigit()) =>
+            {
+                revision.to_string()
+            }
+            _ => "unknown".to_string(),
+        },
+        None => local_source_revision(),
+    }
+}
+
+fn source_dirty() -> String {
+    match std::env::var_os("SAGASCRIPT_SOURCE_DIRTY_INPUT") {
+        Some(raw) => match raw.to_str() {
+            Some("true") => "true".to_string(),
+            Some("false") => "false".to_string(),
+            _ => "unknown".to_string(),
+        },
+        None => local_source_dirty(),
+    }
+}
+
 fn emit_source_rerun_triggers() {
     // Watch source trees that affect the binary's identity without watching
     // the package root, which would include target/ and cause rebuild loops.
@@ -44,6 +82,8 @@ fn emit_source_rerun_triggers() {
 fn emit_git_rerun_triggers() {
     println!("cargo:rerun-if-env-changed=SAGASCRIPT_GIT_HASH");
     println!("cargo:rerun-if-env-changed=SAGASCRIPT_BUILD_DATE");
+    println!("cargo:rerun-if-env-changed=SAGASCRIPT_SOURCE_REVISION_INPUT");
+    println!("cargo:rerun-if-env-changed=SAGASCRIPT_SOURCE_DIRTY_INPUT");
     println!("cargo:rerun-if-env-changed=SAGASCRIPT_UPDATER_PUBKEY");
     println!("cargo:rerun-if-changed=build-meta.env");
 
@@ -87,6 +127,11 @@ fn main() {
 
     println!("cargo:rustc-env=GIT_HASH={git_hash}");
     println!("cargo:rustc-env=BUILD_DATE={build_date}");
+    println!(
+        "cargo:rustc-env=SAGASCRIPT_SOURCE_REVISION={}",
+        source_revision()
+    );
+    println!("cargo:rustc-env=SAGASCRIPT_SOURCE_DIRTY={}", source_dirty());
 
     tauri_build::build();
 }
