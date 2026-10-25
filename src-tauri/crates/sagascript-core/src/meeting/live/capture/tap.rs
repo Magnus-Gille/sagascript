@@ -51,16 +51,9 @@ struct BufferList {
     count: u32,
     buffers: [Buffer; 1],
 }
-#[repr(C)]
-struct Timestamp {
-    sample: f64,
-    host: u64,
-    rate: f64,
-    word: u64,
-    smpte: [u8; 16],
-    flags: u32,
-    reserved: u32,
-}
+// Keep the callback timestamp ABI tied to the SDK-generated binding. In
+// particular, SMPTETime is 24 bytes and mFlags is at byte 56, not byte 48.
+type Timestamp = coreaudio_sys::AudioTimeStamp;
 #[repr(C)]
 #[derive(Default, Clone, Copy)]
 struct Timebase {
@@ -231,7 +224,7 @@ fn copy_input(ctx: &Context, sink: &Sink, input: *const BufferList, time: *const
     }
     // SAFETY: pointers and buffer list are Core Audio callback arguments.
     let (list, time) = unsafe { (&*input, &*time) };
-    if time.flags & 2 == 0 {
+    if time.mFlags & coreaudio_sys::kAudioTimeStampHostTimeValid == 0 {
         fail();
         return;
     }
@@ -269,7 +262,7 @@ fn copy_input(ctx: &Context, sink: &Sink, input: *const BufferList, time: *const
         return;
     }
     let frames = samples / channels as usize;
-    sink.push(to_ns(time.host), ctx.rate, frames, |i| {
+    sink.push(to_ns(time.mHostTime), ctx.rate, frames, |i| {
         let mut sum = 0.;
         for channel in 0..ctx.channels as usize {
             // SAFETY: every plane/interleaved stride is checked above against reported bytes.
@@ -467,5 +460,93 @@ impl Drop for Tap {
                 drop((*(*self.context).sink.get()).take());
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::meeting::live::{capture::Health, document::Source};
+    use std::sync::{mpsc, Arc};
+
+    #[test]
+    fn other_callback_layouts_match_sdk_bindings() {
+        assert_eq!(
+            std::mem::size_of::<Address>(),
+            std::mem::size_of::<coreaudio_sys::AudioObjectPropertyAddress>()
+        );
+        assert_eq!(
+            std::mem::offset_of!(Address, element),
+            std::mem::offset_of!(coreaudio_sys::AudioObjectPropertyAddress, mElement)
+        );
+        assert_eq!(
+            std::mem::size_of::<Format>(),
+            std::mem::size_of::<coreaudio_sys::AudioStreamBasicDescription>()
+        );
+        assert_eq!(
+            std::mem::offset_of!(Format, channels),
+            std::mem::offset_of!(
+                coreaudio_sys::AudioStreamBasicDescription,
+                mChannelsPerFrame
+            )
+        );
+        assert_eq!(
+            std::mem::size_of::<Buffer>(),
+            std::mem::size_of::<coreaudio_sys::AudioBuffer>()
+        );
+        assert_eq!(
+            std::mem::offset_of!(Buffer, data),
+            std::mem::offset_of!(coreaudio_sys::AudioBuffer, mData)
+        );
+        assert_eq!(
+            std::mem::size_of::<BufferList>(),
+            std::mem::size_of::<coreaudio_sys::AudioBufferList>()
+        );
+        assert_eq!(
+            std::mem::offset_of!(BufferList, buffers),
+            std::mem::offset_of!(coreaudio_sys::AudioBufferList, mBuffers)
+        );
+    }
+
+    #[test]
+    fn sdk_timestamp_layout_accepts_host_time_from_callback() {
+        // CoreAudioBaseTypes.h: sizeof(AudioTimeStamp)=64, mHostTime=8,
+        // mSMPTETime=32 (24 bytes), mFlags=56. Use the SDK byte layout,
+        // independent of the Rust struct, to catch field-offset regressions.
+        assert_eq!(std::mem::size_of::<Timestamp>(), 64);
+        assert_eq!(std::mem::offset_of!(Timestamp, mHostTime), 8);
+        assert_eq!(std::mem::offset_of!(Timestamp, mSMPTETime), 32);
+        assert_eq!(std::mem::offset_of!(Timestamp, mFlags), 56);
+        let mut timestamp = [0u64; 8];
+        timestamp[1] = 1_000_000;
+        timestamp[7] = 2; // kAudioTimeStampHostTimeValid at byte 56 (little endian).
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let health = Arc::new(Health::default());
+        let sink = Sink::new(Source::System, sender, health.clone());
+        let context = Context {
+            closed: AtomicBool::new(false),
+            readers: AtomicUsize::new(0),
+            sink: UnsafeCell::new(None),
+            channels: 1,
+            planar: false,
+            rate: 16_000,
+        };
+        let samples = [0.25f32; 160];
+        let buffers = BufferList {
+            count: 1,
+            buffers: [Buffer {
+                channels: 1,
+                bytes: 640,
+                data: samples.as_ptr(),
+            }],
+        };
+        copy_input(&context, &sink, &buffers, timestamp.as_ptr().cast());
+        assert!(!health.failed.load(Ordering::Acquire));
+        let block = receiver
+            .try_recv()
+            .expect("valid SDK timestamp must deliver audio");
+        assert_eq!(block.host_ns, to_ns(1_000_000));
+        assert_eq!(block.len, 160);
+        assert_eq!(block.samples[0], 0.25);
     }
 }

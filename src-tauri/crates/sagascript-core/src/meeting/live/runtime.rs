@@ -7,7 +7,7 @@ use super::{
     recording::Recording,
     segmenter::{Config, Segmenter, WindowJob},
     session::Session,
-    state::Phase,
+    state::{Phase, State},
     timeline::NativeTimeline,
 };
 use crate::transcription::{
@@ -331,9 +331,12 @@ fn capture_audio(session: &Session, lane: &Lane, recording: &mut Recording) -> R
             // CoreAudio may stop system callbacks during silence. Flush the
             // resampler tail before the holdback cursor passes these samples.
             let last_system = health[1].last_host_ns.load(Ordering::Acquire);
-            if last_system != 0 && capture::host_ns().saturating_sub(last_system) > 100_000_000 {
-                timelines[1].flush_idle().map_err(|e| e.to_string())?;
-            }
+            flush_idle_system(
+                &mut timelines[1],
+                &session.state,
+                last_system,
+                capture::host_ns(),
+            )?;
             let target = elapsed.saturating_sub(HOLD_BACK_MS) * 16;
             while frame + 160 <= target {
                 process_frame(
@@ -481,6 +484,23 @@ fn ingest(
     Ok(())
 }
 
+fn flush_idle_system(
+    timeline: &mut NativeTimeline,
+    state: &Mutex<State>,
+    last: u64,
+    now: u64,
+) -> Result<(), String> {
+    if last != 0 && now.saturating_sub(last) > 100_000_000 {
+        timeline.flush_idle().map_err(|e| e.to_string())?;
+        // An idle tap has no fresh signal measurement. Preserve its last audio
+        // timestamp and connection state, but never display the previous RMS.
+        lock_or_recover(state, "live.state")
+            .set_source_signal_level(Source::System, 0.)
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 fn process_frame(
     session: &Session,
     lane: &Lane,
@@ -520,6 +540,39 @@ fn process_frame(
 mod tests {
     use super::*;
     use std::sync::atomic::AtomicBool;
+
+    #[test]
+    fn idle_system_clears_stale_signal_without_fabricating_audio() {
+        let epoch = 1_000_000_000;
+        let mut timeline = NativeTimeline::new(epoch);
+        timeline.push(epoch, 48_000, &[0.5; 480]).unwrap();
+        let mut initial = State::new("idle-system".into()).unwrap();
+        initial.started().unwrap();
+        initial.set_source_connected(Source::System, true).unwrap();
+        initial
+            .set_source_last_audio_ms(Source::System, Some(0))
+            .unwrap();
+        initial
+            .set_source_signal_level(Source::System, 0.5)
+            .unwrap();
+        let state = Mutex::new(initial);
+        flush_idle_system(&mut timeline, &state, epoch, epoch + 100_000_000).unwrap();
+        assert_eq!(
+            state.lock().unwrap().snapshot().sources[1].signal_level,
+            0.5
+        );
+        flush_idle_system(&mut timeline, &state, epoch, epoch + 100_000_001).unwrap();
+        let snapshot = state.lock().unwrap().snapshot();
+        let source = snapshot
+            .sources
+            .iter()
+            .find(|s| s.source == Source::System)
+            .unwrap();
+        assert_eq!(source.signal_level, 0.0);
+        assert!(source.connected);
+        assert_eq!(source.last_audio_ms, Some(0));
+        assert!(snapshot.gaps.is_empty());
+    }
 
     #[test]
     fn failed_or_panicked_recognition_stops_capture() {

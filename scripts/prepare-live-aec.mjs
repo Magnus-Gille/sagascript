@@ -17,7 +17,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { delimiter, dirname, join, resolve } from "node:path";
+import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 
 export const LIVE_AEC_MANIFEST = Object.freeze({
   mesonVersion: "1.12.1",
@@ -49,6 +49,7 @@ Optional:
   --meson PATH              Meson executable (default: VENV/bin/meson)
   --ninja PATH              Ninja executable (default: VENV/bin/ninja)
   --rustc PATH              Rust compiler used to derive the toolchain library path (default: rustc on PATH)
+  --compiler PATH           C compiler selected for native objects (default: CC or cc on PATH)
   --wrapper-dir PATH        Task-local PATH wrappers (default: .sagascript-live-aec/bin)
   --github-env PATH         Append prepared variables to this GitHub environment file
   --github-path PATH        Append the wrapper directory to this GitHub PATH file
@@ -157,6 +158,25 @@ function rustToolchain(passedPath) {
   return rustFromSysroot(sysroot, rustc, `rustc ${rustc}`);
 }
 
+function compilerRuntimeArchive(compilerPath, searchPath) {
+  const compiler = executableFromPath(compilerPath || process.env.CC || "cc", "C compiler", searchPath);
+  const result = spawnSync(compiler, ["-print-file-name=libclang_rt.osx.a"], {
+    encoding: "utf8",
+    timeout: 10_000,
+    env: process.env,
+  });
+  if (result.error) fail(`could not resolve the C compiler runtime archive with ${compiler}: ${result.error.message}`);
+  if (result.status !== 0) {
+    fail(`C compiler at ${compiler} failed to resolve libclang_rt.osx.a: ${(result.stderr || result.stdout || "").trim()}`);
+  }
+  const archive = (result.stdout || "").replace(/\r?\n$/, "");
+  if (!archive || /[\r\n]/.test(archive) || !isAbsolute(archive)) {
+    fail(`C compiler at ${compiler} did not resolve libclang_rt.osx.a to an absolute path`);
+  }
+  assertRegularFile(archive, "C compiler runtime archive");
+  return { compiler, archive };
+}
+
 function sha256(path) {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
@@ -234,22 +254,43 @@ function writeOwnedWrapper(path, contents) {
   chmodSync(path, 0o755);
 }
 
-function prepareWrappers(wrapperDir, mesonPath, ninjaPath, cargoPath, rustLibrary) {
+function prepareWrappers(wrapperDir, mesonPath, ninjaPath, cargoPath, rustLibrary, compilerRuntime) {
   ensureDirectory(wrapperDir, "wrapper directory");
   const mesonWrapper = join(wrapperDir, "meson");
   const ninjaWrapper = join(wrapperDir, "ninja");
   const cargoWrapper = join(wrapperDir, "cargo");
+  const rustcWrapper = join(wrapperDir, "rustc-with-compiler-runtime");
   writeOwnedWrapper(
     mesonWrapper,
     `#!/bin/sh\n${WRAPPER_MARKER}\nif [ "\${1-}" = "setup" ]; then\n  shift\n  exec ${shellQuote(mesonPath)} setup --wrap-mode=forcefallback "$@"\nfi\nexec ${shellQuote(mesonPath)} "$@"\n`,
   );
   writeOwnedWrapper(ninjaWrapper, `#!/bin/sh\n${WRAPPER_MARKER}\nexec ${shellQuote(ninjaPath)} "$@"\n`);
   writeOwnedWrapper(
+    rustcWrapper,
+    `#!/bin/sh
+${WRAPPER_MARKER}
+rustc=\${SAGASCRIPT_LIVE_AEC_REAL_RUSTC-}
+case "\${rustc}" in
+  /*) ;;
+  *)
+    echo "live AEC rustc: selected compiler path is missing or not absolute" >&2
+    exit 1
+    ;;
+esac
+if [ ! -x "\${rustc}" ]; then
+  echo "live AEC rustc: selected compiler is missing or not executable" >&2
+  exit 1
+fi
+exec "\${rustc}" "$@" -C ${shellQuote(`link-arg=${compilerRuntime}`)}
+`,
+  );
+  writeOwnedWrapper(
     cargoWrapper,
     `#!/bin/sh
 ${WRAPPER_MARKER}
 rust_library=${shellQuote(rustLibrary)}
 rust_cargo=${shellQuote(cargoPath)}
+rustc_wrapper=${shellQuote(rustcWrapper)}
 if [ "\${RUSTUP_TOOLCHAIN+x}" = x ]; then
   if [ -z "\${RUSTUP_TOOLCHAIN}" ]; then
     echo "live AEC cargo: RUSTUP_TOOLCHAIN is empty" >&2
@@ -304,15 +345,18 @@ if [ ! -x "\${rust_cargo}" ]; then
   echo "live AEC cargo: Rust cargo is missing or not executable" >&2
   exit 1
 fi
-# Cargo must not discover a different compiler earlier on PATH.
-export RUSTC="\${rust_cargo%/cargo}/rustc"
+# Keep Cargo's existing RUSTC_WRAPPER, RUSTC_WORKSPACE_WRAPPER, and
+# build.rustc-wrapper configuration intact. Route the selected compiler through
+# a transparent rustc shim instead of replacing Cargo's wrapper chain.
+export SAGASCRIPT_LIVE_AEC_REAL_RUSTC="\${rust_cargo%/cargo}/rustc"
+export RUSTC="\${rustc_wrapper}"
 export RUSTDOC="\${rust_cargo%/cargo}/rustdoc"
 export DYLD_LIBRARY_PATH="\${rust_library}"
 export MACOSX_DEPLOYMENT_TARGET=13.0
 exec "\${rust_cargo}" "$@"
 `,
   );
-  return { mesonWrapper, ninjaWrapper, cargoWrapper };
+  return { mesonWrapper, ninjaWrapper, cargoWrapper, rustcWrapper };
 }
 
 function appendGitHubEnv(path, env) {
@@ -335,6 +379,7 @@ export function prepareLiveAec({
   mesonPath,
   ninjaPath,
   rustcPath,
+  compilerPath,
   sourceArchive,
   patchArchive,
   pkgConfigDir,
@@ -358,6 +403,7 @@ export function prepareLiveAec({
   const mesonVersion = assertPinnedVersion(meson, "Meson", manifest.mesonVersion);
   const ninjaVersion = assertPinnedVersion(ninja, "Ninja", manifest.ninjaVersion);
   const rust = rustToolchain(rustcPath);
+  const compiler = compilerRuntimeArchive(compilerPath, basePath);
 
   const cache = resolve(cacheDir);
   ensureDirectory(cache, "Meson package cache");
@@ -378,7 +424,7 @@ export function prepareLiveAec({
     label: "Abseil WrapDB patch archive",
   });
 
-  const wrappers = prepareWrappers(resolve(wrapperDir), meson, ninja, rust.cargo, rust.library);
+  const wrappers = prepareWrappers(resolve(wrapperDir), meson, ninja, rust.cargo, rust.library, compiler.archive);
   const preparedPath = `${resolve(wrapperDir)}${delimiter}${basePath}`;
   const env = {
     PATH: preparedPath,
@@ -396,6 +442,8 @@ export function prepareLiveAec({
     SAGASCRIPT_LIVE_AEC_CARGO: rust.cargo,
     SAGASCRIPT_LIVE_AEC_RUSTC: rust.rustc,
     SAGASCRIPT_LIVE_AEC_RUST_SYSROOT: rust.sysroot,
+    SAGASCRIPT_LIVE_AEC_COMPILER: compiler.compiler,
+    SAGASCRIPT_LIVE_AEC_COMPILER_RUNTIME: compiler.archive,
   };
   if (githubEnv) appendGitHubEnv(resolve(githubEnv), env);
   if (githubPath) appendGitHubPath(resolve(githubPath), resolve(wrapperDir));
@@ -420,6 +468,7 @@ function parseArgs(argv) {
     "meson",
     "ninja",
     "rustc",
+    "compiler",
     "wrapper-dir",
     "github-env",
     "github-path",
@@ -452,6 +501,7 @@ function main() {
     mesonPath: parsed.meson,
     ninjaPath: parsed.ninja,
     rustcPath: parsed.rustc,
+    compilerPath: parsed.compiler,
     wrapperDir: parsed.wrapperdir,
     githubEnv: parsed.githubenv,
     githubPath: parsed.githubpath,

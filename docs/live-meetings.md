@@ -41,7 +41,7 @@ The desktop offers Markdown text and two-track WAV. The core also supports plain
 
 ## Build and verification
 
-WebRTC's bundled build needs Meson 1.12.1, Ninja 1.13.2, clang, pkg-config and the selected Rust toolchain's llvm-tools component. `scripts/live-aec-build-requirements.txt` pins binary-wheel hashes. `scripts/prepare-live-aec.mjs` verifies already-downloaded Abseil 20240722.0 source/patch hashes, creates task-local wrappers, and prevents ambient Homebrew Abseil selection. It performs no downloads or package installation. The macOS CI setup prepares those inputs before Cargo.
+WebRTC's bundled build needs Meson 1.12.1, Ninja 1.13.2, clang, pkg-config and the selected Rust toolchain's llvm-tools component. `scripts/live-aec-build-requirements.txt` pins binary-wheel hashes. `scripts/prepare-live-aec.mjs` verifies already-downloaded Abseil 20240722.0 source/patch hashes, creates task-local wrappers, and prevents ambient Homebrew Abseil selection. It resolves and validates the selected C compiler's `libclang_rt.osx.a`; a generated Rust compiler shim adds that archive as a single linker argument without replacing Cargo flag or wrapper configuration. This preserves release linking on newer Xcode versions without raising the deployment floor. It performs no downloads or package installation. The macOS CI setup prepares those inputs before Cargo.
 
 Do not distribute a binary linked to `/opt/homebrew` or another developer's native libraries. Check `otool -L` on the built application and engine host. Build the native component with macOS deployment target 13.0 to preserve the app's existing lower OS floor; live capture itself remains gated at 14.2 and Apple Silicon. The new path must also compile on the repository's Rust 1.88 MSRV.
 

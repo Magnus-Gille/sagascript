@@ -10,6 +10,6 @@ Checks: red/green behavior tests, project verify gates, cross-model independent 
 
 Recovery: local changes on task/leaf worktrees only; preserve primary checkout and its untracked :memory:.ses. Publication reversible through follow-up/revert PR; no branch deletion or destructive reset. No release trigger authorized.
 
-Open implementation choices: upstream AEC/capture components currently being checked for exact license/API/platform support; measured latency/quality balance rather than an invented fixed target. Full audio temporary retention is required by the owner's save-audio answer.
+Implementation decision: Core Audio tap plus CPAL, static WebRTC AEC3 2.1.0 and the existing Pianissimo CoreML CPU/ANE route; upstream references and license evidence are recorded in docs/live-meetings.md and third-party notices. Latency/quality balance still requires measurement rather than an invented fixed target. Full audio temporary retention is required by the owner's save-audio answer.
 
 Owner clarification 2026-10-25: Mac default microphone and all system audio are sufficient for v1, signal status after Start. Per-app/device selection and pre-start signal testing are not required for this candidate.

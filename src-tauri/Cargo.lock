@@ -4546,6 +4546,7 @@ name = "sagascript-core"
 version = "1.4.6"
 dependencies = [
  "block",
+ "coreaudio-sys",
  "cpal",
  "dirs 6.0.0",
  "fs2",
