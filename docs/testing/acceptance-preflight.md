@@ -41,8 +41,9 @@ verify code signing, notarization, installation, or release readiness. The
 executable hash is SHA-256 of the file resolved through `current_exe`; it does
 not hash a memory image or verify a signature or external artifact binding.
 
-The clean-source marker is a build-time observation: supplied by the verified
-CI build environment, or computed from Git when the package build script ran.
+The clean-source marker is a build-time observation: supplied through
+`SAGASCRIPT_SOURCE_*_INPUT`, or computed from Git when the package build script
+last ran.
 Local app and CLI builds exclude only the shared generated-file allow-list.
 It is not a new inspection of the source tree at command execution, nor proof
 of the provenance of prebuilt frontend assets or sidecars. An acceptance runner
@@ -97,7 +98,7 @@ observations. A receipt is an observation report, not a process-completion
 receipt: it is published before stdout is delivered. If stdout later fails to
 write or flush, the command exits `1` and the already published observations
 remain unchanged, even if their checks passed. An acceptance runner must record
-require both observed exit status `0` and `summary.status: "passed"` from the
+and require both observed exit status `0` and `summary.status: "passed"` from the
 same run. Any other or missing exit status is not an acceptance pass, whatever
 the receipt says. An interrupted process without an observed exit status is
 incomplete. Retrying needs a new receipt path.
