@@ -55,3 +55,9 @@ All captured audio, transcripts and raw logs were deleted after aggregate verifi
 The run exposed empty ASR finals as blank source/time rows. A presentation/export correction filters whitespace-only rows before UI pagination and skips blank cues in human-readable exports. Raw JSON/JSONL segment state remains available so an empty final can replace an earlier preview. Capture, AEC, scheduling and ASR are unchanged by this follow-up; native evidence above remains explicitly tied to `14b7abd5`.
 
 Outstanding acceptance: headphones, route changes, a representative longer meeting/lecture test, the incomplete 30-minute check, and Magnus's real-meeting trust/quality assessment. Do not merge on the strength of the short fixture alone.
+
+## Updated quality workflow and acceptance
+
+Magnus requested automatic local retranscription of both retained tracks after Stop (2026-10-26). Live text may be approximate; final quality must be evaluated separately. The new pass must visibly stop capture before processing, preserve live text/audio on cancellation or error, and export the chosen final result without mixed source attribution. A measurable improvement is not yet established. Capture loss, route failures and source separation remain independent acceptance gates.
+
+Further native tests require a fixed user script displayed separately from system playback references, exact spoken cues/timing, and Magnus's explicit readiness immediately before start. Do not automatically replay a fixture. The completed scripted AirPods test on a0fa8a0e reached Completed with zero reported loss/gaps and valid stereo/text export; B matched15/15words and system2/87word edits. A was invalid for the intended comparison because Magnus read the system reference. These aggregate results neither approve the new post-stop pass nor prove distinct simultaneous speech attribution. Captured raw data was deleted after checking.

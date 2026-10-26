@@ -63,8 +63,21 @@ try {
   await page.getByRole("button", { name: "Stop live meeting", exact: true }).click();
   await page.getByText("Finishing transcript", { exact: true }).waitFor();
   await page.screenshot({ path: outputPath("live-meeting-draining-500.png"), fullPage: true });
-  await page.evaluate(() => window.qa.setPhase("failed", "Synthetic partial stop failure"));
-  await page.getByText("Failed", { exact: true }).waitFor();
+  await page.evaluate(() => window.qa.setRefinement("running", 42));
+  await page.getByRole("progressbar", { name: "Transcript refinement progress" }).waitFor();
+  assert.equal(await page.getByRole("progressbar").getAttribute("value"), "42");
+  await page.getByRole("button", { name: "Cancel refinement", exact: true }).waitFor();
+  assert.equal(await page.getByRole("button", { name: "Discard", exact: true }).count(), 0);
+  await page.getByText("Preview från mig", { exact: true }).waitFor();
+  await page.screenshot({ path: outputPath("live-meeting-refining-500.png"), fullPage: true });
+  await page.evaluate(() => window.qa.setRefinement("cancelled", 42, "Refinement cancelled; live text retained."));
+  await page.getByText("Live transcript kept", { exact: true }).waitFor();
+  await page.getByText("Preview från mig", { exact: true }).waitFor();
+  await page.evaluate(() => {
+    window.qa.setPhase("failed", "Synthetic partial stop failure");
+  });
+
+  await page.getByText("Live transcript kept", { exact: true }).waitFor();
   await page.getByText("Synthetic partial stop failure", { exact: true }).waitFor();
 
   const saveText = page.getByRole("button", { name: "Save text", exact: true });
@@ -77,6 +90,12 @@ try {
   await saveAudio.click();
   await page.waitForFunction(() => window.qa.calls.some((call) => call.action === "save-audio"));
   await page.screenshot({ path: outputPath("live-meeting-failed-save-retry.png"), fullPage: true });
+
+  await page.evaluate(() => window.qa.setRefinement("completed", 100));
+  await page.getByText("Final transcript", { exact: true }).waitFor();
+  await page.getByText("Efterbearbetad text", { exact: true }).waitFor();
+  assert.equal(await page.getByText("Preview från mig", { exact: true }).count(), 0);
+  await page.screenshot({ path: outputPath("live-meeting-refined-500.png"), fullPage: true });
 
   await page.getByRole("button", { name: "Discard", exact: true }).click();
   await page.getByRole("group", { name: "Confirm discard", exact: true }).waitFor();

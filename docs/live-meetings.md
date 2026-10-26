@@ -33,6 +33,18 @@ The larger Settings live tab polls serialized snapshots every 500 ms, shows sour
 
 The first implementation is bounded to four hours, 20,000 segments, 16 MiB transcript text and a 60-second ASR pending PCM queue. Native timestamp discontinuities, microphone stalls, capture overflow, route changes and excessive clock drift fail visibly instead of fabricating continuity. A system source with no samples is not proof of silence or successful permission; native permission and real-device tests remain essential.
 
+## Automatic post-meeting pass
+
+On 2026-10-26 Magnus changed the quality workflow: live text may be approximate; stopping should automatically reprocess the complete retained microphone and system tracks locally. Permanent saving remains opt-in. This adds a quality stage, not permission to lose audio or merge source labels. Better text must be measured; running the model again is not itself proof of improvement.
+
+After capture stops and live finals drain, `refining` keeps the live transcript visible and shows progress. The private stereo recording is read in bounded one-second blocks. Its raw microphone is replayed through AEC3 with the system track as reference; the two sources stay separate. Pianissimo/CoreML handles final-only jobs at batch priority, with 1.5-second silence context and two-second overlap within a maximum 30-second window. This preserves longer phrase context than the live 600ms cutoff, without holding the whole meeting in RAM. No speaker clustering, cloud service or extra model is introduced.
+
+A replacement transcript is staged and validated completely before it replaces the live snapshot. Original source labels, timestamps and gaps survive. Cancel refinement, a model/read error or a refinement panic retains the original live transcript and temporary audio for export. The UI identifies whether the displayed result is refined or the retained live transcript. Export/discard wait until work stops. No quality improvement or perfect accuracy is promised.
+
+CLI uses the same automatic pass after its duration expires or the first Ctrl-C stops capture. An interrupt first received during refinement cancels that pass; the existing second-signal forced-exit behavior still applies. JSONL status includes optional refinement status/progress/error; `transcript_reset` precedes replacement segments so consumers must clear previous segment rows (gap history remains). The CLI drain timeout does not truncate healthy refinement. A four-hour refinement timeout requests cancellation and preserves live export.
+
+Tests cover channel reads, bounded replay, context across short pauses, overlap timing refusal, cancellation/failure fallback, atomic replacement, JSONL reset and UI progress. Native comparison of live versus refined Swedish text remains required before claiming a quality gain. Earlier native acceptance applies to capture on its recorded revisions, not to this new pass.
+
 ## Temporary data and export
 
 Audio is held in an unnamed temporary PCM WAV file, not a permanent meeting archive. It is deleted when the session is discarded or the process exits. Text lives in the session. Crash recovery of unsaved meetings is not promised. Choose text and/or audio export after stopping, then discard the temporary session. Exports use staged, no-replace publication; failed saves preserve the temporary recording for another destination.

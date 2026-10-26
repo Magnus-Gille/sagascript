@@ -123,3 +123,84 @@ fn spool_has_no_destination_until_explicit_export_and_hash_is_finalized_wav() {
     );
     assert!(Path::new(&dest).is_file());
 }
+
+#[test]
+fn reads_finalized_stereo_pcm_in_channel_order_and_chunks() {
+    let mut recording = Recording::new().expect("recording");
+    recording
+        .append(&[1.0, -1.0, 0.25], &[0.5, -0.5, -0.25])
+        .expect("append");
+    recording.finalize().expect("finalize");
+
+    let (microphone, system) = recording.read_frames(1, 2).expect("read frames");
+    assert_eq!(microphone[0], -1.0);
+    assert!((microphone[1] - 0.25).abs() < 0.0001);
+    assert!((system[0] + 0.5).abs() < 0.0001);
+    assert!((system[1] + 0.25).abs() < 0.0001);
+}
+
+#[test]
+fn read_frames_handles_partial_eof_and_start_at_end() {
+    let mut recording = Recording::new().expect("recording");
+    recording
+        .append(&[0.0, 0.5, 1.0], &[0.0, -0.5, -1.0])
+        .expect("append");
+    recording.finalize().expect("finalize");
+
+    let (microphone, system) = recording.read_frames(1, 100).expect("read remainder");
+    assert!((microphone[0] - 0.5).abs() < 0.0001);
+    assert_eq!(microphone[1], 1.0);
+    assert!((system[0] + 0.5).abs() < 0.0001);
+    assert_eq!(system[1], -1.0);
+    assert_eq!(
+        recording.read_frames(3, 10).expect("empty read"),
+        (vec![], vec![])
+    );
+}
+
+#[test]
+fn read_frames_rejects_unfinalized_invalid_start_and_oversized_request() {
+    let mut recording = Recording::new().expect("recording");
+    recording.append(&[0.0], &[0.0]).expect("append");
+    assert!(matches!(
+        recording.read_frames(0, 1),
+        Err(RecordingError::NotFinalized)
+    ));
+    recording.finalize().expect("finalize");
+    assert!(matches!(
+        recording.read_frames(2, 1),
+        Err(RecordingError::ReadStartOutOfBounds)
+    ));
+    assert!(matches!(
+        recording.read_frames(0, MAX_READ_FRAMES + 1),
+        Err(RecordingError::ReadLimitExceeded)
+    ));
+}
+
+#[test]
+fn read_frames_reports_truncated_spool_and_preserves_hash_and_export() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let dest = destination(&dir, "read.wav");
+    let mut recording = Recording::new().expect("recording");
+    recording
+        .append(&[0.25, -0.25], &[0.5, -0.5])
+        .expect("append");
+    recording.finalize().expect("finalize");
+    let digest_before = recording.sha256().expect("sha256 before read");
+    recording.read_frames(0, 2).expect("read frames");
+    assert_eq!(
+        recording.sha256().expect("sha256 after read"),
+        digest_before
+    );
+    recording.export(&dest).expect("export after read");
+    assert_eq!(
+        digest_before,
+        crate::hash::sha256_hex(fs::read(&dest).expect("wav"))
+    );
+
+    recording.file.set_len(44 + 4).expect("truncate spool");
+    assert!(matches!(
+        recording.read_frames(0, 2),
+        Err(RecordingError::ReadTruncated)
+    ));
+}

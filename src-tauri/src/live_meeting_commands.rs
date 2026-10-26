@@ -253,9 +253,27 @@ mod tests {
         state
             .finish_failed("System audio interrupted", true)
             .unwrap();
+        let mut refined = State::new("contract-refined".into()).unwrap();
+        refined.started().unwrap();
+        refined.advance_by(1500).unwrap();
+        refined.begin_stop().unwrap();
+        refined.begin_refinement(true).unwrap();
+        refined.set_refinement_progress(42).unwrap();
+        let refining = refined.snapshot();
+        refined
+            .complete_refinement(vec![LiveSegment {
+                id: "refined-0".into(),
+                source: Source::Microphone,
+                start_ms: 100,
+                end_ms: 900,
+                text: "Slutlig text".into(),
+                status: SegmentStatus::Final,
+                revision: 1,
+            }])
+            .unwrap();
         crate::contract::assert_fixture(
             "get_live_meeting.json",
-            &serde_json::json!({"starting":starting,"running":running,"failed":state.snapshot()}),
+            &serde_json::json!({"starting":starting,"running":running,"failed":state.snapshot(),"refining":refining,"refined":refined.snapshot()}),
         );
     }
 }

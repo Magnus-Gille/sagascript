@@ -361,3 +361,141 @@ test("follows new transcript content until the user pauses, then resumes on requ
   await user.click(screen.getByRole("button", { name: "Return to latest" }));
   expect(transcript.scrollTop).toBe(420);
 });
+
+test("refining sessions show determinate progress, preserve live text, and stop meters", () => {
+  renderLive({
+    snapshot: snapshot({
+      phase: "refining",
+      refinement: { status: "running", progress_percent: 42, error: null },
+      segments: [{ id: "live-1", source: "microphone", start_ms: 0, end_ms: 900, text: "live text", status: "final", revision: 1 }],
+    }),
+  });
+
+  expect(screen.getByLabelText("Live meeting state: Refining transcript")).toBeInTheDocument();
+  expect(screen.getByRole("progressbar", { name: "Transcript refinement progress" })).toHaveAttribute("aria-valuenow", "42");
+  expect(screen.getByText("42%"), "refinement progress should be visible").toBeInTheDocument();
+  expect(screen.getByText(/recording stopped/i)).toBeInTheDocument();
+  expect(screen.getByText(/refining locally from both tracks/i)).toBeInTheDocument();
+  expect(screen.getByRole("log")).toHaveTextContent("live text");
+  expect(screen.getByLabelText("Jag · mikrofon signal level")).toHaveValue(0);
+  expect(screen.getByLabelText("Mötet · systemljud signal level")).toHaveValue(0);
+  expect(screen.getByRole("button", { name: "Cancel refinement" })).toBeEnabled();
+  expect(screen.queryByRole("button", { name: "Save text" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Discard" })).not.toBeInTheDocument();
+});
+
+test("refining uses the stop callback to cancel and keep the live transcript", async () => {
+  const callbacks = renderLive({
+    snapshot: snapshot({
+      phase: "refining",
+      refinement: { status: "running", progress_percent: 10, error: null },
+    }),
+  });
+
+  await userEvent.setup().click(screen.getByRole("button", { name: "Cancel refinement" }));
+  expect(callbacks.onStop).toHaveBeenCalledOnce();
+});
+
+test("completed refinement presents the final transcript after the snapshot replacement", async () => {
+  const view = renderLive({
+    snapshot: snapshot({
+      phase: "refining",
+      refinement: { status: "running", progress_percent: 99, error: null },
+      segments: [{ id: "live-1", source: "microphone", start_ms: 0, end_ms: 900, text: "live text", status: "final", revision: 1 }],
+    }),
+  });
+  expect(screen.getByRole("log")).toHaveTextContent("live text");
+
+  await view.rerender({
+    snapshot: snapshot({
+      phase: "completed",
+      refinement: { status: "completed", progress_percent: 100, error: null },
+      segments: [{ id: "final-1", source: "microphone", start_ms: 0, end_ms: 900, text: "final text", status: "final", revision: 2 }],
+    }),
+    busy: false,
+    supported: true,
+    error: null,
+    onStart: view.onStart,
+    onStop: view.onStop,
+    onDiscard: view.onDiscard,
+    onSaveText: view.onSaveText,
+    onSaveAudio: view.onSaveAudio,
+    onRefresh: view.onRefresh,
+  });
+
+  expect(screen.getByLabelText("Live meeting state: Final transcript")).toBeInTheDocument();
+  expect(screen.getByRole("log")).toHaveTextContent("final text");
+  expect(screen.getByRole("log")).not.toHaveTextContent("live text");
+  expect(screen.getByRole("button", { name: "Save text" })).toBeInTheDocument();
+});
+
+test("cancelled and failed refinement keep the live transcript label and surface safe errors", async () => {
+  const view = renderLive({
+    snapshot: snapshot({
+      phase: "completed",
+      refinement: { status: "cancelled", progress_percent: 58, error: null },
+      error: "Refinement cancelled; live transcript kept",
+      segments: [{ id: "live-1", source: "microphone", start_ms: 0, end_ms: 900, text: "live text", status: "final", revision: 1 }],
+    }),
+  });
+  expect(screen.getByLabelText("Live meeting state: Live transcript kept")).toBeInTheDocument();
+  expect(screen.getByRole("alert")).toHaveTextContent("Refinement cancelled; live transcript kept");
+
+  await view.rerender({
+    snapshot: snapshot({
+      phase: "completed",
+      refinement: { status: "failed", progress_percent: 58, error: "Refinement unavailable" },
+      error: null,
+      segments: [{ id: "live-1", source: "microphone", start_ms: 0, end_ms: 900, text: "live text", status: "final", revision: 1 }],
+    }),
+    busy: false,
+    supported: true,
+    error: null,
+    onStart: view.onStart,
+    onStop: view.onStop,
+    onDiscard: view.onDiscard,
+    onSaveText: view.onSaveText,
+    onSaveAudio: view.onSaveAudio,
+    onRefresh: view.onRefresh,
+  });
+  expect(screen.getByLabelText("Live meeting state: Live transcript kept")).toBeInTheDocument();
+  expect(screen.getByRole("alert")).toHaveTextContent("Refinement unavailable");
+});
+
+test("legacy terminal snapshots keep their lifecycle labels without refinement metadata", async () => {
+  const view = renderLive({ snapshot: snapshot({ phase: "completed", refinement: null }) });
+  expect(screen.getByLabelText("Live meeting state: Completed")).toBeInTheDocument();
+
+  await view.rerender({
+    snapshot: snapshot({ phase: "cancelled" }),
+    busy: false,
+    supported: true,
+    error: null,
+    onStart: view.onStart,
+    onStop: view.onStop,
+    onDiscard: view.onDiscard,
+    onSaveText: view.onSaveText,
+    onSaveAudio: view.onSaveAudio,
+    onRefresh: view.onRefresh,
+  });
+  expect(screen.getByLabelText("Live meeting state: Cancelled")).toBeInTheDocument();
+
+  await view.rerender({
+    snapshot: snapshot({ phase: "failed" }),
+    busy: false,
+    supported: true,
+    error: null,
+    onStart: view.onStart,
+    onStop: view.onStop,
+    onDiscard: view.onDiscard,
+    onSaveText: view.onSaveText,
+    onSaveAudio: view.onSaveAudio,
+    onRefresh: view.onRefresh,
+  });
+  expect(screen.getByLabelText("Live meeting state: Failed")).toBeInTheDocument();
+});
+
+test("explains automatic local refinement in the live meeting copy", () => {
+  renderLive();
+  expect(screen.getByText(/stopping starts local refinement from both tracks/i)).toBeInTheDocument();
+});

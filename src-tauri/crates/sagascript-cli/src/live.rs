@@ -16,7 +16,9 @@ use clap::Args;
 use sagascript_core::error::DictationError;
 use sagascript_core::meeting::live::document::{Gap, LiveSegment, SegmentStatus, Source};
 use sagascript_core::meeting::live::session::Session;
-use sagascript_core::meeting::live::state::{Phase, Snapshot, SourceStatus};
+use sagascript_core::meeting::live::state::{
+    Phase, Refinement, RefinementStatus, Snapshot, SourceStatus,
+};
 use sagascript_core::meeting::MeetingExportFormat;
 use sagascript_core::settings::Language;
 use serde::Serialize;
@@ -26,6 +28,7 @@ use crate::output::{errln, outln, Out};
 
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
+const REFINE_TIMEOUT: Duration = Duration::from_secs(4 * 60 * 60);
 const MAX_DURATION_SECONDS: f64 = 14_400.0;
 
 #[derive(Args, Debug, Clone, Default)]
@@ -64,6 +67,7 @@ pub enum LiveEvent {
         id: String,
         revision: u64,
         phase: Phase,
+        refinement: Option<Refinement>,
         elapsed_ms: u64,
         sources: Vec<SourceStatus>,
         error: Option<String>,
@@ -75,6 +79,9 @@ pub enum LiveEvent {
         end_ms: u64,
         text: String,
         status: SegmentStatus,
+        revision: u64,
+    },
+    TranscriptReset {
         revision: u64,
     },
     Gap {
@@ -89,6 +96,7 @@ pub enum LiveEvent {
 pub struct EventReducer {
     session_id: Option<String>,
     phase: Option<Phase>,
+    refinement: Option<Refinement>,
     error: Option<String>,
     sources: Vec<SourceStatus>,
     segments: BTreeMap<(u8, String), LiveSegment>,
@@ -108,7 +116,18 @@ impl EventReducer {
         }
 
         let mut events = Vec::new();
+        let refinement_completed = snapshot
+            .refinement
+            .as_ref()
+            .is_some_and(|refinement| refinement.status == RefinementStatus::Completed);
+        let first_refinement_completion = refinement_completed
+            && !self
+                .refinement
+                .as_ref()
+                .is_some_and(|refinement| refinement.status == RefinementStatus::Completed);
+
         if self.phase != Some(snapshot.phase)
+            || self.refinement != snapshot.refinement
             || self.error != snapshot.error
             || self.sources != snapshot.sources
         {
@@ -116,13 +135,22 @@ impl EventReducer {
                 id: snapshot.id.clone(),
                 revision: snapshot.revision,
                 phase: snapshot.phase,
+                refinement: snapshot.refinement.clone(),
                 elapsed_ms: snapshot.elapsed_ms,
                 sources: snapshot.sources.clone(),
                 error: snapshot.error.clone(),
             });
             self.phase = Some(snapshot.phase);
+            self.refinement = snapshot.refinement.clone();
             self.error = snapshot.error.clone();
             self.sources = snapshot.sources.clone();
+        }
+
+        if first_refinement_completion {
+            self.segments.clear();
+            events.push(LiveEvent::TranscriptReset {
+                revision: snapshot.revision,
+            });
         }
 
         for segment in &snapshot.segments {
@@ -191,18 +219,44 @@ fn run_session(session: &Arc<Session>, args: &LiveArgs, out: &Out) -> Result<(),
     let mut reducer = EventReducer::default();
     let mut stop_requested = false;
     let mut stop_started = None;
+    let mut refinement_started = None;
+    let mut refinement_stop_requested = false;
+    let mut interrupt_stopped_capture = false;
 
     while !session.is_done() {
+        let snapshot = session.snapshot();
         if !stop_requested
             && (cancel::is_cancelled()
                 || duration_ms.is_some_and(|limit| limit <= started.elapsed().as_millis() as u64))
         {
+            interrupt_stopped_capture = cancel::is_cancelled()
+                && matches!(snapshot.phase, Phase::Starting | Phase::Running);
             session.stop();
             stop_requested = true;
             stop_started = Some(Instant::now());
         }
 
-        if stop_started.is_some_and(|at| at.elapsed() >= DRAIN_TIMEOUT) {
+        if snapshot.phase == Phase::Refining {
+            refinement_started.get_or_insert_with(Instant::now);
+            if cancel::is_cancelled() && !interrupt_stopped_capture && !refinement_stop_requested {
+                session.stop();
+                refinement_stop_requested = true;
+            }
+            if !refinement_stop_requested
+                && refinement_started.is_some_and(|at| at.elapsed() >= REFINE_TIMEOUT)
+            {
+                errln!(
+                    out,
+                    "Efterbearbetningen tog för lång tid; avbryter efterbearbetningen och behåller live-texten."
+                );
+                session.stop();
+                refinement_stop_requested = true;
+            }
+        }
+
+        if stop_started.is_some_and(|at| at.elapsed() >= DRAIN_TIMEOUT)
+            && matches!(snapshot.phase, Phase::Starting | Phase::Draining)
+        {
             session.shutdown();
             let drained = wait_until_done(session, DRAIN_TIMEOUT);
             let detail = if drained {
@@ -213,7 +267,6 @@ fn run_session(session: &Arc<Session>, args: &LiveArgs, out: &Out) -> Result<(),
             return Err(DictationError::TranscriptionFailed(detail.into()));
         }
 
-        let snapshot = session.snapshot();
         emit_events(out, args.jsonl, reducer.update(&snapshot))?;
         if session.is_done() {
             break;
@@ -234,6 +287,7 @@ fn emit_events(out: &Out, jsonl: bool, events: Vec<LiveEvent>) -> Result<(), Dic
             match event {
                 LiveEvent::Status {
                     phase,
+                    refinement,
                     elapsed_ms,
                     sources,
                     error,
@@ -257,6 +311,14 @@ fn emit_events(out: &Out, jsonl: bool, events: Vec<LiveEvent>) -> Result<(), Dic
                     if let Some(error) = error {
                         errln!(out, "  fel: {error}");
                     }
+                    if let Some(refinement) = refinement {
+                        if phase == Phase::Refining {
+                            errln!(out, "  Efterbearbetning: {}%", refinement.progress_percent);
+                        }
+                        if let Some(error) = refinement.error {
+                            errln!(out, "  efterbearbetning: fel: {error}");
+                        }
+                    }
                 }
                 LiveEvent::Segment {
                     source,
@@ -271,6 +333,9 @@ fn emit_events(out: &Out, jsonl: bool, events: Vec<LiveEvent>) -> Result<(), Dic
                         status_label(status),
                         text
                     )?;
+                }
+                LiveEvent::TranscriptReset { .. } => {
+                    outln!(out, "Slutlig text ersätter live-utskriften.")?;
                 }
                 LiveEvent::Gap {
                     source,
@@ -539,6 +604,7 @@ fn phase_label(phase: Phase) -> &'static str {
         Phase::Starting => "startar",
         Phase::Running => "pågår",
         Phase::Draining => "slutför",
+        Phase::Refining => "förfinar",
         Phase::Completed => "klar",
         Phase::Cancelled => "avbruten",
         Phase::Failed => "misslyckad",
@@ -551,13 +617,14 @@ mod tests {
         lifecycle_decision, validate_duration, EventReducer, LifecycleDecision, LiveEvent,
     };
     use sagascript_core::meeting::live::document::{Gap, Source};
-    use sagascript_core::meeting::live::state::{Phase, Snapshot};
+    use sagascript_core::meeting::live::state::{Phase, Refinement, RefinementStatus, Snapshot};
 
     fn snapshot(segments: Vec<sagascript_core::meeting::live::document::LiveSegment>) -> Snapshot {
         Snapshot {
             id: "session".into(),
             revision: 1,
             phase: Phase::Running,
+            refinement: None,
             elapsed_ms: 100,
             sources: Vec::new(),
             segments,
@@ -617,6 +684,78 @@ mod tests {
             |event| matches!(event, LiveEvent::Gap { reason, .. } if reason == "dropped audio")
         ));
         assert!(reducer.update(&with_gap).is_empty());
+    }
+
+    #[test]
+    fn reducer_emits_refinement_progress_as_status_changes() {
+        let mut reducer = EventReducer::default();
+        let mut running = snapshot(Vec::new());
+        running.refinement = Some(Refinement {
+            status: RefinementStatus::Running,
+            progress_percent: 25,
+            error: None,
+        });
+        assert!(reducer.update(&running).iter().any(|event| matches!(
+            event,
+            LiveEvent::Status {
+                refinement: Some(Refinement {
+                    progress_percent: 25,
+                    ..
+                }),
+                ..
+            }
+        )));
+
+        running.refinement.as_mut().unwrap().progress_percent = 50;
+        assert!(reducer.update(&running).iter().any(|event| matches!(
+            event,
+            LiveEvent::Status {
+                refinement: Some(Refinement {
+                    progress_percent: 50,
+                    ..
+                }),
+                ..
+            }
+        )));
+    }
+
+    #[test]
+    fn reducer_resets_transcript_once_before_completed_segments() {
+        let mut reducer = EventReducer::default();
+        assert!(!reducer
+            .update(&snapshot(vec![segment("live", 1)]))
+            .is_empty());
+
+        let mut completed = snapshot(vec![segment("final", 2)]);
+        completed.phase = Phase::Completed;
+        completed.refinement = Some(Refinement {
+            status: RefinementStatus::Completed,
+            progress_percent: 100,
+            error: None,
+        });
+        let events = reducer.update(&completed);
+        let reset_index = events
+            .iter()
+            .position(|event| matches!(event, LiveEvent::TranscriptReset { .. }))
+            .expect("transcript reset");
+        let segment_index = events
+            .iter()
+            .position(|event| matches!(event, LiveEvent::Segment { text, .. } if text == "final"))
+            .expect("final segment");
+        assert!(reset_index < segment_index);
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event, LiveEvent::TranscriptReset { .. }))
+                .count(),
+            1
+        );
+        assert!(reducer.update(&completed).is_empty());
+    }
+
+    #[test]
+    fn refining_phase_has_swedish_label() {
+        assert_eq!(super::phase_label(Phase::Refining), "förfinar");
     }
 
     #[test]

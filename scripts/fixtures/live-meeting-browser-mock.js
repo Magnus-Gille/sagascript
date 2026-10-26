@@ -91,6 +91,11 @@ window.qa = {
     if (!snapshot) return;
     snapshot = { ...snapshot, phase, error, revision: snapshot.revision + 1 };
   },
+  setRefinement(status, progress = 0, error = null) {
+    if (!snapshot) return;
+    snapshot = { ...snapshot, phase: status === "running" ? "refining" : "completed", refinement: {status, progress_percent: progress, error}, error, revision: snapshot.revision + 1 };
+    if (status === "completed") snapshot.segments = [segment("refined-0", "microphone", 1000, "Efterbearbetad text")];
+  },
   setSaveTextFailures(count) {
     saveTextFailures = count;
   },

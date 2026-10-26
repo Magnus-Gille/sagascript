@@ -22,9 +22,26 @@ pub enum Phase {
     Starting,
     Running,
     Draining,
+    Refining,
     Completed,
     Cancelled,
     Failed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RefinementStatus {
+    Running,
+    Completed,
+    Cancelled,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Refinement {
+    pub status: RefinementStatus,
+    pub progress_percent: u8,
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -46,6 +63,8 @@ pub struct Snapshot {
     pub id: String,
     pub revision: u64,
     pub phase: Phase,
+    #[serde(default)]
+    pub refinement: Option<Refinement>,
     pub elapsed_ms: u64,
     pub sources: Vec<SourceStatus>,
     pub segments: Vec<LiveSegment>,
@@ -97,6 +116,7 @@ pub struct State {
     id: String,
     revision: u64,
     phase: Phase,
+    refinement: Option<Refinement>,
     elapsed_ms: u64,
     sources: Vec<SourceStatus>,
     segments: BTreeMap<(u8, String), LiveSegment>,
@@ -115,6 +135,7 @@ impl State {
             id,
             revision: 0,
             phase: Phase::Starting,
+            refinement: None,
             elapsed_ms: 0,
             sources: vec![
                 source_status(Source::Microphone),
@@ -149,6 +170,7 @@ impl State {
             id: self.id.clone(),
             revision: self.revision,
             phase: self.phase,
+            refinement: self.refinement.clone(),
             elapsed_ms: self.elapsed_ms,
             sources: self.sources.clone(),
             segments,
@@ -182,6 +204,91 @@ impl State {
         }
         self.phase = Phase::Completed;
         self.audio_available = has_audio;
+        self.bump_revision();
+        Ok(())
+    }
+
+    pub fn begin_refinement(&mut self, has_audio: bool) -> Result<(), StateError> {
+        if self.phase != Phase::Draining {
+            return Err(StateError::InvalidTransition);
+        }
+        self.phase = Phase::Refining;
+        self.refinement = Some(Refinement {
+            status: RefinementStatus::Running,
+            progress_percent: 0,
+            error: None,
+        });
+        self.audio_available = has_audio;
+        self.bump_revision();
+        Ok(())
+    }
+
+    pub fn set_refinement_progress(&mut self, progress_percent: u8) -> Result<(), StateError> {
+        if self.phase != Phase::Refining {
+            return Err(StateError::InvalidTransition);
+        }
+        if progress_percent > 100 {
+            return Err(StateError::InvalidHealth);
+        }
+        let refinement = self
+            .refinement
+            .as_mut()
+            .ok_or(StateError::InvalidTransition)?;
+        if progress_percent < refinement.progress_percent {
+            return Err(StateError::InvalidHealth);
+        }
+        refinement.progress_percent = progress_percent;
+        self.bump_revision();
+        Ok(())
+    }
+
+    pub fn complete_refinement(&mut self, segments: Vec<LiveSegment>) -> Result<(), StateError> {
+        if self.phase != Phase::Refining {
+            return Err(StateError::InvalidTransition);
+        }
+        let replacement = validate_refinement_segments(segments)?;
+        self.segments = replacement;
+        self.text_bytes = self
+            .segments
+            .values()
+            .map(|segment| segment.text.len())
+            .sum();
+        self.phase = Phase::Completed;
+        self.refinement = Some(Refinement {
+            status: RefinementStatus::Completed,
+            progress_percent: 100,
+            error: None,
+        });
+        self.bump_revision();
+        Ok(())
+    }
+
+    pub fn finish_refinement_fallback(
+        &mut self,
+        cancelled: bool,
+        message: Option<String>,
+    ) -> Result<(), StateError> {
+        if self.phase != Phase::Refining {
+            return Err(StateError::InvalidTransition);
+        }
+        if let Some(message) = &message {
+            validate_error(message)?;
+        }
+        self.phase = Phase::Completed;
+        self.error = message.clone();
+        self.refinement = Some(Refinement {
+            status: if cancelled {
+                RefinementStatus::Cancelled
+            } else {
+                RefinementStatus::Failed
+            },
+            progress_percent: self
+                .refinement
+                .as_ref()
+                .map(|refinement| refinement.progress_percent)
+                .unwrap_or(0),
+            error: message,
+        });
         self.bump_revision();
         Ok(())
     }
@@ -454,7 +561,7 @@ impl State {
     fn ensure_mutable(&self) -> Result<(), StateError> {
         if matches!(
             self.phase,
-            Phase::Completed | Phase::Cancelled | Phase::Failed
+            Phase::Refining | Phase::Completed | Phase::Cancelled | Phase::Failed
         ) {
             Err(StateError::InvalidTransition)
         } else {
@@ -486,6 +593,34 @@ fn source_rank(source: Source) -> u8 {
         Source::Microphone => 0,
         Source::System => 1,
     }
+}
+
+fn validate_refinement_segments(
+    segments: Vec<LiveSegment>,
+) -> Result<BTreeMap<(u8, String), LiveSegment>, StateError> {
+    if segments.len() > MAX_SEGMENTS {
+        return Err(StateError::Capacity);
+    }
+    let mut replacement = BTreeMap::new();
+    let mut text_bytes = 0usize;
+    for segment in segments {
+        validate_segment(&segment)?;
+        if segment.status != SegmentStatus::Final {
+            return Err(StateError::FinalSegment);
+        }
+        text_bytes = text_bytes
+            .checked_add(segment.text.len())
+            .ok_or(StateError::TextTooLarge)?;
+        if text_bytes > MAX_TOTAL_TEXT_BYTES {
+            return Err(StateError::TextTooLarge);
+        }
+        let key = (source_rank(segment.source), segment.id.clone());
+        if replacement.contains_key(&key) || replacement.contains_key(&(1 - key.0, key.1.clone())) {
+            return Err(StateError::IdCollision);
+        }
+        replacement.insert(key, segment);
+    }
+    Ok(replacement)
 }
 
 fn validate_segment(segment: &LiveSegment) -> Result<(), StateError> {

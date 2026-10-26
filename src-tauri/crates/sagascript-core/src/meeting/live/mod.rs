@@ -4,6 +4,8 @@ pub mod capture;
 pub mod document;
 pub mod queue;
 pub mod recording;
+#[cfg(any(test, all(feature = "record", target_os = "macos")))]
+mod refine;
 pub mod segmenter;
 
 #[cfg(all(feature = "record", target_os = "macos"))]

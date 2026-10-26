@@ -17,6 +17,7 @@ const CHANNELS: u16 = 2;
 const BITS_PER_SAMPLE: u16 = 16;
 const BYTES_PER_FRAME: u64 = 4;
 const MAX_DURATION_SAMPLES: u64 = 4 * 60 * 60 * SAMPLE_RATE as u64;
+const MAX_READ_FRAMES: usize = 30 * SAMPLE_RATE as usize;
 const COPY_BUFFER_BYTES: usize = 64 * 1024;
 
 #[derive(Debug)]
@@ -27,6 +28,9 @@ pub enum RecordingError {
     DurationExceeded,
     Finalized,
     NotFinalized,
+    ReadStartOutOfBounds,
+    ReadLimitExceeded,
+    ReadTruncated,
     Publish(fsutil::PublishError),
 }
 
@@ -39,6 +43,9 @@ impl RecordingError {
             Self::DurationExceeded => "live_recording.duration_exceeded",
             Self::Finalized => "live_recording.finalized",
             Self::NotFinalized => "live_recording.not_finalized",
+            Self::ReadStartOutOfBounds => "live_recording.read_start_out_of_bounds",
+            Self::ReadLimitExceeded => "live_recording.read_limit_exceeded",
+            Self::ReadTruncated => "live_recording.read_truncated",
             Self::Publish(_) => "live_recording.publish",
         }
     }
@@ -133,6 +140,78 @@ impl Recording {
         self.file.sync_all()?;
         self.finalized = true;
         Ok(())
+    }
+
+    /// Read up to `max_frames` of the finalized stereo PCM payload.
+    ///
+    /// The returned vectors contain the microphone (left) and system (right)
+    /// channels, normalized back to the `-1.0..=1.0` range used by `append`.
+    /// Reads are bounded so a caller cannot request an unbounded allocation.
+    pub fn read_frames(
+        &mut self,
+        start_sample: u64,
+        max_frames: usize,
+    ) -> Result<(Vec<f32>, Vec<f32>), RecordingError> {
+        if !self.finalized {
+            return Err(RecordingError::NotFinalized);
+        }
+        if max_frames > MAX_READ_FRAMES {
+            return Err(RecordingError::ReadLimitExceeded);
+        }
+        if start_sample > self.duration_samples {
+            return Err(RecordingError::ReadStartOutOfBounds);
+        }
+
+        let data_bytes = self
+            .duration_samples
+            .checked_mul(BYTES_PER_FRAME)
+            .ok_or(RecordingError::ReadTruncated)?;
+        let expected_len = 44u64
+            .checked_add(data_bytes)
+            .ok_or(RecordingError::ReadTruncated)?;
+        if self.file.metadata()?.len() < expected_len {
+            return Err(RecordingError::ReadTruncated);
+        }
+
+        let frames = (self.duration_samples - start_sample).min(max_frames as u64) as usize;
+        let byte_offset = 44u64
+            .checked_add(
+                start_sample
+                    .checked_mul(BYTES_PER_FRAME)
+                    .ok_or(RecordingError::ReadTruncated)?,
+            )
+            .ok_or(RecordingError::ReadTruncated)?;
+        let byte_len = frames
+            .checked_mul(BYTES_PER_FRAME as usize)
+            .ok_or(RecordingError::ReadTruncated)?;
+
+        let result = (|| {
+            self.file.seek(SeekFrom::Start(byte_offset))?;
+            let mut bytes = vec![0u8; byte_len];
+            match self.file.read_exact(&mut bytes) {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => {
+                    return Err(RecordingError::ReadTruncated);
+                }
+                Err(error) => return Err(RecordingError::Io(error)),
+            }
+
+            let mut microphone = Vec::with_capacity(frames);
+            let mut system = Vec::with_capacity(frames);
+            for frame in bytes.as_chunks::<4>().0 {
+                let microphone_sample = i16::from_le_bytes([frame[0], frame[1]]);
+                let system_sample = i16::from_le_bytes([frame[2], frame[3]]);
+                microphone.push(microphone_sample as f32 / i16::MAX as f32);
+                system.push(system_sample as f32 / i16::MAX as f32);
+            }
+            Ok((microphone, system))
+        })();
+        let restore_result = self.file.seek(SeekFrom::End(0));
+        match (result, restore_result) {
+            (Err(error), _) => Err(error),
+            (Ok(_), Err(error)) => Err(RecordingError::Io(error)),
+            (Ok(frames), Ok(_)) => Ok(frames),
+        }
     }
 
     pub fn sha256(&mut self) -> Result<String, RecordingError> {

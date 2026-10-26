@@ -93,10 +93,13 @@ impl Session {
     pub fn is_done(&self) -> bool {
         self.done.load(Ordering::Acquire)
     }
-    /// Stop capture, then drain all final windows. This never cancels queued speech.
+    /// Stop capture and finish both passes. During refinement, keep the live transcript instead.
     pub fn stop(&self) {
         self.stop.store(true, Ordering::Release);
-        if lock_or_recover(&self.state, "live.state").phase() == super::state::Phase::Starting {
+        if matches!(
+            lock_or_recover(&self.state, "live.state").phase(),
+            super::state::Phase::Starting | super::state::Phase::Refining
+        ) {
             self.cancel.cancel();
         }
     }
@@ -163,6 +166,23 @@ mod tests {
         running.stop();
         assert!(running.stop.load(Ordering::Acquire));
         assert!(!running.cancel.is_cancelled());
+    }
+    #[test]
+    fn stopping_refinement_cancels_work_but_does_not_discard_recording_or_live_text() {
+        let session = session();
+        {
+            let mut state = session.state.lock().unwrap();
+            state.started().unwrap();
+            state.begin_stop().unwrap();
+            state.begin_refinement(true).unwrap();
+        }
+        session.stop();
+        assert!(session.cancel.is_cancelled());
+        assert_eq!(
+            session.snapshot().phase,
+            super::super::state::Phase::Refining
+        );
+        assert!(session.discard().is_err());
     }
     #[test]
     fn active_session_cannot_export_or_discard_and_failed_export_is_retryable() {

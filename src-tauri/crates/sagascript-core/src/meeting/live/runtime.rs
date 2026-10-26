@@ -98,6 +98,8 @@ pub(super) fn run(session: &Arc<Session>, settings: Settings) {
     };
     let glossary = Glossary::parse(&settings.effective_glossary_source(None));
     let lane = Arc::new(Lane::new());
+    let refinement_client = client.clone();
+    let refinement_glossary = Glossary::parse(&settings.effective_glossary_source(None));
     let worker_session = session.clone();
     let worker_lane = lane.clone();
     let worker = thread::Builder::new()
@@ -135,21 +137,93 @@ pub(super) fn run(session: &Arc<Session>, settings: Settings) {
     if has_audio {
         *lock_or_recover(&session.recording, "live.recording") = Some(recording);
     }
-    let mut state = lock_or_recover(&session.state, "live.state");
-    for source in [Source::Microphone, Source::System] {
-        let _ = state.set_source_connected(source, false);
-        let _ = state.set_source_queued_ms(source, 0);
-    }
-    if session.cancel.is_cancelled() {
-        let _ = state.cancel();
-        return;
-    }
-    match audio.and(asr).and(finalized) {
-        Ok(()) => {
-            let _ = state.finish(has_audio);
+    let should_refine = {
+        let mut state = lock_or_recover(&session.state, "live.state");
+        for source in [Source::Microphone, Source::System] {
+            let _ = state.set_source_connected(source, false);
+            let _ = state.set_source_signal_level(source, 0.);
+            let _ = state.set_source_queued_ms(source, 0);
         }
-        Err(error) => {
-            let _ = state.finish_failed(clean_error(&error), has_audio);
+        if session.cancel.is_cancelled() {
+            let _ = state.cancel();
+            return;
+        }
+        match audio.and(asr).and(finalized) {
+            Ok(()) if has_audio => state.begin_refinement(true).is_ok(),
+            Ok(()) => {
+                let _ = state.finish(false);
+                false
+            }
+            Err(error) => {
+                let _ = state.finish_failed(clean_error(&error), has_audio);
+                false
+            }
+        }
+    };
+    if should_refine {
+        // Keep the original recording and live text until the entire second pass succeeds.
+        // A failed/cancelled/panicking pass can never publish half a replacement.
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut echo = EchoCanceller3::new()?;
+            let boost = Arc::new(BoostSpec {
+                terms: vec![],
+                weight: 0.,
+                truncated: 0,
+                too_long: 0,
+            });
+            let mut retained = lock_or_recover(&session.recording, "live.recording");
+            let recording = retained
+                .as_mut()
+                .ok_or("No retained audio for refinement")?;
+            super::refine::run(
+                recording,
+                &session.cancel,
+                |mic, system| echo.process(mic, system),
+                |job| {
+                    let result = refinement_client
+                        .transcribe_samples(
+                            &job.pcm,
+                            JobOptions {
+                                priority: Priority::Batch,
+                                boost: Some(boost.clone()),
+                            },
+                            &session.cancel,
+                            None,
+                        )
+                        .map_err(|e| e.to_string())?;
+                    Ok(result)
+                },
+                |percent| {
+                    lock_or_recover(&session.state, "live.state")
+                        .set_refinement_progress(percent)
+                        .map_err(|e| e.to_string())
+                },
+            )
+        }))
+        .unwrap_or_else(|_| Err("Transcript refinement stopped unexpectedly.".into()));
+        let mut state = lock_or_recover(&session.state, "live.state");
+        let outcome = outcome.and_then(|mut segments| {
+            if session.cancel.is_cancelled() {
+                return Err("Transcript refinement was cancelled.".into());
+            }
+            for segment in &mut segments {
+                segment.text = refinement_glossary.correct_text(&segment.text).0;
+            }
+            state
+                .complete_refinement(segments)
+                .map_err(|e| e.to_string())
+        });
+        if let Err(error) = outcome {
+            let cancelled = session.cancel.is_cancelled();
+            let message = if cancelled {
+                "Refinement cancelled. The live transcript was kept.".to_owned()
+            } else {
+                format!(
+                    "Refinement failed; the live transcript was kept. {}",
+                    clean_error(&error)
+                )
+            };
+            let _ = state.finish_refinement_fallback(cancelled, Some(clean_error(&message)));
         }
     }
 }

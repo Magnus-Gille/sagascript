@@ -2,7 +2,7 @@
 export type LiveSource = "microphone" | "system";
 
 /** A live meeting's lifecycle is monotonic apart from terminal snapshots. */
-export type LivePhase = "starting" | "running" | "draining" | "completed" | "cancelled" | "failed";
+export type LivePhase = "starting" | "running" | "draining" | "refining" | "completed" | "cancelled" | "failed";
 
 export type LiveSegmentStatus = "preview" | "final";
 
@@ -38,6 +38,12 @@ export interface Gap {
   reason: string;
 }
 
+export interface LiveRefinement {
+  status: "running" | "completed" | "cancelled" | "failed";
+  progress_percent: number;
+  error: string | null;
+}
+
 /** Exact wire shape published by the live meeting backend. */
 export interface LiveSnapshot {
   id: string;
@@ -49,4 +55,5 @@ export interface LiveSnapshot {
   gaps: Gap[];
   error: string | null;
   audio_available: boolean;
+  refinement?: LiveRefinement | null;
 }

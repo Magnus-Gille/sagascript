@@ -41,6 +41,7 @@
     starting: "Starting",
     running: "Listening",
     draining: "Finishing transcript",
+    refining: "Refining transcript",
     completed: "Completed",
     cancelled: "Cancelled",
     failed: "Failed",
@@ -60,13 +61,17 @@
 
   const hasTranscriptPages = $derived(transcriptPageCount > 1);
   const terminal = $derived(snapshot?.phase === "completed" || snapshot?.phase === "cancelled" || snapshot?.phase === "failed");
-  const recordingStopped = $derived(snapshot?.phase === "draining" || terminal);
+  const refining = $derived(snapshot?.phase === "refining");
+  const refinementProgress = $derived(Math.max(0, Math.min(100, snapshot?.refinement?.progress_percent ?? 0)));
+  const recordingStopped = $derived(snapshot?.phase === "draining" || refining || terminal);
   const hasSession = $derived(snapshot !== null);
   const canStart = $derived(!hasSession && !busy && pendingAction === null && supported);
-  const canStop = $derived((snapshot?.phase === "running" || snapshot?.phase === "starting") && !busy && pendingAction === null);
+  const canStop = $derived(
+    (snapshot?.phase === "running" || snapshot?.phase === "starting" || refining) && !busy && pendingAction === null,
+  );
   const exportable = $derived(snapshot?.phase === "completed" || snapshot?.phase === "failed");
   const canExport = $derived(exportable && !busy && pendingAction === null);
-  const currentError = $derived(actionError ?? error ?? snapshot?.error ?? null);
+  const currentError = $derived(actionError ?? error ?? snapshot?.error ?? snapshot?.refinement?.error ?? null);
   const displayedGaps = $derived(sortLiveGaps(snapshot?.gaps ?? []).slice(-20));
   const omittedGapCount = $derived(Math.max(0, (snapshot?.gaps.length ?? 0) - displayedGaps.length));
 
@@ -82,6 +87,13 @@
 
   function sourceLabel(source: LiveSource): string {
     return source === "microphone" ? "Jag · mikrofon" : "Mötet · systemljud";
+  }
+
+  function phaseLabel(currentSnapshot: LiveSnapshot): string {
+    const refinementStatus = currentSnapshot.refinement?.status;
+    if (refinementStatus === "completed") return "Final transcript";
+    if (refinementStatus === "cancelled" || refinementStatus === "failed") return "Live transcript kept";
+    return phaseLabels[currentSnapshot.phase];
   }
 
   function formatDuration(milliseconds: number): string {
@@ -118,6 +130,12 @@
     runAction("stop", onStop);
   }
 
+  function stopLabel(): string {
+    if (pendingAction === "stop") return refining ? "Cancelling…" : "Stopping…";
+    if (snapshot?.phase === "starting") return "Cancel starting";
+    return refining ? "Cancel refinement" : "Stop live meeting";
+  }
+
   function refresh(): void {
     if (busy || pendingAction !== null) return;
     runAction("refresh", onRefresh);
@@ -134,7 +152,7 @@
   }
 
   function requestDiscard(): void {
-    if (!hasSession || busy || pendingAction !== null) return;
+    if (!hasSession || !terminal || busy || pendingAction !== null) return;
     discardConfirm = true;
   }
 
@@ -178,11 +196,11 @@
   <header class="header">
     <div>
       <h2>Live meeting</h2>
-      <p class="temporary-note">Audio and text are temporary. Save what you want, then discard the temporary session before quitting.</p>
+      <p class="temporary-note">Audio and text are temporary. Stopping starts local refinement from both tracks.</p>
     </div>
     {#if snapshot}
-      <span class:terminal class="phase" aria-label={`Live meeting state: ${phaseLabels[snapshot.phase]}`}>
-        {phaseLabels[snapshot.phase]}
+      <span class:terminal class="phase" aria-label={`Live meeting state: ${phaseLabel(snapshot)}`}>
+        {phaseLabel(snapshot)}
       </span>
     {/if}
   </header>
@@ -200,9 +218,9 @@
       <button class="primary" type="button" disabled={!canStart} onclick={start}>
         {pendingAction === "start" ? "Starting…" : "Start live meeting"}
       </button>
-    {:else if snapshot?.phase === "running" || snapshot?.phase === "starting"}
+    {:else if snapshot?.phase === "running" || snapshot?.phase === "starting" || refining}
       <button class="danger" type="button" disabled={!canStop} onclick={stop}>
-        {pendingAction === "stop" ? "Stopping…" : snapshot.phase === "starting" ? "Cancel starting" : "Stop live meeting"}
+        {stopLabel()}
       </button>
     {/if}
     {#if hasSession}
@@ -217,14 +235,16 @@
           {pendingAction === "save-audio" ? "Saving audio…" : "Save audio"}
         </button>
       {/if}
-      {#if !discardConfirm}
-        <button class="secondary" type="button" disabled={busy || pendingAction !== null} onclick={requestDiscard}>Discard</button>
-      {:else}
-        <span class="discard-confirm" role="group" aria-label="Confirm discard">
-          <span>Discard temporary audio and text?</span>
-          <button class="danger" type="button" disabled={busy || pendingAction !== null} onclick={confirmDiscard}>Yes, discard</button>
-          <button class="secondary" type="button" disabled={busy || pendingAction !== null} onclick={cancelDiscard}>Keep</button>
-        </span>
+      {#if terminal}
+        {#if !discardConfirm}
+          <button class="secondary" type="button" disabled={busy || pendingAction !== null} onclick={requestDiscard}>Discard</button>
+        {:else}
+          <span class="discard-confirm" role="group" aria-label="Confirm discard">
+            <span>Discard temporary audio and text?</span>
+            <button class="danger" type="button" disabled={busy || pendingAction !== null} onclick={confirmDiscard}>Yes, discard</button>
+            <button class="secondary" type="button" disabled={busy || pendingAction !== null} onclick={cancelDiscard}>Keep</button>
+          </span>
+        {/if}
       {/if}
     {/if}
   </div>
@@ -252,6 +272,24 @@
         </article>
       {/each}
     </div>
+
+    {#if refining}
+      <aside class="refinement-status" aria-label="Transcript refinement">
+        <strong>Refining transcript</strong>
+        <p>Recording stopped. Refining locally from both tracks. Your live transcript stays visible until this finishes.</p>
+        <div class="refinement-progress">
+          <progress
+            max="100"
+            value={refinementProgress}
+            aria-label="Transcript refinement progress"
+            aria-valuemin="0"
+            aria-valuemax="100"
+            aria-valuenow={refinementProgress}
+          ></progress>
+          <span>{refinementProgress}%</span>
+        </div>
+      </aside>
+    {/if}
 
     {#if snapshot.gaps.length > 0}
       <aside class="gap-banner" role="status" aria-label="Incomplete audio">
@@ -400,6 +438,34 @@
     border-radius: var(--radius, 7px);
     color: var(--text, #f2f2ef);
     font-size: 12px;
+  }
+  .refinement-status {
+    display: grid;
+    gap: 5px;
+    padding: 9px;
+    border: 1px solid var(--border, #303034);
+    border-radius: var(--radius, 7px);
+    font-size: 12px;
+  }
+  .refinement-status p {
+    color: var(--text-muted, #9a9a9f);
+    font-size: 11px;
+  }
+  .refinement-progress {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .refinement-progress progress {
+    flex: 1;
+    min-width: 0;
+    height: 6px;
+  }
+  .refinement-progress span {
+    min-width: 36px;
+    color: var(--text-muted, #9a9a9f);
+    font-size: 11px;
+    text-align: right;
   }
   .gap-banner p,
   .gap-banner summary,

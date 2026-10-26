@@ -273,3 +273,174 @@ fn construction_rejects_invalid_ids() {
         Err(StateError::InvalidId)
     ));
 }
+
+#[test]
+fn refinement_lifecycle_freezes_live_state_and_tracks_monotonic_progress() {
+    let mut state = State::new("refine".to_string()).expect("valid id");
+    state.started().expect("running");
+    state.advance(250).expect("elapsed");
+    state
+        .upsert(preview("live", Source::Microphone, 1, "live text"))
+        .expect("preview");
+    state.begin_stop().expect("draining");
+    state.begin_refinement(true).expect("refining");
+
+    let snapshot = state.snapshot();
+    assert_eq!(snapshot.phase, Phase::Refining);
+    assert_eq!(snapshot.elapsed_ms, 250);
+    assert_eq!(
+        snapshot.refinement.as_ref().unwrap().status,
+        RefinementStatus::Running
+    );
+    assert_eq!(snapshot.refinement.as_ref().unwrap().progress_percent, 0);
+    assert!(snapshot.refinement.as_ref().unwrap().error.is_none());
+    assert!(snapshot.audio_available);
+
+    state.set_refinement_progress(40).expect("progress");
+    assert_eq!(
+        state.set_refinement_progress(39),
+        Err(StateError::InvalidHealth)
+    );
+    assert_eq!(
+        state.set_refinement_progress(101),
+        Err(StateError::InvalidHealth)
+    );
+    assert_eq!(state.advance(1), Err(StateError::InvalidTransition));
+    assert_eq!(
+        state.upsert(final_segment("late", Source::System, 1, "late")),
+        Err(StateError::InvalidTransition)
+    );
+    assert_eq!(state.snapshot().elapsed_ms, 250);
+    assert_eq!(
+        state
+            .snapshot()
+            .refinement
+            .as_ref()
+            .unwrap()
+            .progress_percent,
+        40
+    );
+}
+
+#[test]
+fn invalid_refinement_replacement_is_transactional() {
+    let mut state = State::new("refine-invalid".to_string()).expect("valid id");
+    state.started().expect("running");
+    state.advance(500).expect("elapsed");
+    state
+        .upsert(final_segment("old", Source::Microphone, 1, "old"))
+        .expect("old segment");
+    state
+        .append_gap(gap(Source::System, 100, 200, "missing"))
+        .expect("gap");
+    state.begin_stop().expect("draining");
+    state.begin_refinement(true).expect("refining");
+    let before = state.snapshot();
+
+    let invalid = vec![
+        final_segment("new", Source::System, 2, "new"),
+        preview("preview", Source::Microphone, 2, "not final"),
+    ];
+    assert_eq!(
+        state.complete_refinement(invalid),
+        Err(StateError::FinalSegment)
+    );
+    assert_eq!(state.snapshot(), before);
+    assert_eq!(state.phase(), Phase::Refining);
+}
+
+#[test]
+fn successful_refinement_replaces_segments_atomically_and_preserves_context() {
+    let mut state = State::new("refine-success".to_string()).expect("valid id");
+    state.started().expect("running");
+    state.advance(500).expect("elapsed");
+    state
+        .set_source_connected(Source::System, true)
+        .expect("source");
+    state
+        .append_gap(gap(Source::Microphone, 100, 200, "missing"))
+        .expect("gap");
+    state.begin_stop().expect("draining");
+    state.begin_refinement(false).expect("refining");
+
+    state
+        .complete_refinement(vec![final_segment(
+            "replacement",
+            Source::System,
+            9,
+            "better",
+        )])
+        .expect("replacement");
+
+    let snapshot = state.snapshot();
+    assert_eq!(snapshot.phase, Phase::Completed);
+    assert_eq!(snapshot.elapsed_ms, 500);
+    assert!(!snapshot.audio_available);
+    assert!(snapshot.sources[1].connected);
+    assert_eq!(
+        snapshot.gaps,
+        vec![gap(Source::Microphone, 100, 200, "missing")]
+    );
+    assert_eq!(snapshot.segments.len(), 1);
+    assert_eq!(snapshot.segments[0].text, "better");
+    assert_eq!(
+        snapshot.refinement.as_ref().unwrap().status,
+        RefinementStatus::Completed
+    );
+    assert_eq!(snapshot.refinement.as_ref().unwrap().progress_percent, 100);
+    assert!(snapshot.refinement.as_ref().unwrap().error.is_none());
+}
+
+#[test]
+fn refinement_fallback_preserves_live_segments_and_gaps() {
+    for (cancelled, status) in [
+        (true, RefinementStatus::Cancelled),
+        (false, RefinementStatus::Failed),
+    ] {
+        let mut state = State::new(format!("fallback-{cancelled}")).expect("valid id");
+        state.started().expect("running");
+        state.advance(500).expect("elapsed");
+        state
+            .upsert(final_segment("live", Source::Microphone, 1, "keep"))
+            .expect("segment");
+        state
+            .append_gap(gap(Source::System, 100, 200, "missing"))
+            .expect("gap");
+        state.begin_stop().expect("draining");
+        state.begin_refinement(true).expect("refining");
+        state.set_refinement_progress(20).expect("progress");
+        let before = state.snapshot();
+        let message = (!cancelled).then_some("refinement failed".to_string());
+
+        state
+            .finish_refinement_fallback(cancelled, message.clone())
+            .expect("fallback");
+        let snapshot = state.snapshot();
+        assert_eq!(snapshot.phase, Phase::Completed);
+        assert_eq!(snapshot.elapsed_ms, before.elapsed_ms);
+        assert_eq!(snapshot.sources, before.sources);
+        assert_eq!(snapshot.segments, before.segments);
+        assert_eq!(snapshot.gaps, before.gaps);
+        assert_eq!(snapshot.audio_available, before.audio_available);
+        assert_eq!(snapshot.error, message);
+        assert_eq!(snapshot.refinement.as_ref().unwrap().status, status);
+        assert_eq!(snapshot.refinement.as_ref().unwrap().progress_percent, 20);
+        assert_eq!(snapshot.refinement.as_ref().unwrap().error, message);
+    }
+}
+
+#[test]
+fn refinement_snapshot_is_backward_compatible_and_statuses_are_snake_case() {
+    let mut state = State::new("wire".to_string()).expect("valid id");
+    let mut old = serde_json::to_value(state.snapshot()).expect("snapshot json");
+    old.as_object_mut().unwrap().remove("refinement");
+    let decoded: Snapshot = serde_json::from_value(old).expect("old snapshot");
+    assert!(decoded.refinement.is_none());
+
+    state.started().expect("running");
+    state.begin_stop().expect("draining");
+    state.begin_refinement(false).expect("refining");
+    let json = serde_json::to_value(state.snapshot()).expect("refinement json");
+    assert_eq!(json["phase"], "refining");
+    assert_eq!(json["refinement"]["status"], "running");
+}
