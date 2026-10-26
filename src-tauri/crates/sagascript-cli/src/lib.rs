@@ -14,6 +14,8 @@ pub mod engine;
 pub mod exit;
 pub mod glossary;
 pub mod latency;
+#[cfg(feature = "record")]
+pub mod live;
 pub mod meeting;
 pub mod meeting_proposal;
 #[cfg(feature = "diarization")]
@@ -351,6 +353,17 @@ EXAMPLES:
     )]
     Record(record::RecordArgs),
 
+    /// Transcribe microphone and system audio locally in a live Swedish meeting (Mac).
+    #[cfg(feature = "record")]
+    #[command(
+        long_about = "Transcribe microphone and system audio as separate sources using local Pianissimo on Apple Silicon (macOS 14.2+). Requires the installed Pianissimo model and microphone/system-audio permissions. Preview text may change until finalized. Press Ctrl-C to stop and finish queued speech. Audio and text are temporary: interactive mode asks what to save; noninteractive mode saves only explicitly requested --text-output and --audio-output paths.
+
+Examples:
+  sagascript live
+  sagascript live --duration 60 --jsonl --text-output meeting.md --audio-output meeting.wav"
+    )]
+    Live(live::LiveArgs),
+
     /// Inspect and exercise the Pianissimo engine host
     #[command(
         long_about = "\
@@ -642,6 +655,8 @@ fn json_output(command: &Command) -> Option<JsonOutput> {
         Command::Transcribe(args) if args.json => Some(JsonOutput::Pretty),
         #[cfg(feature = "record")]
         Command::Record(args) if args.json => Some(JsonOutput::Pretty),
+        #[cfg(feature = "record")]
+        Command::Live(args) if args.jsonl => Some(JsonOutput::Compact),
         Command::Engine(args) => match args.action {
             engine::EngineAction::Status { json: true }
             | engine::EngineAction::Doctor { json: true, .. } => Some(JsonOutput::Pretty),
@@ -678,6 +693,11 @@ fn dispatch(command: Command, out: &Out) -> Result<(), CliError> {
         Command::Record(args) => {
             let out = out.clone();
             run_inference_command("record", move || Ok(record::run(args, &out)?))?
+        }
+        #[cfg(feature = "record")]
+        Command::Live(args) => {
+            let out = out.clone();
+            run_inference_command("live", move || Ok(live::run(args, &out)?))?
         }
         Command::ListModels(args) => models::list(args, out)?,
         Command::DownloadModel(args) => tokio::runtime::Runtime::new()

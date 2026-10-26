@@ -83,6 +83,9 @@ export function settingsBackend(overrides: CommandHandlers = {}): CommandHandler
     get_file_model_options: () => [pianissimo, kbWhisperMedium],
     get_effective_model_info: () => pianissimo,
     get_auto_file_model_info: () => pianissimo,
+    // Live meeting is an optional capability. Keep the shared Settings
+    // fixture unsupported unless a test explicitly opts into the tab.
+    live_meeting_supported: () => false,
     load_update_recovery: () => null,
     get_last_error: () => null,
     get_last_transcription: () => null,

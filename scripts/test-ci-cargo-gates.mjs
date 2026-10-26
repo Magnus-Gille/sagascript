@@ -53,6 +53,7 @@ const EXPECTED = {
     "src-tauri: cargo check -p sagascript-cli --no-default-features --locked",
     "src-tauri/engine-host/ort: cargo check --locked",
   ],
+  msrvLive: ["src-tauri: cargo check -p sagascript-core --features record --locked"],
 };
 
 test("every gate is well formed, and every per-OS exclusion states its reason", () => {
@@ -74,6 +75,8 @@ test("every gate is well formed, and every per-OS exclusion states its reason", 
 test("each lane runs exactly the expected cargo commands, in order", () => {
   for (const os of OSES) assert.deepEqual(lines(os), EXPECTED[os], `${os} gates`);
   assert.deepEqual(lines("linux", "msrv"), EXPECTED.msrv, "msrv gates");
+  assert.deepEqual(lines("macos", "msrv-live"), EXPECTED.msrvLive, "macOS live-record MSRV gate");
+  for (const os of ["linux", "windows"]) assert.deepEqual(lines(os, "msrv-live"), [], `${os} has no live-record MSRV gate`);
 });
 
 test("the core gates run on every OS; every other difference between the OS lists is an exclusion in the list", () => {
@@ -112,7 +115,7 @@ test("cargo-deny gates run first, before any gate that compiles", () => {
   assert.ok(linux.slice(2).every((gate) => gate.args[0] !== "deny"));
 });
 
-test("every OS lane runs the gate script once with its own OS, and the MSRV lane its profile", () => {
+test("every lane runs the gate script once with its OS and profile", () => {
   const workflow = loadWorkflow();
   const osOf = (runsOn) => (/^macos/.test(runsOn) ? "macos" : /^windows/.test(runsOn) ? "windows" : "linux");
   const lanes = { "test-macos": "macos", "test-linux": "linux", "test-windows": "windows" };
@@ -127,11 +130,15 @@ test("every OS lane runs the gate script once with its own OS, and the MSRV lane
     assert.equal(step.continueOnError, undefined, `${jobId}: the gates are blocking`);
     assert.equal(step.workingDirectory, undefined, "the script resolves each gate's directory itself");
   }
-  const msrv = workflow.job("msrv-linux");
-  const [invocation] = msrv.steps.map(gateInvocation).filter(Boolean);
-  assert.deepEqual([invocation.os, invocation.profile], [undefined, "msrv"]);
+  for (const [jobId, os, profile] of [
+    ["msrv-linux", undefined, "msrv"],
+    ["msrv-macos", "macos", "msrv-live"],
+  ]) {
+    const [invocation] = workflow.job(jobId).steps.map(gateInvocation).filter(Boolean);
+    assert.deepEqual([invocation.os, invocation.profile], [os, profile], `${jobId} profile`);
+  }
   for (const { job } of allSteps(workflow).filter(({ step }) => gateInvocation(step))) {
-    assert.ok([...Object.keys(lanes), "msrv-linux"].includes(job.id), `${job.id} must not run the cargo gates`);
+    assert.ok([...Object.keys(lanes), "msrv-linux", "msrv-macos"].includes(job.id), `${job.id} must not run the cargo gates`);
   }
 });
 
@@ -214,6 +221,7 @@ test("--list prints a lane's commands and runs nothing", () => {
     assert.deepEqual(result.stdout.trim().split("\n"), EXPECTED[os]);
   }
   assert.deepEqual(cli(["--profile", "msrv", "--list"]).stdout.trim().split("\n"), EXPECTED.msrv);
+  assert.deepEqual(cli(["--os", "macos", "--profile", "msrv-live", "--list"]).stdout.trim().split("\n"), EXPECTED.msrvLive);
 });
 
 test("the script refuses to run another OS's gates, an unknown option and an MSRV run without a toolchain", () => {
@@ -223,7 +231,9 @@ test("the script refuses to run another OS's gates, an unknown option and an MSR
   assert.match(wrongOs.stderr, /refusing to run the \w+ gates/);
   assert.equal(cli(["--nonsense"]).status, 2);
   assert.equal(cli(["--os", "plan9", "--list"]).status, 2);
-  const noToolchain = cli(["--profile", "msrv"]);
-  assert.equal(noToolchain.status, 2);
-  assert.match(noToolchain.stderr, /RUSTUP_TOOLCHAIN/);
+  for (const profile of ["msrv", "msrv-live"]) {
+    const noToolchain = cli(["--profile", profile]);
+    assert.equal(noToolchain.status, 2, `${profile} refuses to use the development toolchain`);
+    assert.match(noToolchain.stderr, /RUSTUP_TOOLCHAIN/);
+  }
 });

@@ -36,7 +36,7 @@ const read = (path) => readFileSync(path, "utf8").replace(/\r\n?/g, "\n");
 const workflow = parseWorkflow(read(ciPath));
 const packageJson = read(fileURLToPath(new URL("../package.json", import.meta.url)));
 
-const TEST_LANES = ["test-macos", "test-linux", "msrv-linux", "test-windows"];
+const TEST_LANES = ["test-macos", "test-linux", "msrv-linux", "msrv-macos", "test-windows"];
 const NON_TEST_JOBS = {
   scope: "classifies the changed paths so docs-only PRs skip the native lanes; runs no checks",
   "build-macos": "builds the native release binary and runs CLI smoke tests; verify does no release builds",
@@ -282,6 +282,7 @@ test("the parser finds the commands of the CI test lanes", () => {
     "src-tauri/engine-host/coreml: swift test",
     ".: npm run test:frontend",
     "src-tauri: cargo check --workspace --locked",
+    "src-tauri: cargo check -p sagascript-core --features record --locked",
   ]) {
     assert.ok(keys.has(expected), `parsed ${expected}`);
   }

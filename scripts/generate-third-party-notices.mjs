@@ -1,8 +1,9 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { tmpdir } from "node:os";
 import { appPackageReferences, npmLicenseError, shippedNpmClosure } from "./lib/npm-license-policy.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -165,9 +166,9 @@ if (mode === "--test-dev-only-licenses") {
   process.exit(0);
 }
 
-if (!new Set(["--check", "--write"]).has(mode)) {
+if (!new Set(["--check", "--write", "--test-live-aec-licenses"]).has(mode)) {
   console.error(
-    "Usage: node scripts/generate-third-party-notices.mjs --check|--write|--test-sort|--test-npm-installation|--test-newline-normalization|--test-dev-only-licenses",
+    "Usage: node scripts/generate-third-party-notices.mjs --check|--write|--test-sort|--test-npm-installation|--test-newline-normalization|--test-dev-only-licenses|--test-live-aec-licenses",
   );
   process.exit(2);
 }
@@ -242,6 +243,135 @@ function rootLicenseFiles(directory) {
     .sort(compareCodeUnits);
 }
 
+const liveAecLicenseOverrides = new Map([
+  ["webrtc-audio-processing", "6db9d4840c6ff0fb3c37ace8e32cfd3eb6c6e759c67b4ecbee969cd8d75154a9"],
+  ["webrtc-audio-processing-config", "9b79539028e216e813e152d45f5c1ed5fdd0554426ad50270fb03134e7082dac"],
+  ["webrtc-audio-processing-sys", "9b79539028e216e813e152d45f5c1ed5fdd0554426ad50270fb03134e7082dac"],
+]);
+
+function rustLicenseOverride(pkg) {
+  const expectedHash = liveAecLicenseOverrides.get(pkg.name);
+  if (!expectedHash) return { license: pkg.license };
+  if (pkg.version !== "2.1.0") {
+    return { error: `Rust ${pkg.name}@${pkg.version} has unexpected version for reviewed license_file=COPYING override` };
+  }
+  if (pkg.license && pkg.license !== "BSD-3-Clause") {
+    return { error: `Rust ${pkg.name}@${pkg.version} has unexpected SPDX license for reviewed license_file=COPYING override` };
+  }
+  const copying = join(pkg.directory, "COPYING");
+  if (!existsSync(copying)) {
+    return { error: `Rust ${pkg.name}@${pkg.version} is missing reviewed license_file=COPYING` };
+  }
+  const digest = createHash("sha256").update(readFileSync(copying)).digest("hex");
+  if (digest !== expectedHash) {
+    return { error: `Rust ${pkg.name}@${pkg.version} COPYING hash mismatch for reviewed license_file override` };
+  }
+  return { license: "BSD-3-Clause" };
+}
+
+function normalizeLicenseContent(path) {
+  return readFileSync(path, "utf8")
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .join("\n")
+    .trim();
+}
+
+function readLiveAecLicenseTexts() {
+  const directory = join(root, "third-party/live-aec");
+  const manifestPath = join(directory, "manifest.json");
+  if (!existsSync(manifestPath)) throw new Error("live AEC legal-text manifest is missing");
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+  if (manifest.schema_version !== 1 || !Array.isArray(manifest.files) || manifest.files.length !== 9) {
+    throw new Error("live AEC legal-text manifest has an unexpected schema or file count");
+  }
+  const seen = new Set();
+  return manifest.files.map((record) => {
+    if (
+      typeof record.filename !== "string" ||
+      typeof record.sha256 !== "string" ||
+      seen.has(record.filename) ||
+      !/^[a-f0-9]{64}$/.test(record.sha256)
+    ) {
+      throw new Error("live AEC legal-text manifest has an invalid or duplicate file record");
+    }
+    seen.add(record.filename);
+    const path = resolve(directory, record.filename);
+    const relativePath = relative(directory, path);
+    if (isAbsolute(relativePath) || relativePath === ".." || relativePath.startsWith(`..${pathSeparator()}`)) {
+      throw new Error("live AEC legal-text manifest escapes its directory");
+    }
+    if (!existsSync(path) || !statSync(path).isFile()) {
+      throw new Error(`live AEC legal text is missing: ${record.filename}`);
+    }
+    const digest = createHash("sha256").update(readFileSync(path)).digest("hex");
+    if (digest !== record.sha256) {
+      throw new Error(`live AEC legal text hash mismatch: ${record.filename}`);
+    }
+    return {
+      filename: record.filename,
+      content: normalizeLicenseContent(path),
+      component: record.filename.startsWith("abseil/") ? "Native Abseil C++ 20240722.0-3 source" : "Native WebRTC AEC3 2.1.0 source",
+    };
+  });
+}
+
+function pathSeparator() {
+  return process.platform === "win32" ? "\\" : "/";
+}
+
+if (mode === "--test-live-aec-licenses") {
+  const nativeTexts = readLiveAecLicenseTexts();
+  if (nativeTexts.length !== 9 || nativeTexts.some(({ content }) => !content)) {
+    throw new Error("live AEC manifest did not produce all nine non-empty legal texts");
+  }
+  const fixture = mkdtempSync(join(tmpdir(), "sagascript-live-aec-license-test-"));
+  try {
+    writeFileSync(join(fixture, "COPYING"), "fixture does not match the reviewed text\n");
+    const mismatch = rustLicenseOverride({
+      name: "webrtc-audio-processing",
+      version: "2.1.0",
+      directory: fixture,
+      license: undefined,
+    });
+    if (!mismatch.error?.includes("COPYING hash mismatch")) {
+      throw new Error(`Unexpected live AEC mismatch result: ${mismatch.error}`);
+    }
+    const unexpectedLicense = rustLicenseOverride({
+      name: "webrtc-audio-processing",
+      version: "2.1.0",
+      directory: fixture,
+      license: "MIT",
+    });
+    if (!unexpectedLicense.error?.includes("unexpected SPDX license")) {
+      throw new Error(`Unexpected live AEC SPDX result: ${unexpectedLicense.error}`);
+    }
+    const unexpectedVersion = rustLicenseOverride({
+      name: "webrtc-audio-processing",
+      version: "2.1.1",
+      directory: fixture,
+      license: undefined,
+    });
+    if (!unexpectedVersion.error?.includes("unexpected version")) {
+      throw new Error(`Unexpected live AEC version result: ${unexpectedVersion.error}`);
+    }
+    const unrelated = rustLicenseOverride({
+      name: "webrtc-audio-processing-extra",
+      version: "2.1.0",
+      directory: fixture,
+      license: undefined,
+    });
+    if (unrelated.license !== undefined || unrelated.error !== undefined) {
+      throw new Error("An unlisted package unexpectedly received a live AEC override");
+    }
+    console.log("live AEC license override validation passed");
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+  process.exit(0);
+}
+
 const rustById = new Map();
 // The Windows-on-ARM Pianissimo engine host is a separate Cargo workspace with
 // its own lockfile; include it for both platforms it can be built for.
@@ -300,6 +430,12 @@ const lockedNpmPackages = Object.entries(lock.packages)
 const npmPackages = lockedNpmPackages;
 
 for (const pkg of rustPackages) {
+  const override = rustLicenseOverride(pkg);
+  if (override.error) {
+    errors.push(override.error);
+    continue;
+  }
+  if (override.license !== undefined) pkg.license = override.license;
   if (!pkg.license) errors.push(`Rust ${pkg.name}@${pkg.version} has no SPDX license`);
   else if (!reviewedRustLicenses.has(pkg.license)) {
     errors.push(`Rust ${pkg.name}@${pkg.version} has unreviewed license: ${pkg.license}`);
@@ -339,6 +475,13 @@ for (const source of modelSources) {
   if (!modelSourceCode.includes(source)) errors.push(`Reviewed model source is no longer referenced: ${source}`);
 }
 
+let liveAecLicenseTexts = [];
+try {
+  liveAecLicenseTexts = readLiveAecLicenseTexts();
+} catch (error) {
+  errors.push(error instanceof Error ? error.message : String(error));
+}
+
 if (errors.length) {
   console.error(errors.map((error) => `- ${error}`).join("\n"));
   process.exit(1);
@@ -363,6 +506,14 @@ for (const pkg of [...rustPackages, ...npmPackages.filter((pkg) => !pkg.optional
     entry.filenames.add(path.slice(pkg.directory.length + 1));
     licenseTexts.set(digest, entry);
   }
+}
+for (const record of liveAecLicenseTexts) {
+  if (!record.content) continue;
+  const digest = createHash("sha256").update(record.content).digest("hex");
+  const entry = licenseTexts.get(digest) ?? { content: record.content, components: [], filenames: new Set() };
+  entry.components.push(record.component);
+  entry.filenames.add(`third-party/live-aec/${record.filename}`);
+  licenseTexts.set(digest, entry);
 }
 
 function table(packages) {
@@ -414,6 +565,14 @@ unchanged from its publisher under the declared [Apache-2.0 terms](https://www.a
 Its [source-model card](https://huggingface.co/Finnish-NLP/whisper-tiny-finnish/tree/bc5193ed50c052c426230644d17a12c3a8f86df6)
 identifies OpenAI Whisper Tiny as the base; retain the OpenAI Whisper MIT
 attribution as well. No matching CoreML encoder is supplied for the fine-tune.
+
+## Live audio native sources
+
+The optional live audio path uses WebRTC AEC3 from \`webrtc-audio-processing\` 2.1.0
+and Abseil C++ 20240722.0-3. Their vendored legal texts are verified from the
+repository's manifest and included below. Upstream sources are [WebRTC audio
+processing](https://github.com/tonarino/webrtc-audio-processing) and
+[Abseil C++](https://abseil.io/).
 
 ## Rust dependencies in the macOS application, build, and Windows engine host
 

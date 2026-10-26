@@ -7,6 +7,8 @@
 // changed type, enum value or event name on either side fails here or in
 // svelte-check.
 import { describe, expect, expectTypeOf, test } from "vitest";
+import type { LiveSnapshot } from "../lib/live-meeting-types";
+import liveFixture from "../../contracts/transport/get_live_meeting.json";
 import type { MeetingJobSnapshot, Settings } from "../lib/api";
 import { backendErrorRecovery, isBackendError, toErrorMessage, type BackendError } from "../lib/errors";
 import type { EventMap, EventName } from "../lib/events";
@@ -38,6 +40,7 @@ function variantsOf<T>(fixture: Record<string, unknown>, schema: Schema<T>, name
 test("each schema is exactly the frontend type it mirrors", () => {
   // Type-level (svelte-check): renaming, adding or retyping a field in the
   // TypeScript type without the schema, or the reverse, is an error here.
+  expectTypeOf<Infer<typeof schemas.liveSnapshot>>().toEqualTypeOf<LiveSnapshot>();
   expectTypeOf<Infer<typeof schemas.settings>>().toEqualTypeOf<Settings>();
   expectTypeOf<Infer<typeof schemas.meetingJobSnapshot>>().toEqualTypeOf<MeetingJobSnapshot>();
   expectTypeOf<Infer<typeof schemas.backendError>>().toEqualTypeOf<BackendError>();
@@ -46,7 +49,13 @@ test("each schema is exactly the frontend type it mirrors", () => {
 
 test("the suite reads every shared fixture", () => {
   const onDisk = Object.keys(import.meta.glob("../../contracts/transport/*.json")).map((path) => path.split("/").at(-1));
-  expect(onDisk.sort()).toEqual(["command_errors.json", "events.json", "get_meeting_job.json", "get_settings.json"]);
+  expect(onDisk.sort()).toEqual([
+    "command_errors.json",
+    "events.json",
+    "get_live_meeting.json",
+    "get_meeting_job.json",
+    "get_settings.json",
+  ]);
 });
 
 describe("command_errors", () => {
@@ -287,4 +296,9 @@ test("a schema names the path of the first mismatch", () => {
   delete sample.status;
   expect(() => schemas.meetingJobSnapshot.parse(sample, "snapshot")).toThrow(ContractError);
   expect(() => schemas.meetingJobSnapshot.parse(sample, "snapshot")).toThrow("snapshot.status: missing");
+});
+
+test.each(Object.keys(liveFixture))("live meeting %s has the complete wire shape", (variant) => {
+  const fixture: Record<string, unknown> = liveFixture;
+  expect(schemas.liveSnapshot.parse(fixture[variant])).toEqual(fixture[variant]);
 });

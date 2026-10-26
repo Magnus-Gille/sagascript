@@ -287,6 +287,7 @@ mockIPC(async (cmd, args = {}) => {
     case "set_engine_prewarm": engineSettings.engine_prewarm = args.mode; return null;
     case "set_engine_idle_unload_minutes": engineSettings.engine_idle_unload_minutes = args.minutes; return null;
     case "get_platform": return "macos";
+    case "live_meeting_supported": return false;
     case "check_accessibility_permission": return true;
     case "get_supported_formats": return ["wav", "mp3", "m4a"];
     case "hotkey_status": return { ok: true, error: null, shortcut: "Control+Shift+Space", shortcuts: [], settings_watcher: { running: true, recovered_panics: 0 } };

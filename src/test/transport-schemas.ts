@@ -228,3 +228,48 @@ export const eventPayloads = {
   "update-aborted": string,
   navigate_tab: string,
 };
+
+// Live meetings keep source identity separate from speaker diarization.
+const liveSource = literal("microphone", "system");
+export const liveSnapshot = object(
+  {
+    id: string,
+    revision: number,
+    phase: literal("starting", "running", "draining", "refining", "completed", "cancelled", "failed"),
+    elapsed_ms: number,
+    sources: array(
+      object({
+        source: liveSource,
+        connected: boolean,
+        signal_level: number,
+        last_audio_ms: nullable(number),
+        last_text_ms: nullable(number),
+        text_delay_ms: nullable(number),
+        queued_ms: number,
+        dropped_frames: number,
+        error: nullable(string),
+      }),
+    ),
+    segments: array(
+      object({
+        id: string,
+        source: liveSource,
+        start_ms: number,
+        end_ms: number,
+        text: string,
+        status: literal("preview", "final"),
+        revision: number,
+      }),
+    ),
+    gaps: array(object({ source: liveSource, start_ms: number, end_ms: number, reason: string })),
+    error: nullable(string),
+    audio_available: boolean,
+  },
+  {
+    optional: {
+      refinement: nullable(
+        object({ status: literal("running", "completed", "cancelled", "failed"), progress_percent: number, error: nullable(string) }),
+      ),
+    },
+  },
+);

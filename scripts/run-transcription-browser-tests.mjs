@@ -16,6 +16,7 @@ try {
     "qa-profile-download-layout.mjs",
     "qa-update-recovery.mjs",
     "qa-update-completion-races.mjs",
+    "qa-live-meeting.mjs",
   ]) {
     const result = await new Promise((resolve, reject) => {
       const child = spawn(process.execPath, [fileURLToPath(new URL(`./${script}`, import.meta.url))], {

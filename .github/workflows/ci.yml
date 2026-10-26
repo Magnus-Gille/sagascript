@@ -163,7 +163,7 @@ jobs:
           node scripts/ci/smoke-cli.mjs model
 
   check-macos:
-    needs: [scope, test-macos, build-macos]
+    needs: [scope, test-macos, build-macos, msrv-macos]
     if: ${{ always() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -232,6 +232,26 @@ jobs:
   # Minimum supported Rust version (#353): `rust-version` is a promise to people building from
   # source, so compile with exactly that toolchain. The setup action installs it and exports
   # RUSTUP_TOOLCHAIN (over the pin in rust-toolchain.toml); the msrv profile refuses to run without it.
+  # Linux cannot select the macOS-only bundled WebRTC/AEC3 dependency, so prove the live recording
+  # feature on the declared MSRV with the macOS toolchain and its static-build preparation.
+  msrv-macos:
+    needs: scope
+    if: ${{ needs.scope.result == 'success' && needs.scope.outputs.docs_only != 'true' }}
+    runs-on: macos-14
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - name: Set up MSRV toolchain and static AEC build
+        uses: ./.github/actions/setup
+        with:
+          python: "false"
+          rust: msrv
+          cache-key: sagascript-msrv-macos
+          cache-workspaces: src-tauri
+          npm-ci: "false"
+      - name: Check the macOS record feature on MSRV
+        run: node scripts/ci/cargo-gates.mjs --os macos --profile msrv-live
+
   msrv-linux:
     needs: scope
     if: ${{ needs.scope.result == 'success' && needs.scope.outputs.docs_only != 'true' }}

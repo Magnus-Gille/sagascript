@@ -55,6 +55,7 @@ export const TEST_GROUPS = {
     "scripts/test-frontend-test-groups.mjs",
     "scripts/test-npm-license-policy.mjs",
     "scripts/test-pipeline-cache.mjs",
+    "scripts/test-prepare-live-aec.mjs",
     "scripts/test-rust-toolchain-pin.mjs",
     "scripts/test-verify-ci-parity.mjs",
     "scripts/test-verify-runner.mjs",

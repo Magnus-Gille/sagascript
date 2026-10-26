@@ -1,0 +1,222 @@
+{
+  "failed": {
+    "audio_available": true,
+    "elapsed_ms": 1500,
+    "error": "System audio interrupted",
+    "gaps": [
+      {
+        "end_ms": 800,
+        "reason": "Capture interrupted",
+        "source": "system",
+        "start_ms": 500
+      }
+    ],
+    "id": "contract-live",
+    "phase": "failed",
+    "refinement": null,
+    "revision": 10,
+    "segments": [
+      {
+        "end_ms": 900,
+        "id": "0-1",
+        "revision": 1,
+        "source": "microphone",
+        "start_ms": 100,
+        "status": "preview",
+        "text": "Hej mötet"
+      }
+    ],
+    "sources": [
+      {
+        "connected": true,
+        "dropped_frames": 0,
+        "error": null,
+        "last_audio_ms": 1400,
+        "last_text_ms": 900,
+        "queued_ms": 0,
+        "signal_level": 0.20000000298023224,
+        "source": "microphone",
+        "text_delay_ms": 600
+      },
+      {
+        "connected": false,
+        "dropped_frames": 0,
+        "error": null,
+        "last_audio_ms": null,
+        "last_text_ms": null,
+        "queued_ms": 0,
+        "signal_level": 0.0,
+        "source": "system",
+        "text_delay_ms": null
+      }
+    ]
+  },
+  "refined": {
+    "audio_available": true,
+    "elapsed_ms": 1500,
+    "error": null,
+    "gaps": [],
+    "id": "contract-refined",
+    "phase": "completed",
+    "refinement": {
+      "error": null,
+      "progress_percent": 100,
+      "status": "completed"
+    },
+    "revision": 6,
+    "segments": [
+      {
+        "end_ms": 900,
+        "id": "refined-0",
+        "revision": 1,
+        "source": "microphone",
+        "start_ms": 100,
+        "status": "final",
+        "text": "Slutlig text"
+      }
+    ],
+    "sources": [
+      {
+        "connected": false,
+        "dropped_frames": 0,
+        "error": null,
+        "last_audio_ms": null,
+        "last_text_ms": null,
+        "queued_ms": 0,
+        "signal_level": 0.0,
+        "source": "microphone",
+        "text_delay_ms": null
+      },
+      {
+        "connected": false,
+        "dropped_frames": 0,
+        "error": null,
+        "last_audio_ms": null,
+        "last_text_ms": null,
+        "queued_ms": 0,
+        "signal_level": 0.0,
+        "source": "system",
+        "text_delay_ms": null
+      }
+    ]
+  },
+  "refining": {
+    "audio_available": true,
+    "elapsed_ms": 1500,
+    "error": null,
+    "gaps": [],
+    "id": "contract-refined",
+    "phase": "refining",
+    "refinement": {
+      "error": null,
+      "progress_percent": 42,
+      "status": "running"
+    },
+    "revision": 5,
+    "segments": [],
+    "sources": [
+      {
+        "connected": false,
+        "dropped_frames": 0,
+        "error": null,
+        "last_audio_ms": null,
+        "last_text_ms": null,
+        "queued_ms": 0,
+        "signal_level": 0.0,
+        "source": "microphone",
+        "text_delay_ms": null
+      },
+      {
+        "connected": false,
+        "dropped_frames": 0,
+        "error": null,
+        "last_audio_ms": null,
+        "last_text_ms": null,
+        "queued_ms": 0,
+        "signal_level": 0.0,
+        "source": "system",
+        "text_delay_ms": null
+      }
+    ]
+  },
+  "running": {
+    "audio_available": false,
+    "elapsed_ms": 1500,
+    "error": null,
+    "gaps": [],
+    "id": "contract-live",
+    "phase": "running",
+    "refinement": null,
+    "revision": 8,
+    "segments": [
+      {
+        "end_ms": 900,
+        "id": "0-1",
+        "revision": 1,
+        "source": "microphone",
+        "start_ms": 100,
+        "status": "preview",
+        "text": "Hej mötet"
+      }
+    ],
+    "sources": [
+      {
+        "connected": true,
+        "dropped_frames": 0,
+        "error": null,
+        "last_audio_ms": 1400,
+        "last_text_ms": 900,
+        "queued_ms": 0,
+        "signal_level": 0.20000000298023224,
+        "source": "microphone",
+        "text_delay_ms": 600
+      },
+      {
+        "connected": false,
+        "dropped_frames": 0,
+        "error": null,
+        "last_audio_ms": null,
+        "last_text_ms": null,
+        "queued_ms": 0,
+        "signal_level": 0.0,
+        "source": "system",
+        "text_delay_ms": null
+      }
+    ]
+  },
+  "starting": {
+    "audio_available": false,
+    "elapsed_ms": 0,
+    "error": null,
+    "gaps": [],
+    "id": "contract-live",
+    "phase": "starting",
+    "refinement": null,
+    "revision": 0,
+    "segments": [],
+    "sources": [
+      {
+        "connected": false,
+        "dropped_frames": 0,
+        "error": null,
+        "last_audio_ms": null,
+        "last_text_ms": null,
+        "queued_ms": 0,
+        "signal_level": 0.0,
+        "source": "microphone",
+        "text_delay_ms": null
+      },
+      {
+        "connected": false,
+        "dropped_frames": 0,
+        "error": null,
+        "last_audio_ms": null,
+        "last_text_ms": null,
+        "queued_ms": 0,
+        "signal_level": 0.0,
+        "source": "system",
+        "text_delay_ms": null
+      }
+    ]
+  }
+}

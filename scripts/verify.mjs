@@ -505,6 +505,22 @@ export const CHECKS = [
     lanes: ["test-linux"],
   },
   {
+    id: "msrv-live-macos",
+    area: "msrv",
+    title: "Compile the macOS live recording feature on the declared minimum Rust version",
+    steps: [
+      step("node scripts/ci/cargo-gates.mjs --os macos --profile msrv-live", undefined, {
+        env: { RUSTUP_TOOLCHAIN: "{msrvToolchain}" },
+      }),
+    ],
+    sets: [],
+    platforms: MACOS,
+    requires: ["msrv-toolchain"],
+    timeoutMinutes: 60,
+    ci: [ci("cargo check -p sagascript-core --features record --locked", "src-tauri")],
+    lanes: ["msrv-macos"],
+  },
+  {
     id: "msrv",
     area: "msrv",
     title: "Compile on the declared minimum Rust version (rust-version)",
