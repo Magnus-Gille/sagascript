@@ -4,6 +4,7 @@
 // policy lints"); tests may still print (src-tauri/clippy.toml).
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
+pub mod acceptance;
 pub(crate) mod benchmark_config;
 pub mod benchmark_dictation;
 mod benchmark_quality;
@@ -517,6 +518,12 @@ EXAMPLES:
         after_long_help = "EXAMPLES:\n  sagascript permissions status\n  sagascript permissions status --json"
     )]
     Permissions(permissions::PermissionsArgs),
+    /// Read-only acceptance diagnostics for the current process.
+    #[command(
+        long_about = "Inspect the current process against an expected clean source revision, without recording, permission prompts, engine startup or implicit settings access. Reports remaining manual checks; it does not control or inspect another GUI process.",
+        after_long_help = "EXAMPLES:\n  sagascript acceptance preflight --expect-revision <40-character-sha> --json"
+    )]
+    Acceptance(acceptance::AcceptanceArgs),
 
     /// Manage global hint terms and explicit profile-scoped aliases used by live and batch transcription
     #[command(
@@ -604,6 +611,26 @@ pub fn run(cli: Cli) -> ExitCode {
 /// ended (docs/recipes/add-cli-subcommand.md, "Exit codes"). Never exits the
 /// process, so tests call it directly with [`Out::capture`].
 pub fn run_with(cli: Cli, out: &Out) -> Exit {
+    run_with_build(
+        cli,
+        out,
+        sagascript_core::acceptance::BuildObservation::new(
+            env!("CARGO_PKG_VERSION"),
+            env!("SAGASCRIPT_SOURCE_REVISION"),
+            env!("SAGASCRIPT_SOURCE_DIRTY"),
+        ),
+    )
+}
+
+/// Run with the embedding executable's generated build observation.
+/// The desktop binary must supply its own metadata: this library can remain
+/// cached while desktop or frontend source changes. Standalone callers use
+/// [`run_with`], which selects this crate's generated identity.
+pub fn run_with_build(
+    cli: Cli,
+    out: &Out,
+    build: sagascript_core::acceptance::BuildObservation,
+) -> Exit {
     let Some(command) = cli.command else {
         errln!(
             out,
@@ -613,7 +640,9 @@ pub fn run_with(cli: Cli, out: &Out) -> Exit {
     };
     install_engine_identity();
     let json = json_output(&command);
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| dispatch(command, out)));
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        dispatch(command, out, build)
+    }));
 
     // Stop the engine host (if this command started one) before exiting, also
     // when the command panicked: the panic then continues as before (exit 101).
@@ -647,6 +676,10 @@ fn json_output(command: &Command) -> Option<JsonOutput> {
             | engine::EngineAction::Doctor { json: true, .. } => Some(JsonOutput::Pretty),
             _ => None,
         },
+        Command::Acceptance(args) => match args.action {
+            acceptance::AcceptanceAction::Preflight { json: true, .. } => Some(JsonOutput::Pretty),
+            _ => None,
+        },
         Command::Permissions(args) => match args.action {
             permissions::PermissionsAction::Status { json: true } => Some(JsonOutput::Pretty),
             _ => None,
@@ -659,7 +692,11 @@ fn json_output(command: &Command) -> Option<JsonOutput> {
     }
 }
 
-fn dispatch(command: Command, out: &Out) -> Result<(), CliError> {
+fn dispatch(
+    command: Command,
+    out: &Out,
+    build: sagascript_core::acceptance::BuildObservation,
+) -> Result<(), CliError> {
     match command {
         Command::Diarization(args) => diarization::run(args, out)?,
         Command::BenchmarkDictation(args) => {
@@ -703,6 +740,7 @@ fn dispatch(command: Command, out: &Out) -> Result<(), CliError> {
         }
         Command::Config(args) => config::run(args, out)?,
         Command::Permissions(args) => permissions::run(args, out)?,
+        Command::Acceptance(args) => return acceptance::run(args, out, build),
         Command::Engine(args) => return engine::run(args, out),
         Command::Glossary(args) => glossary::run(args, out)?,
         Command::Formats => formats(out)?,

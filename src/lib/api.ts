@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { UpdateRecoveryPayload } from "./update-recovery";
+import type { PreflightReport } from "./acceptance";
 import type {
   CorrectionFile,
   MeetingAudioAttachment,
@@ -249,6 +250,10 @@ export async function downloadModel(whisperModel: string): Promise<void> {
 
 export async function getBuildInfo(): Promise<BuildInfo> {
   return invoke("get_build_info");
+}
+
+export async function acceptancePreflight(expectRevision: string): Promise<PreflightReport> {
+  return invoke("acceptance_preflight", { expectRevision });
 }
 
 export async function transcribeFile(

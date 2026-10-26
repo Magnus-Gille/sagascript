@@ -74,3 +74,37 @@ pub async fn open_microphone_settings() -> Result<(), CommandError> {
     }
     Ok(())
 }
+
+/// Read-only diagnostic report from this GUI process. This does not expose an
+/// IPC transport to an external CLI or start a GUI session.
+#[tauri::command]
+pub async fn acceptance_preflight(
+    controller: tauri::State<'_, super::SharedController>,
+    expect_revision: String,
+) -> Result<sagascript_core::acceptance::PreflightReport, CommandError> {
+    use sagascript_core::acceptance::{self, BuildObservation, Observation, Source};
+    if !acceptance::valid_revision(&expect_revision) {
+        return Err(CommandError::InvalidInput(
+            "Expected a full 40-character source revision".into(),
+        ));
+    }
+    let completed = super::lock_controller(&controller)
+        .settings()
+        .has_completed_onboarding;
+    // Release the controller before hashing the executable on a blocking worker.
+    tauri::async_runtime::spawn_blocking(move || {
+        acceptance::assemble(
+            &expect_revision,
+            BuildObservation::new(
+                env!("CARGO_PKG_VERSION"),
+                env!("SAGASCRIPT_SOURCE_REVISION"),
+                env!("SAGASCRIPT_SOURCE_DIRTY"),
+            ),
+            acceptance::observe_process(),
+            Observation::observed(Source::LiveGui, completed),
+            Source::LiveGui,
+        )
+    })
+    .await
+    .map_err(|_| CommandError::Unavailable("Acceptance diagnostic worker failed".into()))
+}

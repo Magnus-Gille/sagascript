@@ -322,13 +322,13 @@ pub fn activate_app_for_launch() {
 }
 
 extern "C" {
-    fn AXIsProcessTrusted() -> bool;
     fn AXIsProcessTrustedWithOptions(options: core_foundation::base::CFTypeRef) -> bool;
 }
 
 /// Check if the process has accessibility (AX) permissions
 pub fn is_accessibility_trusted() -> bool {
-    unsafe { AXIsProcessTrusted() }
+    sagascript_core::acceptance::accessibility_permission()
+        == sagascript_core::acceptance::AccessibilityStatus::Trusted
 }
 
 fn accessibility_settings_command() -> Command {

@@ -260,7 +260,17 @@ jobs:
           npm run licenses:check
 
       - name: Test frontend release surface
-        run: npm run test:frontend
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          # Node's PATH lookup can miss pwsh on ARM64 even though this step uses it.
+          $env:SAGASCRIPT_PWSH = Join-Path $PSHOME 'pwsh.exe'
+          if (-not (Test-Path -LiteralPath $env:SAGASCRIPT_PWSH -PathType Leaf)) {
+            throw "The running PowerShell installation has no pwsh.exe"
+          }
+          npm run test:frontend
+          exit $LASTEXITCODE
 
       # The frontend module tests (update recovery, transcription queue, …)
       # run under Vitest since #361, outside test:frontend.
