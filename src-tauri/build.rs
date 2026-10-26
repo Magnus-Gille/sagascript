@@ -1,5 +1,8 @@
 use std::process::Command;
 
+#[path = "build_identity.rs"]
+mod build_identity;
+
 fn command_output(args: &[&str]) -> Option<String> {
     Command::new("git")
         .args(args)
@@ -17,8 +20,7 @@ fn metadata_value(key: &str, fallback: impl FnOnce() -> String) -> String {
 fn local_git_hash() -> String {
     let hash =
         command_output(&["rev-parse", "--short", "HEAD"]).unwrap_or_else(|| "unknown".to_string());
-    let dirty = command_output(&["status", "--porcelain=v1", "--untracked-files=all"])
-        .is_some_and(|status| !status.is_empty());
+    let dirty = build_identity::local_source_dirty().unwrap_or(true);
     if dirty {
         format!("{hash}-dirty")
     } else {
@@ -33,8 +35,8 @@ fn local_source_revision() -> String {
 }
 
 fn local_source_dirty() -> String {
-    match command_output(&["status", "--porcelain=v1", "--untracked-files=all"]) {
-        Some(status) => (!status.is_empty()).to_string(),
+    match build_identity::local_source_dirty() {
+        Some(dirty) => dirty.to_string(),
         None => "unknown".to_string(),
     }
 }
@@ -68,6 +70,8 @@ fn emit_source_rerun_triggers() {
     // Watch source trees that affect the binary's identity without watching
     // the package root, which would include target/ and cause rebuild loops.
     for path in [
+        "build_identity.rs",
+        "../scripts/build-identity-generated-paths.txt",
         "src",
         "crates",
         "../src",

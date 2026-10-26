@@ -85,7 +85,13 @@ writer rejects symlink destinations and symlinked parent components and
 publishes the complete file privately (mode `0600` on Unix). If receipt writing
 fails, the stdout report is marked blocked and the command exits `1`. Keep
 receipts in a private location because they record build and permission
-observations.
+observations. A receipt is an observation report, not a process-completion
+receipt: it is published before stdout is delivered. If stdout later fails to
+write or flush, the command exits `1` and the already published observations
+remain unchanged, even if their checks passed. An acceptance runner must record
+and require the process exit status as well as the report; a receipt alone must
+never be interpreted as successful execution. An interrupted process without
+an observed exit status is incomplete. Retrying needs a new receipt path.
 
 The GUI has an additive Tauri `acceptance_preflight` invoke that observes the
 already-running GUI process and returns `scope: "live_gui"`. There is no

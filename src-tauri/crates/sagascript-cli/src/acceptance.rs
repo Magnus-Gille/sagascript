@@ -43,7 +43,7 @@ fn parse_revision(value: &str) -> Result<String, String> {
     }
 }
 
-pub fn run(args: AcceptanceArgs, out: &Out) -> Result<(), CliError> {
+pub fn run(args: AcceptanceArgs, out: &Out, build: BuildObservation) -> Result<(), CliError> {
     let AcceptanceAction::Preflight {
         expect_revision,
         json,
@@ -64,11 +64,7 @@ pub fn run(args: AcceptanceArgs, out: &Out) -> Result<(), CliError> {
     };
     let report = acceptance::assemble(
         &expect_revision,
-        BuildObservation::new(
-            env!("CARGO_PKG_VERSION"),
-            env!("SAGASCRIPT_SOURCE_REVISION"),
-            env!("SAGASCRIPT_SOURCE_DIRTY"),
-        ),
+        build,
         acceptance::observe_process(),
         onboarding,
         Source::CurrentProcess,
@@ -148,6 +144,48 @@ mod tests {
         }
     }
     #[test]
+    fn embedded_preflight_uses_executable_identity_instead_of_cached_library_identity() {
+        let revision = "1234567890abcdef1234567890abcdef12345678";
+        for dirty in ["false", "true", "unknown"] {
+            let cli = crate::Cli::try_parse_from([
+                "sagascript",
+                "acceptance",
+                "preflight",
+                "--expect-revision",
+                revision,
+                "--json",
+            ])
+            .unwrap();
+            let (out, captured) = Out::capture();
+            let exit = crate::run_with_build(
+                cli,
+                &out,
+                BuildObservation::new("executable-version", revision, dirty),
+            );
+            let report: serde_json::Value = serde_json::from_str(&captured.stdout()).unwrap();
+            assert_eq!(report["build"]["version"], "executable-version");
+            assert_eq!(report["build"]["revision"]["value"], revision);
+            let clean = report["summary"]["checks"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|check| check["name"] == "clean_source")
+                .unwrap();
+            assert_eq!(
+                clean["status"],
+                if dirty == "false" {
+                    "passed"
+                } else {
+                    "blocked"
+                }
+            );
+            if dirty != "false" {
+                assert_eq!(exit.code(), 1);
+            }
+        }
+    }
+
+    #[test]
     fn report_is_one_json_document_and_never_reads_implicit_settings() {
         let cli = crate::Cli::try_parse_from([
             "sagascript",
@@ -225,6 +263,40 @@ mod receipt_tests {
         assert_eq!(stdout["summary"]["status"], "passed");
         assert!(stdout.get("release_ready").is_none());
     }
+    #[test]
+    fn published_observations_do_not_hide_later_stdout_or_flush_failure() {
+        struct FailOutput(bool);
+        impl std::io::Write for FailOutput {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                if self.0 {
+                    Ok(bytes.len())
+                } else {
+                    Err(std::io::ErrorKind::BrokenPipe.into())
+                }
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Err(std::io::ErrorKind::BrokenPipe.into())
+            }
+        }
+        for fail_on_flush in [false, true] {
+            let dir = TempDir::new();
+            let path = std::fs::canonicalize(dir.path())
+                .unwrap()
+                .join("observations.json");
+            let (out, _) = Out::capture_stderr(FailOutput(fail_on_flush));
+            let result = emit(passed(), true, Some(&path), &out);
+            assert_eq!(crate::exit::conclude(result, None, &out, None).code(), 1);
+            // The exclusive receipt describes observed checks, not successful
+            // delivery of stdout or the final process exit. Consumers need both.
+            let bytes = std::fs::read(&path).unwrap();
+            let report: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(report["summary"]["status"], "passed");
+            let (out, _) = Out::capture();
+            assert!(emit(passed(), true, Some(&path), &out).is_err());
+            assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        }
+    }
+
     #[test]
     fn closed_stdout_is_failure_even_when_checks_pass() {
         struct Broken;

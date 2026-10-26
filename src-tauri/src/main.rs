@@ -84,7 +84,16 @@ fn main() -> std::process::ExitCode {
                 )))
                 .with_writer(std::io::stderr)
                 .init();
-            return sagascript_cli::run(parsed);
+            return sagascript_cli::run_with_build(
+                parsed,
+                &sagascript_cli::output::Out::stdio(),
+                sagascript_core::acceptance::BuildObservation::new(
+                    env!("CARGO_PKG_VERSION"),
+                    env!("SAGASCRIPT_SOURCE_REVISION"),
+                    env!("SAGASCRIPT_SOURCE_DIRTY"),
+                ),
+            )
+            .into();
         }
     }
 
