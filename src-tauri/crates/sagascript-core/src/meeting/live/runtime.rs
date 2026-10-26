@@ -11,7 +11,7 @@ use super::{
     timeline::NativeTimeline,
 };
 use crate::transcription::{
-    engine_host::{BoostSpec, EngineHostClient, JobOptions, Priority},
+    engine_host::{BoostSpec, CancelToken, EngineHostClient, JobOptions, Priority},
     pianissimo_backend,
 };
 use crate::{glossary::Glossary, settings::Settings, sync::lock_or_recover};
@@ -201,17 +201,10 @@ pub(super) fn run(session: &Arc<Session>, settings: Settings) {
             )
         }))
         .unwrap_or_else(|_| Err("Transcript refinement stopped unexpectedly.".into()));
-        let mut state = lock_or_recover(&session.state, "live.state");
-        let outcome = outcome.and_then(|mut segments| {
-            if session.cancel.is_cancelled() {
-                return Err("Transcript refinement was cancelled.".into());
-            }
-            for segment in &mut segments {
-                segment.text = refinement_glossary.correct_text(&segment.text).0;
-            }
-            state
-                .complete_refinement(segments)
-                .map_err(|e| e.to_string())
+        let outcome = outcome.and_then(|segments| {
+            publish_refinement(&session.state, &session.cancel, segments, |text| {
+                refinement_glossary.correct_text(text).0
+            })
         });
         if let Err(error) = outcome {
             let cancelled = session.cancel.is_cancelled();
@@ -223,9 +216,40 @@ pub(super) fn run(session: &Arc<Session>, settings: Settings) {
                     clean_error(&error)
                 )
             };
-            let _ = state.finish_refinement_fallback(cancelled, Some(clean_error(&message)));
+            let _ = lock_or_recover(&session.state, "live.state")
+                .finish_refinement_fallback(cancelled, Some(clean_error(&message)));
         }
     }
+}
+
+fn publish_refinement(
+    state: &Mutex<State>,
+    cancel: &CancelToken,
+    mut segments: Vec<LiveSegment>,
+    mut correct: impl FnMut(&str) -> String,
+) -> Result<(), String> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        for segment in &mut segments {
+            if cancel.is_cancelled() {
+                return Err("Transcript refinement was cancelled.".into());
+            }
+            segment.text = correct(&segment.text);
+        }
+        // Correction, validation and allocation must not block Session::stop.
+        let prepared = State::prepare_refinement(segments).map_err(|e| e.to_string())?;
+        let retired = {
+            let mut state = lock_or_recover(state, "live.state");
+            if cancel.is_cancelled() {
+                return Err("Transcript refinement was cancelled.".into());
+            }
+            state
+                .complete_prepared_refinement(prepared)
+                .map_err(|e| e.to_string())?
+        };
+        drop(retired);
+        Ok(())
+    }))
+    .unwrap_or_else(|_| Err("Transcript refinement stopped unexpectedly.".into()))
 }
 
 // Stop capture on every ASR failure, including a panic or a state update
@@ -628,6 +652,88 @@ fn process_frame(
 mod tests {
     use super::*;
     use std::sync::atomic::AtomicBool;
+
+    #[test]
+    fn cancellation_during_final_correction_preserves_live_text() {
+        let segment = LiveSegment {
+            id: "live".into(),
+            source: Source::Microphone,
+            start_ms: 0,
+            end_ms: 100,
+            text: "live text".into(),
+            status: SegmentStatus::Final,
+            revision: 1,
+        };
+        let mut initial = State::new("cancel-at-commit".into()).unwrap();
+        initial.started().unwrap();
+        initial.upsert(segment.clone()).unwrap();
+        initial.begin_stop().unwrap();
+        initial.begin_refinement(true).unwrap();
+        let state = Mutex::new(initial);
+        let cancel = CancelToken::new();
+        let (started_tx, started_rx) = mpsc::channel();
+        let (resume_tx, resume_rx) = mpsc::channel();
+        let (cancellation_available, result) = thread::scope(|scope| {
+            let state_ref = &state;
+            let cancel_ref = &cancel;
+            let worker = scope.spawn(move || {
+                publish_refinement(state_ref, cancel_ref, vec![segment], |_| {
+                    started_tx.send(()).unwrap();
+                    resume_rx.recv().unwrap();
+                    "refined text".into()
+                })
+            });
+            started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            // Session::stop must obtain this lock before cancelling Refining.
+            let available = match state.try_lock() {
+                Ok(guard) => {
+                    assert_eq!(guard.snapshot().phase, Phase::Refining);
+                    cancel.cancel();
+                    true
+                }
+                Err(_) => false,
+            };
+            resume_tx.send(()).unwrap();
+            (available, worker.join().unwrap())
+        });
+        assert!(cancellation_available, "final correction blocked Stop");
+        assert!(result.is_err());
+        let snapshot = state.lock().unwrap().snapshot();
+        assert_eq!(snapshot.phase, Phase::Refining);
+        assert_eq!(snapshot.segments[0].text, "live text");
+    }
+
+    #[test]
+    fn panicked_final_correction_keeps_live_state_usable() {
+        let mut initial = State::new("panic-at-commit".into()).unwrap();
+        initial.started().unwrap();
+        let segment = LiveSegment {
+            id: "live".into(),
+            source: Source::System,
+            start_ms: 0,
+            end_ms: 100,
+            text: "live text".into(),
+            status: SegmentStatus::Final,
+            revision: 1,
+        };
+        initial.upsert(segment.clone()).unwrap();
+        initial.begin_stop().unwrap();
+        initial.begin_refinement(true).unwrap();
+        let state = Mutex::new(initial);
+        assert!(
+            publish_refinement(&state, &CancelToken::new(), vec![segment], |_| {
+                panic!("synthetic glossary failure")
+            })
+            .is_err()
+        );
+        let mut state = state.lock().unwrap();
+        assert_eq!(state.snapshot().segments[0].text, "live text");
+        state
+            .finish_refinement_fallback(false, Some("Correction failed".into()))
+            .unwrap();
+        assert_eq!(state.snapshot().phase, Phase::Completed);
+        assert!(state.snapshot().audio_available);
+    }
 
     #[test]
     fn idle_system_clears_stale_signal_without_fabricating_audio() {

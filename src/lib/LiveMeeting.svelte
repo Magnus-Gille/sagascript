@@ -313,7 +313,7 @@
     {/if}
 
     <div class="transcript-heading">
-      <h3>Live transcript</h3>
+      <h3>Transcript</h3>
       <label class="follow-toggle">
         <input type="checkbox" bind:checked={followLatest} />
         Follow latest
@@ -332,7 +332,7 @@
         >
       </div>
     {/if}
-    <div class="transcript" bind:this={transcriptElement} role="log" aria-live="polite" aria-label="Live transcript">
+    <div class="transcript" bind:this={transcriptElement} role="log" aria-live="polite" aria-label="Meeting transcript">
       {#if displayedSegments.length === 0}
         <p class="empty">Waiting for speech…</p>
       {:else}

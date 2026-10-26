@@ -112,6 +112,12 @@ impl fmt::Display for StateError {
 
 impl std::error::Error for StateError {}
 
+/// Fully validated replacement; prepare before acquiring the shared state mutex.
+pub(crate) struct PreparedRefinement {
+    segments: BTreeMap<(u8, String), LiveSegment>,
+    text_bytes: usize,
+}
+
 pub struct State {
     id: String,
     revision: u64,
@@ -246,13 +252,31 @@ impl State {
         if self.phase != Phase::Refining {
             return Err(StateError::InvalidTransition);
         }
-        let replacement = validate_refinement_segments(segments)?;
-        self.segments = replacement;
-        self.text_bytes = self
-            .segments
-            .values()
-            .map(|segment| segment.text.len())
-            .sum();
+        let prepared = Self::prepare_refinement(segments)?;
+        self.complete_prepared_refinement(prepared).map(drop)
+    }
+
+    pub(crate) fn prepare_refinement(
+        segments: Vec<LiveSegment>,
+    ) -> Result<PreparedRefinement, StateError> {
+        let segments = validate_refinement_segments(segments)?;
+        let text_bytes = segments.values().map(|segment| segment.text.len()).sum();
+        Ok(PreparedRefinement {
+            segments,
+            text_bytes,
+        })
+    }
+
+    /// Constant-time publication. The caller drops the retired text after unlocking.
+    pub(crate) fn complete_prepared_refinement(
+        &mut self,
+        mut prepared: PreparedRefinement,
+    ) -> Result<PreparedRefinement, StateError> {
+        if self.phase != Phase::Refining {
+            return Err(StateError::InvalidTransition);
+        }
+        std::mem::swap(&mut self.segments, &mut prepared.segments);
+        std::mem::swap(&mut self.text_bytes, &mut prepared.text_bytes);
         self.phase = Phase::Completed;
         self.refinement = Some(Refinement {
             status: RefinementStatus::Completed,
@@ -260,7 +284,7 @@ impl State {
             error: None,
         });
         self.bump_revision();
-        Ok(())
+        Ok(prepared)
     }
 
     pub fn finish_refinement_fallback(
