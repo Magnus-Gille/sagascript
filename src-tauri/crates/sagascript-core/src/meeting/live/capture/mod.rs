@@ -34,14 +34,26 @@ pub(crate) struct Sink {
     source: Source,
     sender: SyncSender<Block>,
     pub health: Arc<Health>,
+    activation_epoch: Arc<AtomicU64>,
 }
 
 impl Sink {
+    #[cfg(test)]
     pub fn new(source: Source, sender: SyncSender<Block>, health: Arc<Health>) -> Self {
+        Self::with_activation(source, sender, health, Arc::new(AtomicU64::new(1)))
+    }
+
+    fn with_activation(
+        source: Source,
+        sender: SyncSender<Block>,
+        health: Arc<Health>,
+        activation_epoch: Arc<AtomicU64>,
+    ) -> Self {
         Self {
             source,
             sender,
             health,
+            activation_epoch,
         }
     }
 
@@ -53,11 +65,28 @@ impl Sink {
         frames: usize,
         mut sample: impl FnMut(usize) -> f32,
     ) {
+        let activation_epoch = self.activation_epoch.load(Ordering::Acquire);
+        if activation_epoch == 0 {
+            return;
+        }
         if rate == 0 || frames > 192_000 || host_ns == 0 {
             self.health.failed.store(true, Ordering::Release);
             return;
         }
-        for offset in (0..frames).step_by(BLOCK_SAMPLES) {
+        let first_frame = if host_ns < activation_epoch {
+            let delta_ns = u128::from(activation_epoch - host_ns);
+            let frame_offset = delta_ns
+                .saturating_mul(u128::from(rate))
+                .saturating_add(999_999_999)
+                / 1_000_000_000;
+            if frame_offset >= frames as u128 {
+                return;
+            }
+            frame_offset as usize
+        } else {
+            0
+        };
+        for offset in (first_frame..frames).step_by(BLOCK_SAMPLES) {
             let len = (frames - offset).min(BLOCK_SAMPLES);
             let mut block = Block {
                 source: self.source,
@@ -106,6 +135,7 @@ impl Capture {
         system: SyncSender<Block>,
         mic_health: Arc<Health>,
         system_health: Arc<Health>,
+        activation_epoch: Arc<AtomicU64>,
     ) -> Result<Self, String> {
         let permission = crate::audio::permission::microphone_permission();
         let effective = crate::audio::permission::capture_permission_status(permission.status)
@@ -125,7 +155,12 @@ impl Capture {
         if !(8_000..=192_000).contains(&rate) || channels == 0 || channels > 64 {
             return Err("Unsupported microphone format".into());
         }
-        let sink = Sink::new(Source::Microphone, mic, mic_health.clone());
+        let sink = Sink::with_activation(
+            Source::Microphone,
+            mic,
+            mic_health.clone(),
+            activation_epoch.clone(),
+        );
         let mut first: Option<(cpal::StreamInstant, u64)> = None;
         let stream = device
             .build_input_stream_raw(
@@ -187,7 +222,12 @@ impl Capture {
         ) {
             return Err("Unsupported microphone sample format".into());
         }
-        let tap = tap::Tap::start(Sink::new(Source::System, system, system_health))?;
+        let tap = tap::Tap::start(Sink::with_activation(
+            Source::System,
+            system,
+            system_health,
+            activation_epoch,
+        ))?;
         stream.play().map_err(|e| e.to_string())?;
         Ok(Self {
             _microphone: stream,
@@ -219,11 +259,17 @@ pub fn host_ns() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::AtomicUsize;
     #[test]
     fn callback_queue_is_bounded_and_reports_loss() {
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         let health = Arc::new(Health::default());
-        let sink = Sink::new(Source::System, tx, health.clone());
+        let sink = Sink::with_activation(
+            Source::System,
+            tx,
+            health.clone(),
+            Arc::new(AtomicU64::new(1)),
+        );
         sink.push(1_000_000, 48_000, BLOCK_SAMPLES + 3, |i| i as f32 / 4096.);
         let block = rx.try_recv().unwrap();
         assert_eq!(block.len, BLOCK_SAMPLES);
@@ -231,6 +277,69 @@ mod tests {
         assert_eq!(health.dropped_samples.load(Ordering::Relaxed), 3);
         assert!(rx.try_recv().is_err());
     }
+
+    #[test]
+    fn preactivation_callbacks_are_ignored_without_loss_or_health_updates() {
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        let health = Arc::new(Health::default());
+        let calls = Arc::new(AtomicUsize::new(0));
+        let sink = Sink::with_activation(
+            Source::Microphone,
+            tx,
+            health.clone(),
+            Arc::new(AtomicU64::new(0)),
+        );
+        for index in 0..=QUEUE_BLOCKS {
+            let calls = calls.clone();
+            sink.push(1_000_000 + index as u64 * 1_000_000, 48_000, 512, |_| {
+                calls.fetch_add(1, Ordering::Relaxed);
+                0.25
+            });
+        }
+        assert!(rx.try_recv().is_err());
+        assert_eq!(calls.load(Ordering::Acquire), 0);
+        assert_eq!(health.dropped_samples.load(Ordering::Acquire), 0);
+        assert_eq!(health.last_host_ns.load(Ordering::Acquire), 0);
+        assert!(!health.failed.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn crossing_activation_epoch_trims_old_frames_and_reanchors_timestamp() {
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        let health = Arc::new(Health::default());
+        let epoch = 1_000_000_000;
+        let sink = Sink::with_activation(
+            Source::Microphone,
+            tx,
+            health.clone(),
+            Arc::new(AtomicU64::new(epoch)),
+        );
+        sink.push(epoch - 31_250, 48_000, 8, |index| index as f32);
+        let block = rx.try_recv().expect("post-activation samples");
+        assert_eq!(block.host_ns, epoch + 10_416);
+        assert_eq!(block.len, 6);
+        assert_eq!(&block.samples[..block.len], &[2., 3., 4., 5., 6., 7.]);
+        assert_eq!(health.last_host_ns.load(Ordering::Acquire), epoch + 10_416);
+    }
+
+    #[test]
+    fn wholly_pre_activation_block_is_ignored() {
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        let health = Arc::new(Health::default());
+        let epoch = 1_000_000_000;
+        let sink = Sink::with_activation(
+            Source::System,
+            tx,
+            health.clone(),
+            Arc::new(AtomicU64::new(epoch)),
+        );
+        sink.push(epoch - 10_000_000, 1_000, 5, |_| 0.25);
+        assert!(rx.try_recv().is_err());
+        assert_eq!(health.dropped_samples.load(Ordering::Acquire), 0);
+        assert_eq!(health.last_host_ns.load(Ordering::Acquire), 0);
+        assert!(!health.failed.load(Ordering::Acquire));
+    }
+
     #[test]
     fn invalid_pcm_and_clock_fail_visibly() {
         let (tx, rx) = std::sync::mpsc::sync_channel(1);

@@ -45,3 +45,13 @@ The correction handles optional timestamp state explicitly and drains each front
 After the correction, the same direct production-core pass reports zero policy findings in live code (ten before). All 71 focused live tests, workspace Clippy and Rust formatting pass. The complete workspace tests pass again: 2,490 passed, three ignored, no failures. The first local attempt failed because the sandbox denied loopback HTTP fixtures; the unchanged suite passed with that fixture capability approved. This macOS evidence does not replace the pending Linux baseline run.
 
 The bounded implementation leaf used native `gpt-5.6-luna`/high (runtime identity unavailable). Usefulness: partial; root requested a simpler borrow structure, inspected the resulting patch and independently ran policy, Clippy and workspace tests. No lint baseline or acceptance gate changed.
+
+## Native QA corrections
+
+Published candidate `498c9706a6c06e3f47df9edab74f98ace7056313` passed all 11 jobs in provider CI run `40245741205` and both Windows package architectures in run `40245741220`. These receipts apply to that revision only.
+
+The owner's approved native audio test established short-session two-source transcription, background progress, stop and text/stereo-audio export. It also reproduced startup buffer overflow and a Cmd+Q exit-guard bypass. See [NATIVE-ACCEPTANCE.md](NATIVE-ACCEPTANCE.md) for bounded evidence and remaining gates. No captured personal speech or transcript is published.
+
+The capture correction prepares AEC before opening native streams and uses a shared activation epoch to ignore pre-start callbacks, including trimming buffers that straddle activation. Three regressions fail without the gate/trim and pass with it; real post-start overflow remains an error. A bounded native `gpt-5.6-luna`/high worker implemented this leaf (actual runtime identity unknown); root required a stronger valid-buffer regression, inspected the patch and integrated it. Usefulness: partial. A second bounded read-only Luna/high leaf traced Tauri/Muda's native Quit selector and checked the replacement menu path (actual runtime identity unknown; usefulness pass). Root implemented the native menu correction. Native green evidence remains required; code inspection alone is insufficient.
+
+Root verification of both corrections: workspace tests 2,493 passed, three ignored, zero failures; workspace Clippy passed; direct production-core policy reported zero findings in live code. Rust formatting and diff whitespace checks passed. These checks do not replace the pending native regression run or fresh provider CI.

@@ -140,6 +140,13 @@ fn build_app(gui_launch_mode: GuiLaunchMode) -> tauri::App {
         .plugin(tauri_plugin_dialog::init());
 
     #[cfg(target_os = "macos")]
+    {
+        builder = builder
+            .menu(launch::build_guarded_menu)
+            .on_menu_event(launch::handle_guarded_menu);
+    }
+
+    #[cfg(target_os = "macos")]
     if let Some(pubkey) = updates::updater_public_key() {
         builder = builder.plugin(
             tauri_plugin_updater::Builder::new()

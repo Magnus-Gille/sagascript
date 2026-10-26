@@ -17,7 +17,7 @@ use crate::transcription::{
 use crate::{glossary::Glossary, settings::Settings, sync::lock_or_recover};
 use std::{
     sync::{
-        atomic::Ordering,
+        atomic::{AtomicU64, Ordering},
         mpsc::{self, Receiver},
         Arc, Condvar, Mutex,
     },
@@ -289,18 +289,32 @@ fn capture_audio(session: &Session, lane: &Lane, recording: &mut Recording) -> R
     let (mic_tx, mic_rx) = mpsc::sync_channel(capture::QUEUE_BLOCKS);
     let (sys_tx, sys_rx) = mpsc::sync_channel(capture::QUEUE_BLOCKS);
     let health = [Arc::new(Health::default()), Arc::new(Health::default())];
-    let epoch = capture::host_ns();
-    session.epoch_ns.store(epoch, Ordering::Release);
-    let native = capture::Capture::start(mic_tx, sys_tx, health[0].clone(), health[1].clone())?;
-    let mut timelines = [NativeTimeline::new(epoch), NativeTimeline::new(epoch)];
+    let activation_epoch = Arc::new(AtomicU64::new(0));
     let mut segmenters = [
         Segmenter::new(Config::default(), Source::Microphone).map_err(|e| e.to_string())?,
         Segmenter::new(Config::default(), Source::System).map_err(|e| e.to_string())?,
     ];
     let mut echo = EchoCanceller3::new()?;
+    let native = capture::Capture::start(
+        mic_tx,
+        sys_tx,
+        health[0].clone(),
+        health[1].clone(),
+        activation_epoch.clone(),
+    )?;
+    if session.stop.load(Ordering::Acquire) || session.cancel.is_cancelled() {
+        return Ok(());
+    }
+    let epoch = capture::host_ns();
+    let mut timelines = [NativeTimeline::new(epoch), NativeTimeline::new(epoch)];
     lock_or_recover(&session.state, "live.state")
         .started()
         .map_err(|e| e.to_string())?;
+    if session.stop.load(Ordering::Acquire) || session.cancel.is_cancelled() {
+        return Ok(());
+    }
+    session.epoch_ns.store(epoch, Ordering::Release);
+    activation_epoch.store(epoch, Ordering::Release);
     let mut frame = 0u64;
     let mut elapsed = 0u64;
     let outcome = (|| -> Result<(), String> {
