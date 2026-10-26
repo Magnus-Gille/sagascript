@@ -1,4 +1,4 @@
-# #519 native acceptance — partial, corrections pending
+# #519 native acceptance — partial, native regressions passed
 
 The delivery endpoint is merge after review. This checklist does not authorize microphone capture, system-audio capture, playback, installation, or release. Ask Magnus before starting the concrete audio test. Use a candidate built from a recorded commit; never substitute browser mocks for native evidence.
 
@@ -32,4 +32,26 @@ Two native failures block acceptance:
 - The attempted 30-minute CLI run ended after about five seconds with microphone buffer overflow (98,816 dropped samples). It did not complete the endurance test. CPAL starts the macOS input stream during construction, before the system tap and consumer are ready. The correction gates both callbacks until a shared activation epoch and prepares AEC before capture; regression tests cover preactivation callbacks and timestamp trimming.
 - Cmd+Q exited the GUI with a retained completed session, bypassing the existing `ExitRequested` guard. The correction replaces the native predefined Quit item with a regular Cmd+Q menu action routed through Tauri's vetoable exit request. Native retesting must prove refusal before Discard and normal exit afterwards.
 
-The candidate was stopped after these findings. No capture continues. A rebuilt, reviewed candidate and a renewed concrete audio-test authorization are required for further capture. Still pending: native regression retests, headphones, measured speaker echo/doubletalk quality, route changes, 30-minute latency/quality/resource measurements, and Magnus's real-meeting acceptance. Deterministic checks and browser screenshots do not establish these items.
+The candidate was stopped after these findings. They led to the rebuilt, reviewed candidate and renewed owner authorization described below. Deterministic checks and browser screenshots alone did not establish native acceptance.
+
+## Corrected candidate, 2026-10-26
+
+Magnus authorized candidate `14b7abd5ae43ed9146ac4c459a9929063f183aaa` for at most 45 minutes from test start. The isolated QA app and CoreML host matched that clean revision and passed package checks. Hardware: MacBook Air M4, 32 GB, macOS 27.0.1 (26A434), built-in microphone and speakers. Both provider CI and Windows package jobs passed on this revision.
+
+The first GUI start reported microphone permission pending without a visible dialog. An explicit retry advanced to Starting; Magnus then accepted an OS prompt and capture became active. No TCC reset or permission bypass was used. The short GUI session passed two-source capture, stop and zero-loss checks. Cmd+Q retained both active and completed sessions; app-menu Quit retained a failed session; after Discard, Cmd+Q exited the QA app. The ordinary installed app remained untouched. These results cover visible in-app Quit actions, not external AppKit termination, Force Quit or crash recovery.
+
+The subsequent CLI run lasted **807.62 seconds (13.46 minutes)**. Magnus asked to stop the annoying repeated playback, so playback and capture were stopped promptly. CLI exit 130 records the requested interrupt; the session reached Completed and exported a valid stereo PCM16/16 kHz WAV and text before cleanup. Both sources reported zero lost frames and zero gaps. This is **not** a completed 30-minute test, and repeated speaker playback must not resume without a new explicit request.
+
+Aggregate measurements from this bounded run:
+
+- First nonempty preview relative to segment start: median 1.86 s, p95 4.60 s, maximum 5.20 s across 25 segments. Before local speech was added, the repeated synthetic system fixture was approximately 1.8–1.9 s. These are segment-relative estimates, not manually aligned phonetic onset measurements.
+- Stable final text relative to segment end: median 0.45 s, p95 0.53 s, maximum 0.54 s. The running-status epoch estimator had a 0.32 s anchor spread; avoid treating these as exact speech-end latencies.
+- Twenty-one repeats of the 54-word synthetic reference averaged 10.93% normalized word edit distance. This small repeated fixture does not establish general meeting accuracy.
+- Magnus spoke the supplied doubletalk phrase during playback. The closest final microphone segment differed by one word from the 18-word reference while a nonempty system segment overlapped. This establishes one successful local/system overlap case, not broad doubletalk quality.
+- Twenty-six resource samples: app mean 20.4% of one CPU core, RSS 47.2→42.3 MiB; engine mean 3.3% of one core, RSS 245.3→77.3 MiB. RSS does not include all accelerator/shared memory. Queued-audio maxima (3.89 s microphone, 22.85 s system) describe pending audio-window duration, not the time spent waiting; no increasing backlog or capture loss was observed.
+
+All captured audio, transcripts and raw logs were deleted after aggregate verification, as authorized. Only aggregate metrics, synthetic reference material and package/test receipts remain locally. No personal speech or transcript is published. No capture or playback remains running.
+
+The run exposed empty ASR finals as blank source/time rows. A presentation/export correction filters whitespace-only rows before UI pagination and skips blank cues in human-readable exports. Raw JSON/JSONL segment state remains available so an empty final can replace an earlier preview. Capture, AEC, scheduling and ASR are unchanged by this follow-up; native evidence above remains explicitly tied to `14b7abd5`.
+
+Outstanding acceptance: headphones, route changes, a representative longer meeting/lecture test, the incomplete 30-minute check, and Magnus's real-meeting trust/quality assessment. Do not merge on the strength of the short fixture alone.

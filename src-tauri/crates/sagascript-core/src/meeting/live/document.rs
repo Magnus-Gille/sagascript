@@ -314,6 +314,9 @@ impl LiveDocument {
     fn event_lines(&self, markdown: bool) -> Vec<String> {
         let mut events = Vec::with_capacity(self.segments.len() + self.gaps.len());
         for segment in &self.segments {
+            if !has_segment_text(&segment.text) {
+                continue;
+            }
             events.push((
                 segment.start_ms,
                 segment.end_ms,
@@ -360,6 +363,9 @@ impl LiveDocument {
             });
         }
         for segment in &self.segments {
+            if !has_segment_text(&segment.text) {
+                continue;
+            }
             cues.push(SubtitleCue {
                 start_ms: segment.start_ms,
                 end_ms: segment.end_ms,
@@ -439,6 +445,10 @@ fn valid_metadata(value: &str) -> bool {
     !value.trim().is_empty()
         && value.len() <= MAX_METADATA_BYTES
         && !value.chars().any(char::is_control)
+}
+
+fn has_segment_text(value: &str) -> bool {
+    !value.trim().is_empty()
 }
 
 fn valid_id(value: &str) -> bool {

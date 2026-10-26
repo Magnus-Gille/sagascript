@@ -46,7 +46,7 @@
     failed: "Failed",
   };
 
-  const sortedSegments = $derived(sortLiveSegments(snapshot?.segments ?? []));
+  const sortedSegments = $derived(sortLiveSegments((snapshot?.segments ?? []).filter((segment) => segment.text.trim().length > 0)));
   const transcriptPageCount = $derived(Math.max(1, Math.ceil(sortedSegments.length / TRANSCRIPT_PAGE_SIZE)));
   const activeTranscriptPage = $derived(followLatest ? transcriptPageCount - 1 : Math.min(transcriptPage, transcriptPageCount - 1));
   const displayedSegments = $derived(

@@ -138,6 +138,86 @@ test("a failed text export leaves audio export available for retry", async () =>
   expect(screen.getByRole("button", { name: "Save audio" })).toBeEnabled();
 });
 
+test("shows the waiting state when all transcript rows are blank", () => {
+  renderLive({
+    snapshot: snapshot({
+      segments: [
+        { id: "empty-final", source: "microphone", start_ms: 0, end_ms: 500, text: " \t ", status: "final", revision: 2 },
+        { id: "empty-preview", source: "system", start_ms: 500, end_ms: 900, text: "\n", status: "preview", revision: 1 },
+      ],
+    }),
+  });
+
+  const transcript = screen.getByRole("log");
+  expect(transcript).toHaveTextContent("Waiting for speech…");
+  expect(within(transcript).queryAllByRole("article")).toHaveLength(0);
+  expect(screen.queryByRole("button", { name: "Previous" })).not.toBeInTheDocument();
+});
+
+test("counts only nonblank rows for transcript pagination", async () => {
+  const segments = [
+    ...Array.from({ length: 201 }, (_, index) => ({
+      id: `segment-${index}`,
+      source: "microphone" as const,
+      start_ms: index * 1_000,
+      end_ms: index * 1_000 + 900,
+      text: `line ${index}`,
+      status: "final" as const,
+      revision: index + 1,
+    })),
+    ...Array.from({ length: 4 }, (_, index) => ({
+      id: `blank-${index}`,
+      source: "system" as const,
+      start_ms: index * 1_000,
+      end_ms: index * 1_000 + 100,
+      text: "  ",
+      status: "final" as const,
+      revision: index + 1,
+    })),
+  ];
+  const user = userEvent.setup();
+  renderLive({ snapshot: snapshot({ segments }) });
+
+  expect(screen.getByText("Page 2 of 2 · 201 segments")).toBeInTheDocument();
+  expect(screen.getByText("line 200")).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Previous" }));
+  const transcript = screen.getByRole("log");
+  expect(within(transcript).queryAllByRole("article")).toHaveLength(200);
+  expect(transcript).not.toHaveTextContent("blank-");
+});
+
+test("removes stale preview text when its final row is empty", async () => {
+  const view = renderLive({
+    snapshot: snapshot({
+      segments: [
+        { id: "segment-1", source: "microphone", start_ms: 0, end_ms: 900, text: "stale preview", status: "preview", revision: 1 },
+      ],
+    }),
+  });
+
+  const transcript = screen.getByRole("log");
+  expect(transcript).toHaveTextContent("stale preview");
+
+  await view.rerender({
+    snapshot: snapshot({
+      revision: 2,
+      segments: [{ id: "segment-1", source: "microphone", start_ms: 0, end_ms: 900, text: "   ", status: "final", revision: 2 }],
+    }),
+    busy: false,
+    supported: true,
+    error: null,
+    onStart: view.onStart,
+    onStop: view.onStop,
+    onDiscard: view.onDiscard,
+    onSaveText: view.onSaveText,
+    onSaveAudio: view.onSaveAudio,
+    onRefresh: view.onRefresh,
+  });
+
+  expect(transcript).not.toHaveTextContent("stale preview");
+  expect(transcript).toHaveTextContent("Waiting for speech…");
+});
+
 test("discard uses an in-UI confirmation step", async () => {
   const callbacks = renderLive({ snapshot: snapshot({ phase: "failed" }) });
   const user = userEvent.setup();

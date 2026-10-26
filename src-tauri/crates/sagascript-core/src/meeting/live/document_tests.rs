@@ -160,6 +160,43 @@ fn subtitle_exports_include_gap_cues_and_incomplete_status() {
 }
 
 #[test]
+fn human_exports_skip_blank_segments_but_json_keeps_them() {
+    let document = LiveDocument::new(
+        "session-blank",
+        "sv-SE",
+        "whisper-local",
+        6_000,
+        vec![
+            segment("blank", Source::Microphone, 100, 200, " \t "),
+            segment("spoken", Source::Microphone, 500, 1_500, "spoken"),
+        ],
+        vec![gap(Source::System, 2_000, 3_000, "device paused")],
+        false,
+        None,
+    )
+    .expect("fixture is valid");
+
+    let plain = document.export(MeetingExportFormat::Plain).expect("plain");
+    let markdown = document
+        .export(MeetingExportFormat::Markdown)
+        .expect("markdown");
+    let srt = document.export(MeetingExportFormat::Srt).expect("srt");
+    let vtt = document.export(MeetingExportFormat::Vtt).expect("vtt");
+    let json = document.export(MeetingExportFormat::Json).expect("json");
+
+    for output in [&plain, &markdown, &srt, &vtt] {
+        assert!(!output.contains("00:00:00.100"));
+        assert!(!output.contains("00:00:00,100"));
+        assert!(output.contains("spoken"));
+    }
+    assert!(plain.contains("GAP"));
+    assert!(markdown.contains("GAP"));
+    assert!(srt.contains("[INCOMPLETE TRANSCRIPT]"));
+    assert!(vtt.contains("[AUDIO GAP] device paused"));
+    assert!(json.contains(r#""text":" \t ""#));
+}
+
+#[test]
 fn zero_duration_incomplete_subtitle_is_explicit_and_nonempty() {
     let document = LiveDocument::new(
         "session-empty",

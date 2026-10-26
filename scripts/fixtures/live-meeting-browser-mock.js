@@ -32,6 +32,10 @@ function historySegments() {
   );
   segments.push(segment("preview-421", "microphone", 420_500, "Preview från mig", "preview", 2));
   segments.push(segment("final-421", "system", 420_500, "Finalt från mötet", "final", 1));
+  // ASR can finalize an energy-only window without words. These raw rows
+  // must not add visible articles or change the 422-row pagination count.
+  segments.push(segment("blank-mic", "microphone", 420_500, "   "));
+  segments.push(segment("blank-system", "system", 420_500, ""));
   return segments;
 }
 
