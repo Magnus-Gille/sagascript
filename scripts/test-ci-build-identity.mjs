@@ -14,6 +14,22 @@ const envDirs = [];
 const fixtureEnvironments = new Map();
 const allowedOutput = "src-tauri/gen/schemas/desktop-schema.json";
 
+test("desktop CLI dispatch binds preflight to the executable metadata used by GUI diagnostics", async () => {
+  const main = await readFile(new URL("../src-tauri/src/main.rs", import.meta.url), "utf8");
+  const permissions = await readFile(new URL("../src-tauri/src/commands/permissions.rs", import.meta.url), "utf8");
+  // Architectural regression guard: reverting the entry point to run(parsed)
+  // compiles, but silently selects the cached library's build identity again.
+  assert.doesNotMatch(main, /sagascript_cli::run\s*\(\s*parsed\s*\)/);
+  const dispatch = main.match(/return\s+sagascript_cli::run_with_build\(([\s\S]*?)\)\s*\.into\(\)/);
+  assert.ok(dispatch, "desktop CLI must supply executable identity");
+  assert.match(dispatch[1], /sagascript_core::acceptance::BuildObservation::new\(/);
+  for (const key of ["CARGO_PKG_VERSION", "SAGASCRIPT_SOURCE_REVISION", "SAGASCRIPT_SOURCE_DIRTY"]) {
+    const metadata = `env!("${key}")`;
+    assert.ok(dispatch[1].includes(metadata), `desktop CLI must use executable ${key}`);
+    assert.ok(permissions.includes(metadata), `GUI diagnostics must use executable ${key}`);
+  }
+});
+
 function git(cwd, args, extraEnv = {}) {
   return execFileSync("git", args, {
     cwd,

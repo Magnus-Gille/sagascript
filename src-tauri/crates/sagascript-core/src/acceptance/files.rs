@@ -61,12 +61,25 @@ fn write_receipt_new_with(
     ops: &dyn crate::fsutil::PublishFs,
 ) -> io::Result<()> {
     check_receipt_destination(path)?;
-    let staged = crate::fsutil::StagedFile::create_with(path, bytes, ops)
-        .map_err(|_| io::Error::other("receipt staging failed"))?;
+    let staged = crate::fsutil::StagedFile::create_with(path, bytes, ops).map_err(|failure| {
+        if failure.leftover.is_some() {
+            tracing::warn!("could not remove a private receipt staging file");
+        }
+        io::Error::other("receipt staging failed")
+    })?;
     staged
         .publish_with(ops)
-        .map(|_| ())
-        .map_err(|_| io::Error::other("receipt publication failed"))
+        .map(|published| {
+            if published.leftover.is_some() {
+                tracing::warn!("could not remove a private receipt staging file");
+            }
+        })
+        .map_err(|failure| {
+            if failure.leftover.is_some() {
+                tracing::warn!("could not remove a private receipt staging file");
+            }
+            io::Error::other("receipt publication failed")
+        })
 }
 
 fn check_receipt_destination(path: &Path) -> io::Result<()> {

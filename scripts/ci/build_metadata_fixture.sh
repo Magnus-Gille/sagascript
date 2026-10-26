@@ -20,6 +20,18 @@ mkdir -p "$fixture/src" \
 cp src-tauri/crates/sagascript-cli/build.rs "$fixture/build.rs"
 cp src-tauri/build_identity.rs "$fixture_root/src-tauri/build_identity.rs"
 cp scripts/build-identity-generated-paths.txt "$fixture_root/scripts/build-identity-generated-paths.txt"
+
+preserve_fixture_evidence() {
+    local name
+    [[ -n "${SAGASCRIPT_BUILD_METADATA_EVIDENCE_DIR:-}" ]] || return 0
+    mkdir -p "$SAGASCRIPT_BUILD_METADATA_EVIDENCE_DIR"
+    for name in "$@"; do
+        if [[ -f "$evidence_root/$name" ]]; then
+            cp "$evidence_root/$name" "$SAGASCRIPT_BUILD_METADATA_EVIDENCE_DIR/$name"
+        fi
+    done
+}
+
 cat > "$fixture_root/src-tauri/Cargo.toml" <<'EOF'
 [workspace]
 members = ["crates/*"]
@@ -107,7 +119,7 @@ build_count() {
     local elapsed_ms
     (cd "$fixture" && env -u SAGASCRIPT_GIT_HASH -u SAGASCRIPT_BUILD_DATE \
         -u SAGASCRIPT_SOURCE_REVISION_INPUT -u SAGASCRIPT_SOURCE_DIRTY_INPUT \
-        GIT_OPTIONAL_LOCKS=0 \
+        -u GIT_OPTIONAL_LOCKS \
         GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
         CARGO_TARGET_DIR="$fixture_root/src-tauri/target" "$@" /usr/bin/time -p cargo build --offline -vv) > "$log" 2>&1
     local count
@@ -128,11 +140,6 @@ assert_eq() {
 
 clean_fixture() {
     (cd "$fixture" && CARGO_TARGET_DIR="$fixture_root/src-tauri/target" cargo clean >/dev/null)
-}
-
-refresh_git_status() {
-    git -C "$fixture_root" status --porcelain=v1 --untracked-files=all >/dev/null
-    git -C "$fixture_root" status --porcelain=v1 --untracked-files=all >/dev/null
 }
 
 assert_text() {
@@ -169,7 +176,6 @@ assert_text "$(cat "$evidence_root/invalid-dirty.identity")" "ci-hash 2026-09-08
 
 # Hosted-style checkouts without packed-refs retain the existing conservative
 # Git watch behavior. Cache invalidation cases below use all watched refs.
-refresh_git_status
 clean_fixture
 first=$(build_count "$evidence_root/absent-1.log")
 second=$(build_count "$evidence_root/absent-2.log")
@@ -178,21 +184,17 @@ assert_eq "$second" 1 "fallback build with missing packed-refs"
 
 # With all watched Git files present, an unchanged local build is clean.
 git -C "$fixture_root" pack-refs --all --no-prune
-refresh_git_status
 clean_fixture
 refs_first=$(build_count "$evidence_root/refs-1.log")
 refs_same=$(build_count "$evidence_root/refs-2.log")
+preserve_fixture_evidence refs-1.log refs-1.meta refs-1.identity refs-2.log refs-2.meta refs-2.identity
 assert_eq "$refs_first" 1 "build after creating packed-refs"
-if [[ "$refs_same" != 0 ]]; then
-    refs_same=$(build_count "$evidence_root/refs-3.log")
-fi
 assert_eq "$refs_same" 0 "unchanged build with packed-refs"
 
 # Partial metadata still uses local Git fallback and therefore keeps the
 # watches. Recreate the hosted missing-ref shape to verify that fallback
 # remains conservative even when one CI value is supplied.
 rm -f "$fixture_root/.git/packed-refs"
-refresh_git_status
 clean_fixture
 partial_first=$(build_count "$evidence_root/partial-missing-1.log" SAGASCRIPT_GIT_HASH=ci-hash)
 partial_same=$(build_count "$evidence_root/partial-missing-2.log" SAGASCRIPT_GIT_HASH=ci-hash)
@@ -210,7 +212,6 @@ assert_text "$(cat "$evidence_root/partial-date-missing-1.identity")" "$initial_
 # With present Git metadata, partial CI values still use local fallback and
 # an unchanged build is clean.
 git -C "$fixture_root" pack-refs --all --no-prune
-refresh_git_status
 clean_fixture
 partial_present_first=$(build_count "$evidence_root/partial-present-1.log" SAGASCRIPT_GIT_HASH=ci-hash)
 partial_present_same=$(build_count "$evidence_root/partial-present-2.log" SAGASCRIPT_GIT_HASH=ci-hash)
@@ -232,6 +233,23 @@ local_warm_first=$(build_count "$evidence_root/local-warm-1.log")
 local_warm_same=$(build_count "$evidence_root/local-warm-2.log")
 assert_eq "$local_warm_first" 1 "local warm baseline build"
 assert_eq "$local_warm_same" 0 "local unchanged warm build"
+
+# Touching a watched source without changing its contents reruns the helper.
+# Its Git status query must not refresh Cargo's watched index, and the following
+# unchanged build must remain cached.
+touch_source="$fixture/src/lib.rs"
+touch_source_hash=$(git -C "$fixture_root" hash-object "$touch_source")
+sleep 1
+touch "$touch_source"
+index_before=$(git -C "$fixture_root" hash-object .git/index)
+touch_same_content=$(build_count "$evidence_root/touch-same-content.log")
+index_after=$(git -C "$fixture_root" hash-object .git/index)
+touch_source_hash_after=$(git -C "$fixture_root" hash-object "$touch_source")
+assert_eq "$touch_same_content" 1 "touched source reruns build script"
+assert_eq "$touch_source_hash_after" "$touch_source_hash" "touch preserves source contents"
+assert_eq "$index_after" "$index_before" "helper status query does not mutate Git index"
+touch_warm_same=$(build_count "$evidence_root/touch-warm-same.log")
+assert_eq "$touch_warm_same" 0 "unchanged build after touch is cached"
 
 # Changes to the shared helper and generated-path policy must invalidate the
 # cached build script. The new policy entry is committed in the fixture so the
@@ -262,6 +280,45 @@ clean_fixture
 generated_only=$(build_count "$evidence_root/generated-only.log")
 assert_eq "$generated_only" 1 "generated-only fallback identity"
 assert_text "$(cat "$evidence_root/generated-only.identity")" "$policy_hash $policy_date $fixture_sha false" "generated-only changes stay clean"
+
+# A symlink at an allowed generated path does not count as a generated file.
+rm "$fixture_root/src-tauri/gen/schemas/acl-manifests.json"
+ln -s windows-schema.json "$fixture_root/src-tauri/gen/schemas/acl-manifests.json"
+clean_fixture
+generated_symlink=$(build_count "$evidence_root/generated-symlink.log")
+assert_eq "$generated_symlink" 1 "generated-path symlink"
+assert_text "$(cat "$evidence_root/generated-symlink.identity")" "$policy_hash-dirty $policy_date $fixture_sha true" "generated-path symlink is dirty"
+rm "$fixture_root/src-tauri/gen/schemas/acl-manifests.json"
+
+# An unmerged add/add conflict at an allow-listed path is also dirty.
+git -C "$fixture_root" restore --worktree -- src-tauri/gen/schemas/windows-schema.json
+rm -f "$fixture_root/src-tauri/gen/schemas/custom-fixture-schema.json"
+aa_base=$(git -C "$fixture_root" rev-parse HEAD)
+base_branch=$(git -C "$fixture_root" branch --show-current)
+git -C "$fixture_root" checkout -qb fixture-generated-aa-left
+printf '{"branch":"left"}\n' > "$fixture_root/src-tauri/gen/schemas/custom-fixture-schema.json"
+git -C "$fixture_root" add src-tauri/gen/schemas/custom-fixture-schema.json
+git -C "$fixture_root" commit -qm 'fixture: add generated path on left'
+aa_left=$(git -C "$fixture_root" rev-parse HEAD)
+git -C "$fixture_root" checkout -qb fixture-generated-aa-right "$aa_base"
+printf '{"branch":"right"}\n' > "$fixture_root/src-tauri/gen/schemas/custom-fixture-schema.json"
+git -C "$fixture_root" add src-tauri/gen/schemas/custom-fixture-schema.json
+git -C "$fixture_root" commit -qm 'fixture: add generated path on right'
+if git -C "$fixture_root" merge --no-ff --no-commit "$aa_left" >/dev/null 2>&1; then
+    printf 'expected an add/add conflict for the generated fixture path\n' >&2
+    exit 1
+fi
+aa_status=$(git -C "$fixture_root" status --porcelain=v1)
+assert_eq "$aa_status" 'AA src-tauri/gen/schemas/custom-fixture-schema.json' "generated-path merge status"
+aa_right=$(git -C "$fixture_root" rev-parse HEAD)
+aa_right_short=$(git -C "$fixture_root" rev-parse --short HEAD)
+aa_right_date=$(git -C "$fixture_root" show -s --format=%cs HEAD)
+clean_fixture
+generated_aa=$(build_count "$evidence_root/generated-aa.log")
+assert_eq "$generated_aa" 1 "generated-path add/add conflict"
+assert_text "$(cat "$evidence_root/generated-aa.identity")" "$aa_right_short-dirty $aa_right_date $aa_right true" "generated-path add/add conflict is dirty"
+git -C "$fixture_root" merge --abort
+git -C "$fixture_root" checkout -q "$base_branch"
 
 echo 'unrelated untracked data' > "$fixture_root/unrelated untracked.txt"
 clean_fixture
@@ -353,7 +410,7 @@ archive_identity=$(cd "$archive" && "$archive_root/src-tauri/target/debug/build-
 assert_text "$archive_identity" "unknown-dirty unknown unknown unknown" "source archive identity"
 
 printf 'build metadata fixture passed: CI metadata, workspace source watches, generated-path policy, local dirtiness, Git failure, archive, branch, and commit cases\n'
-for log in ci-1 ci-2 ci-3 ci-date absent-1 absent-2 refs-1 refs-2 partial-missing-1 partial-missing-2 partial-date-missing-1 partial-date-missing-2 partial-present-1 partial-present-2 partial-date-present-1 partial-date-present-2 local-warm-1 local-warm-2 helper-changed helper-restored policy-changed generated-only unrelated-untracked renamed-generated source protocol-source new-crate-source desktop-source frontend-source ci-source git-unavailable commit branch; do
+for log in ci-1 ci-2 ci-3 ci-date absent-1 absent-2 refs-1 refs-2 partial-missing-1 partial-missing-2 partial-date-missing-1 partial-date-missing-2 partial-present-1 partial-present-2 partial-date-present-1 partial-date-present-2 local-warm-1 local-warm-2 touch-same-content touch-warm-same helper-changed helper-restored policy-changed generated-only generated-symlink generated-aa unrelated-untracked renamed-generated source protocol-source new-crate-source desktop-source frontend-source ci-source git-unavailable commit branch; do
     printf '%s: ' "$log"
     cat "$evidence_root/$log.meta"
     if [[ -f "$evidence_root/$log.identity" ]]; then

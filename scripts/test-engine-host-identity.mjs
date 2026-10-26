@@ -131,7 +131,12 @@ test("the script and the CI gate agree on what makes a tree dirty", { skip }, ()
 
 test("every consumer reads the one list of generated files", () => {
   const list = readFileSync(join(scripts, "build-identity-generated-paths.txt"), "utf8");
-  for (const consumer of ["engine-host-identity.sh", "ci-build-identity.mjs", "../src-tauri/engine-host/ort/build_identity.rs", "../src-tauri/build_identity.rs"]) {
+  for (const consumer of [
+    "engine-host-identity.sh",
+    "ci-build-identity.mjs",
+    "../src-tauri/engine-host/ort/build_identity.rs",
+    "../src-tauri/build_identity.rs",
+  ]) {
     assert.match(readFileSync(join(scripts, consumer), "utf8"), /build-identity-generated-paths\.txt/, consumer);
   }
   assert.match(readFileSync(join(scripts, "build-engine-host.sh"), "utf8"), /engine-host-identity\.sh/);

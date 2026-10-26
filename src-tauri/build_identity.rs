@@ -7,6 +7,8 @@ const GENERATED_PATHS: &str = include_str!("../scripts/build-identity-generated-
 fn git_output(args: &[&str]) -> Option<Vec<u8>> {
     Command::new("git")
         .args(args)
+        // Observation must not refresh the index that Cargo itself watches.
+        .env("GIT_OPTIONAL_LOCKS", "0")
         .output()
         .ok()
         .filter(|output| output.status.success())
@@ -63,23 +65,13 @@ fn status_is_clean(status: &[u8], repository_root: &str) -> bool {
         }
 
         if code.contains(&b'R') || code.contains(&b'C') {
-            let old_path_offset = record_end + 1;
-            if old_path_offset >= status.len() {
-                return false;
-            }
-            let Some(old_path_length) =
-                status[old_path_offset..].iter().position(|byte| *byte == 0)
-            else {
-                return false;
-            };
-            if old_path_length == 0 {
-                return false;
-            }
             return false;
         }
 
         let supported_status = code == b"??"
-            || (code != b"  " && code.iter().all(|byte| matches!(*byte, b' ' | b'M' | b'A')));
+            || (code != b"  "
+                && code != b"AA"
+                && code.iter().all(|byte| matches!(*byte, b' ' | b'M' | b'A')));
         if !supported_status || !is_allowed_generated_file(repository_root, path) {
             return false;
         }

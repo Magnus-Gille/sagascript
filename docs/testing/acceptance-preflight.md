@@ -41,6 +41,14 @@ verify code signing, notarization, installation, or release readiness. The
 executable hash is SHA-256 of the file resolved through `current_exe`; it does
 not hash a memory image or verify a signature or external artifact binding.
 
+The clean-source marker is a build-time observation: supplied by the verified
+CI build environment, or computed from Git when the package build script ran.
+Local app and CLI builds exclude only the shared generated-file allow-list.
+It is not a new inspection of the source tree at command execution, nor proof
+of the provenance of prebuilt frontend assets or sidecars. An acceptance runner
+must independently bind the clean source, build inputs and resulting artifact;
+the embedded marker does not replace that verification.
+
 The command does not load ordinary settings, contact the engine, load a model,
 start capture, request or reset TCC permissions, inspect process lists, or use
 the network. Permission values are observations; they do not grant or reset
@@ -89,9 +97,10 @@ observations. A receipt is an observation report, not a process-completion
 receipt: it is published before stdout is delivered. If stdout later fails to
 write or flush, the command exits `1` and the already published observations
 remain unchanged, even if their checks passed. An acceptance runner must record
-and require the process exit status as well as the report; a receipt alone must
-never be interpreted as successful execution. An interrupted process without
-an observed exit status is incomplete. Retrying needs a new receipt path.
+require both observed exit status `0` and `summary.status: "passed"` from the
+same run. Any other or missing exit status is not an acceptance pass, whatever
+the receipt says. An interrupted process without an observed exit status is
+incomplete. Retrying needs a new receipt path.
 
 The GUI has an additive Tauri `acceptance_preflight` invoke that observes the
 already-running GUI process and returns `scope: "live_gui"`. There is no
