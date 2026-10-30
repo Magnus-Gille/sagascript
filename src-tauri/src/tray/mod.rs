@@ -166,7 +166,7 @@ pub(crate) fn create_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Er
             "manage_profiles" => {
                 open_settings_window(app, Some("dictate"), "tray_menu_manage_profiles");
             }
-            "check_for_updates" => {
+            "check_for_updates" | "update_status" => {
                 handle_check_for_updates_menu_action(app);
             }
             _ => {}
