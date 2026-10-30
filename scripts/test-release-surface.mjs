@@ -126,7 +126,8 @@ test("second GUI launches are routed to the running instance", () => {
 test("profile and update menu states remain explicit after interaction", () => {
   assert.match(mainSource, /select_profile_menu\(app, &profile\)/);
   assert.match(mainSource, /if selected \{ "✓ " \} else \{ "" \}/);
-  assert.match(mainSource, /if updates::updater_public_key\(\)\.is_some\(\) \{\s*check_for_updates_and_install\(app\.clone\(\)\)/);
+  assert.match(mainSource, /cfg!\(target_os = "macos"\) && has_public_key/);
+  assert.match(mainSource, /UpdateMenuAction::Install => check_for_updates_and_install\(app\.clone\(\)\)/);
   assert.match(mainSource, /state\.available_version = None;/);
   assert.match(mainSource, /items\.check\.set_text\(action_text\)/);
   assert.match(mainSource, /"Check Again…"/);
