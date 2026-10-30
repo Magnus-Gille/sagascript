@@ -70,9 +70,9 @@ fn native_runner_update_menu_smoke() {
 }
 
 #[test]
-fn available_status_is_clickable_only_while_the_action_is_enabled() {
+fn available_status_is_clickable_only_on_windows_while_the_action_is_enabled() {
     let mode = UpdateMenuMode::Available(semver::Version::new(1, 4, 6));
-    assert!(mode.status_enabled(true));
+    assert_eq!(mode.status_enabled(true), cfg!(target_os = "windows"));
     assert!(!mode.status_enabled(false));
     assert!(!UpdateMenuMode::Idle.status_enabled(true));
     #[cfg(target_os = "macos")]

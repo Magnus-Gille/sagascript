@@ -53,7 +53,8 @@ enum UpdateMenuMode {
 
 impl UpdateMenuMode {
     fn status_enabled(&self, action_enabled: bool) -> bool {
-        action_enabled && matches!(self, Self::Available(_))
+        // On macOS only the explicit "Install and Restart" item may install.
+        cfg!(target_os = "windows") && action_enabled && matches!(self, Self::Available(_))
     }
 }
 
