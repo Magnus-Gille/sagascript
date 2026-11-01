@@ -300,6 +300,7 @@ impl OrtEngine {
                 return Ok(result);
             }
         }
+        let _qos = crate::power_qos::high_qos_scope();
         let started = Instant::now();
         let dir = &params.model_dir;
         for file in [
@@ -728,6 +729,7 @@ impl Engine for OrtEngine {
         let loaded = self
             .current()
             .ok_or_else(|| HostError::new(ErrorCode::NotLoaded, "No model is loaded"))?;
+        let _qos = crate::power_qos::high_qos_scope();
         transcribe_loaded(&loaded, request, is_cancelled)
     }
 
