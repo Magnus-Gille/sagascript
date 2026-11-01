@@ -1,0 +1,94 @@
+Windows push-to-transcribe latency investigation — 2026-11-01
+
+Owner mandate
+First diagnose and fix ordinary Windows push-to-transcribe slowness, then assess
+measured GPU/NPU gains and work required. Local diagnosis, source changes, tests
+and candidate builds are authorized. No push, PR, release, driver change or
+replacement of the installed application has been requested in this step.
+Preserve existing app settings, recordings, model files and unrelated work.
+
+Source and worktrees
+Installed app/host source: 1d1a290c2ad377f05b0ca56f4e9c349f91ed5ae0 (1.4.6).
+Root branch: codex/windows-dictation-latency.
+Implementation leaf: codex/windows-dictation-qos-leaf, same base.
+Earlier GPU/NPU research stays on codex/pianissimo-windows-accelerators.
+
+Observed cause and current confidence
+The long-lived Windows tray-app engine is slow even with its model warm.
+Three real user dictations before intervention:
+audio 2.578 / 2.642 / 2.365 seconds; key-up-to-paste 2997 / 1954 / 2243 ms.
+Model acquisition: 10.16 / 21.33 / 10.79 ms; all modelWasWarm=true.
+Only the engine process's execution QoS was changed to explicit HighQoS;
+no model reload, app restart or setting change occurred.
+Three real user dictations afterward:
+audio 1.554 / 1.703 / 1.661 seconds; key-up-to-paste 411 / 330 / 274 ms.
+User independently reported faster response. Post-change clips are shorter,
+so the ratio is not a controlled exact speedup estimate.
+
+Controlled lab test: identical 7.56-second Swedish fixture, model resident,
+15 seconds idle before each request, original installed native ARM64 host:
+system QoS: 436 / 362 ms; explicit HighQoS: 415 / 345 ms;
+explicit EcoQoS: 2791 / 5768 ms. Same decoded text in every case.
+Normal process priority and unrestricted 12-core affinity were observed.
+GetProcessInformation reported no explicit QoS override in the original app
+or host (ControlMask=0/StateMask=0); that does not reveal the effective heuristic
+QoS tier. Microsoft documents visibility-based background QoS on battery.
+The intervention and controlled reproduction strongly support background
+power scheduling as the latency cause; no kernel trace was collected to name
+the exact internal heuristic tier of the original long-lived process.
+
+Cold/warm verification
+Settings: engine_prewarm=on_app_start; idle unload after 60 minutes.
+Same 7.56-second file twice in one installed CLI process, byte-identical copies:
+first: model verification 1.714 s + model load 2.108 s + processing 0.347 s;
+second: verification/load 0 s + processing 0.367 s, engine_warm=true.
+The CLI's performance.total_seconds excludes model verification/loading.
+135.54-second synthetic concatenation: warm processing 7.464 s, six windows.
+App cold load exists but does not explain the observed warm delays.
+CLI benchmark-dictation currently accepts Whisper only; Pianissimo tests used
+transcribe and the native engine-host protocol instead.
+
+Fix design and acceptance
+Request process-level HighQoS only during model loading and transcription so
+ORT's worker threads are included. Restore the exact previous power-throttling
+state after the final overlapping activity finishes. No global power plan,
+priority-class, registry or persistent settings change. Non-Windows no-op.
+Best-effort API failures must leave inference usable and emit a diagnostic.
+Verify preservation of unrelated bits, scope overlap, failure handling and
+restoration; run standalone host fmt/check/test/clippy, then actual inference
+from an EcoQoS child with byte-identical audio and text/token parity checks.
+Energy/battery impact is not measured. Higher active power and shorter runtime
+do not by themselves determine total energy. Idle policy must be restored.
+
+Temporary live intervention and recovery
+At 2026-11-01T09:12:15Z, host PID25008 (parent PID24784) was given HighQoS.
+Process create_time=1793483262.4105215; original state version1/control0/state0.
+Receipt and reversal instructions are in the local lab/live-qos-test.json.
+Restore ONLY if PID and create_time still match; set the original masks.
+Otherwise do not act on a recycled PID. No installed file was changed.
+
+Artifacts
+Lab: C:\Users\magnu\AppData\Local\Temp\sagascript-accelerator-lab
+live-qos-before-after.json: timing metadata only, no private transcript.
+cpu-idle-{system,high,eco}.json and .stderr.txt: controlled native inference.
+cli-cold-warm-identical.jsonl: public audio cold/warm proof.
+cli-batch-cold-warm-long.jsonl: public long-file check.
+windows_qos.py and bench.py in accelerator worktree: experiment harness.
+
+Delegation
+windows_qos_fix: requested gpt-6-luna/xhigh; observed runtime model/effort unknown.
+Own isolated leaf worktree, scoped to standalone ORT host and tests; no further
+delegation. Leaf commit 24831a4c3554b4a90ff2d1c0dbb07cf1ad5737f2 integrated into
+root branch. Offline fmt/check/test (44)/clippy passed in leaf. Parent review
+requested retained baseline after restoration failure and explicit poison
+recovery; both corrected and re-tested. Real inference acceptance pending.
+Independent review requested from gpt-6-sol/high; runtime observation unknown.
+integration_check: requested gpt-6-luna/high; observed runtime unknown; pass:
+root verified live/CLI shared path, warm acquisition timing and idle policy.
+measurement_summary: requested gpt-6-luna/high; observed runtime unknown;
+partial: useful aggregates and parity analysis, corrected median calculation
+and missing-load-field claim after parent checked raw JSON.
+
+Primary references
+https://learn.microsoft.com/en-us/windows/win32/procthread/quality-of-service
+https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-getprocessinformation
