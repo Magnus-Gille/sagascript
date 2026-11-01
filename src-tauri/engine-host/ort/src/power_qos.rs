@@ -9,6 +9,10 @@ const EXECUTION_SPEED: u32 =
     windows_sys::Win32::System::Threading::PROCESS_POWER_THROTTLING_EXECUTION_SPEED;
 #[cfg(all(not(windows), test))]
 const EXECUTION_SPEED: u32 = 1;
+#[cfg(any(windows, test))]
+const RESTORE_RETRIES: usize = 1;
+#[cfg(any(windows, test))]
+const RESTORE_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(2);
 
 #[cfg(any(windows, test))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -72,7 +76,7 @@ impl<A: PowerApi> QosManager<A> {
         // retry it before starting another scope so a later inference does not bless a
         // leaked HighQoS state as its new baseline.
         if let Some(original) = state.original {
-            if let Err(error) = self.api.set(original) {
+            if let Err(error) = self.restore_original(original) {
                 self.api.report_failure("restore previous state", &error);
                 return QosScope {
                     manager: self,
@@ -130,10 +134,39 @@ impl<A: PowerApi> QosManager<A> {
             );
             return;
         };
-        match self.api.set(original) {
+        match self.restore_original(original) {
             Ok(()) => state.original = None,
             Err(error) => self.api.report_failure("restore previous state", &error),
         }
+    }
+
+    fn restore_original(&self, original: ThrottlingState) -> Result<(), String> {
+        let mut prior_error = None;
+        for attempt in 0..=RESTORE_RETRIES {
+            match self.api.set(original) {
+                Ok(()) => {
+                    if let Some(error) = prior_error {
+                        self.api.report_failure(
+                            "restore previous state",
+                            &format!("first attempt failed but retry succeeded: {error}"),
+                        );
+                    }
+                    return Ok(());
+                }
+                Err(error) if attempt < RESTORE_RETRIES => {
+                    prior_error = Some(error);
+                    std::thread::sleep(RESTORE_RETRY_DELAY);
+                }
+                Err(error) => {
+                    return Err(format!(
+                        "first attempt failed: {}; retry failed: {error}",
+                        prior_error.as_deref().unwrap_or("not recorded")
+                    ));
+                }
+            }
+        }
+
+        Err("restore attempt budget exhausted unexpectedly".into())
     }
 }
 
@@ -253,7 +286,7 @@ mod windows {
                 .is_ok()
             {
                 eprintln!(
-                    "warning: Windows process HighQoS {operation} failed; inference will continue: {error}"
+                    "warning: Windows process HighQoS {operation} encountered an API failure; inference will continue: {error}"
                 );
             }
         }
@@ -464,7 +497,7 @@ mod tests {
     }
 
     #[test]
-    fn restore_failure_is_reported_and_a_later_scope_can_still_run() {
+    fn transient_restore_failure_is_retried_before_scope_exit_returns() {
         let original = original_state();
         let api = MockApi::with_state(original);
         api.fail_set_calls(vec![2]);
@@ -472,18 +505,40 @@ mod tests {
 
         drop(manager.acquire());
         let (current, set_calls, warnings) = api.inspect();
-        assert_eq!(current, Some(original.high_qos()));
-        assert_eq!(set_calls, 2);
+        assert_eq!(current, Some(original));
+        assert_eq!(set_calls, 3, "one bounded retry restores during drop");
         assert_eq!(warnings[0].0, "restore previous state");
+        assert!(warnings[0].1.contains("retry succeeded"));
 
         let retry = manager.acquire();
         let (current, set_calls, _) = api.inspect();
         assert_eq!(current, Some(original.high_qos()));
-        assert_eq!(set_calls, 4, "the next scope restores, then re-enables");
+        assert_eq!(set_calls, 4);
         drop(retry);
         let (current, set_calls, _) = api.inspect();
         assert_eq!(current, Some(original));
         assert_eq!(set_calls, 5);
+    }
+
+    #[test]
+    fn persistent_restore_failure_keeps_baseline_for_later_recovery() {
+        let original = original_state();
+        let api = MockApi::with_state(original);
+        api.fail_set_calls(vec![2, 3]);
+        let manager = QosManager::new(api.clone());
+
+        drop(manager.acquire());
+        let (current, set_calls, warnings) = api.inspect();
+        assert_eq!(current, Some(original.high_qos()));
+        assert_eq!(set_calls, 3, "the final scope uses at most one retry");
+        assert!(warnings[0].1.contains("retry failed"));
+
+        let retry = manager.acquire();
+        let (current, set_calls, _) = api.inspect();
+        assert_eq!(current, Some(original.high_qos()));
+        assert_eq!(set_calls, 5, "a later scope restores then enables");
+        drop(retry);
+        assert_eq!(api.inspect().0, Some(original));
     }
 
     #[test]
