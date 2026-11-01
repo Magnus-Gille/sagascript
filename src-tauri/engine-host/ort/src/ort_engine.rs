@@ -282,6 +282,28 @@ impl OrtEngine {
                 .with_inter_threads(1)?
                 .with_memory_pattern(false)?
                 .with_optimization_level(GraphOptimizationLevel::All)?;
+            // Lab-only knobs: never enabled in shipped builds. They apply to the encoder
+            // alone so preprocessing and greedy decoding remain unchanged during comparison.
+            #[cfg(feature = "dev-overrides")]
+            if path.file_name().is_some_and(|name| name == ENCODER_FILE) {
+                if std::env::var("SAGASCRIPT_LAB_BASIC").as_deref() == Ok("1") {
+                    builder = builder.with_optimization_level(GraphOptimizationLevel::Level1)?;
+                }
+                if std::env::var("SAGASCRIPT_LAB_EP").as_deref() == Ok("dml") {
+                    builder = builder
+                        .with_execution_providers([ep::DirectML::default()
+                            .with_device_id(0)
+                            .build()
+                            .error_on_failure()])?
+                        .with_parallel_execution(false)?;
+                }
+                if let Ok(profile) = std::env::var("SAGASCRIPT_LAB_PROFILE") {
+                    builder = builder.with_profiling(profile)?;
+                }
+                if let Ok(file) = std::env::var("SAGASCRIPT_LAB_ENCODER") {
+                    return builder.commit_from_file(file);
+                }
+            }
             builder.commit_from_file(path)
         };
         build().map_err(|e| {
@@ -441,6 +463,87 @@ fn millis(started: Instant) -> u64 {
     (started.elapsed().as_secs_f64() * 1000.0).round() as u64
 }
 
+#[cfg(feature = "dev-overrides")]
+fn parse_lab_pad_frames(value: Option<&str>) -> Result<Option<usize>, &'static str> {
+    value
+        .map(|value| {
+            let frames = value
+                .parse::<usize>()
+                .map_err(|_| "expected a positive integer")?;
+            if frames == 0 {
+                return Err("expected a positive integer");
+            }
+            i64::try_from(frames).map_err(|_| "value exceeds the ONNX dimension range")?;
+            Ok(frames)
+        })
+        .transpose()
+}
+
+#[cfg(feature = "dev-overrides")]
+fn lab_pad_frames() -> Result<Option<usize>, HostError> {
+    match std::env::var("SAGASCRIPT_LAB_PAD_FRAMES") {
+        Ok(value) => parse_lab_pad_frames(Some(&value))
+            .map_err(|error| HostError::new(ErrorCode::Engine, error)),
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(std::env::VarError::NotUnicode(_)) => Err(HostError::new(
+            ErrorCode::Engine,
+            "SAGASCRIPT_LAB_PAD_FRAMES must be a positive integer",
+        )),
+    }
+}
+
+#[cfg(feature = "dev-overrides")]
+fn pad_encoder_features(
+    shape: &[i64],
+    features: Vec<f32>,
+    pad_frames: usize,
+) -> Result<(Vec<i64>, Vec<f32>), &'static str> {
+    if shape.len() != 3 {
+        return Err("expected a rank-3 [batch, channels, frames] tensor");
+    }
+    if pad_frames == 0 {
+        return Err("expected a positive frame count");
+    }
+    let pad_dimension = i64::try_from(pad_frames).map_err(|_| "frame count is too large")?;
+    let batch = usize::try_from(shape[0]).map_err(|_| "batch dimension must be positive")?;
+    let channels = usize::try_from(shape[1]).map_err(|_| "channel dimension must be positive")?;
+    let frames = usize::try_from(shape[2]).map_err(|_| "frame dimension must be positive")?;
+    if batch == 0 || channels == 0 || frames == 0 {
+        return Err("tensor dimensions must be positive");
+    }
+    if pad_frames < frames {
+        return Err("requested frame count is shorter than input; refusing to truncate");
+    }
+
+    let rows = batch
+        .checked_mul(channels)
+        .ok_or("tensor dimensions are too large")?;
+    let expected_len = rows
+        .checked_mul(frames)
+        .ok_or("tensor dimensions are too large")?;
+    if features.len() != expected_len {
+        return Err("feature data length does not match its tensor shape");
+    }
+    let padded_len = rows
+        .checked_mul(pad_frames)
+        .ok_or("padded tensor dimensions are too large")?;
+
+    let mut padded = Vec::new();
+    padded
+        .try_reserve_exact(padded_len)
+        .map_err(|_| "could not allocate padded feature tensor")?;
+    padded.resize(padded_len, 0.0);
+    for row in 0..rows {
+        let source_start = row * frames;
+        let target_start = row * pad_frames;
+        padded[target_start..target_start + frames]
+            .copy_from_slice(&features[source_start..source_start + frames]);
+    }
+    let mut padded_shape = shape.to_vec();
+    padded_shape[2] = pad_dimension;
+    Ok((padded_shape, padded))
+}
+
 fn transcribe_loaded(
     loaded: &Loaded,
     request: &WindowRequest,
@@ -485,6 +588,18 @@ fn transcribe_loaded(
             lens,
         )
     };
+    #[cfg(feature = "dev-overrides")]
+    let (features_shape, features) = match lab_pad_frames()? {
+        Some(pad_frames) => {
+            pad_encoder_features(&features_shape, features, pad_frames).map_err(|error| {
+                HostError::new(
+                    ErrorCode::Engine,
+                    format!("SAGASCRIPT_LAB_PAD_FRAMES: {error}"),
+                )
+            })?
+        }
+        None => (features_shape, features),
+    };
     let preprocess_ms = millis(started);
     if is_cancelled() {
         return Err(cancelled());
@@ -498,6 +613,7 @@ fn transcribe_loaded(
         let outputs = session
             .run(ort::inputs![
                 "audio_signal" => Tensor::from_array((features_shape, features)).map_err(|e| ort_error("audio_signal", e))?,
+                // Keep the actual unpadded feature length for the encoder's length input.
                 "length" => Tensor::from_array(([features_len.len()], features_len)).map_err(|e| ort_error("length", e))?,
             ])
             .map_err(|e| ort_error("encoder", e))?;
@@ -700,5 +816,35 @@ mod dll_path_tests {
             library_path(dir, Some("".into()), true),
             dir.join(ORT_LIBRARY)
         );
+    }
+}
+
+#[cfg(all(test, feature = "dev-overrides"))]
+mod lab_padding_tests {
+    use super::{pad_encoder_features, parse_lab_pad_frames};
+
+    #[test]
+    fn pads_zeros_at_the_end_of_each_channel_time_axis() {
+        let shape = [1, 2, 3];
+        let input = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+
+        let (padded_shape, padded) = pad_encoder_features(&shape, input, 5).unwrap();
+
+        assert_eq!(padded_shape, [1, 2, 5]);
+        assert_eq!(padded, [1.0, 2.0, 3.0, 0.0, 0.0, 4.0, 5.0, 6.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn refuses_to_truncate_encoder_features() {
+        let result = pad_encoder_features(&[1, 2, 3], vec![0.0; 6], 2);
+        assert!(result.unwrap_err().contains("refusing to truncate"));
+    }
+
+    #[test]
+    fn pad_frames_setting_must_be_a_positive_onnx_dimension() {
+        assert_eq!(parse_lab_pad_frames(None), Ok(None));
+        assert_eq!(parse_lab_pad_frames(Some("768")), Ok(Some(768)));
+        assert!(parse_lab_pad_frames(Some("0")).is_err());
+        assert!(parse_lab_pad_frames(Some("many")).is_err());
     }
 }
