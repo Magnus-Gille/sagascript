@@ -37,9 +37,21 @@ from components import (  # noqa: E402
 )
 
 
-SOURCE_REPO = "KlangAI/pianissimo-sv"
-SOURCE_REVISION = "8f1f6d8f8bd7482a5ea1d2bfaf6ef5be61597138"
-EXPECTED_NEMO_SHA256 = "ca340b827dc9e18d2019341fa7b6dc163f00284d84066ce2cbfffcaa129920cd"
+# Pinned released checkpoints; both share Parakeet TDT v3's architecture and tokenizer.
+SOURCES = {
+    "sv": (
+        "KlangAI/pianissimo-sv",
+        "8f1f6d8f8bd7482a5ea1d2bfaf6ef5be61597138",
+        "ca340b827dc9e18d2019341fa7b6dc163f00284d84066ce2cbfffcaa129920cd",
+    ),
+    "da": (
+        "KlangAI/pianissimo-da",
+        "84b50304ce3c0eb4ca5e97c5ee1d6e6423c6e1a9",
+        "6f1e05f618f3495c76fe27b5191471f6cf407d72043e5c7e05b6654a90d9ebd4",
+    ),
+}
+# Set from --language in main(); Swedish keeps its historical default.
+SOURCE_REPO, SOURCE_REVISION, EXPECTED_NEMO_SHA256 = SOURCES["sv"]
 MOBIUS_REPO = "https://github.com/FluidInference/mobius"
 MOBIUS_COMMIT = "864ef8050f2f281d0761de26e3a03108f9f1ce73"
 FRAME_S = 0.08
@@ -137,7 +149,7 @@ def copy_attribution(path: Path) -> None:
 Model: Klang Pianissimo by Klang AI AB
 Source: https://huggingface.co/{SOURCE_REPO}
 Revision: {SOURCE_REVISION}
-pianissimo-sv.nemo SHA-256: {EXPECTED_NEMO_SHA256}
+{SOURCE_REPO.split("/")[-1]}.nemo SHA-256: {EXPECTED_NEMO_SHA256}
 License: Creative Commons Attribution 4.0 International (CC BY 4.0)
 https://creativecommons.org/licenses/by/4.0/
 
@@ -224,9 +236,12 @@ def main() -> None:
         "fp32 ops fall back to CPU/GPU.",
     )
     parser.add_argument("--nemo", type=Path, default=Path(os.environ.get("PIANISSIMO_NEMO", "")))
+    parser.add_argument("--language", choices=sorted(SOURCES), default="sv", help="which pinned Pianissimo checkpoint --nemo is")
     args = parser.parse_args()
     if not args.nemo:
         parser.error("--nemo is required (or set PIANISSIMO_NEMO)")
+    global SOURCE_REPO, SOURCE_REVISION, EXPECTED_NEMO_SHA256
+    SOURCE_REPO, SOURCE_REVISION, EXPECTED_NEMO_SHA256 = SOURCES[args.language]
     args.nemo = args.nemo.resolve()
     out = args.out.resolve()
     if out.exists() and any(out.iterdir()):
