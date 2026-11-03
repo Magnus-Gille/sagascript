@@ -4,7 +4,8 @@
 use sagascript_core::machine;
 use sagascript_core::models::ModelInfo as CatalogEntry;
 use sagascript_core::settings::{
-    FileModel, FileModelPreference, Language, Settings, SettingsError, WhisperModel,
+    FileModel, FileModelPreference, Language, PianissimoModel, Settings, SettingsError,
+    WhisperModel,
 };
 use sagascript_core::transcription::model;
 use sagascript_core::transcription::pianissimo_model;
@@ -25,13 +26,13 @@ pub async fn get_loaded_model(
         .settings()
         .dictation_model_for_profile(&ctrl.settings().default_profile().id)?;
     let effective = match chosen {
-        FileModel::PianissimoOriginal => {
+        FileModel::Pianissimo(pianissimo) => {
             return Ok(LoadedModelInfo {
                 effective_model: "Pianissimo".into(),
-                effective_model_id: "pianissimo-sv".into(),
+                effective_model_id: pianissimo.id().into(),
                 loaded_model: None,
                 is_loaded: false,
-                is_downloaded: pianissimo_model::is_downloaded(),
+                is_downloaded: pianissimo_model::is_downloaded(pianissimo),
             });
         }
         FileModel::Whisper(effective) => effective,
@@ -117,7 +118,7 @@ pub async fn get_file_model_options(
         .as_deref()
         .and_then(|id| match FileModelPreference::parse_id(id) {
             Ok(FileModelPreference::Whisper(model)) => Some(FileModel::Whisper(model)),
-            Ok(FileModelPreference::PianissimoOriginal) => Some(FileModel::PianissimoOriginal),
+            Ok(FileModelPreference::Pianissimo(model)) => Some(FileModel::Pianissimo(model)),
             _ => None,
         });
     Ok(lineup_model_infos(language, include, None))
@@ -142,16 +143,30 @@ fn ensure_pianissimo_runs(supported: bool) -> Result<(), CommandError> {
     }
 }
 
+/// The Pianissimo model a download asks for: `model` is its id, absent for
+/// the Swedish model (the command's only model before Danish).
+fn pianissimo_to_download(model: Option<&str>) -> Result<PianissimoModel, CommandError> {
+    match model {
+        None => Ok(PianissimoModel::Swedish),
+        Some(id) => PianissimoModel::from_id(id)
+            .ok_or_else(|| SettingsError::UnknownModelPreference { id: id.to_string() }.into()),
+    }
+}
+
 #[tauri::command]
-pub async fn download_pianissimo_model(app: tauri::AppHandle) -> Result<(), CommandError> {
+pub async fn download_pianissimo_model(
+    app: tauri::AppHandle,
+    model: Option<String>,
+) -> Result<(), CommandError> {
+    let pianissimo = pianissimo_to_download(model.as_deref())?;
     ensure_pianissimo_runs(
         sagascript_core::transcription::pianissimo_backend::runtime_supported_on_this_os(),
     )?;
     let progress_app = app.clone();
-    pianissimo_model::download(move |downloaded, total| {
+    pianissimo_model::download(pianissimo, move |downloaded, total| {
         let _ = progress_app.emit_event(
             crate::events::event::MODEL_DOWNLOAD_PROGRESS,
-            crate::events::ModelDownloadProgress::new("pianissimo-sv".into(), downloaded, total),
+            crate::events::ModelDownloadProgress::new(pianissimo.id().into(), downloaded, total),
         );
     })
     .await?;
@@ -245,18 +260,25 @@ pub async fn engine_status(
     use sagascript_core::settings::FileModelPreference;
     use sagascript_core::transcription::pianissimo_backend as backend;
     let supported = backend::runtime_supported_on_this_os();
-    let installed = pianissimo_model::is_downloaded();
+    let installed = PianissimoModel::ALL
+        .into_iter()
+        .any(pianissimo_model::is_downloaded);
     let host = backend::resolve_host();
     let selected = {
         let ctrl = lock_controller(&controller);
         let settings = ctrl.settings();
-        settings.file_transcription_model == FileModelPreference::PianissimoOriginal
-            || settings.profile_models.values().any(|m| *m == FileModelPreference::PianissimoOriginal)
-            // "Recommended for Swedish" resolves to Pianissimo where supported.
+        matches!(
+            settings.file_transcription_model,
+            FileModelPreference::Pianissimo(_)
+        ) || settings
+            .profile_models
+            .values()
+            .any(|m| matches!(m, FileModelPreference::Pianissimo(_)))
+            // "Recommended" resolves to the language's Pianissimo model where supported.
             || settings.resolved_hotkey_profiles().iter().any(|profile| {
                 settings
                     .dictation_model_for_profile_gated(&profile.id, supported)
-                    .is_ok_and(|choice| choice == FileModel::PianissimoOriginal)
+                    .is_ok_and(|choice| matches!(choice, FileModel::Pianissimo(_)))
             })
     };
     let mut identity = backend::cached_host_identity();

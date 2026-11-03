@@ -110,7 +110,7 @@ fn reset_model_the_language_cannot_use(
 ) {
     let fits = match memory.profile_models.get(profile_id) {
         Some(FileModelPreference::Whisper(model)) => model.is_compatible_with(language),
-        Some(FileModelPreference::PianissimoOriginal) => language == Language::Swedish,
+        Some(FileModelPreference::Pianissimo(model)) => model.language() == language,
         Some(FileModelPreference::Auto) | None => true,
     };
     if !fits {
@@ -237,10 +237,12 @@ fn change_profile_model(
     // Outside the controller lock: an unload talks to the engine host.
     sagascript_core::transcription::pianissimo_backend::unload_if_unused(&changed.settings);
     if changed.warm {
-        sagascript_core::transcription::pianissimo_backend::warm_in_background(
-            "profile_change",
-            sagascript_core::machine::load,
-        );
+        use sagascript_core::transcription::pianissimo_backend::{self as backend, WarmTrigger};
+        if let Some(model) =
+            backend::warm_model(&changed.settings, WarmTrigger::ProfileChange, None)
+        {
+            backend::warm_in_background("profile_change", model, sagascript_core::machine::load);
+        }
     }
     Ok(())
 }

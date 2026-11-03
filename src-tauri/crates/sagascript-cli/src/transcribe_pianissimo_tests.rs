@@ -19,6 +19,7 @@ use sagascript_core::transcription::pianissimo_backend::{
 
 use super::*;
 use crate::transcribe::pianissimo::{PianissimoEngine, PianissimoHost};
+use sagascript_core::settings::PianissimoModel;
 
 // ---- the scripted engine --------------------------------------------------------
 
@@ -197,11 +198,15 @@ impl PianissimoHost for FakeHost {
         self.supported
     }
 
-    fn model_installed(&self) -> bool {
+    fn model_installed(&self, _: PianissimoModel) -> bool {
         self.installed
     }
 
-    fn start(&self, cancelled: &AtomicBool) -> Result<Arc<dyn PianissimoEngine>, DictationError> {
+    fn start(
+        &self,
+        cancelled: &AtomicBool,
+        _: PianissimoModel,
+    ) -> Result<Arc<dyn PianissimoEngine>, DictationError> {
         self.starts.fetch_add(1, Ordering::SeqCst);
         // Like the real one: attaching fails at once for a run already cancelled.
         if cancelled.load(Ordering::SeqCst) {
@@ -242,6 +247,7 @@ fn run_with_out(
     let args = args_for(job.flags);
     run_pianissimo_batch(
         &PianissimoBatch {
+            model: PianissimoModel::Swedish,
             args: &args,
             files,
             language: job.language,

@@ -52,7 +52,7 @@ pub(crate) fn file_transcription_context(
     // recommended Whisper model rather than Pianissimo.
     let model = match settings.effective_whisper_file_model_for(selection.language)? {
         FileModel::Whisper(model) => model,
-        FileModel::PianissimoOriginal => return Err(SettingsError::PianissimoPlainFilesOnly.into()),
+        FileModel::Pianissimo(_) => return Err(SettingsError::PianissimoPlainFilesOnly.into()),
     };
     let RunContext {
         language, glossary, ..

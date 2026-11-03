@@ -1,6 +1,7 @@
 //! Scenarios for `persist_and_sync` beyond the table (#370): what an unrelated
 //! setter must leave alone, and what two setters must not do at once. They use
 //! the harness of the parent module (`isolated`, `app_with`, the rows).
+use sagascript_core::models::PianissimoModel;
 
 use std::collections::BTreeMap;
 
@@ -317,14 +318,17 @@ fn file_selecting_pianissimo() {
         s.whisper_model = WhisperModel::NbWhisperBase;
         s.engine_prewarm = EnginePrewarm::OnAppStart;
         s.pianissimo_dictation = true;
-        s.file_transcription_model = FileModelPreference::PianissimoOriginal;
+        s.file_transcription_model = FileModelPreference::Pianissimo(PianissimoModel::Swedish);
         s.hotkey_profiles = vec![
             profile("default", "Control+Shift+Space", Language::Norwegian),
             profile("sv", "Control+Alt+S", Language::Swedish),
         ];
         s.profile_models = BTreeMap::from([
             ("default".to_string(), FileModelPreference::Auto),
-            ("sv".to_string(), FileModelPreference::PianissimoOriginal),
+            (
+                "sv".to_string(),
+                FileModelPreference::Pianissimo(PianissimoModel::Swedish),
+            ),
         ]);
     })
     .expect("the fake file is writable");
@@ -342,11 +346,12 @@ fn demoted_copy_of_the_file() -> Settings {
 /// it would have demoted.
 fn selects_pianissimo(settings: &Settings) -> bool {
     settings.pianissimo_dictation
-        || settings.file_transcription_model == FileModelPreference::PianissimoOriginal
+        || settings.file_transcription_model
+            == FileModelPreference::Pianissimo(PianissimoModel::Swedish)
         || settings
             .profile_models
             .values()
-            .any(|model| *model == FileModelPreference::PianissimoOriginal)
+            .any(|model| *model == FileModelPreference::Pianissimo(PianissimoModel::Swedish))
 }
 
 /// A host that cannot run Pianissimo demotes a file's selection of it in
@@ -360,9 +365,12 @@ fn an_unrelated_setter_keeps_the_demotion_of_an_unsupported_engine() {
         "an_unrelated_setter_keeps_the_demotion_of_an_unsupported_engine",
         || {
             machine::update(|s| {
-                s.file_transcription_model = FileModelPreference::PianissimoOriginal;
-                s.profile_models
-                    .insert("default".into(), FileModelPreference::PianissimoOriginal);
+                s.file_transcription_model =
+                    FileModelPreference::Pianissimo(PianissimoModel::Swedish);
+                s.profile_models.insert(
+                    "default".into(),
+                    FileModelPreference::Pianissimo(PianissimoModel::Swedish),
+                );
             })
             .expect("the fake file is writable");
             // The startup load of an unsupported host, whatever this host is.
@@ -386,7 +394,7 @@ fn an_unrelated_setter_keeps_the_demotion_of_an_unsupported_engine() {
             let on_disk = store::load_from(&fake_file());
             assert_eq!(
                 on_disk.file_transcription_model,
-                FileModelPreference::PianissimoOriginal,
+                FileModelPreference::Pianissimo(PianissimoModel::Swedish),
                 "the file keeps the user's choice"
             );
             "demoted".into()
@@ -435,7 +443,7 @@ fn no_setter_brings_the_demoted_engine_back_into_the_controller() {
                     ));
                 }
                 if store::load_from(&fake_file()).profile_models.get("sv")
-                    != Some(&FileModelPreference::PianissimoOriginal)
+                    != Some(&FileModelPreference::Pianissimo(PianissimoModel::Swedish))
                 {
                     problems.push(format!("{name}: the file lost the user's choice"));
                 }

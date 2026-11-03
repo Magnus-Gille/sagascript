@@ -424,7 +424,7 @@ public final class CoreMLEngine: EngineBackend {
         guard !vocabulary.isEmpty else {
             throw EngineHostError(code: .modelLoadFailed, message: "Vocabulary is empty")
         }
-        return vocabulary
+        return normalizedVocabulary(vocabulary)
     }
 
     private func makeLoadedModel(
@@ -605,5 +605,15 @@ public final class CoreMLEngine: EngineBackend {
 
     private func checkCancelled(_ isCancelled: () -> Bool) throws {
         if isCancelled() { throw EngineHostError(code: .cancelled, message: "Transcription was cancelled") }
+    }
+}
+
+/// SentencePiece marks a word start with `▁` (our conversions keep it); FluidInference's
+/// Parakeet vocabulary, which Klang's compiled Core ML builds ship, writes a plain space
+/// instead. Normalizing to `▁` gives every model the same token text, so word grouping and
+/// context biasing (which segments words as `▁` + pieces) work alike.
+func normalizedVocabulary(_ vocabulary: [Int: String]) -> [Int: String] {
+    vocabulary.mapValues { piece in
+        piece.hasPrefix(" ") ? "\u{2581}" + piece.dropFirst() : piece
     }
 }

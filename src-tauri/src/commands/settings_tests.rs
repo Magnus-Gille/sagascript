@@ -1,4 +1,5 @@
 use super::*;
+use sagascript_core::models::PianissimoModel;
 
 #[cfg(test)]
 mod language_selection_tests {
@@ -63,6 +64,7 @@ mod mirror_tests {
         mirror_auto_select_model, mirror_language_selection, mirror_pianissimo_dictation,
         mirror_profile_models, mirror_whisper_model,
     };
+    use sagascript_core::models::PianissimoModel;
     use sagascript_core::settings::{
         FileModelPreference, HotkeyMode, HotkeyProfile, Language, Settings, WhisperModel,
     };
@@ -116,7 +118,8 @@ mod mirror_tests {
         written.hotkey_mode = HotkeyMode::Toggle;
         written.hotkey_profiles = vec![profile("default", "Control+Alt+K", Language::Norwegian)];
         written.beam_size = 7;
-        written.file_transcription_model = FileModelPreference::PianissimoOriginal;
+        written.file_transcription_model =
+            FileModelPreference::Pianissimo(PianissimoModel::Swedish);
         written
     }
 
@@ -403,7 +406,7 @@ mod transport_contract_tests {
         Settings {
             language: Language::Swedish,
             whisper_model: WhisperModel::KbWhisperSmall,
-            file_transcription_model: FileModelPreference::PianissimoOriginal,
+            file_transcription_model: FileModelPreference::Pianissimo(PianissimoModel::Swedish),
             pianissimo_dictation: true,
             engine_prewarm: EnginePrewarm::OnKeyDown,
             engine_idle_unload_minutes: 0,

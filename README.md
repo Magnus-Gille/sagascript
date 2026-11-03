@@ -16,7 +16,7 @@ update.
 - **Nordic-grade accuracy** -- Swedish and Norwegian use [KB-Whisper](https://huggingface.co/KBLab) (Swedish National Library) and [NB-Whisper](https://huggingface.co/NbAiLab) (Norwegian National Library), fine-tuned on 50,000+ hours of Nordic speech with 47% fewer errors than generic Whisper
 - **Privacy by default** -- no telemetry, cloud transcription, or transcript upload; network access is limited to explicit speech-engine/model downloads and update checks
 - **No telemetry or tracking** -- no analytics, no usage sharing, no data collection of any kind
-- **Multi-language** -- English, Swedish, and Norwegian with dedicated models; Finnish and Danish use generic multilingual Whisper models
+- **Multi-language** -- English, Swedish, Norwegian and Danish with dedicated models (Danish: Klang AI's Pianissimo where it runs); Finnish uses generic multilingual Whisper models
 - **Language shortcuts** -- assign different global hotkeys to different languages and switch without opening Settings
 - **CLI + GUI** -- full CLI for scripting and automation, menu bar app for everyday use
 - **File transcription** -- transcribe audio and video files (MP3, WAV, M4A, FLAC, MP4, MKV, OGG, and more)
@@ -24,7 +24,7 @@ update.
 - **macOS v1** -- official releases are signed and notarized for macOS 13+ on Apple Silicon (Pianissimo requires macOS 14+); Intel Macs are not supported by the v1 binary release
 - **Windows beta** -- an unsigned Windows 11 preview for x64 and ARM64 is available from the [GitHub prerelease](https://github.com/Magnus-Gille/sagascript/releases/tag/windows-beta-20260905)
 
-## Pianissimo (Swedish, Core ML / ONNX)
+## Pianissimo (Swedish and Danish, Core ML / ONNX)
 
 Pianissimo runs on the Apple Neural Engine through a Core ML engine host bundled
 in the app (`Sagascript.app/Contents/Resources/EngineHost/sagascript-engine-host`).
@@ -34,7 +34,10 @@ or Windows on ARM (Snapdragon)**. In **Dictate**, select
 **Pianissimo** for a Swedish profile, then download its model if
 prompted. Each profile owns its language, shortcut(s), dictionary, and model;
 another Swedish profile can keep Whisper. **Auto** means the recommended model
-for the profile's language. Pianissimo is Swedish-only. If you change a
+for the profile's language. Each Pianissimo model serves one language:
+`pianissimo-sv` (Swedish, our Core ML conversion on the Mac) and `pianissimo-da`
+(Danish, Klang AI's own Core ML build on the Mac; both use Klang AI's ONNX export
+on Windows). If you change a
 profile's language to one its model does not support (for example Swedish with
 Pianissimo to English), that profile's model is reset to Auto and Sagascript
 tells you which model it now uses (in Settings and on the CLI); other profiles

@@ -58,7 +58,7 @@
   import { backendErrorRecovery, downloadFailureRecovery, isBackendError, toErrorMessage, type BackendErrorRecovery } from "./errors";
   import ErrorRecovery from "./ErrorRecovery.svelte";
   import { open } from "@tauri-apps/plugin-dialog";
-  import { PIANISSIMO_ID, downloadModelById, useModelDownloads } from "./models.svelte";
+  import { PIANISSIMO_ID, downloadModelById, isPianissimoId, useModelDownloads } from "./models.svelte";
   import { requestAccessibility } from "./permissions";
   import { loadPlatform } from "./platform";
   import { createModelCatalogController } from "./modelCatalogController";
@@ -84,7 +84,9 @@
       : "",
   );
   let fileModelOptions: WhisperModel[] = $state([]);
-  const pianissimoSizeMb = $derived(fileModelOptions.find((model) => model.id === PIANISSIMO_ID)?.size_mb ?? 0);
+  const pianissimoSizeMb = $derived(
+    fileModelOptions.find((model) => model.id === settings?.file_transcription_model && isPianissimoId(model.id))?.size_mb ?? 0,
+  );
   // What Auto will use now (recommended if downloaded, else best downloaded) and what is recommended.
   let fileAutoModel: WhisperModel | null = $state(null);
   let fileRecommendedModel: WhisperModel | null = $state(null);
@@ -1095,7 +1097,7 @@
         return;
       }
       // Saved, whether or not the read-back could confirm it.
-      if (id === PIANISSIMO_ID) {
+      if (isPianissimoId(id)) {
         transcribeDiarize = false;
         transcribePrompt = "";
       }
@@ -2012,10 +2014,11 @@
    */
   async function downloadEngineModelAgain(): Promise<void> {
     engineModelDownloading = true;
-    downloads.start(PIANISSIMO_ID, fileModelOptions.find((model) => model.id === PIANISSIMO_ID)?.display_name ?? "Pianissimo");
+    const id = enginePianissimoId();
+    downloads.start(id, fileModelOptions.find((model) => model.id === id)?.display_name ?? "Pianissimo");
     try {
       try {
-        await downloadModelById(PIANISSIMO_ID);
+        await downloadModelById(id);
       } finally {
         downloads.finish();
       }
@@ -2024,6 +2027,18 @@
     } finally {
       engineModelDownloading = false;
     }
+  }
+
+  /**
+   * The Pianissimo model the engine errors are about: the file model when it
+   * is one, else the default dictation profile's, else the Swedish one.
+   */
+  function enginePianissimoId(): string {
+    const file = settings?.file_transcription_model;
+    if (isPianissimoId(file)) return file as string;
+    const profile = settings?.hotkey_profiles?.[0]?.id ?? "default";
+    const dictation = settings?.profile_models?.[profile];
+    return isPianissimoId(dictation) ? (dictation as string) : PIANISSIMO_ID;
   }
 
   /** "Download the model again" under the Dictate tab's error. */
@@ -2793,7 +2808,7 @@
                     : "Download selected model"}
               </button>
             {/if}
-            {#if settings.file_transcription_model === PIANISSIMO_ID}
+            {#if isPianissimoId(settings.file_transcription_model)}
               <div class="hotkey-hint">
                 Requires macOS 14+ on Apple Silicon or Windows on ARM (Snapdragon). Runs locally (Neural Engine on Mac, CPU on Windows){pianissimoSizeMb >
                 0
@@ -2811,7 +2826,7 @@
               <input
                 type="checkbox"
                 bind:checked={transcribeDiarize}
-                disabled={transcribing || settings.file_transcription_model === PIANISSIMO_ID}
+                disabled={transcribing || isPianissimoId(settings.file_transcription_model)}
               />
               Speaker diarization
             </label>
@@ -2846,7 +2861,7 @@
             placeholder="Extra context, e.g. names to listen for: Astrid, Grimnir (optional)"
             bind:value={transcribePrompt}
             rows="2"
-            disabled={transcribing || settings.file_transcription_model === PIANISSIMO_ID}></textarea>
+            disabled={transcribing || isPianissimoId(settings.file_transcription_model)}></textarea>
         </div>
 
         <div class="drop-zone" class:drag-over={dragOver} class:transcribing>

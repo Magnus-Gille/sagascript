@@ -1,4 +1,4 @@
-//! The Pianissimo path of a file run (#343): plain Swedish transcription through
+//! The Pianissimo path of a file run (#343): plain transcription in the model's language through
 //! the engine host, with its own per-file JSON.
 
 use std::path::{Path, PathBuf};
@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use sagascript_core::error::DictationError;
-use sagascript_core::settings::Language;
+use sagascript_core::settings::{Language, PianissimoModel};
 use sagascript_core::transcription::engine_host::{BoostReport, BoostSpec, WindowTiming};
 use sagascript_core::transcription::pianissimo_backend::{
     PianissimoBackend, PianissimoResult, WarmInfo,
@@ -96,12 +96,16 @@ pub(super) trait PianissimoHost {
     /// Whether the OS and the CPU can run the engine host.
     fn runtime_supported(&self) -> bool;
 
-    /// Whether the Pianissimo model is installed.
-    fn model_installed(&self) -> bool;
+    /// Whether this Pianissimo model is installed.
+    fn model_installed(&self, model: PianissimoModel) -> bool;
 
     /// Attaches to the engine host without loading the model. Fails at once if
     /// `cancelled` is set.
-    fn start(&self, cancelled: &AtomicBool) -> Result<Arc<dyn PianissimoEngine>, DictationError>;
+    fn start(
+        &self,
+        cancelled: &AtomicBool,
+        model: PianissimoModel,
+    ) -> Result<Arc<dyn PianissimoEngine>, DictationError>;
 }
 
 /// The engine host of an installed copy.
@@ -112,14 +116,19 @@ impl PianissimoHost for InstalledPianissimo {
         sagascript_core::transcription::pianissimo_backend::runtime_supported_on_this_os()
     }
 
-    fn model_installed(&self) -> bool {
-        pianissimo_model::is_downloaded()
+    fn model_installed(&self, model: PianissimoModel) -> bool {
+        pianissimo_model::is_downloaded(model)
     }
 
-    fn start(&self, cancelled: &AtomicBool) -> Result<Arc<dyn PianissimoEngine>, DictationError> {
+    fn start(
+        &self,
+        cancelled: &AtomicBool,
+        model: PianissimoModel,
+    ) -> Result<Arc<dyn PianissimoEngine>, DictationError> {
         Ok(Arc::new(PianissimoBackend::start_with_cancel(
             cancelled,
             &sagascript_core::machine::load(),
+            model,
         )?))
     }
 }
@@ -138,14 +147,14 @@ pub(super) struct PianissimoPerformance {
     pub(super) windows: Vec<WindowTiming>,
 }
 
-/// Per-file JSON for `--model pianissimo-sv`. The key set is a compatibility
+/// Per-file JSON for `--model pianissimo-sv` (and `pianissimo-da`). The key set is a compatibility
 /// contract: only additive keys (`performance.engine`, `performance.engine_warm`,
 /// `performance.windows`)
 /// may be added to what the NeMo-based release emitted.
 pub(super) fn pianissimo_file_json(
+    model: PianissimoModel,
     text: &str,
     words: &[sagascript_core::transcription::pianissimo_backend::PianissimoWord],
-    language: Language,
     file: &Path,
     duration: f64,
     corrections: &impl serde::Serialize,
@@ -167,8 +176,8 @@ pub(super) fn pianissimo_file_json(
     serde_json::json!({
         "text": text,
         "segments": segments,
-        "language": language,
-        "model": "pianissimo-sv",
+        "language": model.language(),
+        "model": model.id(),
         "file": file.display().to_string(),
         "duration_seconds": duration,
         "coverage_ratio": null,
@@ -209,6 +218,7 @@ pub(super) fn pianissimo_file_json(
 
 /// What a Pianissimo batch is asked to do: the planned run.
 pub(super) struct PianissimoBatch<'a> {
+    pub(super) model: PianissimoModel,
     pub(super) args: &'a TranscribeArgs,
     pub(super) files: &'a [PathBuf],
     pub(super) language: Language,
@@ -229,16 +239,17 @@ pub(super) fn run_pianissimo_batch(
     out: &Out,
 ) -> Result<(), DictationError> {
     let PianissimoBatch {
+        model,
         args,
         files,
-        language,
         glossary,
         clipboard,
+        ..
     } = *batch;
     check_request(batch, host, out)?;
     let load_started = Instant::now();
     let cancel_flag = canceller.flag();
-    let engine = host.start(cancel_flag)?;
+    let engine = host.start(cancel_flag, model)?;
     if let Some(weight) = args.glossary_boost {
         request_boost(&*engine, args, glossary, weight, out)?;
     }
@@ -257,8 +268,8 @@ pub(super) fn run_pianissimo_batch(
             errln!(out, "[{}/{}] {}", index + 1, files.len(), file.display());
             transcribe_one(
                 &FileRun {
+                    model,
                     args,
-                    language,
                     glossary,
                     engine: &*engine,
                     canceller,
@@ -285,7 +296,7 @@ pub(super) fn run_pianissimo_batch(
 }
 
 /// Refuses what Pianissimo cannot do, in this order: a language other than
-/// Swedish, a decoder option it does not have, an OS without the engine host,
+/// the model's, a decoder option it does not have, an OS without the engine host,
 /// a model that is not installed. Then notes that the saved glossary applies
 /// only after transcription.
 fn check_request(
@@ -294,15 +305,17 @@ fn check_request(
     out: &Out,
 ) -> Result<(), DictationError> {
     let PianissimoBatch {
+        model,
         args,
         language,
         glossary,
         ..
     } = *batch;
-    if language != Language::Swedish {
-        return Err(DictationError::SettingsError(
-            "Pianissimo supports Swedish files only".into(),
-        ));
+    if language != model.language() {
+        return Err(DictationError::SettingsError(format!(
+            "Pianissimo supports {} files only",
+            model.language().display_name()
+        )));
     }
     if args.vad
         || args.beam_size.is_some()
@@ -320,10 +333,11 @@ fn check_request(
             sagascript_core::transcription::pianissimo_backend::UNSUPPORTED_MESSAGE.into(),
         ));
     }
-    if !host.model_installed() {
-        return Err(DictationError::TranscriptionFailed(
-            "Pianissimo is not downloaded. Run: sagascript download-model pianissimo-sv".into(),
-        ));
+    if !host.model_installed(model) {
+        return Err(DictationError::TranscriptionFailed(format!(
+            "Pianissimo is not downloaded. Run: sagascript download-model {}",
+            model.id()
+        )));
     }
     if glossary.decoder_prompt().is_some() {
         errln!(out, "Pianissimo does not use Whisper decoder hints; saved glossary replacements still apply after transcription.");
@@ -403,8 +417,8 @@ fn report_boost(report: &BoostReport, out: &Out) {
 
 /// What transcribing one file needs besides the file and the output.
 struct FileRun<'a> {
+    model: PianissimoModel,
     args: &'a TranscribeArgs,
-    language: Language,
     glossary: &'a Glossary,
     engine: &'a dyn PianissimoEngine,
     canceller: &'a Canceller,
@@ -422,8 +436,8 @@ fn transcribe_one(
     out: &Out,
 ) -> Result<FileTranscription, DictationError> {
     let FileRun {
+        model,
         args,
-        language,
         glossary,
         engine,
         canceller,
@@ -451,9 +465,9 @@ fn transcribe_one(
     )?;
     let (text, corrections) = glossary.correct_text(&result.text);
     let output = pianissimo_file_json(
+        model,
         &text,
         &result.words,
-        language,
         file,
         duration,
         &corrections,

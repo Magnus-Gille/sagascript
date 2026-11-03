@@ -6,7 +6,7 @@ fn swedish_lineup_per_platform() {
         models
             .into_iter()
             .map(|m| match m {
-                FileModel::PianissimoOriginal => "pianissimo-sv".to_string(),
+                FileModel::Pianissimo(model) => model.id().to_string(),
                 FileModel::Whisper(w) => w.display_name().to_string(),
             })
             .collect()
@@ -25,7 +25,6 @@ fn swedish_lineup_per_platform() {
             Language::English,
             Language::Norwegian,
             Language::Finnish,
-            Language::Danish,
             Language::Auto,
         ] {
             let expected: Vec<FileModel> = WhisperModel::models_for_language(language)
@@ -35,6 +34,22 @@ fn swedish_lineup_per_platform() {
                 .collect();
             assert_eq!(FileModel::app_lineup(language, gate, None), expected);
         }
+        // Danish: its Pianissimo model first where it runs, then Whisper.
+        let whisper = WhisperModel::models_for_language(Language::Danish)
+            .iter()
+            .copied()
+            .map(FileModel::Whisper);
+        let expected: Vec<FileModel> = if gate {
+            std::iter::once(FileModel::Pianissimo(PianissimoModel::Danish))
+                .chain(whisper)
+                .collect()
+        } else {
+            whisper.collect()
+        };
+        assert_eq!(
+            FileModel::app_lineup(Language::Danish, gate, None),
+            expected
+        );
     }
     // The retired models stay in the full catalogue.
     let all = WhisperModel::models_for_language(Language::Swedish);
@@ -57,7 +72,7 @@ fn lineup_keeps_the_current_hidden_choice_selectable() {
         FileModel::app_lineup(
             Language::Swedish,
             false,
-            Some(FileModel::PianissimoOriginal)
+            Some(FileModel::Pianissimo(PianissimoModel::Swedish))
         )
         .len(),
         2
@@ -70,13 +85,16 @@ fn file_model_ids_round_trip_and_extend_the_whisper_ids() {
         .into_iter()
         .map(FileModel::Whisper)
         .collect();
-    choices.push(FileModel::PianissimoOriginal);
+    choices.push(FileModel::Pianissimo(PianissimoModel::Swedish));
     for choice in &choices {
         assert_eq!(FileModel::from_id(choice.id()), Some(*choice));
         assert_eq!(choice.id().parse::<FileModel>(), Ok(*choice));
     }
-    assert_eq!(FileModel::PianissimoOriginal.id(), "pianissimo-sv");
-    assert_eq!(FileModel::PIANISSIMO_ID, "pianissimo-sv");
+    assert_eq!(
+        FileModel::Pianissimo(PianissimoModel::Swedish).id(),
+        "pianissimo-sv"
+    );
+    assert_eq!(PianissimoModel::Swedish.id(), "pianissimo-sv");
     assert_eq!(
         FileModel::Whisper(WhisperModel::KbWhisperMedium).id(),
         WhisperModel::KbWhisperMedium.id()
@@ -89,4 +107,25 @@ fn file_model_ids_round_trip_and_extend_the_whisper_ids() {
         "auto".parse::<FileModel>(),
         Err(UnknownModelId("auto".to_owned()))
     );
+}
+
+#[test]
+fn a_pianissimo_model_serves_only_its_own_language() {
+    for model in PianissimoModel::ALL {
+        let choice = FileModel::Pianissimo(model);
+        assert_eq!(FileModel::from_id(model.id()), Some(choice));
+        assert_eq!(FileModel::recommended_for(model.language(), true), choice);
+        assert_ne!(FileModel::recommended_for(model.language(), false), choice);
+        for language in Language::ALL {
+            assert_eq!(
+                choice.is_compatible_with(language),
+                language == model.language()
+            );
+            // `include` never smuggles a model into another language's picker.
+            let offered = FileModel::app_lineup(language, true, Some(choice)).contains(&choice);
+            assert_eq!(offered, language == model.language(), "{language:?}");
+        }
+        // Nor onto a machine that cannot run it.
+        assert!(!FileModel::app_lineup(model.language(), false, Some(choice)).contains(&choice));
+    }
 }

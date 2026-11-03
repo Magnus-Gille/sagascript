@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { ModelDownloads, PIANISSIMO_ID, downloadModelById } from "./models.svelte";
+import { ModelDownloads, PIANISSIMO_DA_ID, PIANISSIMO_ID, downloadModelById, isPianissimoId } from "./models.svelte";
 import { backendError, mockIpc } from "../test/ipc";
 
 describe("downloadModelById", () => {
@@ -9,6 +9,19 @@ describe("downloadModelById", () => {
     await downloadModelById(PIANISSIMO_ID);
 
     expect(ipc.calls).toEqual([{ command: "download_pianissimo_model", args: {} }]);
+  });
+
+  test("Danish Pianissimo goes through the same command, naming its model", async () => {
+    const ipc = mockIpc({ download_pianissimo_model: () => undefined });
+
+    await downloadModelById(PIANISSIMO_DA_ID);
+
+    expect(ipc.calls).toEqual([{ command: "download_pianissimo_model", args: { model: "pianissimo-da" } }]);
+  });
+
+  test("only the Pianissimo ids are Pianissimo", () => {
+    expect([PIANISSIMO_ID, PIANISSIMO_DA_ID].every(isPianissimoId)).toBe(true);
+    expect(["pianissimo", "pianissimo-sv-coreml", "small", "", null, undefined].some(isPianissimoId)).toBe(false);
   });
 
   test("every other model goes through download_model by id", async () => {

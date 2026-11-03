@@ -105,7 +105,7 @@ mod lineup_option_tests {
 
     #[test]
     fn the_selected_model_is_marked_active_and_installed_models_downloaded() {
-        let active = Some(FileModel::PianissimoOriginal);
+        let active = Some(FileModel::Pianissimo(PianissimoModel::Swedish));
         let env = FixedModelEnv {
             pianissimo_downloaded: true,
             downloaded: vec![WhisperModel::KbWhisperLarge],

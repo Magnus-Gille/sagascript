@@ -148,6 +148,7 @@ pub async fn transcribe_pianissimo(
     jobs: SharedPlainFileJobs,
     run_id: String,
     file_path: String,
+    model: sagascript_core::models::PianissimoModel,
     glossary: Glossary,
 ) -> Result<String, CommandError> {
     let lease = jobs.begin(run_id)?;
@@ -171,6 +172,7 @@ pub async fn transcribe_pianissimo(
             let backend = Arc::new(PianissimoBackend::start_with_cancel(
                 &run.cancelled,
                 &sagascript_core::machine::load(),
+                model,
             )?);
             *lock_or_recover(
                 &worker_lease.jobs.pianissimo_backend,

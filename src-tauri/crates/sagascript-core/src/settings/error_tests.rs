@@ -56,30 +56,35 @@ fn every_variant_keeps_its_text_and_has_a_stable_snake_case_code() {
             "model_incompatible",
         ),
         (
-            SettingsError::PianissimoSwedishProfileOnly {
+            SettingsError::PianissimoProfileLanguageOnly {
                 profile_id: "en".into(),
+                language: "Swedish",
             },
             "Pianissimo is only available for Swedish profile 'en'",
             "pianissimo_unavailable",
         ),
         (
-            SettingsError::PianissimoRequiresSwedishProfile,
+            SettingsError::PianissimoRequiresLanguageProfile {
+                language: "Swedish",
+            },
             "Pianissimo requires a Swedish profile",
             "pianissimo_unavailable",
         ),
         (
-            SettingsError::PianissimoSwedishFilesOnly,
-            "Pianissimo Original is only available for Swedish file transcription",
+            SettingsError::PianissimoFileLanguageOnly {
+                language: "Danish",
+            },
+            "Pianissimo Original is only available for Danish file transcription",
             "pianissimo_unavailable",
         ),
         (
             SettingsError::PianissimoPlainFilesOnly,
-            "Pianissimo supports plain Swedish file transcription only; select a Whisper file model for meetings or diarization",
+            "Pianissimo supports plain file transcription only; select a Whisper file model for meetings or diarization",
             "pianissimo_unavailable",
         ),
         (
             SettingsError::PianissimoNotForDiarization,
-            "Pianissimo supports plain Swedish file transcription only; choose a Whisper file model for diarization",
+            "Pianissimo supports plain file transcription only; choose a Whisper file model for diarization",
             "pianissimo_unavailable",
         ),
         (

@@ -3,12 +3,19 @@ import { downloadModel, downloadPianissimoModel } from "./api";
 import { useTauriEvent } from "./tauri-events.svelte";
 
 /**
- * The id of the Pianissimo (Swedish) model on the wire: what the backend's
- * `FileModel::PianissimoOriginal` serializes to (sagascript-core
- * `FileModel::PIANISSIMO_ID` in models/file_model.rs, pinned by its tests). `get_file_model_options`,
- * `profile_models` and `file_transcription_model` carry it.
+ * The ids of the Pianissimo models on the wire, one per language: what the
+ * backend's `PianissimoModel::id` returns (sagascript-core models/pianissimo.rs,
+ * pinned by its tests). `get_file_model_options`, `profile_models` and
+ * `file_transcription_model` carry them. `PIANISSIMO_ID` is the Swedish one.
  */
 export const PIANISSIMO_ID = "pianissimo-sv";
+export const PIANISSIMO_DA_ID = "pianissimo-da";
+const PIANISSIMO_IDS: readonly string[] = [PIANISSIMO_ID, PIANISSIMO_DA_ID];
+
+/** Whether `id` names one of the Pianissimo models. */
+export function isPianissimoId(id: string | null | undefined): boolean {
+  return id != null && PIANISSIMO_IDS.includes(id);
+}
 
 /**
  * Download one model. Pianissimo has its own command (its own platform check
@@ -16,7 +23,8 @@ export const PIANISSIMO_ID = "pianissimo-sv";
  * emit `model-download-progress` and `model-ready`.
  */
 export async function downloadModelById(id: string): Promise<void> {
-  if (id === PIANISSIMO_ID) await downloadPianissimoModel();
+  // The command's default is the Swedish model, so its call stays as it was.
+  if (isPianissimoId(id)) await downloadPianissimoModel(id === PIANISSIMO_ID ? undefined : id);
   else await downloadModel(id);
 }
 

@@ -1531,7 +1531,11 @@ mod pianissimo_with_the_fake_host {
     fn model_dir(sandbox: &Sandbox) -> PathBuf {
         let dir = sandbox.root.join("pianissimo-model");
         std::fs::create_dir_all(&dir).expect("create the model directory");
-        for item in sagascript_core::transcription::pianissimo_model::active().required_items {
+        for item in sagascript_core::transcription::pianissimo_model::active(
+            sagascript_core::models::PianissimoModel::Swedish,
+        )
+        .required_items
+        {
             std::fs::write(dir.join(item), b"").expect("write a model item");
         }
         dir

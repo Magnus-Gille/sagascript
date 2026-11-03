@@ -4,7 +4,7 @@
 //! the real machine or the user's settings.
 
 use super::*;
-use crate::models::{FileModel, Language, WhisperModel};
+use crate::models::{FileModel, Language, PianissimoModel, WhisperModel};
 use crate::settings::{store, FileModelPreference, HotkeyProfile, Settings};
 use sagascript_testsupport::fake_settings;
 use std::fs;
@@ -43,14 +43,16 @@ fn load_with_probes(
 /// exactly the probe that decides it.
 #[test]
 fn the_startup_load_resolves_the_lineup_from_the_injected_probes() {
-    use FileModelPreference::{PianissimoOriginal as Pianissimo, Whisper};
+    use FileModelPreference::Whisper;
+    const PIANISSIMO: FileModelPreference =
+        FileModelPreference::Pianissimo(PianissimoModel::Swedish);
     // (Pianissimo supported, Pianissimo downloaded, Whisper models downloaded, expected)
     let rows: [(bool, bool, &[WhisperModel], FileModelPreference); 9] = [
         // Supported: the target is Pianissimo, and it moves a profile when it
         // is downloaded or when the old model is not usable either...
-        (true, true, &[], Pianissimo),
-        (true, true, &[KB_SMALL], Pianissimo),
-        (true, false, &[], Pianissimo),
+        (true, true, &[], PIANISSIMO),
+        (true, true, &[KB_SMALL], PIANISSIMO),
+        (true, false, &[], PIANISSIMO),
         // ...but a downloaded old model stays while the target is missing.
         (true, false, &[KB_SMALL], Whisper(KB_SMALL)),
         // Unsupported: the target is KB-Whisper Medium; Pianissimo's download
@@ -78,8 +80,8 @@ fn an_unsupported_machine_demotes_pianissimo_in_memory_and_leaves_the_file_alone
     for (supported, expected_profile, expected_file, expected_flag) in [
         (
             true,
-            FileModelPreference::PianissimoOriginal,
-            FileModelPreference::PianissimoOriginal,
+            FileModelPreference::Pianissimo(PianissimoModel::Swedish),
+            FileModelPreference::Pianissimo(PianissimoModel::Swedish),
             true,
         ),
         (
@@ -128,7 +130,7 @@ fn two_language_settings() -> Settings {
 #[test]
 fn the_profile_methods_follow_the_injected_platform_gate() {
     for (supported, engine, pianissimo) in [
-        (true, FileModel::PianissimoOriginal, true),
+        (true, FileModel::Pianissimo(PianissimoModel::Swedish), true),
         (false, FileModel::Whisper(KB_MEDIUM), false),
     ] {
         let settings = two_language_settings();
@@ -202,7 +204,7 @@ fn selecting_pianissimo_needs_the_injected_gate() {
         assert_eq!(
             settings.set_profile_model_gated(
                 "default",
-                FileModelPreference::PianissimoOriginal,
+                FileModelPreference::Pianissimo(PianissimoModel::Swedish),
                 supported
             ),
             expected,
@@ -240,7 +242,7 @@ fn the_warm_model_plan_leaves_out_pianissimo_profiles_only_where_it_runs() {
 #[test]
 fn auto_file_transcription_resolves_from_the_injected_readiness() {
     let auto = Settings::default();
-    let pianissimo = FileModel::PianissimoOriginal;
+    let pianissimo = FileModel::Pianissimo(PianissimoModel::Swedish);
     let whisper = FileModel::Whisper;
     // (supported, ready models, expected for any work, expected for Whisper-only work)
     let rows: [(bool, Vec<FileModel>, FileModel, FileModel); 8] = [

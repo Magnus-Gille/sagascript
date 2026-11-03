@@ -2,7 +2,7 @@
 //! answers are chosen by the test, so a list can be checked for a host that
 //! runs Pianissimo (macOS, Windows on ARM) from any host.
 
-use crate::models::{ModelEnv, WhisperModel};
+use crate::models::{ModelEnv, PianissimoModel, WhisperModel};
 
 /// The machine state a model list depends on, chosen by the test.
 #[derive(Debug, Clone, Default)]
@@ -38,15 +38,15 @@ impl ModelEnv for FixedModelEnv {
         self.pianissimo_supported
     }
 
-    fn pianissimo_downloaded(&self) -> bool {
+    fn pianissimo_downloaded(&self, _: PianissimoModel) -> bool {
         self.pianissimo_downloaded
     }
 
-    fn pianissimo_download_bytes(&self) -> u64 {
+    fn pianissimo_download_bytes(&self, _: PianissimoModel) -> u64 {
         self.pianissimo_download_bytes
     }
 
-    fn pianissimo_installed_bytes(&self) -> u64 {
+    fn pianissimo_installed_bytes(&self, _: PianissimoModel) -> u64 {
         self.pianissimo_installed_bytes
     }
 

@@ -300,10 +300,18 @@ pub(crate) fn start_settings_watcher(app: tauri::AppHandle) {
                 c.update_settings(new_settings);
             }
             if warm_after_change {
-                sagascript_core::transcription::pianissimo_backend::warm_in_background(
-                    "profile_change",
-                    sagascript_core::machine::load,
-                );
+                use sagascript_core::transcription::pianissimo_backend::{
+                    self as backend, WarmTrigger,
+                };
+                if let Some(model) =
+                    backend::warm_model(&settings_for_unload, WarmTrigger::ProfileChange, None)
+                {
+                    backend::warm_in_background(
+                        "profile_change",
+                        model,
+                        sagascript_core::machine::load,
+                    );
+                }
             }
             sagascript_core::transcription::pianissimo_backend::unload_if_unused(
                 &settings_for_unload,

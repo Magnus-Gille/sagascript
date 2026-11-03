@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 
 use clap::{Args, Subcommand};
 use sagascript_core::error::DictationError;
+use sagascript_core::models::PianissimoModel;
 use sagascript_core::transcription::engine_host::{
     pipeline, CancelToken, EngineHostClient, EngineHostConfig,
 };
@@ -39,14 +40,18 @@ report says so and exits zero.
 
 The host is found in the copy bundled with the app (Sagascript.app, or engine-host\\ beside the Windows executable). Development builds \
 (debug, or built with the `dev-overrides` feature) also honor \
-SAGASCRIPT_ENGINE_HOST and SAGASCRIPT_PIANISSIMO_MODEL_DIR (an existing model \
-directory instead of the downloaded one); release builds ignore both.",
-        after_long_help = "EXAMPLES:\n  sagascript engine status\n  sagascript engine status --json"
+SAGASCRIPT_ENGINE_HOST and SAGASCRIPT_PIANISSIMO_MODEL_DIR or \
+SAGASCRIPT_PIANISSIMO_DA_MODEL_DIR (an existing model directory instead of the \
+downloaded one); release builds ignore them.",
+        after_long_help = "EXAMPLES:\n  sagascript engine status\n  sagascript engine status --json --model pianissimo-da"
     )]
     Status {
         /// Machine-readable JSON on stdout
         #[arg(long)]
         json: bool,
+        /// Pianissimo model to report on (pianissimo-sv, pianissimo-da)
+        #[arg(long, value_name = "ID", default_value = "pianissimo-sv", value_parser = parse_pianissimo)]
+        model: PianissimoModel,
     },
     /// Check that the engine works end to end
     #[command(
@@ -71,6 +76,9 @@ the app runs at startup) and reports how many it removed and how many are in use
         /// Re-hash all model files instead of trusting verification stamps
         #[arg(long)]
         verify_model: bool,
+        /// Pianissimo model to check (pianissimo-sv, pianissimo-da)
+        #[arg(long, value_name = "ID", default_value = "pianissimo-sv", value_parser = parse_pianissimo)]
+        model: PianissimoModel,
     },
     /// Load the model and hold the engine warm
     #[command(
@@ -78,28 +86,49 @@ the app runs at startup) and reports how many it removed and how many are in use
 Start the engine host, load the Pianissimo model and keep it loaded until \
 Ctrl+C or --seconds elapse. Idle unloading is disabled while holding. Useful for \
 benchmarking warm latency or smoke-testing a signed build.",
-        after_long_help = "EXAMPLES:\n  sagascript engine warm --seconds 30"
+        after_long_help = "EXAMPLES:\n  sagascript engine warm --seconds 30\n  sagascript engine warm --model pianissimo-da --seconds 30"
     )]
     Warm {
         /// Stop after this many seconds (default: until Ctrl+C)
         #[arg(long, value_name = "N")]
         seconds: Option<u64>,
+        /// Pianissimo model to load (pianissimo-sv, pianissimo-da)
+        #[arg(long, value_name = "ID", default_value = "pianissimo-sv", value_parser = parse_pianissimo)]
+        model: PianissimoModel,
     },
+}
+
+/// `--model` of the engine commands: a Pianissimo model id.
+fn parse_pianissimo(id: &str) -> Result<PianissimoModel, String> {
+    PianissimoModel::from_id(id).ok_or_else(|| {
+        let ids: Vec<&str> = PianissimoModel::ALL
+            .iter()
+            .map(|model| model.id())
+            .collect();
+        format!(
+            "unknown Pianissimo model '{id}' (expected {})",
+            ids.join(", ")
+        )
+    })
 }
 
 pub fn run(args: EngineArgs, out: &Out) -> Result<(), CliError> {
     match args.action {
-        EngineAction::Status { json } => {
-            let probe = Probe::detect();
+        EngineAction::Status { json, model } => {
+            let probe = Probe::detect(model);
             let report = status_report(&probe);
             print_status(&report, json, out)?;
             Ok(())
         }
-        EngineAction::Doctor { json, verify_model } => {
-            let probe = Probe::detect();
+        EngineAction::Doctor {
+            json,
+            verify_model,
+            model,
+        } => {
+            let probe = Probe::detect(model);
             doctor(&probe, verify_model, json, out)
         }
-        EngineAction::Warm { seconds } => Ok(warm(seconds, out)?),
+        EngineAction::Warm { seconds, model } => Ok(warm(seconds, model, out)?),
     }
 }
 
@@ -130,6 +159,7 @@ pub struct Probe {
     pub os: String,
     pub arch: String,
     pub host: Option<(PathBuf, &'static str)>,
+    pub model: PianissimoModel,
     pub model_id: String,
     pub model_dir: PathBuf,
     pub model_overridden: bool,
@@ -140,7 +170,7 @@ pub struct Probe {
 }
 
 impl Probe {
-    pub fn detect() -> Self {
+    pub fn detect(model: PianissimoModel) -> Self {
         let host = pianissimo_backend::resolve_host().map(|path| {
             let source = if std::env::var_os(pianissimo_backend::ENGINE_HOST_ENV)
                 .is_some_and(|value| !value.is_empty())
@@ -152,26 +182,36 @@ impl Probe {
             (path, source)
         });
         let config = host.as_ref().map(|(path, _)| {
-            pianissimo_backend::config_for_host(path.clone(), &sagascript_core::machine::load())
+            pianissimo_backend::config_for_host(
+                path.clone(),
+                &sagascript_core::machine::load(),
+                model,
+            )
         });
         Self {
             supported: pianissimo_backend::runtime_supported_on_this_os(),
             os: std::env::consts::OS.into(),
             arch: std::env::consts::ARCH.into(),
             host,
-            model_id: pianissimo_model::model_id(),
-            model_dir: pianissimo_model::model_dir(),
-            model_overridden: pianissimo_model::is_overridden(),
-            model_installed: pianissimo_model::is_downloaded(),
+            model,
+            model_id: pianissimo_model::model_id(model),
+            model_dir: pianissimo_model::model_dir(model),
+            model_overridden: pianissimo_model::is_overridden(model),
+            model_installed: pianissimo_model::is_downloaded(model),
             config,
-            verify: |force| {
-                if force {
-                    pianissimo_model::verify_downloaded_forced()
-                } else {
-                    pianissimo_model::verify_downloaded()
-                }
+            verify: match model {
+                PianissimoModel::Swedish => |force| verify_model(PianissimoModel::Swedish, force),
+                PianissimoModel::Danish => |force| verify_model(PianissimoModel::Danish, force),
             },
         }
+    }
+}
+
+fn verify_model(model: PianissimoModel, force: bool) -> Result<(), DictationError> {
+    if force {
+        pianissimo_model::verify_downloaded_forced(model)
+    } else {
+        pianissimo_model::verify_downloaded(model)
     }
 }
 
@@ -465,8 +505,9 @@ fn doctor_steps(probe: &Probe, verify_model: bool) -> DoctorReport {
         Ok(probe.model_dir.display().to_string())
     } else {
         Err(format!(
-            "model {} is not installed. Run: sagascript download-model pianissimo-sv",
-            probe.model_id
+            "model {} is not installed. Run: sagascript download-model {}",
+            probe.model_id,
+            probe.model.id()
         ))
     };
     if !step("model_installed", t, installed) {
@@ -590,9 +631,9 @@ fn print_doctor(report: &DoctorReport, json: bool, out: &Out) -> Result<(), Writ
 
 // ---- warm -----------------------------------------------------------------
 
-fn warm(seconds: Option<u64>, out: &Out) -> Result<(), DictationError> {
-    let config = pianissimo_backend::engine_config(&sagascript_core::machine::load())?;
-    pianissimo_model::verify_downloaded()?;
+fn warm(seconds: Option<u64>, model: PianissimoModel, out: &Out) -> Result<(), DictationError> {
+    let config = pianissimo_backend::engine_config(&sagascript_core::machine::load(), model)?;
+    pianissimo_model::verify_downloaded(model)?;
     let client = quiet(&config);
     let started = Instant::now();
     client
@@ -742,6 +783,7 @@ mod tests {
             os: "testos".into(),
             arch: "testarch".into(),
             host: Some((host, "env")),
+            model: PianissimoModel::Swedish,
             model_id: "pianissimo-sv-coreml-test".into(),
             model_dir: "/models/ok".into(),
             model_overridden: false,

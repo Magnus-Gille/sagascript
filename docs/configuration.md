@@ -24,8 +24,9 @@ configure the variable for GUI processes as well, to keep GUI and CLI paths
 identical.
 
 The JSON file contains application settings and dictation profiles. Each
-profile owns its language, model (`auto`, a compatible Whisper ID, or Swedish
-`pianissimo-sv`), shortcuts and dictionary. The plain-text files under
+profile owns its language, model (`auto`, a compatible Whisper ID, or the
+language's Pianissimo model `pianissimo-sv` or `pianissimo-da`), shortcuts and
+dictionary. The plain-text files under
 `glossaries/` contain one entry per line. On upgrade, the old `glossary.txt`
 hint source is copied into the profiles while the original file is retained
 for rollback; it no longer participates in dictation. Auto-detect profiles
@@ -33,7 +34,8 @@ use their dictionary as hints only, without deterministic alias replacement.
 
 **Model rule.** The model belongs to the profile, not to a global setting.
 `auto` (the default) resolves to the recommended model for the profile's
-language; Pianissimo (`pianissimo-sv`) is Swedish-only. When a profile's
+language; each Pianissimo model serves only its own language (`pianissimo-sv`
+Swedish, `pianissimo-da` Danish). When a profile's
 language changes (in Settings, `config profiles update ID --language ...`,
 `config set language ...`) and its explicit model does not support the new
 language, that profile's model is reset to `auto` instead of the change being
@@ -60,9 +62,11 @@ language`, `config profiles ... --language` and `--language` of the other
 commands alike.
 
 Supported languages are English (`en`), Swedish (`sv`), Norwegian (`no`),
-Finnish (`fi`), Danish (`da`) and auto-detect (`auto`). Danish uses the
-multilingual Whisper models only (Small is the recommended one); it has no
-language-specific model, and Pianissimo does not run for it.
+Finnish (`fi`), Danish (`da`) and auto-detect (`auto`). Danish uses Klang AI's
+Danish Pianissimo model (`pianissimo-da`) where Pianissimo runs (macOS 14+ on
+Apple Silicon, Windows on ARM) and the multilingual Whisper models elsewhere
+(Small is the recommended one there). Each Pianissimo model serves only its own
+language: `pianissimo-sv` Swedish, `pianissimo-da` Danish.
 
 Use the CLI to discover the effective paths rather than duplicating the
 resolution rules in scripts:

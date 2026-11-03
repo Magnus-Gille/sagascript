@@ -626,7 +626,7 @@ fn cmd_path(out: &Out) -> Result<(), DictationError> {
 mod tests {
     use super::keys::{parse_bool, VALID_KEYS};
     use super::*;
-    use sagascript_core::settings::{validate_hotkey, WhisperModel};
+    use sagascript_core::settings::{validate_hotkey, PianissimoModel, WhisperModel};
 
     // The tests name a key as `config` is given it; these run the key's entry
     // in the table (`keys::KEYS`).
@@ -892,10 +892,18 @@ mod tests {
             ..Default::default()
         };
         settings
-            .set_profile_model_gated("default", FileModelPreference::PianissimoOriginal, true)
+            .set_profile_model_gated(
+                "default",
+                FileModelPreference::Pianissimo(PianissimoModel::Swedish),
+                true,
+            )
             .unwrap();
         settings
-            .set_profile_model_gated("other", FileModelPreference::PianissimoOriginal, true)
+            .set_profile_model_gated(
+                "other",
+                FileModelPreference::Pianissimo(PianissimoModel::Swedish),
+                true,
+            )
             .unwrap();
 
         // `config profiles update default --language en` path.
@@ -923,7 +931,7 @@ mod tests {
         );
         assert_eq!(
             settings.profile_models["other"],
-            FileModelPreference::PianissimoOriginal
+            FileModelPreference::Pianissimo(PianissimoModel::Swedish)
         );
 
         // `config set language` path: compatible explicit model is kept silently.
@@ -951,7 +959,11 @@ mod tests {
             ..Default::default()
         };
         settings
-            .set_profile_model_gated("default", FileModelPreference::PianissimoOriginal, true)
+            .set_profile_model_gated(
+                "default",
+                FileModelPreference::Pianissimo(PianissimoModel::Swedish),
+                true,
+            )
             .unwrap();
         settings
     }
@@ -1002,7 +1014,10 @@ mod tests {
         let error = candidate
             .apply_profiles_change(
                 profiles,
-                Some(("default", FileModelPreference::PianissimoOriginal)),
+                Some((
+                    "default",
+                    FileModelPreference::Pianissimo(PianissimoModel::Swedish),
+                )),
             )
             .unwrap_err()
             .to_string();
@@ -1231,10 +1246,18 @@ mod tests {
             ..Default::default()
         };
         settings
-            .set_profile_model_gated("a", FileModelPreference::PianissimoOriginal, true)
+            .set_profile_model_gated(
+                "a",
+                FileModelPreference::Pianissimo(PianissimoModel::Swedish),
+                true,
+            )
             .unwrap();
         settings
-            .set_profile_model_gated("b", FileModelPreference::PianissimoOriginal, true)
+            .set_profile_model_gated(
+                "b",
+                FileModelPreference::Pianissimo(PianissimoModel::Swedish),
+                true,
+            )
             .unwrap();
         let mut profiles = settings.resolved_hotkey_profiles();
         for profile in &mut profiles {

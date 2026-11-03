@@ -1,5 +1,6 @@
 use super::*;
 use crate::commands::apply_glossary;
+use sagascript_core::models::PianissimoModel;
 use sagascript_core::settings::FileModelPreference;
 
 #[cfg(test)]
@@ -26,6 +27,7 @@ mod save_name_tests {
 #[cfg(test)]
 mod run_context_parity_tests {
     use super::{file_transcription_context, file_transcription_language};
+    use sagascript_core::models::PianissimoModel;
     use sagascript_core::run_context::{RunOverrides, RunSelection};
     use sagascript_core::settings::{FileModelPreference, Settings, WhisperModel};
     use sagascript_core::test_support::run_context_table::{entries, migrated, shapes, PROMPTS};
@@ -115,12 +117,12 @@ mod run_context_parity_tests {
         );
 
         let pianissimo = Settings {
-            file_transcription_model: FileModelPreference::PianissimoOriginal,
+            file_transcription_model: FileModelPreference::Pianissimo(PianissimoModel::Swedish),
             ..migrated()
         };
         assert_eq!(
             file_transcription_context(&pianissimo, Some("swedish"), None).err().map(|error| error.to_string()),
-            Some("Pianissimo supports plain Swedish file transcription only; select a Whisper file model for meetings or diarization".to_string())
+            Some("Pianissimo supports plain file transcription only; select a Whisper file model for meetings or diarization".to_string())
         );
     }
 }
@@ -223,11 +225,12 @@ mod glossary_options_tests {
     #[test]
     fn meeting_context_rejects_pianissimo_instead_of_switching_to_whisper() {
         let mut settings = scoped_file_settings();
-        settings.file_transcription_model = FileModelPreference::PianissimoOriginal;
+        settings.file_transcription_model =
+            FileModelPreference::Pianissimo(PianissimoModel::Swedish);
         let error = file_transcription_context(&settings, Some("swedish"), None)
             .err()
             .expect("meeting path must reject Pianissimo");
-        assert!(error.to_string().contains("plain Swedish"));
+        assert!(error.to_string().contains("plain file transcription only"));
         assert_eq!(error.code(), "pianissimo_unavailable");
         assert_eq!(
             settings.effective_model_for(Language::Swedish),

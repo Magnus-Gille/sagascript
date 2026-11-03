@@ -157,8 +157,9 @@ export async function getFileModelOptions(language: Language, include?: string):
   return invoke("get_file_model_options", { language, include: include ?? null });
 }
 
-export async function downloadPianissimoModel(): Promise<void> {
-  return invoke("download_pianissimo_model");
+/** `model` is a Pianissimo model id; the backend downloads the Swedish one without it. */
+export async function downloadPianissimoModel(model?: string): Promise<void> {
+  return invoke("download_pianissimo_model", model ? { model } : {});
 }
 
 /** Resolves with notices about profile models reset to Auto by a language change. */

@@ -19,8 +19,8 @@ use std::str::FromStr;
 use sagascript_core::error::DictationError;
 use sagascript_core::settings::{
     validate_hotkey, Accessibility, DictionaryRefusal, EnginePrewarm, FileModel,
-    FileModelPreference, HotkeyMode, HotkeyProfile, Language, ModelResetNotice, Settings,
-    WhisperModel,
+    FileModelPreference, HotkeyMode, HotkeyProfile, Language, ModelResetNotice, PianissimoModel,
+    Settings, WhisperModel,
 };
 
 use super::shortcut_warning;
@@ -242,7 +242,7 @@ pub(super) const KEYS: &[Key] = &[
                 .profile_models
                 .get(&settings.default_profile().id)
                 .map_or(settings.pianissimo_dictation, |model| {
-                    *model == FileModelPreference::PianissimoOriginal
+                    *model == FileModelPreference::Pianissimo(PianissimoModel::Swedish)
                 })
                 .to_string()
         },

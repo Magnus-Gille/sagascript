@@ -655,7 +655,7 @@ fn json_output(command: &Command) -> Option<JsonOutput> {
         #[cfg(feature = "record")]
         Command::Record(args) if args.json => Some(JsonOutput::Pretty),
         Command::Engine(args) => match args.action {
-            engine::EngineAction::Status { json: true }
+            engine::EngineAction::Status { json: true, .. }
             | engine::EngineAction::Doctor { json: true, .. } => Some(JsonOutput::Pretty),
             _ => None,
         },
