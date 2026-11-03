@@ -32,7 +32,7 @@ export const GROUP_NPM_PACKAGES = {
 };
 
 export const TEST_GROUPS = {
-  ui: ["scripts/test-file-transcription-recovery.mjs", "scripts/test-finnish-language.mjs"],
+  ui: ["scripts/test-danish-language.mjs", "scripts/test-file-transcription-recovery.mjs", "scripts/test-finnish-language.mjs"],
   ci: [
     "scripts/diarization_sv/test_reference_review.mjs",
     "scripts/test-browser-mock-commands.mjs",

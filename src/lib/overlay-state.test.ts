@@ -89,6 +89,12 @@ test("the English overlay names a Finnish dictation profile in its recording lab
   expect(label(s, "fi", "en-US")).toBe("Recording · Finnish");
 });
 
+test("the overlay names a Danish dictation profile in its recording label", () => {
+  const s = run([state("recording")]);
+  expect(label(s, "da", "en-US")).toBe("Recording · Danish");
+  expect(label(s, "da", "sv-SE")).toBe("Spelar in · danska");
+});
+
 test("a cancelled load resets the engine so later dictations do not show loading", () => {
   let s = run([state("transcribing"), engine("loading"), elapsed]);
   expect(label(s)).toBe("Loading model…");

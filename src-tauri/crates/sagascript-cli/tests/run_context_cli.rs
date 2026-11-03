@@ -138,7 +138,7 @@ fn transcribe_reports_resolution_failures_with_their_codes() {
     let bad_language = sandbox.run(&["transcribe", "a.wav", "--language", "xx"]);
     assert_eq!(
         failure(&bad_language),
-        "Settings error: Unknown language 'xx'. Valid: en, sv, no, fi, auto"
+        "Settings error: Unknown language 'xx'. Valid: en, sv, no, fi, da, auto"
     );
 
     for (flags, code) in [
@@ -198,7 +198,7 @@ fn transcribe_checks_the_prompt_file_before_the_model() {
     ]);
     assert_eq!(
         failure(&language_first),
-        "Settings error: Unknown language 'xx'. Valid: en, sv, no, fi, auto"
+        "Settings error: Unknown language 'xx'. Valid: en, sv, no, fi, da, auto"
     );
 }
 
@@ -398,7 +398,7 @@ mod reprocess {
                 &sandbox,
                 &["--language", "xx", "--prompt-file", MISSING_HINT]
             )),
-            "Settings error: Unknown language 'xx'. Valid: en, sv, no, fi, auto"
+            "Settings error: Unknown language 'xx'. Valid: en, sv, no, fi, da, auto"
         );
     }
 
@@ -637,7 +637,7 @@ mod record {
         );
         assert_eq!(
             failure(&sandbox.run(&["record", "--language", "xx"])),
-            "Settings error: Unknown language 'xx'. Valid: en, sv, no, fi, auto"
+            "Settings error: Unknown language 'xx'. Valid: en, sv, no, fi, da, auto"
         );
     }
 

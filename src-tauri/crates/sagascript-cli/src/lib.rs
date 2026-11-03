@@ -114,13 +114,14 @@ Workflow:
   2. Transcribe a file:  sagascript transcribe recording.wav
   3. Or record live:      sagascript record
 
-Supported languages: English (en), Swedish (sv), Norwegian (no), Finnish (fi), Auto-detect (auto).
+Supported languages: English (en), Swedish (sv), Norwegian (no), Finnish (fi), Danish (da), Auto-detect (auto).
 Models are downloaded from pinned publisher revisions and stored locally.
 
 NOTE: Auto-detect uses a generic multilingual model which is less accurate \
 than the dedicated language models (KBLab for Swedish, NbAiLab for Norwegian). \
 Finnish uses the generic multilingual Base model by default; optional \
 Finnish-optimized Tiny is available as fi-whisper-tiny. \
+Danish uses the generic multilingual Small model by default. \
 For best results, set a specific language.";
 
 #[cfg(not(feature = "record"))]
@@ -137,13 +138,14 @@ Workflow:
   1. Download a model:   sagascript download-model base.en
   2. Transcribe a file:  sagascript transcribe recording.wav
 
-Supported languages: English (en), Swedish (sv), Norwegian (no), Finnish (fi), Auto-detect (auto).
+Supported languages: English (en), Swedish (sv), Norwegian (no), Finnish (fi), Danish (da), Auto-detect (auto).
 Models are downloaded from pinned publisher revisions and stored locally.
 
 NOTE: Auto-detect uses a generic multilingual model which is less accurate \
 than the dedicated language models (KBLab for Swedish, NbAiLab for Norwegian). \
 Finnish uses the generic multilingual Base model by default; optional \
 Finnish-optimized Tiny is available as fi-whisper-tiny. \
+Danish uses the generic multilingual Small model by default. \
 For best results, set a specific language.";
 
 #[cfg(feature = "record")]
@@ -264,7 +266,8 @@ By default, uses the language and model from your persisted settings \
 NOTE: --language auto uses a generic multilingual model which is less \
 accurate than the dedicated language models. Finnish uses the generic \
 multilingual Base model by default; optional Finnish-optimized Tiny is \
-available as fi-whisper-tiny.
+available as fi-whisper-tiny. Danish uses the generic multilingual Small \
+model by default.
 
 INTERRUPTION: Press Ctrl+C to terminate the CLI invocation. A retry uses a \
 fresh in-process model backend with no on-disk warm-state lock. Re-run the \
@@ -287,6 +290,9 @@ EXAMPLES:
 
   # Transcribe in Finnish with the generic multilingual Base model
   sagascript transcribe tal.m4a --language fi --model base
+
+  # Transcribe in Danish with the generic multilingual Small model
+  sagascript transcribe tale.m4a --language da --model small
 
   # Output as JSON (includes metadata)
   sagascript transcribe podcast.mp3 --json
@@ -331,7 +337,8 @@ Use --output to save the raw audio as a WAV file without transcribing \
 NOTE: --language auto uses a generic multilingual model which is less \
 accurate than the dedicated language models. Finnish uses the generic \
 multilingual Base model by default; optional Finnish-optimized Tiny is \
-available as fi-whisper-tiny.",
+available as fi-whisper-tiny. Danish uses the generic multilingual Small \
+model by default.",
         after_long_help = "\
 EXAMPLES:
   # Record until Ctrl+C, then transcribe
@@ -373,7 +380,8 @@ List all available Whisper models with their size and download status.
 Models are organized by language. English uses OpenAI Whisper models, \
 Swedish uses KBLab models, Norwegian uses NbAiLab models, and Finnish uses \
 generic multilingual Whisper models plus an optional Finnish-optimized Tiny \
-(Base is recommended). \
+(Base is recommended). Danish uses the generic multilingual Whisper models \
+(Small is recommended). \
 Use --language to filter the list.
 
 The DOWNLOADED column shows whether each model is already available locally.",
@@ -389,7 +397,10 @@ EXAMPLES:
   sagascript list-models --language en
 
   # List Finnish models
-  sagascript list-models --language fi"
+  sagascript list-models --language fi
+
+  # List Danish models
+  sagascript list-models --language da"
     )]
     ListModels(models::ListModelsArgs),
 
@@ -419,6 +430,7 @@ AVAILABLE MODELS:
   Swedish:    kb-whisper-tiny, kb-whisper-base, kb-whisper-small
   Norwegian:  nb-whisper-tiny, nb-whisper-base, nb-whisper-small
   Finnish:    base (generic multilingual default), fi-whisper-tiny
+  Danish:     small (generic multilingual default)
   Multilingual: tiny, base
 
 DIARIZATION MODELS (requires --features diarization):
@@ -476,7 +488,7 @@ View and modify Sagascript settings. Settings are persisted to a JSON file \
 and take effect immediately (the GUI hot-reloads changes made via CLI).
 
 Available setting keys:
-  language           Language for transcription (en, sv, no, fi, auto)
+  language           Language for transcription (en, sv, no, fi, da, auto)
   whisper_model      Whisper model ID (e.g. base.en, kb-whisper-base)
   hotkey_mode        Hotkey behavior: push (push-to-talk) or toggle
   show_overlay       Show recording overlay (true/false)

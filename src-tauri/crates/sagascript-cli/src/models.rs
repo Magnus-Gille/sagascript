@@ -13,7 +13,7 @@ use crate::output::{errln, outln, Out};
 
 #[derive(Args)]
 pub struct ListModelsArgs {
-    /// Filter by language [possible values: en, sv, no, fi, auto (less accurate)]
+    /// Filter by language [possible values: en, sv, no, fi, da, auto (less accurate)]
     #[arg(short, long, value_name = "LANG")]
     pub language: Option<String>,
 }
@@ -586,6 +586,21 @@ mod lineup_tests {
             .collect();
         assert_eq!(base.len(), 2, "{lines:#?}");
         assert!(base[0].contains("Finnish") && base[1].contains("Auto-detect"));
+    }
+
+    #[test]
+    fn danish_lists_the_multilingual_models_under_its_own_name() {
+        let lines = table(&[Language::Danish], &FixedModelEnv::new());
+        let models = WhisperModel::models_for_language(Language::Danish);
+        assert_eq!(lines.len(), 2 + models.len(), "{lines:#?}");
+        for model in models {
+            let row = lines
+                .iter()
+                .find(|line| line.starts_with(&format!("{} ", model.id())))
+                .unwrap_or_else(|| panic!("no row for {model:?}: {lines:#?}"));
+            assert!(row.contains("Danish"), "{row}");
+        }
+        assert!(lines.iter().all(|line| !line.contains("pianissimo")));
     }
 }
 

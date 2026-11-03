@@ -133,7 +133,7 @@ fn token_spans(text: &str) -> Vec<Token<'_>> {
 
 fn music_marker(language: Language) -> &'static str {
     match language {
-        Language::Swedish => "[MUSIK]",
+        Language::Swedish | Language::Danish => "[MUSIK]",
         Language::Norwegian => "[MUSIKK]",
         // Preserve the established annotation vocabulary for Finnish until
         // localized annotation rules have their own speech-safety evidence.
@@ -205,6 +205,10 @@ mod tests {
         assert_eq!(
             normalize_nonspeech_markers("Musik Musik Musik", Language::Norwegian),
             "[MUSIKK]"
+        );
+        assert_eq!(
+            normalize_nonspeech_markers("Musik Musik Musik", Language::Danish),
+            "[MUSIK]"
         );
         assert_eq!(
             normalize_nonspeech_markers("[MUSIC] Pidän musiikista", Language::Finnish),

@@ -23,7 +23,7 @@ use super::transcribe::{copy_to_clipboard, model_id_string, resolve_effective_mo
 
 #[derive(Args)]
 pub struct RecordArgs {
-    /// Language for transcription [possible values: en, sv, no, fi, auto (less accurate)]
+    /// Language for transcription [possible values: en, sv, no, fi, da, auto (less accurate)]
     #[arg(short, long, value_name = "LANG")]
     pub language: Option<String>,
 
@@ -484,6 +484,7 @@ mod tests {
             Language::English,
             Language::Norwegian,
             Language::Finnish,
+            Language::Danish,
             Language::Auto,
         ] {
             let error =

@@ -16,7 +16,7 @@ update.
 - **Nordic-grade accuracy** -- Swedish and Norwegian use [KB-Whisper](https://huggingface.co/KBLab) (Swedish National Library) and [NB-Whisper](https://huggingface.co/NbAiLab) (Norwegian National Library), fine-tuned on 50,000+ hours of Nordic speech with 47% fewer errors than generic Whisper
 - **Privacy by default** -- no telemetry, cloud transcription, or transcript upload; network access is limited to explicit speech-engine/model downloads and update checks
 - **No telemetry or tracking** -- no analytics, no usage sharing, no data collection of any kind
-- **Multi-language** -- English, Swedish, and Norwegian with dedicated models; additional languages supported via generic Whisper models
+- **Multi-language** -- English, Swedish, and Norwegian with dedicated models; Finnish and Danish use generic multilingual Whisper models
 - **Language shortcuts** -- assign different global hotkeys to different languages and switch without opening Settings
 - **CLI + GUI** -- full CLI for scripting and automation, menu bar app for everyday use
 - **File transcription** -- transcribe audio and video files (MP3, WAV, M4A, FLAC, MP4, MKV, OGG, and more)

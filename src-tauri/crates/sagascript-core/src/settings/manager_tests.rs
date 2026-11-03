@@ -41,6 +41,7 @@ fn pianissimo_dictation_is_swedish_only() {
         Language::English,
         Language::Norwegian,
         Language::Finnish,
+        Language::Danish,
         Language::Auto,
     ] {
         assert!(!enabled.uses_pianissimo_for_dictation(language));

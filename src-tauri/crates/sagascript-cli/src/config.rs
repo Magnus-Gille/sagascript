@@ -861,7 +861,7 @@ mod tests {
 
     #[test]
     fn parse_enum_value_all_valid_languages() {
-        let valid = ["en", "sv", "no", "fi", "auto"];
+        let valid = ["en", "sv", "no", "fi", "da", "auto"];
         for v in valid {
             let result = parse_value::<Language>(v, "language");
             assert!(result.is_ok(), "should parse language '{v}'");
@@ -1780,11 +1780,13 @@ mod tests {
             "sv",
             "no",
             "fi",
+            "da",
             "auto",
             "english",
             "swedish",
             "norwegian",
             "finnish",
+            "danish",
             "EN",
             "English",
             "de",
@@ -1844,7 +1846,7 @@ mod tests {
             crate::transcribe::parse_language("de")
                 .unwrap_err()
                 .to_string(),
-            "Settings error: Unknown language 'de'. Valid: en, sv, no, fi, auto"
+            "Settings error: Unknown language 'de'. Valid: en, sv, no, fi, da, auto"
         );
         assert_eq!(
             apply_setting_value(&mut Settings::default(), "language", "de")

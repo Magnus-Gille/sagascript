@@ -108,6 +108,45 @@ fn language_selection_keeps_a_compatible_profile_model_silently() {
 }
 
 #[test]
+fn danish_selection_resets_swedish_models_and_keeps_multilingual_ones() {
+    let mut settings = swedish_with_explicit_model();
+    let notices = settings
+        .apply_language_selection_gated(Language::Danish, true)
+        .unwrap();
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert_eq!(notices[0].profile_id, "default");
+    assert_eq!(
+        settings.profile_models["default"],
+        FileModelPreference::Auto
+    );
+    assert_eq!(settings.whisper_model, WhisperModel::Small);
+    assert!(settings.auto_select_model);
+
+    // A multilingual model stays, and Pianissimo is refused for Danish.
+    settings
+        .set_profile_model_gated(
+            "default",
+            FileModelPreference::Whisper(WhisperModel::Medium),
+            true,
+        )
+        .unwrap();
+    assert!(settings
+        .set_profile_model_gated("default", FileModelPreference::PianissimoOriginal, true)
+        .is_err());
+    assert!(settings
+        .set_profile_model_gated(
+            "default",
+            FileModelPreference::Whisper(WhisperModel::KbWhisperMedium),
+            true,
+        )
+        .is_err());
+    assert_eq!(
+        settings.profile_models["default"],
+        FileModelPreference::Whisper(WhisperModel::Medium)
+    );
+}
+
+#[test]
 fn refused_language_selection_changes_nothing() {
     let mut settings = swedish_with_explicit_model();
     settings

@@ -103,7 +103,7 @@ pub(super) const KEYS: &[Key] = &[
     Key {
         name: "language",
         note: None,
-        help: &["en, sv, no, fi, auto (auto uses a generic model — less accurate)"],
+        help: &["en, sv, no, fi, da, auto (auto uses a generic model — less accurate)"],
         get: |settings| settings.default_profile().language.id().to_string(),
         set: |settings, value| {
             let language = parse_value::<Language>(value, "language")?;

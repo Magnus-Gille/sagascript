@@ -25,6 +25,7 @@ fn swedish_lineup_per_platform() {
             Language::English,
             Language::Norwegian,
             Language::Finnish,
+            Language::Danish,
             Language::Auto,
         ] {
             let expected: Vec<FileModel> = WhisperModel::models_for_language(language)

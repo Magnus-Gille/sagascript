@@ -2373,6 +2373,8 @@
         return "Norwegian";
       case "fi":
         return "Finnish";
+      case "da":
+        return "Danish";
       case "en":
         return "English";
       default:
@@ -2511,6 +2513,7 @@
                   <option value="sv">Swedish</option>
                   <option value="no">Norwegian</option>
                   <option value="fi">Finnish</option>
+                  <option value="da">Danish</option>
                   <option value="auto">Auto-detect</option>
                 </select>
               </div>
@@ -2955,6 +2958,7 @@
             <option value="sv">Swedish</option>
             <option value="no">Norwegian</option>
             <option value="fi">Finnish</option>
+            <option value="da">Danish</option>
             <option value="auto">Auto-detect</option>
           </select>
           {#if blockedLanguageChange}

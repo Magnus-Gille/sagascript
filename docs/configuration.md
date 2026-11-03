@@ -59,6 +59,11 @@ is written as its code or its English name (`sv`, `swedish`) by `config set
 language`, `config profiles ... --language` and `--language` of the other
 commands alike.
 
+Supported languages are English (`en`), Swedish (`sv`), Norwegian (`no`),
+Finnish (`fi`), Danish (`da`) and auto-detect (`auto`). Danish uses the
+multilingual Whisper models only (Small is the recommended one); it has no
+language-specific model, and Pianissimo does not run for it.
+
 Use the CLI to discover the effective paths rather than duplicating the
 resolution rules in scripts:
 

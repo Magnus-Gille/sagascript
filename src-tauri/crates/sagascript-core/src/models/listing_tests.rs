@@ -45,6 +45,7 @@ fn pianissimo_closes_the_swedish_catalog_only_where_it_runs() {
         Language::English,
         Language::Norwegian,
         Language::Finnish,
+        Language::Danish,
         Language::Auto,
     ] {
         assert!(
@@ -266,6 +267,9 @@ fn recommended_follows_the_pianissimo_gate() {
         ["nb-whisper-base"]
     );
     assert_eq!(recommended(Language::Finnish, &with), ["base"]);
+    // Danish is Whisper-only: the gate changes nothing for it.
+    assert_eq!(recommended(Language::Danish, &with), ["small"]);
+    assert_eq!(recommended(Language::Danish, &without), ["small"]);
     assert_eq!(recommended(Language::Auto, &without), ["base"]);
 }
 
@@ -284,7 +288,7 @@ fn every_language_of_an_entry_lists_it() {
     }
     assert_eq!(
         model_info(FileModel::Whisper(WhisperModel::Base), &env).languages,
-        [Language::Finnish, Language::Auto]
+        [Language::Finnish, Language::Danish, Language::Auto]
     );
     assert_eq!(
         model_info(FileModel::PianissimoOriginal, &env).languages,

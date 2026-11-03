@@ -9,7 +9,7 @@ import type {
   MeetingTranscript,
 } from "./meeting-types";
 
-export type Language = "en" | "sv" | "no" | "fi" | "auto";
+export type Language = "en" | "sv" | "no" | "fi" | "da" | "auto";
 export type HotkeyMode = "push" | "toggle";
 
 export interface HotkeyProfile {

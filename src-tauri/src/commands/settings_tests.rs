@@ -12,6 +12,7 @@ mod language_selection_tests {
             Language::Swedish,
             Language::Norwegian,
             Language::Finnish,
+            Language::Danish,
             Language::Auto,
         ] {
             let mut settings = Settings {

@@ -233,7 +233,9 @@ mod tests {
                 language: Some("xx"),
                 prompt: None,
                 prompt_file: None,
-                expect: Err("Settings error: Unknown language 'xx'. Valid: en, sv, no, fi, auto"),
+                expect: Err(
+                    "Settings error: Unknown language 'xx'. Valid: en, sv, no, fi, da, auto",
+                ),
             },
             Case {
                 name: "inline prompt in front of the profile dictionary",
@@ -388,7 +390,7 @@ mod tests {
         );
         assert_eq!(
             text(with_file(None, Some("xx"))),
-            "Settings error: Unknown language 'xx'. Valid: en, sv, no, fi, auto"
+            "Settings error: Unknown language 'xx'. Valid: en, sv, no, fi, da, auto"
         );
         // The command line never offers both flags (clap makes them conflict),
         // but the request type can hold both: the profile still comes first.
