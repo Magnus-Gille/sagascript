@@ -267,9 +267,9 @@ fn recommended_follows_the_pianissimo_gate() {
         ["nb-whisper-base"]
     );
     assert_eq!(recommended(Language::Finnish, &with), ["base"]);
-    // Danish has its own Pianissimo model where it runs, Whisper Small elsewhere.
+    // Danish has its own Pianissimo model where it runs, Whisper Medium elsewhere.
     assert_eq!(recommended(Language::Danish, &with), ["pianissimo-da"]);
-    assert_eq!(recommended(Language::Danish, &without), ["small"]);
+    assert_eq!(recommended(Language::Danish, &without), ["medium"]);
     assert_eq!(recommended(Language::Auto, &without), ["base"]);
 }
 

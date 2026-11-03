@@ -121,7 +121,8 @@ NOTE: Auto-detect uses a generic multilingual model which is less accurate \
 than the dedicated language models (KBLab for Swedish, NbAiLab for Norwegian). \
 Finnish uses the generic multilingual Base model by default; optional \
 Finnish-optimized Tiny is available as fi-whisper-tiny. \
-Danish uses the generic multilingual Small model by default. \
+Danish uses pianissimo-da where Pianissimo runs, otherwise the generic \
+multilingual Medium model. \
 For best results, set a specific language.";
 
 #[cfg(not(feature = "record"))]
@@ -145,7 +146,8 @@ NOTE: Auto-detect uses a generic multilingual model which is less accurate \
 than the dedicated language models (KBLab for Swedish, NbAiLab for Norwegian). \
 Finnish uses the generic multilingual Base model by default; optional \
 Finnish-optimized Tiny is available as fi-whisper-tiny. \
-Danish uses the generic multilingual Small model by default. \
+Danish uses pianissimo-da where Pianissimo runs, otherwise the generic \
+multilingual Medium model. \
 For best results, set a specific language.";
 
 #[cfg(feature = "record")]
@@ -266,8 +268,8 @@ By default, uses the language and model from your persisted settings \
 NOTE: --language auto uses a generic multilingual model which is less \
 accurate than the dedicated language models. Finnish uses the generic \
 multilingual Base model by default; optional Finnish-optimized Tiny is \
-available as fi-whisper-tiny. Danish uses the generic multilingual Small \
-model by default.
+available as fi-whisper-tiny. Danish uses pianissimo-da where Pianissimo \
+runs, otherwise the generic multilingual Medium model.
 
 INTERRUPTION: Press Ctrl+C to terminate the CLI invocation. A retry uses a \
 fresh in-process model backend with no on-disk warm-state lock. Re-run the \
@@ -291,8 +293,8 @@ EXAMPLES:
   # Transcribe in Finnish with the generic multilingual Base model
   sagascript transcribe tal.m4a --language fi --model base
 
-  # Transcribe in Danish with the generic multilingual Small model
-  sagascript transcribe tale.m4a --language da --model small
+  # Transcribe in Danish with the generic multilingual Medium model
+  sagascript transcribe tale.m4a --language da --model medium
 
   # Output as JSON (includes metadata)
   sagascript transcribe podcast.mp3 --json
@@ -337,8 +339,8 @@ Use --output to save the raw audio as a WAV file without transcribing \
 NOTE: --language auto uses a generic multilingual model which is less \
 accurate than the dedicated language models. Finnish uses the generic \
 multilingual Base model by default; optional Finnish-optimized Tiny is \
-available as fi-whisper-tiny. Danish uses the generic multilingual Small \
-model by default.",
+available as fi-whisper-tiny. Danish uses pianissimo-da where Pianissimo \
+runs, otherwise the generic multilingual Medium model.",
         after_long_help = "\
 EXAMPLES:
   # Record until Ctrl+C, then transcribe
@@ -380,8 +382,8 @@ List all available Whisper models with their size and download status.
 Models are organized by language. English uses OpenAI Whisper models, \
 Swedish uses KBLab models, Norwegian uses NbAiLab models, and Finnish uses \
 generic multilingual Whisper models plus an optional Finnish-optimized Tiny \
-(Base is recommended). Danish uses the generic multilingual Whisper models \
-(Small is recommended). \
+(Base is recommended). Danish uses pianissimo-da where Pianissimo runs, \
+otherwise the generic multilingual Whisper models (Medium is recommended). \
 Use --language to filter the list.
 
 The DOWNLOADED column shows whether each model is already available locally.",
@@ -430,7 +432,7 @@ AVAILABLE MODELS:
   Swedish:    kb-whisper-tiny, kb-whisper-base, kb-whisper-small
   Norwegian:  nb-whisper-tiny, nb-whisper-base, nb-whisper-small
   Finnish:    base (generic multilingual default), fi-whisper-tiny
-  Danish:     small (generic multilingual default)
+  Danish:     medium (generic multilingual default)
   Multilingual: tiny, base
 
 DIARIZATION MODELS (requires --features diarization):
