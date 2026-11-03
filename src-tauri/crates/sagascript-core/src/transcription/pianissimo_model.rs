@@ -767,6 +767,47 @@ const LEGACY_TRASH_PREFIX: &str = ".pianissimo-old-";
 /// in another process (app + CLI) and are left alone.
 const STALE_STAGING_AGE: std::time::Duration = std::time::Duration::from_secs(60 * 60);
 
+/// Every artifact's model id: staging directories are named after them.
+const ALL_MODEL_IDS: [&str; 4] = [MODEL_ID, ONNX_MODEL_ID, DA_MODEL_ID, DA_ONNX_MODEL_ID];
+
+/// A fresh staging directory for `manifest`'s install:
+/// `.pianissimo-extract-<model id>-<uuid>`.
+fn staging_dir_in(manifest: &ModelManifest, models: &Path) -> PathBuf {
+    models.join(format!(
+        "{STAGING_PREFIX}{}-{}",
+        manifest.model_id,
+        uuid::Uuid::new_v4()
+    ))
+}
+
+/// Whose leftover a directory in the models folder is, seen from `manifest`.
+#[derive(Debug, PartialEq, Eq)]
+enum Staging {
+    /// A staging directory of this model.
+    Own,
+    /// A staging directory of another model: possibly a download in progress
+    /// right now (a large file can take well over an hour), never removed here.
+    Other,
+    /// From a release that did not name staging directories after the model,
+    /// or the legacy trash prefix.
+    Unowned,
+}
+
+fn staging_kind(name: &str, manifest: &ModelManifest) -> Option<Staging> {
+    if name.starts_with(LEGACY_TRASH_PREFIX) {
+        return Some(Staging::Unowned);
+    }
+    let rest = name.strip_prefix(STAGING_PREFIX)?;
+    let named = |id: &str| rest.starts_with(&format!("{id}-"));
+    Some(if named(manifest.model_id) {
+        Staging::Own
+    } else if ALL_MODEL_IDS.iter().any(|id| named(id)) {
+        Staging::Other
+    } else {
+        Staging::Unowned
+    })
+}
+
 /// Move the verified `root` into `final_dir`, keeping any previous install as
 /// `<final>.previous-<uuid>` until the new one is in place.
 ///
@@ -855,17 +896,19 @@ fn recover_in(manifest: &ModelManifest, models: &Path) {
     }
 }
 
-/// Remove abandoned staging directories (`.pianissimo-extract-*`, legacy
-/// `.pianissimo-old-*`) not modified within `min_age`. Backups and the active
-/// install are never touched here.
-fn remove_stale_staging(models: &Path, min_age: std::time::Duration) {
+/// Remove abandoned staging directories of `manifest`'s model and unowned
+/// ones (`.pianissimo-extract-*` of older releases, legacy `.pianissimo-old-*`)
+/// not modified within `min_age`. Another model's staging directories,
+/// backups and the active install are never touched here.
+fn remove_stale_staging(manifest: &ModelManifest, models: &Path, min_age: std::time::Duration) {
     let Ok(entries) = std::fs::read_dir(models) else {
         return;
     };
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
-        if !(name.starts_with(STAGING_PREFIX) || name.starts_with(LEGACY_TRASH_PREFIX)) {
-            continue;
+        match staging_kind(&name, manifest) {
+            Some(Staging::Own | Staging::Unowned) => {}
+            Some(Staging::Other) | None => continue,
         }
         let age = entry
             .metadata()
@@ -921,7 +964,7 @@ pub(crate) fn install_archive_in(
 ) -> Result<PathBuf, DictationError> {
     std::fs::create_dir_all(models)
         .map_err(|e| install_err(format!("Failed to create models directory: {e}")))?;
-    let staging = models.join(format!("{STAGING_PREFIX}{}", uuid::Uuid::new_v4()));
+    let staging = staging_dir_in(manifest, models);
     let result = (|| {
         std::fs::create_dir(&staging)
             .map_err(|e| install_err(format!("Cannot create staging directory: {e}")))?;
@@ -984,7 +1027,7 @@ where
 {
     let manifest = *manifest;
     let models = models.to_path_buf();
-    let staging = models.join(format!("{STAGING_PREFIX}{}", uuid::Uuid::new_v4()));
+    let staging = staging_dir_in(&manifest, &models);
     run_blocking({
         let models = models.clone();
         move || {
@@ -1110,7 +1153,7 @@ fn prepare_download(
             "The Pianissimo model has not been published yet (manifest placeholder)",
         ));
     }
-    remove_stale_staging(models, STALE_STAGING_AGE);
+    remove_stale_staging(manifest, models, STALE_STAGING_AGE);
     ensure_free_space(required_space(manifest), free_space(models))?;
     Ok(Preparation::Download)
 }
@@ -1258,9 +1301,9 @@ fn cleanup_superseded(manifest: &ModelManifest, models: &Path) {
             }
         }
     }
-    // Staging directories are shared by every Pianissimo model: a fresh one may
-    // belong to another model's download in progress, so only old ones go.
-    remove_stale_staging(models, STALE_STAGING_AGE);
+    // This model's install is done, so its own leftovers go at any age; another
+    // model's staging directory may be a download in progress and stays.
+    remove_stale_staging(manifest, models, std::time::Duration::ZERO);
 }
 
 fn delete_in(manifest: &ModelManifest, models: &Path) -> Result<(), DictationError> {
@@ -2166,14 +2209,49 @@ mod tests {
         let legacy = models.join(format!("{LEGACY_TRASH_PREFIX}abc"));
         fs::create_dir_all(&legacy).unwrap();
 
-        // Fresh dirs survive the default age guard.
-        remove_stale_staging(&models, STALE_STAGING_AGE);
-        assert!(staging.exists());
+        // Another model's staging directory: a download that may be running.
+        let other_id = ALL_MODEL_IDS
+            .into_iter()
+            .find(|id| *id != manifest.model_id)
+            .unwrap();
+        let other = models.join(format!("{STAGING_PREFIX}{other_id}-abc"));
+        fs::create_dir_all(other.join("Encoder.mlmodelc/weights")).unwrap();
+        let own = staging_dir_in(&manifest, &models);
+        fs::create_dir_all(&own).unwrap();
 
-        remove_stale_staging(&models, std::time::Duration::ZERO);
+        // Fresh dirs survive the default age guard.
+        remove_stale_staging(&manifest, &models, STALE_STAGING_AGE);
+        assert!(staging.exists() && own.exists());
+
+        remove_stale_staging(&manifest, &models, std::time::Duration::ZERO);
         assert!(!staging.exists());
         assert!(!legacy.exists());
+        assert!(!own.exists());
+        assert!(other.exists(), "another model's download must survive");
         assert!(is_downloaded_in(&manifest, &dir));
+
+        // Nor does this model's successful install clean it up.
+        cleanup_superseded(&manifest, &models);
+        assert!(other.exists());
+    }
+
+    #[test]
+    fn staging_directories_are_named_after_their_model() {
+        for manifest in [&MANIFEST, &ONNX_MANIFEST, &DA_MANIFEST, &DA_ONNX_MANIFEST] {
+            let dir = staging_dir_in(manifest, Path::new("/m"));
+            let name = dir.file_name().unwrap().to_string_lossy().into_owned();
+            assert_eq!(staging_kind(&name, manifest), Some(Staging::Own));
+            for other in [&MANIFEST, &ONNX_MANIFEST, &DA_MANIFEST, &DA_ONNX_MANIFEST] {
+                if other.model_id != manifest.model_id {
+                    assert_eq!(staging_kind(&name, other), Some(Staging::Other));
+                }
+            }
+        }
+        assert_eq!(
+            staging_kind(".pianissimo-extract-0b5e-uuid", &DA_MANIFEST),
+            Some(Staging::Unowned)
+        );
+        assert_eq!(staging_kind("pianissimo-sv-coreml-r1", &MANIFEST), None);
     }
 
     #[tokio::test]

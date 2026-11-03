@@ -78,13 +78,17 @@ fn every_variant_keeps_its_text_and_has_a_stable_snake_case_code() {
             "pianissimo_unavailable",
         ),
         (
-            SettingsError::PianissimoPlainFilesOnly,
-            "Pianissimo supports plain file transcription only; select a Whisper file model for meetings or diarization",
+            SettingsError::PianissimoPlainFilesOnly {
+                language: "Swedish",
+            },
+            "Pianissimo supports plain Swedish file transcription only; select a Whisper file model for meetings or diarization",
             "pianissimo_unavailable",
         ),
         (
-            SettingsError::PianissimoNotForDiarization,
-            "Pianissimo supports plain file transcription only; choose a Whisper file model for diarization",
+            SettingsError::PianissimoNotForDiarization {
+                language: "Swedish",
+            },
+            "Pianissimo supports plain Swedish file transcription only; choose a Whisper file model for diarization",
             "pianissimo_unavailable",
         ),
         (

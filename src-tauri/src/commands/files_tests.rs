@@ -122,7 +122,7 @@ mod run_context_parity_tests {
         };
         assert_eq!(
             file_transcription_context(&pianissimo, Some("swedish"), None).err().map(|error| error.to_string()),
-            Some("Pianissimo supports plain file transcription only; select a Whisper file model for meetings or diarization".to_string())
+            Some("Pianissimo supports plain Swedish file transcription only; select a Whisper file model for meetings or diarization".to_string())
         );
     }
 }
@@ -230,7 +230,7 @@ mod glossary_options_tests {
         let error = file_transcription_context(&settings, Some("swedish"), None)
             .err()
             .expect("meeting path must reject Pianissimo");
-        assert!(error.to_string().contains("plain file transcription only"));
+        assert!(error.to_string().contains("plain Swedish"));
         assert_eq!(error.code(), "pianissimo_unavailable");
         assert_eq!(
             settings.effective_model_for(Language::Swedish),

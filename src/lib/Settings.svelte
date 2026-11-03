@@ -58,7 +58,7 @@
   import { backendErrorRecovery, downloadFailureRecovery, isBackendError, toErrorMessage, type BackendErrorRecovery } from "./errors";
   import ErrorRecovery from "./ErrorRecovery.svelte";
   import { open } from "@tauri-apps/plugin-dialog";
-  import { PIANISSIMO_ID, downloadModelById, isPianissimoId, useModelDownloads } from "./models.svelte";
+  import { downloadModelById, firstPianissimoId, isPianissimoId, useModelDownloads } from "./models.svelte";
   import { requestAccessibility } from "./permissions";
   import { loadPlatform } from "./platform";
   import { createModelCatalogController } from "./modelCatalogController";
@@ -2012,9 +2012,8 @@
    * fetches it again when it is missing or damaged. Progress shows like any
    * other download; rejects when the download fails.
    */
-  async function downloadEngineModelAgain(): Promise<void> {
+  async function downloadEngineModelAgain(id: string): Promise<void> {
     engineModelDownloading = true;
-    const id = enginePianissimoId();
     downloads.start(id, fileModelOptions.find((model) => model.id === id)?.display_name ?? "Pianissimo");
     try {
       try {
@@ -2030,15 +2029,19 @@
   }
 
   /**
-   * The Pianissimo model the engine errors are about: the file model when it
-   * is one, else the default dictation profile's, else the Swedish one.
+   * The Pianissimo model a file job's engine error is about: the selected file
+   * model, or what Auto resolves to (or recommends) for the file language.
    */
-  function enginePianissimoId(): string {
-    const file = settings?.file_transcription_model;
-    if (isPianissimoId(file)) return file as string;
-    const profile = settings?.hotkey_profiles?.[0]?.id ?? "default";
-    const dictation = settings?.profile_models?.[profile];
-    return isPianissimoId(dictation) ? (dictation as string) : PIANISSIMO_ID;
+  function filePianissimoId(): string {
+    return firstPianissimoId([settings?.file_transcription_model, fileAutoModel?.id, fileRecommendedModel?.id]);
+  }
+
+  /**
+   * The Pianissimo model a dictation engine error is about: the effective model
+   * (Auto resolved) of the first profile that dictates with Pianissimo.
+   */
+  function dictationPianissimoId(): string {
+    return firstPianissimoId((settings?.hotkey_profiles ?? []).map((profile) => profileModels[profile.id]?.id));
   }
 
   /** "Download the model again" under the Dictate tab's error. */
@@ -2046,7 +2049,7 @@
     if (updatePreparing || downloads.busy || engineModelDownloading) return;
     const revision = dictationEventRevision;
     try {
-      await downloadEngineModelAgain();
+      await downloadEngineModelAgain(dictationPianissimoId());
       // The model is there: the action can be repeated. Unless another event
       // replaced the error meanwhile (even one with the same text): that one
       // decides its own recovery.
@@ -2944,7 +2947,7 @@
               onMissingFile={forgetMissingFile}
               onRetry={retryFileJob}
               retryRefusal={retryRefusals[job.id] ?? ""}
-              onDownloadModel={downloadEngineModelAgain}
+              onDownloadModel={() => downloadEngineModelAgain(filePianissimoId())}
               downloadBusy={downloads.busy || engineModelDownloading}
               {updatePreparing}
               onAttentionChange={updateFileAttention}

@@ -17,6 +17,11 @@ export function isPianissimoId(id: string | null | undefined): boolean {
   return id != null && PIANISSIMO_IDS.includes(id);
 }
 
+/** The first Pianissimo id among `ids` (most relevant first), else the Swedish one. */
+export function firstPianissimoId(ids: readonly (string | null | undefined)[]): string {
+  return (ids.find(isPianissimoId) as string | undefined) ?? PIANISSIMO_ID;
+}
+
 /**
  * Download one model. Pianissimo has its own command (its own platform check
  * and bundle); every other model goes through `download_model` by id. Both

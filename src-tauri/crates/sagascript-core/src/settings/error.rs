@@ -79,15 +79,15 @@ pub enum SettingsError {
     /// own language, and the run is a meeting import or diarization (the app's
     /// wording; the CLI says it in its own words).
     #[error(
-        "Pianissimo supports plain file transcription only; select a Whisper file model for meetings or diarization"
+        "Pianissimo supports plain {language} file transcription only; select a Whisper file model for meetings or diarization"
     )]
-    PianissimoPlainFilesOnly,
+    PianissimoPlainFilesOnly { language: &'static str },
 
     /// The file model is Pianissimo and the run asks for diarization.
     #[error(
-        "Pianissimo supports plain file transcription only; choose a Whisper file model for diarization"
+        "Pianissimo supports plain {language} file transcription only; choose a Whisper file model for diarization"
     )]
-    PianissimoNotForDiarization,
+    PianissimoNotForDiarization { language: &'static str },
 
     /// This system cannot run Pianissimo (selecting it, or downloading its
     /// model).
@@ -181,8 +181,8 @@ impl SettingsError {
             Self::PianissimoProfileLanguageOnly { .. }
             | Self::PianissimoRequiresLanguageProfile { .. }
             | Self::PianissimoFileLanguageOnly { .. }
-            | Self::PianissimoPlainFilesOnly
-            | Self::PianissimoNotForDiarization
+            | Self::PianissimoPlainFilesOnly { .. }
+            | Self::PianissimoNotForDiarization { .. }
             | Self::PianissimoUnsupported => "pianissimo_unavailable",
             Self::InvalidHotkey(_)
             | Self::DuplicateHotkey { .. }

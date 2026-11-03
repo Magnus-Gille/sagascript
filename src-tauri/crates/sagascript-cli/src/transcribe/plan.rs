@@ -115,9 +115,10 @@ pub(super) fn plan_run_with(
         FileModel::Pianissimo(model) => {
             #[cfg(feature = "diarization")]
             if args.diarize || args.meeting_json {
-                return Err(DictationError::SettingsError(
-                    "Pianissimo supports plain file transcription only; select a Whisper model for diarization or meeting output".into(),
-                ));
+                return Err(DictationError::SettingsError(format!(
+                    "Pianissimo supports plain {} file transcription only; select a Whisper model for diarization or meeting output",
+                    model.language().display_name()
+                )));
             }
             EnginePlan::Pianissimo(model)
         }

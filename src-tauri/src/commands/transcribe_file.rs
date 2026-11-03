@@ -76,7 +76,10 @@ pub async fn transcribe_file(
     };
     if let Some((model, glossary)) = pianissimo_glossary {
         if diarize.unwrap_or(false) {
-            return Err(SettingsError::PianissimoNotForDiarization.into());
+            return Err(SettingsError::PianissimoNotForDiarization {
+                language: model.language().display_name(),
+            }
+            .into());
         }
         let text = crate::plain_file_jobs::transcribe_pianissimo(
             app.clone(),

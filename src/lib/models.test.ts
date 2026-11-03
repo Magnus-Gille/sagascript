@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { ModelDownloads, PIANISSIMO_DA_ID, PIANISSIMO_ID, downloadModelById, isPianissimoId } from "./models.svelte";
+import { ModelDownloads, PIANISSIMO_DA_ID, PIANISSIMO_ID, downloadModelById, firstPianissimoId, isPianissimoId } from "./models.svelte";
 import { backendError, mockIpc } from "../test/ipc";
 
 describe("downloadModelById", () => {
@@ -17,6 +17,13 @@ describe("downloadModelById", () => {
     await downloadModelById(PIANISSIMO_DA_ID);
 
     expect(ipc.calls).toEqual([{ command: "download_pianissimo_model", args: { model: "pianissimo-da" } }]);
+  });
+
+  test("an engine repair downloads the model the error is about", () => {
+    // A Danish profile on Auto resolves to pianissimo-da: that is what to repair,
+    // not the Swedish model, and not a file preference the dictation never used.
+    expect(firstPianissimoId(["small", PIANISSIMO_DA_ID, PIANISSIMO_ID])).toBe(PIANISSIMO_DA_ID);
+    expect(firstPianissimoId([undefined, null, "auto"])).toBe(PIANISSIMO_ID);
   });
 
   test("only the Pianissimo ids are Pianissimo", () => {
