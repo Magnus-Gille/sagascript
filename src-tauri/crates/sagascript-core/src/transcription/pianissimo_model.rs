@@ -767,6 +767,11 @@ const LEGACY_TRASH_PREFIX: &str = ".pianissimo-old-";
 /// in another process (app + CLI) and are left alone.
 const STALE_STAGING_AGE: std::time::Duration = std::time::Duration::from_secs(60 * 60);
 
+/// Another model's staging directory is only abandoned past this age: a
+/// download's directory keeps its creation time while files fill it, and a
+/// slow download of a large file can outlast [`STALE_STAGING_AGE`].
+const OTHER_MODEL_STAGING_AGE: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+
 /// Every artifact's model id: staging directories are named after them.
 const ALL_MODEL_IDS: [&str; 4] = [MODEL_ID, ONNX_MODEL_ID, DA_MODEL_ID, DA_ONNX_MODEL_ID];
 
@@ -786,7 +791,8 @@ enum Staging {
     /// A staging directory of this model.
     Own,
     /// A staging directory of another model: possibly a download in progress
-    /// right now (a large file can take well over an hour), never removed here.
+    /// right now (a large file can take well over an hour), so only removed
+    /// past [`OTHER_MODEL_STAGING_AGE`].
     Other,
     /// From a release that did not name staging directories after the model,
     /// or the legacy trash prefix.
@@ -896,20 +902,22 @@ fn recover_in(manifest: &ModelManifest, models: &Path) {
     }
 }
 
-/// Remove abandoned staging directories of `manifest`'s model and unowned
-/// ones (`.pianissimo-extract-*` of older releases, legacy `.pianissimo-old-*`)
-/// not modified within `min_age`. Another model's staging directories,
-/// backups and the active install are never touched here.
+/// Remove abandoned staging directories not modified within `min_age`: of
+/// `manifest`'s model and unowned ones (`.pianissimo-extract-*` of older
+/// releases, legacy `.pianissimo-old-*`); another model's only past
+/// [`OTHER_MODEL_STAGING_AGE`]. Backups and the active install are never
+/// touched here.
 fn remove_stale_staging(manifest: &ModelManifest, models: &Path, min_age: std::time::Duration) {
     let Ok(entries) = std::fs::read_dir(models) else {
         return;
     };
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
-        match staging_kind(&name, manifest) {
-            Some(Staging::Own | Staging::Unowned) => {}
-            Some(Staging::Other) | None => continue,
-        }
+        let min_age = match staging_kind(&name, manifest) {
+            Some(Staging::Own | Staging::Unowned) => min_age,
+            Some(Staging::Other) => min_age.max(OTHER_MODEL_STAGING_AGE),
+            None => continue,
+        };
         let age = entry
             .metadata()
             .and_then(|m| m.modified())
@@ -1301,9 +1309,9 @@ fn cleanup_superseded(manifest: &ModelManifest, models: &Path) {
             }
         }
     }
-    // This model's install is done, so its own leftovers go at any age; another
-    // model's staging directory may be a download in progress and stays.
-    remove_stale_staging(manifest, models, std::time::Duration::ZERO);
+    // Fresh staging directories may be another process's download in progress
+    // (of this model or another), so only abandoned ones go.
+    remove_stale_staging(manifest, models, STALE_STAGING_AGE);
 }
 
 fn delete_in(manifest: &ModelManifest, models: &Path) -> Result<(), DictationError> {
@@ -2223,16 +2231,17 @@ mod tests {
         remove_stale_staging(&manifest, &models, STALE_STAGING_AGE);
         assert!(staging.exists() && own.exists());
 
+        // A successful install leaves fresh ones alone: they may be another
+        // process's download in progress, of this model or another.
+        cleanup_superseded(&manifest, &models);
+        assert!(staging.exists() && own.exists() && other.exists());
+
         remove_stale_staging(&manifest, &models, std::time::Duration::ZERO);
         assert!(!staging.exists());
         assert!(!legacy.exists());
         assert!(!own.exists());
         assert!(other.exists(), "another model's download must survive");
         assert!(is_downloaded_in(&manifest, &dir));
-
-        // Nor does this model's successful install clean it up.
-        cleanup_superseded(&manifest, &models);
-        assert!(other.exists());
     }
 
     #[test]

@@ -23,6 +23,7 @@
     setShowOverlay,
     setFileTranscriptionModel,
     getProfileModelInfo,
+    getActiveHotkeyProfile,
     setBeamSize,
     setTemperatureFallback,
     setVadEnabled,
@@ -58,7 +59,7 @@
   import { backendErrorRecovery, downloadFailureRecovery, isBackendError, toErrorMessage, type BackendErrorRecovery } from "./errors";
   import ErrorRecovery from "./ErrorRecovery.svelte";
   import { open } from "@tauri-apps/plugin-dialog";
-  import { downloadModelById, firstPianissimoId, isPianissimoId, useModelDownloads } from "./models.svelte";
+  import { downloadModelById, firstPianissimoId, isPianissimoId, pianissimoIdForLanguage, useModelDownloads } from "./models.svelte";
   import { requestAccessibility } from "./permissions";
   import { loadPlatform } from "./platform";
   import { createModelCatalogController } from "./modelCatalogController";
@@ -2029,19 +2030,27 @@
   }
 
   /**
-   * The Pianissimo model a file job's engine error is about: the selected file
-   * model, or what Auto resolves to (or recommends) for the file language.
+   * The Pianissimo model a file job's engine error is about. A Pianissimo
+   * model only serves its own language, so the job's language decides: its
+   * profile's, or the default profile's for a job without one.
    */
-  function filePianissimoId(): string {
-    return firstPianissimoId([settings?.file_transcription_model, fileAutoModel?.id, fileRecommendedModel?.id]);
+  function filePianissimoId(job: { profileId: string | null }): string {
+    const profile = profileForId(job.profileId) ?? settings?.hotkey_profiles.find((p) => p.id === "default") ?? null;
+    return firstPianissimoId([pianissimoIdForLanguage(profile?.language), settings?.file_transcription_model]);
   }
 
   /**
-   * The Pianissimo model a dictation engine error is about: the effective model
-   * (Auto resolved) of the first profile that dictates with Pianissimo.
+   * The Pianissimo model a dictation engine error is about: that of the
+   * profile that dictated last (the backend's active profile), else of the
+   * first profile that dictates with Pianissimo.
    */
-  function dictationPianissimoId(): string {
-    return firstPianissimoId((settings?.hotkey_profiles ?? []).map((profile) => profileModels[profile.id]?.id));
+  async function dictationPianissimoId(): Promise<string> {
+    const active = await getActiveHotkeyProfile().catch(() => null);
+    return firstPianissimoId([
+      active ? profileModels[active.id]?.id : null,
+      pianissimoIdForLanguage(active?.language),
+      ...(settings?.hotkey_profiles ?? []).map((profile) => profileModels[profile.id]?.id),
+    ]);
   }
 
   /** "Download the model again" under the Dictate tab's error. */
@@ -2049,7 +2058,7 @@
     if (updatePreparing || downloads.busy || engineModelDownloading) return;
     const revision = dictationEventRevision;
     try {
-      await downloadEngineModelAgain(dictationPianissimoId());
+      await downloadEngineModelAgain(await dictationPianissimoId());
       // The model is there: the action can be repeated. Unless another event
       // replaced the error meanwhile (even one with the same text): that one
       // decides its own recovery.
@@ -2947,7 +2956,7 @@
               onMissingFile={forgetMissingFile}
               onRetry={retryFileJob}
               retryRefusal={retryRefusals[job.id] ?? ""}
-              onDownloadModel={() => downloadEngineModelAgain(filePianissimoId())}
+              onDownloadModel={() => downloadEngineModelAgain(filePianissimoId(job))}
               downloadBusy={downloads.busy || engineModelDownloading}
               {updatePreparing}
               onAttentionChange={updateFileAttention}

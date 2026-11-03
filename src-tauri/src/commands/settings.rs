@@ -236,13 +236,12 @@ fn change_profile_model(
     let changed = persist_profile_model(controller, change, mirror)?;
     // Outside the controller lock: an unload talks to the engine host.
     sagascript_core::transcription::pianissimo_backend::unload_if_unused(&changed.settings);
-    if changed.warm {
-        use sagascript_core::transcription::pianissimo_backend::{self as backend, WarmTrigger};
-        if let Some(model) =
-            backend::warm_model(&changed.settings, WarmTrigger::ProfileChange, None)
-        {
-            backend::warm_in_background("profile_change", model, sagascript_core::machine::load);
-        }
+    if let Some(model) = changed.warm {
+        sagascript_core::transcription::pianissimo_backend::warm_in_background(
+            "profile_change",
+            model,
+            sagascript_core::machine::load,
+        );
     }
     Ok(())
 }
@@ -251,9 +250,9 @@ fn change_profile_model(
 pub(super) struct ProfileModelChange {
     /// The controller's settings after the change.
     pub(super) settings: Settings,
-    /// Whether the change newly puts a profile on the engine host, so the
-    /// engine should be loaded now.
-    pub(super) warm: bool,
+    /// The Pianissimo model the change newly puts a profile on, which should be
+    /// loaded now.
+    pub(super) warm: Option<sagascript_core::models::PianissimoModel>,
 }
 
 /// The persistence half of [`change_profile_model`]: the file and the
@@ -271,7 +270,7 @@ pub(super) fn persist_profile_model(
     let persisted = try_persist_and_mirror(controller, change, mirror)?;
     // The gate the copies were demoted by, so the decision and the demotion
     // cannot disagree about the host.
-    let warm = sagascript_core::transcription::pianissimo_backend::profile_change_needs_warm_gated(
+    let warm = sagascript_core::transcription::pianissimo_backend::profile_change_warm_model_gated(
         &persisted.previous,
         &persisted.current,
         host_runs_pianissimo(),

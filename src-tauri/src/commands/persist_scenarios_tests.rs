@@ -483,7 +483,7 @@ fn a_profile_model_change_does_not_warm_an_engine_this_host_cannot_run() {
             .expect("the setter works");
 
             assert!(
-                !changed.warm,
+                changed.warm.is_none(),
                 "the change would load an engine this host cannot run"
             );
             assert!(!selects_pianissimo(&changed.settings));

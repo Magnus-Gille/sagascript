@@ -17,6 +17,13 @@ export function isPianissimoId(id: string | null | undefined): boolean {
   return id != null && PIANISSIMO_IDS.includes(id);
 }
 
+/** The Pianissimo model of `language`, if it has one: each serves only its own language. */
+export function pianissimoIdForLanguage(language: string | null | undefined): string | null {
+  if (language === "sv") return PIANISSIMO_ID;
+  if (language === "da") return PIANISSIMO_DA_ID;
+  return null;
+}
+
 /** The first Pianissimo id among `ids` (most relevant first), else the Swedish one. */
 export function firstPianissimoId(ids: readonly (string | null | undefined)[]): string {
   return (ids.find(isPianissimoId) as string | undefined) ?? PIANISSIMO_ID;

@@ -290,7 +290,7 @@ pub(crate) fn start_settings_watcher(app: tauri::AppHandle) {
             // Update controller with all new settings
             let profiles = new_settings.resolved_hotkey_profiles();
             let warm_after_change =
-                sagascript_core::transcription::pianissimo_backend::profile_change_needs_warm(
+                sagascript_core::transcription::pianissimo_backend::profile_change_warm_model(
                     &old_settings,
                     &new_settings,
                 );
@@ -299,19 +299,12 @@ pub(crate) fn start_settings_watcher(app: tauri::AppHandle) {
                 let mut c = lock_controller(&ctrl);
                 c.update_settings(new_settings);
             }
-            if warm_after_change {
-                use sagascript_core::transcription::pianissimo_backend::{
-                    self as backend, WarmTrigger,
-                };
-                if let Some(model) =
-                    backend::warm_model(&settings_for_unload, WarmTrigger::ProfileChange, None)
-                {
-                    backend::warm_in_background(
-                        "profile_change",
-                        model,
-                        sagascript_core::machine::load,
-                    );
-                }
+            if let Some(model) = warm_after_change {
+                sagascript_core::transcription::pianissimo_backend::warm_in_background(
+                    "profile_change",
+                    model,
+                    sagascript_core::machine::load,
+                );
             }
             sagascript_core::transcription::pianissimo_backend::unload_if_unused(
                 &settings_for_unload,

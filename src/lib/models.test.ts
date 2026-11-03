@@ -1,5 +1,13 @@
 import { describe, expect, test } from "vitest";
-import { ModelDownloads, PIANISSIMO_DA_ID, PIANISSIMO_ID, downloadModelById, firstPianissimoId, isPianissimoId } from "./models.svelte";
+import {
+  ModelDownloads,
+  PIANISSIMO_DA_ID,
+  PIANISSIMO_ID,
+  downloadModelById,
+  firstPianissimoId,
+  isPianissimoId,
+  pianissimoIdForLanguage,
+} from "./models.svelte";
 import { backendError, mockIpc } from "../test/ipc";
 
 describe("downloadModelById", () => {
@@ -24,6 +32,14 @@ describe("downloadModelById", () => {
     // not the Swedish model, and not a file preference the dictation never used.
     expect(firstPianissimoId(["small", PIANISSIMO_DA_ID, PIANISSIMO_ID])).toBe(PIANISSIMO_DA_ID);
     expect(firstPianissimoId([undefined, null, "auto"])).toBe(PIANISSIMO_ID);
+  });
+
+  test("each language has at most one Pianissimo model, its own", () => {
+    expect(pianissimoIdForLanguage("sv")).toBe(PIANISSIMO_ID);
+    expect(pianissimoIdForLanguage("da")).toBe(PIANISSIMO_DA_ID);
+    for (const language of ["en", "no", "fi", "auto", null, undefined]) expect(pianissimoIdForLanguage(language)).toBeNull();
+    // A failed Danish job is repaired with the Danish model even when the file preference is Swedish.
+    expect(firstPianissimoId([pianissimoIdForLanguage("da"), PIANISSIMO_ID])).toBe(PIANISSIMO_DA_ID);
   });
 
   test("only the Pianissimo ids are Pianissimo", () => {
