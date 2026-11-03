@@ -2031,8 +2031,9 @@
         } finally {
           downloads.finish();
         }
+        // Per model: a later failure must not hide what this one changed on disk.
+        fileModelDiskRevision += 1;
       }
-      fileModelDiskRevision += 1;
       await refreshProfileModels(settings?.hotkey_profiles ?? []);
     } finally {
       engineModelDownloading = false;
