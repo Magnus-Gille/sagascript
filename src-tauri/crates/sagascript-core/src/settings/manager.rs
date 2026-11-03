@@ -10,7 +10,7 @@ use crate::glossary::Glossary;
 // paths (`sagascript_core::settings::{FileModel, Language, WhisperModel}`)
 // keep compiling for the CLI and the app. Shim: remove one release after the
 // callers import from `sagascript_core::models`.
-pub use crate::models::{FileModel, Language, WhisperModel};
+pub use crate::models::{FileModel, Language, PianissimoModel, WhisperModel};
 
 /// Resolve an `Auto` file-model preference against what is downloaded.
 /// `allow_pianissimo` false yields Whisper models only.
@@ -31,7 +31,7 @@ fn auto_file_model(
     candidates.extend(rest.into_iter().map(FileModel::Whisper));
     candidates
         .into_iter()
-        .filter(|m| allow_pianissimo || *m != FileModel::PianissimoOriginal)
+        .filter(|m| allow_pianissimo || !matches!(m, FileModel::Pianissimo(_)))
         .find(|m| is_ready(*m))
         .unwrap_or(recommended)
 }
@@ -45,18 +45,18 @@ pub enum FileModelPreference {
     #[default]
     Auto,
     Whisper(WhisperModel),
-    PianissimoOriginal,
+    Pianissimo(PianissimoModel),
 }
 
 impl FileModelPreference {
     /// Stable identifier of this preference: `auto`, a Whisper model's
-    /// [`WhisperModel::id`] or [`FileModel::PIANISSIMO_ID`]. What the settings
+    /// [`WhisperModel::id`] or a [`PianissimoModel::id`]. What the settings
     /// file stores and `config get` prints; [`Self::parse_id`] is its inverse.
     pub fn id(self) -> &'static str {
         match self {
             Self::Auto => "auto",
             Self::Whisper(model) => model.id(),
-            Self::PianissimoOriginal => FileModel::PIANISSIMO_ID,
+            Self::Pianissimo(model) => model.id(),
         }
     }
 
@@ -64,9 +64,9 @@ impl FileModelPreference {
     pub fn parse_id(id: &str) -> Result<Self, SettingsError> {
         match id {
             "auto" => Ok(Self::Auto),
-            FileModel::PIANISSIMO_ID => Ok(Self::PianissimoOriginal),
-            _ => WhisperModel::from_id(id)
-                .map(Self::Whisper)
+            _ => PianissimoModel::from_id(id)
+                .map(Self::Pianissimo)
+                .or_else(|| WhisperModel::from_id(id).map(Self::Whisper))
                 .ok_or_else(|| SettingsError::UnknownModelPreference { id: id.to_string() }),
         }
     }
@@ -399,8 +399,9 @@ impl Settings {
         self.model_lineup_version = MODEL_LINEUP_VERSION;
         let target = FileModel::recommended_for(Language::Swedish, env.pianissimo_supported);
         let (target_pref, target_ready) = match target {
-            FileModel::PianissimoOriginal => (
-                FileModelPreference::PianissimoOriginal,
+            // Swedish: only the Swedish Pianissimo model can be recommended.
+            FileModel::Pianissimo(model) => (
+                FileModelPreference::Pianissimo(model),
                 env.pianissimo_downloaded,
             ),
             FileModel::Whisper(model) => (
@@ -475,8 +476,8 @@ impl Settings {
             ));
         }
         for profile in &self.hotkey_profiles {
-            let preference = if self.pianissimo_dictation && profile.language == Language::Swedish {
-                FileModelPreference::PianissimoOriginal
+            let preference = if let Some(model) = self.pianissimo_for_dictation(profile.language) {
+                FileModelPreference::Pianissimo(model)
             } else if self.auto_select_model
                 || !self.whisper_model.is_compatible_with(profile.language)
             {
@@ -542,8 +543,8 @@ impl Settings {
             .get(profile_id)
             .copied()
             .unwrap_or_else(|| {
-                if self.uses_pianissimo_for_dictation(profile.language) {
-                    FileModelPreference::PianissimoOriginal
+                if let Some(model) = self.pianissimo_for_dictation(profile.language) {
+                    FileModelPreference::Pianissimo(model)
                 } else if self.auto_select_model
                     || !self.whisper_model.is_compatible_with(profile.language)
                 {
@@ -566,12 +567,13 @@ impl Settings {
                     profile_id: profile_id.to_string(),
                 })
             }
-            FileModelPreference::PianissimoOriginal if profile.language == Language::Swedish => {
-                Ok(FileModel::PianissimoOriginal)
+            FileModelPreference::Pianissimo(model) if model.language() == profile.language => {
+                Ok(FileModel::Pianissimo(model))
             }
-            FileModelPreference::PianissimoOriginal => {
-                Err(SettingsError::PianissimoSwedishProfileOnly {
+            FileModelPreference::Pianissimo(model) => {
+                Err(SettingsError::PianissimoProfileLanguageOnly {
                     profile_id: profile_id.to_string(),
+                    language: model.language().display_name(),
                 })
             }
         }
@@ -589,9 +591,7 @@ impl Settings {
             FileModel::Whisper(model) => Ok((model, false)),
             // The Whisper slot is unused when the flag is set; keep the Whisper
             // recommendation as a harmless placeholder.
-            FileModel::PianissimoOriginal => {
-                Ok((WhisperModel::recommended(Language::Swedish), true))
-            }
+            FileModel::Pianissimo(model) => Ok((WhisperModel::recommended(model.language()), true)),
         }
     }
 
@@ -604,6 +604,19 @@ impl Settings {
     ) -> bool {
         self.live_model_for_profile_gated(profile_id, pianissimo_supported)
             .is_ok_and(|(_, pianissimo)| pianissimo)
+    }
+
+    /// The Pianissimo model `profile_id` dictates with, if any, given the
+    /// platform gate.
+    pub fn profile_pianissimo_model_gated(
+        &self,
+        profile_id: &str,
+        pianissimo_supported: bool,
+    ) -> Option<PianissimoModel> {
+        match self.dictation_model_for_profile_gated(profile_id, pianissimo_supported) {
+            Ok(FileModel::Pianissimo(model)) => Some(model),
+            _ => None,
+        }
     }
 
     /// True when any dictation profile's live model is Pianissimo, given the
@@ -622,7 +635,7 @@ impl Settings {
         preference: FileModelPreference,
         pianissimo_supported: bool,
     ) -> Result<(), SettingsError> {
-        if preference == FileModelPreference::PianissimoOriginal && !pianissimo_supported {
+        if matches!(preference, FileModelPreference::Pianissimo(_)) && !pianissimo_supported {
             return Err(SettingsError::PianissimoUnsupported);
         }
         let profile = self
@@ -639,8 +652,10 @@ impl Settings {
                     profile_id: profile_id.to_string(),
                 });
             }
-            FileModelPreference::PianissimoOriginal if profile.language != Language::Swedish => {
-                return Err(SettingsError::PianissimoRequiresSwedishProfile);
+            FileModelPreference::Pianissimo(model) if model.language() != profile.language => {
+                return Err(SettingsError::PianissimoRequiresLanguageProfile {
+                    language: model.language().display_name(),
+                });
             }
             _ => {}
         }
@@ -675,7 +690,7 @@ impl Settings {
         }
         let mut changed = false;
         for (profile, preference) in self.profile_models.iter_mut() {
-            if *preference == FileModelPreference::PianissimoOriginal {
+            if matches!(preference, FileModelPreference::Pianissimo(_)) {
                 if warn {
                     tracing::warn!(
                         "Pianissimo is not supported on this system; profile '{profile}' now uses the recommended Whisper model"
@@ -685,7 +700,10 @@ impl Settings {
                 changed = true;
             }
         }
-        if self.file_transcription_model == FileModelPreference::PianissimoOriginal {
+        if matches!(
+            self.file_transcription_model,
+            FileModelPreference::Pianissimo(_)
+        ) {
             if warn {
                 tracing::warn!(
                     "Pianissimo is not supported on this system; file transcription now uses the recommended Whisper model"
@@ -748,16 +766,19 @@ impl Settings {
                         profile.language.display_name()
                     )
                 }
-                Some(FileModelPreference::PianissimoOriginal)
-                    if profile.language != Language::Swedish =>
+                Some(FileModelPreference::Pianissimo(model))
+                    if model.language() != profile.language =>
                 {
-                    "Pianissimo only supports Swedish".to_string()
+                    format!(
+                        "Pianissimo only supports {}",
+                        model.language().display_name()
+                    )
                 }
                 _ => continue,
             };
             let recommended = match FileModel::recommended_for(profile.language, supported) {
                 FileModel::Whisper(model) => model.display_name(),
-                FileModel::PianissimoOriginal => "Pianissimo",
+                FileModel::Pianissimo(_) => "Pianissimo",
             };
             self.profile_models
                 .insert(profile.id.clone(), FileModelPreference::Auto);
@@ -857,7 +878,14 @@ impl Settings {
     /// Legacy pre-migration Pianissimo switch, consulted only when a profile
     /// has not yet received its own model preference.
     pub fn uses_pianissimo_for_dictation(&self, language: Language) -> bool {
-        self.pianissimo_dictation && language == Language::Swedish
+        self.pianissimo_for_dictation(language).is_some()
+    }
+
+    /// The Pianissimo model the legacy `pianissimo_dictation` flag selects for
+    /// `language`: the Swedish one only, as the flag predates other models.
+    fn pianissimo_for_dictation(&self, language: Language) -> Option<PianissimoModel> {
+        (self.pianissimo_dictation && language == Language::Swedish)
+            .then_some(PianissimoModel::Swedish)
     }
 
     /// Resolve the model for file transcription without changing the live
@@ -899,11 +927,13 @@ impl Settings {
                     language: language.display_name(),
                 })
             }
-            FileModelPreference::PianissimoOriginal if language == Language::Swedish => {
-                Ok(FileModel::PianissimoOriginal)
+            FileModelPreference::Pianissimo(model) if model.language() == language => {
+                Ok(FileModel::Pianissimo(model))
             }
-            FileModelPreference::PianissimoOriginal => {
-                Err(SettingsError::PianissimoSwedishFilesOnly)
+            FileModelPreference::Pianissimo(model) => {
+                Err(SettingsError::PianissimoFileLanguageOnly {
+                    language: model.language().display_name(),
+                })
             }
         }
     }

@@ -255,6 +255,10 @@ fn recommended_model_per_language() {
         WhisperModel::Base
     );
     assert_eq!(
+        WhisperModel::recommended(Language::Danish),
+        WhisperModel::Small
+    );
+    assert_eq!(
         WhisperModel::recommended(Language::Auto),
         WhisperModel::Base
     );
@@ -290,6 +294,12 @@ fn models_for_language_returns_correct_sets() {
     assert!(fi.contains(&WhisperModel::Base));
     assert!(fi.contains(&WhisperModel::FinnishWhisperTiny));
     assert!(fi.contains(&WhisperModel::LargeV3TurboQ8));
+
+    // Danish has no fine-tuned Whisper here: it offers the same multilingual
+    // models as auto-detect.
+    let da = WhisperModel::models_for_language(Language::Danish);
+    assert_eq!(da, WhisperModel::models_for_language(Language::Auto));
+    assert_eq!(da.len(), 6);
 
     let auto = WhisperModel::models_for_language(Language::Auto);
     assert_eq!(auto.len(), 6);
@@ -389,6 +399,7 @@ fn recommended_model_is_in_models_for_language() {
         Language::Swedish,
         Language::Norwegian,
         Language::Finnish,
+        Language::Danish,
         Language::Auto,
     ];
     for lang in languages {
@@ -457,6 +468,41 @@ fn finnish_uses_generic_default_and_optional_specialized_tiny() {
         WhisperModel::NbWhisperLarge,
     ] {
         assert!(!model.is_compatible_with(Language::Finnish), "{model:?}");
+    }
+}
+
+#[test]
+fn danish_uses_only_multilingual_whisper_models() {
+    for &model in WhisperModel::models_for_language(Language::Danish) {
+        assert!(model.is_compatible_with(Language::Danish), "{model:?}");
+        assert!(!model.is_english_only(), "{model:?}");
+        assert!(!model.is_language_optimized(), "{model:?}");
+    }
+    for model in WhisperModel::ALL {
+        assert_eq!(
+            model.is_compatible_with(Language::Danish),
+            !model.is_english_only() && !model.is_language_optimized(),
+            "{model:?}"
+        );
+    }
+    // The language-specific fine-tunes and English-only models never serve Danish.
+    for model in [
+        WhisperModel::TinyEn,
+        WhisperModel::SmallEn,
+        WhisperModel::KbWhisperMedium,
+        WhisperModel::NbWhisperBase,
+        WhisperModel::FinnishWhisperTiny,
+    ] {
+        assert!(!model.is_compatible_with(Language::Danish), "{model:?}");
+    }
+    // Danish does not make any existing model compatible with a new language:
+    // Whisper multilingual models are the same set Auto accepts.
+    for model in WhisperModel::ALL {
+        assert_eq!(
+            model.is_compatible_with(Language::Danish),
+            model.is_compatible_with(Language::Auto),
+            "{model:?}"
+        );
     }
 }
 

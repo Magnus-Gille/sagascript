@@ -21,6 +21,7 @@
 //!
 //! Each table row calls the real setter (a `State` from Tauri's mock runtime),
 //! after the file was changed behind the controller's back the way the CLI does.
+use sagascript_core::models::PianissimoModel;
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -631,7 +632,7 @@ fn the_child_cannot_reach_the_users_models_directory() {
                 .parent()
                 .expect("the settings file has a directory")
                 .to_path_buf();
-            let pianissimo = pianissimo_model::model_dir();
+            let pianissimo = pianissimo_model::model_dir(PianissimoModel::Swedish);
             assert!(
                 pianissimo.starts_with(&dir),
                 "the Pianissimo model directory {} is outside {}",
@@ -639,11 +640,11 @@ fn the_child_cannot_reach_the_users_models_directory() {
                 dir.display()
             );
             assert_eq!(
-                pianissimo_model::override_dir().as_deref(),
+                pianissimo_model::override_dir(PianissimoModel::Swedish).as_deref(),
                 Some(&*pianissimo)
             );
             assert!(
-                !pianissimo_model::is_downloaded(),
+                !pianissimo_model::is_downloaded(PianissimoModel::Swedish),
                 "an empty directory is not an installed model"
             );
             // Windows resolves `data_dir` from the OS, not the environment; the

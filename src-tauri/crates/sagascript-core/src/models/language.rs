@@ -13,17 +13,20 @@ pub enum Language {
     Norwegian,
     #[serde(rename = "fi")]
     Finnish,
+    #[serde(rename = "da")]
+    Danish,
     #[serde(rename = "auto")]
     Auto,
 }
 
 impl Language {
     /// Every language, in the order the app lists them.
-    pub const ALL: [Language; 5] = [
+    pub const ALL: [Language; 6] = [
         Language::English,
         Language::Swedish,
         Language::Norwegian,
         Language::Finnish,
+        Language::Danish,
         Language::Auto,
     ];
 
@@ -36,6 +39,7 @@ impl Language {
             Language::Swedish => "sv",
             Language::Norwegian => "no",
             Language::Finnish => "fi",
+            Language::Danish => "da",
             Language::Auto => "auto",
         }
     }
@@ -54,6 +58,7 @@ impl Language {
             Language::Swedish => "Swedish",
             Language::Norwegian => "Norwegian",
             Language::Finnish => "Finnish",
+            Language::Danish => "Danish",
             Language::Auto => "Auto-detect",
         }
     }
@@ -65,6 +70,7 @@ impl Language {
             Language::Swedish => Some("sv"),
             Language::Norwegian => Some("no"),
             Language::Finnish => Some("fi"),
+            Language::Danish => Some("da"),
             Language::Auto => None,
         }
     }
@@ -102,6 +108,7 @@ impl std::str::FromStr for Language {
             "swedish" => Ok(Language::Swedish),
             "norwegian" => Ok(Language::Norwegian),
             "finnish" => Ok(Language::Finnish),
+            "danish" => Ok(Language::Danish),
             id => Language::from_id(id).ok_or_else(|| UnknownLanguage(text.to_owned())),
         }
     }

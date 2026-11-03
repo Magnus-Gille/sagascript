@@ -18,7 +18,7 @@
 //! [`ModelEnv`]. `crate::machine::{catalog, app_picker, model_info}` are these
 //! functions with this machine's answers.
 
-use super::{FileModel, Language, WhisperModel};
+use super::{FileModel, Language, PianissimoModel, WhisperModel};
 
 const MIB: u64 = 1_048_576;
 
@@ -27,12 +27,12 @@ const MIB: u64 = 1_048_576;
 pub trait ModelEnv {
     /// Whether Pianissimo can run here.
     fn runs_pianissimo(&self) -> bool;
-    /// Whether the Pianissimo files are on disk.
-    fn pianissimo_downloaded(&self) -> bool;
-    /// Bytes a Pianissimo download transfers (the archive, or all files).
-    fn pianissimo_download_bytes(&self) -> u64;
-    /// Bytes Pianissimo occupies once installed.
-    fn pianissimo_installed_bytes(&self) -> u64;
+    /// Whether the files of this Pianissimo model are on disk.
+    fn pianissimo_downloaded(&self, model: PianissimoModel) -> bool;
+    /// Bytes its download transfers (the archive, or all files).
+    fn pianissimo_download_bytes(&self, model: PianissimoModel) -> u64;
+    /// Bytes it occupies once installed.
+    fn pianissimo_installed_bytes(&self, model: PianissimoModel) -> u64;
     /// Whether the file of a Whisper model is on disk.
     fn whisper_downloaded(&self, model: WhisperModel) -> bool;
 }
@@ -75,12 +75,21 @@ fn megabytes(bytes: u64) -> u32 {
     (bytes / MIB) as u32
 }
 
-/// The description of Pianissimo: its engine differs by platform.
-fn pianissimo_description() -> &'static str {
-    if cfg!(windows) {
-        "Swedish file transcription · ONNX Runtime on the CPU · Windows on ARM (Snapdragon)"
-    } else {
-        "Swedish file transcription · Core ML on the Neural Engine · macOS 14+ on Apple Silicon"
+/// The description of a Pianissimo model: its engine differs by platform.
+fn pianissimo_description(model: PianissimoModel) -> &'static str {
+    match (model, cfg!(windows)) {
+        (PianissimoModel::Swedish, true) => {
+            "Swedish file transcription · ONNX Runtime on the CPU · Windows on ARM (Snapdragon)"
+        }
+        (PianissimoModel::Swedish, false) => {
+            "Swedish file transcription · Core ML on the Neural Engine · macOS 14+ on Apple Silicon"
+        }
+        (PianissimoModel::Danish, true) => {
+            "Danish file transcription · ONNX Runtime on the CPU · Windows on ARM (Snapdragon)"
+        }
+        (PianissimoModel::Danish, false) => {
+            "Danish file transcription · Core ML on the Neural Engine · macOS 14+ on Apple Silicon"
+        }
     }
 }
 
@@ -91,7 +100,7 @@ fn languages_of(choice: FileModel) -> Vec<Language> {
             .into_iter()
             .filter(|language| WhisperModel::models_for_language(*language).contains(&model))
             .collect(),
-        FileModel::PianissimoOriginal => vec![Language::Swedish],
+        FileModel::Pianissimo(model) => vec![model.language()],
     }
 }
 
@@ -115,14 +124,14 @@ pub fn model_info(choice: FileModel, env: &dyn ModelEnv) -> ModelInfo {
             recommended_for,
             hidden_in_app: model.is_hidden_in_app(),
         },
-        FileModel::PianissimoOriginal => ModelInfo {
+        FileModel::Pianissimo(model) => ModelInfo {
             model: choice,
-            id: FileModel::PIANISSIMO_ID,
+            id: model.id(),
             display_name: "Pianissimo",
-            description: pianissimo_description(),
-            download_size_mb: megabytes(env.pianissimo_download_bytes()),
-            installed_size_mb: megabytes(env.pianissimo_installed_bytes()),
-            installed: env.pianissimo_downloaded(),
+            description: pianissimo_description(model),
+            download_size_mb: megabytes(env.pianissimo_download_bytes(model)),
+            installed_size_mb: megabytes(env.pianissimo_installed_bytes(model)),
+            installed: env.pianissimo_downloaded(model),
             languages: languages_of(choice),
             recommended_for,
             hidden_in_app: false,
@@ -131,16 +140,16 @@ pub fn model_info(choice: FileModel, env: &dyn ModelEnv) -> ModelInfo {
 }
 
 /// Every model that serves `language`, in the order `list-models` prints them:
-/// the Whisper models of [`WhisperModel::models_for_language`], then Pianissimo
-/// for Swedish where it runs. Includes the models the app hides
+/// the Whisper models of [`WhisperModel::models_for_language`], then the
+/// language's Pianissimo model where it runs. Includes the models the app hides
 /// ([`ModelInfo::hidden_in_app`]).
 pub fn catalog(language: Language, env: &dyn ModelEnv) -> Vec<ModelInfo> {
     let mut models: Vec<ModelInfo> = WhisperModel::models_for_language(language)
         .iter()
         .map(|model| model_info(FileModel::Whisper(*model), env))
         .collect();
-    if language == Language::Swedish && env.runs_pianissimo() {
-        models.push(model_info(FileModel::PianissimoOriginal, env));
+    if let Some(model) = PianissimoModel::for_language(language).filter(|_| env.runs_pianissimo()) {
+        models.push(model_info(FileModel::Pianissimo(model), env));
     }
     models
 }

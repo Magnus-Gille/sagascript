@@ -450,7 +450,7 @@ pub fn analyze_language_windows(windows: &[LanguageWindow]) -> LanguageRegionDia
 }
 
 fn is_supported_language(language: &str) -> bool {
-    matches!(language, "en" | "sv" | "no" | "fi")
+    matches!(language, "en" | "sv" | "no" | "fi" | "da")
 }
 
 #[derive(Debug)]
@@ -502,7 +502,7 @@ pub fn language_mismatch_warning(
 
     let detected_name = language_name(&detected.language);
     let recommendation = match detected.language.as_str() {
-        "en" | "sv" | "no" | "fi" => format!("--language {}", detected.language),
+        "en" | "sv" | "no" | "fi" | "da" => format!("--language {}", detected.language),
         _ => "--language auto".to_string(),
     };
     Some(TranscriptionWarning {
@@ -607,6 +607,7 @@ fn language_name(code: &str) -> &str {
         "sv" => "Swedish",
         "no" => "Norwegian",
         "fi" => "Finnish",
+        "da" => "Danish",
         _ => code,
     }
 }
@@ -743,6 +744,21 @@ mod tests {
 
         assert!(warning.message.contains("Finnish"));
         assert!(warning.message.contains("--language fi"));
+    }
+
+    #[test]
+    fn danish_language_mismatch_recommends_explicit_language() {
+        let warning = language_mismatch_warning(
+            Language::English,
+            &LanguageDetection {
+                language: "da".to_string(),
+                probability: 0.995,
+            },
+        )
+        .expect("strong Danish mismatch should warn");
+
+        assert!(warning.message.contains("Danish"));
+        assert!(warning.message.contains("--language da"));
     }
 
     #[test]

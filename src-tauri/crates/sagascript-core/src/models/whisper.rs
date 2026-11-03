@@ -262,7 +262,11 @@ impl WhisperModel {
                         && !self.is_swedish_optimized()
                         && !self.is_norwegian_optimized())
             }
-            Language::Auto => !self.is_english_only() && !self.is_language_optimized(),
+            // No Danish fine-tune is bundled: only the multilingual models serve
+            // it, exactly as for auto-detect.
+            Language::Danish | Language::Auto => {
+                !self.is_english_only() && !self.is_language_optimized()
+            }
         }
     }
 
@@ -331,6 +335,8 @@ impl WhisperModel {
             Language::Swedish => WhisperModel::KbWhisperMedium,
             Language::Norwegian => WhisperModel::NbWhisperBase,
             Language::Finnish => WhisperModel::Base,
+            // Whisper fallback for Danish, where no Danish-specific model runs.
+            Language::Danish => WhisperModel::Small,
             Language::Auto => WhisperModel::Base,
         }
     }
@@ -379,7 +385,7 @@ impl WhisperModel {
                 WhisperModel::LargeV3Turbo,
                 WhisperModel::LargeV3TurboQ8,
             ],
-            Language::Auto => &[
+            Language::Danish | Language::Auto => &[
                 WhisperModel::Tiny,
                 WhisperModel::Base,
                 WhisperModel::Small,

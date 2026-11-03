@@ -19,7 +19,9 @@
 //! The old paths `settings::store::{load, update, try_update}` re-export the
 //! entry points for one release.
 
-use crate::models::{self, FileModel, Language, ModelEnv, ModelInfo, WhisperModel};
+use crate::models::{
+    self, FileModel, Language, ModelEnv, ModelInfo, PianissimoModel, WhisperModel,
+};
 use crate::settings::{
     store, FileModelPreference, HotkeyProfile, LineupEnv, MachineProbe, ModelResetNotice, Settings,
     SettingsError,
@@ -37,7 +39,7 @@ pub(crate) fn pianissimo_supported() -> bool {
 pub(crate) fn file_model_ready(choice: FileModel) -> bool {
     match choice {
         FileModel::Whisper(whisper) => model::is_model_downloaded(whisper),
-        FileModel::PianissimoOriginal => pianissimo_model::is_downloaded(),
+        FileModel::Pianissimo(model) => pianissimo_model::is_downloaded(model),
     }
 }
 
@@ -54,7 +56,7 @@ impl MachineProbe for ThisMachine {
     fn lineup_env(&self) -> LineupEnv<'_> {
         LineupEnv {
             pianissimo_supported: self.pianissimo_supported(),
-            pianissimo_downloaded: pianissimo_model::is_downloaded(),
+            pianissimo_downloaded: pianissimo_model::is_downloaded(PianissimoModel::Swedish),
             whisper_downloaded: &model::is_model_downloaded,
         }
     }
@@ -66,16 +68,16 @@ impl ModelEnv for ThisMachine {
         pianissimo_supported()
     }
 
-    fn pianissimo_downloaded(&self) -> bool {
-        pianissimo_model::is_downloaded()
+    fn pianissimo_downloaded(&self, model: PianissimoModel) -> bool {
+        pianissimo_model::is_downloaded(model)
     }
 
-    fn pianissimo_download_bytes(&self) -> u64 {
-        pianissimo_model::download_size_bytes()
+    fn pianissimo_download_bytes(&self, model: PianissimoModel) -> u64 {
+        pianissimo_model::download_size_bytes(model)
     }
 
-    fn pianissimo_installed_bytes(&self) -> u64 {
-        pianissimo_model::installed_size_bytes()
+    fn pianissimo_installed_bytes(&self, model: PianissimoModel) -> u64 {
+        pianissimo_model::installed_size_bytes(model)
     }
 
     fn whisper_downloaded(&self, whisper: WhisperModel) -> bool {

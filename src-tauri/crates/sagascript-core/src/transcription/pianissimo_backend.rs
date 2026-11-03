@@ -19,6 +19,7 @@ use std::time::{Duration, Instant};
 use serde::Deserialize;
 
 use crate::error::DictationError;
+use crate::models::PianissimoModel;
 use crate::path_scrub::scrub_paths;
 use crate::settings::{EnginePrewarm, Settings};
 use crate::sync::lock_or_recover;
@@ -331,13 +332,18 @@ fn reset_last_load_for_test() {
         .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
 }
 
-/// Engine-host configuration for an explicit host binary (no presence checks).
-pub fn config_for_host(host: PathBuf, settings: &Settings) -> EngineHostConfig {
+/// Engine-host configuration of `model` for an explicit host binary (no
+/// presence checks).
+pub fn config_for_host(
+    host: PathBuf,
+    settings: &Settings,
+    model: PianissimoModel,
+) -> EngineHostConfig {
     let mut config = EngineHostConfig::new(
         host,
         LoadSpec {
-            model_dir: pianissimo_model::model_dir(),
-            model_id: pianissimo_model::model_id(),
+            model_dir: pianissimo_model::model_dir(model),
+            model_id: pianissimo_model::model_id(model),
             compute_units: compute_units(),
         },
     );
@@ -349,8 +355,8 @@ pub fn config_for_host(host: PathBuf, settings: &Settings) -> EngineHostConfig {
     config
 }
 
-/// Why Pianissimo cannot start right now, checked cheaply and in order.
-fn precheck() -> Result<PathBuf, DictationError> {
+/// Why Pianissimo cannot start `model` right now, checked cheaply and in order.
+fn precheck(model: PianissimoModel) -> Result<PathBuf, DictationError> {
     if !runtime_supported_on_this_os() {
         return Err(DictationError::TranscriptionFailed(
             UNSUPPORTED_MESSAGE.into(),
@@ -362,11 +368,11 @@ fn precheck() -> Result<PathBuf, DictationError> {
              {ENGINE_HOST_ENV} is not set"
         ))
     })?;
-    if !pianissimo_model::is_downloaded() {
-        return Err(DictationError::TranscriptionFailed(
-            "Pianissimo model is not downloaded. Run 'sagascript download-model pianissimo-sv'"
-                .into(),
-        ));
+    if !pianissimo_model::is_downloaded(model) {
+        return Err(DictationError::TranscriptionFailed(format!(
+            "Pianissimo model is not downloaded. Run 'sagascript download-model {}'",
+            model.id()
+        )));
     }
     Ok(host)
 }
@@ -375,9 +381,12 @@ fn precheck() -> Result<PathBuf, DictationError> {
 /// platform, host and model-presence checks (no model verification, no spawn).
 /// The caller loads the settings (`machine::load`): transcription does not read
 /// the settings file (#372).
-pub fn engine_config(settings: &Settings) -> Result<EngineHostConfig, DictationError> {
-    let host = precheck()?;
-    Ok(config_for_host(host, settings))
+pub fn engine_config(
+    settings: &Settings,
+    model: PianissimoModel,
+) -> Result<EngineHostConfig, DictationError> {
+    let host = precheck(model)?;
+    Ok(config_for_host(host, settings, model))
 }
 
 // ---- process-global client ------------------------------------------------
@@ -396,13 +405,31 @@ struct Shared {
     client: EngineHostClient,
 }
 
-fn shared_slot() -> &'static Mutex<Option<Shared>> {
-    static SHARED: OnceLock<Mutex<Option<Shared>>> = OnceLock::new();
-    SHARED.get_or_init(|| Mutex::new(None))
+/// The slot of `model`'s client: one engine host per Pianissimo model, so a
+/// job on one model never loses its host to a request for the other.
+fn shared_slot(model: PianissimoModel) -> &'static Mutex<Option<Shared>> {
+    static SHARED: OnceLock<[Mutex<Option<Shared>>; 2]> = OnceLock::new();
+    let slots = SHARED.get_or_init(|| [Mutex::new(None), Mutex::new(None)]);
+    match model {
+        PianissimoModel::Swedish => &slots[0],
+        PianissimoModel::Danish => &slots[1],
+    }
 }
 
-/// The one [`EngineHostClient`] of this process. Created lazily (this does not
-/// spawn the host); recreated when the host path, model or the idle setting of
+/// Every client created so far, with its model.
+fn shared_clients() -> Vec<(PianissimoModel, EngineHostClient)> {
+    PianissimoModel::ALL
+        .into_iter()
+        .filter_map(|model| {
+            let slot = shared_slot(model).lock().ok()?;
+            slot.as_ref().map(|shared| (model, shared.client.clone()))
+        })
+        .collect()
+}
+
+/// The [`EngineHostClient`] of `model` in this process (one per model).
+/// Created lazily (this does not spawn the host); recreated when the host
+/// path, model artifact or the idle setting of
 /// `settings` (`engine_idle_unload_minutes`, the only field read) changes between
 /// two calls: the next call then verifies the model again, shuts the old client
 /// down and creates a new one (see `client_in_slot`). The model artifact is
@@ -410,14 +437,17 @@ fn shared_slot() -> &'static Mutex<Option<Shared>> {
 ///
 /// The caller loads the settings (`machine::load`) when it asks, as this
 /// function itself did before (#372).
-pub fn shared_client(settings: &Settings) -> Result<EngineHostClient, DictationError> {
-    let host = precheck()?;
-    let config = config_for_host(host, settings);
+pub fn shared_client(
+    settings: &Settings,
+    model: PianissimoModel,
+) -> Result<EngineHostClient, DictationError> {
+    let host = precheck(model)?;
+    let config = config_for_host(host, settings, model);
     let key = shared_key(&config, settings);
     client_in_slot(
-        shared_slot(),
+        shared_slot(model),
         key,
-        pianissimo_model::verify_downloaded,
+        || pianissimo_model::verify_downloaded(model),
         |old| {
             if let Some(old) = old {
                 old.client.shutdown();
@@ -473,10 +503,12 @@ fn client_in_slot(
     Ok(client)
 }
 
-/// Shut the shared host down (CLI exit, model deletion, app quit). No-op when
-/// none was created.
+/// Shut every shared host down (CLI exit, model deletion, app quit). No-op
+/// when none was created.
 pub fn shutdown_shared_client() {
-    shutdown_slot(shared_slot());
+    for model in PianissimoModel::ALL {
+        shutdown_slot(shared_slot(model));
+    }
 }
 
 /// Recovered as-is (ADR 0005): the slot holds either the previous complete
@@ -506,12 +538,8 @@ fn remember_host_identity(snapshot: &super::engine_host::HostSnapshot) {
 /// Engine-host build identity `(version, git_sha)` from the last successful
 /// `hello` in this process. Never starts the host.
 pub fn cached_host_identity() -> Option<(String, Option<String>)> {
-    if let Some(shared) = shared_slot()
-        .lock()
-        .ok()
-        .and_then(|slot| slot.as_ref().map(|s| s.client.snapshot()))
-    {
-        remember_host_identity(&shared);
+    for (_, client) in shared_clients() {
+        remember_host_identity(&client.snapshot());
     }
     HOST_IDENTITY.lock().ok().and_then(|cache| cache.clone())
 }
@@ -519,7 +547,19 @@ pub fn cached_host_identity() -> Option<(String, Option<String>)> {
 /// Start the host if needed and complete `hello` only (no model load) so the
 /// build identity is known. Blocking; call from a blocking context.
 pub fn refresh_host_identity(settings: &Settings) -> Option<(String, Option<String>)> {
-    if let Ok(client) = shared_client(settings) {
+    // Reuse the running client (whatever model it serves); otherwise start one
+    // for an installed model, as `hello` needs no model.
+    let client = shared_clients()
+        .into_iter()
+        .map(|(_, client)| client)
+        .next()
+        .or_else(|| {
+            PianissimoModel::ALL
+                .into_iter()
+                .find(|model| pianissimo_model::is_downloaded(*model))
+                .and_then(|model| shared_client(settings, model).ok())
+        });
+    if let Some(client) = client {
         if let Ok(snapshot) = client.connect() {
             remember_host_identity(&snapshot);
         }
@@ -527,13 +567,11 @@ pub fn refresh_host_identity(settings: &Settings) -> Option<(String, Option<Stri
     cached_host_identity()
 }
 
-/// Whether the shared engine currently has the model loaded (never starts anything).
+/// Whether a shared engine currently has its model loaded (never starts anything).
 pub fn engine_is_warm() -> bool {
-    shared_slot()
-        .lock()
-        .ok()
-        .and_then(|slot| slot.as_ref().map(|shared| shared.client.snapshot().loaded))
-        .unwrap_or(false)
+    shared_clients()
+        .iter()
+        .any(|(_, client)| client.snapshot().loaded)
 }
 
 /// An event that may warrant loading the engine ahead of the next utterance.
@@ -567,12 +605,23 @@ impl WarmTrigger {
 /// and need some profile on Pianissimo. Key-down warms in both `on_app_start`
 /// and `on_key_down` (an additional trigger after an idle unload) when the
 /// active profile uses Pianissimo. `off` never warms.
+#[cfg(test)]
 pub(crate) fn warm_wanted(
     settings: &Settings,
     trigger: WarmTrigger,
     active_profile: Option<&str>,
 ) -> bool {
-    warm_wanted_gated(
+    warm_model(settings, trigger, active_profile).is_some()
+}
+
+/// The Pianissimo model `trigger` should load under `settings` on this
+/// machine, if any (see [`warm_wanted`]).
+pub fn warm_model(
+    settings: &Settings,
+    trigger: WarmTrigger,
+    active_profile: Option<&str>,
+) -> Option<PianissimoModel> {
+    warm_model_gated(
         settings,
         trigger,
         active_profile,
@@ -589,40 +638,63 @@ pub(crate) fn warm_wanted_gated(
     active_profile: Option<&str>,
     pianissimo_supported: bool,
 ) -> bool {
+    warm_model_gated(settings, trigger, active_profile, pianissimo_supported).is_some()
+}
+
+/// The Pianissimo model `trigger` should load under `settings`, if any (see
+/// [`warm_wanted`]): the key-down profile's model, otherwise the default
+/// profile's, otherwise the first profile's on Pianissimo.
+pub(crate) fn warm_model_gated(
+    settings: &Settings,
+    trigger: WarmTrigger,
+    active_profile: Option<&str>,
+    pianissimo_supported: bool,
+) -> Option<PianissimoModel> {
+    let default_id = settings.default_profile().id;
     match (settings.engine_prewarm, trigger) {
-        (EnginePrewarm::Off, _) => false,
+        (EnginePrewarm::Off, _) => None,
         (_, WarmTrigger::KeyDown) => {
-            let id = active_profile
-                .map(str::to_owned)
-                .unwrap_or_else(|| settings.default_profile().id);
-            settings.profile_uses_pianissimo_gated(&id, pianissimo_supported)
+            let id = active_profile.unwrap_or(&default_id);
+            settings.profile_pianissimo_model_gated(id, pianissimo_supported)
         }
-        (EnginePrewarm::OnKeyDown, _) => false,
-        (EnginePrewarm::OnAppStart, _) => {
-            settings.any_profile_uses_pianissimo_gated(pianissimo_supported)
-        }
+        (EnginePrewarm::OnKeyDown, _) => None,
+        (EnginePrewarm::OnAppStart, _) => settings
+            .profile_pianissimo_model_gated(&default_id, pianissimo_supported)
+            .or_else(|| {
+                settings
+                    .resolved_hotkey_profiles()
+                    .iter()
+                    .find_map(|profile| {
+                        settings.profile_pianissimo_model_gated(&profile.id, pianissimo_supported)
+                    })
+            }),
     }
 }
 
-/// Call `warm(reason)` when `warm_wanted`. The hook is injected so tests need
-/// no engine; production passes [`warm_in_background`].
+/// Call `warm(reason, model)` when `warm_wanted`. The hook is injected so tests
+/// need no engine; production passes [`warm_in_background`].
 pub fn warm_on(
     settings: &Settings,
     trigger: WarmTrigger,
     active_profile: Option<&str>,
-    warm: impl FnOnce(&'static str),
+    warm: impl FnOnce(&'static str, PianissimoModel),
 ) -> bool {
-    let wanted = warm_wanted(settings, trigger, active_profile);
-    if wanted {
-        warm(trigger.reason());
+    let model = warm_model(settings, trigger, active_profile);
+    if let Some(model) = model {
+        warm(trigger.reason(), model);
     }
-    wanted
+    model.is_some()
 }
 
-/// True when a settings change newly puts a profile on Pianissimo (or newly
-/// enables `on_app_start` while one is), so the engine should load now.
+/// True when a settings change newly puts a profile on a Pianissimo model (or
+/// newly enables `on_app_start` while one is), so that model should load now.
 pub fn profile_change_needs_warm(old: &Settings, new: &Settings) -> bool {
-    profile_change_needs_warm_gated(old, new, runtime_supported_on_this_os())
+    profile_change_warm_model(old, new).is_some()
+}
+
+/// The Pianissimo model [`profile_change_needs_warm`] would load, if any.
+pub fn profile_change_warm_model(old: &Settings, new: &Settings) -> Option<PianissimoModel> {
+    profile_change_warm_model_gated(old, new, runtime_supported_on_this_os())
 }
 
 /// [`profile_change_needs_warm`] with the platform gate given instead of asked
@@ -632,15 +704,27 @@ pub fn profile_change_needs_warm_gated(
     new: &Settings,
     pianissimo_supported: bool,
 ) -> bool {
+    profile_change_warm_model_gated(old, new, pianissimo_supported).is_some()
+}
+
+/// [`profile_change_warm_model`] with the platform gate given: the model a
+/// profile newly dictates with (a profile switched between models counts), or,
+/// when pre-warm was just enabled, the model app start would load.
+pub fn profile_change_warm_model_gated(
+    old: &Settings,
+    new: &Settings,
+    pianissimo_supported: bool,
+) -> Option<PianissimoModel> {
     if !warm_wanted_gated(new, WarmTrigger::ProfileChange, None, pianissimo_supported) {
-        return false;
+        return None;
     }
     if !warm_wanted_gated(old, WarmTrigger::ProfileChange, None, pianissimo_supported) {
-        return true;
+        return warm_model_gated(new, WarmTrigger::ProfileChange, None, pianissimo_supported);
     }
-    new.resolved_hotkey_profiles().iter().any(|profile| {
-        new.profile_uses_pianissimo_gated(&profile.id, pianissimo_supported)
-            && !old.profile_uses_pianissimo_gated(&profile.id, pianissimo_supported)
+    new.resolved_hotkey_profiles().iter().find_map(|profile| {
+        let model = new.profile_pianissimo_model_gated(&profile.id, pianissimo_supported)?;
+        (old.profile_pianissimo_model_gated(&profile.id, pianissimo_supported) != Some(model))
+            .then_some(model)
     })
 }
 
@@ -657,19 +741,15 @@ fn warm_in_pressure_cooldown(reason: &str, last_unload: Option<Instant>, now: In
         && last_unload.is_some_and(|at| now.saturating_duration_since(at) < PRESSURE_WARM_COOLDOWN)
 }
 
-fn shared_client_if_created() -> Option<EngineHostClient> {
-    shared_slot()
-        .lock()
-        .ok()
-        .and_then(|slot| slot.as_ref().map(|shared| shared.client.clone()))
-}
-
 /// Free the engine's model memory when the system reports memory pressure and
 /// no transcription is running. The next utterance reloads (and shows the
 /// loading state). Never starts anything. Returns whether it unloaded, and
 /// starts the `PRESSURE_WARM_COOLDOWN` when it did.
 pub fn unload_if_idle_for_memory_pressure() -> bool {
-    let unloaded = shared_client_if_created().is_some_and(|client| client.unload_if_idle());
+    // Every idle engine goes, not just the first: `|` keeps evaluating.
+    let unloaded = shared_clients()
+        .iter()
+        .fold(false, |any, (_, client)| client.unload_if_idle() | any);
     if unloaded {
         *LAST_PRESSURE_UNLOAD
             .lock()
@@ -679,22 +759,28 @@ pub fn unload_if_idle_for_memory_pressure() -> bool {
     unloaded
 }
 
-/// The model is only worth keeping resident while some profile uses Pianissimo.
+/// A model is only worth keeping resident while some profile dictates with it.
 /// (Pre-warm `off` is not a reason to unload: it only skips eager loading.)
-pub(crate) fn should_unload_when_unused(settings: &Settings) -> bool {
-    !settings.any_profile_uses_pianissimo()
+pub(crate) fn should_unload_when_unused(settings: &Settings, model: PianissimoModel) -> bool {
+    let supported = runtime_supported_on_this_os();
+    !settings.resolved_hotkey_profiles().iter().any(|profile| {
+        settings.profile_pianissimo_model_gated(&profile.id, supported) == Some(model)
+    })
 }
 
-/// Unload the resident model now if no profile uses Pianissimo any more and
-/// nothing is transcribing; a busy engine is left to the idle timer. Never
-/// starts anything. Returns whether it unloaded.
+/// Unload each resident model no profile dictates with any more, unless it is
+/// transcribing; a busy engine is left to the idle timer. Never starts
+/// anything. Returns whether it unloaded any.
 pub fn unload_if_unused(settings: &Settings) -> bool {
-    if !should_unload_when_unused(settings) {
-        return false;
-    }
-    let unloaded = shared_client_if_created().is_some_and(|client| client.unload_if_idle());
-    if unloaded {
-        tracing::info!("Pianissimo engine unloaded: no profile uses it any more");
+    let mut unloaded = false;
+    for (model, client) in shared_clients() {
+        if should_unload_when_unused(settings, model) && client.unload_if_idle() {
+            tracing::info!(
+                model = model.id(),
+                "Pianissimo engine unloaded: no profile uses it any more"
+            );
+            unloaded = true;
+        }
     }
     unloaded
 }
@@ -706,9 +792,18 @@ pub fn unload_if_unused(settings: &Settings) -> bool {
 /// `load_settings` (`machine::load`) is called on the warm-up thread, when it
 /// attaches to the shared engine, not by the caller: the settings file is not
 /// read on the hotkey path, and the read happens as late as it always did.
-pub fn warm_in_background(reason: &'static str, load_settings: fn() -> Settings) {
-    static IN_FLIGHT: AtomicBool = AtomicBool::new(false);
-    if !runtime_supported_on_this_os() || !pianissimo_model::is_downloaded() {
+pub fn warm_in_background(
+    reason: &'static str,
+    model: PianissimoModel,
+    load_settings: fn() -> Settings,
+) {
+    // One warm-up per model at a time.
+    static IN_FLIGHT: [AtomicBool; 2] = [AtomicBool::new(false), AtomicBool::new(false)];
+    let in_flight: &'static AtomicBool = &IN_FLIGHT[match model {
+        PianissimoModel::Swedish => 0,
+        PianissimoModel::Danish => 1,
+    }];
+    if !runtime_supported_on_this_os() || !pianissimo_model::is_downloaded(model) {
         return;
     }
     let last_unload = *LAST_PRESSURE_UNLOAD
@@ -721,7 +816,7 @@ pub fn warm_in_background(reason: &'static str, load_settings: fn() -> Settings)
         );
         return;
     }
-    if IN_FLIGHT.swap(true, Ordering::SeqCst) {
+    if in_flight.swap(true, Ordering::SeqCst) {
         return;
     }
     let spawned = std::thread::Builder::new()
@@ -729,7 +824,7 @@ pub fn warm_in_background(reason: &'static str, load_settings: fn() -> Settings)
         .spawn(move || {
             LOAD_SOURCE.with(|source| source.set(LoadSource::Warm));
             let started = Instant::now();
-            match shared_client(&load_settings())
+            match shared_client(&load_settings(), model)
                 .map_err(|e| e.to_string())
                 .and_then(|client| {
                     if client.snapshot().loaded {
@@ -749,11 +844,11 @@ pub fn warm_in_background(reason: &'static str, load_settings: fn() -> Settings)
                     "Pianissimo engine pre-warm failed"
                 ),
             }
-            IN_FLIGHT.store(false, Ordering::SeqCst);
+            in_flight.store(false, Ordering::SeqCst);
         });
     if let Err(error) = spawned {
         tracing::warn!(%error, "could not start Pianissimo pre-warm thread");
-        IN_FLIGHT.store(false, Ordering::SeqCst);
+        in_flight.store(false, Ordering::SeqCst);
     }
 }
 
@@ -879,22 +974,23 @@ pub struct PianissimoBackend {
 }
 
 impl PianissimoBackend {
-    pub fn start(settings: &Settings) -> Result<Self, DictationError> {
+    pub fn start(settings: &Settings, model: PianissimoModel) -> Result<Self, DictationError> {
         static NEVER_CANCEL: AtomicBool = AtomicBool::new(false);
-        Self::start_with_cancel(&NEVER_CANCEL, settings)
+        Self::start_with_cancel(&NEVER_CANCEL, settings, model)
     }
 
-    /// Attach to the process-global engine client. Does not load the model; the
-    /// first transcription (or [`Self::warm_up`]) does. `settings` are the
-    /// current ones (see [`shared_client`]).
+    /// Attach to the process-global engine client with `model`. Does not load
+    /// the model; the first transcription (or [`Self::warm_up`]) does.
+    /// `settings` are the current ones (see [`shared_client`]).
     pub fn start_with_cancel(
         cancelled: &AtomicBool,
         settings: &Settings,
+        model: PianissimoModel,
     ) -> Result<Self, DictationError> {
         if cancelled.load(Ordering::SeqCst) {
             return Err(cancelled_error());
         }
-        let client = shared_client(settings)?;
+        let client = shared_client(settings, model)?;
         if cancelled.load(Ordering::SeqCst) {
             return Err(cancelled_error());
         }
@@ -1306,7 +1402,11 @@ mod tests {
                 engine_idle_unload_minutes: minutes,
                 ..Settings::default()
             };
-            let config = config_for_host("/nonexistent/host".into(), &settings);
+            let config = config_for_host(
+                "/nonexistent/host".into(),
+                &settings,
+                PianissimoModel::Swedish,
+            );
             shared_key(&config, &settings)
         };
         assert_eq!(config(7).idle_minutes, 7);
@@ -1431,7 +1531,7 @@ mod tests {
         settings
             .set_profile_model_gated(
                 "default",
-                crate::settings::FileModelPreference::PianissimoOriginal,
+                crate::settings::FileModelPreference::Pianissimo(PianissimoModel::Swedish),
                 true,
             )
             .unwrap();
@@ -1507,18 +1607,18 @@ mod tests {
         let settings = pianissimo_settings(EnginePrewarm::OnAppStart);
         assert!(settings.any_profile_uses_pianissimo());
         let calls = std::cell::RefCell::new(Vec::new());
-        assert!(warm_on(&settings, WarmTrigger::Wake, None, |r| calls
+        assert!(warm_on(&settings, WarmTrigger::Wake, None, |r, _| calls
             .borrow_mut()
             .push(r)));
         assert!(warm_on(
             &settings,
             WarmTrigger::KeyDown,
             Some("default"),
-            |r| calls.borrow_mut().push(r)
+            |r, _| calls.borrow_mut().push(r)
         ));
         assert_eq!(*calls.borrow(), vec!["wake", "key_down"]);
         let off = pianissimo_settings(EnginePrewarm::Off);
-        assert!(!warm_on(&off, WarmTrigger::Wake, None, |_| panic!(
+        assert!(!warm_on(&off, WarmTrigger::Wake, None, |_, _| panic!(
             "must not warm when off"
         )));
     }
@@ -1585,18 +1685,77 @@ mod tests {
     }
 
     #[test]
+    fn each_pianissimo_model_has_its_own_client_slot() {
+        // A request for one model must never shut down the other's host (and
+        // the job running on it): their clients live in different slots.
+        assert!(!std::ptr::eq(
+            shared_slot(PianissimoModel::Swedish),
+            shared_slot(PianissimoModel::Danish)
+        ));
+    }
+
+    /// Settings with the Swedish default profile on Swedish Pianissimo and a
+    /// Danish profile on `danish`.
+    fn swedish_and_danish(danish: crate::settings::FileModelPreference) -> Settings {
+        let mut settings = pianissimo_settings(EnginePrewarm::OnAppStart);
+        let mut profile = crate::settings::HotkeyProfile::legacy_default(
+            "Super+D".into(),
+            crate::models::Language::Danish,
+        );
+        profile.id = "danish".into();
+        settings.hotkey_profiles = settings.resolved_hotkey_profiles();
+        settings.hotkey_profiles.push(profile);
+        settings
+            .set_profile_model_gated("danish", danish, true)
+            .unwrap();
+        settings
+    }
+
+    #[test]
+    fn a_profile_change_warms_the_model_that_was_added() {
+        use crate::settings::FileModelPreference;
+        let before = swedish_and_danish(FileModelPreference::Whisper(
+            crate::models::WhisperModel::Small,
+        ));
+        let after = swedish_and_danish(FileModelPreference::Pianissimo(PianissimoModel::Danish));
+        // The default profile is Swedish, but the change is the Danish model.
+        assert_eq!(
+            profile_change_warm_model_gated(&before, &after, true),
+            Some(PianissimoModel::Danish)
+        );
+        assert_eq!(profile_change_warm_model_gated(&after, &after, true), None);
+        assert_eq!(profile_change_warm_model_gated(&after, &before, true), None);
+        // Key-down on the Danish profile warms the Danish model.
+        assert_eq!(
+            warm_model_gated(&after, WarmTrigger::KeyDown, Some("danish"), true),
+            Some(PianissimoModel::Danish)
+        );
+        assert_eq!(
+            warm_model_gated(&after, WarmTrigger::KeyDown, Some("default"), true),
+            Some(PianissimoModel::Swedish)
+        );
+    }
+
+    #[test]
     fn model_unloads_when_no_profile_uses_pianissimo_even_with_prewarm_off() {
         for prewarm in [
             EnginePrewarm::Off,
             EnginePrewarm::OnAppStart,
             EnginePrewarm::OnKeyDown,
         ] {
+            for model in PianissimoModel::ALL {
+                assert!(
+                    should_unload_when_unused(&whisper_settings(prewarm), model),
+                    "{prewarm:?}"
+                );
+            }
+            // The Swedish profile keeps the Swedish model, not the Danish one.
             assert!(
-                should_unload_when_unused(&whisper_settings(prewarm)),
+                !should_unload_when_unused(&pianissimo_settings(prewarm), PianissimoModel::Swedish),
                 "{prewarm:?}"
             );
             assert!(
-                !should_unload_when_unused(&pianissimo_settings(prewarm)),
+                should_unload_when_unused(&pianissimo_settings(prewarm), PianissimoModel::Danish),
                 "{prewarm:?}"
             );
         }

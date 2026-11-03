@@ -98,8 +98,9 @@ fn run_inner(args: TranscribeArgs, canceller: &Canceller, out: &Out) -> Result<(
         engine,
     } = plan_run(&args, &*backend)?;
     match engine {
-        EnginePlan::Pianissimo => run_pianissimo_batch(
+        EnginePlan::Pianissimo(model) => run_pianissimo_batch(
             &PianissimoBatch {
+                model,
                 args: &args,
                 files: &files,
                 language,
