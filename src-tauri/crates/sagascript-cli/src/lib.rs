@@ -361,8 +361,8 @@ EXAMPLES:
     /// Inspect and exercise the Pianissimo engine host
     #[command(
         long_about = "\
-Inspect and exercise the persistent engine host that runs Pianissimo (Swedish; \
-Core ML on the Apple Neural Engine, or ONNX Runtime on the CPU on Windows). Requires \
+Inspect and exercise the persistent engine host that runs Pianissimo (Swedish \
+pianissimo-sv or Danish pianissimo-da, chosen with --model; Core ML on the Apple Neural Engine, or ONNX Runtime on the CPU on Windows). Requires \
 macOS 14+ on Apple Silicon or Windows on ARM (Snapdragon).
 
   status   host path and build identity, protocol version, model state

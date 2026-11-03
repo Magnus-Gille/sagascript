@@ -13,7 +13,8 @@ use crate::models::WhisperModel;
 pub struct LineupEnv<'a> {
     /// `pianissimo_backend::runtime_supported_on_this_os()`.
     pub pianissimo_supported: bool,
-    /// `pianissimo_model::is_downloaded()`.
+    /// `pianissimo_model::is_downloaded(PianissimoModel::Swedish)`: the lineup
+    /// migration is Swedish.
     pub pianissimo_downloaded: bool,
     /// `model::is_model_downloaded`.
     pub whisper_downloaded: &'a dyn Fn(WhisperModel) -> bool,
