@@ -7,6 +7,7 @@ import {
   firstPianissimoId,
   isPianissimoId,
   pianissimoIdForLanguage,
+  pianissimoIdsOf,
 } from "./models.svelte";
 import { backendError, mockIpc } from "../test/ipc";
 
@@ -40,6 +41,12 @@ describe("downloadModelById", () => {
     for (const language of ["en", "no", "fi", "auto", null, undefined]) expect(pianissimoIdForLanguage(language)).toBeNull();
     // A failed Danish job is repaired with the Danish model even when the file preference is Swedish.
     expect(firstPianissimoId([pianissimoIdForLanguage("da"), PIANISSIMO_ID])).toBe(PIANISSIMO_DA_ID);
+  });
+
+  test("a dictation repair covers every Pianissimo model the profiles use, once each", () => {
+    expect(pianissimoIdsOf([PIANISSIMO_ID, "small", PIANISSIMO_DA_ID, PIANISSIMO_ID])).toEqual([PIANISSIMO_ID, PIANISSIMO_DA_ID]);
+    expect(pianissimoIdsOf([PIANISSIMO_DA_ID, undefined])).toEqual([PIANISSIMO_DA_ID]);
+    expect(pianissimoIdsOf(["small", null])).toEqual([PIANISSIMO_ID]);
   });
 
   test("only the Pianissimo ids are Pianissimo", () => {

@@ -23,7 +23,6 @@
     setShowOverlay,
     setFileTranscriptionModel,
     getProfileModelInfo,
-    getActiveHotkeyProfile,
     setBeamSize,
     setTemperatureFallback,
     setVadEnabled,
@@ -59,7 +58,14 @@
   import { backendErrorRecovery, downloadFailureRecovery, isBackendError, toErrorMessage, type BackendErrorRecovery } from "./errors";
   import ErrorRecovery from "./ErrorRecovery.svelte";
   import { open } from "@tauri-apps/plugin-dialog";
-  import { downloadModelById, firstPianissimoId, isPianissimoId, pianissimoIdForLanguage, useModelDownloads } from "./models.svelte";
+  import {
+    downloadModelById,
+    firstPianissimoId,
+    isPianissimoId,
+    pianissimoIdForLanguage,
+    pianissimoIdsOf,
+    useModelDownloads,
+  } from "./models.svelte";
   import { requestAccessibility } from "./permissions";
   import { loadPlatform } from "./platform";
   import { createModelCatalogController } from "./modelCatalogController";
@@ -2013,14 +2019,18 @@
    * fetches it again when it is missing or damaged. Progress shows like any
    * other download; rejects when the download fails.
    */
-  async function downloadEngineModelAgain(id: string): Promise<void> {
+  async function downloadEngineModelAgain(ids: readonly string[]): Promise<void> {
+    // Reserved before the first await, so a second press cannot start another.
     engineModelDownloading = true;
-    downloads.start(id, fileModelOptions.find((model) => model.id === id)?.display_name ?? "Pianissimo");
     try {
-      try {
-        await downloadModelById(id);
-      } finally {
-        downloads.finish();
+      // One at a time: an installed, intact model only has its files checked.
+      for (const id of ids) {
+        downloads.start(id, fileModelOptions.find((model) => model.id === id)?.display_name ?? "Pianissimo");
+        try {
+          await downloadModelById(id);
+        } finally {
+          downloads.finish();
+        }
       }
       fileModelDiskRevision += 1;
       await refreshProfileModels(settings?.hotkey_profiles ?? []);
@@ -2040,17 +2050,13 @@
   }
 
   /**
-   * The Pianissimo model a dictation engine error is about: that of the
-   * profile that dictated last (the backend's active profile), else of the
-   * first profile that dictates with Pianissimo.
+   * The Pianissimo models a dictation engine error can be about: every one a
+   * profile dictates with (Auto resolved). The error does not say which
+   * profile failed, so all of them are checked; an intact one costs only a
+   * verification.
    */
-  async function dictationPianissimoId(): Promise<string> {
-    const active = await getActiveHotkeyProfile().catch(() => null);
-    return firstPianissimoId([
-      active ? profileModels[active.id]?.id : null,
-      pianissimoIdForLanguage(active?.language),
-      ...(settings?.hotkey_profiles ?? []).map((profile) => profileModels[profile.id]?.id),
-    ]);
+  function dictationPianissimoIds(): string[] {
+    return pianissimoIdsOf((settings?.hotkey_profiles ?? []).map((profile) => profileModels[profile.id]?.id));
   }
 
   /** "Download the model again" under the Dictate tab's error. */
@@ -2058,7 +2064,7 @@
     if (updatePreparing || downloads.busy || engineModelDownloading) return;
     const revision = dictationEventRevision;
     try {
-      await downloadEngineModelAgain(await dictationPianissimoId());
+      await downloadEngineModelAgain(dictationPianissimoIds());
       // The model is there: the action can be repeated. Unless another event
       // replaced the error meanwhile (even one with the same text): that one
       // decides its own recovery.
@@ -2956,7 +2962,7 @@
               onMissingFile={forgetMissingFile}
               onRetry={retryFileJob}
               retryRefusal={retryRefusals[job.id] ?? ""}
-              onDownloadModel={() => downloadEngineModelAgain(filePianissimoId(job))}
+              onDownloadModel={() => downloadEngineModelAgain([filePianissimoId(job)])}
               downloadBusy={downloads.busy || engineModelDownloading}
               {updatePreparing}
               onAttentionChange={updateFileAttention}

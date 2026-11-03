@@ -87,8 +87,6 @@ export function settingsBackend(overrides: CommandHandlers = {}): CommandHandler
     get_last_error: () => null,
     get_last_transcription: () => null,
     get_update_result_pending: () => false,
-    // Asked when "Download the model again" repairs a dictation engine.
-    get_active_hotkey_profile: () => null,
     ...overrides,
   };
 }

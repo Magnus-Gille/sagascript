@@ -24,6 +24,13 @@ export function pianissimoIdForLanguage(language: string | null | undefined): st
   return null;
 }
 
+/** The distinct Pianissimo ids among `ids`, in order; the Swedish one when there are none. */
+export function pianissimoIdsOf(ids: readonly (string | null | undefined)[]): string[] {
+  const pianissimo = ids.filter(isPianissimoId) as string[];
+  const found = pianissimo.filter((id, index) => pianissimo.indexOf(id) === index);
+  return found.length > 0 ? found : [PIANISSIMO_ID];
+}
+
 /** The first Pianissimo id among `ids` (most relevant first), else the Swedish one. */
 export function firstPianissimoId(ids: readonly (string | null | undefined)[]): string {
   return (ids.find(isPianissimoId) as string | undefined) ?? PIANISSIMO_ID;
