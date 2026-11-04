@@ -232,6 +232,20 @@ private func sendWindow(_ server: EngineHostServer, id: UInt64, path: String, pr
     #expect(CoreMLEngine.configuredMaxInFlight(environment: ["SAGASCRIPT_ENGINE_MAX_IN_FLIGHT": "99"]) == 8)
 }
 
+@Test func overlapOverrideReachesTheCapabilitiesHelloAnnounces() {
+    // The client plans windows from `hello` (before any load), so the override must be there.
+    #expect(CoreMLEngine.defaultCapabilities(environment: [:]).preferredOverlapSeconds == 2)
+    #expect(CoreMLEngine.defaultCapabilities(environment: ["SAGASCRIPT_ENGINE_OVERLAP_S": "1.0"])
+        .preferredOverlapSeconds == 1.0)
+    #expect(CoreMLEngine.defaultCapabilities(environment: ["SAGASCRIPT_ENGINE_OVERLAP_S": "1.0"])
+        .maxInFlight == 4)
+    // A value that is not a sane number of seconds is ignored, as if unset.
+    for bad in ["", "abc", "-1", "nan", "inf"] {
+        #expect(CoreMLEngine.overlapOverride(environment: ["SAGASCRIPT_ENGINE_OVERLAP_S": bad]) == nil, "\(bad)")
+    }
+    #expect(CoreMLEngine.overlapOverride(environment: ["SAGASCRIPT_ENGINE_OVERLAP_S": "0"]) == 0)
+}
+
 @Test func cancelProducesAckAndCancelledTerminalResponse() {
     let output = RecordingOutput()
     let server = EngineHostServer(engine: FakeEngine(), output: output.append)
