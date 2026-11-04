@@ -63,6 +63,19 @@ a completion percentage or ETA.
 - `transcribing`: native Whisper percentages.
 - `finalizing`, `completed`: postprocessing and successful completion.
 
+Pianissimo file runs in the CLI (`--model pianissimo-sv` and friends) decode and
+transcribe at the same time: the engine starts on the first 15 s windows once they
+are decoded and resampled, while the rest of the file is still being decoded. That
+path has no separate decode or conversion stage, so it emits no `resampling` events
+and no decoding percentages: `decoding` at 0 when the file starts, then
+`transcribing` percentages, then `completed`, with no stage events interleaved. The
+`transcribing` percentage is an estimate until decoding is done (from the length the
+container announces, else from the fraction of the file read), never decreases, and
+stays below 100 until the last window is merged. In the per-file JSON,
+`performance.decode_resample_seconds` is the time from the start of the file until
+decoding and resampling were finished; it overlaps inference, so it is not a stage
+that comes before it and must not be added to it (`total_seconds` is the whole run).
+
 The detailed terminal-independent timeline covers both plain transcription and
 the meeting phase boundaries described above. GUI plain imports use the same
 core decode/conversion callbacks; they do not perform the CLI's separate
