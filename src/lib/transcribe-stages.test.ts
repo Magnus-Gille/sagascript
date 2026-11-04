@@ -84,3 +84,50 @@ test("incremental engine progress advances the Transcribe meter monotonically wi
   expect(seen).toStrictEqual([3, 9, 9, 24, 24, 58, 91, 100]);
   expect(state.status, "a native 100% never completes the run").not.toBe("completed");
 });
+
+test("a streamed Pianissimo import (decoding 0, loading, transcribing) leaves nothing unchecked", () => {
+  // The desktop app decodes while the engine transcribes: no resampling events
+  // and no decoding percentage beyond 0.
+  const sequence: [phase: string, percent: number | null][] = [
+    ["decoding", 0],
+    ["loading", null],
+    ["transcribing", 0],
+  ];
+  let state = startStages();
+  const statuses: string[][] = [];
+  for (const [phase, percent] of sequence) {
+    state = updateStages(state, phase, percent);
+    statuses.push(stageRows(state).map((r) => r.status));
+  }
+  expect(statuses).toStrictEqual([
+    ["active", "pending", "pending"],
+    ["completed", "active", "pending"],
+    ["completed", "active", "pending"],
+  ]);
+  expect(stageRows(state)[1].percent, "no invented model-load percentage").toBe(null);
+
+  const seen: (number | null)[] = [];
+  for (const pct of [4, 4, 17, 38, 61, 99, 100]) {
+    state = updateStages(state, "transcribing", pct);
+    seen.push(stageRows(state)[2].percent);
+    expect(stageRows(state).slice(0, 2).map((r) => r.status)).toStrictEqual(["completed", "completed"]);
+  }
+  expect(seen).toStrictEqual([4, 4, 17, 38, 61, 99, 100]);
+  state = updateStages(state, "finalizing");
+  expect(stageRows(state).map((r) => r.status)).toStrictEqual(["completed", "completed", "active"]);
+  expect(state.status, "only the command result completes the run").toBe("running");
+  state = finishStages(state, "completed");
+  expect(stageRows(state).map((r) => r.status)).toStrictEqual(["completed", "completed", "completed"]);
+});
+
+test("a streamed Pianissimo import that fails while loading keeps the read step checked only", () => {
+  let state = startStages();
+  for (const [phase, percent] of [
+    ["decoding", 0],
+    ["loading", null],
+  ] as const) {
+    state = updateStages(state, phase, percent);
+  }
+  state = finishStages(state, "failed");
+  expect(stageRows(state).map((r) => r.status)).toStrictEqual(["completed", "failed", "pending"]);
+});
