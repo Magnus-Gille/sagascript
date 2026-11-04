@@ -1,14 +1,16 @@
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 use symphonia::core::audio::SampleBuffer;
 use symphonia::core::codecs::{CodecParameters, Decoder, DecoderOptions, CODEC_TYPE_ALAC};
-use symphonia::core::formats::{FormatOptions, Packet};
+use symphonia::core::formats::{FormatOptions, FormatReader, Packet};
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 use tracing::info;
 
-use super::resample::resample_to_16khz_bounded;
+use super::resample::{resample_to_16khz_bounded, StreamingResampler, TARGET_SAMPLE_RATE};
 use crate::error::DictationError;
 
 /// Supported audio/video file extensions.
@@ -28,7 +30,9 @@ pub const SUPPORTED_EXTENSIONS: &[&str] = &[
 /// the cap applies consistently regardless of the source format — a 4-hour
 /// clip is rejected the same whether it's mono 16kHz or stereo 48kHz. This is
 /// deliberately generous: no legitimate multi-hour podcast batch-
-/// transcription job should ever hit it.
+/// transcription job should ever hit it. The streaming decode
+/// ([`decode_audio_file_streaming`]) keeps nothing, but counts its 16 kHz
+/// output against the same limit.
 pub(crate) const MAX_DECODE_SAMPLES: usize = 4 * 3600 * 16_000; // ~230M, ~4h @ 16kHz mono equivalent
 
 /// Check whether the accumulated decode so far has exceeded
@@ -365,23 +369,39 @@ fn note_decode_error(consecutive_errors: &mut usize, kind: &str) -> Result<(), D
     Ok(())
 }
 
+/// One decoded packet as the packet loop hands it to its consumer.
+struct PacketAudio<'a> {
+    /// Interleaved samples, `frames * channels` of them.
+    interleaved: &'a [f32],
+    frames: usize,
+    channels: usize,
+    /// Capacity of the decoded buffer, in frames (for the live-buffer budget).
+    capacity: usize,
+}
+
 /// Packet loop, separated from container probing so tests can drive it with a
-/// scripted packet source and decoder.
+/// scripted packet source and decoder. Every decoded packet goes to `on_audio`,
+/// after the per-packet budget check and before the next packet is pulled.
+/// Returns the channel count of the last decoded packet (`codec_channels` if
+/// none decoded).
+///
+/// `consumed` (when given, and the file size is known) is kept at the
+/// audio-packet bytes consumed so far, for progress estimates.
 #[allow(clippy::too_many_arguments)]
-fn decode_packets(
+fn run_packet_loop(
     next_packet: &mut dyn FnMut() -> symphonia::core::errors::Result<Packet>,
     decoder: &mut dyn Decoder,
     track_id: u32,
-    sample_rate: u32,
     codec_channels: usize,
     total_bytes: u64,
     checkpoint: Option<&dyn Fn() -> Result<(), DictationError>>,
     on_decode: Option<&dyn Fn(u8)>,
+    consumed: Option<&AtomicU64>,
     budget: &DecodeBudget,
-) -> Result<(Vec<f32>, usize), DictationError> {
+    on_audio: &mut dyn FnMut(PacketAudio<'_>) -> Result<(), DictationError>,
+) -> Result<usize, DictationError> {
     let mut consumed_bytes = 0u64;
     let mut last_decode_pct = 0u8;
-    let mut mono: Vec<f32> = Vec::new();
     let mut actual_channels: usize = codec_channels.max(1);
     let mut consecutive_errors = 0usize;
 
@@ -418,6 +438,9 @@ fn decode_packets(
         // bytes asymptote below 100; clean EOF snaps to 100 after resample.
         if total_bytes > 0 {
             consumed_bytes = consumed_bytes.saturating_add(packet.data.len() as u64);
+            if let Some(consumed) = consumed {
+                consumed.store(consumed_bytes, Ordering::Relaxed);
+            }
             let pct = decode_percent(consumed_bytes, total_bytes).min(99);
             if pct > last_decode_pct {
                 last_decode_pct = pct;
@@ -448,7 +471,8 @@ fn decode_packets(
         let capacity = decoded.capacity();
         let frames = decoded.frames();
 
-        // Budget checks happen before the sample buffer or `mono` can grow.
+        // Budget checks happen before the sample buffer or the consumer's
+        // buffers can grow.
         check_packet_budget(capacity as u64, actual_channels as u64, budget)?;
         if let Some(checkpoint) = checkpoint {
             checkpoint()?;
@@ -456,35 +480,97 @@ fn decode_packets(
 
         let mut sample_buf = SampleBuffer::<f32>::new(capacity as u64, spec);
         sample_buf.copy_interleaved_ref(decoded);
-        let samples = sample_buf.samples();
-        let channels = actual_channels;
-        // Live besides `mono`: the interleaved sample buffer just allocated.
-        let other_live = pcm_bytes(capacity as u64, actual_channels as u64)?;
-
-        // Streaming downmix: average each frame's channels as it arrives so the
-        // multichannel source-rate PCM is never accumulated.
-        append_mono_within_budget(&mut mono, frames, sample_rate, budget, other_live, |mono| {
-            if channels <= 1 {
-                mono.extend_from_slice(samples);
-            } else {
-                mono.extend(
-                    samples
-                        .chunks(channels)
-                        .map(|frame| frame.iter().sum::<f32>() / channels as f32),
-                );
-            }
+        on_audio(PacketAudio {
+            interleaved: sample_buf.samples(),
+            frames,
+            channels: actual_channels,
+            capacity,
         })?;
     }
 
+    Ok(actual_channels)
+}
+
+/// Average each frame's channels and append the mono frames to `mono`: the
+/// streaming downmix both decode paths use, so their values are identical.
+fn downmix_extend(audio: &PacketAudio<'_>, mono: &mut Vec<f32>) {
+    if audio.channels <= 1 {
+        mono.extend_from_slice(audio.interleaved);
+    } else {
+        let channels = audio.channels;
+        mono.extend(
+            audio
+                .interleaved
+                .chunks(channels)
+                .map(|frame| frame.iter().sum::<f32>() / channels as f32),
+        );
+    }
+}
+
+/// Accumulating packet loop of the batch decode: each packet is downmixed to
+/// mono as it arrives (the multichannel source-rate PCM is never retained) and
+/// appended to one source-rate mono buffer, within the byte budget.
+#[allow(clippy::too_many_arguments)]
+fn decode_packets(
+    next_packet: &mut dyn FnMut() -> symphonia::core::errors::Result<Packet>,
+    decoder: &mut dyn Decoder,
+    track_id: u32,
+    sample_rate: u32,
+    codec_channels: usize,
+    total_bytes: u64,
+    checkpoint: Option<&dyn Fn() -> Result<(), DictationError>>,
+    on_decode: Option<&dyn Fn(u8)>,
+    budget: &DecodeBudget,
+) -> Result<(Vec<f32>, usize), DictationError> {
+    let mut mono: Vec<f32> = Vec::new();
+    let actual_channels = run_packet_loop(
+        next_packet,
+        decoder,
+        track_id,
+        codec_channels,
+        total_bytes,
+        checkpoint,
+        on_decode,
+        None,
+        budget,
+        &mut |audio| {
+            // Live besides `mono`: the interleaved sample buffer just allocated.
+            let other_live = pcm_bytes(audio.capacity as u64, audio.channels as u64)?;
+            append_mono_within_budget(
+                &mut mono,
+                audio.frames,
+                sample_rate,
+                budget,
+                other_live,
+                |mono| downmix_extend(&audio, mono),
+            )
+        },
+    )?;
     Ok((mono, actual_channels))
 }
 
-fn decode_audio_file_inner(
+/// A probed file with its decoder ready: what both decode paths start from.
+struct OpenedAudio {
+    format: Box<dyn FormatReader>,
+    decoder: Box<dyn Decoder>,
+    track_id: u32,
+    sample_rate: u32,
+    /// Channel count from the codec parameters; can be wrong (the packet loop
+    /// reports the real one).
+    codec_channels: usize,
+    /// File size, the denominator of the decode progress fraction (0: unknown).
+    total_bytes: u64,
+    /// Frames the container announces, when it does (not trustworthy).
+    n_frames: Option<u64>,
+}
+
+/// Check the extension, open and probe the file, pick the first audio track and
+/// build its decoder (after the codec-allocation check). The `checkpoint` runs
+/// first, before any file access.
+fn open_audio(
     path: &Path,
     checkpoint: Option<&dyn Fn() -> Result<(), DictationError>>,
-    on_decode: Option<&dyn Fn(u8)>,
-    on_resample: Option<&dyn Fn(u8)>,
-) -> Result<Vec<f32>, DictationError> {
+) -> Result<OpenedAudio, DictationError> {
     if let Some(checkpoint) = checkpoint {
         checkpoint()?;
     }
@@ -534,7 +620,7 @@ fn decode_audio_file_inner(
             DictationError::FileDecodeError(format!("Failed to probe file format: {e}"))
         })?;
 
-    let mut format = probed.format;
+    let format = probed.format;
 
     // Find the first audio track
     let track = format
@@ -550,13 +636,41 @@ fn decode_audio_file_inner(
     // channels from codec_params can be wrong (e.g. AAC stereo reporting 1).
     // We'll detect the real channel count from the first decoded frame.
     let codec_channels = track.codec_params.channels.map(|c| c.count()).unwrap_or(0);
+    let n_frames = track.codec_params.n_frames;
 
     info!(
         "Decoding audio: {} Hz, codec_channels={}, codec {:?}",
         sample_rate, codec_channels, track.codec_params.codec
     );
 
-    let mut decoder = make_decoder(&track.codec_params, &DEFAULT_DECODE_BUDGET)?;
+    let decoder = make_decoder(&track.codec_params, &DEFAULT_DECODE_BUDGET)?;
+
+    Ok(OpenedAudio {
+        format,
+        decoder,
+        track_id,
+        sample_rate,
+        codec_channels,
+        total_bytes,
+        n_frames,
+    })
+}
+
+fn decode_audio_file_inner(
+    path: &Path,
+    checkpoint: Option<&dyn Fn() -> Result<(), DictationError>>,
+    on_decode: Option<&dyn Fn(u8)>,
+    on_resample: Option<&dyn Fn(u8)>,
+) -> Result<Vec<f32>, DictationError> {
+    let OpenedAudio {
+        mut format,
+        mut decoder,
+        track_id,
+        sample_rate,
+        codec_channels,
+        total_bytes,
+        ..
+    } = open_audio(path, checkpoint)?;
 
     let mut next_packet = || format.next_packet();
     let (mono, actual_channels) = decode_packets(
@@ -649,6 +763,168 @@ fn decode_audio_file_inner(
     );
 
     Ok(resampled)
+}
+
+/// What a streaming decode knows as soon as the file is open.
+#[derive(Debug, Clone)]
+pub struct StreamInfo {
+    pub source_rate: u32,
+    /// Channel count from the codec parameters (can be wrong; the real count
+    /// is in [`StreamedDecode::channels`]).
+    pub codec_channels: usize,
+    /// Output length (16 kHz samples) implied by the container's frame count,
+    /// if it announces one. An estimate for progress: containers can lie, and
+    /// the resampler adds a short tail.
+    pub expected_samples: Option<usize>,
+    /// File size in bytes (0: unknown).
+    pub total_bytes: u64,
+    /// Audio-packet bytes consumed so far, kept up to date while decoding (only
+    /// when `total_bytes` is known). With `total_bytes` it is a fraction of the
+    /// file to estimate progress from when `expected_samples` is `None`.
+    pub consumed_bytes: Arc<AtomicU64>,
+}
+
+/// The outcome of a streaming decode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StreamedDecode {
+    /// Total 16 kHz mono samples handed to the sink.
+    pub samples: usize,
+    pub source_rate: u32,
+    /// Channel count of the decoded audio (the real one, not the codec's claim).
+    pub channels: usize,
+    /// As in [`StreamInfo::expected_samples`].
+    pub expected_samples: Option<usize>,
+}
+
+/// 16 kHz samples that `n_frames` source frames at `sample_rate` come to.
+fn expected_output_samples(n_frames: Option<u64>, sample_rate: u32) -> Option<usize> {
+    let frames = n_frames.filter(|&n| n > 0)?;
+    if sample_rate == 0 {
+        return None;
+    }
+    let samples =
+        (u128::from(frames) * u128::from(TARGET_SAMPLE_RATE)).div_ceil(u128::from(sample_rate));
+    usize::try_from(samples).ok()
+}
+
+/// Add `added` streamed 16 kHz samples to the running total, enforcing the
+/// ~4 hour cap on the *output* count (the streamed counterpart of the batch
+/// path's source-rate check).
+fn count_streamed_output(total: &mut usize, added: usize) -> Result<(), DictationError> {
+    *total = total
+        .checked_add(added)
+        .ok_or_else(|| budget_error("size overflow"))?;
+    check_decode_size_cap(*total, 1, TARGET_SAMPLE_RATE)
+}
+
+/// Decode an audio or video file to 16 kHz mono like [`decode_audio_file`], but
+/// hand the samples to `sink` as they are produced instead of returning them,
+/// so a consumer can start on the first seconds while the rest decodes.
+///
+/// The concatenation of what `sink` receives, in order, is bit-identical to
+/// `decode_audio_file(path)`. Each packet is downmixed and resampled as it
+/// arrives (see [`StreamingResampler`]); neither the source-rate mono nor the
+/// full output is accumulated, so memory stays flat however long the file is.
+/// `sink` is called with non-empty slices, at the pace of the decoder; if it
+/// returns an error, decoding stops with that error.
+///
+/// All safeguards of the batch decode apply: the extension check, the codec
+/// allocation and per-packet budget checks, the consecutive-error limits and
+/// the ~4 hour cap (counted on the streamed output). Empty audio fails with the
+/// same "No audio samples decoded" error. `checkpoint` is called at the same
+/// bounded points as in [`decode_audio_file_with_control`]; it is `Sync` so the
+/// caller can run the decode on a worker thread while another observes
+/// cancellation. `on_open` is called once, after the file is probed and before
+/// the first packet is decoded.
+pub fn decode_audio_file_streaming(
+    path: &Path,
+    checkpoint: &(dyn Fn() -> Result<(), DictationError> + Sync),
+    on_open: &mut dyn FnMut(&StreamInfo),
+    sink: &mut dyn FnMut(&[f32]) -> Result<(), DictationError>,
+) -> Result<StreamedDecode, DictationError> {
+    let checkpoint: &dyn Fn() -> Result<(), DictationError> = checkpoint;
+    let OpenedAudio {
+        mut format,
+        mut decoder,
+        track_id,
+        sample_rate,
+        codec_channels,
+        total_bytes,
+        n_frames,
+    } = open_audio(path, Some(checkpoint))?;
+    let expected_samples = expected_output_samples(n_frames, sample_rate);
+    let consumed = Arc::new(AtomicU64::new(0));
+    on_open(&StreamInfo {
+        source_rate: sample_rate,
+        codec_channels,
+        expected_samples,
+        total_bytes,
+        consumed_bytes: consumed.clone(),
+    });
+
+    let mut resampler = StreamingResampler::new(sample_rate);
+    let resample_error =
+        |e: String| DictationError::TranscriptionFailed(format!("Resample failed: {e}"));
+    let mut mono: Vec<f32> = Vec::new();
+    let mut converted: Vec<f32> = Vec::new();
+    let mut source_frames = 0usize;
+    let mut streamed = 0usize;
+    let mut forward = |converted: &mut Vec<f32>| -> Result<(), DictationError> {
+        if !converted.is_empty() {
+            count_streamed_output(&mut streamed, converted.len())?;
+            sink(converted.as_slice())?;
+            converted.clear();
+        }
+        Ok(())
+    };
+
+    let mut next_packet = || format.next_packet();
+    let channels = run_packet_loop(
+        &mut next_packet,
+        decoder.as_mut(),
+        track_id,
+        codec_channels,
+        total_bytes,
+        Some(checkpoint),
+        None,
+        Some(&consumed),
+        &DEFAULT_DECODE_BUDGET,
+        &mut |audio| {
+            // Same downmix as the batch decode, one packet at a time.
+            mono.clear();
+            downmix_extend(&audio, &mut mono);
+            source_frames += mono.len();
+            resampler
+                .push(&mono, &mut converted)
+                .map_err(resample_error)?;
+            forward(&mut converted)
+        },
+    )?;
+
+    if source_frames == 0 {
+        return Err(DictationError::FileDecodeError(
+            "No audio samples decoded from file".to_string(),
+        ));
+    }
+    checkpoint()?;
+    resampler.finish(&mut converted).map_err(resample_error)?;
+    forward(&mut converted)?;
+    checkpoint()?;
+
+    info!(
+        "Streamed {} source frames ({:.1}s), {} ch at {} Hz, as {} samples at 16kHz",
+        source_frames,
+        source_frames as f64 / f64::from(sample_rate.max(1)),
+        channels,
+        sample_rate,
+        streamed
+    );
+    Ok(StreamedDecode {
+        samples: streamed,
+        source_rate: sample_rate,
+        channels,
+        expected_samples,
+    })
 }
 
 #[cfg(test)]
@@ -1753,5 +2029,290 @@ mod tests {
                 assert_eq!(fnv(&got), hash, "{rate} Hz {ch} ch {bits}-bit");
             }
         }
+    }
+
+    // -- streaming decode --
+
+    /// What a streaming decode produced: every sink call, plus the result.
+    struct Streamed {
+        calls: Vec<usize>,
+        samples: Vec<f32>,
+        info: Option<StreamInfo>,
+        result: Result<StreamedDecode, DictationError>,
+    }
+
+    fn stream(
+        path: &Path,
+        checkpoint: &(dyn Fn() -> Result<(), DictationError> + Sync),
+    ) -> Streamed {
+        let mut calls = Vec::new();
+        let mut samples = Vec::new();
+        let mut info = None;
+        let result = decode_audio_file_streaming(
+            path,
+            checkpoint,
+            &mut |i| info = Some(i.clone()),
+            &mut |chunk| {
+                assert!(!chunk.is_empty(), "the sink is never called with nothing");
+                calls.push(chunk.len());
+                samples.extend_from_slice(chunk);
+                Ok(())
+            },
+        );
+        Streamed {
+            calls,
+            samples,
+            info,
+            result,
+        }
+    }
+
+    fn bits_of(v: &[f32]) -> Vec<u32> {
+        v.iter().map(|f| f.to_bits()).collect()
+    }
+
+    fn repo_fixture(name: &str) -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../test-audio")
+            .join(name)
+    }
+
+    #[test]
+    fn streaming_decode_equals_batch_decode_on_the_repo_fixtures() {
+        for name in [
+            "english-jfk.wav",
+            "swedish-fleurs-hongkong.wav",
+            "norwegian-short-3s.mp3",
+            "norwegian-medium-8s.mp3",
+        ] {
+            let path = repo_fixture(name);
+            let want = decode_audio_file(&path).unwrap();
+            let got = stream(&path, &|| Ok(()));
+            let done = got.result.unwrap();
+            assert_eq!(bits_of(&got.samples), bits_of(&want), "{name}");
+            assert_eq!(done.samples, want.len(), "{name}");
+            assert!(got.calls.len() > 1, "{name}: delivered in pieces");
+            assert!(got.info.is_some(), "{name}");
+        }
+    }
+
+    #[test]
+    fn streaming_decode_equals_batch_decode_for_resampled_and_multichannel_sources() {
+        let dir = TempDir::new();
+        for (rate, ch, bits, float, frames) in [
+            (16_000u32, 1u16, 16u16, false, 5_037usize),
+            (44_100, 2, 16, false, 20_011),
+            (48_000, 2, 24, false, 30_001),
+            (48_000, 1, 32, true, 9_999),
+            (22_050, 1, 8, false, 4_099),
+            (48_000, 3, 16, false, 7_777),
+            (8_000, 2, 16, false, 1_025),
+            (8_000, 1, 16, false, 1_024),
+            // Fewer than one resampler chunk of source audio.
+            (48_000, 2, 16, false, 700),
+            (44_100, 1, 16, false, 1),
+        ] {
+            let path = dir.join(format!("s_{rate}_{ch}_{bits}_{float}_{frames}.wav"));
+            std::fs::write(&path, pcm_wav(rate, ch, bits, float, frames)).unwrap();
+            let want = decode_audio_file(&path).unwrap();
+            let got = stream(&path, &|| Ok(()));
+            let done = got.result.unwrap();
+            let label = format!("{rate} Hz {ch} ch {bits}-bit {frames} frames");
+            assert_eq!(bits_of(&got.samples), bits_of(&want), "{label}");
+            assert_eq!(done.samples, want.len(), "{label}");
+            assert_eq!((done.source_rate, done.channels), (rate, usize::from(ch)));
+            let info = got.info.unwrap();
+            assert_eq!(info.source_rate, rate);
+            assert_eq!(
+                info.expected_samples,
+                expected_output_samples(Some(frames as u64), rate)
+            );
+        }
+    }
+
+    #[test]
+    fn streaming_decode_announces_the_expected_length_and_tracks_consumed_bytes() {
+        let dir = TempDir::new();
+        let path = dir.join("expected.wav");
+        std::fs::write(&path, pcm_wav(44_100, 2, 16, false, 44_100)).unwrap();
+        let total = std::fs::metadata(&path).unwrap().len();
+        let mut seen = Vec::new();
+        let info = std::cell::RefCell::new(None::<StreamInfo>);
+        let done = decode_audio_file_streaming(
+            &path,
+            &|| Ok(()),
+            &mut |i| *info.borrow_mut() = Some(i.clone()),
+            &mut |_| {
+                let info = info.borrow();
+                seen.push(
+                    info.as_ref()
+                        .unwrap()
+                        .consumed_bytes
+                        .load(Ordering::Relaxed),
+                );
+                Ok(())
+            },
+        )
+        .unwrap();
+        let info = info.into_inner().unwrap();
+        assert_eq!(info.total_bytes, total);
+        assert_eq!(info.expected_samples, Some(16_000));
+        assert!(
+            (done.samples as i64 - 16_000).abs() < 400,
+            "close to the announced length: {}",
+            done.samples
+        );
+        assert!(seen.windows(2).all(|w| w[0] <= w[1]), "never goes back");
+        assert!(*seen.last().unwrap() > 0 && *seen.last().unwrap() <= total);
+    }
+
+    #[test]
+    fn streaming_decode_keeps_the_batch_error_behaviour() {
+        let dir = TempDir::new();
+        // Extension and missing file: the batch errors, before any callback.
+        let called = AtomicUsize::new(0);
+        let counting = || {
+            called.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        };
+        let unsupported = stream(&dir.join("x.xyz"), &counting);
+        assert!(matches!(
+            unsupported.result,
+            Err(DictationError::UnsupportedFormat(_))
+        ));
+        assert!(unsupported.info.is_none());
+        let missing = stream(&dir.join("missing.wav"), &counting);
+        assert!(matches!(
+            missing.result,
+            Err(DictationError::FileNotFound(_))
+        ));
+        assert_eq!(
+            called.load(Ordering::SeqCst),
+            2,
+            "the checkpoint runs first"
+        );
+
+        // A WAV without a single frame: the batch error text.
+        let empty = dir.join("empty.wav");
+        std::fs::write(&empty, pcm_wav(16_000, 1, 16, false, 0)).unwrap();
+        let want = decode_audio_file(&empty).unwrap_err().to_string();
+        let got = stream(&empty, &|| Ok(())).result.unwrap_err().to_string();
+        assert_eq!(got, want);
+        assert!(got.contains("No audio samples decoded"), "{got}");
+    }
+
+    #[test]
+    fn streaming_decode_stops_on_cancel_and_on_a_failing_sink() {
+        let dir = TempDir::new();
+        let path = dir.join("long.wav");
+        std::fs::write(&path, pcm_wav(44_100, 2, 16, false, 200_000)).unwrap();
+
+        // Cancel after a few packets: stops with the checkpoint's error, having
+        // delivered only part of the audio.
+        let calls = AtomicUsize::new(0);
+        let cancel_late = || {
+            if calls.fetch_add(1, Ordering::SeqCst) >= 40 {
+                Err(DictationError::Cancelled)
+            } else {
+                Ok(())
+            }
+        };
+        let cancelled = stream(&path, &cancel_late);
+        assert!(matches!(cancelled.result, Err(DictationError::Cancelled)));
+        assert!(!cancelled.samples.is_empty());
+        let full = decode_audio_file(&path).unwrap();
+        assert!(cancelled.samples.len() < full.len() / 2);
+
+        // A sink error ends the decode with that error and no further calls.
+        let mut delivered = 0;
+        let error = decode_audio_file_streaming(&path, &|| Ok(()), &mut |_| {}, &mut |_| {
+            delivered += 1;
+            Err(DictationError::FileDecodeError("sink full".into()))
+        })
+        .unwrap_err();
+        assert!(matches!(&error, DictationError::FileDecodeError(m) if m == "sink full"));
+        assert_eq!(delivered, 1);
+    }
+
+    #[test]
+    fn streaming_decode_can_run_on_a_worker_thread_while_the_caller_cancels() {
+        let dir = TempDir::new();
+        let path = dir.join("worker.wav");
+        std::fs::write(&path, pcm_wav(48_000, 2, 16, false, 300_000)).unwrap();
+        let cancelled = std::sync::atomic::AtomicBool::new(false);
+        let checkpoint = || {
+            if cancelled.load(Ordering::SeqCst) {
+                Err(DictationError::Cancelled)
+            } else {
+                Ok(())
+            }
+        };
+        let outcome = std::thread::scope(|scope| {
+            let worker = scope.spawn(|| {
+                let mut total = 0usize;
+                let result =
+                    decode_audio_file_streaming(&path, &checkpoint, &mut |_| {}, &mut |chunk| {
+                        total += chunk.len();
+                        cancelled.store(true, Ordering::SeqCst);
+                        Ok(())
+                    });
+                (result, total)
+            });
+            worker.join().unwrap()
+        });
+        assert!(matches!(outcome.0, Err(DictationError::Cancelled)));
+        assert!(outcome.1 > 0);
+    }
+
+    #[test]
+    fn the_duration_cap_applies_to_the_streamed_output_count() {
+        let mut total = 0usize;
+        count_streamed_output(&mut total, MAX_DECODE_SAMPLES - 10).unwrap();
+        count_streamed_output(&mut total, 10).unwrap();
+        assert_eq!(total, MAX_DECODE_SAMPLES);
+        let error = count_streamed_output(&mut total, 1).unwrap_err();
+        assert!(
+            matches!(&error, DictationError::FileDecodeError(m) if m.contains("4 hour")),
+            "{error:?}"
+        );
+        let mut near_overflow = usize::MAX - 1;
+        assert!(count_streamed_output(&mut near_overflow, 5).is_err());
+    }
+
+    #[test]
+    fn expected_length_comes_from_the_announced_frame_count() {
+        assert_eq!(expected_output_samples(Some(48_000), 48_000), Some(16_000));
+        assert_eq!(expected_output_samples(Some(44_100), 44_100), Some(16_000));
+        assert_eq!(expected_output_samples(Some(8_000), 8_000), Some(16_000));
+        assert_eq!(expected_output_samples(Some(1), 48_000), Some(1));
+        assert_eq!(expected_output_samples(None, 48_000), None);
+        assert_eq!(expected_output_samples(Some(0), 48_000), None);
+        assert_eq!(expected_output_samples(Some(10), 0), None);
+    }
+
+    /// Opt-in parity check on a real file of any supported format:
+    /// `SAGASCRIPT_STREAM_PARITY_FILE=/path/to/file cargo test --release -p
+    /// sagascript-core --lib streaming_decode_parity_on_env_file -- --ignored`.
+    #[test]
+    #[ignore = "needs SAGASCRIPT_STREAM_PARITY_FILE"]
+    fn streaming_decode_parity_on_env_file() {
+        let path = PathBuf::from(
+            std::env::var_os("SAGASCRIPT_STREAM_PARITY_FILE")
+                .expect("set SAGASCRIPT_STREAM_PARITY_FILE"),
+        );
+        let want = decode_audio_file(&path).unwrap();
+        let got = stream(&path, &|| Ok(()));
+        let done = got.result.unwrap();
+        assert_eq!(done.samples, want.len());
+        assert_eq!(got.samples.len(), want.len());
+        assert!(bits_of(&got.samples) == bits_of(&want), "samples differ");
+        eprintln!(
+            "parity ok: {} samples, {} Hz, {} ch, expected {:?}, {} sink calls",
+            done.samples,
+            done.source_rate,
+            done.channels,
+            done.expected_samples,
+            got.calls.len()
+        );
     }
 }
