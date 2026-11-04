@@ -146,9 +146,9 @@ pub(crate) fn resample_to_16khz_bounded(
 }
 
 /// The batch resampler's fixed input chunk size, in source samples.
-const STREAM_CHUNK: usize = 1024;
+pub(crate) const STREAM_CHUNK: usize = 1024;
 
-fn sinc_params() -> SincInterpolationParameters {
+pub(crate) fn sinc_params() -> SincInterpolationParameters {
     SincInterpolationParameters {
         sinc_len: 256,
         f_cutoff: 0.95,

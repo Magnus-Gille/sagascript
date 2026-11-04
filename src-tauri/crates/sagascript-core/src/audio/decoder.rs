@@ -11,7 +11,8 @@ use symphonia::core::probe::Hint;
 use tracing::info;
 
 use super::resample::{
-    resample_to_16khz_bounded, StreamResampleError, StreamingResampler, TARGET_SAMPLE_RATE,
+    resample_to_16khz_bounded, StreamResampleError, StreamingResampler, STREAM_CHUNK,
+    TARGET_SAMPLE_RATE,
 };
 use crate::error::DictationError;
 
@@ -41,7 +42,18 @@ pub(crate) const MAX_DECODE_SAMPLES: usize = 4 * 3600 * 16_000; // ~230M, ~4h @ 
 /// [`MAX_DECODE_SAMPLES`], normalized to a 16kHz-mono-equivalent duration.
 /// Factored out of the decode loop so it can be unit tested without
 /// allocating gigabytes of PCM data.
+#[cfg(test)]
 fn check_decode_size_cap(
+    raw_sample_count: usize,
+    channels: usize,
+    sample_rate: u32,
+) -> Result<(), DictationError> {
+    check_decode_size_cap_within(MAX_DECODE_SAMPLES, raw_sample_count, channels, sample_rate)
+}
+
+/// [`check_decode_size_cap`] against an explicit limit (in 16 kHz mono samples).
+fn check_decode_size_cap_within(
+    limit: usize,
     raw_sample_count: usize,
     channels: usize,
     sample_rate: u32,
@@ -56,9 +68,9 @@ fn check_decode_size_cap(
     let duration_secs = raw_sample_count as f64 / channels / sample_rate;
     let equivalent_16k_mono_samples = duration_secs * 16_000.0;
 
-    if equivalent_16k_mono_samples > MAX_DECODE_SAMPLES as f64 {
+    if equivalent_16k_mono_samples > limit as f64 {
         return Err(DictationError::FileDecodeError(format!(
-            "Audio file is too long to decode (exceeds the ~4 hour / {MAX_DECODE_SAMPLES}-sample \
+            "Audio file is too long to decode (exceeds the ~4 hour / {limit}-sample \
              16kHz-mono-equivalent limit); aborting to avoid unbounded memory use"
         )));
     }
@@ -98,12 +110,16 @@ struct DecodeBudget {
     max_total_bytes: u64,
     max_packet_bytes: u64,
     conversion_scratch_bytes: u64,
+    /// The duration cap, as 16 kHz mono samples ([`MAX_DECODE_SAMPLES`] in
+    /// production; a field so that tests can use a small one).
+    max_duration_samples: usize,
 }
 
 const DEFAULT_DECODE_BUDGET: DecodeBudget = DecodeBudget {
     max_total_bytes: 4 * 1024 * 1024 * 1024,
     max_packet_bytes: 64 * 1024 * 1024,
     conversion_scratch_bytes: 64 * 1024 * 1024,
+    max_duration_samples: MAX_DECODE_SAMPLES,
 };
 
 const SAMPLE_BYTES: u64 = std::mem::size_of::<f32>() as u64;
@@ -275,7 +291,7 @@ fn append_mono_within_budget(
     if new_len as u64 > ceiling {
         return Err(budget_error("total decoded audio"));
     }
-    check_decode_size_cap(new_len, 1, sample_rate)?;
+    check_decode_size_cap_within(budget.max_duration_samples, new_len, 1, sample_rate)?;
     if new_len > mono.capacity() {
         let old = mono.capacity() as u64;
         let fits = |target: usize| -> bool {
@@ -809,14 +825,37 @@ fn expected_output_samples(n_frames: Option<u64>, sample_rate: u32) -> Option<us
     usize::try_from(samples).ok()
 }
 
-/// Add `added` streamed 16 kHz samples to the running total, enforcing the
-/// ~4 hour cap on the *output* count (the streamed counterpart of the batch
-/// path's source-rate check).
-fn count_streamed_output(total: &mut usize, added: usize) -> Result<(), DictationError> {
+/// What the resampler's own padding and flush may add to the output beyond the
+/// nominal length of the audio. The batch decode caps the *source* duration and
+/// lets the resampler's output exceed the nominal count within its memory
+/// budget (it reserves three maximal output chunks plus 1024 for it). The
+/// streaming decode caps the source the same way, and checks its output against
+/// the limit plus this much: three maximal output chunks (twice the chunk times
+/// the highest ratio it accepts, plus 64, each) and one more chunk. So audio
+/// exactly at the limit decodes in both paths, and the output is never trimmed.
+const STREAM_OUTPUT_HEADROOM: usize = 3
+    * (2 * STREAM_CHUNK * (TARGET_SAMPLE_RATE / MIN_STREAM_SOURCE_RATE) as usize + 64)
+    + STREAM_CHUNK;
+
+/// Add `added` streamed 16 kHz samples to the running total, enforcing the cap
+/// on the *output* count: `limit` (in 16 kHz samples) plus the resampler's
+/// bounded overhead, [`STREAM_OUTPUT_HEADROOM`]. The source-duration check at
+/// exactly `limit` is what decides whether a file is too long; this one is the
+/// backstop on what the resampler can produce.
+fn count_streamed_output(
+    total: &mut usize,
+    added: usize,
+    limit: usize,
+) -> Result<(), DictationError> {
     *total = total
         .checked_add(added)
         .ok_or_else(|| budget_error("size overflow"))?;
-    check_decode_size_cap(*total, 1, TARGET_SAMPLE_RATE)
+    check_decode_size_cap_within(
+        limit,
+        total.saturating_sub(STREAM_OUTPUT_HEADROOM),
+        1,
+        TARGET_SAMPLE_RATE,
+    )
 }
 
 /// Decode an audio or video file to 16 kHz mono like [`decode_audio_file`], but
@@ -939,7 +978,7 @@ fn stream_packets(
     let mut source_frames = 0usize;
     let mut streamed = 0usize;
     let mut emit = |chunk: &[f32]| -> Result<(), DictationError> {
-        count_streamed_output(&mut streamed, chunk.len())?;
+        count_streamed_output(&mut streamed, chunk.len(), budget.max_duration_samples)?;
         sink(chunk)
     };
 
@@ -966,7 +1005,12 @@ fn stream_packets(
             source_frames = source_frames
                 .checked_add(mono.len())
                 .ok_or_else(|| budget_error("size overflow"))?;
-            check_decode_size_cap(source_frames, 1, sample_rate)?;
+            check_decode_size_cap_within(
+                budget.max_duration_samples,
+                source_frames,
+                1,
+                sample_rate,
+            )?;
             if sample_rate < MIN_STREAM_SOURCE_RATE {
                 return Err(DictationError::FileDecodeError(format!(
                     "Audio sample rate {sample_rate} Hz is too low to decode \
@@ -1742,6 +1786,7 @@ mod tests {
             max_total_bytes: 4_000,
             max_packet_bytes: 0,
             conversion_scratch_bytes: 0,
+            max_duration_samples: MAX_DECODE_SAMPLES,
         };
         // 16 kHz: 8 bytes per frame (mono + output) -> ceiling 500 frames.
         assert_eq!(max_mono_frames(16_000, &budget), 500);
@@ -1784,6 +1829,7 @@ mod tests {
             max_total_bytes: 6_000,
             max_packet_bytes: 0,
             conversion_scratch_bytes: 0,
+            max_duration_samples: MAX_DECODE_SAMPLES,
         };
         assert_eq!(max_mono_frames(48_000, &budget), 1_000);
         // Previous capacity (900) is greater than half the clamped target.
@@ -1812,6 +1858,7 @@ mod tests {
             max_total_bytes: 60_000,
             max_packet_bytes: 0,
             conversion_scratch_bytes: 0,
+            max_duration_samples: MAX_DECODE_SAMPLES,
         };
         let ceiling = max_mono_frames(48_000, &budget);
         let mut mono: Vec<f32> = Vec::new();
@@ -1896,6 +1943,7 @@ mod tests {
             max_total_bytes: 5_600,
             max_packet_bytes: 1_200,
             conversion_scratch_bytes: 0,
+            max_duration_samples: MAX_DECODE_SAMPLES,
         };
         // ceiling = (5_600 - 350 packet margin) / 8 = 656 frames at 16 kHz.
         let pulled = std::cell::Cell::new(0usize);
@@ -2338,17 +2386,21 @@ mod tests {
 
     #[test]
     fn the_duration_cap_applies_to_the_streamed_output_count() {
+        // The output may exceed the nominal limit by the resampler's bounded
+        // overhead, and no more.
+        let limit = MAX_DECODE_SAMPLES;
+        let most = limit + STREAM_OUTPUT_HEADROOM;
         let mut total = 0usize;
-        count_streamed_output(&mut total, MAX_DECODE_SAMPLES - 10).unwrap();
-        count_streamed_output(&mut total, 10).unwrap();
-        assert_eq!(total, MAX_DECODE_SAMPLES);
-        let error = count_streamed_output(&mut total, 1).unwrap_err();
+        count_streamed_output(&mut total, most - 10, limit).unwrap();
+        count_streamed_output(&mut total, 10, limit).unwrap();
+        assert_eq!(total, most);
+        let error = count_streamed_output(&mut total, 1, limit).unwrap_err();
         assert!(
             matches!(&error, DictationError::FileDecodeError(m) if m.contains("4 hour")),
             "{error:?}"
         );
         let mut near_overflow = usize::MAX - 1;
-        assert!(count_streamed_output(&mut near_overflow, 5).is_err());
+        assert!(count_streamed_output(&mut near_overflow, 5, limit).is_err());
     }
 
     #[test]
@@ -2372,6 +2424,16 @@ mod tests {
         packets: usize,
         sink: &mut dyn FnMut(&[f32]) -> Result<(), DictationError>,
     ) -> Result<StreamRun, DictationError> {
+        run_scripted_stream_within(decoder, rate, packets, &DEFAULT_DECODE_BUDGET, sink)
+    }
+
+    fn run_scripted_stream_within(
+        decoder: &mut ScriptedDecoder,
+        rate: u32,
+        packets: usize,
+        budget: &DecodeBudget,
+        sink: &mut dyn FnMut(&[f32]) -> Result<(), DictationError>,
+    ) -> Result<StreamRun, DictationError> {
         let pulled = std::cell::Cell::new(0usize);
         let mut next = || {
             let n = pulled.get();
@@ -2393,9 +2455,103 @@ mod tests {
             0,
             &|| Ok(()),
             &AtomicU64::new(0),
-            &DEFAULT_DECODE_BUDGET,
+            budget,
             sink,
         )
+    }
+
+    /// The batch path over the same scripted packets: `packets` of the decoder's buffer.
+    fn run_scripted_batch(
+        decoder: &mut ScriptedDecoder,
+        rate: u32,
+        packets: usize,
+        budget: &DecodeBudget,
+    ) -> Result<(Vec<f32>, usize), DictationError> {
+        let pulled = std::cell::Cell::new(0usize);
+        let mut next = || {
+            let n = pulled.get();
+            pulled.set(n + 1);
+            if n >= packets {
+                Err(SymError::IoError(std::io::Error::from(
+                    std::io::ErrorKind::UnexpectedEof,
+                )))
+            } else {
+                Ok(Packet::new_from_slice(0, 0, 0, &[0u8; 4]))
+            }
+        };
+        decode_packets(&mut next, decoder, 0, rate, 1, 0, None, None, budget)
+    }
+
+    #[test]
+    fn audio_at_exactly_the_duration_limit_decodes_in_both_paths_and_one_frame_more_fails_in_both()
+    {
+        // A small limit stands in for the 4 hours: 2 s of 16 kHz, which is 16_000
+        // frames at 8 kHz (a rate the streaming path accepts).
+        let limit = 32_000;
+        let rate = 8_000;
+        let budget = DecodeBudget {
+            max_duration_samples: limit,
+            ..DEFAULT_DECODE_BUDGET
+        };
+
+        // Exactly at the limit: both succeed. The resampler's flush takes the
+        // output past the nominal count, which the streaming path must allow.
+        let mut batch_decoder = ScriptedDecoder::new(false, rate, Channels::FRONT_LEFT, 16_000);
+        let (mono, _) = run_scripted_batch(&mut batch_decoder, rate, 1, &budget)
+            .expect("the batch path allows exactly the limit");
+        let batch_output = crate::audio::resample::resample_to_16khz(mono, rate).unwrap();
+        let mut stream_decoder = ScriptedDecoder::new(false, rate, Channels::FRONT_LEFT, 16_000);
+        let mut streamed = Vec::new();
+        run_scripted_stream_within(&mut stream_decoder, rate, 1, &budget, &mut |chunk| {
+            streamed.extend_from_slice(chunk);
+            Ok(())
+        })
+        .expect("the streaming path allows exactly the limit");
+        assert!(
+            batch_output.len() > limit,
+            "the premise: the resampled audio is longer than the nominal limit ({} vs {limit})",
+            batch_output.len()
+        );
+        assert_eq!(
+            bits_of(&streamed),
+            bits_of(&batch_output),
+            "the output is never trimmed"
+        );
+
+        // One frame more: both refuse, with the same error.
+        let mut batch_decoder = ScriptedDecoder::new(false, rate, Channels::FRONT_LEFT, 16_001);
+        let batch_error = run_scripted_batch(&mut batch_decoder, rate, 1, &budget).unwrap_err();
+        let mut stream_decoder = ScriptedDecoder::new(false, rate, Channels::FRONT_LEFT, 16_001);
+        let stream_error =
+            run_scripted_stream_within(&mut stream_decoder, rate, 1, &budget, &mut |_| Ok(()))
+                .unwrap_err();
+        for error in [&batch_error, &stream_error] {
+            assert!(
+                matches!(error, DictationError::FileDecodeError(m) if m.contains("4 hour")),
+                "{error:?}"
+            );
+        }
+        assert_eq!(batch_error.to_string(), stream_error.to_string());
+    }
+
+    #[test]
+    fn the_output_headroom_covers_the_batch_paths_reservation_at_the_lowest_accepted_rate() {
+        use rubato::{Resampler, SincFixedIn};
+        let ratio = f64::from(TARGET_SAMPLE_RATE) / f64::from(MIN_STREAM_SOURCE_RATE);
+        let resampler = SincFixedIn::<f32>::new(
+            ratio,
+            2.0,
+            crate::audio::resample::sinc_params(),
+            STREAM_CHUNK,
+            1,
+        )
+        .unwrap();
+        // What the batch code sets aside for padding and flush.
+        let batch_headroom = resampler.output_frames_max() * 3 + 1024;
+        assert!(
+            STREAM_OUTPUT_HEADROOM >= batch_headroom,
+            "{STREAM_OUTPUT_HEADROOM} < {batch_headroom}"
+        );
     }
 
     #[test]
