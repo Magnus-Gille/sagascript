@@ -91,13 +91,12 @@ decoding is done, never decreasing, below 100 until the last window) and
 transcribing percentage above 0 arrives. A file that is gone is reported as
 `file_not_found` before the engine starts; other decode errors are reported once
 the engine is loaded. Stop and the inference timeout reach the decoder as well as
-the engine. The timeout is counted from the start of inference, after the model has
-loaded, and is never shorter than for a file decoded in full first: it starts at
-180 s and, as the decoder learns the length (what the container announces, the
-decoded length every 60 s, then the exact length), moves out to
-`max(audio seconds * 10, 180 s)`. It never moves in, so a header that understates
-the length cannot shorten it, and one that overstates it (up to the decoder's 4 h
-limit) keeps the longer limit.
+the engine. No timeout runs while the file decodes, as before, when the file was decoded
+before any timeout was set: a slow decode never counts. When the decode ends, the
+timeout is `max(audio seconds * 10, 180 s)` from that moment, so it is never
+shorter than for a file decoded in full first. Estimates of the length (what the
+container announces, the length decoded so far) do not set it, so a header that
+understates the length cannot shorten it.
 
 GUI plain imports have run-ID-scoped `plain-transcription-progress` events.
 They lease a warm backend separate from live dictation/training, so Stop cannot

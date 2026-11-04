@@ -7,7 +7,8 @@ use crate::events::{EmitEvent, PlainPhase, PlainTranscriptionProgress};
 use sagascript_core::sync::lock_or_recover;
 use sagascript_core::transcription::whisper_backend::display_transcript;
 use sagascript_core::transcription::{
-    pianissimo_backend::PianissimoBackend, Glossary, TranscribeRequest,
+    pianissimo_backend::{AudioLength, PianissimoBackend},
+    Glossary, TranscribeRequest,
 };
 use sagascript_core::{
     audio::decoder,
@@ -187,14 +188,14 @@ pub async fn transcribe_pianissimo(
             // compile can take minutes and is not inference time.
             backend.warm_up_with_cancel(&run.cancelled)?;
             run.check()?;
-            // The length is unknown until the decode ends, so the limit starts
-            // at its floor and grows as the decoder reports what it learns.
-            let deadline = StreamDeadline::start(&run.deadline, Instant::now());
+            // The decode runs alongside inference and the length is known only
+            // when it ends: the limit is set then (see `StreamDeadline`).
+            let deadline = StreamDeadline::new(&run.deadline);
             let (result, _) = backend.transcribe_file_streaming_with_length(
                 path,
                 |pct| progress(PlainPhase::Transcribing, Some(pct)),
                 &run.cancelled,
-                |samples| deadline.audio_length_known(samples),
+                |length| deadline.audio_length(length, Instant::now()),
             )?;
             run.check()?;
             progress(PlainPhase::Finalizing, None);
@@ -285,28 +286,30 @@ fn pianissimo_timeout(samples: usize) -> Duration {
     Duration::from_secs(((samples / 16_000) as u64).saturating_mul(10).max(180))
 }
 
-/// The deadline of a streamed Pianissimo import, whose audio length is not
-/// known when inference starts. It starts at the floor of the limit, measured
-/// from the start of inference (after the engine loaded), and moves out as
-/// lengths are reported. It only ever moves out: a header that understates the
-/// length cannot shorten it, and the final deadline is never earlier than the
-/// one the same file got when it was decoded before it was transcribed.
+/// The deadline of a streamed Pianissimo import. The decode runs alongside
+/// inference and the audio's length is known only when it ends, so no deadline
+/// runs while the file decodes (as before, when the file was decoded before any
+/// deadline was set: a slow decode never counts against it). When the decode
+/// ends, the deadline is `max(audio seconds * 10, 180 s)` from that moment,
+/// which is never earlier than the one the same file got when it was decoded in
+/// full first. Estimates (a container's announcement, the length decoded so
+/// far) are ignored: an understating header cannot shorten the limit.
 struct StreamDeadline<'a> {
     slot: &'a Mutex<Option<Instant>>,
-    started: Instant,
 }
 
 impl<'a> StreamDeadline<'a> {
-    fn start(slot: &'a Mutex<Option<Instant>>, started: Instant) -> Self {
-        let deadline = Self { slot, started };
-        deadline.audio_length_known(0);
-        deadline
+    fn new(slot: &'a Mutex<Option<Instant>>) -> Self {
+        Self { slot }
     }
 
-    /// The audio is known to be, or announced to be, `samples` long. Reports are
-    /// not ordered and a header can overstate: the latest deadline wins.
-    fn audio_length_known(&self, samples: usize) {
-        let Some(end) = self.started.checked_add(pianissimo_timeout(samples)) else {
+    /// The decoder reported `length` at `now`. Only the exact length sets the
+    /// deadline, and it only ever moves out.
+    fn audio_length(&self, length: AudioLength, now: Instant) {
+        let AudioLength::Exact(samples) = length else {
+            return;
+        };
+        let Some(end) = now.checked_add(pianissimo_timeout(samples)) else {
             return;
         };
         let mut slot = lock_or_recover(self.slot, DEADLINE_LOCK);
@@ -571,84 +574,70 @@ mod tests {
         assert!(pianissimo_timeout(usize::MAX) >= Duration::from_secs(180));
     }
 
-    fn deadline_after(slot: &Mutex<Option<Instant>>, started: Instant) -> Duration {
-        slot.lock().unwrap().expect("a deadline is set") - started
+    fn deadline_after(slot: &Mutex<Option<Instant>>, from: Instant) -> Duration {
+        slot.lock().unwrap().expect("a deadline is set") - from
+    }
+
+    /// While the file decodes no limit runs, whatever the estimates say.
+    #[test]
+    fn the_stream_deadline_is_not_set_while_the_file_decodes() {
+        let slot = Mutex::new(None);
+        let deadline = StreamDeadline::new(&slot);
+        let now = Instant::now();
+        for samples in [0, 10 * 16_000, 3_600 * 16_000, usize::MAX] {
+            deadline.audio_length(AudioLength::Estimate(samples), now);
+        }
+        assert!(slot.lock().unwrap().is_none());
     }
 
     #[test]
-    fn the_stream_deadline_starts_at_the_floor_when_inference_starts() {
-        let slot = Mutex::new(None);
-        let started = Instant::now();
-
-        let _deadline = StreamDeadline::start(&slot, started);
-
-        assert_eq!(deadline_after(&slot, started), Duration::from_secs(180));
+    fn the_stream_deadline_is_the_batch_limit_from_the_end_of_the_decode() {
+        let decoded = Instant::now();
+        for (seconds, limit) in [(10usize, 180u64), (45, 450), (3_600, 36_000)] {
+            let slot = Mutex::new(None);
+            StreamDeadline::new(&slot).audio_length(AudioLength::Exact(seconds * 16_000), decoded);
+            assert_eq!(
+                deadline_after(&slot, decoded),
+                Duration::from_secs(limit),
+                "{seconds} s"
+            );
+        }
     }
 
+    /// The review finding: a limit that started with the decode could expire
+    /// before a slow decode reported the length. A decode slower than the
+    /// 180 s floor now leaves the whole limit for after it.
     #[test]
-    fn the_stream_deadline_follows_the_announced_and_the_exact_length() {
+    fn a_decode_slower_than_the_floor_does_not_eat_into_the_limit() {
         let slot = Mutex::new(None);
+        let deadline = StreamDeadline::new(&slot);
         let started = Instant::now();
-        let deadline = StreamDeadline::start(&slot, started);
-
-        // A short file keeps the floor.
-        deadline.audio_length_known(10 * 16_000);
-        assert_eq!(deadline_after(&slot, started), Duration::from_secs(180));
-        // The container announces an hour.
-        deadline.audio_length_known(3_600 * 16_000);
-        assert_eq!(deadline_after(&slot, started), Duration::from_secs(36_000));
-        // The exact length turns out to be longer than announced.
-        deadline.audio_length_known(3_700 * 16_000);
-        assert_eq!(deadline_after(&slot, started), Duration::from_secs(37_000));
+        deadline.audio_length(AudioLength::Estimate(0), started);
+        let decoded = started + Duration::from_secs(400);
+        deadline.audio_length(AudioLength::Exact(45 * 16_000), decoded);
+        assert_eq!(deadline_after(&slot, decoded), Duration::from_secs(450));
     }
 
-    /// A header that understates the length cannot shorten the limit, and one
-    /// that overstates it is not taken back: the deadline only moves out.
     #[test]
     fn the_stream_deadline_never_moves_in() {
         let slot = Mutex::new(None);
-        let started = Instant::now();
-        let deadline = StreamDeadline::start(&slot, started);
-
-        deadline.audio_length_known(1_800 * 16_000); // decoded so far / announced
-        let longest = deadline_after(&slot, started);
-        for samples in [0, 16_000, 60 * 16_000, 1_799 * 16_000] {
-            deadline.audio_length_known(samples); // a crafted-low header, a smaller report
-            assert_eq!(deadline_after(&slot, started), longest, "{samples}");
-        }
-        // The exact length is shorter than an overstating header: no shrinking.
-        deadline.audio_length_known(120 * 16_000);
-        assert_eq!(deadline_after(&slot, started), longest);
+        let deadline = StreamDeadline::new(&slot);
+        let now = Instant::now();
+        deadline.audio_length(AudioLength::Exact(1_800 * 16_000), now);
+        let longest = deadline_after(&slot, now);
+        deadline.audio_length(AudioLength::Exact(60 * 16_000), now);
+        assert_eq!(deadline_after(&slot, now), longest);
     }
 
     #[test]
     fn the_stream_deadline_ignores_a_length_it_cannot_represent() {
         let slot = Mutex::new(None);
-        let started = Instant::now();
-        let deadline = StreamDeadline::start(&slot, started);
-
-        deadline.audio_length_known(usize::MAX);
-
-        let after = deadline_after(&slot, started);
-        assert!(after >= Duration::from_secs(180), "{after:?}");
-    }
-
-    /// The reports arrive from the decoder thread while the engine side reads
-    /// the deadline: concurrent reports keep the latest deadline.
-    #[test]
-    fn the_stream_deadline_keeps_the_latest_under_concurrent_reports() {
-        let slot = Mutex::new(None);
-        let started = Instant::now();
-        let deadline = StreamDeadline::start(&slot, started);
-
-        std::thread::scope(|scope| {
-            for minutes in [5usize, 90, 30, 60, 1] {
-                let deadline = &deadline;
-                scope.spawn(move || deadline.audio_length_known(minutes * 60 * 16_000));
-            }
-        });
-
-        assert_eq!(deadline_after(&slot, started), Duration::from_secs(54_000));
+        let now = Instant::now();
+        StreamDeadline::new(&slot).audio_length(AudioLength::Exact(usize::MAX), now);
+        let end = *slot.lock().unwrap();
+        if let Some(end) = end {
+            assert!(end >= now + Duration::from_secs(180), "never a short limit");
+        }
     }
 
     #[test]

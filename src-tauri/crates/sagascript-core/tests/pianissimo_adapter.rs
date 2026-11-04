@@ -6,7 +6,7 @@ use sagascript_core::transcription::engine_host::{
     EngineHostClient, EngineHostConfig, LoadSpec, Timeouts,
 };
 use sagascript_core::transcription::live_dictation::LiveDictationBackend;
-use sagascript_core::transcription::pianissimo_backend::PianissimoBackend;
+use sagascript_core::transcription::pianissimo_backend::{AudioLength, PianissimoBackend};
 use sagascript_core::transcription::whisper_backend::DictationTimings;
 use sagascript_core::transcription::{TranscribeOptions, WhisperBackend};
 use std::path::Path;
@@ -435,12 +435,28 @@ fn a_streamed_file_reports_its_length_as_it_is_learned() {
                 &path,
                 |_| {},
                 &AtomicBool::new(false),
-                |samples| lengths.lock().unwrap().push(samples),
+                |length| lengths.lock().unwrap().push(length),
             )
             .unwrap();
 
         let label = format!("{rate} Hz {seconds} s");
-        let lengths = lengths.into_inner().unwrap();
+        let reports = lengths.into_inner().unwrap();
+        assert!(
+            matches!(reports.last(), Some(AudioLength::Exact(_))),
+            "{label}: the last report is exact: {reports:?}"
+        );
+        assert!(
+            reports[..reports.len() - 1]
+                .iter()
+                .all(|l| matches!(l, AudioLength::Estimate(_))),
+            "{label}: the others are estimates: {reports:?}"
+        );
+        let lengths: Vec<usize> = reports
+            .iter()
+            .map(|l| match *l {
+                AudioLength::Estimate(n) | AudioLength::Exact(n) => n,
+            })
+            .collect();
         let exact = stats.audio_samples;
         assert_eq!(
             lengths.last(),
