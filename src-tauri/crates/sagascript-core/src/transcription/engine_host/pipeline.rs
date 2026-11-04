@@ -590,8 +590,22 @@ impl EngineHostClient {
         let pcm =
             PcmFile::create(self.config().temp_dir.as_deref()).map_err(StreamError::Engine)?;
         let shared = StreamShared::new(cancel.clone());
+        let job = shared.job.clone();
+        let over = AtomicBool::new(false);
         std::thread::scope(|scope| {
             let (pcm_ref, shared_ref) = (&pcm, &shared);
+            // The caller's cancel reaches the job token within a few ms; the job
+            // ends this watcher, however the scope is left.
+            let _ends_watcher = SetOnDrop(&over);
+            scope.spawn(|| {
+                while !over.load(Ordering::SeqCst) {
+                    if cancel.is_cancelled() {
+                        job.cancel();
+                        return;
+                    }
+                    std::thread::sleep(CANCEL_POLL);
+                }
+            });
             let producer = scope.spawn(move || {
                 // A panic in `produce` must not leave the scheduler waiting.
                 let mut guard = ProducerGuard {
@@ -611,7 +625,7 @@ impl EngineHostClient {
                 guard.finished = true;
                 result
             });
-            let engine = self.stream_engine_side(&shared, &pcm, &opts, cancel, progress);
+            let engine = self.stream_engine_side(&shared, &pcm, &opts, &job, progress);
             if engine.is_err() {
                 shared.fail_with(Side::Engine, None);
             }
@@ -619,9 +633,10 @@ impl EngineHostClient {
             shared.stop();
             let produced = match producer.join() {
                 Ok(result) => result,
-                Err(panic) => std::panic::resume_unwind(panic),
+                Err(payload) => std::panic::resume_unwind(payload),
             };
-            resolve_stream(engine, produced, shared.first_failure(), cancel)
+            let io_error = shared.lock().io_error.take();
+            resolve_stream(engine, produced, shared.first_failure(), io_error, cancel)
         })
     }
 
@@ -929,7 +944,14 @@ enum Side {
 struct StreamShared {
     state: Mutex<StreamState>,
     wake: std::sync::Condvar,
+    /// The caller's token: cancelling it cancels the job.
     cancel: CancelToken,
+    /// The job's own token, which every wait on the host observes (loading the
+    /// model, submitting a window, waiting for its result). It is cancelled when
+    /// the caller cancels (a watcher bridges the two) and when the producer
+    /// fails, so neither can leave the scheduler in a long host wait. The
+    /// caller's token is never touched: it is the caller's.
+    job: CancelToken,
     /// Set when either side failed or the job is over: the producer must stop.
     stop: AtomicBool,
     /// The side that failed first (`Side as u8`), 0 while none did.
@@ -954,6 +976,7 @@ impl StreamShared {
             state: Mutex::new(StreamState::default()),
             wake: std::sync::Condvar::new(),
             cancel,
+            job: CancelToken::new(),
             stop: AtomicBool::new(false),
             first_failure: std::sync::atomic::AtomicU8::new(0),
             expected_total: std::sync::atomic::AtomicUsize::new(0),
@@ -992,6 +1015,8 @@ impl StreamShared {
         if let Some(error) = error {
             self.lock().io_error.get_or_insert(error);
         }
+        // Whatever the scheduler is waiting for on the host is no longer wanted.
+        self.job.cancel();
         self.stop();
     }
 
@@ -1001,6 +1026,18 @@ impl StreamShared {
             2 => Some(Side::Producer),
             _ => None,
         }
+    }
+}
+
+/// How often the watcher passes the caller's cancel on to the job token.
+const CANCEL_POLL: Duration = Duration::from_millis(20);
+
+/// Sets a flag when dropped, so a watcher thread ends however its scope exits.
+struct SetOnDrop<'a>(&'a AtomicBool);
+
+impl Drop for SetOnDrop<'_> {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::SeqCst);
     }
 }
 
@@ -1222,6 +1259,7 @@ fn resolve_stream<E>(
     engine: Result<(Driven, usize, u32)>,
     produced: std::result::Result<(), E>,
     first_failure: Option<Side>,
+    producer_side_io_error: Option<EngineHostError>,
     cancel: &CancelToken,
 ) -> std::result::Result<Transcription, StreamError<E>> {
     match engine {
@@ -1232,7 +1270,8 @@ fn resolve_stream<E>(
         Err(_) if cancel.is_cancelled() => Err(StreamError::Engine(EngineHostError::Cancelled)),
         Err(error) => match (first_failure, produced) {
             (Some(Side::Producer), Err(e)) => Err(StreamError::Producer(e)),
-            _ => Err(StreamError::Engine(error)),
+            // The scheduler may only have unwound; then the failure is the PCM file's.
+            _ => Err(StreamError::Engine(producer_side_io_error.unwrap_or(error))),
         },
     }
 }
@@ -1670,7 +1709,13 @@ mod stream_tests {
     fn errors_resolve_to_cancel_first_then_the_side_that_failed_first() {
         let engine_failed = || Err(EngineHostError::NotRunning);
         let cancel = CancelToken::new();
-        let r = resolve_stream::<&str>(engine_failed(), Err("decode"), Some(Side::Engine), &cancel);
+        let r = resolve_stream::<&str>(
+            engine_failed(),
+            Err("decode"),
+            Some(Side::Engine),
+            None,
+            &cancel,
+        );
         assert!(matches!(
             r,
             Err(StreamError::Engine(EngineHostError::NotRunning))
@@ -1679,18 +1724,31 @@ mod stream_tests {
             engine_failed(),
             Err("decode"),
             Some(Side::Producer),
+            None,
             &cancel,
         );
         assert!(matches!(r, Err(StreamError::Producer("decode"))));
         // The scheduler's own failure while the producer finished fine.
-        let r = resolve_stream::<&str>(engine_failed(), Ok(()), Some(Side::Engine), &cancel);
+        let r = resolve_stream::<&str>(engine_failed(), Ok(()), Some(Side::Engine), None, &cancel);
         assert!(matches!(
             r,
             Err(StreamError::Engine(EngineHostError::NotRunning))
         ));
+        // The scheduler only unwound because the producer side hit a PCM file error.
+        let r = resolve_stream::<&str>(
+            Err(EngineHostError::Cancelled),
+            Ok(()),
+            Some(Side::Engine),
+            Some(EngineHostError::Io(std::io::Error::other("disk full"))),
+            &cancel,
+        );
+        assert!(matches!(
+            r,
+            Err(StreamError::Engine(EngineHostError::Io(_)))
+        ));
         cancel.cancel();
         for first in [None, Some(Side::Engine), Some(Side::Producer)] {
-            let r = resolve_stream::<&str>(engine_failed(), Err("decode"), first, &cancel);
+            let r = resolve_stream::<&str>(engine_failed(), Err("decode"), first, None, &cancel);
             assert!(
                 matches!(r, Err(StreamError::Engine(EngineHostError::Cancelled))),
                 "{first:?}"

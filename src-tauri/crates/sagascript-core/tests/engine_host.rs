@@ -2460,3 +2460,114 @@ fn a_stream_job_does_not_starve_dictation() {
     );
     job.join().unwrap().unwrap_or_else(|e| panic!("{e:?}"));
 }
+
+// ---- a failing producer interrupts the host waits of the scheduler
+
+fn windows_sent_in(log: &Path) -> usize {
+    std::fs::read_to_string(log)
+        .unwrap_or_default()
+        .lines()
+        .filter(|l| l.starts_with("transcribe_window"))
+        .count()
+}
+
+#[test]
+fn a_producer_failure_interrupts_a_slow_model_load() {
+    // The load takes 3 s (a first-time Core ML compile takes minutes). The decode
+    // fails after 150 ms: its error must not wait for the load.
+    let mut env = stream_env();
+    env.push(("FAKE_LOAD_DELAY_MS", "3000"));
+    let f = fixture(&env);
+    let cancel = CancelToken::new();
+    let started = Instant::now();
+    let r = f.client.transcribe_file_stream(&cancel, None, |sink| {
+        feed(sink, &pcm(2.0), 8_000, Duration::ZERO).unwrap();
+        std::thread::sleep(Duration::from_millis(150));
+        Err("file not found".to_string())
+    });
+    match r {
+        Err(StreamError::Producer(message)) => assert_eq!(message, "file not found"),
+        other => panic!("expected the producer's own error, got {other:?}"),
+    }
+    assert!(
+        started.elapsed() < Duration::from_millis(1500),
+        "returned after {:?}, not after the 3 s load",
+        started.elapsed()
+    );
+    assert!(!cancel.is_cancelled(), "the caller's token is the caller's");
+    assert_eq!(temp_entries(f.tmp.path()), 0);
+}
+
+#[test]
+fn a_producer_failure_interrupts_a_window_in_flight() {
+    // Each window takes 3 s on the host. The decode fails once windows were sent.
+    let log = tempfile::tempdir().unwrap();
+    let log_path = log.path().join("ops.log");
+    let mut env = stream_env();
+    env.push(("FAKE_WINDOW_DELAY_MS", "3000"));
+    env.push(("FAKE_LOG", log_path.to_str().unwrap()));
+    let f = fixture(&env);
+    f.client.warm().unwrap();
+    let cancel = CancelToken::new();
+    let samples = pcm(25.0);
+    let log_for_producer = log_path.clone();
+    let mut sent_when_failing = 0;
+    let started = Instant::now();
+    let r = f.client.transcribe_file_stream(&cancel, None, |sink| {
+        feed(sink, &samples, 8_000, Duration::ZERO).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while windows_sent_in(&log_for_producer) == 0 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        sent_when_failing = windows_sent_in(&log_for_producer);
+        Err("decode failed at 25 s".to_string())
+    });
+    match r {
+        Err(StreamError::Producer(message)) => assert_eq!(message, "decode failed at 25 s"),
+        other => panic!("expected the producer's own error, got {other:?}"),
+    }
+    assert!(sent_when_failing >= 1, "a window was in flight");
+    assert!(
+        started.elapsed() < Duration::from_millis(1800),
+        "returned after {:?}, not after the 3 s window",
+        started.elapsed()
+    );
+    assert!(!cancel.is_cancelled(), "the caller's token is the caller's");
+    assert_eq!(temp_entries(f.tmp.path()), 0);
+}
+
+#[test]
+fn a_caller_cancel_still_wins_during_a_slow_load_and_stops_the_producer() {
+    let mut env = stream_env();
+    env.push(("FAKE_LOAD_DELAY_MS", "3000"));
+    let f = fixture(&env);
+    let cancel = CancelToken::new();
+    let from_outside = cancel.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(150));
+        from_outside.cancel();
+    });
+    let producer_closed = Arc::new(AtomicBool::new(false));
+    let closed = producer_closed.clone();
+    let started = Instant::now();
+    let r = f.client.transcribe_file_stream(&cancel, None, |sink| loop {
+        match sink.append(&[0.0; 1_600]) {
+            Ok(()) => std::thread::sleep(Duration::from_millis(5)),
+            Err(_) => {
+                closed.store(true, Ordering::SeqCst);
+                return Err("stopped by the cancel".to_string());
+            }
+        }
+    });
+    assert!(
+        matches!(r, Err(StreamError::Engine(EngineHostError::Cancelled))),
+        "a genuine cancel is Cancelled, not the producer's error: {r:?}"
+    );
+    assert!(producer_closed.load(Ordering::SeqCst));
+    assert!(
+        started.elapsed() < Duration::from_millis(1500),
+        "{:?}",
+        started.elapsed()
+    );
+    assert_eq!(temp_entries(f.tmp.path()), 0);
+}
