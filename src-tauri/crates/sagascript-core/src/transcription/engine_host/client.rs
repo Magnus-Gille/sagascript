@@ -64,6 +64,11 @@ pub struct LoadSpec {
 /// window's slot until the host answers or is killed.
 pub(crate) const DEFAULT_WEDGE_GRACE: Duration = Duration::from_secs(30);
 
+/// Default [`Timeouts::interactive_min`]: an interactive (dictation) window
+/// normally takes 50-300 ms, so ten seconds without an answer means the host
+/// is stalled, not busy. See [`Timeouts::interactive`].
+pub(crate) const DEFAULT_INTERACTIVE_MIN: Duration = Duration::from_secs(10);
+
 /// Default [`EngineHostConfig::failed_cooldown`]. While failed, requests fail
 /// at once without spawning anything; the first request after the cooldown
 /// gets one fresh start (half-open). If that start or its model load fails
@@ -79,9 +84,18 @@ pub struct Timeouts {
     pub ping: Duration,
     pub status: Duration,
     pub unload: Duration,
-    /// `transcribe_window` timeout is `max(transcribe_min, transcribe_factor * window_s)`.
+    /// Batch (file job) `transcribe_window` timeout is
+    /// `max(transcribe_min, transcribe_factor * window_s)`.
     pub transcribe_min: Duration,
     pub transcribe_factor: f64,
+    /// Interactive (dictation) `transcribe_window` timeout is
+    /// `max(interactive_min, interactive_factor * window_s)`. Much shorter than
+    /// the batch one: a dictation window that is not answered by then has the
+    /// host killed and restarted and is resubmitted (see
+    /// [`WindowTicket::wait`]), so the user waits for one timeout plus a
+    /// restart instead of losing the dictation.
+    pub interactive_min: Duration,
+    pub interactive_factor: f64,
     pub shutdown_grace: Duration,
     /// Upper bound for writing one request to the host's stdin. A host that
     /// stops reading it is killed, and the request fails as crashed (like the
@@ -104,6 +118,8 @@ impl Default for Timeouts {
             unload: Duration::from_secs(10),
             transcribe_min: Duration::from_secs(15),
             transcribe_factor: 3.0,
+            interactive_min: DEFAULT_INTERACTIVE_MIN,
+            interactive_factor: 1.0,
             shutdown_grace: Duration::from_secs(2),
             write: super::process::DEFAULT_WRITE_TIMEOUT,
             wedge_grace: DEFAULT_WEDGE_GRACE,
@@ -112,10 +128,26 @@ impl Default for Timeouts {
 }
 
 impl Timeouts {
+    /// Batch (file job) timeout for a window of `window_s` seconds.
     pub fn transcribe(&self, window_s: f64) -> Duration {
         self.transcribe_min.max(Duration::from_secs_f64(
             (self.transcribe_factor * window_s).max(0.0),
         ))
+    }
+
+    /// Interactive (dictation) timeout for a window of `window_s` seconds.
+    pub fn interactive(&self, window_s: f64) -> Duration {
+        self.interactive_min.max(Duration::from_secs_f64(
+            (self.interactive_factor * window_s).max(0.0),
+        ))
+    }
+
+    /// The `transcribe_window` timeout for a request of `priority`.
+    pub fn window(&self, priority: Priority, window_s: f64) -> Duration {
+        match priority {
+            Priority::Interactive => self.interactive(window_s),
+            Priority::Batch => self.transcribe(window_s),
+        }
     }
 }
 
@@ -576,10 +608,10 @@ impl EngineHostClient {
         }
         drop(reservation);
         let Some(slot) = slot else { return Ok(None) };
-        let timeout = inner
-            .cfg
-            .timeouts
-            .transcribe(req.num_samples as f64 / f64::from(caps.sample_rate));
+        let timeout = inner.cfg.timeouts.window(
+            req.priority,
+            req.num_samples as f64 / f64::from(caps.sample_rate),
+        );
         let pending = proc.send(&window_op(req))?;
         Ok(Some(WindowTicket {
             inner: inner.clone(),
@@ -732,6 +764,21 @@ pub struct WindowTicket {
 
 impl WindowTicket {
     /// Block until the window finishes, fails, times out or `cancel` fires.
+    ///
+    /// What a timeout does depends on the window's priority:
+    /// - **Batch** (file job): the caller gets [`EngineHostError::Timeout`] at
+    ///   once and a detached [`WedgeWatch`] gives the host `wedge_grace` to
+    ///   answer the cancelled window before it kills it. The host is left alone
+    ///   meanwhile, since a legitimate uninterruptible stage (#397) can outlast
+    ///   the timeout and killing it would throw that work away.
+    /// - **Interactive** (dictation): the host is killed at once, without the
+    ///   grace, and counted as a crash, and the caller still gets
+    ///   [`EngineHostError::Timeout`]. A dictation cannot wait out a stalled
+    ///   host, and the next request starts a fresh one and reloads the model.
+    ///   The windows of this host that are still in flight, of the same job or
+    ///   of a concurrent file job, fail as crashed. The pipeline resubmits an
+    ///   interactive job's windows on the new host
+    ///   ([`EngineHostClient::transcribe_samples`]).
     pub fn wait(mut self, cancel: &CancelToken) -> Result<WindowOutput> {
         loop {
             let pending = self
@@ -745,10 +792,17 @@ impl WindowTicket {
             let now = Instant::now();
             if now >= self.deadline {
                 if let Some(pending) = self.pending.take() {
-                    // Returns at once; the host's late answer (or its kill) is
-                    // awaited on a detached thread.
-                    self.inner
-                        .watch_timed_out_window(self.proc.clone(), pending, self.slot.take());
+                    if self.req.priority == Priority::Interactive {
+                        self.inner.kill_stalled_host(&self.proc, &pending);
+                    } else {
+                        // Returns at once; the host's late answer (or its
+                        // kill) is awaited on a detached thread.
+                        self.inner.watch_timed_out_window(
+                            self.proc.clone(),
+                            pending,
+                            self.slot.take(),
+                        );
+                    }
                 }
                 return Err(EngineHostError::Timeout {
                     op: "transcribe_window",
@@ -1508,6 +1562,28 @@ impl Inner {
         }
     }
 
+    /// An interactive window timed out: the host is stalled (a dictation
+    /// window takes 50-300 ms), so end it now instead of after the wedge grace.
+    /// It counts as a crash against the restart budget, exactly once however
+    /// many callers notice it, and the next request starts a fresh host.
+    ///
+    /// Only `proc` is ended, the host this window was sent to. If another
+    /// request has replaced it meanwhile, the new host is untouched. The windows
+    /// still in flight on `proc` get `Delivery::Closed` and fail as crashed.
+    fn kill_stalled_host(&self, proc: &Arc<HostProcess>, pending: &Pending) {
+        proc.forget(pending.id);
+        tracing::warn!(
+            pid = proc.pid(),
+            "engine host did not answer an interactive window in time; killing it and \
+             retrying on a fresh host"
+        );
+        if proc.claim_crash() {
+            Self::record_crash(&mut self.lock_state());
+        }
+        // No grace: a stalled host will not exit on its own. Reaps the process.
+        proc.terminate(Duration::ZERO, false);
+    }
+
     /// A window timed out: hand it to a detached [`WedgeWatch`] so the caller
     /// gets its timeout at once. If no thread can be started, the watch runs
     /// here (the caller then waits up to the wedge grace, as a fallback).
@@ -1804,6 +1880,26 @@ mod poison_tests {
             !client.snapshot().running,
             "the idle pass shut the host down despite the poisoned lock"
         );
+    }
+}
+
+#[cfg(test)]
+mod timeout_tests {
+    use super::*;
+
+    /// A dictation window gets `max(10 s, 1 x window)`, a file window keeps
+    /// `max(15 s, 3 x window)` (45 s for the 15 s windows of the incident).
+    #[test]
+    fn interactive_windows_get_a_shorter_timeout_than_batch_windows() {
+        let t = Timeouts::default();
+        let secs = Duration::from_secs;
+        assert_eq!(t.window(Priority::Interactive, 15.0), secs(15));
+        assert_eq!(t.window(Priority::Interactive, 5.0), secs(10));
+        assert_eq!(t.window(Priority::Interactive, 0.0), secs(10));
+        assert_eq!(t.window(Priority::Batch, 15.0), secs(45));
+        assert_eq!(t.window(Priority::Batch, 2.0), secs(15));
+        assert_eq!(t.window(Priority::Batch, 15.0), t.transcribe(15.0));
+        assert_eq!(t.window(Priority::Interactive, 15.0), t.interactive(15.0));
     }
 }
 
