@@ -99,6 +99,54 @@ pub fn plan_windows(
     out
 }
 
+/// How many windows [`plan_windows`] returns, computed from the length alone
+/// (saturating arithmetic, nothing allocated), so an absurd length is as cheap
+/// as a small one.
+///
+/// The plan starts a window every `step` samples, ends it at `start + size`,
+/// and stops after the first window that reaches the end (or when the next
+/// start would be past the end, which only happens when `step > size`). So it
+/// has `1 + ceil((total - size) / step)` windows, capped at `ceil(total / step)`
+/// starts before the end; a single window when the audio fits one or the
+/// parameters cannot slide (`size` or `step` zero).
+pub fn count_windows(
+    total_samples: usize,
+    sample_rate: u32,
+    window_s: f64,
+    overlap_s: f64,
+) -> usize {
+    let sr = f64::from(sample_rate);
+    let size = (window_s * sr) as usize;
+    let step = ((window_s - overlap_s) * sr) as usize;
+    if total_samples <= size || size == 0 || step == 0 {
+        return 1;
+    }
+    let starting_before_the_end = total_samples.div_ceil(step);
+    let up_to_the_one_that_reaches_it = (total_samples - size).div_ceil(step).saturating_add(1);
+    starting_before_the_end.min(up_to_the_one_that_reaches_it)
+}
+
+/// How many windows [`plan_for_total`] returns, without building them.
+pub fn count_planned_windows(
+    total_samples: usize,
+    sample_rate: u32,
+    max_window_s: f64,
+    preferred_window_s: f64,
+    overlap_s: f64,
+) -> usize {
+    let max_window = (max_window_s * f64::from(sample_rate)) as usize;
+    if total_samples <= max_window {
+        1
+    } else {
+        count_windows(
+            total_samples,
+            sample_rate,
+            preferred_window_s.min(max_window_s),
+            overlap_s,
+        )
+    }
+}
+
 /// The windows a file job transcribes, planned once the length is known: one
 /// window `[0, total)` when `total <= max_window_s * sr`, otherwise
 /// [`plan_windows`] with the window the engine prefers (capped at its maximum).
@@ -774,6 +822,81 @@ mod planner_tests {
             }
         }
         assert!(cases > 4000, "{cases}");
+    }
+
+    /// Totals that exercise a plan: its edges (exact multiples of the step, the
+    /// window and the maximum window, and one either side) and random ones.
+    fn totals_around(
+        sr: u32,
+        max_s: f64,
+        pref_s: f64,
+        overlap_s: f64,
+        rng: &mut Rng,
+    ) -> Vec<usize> {
+        let max_window = (max_s * f64::from(sr)) as usize;
+        let size = (pref_s.min(max_s) * f64::from(sr)) as usize;
+        let step = ((pref_s.min(max_s) - overlap_s) * f64::from(sr)) as usize;
+        let mut totals = vec![0, 1, 2, 3, max_window, size];
+        for k in 0..40 {
+            for base in [
+                k * step.max(1),
+                k * step.max(1) + size,
+                k * step.max(1) + max_window,
+            ] {
+                for delta in [-2i64, -1, 0, 1, 2] {
+                    if let Some(total) = base.checked_add_signed(delta as isize) {
+                        totals.push(total);
+                    }
+                }
+            }
+        }
+        totals.extend((0..200).map(|_| rng.below(60 * max_window.max(8))));
+        totals
+    }
+
+    #[test]
+    fn the_window_count_formula_equals_the_length_of_the_plan() {
+        let mut rng = Rng(0x9e37_79b9_7f4a_7c15);
+        let mut caps = CAPS.to_vec();
+        // Windows that skip audio between them (a negative overlap), fractions
+        // that truncate, and a one-sample step.
+        caps.extend([
+            (16_000, 15.0, 15.0, -5.0),
+            (16_000, 15.0, 15.0, -0.5),
+            (100, 2.0, 2.0, 1.99), // a step of one sample
+            (16_000, 15.0, 7.3, 0.7),
+            (44_100, 10.0, 9.99, 0.01),
+            (7, 2.0, 2.0, 0.9),
+        ]);
+        let mut checked = 0;
+        for &(sr, max_s, pref_s, overlap_s) in &caps {
+            for total in totals_around(sr, max_s, pref_s, overlap_s, &mut rng) {
+                assert_eq!(
+                    count_windows(total, sr, pref_s.min(max_s), overlap_s),
+                    plan_windows(total, sr, pref_s.min(max_s), overlap_s).len(),
+                    "plan_windows: sr {sr} window {pref_s} overlap {overlap_s} total {total}"
+                );
+                assert_eq!(
+                    count_planned_windows(total, sr, max_s, pref_s, overlap_s),
+                    plan_for_total(total, sr, max_s, pref_s, overlap_s).len(),
+                    "plan_for_total: sr {sr} max {max_s} pref {pref_s} overlap {overlap_s} total {total}"
+                );
+                checked += 1;
+            }
+        }
+        assert!(checked > 5_000, "{checked}");
+    }
+
+    #[test]
+    fn counting_windows_of_an_absurd_length_neither_allocates_nor_overflows() {
+        // A header can claim any length. The count is arithmetic, not a plan.
+        for total in [usize::MAX, usize::MAX - 1, usize::MAX / 2, 1 << 62] {
+            let n = count_planned_windows(total, 16_000, 15.0, 15.0, 2.0);
+            let step = 13 * 16_000usize;
+            assert_eq!(n, 1 + (total - 15 * 16_000).div_ceil(step), "{total}");
+            assert_eq!(count_windows(total, 1, 1e-9, 0.0), 1, "no window to slide");
+        }
+        assert_eq!(count_windows(usize::MAX, 16_000, 15.0, 15.0), 1);
     }
 
     #[test]

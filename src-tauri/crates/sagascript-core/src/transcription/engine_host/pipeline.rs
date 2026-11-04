@@ -3,10 +3,11 @@
 
 use super::client::{batch_lane, EngineHostClient, WindowOutput, WindowRequest, WindowTicket};
 use super::{EngineHostError, Result};
+use crate::audio::decoder::MAX_DECODE_SAMPLES;
 use crate::sync::lock_or_recover;
 use crate::transcription::chunk_merge::{
-    merge_window, offset_tokens, plan_for_total, tokens_to_text, tokens_to_words, AlignedToken,
-    Window, WindowPlanner, Word,
+    count_planned_windows, merge_window, offset_tokens, plan_for_total, tokens_to_text,
+    tokens_to_words, AlignedToken, Window, WindowPlanner, Word,
 };
 use sagascript_engine_protocol::Priority;
 use std::collections::VecDeque;
@@ -1057,9 +1058,13 @@ impl<'a> Sink<'a> {
 
     /// Tell the transcription how long the audio is expected to be, in samples,
     /// to estimate progress. Advisory: it may be revised (call again) and need
-    /// not be exact; zero means unknown.
+    /// not be exact; zero means unknown. The value usually comes from a file
+    /// header, which cannot be trusted, so it is capped at the longest audio the
+    /// decoder accepts (about 4 hours).
     pub fn set_expected_total(&self, samples: usize) {
-        self.shared.expected_total.store(samples, Ordering::Relaxed);
+        self.shared
+            .expected_total
+            .store(samples.min(MAX_DECODE_SAMPLES), Ordering::Relaxed);
     }
 
     /// Write the buffered samples through to the PCM file, then let the
@@ -1199,14 +1204,13 @@ impl WindowSource for StreamPlan<'_> {
             return None;
         }
         let samples = hint.max(self.seen.0);
-        let estimate = plan_for_total(
+        let estimate = count_planned_windows(
             samples,
             self.sample_rate,
             self.max_window_s,
             self.preferred_window_s,
             self.overlap_s,
-        )
-        .len();
+        );
         // An estimate is never the end: more than what is merged and planned.
         Some(estimate.max(self.windows.len()).max(merged + 1))
     }
@@ -1585,6 +1589,55 @@ mod stream_tests {
             assert!(checks > 0);
         });
         assert_eq!(shared.lock().available, 300 * 7_000);
+    }
+
+    fn pianissimo_like_caps() -> sagascript_engine_protocol::Capabilities {
+        sagascript_engine_protocol::Capabilities {
+            sample_rate: 16_000,
+            max_window_s: 15.0,
+            preferred_window_s: 15.0,
+            preferred_overlap_s: 2.0,
+            max_in_flight: 4,
+            token_timestamps: true,
+            languages: vec!["sv".into()],
+            compute_units: vec!["ane".into()],
+            min_macos: None,
+            context_biasing: false,
+        }
+    }
+
+    /// The length hint comes from a file header and cannot be trusted: it is
+    /// capped where it is set, and the estimate built from it is arithmetic, so
+    /// a hostile value costs nothing; the estimate stays above what is merged.
+    #[test]
+    fn an_untrusted_length_hint_is_capped_and_the_estimate_never_reaches_the_end() {
+        let (_parent, file, shared) = stream_fixture();
+        let sink = Sink::new(&file, &shared);
+        let plan = StreamPlan::new(&shared, &pianissimo_like_caps());
+        let hint = || shared.expected_total.load(Ordering::Relaxed);
+
+        assert_eq!(plan.progress_total(0), None, "no hint, no estimate");
+        sink.set_expected_total(0);
+        assert_eq!(plan.progress_total(0), None, "zero is unknown");
+
+        sink.set_expected_total(usize::MAX);
+        assert_eq!(hint(), MAX_DECODE_SAMPLES);
+        let cap_windows = count_planned_windows(MAX_DECODE_SAMPLES, 16_000, 15.0, 15.0, 2.0);
+        assert_eq!(cap_windows, 1_108, "4 hours in 13 s steps");
+        let started = std::time::Instant::now();
+        assert_eq!(plan.progress_total(3), Some(cap_windows));
+        assert!(
+            started.elapsed() < Duration::from_millis(100),
+            "an estimate is arithmetic"
+        );
+
+        // 40 s: windows start at 0, 13 and 26 s. The estimate stays above what is
+        // merged, so progress is never 100% before the end.
+        sink.set_expected_total(40 * 16_000);
+        assert_eq!(plan.progress_total(0), Some(3));
+        assert_eq!(plan.progress_total(2), Some(3));
+        assert_eq!(plan.progress_total(3), Some(4));
+        assert_eq!(plan.progress_total(10), Some(11));
     }
 
     #[test]
