@@ -246,6 +246,43 @@ private func sendWindow(_ server: EngineHostServer, id: UInt64, path: String, pr
     #expect(CoreMLEngine.overlapOverride(environment: ["SAGASCRIPT_ENGINE_OVERLAP_S": "0"]) == 0)
 }
 
+@Test func anOverlapNotBelowTheAnnouncedWindowIsIgnoredSoTheHandshakeStaysValid() {
+    // The client rejects a host whose announced overlap is not below its preferred window,
+    // so an override of 15 s or more (the window is 15 s) must not reach `hello`.
+    for value in ["15", "15.0", "20", "1000"] {
+        var warnings: [String] = []
+        let caps = CoreMLEngine.defaultCapabilities(
+            environment: ["SAGASCRIPT_ENGINE_OVERLAP_S": value],
+            warn: { warnings.append($0) }
+        )
+        #expect(caps.preferredOverlapSeconds == 2, "\(value)")
+        #expect(caps.preferredOverlapSeconds < caps.preferredWindowSeconds, "\(value)")
+        #expect(warnings.count == 1 && warnings[0].contains("SAGASCRIPT_ENGINE_OVERLAP_S"), "\(value): \(warnings)")
+    }
+    // Just below the window is announced, without a warning.
+    var warnings: [String] = []
+    let caps = CoreMLEngine.defaultCapabilities(
+        environment: ["SAGASCRIPT_ENGINE_OVERLAP_S": "14.9"],
+        warn: { warnings.append($0) }
+    )
+    #expect(caps.preferredOverlapSeconds == 14.9)
+    #expect(caps.preferredOverlapSeconds < caps.preferredWindowSeconds)
+    #expect(warnings.isEmpty)
+}
+
+@Test func anOverlapIsAppliedAfterLoadOnlyWhenBelowTheLoadedWindow() {
+    let env = ["SAGASCRIPT_ENGINE_OVERLAP_S": "10"]
+    var warnings: [String] = []
+    #expect(CoreMLEngine.overlapOverride(environment: env, window: 30, warn: { warnings.append($0) }) == 10)
+    #expect(warnings.isEmpty)
+    #expect(CoreMLEngine.overlapOverride(environment: env, window: 10, warn: { warnings.append($0) }) == nil)
+    #expect(CoreMLEngine.overlapOverride(environment: env, window: 8, warn: { warnings.append($0) }) == nil)
+    #expect(warnings.count == 2)
+    // Unset or unusable values are ignored quietly: nothing to warn about.
+    #expect(CoreMLEngine.overlapOverride(environment: [:], window: 15, warn: { warnings.append($0) }) == nil)
+    #expect(warnings.count == 2)
+}
+
 @Test func cancelProducesAckAndCancelledTerminalResponse() {
     let output = RecordingOutput()
     let server = EngineHostServer(engine: FakeEngine(), output: output.append)

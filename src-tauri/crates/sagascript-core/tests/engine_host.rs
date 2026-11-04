@@ -220,6 +220,29 @@ fn handshake_rejects_protocol_mismatch() {
     assert!(!f.client.snapshot().running);
 }
 
+/// Why a host must never announce an overlap that is not below its window (for
+/// instance from an oversized `SAGASCRIPT_ENGINE_OVERLAP_S`): the client refuses it.
+#[test]
+fn handshake_rejects_an_overlap_that_is_not_below_the_preferred_window() {
+    for overlap in ["15", "20"] {
+        let f = fixture(&[("FAKE_WINDOW_S", "15"), ("FAKE_OVERLAP_S", overlap)]);
+        match f.client.warm() {
+            Err(EngineHostError::Handshake(m)) => {
+                assert!(m.contains("inconsistent window capabilities"), "{m}")
+            }
+            other => panic!("overlap {overlap}: {other:?}"),
+        }
+        assert!(!f.client.snapshot().running);
+    }
+    // Just below the window is fine.
+    let f = fixture(&[("FAKE_WINDOW_S", "15"), ("FAKE_OVERLAP_S", "14.9")]);
+    let caps = f.client.warm().unwrap();
+    assert_eq!(
+        (caps.preferred_window_s, caps.preferred_overlap_s),
+        (15.0, 14.9)
+    );
+}
+
 #[test]
 fn handshake_rejects_missing_git_sha() {
     let f = fixture(&[("FAKE_NO_SHA", "1")]);
