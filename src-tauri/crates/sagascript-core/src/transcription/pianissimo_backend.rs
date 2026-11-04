@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 
-use crate::audio::decoder::{decode_audio_file_streaming, StreamInfo};
+use crate::audio::decoder::{decode_audio_file_streaming, StreamInfo, MAX_DECODE_SAMPLES};
 use crate::error::DictationError;
 use crate::models::PianissimoModel;
 use crate::path_scrub::scrub_paths;
@@ -947,14 +947,19 @@ fn estimate_total_from_bytes(samples: usize, consumed: u64, total: u64) -> Optio
     usize::try_from(estimate).ok()
 }
 
-/// The producer of a streamed file job: decode `path` into `sink` and record
-/// the decoder's stats.
+/// How much more decoded audio (60 s at 16 kHz) triggers the next report of the
+/// length decoded so far to the `on_audio_length` observer.
+const LENGTH_REPORT_STEP_SAMPLES: usize = 60 * 16_000;
+
+/// The producer of a streamed file job: decode `path` into `sink`, record the
+/// decoder's stats and tell `on_audio_length` what it learns of the length.
 fn stream_decode_into(
     path: &Path,
     sink: &Sink<'_>,
     cancelled: &AtomicBool,
     token: &CancelToken,
     stats: &Mutex<Option<StreamStats>>,
+    on_audio_length: &(dyn Fn(usize) + Sync),
 ) -> Result<(), DictationError> {
     let checkpoint = || {
         if cancelled.load(Ordering::SeqCst) || token.is_cancelled() {
@@ -965,18 +970,27 @@ fn stream_decode_into(
     };
     let opened: std::cell::RefCell<Option<StreamInfo>> = std::cell::RefCell::new(None);
     let mut streamed = 0usize;
+    let mut next_length_report = LENGTH_REPORT_STEP_SAMPLES;
     let done = decode_audio_file_streaming(
         path,
         &checkpoint,
         &mut |info| {
             if let Some(expected) = info.expected_samples {
                 sink.set_expected_total(expected);
+                // A header is untrusted: cap it, as the sink does.
+                on_audio_length(expected.min(MAX_DECODE_SAMPLES));
             }
             *opened.borrow_mut() = Some(info.clone());
         },
         &mut |chunk| {
             sink.append(chunk).map_err(sink_error_to_dictation)?;
             streamed += chunk.len();
+            // What was decoded so far is a floor for the length that no header
+            // can understate.
+            if streamed >= next_length_report {
+                on_audio_length(streamed);
+                next_length_report = streamed + LENGTH_REPORT_STEP_SAMPLES;
+            }
             if let Some(info) = opened.borrow().as_ref() {
                 if info.expected_samples.is_none() {
                     let consumed = info.consumed_bytes.load(Ordering::Relaxed);
@@ -990,6 +1004,7 @@ fn stream_decode_into(
             Ok(())
         },
     )?;
+    on_audio_length(done.samples);
     *lock_or_recover(stats, "pianissimo.stream_stats") = Some(StreamStats {
         audio_samples: done.samples,
         decode_finished_at: Instant::now(),
@@ -1186,6 +1201,29 @@ impl PianissimoBackend {
         progress: impl Fn(u8),
         cancelled: &AtomicBool,
     ) -> Result<(PianissimoResult, StreamStats), DictationError> {
+        self.transcribe_file_streaming_with_length(path, progress, cancelled, |_| {})
+    }
+
+    /// [`Self::transcribe_file_streaming`] that also tells `on_audio_length` what
+    /// is known of the audio's length, in 16 kHz samples, while the file decodes.
+    /// A caller can size a time limit with it for a file whose length is not
+    /// known when the job starts.
+    ///
+    /// `on_audio_length` runs on the decoder thread and receives, in order: the
+    /// length the container announces when it opens (if it does; a header can
+    /// understate or overstate, so it is capped at the longest audio the decoder
+    /// accepts, about 4 hours); the length decoded so far, each time 60 s more
+    /// were decoded (a floor no header can lower); and, last, the exact length.
+    /// The values are not monotonic (a header can be above the real length): a
+    /// caller that wants a limit that never undercuts the real length keeps the
+    /// largest value it has seen.
+    pub fn transcribe_file_streaming_with_length(
+        &self,
+        path: &Path,
+        progress: impl Fn(u8),
+        cancelled: &AtomicBool,
+        on_audio_length: impl Fn(usize) + Sync,
+    ) -> Result<(PianissimoResult, StreamStats), DictationError> {
         if cancelled.load(Ordering::SeqCst) {
             return Err(cancelled_error());
         }
@@ -1210,7 +1248,7 @@ impl PianissimoBackend {
             };
             self.client
                 .transcribe_file_stream(&token, Some(&mut report), |sink| {
-                    stream_decode_into(path, sink, cancelled, &token, &stats)
+                    stream_decode_into(path, sink, cancelled, &token, &stats, &on_audio_length)
                 })
         });
         if let Ok(mut active) = self.active.lock() {

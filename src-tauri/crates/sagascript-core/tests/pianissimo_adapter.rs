@@ -417,6 +417,59 @@ fn a_streamed_file_equals_the_decoded_file_and_reports_monotonic_progress() {
     }
 }
 
+/// A caller sizing a time limit from the reported lengths must be able to rely
+/// on them: the announced length first, the length decoded so far in 60 s steps
+/// (a floor a header cannot lower), and the exact length last.
+#[test]
+fn a_streamed_file_reports_its_length_as_it_is_learned() {
+    for (rate, seconds) in [(16_000u32, 150usize), (44_100, 130)] {
+        let tmp = tempfile::tempdir().unwrap();
+        let files = tempfile::tempdir().unwrap();
+        let path = write_wav(files.path(), "speech.wav", rate, seconds);
+        let backend =
+            PianissimoBackend::with_client(client(&[("FAKE_WINDOW_S", "30")], tmp.path()));
+        let lengths = Mutex::new(Vec::new());
+
+        let (_, stats) = backend
+            .transcribe_file_streaming_with_length(
+                &path,
+                |_| {},
+                &AtomicBool::new(false),
+                |samples| lengths.lock().unwrap().push(samples),
+            )
+            .unwrap();
+
+        let label = format!("{rate} Hz {seconds} s");
+        let lengths = lengths.into_inner().unwrap();
+        let exact = stats.audio_samples;
+        assert_eq!(
+            lengths.last(),
+            Some(&exact),
+            "{label}: exact last {lengths:?}"
+        );
+        assert!(
+            lengths.len() >= 3,
+            "{label}: announced length, a 60 s step and the exact length: {lengths:?}"
+        );
+        // The first value is the container's announcement, near the real length.
+        assert!(
+            lengths[0].abs_diff(exact) <= rate as usize,
+            "{label}: announced {lengths:?} vs {exact}"
+        );
+        // The steps in between are floors: never above the real length.
+        assert!(
+            lengths.iter().skip(1).all(|n| *n <= exact),
+            "{label}: {lengths:?}"
+        );
+        let steps: Vec<usize> = lengths[1..lengths.len() - 1].to_vec();
+        assert!(
+            steps.windows(2).all(|w| w[1] >= w[0] + 60 * SR),
+            "{label}: one report per 60 s decoded: {steps:?}"
+        );
+        assert!(steps.iter().all(|n| *n >= 60 * SR), "{label}: {steps:?}");
+    }
+}
+
 #[test]
 fn a_streamed_file_that_is_missing_or_not_audio_fails_with_the_decoders_error() {
     let tmp = tempfile::tempdir().unwrap();
