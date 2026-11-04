@@ -118,7 +118,10 @@ Request:
 ```
 - `pcm_path` is a raw little-endian float32 mono file written by the client (0600, private temp
   dir, deleted by the client; see "PCM temp dirs" below). The host reads `num_samples` starting at
-  `offset_samples`.
+  `offset_samples`. The file can still be growing: a client that decodes while it transcribes
+  appends audio and requests a window only after its range was written and flushed, so the host
+  must open the file per request and read just that range (never cache the file length or read to
+  its end).
 - `num_samples ≤ max_window_s × sample_rate`, else `bad_request`. Shorter windows are padded
   internally; tokens beyond the real audio are dropped. `num_samples` must be at least 1,
   `pcm_path` absolute, `format` `f32le` and `sample_rate` the host's `capabilities.sample_rate`;

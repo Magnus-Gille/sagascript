@@ -348,3 +348,167 @@ fn live_abort_during_model_load_returns_promptly_and_keeps_the_host() {
     assert!(shared.snapshot().running, "host must not be killed");
     assert_eq!(spawn_count(&log), 1);
 }
+
+// ---- decode and transcribe a file at once (streaming) ---------------------
+
+/// A WAV file of `seconds` of a chirp-like signal at `rate` Hz (16-bit mono),
+/// so the decoder resamples when `rate` is not 16 kHz.
+fn write_wav(dir: &Path, name: &str, rate: u32, seconds: usize) -> std::path::PathBuf {
+    let frames = rate as usize * seconds;
+    let samples: Vec<f32> = (0..frames)
+        .map(|i| ((i as f32 * 0.0007) * (1.0 + i as f32 * 1e-7)).sin() * 0.6)
+        .collect();
+    let mut wav = sagascript_core::audio::wav::encode_wav(&samples);
+    wav[24..28].copy_from_slice(&rate.to_le_bytes());
+    wav[28..32].copy_from_slice(&(rate * 2).to_le_bytes());
+    let path = dir.join(name);
+    std::fs::write(&path, wav).unwrap();
+    path
+}
+
+#[test]
+fn a_streamed_file_equals_the_decoded_file_and_reports_monotonic_progress() {
+    for (rate, seconds) in [
+        (16_000u32, 100usize),
+        (44_100, 70),
+        (48_000, 12),
+        (16_000, 4),
+    ] {
+        let tmp = tempfile::tempdir().unwrap();
+        let files = tempfile::tempdir().unwrap();
+        let path = write_wav(files.path(), "speech.wav", rate, seconds);
+        let backend =
+            PianissimoBackend::with_client(client(&[("FAKE_WINDOW_S", "30")], tmp.path()));
+        let decoded = sagascript_core::audio::decoder::decode_audio_file(&path).unwrap();
+        let want = backend.transcribe(&decoded, |_| {}).unwrap();
+
+        let seen = Mutex::new(Vec::new());
+        let (got, stats) = backend
+            .transcribe_file_streaming(
+                &path,
+                |p| seen.lock().unwrap().push(p),
+                &AtomicBool::new(false),
+            )
+            .unwrap();
+
+        let label = format!("{rate} Hz {seconds} s");
+        assert_eq!(got.text, want.text, "{label}");
+        assert_eq!(got.words, want.words, "{label}");
+        let windows = |r: &sagascript_core::transcription::pianissimo_backend::PianissimoResult| {
+            r.window_timings
+                .iter()
+                .map(|w| (w.index, w.start_sample, w.end_sample, w.tokens))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(windows(&got), windows(&want), "{label}");
+        assert_eq!(stats.audio_samples, decoded.len(), "{label}");
+        let seen = seen.into_inner().unwrap();
+        assert_eq!(seen.first(), Some(&0), "{label}: {seen:?}");
+        assert_eq!(seen.last(), Some(&100), "{label}: {seen:?}");
+        assert!(
+            seen.windows(2).all(|w| w[0] < w[1]),
+            "{label}: strictly increasing, no repeats: {seen:?}"
+        );
+        assert!(
+            seen[..seen.len() - 1].iter().all(|p| *p < 100),
+            "{label}: 100 only at the end: {seen:?}"
+        );
+        assert_eq!(std::fs::read_dir(tmp.path()).unwrap().count(), 0, "{label}");
+    }
+}
+
+#[test]
+fn a_streamed_file_that_is_missing_or_not_audio_fails_with_the_decoders_error() {
+    let tmp = tempfile::tempdir().unwrap();
+    let files = tempfile::tempdir().unwrap();
+    let backend = PianissimoBackend::with_client(client(&[("FAKE_WINDOW_S", "30")], tmp.path()));
+    let never = AtomicBool::new(false);
+
+    let missing = backend
+        .transcribe_file_streaming(&files.path().join("gone.wav"), |_| {}, &never)
+        .unwrap_err();
+    assert!(
+        matches!(
+            missing,
+            sagascript_core::error::DictationError::FileNotFound(_)
+        ),
+        "{missing:?}"
+    );
+
+    let junk = files.path().join("junk.mp3");
+    std::fs::write(&junk, vec![0x5Au8; 4096]).unwrap();
+    let error = backend
+        .transcribe_file_streaming(&junk, |_| {}, &never)
+        .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            sagascript_core::error::DictationError::FileDecodeError(_)
+        ),
+        "{error:?}"
+    );
+    assert_eq!(std::fs::read_dir(tmp.path()).unwrap().count(), 0);
+
+    // The backend is fine afterwards.
+    let ok = write_wav(files.path(), "ok.wav", 16_000, 3);
+    backend
+        .transcribe_file_streaming(&ok, |_| {}, &never)
+        .unwrap();
+}
+
+#[test]
+fn cancelling_a_streamed_file_stops_decoding_and_inference_quickly() {
+    let tmp = tempfile::tempdir().unwrap();
+    let files = tempfile::tempdir().unwrap();
+    let path = write_wav(files.path(), "long.wav", 44_100, 600);
+    let backend = Arc::new(PianissimoBackend::with_client(client(
+        &[("FAKE_WINDOW_S", "30"), ("FAKE_WINDOW_DELAY_MS", "1000")],
+        tmp.path(),
+    )));
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let job = {
+        let backend = backend.clone();
+        let cancelled = cancelled.clone();
+        std::thread::spawn(move || backend.transcribe_file_streaming(&path, |_| {}, &cancelled))
+    };
+    std::thread::sleep(Duration::from_millis(600));
+    let at = Instant::now();
+    cancelled.store(true, Ordering::SeqCst);
+
+    let error = job.join().unwrap().unwrap_err();
+
+    assert!(
+        matches!(error, sagascript_core::error::DictationError::Cancelled),
+        "{error:?}"
+    );
+    assert!(at.elapsed() < Duration::from_secs(2), "{:?}", at.elapsed());
+    assert_eq!(std::fs::read_dir(tmp.path()).unwrap().count(), 0);
+}
+
+#[test]
+fn request_abort_cancels_a_streamed_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    let files = tempfile::tempdir().unwrap();
+    let path = write_wav(files.path(), "long.wav", 16_000, 600);
+    let backend = Arc::new(PianissimoBackend::with_client(client(
+        &[("FAKE_WINDOW_S", "30"), ("FAKE_WINDOW_DELAY_MS", "1000")],
+        tmp.path(),
+    )));
+    let job = {
+        let backend = backend.clone();
+        std::thread::spawn(move || {
+            backend.transcribe_file_streaming(&path, |_| {}, &AtomicBool::new(false))
+        })
+    };
+    std::thread::sleep(Duration::from_millis(600));
+    let at = Instant::now();
+    backend.request_abort();
+
+    let error = job.join().unwrap().unwrap_err();
+
+    assert!(
+        matches!(error, sagascript_core::error::DictationError::Cancelled),
+        "{error:?}"
+    );
+    assert!(at.elapsed() < Duration::from_secs(2), "{:?}", at.elapsed());
+}
