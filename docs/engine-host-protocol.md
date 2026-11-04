@@ -196,8 +196,8 @@ On stdin EOF the host fails queued windows with `cancelled`, cancels running one
 ## Client behavior (normative for Sagascript's Rust client)
 
 - Timeouts: `hello` 10 s, `load` 180 s (first-time ANE compile), `ping` 2 s, `transcribe_window`
-  max(15 s, 3 × window seconds) for file jobs (batch priority) and max(10 s, 1 × window seconds)
-  for dictation (interactive priority); `shutdown` grace 2 s, then kill.
+  max(15 s, 3 × window seconds) for file jobs (batch priority) and, by default, the same for
+  dictation (interactive priority), above a Neural Engine recompile of the encoder (#397); `shutdown` grace 2 s, then kill.
 - Writes to the host's stdin go through a writer thread and are bounded (5 s, and never longer
   than the request's own timeout). A host that stops reading stdin is killed (counted as a crash)
   and the request fails as crashed, like every other request in flight on that host, so a job

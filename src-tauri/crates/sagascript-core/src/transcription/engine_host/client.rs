@@ -64,10 +64,13 @@ pub struct LoadSpec {
 /// window's slot until the host answers or is killed.
 pub(crate) const DEFAULT_WEDGE_GRACE: Duration = Duration::from_secs(30);
 
-/// Default [`Timeouts::interactive_min`]: an interactive (dictation) window
-/// normally takes 50-300 ms, so ten seconds without an answer means the host
-/// is stalled, not busy. See [`Timeouts::interactive`].
-pub(crate) const DEFAULT_INTERACTIVE_MIN: Duration = Duration::from_secs(10);
+/// Default [`Timeouts::interactive_min`]. An interactive (dictation) window
+/// normally takes 50-300 ms, but the first `prediction()` after macOS evicted
+/// the Neural Engine program recompiles the encoder inside the window: 11.5-16.7 s
+/// measured in #397, longer on a loaded machine. A kill mid-compile throws the
+/// compile away, so the default stays at the batch formula (45 s for a 15 s
+/// window), well above a legitimate recompile. See [`Timeouts::interactive`].
+pub(crate) const DEFAULT_INTERACTIVE_MIN: Duration = Duration::from_secs(15);
 
 /// Default [`EngineHostConfig::failed_cooldown`]. While failed, requests fail
 /// at once without spawning anything; the first request after the cooldown
@@ -89,9 +92,10 @@ pub struct Timeouts {
     pub transcribe_min: Duration,
     pub transcribe_factor: f64,
     /// Interactive (dictation) `transcribe_window` timeout is
-    /// `max(interactive_min, interactive_factor * window_s)`. Much shorter than
-    /// the batch one: a dictation window that is not answered by then has the
-    /// host killed and restarted and is resubmitted (see
+    /// `max(interactive_min, interactive_factor * window_s)`; by default the
+    /// same as the batch one, above a Neural Engine recompile (#397). Unlike a
+    /// batch window, a dictation window that is not answered by then has the
+    /// host killed and restarted at once and is resubmitted (see
     /// [`WindowTicket::wait`]), so the user waits for one timeout plus a
     /// restart instead of losing the dictation.
     pub interactive_min: Duration,
@@ -119,7 +123,7 @@ impl Default for Timeouts {
             transcribe_min: Duration::from_secs(15),
             transcribe_factor: 3.0,
             interactive_min: DEFAULT_INTERACTIVE_MIN,
-            interactive_factor: 1.0,
+            interactive_factor: 3.0,
             shutdown_grace: Duration::from_secs(2),
             write: super::process::DEFAULT_WRITE_TIMEOUT,
             wedge_grace: DEFAULT_WEDGE_GRACE,
@@ -1887,15 +1891,18 @@ mod poison_tests {
 mod timeout_tests {
     use super::*;
 
-    /// A dictation window gets `max(10 s, 1 x window)`, a file window keeps
-    /// `max(15 s, 3 x window)` (45 s for the 15 s windows of the incident).
+    /// By default a dictation window gets the batch formula
+    /// `max(15 s, 3 x window)` (45 s for a 15 s window): well above a Neural
+    /// Engine recompile (11.5-16.7 s, #397), which a shorter limit would kill
+    /// and throw away. Only the reaction to a timeout differs.
     #[test]
-    fn interactive_windows_get_a_shorter_timeout_than_batch_windows() {
+    fn interactive_windows_outlast_a_neural_engine_recompile() {
         let t = Timeouts::default();
         let secs = Duration::from_secs;
-        assert_eq!(t.window(Priority::Interactive, 15.0), secs(15));
-        assert_eq!(t.window(Priority::Interactive, 5.0), secs(10));
-        assert_eq!(t.window(Priority::Interactive, 0.0), secs(10));
+        assert_eq!(t.window(Priority::Interactive, 15.0), secs(45));
+        assert_eq!(t.window(Priority::Interactive, 5.0), secs(15));
+        assert_eq!(t.window(Priority::Interactive, 0.0), secs(15));
+        assert!(t.window(Priority::Interactive, 15.0) >= secs(2 * 17));
         assert_eq!(t.window(Priority::Batch, 15.0), secs(45));
         assert_eq!(t.window(Priority::Batch, 2.0), secs(15));
         assert_eq!(t.window(Priority::Batch, 15.0), t.transcribe(15.0));
