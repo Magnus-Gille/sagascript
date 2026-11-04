@@ -793,8 +793,17 @@ impl WindowTicket {
                 self.abandon();
                 return Err(EngineHostError::Cancelled);
             }
-            let now = Instant::now();
-            if now >= self.deadline {
+            // Take what the host already sent before judging the deadline: the
+            // caller waits on its windows in order, so it can reach one after
+            // that window's deadline although the answer arrived in time. Such
+            // a window did not time out (and must not get its host killed).
+            let slice = self
+                .deadline
+                .saturating_duration_since(Instant::now())
+                .min(Duration::from_millis(20));
+            let delivery = pending.recv_timeout(slice);
+            if matches!(delivery, Err(RecvTimeoutError::Timeout)) && Instant::now() >= self.deadline
+            {
                 if let Some(pending) = self.pending.take() {
                     if self.req.priority == Priority::Interactive {
                         self.inner.kill_stalled_host(&self.proc, &pending);
@@ -813,8 +822,7 @@ impl WindowTicket {
                     after: self.timeout,
                 });
             }
-            let slice = (self.deadline - now).min(Duration::from_millis(20));
-            match pending.recv_timeout(slice) {
+            match delivery {
                 Ok(Delivery::Event { .. }) | Err(RecvTimeoutError::Timeout) => {}
                 Ok(Delivery::Response(Ok(v))) => {
                     self.pending = None;

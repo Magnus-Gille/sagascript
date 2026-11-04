@@ -1801,6 +1801,43 @@ fn stalled_dictation_window_restarts_the_host_and_returns_the_full_text() {
     );
 }
 
+/// A dictation window whose answer arrived in time but is only waited on
+/// after its deadline (the pipeline waits on its windows in order, so a slow
+/// first window delays the others' waits) is a success: the queued answer is
+/// taken, and the healthy host is not killed and counts no crash.
+#[test]
+fn a_queued_answer_past_the_deadline_is_taken_and_the_host_kept() {
+    let f = stall_fixture(&LONG_ENV, |_| {});
+    f.client.warm().unwrap();
+    let pid = f.client.snapshot().pid.unwrap();
+    let samples = pcm(0.5);
+    let pcm_file = PcmFile::write(&samples, Some(f.tmp.path())).unwrap();
+    let req = WindowRequest {
+        pcm_path: pcm_file.path().to_path_buf(),
+        offset_samples: 0,
+        num_samples: samples.len() as u64,
+        sample_rate: 16_000,
+        priority: Priority::Interactive,
+        boost: None,
+    };
+    let ticket = f
+        .client
+        .submit_window(&req, &CancelToken::new(), Duration::from_secs(1))
+        .unwrap()
+        .expect("slot");
+    // The fake host answers within milliseconds; the wait starts well after
+    // the interactive deadline.
+    std::thread::sleep(STALL * 3);
+
+    ticket.wait(&CancelToken::new()).expect("the queued answer");
+
+    let snap = f.client.snapshot();
+    assert_eq!(snap.pid, Some(pid), "the healthy host was killed");
+    assert!(pid_alive(pid));
+    assert_eq!(snap.crashes_in_window, 0, "{snap:?}");
+    assert_eq!(snap.spawns, 1);
+}
+
 /// (b) The retry budget is `max_crash_retries`, as for a crash: a host that
 /// stalls on every attempt ends in the `Timeout`, after one restart per retry.
 #[test]
