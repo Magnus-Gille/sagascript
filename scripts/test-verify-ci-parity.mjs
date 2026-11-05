@@ -73,8 +73,8 @@ const ALLOWLIST = [
   { run: "npm ci", reason: "installs dependencies; verify never installs (its preflight names `npm ci`)" },
   { run: "npx playwright install chromium", reason: "installs a browser; the browser check's preflight names it" },
   {
-    run: "cargo install --locked cargo-deny --version 0.20.2",
-    reason: "installs a tool; the deny check's preflight names this command",
+    run: "bash scripts/ci/install-cargo-deny.sh",
+    reason: "installs a tool; the deny check's preflight names the equivalent `cargo install` command",
   },
   {
     run: "npm run build",
@@ -84,7 +84,7 @@ const ALLOWLIST = [
     run: "python -m pip install -r scripts/diarization_sv/requirements-evaluation.txt",
     reason: "installs packages; the python-diarization preflight names this command",
   },
-  { run: "sudo apt-get", prefix: true, reason: "installs system packages; the linux-libs preflight names them" },
+  { run: "bash scripts/ci/apt-install-tauri-deps.sh", reason: "installs system packages; the linux-libs preflight names them" },
   { run: "rustup toolchain install", prefix: true, reason: "installs the MSRV toolchain; the msrv preflight names it" },
   {
     run: "curl --fail --location --retry 2",
@@ -293,7 +293,7 @@ test("the parser finds the commands of the CI test lanes", () => {
   // The commands the lanes take from the gate list and from the setup action are visible too.
   for (const expected of ["src-tauri: cargo test --workspace", ".: npm ci"]) assert.ok(keys.has(expected), `parsed ${expected}`);
   assert.ok(
-    ciCommands.some((command) => command.job === "test-linux" && command.run.startsWith("sudo apt-get")),
+    ciCommands.some((command) => command.job === "test-linux" && command.run === "bash scripts/ci/apt-install-tauri-deps.sh"),
     "the setup action's apt step",
   );
   assert.ok(
