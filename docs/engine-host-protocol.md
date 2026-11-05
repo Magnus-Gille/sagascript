@@ -196,13 +196,19 @@ On stdin EOF the host fails queued windows with `cancelled`, cancels running one
 ## Client behavior (normative for Sagascript's Rust client)
 
 - Timeouts: `hello` 10 s, `load` 180 s (first-time ANE compile), `ping` 2 s, `transcribe_window`
-  max(15 s, 3 × window seconds); `shutdown` grace 2 s, then kill.
+  max(15 s, 3 × window seconds) for file jobs (batch priority) and, by default, the same for
+  dictation (interactive priority), above a Neural Engine recompile of the encoder (#397); `shutdown` grace 2 s, then kill.
 - Writes to the host's stdin go through a writer thread and are bounded (5 s, and never longer
   than the request's own timeout). A host that stops reading stdin is killed (counted as a crash)
   and the request fails as crashed, like every other request in flight on that host, so a job
   resubmits it once on a fresh host; shutdown never waits on a blocked write.
-- Wedged window: when a `transcribe_window` times out, the caller gets the timeout at once. A
-  detached watcher sends `cancel` and waits up to 30 s (the wedge grace) for that request's
+- Stalled dictation window: when an interactive `transcribe_window` times out, the client kills
+  that host at once (no grace; counted as one crash), and the dictation job resubmits its
+  in-flight windows on a fresh host, which first reloads the model under the `load` timeout,
+  within `max_crash_retries`. Out of retries, the job fails with the timeout. Windows of a file
+  job on the same host fail as crashed and are resubmitted by that job's own crash path.
+- Wedged file window: when a batch `transcribe_window` times out, the caller gets the timeout at
+  once. A detached watcher sends `cancel` and waits up to 30 s (the wedge grace) for that request's
   terminal response; the window keeps its slot meanwhile. Without one the host is stuck in an
   uninterruptible call (a Core ML prediction cannot be cancelled, yet `ping` is still answered),
   so it is killed (counted as a crash) and the next request starts a fresh host. The grace exceeds

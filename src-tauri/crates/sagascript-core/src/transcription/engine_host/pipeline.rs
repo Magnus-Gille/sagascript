@@ -547,11 +547,17 @@ impl EngineHostClient {
                 }
             }
             let err = failure.expect("failure set on this path");
-            if !err.is_crash() {
+            // A dictation window that timed out had its host killed
+            // (`WindowTicket::wait`), so it is recovered like a crash. A file
+            // job's timeout leaves the host alone and fails the job as before.
+            let stalled = opts.priority == Priority::Interactive && err.is_window_timeout();
+            if !err.is_crash() && !stalled {
                 return Err(err); // queued tickets cancel on drop
             }
             // The host died: every window in flight is affected. Resubmit them
-            // in order, each at most `max_crash_retries` times.
+            // in order, each at most `max_crash_retries` times. The next
+            // `submit_window` restarts the host and reloads the model (under
+            // the `load` timeout, not the window timeout).
             let mut affected: Vec<usize> = failed_idx.into_iter().collect();
             affected.extend(queue.iter().map(|(i, _)| *i));
             if failed_idx.is_none() {
@@ -563,7 +569,7 @@ impl EngineHostClient {
                     return Err(err);
                 }
             }
-            tracing::warn!(windows = ?affected, "engine host crashed; resubmitting in-flight windows");
+            tracing::warn!(windows = ?affected, stalled, "engine host crashed or stalled; resubmitting in-flight windows");
             next = affected[0];
             queue.clear();
         }

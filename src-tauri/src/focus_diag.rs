@@ -35,13 +35,14 @@ fn emit(
     crate::logging::log_global(level_for(event, &data), "Focus", event, data);
 }
 
-/// Only events needed to diagnose paste-target problems in the field are INFO;
-/// everything else is DEBUG (written only with RUST_LOG=debug).
+/// Only events needed to diagnose paste-target and indicator problems in the
+/// field are INFO; everything else is DEBUG (written only with RUST_LOG=debug).
 fn level_for(event: &str, data: &serde_json::Value) -> &'static str {
     let is_info = match event {
         "paste_guard_check" => data["decision"] == "reject",
         "focus_restore_before_paste" => data["attempted"] == true,
         "settings_window_open_requested" => data["site"] == "paste_failed_copy_fallback",
+        "overlay_shown" => data["movedToActiveSpace"] == true,
         "activation_call" => {
             data["site"] == "launch_activation" && data["step"] == "withdrawn_user_moved_on"
         }
@@ -122,6 +123,10 @@ mod tests {
             ),
             "info"
         );
+        assert_eq!(
+            level_for("overlay_shown", &json!({ "movedToActiveSpace": true })),
+            "info"
+        );
     }
 
     #[test]
@@ -136,6 +141,10 @@ mod tests {
         );
         assert_eq!(
             level_for("settings_window_open_requested", &json!({ "site": "tray" })),
+            "debug"
+        );
+        assert_eq!(
+            level_for("overlay_shown", &json!({ "movedToActiveSpace": false })),
             "debug"
         );
         assert_eq!(
