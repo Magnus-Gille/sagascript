@@ -45,6 +45,11 @@ jobs:
       # across branches instead of a `Cargo.lock`-keyed multi-GB target dump.
       # `build-macos` below uses the same shared key so the release Tauri
       # build reuses dependencies this gate job just compiled.
+      # whisper.cpp targets Apple silicon's apple-m1 baseline, not the runner's CPU; before the
+      # Rust cache, whose key includes CMAKE_* variables (scripts/cmake/macos-arm64-portable.cmake).
+      - name: Use the portable whisper.cpp CPU baseline
+        run: bash scripts/ci/use-portable-whisper-macos.sh
+
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2, pinned (#180 review: release handles signing credentials)
         with:

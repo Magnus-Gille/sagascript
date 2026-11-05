@@ -66,6 +66,11 @@ jobs:
           node-version: 22
           cache: npm
 
+      # whisper.cpp targets Apple silicon's apple-m1 baseline, not the runner's CPU; before the
+      # Rust cache, whose key includes CMAKE_* variables (scripts/cmake/macos-arm64-portable.cmake).
+      - name: Use the portable whisper.cpp CPU baseline
+        run: bash scripts/ci/use-portable-whisper-macos.sh
+
       # Shares the quality-gate shared key above (#178) so this build reuses
       # dependencies the gate just compiled instead of rebuilding from cold.
       - name: Cache Rust dependencies
