@@ -53,6 +53,7 @@ export const TEST_GROUPS = {
     "scripts/test-engine-host-identity.mjs",
     "scripts/test-engine-host-conformance-reader.mjs",
     "scripts/test-frontend-test-groups.mjs",
+    "scripts/test-macos-whisper-baseline.mjs",
     "scripts/test-npm-license-policy.mjs",
     "scripts/test-pipeline-cache.mjs",
     "scripts/test-rust-toolchain-pin.mjs",

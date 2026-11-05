@@ -43,7 +43,7 @@ permissions:
 
 jobs:
   build-macos:
-    runs-on: macos-14
+    runs-on: macos-15
     # Twice the slowest observed run (#354): Apple notarization alone has taken
     # 107 minutes (v1.0.0), so the cap must not cut a slow but healthy notary
     # wait short. Waiting for the environment approval does not count.
@@ -65,6 +65,11 @@ jobs:
         with:
           node-version: 22
           cache: npm
+
+      # whisper.cpp targets Apple silicon's apple-m1 baseline, not the runner's CPU; before the
+      # Rust cache, whose key includes CMAKE_* variables (scripts/cmake/macos-arm64-portable.cmake).
+      - name: Use the portable whisper.cpp CPU baseline
+        run: bash scripts/ci/use-portable-whisper-macos.sh
 
       # Shares the quality-gate shared key above (#178) so this build reuses
       # dependencies the gate just compiled instead of rebuilding from cold.

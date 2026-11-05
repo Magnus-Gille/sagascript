@@ -81,6 +81,13 @@ runs:
         node-version: 22
         cache: npm
 
+    # whisper.cpp targets Apple silicon's apple-m1 baseline, not the runner's CPU; before the Rust cache,
+    # whose key includes CMAKE_* variables (scripts/cmake/macos-arm64-portable.cmake).
+    - if: ${{ runner.os == 'macOS' }}
+      name: Use the portable whisper.cpp CPU baseline
+      shell: bash
+      run: bash scripts/ci/use-portable-whisper-macos.sh
+
     - name: Cache Rust dependencies
       uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       with:
