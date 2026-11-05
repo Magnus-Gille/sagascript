@@ -1,8 +1,8 @@
 use super::*;
 use sagascript_engine_protocol::{WindowTimings, WireToken};
+use std::sync::atomic::AtomicU64;
 use std::sync::mpsc::{channel, Receiver};
 use std::sync::Condvar;
-use std::time::Duration;
 
 #[derive(Clone, Default)]
 struct SharedOut(Arc<Mutex<Vec<u8>>>);
@@ -47,6 +47,23 @@ struct Gate {
     cv: Condvar,
 }
 
+/// A monotonic clock the tests move by hand (`warm` skips a canary that ran under 30 s ago).
+struct TestClock {
+    base: Instant,
+    offset_ms: AtomicU64,
+}
+
+impl TestClock {
+    fn now(&self) -> Instant {
+        self.base + Duration::from_millis(self.offset_ms.load(Ordering::SeqCst))
+    }
+
+    fn advance(&self, by: Duration) {
+        self.offset_ms
+            .fetch_add(by.as_millis() as u64, Ordering::SeqCst);
+    }
+}
+
 struct MockEngine {
     max_in_flight: u32,
     slots: usize,
@@ -54,6 +71,12 @@ struct MockEngine {
     gate: Option<Arc<Gate>>,
     started: Mutex<Vec<String>>,
     started_tx: Mutex<Sender<()>>,
+    /// Holds `canary` calls while closed (open by default); independent of the window `gate`.
+    canary_gate: Arc<Gate>,
+    /// Canaries that started (loaded model found).
+    canaries: Mutex<usize>,
+    /// The next canary fails with this error.
+    canary_failure: Mutex<Option<HostError>>,
 }
 
 impl MockEngine {
@@ -67,6 +90,12 @@ impl MockEngine {
                 gate,
                 started: Mutex::new(vec![]),
                 started_tx: Mutex::new(tx),
+                canary_gate: Arc::new(Gate {
+                    open: Mutex::new(true),
+                    cv: Condvar::new(),
+                }),
+                canaries: Mutex::new(0),
+                canary_failure: Mutex::new(None),
             },
             rx,
         )
@@ -152,6 +181,33 @@ impl Engine for Arc<MockEngine> {
             boost_reason: None,
         })
     }
+    fn canary(&self) -> Result<Canary, HostError> {
+        if self.loaded.lock().unwrap().is_none() {
+            return Err(HostError::new(ErrorCode::NotLoaded, "not loaded"));
+        }
+        *self.canaries.lock().unwrap() += 1;
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut open = self.canary_gate.open.lock().unwrap();
+        while !*open {
+            if Instant::now() > deadline {
+                return Err(HostError::new(ErrorCode::Internal, "canary never released"));
+            }
+            open = self
+                .canary_gate
+                .cv
+                .wait_timeout(open, Duration::from_millis(10))
+                .unwrap()
+                .0;
+        }
+        drop(open);
+        match self.canary_failure.lock().unwrap().take() {
+            Some(error) => Err(error),
+            None => Ok(Canary {
+                canary_ms: 5,
+                probable_recompile: false,
+            }),
+        }
+    }
     fn unload(&self) {
         *self.loaded.lock().unwrap() = None;
     }
@@ -172,6 +228,7 @@ struct Fixture {
     out: SharedOut,
     started: Receiver<()>,
     shutdown: Arc<AtomicBool>,
+    clock: Arc<TestClock>,
 }
 
 fn fixture(max_in_flight: u32, gated: bool) -> (Fixture, Arc<Gate>) {
@@ -184,7 +241,12 @@ fn fixture(max_in_flight: u32, gated: bool) -> (Fixture, Arc<Gate>) {
     let out = SharedOut::default();
     let shutdown = Arc::new(AtomicBool::new(false));
     let flag = Arc::clone(&shutdown);
-    let server = Server::new(
+    let clock = Arc::new(TestClock {
+        base: Instant::now(),
+        offset_ms: AtomicU64::new(0),
+    });
+    let now = Arc::clone(&clock);
+    let server = Server::with_clock(
         Arc::clone(&engine),
         HostBuild {
             version: "9.9.9".into(),
@@ -193,6 +255,7 @@ fn fixture(max_in_flight: u32, gated: bool) -> (Fixture, Arc<Gate>) {
         },
         Box::new(out.clone()),
         Box::new(move || flag.store(true, Ordering::SeqCst)),
+        Box::new(move || now.now()),
     );
     (
         Fixture {
@@ -201,6 +264,7 @@ fn fixture(max_in_flight: u32, gated: bool) -> (Fixture, Arc<Gate>) {
             out,
             started,
             shutdown,
+            clock,
         },
         gate,
     )
@@ -513,4 +577,218 @@ fn advertised_two_with_one_execution_slot_still_runs_interactive_first() {
         })
         .collect();
     assert_eq!(order, ["batch-run", "dictation", "batch-next"]);
+}
+
+fn warm(f: &Fixture, id: u64) {
+    f.server.handle_line(&req(id, "warm", json!({})));
+}
+
+/// Closes the canary gate: the next canary stays running until [`release_canary`].
+fn hold_canary(f: &Fixture) {
+    *f.engine.canary_gate.open.lock().unwrap() = false;
+}
+
+fn release_canary(f: &Fixture) {
+    open(&f.engine.canary_gate);
+}
+
+fn wait_canaries(f: &Fixture, count: usize) {
+    for _ in 0..500 {
+        if *f.engine.canaries.lock().unwrap() >= count {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    panic!("fewer than {count} canaries started");
+}
+
+/// The whole response, `skipped` reason or the canary's numbers.
+fn skipped(response: &Value) -> &str {
+    assert_eq!(response["ok"], true, "{response}");
+    assert_eq!(response["ran"], false, "{response}");
+    assert!(response.get("canary_ms").is_none(), "{response}");
+    response["skipped"].as_str().unwrap()
+}
+
+#[test]
+fn warm_runs_a_canary_and_is_answered_when_it_finished() {
+    let (f, _) = fixture(1, false);
+    hello(&f);
+    warm(&f, 2);
+    assert_eq!(skipped(&f.out.response(2).unwrap()), "not_loaded");
+    load(&f, 3);
+    warm(&f, 4);
+    let ran = f.out.wait_response(4);
+    assert_eq!(ran["ok"], true);
+    assert_eq!(ran["ran"], true);
+    assert!(ran["canary_ms"].is_u64(), "{ran}");
+    assert_eq!(ran["probable_recompile"], false);
+    assert!(ran.get("skipped").is_none(), "{ran}");
+    assert_eq!(*f.engine.canaries.lock().unwrap(), 1);
+    // stdout carries protocol lines only: one per request.
+    assert_eq!(f.out.lines().len(), 4);
+}
+
+#[test]
+fn a_running_canary_takes_no_window_slot_and_is_unknown_to_cancel() {
+    // One execution slot: a canary that held it would block the dictation window.
+    let (f, _) = fixture(1, false);
+    hello(&f);
+    load(&f, 2);
+    hold_canary(&f);
+    warm(&f, 10);
+    wait_canaries(&f, 1);
+    f.server.handle_line(&req(11, "status", json!({})));
+    let status = f.out.response(11).unwrap();
+    assert_eq!(status["in_flight"], 0);
+    assert_eq!(status["state"], "ready");
+    f.server
+        .handle_line(&req(12, "cancel", json!({"target": 10})));
+    assert_eq!(f.out.response(12).unwrap()["cancelled"], false);
+    f.server
+        .handle_line(&window(13, "dictation", 16_000, "interactive"));
+    assert_eq!(f.out.wait_response(13)["ok"], true);
+    assert!(
+        f.out.response(10).is_none(),
+        "the canary is still running: {:?}",
+        f.out.lines()
+    );
+    release_canary(&f);
+    let ran = f.out.wait_response(10);
+    assert_eq!(ran["ran"], true, "{ran}");
+}
+
+#[test]
+fn a_second_warm_while_a_canary_runs_is_in_progress_and_not_waited_for() {
+    let (f, _) = fixture(1, false);
+    hello(&f);
+    load(&f, 2);
+    hold_canary(&f);
+    warm(&f, 10);
+    wait_canaries(&f, 1);
+    warm(&f, 11);
+    // Answered at once, from the thread that handled the line.
+    assert_eq!(skipped(&f.out.response(11).unwrap()), "in_progress");
+    // in_progress is checked before not_loaded.
+    f.server.handle_line(&req(12, "unload", json!({})));
+    assert_eq!(f.out.wait_response(12)["ok"], true);
+    warm(&f, 13);
+    assert_eq!(skipped(&f.out.response(13).unwrap()), "in_progress");
+    assert!(f.out.response(10).is_none());
+    release_canary(&f);
+    assert_eq!(f.out.wait_response(10)["ran"], true);
+    assert_eq!(*f.engine.canaries.lock().unwrap(), 1);
+    // The slot is free again (and the model is gone).
+    warm(&f, 14);
+    assert_eq!(skipped(&f.out.response(14).unwrap()), "not_loaded");
+}
+
+#[test]
+fn recent_expires_after_thirty_seconds_on_the_injected_clock() {
+    let (f, _) = fixture(1, false);
+    hello(&f);
+    load(&f, 2);
+    warm(&f, 3);
+    assert_eq!(f.out.wait_response(3)["ran"], true);
+    warm(&f, 4);
+    assert_eq!(skipped(&f.out.response(4).unwrap()), "recent");
+    f.clock.advance(Duration::from_millis(29_999));
+    warm(&f, 5);
+    assert_eq!(skipped(&f.out.response(5).unwrap()), "recent");
+    // "Less than 30 s ago": at 30 s the canary runs again, and restarts the interval.
+    f.clock.advance(Duration::from_millis(1));
+    warm(&f, 6);
+    assert_eq!(f.out.wait_response(6)["ran"], true);
+    warm(&f, 7);
+    assert_eq!(skipped(&f.out.response(7).unwrap()), "recent");
+    assert_eq!(*f.engine.canaries.lock().unwrap(), 2);
+}
+
+#[test]
+fn a_window_that_ran_counts_as_activity() {
+    let (f, _) = fixture(1, false);
+    hello(&f);
+    load(&f, 2);
+    f.server
+        .handle_line(&window(3, "dictation", 16_000, "interactive"));
+    assert_eq!(f.out.wait_response(3)["ok"], true);
+    warm(&f, 4);
+    assert_eq!(skipped(&f.out.response(4).unwrap()), "recent");
+    f.clock.advance(Duration::from_secs(30));
+    warm(&f, 5);
+    assert_eq!(f.out.wait_response(5)["ran"], true);
+    assert_eq!(*f.engine.canaries.lock().unwrap(), 1);
+}
+
+#[test]
+fn a_cancelled_window_is_not_activity() {
+    let (f, gate) = fixture(1, true);
+    hello(&f);
+    load(&f, 2);
+    f.server.handle_line(&window(3, "run", 16_000, "batch"));
+    f.started.recv_timeout(Duration::from_secs(5)).unwrap();
+    f.server
+        .handle_line(&req(4, "cancel", json!({"target": 3})));
+    assert_eq!(error_code(&f.out.wait_response(3)), "cancelled");
+    open(&gate);
+    warm(&f, 5);
+    assert_eq!(f.out.wait_response(5)["ran"], true);
+}
+
+#[test]
+fn a_queued_or_running_window_makes_warm_busy_before_recent() {
+    let (f, gate) = fixture(1, true);
+    hello(&f);
+    load(&f, 2);
+    f.server.handle_line(&window(3, "run", 16_000, "batch"));
+    f.started.recv_timeout(Duration::from_secs(5)).unwrap();
+    warm(&f, 4);
+    assert_eq!(skipped(&f.out.response(4).unwrap()), "busy");
+    f.server.handle_line(&window(5, "queued", 16_000, "batch"));
+    warm(&f, 6);
+    assert_eq!(skipped(&f.out.response(6).unwrap()), "busy");
+    f.server.handle_line(&req(7, "status", json!({})));
+    assert_eq!(f.out.response(7).unwrap()["in_flight"], 1);
+    open(&gate);
+    assert_eq!(f.out.wait_response(3)["ok"], true);
+    assert_eq!(f.out.wait_response(5)["ok"], true);
+    warm(&f, 8);
+    assert_eq!(skipped(&f.out.response(8).unwrap()), "recent");
+    assert_eq!(*f.engine.canaries.lock().unwrap(), 0);
+}
+
+#[test]
+fn a_failing_canary_answers_the_engine_error_and_is_not_activity() {
+    let (f, _) = fixture(1, false);
+    hello(&f);
+    load(&f, 2);
+    *f.engine.canary_failure.lock().unwrap() =
+        Some(HostError::new(ErrorCode::Engine, "encoder failed"));
+    warm(&f, 3);
+    let failed = f.out.wait_response(3);
+    assert_eq!(failed["ok"], false);
+    assert_eq!(error_code(&failed), "engine");
+    assert_eq!(failed["error"]["message"], "encoder failed");
+    // The canary slot is free and the failure did not count as the model having run.
+    warm(&f, 4);
+    assert_eq!(f.out.wait_response(4)["ran"], true);
+    // A model unloaded between the check and the canary is a skip, not an error.
+    f.clock.advance(Duration::from_secs(30));
+    *f.engine.canary_failure.lock().unwrap() =
+        Some(HostError::new(ErrorCode::NotLoaded, "No model is loaded"));
+    warm(&f, 5);
+    assert_eq!(skipped(&f.out.wait_response(5)), "not_loaded");
+}
+
+#[test]
+fn warm_log_line_names_trigger_time_and_recompile() {
+    assert_eq!(
+        warm_log_line("request", 38, false),
+        "warm canary trigger=request ms=38 probable_recompile=false"
+    );
+    // A probable recompile is logged at INFO by the client, which keys on the prefix.
+    assert_eq!(
+        warm_log_line("request", 12_500, true),
+        "info: warm canary trigger=request ms=12500 probable_recompile=true"
+    );
 }

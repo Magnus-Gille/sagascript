@@ -7,7 +7,8 @@ use super::{EngineHostError, Result};
 use crate::sync::{lock_or_recover, lock_or_recover_with, recover_poisoned};
 use sagascript_engine_protocol::{
     parse_result, Capabilities, ClientInfo, ErrorCode, HelloResult, HostInfo, LoadResult, Priority,
-    RequestOp, StatusResult, TranscribeWindowResult, WindowTimings, WireToken, PROTOCOL_VERSION,
+    RequestOp, StatusResult, TranscribeWindowResult, WarmResult, WindowTimings, WireToken,
+    PROTOCOL_VERSION,
 };
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -87,6 +88,11 @@ pub struct Timeouts {
     pub ping: Duration,
     pub status: Duration,
     pub unload: Duration,
+    /// `warm` (one canary prediction). Generous: the canary is what absorbs a
+    /// Neural Engine recompile, which took up to 181 s on a loaded machine
+    /// (#397). A `warm` that times out is forgotten; the host is never killed
+    /// for it.
+    pub warm: Duration,
     /// Batch (file job) `transcribe_window` timeout is
     /// `max(transcribe_min, transcribe_factor * window_s)`.
     pub transcribe_min: Duration,
@@ -120,6 +126,7 @@ impl Default for Timeouts {
             ping: Duration::from_secs(2),
             status: Duration::from_secs(5),
             unload: Duration::from_secs(10),
+            warm: Duration::from_secs(180),
             transcribe_min: Duration::from_secs(15),
             transcribe_factor: 3.0,
             interactive_min: DEFAULT_INTERACTIVE_MIN,
@@ -524,6 +531,21 @@ impl EngineHostClient {
         let t = Instant::now();
         proc.request(&RequestOp::Ping, self.inner.cfg.timeouts.ping)?;
         Ok(t.elapsed())
+    }
+
+    /// Run one canary prediction on the loaded model (`warm`) and wait for it,
+    /// so a Neural Engine recompile after an OS eviction happens now and not
+    /// in the next window (#397). Never starts the host or loads the model
+    /// (`NotRunning` without a live host), takes no window slot and never
+    /// delays a window: the host runs the canary outside its window queue, and
+    /// a window sent meanwhile waits at most for the rest of a recompile the
+    /// canary already started. Meant for a background thread: a timeout is
+    /// [`Timeouts::warm`], after which the request is forgotten and the host
+    /// left alone.
+    pub fn warm_canary(&self) -> Result<WarmResult> {
+        let proc = self.inner.live_proc()?;
+        let v = proc.request(&RequestOp::Warm, self.inner.cfg.timeouts.warm)?;
+        parse_result(v).map_err(|e| EngineHostError::Protocol(e.0))
     }
 
     /// Free model memory but keep the process.

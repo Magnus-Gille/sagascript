@@ -302,6 +302,14 @@ pub struct FakeEngine {
     pub not_loaded: ErrorBody,
     /// What `transcribe` does, by `pcm_path`.
     pub windows: BTreeMap<String, FakeWindow>,
+    /// What the engine's canary prediction (`warm` that is not skipped) reports.
+    pub warm: FakeWarm,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct FakeWarm {
+    pub canary_ms: u64,
+    pub probable_recompile: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
