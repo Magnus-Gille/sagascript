@@ -199,8 +199,8 @@ test("the Rust cache key follows the gate list for the lanes that run gates, and
     cache.with["shared-key"],
     "${{ inputs.cache-key }}${{ inputs.native-build != 'true' && format('-{0}', hashFiles('scripts/ci/cargo-gates.mjs')) || '' }}",
   );
-  // Pull requests only restore: a cache saved from a PR ref is unreadable by other branches and evicts shared ones (SAGA-546).
-  assert.equal(cache.with["save-if"], "${{ github.event_name != 'pull_request' }}");
+  // Only main saves: a cache saved from a PR or tag ref is unreadable by other runs and evicts shared ones (SAGA-546).
+  assert.equal(cache.with["save-if"], "${{ github.ref == 'refs/heads/main' }}");
   for (const id of LANES) {
     const job = workflow.job(id);
     const runsGates = job.steps.some((step) => gateInvocation(step));
