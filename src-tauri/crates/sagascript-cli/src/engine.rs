@@ -10,8 +10,9 @@ use std::time::{Duration, Instant};
 use clap::{Args, Subcommand};
 use sagascript_core::error::DictationError;
 use sagascript_core::models::PianissimoModel;
+use sagascript_core::path_scrub::scrub_paths;
 use sagascript_core::transcription::engine_host::{
-    pipeline, CancelToken, EngineHostClient, EngineHostConfig,
+    pipeline, CancelToken, EngineHostClient, EngineHostConfig, EngineHostError, WarmResult,
 };
 use sagascript_core::transcription::{pianissimo_backend, pianissimo_model};
 use serde_json::{json, Value};
@@ -85,13 +86,21 @@ the app runs at startup) and reports how many it removed and how many are in use
         long_about = "\
 Start the engine host, load the Pianissimo model and keep it loaded until \
 Ctrl+C or --seconds elapse. Idle unloading is disabled while holding. Useful for \
-benchmarking warm latency or smoke-testing a signed build.",
-        after_long_help = "EXAMPLES:\n  sagascript engine warm --seconds 30\n  sagascript engine warm --model pianissimo-da --seconds 30"
+benchmarking warm latency or smoke-testing a signed build.
+
+After the load it runs one canary prediction, as the app does on push-to-talk \
+key-down, and prints its time. --canary-every repeats it while holding: a canary \
+that takes seconds instead of milliseconds means macOS had evicted the model's \
+Neural Engine program and the canary recompiled it (#397).",
+        after_long_help = "EXAMPLES:\n  sagascript engine warm --seconds 30\n  sagascript engine warm --model pianissimo-da --seconds 30\n  sagascript engine warm --seconds 3600 --canary-every 300"
     )]
     Warm {
         /// Stop after this many seconds (default: until Ctrl+C)
         #[arg(long, value_name = "N")]
         seconds: Option<u64>,
+        /// While holding, run a canary prediction every N seconds and print its time
+        #[arg(long, value_name = "N", value_parser = clap::value_parser!(u64).range(1..))]
+        canary_every: Option<u64>,
         /// Pianissimo model to load (pianissimo-sv, pianissimo-da)
         #[arg(long, value_name = "ID", default_value = "pianissimo-sv", value_parser = parse_pianissimo)]
         model: PianissimoModel,
@@ -128,7 +137,11 @@ pub fn run(args: EngineArgs, out: &Out) -> Result<(), CliError> {
             let probe = Probe::detect(model);
             doctor(&probe, verify_model, json, out)
         }
-        EngineAction::Warm { seconds, model } => Ok(warm(seconds, model, out)?),
+        EngineAction::Warm {
+            seconds,
+            canary_every,
+            model,
+        } => Ok(warm(seconds, canary_every, model, out)?),
     }
 }
 
@@ -631,7 +644,36 @@ fn print_doctor(report: &DoctorReport, json: bool, out: &Out) -> Result<(), Writ
 
 // ---- warm -----------------------------------------------------------------
 
-fn warm(seconds: Option<u64>, model: PianissimoModel, out: &Out) -> Result<(), DictationError> {
+/// One line for a `warm` canary result (or why there was none).
+fn canary_line(result: &Result<WarmResult, EngineHostError>) -> String {
+    match result {
+        Ok(WarmResult {
+            ran: true,
+            canary_ms,
+            probable_recompile,
+            ..
+        }) => format!(
+            "Canary {} ms{}",
+            canary_ms.unwrap_or_default(),
+            if *probable_recompile == Some(true) {
+                " (probable Neural Engine recompile)"
+            } else {
+                ""
+            }
+        ),
+        Ok(WarmResult { skipped, .. }) => {
+            format!("Canary skipped: {}", skipped.as_deref().unwrap_or("?"))
+        }
+        Err(error) => format!("Canary failed: {}", scrub_paths(&error.to_string())),
+    }
+}
+
+fn warm(
+    seconds: Option<u64>,
+    canary_every: Option<u64>,
+    model: PianissimoModel,
+    out: &Out,
+) -> Result<(), DictationError> {
     let config = pianissimo_backend::engine_config(&sagascript_core::machine::load(), model)?;
     pianissimo_model::verify_downloaded(model)?;
     let client = quiet(&config);
@@ -650,10 +692,24 @@ fn warm(seconds: Option<u64>, model: PianissimoModel, out: &Out) -> Result<(), D
             None => "Holding until Ctrl+C...".to_string(),
         }
     );
+    errln!(out, "{}", canary_line(&client.warm_canary()));
     let deadline = seconds.map(|n| Instant::now() + Duration::from_secs(n));
+    let every = canary_every.map(Duration::from_secs);
+    let mut next_canary = every.map(|every| Instant::now() + every);
     loop {
         if deadline.is_some_and(|d| Instant::now() >= d) {
             break;
+        }
+        if let (Some(at), Some(every)) = (next_canary, every) {
+            if Instant::now() >= at {
+                errln!(
+                    out,
+                    "{:>6.0} s: {}",
+                    started.elapsed().as_secs_f64(),
+                    canary_line(&client.warm_canary())
+                );
+                next_canary = Some(Instant::now() + every);
+            }
         }
         // Detect a host that died while holding; Ctrl+C ends the process and the
         // host exits on stdin EOF.

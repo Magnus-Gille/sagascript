@@ -1,5 +1,5 @@
 {
- "comment": "The scripted engine behind a host's protocol server while it replays the *.jsonl transcripts in this directory (docs/engine-host-protocol.md, Golden transcripts). load: model_dir in load_errors fails with that error, any other succeeds with load_result plus the requested model_id. transcribe: not loaded -> not_loaded; otherwise windows[pcm_path]. expect_boost is the dictionary the engine must receive (absent: none; a mismatch fails with internal); hold blocks until the window is cancelled, then fails with cancelled.",
+ "comment": "The scripted engine behind a host's protocol server while it replays the *.jsonl transcripts in this directory (docs/engine-host-protocol.md, Golden transcripts). load: model_dir in load_errors fails with that error, any other succeeds with load_result plus the requested model_id. transcribe: not loaded -> not_loaded; otherwise windows[pcm_path]. expect_boost is the dictionary the engine must receive (absent: none; a mismatch fails with internal); hold blocks until the window is cancelled, then fails with cancelled. warm: a canary that is not skipped (see warm.jsonl) reports warm.canary_ms and warm.probable_recompile.",
  "capabilities": {
   "sample_rate": 16000,
   "max_window_s": 1.0,
@@ -165,5 +165,9 @@
     "retryable": false
    }
   }
+ },
+ "warm": {
+  "canary_ms": 7,
+  "probable_recompile": false
  }
 }

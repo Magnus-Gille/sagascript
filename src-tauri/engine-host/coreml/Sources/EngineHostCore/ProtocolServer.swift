@@ -59,6 +59,13 @@ private final class RequestScheduler {
         return running.count
     }
 
+    /// Queued plus running windows: any of them keeps the model resident, so a canary has nothing
+    /// to do (`warm.skipped = busy`).
+    var windowsInFlight: Int {
+        lock.lock(); defer { lock.unlock() }
+        return pending.count + running.count
+    }
+
     func submit(
         id: UInt64,
         priority: WindowPriority,
@@ -161,19 +168,34 @@ public final class EngineHostServer {
     private let stateLock = NSLock()
     private let controlQueue = DispatchQueue(label: "ai.gille.sagascript.engine-host.control", qos: .userInitiated)
     private let scheduler: RequestScheduler
+    private let warmCoordinator: WarmCoordinator
     private let startedAt = Date()
     private var sawHello = false
     private var stopping = false
 
+    /// - Parameters:
+    ///   - recentInterval, now, warmLog: the `warm` rules, clock and stderr line (see
+    ///     `WarmCoordinator`); tests inject them.
     public init(
         engine: EngineBackend,
         output: @escaping ([String: Any]) -> Void,
-        onShutdown: @escaping () -> Void = {}
+        onShutdown: @escaping () -> Void = {},
+        recentInterval: TimeInterval = WarmCoordinator.defaultRecentInterval,
+        now: @escaping () -> TimeInterval = HostClock.continuousSeconds,
+        warmLog: @escaping (String) -> Void = WarmCoordinator.logToStandardError
     ) {
         self.engine = engine
         self.output = output
         self.onShutdown = onShutdown
-        self.scheduler = RequestScheduler(maximum: engine.capabilities.maxInFlight)
+        let scheduler = RequestScheduler(maximum: engine.capabilities.maxInFlight)
+        self.scheduler = scheduler
+        self.warmCoordinator = WarmCoordinator(
+            engine: engine,
+            windowsInFlight: { scheduler.windowsInFlight },
+            now: now,
+            recentInterval: recentInterval,
+            log: warmLog
+        )
     }
 
     public func handleLine(_ line: String) {
@@ -231,6 +253,16 @@ public final class EngineHostServer {
         scheduler.cancelAll()
     }
 
+    /// A canary the host starts itself (memory pressure, wake from sleep, keep-alive timer). Fire
+    /// and forget: the outcome is only logged, and nothing runs once the host is stopping.
+    public func backgroundWarm(_ trigger: WarmTrigger) {
+        stateLock.lock()
+        let isStopping = stopping
+        stateLock.unlock()
+        if isStopping { return }
+        warmCoordinator.warm(trigger: trigger) { _ in }
+    }
+
     private func dispatch(id: UInt64, request: WireRequest) {
         switch request {
         case .hello: return
@@ -241,6 +273,7 @@ public final class EngineHostServer {
         case let .load(modelDirectory, modelID, computeUnits):
             handleLoad(id: id, modelDirectory: modelDirectory, modelID: modelID, computeUnits: computeUnits)
         case let .transcribeWindow(parameters): handleTranscribe(id: id, parameters: parameters)
+        case .warm: handleWarm(id: id)
         case .unload: handleUnload(id: id)
         case .shutdown: handleShutdown(id: id)
         }
@@ -321,6 +354,10 @@ public final class EngineHostServer {
         )
         scheduler.submit(id: id, priority: parameters.priority, work: { [weak self] flag in
             guard let self else { throw EngineHostError(code: .internalError, message: "Host deallocated") }
+            // Only a window that ran gets here (a cancelled queued one never starts). This runs
+            // before the slot is freed, so a canary never finds the window neither in flight nor
+            // recorded as activity.
+            defer { self.warmCoordinator.noteActivity() }
             let result = try self.engine.transcribe(window, isCancelled: { flag.isCancelled })
             return WireProtocol.windowResult(result)
         }, completion: { [weak self] result in
@@ -330,6 +367,18 @@ public final class EngineHostServer {
             case let .failure(error): self.sendFailure(id: id, error: error)
             }
         })
+    }
+
+    /// Never goes through the scheduler: no slot, not in `status.in_flight`, unknown to `cancel`.
+    /// Answered when the canary has finished, or at once when it is skipped.
+    private func handleWarm(id: UInt64) {
+        warmCoordinator.warm(trigger: .request) { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case let .success(outcome): self.sendSuccess(id: id, fields: WireProtocol.warmResult(outcome))
+            case let .failure(error): self.sendFailure(id: id, error: error)
+            }
+        }
     }
 
     private func handleUnload(id: UInt64) {

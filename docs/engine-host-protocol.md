@@ -60,7 +60,8 @@ result), never a silent zero or empty value. The optional result fields are `hel
 error), `hello.host.build_dirty` (optional for the client only, see `hello`),
 `hello.capabilities.min_macos`,
 `hello.capabilities.context_biasing`, `tokens[].confidence`, `timings.boost_us`, `boost_active`,
-`boost_reason`, and `status.model_id` (`null` when no model is loaded). The optional request
+`boost_reason`, `status.model_id` (`null` when no model is loaded), and `warm`'s `skipped`,
+`canary_ms` and `probable_recompile` (see [`warm`](#warm)). The optional request
 fields are `boost_terms` and `boost_weight`. The `error` object's `code`, `message` and
 `retryable` are all required too; what the client does with a malformed line is under
 [Client behavior](#client-behavior-normative-for-sagascripts-rust-client).
@@ -180,6 +181,45 @@ terminates with error `cancelled`. Cancellation is best effort; a window may sti
 unknown or finished target (any integer ≥ 0) answers `false`; a missing or non-integer `target` is
 `bad_request`.
 
+### `warm`
+Request: `{}` (no parameters) → `{"ran":true,"canary_ms":38,"probable_recompile":false}` or
+`{"ran":false,"skipped":"recent"}`.
+
+One **canary prediction** on the loaded model: a silent window of one encoder frame (1280 samples,
+nothing read from disk) through the whole pipeline (preprocessor, encoder, one decoder and joint
+step), result discarded. macOS can evict a loaded model's Neural Engine program; the next prediction
+then recompiles it inside `ANECompilerService`, 11.5-16.7 s for the Pianissimo encoder and over 45 s
+on a loaded machine (#397). There is no public API to pin a program, so the client sends `warm`
+when a dictation is about to start (push-to-talk key-down) and any recompile overlaps the user's
+speech instead of following key-up. A window sent while the canary still recompiles is expected
+to wait for that same compile rather than start a second one, so the dictation waits at most for
+the rest of it (not yet observed on a real eviction; see
+`docs/benchmarks/pianissimo-ane-eviction.md`).
+
+- Never queued with windows: it does not take a `max_in_flight` slot, does not count toward
+  `status.in_flight`, and `cancel` does not know it (`false`; a Core ML prediction cannot be
+  interrupted and the canary is harmless). At most one canary runs at a time.
+- It is answered when the canary has finished, or at once when it is skipped. Skipping is a
+  success with `ran: false` and `skipped`, checked in this order: `in_progress` (another canary is
+  running; it is not waited for), `not_loaded`, `busy` (a window is queued or running and keeps the
+  model resident itself), `recent` (a canary or window finished less than 30 s ago).
+- `canary_ms` is the canary's wall time. `probable_recompile` is true when the encoder stage took at
+  least 1 s while the encoder runs on the Neural Engine (a resident encoder takes 30-40 ms for the
+  canary); hosts without a Neural Engine always send false. A failing canary is answered with the
+  engine's error (`engine`, `internal`).
+- Background canaries (Core ML host): the host also runs a canary, with the same skip rules, when
+  macOS reports memory pressure (`DispatchSource.makeMemoryPressureSource`: 10 s after a warning
+  unless the level is critical by then, 5 s after it returns to normal; none while critical) and
+  3 s after the system woke from sleep (seen as the continuous clock running ahead of the uptime
+  clock in the host's once-a-second parent check). `SAGASCRIPT_ENGINE_KEEPALIVE_S` (at least 60,
+  unset by default) adds a canary every that many seconds while a model is loaded; it is off by
+  default (see `docs/benchmarks/pianissimo-ane-eviction.md` for its cost). The app unloads an idle
+  model on memory pressure (see `unload_if_idle_for_memory_pressure`), so in the app the pressure
+  canary mostly finds `not_loaded`; it matters when the model stayed loaded.
+- Every canary that ran writes one stderr line: `warm canary trigger=<request|memory_pressure|wake|keep_alive> ms=<n> probable_recompile=<bool>`;
+  a probable recompile is prefixed `info: `, which the client logs at INFO (other host stderr
+  lines are logged at debug).
+
 ### `status`, `ping`, `unload`, `shutdown`
 - `status` → `{"state":"idle|loading|ready|busy","model_id":null|"…","in_flight":0,"rss_bytes":…,"uptime_s":…}`
 - `ping` → `{}`; always answered, even while busy.
@@ -195,7 +235,8 @@ On stdin EOF the host fails queued windows with `cancelled`, cancels running one
 
 ## Client behavior (normative for Sagascript's Rust client)
 
-- Timeouts: `hello` 10 s, `load` 180 s (first-time ANE compile), `ping` 2 s, `transcribe_window`
+- Timeouts: `hello` 10 s, `load` 180 s (first-time ANE compile), `ping` 2 s, `warm` 180 s (a
+  timed-out `warm` is forgotten, never a reason to kill the host), `transcribe_window`
   max(15 s, 3 × window seconds) for file jobs (batch priority) and, by default, the same for
   dictation (interactive priority), above a Neural Engine recompile of the encoder (#397); `shutdown` grace 2 s, then kill.
 - Writes to the host's stdin go through a writer thread and are bounded (5 s, and never longer
@@ -221,6 +262,11 @@ On stdin EOF the host fails queued windows with `cancelled`, cancels running one
   is 1), merge strictly in window order with `chunk_merge::merge_window`, report
   progress as merged windows / total, cancel by not sending further windows and cancelling the
   ones in flight.
+- Key-down canary (#397): when push-to-talk starts recording and the profile's Pianissimo
+  model is already loaded, the app sends `warm` from its background pre-warm thread (one per
+  model at a time) and never waits for it; when the model is not loaded, that thread loads it
+  instead. The dictation's windows are sent as usual. A canary result with
+  `probable_recompile` is logged at INFO with its trigger.
 - Dictation: one window (utterances longer than `max_window_s` use the long-audio path) with
   `priority:"interactive"`; the client never queues it behind file windows. One host slot is
   therefore reserved for interactive work (batch is capped at `max_in_flight − 1`), so a dictation
@@ -304,6 +350,7 @@ joint steps, tokens); `scripts/benchmark-windows-engine-host.ps1` sweeps these s
 | `cancel.jsonl` | cancelling a queued and a running window, unknown and finished targets, malformed targets, `status` while busy |
 | `shutdown.jsonl` | `shutdown` cancelling a running window, exit, requests after `shutdown` |
 | `eof.jsonl` | stdin EOF failing queued and running windows |
+| `warm.jsonl` | `warm` before `hello`, before `load`, after `load`, again at once (`recent`), while a window is in flight (`busy`, not counted in `in_flight`), `cancel` of a `warm` id, after `unload` |
 
 Each `.jsonl` line is one step, an object with exactly one of:
 
@@ -329,7 +376,8 @@ announces; `load` of a `model_dir` listed in `load_errors` fails with that error
 returns `load_result` with the requested `model_id`; `transcribe` before `load` (or after
 `unload`) fails with `not_loaded`, otherwise `windows[pcm_path]` decides: `result`, `error`, or
 `hold` (block until cancelled, then fail with `cancelled`). `expect_boost` is the dictionary the
-engine must receive (terms with a positive weight); a window without it must receive none.
+engine must receive (terms with a positive weight); a window without it must receive none. A
+canary that is not skipped reports `warm.canary_ms` and `warm.probable_recompile`.
 
 Files are named by POSIX paths under `/vectors/`; nothing is read from them. Where such a path
 is not absolute (Windows has no drive in it), a replay moves every `/vectors/` prefix under an
@@ -353,15 +401,17 @@ Who checks what:
 ## Conformance
 
 `scripts/engine-host-conformance.py <host binary> --no-model` runs against a real host process
-and needs no model: `hello`, `ping`, `status`, a request before `hello`, an unknown op, `load` of
-a missing model (`model_missing`), a window before `load` (`not_loaded`), `cancel` of a finished
+and needs no model: `hello`, `ping`, `status`, a request before `hello`, an unknown op, `warm`
+before `load` (`skipped: not_loaded`), `load` of a missing model (`model_missing`), a window before
+`load` (`not_loaded`), `cancel` of a finished
 request, `shutdown` and EOF exit. PR CI runs it against the staged Core ML host (test-macos;
 `npm run verify` check `engine-host-conformance`), and the release build runs it against the
 signed hardened-runtime host before bundling it (`release-build-macos.yml`).
 
 `scripts/engine-host-conformance.py <host binary> --model-dir <dir>` runs those checks and then
-exercises `load`, `transcribe_window` (including out-of-order concurrent responses and an
-over-long window), `cancel`, `status`, `unload`, EOF exit and `shutdown` with a real model. Every
+exercises `load`, `warm` (a canary that runs, then one skipped as `recent`), `transcribe_window`
+(including out-of-order concurrent responses and an over-long window), `cancel`, `status`,
+`unload`, EOF exit and `shutdown` with a real model. Every
 engine host must pass it. It is part of the release gate, always right after a Pianissimo smoke
 that has downloaded the model (`--model-dir` from `sagascript engine status --json`):
 

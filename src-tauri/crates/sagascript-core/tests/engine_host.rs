@@ -38,6 +38,7 @@ fn config(env: &[(&str, &str)], tmp: &Path) -> EngineHostConfig {
         ping: Duration::from_millis(500),
         status: Duration::from_secs(2),
         unload: Duration::from_secs(2),
+        warm: Duration::from_secs(5),
         transcribe_min: Duration::from_secs(5),
         transcribe_factor: 0.0,
         interactive_min: Duration::from_secs(5),
