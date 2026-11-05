@@ -723,7 +723,6 @@ impl EngineHostClient {
                 break;
             }
             let mut failure: Option<EngineHostError> = None;
-            let mut failed_idx: Option<usize> = None;
             while queue.len() < max_in_flight {
                 if next >= source.windows().len() {
                     source.plan_more();
@@ -749,36 +748,37 @@ impl EngineHostClient {
                     }
                 }
             }
-            if failure.is_none() {
-                let Some((idx, ticket)) = queue.pop_front() else {
-                    // Nothing in flight. Either no slot yet (an interactive
-                    // request is running), or the audio has not reached the next
-                    // window: wait for it, bounded so cancel is noticed.
-                    if next >= source.windows().len() && !source.is_complete() {
-                        source.wait_for_data(cancel)?;
-                    }
-                    continue;
-                };
-                match ticket.wait(cancel) {
-                    Ok(out) => {
-                        debug_assert_eq!(idx, merged);
-                        let window = source.windows()[idx];
-                        acc = merge_output(acc, &window, idx, sr, caps, out, &mut timings);
-                        merged += 1;
-                        if let Some(p) = progress.as_mut() {
-                            if let Some(total) = source.progress_total(merged) {
-                                p(merged, total);
-                            }
+            // A submit failure, or else the oldest window's answer: merged
+            // (next turn) or failed (handled below, with its index).
+            let (err, failed_idx) = match failure {
+                Some(e) => (e, None),
+                None => {
+                    let Some((idx, ticket)) = queue.pop_front() else {
+                        // Nothing in flight. Either no slot yet (an interactive
+                        // request is running), or the audio has not reached the
+                        // next window: wait for it, bounded so cancel is noticed.
+                        if next >= source.windows().len() && !source.is_complete() {
+                            source.wait_for_data(cancel)?;
                         }
                         continue;
-                    }
-                    Err(e) => {
-                        failed_idx = Some(idx);
-                        failure = Some(e);
+                    };
+                    match ticket.wait(cancel) {
+                        Ok(out) => {
+                            debug_assert_eq!(idx, merged);
+                            let window = source.windows()[idx];
+                            acc = merge_output(acc, &window, idx, sr, caps, out, &mut timings);
+                            merged += 1;
+                            if let Some(p) = progress.as_mut() {
+                                if let Some(total) = source.progress_total(merged) {
+                                    p(merged, total);
+                                }
+                            }
+                            continue;
+                        }
+                        Err(e) => (e, Some(idx)),
                     }
                 }
-            }
-            let err = failure.expect("failure set on this path");
+            };
             // A dictation window that timed out had its host killed
             // (`WindowTicket::wait`), so it is recovered like a crash. A file
             // job's timeout leaves the host alone and fails the job as before.
@@ -1542,10 +1542,14 @@ mod stream_tests {
         let file = PcmFile::create(Some(parent.path())).unwrap();
         assert_eq!(std::fs::metadata(file.path()).unwrap().len(), 0);
         assert_eq!(file.len_samples(), 0);
-        let owner = std::fs::read(file.dir().join(PCM_OWNER_FILE)).unwrap();
-        assert!(owner.starts_with(PCM_OWNER_MARKER.as_bytes()));
+        // The owner lock is held while the file lives. Windows' LockFileEx makes
+        // the locked range unreadable to every other handle, so only Unix (an
+        // advisory flock) can read the marker back while the lock is held.
+        assert_eq!(pcm_owner_is_dead(file.dir()), Some(false));
         #[cfg(unix)]
         {
+            let owner = std::fs::read(file.dir().join(PCM_OWNER_FILE)).unwrap();
+            assert!(owner.starts_with(PCM_OWNER_MARKER.as_bytes()));
             use std::os::unix::fs::PermissionsExt;
             let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
             assert_eq!(mode(file.path()), 0o600);
