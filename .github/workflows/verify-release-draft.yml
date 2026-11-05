@@ -29,7 +29,7 @@ permissions:
 
 jobs:
   verify-drafts:
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 60
     env:
       RELEASE_RUN_ID: ${{ inputs.release_run_id }}

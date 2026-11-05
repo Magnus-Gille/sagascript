@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   quality-gate:
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 60
 
     steps:
@@ -122,7 +122,7 @@ jobs:
       # Same explicit triple as `build-macos` below (#178): the shared
       # rust-cache key covers one target dir, so building the gate binary
       # here lets the release Tauri build reuse these compiled dependencies
-      # instead of compiling them cold. macos-14 runners are aarch64, so no
+      # instead of compiling them cold. macos-15 runners are aarch64, so no
       # extra rustup target is needed.
       - name: Build release CLI for inference smoke tests
         working-directory: src-tauri

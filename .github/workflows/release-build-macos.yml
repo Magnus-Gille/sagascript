@@ -43,7 +43,7 @@ permissions:
 
 jobs:
   build-macos:
-    runs-on: macos-14
+    runs-on: macos-15
     # Twice the slowest observed run (#354): Apple notarization alone has taken
     # 107 minutes (v1.0.0), so the cap must not cut a slow but healthy notary
     # wait short. Waiting for the environment approval does not count.
