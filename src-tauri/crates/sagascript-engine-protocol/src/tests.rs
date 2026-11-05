@@ -31,6 +31,7 @@ fn request_round_trip_all_ops() {
         RequestOp::Ping,
         RequestOp::Unload,
         RequestOp::Shutdown,
+        RequestOp::Warm,
     ];
     for (i, op) in ops.into_iter().enumerate() {
         let id = i as u64 + 1;

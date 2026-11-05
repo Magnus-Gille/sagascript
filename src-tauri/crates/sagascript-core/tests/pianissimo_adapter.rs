@@ -3,10 +3,11 @@
 
 use sagascript_core::settings::{Language, WhisperModel};
 use sagascript_core::transcription::engine_host::{
-    EngineHostClient, EngineHostConfig, LoadSpec, Timeouts,
+    EngineHostClient, EngineHostConfig, EngineHostError, LoadSpec, Timeouts,
 };
 use sagascript_core::transcription::live_dictation::LiveDictationBackend;
 use sagascript_core::transcription::pianissimo_backend::PianissimoBackend;
+use sagascript_core::transcription::pianissimo_backend::WarmOutcome;
 use sagascript_core::transcription::whisper_backend::DictationTimings;
 use sagascript_core::transcription::{TranscribeOptions, WhisperBackend};
 use std::path::Path;
@@ -36,6 +37,7 @@ fn client(env: &[(&str, &str)], tmp: &Path) -> EngineHostClient {
         ping: Duration::from_millis(500),
         status: Duration::from_secs(2),
         unload: Duration::from_secs(2),
+        warm: Duration::from_secs(2),
         transcribe_min: Duration::from_secs(10),
         transcribe_factor: 0.0,
         interactive_min: Duration::from_secs(10),
@@ -513,4 +515,115 @@ fn request_abort_cancels_a_streamed_file() {
         "{error:?}"
     );
     assert!(at.elapsed() < Duration::from_secs(2), "{:?}", at.elapsed());
+}
+
+fn ops_logged(log: &Path, op: &str) -> usize {
+    std::fs::read_to_string(log)
+        .unwrap_or_default()
+        .lines()
+        .filter(|line| line.starts_with(&format!("{op} ")))
+        .count()
+}
+
+/// #397: a key-down warm of an engine that is already loaded sends one canary
+/// (`warm`) instead of nothing, and never reloads the model.
+#[test]
+fn a_loaded_engine_gets_a_canary_and_no_reload() {
+    let tmp = tempfile::tempdir().unwrap();
+    let log = tmp.path().join("log");
+    let shared = client(&[("FAKE_LOG", log.to_str().unwrap())], tmp.path());
+    shared.warm().unwrap();
+
+    let outcome = sagascript_core::testing::warm_or_touch(&shared, true).unwrap();
+
+    let WarmOutcome::Canary(result) = outcome else {
+        panic!("expected a canary, got {outcome:?}");
+    };
+    assert!(result.ran, "{result:?}");
+    assert_eq!(result.probable_recompile, Some(false));
+    assert_eq!(ops_logged(&log, "warm"), 1);
+    assert_eq!(ops_logged(&log, "load"), 1, "the canary must not reload");
+}
+
+#[test]
+fn an_unloaded_engine_is_loaded_and_a_held_back_load_starts_nothing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let log = tmp.path().join("log");
+    let shared = client(&[("FAKE_LOG", log.to_str().unwrap())], tmp.path());
+
+    assert_eq!(
+        sagascript_core::testing::warm_or_touch(&shared, false).unwrap(),
+        WarmOutcome::LoadHeldBack
+    );
+    assert_eq!(spawn_count(&log), 0, "a held-back load starts no host");
+
+    assert_eq!(
+        sagascript_core::testing::warm_or_touch(&shared, true).unwrap(),
+        WarmOutcome::Loaded
+    );
+    assert_eq!(ops_logged(&log, "warm"), 0, "a load needs no canary");
+    assert!(shared.snapshot().loaded);
+}
+
+/// #397 acceptance: the key-down canary does not delay key-up. While a canary
+/// is still running (standing in for a Neural Engine recompile), a dictation
+/// window is answered at once.
+#[test]
+fn a_running_canary_does_not_delay_the_dictation() {
+    let tmp = tempfile::tempdir().unwrap();
+    let shared = client(&[("FAKE_WARM_DELAY_MS", "1500")], tmp.path());
+    shared.warm().unwrap();
+
+    let canary = {
+        let shared = shared.clone();
+        std::thread::spawn(move || {
+            let outcome = sagascript_core::testing::warm_or_touch(&shared, true);
+            (outcome, Instant::now())
+        })
+    };
+    std::thread::sleep(Duration::from_millis(100));
+    let started = Instant::now();
+    let (text, _) = dictate(&live(&shared));
+    let dictated = Instant::now();
+
+    assert!(!text.unwrap().is_empty());
+    let (outcome, canary_done) = canary.join().unwrap();
+    let Ok(WarmOutcome::Canary(result)) = outcome else {
+        panic!("the canary did not complete: {outcome:?}");
+    };
+    assert_eq!(result.canary_ms, Some(1500));
+    assert!(
+        dictated < canary_done,
+        "the dictation waited for the canary ({:?})",
+        dictated - started
+    );
+}
+
+#[test]
+fn a_host_without_warm_and_a_hanging_canary_leave_the_host_alone() {
+    let tmp = tempfile::tempdir().unwrap();
+    let old = client(&[("FAKE_WARM_UNSUPPORTED", "1")], tmp.path());
+    old.warm().unwrap();
+    assert_eq!(
+        sagascript_core::testing::warm_or_touch(&old, true).unwrap(),
+        WarmOutcome::CanaryUnsupported
+    );
+    assert!(old.snapshot().loaded);
+
+    let hanging = client(&[("FAKE_WARM_HANG", "1")], tmp.path());
+    hanging.warm().unwrap();
+    let pid = hanging.snapshot().pid;
+    let error = sagascript_core::testing::warm_or_touch(&hanging, true).unwrap_err();
+    assert!(
+        matches!(error, EngineHostError::Timeout { op: "warm", .. }),
+        "{error:?}"
+    );
+    let after = hanging.snapshot();
+    assert!(after.loaded, "a canary timeout must not kill the host");
+    assert_eq!(
+        (after.pid, after.spawns, after.crashes_in_window),
+        (pid, 1, 0)
+    );
+    let (text, _) = dictate(&live(&hanging));
+    assert!(!text.unwrap().is_empty());
 }

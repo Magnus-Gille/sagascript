@@ -3,11 +3,12 @@
 //! Engine-agnostic (see [`Engine`]); the scheduler mirrors the Swift Core ML host:
 //! at most `max_in_flight` `transcribe_window` jobs run at once, and queued jobs start
 //! interactive-first, then in arrival order. `ping`, `status` and `cancel` are answered
-//! immediately, `load`/`unload` run on one serial control thread.
+//! immediately, `load`/`unload` run on one serial control thread. `warm` runs one canary
+//! prediction on its own thread, outside the window queue (see [`Server::handle_warm`]).
 
 use sagascript_engine_protocol::{
     decode_request, Capabilities, ErrorCode, LoadResult, ParsedRequest, Priority, RequestOp,
-    TranscribeWindowResult, MAX_LINE_BYTES, PROTOCOL_VERSION,
+    TranscribeWindowResult, WarmResult, MAX_LINE_BYTES, PROTOCOL_VERSION,
 };
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
@@ -16,7 +17,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Sender};
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HostError {
@@ -61,6 +62,16 @@ pub struct HostBuild {
     pub dirty: bool,
 }
 
+/// What one canary prediction measured.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Canary {
+    /// Wall time of the canary.
+    pub canary_ms: u64,
+    /// The encoder was slow enough that a Neural Engine program was most likely recompiled.
+    /// Always false for an engine without a Neural Engine.
+    pub probable_recompile: bool,
+}
+
 pub trait Engine: Send + Sync + 'static {
     /// Engine name for `hello.host.engine` (for example `"onnx"`).
     fn engine_name(&self) -> &'static str;
@@ -80,6 +91,10 @@ pub trait Engine: Send + Sync + 'static {
         request: &WindowRequest,
         is_cancelled: &dyn Fn() -> bool,
     ) -> Result<TranscribeWindowResult, HostError>;
+    /// One canary prediction on the loaded model (`warm`): a silent window of one encoder frame,
+    /// held in memory, through the whole pipeline; the result is discarded. Not loaded: an
+    /// `ErrorCode::NotLoaded` error, which the server answers as a skipped canary.
+    fn canary(&self) -> Result<Canary, HostError>;
     fn unload(&self);
     fn loaded_model_id(&self) -> Option<String>;
     fn is_loading(&self) -> bool;
@@ -94,11 +109,24 @@ struct Job {
     flag: Arc<AtomicBool>,
 }
 
+/// A canary or a window that finished less than this ago keeps the model resident, so `warm` is
+/// skipped as `recent`.
+const WARM_RECENT: Duration = Duration::from_secs(30);
+
+/// The monotonic clock behind `warm`'s `recent` rule; tests inject their own.
+type Clock = Box<dyn Fn() -> Instant + Send + Sync>;
+
 #[derive(Default)]
 struct Sched {
     next_sequence: u64,
     pending: Vec<Job>,
     running: HashMap<u64, Arc<AtomicBool>>,
+    /// A canary is running. It is not a window: never in `running`, so it takes no slot and does
+    /// not count toward `status.in_flight`. Shares this lock so `warm`'s skip checks (`busy`,
+    /// `recent`) see a window's completion and its activity time as one step.
+    canary_running: bool,
+    /// When a canary, or a window that ran, last finished.
+    last_activity: Option<Instant>,
 }
 
 #[derive(Default)]
@@ -119,6 +147,7 @@ pub struct Server<E: Engine> {
     sched: Mutex<Sched>,
     control: Mutex<Sender<ControlTask>>,
     started: Instant,
+    clock: Clock,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -127,6 +156,37 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn skipped_warm(reason: &str) -> WarmResult {
+    WarmResult {
+        ran: false,
+        skipped: Some(reason.to_string()),
+        canary_ms: None,
+        probable_recompile: None,
+    }
+}
+
+/// The stderr line for a canary that ran. A probable recompile is prefixed `info: `, which the
+/// client logs at INFO (the other host stderr lines at debug). `trigger` is `request` here; the
+/// other triggers belong to the Core ML host's background canaries.
+fn warm_log_line(trigger: &str, canary_ms: u64, probable_recompile: bool) -> String {
+    let prefix = if probable_recompile { "info: " } else { "" };
+    format!(
+        "{prefix}warm canary trigger={trigger} ms={canary_ms} probable_recompile={probable_recompile}"
+    )
+}
+
+/// Frees the canary slot on every exit path, a panicking engine included.
+struct CanarySlot<'a, E: Engine> {
+    server: &'a Server<E>,
+    ran: bool,
+}
+
+impl<E: Engine> Drop for CanarySlot<'_, E> {
+    fn drop(&mut self) {
+        self.server.finish_canary(self.ran);
+    }
 }
 
 fn priority_rank(priority: Priority) -> u8 {
@@ -142,6 +202,17 @@ impl<E: Engine> Server<E> {
         build: HostBuild,
         output: Box<dyn Write + Send>,
         on_shutdown: Box<dyn Fn() + Send + Sync>,
+    ) -> Arc<Self> {
+        Self::with_clock(engine, build, output, on_shutdown, Box::new(Instant::now))
+    }
+
+    /// [`Server::new`] with the monotonic clock `warm` uses to tell whether the model ran recently.
+    pub fn with_clock(
+        engine: E,
+        build: HostBuild,
+        output: Box<dyn Write + Send>,
+        on_shutdown: Box<dyn Fn() + Send + Sync>,
+        clock: Clock,
     ) -> Arc<Self> {
         let (tx, rx) = channel::<ControlTask>();
         std::thread::Builder::new()
@@ -163,6 +234,7 @@ impl<E: Engine> Server<E> {
             sched: Mutex::new(Sched::default()),
             control: Mutex::new(tx),
             started: Instant::now(),
+            clock,
         })
     }
 
@@ -280,6 +352,7 @@ impl<E: Engine> Server<E> {
                 boost_terms,
                 boost_weight,
             ),
+            RequestOp::Warm => self.handle_warm(id),
             RequestOp::Unload => {
                 let this = Arc::clone(self);
                 self.run_control(Box::new(move || {
@@ -503,6 +576,9 @@ impl<E: Engine> Server<E> {
         let flag = Arc::clone(&job.flag);
         let is_cancelled = move || flag.load(Ordering::SeqCst);
         let result = self.engine.transcribe(&job.request, &is_cancelled);
+        // Only a window that completed is known to have used the model, whatever happens to its
+        // response below; a failed or cancelled one leaves `warm` free to run a canary.
+        let completed = result.is_ok();
         // Honor a `cancel` that returned true even if the window happened to finish.
         let result = match result {
             Ok(_) if job.flag.load(Ordering::SeqCst) => Err(HostError::new(
@@ -511,7 +587,13 @@ impl<E: Engine> Server<E> {
             )),
             other => other,
         };
-        lock(&self.sched).running.remove(&job.id);
+        {
+            let mut sched = lock(&self.sched);
+            sched.running.remove(&job.id);
+            if completed {
+                sched.last_activity = Some((self.clock)());
+            }
+        }
         self.pump();
         match result {
             Ok(result) => match serde_json::to_value(result) {
@@ -519,6 +601,102 @@ impl<E: Engine> Server<E> {
                 _ => self.send_failure(job.id, ErrorCode::Internal, "cannot encode result", false),
             },
             Err(error) => self.send_error(job.id, &error),
+        }
+    }
+
+    /// `warm`: one canary prediction on the loaded model, off the thread that reads stdin so
+    /// `ping`, `status` and `cancel` stay immediate and never through the window queue (no slot,
+    /// not in `status.in_flight`, unknown to `cancel`). A skipped canary is answered at once, the
+    /// reasons checked in the order of the protocol document; otherwise the answer follows the
+    /// canary. This engine has no Neural Engine to recompile, but the canary still pages the
+    /// model back in after an idle period.
+    fn handle_warm(self: &Arc<Self>, id: u64) {
+        let skipped = {
+            let mut sched = lock(&self.sched);
+            let skipped = if sched.canary_running {
+                Some("in_progress")
+            } else if self.engine.loaded_model_id().is_none() {
+                Some("not_loaded")
+            } else if !sched.pending.is_empty() || !sched.running.is_empty() {
+                Some("busy")
+            } else if sched
+                .last_activity
+                .is_some_and(|at| (self.clock)().saturating_duration_since(at) < WARM_RECENT)
+            {
+                Some("recent")
+            } else {
+                None
+            };
+            if skipped.is_none() {
+                sched.canary_running = true;
+            }
+            skipped
+        };
+        if let Some(reason) = skipped {
+            self.send_warm(id, skipped_warm(reason));
+            return;
+        }
+        let this = Arc::clone(self);
+        let spawned = std::thread::Builder::new()
+            .name("warm".into())
+            .spawn(move || this.run_canary(id));
+        if let Err(error) = spawned {
+            self.finish_canary(false);
+            self.send_failure(
+                id,
+                ErrorCode::Internal,
+                &format!("cannot spawn canary thread: {error}"),
+                false,
+            );
+        }
+    }
+
+    fn run_canary(self: Arc<Self>, id: u64) {
+        let mut slot = CanarySlot {
+            server: &self,
+            ran: false,
+        };
+        let outcome = self.engine.canary();
+        slot.ran = outcome.is_ok();
+        // The canary stops counting before its answer is written, like a window.
+        drop(slot);
+        match outcome {
+            Ok(canary) => {
+                eprintln!(
+                    "{}",
+                    warm_log_line("request", canary.canary_ms, canary.probable_recompile)
+                );
+                self.send_warm(
+                    id,
+                    WarmResult {
+                        ran: true,
+                        skipped: None,
+                        canary_ms: Some(canary.canary_ms),
+                        probable_recompile: Some(canary.probable_recompile),
+                    },
+                );
+            }
+            // Unloaded after the check in `handle_warm`: nothing to warm.
+            Err(error) if error.code == ErrorCode::NotLoaded => {
+                self.send_warm(id, skipped_warm("not_loaded"))
+            }
+            Err(error) => self.send_error(id, &error),
+        }
+    }
+
+    /// The canary is over: free the canary slot and, when it ran, note the activity.
+    fn finish_canary(&self, ran: bool) {
+        let mut sched = lock(&self.sched);
+        sched.canary_running = false;
+        if ran {
+            sched.last_activity = Some((self.clock)());
+        }
+    }
+
+    fn send_warm(&self, id: u64, result: WarmResult) {
+        match serde_json::to_value(result) {
+            Ok(Value::Object(fields)) => self.send_success(id, fields),
+            _ => self.send_failure(id, ErrorCode::Internal, "cannot encode warm result", false),
         }
     }
 

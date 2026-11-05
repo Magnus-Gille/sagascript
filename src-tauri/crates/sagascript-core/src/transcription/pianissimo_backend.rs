@@ -27,7 +27,8 @@ use crate::sync::lock_or_recover;
 use crate::transcription::dev_overrides::env_override;
 use crate::transcription::engine_host::{
     CancelToken, ClientIdentity, EngineHostClient, EngineHostConfig, EngineHostError, ErrorCode,
-    LoadEvent, LoadObserver, LoadSpec, Sink, SinkError, StreamError, Transcription, WindowTiming,
+    LoadEvent, LoadObserver, LoadSpec, Sink, SinkError, StreamError, Transcription, WarmResult,
+    WindowTiming,
 };
 use crate::transcription::pianissimo_model;
 
@@ -729,17 +730,96 @@ pub fn profile_change_warm_model_gated(
     })
 }
 
-/// After a memory-pressure unload, key-down and wake warms are skipped for
-/// this long so the engine is not reloaded straight into the same pressure.
+/// After a memory-pressure unload, a wake does not load the engine for this
+/// long, so it is not reloaded straight into the same pressure.
 pub(crate) const PRESSURE_WARM_COOLDOWN: Duration = Duration::from_secs(5 * 60);
 
 static LAST_PRESSURE_UNLOAD: Mutex<Option<Instant>> = Mutex::new(None);
 
-/// True when a warm for `reason` should be skipped because of a recent
-/// memory-pressure unload. App start and profile changes are never skipped.
+/// True when a warm for `reason` must not *load* the engine because of a
+/// recent memory-pressure unload. Only wake is held back: key-down is followed
+/// by a dictation that loads the engine anyway (holding the load back would
+/// only move it behind key-up, #397), and app start and profile changes are
+/// never skipped. A canary on an engine that is still loaded is never held
+/// back: it loads nothing.
 fn warm_in_pressure_cooldown(reason: &str, last_unload: Option<Instant>, now: Instant) -> bool {
-    matches!(reason, "key_down" | "wake")
+    reason == "wake"
         && last_unload.is_some_and(|at| now.saturating_duration_since(at) < PRESSURE_WARM_COOLDOWN)
+}
+
+/// What a background warm did (see [`warm_or_touch`]).
+#[derive(Debug, Clone, PartialEq)]
+pub enum WarmOutcome {
+    /// The model was not loaded and is loaded now.
+    Loaded,
+    /// The model was not loaded and loading it was held back (see
+    /// [`warm_in_pressure_cooldown`]).
+    LoadHeldBack,
+    /// The model was loaded: the host ran a canary prediction, or skipped it.
+    Canary(WarmResult),
+    /// The model was loaded, but the host has no `warm` op (an older host).
+    CanaryUnsupported,
+}
+
+/// Load the model, or when it is already loaded run one canary prediction so
+/// a Neural Engine program the OS evicted is recompiled now, while the user is
+/// still speaking, and not in the dictation's window (#397). Blocks for the
+/// load or the canary; callers run it on a background thread.
+pub(crate) fn warm_or_touch(
+    client: &EngineHostClient,
+    load_allowed: bool,
+) -> Result<WarmOutcome, EngineHostError> {
+    if client.snapshot().loaded {
+        return match client.warm_canary() {
+            Ok(result) => Ok(WarmOutcome::Canary(result)),
+            Err(EngineHostError::Remote {
+                code: ErrorCode::Unsupported,
+                ..
+            }) => Ok(WarmOutcome::CanaryUnsupported),
+            Err(error) => Err(error),
+        };
+    }
+    if !load_allowed {
+        return Ok(WarmOutcome::LoadHeldBack);
+    }
+    client.warm().map(|_| WarmOutcome::Loaded)
+}
+
+fn log_warm_outcome(reason: &'static str, started: Instant, outcome: Result<WarmOutcome, String>) {
+    let ms = started.elapsed().as_millis() as u64;
+    match outcome {
+        Ok(WarmOutcome::Loaded) => tracing::info!(reason, ms, "Pianissimo engine pre-warmed"),
+        Ok(WarmOutcome::LoadHeldBack) => tracing::debug!(
+            reason,
+            "Pianissimo pre-warm skipped: recent memory-pressure unload"
+        ),
+        Ok(WarmOutcome::Canary(WarmResult {
+            ran: true,
+            canary_ms,
+            probable_recompile: Some(true),
+            ..
+        })) => tracing::info!(
+            reason,
+            canary_ms,
+            "Pianissimo canary absorbed a probable Neural Engine recompile"
+        ),
+        Ok(WarmOutcome::Canary(result)) => tracing::debug!(
+            reason,
+            ran = result.ran,
+            skipped = result.skipped.as_deref(),
+            canary_ms = result.canary_ms,
+            "Pianissimo engine already warm; canary done"
+        ),
+        Ok(WarmOutcome::CanaryUnsupported) => tracing::debug!(
+            reason,
+            "Pianissimo engine already warm; the host cannot run a canary"
+        ),
+        Err(error) => tracing::warn!(
+            reason,
+            error = %scrub_paths(&error),
+            "Pianissimo engine pre-warm failed"
+        ),
+    }
 }
 
 /// Free the engine's model memory when the system reports memory pressure and
@@ -786,9 +866,11 @@ pub fn unload_if_unused(settings: &Settings) -> bool {
     unloaded
 }
 
-/// Load the model in the background so the next utterance starts warm. Returns
-/// immediately; never blocks the caller (hotkey path, main thread). Silently
-/// does nothing when Pianissimo is unsupported or not installed.
+/// Load the model in the background so the next utterance starts warm, or,
+/// when it is already loaded, run one canary prediction on it (see
+/// [`warm_or_touch`]). Returns immediately; never blocks the caller (hotkey
+/// path, main thread). Silently does nothing when Pianissimo is unsupported or
+/// not installed.
 ///
 /// `load_settings` (`machine::load`) is called on the warm-up thread, when it
 /// attaches to the shared engine, not by the caller: the settings file is not
@@ -810,13 +892,7 @@ pub fn warm_in_background(
     let last_unload = *LAST_PRESSURE_UNLOAD
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    if warm_in_pressure_cooldown(reason, last_unload, Instant::now()) {
-        tracing::debug!(
-            reason,
-            "Pianissimo pre-warm skipped: recent memory-pressure unload"
-        );
-        return;
-    }
+    let load_allowed = !warm_in_pressure_cooldown(reason, last_unload, Instant::now());
     if in_flight.swap(true, Ordering::SeqCst) {
         return;
     }
@@ -825,26 +901,10 @@ pub fn warm_in_background(
         .spawn(move || {
             LOAD_SOURCE.with(|source| source.set(LoadSource::Warm));
             let started = Instant::now();
-            match shared_client(&load_settings(), model)
+            let outcome = shared_client(&load_settings(), model)
                 .map_err(|e| e.to_string())
-                .and_then(|client| {
-                    if client.snapshot().loaded {
-                        return Ok(false);
-                    }
-                    client.warm().map(|_| true).map_err(|e| e.to_string())
-                }) {
-                Ok(true) => tracing::info!(
-                    reason,
-                    ms = started.elapsed().as_millis() as u64,
-                    "Pianissimo engine pre-warmed"
-                ),
-                Ok(false) => tracing::debug!(reason, "Pianissimo engine already warm"),
-                Err(error) => tracing::warn!(
-                    reason,
-                    error = %scrub_paths(&error),
-                    "Pianissimo engine pre-warm failed"
-                ),
-            }
+                .and_then(|client| warm_or_touch(&client, load_allowed).map_err(|e| e.to_string()));
+            log_warm_outcome(reason, started, outcome);
             in_flight.store(false, Ordering::SeqCst);
         });
     if let Err(error) = spawned {
@@ -1942,27 +2002,28 @@ mod tests {
     }
 
     #[test]
-    fn pressure_cooldown_skips_only_key_down_and_wake_warms() {
+    fn pressure_cooldown_holds_back_only_a_wake_load() {
         let now = Instant::now();
         let recent = Some(now);
         assert!(warm_in_pressure_cooldown(
-            "key_down",
+            "wake",
             recent,
             now + Duration::from_secs(10)
         ));
-        assert!(warm_in_pressure_cooldown(
-            "wake",
+        // Key-down is followed by a dictation that loads anyway (#397).
+        assert!(!warm_in_pressure_cooldown(
+            "key_down",
             recent,
             now + Duration::from_secs(10)
         ));
         assert!(!warm_in_pressure_cooldown("app_start", recent, now));
         assert!(!warm_in_pressure_cooldown("profile_change", recent, now));
         assert!(!warm_in_pressure_cooldown(
-            "key_down",
+            "wake",
             recent,
             now + PRESSURE_WARM_COOLDOWN
         ));
-        assert!(!warm_in_pressure_cooldown("key_down", None, now));
+        assert!(!warm_in_pressure_cooldown("wake", None, now));
     }
 
     #[test]

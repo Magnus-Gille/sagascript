@@ -156,6 +156,15 @@ impl Engine for Arc<VectorEngine> {
             }
         }
     }
+    fn canary(&self) -> Result<Canary, HostError> {
+        if lock(&self.loaded).is_none() {
+            return Err(host_error(self.spec.not_loaded.clone()));
+        }
+        Ok(Canary {
+            canary_ms: self.spec.warm.canary_ms,
+            probable_recompile: self.spec.warm.probable_recompile,
+        })
+    }
     fn unload(&self) {
         *lock(&self.loaded) = None;
     }
@@ -289,6 +298,7 @@ fn golden_transcripts_replay() {
         "load.jsonl",
         "shutdown.jsonl",
         "transcribe.jsonl",
+        "warm.jsonl",
     ] {
         assert!(transcripts.iter().any(|t| t.name == name), "missing {name}");
     }
