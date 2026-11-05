@@ -3,7 +3,7 @@ import Foundation
 import Testing
 @testable import SagascriptEngineHostCore
 
-private final class RecordingOutput {
+final class RecordingOutput {
     private let condition = NSCondition()
     private(set) var values: [[String: Any]] = []
 
@@ -41,7 +41,7 @@ private final class RecordingOutput {
     }
 }
 
-private final class FakeEngine: EngineBackend {
+final class FakeEngine: EngineBackend {
     let capabilities: HostCapabilities
 
     init(maxInFlight: Int = 2) {
@@ -57,6 +57,9 @@ private final class FakeEngine: EngineBackend {
     private var loaded = false
     private var gateOpen = false
     private var started: [String] = []
+    private var canaryGateOpen = true
+    private var canaryStarts = 0
+    private var canaryOutcome: Result<CanaryResult, Error> = .success(CanaryResult(milliseconds: 7, probableRecompile: false))
 
     /// Paths containing "gate" block inside `transcribe` until `openGates()`,
     /// which lets a test hold the in-flight slots without any timing assumptions.
@@ -127,21 +130,67 @@ private final class FakeEngine: EngineBackend {
     }
 
     func unload() { loaded = false }
+
+    // MARK: canary
+
+    /// Makes every following canary block until `openCanaryGate()`.
+    func holdCanaries() {
+        gateCondition.lock(); canaryGateOpen = false; gateCondition.unlock()
+    }
+
+    func openCanaryGate() {
+        gateCondition.lock(); canaryGateOpen = true; gateCondition.broadcast(); gateCondition.unlock()
+    }
+
+    /// What the following canaries return or throw.
+    func setCanaryOutcome(_ outcome: Result<CanaryResult, Error>) {
+        gateCondition.lock(); canaryOutcome = outcome; gateCondition.unlock()
+    }
+
+    /// Canaries that have entered `canary()` on a loaded model.
+    var canaryCount: Int {
+        gateCondition.lock(); defer { gateCondition.unlock() }
+        return canaryStarts
+    }
+
+    /// Blocks until `count` canaries have entered `canary()` (10 s safety timeout).
+    func waitUntilCanaryStarted(count: Int) -> Bool {
+        let deadline = Date().addingTimeInterval(10)
+        gateCondition.lock(); defer { gateCondition.unlock() }
+        while canaryStarts < count {
+            if !gateCondition.wait(until: deadline) { return false }
+        }
+        return true
+    }
+
+    func canary() throws -> CanaryResult? {
+        guard loaded else { return nil }
+        gateCondition.lock()
+        canaryStarts += 1
+        gateCondition.broadcast()
+        let deadline = Date().addingTimeInterval(10)
+        while !canaryGateOpen {
+            if !gateCondition.wait(until: deadline) { break }
+        }
+        let outcome = canaryOutcome
+        gateCondition.unlock()
+        return try outcome.get()
+    }
 }
 
-private func sendRequest(_ server: EngineHostServer, _ object: [String: Any]) {
+func sendRequest(_ server: EngineHostServer, _ object: [String: Any]) {
     let data = try! JSONSerialization.data(withJSONObject: object)
     server.handleLine(String(decoding: data, as: UTF8.self))
 }
 
-private func sendHello(_ server: EngineHostServer, id: UInt64 = 1) {
+func sendHello(_ server: EngineHostServer, id: UInt64 = 1) {
     sendRequest(server, [
         "v": 1, "id": id, "op": "hello",
         "client": ["name": "test", "version": "1", "git_sha": String(repeating: "0", count: 40)],
     ])
 }
 
-private func sendWindow(_ server: EngineHostServer, id: UInt64, path: String, priority: String) {
+func sendWindow(_ server: EngineHostServer, id: UInt64, path: String, priority: String) {
     sendRequest(server, [
         "v": 1, "id": id, "op": "transcribe_window", "pcm_path": path,
         "offset_samples": 0, "num_samples": 1000, "sample_rate": 16_000,
@@ -294,7 +343,7 @@ private enum Golden {
     /// Every transcript the contract defines; the replay fails when one is missing.
     static let transcriptNames = [
         "cancel.jsonl", "context-biasing.jsonl", "eof.jsonl", "handshake.jsonl", "load.jsonl",
-        "shutdown.jsonl", "transcribe.jsonl",
+        "shutdown.jsonl", "transcribe.jsonl", "warm.jsonl",
     ]
 
     static func json(_ data: Data) throws -> Any {
@@ -478,6 +527,16 @@ private final class GoldenEngine: EngineBackend {
             boostActive: (result["boost_active"] as? NSNumber)?.boolValue,
             boostReason: result["boost_reason"] as? String,
             boostMicroseconds: (timings["boost_us"] as? NSNumber)?.intValue ?? 0
+        )
+    }
+
+    /// A loaded model answers with `fake-engine.json`'s `warm`; the server decides when to ask.
+    func canary() throws -> CanaryResult? {
+        guard loadedModelID != nil else { return nil }
+        let warm = spec["warm"] as! [String: Any]
+        return CanaryResult(
+            milliseconds: (warm["canary_ms"] as! NSNumber).doubleValue,
+            probableRecompile: (warm["probable_recompile"] as! NSNumber).boolValue
         )
     }
 

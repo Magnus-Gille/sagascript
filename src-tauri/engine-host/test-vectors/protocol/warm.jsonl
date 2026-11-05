@@ -1,0 +1,33 @@
+{"note":"warm (#397): one canary prediction on the loaded model so a Neural Engine recompile after an OS eviction happens now, not in the next window. Like every op it needs hello first."}
+{"send":{"v":1,"id":1,"op":"warm"}}
+{"expect":{"id":1,"ok":false,"error":{"code":"protocol","message":"<string>","retryable":false}}}
+{"send":{"v":1,"id":2,"op":"hello","client":{"name":"sagascript","version":"1.4.4","git_sha":"0123456789abcdef0123456789abcdef01234567"}}}
+{"expect":{"id":2,"ok":true,"protocol":1,"host":{"name":"sagascript-engine-host","version":"<string>","git_sha":"<sha40>","build_dirty":"<bool>","engine":"<string>","engine_version":"<string>"},"capabilities":{"sample_rate":16000,"max_window_s":1.0,"preferred_window_s":1.0,"preferred_overlap_s":0.2,"max_in_flight":2,"token_timestamps":true,"languages":["sv"],"compute_units":["ane","gpu","cpu","all"],"min_macos":"14.0","context_biasing":true}}}
+{"note":"Nothing loaded: nothing to warm. A skipped canary is a success with ran false and the reason."}
+{"send":{"v":1,"id":3,"op":"warm"}}
+{"expect":{"id":3,"ok":true,"ran":false,"skipped":"not_loaded"}}
+{"send":{"v":1,"id":4,"op":"load","model_dir":"/vectors/model","model_id":"vectors-model","compute_units":"ane"}}
+{"expect":{"id":4,"ok":true,"model_id":"vectors-model","load_ms":4,"compiled":false,"window_s":1.0,"frame_s":0.08,"vocab_size":3,"blank_id":2}}
+{"note":"The canary runs and is answered when it has finished (the fake engine reports warm.canary_ms)."}
+{"send":{"v":1,"id":5,"op":"warm"}}
+{"expect":{"id":5,"ok":true,"ran":true,"canary_ms":7,"probable_recompile":false}}
+{"note":"The model ran moments ago, so it is still resident: skipped. Unknown fields are ignored."}
+{"send":{"v":1,"id":6,"op":"warm","reason":"key_down"},"unknown_fields":["reason"]}
+{"expect":{"id":6,"ok":true,"ran":false,"skipped":"recent"}}
+{"note":"A window in flight keeps the model resident itself: the canary is skipped (busy wins over recent), it never takes a window slot and never counts toward in_flight."}
+{"send":{"v":1,"id":10,"op":"transcribe_window","pcm_path":"/vectors/hold.f32","offset_samples":0,"num_samples":8000,"sample_rate":16000,"format":"f32le","priority":"interactive"}}
+{"send":{"v":1,"id":7,"op":"warm"}}
+{"expect":{"id":7,"ok":true,"ran":false,"skipped":"busy"}}
+{"send":{"v":1,"id":8,"op":"status"}}
+{"expect":{"id":8,"ok":true,"state":"busy","model_id":"vectors-model","in_flight":1,"rss_bytes":"<uint>","uptime_s":"<number>"}}
+{"note":"cancel does not know warm requests: a canary cannot be interrupted, and it is harmless."}
+{"send":{"v":1,"id":9,"op":"cancel","target":5}}
+{"expect":{"id":9,"ok":true,"cancelled":false}}
+{"send":{"v":1,"id":11,"op":"cancel","target":10}}
+{"expect":{"id":11,"ok":true,"cancelled":true}}
+{"expect":{"id":10,"ok":false,"error":{"code":"cancelled","message":"<string>","retryable":false}}}
+{"note":"After unload there is nothing to warm again (not_loaded wins over recent)."}
+{"send":{"v":1,"id":12,"op":"unload"}}
+{"expect":{"id":12,"ok":true}}
+{"send":{"v":1,"id":13,"op":"warm"}}
+{"expect":{"id":13,"ok":true,"ran":false,"skipped":"not_loaded"}}

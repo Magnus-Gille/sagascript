@@ -44,6 +44,11 @@
 //!   FAKE_MALFORMED_FIRST_WINDOW=1                       the first window received answers (result or cancelled)
 //!                                                       with an error object without `message`/`retryable`
 //!   FAKE_LOG=<path>                                     append "<op> <id>" lines
+//!   FAKE_WARM_DELAY_MS                                  `warm`: the canary takes this long (on its own
+//!                                                       thread, so windows are not held up by it)
+//!   FAKE_WARM_RECOMPILE=1                               `warm` reports probable_recompile
+//!   FAKE_WARM_HANG=1                                    never answer `warm`
+//!   FAKE_WARM_UNSUPPORTED=1                             answer `warm` with unsupported (an older host)
 
 use sagascript_engine_protocol::{
     decode_request, encode_err, encode_event, encode_ok, ErrorCode, ParsedRequest, Priority,
@@ -408,6 +413,42 @@ fn handle(host: &Arc<Host>, id: u64, op: RequestOp) {
             host.write(&encode_ok(id, json!({})));
             eprintln!("fake host: shutdown requested");
             std::process::exit(0);
+        }
+        RequestOp::Warm => {
+            if env_flag("FAKE_WARM_UNSUPPORTED") {
+                host.write(&encode_err(
+                    id,
+                    ErrorCode::Unsupported,
+                    "unknown op warm",
+                    false,
+                ));
+                return;
+            }
+            if host.loaded.lock().unwrap().is_none() {
+                host.write(&encode_ok(
+                    id,
+                    json!({"ran": false, "skipped": "not_loaded"}),
+                ));
+                return;
+            }
+            if env_flag("FAKE_WARM_HANG") {
+                return;
+            }
+            let host = host.clone();
+            std::thread::spawn(move || {
+                let delay = env_u64("FAKE_WARM_DELAY_MS", 0);
+                std::thread::sleep(Duration::from_millis(delay));
+                let recompile = env_flag("FAKE_WARM_RECOMPILE");
+                if recompile {
+                    eprintln!(
+                        "info: warm canary trigger=request ms={delay} probable_recompile=true"
+                    );
+                }
+                host.write(&encode_ok(
+                    id,
+                    json!({"ran": true, "canary_ms": delay, "probable_recompile": recompile}),
+                ));
+            });
         }
     }
 }
