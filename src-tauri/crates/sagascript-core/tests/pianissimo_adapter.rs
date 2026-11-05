@@ -38,6 +38,8 @@ fn client(env: &[(&str, &str)], tmp: &Path) -> EngineHostClient {
         unload: Duration::from_secs(2),
         transcribe_min: Duration::from_secs(10),
         transcribe_factor: 0.0,
+        interactive_min: Duration::from_secs(10),
+        interactive_factor: 0.0,
         shutdown_grace: Duration::from_millis(500),
         write: Duration::from_secs(2),
         wedge_grace: Duration::from_millis(500),

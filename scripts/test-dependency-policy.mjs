@@ -40,7 +40,7 @@ function tomlStrings(text, section, key) {
 }
 
 test("test-linux gates both Cargo workspaces on cargo-deny before compiling", () => {
-  const INSTALL = "cargo install --locked cargo-deny --version 0.20.2";
+  const INSTALL = "bash scripts/ci/install-cargo-deny.sh";
   const linux = gatesFor({ os: "linux" });
   // The ORT host run may only silence the "policy entry not used here" notes,
   // not skip a check or allow a finding.
@@ -73,7 +73,8 @@ test("test-linux gates both Cargo workspaces on cargo-deny before compiling", ()
 test("npm run verify runs the same cargo-deny release CI installs", async () => {
   const { CARGO_DENY_VERSION } = await import("./verify.mjs");
   assert.ok(
-    workflow.job("test-linux").steps.some(runs(`cargo install --locked cargo-deny --version ${CARGO_DENY_VERSION}`)),
+    workflow.job("test-linux").steps.some(runs("bash scripts/ci/install-cargo-deny.sh")) &&
+      (await read("scripts/ci/install-cargo-deny.sh")).includes(`\nVERSION=${CARGO_DENY_VERSION}\n`),
     `verify's preflight asks for cargo-deny ${CARGO_DENY_VERSION}; test-linux must install the same release`,
   );
 });

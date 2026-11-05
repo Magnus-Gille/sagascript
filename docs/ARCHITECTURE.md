@@ -454,9 +454,13 @@ sequenceDiagram
   `engine-host\sagascript-engine-host-ort.exe`); `SAGASCRIPT_ENGINE_HOST` only in development
   builds (`dev-overrides`).
 - Recovery ([#366](https://github.com/Magnus-Gille/sagascript/issues/366)): `Failed` lasts
-  `failed_cooldown` (60 s), then one fresh start (half-open); a window that times out returns at
-  once, and a detached `engine-host-wedge-watch` thread kills the host if it sends no terminal
-  response within `wedge_grace` (30 s) after `cancel`; stdin writes are bounded
+  `failed_cooldown` (60 s), then one fresh start (half-open); a file-job window that times out
+  returns at once, and a detached `engine-host-wedge-watch` thread kills the host if it sends no
+  terminal response within `wedge_grace` (30 s) after `cancel`; a dictation (interactive) window
+  has `Timeouts::interactive` (by default the batch max(15 s, 3 × window), above a Neural Engine
+  recompile of 11.5-16.7 s, #397) and its timeout kills the host at once (`WindowTicket::wait`), after which the job resubmits its windows like after a crash (the
+  client is shared by dictation and file jobs of a model, so a file job's windows in flight on that
+  host fail as crashed and take their own crash-resubmit path); stdin writes are bounded
   (`Timeouts::write`); the restart backoff is slept unlocked and is cancel-aware.
   `EngineHostClient::reset()` clears `Failed` at once but has no production caller: settings that
   change the engine (host, model, compute units, idle policy) already replace the shared client

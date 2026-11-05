@@ -19,6 +19,9 @@
 //!   FAKE_WEDGE_ONCE_FILE=<path>                         if the file is absent (creates it): the window takes its
 //!                                                       slot and never finishes, ignoring cancel, while ping and
 //!                                                       status are still answered (a stuck Core ML prediction)
+//!   FAKE_WEDGE_INTERACTIVE_ONCE_FILE=<path>             like FAKE_WEDGE_ONCE_FILE, but only the first
+//!                                                       interactive window (dictation) is wedged; batch
+//!                                                       windows are served normally and leave the marker alone
 //!   FAKE_STOP_READING_ONCE_FILE=<path>                  if the file is absent (creates it): on a window, stop
 //!                                                       reading stdin (30 s, then exit) without answering
 //!   FAKE_UNLOAD_DELAY_MS                               delay before an unload completes/acks
@@ -323,7 +326,9 @@ fn handle(host: &Arc<Host>, id: u64, op: RequestOp) {
                 std::thread::sleep(Duration::from_secs(30));
                 std::process::exit(0);
             }
-            let wedge = first_time("FAKE_WEDGE_ONCE_FILE");
+            let wedge = first_time("FAKE_WEDGE_ONCE_FILE")
+                || (priority == Priority::Interactive
+                    && first_time("FAKE_WEDGE_INTERACTIVE_ONCE_FILE"));
             if env_flag("FAKE_BUSY") {
                 let s = host.sched.lock().unwrap();
                 if s.running + s.queue.len() >= host.max_in_flight {
