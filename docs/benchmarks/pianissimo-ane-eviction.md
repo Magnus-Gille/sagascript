@@ -49,10 +49,12 @@ Findings:
 3. **The key-down canary already pays on the cheap path.** After 5 min idle the first window went
    from 117-223 ms to 32-36 ms encode when a canary had run 3 s earlier, which the canary absorbed
    instead (65-263 ms) while the user would still be speaking.
-4. **A canary never delayed a window.** In every probe the window sent 3 s or 8 s after a canary,
-   and in the fake-host test one sent while a 1.5 s canary was still running, was answered as fast
-   as without it (`a_running_canary_does_not_delay_the_dictation`; the Swift and ONNX host tests
-   check that a running canary takes no window slot).
+4. **A canary never delayed a window on the Core ML host.** In every probe the window sent 3 s or
+   8 s after a canary, and in the fake-host test one sent while a 1.5 s canary was still running,
+   was answered as fast as without it (`a_running_canary_does_not_delay_the_dictation`; the Swift
+   and ONNX host tests check that a running canary takes no window slot). The ONNX host's sessions
+   take one run at a time, so there a window that arrives mid-canary waits for the canary's current
+   stage (80 ms of input); that was not measured, for want of ONNX Runtime on this machine.
 
 ### What could not be measured: a real eviction
 
@@ -70,10 +72,11 @@ The recompile could not be induced without root:
 
 Two soak runs probed a loaded, idle host at growing gaps (1-20 min), alternating a window without a
 canary and one 3 s after a canary, to catch a natural eviction (the installed host for 17 min, the
-new host with the real `warm` op for up to 3 h). Neither saw one while this page was written. A real
-memory-pressure event during the second run did fire the host's own canary
-(`warm canary trigger=memory_pressure ms=105 probable_recompile=false`), so that wiring works on a
-live system.
+new host with the real `warm` op for 3 h 13 min, 23 probes). Neither saw one. In the second run the
+first window without a canary took 62-266 ms encode (12 probes) and the one 3 s after a canary
+31-38 ms (11 probes). Real memory-pressure events during that run fired the host's own canary 12
+times (for example `warm canary trigger=memory_pressure ms=105 probable_recompile=false`), so that
+wiring works on a live system; no wake happened during it.
 
 Without an observed eviction it is still unverified that a window sent during a canary's recompile
 waits for that same compile rather than starting a second one; the protocol document marks this as

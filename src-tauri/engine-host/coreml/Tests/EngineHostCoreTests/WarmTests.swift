@@ -199,6 +199,18 @@ private func errorCode(_ response: [String: Any]) -> String? {
     #expect(h.response(12)["ran"] as? Bool == true)
 }
 
+@Test func aCancelledWindowIsNotActivity() {
+    let h = WarmHarness()
+    sendWindow(h.server, id: 10, path: "/tmp/gate-1", priority: "interactive")
+    #expect(h.fake.waitUntilStarted(count: 1))
+    sendRequest(h.server, ["v": 1, "id": 11, "op": "cancel", "target": 10])
+    let cancelled = h.response(10)["error"] as? [String: Any]
+    #expect(cancelled?["code"] as? String == "cancelled")
+    // It may not have reached the model, so the canary still runs (as in the ONNX host).
+    h.warm(id: 12)
+    #expect(h.response(12)["ran"] as? Bool == true)
+}
+
 @Test func skipRulesAreCheckedInProtocolOrder() {
     let h = WarmHarness(load: false)
     h.warm(id: 10)
@@ -248,9 +260,10 @@ private func errorCode(_ response: [String: Any]) -> String? {
     #expect(error?["code"] as? String == "busy")
     #expect(error?["message"] as? String == "the engine said no")
     #expect(error?["retryable"] as? Bool == true)
-    // The model was exercised, so a failed canary is activity too.
+    // A failed canary is not activity: the next one runs instead of being skipped as recent.
+    h.fake.setCanaryOutcome(.success(CanaryResult(milliseconds: 30, probableRecompile: false)))
     h.warm(id: 11)
-    #expect(h.skipped(11) == "recent")
+    #expect(h.response(11)["ran"] as? Bool == true)
 }
 
 @Test func aCanaryThatThrowsAnotherErrorIsAnInternalError() {

@@ -242,7 +242,8 @@ the first dictation does not wait on a cold model.
   prediction (`warm`, see `docs/engine-host-protocol.md`), unless `engine_prewarm`
   is `off`. macOS can evict a loaded model's Neural Engine program; the canary
   then recompiles it while the user is still speaking instead of after key-up
-  (#397). It never delays the dictation's own window. The engine host also runs
+  (#397). It takes no window slot and is skipped while a window is queued or
+  running. The engine host also runs
   a canary after memory pressure eases and after wake. `SAGASCRIPT_ENGINE_KEEPALIVE_S`
   (host environment, at least 60) adds a periodic canary; off by default, see
   `docs/benchmarks/pianissimo-ane-eviction.md`.

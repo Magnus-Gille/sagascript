@@ -354,11 +354,10 @@ public final class EngineHostServer {
         )
         scheduler.submit(id: id, priority: parameters.priority, work: { [weak self] flag in
             guard let self else { throw EngineHostError(code: .internalError, message: "Host deallocated") }
-            // Only a window that ran gets here (a cancelled queued one never starts). This runs
-            // before the slot is freed, so a canary never finds the window neither in flight nor
-            // recorded as activity.
-            defer { self.warmCoordinator.noteActivity() }
             let result = try self.engine.transcribe(window, isCancelled: { flag.isCancelled })
+            // Only a window that succeeded counts as activity. This runs before the slot is freed,
+            // so a canary never finds the window neither in flight nor recorded as activity.
+            self.warmCoordinator.noteActivity()
             return WireProtocol.windowResult(result)
         }, completion: { [weak self] result in
             guard let self else { return }

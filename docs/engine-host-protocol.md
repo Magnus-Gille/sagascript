@@ -198,11 +198,15 @@ the rest of it (not yet observed on a real eviction; see
 
 - Never queued with windows: it does not take a `max_in_flight` slot, does not count toward
   `status.in_flight`, and `cancel` does not know it (`false`; a Core ML prediction cannot be
-  interrupted and the canary is harmless). At most one canary runs at a time.
+  interrupted and the canary is harmless). At most one canary runs at a time. A window that
+  arrives while a canary runs is not queued behind it, but shares the model with it: the Core ML
+  host runs the two side by side, while the ONNX host's sessions take one run at a time, so there
+  the window waits for the canary's current stage (one encoder frame of input).
 - It is answered when the canary has finished, or at once when it is skipped. Skipping is a
   success with `ran: false` and `skipped`, checked in this order: `in_progress` (another canary is
   running; it is not waited for), `not_loaded`, `busy` (a window is queued or running and keeps the
-  model resident itself), `recent` (a canary or window finished less than 30 s ago).
+  model resident itself), `recent` (a canary or window succeeded less than 30 s ago; a failed or
+  cancelled one may not have reached the model and does not count).
 - `canary_ms` is the canary's wall time. `probable_recompile` is true when the encoder stage took at
   least 1 s while the encoder runs on the Neural Engine (a resident encoder takes 30-40 ms for the
   canary); hosts without a Neural Engine always send false. A failing canary is answered with the
@@ -236,7 +240,7 @@ On stdin EOF the host fails queued windows with `cancelled`, cancels running one
 ## Client behavior (normative for Sagascript's Rust client)
 
 - Timeouts: `hello` 10 s, `load` 180 s (first-time ANE compile), `ping` 2 s, `warm` 180 s (a
-  timed-out `warm` is forgotten, never a reason to kill the host), `transcribe_window`
+  `warm` whose answer times out is forgotten, never a reason to kill the host), `transcribe_window`
   max(15 s, 3 × window seconds) for file jobs (batch priority) and, by default, the same for
   dictation (interactive priority), above a Neural Engine recompile of the encoder (#397); `shutdown` grace 2 s, then kill.
 - Writes to the host's stdin go through a writer thread and are bounded (5 s, and never longer

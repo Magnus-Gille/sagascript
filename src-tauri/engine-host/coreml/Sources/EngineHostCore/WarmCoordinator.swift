@@ -23,7 +23,7 @@ public enum WarmSkipReason: String, Sendable {
     case notLoaded = "not_loaded"
     /// A window is queued or running and keeps the model resident itself.
     case busy
-    /// A canary or window finished less than the recent interval ago.
+    /// A canary or window succeeded less than the recent interval ago.
     case recent
 }
 
@@ -84,8 +84,9 @@ public final class WarmCoordinator {
         self.log = log
     }
 
-    /// A window ran on the model (whatever its outcome): the model is resident, so a canary within
-    /// `recentInterval` has nothing to do.
+    /// A window succeeded on the model: the model is resident, so a canary within `recentInterval`
+    /// has nothing to do. A failed or cancelled window may not have reached the model and does not
+    /// count (an extra canary is cheap, a skipped one can leave a recompile to the dictation).
     public func noteActivity() {
         let time = now()
         lock.lock(); lastActivity = time; lock.unlock()
@@ -113,8 +114,8 @@ public final class WarmCoordinator {
         }
     }
 
-    /// The skip rules in the order of the protocol, then the canary itself. A canary that ran, and
-    /// one that failed, both count as model activity.
+    /// The skip rules in the order of the protocol, then the canary itself. Only a canary that
+    /// succeeded counts as model activity, like a window (and as in the ONNX host).
     private func evaluate() -> Result<WarmOutcome, EngineHostError> {
         guard engine.loadedModelID != nil else { return .success(.skipped(.notLoaded)) }
         guard windowsInFlight() == 0 else { return .success(.skipped(.busy)) }
@@ -125,10 +126,8 @@ public final class WarmCoordinator {
             noteActivity()
             return .success(.ran(canary))
         } catch let error as EngineHostError {
-            noteActivity()
             return .failure(error)
         } catch {
-            noteActivity()
             return .failure(EngineHostError(code: .internalError, message: error.localizedDescription))
         }
     }

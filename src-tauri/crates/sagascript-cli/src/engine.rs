@@ -12,7 +12,8 @@ use sagascript_core::error::DictationError;
 use sagascript_core::models::PianissimoModel;
 use sagascript_core::path_scrub::scrub_paths;
 use sagascript_core::transcription::engine_host::{
-    pipeline, CancelToken, EngineHostClient, EngineHostConfig, EngineHostError, WarmResult,
+    pipeline, CancelToken, EngineHostClient, EngineHostConfig, EngineHostError, ErrorCode,
+    WarmResult,
 };
 use sagascript_core::transcription::{pianissimo_backend, pianissimo_model};
 use serde_json::{json, Value};
@@ -91,7 +92,9 @@ benchmarking warm latency or smoke-testing a signed build.
 After the load it runs one canary prediction, as the app does on push-to-talk \
 key-down, and prints its time. --canary-every repeats it while holding: a canary \
 that takes seconds instead of milliseconds means macOS had evicted the model's \
-Neural Engine program and the canary recompiled it (#397).",
+Neural Engine program and the canary recompiled it (#397). A canary still \
+running when --seconds elapse is waited for (it may be recompiling); a failed \
+canary makes the command exit non-zero once the hold ends.",
         after_long_help = "EXAMPLES:\n  sagascript engine warm --seconds 30\n  sagascript engine warm --model pianissimo-da --seconds 30\n  sagascript engine warm --seconds 3600 --canary-every 300"
     )]
     Warm {
@@ -644,28 +647,50 @@ fn print_doctor(report: &DoctorReport, json: bool, out: &Out) -> Result<(), Writ
 
 // ---- warm -----------------------------------------------------------------
 
-/// One line for a `warm` canary result (or why there was none).
-fn canary_line(result: &Result<WarmResult, EngineHostError>) -> String {
+/// One line for a `warm` canary result (or why there was none), and whether
+/// the canary failed. A host that predates `warm` is not a failure.
+fn canary_report(result: &Result<WarmResult, EngineHostError>) -> (String, bool) {
     match result {
         Ok(WarmResult {
             ran: true,
             canary_ms,
             probable_recompile,
             ..
-        }) => format!(
-            "Canary {} ms{}",
-            canary_ms.unwrap_or_default(),
-            if *probable_recompile == Some(true) {
-                " (probable Neural Engine recompile)"
-            } else {
-                ""
-            }
+        }) => (
+            format!(
+                "Canary {} ms{}",
+                canary_ms.unwrap_or_default(),
+                if *probable_recompile == Some(true) {
+                    " (probable Neural Engine recompile)"
+                } else {
+                    ""
+                }
+            ),
+            false,
         ),
-        Ok(WarmResult { skipped, .. }) => {
-            format!("Canary skipped: {}", skipped.as_deref().unwrap_or("?"))
-        }
-        Err(error) => format!("Canary failed: {}", scrub_paths(&error.to_string())),
+        Ok(WarmResult { skipped, .. }) => (
+            format!("Canary skipped: {}", skipped.as_deref().unwrap_or("?")),
+            false,
+        ),
+        Err(EngineHostError::Remote {
+            code: ErrorCode::Unsupported,
+            ..
+        }) => (
+            "Canary not supported by this engine host".to_string(),
+            false,
+        ),
+        Err(error) => (
+            format!("Canary failed: {}", scrub_paths(&error.to_string())),
+            true,
+        ),
     }
+}
+
+/// Runs one canary and returns its line, counting a failure in `failures`.
+fn run_canary(client: &EngineHostClient, failures: &mut u32) -> String {
+    let (line, failed) = canary_report(&client.warm_canary());
+    *failures += u32::from(failed);
+    line
 }
 
 fn warm(
@@ -692,7 +717,9 @@ fn warm(
             None => "Holding until Ctrl+C...".to_string(),
         }
     );
-    errln!(out, "{}", canary_line(&client.warm_canary()));
+    // A failed canary does not end the hold; it fails the command at the end.
+    let mut failures = 0;
+    errln!(out, "{}", run_canary(&client, &mut failures));
     let deadline = seconds.map(|n| Instant::now() + Duration::from_secs(n));
     let every = canary_every.map(Duration::from_secs);
     let mut next_canary = every.map(|every| Instant::now() + every);
@@ -706,7 +733,7 @@ fn warm(
                     out,
                     "{:>6.0} s: {}",
                     started.elapsed().as_secs_f64(),
-                    canary_line(&client.warm_canary())
+                    run_canary(&client, &mut failures)
                 );
                 next_canary = Some(Instant::now() + every);
             }
@@ -722,6 +749,11 @@ fn warm(
         std::thread::sleep(Duration::from_millis(200));
     }
     client.shutdown();
+    if failures > 0 {
+        return Err(DictationError::TranscriptionFailed(format!(
+            "{failures} canary prediction(s) failed"
+        )));
+    }
     Ok(())
 }
 
@@ -1027,5 +1059,56 @@ mod tests {
         std::env::remove_var("ENGINE_TEST_FORCE_FAILS");
         assert!(normal.ok, "{:?}", normal.steps);
         assert_eq!(forced.failed_step.as_deref(), Some("model_verified"));
+    }
+
+    #[test]
+    fn only_a_failed_canary_fails_engine_warm() {
+        let ran = Ok(WarmResult {
+            ran: true,
+            skipped: None,
+            canary_ms: Some(1200),
+            probable_recompile: Some(true),
+        });
+        assert_eq!(
+            canary_report(&ran),
+            (
+                "Canary 1200 ms (probable Neural Engine recompile)".into(),
+                false
+            )
+        );
+        let skipped = Ok(WarmResult {
+            ran: false,
+            skipped: Some("recent".into()),
+            canary_ms: None,
+            probable_recompile: None,
+        });
+        assert_eq!(
+            canary_report(&skipped),
+            ("Canary skipped: recent".into(), false)
+        );
+        // A host that predates `warm` (#397) is tolerated, not a failure.
+        let unsupported = Err(EngineHostError::Remote {
+            code: ErrorCode::Unsupported,
+            message: "unknown op".into(),
+            retryable: false,
+        });
+        assert_eq!(
+            canary_report(&unsupported),
+            ("Canary not supported by this engine host".into(), false)
+        );
+        let failed = Err(EngineHostError::Remote {
+            code: ErrorCode::Engine,
+            message: "/Users/someone/Model.mlmodelc failed".into(),
+            retryable: false,
+        });
+        let (line, is_failure) = canary_report(&failed);
+        assert!(is_failure, "{line}");
+        assert!(line.starts_with("Canary failed:"), "{line}");
+        assert!(!line.contains("/Users/someone"), "{line}");
+        let timed_out = Err(EngineHostError::Timeout {
+            op: "warm",
+            after: Duration::from_secs(180),
+        });
+        assert!(canary_report(&timed_out).1);
     }
 }
