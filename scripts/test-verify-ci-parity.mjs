@@ -87,6 +87,10 @@ const ALLOWLIST = [
   { run: "sudo apt-get", prefix: true, reason: "installs system packages; the linux-libs preflight names them" },
   { run: "rustup toolchain install", prefix: true, reason: "installs the MSRV toolchain; the msrv preflight names it" },
   {
+    run: "bash scripts/ci/use-portable-whisper-macos.sh",
+    reason: "CI-only: shipped and CI builds target apple-m1, local builds keep tuning whisper.cpp to the developer's CPU",
+  },
+  {
     run: "curl --fail --location --retry 2",
     prefix: true,
     reason: "downloads the third-party scorer for the DER/JER cross-check; CI-only network step",

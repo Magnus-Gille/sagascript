@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   quality-gate:
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 60
 
     steps:
@@ -45,6 +45,11 @@ jobs:
       # across branches instead of a `Cargo.lock`-keyed multi-GB target dump.
       # `build-macos` below uses the same shared key so the release Tauri
       # build reuses dependencies this gate job just compiled.
+      # whisper.cpp targets Apple silicon's apple-m1 baseline, not the runner's CPU; before the
+      # Rust cache, whose key includes CMAKE_* variables (scripts/cmake/macos-arm64-portable.cmake).
+      - name: Use the portable whisper.cpp CPU baseline
+        run: bash scripts/ci/use-portable-whisper-macos.sh
+
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2, pinned (#180 review: release handles signing credentials)
         with:
@@ -122,7 +127,7 @@ jobs:
       # Same explicit triple as `build-macos` below (#178): the shared
       # rust-cache key covers one target dir, so building the gate binary
       # here lets the release Tauri build reuse these compiled dependencies
-      # instead of compiling them cold. macos-14 runners are aarch64, so no
+      # instead of compiling them cold. macos-15 runners are aarch64, so no
       # extra rustup target is needed.
       - name: Build release CLI for inference smoke tests
         working-directory: src-tauri
