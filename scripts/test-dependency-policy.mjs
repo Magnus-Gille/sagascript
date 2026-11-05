@@ -3,7 +3,7 @@
 // families scripts/generate-third-party-notices.mjs reviews and the git
 // sources the Cargo manifests actually use.
 import assert from "node:assert/strict";
-import { readdirSync, readFileSync } from "node:fs";
+import { readdirSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { commandOf, gatesFor } from "./ci/cargo-gates.mjs";
@@ -74,7 +74,7 @@ test("npm run verify runs the same cargo-deny release CI installs", async () => 
   const { CARGO_DENY_VERSION } = await import("./verify.mjs");
   assert.ok(
     workflow.job("test-linux").steps.some(runs("bash scripts/ci/install-cargo-deny.sh")) &&
-      readFileSync("scripts/ci/install-cargo-deny.sh", "utf8").includes(`\nVERSION=${CARGO_DENY_VERSION}\n`),
+      (await read("scripts/ci/install-cargo-deny.sh")).includes(`\nVERSION=${CARGO_DENY_VERSION}\n`),
     `verify's preflight asks for cargo-deny ${CARGO_DENY_VERSION}; test-linux must install the same release`,
   );
 });
