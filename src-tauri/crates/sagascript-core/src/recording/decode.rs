@@ -232,8 +232,8 @@ pub fn decode_tracks(folder: &Path) -> Result<TrackDecoder, RecordingError> {
 }
 
 /// Each track's start relative to the earliest track of its clock domain, in
-/// 16 kHz samples.
-fn leading_silences(manifest: &Manifest) -> Vec<u64> {
+/// nanoseconds.
+pub(crate) fn start_offsets_ns(manifest: &Manifest) -> Vec<u64> {
     manifest
         .tracks
         .iter()
@@ -245,9 +245,20 @@ fn leading_silences(manifest: &Manifest) -> Vec<u64> {
                 .map(|other| other.clock.start_ns)
                 .min()
                 .unwrap_or(track.clock.start_ns);
-            let offset_ns = u128::from(track.clock.start_ns.saturating_sub(earliest));
-            (offset_ns * u128::from(TARGET_SAMPLE_RATE) / 1_000_000_000) as u64
+            track.clock.start_ns.saturating_sub(earliest)
         })
+        .collect()
+}
+
+/// `offset_ns` as whole samples at `rate`.
+pub(crate) fn samples_in(offset_ns: u64, rate: u32) -> u64 {
+    (u128::from(offset_ns) * u128::from(rate) / 1_000_000_000) as u64
+}
+
+fn leading_silences(manifest: &Manifest) -> Vec<u64> {
+    start_offsets_ns(manifest)
+        .into_iter()
+        .map(|offset| samples_in(offset, TARGET_SAMPLE_RATE))
         .collect()
 }
 

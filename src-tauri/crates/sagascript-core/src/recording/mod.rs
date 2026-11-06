@@ -39,6 +39,7 @@ pub mod capture;
 pub mod decode;
 pub mod encoder;
 pub mod error;
+pub mod export;
 pub mod flac;
 mod io;
 pub mod journal;
@@ -58,6 +59,7 @@ use std::time::Duration;
 pub use decode::{decode_tracks, TrackChunk, TrackDecoder, CHUNK_SAMPLES};
 pub use encoder::{TrackEncoder, TrackSummary};
 pub use error::RecordingError;
+pub use export::{export_recording, ExportFormat, ExportLayout, ExportOptions, ExportReport};
 pub use flac::{FlacEncoder, TrackSink};
 pub use library::{
     audio_track_path, delete_recording_folder, list_recordings, read_recording, RecordingSummary,
