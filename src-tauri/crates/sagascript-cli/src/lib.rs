@@ -360,8 +360,8 @@ macOS 14+ on Apple Silicon or Windows on ARM (Snapdragon).
 
   status   host path and build identity, protocol version, model state
   doctor   run host -> load -> transcribe end to end (non-zero exit on failure)
-  warm     load the model and hold it warm (benchmarks, smoke tests)",
-        after_long_help = "EXAMPLES:\n  sagascript engine status --json\n  sagascript engine doctor --verify-model\n  sagascript engine warm --seconds 30"
+  warm     load the model, optionally prime inference, and hold it warm",
+        after_long_help = "EXAMPLES:\n  sagascript engine status --json\n  sagascript engine doctor --verify-model\n  sagascript engine warm --seconds 30\n  sagascript engine warm --prime --seconds 30"
     )]
     Engine(engine::EngineArgs),
 

@@ -417,7 +417,16 @@ pub fn shared_client(settings: &Settings) -> Result<EngineHostClient, DictationE
     client_in_slot(
         shared_slot(),
         key,
-        pianissimo_model::verify_downloaded,
+        || {
+            let started = Instant::now();
+            let result = pianissimo_model::verify_downloaded();
+            tracing::info!(
+                model_verification_ms = started.elapsed().as_millis() as u64,
+                verified = result.is_ok(),
+                "Pianissimo model verification finished"
+            );
+            result
+        },
         |old| {
             if let Some(old) = old {
                 old.client.shutdown();
@@ -476,7 +485,9 @@ fn client_in_slot(
 /// Shut the shared host down (CLI exit, model deletion, app quit). No-op when
 /// none was created.
 pub fn shutdown_shared_client() {
+    cancel_background_inference_warm();
     shutdown_slot(shared_slot());
+    mark_inference_cold();
 }
 
 /// Recovered as-is (ADR 0005): the slot holds either the previous complete
@@ -648,13 +659,264 @@ pub fn profile_change_needs_warm_gated(
 /// this long so the engine is not reloaded straight into the same pressure.
 pub(crate) const PRESSURE_WARM_COOLDOWN: Duration = Duration::from_secs(5 * 60);
 
+/// Touch the model only after a cold load, a wake, or five minutes without an
+/// inference. This is event-driven: there is no periodic timer or idle loop.
+const INFERENCE_WARM_STALE_AFTER: Duration = Duration::from_secs(5 * 60);
+/// Do not hammer a host with repeated warm attempts when its synthetic
+/// inference fails. A successful user inference clears this retry delay.
+const INFERENCE_WARM_RETRY_AFTER: Duration = Duration::from_secs(60);
+/// 100 ms of 16 kHz silence: enough to execute the encoder without recording
+/// speech or adding anything to the user's transcription history.
+const INFERENCE_WARM_SAMPLES: [f32; 1_600] = [0.0; 1_600];
+
 static LAST_PRESSURE_UNLOAD: Mutex<Option<Instant>> = Mutex::new(None);
+
+#[derive(Default)]
+struct InferenceWarmState {
+    identity: Option<InferenceWarmIdentity>,
+    last_ready: Option<Instant>,
+    last_attempt: Option<Instant>,
+    needs_warm: bool,
+}
+
+impl InferenceWarmState {
+    fn new() -> Self {
+        Self {
+            needs_warm: true,
+            ..Self::default()
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct InferenceWarmIdentity {
+    host_path: PathBuf,
+    model_dir: PathBuf,
+    model_id: String,
+    compute_units: String,
+    idle_unload: Option<Duration>,
+    idle_shutdown: Option<Duration>,
+}
+
+impl InferenceWarmIdentity {
+    fn from_client(client: &EngineHostClient) -> Self {
+        let config = client.config();
+        Self {
+            host_path: config.host_path.clone(),
+            model_dir: config.load.model_dir.clone(),
+            model_id: config.load.model_id.clone(),
+            compute_units: config.load.compute_units.clone(),
+            idle_unload: config.idle_unload,
+            idle_shutdown: config.idle_shutdown,
+        }
+    }
+}
+
+static INFERENCE_WARM_STATE: OnceLock<Mutex<InferenceWarmState>> = OnceLock::new();
+
+fn inference_warm_state() -> &'static Mutex<InferenceWarmState> {
+    INFERENCE_WARM_STATE.get_or_init(|| Mutex::new(InferenceWarmState::new()))
+}
+
+#[derive(Default)]
+struct BackgroundWarmState {
+    running: bool,
+    cancel_inference: bool,
+    inference_cancel: Option<CancelToken>,
+}
+
+static BACKGROUND_WARM_STATE: OnceLock<Mutex<BackgroundWarmState>> = OnceLock::new();
+
+fn background_warm_state() -> &'static Mutex<BackgroundWarmState> {
+    BACKGROUND_WARM_STATE.get_or_init(|| Mutex::new(BackgroundWarmState::default()))
+}
+
+const BACKGROUND_WARM_LOCK: &str = "pianissimo.background_warm";
+const INFERENCE_WARM_LOCK: &str = "pianissimo.inference_warm";
+
+fn should_prime_inference(
+    reason: &str,
+    identity: &InferenceWarmIdentity,
+    model_was_loaded: bool,
+    state: &InferenceWarmState,
+    now: Instant,
+) -> bool {
+    let forced = reason == "wake";
+    let identity_changed = state.identity.as_ref() != Some(identity);
+    let cold = identity_changed || !model_was_loaded || state.needs_warm;
+    let last_ready = if identity_changed {
+        None
+    } else {
+        state.last_ready
+    };
+    let last_attempt = if identity_changed {
+        None
+    } else {
+        state.last_attempt
+    };
+    let stale =
+        last_ready.is_none_or(|at| now.saturating_duration_since(at) >= INFERENCE_WARM_STALE_AFTER);
+    if !(forced || cold || stale) {
+        return false;
+    }
+    forced
+        || !last_attempt
+            .is_some_and(|at| now.saturating_duration_since(at) < INFERENCE_WARM_RETRY_AFTER)
+}
+
+fn should_reserve_inference_warm(
+    reason: &str,
+    identity: &InferenceWarmIdentity,
+    model_was_loaded: bool,
+    now: Instant,
+) -> bool {
+    let mut state = lock_or_recover(inference_warm_state(), INFERENCE_WARM_LOCK);
+    if !should_prime_inference(reason, identity, model_was_loaded, &state, now) {
+        return false;
+    }
+    if state.identity.as_ref() != Some(identity) {
+        state.identity = Some(identity.clone());
+        state.last_ready = None;
+        state.last_attempt = None;
+        state.needs_warm = true;
+    } else if !model_was_loaded {
+        state.last_ready = None;
+        state.needs_warm = true;
+    }
+    state.last_attempt = Some(now);
+    true
+}
+
+/// Run one short, synthetic dictation through the batch path. The client
+/// reserves a negotiated request slot when possible; a provider may still
+/// serialize execution and may not interrupt an active compile. Hosts with a
+/// single negotiated slot are skipped.
+fn prime_inference(
+    client: &EngineHostClient,
+    cancel: &CancelToken,
+) -> Result<bool, DictationError> {
+    let max_in_flight = client
+        .capabilities()
+        .map(|caps| caps.max_in_flight)
+        .unwrap_or(0);
+    if max_in_flight <= 1 {
+        return Ok(false);
+    }
+    client
+        .transcribe_warmup_samples(&INFERENCE_WARM_SAMPLES, cancel)
+        .map(|_| true)
+        .map_err(map_engine_error)
+}
+
+/// Explicitly prime a loaded host's inference path with 100 ms of local silence.
+/// Returns `false` when the host has no separate slot to reserve for interactive
+/// work. Provider runtimes may still serialize that slot with active execution.
+pub fn prime_inference_cache(
+    client: &EngineHostClient,
+    cancel: &CancelToken,
+) -> Result<bool, DictationError> {
+    if client
+        .capabilities()
+        .is_none_or(|caps| caps.max_in_flight <= 1)
+    {
+        return Ok(false);
+    }
+    match prime_inference(client, cancel) {
+        Ok(true) => {
+            note_inference_ready(client);
+            Ok(true)
+        }
+        Ok(false) => Ok(false),
+        Err(DictationError::Cancelled) => Err(DictationError::Cancelled),
+        Err(error) => Err(error),
+    }
+}
+
+/// A real transcription or a completed synthetic one means the model's
+/// inference path has recently run. This signal is local process state only.
+pub(crate) fn note_inference_ready(client: &EngineHostClient) {
+    let mut state = lock_or_recover(inference_warm_state(), INFERENCE_WARM_LOCK);
+    let now = Instant::now();
+    state.identity = Some(InferenceWarmIdentity::from_client(client));
+    state.last_ready = Some(now);
+    state.last_attempt = Some(now);
+    state.needs_warm = false;
+}
+
+/// A wake or unload invalidates the recent inference touch. On hosts that do
+/// not unload on wake, the next permitted key-down warm will still run once.
+pub fn mark_inference_cold() {
+    let mut state = lock_or_recover(inference_warm_state(), INFERENCE_WARM_LOCK);
+    state.last_ready = None;
+    state.last_attempt = None;
+    state.needs_warm = true;
+}
+
+/// The background warm-up uses batch priority and leaves an interactive slot
+/// free. If real dictation starts while the synthetic prediction is running,
+/// cancel just that prediction; the model load remains available to reuse.
+pub(crate) fn cancel_background_inference_warm() {
+    let mut state = lock_or_recover(background_warm_state(), BACKGROUND_WARM_LOCK);
+    if state.running {
+        state.cancel_inference = true;
+        if let Some(token) = &state.inference_cancel {
+            token.cancel();
+        }
+    }
+}
+
+fn begin_background_warm() -> bool {
+    let mut state = lock_or_recover(background_warm_state(), BACKGROUND_WARM_LOCK);
+    if state.running {
+        return false;
+    }
+    state.running = true;
+    state.cancel_inference = false;
+    state.inference_cancel = None;
+    true
+}
+
+fn begin_background_inference_warm() -> Option<CancelToken> {
+    let mut state = lock_or_recover(background_warm_state(), BACKGROUND_WARM_LOCK);
+    if !state.running || state.cancel_inference {
+        return None;
+    }
+    let token = CancelToken::new();
+    state.inference_cancel = Some(token.clone());
+    Some(token)
+}
+
+fn end_background_inference_warm() {
+    lock_or_recover(background_warm_state(), BACKGROUND_WARM_LOCK).inference_cancel = None;
+}
+
+fn end_background_warm() {
+    let mut state = lock_or_recover(background_warm_state(), BACKGROUND_WARM_LOCK);
+    state.running = false;
+    state.cancel_inference = false;
+    state.inference_cancel = None;
+}
+
+struct BackgroundWarmGuard;
+
+impl Drop for BackgroundWarmGuard {
+    fn drop(&mut self) {
+        end_background_warm();
+    }
+}
 
 /// True when a warm for `reason` should be skipped because of a recent
 /// memory-pressure unload. App start and profile changes are never skipped.
 fn warm_in_pressure_cooldown(reason: &str, last_unload: Option<Instant>, now: Instant) -> bool {
     matches!(reason, "key_down" | "wake")
         && last_unload.is_some_and(|at| now.saturating_duration_since(at) < PRESSURE_WARM_COOLDOWN)
+}
+
+fn in_pressure_cooldown(reason: &str, now: Instant) -> bool {
+    let last_unload = *LAST_PRESSURE_UNLOAD
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    warm_in_pressure_cooldown(reason, last_unload, now)
 }
 
 fn shared_client_if_created() -> Option<EngineHostClient> {
@@ -669,11 +931,13 @@ fn shared_client_if_created() -> Option<EngineHostClient> {
 /// loading state). Never starts anything. Returns whether it unloaded, and
 /// starts the `PRESSURE_WARM_COOLDOWN` when it did.
 pub fn unload_if_idle_for_memory_pressure() -> bool {
+    cancel_background_inference_warm();
     let unloaded = shared_client_if_created().is_some_and(|client| client.unload_if_idle());
     if unloaded {
         *LAST_PRESSURE_UNLOAD
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(Instant::now());
+        mark_inference_cold();
         tracing::info!("Pianissimo engine unloaded under memory pressure");
     }
     unloaded
@@ -694,66 +958,155 @@ pub fn unload_if_unused(settings: &Settings) -> bool {
     }
     let unloaded = shared_client_if_created().is_some_and(|client| client.unload_if_idle());
     if unloaded {
+        mark_inference_cold();
         tracing::info!("Pianissimo engine unloaded: no profile uses it any more");
     }
     unloaded
 }
 
-/// Load the model in the background so the next utterance starts warm. Returns
-/// immediately; never blocks the caller (hotkey path, main thread). Silently
-/// does nothing when Pianissimo is unsupported or not installed.
+/// Load the model and, when its inference cache is cold or stale, run a short
+/// synthetic inference in the background. Returns immediately; never blocks
+/// the caller (hotkey path, main thread). A provider may serialize requests or
+/// be unable to interrupt a long compile, so this does not guarantee an instant
+/// first dictation. Silently does nothing when Pianissimo is unsupported or not
+/// installed.
 ///
 /// `load_settings` (`machine::load`) is called on the warm-up thread, when it
 /// attaches to the shared engine, not by the caller: the settings file is not
 /// read on the hotkey path, and the read happens as late as it always did.
 pub fn warm_in_background(reason: &'static str, load_settings: fn() -> Settings) {
-    static IN_FLIGHT: AtomicBool = AtomicBool::new(false);
     if !runtime_supported_on_this_os() || !pianissimo_model::is_downloaded() {
         return;
     }
-    let last_unload = *LAST_PRESSURE_UNLOAD
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    if warm_in_pressure_cooldown(reason, last_unload, Instant::now()) {
+    if in_pressure_cooldown(reason, Instant::now()) {
         tracing::debug!(
             reason,
             "Pianissimo pre-warm skipped: recent memory-pressure unload"
         );
         return;
     }
-    if IN_FLIGHT.swap(true, Ordering::SeqCst) {
+    if !begin_background_warm() {
         return;
     }
     let spawned = std::thread::Builder::new()
         .name("pianissimo-warm".into())
         .spawn(move || {
+            let _flight = BackgroundWarmGuard;
             LOAD_SOURCE.with(|source| source.set(LoadSource::Warm));
             let started = Instant::now();
-            match shared_client(&load_settings())
-                .map_err(|e| e.to_string())
-                .and_then(|client| {
-                    if client.snapshot().loaded {
-                        return Ok(false);
-                    }
-                    client.warm().map(|_| true).map_err(|e| e.to_string())
-                }) {
-                Ok(true) => tracing::info!(
+            let client_started = Instant::now();
+            let result = shared_client(&load_settings()).map_err(|e| e.to_string()).and_then(|client| {
+                let attach_ms = client_started.elapsed().as_millis() as u64;
+                warm_client(&client, &CancelToken::new())
+                    .map_err(|e| e.to_string())
+                    .map(|info| {
+                        let mut inference_warm_seconds = 0.0;
+                        let mut inference_attempted = false;
+                        let mut inference_warmed = false;
+                        if !in_pressure_cooldown(reason, Instant::now())
+                            && client
+                                .capabilities()
+                                .is_some_and(|caps| caps.max_in_flight > 1)
+                            && should_reserve_inference_warm(
+                                reason,
+                                &InferenceWarmIdentity::from_client(&client),
+                                info.was_warm,
+                                Instant::now(),
+                            )
+                        {
+                            match begin_background_inference_warm() {
+                                Some(cancel) => {
+                                    inference_attempted = true;
+                                    let inference_started = Instant::now();
+                                    let result = prime_inference(&client, &cancel);
+                                    end_background_inference_warm();
+                                    match result {
+                                        Ok(true) => {
+                                            inference_warmed = true;
+                                            inference_warm_seconds =
+                                                inference_started.elapsed().as_secs_f64();
+                                            note_inference_ready(&client);
+                                        }
+                                        Ok(false) => {}
+                                        Err(DictationError::Cancelled) => tracing::debug!(
+                                            reason,
+                                            "Pianissimo inference pre-warm cancelled for interactive work"
+                                        ),
+                                        Err(error) => tracing::warn!(
+                                            reason,
+                                            error = %scrub_paths(&error.to_string()),
+                                            "Pianissimo inference pre-warm failed"
+                                        ),
+                                    }
+                                }
+                                None => tracing::debug!(
+                                    reason,
+                                    "Pianissimo inference pre-warm skipped for interactive work"
+                                ),
+                            }
+                        }
+                        let (engine_start_ms, model_load_ms) = if info.was_warm {
+                            (0, 0)
+                        } else {
+                            let snapshot = client.snapshot();
+                            let model_load_ms = snapshot
+                                .last_load
+                                .map(|load| load.load_ms)
+                                .unwrap_or(0);
+                            let total_ready_ms = (info.load_seconds * 1000.0) as u64;
+                            (total_ready_ms.saturating_sub(model_load_ms), model_load_ms)
+                        };
+                        (
+                            attach_ms,
+                            engine_start_ms,
+                            model_load_ms,
+                            info,
+                            inference_warm_seconds,
+                            inference_attempted,
+                            inference_warmed,
+                        )
+                    })
+            });
+            match result {
+                Ok((attach_ms, _, _, info, _, inference_attempted, _))
+                    if info.was_warm && !inference_attempted =>
+                {
+                    tracing::debug!(
+                        reason,
+                        attach_ms,
+                        "Pianissimo model already loaded; inference pre-warm skipped"
+                    )
+                }
+                Ok((
+                    attach_ms,
+                    engine_start_ms,
+                    model_load_ms,
+                    info,
+                    inference_warm_seconds,
+                    inference_attempted,
+                    inference_warmed,
+                )) => tracing::info!(
                     reason,
-                    ms = started.elapsed().as_millis() as u64,
-                    "Pianissimo engine pre-warmed"
+                    attach_ms,
+                    engine_start_ms,
+                    model_load_ms,
+                    inference_warm_ms = (inference_warm_seconds * 1000.0) as u64,
+                    total_ms = started.elapsed().as_millis() as u64,
+                    was_loaded = info.was_warm,
+                    inference_attempted,
+                    inference_warmed,
+                    "Pianissimo model pre-warm completed"
                 ),
-                Ok(false) => tracing::debug!(reason, "Pianissimo engine already warm"),
                 Err(error) => tracing::warn!(
                     reason,
                     error = %scrub_paths(&error),
                     "Pianissimo engine pre-warm failed"
                 ),
             }
-            IN_FLIGHT.store(false, Ordering::SeqCst);
         });
     if let Err(error) = spawned {
         tracing::warn!(%error, "could not start Pianissimo pre-warm thread");
-        IN_FLIGHT.store(false, Ordering::SeqCst);
+        end_background_warm();
     }
 }
 
@@ -959,6 +1312,7 @@ impl PianissimoBackend {
         if cancelled.load(Ordering::SeqCst) {
             return Err(cancelled_error());
         }
+        cancel_background_inference_warm();
         let token = CancelToken::new();
         {
             let mut active = self.active.lock().map_err(|_| {
@@ -977,6 +1331,9 @@ impl PianissimoBackend {
         });
         if let Ok(mut active) = self.active.lock() {
             let _ = active.take();
+        }
+        if outcome.is_ok() {
+            note_inference_ready(&self.client);
         }
         let transcription = outcome.map_err(map_engine_error)?;
         progress(100);
@@ -1626,6 +1983,99 @@ mod tests {
             now + PRESSURE_WARM_COOLDOWN
         ));
         assert!(!warm_in_pressure_cooldown("key_down", None, now));
+    }
+
+    #[test]
+    fn inference_warm_policy_covers_cold_stale_wake_and_retry_states() {
+        let now = Instant::now();
+        let identity = InferenceWarmIdentity {
+            host_path: "host".into(),
+            model_dir: "model".into(),
+            model_id: "pianissimo-sv".into(),
+            compute_units: "ane".into(),
+            idle_unload: Some(Duration::from_secs(60)),
+            idle_shutdown: Some(Duration::from_secs(120)),
+        };
+        let cold = InferenceWarmState::new();
+        assert!(should_prime_inference(
+            "key_down", &identity, true, &cold, now
+        ));
+        assert!(should_prime_inference(
+            "app_start",
+            &identity,
+            false,
+            &cold,
+            now
+        ));
+
+        let fresh = InferenceWarmState {
+            identity: Some(identity.clone()),
+            last_ready: Some(now),
+            last_attempt: Some(now),
+            needs_warm: false,
+        };
+        assert!(!should_prime_inference(
+            "key_down", &identity, true, &fresh, now
+        ));
+
+        let stale = InferenceWarmState {
+            last_ready: Some(now - INFERENCE_WARM_STALE_AFTER),
+            ..fresh
+        };
+        assert!(should_prime_inference(
+            "key_down", &identity, true, &stale, now
+        ));
+
+        let failed_recently = InferenceWarmState {
+            identity: Some(identity.clone()),
+            last_ready: None,
+            last_attempt: Some(now - Duration::from_secs(30)),
+            needs_warm: true,
+        };
+        assert!(!should_prime_inference(
+            "key_down",
+            &identity,
+            true,
+            &failed_recently,
+            now
+        ));
+        assert!(should_prime_inference(
+            "key_down",
+            &identity,
+            true,
+            &failed_recently,
+            now + INFERENCE_WARM_RETRY_AFTER
+        ));
+        assert!(should_prime_inference(
+            "wake",
+            &identity,
+            true,
+            &failed_recently,
+            now
+        ));
+        let changed_model = InferenceWarmIdentity {
+            model_id: "different-model".into(),
+            ..identity.clone()
+        };
+        assert!(should_prime_inference(
+            "key_down",
+            &changed_model,
+            true,
+            &failed_recently,
+            now
+        ));
+    }
+
+    #[test]
+    fn live_work_cancels_only_a_running_background_inference() {
+        assert!(begin_background_warm());
+        let token = begin_background_inference_warm().expect("warm state is not cancelled");
+
+        cancel_background_inference_warm();
+
+        assert!(token.is_cancelled());
+        assert!(begin_background_inference_warm().is_none());
+        end_background_warm();
     }
 
     #[test]

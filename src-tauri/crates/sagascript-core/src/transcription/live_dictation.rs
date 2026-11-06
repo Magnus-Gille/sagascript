@@ -10,7 +10,8 @@ use crate::settings::Settings;
 
 use super::engine_host::{CancelToken, EngineHostClient};
 use super::pianissimo_backend::{
-    cancelled_error, map_engine_error, shared_client, warm_client, with_cancel_bridge,
+    cancel_background_inference_warm, cancelled_error, map_engine_error, note_inference_ready,
+    shared_client, warm_client, with_cancel_bridge,
 };
 use super::whisper_backend::DictationTimings;
 use super::{TranscribeOptions, TranscribeRequest, WhisperBackend};
@@ -118,6 +119,11 @@ impl LiveDictationBackend {
             return Ok(String::new());
         }
 
+        // Cancel a background synthetic prediction and request interactive
+        // priority. Providers may still serialize execution or finish a
+        // non-preemptible compile before this request can run.
+        cancel_background_inference_warm();
+
         // The cancel token exists before the model is acquired, so an abort
         // during a first-use compile/load is observed immediately (without
         // killing the host: the load still finishes for next time).
@@ -167,6 +173,9 @@ impl LiveDictationBackend {
         });
         timings.inference_ms = inference_started.elapsed().as_secs_f64() * 1000.0;
         self.clear_active_job();
+        if result.is_ok() {
+            note_inference_ready(&client);
+        }
         let snapshot = client.snapshot();
         tracing::info!(
             samples = samples.len(),

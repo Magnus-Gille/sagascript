@@ -3,10 +3,12 @@
 
 use sagascript_core::settings::{Language, WhisperModel};
 use sagascript_core::transcription::engine_host::{
-    EngineHostClient, EngineHostConfig, LoadSpec, Timeouts,
+    BoostSpec, CancelToken, EngineHostClient, EngineHostConfig, LoadSpec, Timeouts,
 };
 use sagascript_core::transcription::live_dictation::LiveDictationBackend;
-use sagascript_core::transcription::pianissimo_backend::PianissimoBackend;
+use sagascript_core::transcription::pianissimo_backend::{
+    prime_inference_cache, PianissimoBackend,
+};
 use sagascript_core::transcription::whisper_backend::DictationTimings;
 use sagascript_core::transcription::{TranscribeOptions, WhisperBackend};
 use std::path::Path;
@@ -21,7 +23,7 @@ fn client(env: &[(&str, &str)], tmp: &Path) -> EngineHostClient {
     let mut cfg = EngineHostConfig::new(
         FAKE,
         LoadSpec {
-            model_dir: "/models/ok".into(),
+            model_dir: tmp.join("model-ok"),
             model_id: "fake-model".into(),
             compute_units: "cpu".into(),
         },
@@ -59,6 +61,24 @@ fn spawn_count(log: &Path) -> usize {
         .lines()
         .filter(|line| line.starts_with("hello "))
         .count()
+}
+
+fn wait_for_window_count(log: &Path, expected: usize) -> bool {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let count = std::fs::read_to_string(log)
+            .unwrap_or_default()
+            .lines()
+            .filter(|line| line.starts_with("transcribe_window "))
+            .count();
+        if count >= expected {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
 
 #[test]
@@ -178,6 +198,120 @@ fn warm_up_with_cancel_returns_promptly_and_keeps_the_host() {
         backend.client().snapshot().running,
         "host keeps loading for the next job"
     );
+}
+
+#[test]
+fn explicit_inference_prime_does_not_inherit_client_context() {
+    let tmp = tempfile::tempdir().unwrap();
+    let log = tmp.path().join("log");
+    let shared = client(&[("FAKE_LOG", log.to_str().unwrap())], tmp.path());
+    shared.set_boost(Some(
+        BoostSpec::new(["private glossary term".to_string()], 1.0).unwrap(),
+    ));
+    shared.warm().unwrap();
+
+    let warmed = prime_inference_cache(&shared, &CancelToken::new()).unwrap();
+
+    assert!(warmed);
+    assert_eq!(shared.snapshot().loads, 1);
+    assert_eq!(
+        shared.boost_report().windows,
+        0,
+        "synthetic warm-up must not inherit profile glossary context"
+    );
+    assert_eq!(spawn_count(&log), 1);
+}
+
+#[test]
+fn explicit_inference_prime_skips_hosts_without_a_reserved_interactive_slot() {
+    let tmp = tempfile::tempdir().unwrap();
+    let shared = client(&[("FAKE_ADVERTISE_IN_FLIGHT", "1")], tmp.path());
+    shared.warm().unwrap();
+
+    let warmed = prime_inference_cache(&shared, &CancelToken::new()).unwrap();
+
+    assert!(!warmed);
+    assert!(shared.snapshot().loaded);
+}
+
+#[test]
+fn explicit_inference_prime_honors_cancellation_and_keeps_the_host() {
+    let tmp = tempfile::tempdir().unwrap();
+    let log = tmp.path().join("log");
+    let shared = client(
+        &[
+            ("FAKE_LOG", log.to_str().unwrap()),
+            ("FAKE_WINDOW_DELAY_MS", "3000"),
+        ],
+        tmp.path(),
+    );
+    shared.warm().unwrap();
+    let cancel = CancelToken::new();
+    let prime = {
+        let shared = shared.clone();
+        let cancel = cancel.clone();
+        std::thread::spawn(move || prime_inference_cache(&shared, &cancel))
+    };
+    assert!(
+        wait_for_window_count(&log, 1),
+        "synthetic window was not sent"
+    );
+
+    cancel.cancel();
+
+    let error = prime.join().unwrap().unwrap_err();
+    assert!(error.to_string().contains("cancelled"), "{error}");
+    assert!(
+        shared.snapshot().running,
+        "cancellation keeps the host alive"
+    );
+}
+
+#[test]
+fn a_live_utterance_runs_while_a_batch_window_is_in_flight() {
+    let tmp = tempfile::tempdir().unwrap();
+    let log = tmp.path().join("log");
+    let shared = client(
+        &[
+            ("FAKE_LOG", log.to_str().unwrap()),
+            ("FAKE_WINDOW_DELAY_MS", "1500"),
+        ],
+        tmp.path(),
+    );
+    shared.warm().unwrap();
+    let batch_finished = Arc::new(AtomicBool::new(false));
+    let batch = {
+        let shared = shared.clone();
+        let batch_finished = batch_finished.clone();
+        std::thread::spawn(move || {
+            let result = shared.transcribe_file_samples(
+                &[0.0; SR],
+                &sagascript_core::transcription::engine_host::CancelToken::new(),
+                None,
+            );
+            batch_finished.store(true, Ordering::SeqCst);
+            result
+        })
+    };
+    assert!(
+        wait_for_window_count(&log, 1),
+        "batch window was not submitted"
+    );
+
+    let live_backend = live(&shared);
+    let live_job = std::thread::spawn(move || dictate(&live_backend).0);
+    assert!(
+        wait_for_window_count(&log, 2),
+        "interactive window waited for the batch window to finish"
+    );
+    assert!(
+        !batch_finished.load(Ordering::SeqCst),
+        "the live window must be submitted while the batch window is active"
+    );
+
+    assert!(batch.join().unwrap().is_ok());
+    assert!(live_job.join().unwrap().is_ok());
+    assert_eq!(spawn_count(&log), 1);
 }
 
 #[test]

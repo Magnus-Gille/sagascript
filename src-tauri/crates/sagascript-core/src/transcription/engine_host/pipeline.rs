@@ -445,7 +445,34 @@ impl EngineHostClient {
         samples: &[f32],
         opts: JobOptions,
         cancel: &CancelToken,
+        progress: Option<ProgressFn<'_>>,
+    ) -> Result<Transcription> {
+        self.transcribe_samples_with_boost_policy(samples, opts, cancel, progress, true)
+    }
+
+    /// Run synthetic warm-up samples without inheriting a client-wide
+    /// context-biasing dictionary. The result is discarded by the caller.
+    pub(crate) fn transcribe_warmup_samples(
+        &self,
+        samples: &[f32],
+        cancel: &CancelToken,
+    ) -> Result<Transcription> {
+        self.transcribe_samples_with_boost_policy(
+            samples,
+            JobOptions::default(),
+            cancel,
+            None,
+            false,
+        )
+    }
+
+    fn transcribe_samples_with_boost_policy(
+        &self,
+        samples: &[f32],
+        opts: JobOptions,
+        cancel: &CancelToken,
         mut progress: Option<ProgressFn<'_>>,
+        inherit_client_boost: bool,
     ) -> Result<Transcription> {
         if cancel.is_cancelled() {
             return Err(EngineHostError::Cancelled);
@@ -492,7 +519,10 @@ impl EngineHostClient {
             num_samples: (plan[i].end_sample - plan[i].start_sample) as u64,
             sample_rate: sr,
             priority: opts.priority,
-            boost: opts.boost.clone().or_else(|| self.boost()),
+            boost: opts
+                .boost
+                .clone()
+                .or_else(|| inherit_client_boost.then(|| self.boost()).flatten()),
         };
 
         let mut queue: VecDeque<(usize, WindowTicket)> = VecDeque::new();

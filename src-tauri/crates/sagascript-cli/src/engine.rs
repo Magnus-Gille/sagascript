@@ -2,7 +2,7 @@
 //!
 //! `status` reports what would run, `doctor` runs the full chain (resolve host,
 //! hello, load, transcribe one second of silence) and fails loudly, `warm`
-//! loads the model and holds it (benchmarks, signed-build smoke tests).
+//! loads the model and optionally primes inference before holding it.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -77,13 +77,20 @@ the app runs at startup) and reports how many it removed and how many are in use
         long_about = "\
 Start the engine host, load the Pianissimo model and keep it loaded until \
 Ctrl+C or --seconds elapse. Idle unloading is disabled while holding. Useful for \
-benchmarking warm latency or smoke-testing a signed build.",
-        after_long_help = "EXAMPLES:\n  sagascript engine warm --seconds 30"
+benchmarking warm latency or smoke-testing a signed build.\n\n\
+Use --prime to run a short transcription on synthetic silence after loading. \
+The host reserves a request slot for dictation when it can, but providers may \
+serialize execution or be unable to interrupt a long compile. Priming does not \
+guarantee an instant first dictation.",
+        after_long_help = "EXAMPLES:\n  sagascript engine warm --seconds 30\n  sagascript engine warm --prime --seconds 30"
     )]
     Warm {
         /// Stop after this many seconds (default: until Ctrl+C)
         #[arg(long, value_name = "N")]
         seconds: Option<u64>,
+        /// Run one bounded synthetic inference after loading
+        #[arg(long)]
+        prime: bool,
     },
 }
 
@@ -99,7 +106,7 @@ pub fn run(args: EngineArgs, out: &Out) -> Result<(), CliError> {
             let probe = Probe::detect();
             doctor(&probe, verify_model, json, out)
         }
-        EngineAction::Warm { seconds } => Ok(warm(seconds, out)?),
+        EngineAction::Warm { seconds, prime } => Ok(warm(seconds, prime, out)?),
     }
 }
 
@@ -590,19 +597,21 @@ fn print_doctor(report: &DoctorReport, json: bool, out: &Out) -> Result<(), Writ
 
 // ---- warm -----------------------------------------------------------------
 
-fn warm(seconds: Option<u64>, out: &Out) -> Result<(), DictationError> {
+fn warm(seconds: Option<u64>, prime: bool, out: &Out) -> Result<(), DictationError> {
     let config = pianissimo_backend::engine_config(&sagascript_core::machine::load())?;
+    let verification_started = Instant::now();
     pianissimo_model::verify_downloaded()?;
+    errln!(
+        out,
+        "Model verification finished in {:.2} s.",
+        verification_started.elapsed().as_secs_f64()
+    );
     let client = quiet(&config);
-    let started = Instant::now();
-    client
-        .warm()
-        .map_err(|e| DictationError::TranscriptionFailed(e.to_string()))?;
+    warm_engine_client(&client, prime, out)?;
     let snapshot = client.snapshot();
     errln!(
         out,
-        "Engine warm in {:.2} s (host pid {}). {}",
-        started.elapsed().as_secs_f64(),
+        "Engine host pid {}. {}",
         snapshot.pid.map_or("?".into(), |p| p.to_string()),
         match seconds {
             Some(n) => format!("Holding for {n} s..."),
@@ -625,6 +634,51 @@ fn warm(seconds: Option<u64>, out: &Out) -> Result<(), DictationError> {
         std::thread::sleep(Duration::from_millis(200));
     }
     client.shutdown();
+    Ok(())
+}
+
+fn warm_engine_client(
+    client: &EngineHostClient,
+    prime: bool,
+    out: &Out,
+) -> Result<(), DictationError> {
+    let was_loaded = client.snapshot().loaded;
+    let started = Instant::now();
+    client
+        .warm()
+        .map_err(|e| DictationError::TranscriptionFailed(e.to_string()))?;
+    let ready_ms = started.elapsed().as_millis() as u64;
+    let model_load_ms = if was_loaded {
+        0
+    } else {
+        client
+            .snapshot()
+            .last_load
+            .map(|load| load.load_ms)
+            .unwrap_or(0)
+    };
+    let host_start_ms = ready_ms.saturating_sub(model_load_ms);
+    errln!(
+        out,
+        "Engine ready in {:.2} s (host start/handshake {:.2} s; model load {} ms).",
+        ready_ms as f64 / 1000.0,
+        host_start_ms as f64 / 1000.0,
+        model_load_ms
+    );
+    if prime {
+        let started = Instant::now();
+        match pianissimo_backend::prime_inference_cache(client, &CancelToken::new())? {
+            true => errln!(
+                out,
+                "Inference cache primed in {:.2} s (100 ms of local silence).",
+                started.elapsed().as_secs_f64()
+            ),
+            false => errln!(
+                out,
+                "Inference priming skipped: host cannot reserve an interactive request slot."
+            ),
+        }
+    }
     Ok(())
 }
 
@@ -709,6 +763,49 @@ mod tests {
             ))
         );
         assert_eq!(fake_host_executable_from_cargo_messages("not json"), None);
+    }
+
+    #[test]
+    fn engine_warm_only_primes_inference_when_requested() {
+        let tmp = tempfile::tempdir().unwrap();
+        let log = tmp.path().join("host.log");
+        let mut config = EngineHostConfig::new(
+            fake_host(),
+            LoadSpec {
+                model_dir: tmp.path().join("model-ok"),
+                model_id: "pianissimo-sv-test".into(),
+                compute_units: "cpu".into(),
+            },
+        );
+        config
+            .env
+            .push(("FAKE_LOG".into(), log.to_string_lossy().into_owned()));
+        config.temp_dir = Some(tmp.path().to_path_buf());
+        let client = quiet(&config);
+
+        let (out, captured) = Out::capture();
+        warm_engine_client(&client, false, &out).unwrap();
+        assert!(captured.stderr().contains("host start/handshake"));
+        assert!(captured.stderr().contains("model load 1 ms"));
+        let lines = std::fs::read_to_string(&log).unwrap();
+        assert!(!lines
+            .lines()
+            .any(|line| line.starts_with("transcribe_window ")));
+
+        let (out, captured) = Out::capture();
+        warm_engine_client(&client, true, &out).unwrap();
+        assert!(captured.stderr().contains("Inference cache primed"));
+        let lines = std::fs::read_to_string(&log).unwrap();
+        assert_eq!(
+            lines
+                .lines()
+                .filter(|line| line.starts_with("transcribe_window "))
+                .count(),
+            1,
+            "explicit priming must perform one synthetic inference"
+        );
+        assert_eq!(client.snapshot().loads, 1);
+        client.shutdown();
     }
 
     /// A [`Probe`] whose engine writes its PCM temp dirs into a private

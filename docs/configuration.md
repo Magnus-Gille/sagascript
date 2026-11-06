@@ -215,12 +215,23 @@ See [ADR 0007](adr/0007-settings-file-evolution.md).
 
 ## Engine warm-up (Pianissimo)
 
-Decision (#277): the Pianissimo engine now loads in the background by default so
-the first dictation does not wait on a cold model.
+Decision (#277): the Pianissimo engine loads in the background by default. A
+background pre-warm also runs 100 ms of synthetic silence through the inference
+path when the cache is cold, stale or invalidated by system wake.
 
 - `engine_prewarm` defaults to `on_app_start` (it was `on_key_down`): the model
   loads at app start, after system wake and when a profile switches to
-  Pianissimo. Key-down still warms after an idle unload. `off` loads lazily.
+  Pianissimo. Key-down still warms after an idle unload or a stale inference
+  cache. `on_key_down` waits until key-down; `off` disables automatic loading
+  and inference priming.
+- Synthetic input produces no dictation output or history. It runs at batch
+  priority and keeps a negotiated request slot available for dictation, but a
+  provider can serialize that slot with its execution work and may not interrupt
+  a long compile. Background priming therefore reduces cold waits without
+  guaranteeing an instant result when the user releases the key.
+- `sagascript engine warm --prime` explicitly runs the same short synthetic
+  inference for diagnostics and benchmarking. Plain `engine warm` still only
+  loads and holds the model.
 - `engine_idle_unload_minutes` defaults to 60 (was 10).
 - Migration (`engine_defaults_version` 1): settings still on the old defaults
   move to the new ones once; an explicit non-default choice is kept.

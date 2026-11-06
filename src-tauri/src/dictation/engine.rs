@@ -66,6 +66,11 @@ fn prewarm_engine_for(
     trigger: sagascript_core::transcription::pianissimo_backend::WarmTrigger,
 ) {
     use sagascript_core::transcription::pianissimo_backend::warm_on;
+    if trigger == sagascript_core::transcription::pianissimo_backend::WarmTrigger::Wake {
+        // Core ML may evict its compiled inference state while the app sleeps,
+        // even when the engine host still reports the model as loaded.
+        sagascript_core::transcription::pianissimo_backend::mark_inference_cold();
+    }
     let ctrl: tauri::State<'_, SharedController> = app.state();
     // Wake callbacks run on the main thread inside an ObjC block: never block
     // on the controller there. Skip this warm when it is busy; a poisoned
