@@ -56,6 +56,9 @@ mod test_signals;
 
 use std::time::Duration;
 
+pub use capture::{
+    test_source_requested, SyntheticConfig, SyntheticSource, SYNTHETIC_DEVICE_NAME, TEST_SOURCE_ENV,
+};
 pub use decode::{decode_tracks, TrackChunk, TrackDecoder, CHUNK_SAMPLES};
 pub use encoder::{TrackEncoder, TrackSummary};
 pub use error::RecordingError;

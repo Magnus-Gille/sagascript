@@ -185,7 +185,19 @@ CLI and the app and wait for their own change: `settings::{WhisperModel, FileMod
   the writer's policy as a steppable object: gaps, clock anchors, endings, disk, FAT limit), `resampler.rs`
   (the streaming 16 kHz resampler of the compact tier), `disk.rs` (free-space thresholds),
   `fsclass.rs` (folder warnings: FAT32, exFAT, network, cloud-synced) and `status.rs` (the snapshot).
-  The CLI, commands, settings and UI (1c) build on it and are not here. Only `flacenc` (exact pin,
+  **Surfaces (SAGA-564, phase 1c)**: `capture/synthetic.rs` (`SyntheticSource`, a real-time sine on its
+  own thread with no `cpal`; `test_source_requested()` reads `SAGASCRIPT_TEST_SOURCE=synthetic[:hz]` only
+  in a debug or `dev-overrides` build, for the CLI's integration tests); `library.rs` (`list_recordings`,
+  `read_recording` by folder name or id prefix, `delete_recording_folder`, `audio_track_path`: a name is
+  one plain component, a locked or manifest-less folder is never deleted); `decode.rs` (`decode_tracks`,
+  a pull-based iterator of 16 kHz mono `TrackChunk`s of at most 2 s, one track after another, offsets as
+  leading silence, a typed error for a track shorter than its manifest; `NativeTrackReader` is the FLAC
+  reader it shares with the export; `tests/recording_decode_memory.rs` measures that memory is flat);
+  `export.rs` (`export_recording`: FLAC or WAV as `tracks` (byte copy or streamed 24-bit decode),
+  `stereo` or `mixdown` (derived: aligned by clock offset, resampled to the highest rate, reported in the
+  `ExportReport`); never overwrites, never writes inside the recording folder). The test helper
+  `test_recordings.rs` records through the real session over `FakeSource`. The CLI, commands, settings
+  and UI build on these and are not here. Only `flacenc` (exact pin,
   no default features) was added as a dependency.
 
 **The top level of `src/`.** A subsystem is a directory; the files beside `lib.rs` are the
