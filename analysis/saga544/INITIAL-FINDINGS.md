@@ -70,3 +70,7 @@ to justify changing product code or adding reference-specific corrections.
    holdout IDs. Retain the ticket if no candidate improves held-out word errors.
 
 No inference, decoder tuning, or product code change was run in this worktree.
+
+## Data attribution
+
+The Swedish FLEURS reference material is from Google Research's FLEURS dataset (https://huggingface.co/datasets/google/fleurs), licensed CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/). The frozen split selects and records a subset for this analysis; local paths in the manifest describe the original test environment and are not portable.
