@@ -36,6 +36,7 @@
 //! recording that is still being written.
 
 pub mod capture;
+pub mod decode;
 pub mod encoder;
 pub mod error;
 pub mod flac;
@@ -47,10 +48,13 @@ pub mod recover;
 pub mod session;
 pub mod store;
 #[cfg(test)]
+mod test_recordings;
+#[cfg(test)]
 mod test_signals;
 
 use std::time::Duration;
 
+pub use decode::{decode_tracks, TrackChunk, TrackDecoder, CHUNK_SAMPLES};
 pub use encoder::{TrackEncoder, TrackSummary};
 pub use error::RecordingError;
 pub use flac::{FlacEncoder, TrackSink};

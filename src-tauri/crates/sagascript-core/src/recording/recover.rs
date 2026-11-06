@@ -44,11 +44,9 @@ use super::manifest::{
     is_plain_file_name, parse_manifest, serialize_manifest, Clock, EndedReason, Gap, Manifest,
     RecordingState, Track, MANIFEST_FILE,
 };
-use super::store::{lock_folder, read_bounded, RecordingStore, LOCK_FILE};
+use super::store::{lock_folder, read_bounded, RecordingStore, LOCK_FILE, MAX_MANIFEST_BYTES};
 use crate::hash::StreamingSha256;
 
-/// The largest manifest read.
-const MAX_MANIFEST_BYTES: u64 = 16 * 1024 * 1024;
 /// How much of a track file is read to find its header.
 const HEADER_READ_LIMIT: usize = 1024 * 1024;
 /// How many `.tail` files of one track are tried.
