@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "revision": "dense-exact-shift-v1",
+  "mel_frames": 2048,
+  "source_model": "pianissimo-sv-onnx-32118e6",
+  "source_graph_sha256": "394521a5395368a78e5b7b770c8ee0a410e5f781d1dab78f381ff32208385abe",
+  "files": [
+    {
+      "name": "encoder.onnx",
+      "size": 627780,
+      "sha256": "beaefbf4682da2810f514d6ad937a985e738dadd883837e84cc26d9f3b3f4108"
+    },
+    {
+      "name": "encoder.weights",
+      "size": 1345163776,
+      "sha256": "b7a9c29346db7de77308979e3d6ea0e702efb0137d062a456ecb279b8e22c431"
+    }
+  ]
+}
