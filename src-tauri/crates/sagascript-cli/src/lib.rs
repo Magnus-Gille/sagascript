@@ -30,6 +30,10 @@ pub mod speaker_args;
 // stack — on Linux, no cpal/ALSA.
 #[cfg(feature = "record")]
 pub mod record;
+#[cfg(feature = "record")]
+mod recorder;
+mod recording_text;
+pub mod recordings;
 pub mod transcribe;
 
 use std::path::PathBuf;
@@ -156,6 +160,10 @@ EXAMPLES:
 
   # Record from microphone for 30 seconds, copy result to clipboard
   sagascript record --duration 30 --clipboard
+
+  # Keep a recording as FLAC files, then list what you have
+  sagascript record --name 'Team meeting'
+  sagascript recordings list
 
   # List all available models for Swedish
   sagascript list-models --language sv
@@ -334,6 +342,22 @@ have elapsed. The captured audio is then transcribed using the selected model.
 Use --output to save the raw audio as a WAV file without transcribing \
 (useful for capturing audio to process later with 'sagascript transcribe').
 
+RECORDER MODE: --quality, --dir, --name or --transcribe keep the recording as \
+a folder of FLAC files plus a manifest instead of audio in memory. --quality \
+lossless stores the microphone as the device delivers it (24-bit, native \
+sample rate, about 300 MB per hour); compact stores 16 kHz, 16-bit (about \
+50 MB per hour). The folder goes under --dir (default: the recording_directory \
+setting, else the Sagascript folder in your Music folder); --name is the \
+title. Recorder mode is never silent: stderr shows a start banner, a status \
+line every 10 seconds (elapsed time, level, gaps, free disk) and a summary. \
+Ctrl+C, SIGTERM and --duration stop and finish the recording. stdout is the \
+folder path, or with --json one object describing the recording; with \
+--transcribe the saved recording is then transcribed and stdout is the text \
+(the JSON object gains 'transcript'). The recorder flags cannot be combined \
+with --output or --clipboard. Recording other people may need their consent; \
+a microphone picks up the whole room. Manage recordings with \
+'sagascript recordings'.
+
 NOTE: --language auto uses a generic multilingual model which is less \
 accurate than the dedicated language models. Finnish uses the generic \
 multilingual Base model by default; optional Finnish-optimized Tiny is \
@@ -354,9 +378,47 @@ EXAMPLES:
   sagascript record --clipboard
 
   # Record with JSON output
-  sagascript record --duration 5 --json"
+  sagascript record --duration 5 --json
+
+  # Keep a lossless recording in a folder until Ctrl+C
+  sagascript record --quality lossless --name \"Team meeting\"
+
+  # Compact recording for 10 minutes, then transcribe it
+  sagascript record --quality compact --duration 600 --transcribe"
     )]
     Record(record::RecordArgs),
+
+    /// List, show, export, recover and delete recordings made with `record`
+    #[command(
+        long_about = "\
+Work with the recording folders that 'sagascript record' (recorder mode) and the \
+Sagascript app write: one folder per recording with lossless or compact FLAC \
+tracks and a manifest.
+
+All actions take --dir (default: the recording_directory setting, else the \
+Sagascript folder in your Music folder) and --json. A recording is named by its \
+folder name, by its recording id (6 or more characters of it) or by its folder path.
+
+'delete' removes the folder for good and needs --yes; the app moves recordings \
+to the Trash instead.",
+        after_long_help = "\
+EXAMPLES:
+  # What is there?
+  sagascript recordings list
+
+  # Details of one recording
+  sagascript recordings show a1b2c3d4
+
+  # A mixdown as a single WAV file
+  sagascript recordings export a1b2c3d4 --format wav --layout mixdown --output talk.wav
+
+  # Finish recordings a crash interrupted
+  sagascript recordings recover
+
+  # Remove a recording for good
+  sagascript recordings delete a1b2c3d4 --yes"
+    )]
+    Recordings(recordings::RecordingsArgs),
 
     /// Inspect and exercise the Pianissimo engine host
     #[command(
@@ -663,6 +725,7 @@ fn json_output(command: &Command) -> Option<JsonOutput> {
             permissions::PermissionsAction::Status { json: true } => Some(JsonOutput::Pretty),
             _ => None,
         },
+        Command::Recordings(args) if args.action.json() => Some(JsonOutput::Pretty),
         Command::Glossary(args) => match args.action {
             glossary::GlossaryAction::Suggest { json: true, .. } => Some(JsonOutput::Compact),
             _ => None,
@@ -691,6 +754,7 @@ fn dispatch(command: Command, out: &Out) -> Result<(), CliError> {
             let out = out.clone();
             run_inference_command("record", move || Ok(record::run(args, &out)?))?
         }
+        Command::Recordings(args) => recordings::run(args, out)?,
         Command::ListModels(args) => models::list(args, out)?,
         Command::DownloadModel(args) => tokio::runtime::Runtime::new()
             .map_err(|error| {

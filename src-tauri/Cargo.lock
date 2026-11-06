@@ -4577,6 +4577,7 @@ name = "sagascript-cli"
 version = "1.4.8"
 dependencies = [
  "arboard",
+ "chrono",
  "clap",
  "clap_complete",
  "clap_mangen",

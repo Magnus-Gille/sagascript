@@ -43,13 +43,37 @@ pub struct RecordArgs {
     #[arg(short, long, value_name = "PATH")]
     pub output: Option<String>,
 
-    /// Output result as JSON (includes text, language, model, duration)
+    /// Output result as JSON (includes text, language, model, duration; in recorder mode the saved recording)
     #[arg(long)]
     pub json: bool,
 
     /// Copy transcription result to clipboard
     #[arg(long)]
     pub clipboard: bool,
+
+    /// Recorder mode: keep the recording as a folder of FLAC files. lossless stores the
+    /// microphone as it delivers it (24-bit, native rate); compact stores 16 kHz, 16-bit
+    /// (default: the recording_quality setting)
+    #[arg(
+        long,
+        value_name = "QUALITY",
+        value_parser = clap::builder::PossibleValuesParser::new(["lossless", "compact"]),
+        conflicts_with_all = ["output", "clipboard"]
+    )]
+    pub quality: Option<String>,
+
+    /// Recorder mode: folder that holds the recordings (default: the recording_directory
+    /// setting, else Sagascript in your Music folder)
+    #[arg(long, value_name = "DIR", conflicts_with_all = ["output", "clipboard"])]
+    pub dir: Option<PathBuf>,
+
+    /// Recorder mode: title of the recording (default: Recording); part of the folder name
+    #[arg(long, value_name = "TITLE", conflicts_with_all = ["output", "clipboard"])]
+    pub name: Option<String>,
+
+    /// Recorder mode: transcribe the recording once it is saved and print the text
+    #[arg(long, conflicts_with_all = ["output", "clipboard"])]
+    pub transcribe: bool,
 
     /// Hint the Whisper decoder with domain-specific vocabulary. Not supported by pianissimo-sv.
     /// Reduces mishearings of proper nouns, foreign names, and jargon.
@@ -80,20 +104,55 @@ impl<'a> From<&'a RecordArgs> for RunRequest<'a> {
     }
 }
 
-pub fn run(args: RecordArgs, out: &Out) -> Result<(), DictationError> {
-    let stored = sagascript_core::machine::load();
-    let request = RunRequest::from(&args);
-    let selection = request.select(&stored)?;
+/// What `sagascript record` was asked to do. The old behaviour (capture to
+/// memory, then transcribe or save a WAV) stays exactly as it was unless one of
+/// the recorder flags is given.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RecordMode {
+    /// `record`, `record -o file.wav`, `record --clipboard`, ...
+    Dictation,
+    /// `--quality`, `--dir`, `--name` or `--transcribe`: a recording folder.
+    Recorder,
+}
+
+impl RecordArgs {
+    pub fn mode(&self) -> RecordMode {
+        if self.quality.is_some() || self.dir.is_some() || self.name.is_some() || self.transcribe {
+            RecordMode::Recorder
+        } else {
+            RecordMode::Dictation
+        }
+    }
+}
+
+/// The language, the engine and the vocabulary a transcription run uses,
+/// resolved and validated before any audio is captured.
+pub(crate) struct Prepared {
+    pub language: Language,
+    /// `None` when the run only saves audio.
+    pub model: Option<RecordModel>,
+    pub glossary: Glossary,
+}
+
+/// Resolve the profile, language, engine and glossary, and check that the
+/// engine is installed. `save_only` skips the engine and the hint file: saving
+/// audio selects and requires no transcription model.
+pub(crate) fn prepare(
+    args: &RecordArgs,
+    stored: &Settings,
+    save_only: bool,
+) -> Result<Prepared, DictationError> {
+    let request = RunRequest::from(args);
+    let selection = request.select(stored)?;
     let profile = &selection.profile;
     let language = selection.language;
-    let save_only = args.output.is_some();
     // Saving audio does not select or require a transcription model. Resolve
     // and validate the engine before capture for every transcription run.
     let selected_model = if save_only {
         None
     } else {
         let mut selected =
-            resolve_record_model_for_profile(&stored, profile, language, args.model.as_deref())?;
+            resolve_record_model_for_profile(stored, profile, language, args.model.as_deref())?;
         // Pianissimo has no decoder hints. When it was only implied by
         // "recommended" (no --model, profile on Auto or a language override),
         // decode with the recommended Whisper model instead of failing.
@@ -119,7 +178,7 @@ pub fn run(args: RecordArgs, out: &Out) -> Result<(), DictationError> {
     let glossary = if save_only {
         Glossary::parse("")
     } else {
-        request.finish(&stored, selection)?.glossary
+        request.finish(stored, selection)?.glossary
     };
     if let Some(selected) = selected_model {
         match selected {
@@ -149,6 +208,91 @@ pub fn run(args: RecordArgs, out: &Out) -> Result<(), DictationError> {
             }
         }
     }
+    Ok(Prepared {
+        language,
+        model: selected_model,
+        glossary,
+    })
+}
+
+/// A finished transcription of recorded audio.
+pub(crate) struct Transcript {
+    pub text: String,
+    pub model_id: &'static str,
+    pub vocabulary_corrections: Vec<sagascript_core::glossary::GlossaryCorrection>,
+}
+
+/// Transcribe 16 kHz mono `audio` of `duration` seconds with the engine that
+/// [`prepare`] chose and apply the vocabulary corrections. Shared by the
+/// dictation mode and by the recorder's `--transcribe`.
+pub(crate) fn transcribe_samples(
+    audio: &[f32],
+    duration: f64,
+    model: RecordModel,
+    language: Language,
+    glossary: &Glossary,
+    out: &Out,
+) -> Result<Transcript, DictationError> {
+    let (text, model_id) = match model {
+        RecordModel::Whisper(model) => {
+            errln!(out, "Loading model: {}...", model.display_name());
+            let backend = WhisperBackend::new();
+            backend.load_model(model)?;
+
+            let decoder_prompt = glossary.decoder_prompt();
+            let opts = TranscribeOptions {
+                prompt: decoder_prompt,
+                ..TranscribeOptions::default()
+            };
+            let text = if duration > 10.0 {
+                let pb = ProgressBar::new(100);
+                pb.set_style(
+                    ProgressStyle::with_template("  Transcribing [{bar:40}] {pos}%").unwrap(),
+                );
+                let pb_cb = pb.clone();
+                let text = backend.transcribe_text(
+                    TranscribeRequest::new(audio, language, &opts)
+                        .live()
+                        .on_progress(move |pct| {
+                            crate::set_transcription_progress(&pb_cb, pct);
+                        }),
+                )?;
+                pb.finish_and_clear();
+                text
+            } else {
+                errln!(out, "Transcribing...");
+                backend.transcribe_text(TranscribeRequest::new(audio, language, &opts).live())?
+            };
+            (text, model_id_string(model))
+        }
+        RecordModel::Pianissimo(pianissimo) => {
+            if glossary.decoder_prompt().is_some() {
+                errln!(out, "Pianissimo does not use Whisper decoder hints; aliases in the selected profile still correct the transcript after inference.");
+            }
+            errln!(out, "Loading model: Pianissimo...");
+            let text = transcribe_pianissimo_record(audio, duration, pianissimo, out)?;
+            (text, pianissimo.id())
+        }
+    };
+    let (text, vocabulary_corrections) = glossary.correct_text(&text);
+    Ok(Transcript {
+        text,
+        model_id,
+        vocabulary_corrections,
+    })
+}
+
+pub fn run(args: RecordArgs, out: &Out) -> Result<(), DictationError> {
+    if args.mode() == RecordMode::Recorder {
+        return crate::recorder::run(args, out);
+    }
+    let stored = sagascript_core::machine::load();
+    let save_only = args.output.is_some();
+    let Prepared {
+        language,
+        model: selected_model,
+        glossary,
+    } = prepare(&args, &stored, save_only)?;
 
     // Set up Ctrl+C handler
     let running = Arc::new(AtomicBool::new(true));
@@ -203,49 +347,11 @@ pub fn run(args: RecordArgs, out: &Out) -> Result<(), DictationError> {
 
     // Transcribe
     let selected_model = selected_model.expect("transcription model resolved before capture");
-    let (text, model_id) = match selected_model {
-        RecordModel::Whisper(model) => {
-            errln!(out, "Loading model: {}...", model.display_name());
-            let backend = WhisperBackend::new();
-            backend.load_model(model)?;
-
-            let decoder_prompt = glossary.decoder_prompt();
-            let opts = TranscribeOptions {
-                prompt: decoder_prompt,
-                ..TranscribeOptions::default()
-            };
-            let text = if duration > 10.0 {
-                let pb = ProgressBar::new(100);
-                pb.set_style(
-                    ProgressStyle::with_template("  Transcribing [{bar:40}] {pos}%").unwrap(),
-                );
-                let pb_cb = pb.clone();
-                let text = backend.transcribe_text(
-                    TranscribeRequest::new(&audio, language, &opts)
-                        .live()
-                        .on_progress(move |pct| {
-                            crate::set_transcription_progress(&pb_cb, pct);
-                        }),
-                )?;
-                pb.finish_and_clear();
-                text
-            } else {
-                errln!(out, "Transcribing...");
-                backend.transcribe_text(TranscribeRequest::new(&audio, language, &opts).live())?
-            };
-            (text, model_id_string(model))
-        }
-        RecordModel::Pianissimo(pianissimo) => {
-            if glossary.decoder_prompt().is_some() {
-                errln!(out, "Pianissimo does not use Whisper decoder hints; aliases in the selected profile still correct the transcript after inference.");
-            }
-            errln!(out, "Loading model: Pianissimo...");
-            let text = transcribe_pianissimo_record(&audio, duration, pianissimo, out)?;
-            (text, pianissimo.id())
-        }
-    };
-
-    let (text, vocabulary_corrections) = glossary.correct_text(&text);
+    let Transcript {
+        text,
+        model_id,
+        vocabulary_corrections,
+    } = transcribe_samples(&audio, duration, selected_model, language, &glossary, out)?;
     let has_text = !text.trim().is_empty();
 
     // Output
@@ -271,7 +377,7 @@ pub fn run(args: RecordArgs, out: &Out) -> Result<(), DictationError> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum RecordModel {
+pub(crate) enum RecordModel {
     Whisper(WhisperModel),
     Pianissimo(PianissimoModel),
 }
@@ -389,7 +495,7 @@ fn transcribe_pianissimo_with_progress<T>(
     }
 }
 
-fn write_plain_record_output(out: &Out, text: &str) -> Result<bool, WriteError> {
+pub(crate) fn write_plain_record_output(out: &Out, text: &str) -> Result<bool, WriteError> {
     if text.trim().is_empty() {
         return Ok(false);
     }
@@ -398,7 +504,7 @@ fn write_plain_record_output(out: &Out, text: &str) -> Result<bool, WriteError> 
     Ok(true)
 }
 
-fn ctrlc_handler(running: Arc<AtomicBool>) {
+pub(crate) fn ctrlc_handler(running: Arc<AtomicBool>) {
     let _ = ctrlc::set_handler(move || {
         running.store(false, Ordering::Relaxed);
     });
@@ -411,11 +517,77 @@ mod tests {
         write_plain_record_output, RecordModel,
     };
     use crate::output::Out;
+    use clap::Parser;
     use sagascript_core::settings::{
         FileModelPreference, HotkeyProfile, Language, PianissimoModel, Settings, WhisperModel,
     };
 
     const FALLBACK: WhisperModel = WhisperModel::KbWhisperLarge;
+
+    fn parsed(extra: &[&str]) -> Result<super::RecordArgs, clap::Error> {
+        let mut argv = vec!["sagascript", "record"];
+        argv.extend_from_slice(extra);
+        crate::Cli::try_parse_from(argv).map(|cli| match cli.command {
+            Some(crate::Command::Record(args)) => args,
+            _ => panic!("expected record"),
+        })
+    }
+
+    /// D5: `record` without a recorder flag, and `record -o file.wav`, are the
+    /// old command (capture to memory, then transcribe or save a WAV). The
+    /// branch is a pure function of the arguments, so this needs no device.
+    #[test]
+    fn the_old_record_invocations_stay_in_dictation_mode() {
+        for argv in [
+            &[][..],
+            &["-o", "capture.wav"],
+            &["--output", "capture.wav", "--duration", "5"],
+            &["--clipboard"],
+            &["--json", "--duration", "5", "--language", "no"],
+            &["--model", "base.en", "--hint", "Sara"],
+            &["--profile", "default", "--prompt-file", "terms.txt"],
+        ] {
+            let args = parsed(argv).unwrap_or_else(|e| panic!("{argv:?}: {e}"));
+            assert_eq!(args.mode(), super::RecordMode::Dictation, "{argv:?}");
+            assert!(args.quality.is_none() && args.dir.is_none() && args.name.is_none());
+            assert!(!args.transcribe);
+        }
+        let args = parsed(&["-o", "capture.wav"]).unwrap();
+        assert_eq!(args.output.as_deref(), Some("capture.wav"));
+    }
+
+    #[test]
+    fn any_recorder_flag_selects_recorder_mode() {
+        for argv in [
+            &["--quality", "lossless"][..],
+            &["--quality", "compact"],
+            &["--dir", "takes"],
+            &["--name", "Standup"],
+            &["--transcribe"],
+            &["--duration", "5", "--json", "--name", "x"],
+        ] {
+            let args = parsed(argv).unwrap_or_else(|e| panic!("{argv:?}: {e}"));
+            assert_eq!(args.mode(), super::RecordMode::Recorder, "{argv:?}");
+        }
+    }
+
+    #[test]
+    fn recorder_flags_conflict_with_output_and_clipboard() {
+        for recorder in [
+            &["--quality", "lossless"][..],
+            &["--dir", "d"],
+            &["--name", "n"],
+            &["--transcribe"],
+        ] {
+            for legacy in [&["-o", "x.wav"][..], &["--clipboard"]] {
+                let mut argv = recorder.to_vec();
+                argv.extend_from_slice(legacy);
+                let error = parsed(&argv).err().unwrap_or_else(|| panic!("{argv:?}"));
+                assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+            }
+        }
+        assert!(parsed(&["--quality", "mp3"]).is_err());
+    }
 
     #[test]
     fn two_profiles_keep_independent_record_engines_and_explicit_override() {
