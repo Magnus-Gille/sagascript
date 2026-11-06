@@ -108,17 +108,58 @@ mod platform {
     }
 }
 
+/// `GetDriveTypeW`'s answer for a fixed local disk. The shell sends an item to
+/// the Recycle Bin only where the volume has one, and `SHFileOperationW` with
+/// `FOF_ALLOWUNDO` *deletes for good* where it has none (a network share or
+/// UNC path, a USB stick, a RAM disk), without an error. The app promises a
+/// reversible move, so only a fixed disk is trusted to have a bin.
+#[cfg_attr(not(windows), allow(dead_code))]
+const DRIVE_FIXED: u32 = 3;
+
+/// Whether a volume of this `GetDriveTypeW` type is expected to have a
+/// Recycle Bin that takes a recording folder.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn recycle_bin_expected(drive_type: u32) -> bool {
+    drive_type == DRIVE_FIXED
+}
+
 #[cfg(windows)]
 mod platform {
     use std::os::windows::ffi::OsStrExt;
     use std::path::Path;
 
+    use windows_sys::Win32::Storage::FileSystem::{GetDriveTypeW, GetVolumePathNameW};
     use windows_sys::Win32::UI::Shell::{
-        SHFileOperationW, FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_NOERRORUI, FOF_SILENT, FO_DELETE,
-        SHFILEOPSTRUCTW,
+        SHFileOperationW, FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_NOERRORUI, FOF_SILENT,
+        FOF_WANTNUKEWARNING, FO_DELETE, SHFILEOPSTRUCTW,
     };
 
+    use super::recycle_bin_expected;
     use crate::command_error::CommandError;
+
+    fn wide(text: &std::ffi::OsStr) -> Vec<u16> {
+        text.encode_wide().chain(std::iter::once(0)).collect()
+    }
+
+    fn not_recyclable() -> CommandError {
+        CommandError::Unavailable(
+            "This recording is on a drive without a Recycle Bin (a network share, a USB drive or similar), so it was not deleted. Delete the folder in File Explorer if you want it gone."
+                .into(),
+        )
+    }
+
+    /// The `GetDriveTypeW` type of the volume that holds `path`, or `None`
+    /// when Windows does not say.
+    fn drive_type(path: &Path) -> Option<u32> {
+        let path = wide(path.as_os_str());
+        let mut root = vec![0u16; 1024];
+        // SAFETY: `path` is NUL terminated and `root` has the length passed.
+        if unsafe { GetVolumePathNameW(path.as_ptr(), root.as_mut_ptr(), root.len() as u32) } == 0 {
+            return None;
+        }
+        // SAFETY: `root` was NUL terminated by the call above.
+        Some(unsafe { GetDriveTypeW(root.as_ptr()) })
+    }
 
     pub(super) fn move_to_trash(path: &Path) -> Result<(), CommandError> {
         // The shell needs a full path, and does not take the `\\?\` form.
@@ -128,15 +169,29 @@ mod platform {
         })?;
         let text = full.to_string_lossy();
         let plain = text.strip_prefix(r"\\?\").unwrap_or(&text);
+        // Fail closed: a volume that is not known to have a Recycle Bin is
+        // refused before the shell is called, never trusted to "undo".
+        if !drive_type(Path::new(plain)).is_some_and(recycle_bin_expected) {
+            return Err(not_recyclable());
+        }
         // `pFrom` is a list of names, each ended by a NUL, and the list by another.
         let mut from: Vec<u16> = std::ffi::OsStr::new(plain).encode_wide().collect();
         from.extend([0, 0]);
+        // `FOF_WANTNUKEWARNING` makes the shell warn (and let the user refuse)
+        // where it would delete for good even on a fixed disk (the bin is
+        // switched off, or the folder is larger than the bin allows); it
+        // overrides `FOF_NOCONFIRMATION` for that case only. Refusing it
+        // aborts the operation, which is reported below, and nothing is lost.
         let mut operation = SHFILEOPSTRUCTW {
             hwnd: std::ptr::null_mut(),
             wFunc: FO_DELETE,
             pFrom: from.as_ptr(),
             pTo: std::ptr::null(),
-            fFlags: (FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_NOERRORUI | FOF_SILENT) as u16,
+            fFlags: (FOF_ALLOWUNDO
+                | FOF_NOCONFIRMATION
+                | FOF_NOERRORUI
+                | FOF_SILENT
+                | FOF_WANTNUKEWARNING) as u16,
             fAnyOperationsAborted: 0,
             hNameMappings: std::ptr::null_mut(),
             lpszProgressTitle: std::ptr::null(),
@@ -145,14 +200,17 @@ mod platform {
         // terminated UTF-16 list that outlives the call, and the call is
         // synchronous (no `FOF_ASYNC`).
         let code = unsafe { SHFileOperationW(&mut operation) };
-        if code != 0 || operation.fAnyOperationsAborted != 0 {
+        if operation.fAnyOperationsAborted != 0 {
+            return Err(CommandError::Unavailable(
+                "The recording was not moved: Windows could not send it to the Recycle Bin and the delete was declined."
+                    .into(),
+            ));
+        }
+        if code != 0 {
             return Err(CommandError::Io(
                 "Could not move the recording to the Recycle Bin.".into(),
             )
-            .because(format!(
-                "SHFileOperationW returned {code:#x} (aborted: {})",
-                operation.fAnyOperationsAborted != 0
-            )));
+            .because(format!("SHFileOperationW returned {code:#x}")));
         }
         Ok(())
     }

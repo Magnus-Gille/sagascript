@@ -129,3 +129,28 @@ fn elsewhere_the_system_trash_is_unavailable() {
     let error = move_to_trash(Path::new("x")).expect_err("no trash here");
     assert_eq!(error.code(), "unavailable");
 }
+
+/// The Windows drive types of `GetDriveTypeW`: only a fixed disk is trusted to
+/// have a Recycle Bin (the shell deletes for good on the others).
+#[test]
+fn only_a_fixed_disk_is_expected_to_have_a_recycle_bin() {
+    const DRIVE_UNKNOWN: u32 = 0;
+    const DRIVE_NO_ROOT_DIR: u32 = 1;
+    const DRIVE_REMOVABLE: u32 = 2;
+    const DRIVE_FIXED: u32 = 3;
+    const DRIVE_REMOTE: u32 = 4;
+    const DRIVE_CDROM: u32 = 5;
+    const DRIVE_RAMDISK: u32 = 6;
+    assert!(recycle_bin_expected(DRIVE_FIXED));
+    for other in [
+        DRIVE_UNKNOWN,
+        DRIVE_NO_ROOT_DIR,
+        DRIVE_REMOVABLE,
+        DRIVE_REMOTE,
+        DRIVE_CDROM,
+        DRIVE_RAMDISK,
+        99,
+    ] {
+        assert!(!recycle_bin_expected(other), "{other}");
+    }
+}
