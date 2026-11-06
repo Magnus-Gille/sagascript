@@ -69,6 +69,7 @@ use super::RecordingError;
 use crate::sync::lock_or_recover;
 
 const INNER_LOCK: &str = "recording.session";
+const SOURCES_LOCK: &str = "recording.session.sources";
 const TERMINAL_LOCK: &str = "recording.session.terminal";
 
 /// One source and the track it records to.
@@ -131,6 +132,10 @@ pub struct SessionConfig {
     /// Look at the OS clocks for a system sleep (the real thing; tests that
     /// inject a sleep turn it off).
     pub detect_sleep: bool,
+    /// Tests: called right after the writer thread was spawned, to interleave
+    /// what the writer does with the rest of `start`.
+    #[cfg(test)]
+    pub(crate) after_spawn: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 impl SessionConfig {
@@ -159,14 +164,49 @@ impl SessionConfig {
             free_space: Arc::new(VolumeFreeSpace),
             folder_warnings: None,
             detect_sleep: true,
+            #[cfg(test)]
+            after_spawn: None,
         }
     }
 }
 
 struct Inner {
     started: bool,
-    sources: Vec<Box<dyn CaptureSource>>,
+    /// Set by the one caller of `stop` that owns the shutdown.
+    shutdown_started: bool,
     thread: Option<JoinHandle<()>>,
+}
+
+/// The capture sources, shared between the session (`stop`) and the writer
+/// thread (which stops them when the recording ends without a `stop`).
+///
+/// [`stop_all`](Self::stop_all) holds the set's mutex for the whole time the
+/// sources take to stop, so whoever calls it second waits until the first is
+/// done: nobody can conclude "the sources are stopped" while one is still
+/// delivering. The mutex is a leaf: a source's `stop` takes no lock of this
+/// module.
+struct SourceSet {
+    sources: Mutex<Vec<Box<dyn CaptureSource>>>,
+}
+
+impl SourceSet {
+    fn new() -> Self {
+        Self {
+            sources: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn set(&self, sources: Vec<Box<dyn CaptureSource>>) {
+        *lock_or_recover(&self.sources, SOURCES_LOCK) = sources;
+    }
+
+    /// Stop every source (each `stop` is idempotent). When this returns no
+    /// callback of any source runs any more.
+    fn stop_all(&self) {
+        for source in lock_or_recover(&self.sources, SOURCES_LOCK).iter_mut() {
+            source.stop();
+        }
+    }
 }
 
 /// A recording in progress. `Send + Sync`: the app holds one behind an `Arc`
@@ -176,6 +216,7 @@ pub struct RecordingSession {
     config: SessionConfig,
     status: Arc<StatusShared>,
     inner: Mutex<Inner>,
+    sources: Arc<SourceSet>,
     stop_requested: Arc<AtomicBool>,
     handles: OnceLock<Vec<SignalHandle>>,
     folder: OnceLock<PathBuf>,
@@ -190,9 +231,10 @@ impl RecordingSession {
             status: Arc::new(StatusShared::new()),
             inner: Mutex::new(Inner {
                 started: false,
-                sources: Vec::new(),
+                shutdown_started: false,
                 thread: None,
             }),
+            sources: Arc::new(SourceSet::new()),
             stop_requested: Arc::new(AtomicBool::new(false)),
             handles: OnceLock::new(),
             folder: OnceLock::new(),
@@ -448,19 +490,34 @@ impl RecordingSession {
             }
         };
 
+        // The sources belong to the set before the writer exists: a writer that
+        // finishes at once must find them there to stop. The state is
+        // `Recording` before the writer can publish a terminal state, so
+        // nothing here can overwrite one.
+        self.sources
+            .set(specs.into_iter().map(|spec| spec.source).collect());
+        self.status.set_state(SessionState::Recording);
         let status = Arc::clone(&self.status);
         let stop = Arc::clone(&self.stop_requested);
+        let sources = Arc::clone(&self.sources);
         let tick = config.tick;
-        let clock = Arc::clone(&config.clock);
-        let thread = std::thread::Builder::new()
+        let spawned = std::thread::Builder::new()
             .name("recording-writer".into())
-            .spawn(move || writer_loop(core, stop, status, clock, tick))
-            .map_err(|_| RecordingError::SessionFailed {
-                reason: "could not start the writer thread",
-            })?;
-        inner.sources = specs.into_iter().map(|spec| spec.source).collect();
+            .spawn(move || writer_loop(core, stop, status, sources, tick));
+        let thread = match spawned {
+            Ok(thread) => thread,
+            Err(_) => {
+                self.sources.stop_all();
+                return Err(RecordingError::SessionFailed {
+                    reason: "could not start the writer thread",
+                });
+            }
+        };
         inner.thread = Some(thread);
-        self.status.set_state(SessionState::Recording);
+        #[cfg(test)]
+        if let Some(hook) = &config.after_spawn {
+            hook();
+        }
         Ok(())
     }
 
@@ -468,22 +525,31 @@ impl RecordingSession {
     /// threads at once: every call returns the same result once the first has
     /// finished. A session that was never started has nothing to stop.
     pub fn stop(&self) -> Result<SessionOutcome, RecordingError> {
-        let (mut sources, thread) = {
+        // One caller owns the shutdown: it stops the sources and only then
+        // tells the writer to finish. Every other caller just waits for the
+        // result, so none of them can make the writer finish while a source
+        // is still delivering.
+        let owner = {
             let mut inner = lock_or_recover(&self.inner, INNER_LOCK);
             if !inner.started {
                 return Err(RecordingError::NotRecording);
             }
-            self.status
-                .transition(SessionState::Recording, SessionState::Finalizing);
-            (std::mem::take(&mut inner.sources), inner.thread.take())
+            if inner.shutdown_started {
+                None
+            } else {
+                inner.shutdown_started = true;
+                self.status
+                    .transition(SessionState::Recording, SessionState::Finalizing);
+                Some(inner.thread.take())
+            }
         };
-        // No callback runs once `stop` returns, so the writer sees every block.
-        for source in sources.iter_mut() {
-            source.stop();
-        }
-        self.stop_requested.store(true, Ordering::Release);
-        if let Some(thread) = thread {
-            let _ = thread.join();
+        if let Some(thread) = owner {
+            // No callback runs once this returns, so the writer sees every block.
+            self.sources.stop_all();
+            self.stop_requested.store(true, Ordering::Release);
+            if let Some(thread) = thread {
+                let _ = thread.join();
+            }
         }
         self.wait_terminal()
     }
@@ -540,12 +606,17 @@ fn finish_with(status: &StatusShared, result: Result<SessionOutcome, RecordingEr
 /// Marks the session failed if the writer thread unwinds.
 struct PanicGuard {
     status: Arc<StatusShared>,
+    sources: Arc<SourceSet>,
     armed: bool,
 }
 
 impl Drop for PanicGuard {
     fn drop(&mut self) {
         if self.armed {
+            // The sources first, as in the normal ending; a panic in a
+            // source's `stop` must not become a second panic while unwinding.
+            let sources = &self.sources;
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| sources.stop_all()));
             finish_with(
                 &self.status,
                 Err(RecordingError::SessionFailed {
@@ -560,11 +631,12 @@ fn writer_loop(
     mut core: SessionCore,
     stop: Arc<AtomicBool>,
     status: Arc<StatusShared>,
-    _clock: Arc<dyn SessionClock>,
+    sources: Arc<SourceSet>,
     tick: Duration,
 ) {
     let mut guard = PanicGuard {
         status: Arc::clone(&status),
+        sources: Arc::clone(&sources),
         armed: true,
     };
     let result = loop {
@@ -587,6 +659,12 @@ fn writer_loop(
     // Dropping the core on an error releases the folder's lock and leaves the
     // manifest at `recording`, which recovery finishes.
     drop(core);
+    // The recording is over, by `stop` or by itself (a track that ended, a
+    // full disk, a failure): close the sources *before* anyone can see the
+    // terminal state, so a finished session never leaves a microphone open.
+    // This is the writer thread, which does not join itself: stopping a
+    // source never waits for the writer.
+    sources.stop_all();
     finish_with(&status, result);
 }
 

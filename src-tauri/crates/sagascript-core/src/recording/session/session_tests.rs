@@ -531,3 +531,161 @@ fn the_session_and_its_parts_can_be_shared_between_threads() {
     send::<SessionOutcome>();
     send::<SourceSpec>();
 }
+
+// ---- Codex review of 1b: who stops the sources, and when ----------------------
+
+#[test]
+fn a_track_that_ends_on_its_own_stops_the_source_before_the_session_is_done() {
+    let rig = rig();
+    rig.deliver(ms(200));
+    rig.handle.change_device();
+    wait_until("a terminal state", || rig.session.state().is_terminal());
+    // Not "eventually": the moment `Done` is visible the stream is closed.
+    assert!(
+        !rig.handle.running(),
+        "the microphone is still open at {:?}",
+        rig.session.state()
+    );
+    rig.session.stop().unwrap();
+}
+
+#[test]
+fn a_writer_that_fails_stops_the_source_before_the_session_is_failed() {
+    let rig = rig_with(Quality::Lossless, MONO48, |config| {
+        config.free_space = Arc::new(PanicsOnPoll(Default::default()));
+    });
+    wait_until("a terminal state", || rig.session.state().is_terminal());
+    assert_eq!(rig.session.state(), SessionState::Failed);
+    assert!(
+        !rig.handle.running(),
+        "the microphone is still open after Failed"
+    );
+}
+
+/// A source whose `stop` is held until the test lets it go.
+struct HeldStop {
+    inner: FakeSource,
+    entered: std::sync::mpsc::Sender<()>,
+    release: std::sync::mpsc::Receiver<()>,
+    held_once: bool,
+}
+
+impl CaptureSource for HeldStop {
+    fn format(&self) -> NativeFormat {
+        self.inner.format()
+    }
+    fn device_name(&self) -> Option<String> {
+        None
+    }
+    fn start(&mut self, sink: BlockSink) -> Result<(), RecordingError> {
+        self.inner.start(sink)
+    }
+    fn stop(&mut self) {
+        // Idempotent, like every source: only the first stop is held.
+        if !self.held_once {
+            self.held_once = true;
+            let _ = self.entered.send(());
+            let _ = self.release.recv();
+        }
+        self.inner.stop();
+    }
+}
+
+#[test]
+fn a_second_stop_waits_for_the_first_to_stop_the_source_and_loses_no_audio() {
+    let temp = TempDir::new();
+    let store = RecordingStore::new(temp.path().join("Recordings"));
+    let (source, handle) = FakeSource::new(MONO48);
+    let (entered_tx, entered) = std::sync::mpsc::channel();
+    let (release, release_rx) = std::sync::mpsc::channel();
+    let session = Arc::new(RecordingSession::new(
+        store,
+        config(handle.clock(), Quality::Lossless),
+    ));
+    session
+        .start(vec![SourceSpec {
+            id: "mic".into(),
+            role: "mic".into(),
+            source: Box::new(HeldStop {
+                inner: source,
+                entered: entered_tx,
+                release: release_rx,
+                held_once: false,
+            }),
+        }])
+        .unwrap();
+    handle.deliver(ms(200));
+
+    let first = {
+        let session = Arc::clone(&session);
+        std::thread::spawn(move || session.stop())
+    };
+    entered
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the first stop reached the source");
+    let second = {
+        let session = Arc::clone(&session);
+        std::thread::spawn(move || session.stop())
+    };
+
+    // The source is still delivering, because its stop has not returned. The
+    // second caller must not have told the writer to finish.
+    std::thread::sleep(ms(200));
+    let status = session.status();
+    assert_eq!(
+        status.tracks[0].ended, None,
+        "the writer finished before the source stopped"
+    );
+    assert!(!status.state.is_terminal());
+    handle.deliver(ms(300)); // audio that arrives while the stop is held
+
+    release.send(()).unwrap();
+    let a = first.join().unwrap().unwrap();
+    let b = second.join().unwrap().unwrap();
+    assert_eq!(a.manifest, b.manifest);
+    assert_eq!(
+        a.manifest.tracks[0].frames,
+        handle.position(),
+        "the late audio was kept"
+    );
+    assert!(!handle.running());
+}
+
+#[test]
+fn a_writer_that_fails_at_once_cannot_be_overwritten_by_the_start_finishing_later() {
+    let temp = TempDir::new();
+    let store = RecordingStore::new(temp.path().join("Recordings"));
+    let (source, handle) = FakeSource::new(MONO48);
+    let mut config = config(handle.clock(), Quality::Lossless);
+    config.free_space = Arc::new(PanicsOnPoll(Default::default()));
+    let state_seen = Arc::new(std::sync::Mutex::new(None));
+    let probe: Arc<std::sync::OnceLock<Arc<RecordingSession>>> = Arc::default();
+    {
+        let state_seen = Arc::clone(&state_seen);
+        let probe = Arc::clone(&probe);
+        // Right after the writer is spawned, hold `start` until the writer has
+        // failed: the order that used to be a race.
+        config.after_spawn = Some(Arc::new(move || {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while Instant::now() < deadline {
+                if let Some(session) = probe.get() {
+                    if session.state().is_terminal() {
+                        *state_seen.lock().unwrap() = Some(session.state());
+                        return;
+                    }
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }));
+    }
+    let session = Arc::new(RecordingSession::new(store, config));
+    let _ = probe.set(Arc::clone(&session));
+    session.start(vec![SourceSpec::mic(source)]).unwrap();
+    assert_eq!(
+        session.state(),
+        SessionState::Failed,
+        "`start` replaced a terminal state with Recording (it saw {:?} first)",
+        state_seen.lock().unwrap()
+    );
+    assert!(session.stop().is_err());
+}
