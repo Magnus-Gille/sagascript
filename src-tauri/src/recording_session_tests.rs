@@ -630,6 +630,26 @@ async fn the_state_before_any_session_is_idle() {
     assert!(!h.recorder.is_active());
 }
 
+/// Make a finished recording look like a process died while writing it: its
+/// manifest says `recording` again, sealed the way the writer seals it (a
+/// hand-edited manifest would fail its own integrity check, which is a
+/// different case).
+fn interrupt(manifest_path: &Path) {
+    let mut manifest =
+        sagascript_core::recording::parse_manifest(&std::fs::read(manifest_path).expect("read"))
+            .expect("a parsable manifest");
+    assert_eq!(
+        manifest.state,
+        sagascript_core::recording::RecordingState::Complete
+    );
+    manifest.state = sagascript_core::recording::RecordingState::Recording;
+    std::fs::write(
+        manifest_path,
+        sagascript_core::recording::serialize_manifest_sealed(&manifest).expect("serialize"),
+    )
+    .expect("write");
+}
+
 #[tokio::test]
 async fn a_recording_left_unfinished_is_recovered_and_described() {
     let h = Harness::new();
@@ -642,13 +662,7 @@ async fn a_recording_left_unfinished_is_recovered_and_described() {
         .path()
         .join(&finished.summary.folder_name)
         .join("recording.json");
-    let text = std::fs::read_to_string(&manifest).expect("read");
-    assert!(text.contains("\"state\": \"complete\""), "{text}");
-    std::fs::write(
-        &manifest,
-        text.replace("\"state\": \"complete\"", "\"state\": \"recording\""),
-    )
-    .expect("write");
+    interrupt(&manifest);
 
     let notes = recover_pending(h.dir.path(), None).expect("recovers");
     assert_eq!(notes.len(), 1, "{notes:?}");
@@ -719,6 +733,74 @@ fn deleting_refuses_what_is_not_a_recording_of_this_folder() {
         assert_eq!(error.code(), code, "{name}");
     }
     assert!(trash.0.lock().expect("lock").is_empty());
+}
+
+/// A trash that tries to take the recording's lock while the move is under
+/// way, as a recovery or a second remover would, and records the answer.
+#[derive(Default)]
+struct ProbingTrash {
+    answers: Mutex<Vec<Option<&'static str>>>,
+    root: Mutex<Option<PathBuf>>,
+}
+
+impl RecordingTrash for ProbingTrash {
+    fn move_to_trash(&self, folder: &Path) -> Result<(), CommandError> {
+        let root = folder.parent().expect("root").to_path_buf();
+        let name = folder
+            .file_name()
+            .expect("name")
+            .to_string_lossy()
+            .into_owned();
+        *self.root.lock().expect("lock") = Some(root.clone());
+        let answer = sagascript_core::recording::lock_recording_for_removal(&root, &name)
+            .err()
+            .map(|error| error.code());
+        self.answers.lock().expect("lock").push(answer);
+        Ok(())
+    }
+}
+
+#[test]
+fn a_recording_another_process_holds_is_not_trashed() {
+    let root = TempDir::new();
+    make_recording(root.path(), "one");
+    // The CLI (or another app instance) is writing it: it holds the lock.
+    let held = sagascript_core::recording::lock_recording_for_removal(root.path(), "one")
+        .expect("the other writer's lock");
+    let trash = FakeTrash::default();
+    let error = delete_recording_in(root.path(), "one", None, &trash).expect_err("locked");
+    assert_eq!(error.code(), "recording_locked");
+    assert!(trash.0.lock().expect("lock").is_empty());
+    drop(held);
+    delete_recording_in(root.path(), "one", None, &trash).expect("free again");
+    assert_eq!(trash.0.lock().expect("lock").len(), 1);
+}
+
+#[test]
+fn a_recording_whose_owner_cannot_be_established_is_not_trashed() {
+    let root = TempDir::new();
+    make_recording(root.path(), "one");
+    // A directory where the lock file belongs: not "nobody owns it".
+    std::fs::create_dir(root.path().join("one").join("recording.lock")).expect("dir");
+    let trash = FakeTrash::default();
+    let error = delete_recording_in(root.path(), "one", None, &trash).expect_err("unknown owner");
+    assert_ne!(error.code(), "busy");
+    assert!(trash.0.lock().expect("lock").is_empty());
+}
+
+#[test]
+fn the_lock_is_held_for_the_whole_move_and_released_after_it() {
+    let root = TempDir::new();
+    make_recording(root.path(), "one");
+    let trash = ProbingTrash::default();
+    delete_recording_in(root.path(), "one", None, &trash).expect("moved");
+    assert_eq!(
+        *trash.answers.lock().expect("lock"),
+        [Some("recording_locked")],
+        "recovery or a second remover is kept out during the move"
+    );
+    sagascript_core::recording::lock_recording_for_removal(root.path(), "one")
+        .expect("released after the move");
 }
 
 #[tokio::test]
@@ -799,12 +881,7 @@ async fn startup_recovery_recovers_an_interrupted_recording_and_describes_it() {
         .path()
         .join(&finished.summary.folder_name)
         .join("recording.json");
-    let text = std::fs::read_to_string(&manifest).expect("read");
-    std::fs::write(
-        &manifest,
-        text.replace("\"state\": \"complete\"", "\"state\": \"recording\""),
-    )
-    .expect("write");
+    interrupt(&manifest);
 
     let notes = recover_at_startup(h.dir.path());
     assert_eq!(notes.len(), 1, "{notes:?}");
@@ -854,12 +931,7 @@ async fn a_recording_that_still_says_recording_is_not_decoded() {
     let finished = stop_session(&h.recorder).await.expect("stops");
     let folder = h.dir.path().join(&finished.summary.folder_name);
     let manifest = folder.join("recording.json");
-    let text = std::fs::read_to_string(&manifest).expect("read");
-    std::fs::write(
-        &manifest,
-        text.replace("\"state\": \"complete\"", "\"state\": \"recording\""),
-    )
-    .expect("write");
+    interrupt(&manifest);
 
     let error = decode_recording_samples(&folder, &|| Ok(()), &|_| {}).unwrap_err();
     assert_eq!(

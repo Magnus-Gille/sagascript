@@ -44,9 +44,10 @@ use sagascript_core::recording::capture::{CaptureSource, MicConfig, MicSource};
 use sagascript_core::recording::session::disk::{FreeSpace, VolumeFreeSpace};
 use sagascript_core::recording::session::fsclass::{folder_warnings, FolderWarning};
 use sagascript_core::recording::{
-    default_recordings_dir, read_recording, summarize_folder, Client, EndedReason, RecordingError,
-    RecordingSession, RecordingStore, RecordingSummary, RecoveryOutcome, RecoveryReport,
-    SessionConfig, SessionState, SessionStatus, SessionWarning, SourceSpec,
+    default_recordings_dir, lock_recording_for_removal, read_recording, summarize_folder, Client,
+    EndedReason, RecordingError, RecordingSession, RecordingStore, RecordingSummary,
+    RecoveryOutcome, RecoveryReport, SessionConfig, SessionState, SessionStatus, SessionWarning,
+    SourceSpec,
 };
 use sagascript_core::settings::{expand_home, RecordingQuality, Settings};
 use sagascript_core::sync::lock_or_recover;
@@ -821,7 +822,9 @@ pub async fn stop_session(recorder: &SharedRecorder) -> Result<RecordingFinished
 }
 
 /// Move the recording `folder_name` of `root` to the trash. Refuses the
-/// recording that is being made now (`active`, its folder name). Blocking.
+/// recording that is being made now (`active`, its folder name) and any
+/// recording whose `recording.lock` another process holds or cannot be
+/// established. Blocking.
 pub fn delete_recording_in(
     root: &Path,
     folder_name: &str,
@@ -832,6 +835,11 @@ pub fn delete_recording_in(
     if active == Some(folder_name) {
         return Err(busy("That recording is still being made."));
     }
+    // The lock decides, not this instance's own bookkeeping: the CLI or a
+    // second app instance may be writing the recording. It is held for the
+    // whole move, which keeps recovery and a second remover out, and any
+    // failure to establish ownership refuses the move.
+    let _removal = lock_recording_for_removal(root, folder_name)?;
     trash.move_to_trash(&folder)
 }
 

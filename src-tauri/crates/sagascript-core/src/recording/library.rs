@@ -149,7 +149,10 @@ pub fn lock_recording_for_removal(
 ) -> Result<RemovalLock, RecordingError> {
     let folder = resolve(root, name_or_id, true)?;
     let file = lock_folder(&folder, true)?;
-    Ok(RemovalLock { folder, _file: file })
+    Ok(RemovalLock {
+        folder,
+        _file: file,
+    })
 }
 
 /// Remove a recording folder and everything in it. Refuses a folder that is
