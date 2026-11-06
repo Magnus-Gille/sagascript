@@ -116,7 +116,7 @@ compatibility shim and closes no loop at run time.
 |---|---|---|
 | Leaves | `models/`, `glossary.rs` | `models/` is the model catalog: `WhisperModel` (21 models, ids via `id()` / `from_id()` / `FromStr`, `ALL`), its download URLs and SHA-256 in `sources.rs` (pinned revisions; `scripts/generate-third-party-notices.mjs` only asserts that six reviewed URL prefixes still appear in the model sources, `sources.rs` among them), `FileModel` (a Whisper model or Pianissimo) and `Language`, and `listing.rs`: the one `ModelInfo` per model (ids, names, download and installed size, languages, recommended, hidden in the app) behind `sagascript list-models` (`catalog`) and the app's pickers (`app_picker`), with what is downloaded and whether Pianissimo runs arriving as `ModelEnv` (#373). Imports neither `settings` nor `transcription` (tested) and returns no `whisper_rs` type: `transcription::whisper` (`whisper/words.rs`) maps a model to its DTW preset. `glossary.rs` (personal dictionary parser) imports nothing from the crate (tested). |
 | Settings | `settings/` | Reads the catalog. Imports nothing from `transcription` (tested): what is downloaded and whether Pianissimo can run arrive as arguments, as `LineupEnv` / `MachineProbe` into the store and as the `pianissimo_supported` and readiness arguments of the `*_gated` methods of `Settings`. `ops.rs` is the settings operations of section 2.2; they take the Pianissimo gate and the Accessibility answer (`Accessibility`) the same way. |
-| Runtime | `transcription/` (Whisper, Pianissimo, engine host, model downloads), `audio/`, `download.rs`, `meeting/`, `diarization/` | `transcription` reads `models` and the `Settings` type, and never loads the settings file: `pianissimo_backend::{engine_config, shared_client}` take the `Settings` their callers load with `machine::load` (only `settings/`, `machine.rs` and the `testing` seam name the store; tested). `transcription::model` and `pianissimo_model` answer whether a model is on disk; `pianissimo_backend::runtime_supported_on_this_os` answers whether Pianissimo runs. |
+| Runtime | `transcription/` (Whisper, Pianissimo, engine host, model downloads), `audio/`, `download.rs`, `meeting/`, `diarization/`, `recording/` | `transcription` reads `models` and the `Settings` type, and never loads the settings file: `pianissimo_backend::{engine_config, shared_client}` take the `Settings` their callers load with `machine::load` (only `settings/`, `machine.rs` and the `testing` seam name the store; tested). `transcription::model` and `pianissimo_model` answer whether a model is on disk; `pianissimo_backend::runtime_supported_on_this_os` answers whether Pianissimo runs. |
 | Machine | `machine.rs` | The only place that feeds the runtime's answers to settings: `ThisMachine` (a `MachineProbe` and the `ModelEnv` of the model lists: `catalog`, `app_picker`, `model_info`), `load` / `update` / `try_update`, and the `Settings` methods without a `_gated` suffix (`dictation_model_for_profile`, `effective_file_model_for`, `warm_model_plan`, `apply_language_selection`, ...), each its `_gated` sibling plus this machine's probe. |
 
 Old paths stay for one release (#372). The re-exports of `lib.rs` (the old top-level paths of
@@ -160,6 +160,22 @@ CLI and the app and wait for their own change: `settings::{WhisperModel, FileMod
   {analyze, cluster, clustering, embedding, ...}` re-export it when the feature is on.
   `eval/` is not behind a feature of its own: the CLI's lean build uses it (a feature for it is
   an open decision on #372).
+
+- `recording/`: the recorder's portable storage layer (SAGA-562, [ADR 0010](adr/0010-recording-storage.md),
+  [recorder design](recorder-design.md) §4.4-§4.5), compiled in every build, with no audio-device
+  dependency and no use of the `record` feature (that is capture only). A recording is a folder: one FLAC
+  file per track, `recording.json`, an append-only `<track>.events.jsonl` journal per track and, while a
+  process owns it, `recording.lock`. `manifest.rs` the manifest types, versioning and the migration
+  rule (`schema_version`, `min_reader_version`, unknown fields kept); `journal.rs` the journal;
+  `flac/` the streaming `FlacEncoder` over `flacenc` (`mod.rs`; `format.rs` the file header with its
+  SEEKTABLE and PADDING region, the CRCs and frame headers; `scan.rs` the structural frame walker that
+  recovery uses instead of decoding; `decode.rs` the MD5 recomputation through `symphonia`);
+  `encoder.rs` the `TrackEncoder` seam and the float-to-integer rule; `naming.rs` folder names;
+  `store.rs` creating a recording with its final name, the lock and the write and fsync order;
+  `recover.rs` finishing what a dead process left; `error.rs` `RecordingError` with stable codes
+  (ADR 0006). The writer types are driven by one thread through `&mut self` and hold no mutex. Capture
+  (`RecordingSession`, phase 1b) and the CLI, commands, settings and UI (1c) build on it and are not
+  here. Only `flacenc` (exact pin, no default features) was added as a dependency.
 
 **The top level of `src/`.** A subsystem is a directory; the files beside `lib.rs` are the
 cross-cutting modules that belong to no one subsystem, and each has a row here.
@@ -495,6 +511,7 @@ sequenceDiagram
 | Lock | Where | Notes |
 |---|---|---|
 | `SharedController = Mutex<AppController>` | `commands/mod.rs`, managed in `launch/startup.rs` (`manage_app_state`) | Taken from commands, the hotkey handler, the watcher, the updater and meeting jobs, always via `lock_controller`. Audio start/stop and log writes happen under it. Never hold it across `.await` or inference; `SharedWhisper` lives outside it for that reason. |
+| `recording.lock` (one per recording folder) | `recording/store.rs` (`lock_folder`), `recording/recover.rs` | Advisory exclusive file lock (`fs2::FileExt::try_lock_exclusive`, never blocking; `File::try_lock` needs Rust 1.89 and the MSRV is 1.88) held by a `RecordingWriter` from the creation of the folder until it finishes or is dropped. Recovery takes it first and reads the manifest again under it, so it never touches a recording another process or handle owns; a killed process releases it with its file descriptors. The writer types have no in-process mutex. |
 | `<settings>.json.lock` | `with_settings_lock` in `settings/store.rs` | Exclusive file lock shared by app and CLI processes, held for read-merge-write only. |
 | `HotkeyHealth { state, transition }` | `hotkey/health.rs` | `transition` serializes OS (un)registration between commands and the watcher; kept out of the controller on purpose (see its doc comment). |
 | `UpdateActivity`, `UpdatePreparation` | `updater/activity.rs` | Work leases and the exclusive update permit. |
@@ -576,6 +593,9 @@ settings watcher runs each event under `catch_unwind`; its health is
 | CLI | `diarization` | on | `--diarize`, `meeting_reprocessing*` (the `meeting reprocess` command and the native backend), `speaker_args`. |
 | ORT host | `dev-overrides` | off | Release builds honor `ORT_DYLIB_PATH`. |
 
+`recording/` (the recorder's storage layer) has no feature: it is portable code that needs neither
+`record` nor `diarization`, so a headless build and the lean CLI compile it.
+
 Feature unification: `cargo test --workspace` builds core with `record` and `diarization`
 (enabled by the app and CLI). CI therefore also runs core and CLI per package to keep the
 no-feature builds honest, and asserts that `cargo tree -p sagascript-cli --no-default-features`
@@ -598,8 +618,8 @@ Shared fixtures: `sagascript_testsupport` (`TempDir`, `fake_settings`, `sha256_h
 | Layer | Location | Local command | CI |
 |---|---|---|---|
 | Rust unit, app | sibling `foo_tests.rs` files, declared last in `foo.rs` as `#[cfg(test)] #[path = "foo_tests.rs"] mod tests;` (`commands/settings_tests.rs` and the other `commands/*_tests.rs`, `launch/mode_tests.rs`, `tray/status_tests.rs`, `meeting_jobs_tests.rs`, `paste/windows_clipboard_tests.rs`); inline `#[cfg(test)]` modules in smaller files | `cargo test` (app only), `cargo test --workspace` (everything) | every OS lane (`cargo test --workspace`) |
-| Rust unit, core/CLI/protocol | inline, or sibling `foo_tests.rs` as in the app: core `download_tests.rs`, `settings/manager_tests.rs`, `settings/store_tests.rs`, `transcription/whisper/*_tests.rs` (one per module, declared with `#[path]`); CLI `transcribe_tests.rs`, `transcribe_file_tests.rs` (with the nested `transcribe_diarized_tests.rs` and `transcribe_pianissimo_tests.rs`), `meeting_reprocessing_tests.rs`; `sagascript-engine-protocol/src/tests.rs` | `cargo test -p <crate>`; release-only guard: `cargo test --release -p sagascript-core --lib dev_overrides` | `cargo test --workspace` and the per-crate feature-subset gates on every OS; the release guard in test-linux |
-| Rust integration | `sagascript-core/tests/*.rs` (engine host against the fake host, chunk-merge golden, Pianissimo adapter); `sagascript-cli/tests/*.rs` (spawn `CARGO_BIN_EXE_sagascript`) | `cargo test -p sagascript-core`, `-p sagascript-cli` | macOS, Linux, Windows |
+| Rust unit, core/CLI/protocol | inline, or sibling `foo_tests.rs` as in the app: core `download_tests.rs`, `recording/*_tests.rs` and `recording/flac/*_tests.rs` (decoded with `symphonia`, the independent decoder; fixtures are synthetic and the golden manifest is `tests/fixtures/recording/manifest-v1.json`), `settings/manager_tests.rs`, `settings/store_tests.rs`, `transcription/whisper/*_tests.rs` (one per module, declared with `#[path]`); CLI `transcribe_tests.rs`, `transcribe_file_tests.rs` (with the nested `transcribe_diarized_tests.rs` and `transcribe_pianissimo_tests.rs`), `meeting_reprocessing_tests.rs`; `sagascript-engine-protocol/src/tests.rs` | `cargo test -p <crate>`; release-only guard: `cargo test --release -p sagascript-core --lib dev_overrides` | `cargo test --workspace` and the per-crate feature-subset gates on every OS; the release guard in test-linux |
+| Rust integration | `sagascript-core/tests/*.rs` (engine host against the fake host, chunk-merge golden, Pianissimo adapter; the recorder: `recording_kill.rs` re-executes the test binary and SIGKILLs the child mid-write (Unix only) and checks recovery against an independent encode, `recording_memory.rs` measures peak heap with a counting allocator, `recording_manual_files.rs` is ignored and writes files for `flac -t` / `afconvert` / ffmpeg checks); `sagascript-cli/tests/*.rs` (spawn `CARGO_BIN_EXE_sagascript`) | `cargo test -p sagascript-core`, `-p sagascript-cli` | macOS, Linux, Windows |
 | ORT host | `src-tauri/engine-host/ort/src/**` | `cargo test` and `cargo clippy --all-targets -- -D warnings` in `engine-host/ort/` | test-linux (fmt, test, clippy); test-windows (test, clippy) |
 | Engine-host protocol | golden transcripts `src-tauri/engine-host/test-vectors/protocol/*.jsonl` with the scripted `fake-engine.json` ([contract](engine-host-protocol.md#golden-transcripts)); replayed by `sagascript-engine-protocol/src/vector_tests.rs`, `engine-host/ort/src/server/golden_tests.rs` and `ProtocolServerTests.swift` | `cargo test -p sagascript-engine-protocol`; `cargo test --locked` in `engine-host/ort/`; `swift test` | `cargo test --workspace` in every OS lane (protocol crate); test-linux, test-windows (ORT host); test-macos (Swift) |
 | CLI/app parity (#373) | `core::test_support::settings_ops_table` (the rows and what each must persist) with its own consistency tests; the CLI side `sagascript-cli/tests/settings_parity.rs` (the real `sagascript config` on a fake settings file per row), the app side `commands/persist_parity_tests.rs` (the real setters, child process, fake settings file) | `cargo test -p sagascript-cli --test settings_parity`; `cargo test -p sagascript parity` | every OS lane (`cargo test --workspace`) |

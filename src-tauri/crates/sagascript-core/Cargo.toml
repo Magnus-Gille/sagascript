@@ -32,6 +32,11 @@ sha2 = "0.10"
 num_cpus = "1"
 symphonia = { version = "0.5", features = ["aac", "alac", "flac", "mp3", "pcm", "vorbis", "isomp4", "mkv", "ogg"] }
 rubato = "0.14"
+# Streaming FLAC frame encoder for the recorder's storage layer (SAGA-562,
+# ADR 0010). Pinned exactly: it is a 0.x crate with a known edge case that the
+# encoder works around (recording/flac). No default features: no `par`
+# (crossbeam), no `serde`, no `log`.
+flacenc = { version = "=0.5.1", default-features = false }
 regex = "1"
 sagascript-engine-protocol = { path = "../sagascript-engine-protocol" }
 tempfile = "3"
@@ -51,8 +56,9 @@ kodama = { version = "0.2", optional = true }
 ndarray = { version = "0.17", optional = true }
 
 # fsync(2) as the fallback for volumes that reject F_FULLFSYNC, which is all
-# std's `sync_all` does on Apple platforms (fsutil.rs). Already in the graph.
-[target.'cfg(target_vendor = "apple")'.dependencies]
+# std's `sync_all` does on Apple platforms (fsutil.rs), and O_NOFOLLOW for the
+# recording store's file opens (recording/io.rs). Already in the graph.
+[target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
 # whisper-rs is declared per-target because macOS enables Metal/CoreML;
