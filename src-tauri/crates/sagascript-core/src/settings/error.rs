@@ -36,6 +36,18 @@ pub enum SettingsError {
     #[error("engine_prewarm must be off, on_app_start or on_key_down, got '{value}'")]
     InvalidEnginePrewarm { value: String },
 
+    /// `recording_quality` is neither `lossless` nor `compact`.
+    #[error("recording_quality must be lossless or compact, got '{value}'")]
+    InvalidRecordingQuality { value: String },
+
+    /// A recording channel is 0; channels count from 1.
+    #[error("recording_channel_pair channels count from 1, got {first}-{second}")]
+    InvalidRecordingChannelPair { first: u16, second: u16 },
+
+    /// `recording_directory` names an existing file, not a folder.
+    #[error("recording_directory is a file, not a folder")]
+    RecordingDirectoryIsAFile,
+
     /// No dictation profile has this id.
     #[error("Unknown profile '{id}'")]
     UnknownProfile { id: String },
@@ -172,9 +184,11 @@ impl SettingsError {
     /// another meaning.
     pub fn code(&self) -> &'static str {
         match self {
-            Self::UnknownModelPreference { .. } | Self::InvalidEnginePrewarm { .. } => {
-                "invalid_setting_value"
-            }
+            Self::UnknownModelPreference { .. }
+            | Self::InvalidEnginePrewarm { .. }
+            | Self::InvalidRecordingQuality { .. }
+            | Self::InvalidRecordingChannelPair { .. }
+            | Self::RecordingDirectoryIsAFile => "invalid_setting_value",
             Self::UnknownProfile { .. } | Self::UnknownDictationProfile { .. } => "unknown_profile",
             Self::ModelIncompatibleWithProfile { .. }
             | Self::ModelIncompatibleWithLanguage { .. } => "model_incompatible",

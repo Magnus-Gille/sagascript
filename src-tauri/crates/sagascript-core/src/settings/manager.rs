@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, HashSet};
+use std::path::PathBuf;
 
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 
@@ -174,8 +175,67 @@ impl EnginePrewarm {
     }
 }
 
+/// The quality tier new recordings are made in (`recording_quality`).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RecordingQuality {
+    /// Native sample rate, 24-bit, never resampled. Default.
+    #[default]
+    Lossless,
+    /// 16 kHz / 16-bit: smaller files, resampled by definition.
+    Compact,
+}
+
+impl RecordingQuality {
+    pub const ALL: [RecordingQuality; 2] = [Self::Lossless, Self::Compact];
+
+    /// Stable identifier used in the settings file and by `sagascript config`.
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Lossless => "lossless",
+            Self::Compact => "compact",
+        }
+    }
+
+    pub fn parse_id(value: &str) -> Result<Self, SettingsError> {
+        Self::ALL
+            .into_iter()
+            .find(|quality| quality.id() == value)
+            .ok_or_else(|| SettingsError::InvalidRecordingQuality {
+                value: value.to_string(),
+            })
+    }
+
+    /// The tier the recorder takes.
+    pub fn to_quality(self) -> crate::recording::Quality {
+        match self {
+            Self::Lossless => crate::recording::Quality::Lossless,
+            Self::Compact => crate::recording::Quality::Compact,
+        }
+    }
+}
+
 /// Default minutes of inactivity before the engine host unloads its model.
 pub(crate) const DEFAULT_ENGINE_IDLE_UNLOAD_MINUTES: u32 = 60;
+
+/// `path` with a leading `~` or `~/` replaced by the home folder. Anything
+/// else (including `~user`) is returned unchanged, as is `path` when the home
+/// folder is unknown.
+pub fn expand_home(path: &str) -> String {
+    let Some(home) = dirs::home_dir() else {
+        return path.to_string();
+    };
+    if path == "~" {
+        return home.to_string_lossy().into_owned();
+    }
+    match path.strip_prefix("~/").or_else(|| path.strip_prefix("~\\")) {
+        Some(rest) => home.join(rest).to_string_lossy().into_owned(),
+        None => path.to_string(),
+    }
+}
+
+/// Default `recording_channel_pair`: input channels 1 and 2.
+pub const DEFAULT_RECORDING_CHANNEL_PAIR: [u16; 2] = [1, 2];
 
 /// Defaults that shipped before [`ENGINE_DEFAULTS_VERSION`] 1, used to tell
 /// users still on the old defaults from users who chose something else.
@@ -247,6 +307,20 @@ pub struct Settings {
     /// Minutes of inactivity before the engine host unloads its model; the host
     /// process itself exits after twice this. 0 disables idle unloading.
     pub engine_idle_unload_minutes: u32,
+    /// Quality tier of new recordings.
+    pub recording_quality: RecordingQuality,
+    /// Folder the recordings are kept in. Empty = the default folder
+    /// ([`Settings::recordings_dir`]); created on the first recording.
+    pub recording_directory: String,
+    /// Input channels recorded, 1-based: `[n, m]` is a stereo pair, `[n, n]`
+    /// mono channel `n`.
+    pub recording_channel_pair: [u16; 2],
+    /// The user has confirmed the recordings folder (first-use prompt).
+    /// Internal marker, not a `config` key.
+    pub recording_folder_confirmed: bool,
+    /// The user has acknowledged the recording consent reminder. Internal
+    /// marker, not a `config` key.
+    pub recording_consent_acknowledged: bool,
     pub hotkey_mode: HotkeyMode,
     pub show_overlay: bool,
     pub auto_paste: bool,
@@ -313,6 +387,11 @@ impl Default for Settings {
             pianissimo_dictation: false,
             engine_prewarm: EnginePrewarm::default(),
             engine_idle_unload_minutes: DEFAULT_ENGINE_IDLE_UNLOAD_MINUTES,
+            recording_quality: RecordingQuality::default(),
+            recording_directory: String::new(),
+            recording_channel_pair: DEFAULT_RECORDING_CHANNEL_PAIR,
+            recording_folder_confirmed: false,
+            recording_consent_acknowledged: false,
             hotkey_mode: HotkeyMode::default(),
             show_overlay: true,
             auto_paste: true,
@@ -354,6 +433,25 @@ impl ModelResetNotice {
 }
 
 impl Settings {
+    /// The folder recordings are kept in: `recording_directory`, or the
+    /// default folder when it is empty. May not exist yet.
+    pub fn recordings_dir(&self) -> PathBuf {
+        let configured = self.recording_directory.trim();
+        if configured.is_empty() {
+            crate::recording::default_recordings_dir()
+        } else {
+            PathBuf::from(configured)
+        }
+    }
+
+    /// `recording_channel_pair` as a tuple, for `MicConfig::channel_pair`.
+    pub fn recording_channel_pair_tuple(&self) -> (u16, u16) {
+        (
+            self.recording_channel_pair[0],
+            self.recording_channel_pair[1],
+        )
+    }
+
     /// One-time move of the engine warm-up settings to the cold-start defaults
     /// (load at app start, unload after 60 idle minutes), recorded by
     /// `engine_defaults_version`. Only values still equal to the previous

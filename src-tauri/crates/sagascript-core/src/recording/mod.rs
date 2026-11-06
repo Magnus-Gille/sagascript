@@ -54,7 +54,17 @@ mod test_recordings;
 #[cfg(test)]
 mod test_signals;
 
+use std::path::PathBuf;
 use std::time::Duration;
+
+/// Folder recordings go to when `recording_directory` is empty: `Sagascript`
+/// in the user's audio folder (`~/Music` on macOS), else in the home folder.
+pub fn default_recordings_dir() -> PathBuf {
+    dirs::audio_dir()
+        .or_else(dirs::home_dir)
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("Sagascript")
+}
 
 pub use capture::{
     test_source_requested, SyntheticConfig, SyntheticSource, SYNTHETIC_DEVICE_NAME, TEST_SOURCE_ENV,
