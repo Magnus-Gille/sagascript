@@ -353,9 +353,10 @@ impl SessionCore {
         let pipe = &self.pipes[index];
         if !pipe.ended {
             if let Some(expected) = pipe.expected_next_ns {
-                let missing = host_now.saturating_sub(expected);
-                if trailing == 0
-                    && missing >= self.settings.stall_timeout_ns.max(self.settings.min_gap_ns)
+                // What the counted drops do not explain is a stall at the end.
+                let counted = trailing * 1_000_000_000 / u64::from(pipe.native.sample_rate);
+                let missing = host_now.saturating_sub(expected).saturating_sub(counted);
+                if missing >= self.settings.stall_timeout_ns.max(self.settings.min_gap_ns)
                     && missing <= self.settings.max_gap_fill_ns
                 {
                     let frames = missing * u64::from(pipe.native.sample_rate) / 1_000_000_000;
@@ -383,18 +384,27 @@ impl SessionCore {
         let host = block.host_ns();
         let frames = block.frames() as u64;
         let settings = self.settings.clone();
-        let (rate, mut gap) = {
+        let (rate, gaps) = {
             let pipe = &mut self.pipes[index];
             pipe.last_arrival_ns = now;
             pipe.stalled = false;
             let rate = u64::from(pipe.native.sample_rate);
-            let mut gap: Option<(u64, GapReason)> = None;
-            if block.dropped_before() > 0 {
-                gap = Some((block.dropped_before(), GapReason::Overrun));
-            } else if let Some(expected) = pipe.expected_next_ns {
+            let mut gaps: Vec<(u64, GapReason)> = Vec::new();
+            // What the callback counted is exact. What the host clock says is
+            // missing beyond that is a separate stall (or a lost device): the
+            // two can both be true before one block, so both are kept, the
+            // counted overrun first. The clock part must clear the jitter
+            // tolerance (`min_gap`) to count.
+            let dropped = block.dropped_before();
+            if dropped > 0 {
+                gaps.push((dropped, GapReason::Overrun));
+            }
+            if let Some(expected) = pipe.expected_next_ns {
                 let missing = host.saturating_sub(expected);
-                if missing >= settings.min_gap_ns {
-                    if missing > settings.max_gap_fill_ns {
+                let counted = dropped * 1_000_000_000 / rate;
+                let residual = missing.saturating_sub(counted);
+                if residual >= settings.min_gap_ns {
+                    if residual > settings.max_gap_fill_ns {
                         let reason = if pipe.sleep_seen {
                             EndedReason::SystemSleep
                         } else {
@@ -408,22 +418,26 @@ impl SessionCore {
                     } else {
                         GapReason::Stall
                     };
-                    gap = Some((missing * rate / 1_000_000_000, reason));
+                    gaps.push((residual * rate / 1_000_000_000, reason));
                 }
             }
-            (rate, gap)
+            (rate, gaps)
         };
         if self.pipes[index].pending_end.is_some()
-            && matches!(gap, Some((_, GapReason::Stall | GapReason::DeviceLoss)))
+            && gaps
+                .iter()
+                .any(|(_, reason)| matches!(reason, GapReason::Stall | GapReason::DeviceLoss))
         {
             // The track is going to end (a sleep, a device change): audio that
             // arrives after a long silence is not stored behind a stall.
             return Ok(());
         }
-        if let Some((native_frames, reason)) = gap.take() {
-            self.insert_gap(index, native_frames, reason)?;
-            if self.pipes[index].ended {
-                return Ok(());
+        if !gaps.is_empty() {
+            for (native_frames, reason) in gaps {
+                self.insert_gap(index, native_frames, reason)?;
+                if self.pipes[index].ended {
+                    return Ok(());
+                }
             }
             self.pipes[index].device_lost = false;
             self.anchor(index, host)?;

@@ -1003,3 +1003,60 @@ fn a_full_disk_at_the_journal_sync_when_the_track_ends_still_ends_with_disk_full
     assert_eq!(done.track().frames, done.handle.position());
     done.assert_audio(&[]);
 }
+
+// ---- Codex review of 1b, finding 8 --------------------------------------------
+
+#[test]
+fn an_overrun_and_a_stall_before_the_same_block_are_both_in_the_timeline() {
+    let mut rig = Rig::mono();
+    rig.handle.deliver(ms(100));
+    rig.pump();
+    rig.handle.overrun(480); // the callback dropped 10 ms it could count
+    rig.handle.stall(ms(700)); // and then the device went quiet for 700 ms
+    rig.handle.deliver(ms(100));
+    let at = 960 + 4_800;
+    let done = rig.finish();
+    assert_eq!(
+        done.gaps(),
+        vec![
+            (at, 480, GapReason::Overrun),
+            (at + 480, 33_600, GapReason::Stall)
+        ]
+    );
+    assert_eq!(done.track().frames, done.handle.position());
+    done.assert_audio(&[(at, 480 + 33_600)]);
+}
+
+#[test]
+fn jitter_after_an_overrun_is_not_a_second_gap() {
+    let mut rig = Rig::mono();
+    rig.handle.deliver(ms(100));
+    rig.pump();
+    rig.handle.overrun(480);
+    rig.handle.idle(ms(30)); // timestamp jitter, under the 100 ms tolerance
+    rig.handle.deliver(ms(100));
+    let done = rig.finish();
+    assert_eq!(done.gaps().len(), 1, "{:?}", done.gaps());
+    assert_eq!(done.gaps()[0].2, GapReason::Overrun);
+}
+
+#[test]
+fn an_overrun_and_a_lost_device_before_the_same_block_keep_their_own_reasons() {
+    let mut rig = Rig::mono();
+    rig.handle.deliver(ms(100));
+    rig.pump();
+    rig.handle.lose_device();
+    rig.pump();
+    rig.handle.overrun(480);
+    rig.handle.stall(ms(2_000));
+    rig.handle.deliver(ms(100));
+    let at = 960 + 4_800;
+    let done = rig.finish();
+    assert_eq!(
+        done.gaps(),
+        vec![
+            (at, 480, GapReason::Overrun),
+            (at + 480, 96_000, GapReason::DeviceLoss)
+        ]
+    );
+}
