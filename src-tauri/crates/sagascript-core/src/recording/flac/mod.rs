@@ -412,6 +412,10 @@ impl<W: TrackSink> TrackEncoder for FlacEncoder<W> {
         self.clipped
     }
 
+    fn bytes_written(&self) -> u64 {
+        HEADER_LEN as u64 + self.frame_bytes
+    }
+
     fn sync(&mut self) -> Result<(), RecordingError> {
         self.guard()?;
         let io_error = |error: io::Error| RecordingError::io("sync a track file", &error);

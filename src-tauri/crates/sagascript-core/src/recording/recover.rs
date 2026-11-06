@@ -184,7 +184,7 @@ pub fn recover_folder(dir: &Path) -> Result<RecoveredRecording, RecordingError> 
     let mut recovered = manifest.clone();
     let mut reports = Vec::with_capacity(manifest.tracks.len());
     for (entry, track) in recovered.tracks.iter_mut().zip(&manifest.tracks) {
-        let (updated, report) = recover_track(dir, track)?;
+        let (updated, report) = recover_track(dir, track, TailPolicy::Keep)?;
         *entry = updated;
         reports.push(report);
     }
@@ -202,8 +202,23 @@ pub fn recover_folder(dir: &Path) -> Result<RecoveredRecording, RecordingError> 
     })
 }
 
+/// What recovery does with the bytes after the last valid frame.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TailPolicy {
+    /// Copy them to `<track>.tail` first (a recording left by a dead process).
+    Keep,
+    /// Drop them. Used by the live session when the disk is full: the bytes
+    /// are the part of one block that could not be written, there is no space
+    /// for a copy, and the process knows exactly what it had accepted.
+    Discard,
+}
+
 /// Recover one track: the new manifest entry and what was done.
-fn recover_track(dir: &Path, track: &Track) -> Result<(Track, TrackRecovery), RecordingError> {
+pub(crate) fn recover_track(
+    dir: &Path,
+    track: &Track,
+    policy: TailPolicy,
+) -> Result<(Track, TrackRecovery), RecordingError> {
     let params = StreamParams {
         sample_rate: track.sample_rate,
         channels: track.channels,
@@ -301,9 +316,13 @@ fn recover_track(dir: &Path, track: &Track) -> Result<(Track, TrackRecovery), Re
 
     // Anything after the last valid frame goes to the tail, then the file is cut.
     if length > summary.end_offset {
-        let (name, bytes) = save_tail(dir, &track.id, &mut file, summary.end_offset, length)?;
-        tail_file = Some(name);
-        tail_bytes += bytes;
+        if policy == TailPolicy::Keep {
+            let (name, bytes) = save_tail(dir, &track.id, &mut file, summary.end_offset, length)?;
+            tail_file = Some(name);
+            tail_bytes += bytes;
+        } else {
+            tail_bytes += length - summary.end_offset;
+        }
         file.set_len(summary.end_offset)
             .map_err(|error| RecordingError::io("truncate a track file", &error))?;
     }

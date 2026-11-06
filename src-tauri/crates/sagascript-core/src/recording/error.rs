@@ -16,7 +16,7 @@ use std::io;
 use crate::path_scrub::scrub_paths;
 
 /// Why a recording operation did not happen or did not finish.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum RecordingError {
     /// A filesystem call failed. `action` says which step ("create the
     /// recording folder"); the path is deliberately not kept.
@@ -64,6 +64,15 @@ pub enum RecordingError {
     /// the format this store writes). It is left exactly as it was.
     #[error("a track file cannot be read as a recording track: {reason}")]
     CorruptTrack { reason: &'static str },
+    /// The capture source could not be opened or never delivered audio: no
+    /// input device, a stream that would not start, a device that sent no
+    /// block within the start timeout (phase 1b).
+    #[error("the audio source is not available: {reason}")]
+    SourceUnavailable { reason: &'static str },
+    /// The session ended abnormally (its writer thread panicked) or was used
+    /// out of order. The recording folder, if any, is left for recovery.
+    #[error("the recording session failed: {reason}")]
+    SessionFailed { reason: &'static str },
     /// The FLAC encoder library refused a block (a bug or an out-of-range
     /// sample). The text is scrubbed of paths.
     #[error("the audio encoder failed: {message}")]
@@ -114,6 +123,8 @@ impl RecordingError {
             Self::TrackFinished => "recording_track_finished",
             Self::CorruptTrack { .. } => "recording_corrupt_track",
             Self::Encoder { .. } => "recording_encoder",
+            Self::SourceUnavailable { .. } => "recording_source_unavailable",
+            Self::SessionFailed { .. } => "recording_session_failed",
         }
     }
 

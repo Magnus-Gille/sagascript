@@ -41,6 +41,12 @@ pub trait TrackEncoder: Send {
     /// Samples clamped (or NaN) so far.
     fn clipped_samples(&self) -> u64;
 
+    /// Bytes the track file holds or is about to hold: the header and every
+    /// frame encoded so far (not the partial block that waits, not the
+    /// `BufWriter` contents lost to an error). The session reports it and
+    /// stops a FAT32 track before the 4 GiB limit.
+    fn bytes_written(&self) -> u64;
+
     /// Flush buffered bytes and fsync the file. A full block is encoded as
     /// soon as it is complete; the partial block that waits is not written.
     fn sync(&mut self) -> Result<(), RecordingError>;
