@@ -36,6 +36,7 @@
 //! | `accessibility_permission_denied` | the Accessibility permission a setting needs is missing |
 //! | `model_download_failed` | a model the command needed could not be downloaded |
 //! | `paste_error` | the automatic paste of a dictation failed (the `error` event; the text is what the paste task reported) |
+//! | `recording_*` | a recorder failure ([`RecordingError::code`]): `recording_permission_denied`, `recording_source_unavailable`, `recording_disk_full`, `recording_device_changed`, `recording_recovery_needed`, `recording_io`, `recording_locked`, … |
 //!
 //! A failure whose text is fixed for the user but that has a cause worth
 //! keeping is [`CommandError::because`]: the cause is scrubbed, logged and kept
@@ -43,6 +44,7 @@
 
 use sagascript_core::error::DictationError;
 use sagascript_core::path_scrub::scrub_paths;
+use sagascript_core::recording::RecordingError;
 use sagascript_core::settings::SettingsError;
 use serde::ser::{Serialize, SerializeStruct, Serializer};
 
@@ -95,6 +97,12 @@ pub enum CommandError {
     /// A dictation, transcription, audio or file error, with its own code.
     #[error(transparent)]
     Dictation(DictationError),
+    /// A recorder failure, with the `recording_*` code and retry hint of its
+    /// [`RecordingError`] (`recording_permission_denied`, `recording_disk_full`,
+    /// `recording_device_changed`, ...). The text is the error's own, without the
+    /// "Recording error: " prefix [`DictationError::Recording`] adds for the CLI.
+    #[error(transparent)]
+    Recording(RecordingError),
     /// The command refused its arguments or the user's choice (`invalid_input`).
     #[error("{0}")]
     InvalidInput(String),
@@ -156,6 +164,7 @@ impl CommandError {
             Self::HotkeyChangeFailed(_) => "hotkey_change_failed",
             Self::Settings(error) => error.code(),
             Self::Dictation(error) => error.code(),
+            Self::Recording(error) => error.code(),
             Self::InvalidInput(_) => "invalid_input",
             Self::NotFound(_) => "not_found",
             Self::Unavailable(_) => "unavailable",
@@ -197,6 +206,7 @@ impl CommandError {
         match self {
             Self::Busy(_) => true,
             Self::Dictation(error) => error.retryable(),
+            Self::Recording(error) => error.retryable(),
             Self::Caused { error, .. } => error.retryable(),
             _ => false,
         }
@@ -212,8 +222,16 @@ impl From<DictationError> for CommandError {
     fn from(error: DictationError) -> Self {
         match error {
             DictationError::Cancelled => Self::Cancelled,
+            // One representation of a recorder failure, whichever way it arrived.
+            DictationError::Recording(error) => Self::Recording(error),
             other => Self::Dictation(other),
         }
+    }
+}
+
+impl From<RecordingError> for CommandError {
+    fn from(error: RecordingError) -> Self {
+        Self::Recording(error)
     }
 }
 

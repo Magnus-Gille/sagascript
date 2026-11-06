@@ -15,6 +15,7 @@ use crate::dictation::warm_models_at_startup;
 use crate::events::{self, EmitEvent};
 #[cfg(target_os = "macos")]
 use crate::platform;
+use crate::recording_session::{recover_at_startup, SharedRecorder};
 use crate::settings_watcher::start_settings_watcher;
 use crate::tray::{create_tray, manage_tray_state};
 use crate::updater::{check_for_updates_and_install, manage_update_menu_state};
@@ -99,7 +100,39 @@ pub(crate) fn setup_app(
     // switching. Missing models are never downloaded implicitly.
     warm_models_at_startup(app);
 
+    // Finish recordings an earlier run left unfinished (a crash, a power cut).
+    recover_recordings_at_startup(app);
+
     Ok(())
+}
+
+/// Recover the interrupted recordings of the configured recordings folder in
+/// the background, and tell the Record window about what was kept. Never
+/// creates the folder and never touches a recording another process holds
+/// (core's recovery takes the lock first). Silent when there is nothing to say.
+fn recover_recordings_at_startup(app: &tauri::App) {
+    let root = {
+        let controller: tauri::State<'_, SharedController> = app.state();
+        let root = lock_controller(&controller).settings().recordings_dir();
+        root
+    };
+    let handle = app.handle().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let notes = recover_at_startup(&root);
+        if notes.is_empty() {
+            return;
+        }
+        info!(
+            "Recovered {} interrupted recording(s) at start",
+            notes.len()
+        );
+        handle
+            .state::<SharedRecorder>()
+            .remember_notes(notes.clone());
+        if let Err(error) = handle.emit_event(events::event::RECORDINGS_RECOVERED, notes) {
+            warn!("Could not announce the recovered recordings: {error}");
+        }
+    });
 }
 
 /// Build the controller, the Whisper backend and the other shared state, and
@@ -127,6 +160,7 @@ fn manage_app_state(app: &tauri::App) {
     app.manage(plain_file_jobs::SharedPlainFileJobs::default());
     app.manage(Arc::new(meeting_jobs::MeetingJobs::default()));
     app.manage(meeting_media::SharedMeetingAudio::default());
+    app.manage(crate::recording_session::SharedRecorder::default());
     // Process-wide hotkey registration health (see hotkey::health for
     // why this is deliberately independent of the AppController
     // mutex). Assumed healthy until the synchronous registration

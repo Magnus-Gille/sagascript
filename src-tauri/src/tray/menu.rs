@@ -6,6 +6,45 @@ use tracing::error;
 use super::{SharedProfileMenuState, PROFILE_MENU_LOCK};
 use crate::commands::{lock_controller, SharedController};
 
+/// What choosing a tray menu item does. Pure, so the table of item ids is
+/// tested (`menu_tests.rs`); `create_tray` carries the actions out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum MenuAction {
+    Quit,
+    /// Open (or focus) the settings window on `tab`; `site` names the caller in the focus log.
+    Settings {
+        tab: Option<&'static str>,
+        site: &'static str,
+    },
+    /// Open (or focus) the Record window.
+    Record,
+    CheckForUpdates,
+}
+
+/// The menu item id of "Record…".
+pub(super) const RECORD_ITEM_ID: &str = "record";
+
+pub(super) fn menu_action(id: &str) -> Option<MenuAction> {
+    Some(match id {
+        "quit" => MenuAction::Quit,
+        "settings" => MenuAction::Settings {
+            tab: None,
+            site: "tray_menu_settings",
+        },
+        "transcribe_file" => MenuAction::Settings {
+            tab: Some("transcribe"),
+            site: "tray_menu_transcribe_file",
+        },
+        "manage_profiles" => MenuAction::Settings {
+            tab: Some("dictate"),
+            site: "tray_menu_manage_profiles",
+        },
+        RECORD_ITEM_ID => MenuAction::Record,
+        "check_for_updates" => MenuAction::CheckForUpdates,
+        _ => return None,
+    })
+}
+
 fn format_menu_shortcut(shortcut: &str) -> String {
     let parts: Vec<(&str, String)> = shortcut
         .split('+')

@@ -134,6 +134,65 @@ fn try_open_settings_window(app: &tauri::AppHandle, tab: Option<&str>) -> Result
     }
 }
 
+/// The Record window (SAGA-564): its label and the URL `App.svelte` routes to
+/// `Record.svelte`.
+const RECORD_WINDOW_LABEL: &str = "record";
+const RECORD_WINDOW_URL: &str = "index.html?window=record";
+const RECORD_WINDOW_WIDTH: f64 = 460.0;
+const RECORD_WINDOW_HEIGHT: f64 = 680.0;
+const RECORD_WINDOW_MIN_HEIGHT: f64 = 520.0;
+
+/// The height of a new Record window: 680 logical pixels, or 90% of the
+/// primary screen on a smaller one, never below the window's minimum.
+fn record_window_height(screen_height: Option<f64>) -> f64 {
+    match screen_height {
+        Some(screen) => (screen * 0.9).clamp(RECORD_WINDOW_MIN_HEIGHT, RECORD_WINDOW_HEIGHT),
+        None => RECORD_WINDOW_HEIGHT,
+    }
+}
+
+/// Open or focus the Record window. Errors are logged, as for Settings. Call it
+/// on the main thread (ADR 0003): the tray menu handler does.
+pub(crate) fn open_record_window(app: &tauri::AppHandle, site: &'static str) {
+    info!("Opening the Record window");
+    focus_diag::log(
+        "record_window_open_requested",
+        serde_json::json!({
+            "site": site,
+            "windowExists": app.get_webview_window(RECORD_WINDOW_LABEL).is_some(),
+        }),
+    );
+    if let Err(error) = try_open_record_window(app) {
+        error!("Failed to open the Record window: {error}");
+    }
+}
+
+fn try_open_record_window(app: &tauri::AppHandle) -> Result<(), WindowError> {
+    if let Some(window) = app.get_webview_window(RECORD_WINDOW_LABEL) {
+        return reveal_existing_main_window(&window);
+    }
+    let screen_height = app
+        .primary_monitor()
+        .ok()
+        .flatten()
+        .map(|monitor| monitor.size().height as f64 / monitor.scale_factor());
+    let window = tauri::WebviewWindowBuilder::new(
+        app,
+        RECORD_WINDOW_LABEL,
+        tauri::WebviewUrl::App(RECORD_WINDOW_URL.into()),
+    )
+    .title("Sagascript Record")
+    .inner_size(RECORD_WINDOW_WIDTH, record_window_height(screen_height))
+    .min_inner_size(400.0, RECORD_WINDOW_MIN_HEIGHT)
+    .resizable(true)
+    .always_on_top(false)
+    .center()
+    .focused(true)
+    .build()
+    .map_err(WindowError::Create)?;
+    reveal_existing_main_window(&window)
+}
+
 #[cfg(test)]
 #[path = "window_tests.rs"]
 mod tests;

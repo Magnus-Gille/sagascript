@@ -33,7 +33,7 @@ use serde_json::Value;
 use crate::glossary::Glossary;
 use crate::settings::{
     Accessibility, EnginePrewarm, FileModelPreference, HotkeyMode, HotkeyProfile, Language,
-    Settings, WhisperModel,
+    RecordingQuality, Settings, WhisperModel,
 };
 
 /// The two entry points to a setting.
@@ -142,6 +142,12 @@ pub enum Op {
     TemperatureFallback(bool),
     EnginePrewarm(EnginePrewarm),
     EngineIdleUnloadMinutes(u32),
+    RecordingQuality(RecordingQuality),
+    /// The folder as the surface is given it (absolute: the CLI would make a
+    /// relative one absolute against its own directory, the app refuses it).
+    RecordingDirectory(String),
+    /// 1-based input channels (`config set recording_channel_pair 3-4`).
+    RecordingChannelPair(u16, u16),
     FileTranscriptionModel(FileModelPreference),
     HotkeyMode(HotkeyMode),
     /// The default profile's shortcut (`config set hotkey`, the app's `set_hotkey`).
@@ -195,6 +201,12 @@ pub fn reset_as_op(key: &str) -> Op {
         "engine_idle_unload_minutes" => {
             Op::EngineIdleUnloadMinutes(defaults.engine_idle_unload_minutes)
         }
+        "recording_quality" => Op::RecordingQuality(defaults.recording_quality),
+        "recording_directory" => Op::RecordingDirectory(defaults.recording_directory.clone()),
+        "recording_channel_pair" => Op::RecordingChannelPair(
+            defaults.recording_channel_pair[0],
+            defaults.recording_channel_pair[1],
+        ),
         "file_transcription_model" => Op::FileTranscriptionModel(defaults.file_transcription_model),
         "hotkey" => Op::Hotkey(DEFAULT_HOTKEY),
         other => panic!("`config reset {other}` is not the setter with the default value"),
@@ -428,8 +440,26 @@ pub fn customised() -> Settings {
         vad_enabled: true,
         engine_prewarm: EnginePrewarm::Off,
         engine_idle_unload_minutes: 7,
+        recording_quality: RecordingQuality::Compact,
+        recording_directory: a_folder(),
+        recording_channel_pair: [3, 4],
         ..english()
     }
+}
+
+/// A folder path that exists on every machine (the temporary directory) and is
+/// absolute, as both surfaces take it.
+fn a_folder() -> String {
+    std::env::temp_dir().to_string_lossy().into_owned()
+}
+
+/// A path of a file that exists while the table runs (the running executable):
+/// not a folder recordings can go to.
+fn a_file() -> String {
+    std::env::current_exe()
+        .expect("the running executable has a path")
+        .to_string_lossy()
+        .into_owned()
 }
 
 /// The cases, in the order they are added.
@@ -637,6 +667,46 @@ pub fn cases() -> Vec<Case> {
         "engine_idle_unload_minutes 0",
         customised(),
         Op::EngineIdleUnloadMinutes(0),
+    );
+    add(
+        "recording_quality compact",
+        english(),
+        Op::RecordingQuality(RecordingQuality::Compact),
+    );
+    add(
+        "recording_directory a folder",
+        english(),
+        Op::RecordingDirectory(a_folder()),
+    );
+    add(
+        "recording_directory empty (the default folder)",
+        customised(),
+        Op::RecordingDirectory(String::new()),
+    );
+    add(
+        "recording_directory is a file (refused)",
+        customised(),
+        Op::RecordingDirectory(a_file()),
+    );
+    add(
+        "recording_channel_pair 3-4",
+        english(),
+        Op::RecordingChannelPair(3, 4),
+    );
+    add(
+        "recording_channel_pair 3-3 (mono channel 3)",
+        customised(),
+        Op::RecordingChannelPair(3, 3),
+    );
+    add(
+        "recording_channel_pair 0-2 (refused)",
+        customised(),
+        Op::RecordingChannelPair(0, 2),
+    );
+    add(
+        "recording_channel_pair 1-0 (refused)",
+        customised(),
+        Op::RecordingChannelPair(1, 0),
     );
     add(
         "file_transcription_model auto",
@@ -890,6 +960,9 @@ pub fn cases() -> Vec<Case> {
         "temperature_fallback",
         "engine_prewarm",
         "engine_idle_unload_minutes",
+        "recording_quality",
+        "recording_directory",
+        "recording_channel_pair",
     ] {
         add(&format!("reset {key}"), customised(), Op::Reset(key));
     }
@@ -1048,6 +1121,14 @@ fn apply(
         Op::TemperatureFallback(enabled) => settings.temperature_fallback = *enabled,
         Op::EnginePrewarm(mode) => settings.engine_prewarm = *mode,
         Op::EngineIdleUnloadMinutes(minutes) => settings.engine_idle_unload_minutes = *minutes,
+        Op::RecordingQuality(quality) => settings.recording_quality = *quality,
+        Op::RecordingDirectory(directory) => {
+            let is_file = std::path::Path::new(directory).is_file();
+            settings.set_recording_directory(directory, is_file)?;
+        }
+        Op::RecordingChannelPair(first, second) => {
+            settings.set_recording_channel_pair(*first, *second)?
+        }
         Op::FileTranscriptionModel(choice) => settings.file_transcription_model = *choice,
         Op::HotkeyMode(mode) => settings.replace_hotkey_mode(*mode)?,
         Op::Hotkey(shortcut) => {

@@ -5,6 +5,7 @@
 import type { AppState, BuildInfo, EngineLoadState, EngineStatus, GlossarySuggestion, HotkeyMode, HotkeyProfile, HotkeyStatus, Language, LoadedModelInfo, MeetingJobSnapshot, Settings, TrainingTranscript, WhisperModel } from "./api";
 import type { MeetingReprocessingProposal, ProposalState, ReprocessingMode, ReprocessingRequest, SelectedReprocessingPlan } from "./meeting-reprocessing-types";
 import type { CorrectionFile, CorrectionOperation, MeetingAudioAttachment, MeetingExportFormat, MeetingReview, MeetingReviewState, MeetingTranscript } from "./meeting-types";
+import type { RecordingFinished, RecordingFolderInfo, RecordingQuality, RecordingSessionInfo, RecordingSummary, RecoveryNote } from "./record-types";
 import type { UpdateRecoveryPayload } from "./update-recovery";
 import type { BackendError } from "./errors";
 
@@ -23,6 +24,8 @@ type NoArgs = Record<string, never>;
 export interface CommandMap {
   /** `meeting_reprocessing_commands::accept_meeting_proposal(proposal: MeetingReprocessingProposal, current_review: MeetingReview) -> Result<ReviewState, CommandError>` */
   accept_meeting_proposal: { args: { proposal: MeetingReprocessingProposal; currentReview: MeetingReview }; result: MeetingReviewState; error: BackendError };
+  /** `commands::acknowledge_recording_consent() -> Result<(), CommandError>` */
+  acknowledge_recording_consent: { args: NoArgs; result: void; error: BackendError };
   /** `commands::acknowledge_update_result(expected_text: String) -> Result<bool, CommandError>` */
   acknowledge_update_result: { args: { expectedText: string }; result: boolean; error: BackendError };
   /** `meeting_review_commands::apply_meeting_corrections(review: MeetingReview, corrections: CorrectionFile) -> Result<ReviewState, CommandError>` */
@@ -47,10 +50,14 @@ export interface CommandMap {
   clear_update_recovery: { args: NoArgs; result: void; error: BackendError };
   /** `commands::complete_update_preparation(nonce: String, error: Option<String>) -> Result<(), CommandError>` */
   complete_update_preparation: { args: { nonce: string; error?: string | null }; result: void; error: BackendError };
+  /** `commands::confirm_recording_folder() -> Result<(), CommandError>` */
+  confirm_recording_folder: { args: NoArgs; result: void; error: BackendError };
   /** `commands::copy_transcription_text(text: String) -> Result<(), CommandError>` */
   copy_transcription_text: { args: { text: string }; result: void; error: BackendError };
   /** `meeting_review_commands::create_meeting_review(transcript: MeetingTranscript) -> Result<ReviewState, CommandError>` */
   create_meeting_review: { args: { transcript: MeetingTranscript }; result: MeetingReviewState; error: BackendError };
+  /** `commands::delete_recording(folder_name: String) -> Result<(), CommandError>` */
+  delete_recording: { args: { folderName: string }; result: void; error: BackendError };
   /** `meeting_media::detach_meeting_audio(token: String) -> Result<(), CommandError>` */
   detach_meeting_audio: { args: { token: string }; result: void; error: BackendError };
   /** `commands::download_model(whisper_model: WhisperModel) -> Result<(), CommandError>` */
@@ -87,6 +94,10 @@ export interface CommandMap {
   get_platform: { args: NoArgs; result: string; error: BackendError };
   /** `commands::get_profile_model_info(profile_id: String) -> Result<ModelInfo, CommandError>` */
   get_profile_model_info: { args: { profileId: string }; result: WhisperModel; error: BackendError };
+  /** `commands::get_recording_folder_info(path: Option<String>) -> Result<RecordingFolderInfo, CommandError>` */
+  get_recording_folder_info: { args: { path?: string | null }; result: RecordingFolderInfo; error: BackendError };
+  /** `commands::get_recording_session() -> Result<RecordingSessionInfo, CommandError>` */
+  get_recording_session: { args: NoArgs; result: RecordingSessionInfo; error: BackendError };
   /** `commands::get_settings() -> Result<Settings, CommandError>` */
   get_settings: { args: NoArgs; result: Settings; error: BackendError };
   /** `commands::get_state() -> Result<AppState, CommandError>` */
@@ -101,6 +112,8 @@ export interface CommandMap {
   is_model_downloaded: { args: { whisperModel: string }; result: boolean; error: BackendError };
   /** `commands::is_model_ready() -> Result<bool, CommandError>` */
   is_model_ready: { args: NoArgs; result: boolean; error: BackendError };
+  /** `commands::list_recordings() -> Result<Vec<RecordingSummary>, CommandError>` */
+  list_recordings: { args: NoArgs; result: RecordingSummary[]; error: BackendError };
   /** `commands::load_update_recovery() -> Result<Option<serde_json::Value>, CommandError>` */
   load_update_recovery: { args: NoArgs; result: UpdateRecoveryPayload | null; error: BackendError };
   /** `meeting_jobs::merge_meeting_speakers(transcript: MeetingTranscript, from_id: String, into_id: String) -> Result<MeetingTranscript, CommandError>` */
@@ -119,6 +132,8 @@ export interface CommandMap {
   plan_meeting_reprocessing: { args: { previous: MeetingReview; mode: ReprocessingMode; threshold: number; saveCache: boolean; prompt?: string | null; profileId?: string | null }; result: SelectedReprocessingPlan | null; error: BackendError };
   /** `meeting_reprocessing_commands::preview_meeting_proposal(proposal: MeetingReprocessingProposal) -> Result<ProposalState, CommandError>` */
   preview_meeting_proposal: { args: { proposal: MeetingReprocessingProposal }; result: ProposalState; error: BackendError };
+  /** `commands::recover_recordings() -> Result<Vec<RecoveryNote>, CommandError>` */
+  recover_recordings: { args: NoArgs; result: RecoveryNote[]; error: BackendError };
   /** `meeting_jobs::rename_meeting_speaker(transcript: MeetingTranscript, speaker_id: String, label: String) -> Result<MeetingTranscript, CommandError>` */
   rename_meeting_speaker: { args: { transcript: MeetingTranscript; speakerId: string; label: string }; result: MeetingTranscript; error: BackendError };
   /** `commands::request_accessibility_permission() -> Result<(), CommandError>` */
@@ -131,6 +146,8 @@ export interface CommandMap {
   resolve_meeting_proposal: { args: { proposal: MeetingReprocessingProposal; expectedRevision: string; index: number; operations: CorrectionOperation[] }; result: ProposalState; error: BackendError };
   /** `commands::retry_hotkey_registration() -> Result<(), CommandError>` */
   retry_hotkey_registration: { args: NoArgs; result: void; error: BackendError };
+  /** `commands::reveal_recording(folder_name: String) -> Result<(), CommandError>` */
+  reveal_recording: { args: { folderName: string }; result: void; error: BackendError };
   /** `meeting_jobs::save_meeting_export(transcript: MeetingTranscript, format: ExportFormat) -> Result<bool, CommandError>` */
   save_meeting_export: { args: { transcript: MeetingTranscript; format: MeetingExportFormat }; result: boolean; error: BackendError };
   /** `meeting_reprocessing_commands::save_meeting_proposal(proposal: MeetingReprocessingProposal) -> Result<bool, CommandError>` */
@@ -171,6 +188,12 @@ export interface CommandMap {
   set_profile_glossary: { args: { profileId: string; source: string; expectedSource?: string | null }; result: void; error: BackendError };
   /** `commands::set_profile_model(profile_id: String, model_id: String) -> Result<(), CommandError>` */
   set_profile_model: { args: { profileId: string; modelId: string }; result: void; error: BackendError };
+  /** `commands::set_recording_channel_pair(first: u16, second: u16) -> Result<(), CommandError>` */
+  set_recording_channel_pair: { args: { first: number; second: number }; result: void; error: BackendError };
+  /** `commands::set_recording_directory(path: String) -> Result<(), CommandError>` */
+  set_recording_directory: { args: { path: string }; result: void; error: BackendError };
+  /** `commands::set_recording_quality(quality: RecordingQuality) -> Result<(), CommandError>` */
+  set_recording_quality: { args: { quality: RecordingQuality }; result: void; error: BackendError };
   /** `commands::set_show_overlay(enabled: bool) -> Result<(), CommandError>` */
   set_show_overlay: { args: { enabled: boolean }; result: void; error: BackendError };
   /** `commands::set_temperature_fallback(enabled: bool) -> Result<(), CommandError>` */
@@ -183,16 +206,22 @@ export interface CommandMap {
   set_whisper_model: { args: { model: string }; result: void; error: BackendError };
   /** `commands::start_recording() -> Result<(), CommandError>` */
   start_recording: { args: NoArgs; result: void; error: BackendError };
+  /** `commands::start_recording_session(title: Option<String>) -> Result<RecordingSessionInfo, CommandError>` */
+  start_recording_session: { args: { title?: string | null }; result: RecordingSessionInfo; error: BackendError };
   /** `commands::start_training_recording(profile_id: String) -> Result<(), CommandError>` */
   start_training_recording: { args: { profileId: string }; result: void; error: BackendError };
   /** `commands::stop_and_transcribe() -> Result<String, CommandError>` */
   stop_and_transcribe: { args: NoArgs; result: string; error: BackendError };
   /** `commands::stop_and_transcribe_training() -> Result<TrainingTranscript, CommandError>` */
   stop_and_transcribe_training: { args: NoArgs; result: TrainingTranscript; error: BackendError };
+  /** `commands::stop_recording_session() -> Result<RecordingFinished, CommandError>` */
+  stop_recording_session: { args: NoArgs; result: RecordingFinished; error: BackendError };
   /** `commands::suggest_training_glossary(heard: String, corrected: String, profile_id: String) -> Result<Vec<GlossarySuggestion>, CommandError>` */
   suggest_training_glossary: { args: { heard: string; corrected: string; profileId: string }; result: GlossarySuggestion[]; error: BackendError };
   /** `commands::transcribe_file(file_path: String, prompt: Option<String>, diarize: Option<bool>, profile_id: Option<String>, run_id: Option<String>, auto_paste: Option<bool>) -> Result<String, CommandError>` */
   transcribe_file: { args: { filePath: string; prompt?: string | null; diarize?: boolean | null; profileId?: string | null; runId?: string | null; autoPaste?: boolean | null }; result: string; error: BackendError };
+  /** `commands::transcribe_recording(folder_name: String) -> Result<Option<String>, CommandError>` */
+  transcribe_recording: { args: { folderName: string }; result: string | null; error: BackendError };
   /** `commands::transcribe_training_file(file_path: String, profile_id: String) -> Result<TrainingTranscript, CommandError>` */
   transcribe_training_file: { args: { filePath: string; profileId: string }; result: TrainingTranscript; error: BackendError };
   /** `meeting_review_commands::undo_meeting_review(review: MeetingReview, expected_revision: String) -> Result<ReviewState, CommandError>` */
@@ -202,6 +231,7 @@ export interface CommandMap {
 /** The registered command names, sorted. */
 export const COMMAND_NAMES = [
   "accept_meeting_proposal",
+  "acknowledge_recording_consent",
   "acknowledge_update_result",
   "apply_meeting_corrections",
   "apply_training_glossary",
@@ -214,8 +244,10 @@ export const COMMAND_NAMES = [
   "check_accessibility_permission",
   "clear_update_recovery",
   "complete_update_preparation",
+  "confirm_recording_folder",
   "copy_transcription_text",
   "create_meeting_review",
+  "delete_recording",
   "detach_meeting_audio",
   "download_model",
   "download_pianissimo_model",
@@ -234,6 +266,8 @@ export const COMMAND_NAMES = [
   "get_model_info",
   "get_platform",
   "get_profile_model_info",
+  "get_recording_folder_info",
+  "get_recording_session",
   "get_settings",
   "get_state",
   "get_supported_formats",
@@ -241,6 +275,7 @@ export const COMMAND_NAMES = [
   "hotkey_status",
   "is_model_downloaded",
   "is_model_ready",
+  "list_recordings",
   "load_update_recovery",
   "merge_meeting_speakers",
   "microphone_status",
@@ -250,12 +285,14 @@ export const COMMAND_NAMES = [
   "open_microphone_settings",
   "plan_meeting_reprocessing",
   "preview_meeting_proposal",
+  "recover_recordings",
   "rename_meeting_speaker",
   "request_accessibility_permission",
   "request_microphone_access",
   "reset_meeting_review",
   "resolve_meeting_proposal",
   "retry_hotkey_registration",
+  "reveal_recording",
   "save_meeting_export",
   "save_meeting_proposal",
   "save_meeting_review",
@@ -276,17 +313,23 @@ export const COMMAND_NAMES = [
   "set_pianissimo_dictation",
   "set_profile_glossary",
   "set_profile_model",
+  "set_recording_channel_pair",
+  "set_recording_directory",
+  "set_recording_quality",
   "set_show_overlay",
   "set_temperature_fallback",
   "set_update_result_pending",
   "set_vad_enabled",
   "set_whisper_model",
   "start_recording",
+  "start_recording_session",
   "start_training_recording",
   "stop_and_transcribe",
   "stop_and_transcribe_training",
+  "stop_recording_session",
   "suggest_training_glossary",
   "transcribe_file",
+  "transcribe_recording",
   "transcribe_training_file",
   "undo_meeting_review",
 ] as const satisfies readonly (keyof CommandMap)[];
@@ -297,6 +340,7 @@ export const COMMAND_NAMES = [
  */
 export const BACKEND_ERROR_COMMANDS = [
   "accept_meeting_proposal",
+  "acknowledge_recording_consent",
   "acknowledge_update_result",
   "apply_meeting_corrections",
   "apply_training_glossary",
@@ -309,8 +353,10 @@ export const BACKEND_ERROR_COMMANDS = [
   "check_accessibility_permission",
   "clear_update_recovery",
   "complete_update_preparation",
+  "confirm_recording_folder",
   "copy_transcription_text",
   "create_meeting_review",
+  "delete_recording",
   "detach_meeting_audio",
   "download_model",
   "download_pianissimo_model",
@@ -329,6 +375,8 @@ export const BACKEND_ERROR_COMMANDS = [
   "get_model_info",
   "get_platform",
   "get_profile_model_info",
+  "get_recording_folder_info",
+  "get_recording_session",
   "get_settings",
   "get_state",
   "get_supported_formats",
@@ -336,6 +384,7 @@ export const BACKEND_ERROR_COMMANDS = [
   "hotkey_status",
   "is_model_downloaded",
   "is_model_ready",
+  "list_recordings",
   "load_update_recovery",
   "merge_meeting_speakers",
   "microphone_status",
@@ -345,12 +394,14 @@ export const BACKEND_ERROR_COMMANDS = [
   "open_microphone_settings",
   "plan_meeting_reprocessing",
   "preview_meeting_proposal",
+  "recover_recordings",
   "rename_meeting_speaker",
   "request_accessibility_permission",
   "request_microphone_access",
   "reset_meeting_review",
   "resolve_meeting_proposal",
   "retry_hotkey_registration",
+  "reveal_recording",
   "save_meeting_export",
   "save_meeting_proposal",
   "save_meeting_review",
@@ -371,17 +422,23 @@ export const BACKEND_ERROR_COMMANDS = [
   "set_pianissimo_dictation",
   "set_profile_glossary",
   "set_profile_model",
+  "set_recording_channel_pair",
+  "set_recording_directory",
+  "set_recording_quality",
   "set_show_overlay",
   "set_temperature_fallback",
   "set_update_result_pending",
   "set_vad_enabled",
   "set_whisper_model",
   "start_recording",
+  "start_recording_session",
   "start_training_recording",
   "stop_and_transcribe",
   "stop_and_transcribe_training",
+  "stop_recording_session",
   "suggest_training_glossary",
   "transcribe_file",
+  "transcribe_recording",
   "transcribe_training_file",
   "undo_meeting_review",
 ] as const satisfies readonly (keyof CommandMap)[];
@@ -397,6 +454,7 @@ export const COMMAND_ARGUMENTS: {
   };
 } = {
   accept_meeting_proposal: { required: ["proposal", "currentReview"], optional: [] },
+  acknowledge_recording_consent: { required: [], optional: [] },
   acknowledge_update_result: { required: ["expectedText"], optional: [] },
   apply_meeting_corrections: { required: ["review", "corrections"], optional: [] },
   apply_training_glossary: { required: ["heard", "corrected", "profileId", "accepted"], optional: [] },
@@ -409,8 +467,10 @@ export const COMMAND_ARGUMENTS: {
   check_accessibility_permission: { required: [], optional: [] },
   clear_update_recovery: { required: [], optional: [] },
   complete_update_preparation: { required: ["nonce"], optional: ["error"] },
+  confirm_recording_folder: { required: [], optional: [] },
   copy_transcription_text: { required: ["text"], optional: [] },
   create_meeting_review: { required: ["transcript"], optional: [] },
+  delete_recording: { required: ["folderName"], optional: [] },
   detach_meeting_audio: { required: ["token"], optional: [] },
   download_model: { required: ["whisperModel"], optional: [] },
   download_pianissimo_model: { required: [], optional: ["model"] },
@@ -429,6 +489,8 @@ export const COMMAND_ARGUMENTS: {
   get_model_info: { required: [], optional: [] },
   get_platform: { required: [], optional: [] },
   get_profile_model_info: { required: ["profileId"], optional: [] },
+  get_recording_folder_info: { required: [], optional: ["path"] },
+  get_recording_session: { required: [], optional: [] },
   get_settings: { required: [], optional: [] },
   get_state: { required: [], optional: [] },
   get_supported_formats: { required: [], optional: [] },
@@ -436,6 +498,7 @@ export const COMMAND_ARGUMENTS: {
   hotkey_status: { required: [], optional: [] },
   is_model_downloaded: { required: ["whisperModel"], optional: [] },
   is_model_ready: { required: [], optional: [] },
+  list_recordings: { required: [], optional: [] },
   load_update_recovery: { required: [], optional: [] },
   merge_meeting_speakers: { required: ["transcript", "fromId", "intoId"], optional: [] },
   microphone_status: { required: [], optional: [] },
@@ -445,12 +508,14 @@ export const COMMAND_ARGUMENTS: {
   open_microphone_settings: { required: [], optional: [] },
   plan_meeting_reprocessing: { required: ["previous", "mode", "threshold", "saveCache"], optional: ["prompt", "profileId"] },
   preview_meeting_proposal: { required: ["proposal"], optional: [] },
+  recover_recordings: { required: [], optional: [] },
   rename_meeting_speaker: { required: ["transcript", "speakerId", "label"], optional: [] },
   request_accessibility_permission: { required: [], optional: [] },
   request_microphone_access: { required: [], optional: [] },
   reset_meeting_review: { required: ["review", "expectedRevision"], optional: [] },
   resolve_meeting_proposal: { required: ["proposal", "expectedRevision", "index", "operations"], optional: [] },
   retry_hotkey_registration: { required: [], optional: [] },
+  reveal_recording: { required: ["folderName"], optional: [] },
   save_meeting_export: { required: ["transcript", "format"], optional: [] },
   save_meeting_proposal: { required: ["proposal"], optional: [] },
   save_meeting_review: { required: ["review", "format"], optional: [] },
@@ -471,17 +536,23 @@ export const COMMAND_ARGUMENTS: {
   set_pianissimo_dictation: { required: ["enabled"], optional: [] },
   set_profile_glossary: { required: ["profileId", "source"], optional: ["expectedSource"] },
   set_profile_model: { required: ["profileId", "modelId"], optional: [] },
+  set_recording_channel_pair: { required: ["first", "second"], optional: [] },
+  set_recording_directory: { required: ["path"], optional: [] },
+  set_recording_quality: { required: ["quality"], optional: [] },
   set_show_overlay: { required: ["enabled"], optional: [] },
   set_temperature_fallback: { required: ["enabled"], optional: [] },
   set_update_result_pending: { required: ["resultId", "pending"], optional: [] },
   set_vad_enabled: { required: ["enabled"], optional: [] },
   set_whisper_model: { required: ["model"], optional: [] },
   start_recording: { required: [], optional: [] },
+  start_recording_session: { required: [], optional: ["title"] },
   start_training_recording: { required: ["profileId"], optional: [] },
   stop_and_transcribe: { required: [], optional: [] },
   stop_and_transcribe_training: { required: [], optional: [] },
+  stop_recording_session: { required: [], optional: [] },
   suggest_training_glossary: { required: ["heard", "corrected", "profileId"], optional: [] },
   transcribe_file: { required: ["filePath"], optional: ["prompt", "diarize", "profileId", "runId", "autoPaste"] },
+  transcribe_recording: { required: ["folderName"], optional: [] },
   transcribe_training_file: { required: ["filePath", "profileId"], optional: [] },
   undo_meeting_review: { required: ["review", "expectedRevision"], optional: [] },
 };

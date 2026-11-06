@@ -626,7 +626,9 @@ fn cmd_path(out: &Out) -> Result<(), DictationError> {
 mod tests {
     use super::keys::{parse_bool, VALID_KEYS};
     use super::*;
-    use sagascript_core::settings::{validate_hotkey, PianissimoModel, WhisperModel};
+    use sagascript_core::settings::{
+        validate_hotkey, PianissimoModel, RecordingQuality, WhisperModel,
+    };
 
     // The tests name a key as `config` is given it; these run the key's entry
     // in the table (`keys::KEYS`).
@@ -843,6 +845,8 @@ mod tests {
             "model_lineup_version",
             "engine_defaults_version",
             "schema_version",
+            "recording_folder_confirmed",
+            "recording_consent_acknowledged",
         ];
 
         let settings = Settings::default();
@@ -1628,6 +1632,105 @@ mod tests {
         assert_eq!(get_setting_value(&settings, "beam_size"), "0");
         assert_eq!(get_setting_value(&settings, "temperature_fallback"), "true");
         assert_eq!(get_setting_value(&settings, "vad_enabled"), "false");
+        assert_eq!(
+            get_setting_value(&settings, "recording_quality"),
+            "lossless"
+        );
+        assert_eq!(get_setting_value(&settings, "recording_directory"), "");
+        assert_eq!(
+            get_setting_value(&settings, "recording_channel_pair"),
+            "1-2"
+        );
+    }
+
+    #[test]
+    fn recording_settings_can_be_set_reset_and_reject_bad_values() {
+        let mut settings = Settings::default();
+        apply_setting_value(&mut settings, "recording_quality", "compact").unwrap();
+        apply_setting_value(&mut settings, "recording_channel_pair", "3-3").unwrap();
+        apply_setting_value(&mut settings, "recording_directory", "/Volumes/Audio/Takes").unwrap();
+        assert_eq!(get_setting_value(&settings, "recording_quality"), "compact");
+        assert_eq!(
+            get_setting_value(&settings, "recording_channel_pair"),
+            "3-3"
+        );
+        assert_eq!(settings.recording_channel_pair, [3, 3]);
+        assert_eq!(
+            get_setting_value(&settings, "recording_directory"),
+            "/Volumes/Audio/Takes"
+        );
+
+        // A bad value changes nothing and says what is wrong.
+        for bad in [
+            "0-2", "1-0", "0-0", "1", "a-b", "1-2-3", "", "-1-2", "1-70000",
+        ] {
+            let error = apply_setting_value(&mut settings, "recording_channel_pair", bad)
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("recording_channel_pair"), "{bad}: {error}");
+        }
+        assert!(apply_setting_value(&mut settings, "recording_quality", "studio").is_err());
+        assert_eq!(settings.recording_channel_pair, [3, 3]);
+        assert_eq!(settings.recording_quality, RecordingQuality::Compact);
+
+        let defaults = Settings::default();
+        for key in [
+            "recording_quality",
+            "recording_directory",
+            "recording_channel_pair",
+        ] {
+            reset_setting_value(&mut settings, key, &defaults).unwrap();
+        }
+        assert_eq!(
+            get_setting_value(&settings, "recording_quality"),
+            "lossless"
+        );
+        assert_eq!(get_setting_value(&settings, "recording_directory"), "");
+        assert_eq!(
+            get_setting_value(&settings, "recording_channel_pair"),
+            "1-2"
+        );
+    }
+
+    #[test]
+    fn recording_directory_is_expanded_made_absolute_and_never_a_file() {
+        let mut settings = Settings::default();
+        apply_setting_value(&mut settings, "recording_directory", "~/Takes").unwrap();
+        assert_eq!(
+            settings.recording_directory,
+            sagascript_core::settings::expand_home("~/Takes")
+        );
+        #[cfg(unix)]
+        assert!(settings.recording_directory.starts_with('/'));
+        apply_setting_value(&mut settings, "recording_directory", "takes/one").unwrap();
+        let expected = std::env::current_dir().unwrap().join("takes/one");
+        assert_eq!(settings.recording_directory, expected.to_string_lossy());
+
+        // A folder that does not exist yet is fine; a file is not.
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("not-yet");
+        apply_setting_value(
+            &mut settings,
+            "recording_directory",
+            missing.to_str().unwrap(),
+        )
+        .unwrap();
+        assert!(!missing.exists());
+        let file = dir.path().join("a-file");
+        std::fs::write(&file, b"x").unwrap();
+        let error =
+            apply_setting_value(&mut settings, "recording_directory", file.to_str().unwrap())
+                .unwrap_err()
+                .to_string();
+        assert!(error.contains("is a file"), "{error}");
+        assert_eq!(
+            settings.recording_directory,
+            missing.to_string_lossy(),
+            "a refused directory changes nothing"
+        );
+
+        apply_setting_value(&mut settings, "recording_directory", "  ").unwrap();
+        assert_eq!(settings.recording_directory, "");
     }
 
     #[test]

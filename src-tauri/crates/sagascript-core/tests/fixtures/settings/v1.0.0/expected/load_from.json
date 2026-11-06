@@ -28,6 +28,14 @@
   "profile_models": {
     "default": "kb-whisper-small"
   },
+  "recording_channel_pair": [
+    1,
+    2
+  ],
+  "recording_consent_acknowledged": false,
+  "recording_directory": "",
+  "recording_folder_confirmed": false,
+  "recording_quality": "lossless",
   "schema_version": 4,
   "show_overlay": true,
   "temperature_fallback": false,

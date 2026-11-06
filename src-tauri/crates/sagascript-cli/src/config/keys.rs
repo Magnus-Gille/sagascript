@@ -18,9 +18,9 @@ use std::str::FromStr;
 
 use sagascript_core::error::DictationError;
 use sagascript_core::settings::{
-    validate_hotkey, Accessibility, DictionaryRefusal, EnginePrewarm, FileModel,
+    expand_home, validate_hotkey, Accessibility, DictionaryRefusal, EnginePrewarm, FileModel,
     FileModelPreference, HotkeyMode, HotkeyProfile, Language, ModelResetNotice, PianissimoModel,
-    Settings, WhisperModel,
+    RecordingQuality, Settings, WhisperModel,
 };
 
 use super::shortcut_warning;
@@ -363,6 +363,63 @@ pub(super) const KEYS: &[Key] = &[
         engine_idle_unload_minutes,
         &["Integer >= 0 (default 60; engine host exits after twice this; 0 = never unload)"]
     ),
+    Key {
+        name: "recording_quality",
+        note: None,
+        help: &["lossless, compact (lossless keeps the native rate; compact is 16 kHz)"],
+        get: |settings| settings.recording_quality.id().to_string(),
+        set: |settings, value| {
+            settings.recording_quality =
+                RecordingQuality::parse_id(value).map_err(DictationError::from)?;
+            Ok(Vec::new())
+        },
+        reset: |settings, defaults| {
+            settings.recording_quality = defaults.recording_quality;
+            Ok(Vec::new())
+        },
+        warning: no_warning,
+    },
+    Key {
+        name: "recording_directory",
+        note: None,
+        help: &[
+            "Folder for recordings; ~/ and relative paths are made absolute, the folder",
+            "is created on the first recording. Empty = the default (Music/Sagascript)",
+        ],
+        get: |settings| settings.recording_directory.clone(),
+        set: |settings, value| {
+            let directory = absolute_directory(value)?;
+            let is_file = std::path::Path::new(&directory).is_file();
+            settings.set_recording_directory(&directory, is_file)?;
+            Ok(Vec::new())
+        },
+        reset: |settings, defaults| {
+            settings.recording_directory = defaults.recording_directory.clone();
+            Ok(Vec::new())
+        },
+        warning: no_warning,
+    },
+    Key {
+        name: "recording_channel_pair",
+        note: None,
+        help: &[
+            "FIRST-SECOND input channels, counted from 1: 1-2 (default), 3-4; 3-3 = mono channel 3",
+        ],
+        get: |settings| {
+            let [first, second] = settings.recording_channel_pair;
+            format!("{first}-{second}")
+        },
+        set: |settings, value| {
+            let (first, second) = parse_channel_pair(value)?;
+            settings.set_recording_channel_pair(first, second)?;
+            Ok(Vec::new())
+        },
+        reset: |settings, defaults| {
+            settings.recording_channel_pair = defaults.recording_channel_pair;
+            Ok(Vec::new())
+        },
+        warning: no_warning,
+    },
 ];
 
 /// The key names, generated from [`KEYS`].
@@ -449,6 +506,38 @@ pub(super) fn parse_bool(value: &str, key: &str) -> Result<bool, DictationError>
 }
 
 // -- Keys that need more than a field --
+
+/// `3-4` as `(3, 4)`; `3-3` is mono channel 3. The operation refuses 0.
+fn parse_channel_pair(value: &str) -> Result<(u16, u16), DictationError> {
+    let bad = || {
+        DictationError::SettingsError(format!(
+            "recording_channel_pair must look like 1-2 or 3-3 (channels count from 1), got '{value}'"
+        ))
+    };
+    let (first, second) = value.trim().split_once('-').ok_or_else(bad)?;
+    let first = first.trim().parse::<u16>().map_err(|_| bad())?;
+    let second = second.trim().parse::<u16>().map_err(|_| bad())?;
+    Ok((first, second))
+}
+
+/// The folder as stored: `~/` expanded, a relative path made absolute against
+/// the current directory (the app runs elsewhere), empty kept empty. The
+/// folder need not exist.
+fn absolute_directory(value: &str) -> Result<String, DictationError> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(String::new());
+    }
+    let expanded = expand_home(value);
+    let path = std::path::Path::new(&expanded);
+    if path.is_absolute() {
+        return Ok(expanded);
+    }
+    let current = std::env::current_dir().map_err(|error| {
+        DictationError::SettingsError(format!("Cannot make recording_directory absolute: {error}"))
+    })?;
+    Ok(current.join(path).to_string_lossy().into_owned())
+}
 
 fn whisper_model_value(settings: &Settings) -> String {
     let profile = settings.default_profile();

@@ -31,7 +31,8 @@ use std::time::Duration;
 
 use sagascript_core::machine;
 use sagascript_core::settings::{
-    store, EnginePrewarm, FileModelPreference, HotkeyMode, Language, Settings, WhisperModel,
+    store, EnginePrewarm, FileModelPreference, HotkeyMode, Language, RecordingQuality, Settings,
+    WhisperModel,
 };
 use sagascript_core::transcription::{
     model as whisper_model_files, pianissimo_model, suggest_glossary_candidates, Glossary,
@@ -341,6 +342,62 @@ const ROWS: &[Row] = &[
                 .map_err(text)
         },
         landed: |s| s.engine_idle_unload_minutes == 11,
+    },
+    Row {
+        commands: &["set_recording_quality"],
+        mirror: Mirror::Field(&["recording_quality"]),
+        arrange: nothing,
+        run: |app, rt| {
+            rt.block_on(set_recording_quality(
+                controller(app),
+                RecordingQuality::Compact,
+            ))
+            .map_err(text)
+        },
+        landed: |s| s.recording_quality == RecordingQuality::Compact,
+    },
+    Row {
+        commands: &["set_recording_directory"],
+        mirror: Mirror::Field(&["recording_directory"]),
+        arrange: nothing,
+        run: |app, rt| {
+            rt.block_on(set_recording_directory(
+                controller(app),
+                std::env::temp_dir().to_string_lossy().into_owned(),
+            ))
+            .map_err(text)
+        },
+        landed: |s| s.recording_directory == std::env::temp_dir().to_string_lossy(),
+    },
+    Row {
+        commands: &["set_recording_channel_pair"],
+        mirror: Mirror::Field(&["recording_channel_pair"]),
+        arrange: nothing,
+        run: |app, rt| {
+            rt.block_on(set_recording_channel_pair(controller(app), 3, 4))
+                .map_err(text)
+        },
+        landed: |s| s.recording_channel_pair == [3, 4],
+    },
+    Row {
+        commands: &["confirm_recording_folder"],
+        mirror: Mirror::Field(&["recording_folder_confirmed"]),
+        arrange: nothing,
+        run: |app, rt| {
+            rt.block_on(confirm_recording_folder(controller(app)))
+                .map_err(text)
+        },
+        landed: |s| s.recording_folder_confirmed,
+    },
+    Row {
+        commands: &["acknowledge_recording_consent"],
+        mirror: Mirror::Field(&["recording_consent_acknowledged"]),
+        arrange: nothing,
+        run: |app, rt| {
+            rt.block_on(acknowledge_recording_consent(controller(app)))
+                .map_err(text)
+        },
+        landed: |s| s.recording_consent_acknowledged,
     },
     Row {
         commands: &["set_hotkey_mode"],

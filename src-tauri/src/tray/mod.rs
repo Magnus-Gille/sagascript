@@ -1,5 +1,6 @@
 //! The menu-bar / system-tray icon and its menu: the profile entries, the
-//! status line, the update entries and the build identity.
+//! status line (which also shows a running audio recording), the Record entry,
+//! the update entries and the build identity.
 //!
 //! Tray, menu and window calls belong on the main thread (ADR 0003). The
 //! functions here are called from there; code that may run elsewhere goes
@@ -21,16 +22,16 @@ use tauri::{
 use tracing::info;
 
 use crate::commands::{lock_controller, SharedController};
-use crate::launch::open_settings_window;
+use crate::launch::{open_record_window, open_settings_window};
 use crate::updater::{
     handle_check_for_updates_menu_action, register_update_menu_items, UPDATE_CHECK_ACTION,
 };
-use menu::create_profile_menu_items;
+use menu::{create_profile_menu_items, menu_action, MenuAction, RECORD_ITEM_ID};
 #[cfg(target_os = "macos")]
 use position::{configure_macos_tray_identity, seed_macos_tray_preferred_position};
 
 pub(crate) use menu::{select_profile_menu, update_profiles_menu};
-pub(crate) use status::{update_tray_last_result, update_tray_status};
+pub(crate) use status::{refresh_tray_status, update_tray_last_result, update_tray_status};
 
 const BUILD_IDENTITY: &str = concat!(
     "Version ",
@@ -79,6 +80,7 @@ pub(crate) fn create_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Er
         true,
         None::<&str>,
     )?;
+    let record_item = MenuItem::with_id(app, RECORD_ITEM_ID, "Record…", true, None::<&str>)?;
     let status = MenuItem::with_id(app, "status", "Sagascript - Idle", false, None::<&str>)?;
     let profiles = {
         let ctrl: tauri::State<'_, SharedController> = app.state();
@@ -132,6 +134,7 @@ pub(crate) fn create_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Er
             &build_info_item,
             &settings_item,
             &transcribe_file_item,
+            &record_item,
             &quit,
         ],
     )?;
@@ -152,24 +155,15 @@ pub(crate) fn create_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Er
         None => return Err("Windows tray icon is missing from the app bundle".into()),
     };
     let tray = tray_builder
-        .on_menu_event(move |app, event| match event.id().as_ref() {
-            "quit" => {
+        .on_menu_event(move |app, event| match menu_action(event.id().as_ref()) {
+            Some(MenuAction::Quit) => {
                 info!("Quit requested");
                 app.exit(0);
             }
-            "settings" => {
-                open_settings_window(app, None, "tray_menu_settings");
-            }
-            "transcribe_file" => {
-                open_settings_window(app, Some("transcribe"), "tray_menu_transcribe_file");
-            }
-            "manage_profiles" => {
-                open_settings_window(app, Some("dictate"), "tray_menu_manage_profiles");
-            }
-            "check_for_updates" => {
-                handle_check_for_updates_menu_action(app);
-            }
-            _ => {}
+            Some(MenuAction::Settings { tab, site }) => open_settings_window(app, tab, site),
+            Some(MenuAction::Record) => open_record_window(app, "tray_menu_record"),
+            Some(MenuAction::CheckForUpdates) => handle_check_for_updates_menu_action(app),
+            None => {}
         })
         .build(app)?;
 

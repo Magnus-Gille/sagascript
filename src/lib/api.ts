@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import type { RecordingQuality } from "./record-types";
 import type { UpdateRecoveryPayload } from "./update-recovery";
 import type {
   CorrectionFile,
@@ -52,6 +53,16 @@ export interface Settings {
   engine_prewarm: EnginePrewarm;
   engine_idle_unload_minutes: number;
   has_completed_onboarding: boolean;
+  /** The tier new recordings are made in (SAGA-564). */
+  recording_quality: RecordingQuality;
+  /** Empty = the default folder. */
+  recording_directory: string;
+  /** 1-based input channels; `[n, n]` records channel n as mono. */
+  recording_channel_pair: [number, number];
+  /** First use: the user has confirmed the recordings folder. */
+  recording_folder_confirmed: boolean;
+  /** First use: the user has read the consent reminder. */
+  recording_consent_acknowledged: boolean;
 }
 
 export interface BuildInfo {

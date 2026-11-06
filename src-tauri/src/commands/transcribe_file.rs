@@ -33,6 +33,89 @@ pub async fn cancel_file_transcription(
     Ok(jobs.cancel(&run_id))
 }
 
+/// What a plain run takes besides its input.
+pub(crate) struct PlainOptions {
+    pub prompt: Option<String>,
+    pub profile_id: Option<String>,
+    /// Paste the text into the frontmost app when the setting allows it
+    /// (`None`: yes, as for `transcribe_file`).
+    pub auto_paste: Option<bool>,
+    /// Mark the text as an unsaved result for the update flow
+    /// (`UpdateActivity::set_result_pending`). Only a window that later clears
+    /// it may ask for this.
+    pub remember_result: bool,
+}
+
+/// The plain (non-diarized) run of `input`: choose the model as a file
+/// transcription does, run it with its progress events, and hand the text
+/// back. `transcribe_file` and `transcribe_recording` share it, so a saved
+/// recording is transcribed exactly like a file.
+pub(crate) async fn transcribe_plain_input(
+    app: tauri::AppHandle,
+    controller: &SharedController,
+    jobs: crate::plain_file_jobs::SharedPlainFileJobs,
+    activity: &Arc<crate::update_activity::UpdateActivity>,
+    result_id: String,
+    input: crate::plain_file_jobs::PlainInput,
+    options: PlainOptions,
+) -> Result<String, CommandError> {
+    let PlainOptions {
+        prompt,
+        profile_id,
+        auto_paste,
+        remember_result,
+    } = options;
+    let _work_lease = activity.begin_work()?;
+    let pianissimo = {
+        let ctrl = lock_controller(controller);
+        let settings = ctrl.settings();
+        let language = file_transcription_language(settings, profile_id.as_deref())?;
+        match settings.effective_file_model_for(language)? {
+            FileModel::Pianissimo(model) => Some((
+                model,
+                Glossary::parse(&settings.effective_glossary_source_with_prompt(
+                    profile_id.as_deref(),
+                    prompt.as_deref(),
+                )),
+            )),
+            FileModel::Whisper(_) => None,
+        }
+    };
+    let text = if let Some((model, glossary)) = pianissimo {
+        crate::plain_file_jobs::transcribe_pianissimo(
+            app.clone(),
+            jobs,
+            result_id.clone(),
+            input,
+            model,
+            glossary,
+        )
+        .await?
+    } else {
+        let context = {
+            let ctrl = lock_controller(controller);
+            file_transcription_context(ctrl.settings(), profile_id.as_deref(), prompt.as_deref())?
+        };
+        crate::plain_file_jobs::transcribe(app.clone(), jobs, result_id.clone(), input, context)
+            .await?
+    };
+    if remember_result {
+        activity.set_result_pending(&result_id, true)?;
+    }
+    if auto_paste.unwrap_or(true) && lock_controller(controller).settings().auto_paste {
+        let paste_text = text.clone();
+        app.run_on_main_thread(move || {
+            if let Err(error) = crate::paste::PasteService::new().paste(&paste_text) {
+                error!(%error, "Auto-paste failed");
+            }
+        })
+        .map_err(|error| {
+            CommandError::Unavailable(format!("Could not dispatch auto-paste: {error}"))
+        })?;
+    }
+    Ok(text)
+}
+
 #[tauri::command]
 #[allow(clippy::too_many_arguments)] // Tauri injects AppHandle + States; the
                                      // frontend call shape (file/prompt/diarize/profile) is unchanged.
@@ -50,88 +133,47 @@ pub async fn transcribe_file(
     auto_paste: Option<bool>,
 ) -> Result<String, CommandError> {
     let activity = activity.inner().clone();
-    let _work_lease = activity.begin_work()?;
     let result_id = run_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
-    let pianissimo_glossary = {
+    if !diarize.unwrap_or(false) {
+        return transcribe_plain_input(
+            app,
+            &controller,
+            jobs.inner().clone(),
+            &activity,
+            result_id,
+            crate::plain_file_jobs::PlainInput::File(file_path),
+            PlainOptions {
+                prompt,
+                profile_id,
+                auto_paste,
+                remember_result: true,
+            },
+        )
+        .await;
+    }
+    let _work_lease = activity.begin_work()?;
+
+    // Diarization needs Whisper, so an Auto preference must not pick Pianissimo for it.
+    let pianissimo_for_diarization = {
         let ctrl = lock_controller(&controller);
         let settings = ctrl.settings();
         let language = file_transcription_language(settings, profile_id.as_deref())?;
-        // Diarization needs Whisper, so an Auto preference must not pick Pianissimo for it.
-        let resolved = if diarize.unwrap_or(false) {
-            settings.effective_whisper_file_model_for(language)?
-        } else {
-            settings.effective_file_model_for(language)?
-        };
-        match resolved {
-            FileModel::Pianissimo(model) => Some((
-                model,
-                Glossary::parse(&settings.effective_glossary_source_with_prompt(
-                    profile_id.as_deref(),
-                    prompt.as_deref(),
-                )),
-            )),
+        match settings.effective_whisper_file_model_for(language)? {
+            FileModel::Pianissimo(model) => Some(model),
             FileModel::Whisper(_) => None,
         }
     };
-    if let Some((model, glossary)) = pianissimo_glossary {
-        if diarize.unwrap_or(false) {
-            return Err(SettingsError::PianissimoNotForDiarization {
-                language: model.language().display_name(),
-            }
-            .into());
+    if let Some(model) = pianissimo_for_diarization {
+        return Err(SettingsError::PianissimoNotForDiarization {
+            language: model.language().display_name(),
         }
-        let text = crate::plain_file_jobs::transcribe_pianissimo(
-            app.clone(),
-            jobs.inner().clone(),
-            result_id.clone(),
-            file_path,
-            model,
-            glossary,
-        )
-        .await?;
-        activity.set_result_pending(&result_id, true)?;
-        if auto_paste.unwrap_or(true) && lock_controller(&controller).settings().auto_paste {
-            let paste_text = text.clone();
-            app.run_on_main_thread(move || {
-                if let Err(error) = crate::paste::PasteService::new().paste(&paste_text) {
-                    error!(%error, "Auto-paste failed");
-                }
-            })
-            .map_err(|error| {
-                CommandError::Unavailable(format!("Could not dispatch auto-paste: {error}"))
-            })?;
-        }
-        return Ok(text);
+        .into());
     }
     let context = {
         let ctrl = lock_controller(&controller);
         file_transcription_context(ctrl.settings(), profile_id.as_deref(), prompt.as_deref())?
     };
-
-    if !diarize.unwrap_or(false) {
-        let text = crate::plain_file_jobs::transcribe(
-            app.clone(),
-            jobs.inner().clone(),
-            result_id.clone(),
-            file_path,
-            context,
-        )
-        .await?;
-        activity.set_result_pending(&result_id, true)?;
-        if auto_paste.unwrap_or(true) && lock_controller(&controller).settings().auto_paste {
-            let paste_text = text.clone();
-            app.run_on_main_thread(move || {
-                if let Err(error) = crate::paste::PasteService::new().paste(&paste_text) {
-                    error!(%error, "Auto-paste failed");
-                }
-            })
-            .map_err(|error| {
-                CommandError::Unavailable(format!("Could not dispatch auto-paste: {error}"))
-            })?;
-        }
-        return Ok(text);
-    }
     let FileTranscriptionContext {
         language,
         model: effective_model,
