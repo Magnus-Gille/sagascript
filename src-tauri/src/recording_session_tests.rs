@@ -874,7 +874,7 @@ fn a_reserved_slot_keeps_dictation_out_while_the_permission_is_asked_for() {
     // A denied permission (the reservation dropped) frees the microphone.
     drop(reservation);
     assert!(!h.recorder.is_active());
-    lock_controller_for_dictation(&controller, &h.recorder).expect("free again");
+    drop(lock_controller_for_dictation(&controller, &h.recorder).expect("free again"));
 }
 
 #[test]
@@ -915,8 +915,7 @@ async fn a_reservation_is_released_on_every_path() {
     };
     start_reserved(reservation, broken, None, h.emit())
         .await
-        .err()
-        .expect("the folder cannot exist");
+        .expect_err("the folder cannot exist");
     assert!(!h.recorder.is_active());
 
     // A start that works holds it until the stop.

@@ -174,6 +174,7 @@ fn it_reports_its_format_delivers_blocks_and_stops_cleanly() {
             sample_rate: 16_000,
             channels: 2,
         },
+        ..SyntheticConfig::default()
     });
     assert_eq!(source.format().sample_rate, 16_000);
     assert_eq!(source.device_name().as_deref(), Some(SYNTHETIC_DEVICE_NAME));
