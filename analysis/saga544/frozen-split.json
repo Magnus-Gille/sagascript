@@ -1,0 +1,199 @@
+{
+  "split_version": "SAGA-544-v1",
+  "frozen_date": "2026-11-01",
+  "split_policy": "Development: ten already-evaluated public clips present in corpus.json and the original per-clip host sweep. Holdout: ten unseen FLEURS-SV dev sentence IDs selected deterministically by SHA256 order after excluding the two FLEURS IDs exposed in the already-viewed long transcript (1604, 1525) and every filename in the existing long fixture. For each eligible sentence ID, choose the filename with minimum SHA256(SAGA-544-clip-v1|id|filename); order selected IDs by SHA256(SAGA-544-holdout-v1|id). Freeze before any decoder/merge parameter tuning.",
+  "development": [
+    {
+      "id": "14347918279741910315",
+      "file": "C:\\Users\\magnu\\AppData\\Local\\Temp\\sagascript-accelerator-lab\\audio\\14347918279741910315.wav",
+      "duration_seconds": 0.0,
+      "sha256": "0b2a779643d09527c55ed950038139bba637282495054b78612ca462bb4e80bc",
+      "reference": "Skogarna är dock inte bara mangroveträsk — de innehåller några av de sista kvarvarande ståndorterna av de stora djunglerna som en gång täckte Gangesslätten.",
+      "source": "corpus.json"
+    },
+    {
+      "id": "10411502267097546866",
+      "file": "C:\\Users\\magnu\\AppData\\Local\\Temp\\sagascript-accelerator-lab\\audio\\10411502267097546866.wav",
+      "duration_seconds": 0.0,
+      "sha256": "e7fd048c760be5c6691ff85ab9f809963a81c655344dcbda90ca92589441ed8e",
+      "reference": "Maciej Krezel i det polska herrlaget för synskadade och ledsagaren Anna Ogarzynska slutade på trettonde plats i Super-G. Sydkoreas Jong Seork Park hamnade på tjugofjärde plats i herrarnas sittande Super-G.",
+      "source": "corpus.json"
+    },
+    {
+      "id": "9092741274593827020",
+      "file": "C:\\Users\\magnu\\AppData\\Local\\Temp\\sagascript-accelerator-lab\\audio\\9092741274593827020.wav",
+      "duration_seconds": 0.0,
+      "sha256": "72c7263e7092b4a87cbb7b4ec7995a1d8d83fa299b7b8fde1d8ed539c68079a1",
+      "reference": "Det nya kungarikets gamla egyptier förundrades över sina föregångares monument som vid den tiden var gott och väl över tusen år gamla.",
+      "source": "corpus.json"
+    },
+    {
+      "id": "9191614290588137327",
+      "file": "C:\\Users\\magnu\\AppData\\Local\\Temp\\sagascript-accelerator-lab\\audio\\9191614290588137327.wav",
+      "duration_seconds": 0.0,
+      "sha256": "a21a06d1a901d8d0f5ca15377e8360ff3c1ae58f91bd94ae48e8ddaeeee5f018",
+      "reference": "I början var kläder starkt influerade av den bysantinska kulturen i öst.",
+      "source": "corpus.json"
+    },
+    {
+      "id": "682426172675355782",
+      "file": "C:\\Users\\magnu\\AppData\\Local\\Temp\\sagascript-accelerator-lab\\audio\\682426172675355782.wav",
+      "duration_seconds": 0.0,
+      "sha256": "4271de11d1b0619a1fda890d77ca902958988c5992e9d5d36f3a0941f552ea47",
+      "reference": "Fjädrarnas struktur indikerar att de inte användes för att flyga utan istället för temperaturreglering eller för uppvisning. Forskarna föreslog att exemplaret visar en vuxen fjäderdräkt och inte kycklingdun, även om svansen kommer från en ung dinosaurie.",
+      "source": "corpus.json"
+    },
+    {
+      "id": "13767655196060956559",
+      "file": "C:\\Users\\magnu\\AppData\\Local\\Temp\\sagascript-accelerator-lab\\audio\\13767655196060956559.wav",
+      "duration_seconds": 0.0,
+      "sha256": "91b57317b5e359fdc416fc000c12caef30d62cd9aea1ae9b92f1c018eadcb858",
+      "reference": "Kurirföretag har bra betalt för att leverera saker snabbt. Ofta är tid väldigt viktigt när det gäller affärsdokument, handelsvaror eller reservdelar till en brådskande reparation.",
+      "source": "corpus.json"
+    },
+    {
+      "id": "14782532088492245120",
+      "file": "C:\\Users\\magnu\\AppData\\Local\\Temp\\sagascript-accelerator-lab\\audio\\14782532088492245120.wav",
+      "duration_seconds": 0.0,
+      "sha256": "1e648d566e24854284fda2f29146add7d39f512137500a1d7d6b9422e684f5e1",
+      "reference": "Att resa och lära sig är ett allt mer populärt alternativ för de som planerar ett friår.",
+      "source": "corpus.json"
+    },
+    {
+      "id": "13930291059846386070",
+      "file": "C:\\Users\\magnu\\AppData\\Local\\Temp\\sagascript-accelerator-lab\\audio\\13930291059846386070.wav",
+      "duration_seconds": 0.0,
+      "sha256": "758ffe4271ed0fffb5ce63ae822602bedc6886b3b01687db88b66a2039481dd8",
+      "reference": "Mallorcansk mat, liksom den i liknande områden kring Medelhavet, baseras på bröd, grönsaker och kött (särskilt fläsk) och använder genomgående olivolja.",
+      "source": "corpus.json"
+    },
+    {
+      "id": "4748525319668878312",
+      "file": "C:\\Users\\magnu\\AppData\\Local\\Temp\\sagascript-accelerator-lab\\audio\\4748525319668878312.wav",
+      "duration_seconds": 0.0,
+      "sha256": "ef2e24a70be8968b776b6206741797e09f02b70c64a4d7f111aff83936893345",
+      "reference": "Naturalister och filosofer fokuserade på klassiska texter och, i synnerhet, på Bibeln skriven på latin.",
+      "source": "corpus.json"
+    },
+    {
+      "id": "3922683486251864943",
+      "file": "C:\\Users\\magnu\\AppData\\Local\\Temp\\sagascript-accelerator-lab\\audio\\3922683486251864943.wav",
+      "duration_seconds": 0.0,
+      "sha256": "6d3407477c607dd1dc3ca24ee53dd0b6ed66358713b8a3110de8cb5ee3334266",
+      "reference": "För tusentals år sedan sa en man vid namn Aristarchos att solsystemet rörde sig runt solen.",
+      "source": "corpus.json"
+    }
+  ],
+  "holdout": [
+    {
+      "id": "1657",
+      "filename": "253588038069441526.wav",
+      "archive_member": "dev/253588038069441526.wav",
+      "samples": 132480,
+      "duration_seconds": 8.28,
+      "gender": "FEMALE",
+      "local_file": "analysis/saga544/audio/dev/253588038069441526.wav",
+      "sha256": "80795d3fd0582868f12ca46aaea55c3b8609fb81d2e54501a2686d0d965dd6f4",
+      "reference_source": "fleurs-sv-dev.tsv; column 3; join by id+filename"
+    },
+    {
+      "id": "1616",
+      "filename": "9605227605889301823.wav",
+      "archive_member": "dev/9605227605889301823.wav",
+      "samples": 221760,
+      "duration_seconds": 13.86,
+      "gender": "MALE",
+      "local_file": "analysis/saga544/audio/dev/9605227605889301823.wav",
+      "sha256": "5bf69e597aed47cf8c47ea374d9a36c85afe72727ea87f68110a348dbfae492f",
+      "reference_source": "fleurs-sv-dev.tsv; column 3; join by id+filename"
+    },
+    {
+      "id": "1646",
+      "filename": "5159652094349278606.wav",
+      "archive_member": "dev/5159652094349278606.wav",
+      "samples": 144000,
+      "duration_seconds": 9.0,
+      "gender": "MALE",
+      "local_file": "analysis/saga544/audio/dev/5159652094349278606.wav",
+      "sha256": "013d2f552d8a4a6a2f091bf8b6d4ead076f3daeefd1ebf36585e40a067b4dc76",
+      "reference_source": "fleurs-sv-dev.tsv; column 3; join by id+filename"
+    },
+    {
+      "id": "1645",
+      "filename": "3767622023747865396.wav",
+      "archive_member": "dev/3767622023747865396.wav",
+      "samples": 147840,
+      "duration_seconds": 9.24,
+      "gender": "MALE",
+      "local_file": "analysis/saga544/audio/dev/3767622023747865396.wav",
+      "sha256": "9ff6dccc862bfe2a6b05cb86fc9aac53cb9b60146ac93771927087473e25393e",
+      "reference_source": "fleurs-sv-dev.tsv; column 3; join by id+filename"
+    },
+    {
+      "id": "1635",
+      "filename": "9528455962773122011.wav",
+      "archive_member": "dev/9528455962773122011.wav",
+      "samples": 152640,
+      "duration_seconds": 9.54,
+      "gender": "MALE",
+      "local_file": "analysis/saga544/audio/dev/9528455962773122011.wav",
+      "sha256": "aa5f749aa81c93ead0bbfb078e30b670f4e9c268be1fa1c2c6f2b94771ba82b7",
+      "reference_source": "fleurs-sv-dev.tsv; column 3; join by id+filename"
+    },
+    {
+      "id": "1516",
+      "filename": "15761851502248770161.wav",
+      "archive_member": "dev/15761851502248770161.wav",
+      "samples": 206400,
+      "duration_seconds": 12.9,
+      "gender": "MALE",
+      "local_file": "analysis/saga544/audio/dev/15761851502248770161.wav",
+      "sha256": "f9ba32c6812840f2527af524987434f7c0a960c58a2a8d139d1ded33f5c6fa8b",
+      "reference_source": "fleurs-sv-dev.tsv; column 3; join by id+filename"
+    },
+    {
+      "id": "1636",
+      "filename": "2458177006881690292.wav",
+      "archive_member": "dev/2458177006881690292.wav",
+      "samples": 197760,
+      "duration_seconds": 12.36,
+      "gender": "FEMALE",
+      "local_file": "analysis/saga544/audio/dev/2458177006881690292.wav",
+      "sha256": "e0ff53f636dfe2a6895c0f3935a31d6fae6101d59902fbff764f1674c867f9e5",
+      "reference_source": "fleurs-sv-dev.tsv; column 3; join by id+filename"
+    },
+    {
+      "id": "1637",
+      "filename": "11160028023696751334.wav",
+      "archive_member": "dev/11160028023696751334.wav",
+      "samples": 335040,
+      "duration_seconds": 20.94,
+      "gender": "MALE",
+      "local_file": "analysis/saga544/audio/dev/11160028023696751334.wav",
+      "sha256": "12e55becc9e5decb3fa27325be218be1abecb56ad1bf4918733b688eef490c2f",
+      "reference_source": "fleurs-sv-dev.tsv; column 3; join by id+filename"
+    },
+    {
+      "id": "1624",
+      "filename": "5637693012008965833.wav",
+      "archive_member": "dev/5637693012008965833.wav",
+      "samples": 112320,
+      "duration_seconds": 7.02,
+      "gender": "MALE",
+      "local_file": "analysis/saga544/audio/dev/5637693012008965833.wav",
+      "sha256": "77044696a501be7875d07edfac21e937163f7cfbc65a2760cdd5259ddd38ee2e",
+      "reference_source": "fleurs-sv-dev.tsv; column 3; join by id+filename"
+    },
+    {
+      "id": "1549",
+      "filename": "10897494650657584393.wav",
+      "archive_member": "dev/10897494650657584393.wav",
+      "samples": 207360,
+      "duration_seconds": 12.96,
+      "gender": "FEMALE",
+      "local_file": "analysis/saga544/audio/dev/10897494650657584393.wav",
+      "sha256": "688e65efae39704a94b0f1a30395725841664250592a43e7bad29076403d887c",
+      "reference_source": "fleurs-sv-dev.tsv; column 3; join by id+filename"
+    }
+  ]
+}
