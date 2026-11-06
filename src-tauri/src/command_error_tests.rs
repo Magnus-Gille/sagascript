@@ -1,8 +1,9 @@
 use super::*;
 use crate::contract;
 use sagascript_core::error::DictationError;
+use sagascript_core::recording::RecordingError;
 use sagascript_core::settings::SettingsError;
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 
 /// What the Swift engine host sends when a model file cannot be loaded
 /// (`CoreMLEngine.swift`): an absolute path under the user's home directory,
@@ -137,6 +138,164 @@ fn the_meeting_and_evaluation_errors_keep_their_codes_and_texts() {
     );
 }
 
+/// One of every [`RecordingError`] variant, each with the text it would carry
+/// in the app (a path in the encoder's message, to prove it is scrubbed). The
+/// match fails to compile when a variant is added: add its sample here, and a
+/// row follows in `command_errors.json`.
+fn recording_errors() -> Vec<RecordingError> {
+    let all = vec![
+        RecordingError::Io {
+            action: "create the recording folder",
+            kind: std::io::ErrorKind::NotFound,
+            os_code: Some(2),
+        },
+        RecordingError::DiskFull {
+            action: "start a recording",
+        },
+        RecordingError::PermissionDenied {
+            action: "open the microphone",
+        },
+        RecordingError::NameUnavailable,
+        RecordingError::Locked,
+        RecordingError::NotRecording,
+        RecordingError::ManifestInvalid {
+            reason: "the manifest is not JSON",
+        },
+        RecordingError::ManifestTooNew {
+            required: 9,
+            supported: 1,
+        },
+        RecordingError::UnsupportedFormat {
+            reason: "a source delivers one or two channels at a real sample rate",
+        },
+        RecordingError::InvalidInput {
+            reason: "a recording is named by one plain folder name",
+        },
+        RecordingError::UnknownTrack,
+        RecordingError::TrackFinished,
+        RecordingError::CorruptTrack {
+            reason: "not a FLAC file",
+        },
+        RecordingError::SourceUnavailable {
+            reason: "no input device",
+        },
+        RecordingError::SessionFailed {
+            reason: "the recording writer stopped unexpectedly",
+        },
+        RecordingError::DeviceChanged {
+            reason: "device_changed",
+        },
+        RecordingError::RecoveryNeeded,
+        RecordingError::Encoder {
+            message: "failed at /Users/x/Music/Sagascript/a/mic.flac".into(),
+        },
+    ];
+    for error in &all {
+        match error {
+            RecordingError::Io { .. }
+            | RecordingError::DiskFull { .. }
+            | RecordingError::PermissionDenied { .. }
+            | RecordingError::NameUnavailable
+            | RecordingError::Locked
+            | RecordingError::NotRecording
+            | RecordingError::ManifestInvalid { .. }
+            | RecordingError::ManifestTooNew { .. }
+            | RecordingError::UnsupportedFormat { .. }
+            | RecordingError::InvalidInput { .. }
+            | RecordingError::UnknownTrack
+            | RecordingError::TrackFinished
+            | RecordingError::CorruptTrack { .. }
+            | RecordingError::SourceUnavailable { .. }
+            | RecordingError::SessionFailed { .. }
+            | RecordingError::DeviceChanged { .. }
+            | RecordingError::RecoveryNeeded
+            | RecordingError::Encoder { .. } => {}
+        }
+    }
+    all
+}
+
+/// The `command_errors.json` rows of the recorder: one per code, keyed by it.
+fn recording_rows() -> Map<String, Value> {
+    recording_errors()
+        .into_iter()
+        .map(|error| (error.code().to_owned(), wire(error)))
+        .collect()
+}
+
+#[test]
+fn a_recording_error_keeps_its_code_retry_hint_and_text_on_the_wire() {
+    assert_eq!(
+        wire(RecordingError::PermissionDenied {
+            action: "open the microphone"
+        }),
+        json!({
+            "code": "recording_permission_denied",
+            "message": "permission was denied; could not open the microphone",
+            "retryable": false,
+        })
+    );
+    assert_eq!(
+        wire(RecordingError::DiskFull {
+            action: "start a recording"
+        }),
+        json!({
+            "code": "recording_disk_full",
+            "message": "the disk is full; could not start a recording",
+            "retryable": true,
+        })
+    );
+    assert_eq!(wire(RecordingError::Locked)["retryable"], true);
+    assert_eq!(wire(RecordingError::RecoveryNeeded)["retryable"], false);
+}
+
+#[test]
+fn every_recording_error_has_a_distinct_code_a_row_and_no_path() {
+    let rows = recording_rows();
+    let errors = recording_errors();
+    assert_eq!(rows.len(), errors.len(), "two samples share a code");
+    for error in errors {
+        let code = error.code();
+        let row = &rows[code];
+        assert_eq!(row["code"], code);
+        assert_eq!(row["retryable"], error.retryable(), "{code}");
+        assert!(code.starts_with("recording_"), "{code}");
+        let message = row["message"].as_str().expect("message is a string");
+        assert!(!message.contains("/Users/x"), "{code}: {message}");
+        // The same error through the dictation error the CLI uses has one
+        // representation on the wire, with the app's text.
+        let through_dictation = CommandError::from(DictationError::Recording(error.clone()));
+        assert!(matches!(through_dictation, CommandError::Recording(_)));
+        assert_eq!(wire(through_dictation), *row, "{code}");
+    }
+}
+
+#[test]
+fn every_recording_code_has_a_row_in_the_shared_fixture() {
+    if contract::blessing() {
+        return; // the fixture is being rewritten; the next run reads it
+    }
+    let fixture = contract::read_fixture("command_errors.json");
+    for (code, row) in recording_rows() {
+        assert_eq!(
+            fixture.get(&code),
+            Some(&row),
+            "contracts/transport/command_errors.json has no up-to-date row for {code}"
+        );
+    }
+    // The codes the recorder window branches on (RECORDING_ERROR_CODES in
+    // src/lib/record-types.ts) are all rows.
+    for code in [
+        "recording_permission_denied",
+        "recording_source_unavailable",
+        "recording_disk_full",
+        "recording_device_changed",
+        "recording_recovery_needed",
+    ] {
+        assert!(fixture.get(code).is_some(), "{code} has no row");
+    }
+}
+
 #[test]
 fn cancellation_has_one_representation() {
     let from_dictation = CommandError::from(DictationError::Cancelled);
@@ -200,6 +359,7 @@ fn every_code_is_stable_snake_case() {
         CommandError::HotkeyInvalid("x".into()),
         CommandError::HotkeyChangeFailed("x".into()),
         SettingsError::NoProfiles.into(),
+        RecordingError::DiskFull { action: "x" }.into(),
         CommandError::InvalidInput("x".into()),
         CommandError::NotFound("x".into()),
         CommandError::Unavailable("x".into()),
@@ -265,7 +425,7 @@ fn a_fixed_message_keeps_its_cause_for_the_log_and_never_sends_it() {
 /// failure, so the TypeScript side proves it can display them without the path.
 #[test]
 fn command_error_fixture_matches_what_rust_sends() {
-    let actual = json!({
+    let mut actual = json!({
         "busy": wire(CommandError::Busy(
             "Cannot start recording while Sagascript is busy. Stop the current recording or wait for transcription to finish."
                 .into()
@@ -304,5 +464,10 @@ fn command_error_fixture_matches_what_rust_sends() {
         )),
         "meeting_stale": wire(sagascript_core::meeting::review::MeetingReviewError::ExpectedRevisionMismatch),
     });
+    // Every code the recorder can send, one row each.
+    actual
+        .as_object_mut()
+        .expect("the fixture is an object")
+        .extend(recording_rows());
     contract::assert_fixture("command_errors.json", &actual);
 }

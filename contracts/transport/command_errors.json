@@ -54,14 +54,14 @@
     "message": "correction expected revision does not match this review",
     "retryable": false
   },
-  "model_busy": {
-    "code": "model_busy",
-    "message": "Transcription engine is busy — a previous transcription may still be running. Please try again in a moment.",
-    "retryable": true
-  },
   "microphone_permission_pending": {
     "code": "microphone_permission_pending",
     "message": "Microphone permission is awaiting your response. Choose Allow in the macOS dialog, then start recording again.",
+    "retryable": true
+  },
+  "model_busy": {
+    "code": "model_busy",
+    "message": "Transcription engine is busy — a previous transcription may still be running. Please try again in a moment.",
     "retryable": true
   },
   "no_audio_captured": {
@@ -77,6 +77,96 @@
   "paste_error": {
     "code": "paste_error",
     "message": "Accessibility permission denied",
+    "retryable": false
+  },
+  "recording_corrupt_track": {
+    "code": "recording_corrupt_track",
+    "message": "a track file cannot be read as a recording track: not a FLAC file",
+    "retryable": false
+  },
+  "recording_device_changed": {
+    "code": "recording_device_changed",
+    "message": "the recording stopped early because the input device changed (device_changed)",
+    "retryable": false
+  },
+  "recording_disk_full": {
+    "code": "recording_disk_full",
+    "message": "the disk is full; could not start a recording",
+    "retryable": true
+  },
+  "recording_encoder": {
+    "code": "recording_encoder",
+    "message": "the audio encoder failed: failed at <path>/mic.flac",
+    "retryable": false
+  },
+  "recording_invalid_input": {
+    "code": "recording_invalid_input",
+    "message": "invalid input: a recording is named by one plain folder name",
+    "retryable": false
+  },
+  "recording_io": {
+    "code": "recording_io",
+    "message": "could not create the recording folder: NotFound (os error 2)",
+    "retryable": false
+  },
+  "recording_locked": {
+    "code": "recording_locked",
+    "message": "the recording is in use by another process",
+    "retryable": true
+  },
+  "recording_manifest_invalid": {
+    "code": "recording_manifest_invalid",
+    "message": "the recording manifest is not valid: the manifest is not JSON",
+    "retryable": false
+  },
+  "recording_manifest_too_new": {
+    "code": "recording_manifest_too_new",
+    "message": "the recording needs a newer version of Sagascript (manifest version 9, this build reads 1)",
+    "retryable": false
+  },
+  "recording_name_unavailable": {
+    "code": "recording_name_unavailable",
+    "message": "no free name for a new recording folder",
+    "retryable": true
+  },
+  "recording_not_recording": {
+    "code": "recording_not_recording",
+    "message": "the recording is not in progress",
+    "retryable": false
+  },
+  "recording_permission_denied": {
+    "code": "recording_permission_denied",
+    "message": "permission was denied; could not open the microphone",
+    "retryable": false
+  },
+  "recording_recovery_needed": {
+    "code": "recording_recovery_needed",
+    "message": "the recording was interrupted and needs recovery first",
+    "retryable": false
+  },
+  "recording_session_failed": {
+    "code": "recording_session_failed",
+    "message": "the recording session failed: the recording writer stopped unexpectedly",
+    "retryable": false
+  },
+  "recording_source_unavailable": {
+    "code": "recording_source_unavailable",
+    "message": "the audio source is not available: no input device",
+    "retryable": false
+  },
+  "recording_track_finished": {
+    "code": "recording_track_finished",
+    "message": "the track has already ended",
+    "retryable": false
+  },
+  "recording_unknown_track": {
+    "code": "recording_unknown_track",
+    "message": "the recording has no such track",
+    "retryable": false
+  },
+  "recording_unsupported_format": {
+    "code": "recording_unsupported_format",
+    "message": "unsupported audio format: a source delivers one or two channels at a real sample rate",
     "retryable": false
   },
   "transcription_timed_out": {
