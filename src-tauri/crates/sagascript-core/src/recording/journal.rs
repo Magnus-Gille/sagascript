@@ -70,9 +70,26 @@ pub enum JournalEvent {
     },
 }
 
+/// A failure a test makes the next journal call have, once.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum JournalFault {
+    /// The append fails before a byte is written.
+    AppendNothing,
+    /// The append writes half of the line and fails, as a full disk can.
+    AppendTorn,
+    /// The append works; the sync fails.
+    SyncFails,
+}
+
 /// Appends events to a track's journal.
 pub struct JournalWriter {
     file: File,
+    /// An append failed, so the file may end in half a line. The next append
+    /// closes that line first, so it cannot swallow the next event.
+    torn: bool,
+    #[cfg(test)]
+    pub(crate) fault: Option<JournalFault>,
 }
 
 impl JournalWriter {
@@ -80,20 +97,58 @@ impl JournalWriter {
     pub fn create(path: &Path) -> Result<Self, RecordingError> {
         let file = create_new_private(path)
             .map_err(|error| RecordingError::io("create a track journal", &error))?;
-        Ok(Self { file })
+        Ok(Self {
+            file,
+            torn: false,
+            #[cfg(test)]
+            fault: None,
+        })
     }
 
     /// Append one event as a single write of a complete line.
     pub fn append(&mut self, event: &JournalEvent) -> Result<(), RecordingError> {
         let mut line = serde_json::to_vec(event).map_err(RecordingError::encoder)?;
         line.push(b'\n');
-        self.file
-            .write_all(&line)
-            .map_err(|error| RecordingError::io("append to a track journal", &error))
+        #[cfg(test)]
+        if let Some(fault @ (JournalFault::AppendNothing | JournalFault::AppendTorn)) = self.fault {
+            self.fault = None;
+            self.torn = true;
+            if fault == JournalFault::AppendTorn {
+                let _ = self.file.write_all(&line[..line.len() / 2]);
+            }
+            return Err(RecordingError::io(
+                "append to a track journal",
+                &std::io::Error::other("injected"),
+            ));
+        }
+        // After a failed append the file may end in a fragment; a newline
+        // first turns it into one ignorable line instead of the front of
+        // this event. It goes out in the same write.
+        if self.torn {
+            line.insert(0, b'\n');
+        }
+        match self.file.write_all(&line) {
+            Ok(()) => {
+                self.torn = false;
+                Ok(())
+            }
+            Err(error) => {
+                self.torn = true;
+                Err(RecordingError::io("append to a track journal", &error))
+            }
+        }
     }
 
     /// Flush the journal to stable storage.
     pub fn sync(&mut self) -> Result<(), RecordingError> {
+        #[cfg(test)]
+        if self.fault == Some(JournalFault::SyncFails) {
+            self.fault = None;
+            return Err(RecordingError::io(
+                "sync a track journal",
+                &std::io::Error::other("injected"),
+            ));
+        }
         sync_file(&self.file).map_err(|error| RecordingError::io("sync a track journal", &error))
     }
 }

@@ -5,7 +5,7 @@ use sagascript_testsupport::TempDir;
 use super::*;
 use crate::hash::sha256_hex;
 use crate::recording::flac::format::{parse_header, HEADER_LEN};
-use crate::recording::journal::{read_journal, JournalEvent};
+use crate::recording::journal::{read_journal, JournalEvent, JournalFault};
 use crate::recording::manifest::parse_manifest;
 use crate::recording::recover::recover_folder;
 use crate::recording::test_signals::*;
@@ -640,4 +640,212 @@ fn a_gap_the_track_cannot_hold_is_refused_before_it_is_journaled_or_written() {
     let manifest = writer.finish(EndedReason::Stopped).unwrap();
     assert_eq!(manifest.tracks[0].frames, 2000);
     assert!(manifest.tracks[0].gaps.is_empty());
+}
+
+// ---- a gap that fails part-way, and a caller that goes on ----------------------------
+
+/// Wraps an encoder so a test can make its silence or its sync fail.
+struct FaultyEncoder {
+    inner: Box<dyn TrackEncoder>,
+    fail_silence: bool,
+    fail_sync: bool,
+}
+
+fn injected(action: &'static str) -> RecordingError {
+    RecordingError::io(action, &std::io::Error::other("injected"))
+}
+
+impl TrackEncoder for FaultyEncoder {
+    fn push(&mut self, interleaved: &[f32]) -> Result<(), RecordingError> {
+        self.inner.push(interleaved)
+    }
+    fn push_silence(&mut self, frames: u64) -> Result<(), RecordingError> {
+        if self.fail_silence {
+            return Err(injected("write a track frame"));
+        }
+        self.inner.push_silence(frames)
+    }
+    fn ensure_room(&self, frames: u64) -> Result<(), RecordingError> {
+        self.inner.ensure_room(frames)
+    }
+    fn frames_pushed(&self) -> u64 {
+        self.inner.frames_pushed()
+    }
+    fn clipped_samples(&self) -> u64 {
+        self.inner.clipped_samples()
+    }
+    fn sync(&mut self) -> Result<(), RecordingError> {
+        if self.fail_sync {
+            return Err(injected("sync a track file"));
+        }
+        self.inner.sync()
+    }
+    fn finish(self: Box<Self>) -> Result<TrackSummary, RecordingError> {
+        self.inner.finish()
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum GapFault {
+    /// The journal line cannot be appended (nothing written).
+    Append,
+    /// Half of the journal line is written, then the append fails.
+    TornAppend,
+    /// The line is appended; fsyncing it fails.
+    JournalSync,
+    /// The intent is durable; the silence cannot be written.
+    Silence,
+    /// The gap is committed (silence and in-memory record); the final fsync of
+    /// the track fails.
+    FinalSync,
+}
+
+/// A writer with 6000 frames of speech whose next `gap` of 3000 frames fails
+/// as `fault` says.
+fn writer_whose_next_gap_fails(fault: GapFault) -> (TempDir, RecordingWriter, Vec<i32>) {
+    let root = TempDir::new();
+    let store = RecordingStore::new(root.path());
+    let mut writer = store.create(mic_recording()).unwrap();
+    let first = at_bits(&speechlike(6000, 71), 24);
+    writer.push("mic", &to_f32(&first, 24)).unwrap();
+    let track = &mut writer.tracks[0];
+    match fault {
+        GapFault::Append => track.journal.fault = Some(JournalFault::AppendNothing),
+        GapFault::TornAppend => track.journal.fault = Some(JournalFault::AppendTorn),
+        GapFault::JournalSync => track.journal.fault = Some(JournalFault::SyncFails),
+        GapFault::Silence | GapFault::FinalSync => {
+            let inner = track.encoder.take().unwrap();
+            track.encoder = Some(Box::new(FaultyEncoder {
+                inner,
+                fail_silence: matches!(fault, GapFault::Silence),
+                fail_sync: matches!(fault, GapFault::FinalSync),
+            }));
+        }
+    }
+    (root, writer, first)
+}
+
+/// Every gap of a recovered track is silence in the audio that was kept.
+fn assert_gaps_are_silence(folder: &Path, kept: usize, what: &str) {
+    let file = std::fs::read(folder.join("mic.flac")).unwrap();
+    let manifest = read_manifest(folder);
+    if kept == 0 {
+        return;
+    }
+    let decoded = decode_flac(&file);
+    for gap in &manifest.tracks[0].gaps {
+        let range = gap.at_frame as usize..(gap.at_frame + gap.length) as usize;
+        assert!(
+            decoded.samples[range.clone()].iter().all(|s| *s == 0),
+            "{what}: the gap {range:?} covers audio that was captured"
+        );
+    }
+}
+
+#[test]
+fn a_gap_that_fails_part_way_ends_the_track_until_recovery() {
+    for fault in [
+        GapFault::Append,
+        GapFault::TornAppend,
+        GapFault::JournalSync,
+        GapFault::Silence,
+    ] {
+        let (_root, mut writer, _first) = writer_whose_next_gap_fails(fault);
+        let error = writer.gap("mic", 3000, GapReason::Overrun).unwrap_err();
+        assert_eq!(
+            error.code(),
+            "recording_io",
+            "{fault:?}: the injected failure"
+        );
+
+        // The caller handled the error and goes on: none of it is accepted,
+        // because the journal may hold an intent that audio written now would
+        // fall inside.
+        let more = to_f32(&at_bits(&speechlike(9000, 72), 24), 24);
+        for (what, result) in [
+            ("push", writer.push("mic", &more)),
+            ("anchor", writer.anchor("mic", 9_000_000)),
+            ("gap", writer.gap("mic", 10, GapReason::Stall)),
+        ] {
+            assert!(
+                matches!(result, Err(RecordingError::TrackFinished)),
+                "{fault:?}: {what} after a failed gap: {result:?}"
+            );
+        }
+        // The healthy parts keep working, and the writer cannot end the
+        // recording as if nothing had happened.
+        writer.sync().unwrap();
+        assert!(
+            matches!(
+                writer.finish_track("mic", EndedReason::Stopped),
+                Err(RecordingError::TrackFinished)
+            ),
+            "{fault:?}"
+        );
+        let folder = writer.folder().to_path_buf();
+        assert_eq!(read_manifest(&folder).state, RecordingState::Recording);
+        drop(writer);
+
+        // Recovery sees an intent that no audio contradicts, and the track
+        // holds only what was captured before it.
+        let recovered = recover_folder(&folder).unwrap();
+        let kept = recovered.tracks[0].frames_kept as usize;
+        assert!(kept <= 6000, "{fault:?}: {kept}");
+        assert_gaps_are_silence(&folder, kept, &format!("{fault:?}"));
+        assert!(recovered.manifest.tracks[0].gaps.is_empty(), "{fault:?}");
+    }
+}
+
+#[test]
+fn audio_pushed_after_a_failed_gap_is_never_called_silence_whatever_failed() {
+    // The same, from the other end: let the caller push as soon as it likes
+    // and look at what recovery says about every byte that was accepted.
+    for fault in [
+        GapFault::Append,
+        GapFault::TornAppend,
+        GapFault::JournalSync,
+        GapFault::Silence,
+    ] {
+        let (_root, mut writer, _first) = writer_whose_next_gap_fails(fault);
+        let _ = writer.gap("mic", 3000, GapReason::Overrun);
+        let _ = writer.push("mic", &to_f32(&at_bits(&speechlike(9000, 73), 24), 24));
+        let folder = writer.folder().to_path_buf();
+        drop(writer);
+        let recovered = recover_folder(&folder).unwrap();
+        assert_gaps_are_silence(
+            &folder,
+            recovered.tracks[0].frames_kept as usize,
+            &format!("{fault:?}"),
+        );
+    }
+}
+
+#[test]
+fn a_failed_final_sync_leaves_a_committed_gap_and_the_track_goes_on() {
+    let (_root, mut writer, first) = writer_whose_next_gap_fails(GapFault::FinalSync);
+    let error = writer.gap("mic", 3000, GapReason::Overrun).unwrap_err();
+    assert_eq!(error.code(), "recording_io", "the injected failure");
+    // The silence is in the track and the gap is recorded: nothing about it
+    // is in doubt, so the track is not ended and takes more audio.
+    let later = at_bits(&speechlike(8000, 74), 24);
+    writer.push("mic", &to_f32(&later, 24)).unwrap();
+    writer.anchor("mic", 20_000_000).unwrap();
+    let folder = writer.folder().to_path_buf();
+    drop(writer);
+
+    let recovered = recover_folder(&folder).unwrap();
+    let kept = recovered.tracks[0].frames_kept as usize;
+    assert_eq!(kept, 16_384, "6000 + 3000 + 8000 frames, four whole blocks");
+    assert_eq!(
+        recovered.manifest.tracks[0].gaps,
+        vec![Gap::new(6000, 3000, GapReason::Overrun)]
+    );
+    let mut pcm = first;
+    pcm.extend(std::iter::repeat_n(0, 3000));
+    pcm.extend_from_slice(&later);
+    let decoded = decode_flac(&std::fs::read(folder.join("mic.flac")).unwrap());
+    assert!(
+        decoded.samples == pcm[..kept],
+        "the audio after the gap is untouched"
+    );
 }
