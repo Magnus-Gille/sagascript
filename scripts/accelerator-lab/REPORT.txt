@@ -1,0 +1,198 @@
+Sagascript / Pianissimo on Windows ARM64 — local evaluation, 2026-11-01
+
+Outcome
+The ordinary dictation slowdown was strongly linked to Windows CPU scheduling/
+power QoS, not repeated model loading. The scoped CPU fix is installed with the
+owner's explicit approval and verified through CLI, GUI timing and idle readback.
+For the tested implementations, the shipped INT8 CPU model remains the fastest
+working path. Full audio-to-text runs also succeeded on Adreno GPU and Hexagon
+NPU. Neither proves the performance ceiling of the hardware or future exports.
+
+Machine and method
+Snapdragon X Elite X1E78100, 12 cores, 32 GB; Adreno X1-85 driver31.0.112.0;
+Hexagon driver30.0.143.0; Windows11 ARM64 build26200. Balanced/on battery for
+the recorded evaluation. No global power-plan or driver changes. Background
+activity and thermal state were not experimentally controlled. No energy meter
+was used, so battery savings/cost cannot be calculated from these timings.
+
+Public corpus: 11 Swedish clips, 135.54 seconds, 235 reference words. Existing
+7.56s Hongkong fixture plus ten Google FLEURS dev clips, five male/five female.
+Small read-speech sample, not a meeting, conversational benchmark or an English
+evaluation. No private audio was uploaded. WER uses lowercase word tokens,
+ignores punctuation, and does not normalize numbers or Swedish compounds.
+Quality counts one observation per clip, not one per repeat. Warm medians use
+iteration>0. Typical runs repeat each clip twice; shipped baseline uses three.
+Different host versions, FP16/INT8 models and Python/Rust paths mean this is a
+comparison of working implementations, not isolated measurements of chip speed.
+
+Verified working results (full corpus; milliseconds, decimal MB)
+Artifact                         warm median  errors/235  load       run RSS max
+cpu-shipped-final                       389.4     15       2322.3          830.1
+cpu-scoped-qos-eco                       388.1     15       2133.8          827.2
+dml-fp16-bare                           1600.9     13       8314.1         3499.7
+dml-int8-flat                          1884.8     14       3359.7         1828.4
+qnn-cache-reload                       1078.3     13       2659.8*        1434.5
+gpu-scoped-static-dynamic              1737.0     13      10898.2         see JSON
+*QNN load is encoder session creation; native host load includes all models.
+These memory figures are sampled inference RSS, not peak compilation memory.
+FP16's two fewer errors on 235 words do not establish a general accuracy gain.
+
+Cold versus warm
+Identical 7.56s files through the installed CLI in one process:
+first verification1.714s + model load2.108s + processing0.347s;
+second verification0 + load0 + processing0.367s. CLI performance.total_seconds
+excludes verification/loading. Slow real GUI dictations already had warm=true
+and model acquisition around10ms. Cold loading exists, but did not explain the
+recurring multi-second wait. A warm 135.54s synthetic concatenation took7.464s
+processing, using six overlapping windows. This validates long-file chunking,
+not live meeting capture or speaker separation.
+
+CPU fix and acceptance
+Exact installed source ee2e86a279225439c7a1ebb3f45492c5a5285be4.
+Installed EXE SHA256:
+3047cae09b25aaa59742932cb755059d0a3c4f04d22cb4b731c17a2f7d78fed3
+Only AppData/Local/Sagascript/engine-host/sagascript-engine-host-ort.exe changed.
+GUI, CLI, DLLs, settings and models unchanged. Original EXE is preserved in
+lab/qos-rollback; qos-install-receipt.json records the authorized operation.
+Restore only while idle, verify original hash, restart engine and smoke-test;
+do not act on historical/recycled PIDs. An ordinary app upgrade may replace
+this local fix until it is incorporated in a released build.
+
+The guard saves exact process power masks, requests HighQoS during real load/
+inference, and restores the saved masks after the last overlapping scope.
+Process scope covers ORT worker threads. It does not set realtime priority,
+pin cores, change the global plan, or keep a performance override during idle.
+One immediate restoration retry after2ms; persistent OS API failure is logged
+and the original baseline retained for a later recovery attempt. No claim
+that arbitrary persistent OS failure is impossible.
+
+Controlled child initially in EcoQoS: 22/22 requests preserved exact CPU text
+and token IDs and restored EcoQoS; warm median388ms, range313-518ms.
+45 native tests, fmt, clippy -D warnings and release build passed. Independent
+review requested Sol/high, found missing immediate restore retry; fixed and
+re-reviewed without further actionable findings. Runtime model observation
+unavailable. GUI user reports fast; latest three entries are925/935/944ms with
+warm model while conversion/build activity overlapped. Reply said two samples,
+so exact correspondence is not asserted. New host idle masks0/0 verified.
+
+Scheduling A/B and battery meaning
+Same7.56s file after15s idle: system436/362ms, High415/345ms, Eco2791/5768ms.
+Live before/after user clips differ in length, so no exact speedup factor is
+derived from those clips. Process masks0/0 mean automatic policy, not proof of
+the OS's internally chosen QoS tier. No kernel scheduling trace was collected.
+
+Same three public clips, three runs/mode (six warm observations):
+GPU explicitEco1881ms -> explicitHigh1626ms, ~13.5% lower.
+NPU explicitEco1168ms -> explicitHigh1055ms, ~9.7% lower.
+Every per-clip mean improved; text parity9/9 in both comparisons. This measures
+CPU-side QoS around accelerator execution; it does not prove GPU/NPU clocks
+changed. More active power and shorter runtime do not establish total energy.
+
+GPU: what works and what failed
+DirectML native ARM64, WinML2.5.96 / ORT1.28.3. Original export failed with
+rank-five attention matrix multiplication. Rewriting72 attention MatMuls to
+rank-three with explicit broadcasting/reshape made full ASR work. CPU parity
+for transformed versus original models was independently verified on11clips.
+Dynamic FP16 profile: executed DML2559 unique nodes and CPU2264 unique nodes.
+INT8: DML2799 / CPU2264. Counts are not percentages of compute or wall time.
+Decoder and preprocessing remain on CPU. INT8 export does not translate to
+fast accelerator-native integer execution merely by selecting DirectML.
+
+New scoped-QoS host source68a06c95785accaf2c6e35e1f8dfe10bed01dcbf adds lab-only
+feature padding; 48 dev-feature tests plus default check/fmt/clippy passed in
+leaf; parent independently reran48tests/fmt and built release. Isolated from
+installed CPU engine.
+Static2048 and768 shapes ran but emitted NO tokens (100% WER). These are
+rejected outputs, never speedup results. CPU static2048 produced13errors/235.
+Diagnosis: exact758 without padding still blank; dynamic model padded to768
+produced correct fixture text; static768 with basic optimization still blank.
+Static GPU profile fused the encoder into one DML node with no CPU nodes.
+Thus static-shape DirectML execution is implicated, not padding alone. Root
+cause inside runtime/compiler/numerics is unproven. Further work needs a
+tensor-level numerical bisection and validated graph lowering/runtime fix,
+then full-corpus quality checks before any performance claim or integration.
+
+NPU: what works and what failed
+Python3.13 ARM64 / ORT1.29.0 / QNN plugin2.7.0; HTP burst mode.
+Original dynamic INT8 graph rejected unsupported quantization/other operators
+under strict NPU placement. FP16 fixed2048 works as3QNN partitions plus72CPU
+nodes. It is hybrid inference, not100% NPU. First compile74-77s and roughly
+7.8-9.3GB peak RSS. Context cache cuts encoder load to2.2-2.7s and inference
+RSS to~1.43GB; cache artifact is~1.22GB. Cache and uncached outputs matched.
+FP16 fixed2048 NPU~1.06s versus matched CPU FP16~1.23s: NPU has a measured
+advantage in that particular comparison, but loses to shipped CPU INT8~0.39s.
+Fixed758 fixture warm~0.98s; fixed3008 crashed with native0xC0000005 during
+load. Therefore current prototype cannot support the full30s window robustly.
+Production would need shorter-window/chunk routing, validated overlap/text
+merging, cache lifecycle/versioning and CPU fallback; none was installed.
+
+QDQ experiment
+Separate five public calibration sentences were selected excluding evaluation
+filenames, normalized reference text and duplicate calibration sentence IDs.
+Requested uint16 activations / uint8 per-channel weights using ORT's QNN
+quantizer. First failure: FP16-to-FP32 optimization crossed2GB protobuf limit.
+Process-local external-initializer workaround got past preprocessing. Next
+attempt reached8316MB sampled RSS after251s and was stopped by an8GB guard.
+Final attempt qdq-final-bounded allowed11GB process RSS, retained3GB minimum
+available system RAM and a420s time limit. It was stopped after310.37s by the
+system-memory-reserve guard, peak sampled process RSS9499.60MB, exit1. No
+validated QDQ output was produced. All evaluation children have terminated.
+No validated QDQ accuracy, NPU latency or energy result exists at this stage.
+Do not present this export failure as proof quantized NPU cannot outperform CPU.
+Next export work needs a memory-bounded preprocessing/calibration/quantization
+pipeline (external weights and fewer simultaneous model copies), or an approved
+machine with more available RAM. Then validate QNN operator placement, held-out
+accuracy and complete ASR latency. Merely raising process priority cannot solve
+this export-memory problem. No additional export retries are left running.
+
+Practical decision
+Use the scoped-QoS CPU INT8 engine for current Windows dictation. Current GPU
+and NPU prototypes add packaging, conversion and validation work without a
+measured latency benefit over that path. GPU needs static-graph correctness
+work; NPU needs a deployable quantized export plus robust window/cache handling.
+Potential battery or future quantized-model benefits remain unmeasured. There
+is no evidence for a guaranteed speedup figure for those unfinished designs.
+
+Reproduction and artifacts
+Worktree scripts: bench.py (native full ASR), pipeline.py (CPU/QNN full ASR),
+flatten_attention.py (72-node transform), prepare_qdq.py (disjoint calibration),
+supervise.py (time/RSS/free-memory guard), windows_qos.py (explicit child QoS),
+summarize.py, enrich_profile.py, prepare_long.py, test_bench.py.
+Run heavyweight tests sequentially; bench.py reuses lab/input.f32.
+Use supervise.py; do not confuse wrapper process success with model quality.
+Completed execution can still have invalid text, as static DirectML demonstrated.
+Python harness tests4/4 passed. Old lab ORT fmt/check/test/clippy passed; see
+Windows latency handoff for production fix review and exact acceptance.
+Only small summary/evidence files belong in Git. Model copies, public audio,
+full profiles and raw benchmarks remain in:
+C:/Users/magnu/AppData/Local/Temp/sagascript-accelerator-lab
+The primary checkout was not edited. No push, PR, driver change or remote
+inference/server deployment is included in this authorization.
+
+Example commands (PowerShell; substitute existing absolute paths):
+  & $py scripts/accelerator-lab/bench.py --lab $lab --host $host --model $model --label cpu --repeats 2
+  & $py scripts/accelerator-lab/bench.py --lab $lab --host $gpuHost --model $model --label dml --repeats 2 --env SAGASCRIPT_LAB_EP=dml --env "SAGASCRIPT_LAB_ENCODER=$flatEncoder"
+  & $py scripts/accelerator-lab/pipeline.py --lab $lab --model $model --encoder $fp16Encoder --provider qnn-npu --frames 2048 --label qnn --repeats 2 --qos high --context-cache $cache
+  & $py scripts/accelerator-lab/supervise.py --lab $lab --label qdq --timeout 420 --max-rss-mb 11000 --min-available-mb 3000 -- $py scripts/accelerator-lab/prepare_qdq.py --lab $lab --model $model --encoder $fixedEncoder --label qdq --external-optimizer
+
+Sources / public audio attribution
+Google FLEURS dataset, Swedish dev audio/transcripts, CC-BY4.0:
+https://huggingface.co/datasets/google/fleurs
+https://huggingface.co/datasets/google/fleurs/resolve/main/data/sv_se/audio/dev.tar.gz
+https://huggingface.co/datasets/google/fleurs/resolve/main/data/sv_se/dev.tsv
+KlangAI Pianissimo ONNX model pinned revision32118e6c01a88e3c4b4b735971195303a88d21ce:
+https://huggingface.co/KlangAI/pianissimo-sv-onnx
+https://onnxruntime.ai/docs/execution-providers/DirectML-ExecutionProvider.html
+https://onnxruntime.ai/docs/execution-providers/QNN-ExecutionProvider.html
+https://learn.microsoft.com/en-us/windows/win32/procthread/quality-of-service
+
+Delegation record
+windows_qos_fix requested Luna/xhigh, isolated source/tests worktrees; pass
+after parent/reviewer corrections. GPU lab leaf commit68a06c9; parent built
+and tested real inference, catching static-GPU quality failure (not a claim
+the leaf's test suite validated the hardware runtime).
+qos_review requested Sol/high; independent immutable CPU review, pass.
+integration_check requested Luna/high; shared CLI/GUI source review, pass.
+measurement_summary requested Luna/high; initial partial (root corrected
+aggregate details), follow-up pass after independent raw-JSON checks.
+Requested model/effort are recorded; runtime-observed values unavailable.

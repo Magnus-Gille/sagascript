@@ -41,7 +41,7 @@ windows-sys = { version = "0.52", features = ["Win32_Foundation", "Win32_System_
 [features]
 # Honour ORT_DYLIB_PATH in release builds too (always honoured in debug builds). Off by default
 # so a shipped host only ever loads the ONNX Runtime DLL beside it.
-dev-overrides = []
+dev-overrides = ["ort/directml"]
 
 # Match the main workspace and CI for routine local dev/test builds. Only
 # debug-info volume changes; all other profile defaults remain inherited.

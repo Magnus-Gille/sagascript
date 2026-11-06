@@ -1,0 +1,26 @@
+[
+  {
+    "label": "qdq-preparation",
+    "status": "exited",
+    "elapsed_s": 16.059702099999413,
+    "peak_sampled_rss_mb": 6721.388544,
+    "exit_code": 1,
+    "validated_quantized_model": false
+  },
+  {
+    "label": "qdq-external",
+    "status": "process_memory_limit",
+    "elapsed_s": 251.04528779999237,
+    "peak_sampled_rss_mb": 8316.137472,
+    "exit_code": 1,
+    "validated_quantized_model": false
+  },
+  {
+    "label": "qdq-final-bounded",
+    "status": "system_memory_reserve",
+    "elapsed_s": 310.374316899979,
+    "peak_sampled_rss_mb": 9499.602944,
+    "exit_code": 1,
+    "validated_quantized_model": false
+  }
+]

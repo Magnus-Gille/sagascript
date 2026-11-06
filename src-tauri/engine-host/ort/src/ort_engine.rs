@@ -282,6 +282,28 @@ impl OrtEngine {
                 .with_inter_threads(1)?
                 .with_memory_pattern(false)?
                 .with_optimization_level(GraphOptimizationLevel::All)?;
+            // Lab-only knobs: never enabled in a shipped build. Only move the
+            // encoder, keeping preprocessing and greedy decoding identical.
+            #[cfg(feature = "dev-overrides")]
+            if path.file_name().is_some_and(|name| name == ENCODER_FILE) {
+                if std::env::var("SAGASCRIPT_LAB_BASIC").as_deref() == Ok("1") {
+                    builder = builder.with_optimization_level(GraphOptimizationLevel::Level1)?;
+                }
+                if std::env::var("SAGASCRIPT_LAB_EP").as_deref() == Ok("dml") {
+                    builder = builder
+                        .with_execution_providers([ep::DirectML::default()
+                            .with_device_id(0)
+                            .build()
+                            .error_on_failure()])?
+                        .with_parallel_execution(false)?;
+                }
+                if let Ok(profile) = std::env::var("SAGASCRIPT_LAB_PROFILE") {
+                    builder = builder.with_profiling(profile)?;
+                }
+                if let Ok(file) = std::env::var("SAGASCRIPT_LAB_ENCODER") {
+                    return builder.commit_from_file(file);
+                }
+            }
             builder.commit_from_file(path)
         };
         build().map_err(|e| {

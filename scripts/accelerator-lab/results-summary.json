@@ -1,0 +1,585 @@
+[
+  {
+    "label": "cpu-fp16-fixed2048",
+    "status": "complete",
+    "error": [],
+    "runs": 22,
+    "load_ms": 3792.081199993845,
+    "clips": 11,
+    "audio_s": 135.54,
+    "median_warm_ms": 1226.4582999923732,
+    "warm_min_ms": 1190.9815999970306,
+    "warm_max_ms": 1281.0997999913525,
+    "warm_rtf": 0.09956765456637355,
+    "errors": 13,
+    "reference_words": 235,
+    "wer": 0.05531914893617021,
+    "text_mismatches_vs_shipped": [
+      "682426172675355782",
+      "14782532088492245120"
+    ],
+    "max_rss_mb": 2690.82624,
+    "placement_events": {
+      "CPUExecutionProvider": 38896
+    },
+    "unique_provider_nodes": {
+      "CPUExecutionProvider": 1768
+    },
+    "provider_node_duration_us": {
+      "CPUExecutionProvider": 25462585
+    },
+    "process": {
+      "exit_code": 0,
+      "elapsed_s": 32.593963199993595,
+      "peak_sampled_rss_mb": 3879.870464,
+      "status": "exited"
+    }
+  },
+  {
+    "label": "cpu-fp16-flat",
+    "status": "complete",
+    "error": [],
+    "runs": 22,
+    "load_ms": 5590.48499999335,
+    "clips": 11,
+    "audio_s": 135.54,
+    "median_warm_ms": 920.2484999841545,
+    "warm_min_ms": 682.8602000023238,
+    "warm_max_ms": 1404.5967000129167,
+    "warm_rtf": 0.07768021912328221,
+    "errors": 13,
+    "reference_words": 235,
+    "wer": 0.05531914893617021,
+    "text_mismatches_vs_shipped": [
+      "682426172675355782",
+      "14782532088492245120"
+    ],
+    "max_rss_mb": 2801.905664,
+    "placement_events": {
+      "CPUExecutionProvider": 106106
+    },
+    "unique_provider_nodes": {
+      "CPUExecutionProvider": 4823
+    },
+    "provider_node_duration_us": {
+      "CPUExecutionProvider": 19783500
+    },
+    "process": {
+      "exit_code": 0,
+      "elapsed_s": 30.197931599977892,
+      "peak_sampled_rss_mb": 3668.676608,
+      "status": "exited"
+    }
+  },
+  {
+    "label": "cpu-scoped-qos-eco",
+    "status": "complete",
+    "error": null,
+    "runs": 22,
+    "load_ms": 2133.842099981848,
+    "clips": 11,
+    "audio_s": 135.54,
+    "median_warm_ms": 388.12329998472705,
+    "warm_min_ms": 312.7172999957111,
+    "warm_max_ms": 517.7633999846876,
+    "warm_rtf": 0.03216794673114144,
+    "errors": 15,
+    "reference_words": 235,
+    "wer": 0.06382978723404255,
+    "text_mismatches_vs_shipped": [],
+    "max_rss_mb": 827.16672
+  },
+  {
+    "label": "cpu-scoped-static-2048",
+    "status": "complete",
+    "error": null,
+    "runs": 22,
+    "load_ms": 7893.887500016717,
+    "clips": 11,
+    "audio_s": 135.54,
+    "median_warm_ms": 1684.4948999932967,
+    "warm_min_ms": 1601.2851000123192,
+    "warm_max_ms": 2089.3666000047233,
+    "warm_rtf": 0.1391165729672699,
+    "errors": 13,
+    "reference_words": 235,
+    "wer": 0.05531914893617021,
+    "text_mismatches_vs_shipped": [
+      "682426172675355782",
+      "14782532088492245120"
+    ],
+    "max_rss_mb": 2591.78496,
+    "process": {
+      "exit_code": 0,
+      "elapsed_s": 47.42997860000469,
+      "peak_sampled_rss_mb": 4224.08192,
+      "status": "exited"
+    }
+  },
+  {
+    "label": "cpu-shipped-final",
+    "status": null,
+    "error": null,
+    "runs": 33,
+    "load_ms": 2322.252900019521,
+    "clips": 11,
+    "audio_s": 135.54,
+    "median_warm_ms": 389.4239500077674,
+    "warm_min_ms": 311.9340999983251,
+    "warm_max_ms": 523.369400005322,
+    "warm_rtf": 0.03173253356952328,
+    "errors": 15,
+    "reference_words": 235,
+    "wer": 0.06382978723404255,
+    "text_mismatches_vs_shipped": [],
+    "max_rss_mb": 830.144512
+  },
+  {
+    "label": "dml-fp16-bare",
+    "status": "complete",
+    "error": null,
+    "runs": 22,
+    "load_ms": 8314.087999984622,
+    "clips": 11,
+    "audio_s": 135.54,
+    "median_warm_ms": 1600.8880000154022,
+    "warm_min_ms": 1042.207699996652,
+    "warm_max_ms": 2150.1397999818437,
+    "warm_rtf": 0.12764384904852646,
+    "errors": 13,
+    "reference_words": 235,
+    "wer": 0.05531914893617021,
+    "text_mismatches_vs_shipped": [
+      "682426172675355782",
+      "14782532088492245120"
+    ],
+    "max_rss_mb": 3499.651072,
+    "placement_events": {
+      "DmlExecutionProvider": 56298,
+      "CPUExecutionProvider": 49808
+    },
+    "unique_provider_nodes": {
+      "DmlExecutionProvider": 2559,
+      "CPUExecutionProvider": 2264
+    },
+    "provider_node_duration_us": {
+      "DmlExecutionProvider": 7221527,
+      "CPUExecutionProvider": 718659
+    }
+  },
+  {
+    "label": "dml-int8-flat",
+    "status": "complete",
+    "error": null,
+    "runs": 22,
+    "load_ms": 3359.6608999941964,
+    "clips": 11,
+    "audio_s": 135.54,
+    "median_warm_ms": 1884.7849000012502,
+    "warm_min_ms": 1138.9763999904972,
+    "warm_max_ms": 2558.067600009963,
+    "warm_rtf": 0.1523899904089671,
+    "errors": 14,
+    "reference_words": 235,
+    "wer": 0.059574468085106386,
+    "text_mismatches_vs_shipped": [
+      "10411502267097546866",
+      "682426172675355782"
+    ],
+    "max_rss_mb": 1828.360192,
+    "placement_events": {
+      "DmlExecutionProvider": 61578,
+      "CPUExecutionProvider": 49808
+    },
+    "unique_provider_nodes": {
+      "DmlExecutionProvider": 2799,
+      "CPUExecutionProvider": 2264
+    },
+    "provider_node_duration_us": {
+      "DmlExecutionProvider": 10284670,
+      "CPUExecutionProvider": 535938
+    },
+    "process": {
+      "exit_code": 0,
+      "elapsed_s": 47.631989800021984,
+      "peak_sampled_rss_mb": 1898.160128,
+      "status": "exited"
+    }
+  },
+  {
+    "label": "gpu-diagnose-basic768",
+    "status": "complete",
+    "error": null,
+    "runs": 2,
+    "load_ms": 7417.732000001706,
+    "clips": 1,
+    "audio_s": 7.56,
+    "median_warm_ms": 838.4081999829505,
+    "warm_min_ms": 838.4081999829505,
+    "warm_max_ms": 838.4081999829505,
+    "warm_rtf": 0.11090055555330033,
+    "errors": 16,
+    "reference_words": 16,
+    "wer": 1.0,
+    "text_mismatches_vs_shipped": [
+      "hongkong-test"
+    ],
+    "max_rss_mb": 5279.86688,
+    "process": {
+      "exit_code": 0,
+      "elapsed_s": 10.948889999999665,
+      "peak_sampled_rss_mb": 5341.179904,
+      "status": "exited"
+    },
+    "quality_verdict": "rejected: empty transcript, not a valid speed result"
+  },
+  {
+    "label": "gpu-diagnose-dynamicpad",
+    "status": "complete",
+    "error": null,
+    "runs": 2,
+    "load_ms": 8236.014099995373,
+    "clips": 1,
+    "audio_s": 7.56,
+    "median_warm_ms": 908.6633999831975,
+    "warm_min_ms": 908.6633999831975,
+    "warm_max_ms": 908.6633999831975,
+    "warm_rtf": 0.12019357142634887,
+    "errors": 0,
+    "reference_words": 16,
+    "wer": 0.0,
+    "text_mismatches_vs_shipped": [],
+    "max_rss_mb": 2868.404224,
+    "process": {
+      "exit_code": 0,
+      "elapsed_s": 11.964045600005193,
+      "peak_sampled_rss_mb": 3847.733248,
+      "status": "exited"
+    }
+  },
+  {
+    "label": "gpu-diagnose-exact758",
+    "status": "complete",
+    "error": null,
+    "runs": 2,
+    "load_ms": 7574.880300002405,
+    "clips": 1,
+    "audio_s": 7.56,
+    "median_warm_ms": 987.6688999938779,
+    "warm_min_ms": 987.6688999938779,
+    "warm_max_ms": 987.6688999938779,
+    "warm_rtf": 0.13064403439072458,
+    "errors": 16,
+    "reference_words": 16,
+    "wer": 1.0,
+    "text_mismatches_vs_shipped": [
+      "hongkong-test"
+    ],
+    "max_rss_mb": 5243.465728,
+    "process": {
+      "exit_code": 0,
+      "elapsed_s": 11.436633399978746,
+      "peak_sampled_rss_mb": 5329.993728,
+      "status": "exited"
+    },
+    "quality_verdict": "rejected: empty transcript, not a valid speed result"
+  },
+  {
+    "label": "gpu-qos-eco",
+    "status": "complete",
+    "error": null,
+    "runs": 9,
+    "load_ms": 11237.35760001,
+    "clips": 3,
+    "audio_s": 40.92,
+    "median_warm_ms": 1880.9857000160264,
+    "warm_min_ms": 1027.732599992305,
+    "warm_max_ms": 2291.0368000157177,
+    "warm_rtf": 0.12690733260058484,
+    "errors": 6,
+    "reference_words": 71,
+    "wer": 0.08450704225352113,
+    "text_mismatches_vs_shipped": [],
+    "max_rss_mb": 3205.378048
+  },
+  {
+    "label": "gpu-qos-high",
+    "status": "complete",
+    "error": null,
+    "runs": 9,
+    "load_ms": 5694.598400004907,
+    "clips": 3,
+    "audio_s": 40.92,
+    "median_warm_ms": 1626.3607500004582,
+    "warm_min_ms": 940.922000008868,
+    "warm_max_ms": 2041.810800001258,
+    "warm_rtf": 0.11097824291300729,
+    "errors": 6,
+    "reference_words": 71,
+    "wer": 0.08450704225352113,
+    "text_mismatches_vs_shipped": [],
+    "max_rss_mb": 3204.759552
+  },
+  {
+    "label": "gpu-scoped-static-2048",
+    "status": "complete",
+    "error": null,
+    "runs": 22,
+    "load_ms": 7441.809999989346,
+    "clips": 11,
+    "audio_s": 135.54,
+    "median_warm_ms": 1811.3254999916535,
+    "warm_min_ms": 1770.3898000181653,
+    "warm_max_ms": 1841.8172000092454,
+    "warm_rtf": 0.14670960970924293,
+    "errors": 235,
+    "reference_words": 235,
+    "wer": 1.0,
+    "text_mismatches_vs_shipped": [
+      "hongkong-test",
+      "14347918279741910315",
+      "10411502267097546866",
+      "9092741274593827020",
+      "9191614290588137327",
+      "682426172675355782",
+      "13767655196060956559",
+      "14782532088492245120",
+      "13930291059846386070",
+      "4748525319668878312",
+      "3922683486251864943"
+    ],
+    "max_rss_mb": 5392.5888,
+    "process": {
+      "exit_code": 0,
+      "elapsed_s": 49.074392099981196,
+      "peak_sampled_rss_mb": 5466.923008,
+      "status": "exited"
+    },
+    "quality_verdict": "rejected: empty transcript, not a valid speed result"
+  },
+  {
+    "label": "gpu-scoped-static-768",
+    "status": "complete",
+    "error": null,
+    "runs": 2,
+    "load_ms": 7535.640099988086,
+    "clips": 1,
+    "audio_s": 7.56,
+    "median_warm_ms": 865.3511999873444,
+    "warm_min_ms": 865.3511999873444,
+    "warm_max_ms": 865.3511999873444,
+    "warm_rtf": 0.11446444444277043,
+    "errors": 16,
+    "reference_words": 16,
+    "wer": 1.0,
+    "text_mismatches_vs_shipped": [
+      "hongkong-test"
+    ],
+    "max_rss_mb": 5249.572864,
+    "process": {
+      "exit_code": 0,
+      "elapsed_s": 11.018259100004798,
+      "peak_sampled_rss_mb": 5329.924096,
+      "status": "exited"
+    },
+    "quality_verdict": "rejected: empty transcript, not a valid speed result"
+  },
+  {
+    "label": "gpu-scoped-static-dynamic",
+    "status": "complete",
+    "error": null,
+    "runs": 22,
+    "load_ms": 10898.249699996086,
+    "clips": 11,
+    "audio_s": 135.54,
+    "median_warm_ms": 1737.0355000020936,
+    "warm_min_ms": 1046.746300009545,
+    "warm_max_ms": 3624.4556000165176,
+    "warm_rtf": 0.15252929541096114,
+    "errors": 13,
+    "reference_words": 235,
+    "wer": 0.05531914893617021,
+    "text_mismatches_vs_shipped": [
+      "682426172675355782",
+      "14782532088492245120"
+    ],
+    "max_rss_mb": 3317.723136,
+    "process": {
+      "exit_code": 0,
+      "elapsed_s": 55.3222633000114,
+      "peak_sampled_rss_mb": 4146.552832,
+      "status": "exited"
+    }
+  },
+  {
+    "label": "npu-qos-eco",
+    "status": "complete",
+    "error": [],
+    "runs": 9,
+    "load_ms": 4191.824500012444,
+    "clips": 3,
+    "audio_s": 40.92,
+    "median_warm_ms": 1168.1774999888148,
+    "warm_min_ms": 1097.0008000149392,
+    "warm_max_ms": 1320.444499986479,
+    "warm_rtf": 0.08609274437915106,
+    "errors": 6,
+    "reference_words": 71,
+    "wer": 0.08450704225352113,
+    "text_mismatches_vs_shipped": [],
+    "max_rss_mb": 1432.936448,
+    "placement_events": {
+      "QNNExecutionProvider": 27,
+      "CPUExecutionProvider": 648
+    },
+    "unique_provider_nodes": {
+      "QNNExecutionProvider": 3,
+      "CPUExecutionProvider": 72
+    },
+    "provider_node_duration_us": {
+      "QNNExecutionProvider": 8830474,
+      "CPUExecutionProvider": 114546
+    }
+  },
+  {
+    "label": "npu-qos-high",
+    "status": "complete",
+    "error": [],
+    "runs": 9,
+    "load_ms": 2519.9218000052497,
+    "clips": 3,
+    "audio_s": 40.92,
+    "median_warm_ms": 1054.9711000057869,
+    "warm_min_ms": 1025.013799982844,
+    "warm_max_ms": 1099.0593000024091,
+    "warm_rtf": 0.07771153714548956,
+    "errors": 6,
+    "reference_words": 71,
+    "wer": 0.08450704225352113,
+    "text_mismatches_vs_shipped": [],
+    "max_rss_mb": 1432.748032,
+    "placement_events": {
+      "QNNExecutionProvider": 27,
+      "CPUExecutionProvider": 648
+    },
+    "unique_provider_nodes": {
+      "QNNExecutionProvider": 3,
+      "CPUExecutionProvider": 72
+    },
+    "provider_node_duration_us": {
+      "QNNExecutionProvider": 8806468,
+      "CPUExecutionProvider": 19634
+    }
+  },
+  {
+    "label": "qnn-cache-bare",
+    "status": "complete",
+    "error": [],
+    "runs": 22,
+    "load_ms": 2169.054700003471,
+    "clips": 11,
+    "audio_s": 135.54,
+    "median_warm_ms": 1054.2360999970697,
+    "warm_min_ms": 1022.0953999960329,
+    "warm_max_ms": 1108.2771999936085,
+    "warm_rtf": 0.08621225837428365,
+    "errors": 13,
+    "reference_words": 235,
+    "wer": 0.05531914893617021,
+    "text_mismatches_vs_shipped": [
+      "682426172675355782",
+      "14782532088492245120"
+    ],
+    "max_rss_mb": 1434.349568,
+    "placement_events": {
+      "QNNExecutionProvider": 66,
+      "CPUExecutionProvider": 1584
+    },
+    "unique_provider_nodes": {
+      "QNNExecutionProvider": 3,
+      "CPUExecutionProvider": 72
+    },
+    "provider_node_duration_us": {
+      "QNNExecutionProvider": 21539317,
+      "CPUExecutionProvider": 49614
+    }
+  },
+  {
+    "label": "qnn-cache-reload",
+    "status": "complete",
+    "error": [],
+    "runs": 22,
+    "load_ms": 2659.777799999574,
+    "clips": 11,
+    "audio_s": 135.54,
+    "median_warm_ms": 1078.3064999850467,
+    "warm_min_ms": 1036.8442000180949,
+    "warm_max_ms": 1151.209400006337,
+    "warm_rtf": 0.08758529659116858,
+    "errors": 13,
+    "reference_words": 235,
+    "wer": 0.05531914893617021,
+    "text_mismatches_vs_shipped": [
+      "682426172675355782",
+      "14782532088492245120"
+    ],
+    "max_rss_mb": 1434.5216,
+    "placement_events": {
+      "QNNExecutionProvider": 66,
+      "CPUExecutionProvider": 1584
+    },
+    "unique_provider_nodes": {
+      "QNNExecutionProvider": 3,
+      "CPUExecutionProvider": 72
+    },
+    "provider_node_duration_us": {
+      "QNNExecutionProvider": 21599928,
+      "CPUExecutionProvider": 110639
+    },
+    "process": {
+      "exit_code": 0,
+      "elapsed_s": 27.773378799989587,
+      "peak_sampled_rss_mb": 2657.783808,
+      "status": "exited"
+    }
+  },
+  {
+    "label": "qnn-npu-fp16-2048",
+    "status": "complete",
+    "error": [],
+    "runs": 22,
+    "load_ms": 74006.70120000723,
+    "clips": 11,
+    "audio_s": 135.54,
+    "median_warm_ms": 1060.2120999828912,
+    "warm_min_ms": 1015.2415999909863,
+    "warm_max_ms": 1134.4878999807406,
+    "warm_rtf": 0.08625762653038933,
+    "errors": 13,
+    "reference_words": 235,
+    "wer": 0.05531914893617021,
+    "text_mismatches_vs_shipped": [
+      "682426172675355782",
+      "14782532088492245120"
+    ],
+    "max_rss_mb": 7720.783872,
+    "placement_events": {
+      "QNNExecutionProvider": 66,
+      "CPUExecutionProvider": 1584
+    },
+    "unique_provider_nodes": {
+      "QNNExecutionProvider": 3,
+      "CPUExecutionProvider": 72
+    },
+    "provider_node_duration_us": {
+      "QNNExecutionProvider": 21564941,
+      "CPUExecutionProvider": 48767
+    },
+    "process": {
+      "exit_code": 0,
+      "elapsed_s": 104.62466729999869,
+      "peak_sampled_rss_mb": 7763.57888,
+      "status": "exited"
+    }
+  }
+]
