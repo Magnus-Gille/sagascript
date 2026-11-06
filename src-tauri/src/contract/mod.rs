@@ -31,7 +31,9 @@ pub const FIXTURES: &[&str] = &[
     "command_errors.json",
     "events.json",
     "get_meeting_job.json",
+    "get_recording_folder_info.json",
     "get_settings.json",
+    "stop_recording_session.json",
 ];
 
 /// The commands that write settings (they reach `persist_and_sync` or a sibling),
