@@ -51,7 +51,8 @@ jobs:
     name: Build Windows ${{ matrix.architecture }} candidate
     needs: decide
     # Only a pull request can be skipped; every other event (workflow_call, workflow_dispatch) builds.
-    if: github.event_name != 'pull_request' || needs.decide.outputs.run == 'true'
+    # `!cancelled()` keeps the release path free of the gate: even if `decide` failed, a non-PR event builds.
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.decide.outputs.run == 'true') }}
     strategy:
       fail-fast: false
       matrix:

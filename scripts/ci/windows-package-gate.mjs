@@ -13,11 +13,16 @@ import { appendFileSync, readFileSync } from "node:fs";
 export const LABEL = "windows-package";
 export const VERSION_FILES = ["package.json", "src-tauri/tauri.conf.json"];
 
-// Files that matter to Windows packaging and to nothing else in pull request CI, taken from what
-// windows-package.yml runs and reads. A trailing "/" matches a directory. Application source,
-// Cargo manifests and shared scripts are deliberately absent: ci.yml's test-windows and
-// build-windows already compile and test them on Windows for every pull request.
+// Files that matter to Windows packaging, taken from what windows-package.yml runs and reads, plus
+// the dependency manifests. A trailing "/" matches a directory. Application source and shared
+// scripts are deliberately absent: ci.yml's test-windows and build-windows already compile and
+// test them on Windows for every pull request. Dependency changes are not: they can change the
+// bundler (the Tauri CLI from package-lock.json, tauri-build from Cargo.lock) or what is packaged,
+// which only this workflow exercises before a release.
 export const WINDOWS_PACKAGE_PATHS = [
+  "package-lock.json", // @tauri-apps/cli is the NSIS/MSI bundler; frontend dependencies are packaged
+  "src-tauri/Cargo.toml", // app crate features and dependency requirements
+  "src-tauri/Cargo.lock", // tauri-build and every crate compiled into the packaged app
   ".gitattributes", // checkout normalisation (line endings) decides the packaged bytes
   ".github/workflows/windows-package.yml", // the workflow itself
   "src-tauri/tauri.conf.json", // bundler/installer (NSIS, MSI) configuration

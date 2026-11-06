@@ -10,7 +10,7 @@ import { REPO_ROOT, loadWorkflow } from "./lib/ci-workflow.mjs";
 import { LABEL, WINDOWS_PACKAGE_PATHS, decide, pathMatches } from "./ci/windows-package-gate.mjs";
 
 const workflow = loadWorkflow("windows-package.yml");
-const GATE = "github.event_name != 'pull_request' || needs.decide.outputs.run == 'true'";
+const GATE = "${{ !cancelled() && (github.event_name != 'pull_request' || needs.decide.outputs.run == 'true') }}";
 
 test("workflow_call and workflow_dispatch stay triggers, and pull_request also fires when a label is added", () => {
   const on = workflow.doc.on;
@@ -24,10 +24,13 @@ test("only the pull_request event can skip the package jobs; every other event r
   assert.deepEqual(build.needs, ["decide"]);
   assert.equal(build.condition, GATE);
   // The gate is false only for a pull request whose decision said no, whatever the called/dispatched context.
+  // run "" is a failed or skipped `decide`: !cancelled() (not success()) keeps a release build running then.
+  assert.match(GATE, /^\$\{\{ !cancelled\(\) && \(/, "a failed decide job must not skip the release path");
   const gate = (event, run) => event !== "pull_request" || run === "true";
   for (const event of ["workflow_call", "push", "workflow_dispatch"]) {
     for (const run of ["true", "false", ""]) assert.ok(gate(event, run), `${event} with run=${run} builds`);
   }
+  assert.ok(!gate("pull_request", ""), "a pull request whose decide failed is skipped, not built");
   assert.ok(gate("pull_request", "true"));
   assert.ok(!gate("pull_request", "false"));
   assert.ok(!gate("pull_request", ""));
@@ -70,13 +73,11 @@ test("the decision covers the label, a version change and the packaging paths", 
     const file = path.endsWith("/") ? `${path}nested/file` : path;
     assert.equal(decide({ ...none, changedFiles: ["README.md", file] }).run, true, file);
   }
-  for (const file of [
-    "src-tauri/src/lib.rs",
-    "src-tauri/Cargo.lock",
-    "docs/ci-performance.md",
-    "src-tauri/engine-host/coreml/x.swift",
-    "scripts/cmake-notes.md",
-  ]) {
+  // Dependency changes can change the bundler or what is packaged (Dependabot's groups do).
+  for (const file of ["package-lock.json", "src-tauri/Cargo.lock", "src-tauri/Cargo.toml"]) {
+    assert.ok(pathMatches(file), file);
+  }
+  for (const file of ["src-tauri/src/lib.rs", "docs/ci-performance.md", "src-tauri/engine-host/coreml/x.swift", "scripts/cmake-notes.md"]) {
     assert.ok(!pathMatches(file), file);
   }
   // No change set (no base commit) fails open.
