@@ -332,7 +332,12 @@ impl<W: TrackSink> FlacEncoder<W> {
             self.encode_pending()?;
         }
         let io_error = |error: io::Error| RecordingError::io("finish a track file", &error);
+        // The last frame is made durable **before** the metadata is rewritten
+        // (design §4.5): a power loss during the rewrite must find the frames
+        // on disk, and the rewrite is the only thing that can then be torn.
+        // Recovery rebuilds a torn header from the frames.
         self.out.flush().map_err(io_error)?;
+        self.out.get_mut().sync_data().map_err(io_error)?;
         let md5 = self.context.md5_digest();
         let totals = StreamTotals {
             total_samples: self.frames_pushed,
