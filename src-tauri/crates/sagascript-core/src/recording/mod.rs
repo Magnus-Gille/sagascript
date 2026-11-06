@@ -75,8 +75,8 @@ pub use error::RecordingError;
 pub use export::{export_recording, ExportFormat, ExportLayout, ExportOptions, ExportReport};
 pub use flac::{FlacEncoder, TrackSink};
 pub use library::{
-    audio_track_path, delete_recording_folder, list_recordings, read_recording, summarize_folder,
-    RecordingSummary, MIN_ID_PREFIX,
+    audio_track_path, delete_recording_folder, list_recordings, lock_recording_for_removal,
+    read_recording, summarize_folder, RecordingSummary, RemovalLock, MIN_ID_PREFIX,
 };
 pub use manifest::{
     manifest_integrity, parse_manifest, serialize_manifest, serialize_manifest_sealed, Client,

@@ -18,7 +18,7 @@ use serde::Serialize;
 
 use super::error::RecordingError;
 use super::manifest::{is_plain_file_name, Manifest, Quality, RecordingState, MANIFEST_FILE};
-use super::store::{load_manifest, lock_folder};
+use super::store::{load_manifest, lock_folder, LOCK_FILE};
 
 /// The shortest recording-id prefix accepted as a name.
 pub const MIN_ID_PREFIX: usize = 6;
@@ -116,20 +116,84 @@ pub fn summarize_folder(folder: &Path) -> Result<RecordingSummary, RecordingErro
     Ok(summarize(&name, folder, &manifest))
 }
 
-/// Remove a recording folder and everything in it. Refuses a folder that is
-/// not directly under `root`, has no `recording.json`, or is owned by a live
-/// recording ([`RecordingError::Locked`]). The app moves folders to the trash
-/// instead; this is the CLI's `delete --yes`.
-pub fn delete_recording_folder(root: &Path, name_or_id: &str) -> Result<(), RecordingError> {
-    let dir = resolve(root, name_or_id, true)?;
-    match lock_folder(&dir, false) {
-        // Released before the removal: Windows cannot delete an open file.
-        Ok(lock) => drop(lock),
-        Err(RecordingError::Locked) => return Err(RecordingError::Locked),
-        // No lock file: a finished recording, or one whose process is gone.
-        Err(_) => {}
+/// The exclusive lock a caller holds while it removes a recording folder
+/// (deleting it, moving it to the trash). While it exists no writer, no
+/// recovery and no second remover can own the recording, so the folder is not
+/// moved out from under a process that is still writing it. Dropping it
+/// releases the lock.
+#[derive(Debug)]
+pub struct RemovalLock {
+    folder: PathBuf,
+    _file: fs::File,
+}
+
+impl RemovalLock {
+    /// The locked recording folder.
+    pub fn folder(&self) -> &Path {
+        &self.folder
     }
-    fs::remove_dir_all(&dir).map_err(|error| RecordingError::io("delete the recording", &error))
+}
+
+/// Take the recording lock of `name_or_id` for a removal, without blocking.
+///
+/// Ownership has to be established, not assumed: a recording another process
+/// is writing gives [`RecordingError::Locked`], and so does one being removed
+/// or recovered; a lock file that cannot be opened or locked for any other
+/// reason (a permission error, a link where the file belongs) fails with that
+/// error and never counts as "nobody owns it". A recording whose lock file is
+/// missing (finished and tidied by hand) gets one made, so the removal is
+/// held to the same rule.
+pub fn lock_recording_for_removal(
+    root: &Path,
+    name_or_id: &str,
+) -> Result<RemovalLock, RecordingError> {
+    let folder = resolve(root, name_or_id, true)?;
+    let file = lock_folder(&folder, true)?;
+    Ok(RemovalLock { folder, _file: file })
+}
+
+/// Remove a recording folder and everything in it. Refuses a folder that is
+/// not directly under `root`, has no `recording.json`, or whose lock is not
+/// ours ([`lock_recording_for_removal`]). The app moves folders to the trash
+/// instead; this is the CLI's `delete --yes`.
+///
+/// The lock is held while the contents go, manifest first, so a recovery that
+/// takes it afterwards finds no recording. The lock file is removed last,
+/// after the lock is released (Windows cannot delete an open file).
+pub fn delete_recording_folder(root: &Path, name_or_id: &str) -> Result<(), RecordingError> {
+    let lock = lock_recording_for_removal(root, name_or_id)?;
+    let dir = lock.folder.clone();
+    remove_all_but_the_lock(&dir)?;
+    drop(lock);
+    // Only the lock file is left; with nothing to recover, a stray taker of
+    // the lock finds an empty folder.
+    fs::remove_file(dir.join(LOCK_FILE))
+        .and_then(|()| fs::remove_dir(&dir))
+        .map_err(|error| RecordingError::io("delete the recording", &error))
+}
+
+/// Remove every entry of `dir` but the lock file, the manifest first. Links
+/// are removed, never followed.
+fn remove_all_but_the_lock(dir: &Path) -> Result<(), RecordingError> {
+    let io = |error: std::io::Error| RecordingError::io("delete the recording", &error);
+    let mut names = Vec::new();
+    for entry in fs::read_dir(dir).map_err(io)? {
+        let name = entry.map_err(io)?.file_name();
+        if name != LOCK_FILE {
+            names.push(name);
+        }
+    }
+    names.sort_by_key(|name| name != MANIFEST_FILE);
+    for name in names {
+        let path = dir.join(&name);
+        let metadata = fs::symlink_metadata(&path).map_err(io)?;
+        if metadata.is_dir() {
+            fs::remove_dir_all(&path).map_err(io)?;
+        } else {
+            fs::remove_file(&path).map_err(io)?;
+        }
+    }
+    Ok(())
 }
 
 /// The FLAC file of track `track_id`, for playback and export.

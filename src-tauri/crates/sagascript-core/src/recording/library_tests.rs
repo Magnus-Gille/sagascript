@@ -285,6 +285,93 @@ fn delete_refuses_a_recording_in_progress() {
     assert!(writer.folder().exists());
 }
 
+/// A made recording's folder name.
+fn folder_name(made: &Made) -> String {
+    made.folder
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned()
+}
+
+#[test]
+fn delete_fails_closed_when_the_lock_cannot_be_taken() {
+    let (_temp, store) = store();
+    let made = mic(&store, "One", "2026-11-05T10:00:00.000+01:00");
+    let name = folder_name(&made);
+    // Whatever stands where the lock file belongs (here a directory, on a
+    // real system a permission error) is not "no lock": ownership is unknown.
+    let lock = made.folder.join(crate::recording::store::LOCK_FILE);
+    let _ = std::fs::remove_file(&lock);
+    std::fs::create_dir(&lock).unwrap();
+    let error = delete_recording_folder(store.root(), &name).unwrap_err();
+    assert_ne!(error.code(), "recording_locked");
+    assert!(made.folder.join("recording.json").is_file(), "{error}");
+    assert!(made.folder.exists());
+}
+
+#[test]
+fn delete_of_a_recording_without_a_lock_file_takes_the_lock_itself() {
+    let (_temp, store) = store();
+    let made = mic(&store, "One", "2026-11-05T10:00:00.000+01:00");
+    let name = folder_name(&made);
+    let _ = std::fs::remove_file(made.folder.join(crate::recording::store::LOCK_FILE));
+    delete_recording_folder(store.root(), &name).unwrap();
+    assert!(!made.folder.exists());
+}
+
+#[test]
+fn a_removal_lock_keeps_out_deletion_recovery_and_a_second_lock() {
+    let (_temp, store) = store();
+    let made = mic(&store, "One", "2026-11-05T10:00:00.000+01:00");
+    let name = folder_name(&made);
+    let guard = lock_recording_for_removal(store.root(), &name).unwrap();
+    assert_eq!(
+        delete_recording_folder(store.root(), &name)
+            .unwrap_err()
+            .code(),
+        "recording_locked"
+    );
+    assert_eq!(
+        lock_recording_for_removal(store.root(), &name)
+            .err()
+            .map(|error| error.code()),
+        Some("recording_locked")
+    );
+    // Recovery of the folder is refused while the removal holds the lock.
+    let reports = store.recover_pending().unwrap();
+    assert!(
+        reports.iter().all(|report| !matches!(
+            report.outcome,
+            crate::recording::RecoveryOutcome::Recovered(_)
+        )),
+        "{reports:?}"
+    );
+    drop(guard);
+    delete_recording_folder(store.root(), &name).unwrap();
+}
+
+#[test]
+fn a_removal_lock_is_refused_for_a_recording_in_progress_and_for_a_bad_name() {
+    let (_temp, store) = store();
+    let writer = store
+        .create(recording("Live", vec![track("mic", 48_000, 1, 24)]))
+        .unwrap();
+    let name = writer.folder_name().to_string();
+    assert_eq!(
+        lock_recording_for_removal(store.root(), &name)
+            .err()
+            .map(|error| error.code()),
+        Some("recording_locked")
+    );
+    assert_eq!(
+        lock_recording_for_removal(store.root(), "../x")
+            .err()
+            .map(|error| error.code()),
+        Some("recording_invalid_input")
+    );
+}
+
 #[test]
 fn delete_refuses_a_folder_that_is_not_a_recording() {
     let (_temp, store) = store();
