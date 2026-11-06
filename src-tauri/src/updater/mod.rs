@@ -51,6 +51,37 @@ enum UpdateMenuMode {
     Idle,
 }
 
+impl UpdateMenuMode {
+    fn status_enabled(&self, action_enabled: bool) -> bool {
+        // On macOS only the explicit "Install and Restart" item may install.
+        cfg!(target_os = "windows") && action_enabled && matches!(self, Self::Available(_))
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum UpdateMenuAction {
+    None,
+    Check,
+    Install,
+    OpenRelease,
+}
+
+impl UpdateMenuState {
+    fn action(&self, has_public_key: bool) -> UpdateMenuAction {
+        if self.checking || self.installing {
+            UpdateMenuAction::None
+        } else if self.available_version.is_none() {
+            UpdateMenuAction::Check
+        } else if cfg!(target_os = "macos") && has_public_key {
+            // Only macOS registers the signed updater plugin. A public key in
+            // a Windows build must not turn the release action into a recheck.
+            UpdateMenuAction::Install
+        } else {
+            UpdateMenuAction::OpenRelease
+        }
+    }
+}
+
 fn update_status_text(result: &updates::UpdateCheck) -> String {
     match result {
         updates::UpdateCheck::Available { version } => {
@@ -103,6 +134,7 @@ fn set_update_menu(
 ) {
     let status_text = status_text.into();
     let action_text = action_text.into();
+    let status_enabled = mode.status_enabled(enabled);
     dispatch_to_main(app, move |app| {
         let items = {
             let state: tauri::State<'_, SharedUpdateMenuState> = app.state();
@@ -132,6 +164,9 @@ fn set_update_menu(
         };
         if let Err(error) = items.status.set_text(status_text) {
             error!("Failed to update tray update status: {error}");
+        }
+        if let Err(error) = items.status.set_enabled(status_enabled) {
+            error!("Failed to update tray update status availability: {error}");
         }
         if let Err(error) = items.check.set_text(action_text) {
             error!("Failed to update tray update action: {error}");
@@ -173,6 +208,9 @@ fn check_for_updates_with_intent(app: tauri::AppHandle, install_when_available: 
 
     if let Err(error) = items.status.set_text("Checking for updates…") {
         error!("Failed to update tray update status: {error}");
+    }
+    if let Err(error) = items.status.set_enabled(false) {
+        error!("Failed to disable update status action: {error}");
     }
     if let Err(error) = items.check.set_enabled(false) {
         error!("Failed to disable update action: {error}");
@@ -278,24 +316,34 @@ pub(crate) fn register_update_menu_items(
     });
 }
 
-/// The tray's "Check for Updates" entry: check, or install an announced update.
+/// Both tray update entries: check, install, or open the announced release.
 pub(crate) fn handle_check_for_updates_menu_action(app: &tauri::AppHandle) {
-    let (available_version, installing) = {
+    let (available_version, action) = {
         let state: tauri::State<'_, SharedUpdateMenuState> = app.state();
         let state = lock_or_recover(&state, UPDATE_MENU_LOCK);
-        (state.available_version.clone(), state.installing)
+        (
+            state.available_version.clone(),
+            state.action(updates::updater_public_key().is_some()),
+        )
     };
-    if installing {
-        // The updater owns the menu action while it is
-        // downloading, waiting for work, or restarting.
-    } else if let Some(version) = available_version {
-        if updates::updater_public_key().is_some() {
-            check_for_updates_and_install(app.clone());
-        } else if let Err(error) = open_update_release(&version) {
-            error!("Failed to open update release: {error}");
+    match action {
+        UpdateMenuAction::None => {}
+        UpdateMenuAction::Check => check_for_updates(app.clone()),
+        UpdateMenuAction::Install => check_for_updates_and_install(app.clone()),
+        UpdateMenuAction::OpenRelease => {
+            if let Some(version) = available_version {
+                if let Err(error) = open_update_release(&version) {
+                    error!("Failed to open update release: {error}");
+                    set_update_menu(
+                        app,
+                        "Couldn't open update page",
+                        format!("Retry Open Release v{version}…"),
+                        true,
+                        UpdateMenuMode::Available(version),
+                    );
+                }
+            }
         }
-    } else {
-        check_for_updates(app.clone());
     }
 }
 
