@@ -461,6 +461,9 @@ fn transcribe_loaded(
     if is_cancelled() {
         return Err(cancelled());
     }
+    // HighQoS covers the model work only, not the PCM read above: a slow or stalled file
+    // must not keep the whole process out of EcoQoS.
+    let _qos = crate::power_qos::high_qos_scope();
     run_pipeline(
         loaded,
         Pipeline {
@@ -729,7 +732,6 @@ impl Engine for OrtEngine {
         let loaded = self
             .current()
             .ok_or_else(|| HostError::new(ErrorCode::NotLoaded, "No model is loaded"))?;
-        let _qos = crate::power_qos::high_qos_scope();
         transcribe_loaded(&loaded, request, is_cancelled)
     }
 
