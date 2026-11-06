@@ -485,7 +485,7 @@ fn a_stall_trips_the_watchdog_and_the_gap_length_comes_from_the_stamps() {
 
 #[test]
 fn a_late_block_under_the_minimum_is_not_a_gap() {
-    let mut rig = Rig::mono();
+    let rig = Rig::mono();
     rig.handle.deliver(ms(100));
     rig.handle.idle(ms(60));
     rig.handle.deliver(ms(100));
@@ -616,7 +616,7 @@ fn a_channel_count_change_ends_the_track_too() {
 
 #[test]
 fn the_same_format_reported_again_is_not_a_change() {
-    let mut rig = Rig::mono();
+    let rig = Rig::mono();
     rig.handle.deliver(ms(100));
     rig.handle.change_format(MONO48);
     rig.handle.deliver(ms(100));
@@ -669,7 +669,7 @@ fn the_other_endings_do_not_depend_on_the_order_of_events() {
 
 #[test]
 fn frames_dropped_after_the_last_block_are_a_gap_at_the_end() {
-    let mut rig = Rig::new(Opts {
+    let rig = Rig::new(Opts {
         block_frames: 64,
         blocks: 4,
         prime: Duration::from_micros(500),
@@ -698,7 +698,7 @@ fn a_stall_that_is_still_going_when_the_user_stops_is_a_gap_too() {
 
 #[test]
 fn stopping_straight_after_the_last_block_adds_nothing() {
-    let mut rig = Rig::mono();
+    let rig = Rig::mono();
     rig.handle.deliver(ms(100));
     let done = rig.finish();
     assert!(done.track().gaps.is_empty());
@@ -729,7 +729,7 @@ fn a_write_error_from_a_full_disk_cuts_the_track_to_its_last_complete_frame() {
     assert_eq!(done.on_disk().state, RecordingState::Complete);
     let frames = done.track().frames;
     assert!(
-        frames > 0 && frames % 4096 == 0,
+        frames > 0 && frames.is_multiple_of(4096),
         "{frames}: whole blocks only"
     );
     assert!(frames < done.handle.position());
@@ -746,7 +746,7 @@ fn a_write_error_from_a_full_disk_cuts_the_track_to_its_last_complete_frame() {
 #[test]
 fn a_full_disk_while_the_last_block_is_written_at_stop_is_cut_back_too() {
     // Room for the header and the first frames only; the stop flushes the rest.
-    let mut rig = Rig::new(Opts {
+    let rig = Rig::new(Opts {
         disk_full_after: Some(TRACK_HEADER_LEN as u64 + 14_000),
         ..Opts::default()
     });
@@ -754,7 +754,7 @@ fn a_full_disk_while_the_last_block_is_written_at_stop_is_cut_back_too() {
     let done = rig.finish();
     assert_eq!(done.track().ended_reason, Some(EndedReason::DiskFull));
     assert_eq!(done.manifest().state, RecordingState::Complete);
-    assert_eq!(done.track().frames % 4096, 0);
+    assert!(done.track().frames.is_multiple_of(4096));
     done.assert_audio(&[]);
 }
 
@@ -936,7 +936,7 @@ fn compact_stereo_44100_is_downmixed_to_mono_16k() {
 
 #[test]
 fn a_compact_track_that_ends_on_a_device_change_flushes_the_resampler_first() {
-    let mut rig = compact(MONO48);
+    let rig = compact(MONO48);
     rig.handle.deliver(ms(500));
     rig.handle.change_device();
     let done = rig.finished_by_itself();

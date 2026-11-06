@@ -141,7 +141,7 @@ impl StreamResampler {
             }
             let (used, produced) = inner
                 .process_into_buffer(&[&self.pending[..need]], &mut self.out, None)
-                .map_err(|error| RecordingError::encoder(error))?;
+                .map_err(RecordingError::encoder)?;
             self.pending.drain(..used);
             emit(&self.out[0], produced, &mut self.emitted, out);
         }
@@ -170,12 +170,12 @@ impl StreamResampler {
                             &mut self.out,
                             None,
                         )
-                        .map_err(|error| RecordingError::encoder(error))?;
+                        .map_err(RecordingError::encoder)?;
                     produced
                 } else {
                     let (_, produced) = inner
                         .process_partial_into_buffer(None::<&[Vec<f32>]>, &mut self.out, None)
-                        .map_err(|error| RecordingError::encoder(error))?;
+                        .map_err(RecordingError::encoder)?;
                     produced
                 };
                 first = false;

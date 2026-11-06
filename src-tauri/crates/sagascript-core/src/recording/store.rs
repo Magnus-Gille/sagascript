@@ -401,6 +401,9 @@ struct TrackWriter {
     finished: Option<FinishedTrack>,
 }
 
+/// The gaps and the clock anchors of a track, as the journal says they are.
+type RebuiltTrack = (Vec<Gap>, Vec<(u64, u64)>);
+
 /// What the manifest needs from a track that ended.
 struct FinishedTrack {
     frames: u64,
@@ -410,7 +413,7 @@ struct FinishedTrack {
     /// Set when the track was cut back after a failed write: the gaps and
     /// anchors that survive the cut, from the journal. `None` means the
     /// writer's own lists are complete.
-    rebuilt: Option<(Vec<Gap>, Vec<(u64, u64)>)>,
+    rebuilt: Option<RebuiltTrack>,
 }
 
 /// A recording in progress. It is driven by one thread (`&mut self`) and holds

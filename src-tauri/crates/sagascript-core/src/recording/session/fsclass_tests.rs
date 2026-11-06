@@ -91,5 +91,5 @@ fn warnings_combine_and_are_sorted_without_duplicates() {
 #[test]
 fn the_fat32_limit_is_below_four_gibibytes() {
     assert_eq!(FAT32_MAX_FILE_BYTES, 4_294_967_295);
-    assert!(FAT32_TRACK_LIMIT_BYTES < FAT32_MAX_FILE_BYTES - 60_000_000);
+    const { assert!(FAT32_TRACK_LIMIT_BYTES < FAT32_MAX_FILE_BYTES - 60_000_000) };
 }

@@ -512,9 +512,7 @@ impl Drop for RecordingSession {
         // A session dropped while recording is stopped and finished, as far as
         // it can be, rather than abandoned with a writer thread running.
         let started = lock_or_recover(&self.inner, INNER_LOCK).started;
-        if started && !self.state().is_terminal() {
-            let _ = self.stop();
-        } else if started {
+        if started {
             let _ = self.stop();
         }
     }

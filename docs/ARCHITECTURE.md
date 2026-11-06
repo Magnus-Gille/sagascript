@@ -173,9 +173,20 @@ CLI and the app and wait for their own change: `settings::{WhisperModel, FileMod
   `encoder.rs` the `TrackEncoder` seam and the float-to-integer rule; `naming.rs` folder names;
   `store.rs` creating a recording with its final name, the lock and the write and fsync order;
   `recover.rs` finishing what a dead process left; `error.rs` `RecordingError` with stable codes
-  (ADR 0006). The writer types are driven by one thread through `&mut self` and hold no mutex. Capture
-  (`RecordingSession`, phase 1b) and the CLI, commands, settings and UI (1c) build on it and are not
-  here. Only `flacenc` (exact pin, no default features) was added as a dependency.
+  (ADR 0006). The writer types are driven by one thread through `&mut self` and hold no mutex.
+  **Capture (SAGA-563, phase 1b)** sits on top, portable except for the microphone:
+  `capture/` is `block.rs` (a pooled `Block` and `NativeFormat`), `spsc.rs` (the bounded lock-free
+  queue, the one `unsafe` of the recorder), `sink.rs` (`BlockSink` for the audio callback,
+  `TrackReceiver` for the writer: pool, queue, dropped-frame count, peak atomics, signals),
+  `source.rs` (`CaptureSource`), `clock.rs` (the host clock and its named domain, the session clock,
+  sleep detection), `fake.rs` (`FakeSource`, the hardware-free source every session test drives) and
+  `mic.rs` (`MicSource` over `cpal`, feature `record` only). `session/` is `mod.rs`
+  (`RecordingSession`: the state machine, `start`/`stop`, the writer thread), `core.rs` (`SessionCore`,
+  the writer's policy as a steppable object: gaps, clock anchors, endings, disk, FAT limit), `resampler.rs`
+  (the streaming 16 kHz resampler of the compact tier), `disk.rs` (free-space thresholds),
+  `fsclass.rs` (folder warnings: FAT32, exFAT, network, cloud-synced) and `status.rs` (the snapshot).
+  The CLI, commands, settings and UI (1c) build on it and are not here. Only `flacenc` (exact pin,
+  no default features) was added as a dependency.
 
 **The top level of `src/`.** A subsystem is a directory; the files beside `lib.rs` are the
 cross-cutting modules that belong to no one subsystem, and each has a row here.
@@ -505,6 +516,7 @@ sequenceDiagram
 | Main (UI) thread | Tauri setup, tray/window/overlay APIs, global-shortcut callbacks on macOS (and key-down on Windows), `macos_bare` callbacks, `run_on_main_thread` closures (macOS paste, AppKit focus calls), sync (non-`async`) Tauri commands. |
 | Tokio runtime | `async` Tauri commands, tasks from `tauri::async_runtime::spawn` (dictation stop pipeline, update flow). |
 | Blocking pool | `spawn_blocking`: inference, paste on Windows/Linux, focus-restore wait, recovery file I/O, and the file work of model downloads (`download::run_blocking`: directory preparation, hashing existing artifacts, fsync, rename and directory sync on install, Pianissimo staging and promotion). |
+| Recording threads | The `cpal` audio callback of `MicSource` (`recording/capture/mic.rs`; realtime, touches only atomics and the lock-free queues, never a lock or an allocation), the thread that owns the `!Send` input stream (`recording-mic`), and one `recording-writer` thread per `RecordingSession` that drains the queues into the store and does the policy of `session/core.rs`. |
 | Dedicated threads | Settings watcher, startup model warm-up, engine-host reader/stderr/stdin-writer/supervisor/wedge-watch threads and the PCM temp dir sweep, audio capture worker and cpal callback, `global-hotkey` event thread (Linux) and key-up polling thread (Windows). |
 | CLI | `sagascript_cli::run` builds its own Tokio runtime; inference commands run on a worker thread (16 MiB stack on Windows, `run_inference_command`). |
 
@@ -512,6 +524,7 @@ sequenceDiagram
 |---|---|---|
 | `SharedController = Mutex<AppController>` | `commands/mod.rs`, managed in `launch/startup.rs` (`manage_app_state`) | Taken from commands, the hotkey handler, the watcher, the updater and meeting jobs, always via `lock_controller`. Audio start/stop and log writes happen under it. Never hold it across `.await` or inference; `SharedWhisper` lives outside it for that reason. |
 | `recording.lock` (one per recording folder) | `recording/store.rs` (`lock_folder`), `recording/recover.rs` | Advisory exclusive file lock (`fs2::FileExt::try_lock_exclusive`, never blocking; `File::try_lock` needs Rust 1.89 and the MSRV is 1.88) held by a `RecordingWriter` from the creation of the folder until it finishes or is dropped. Recovery takes it first and reads the manifest again under it, so it never touches a recording another process or handle owns; a killed process releases it with its file descriptors. The writer types have no in-process mutex. |
+| `recording.session` (`RecordingSession::inner`), with the leaves `recording.session.track_ended`, `recording.session.terminal` and `recording.fake_source` | `recording/session/mod.rs`, `status.rs`, `capture/fake.rs` | `inner` serialises `start` and `stop` and holds the sources and the writer's `JoinHandle`; the other two are leaves taken inside it, never the reverse, and nothing else of the program is taken while holding any of them. The status snapshot takes only the leaves, so it never waits for `start`/`stop`. `stop` takes the sources and the handle out under `inner` and stops and joins **after releasing it**. A `Condvar` on `terminal` lets concurrent `stop` calls wait for one result. `lock_or_recover` everywhere (ADR 0005): every critical section is a few assignments. The audio callback shares no lock with anyone. |
 | `<settings>.json.lock` | `with_settings_lock` in `settings/store.rs` | Exclusive file lock shared by app and CLI processes, held for read-merge-write only. |
 | `HotkeyHealth { state, transition }` | `hotkey/health.rs` | `transition` serializes OS (un)registration between commands and the watcher; kept out of the controller on purpose (see its doc comment). |
 | `UpdateActivity`, `UpdatePreparation` | `updater/activity.rs` | Work leases and the exclusive update permit. |

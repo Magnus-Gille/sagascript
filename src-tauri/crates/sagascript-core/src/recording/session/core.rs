@@ -457,10 +457,10 @@ impl SessionCore {
         let id = self.pipes[index].id.clone();
         let mut scratch = std::mem::take(&mut self.pipes[index].scratch);
         scratch.clear();
-        let processed = match self.pipes[index].resampler.as_mut() {
-            Some(resampler) => Some(resampler.process(samples, &mut scratch)),
-            None => None,
-        };
+        let processed = self.pipes[index]
+            .resampler
+            .as_mut()
+            .map(|resampler| resampler.process(samples, &mut scratch));
         let result = match processed {
             Some(Err(error)) => Err(error),
             Some(Ok(())) => self.writer().push(&id, &scratch),
