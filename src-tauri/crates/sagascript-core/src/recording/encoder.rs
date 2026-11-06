@@ -31,8 +31,14 @@ pub trait TrackEncoder: Send {
     fn push(&mut self, interleaved: &[f32]) -> Result<(), RecordingError>;
 
     /// Append `frames` frames of digital silence (a gap); no memory is
-    /// allocated for the length.
+    /// allocated for the length. A length the track cannot hold is refused
+    /// before anything changes ([`ensure_room`](Self::ensure_room)).
     fn push_silence(&mut self, frames: u64) -> Result<(), RecordingError>;
+
+    /// Whether `frames` more frames fit in the track (the container counts
+    /// samples in a fixed number of bits). A writer asks before it journals a
+    /// gap, so a refusal leaves no trace.
+    fn ensure_room(&self, frames: u64) -> Result<(), RecordingError>;
 
     /// Sample frames accepted so far, including those still waiting for a
     /// full block. A gap starts at this index.

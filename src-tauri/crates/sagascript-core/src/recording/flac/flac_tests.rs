@@ -621,7 +621,10 @@ impl io::Write for ScriptedSink {
         let mut data = self.data.lock().unwrap();
         let at = data.position();
         let written = data.write(buf)?;
-        self.ops.lock().unwrap().push(Op::Write { at, len: written });
+        self.ops
+            .lock()
+            .unwrap()
+            .push(Op::Write { at, len: written });
         Ok(written)
     }
 
@@ -731,4 +734,86 @@ fn a_failed_sync_after_the_rewrite_is_reported_and_the_header_is_the_new_one() {
     assert!(error.is_disk_full(), "{error:?}");
     let header = parse_header(&sink.bytes()).expect("a header");
     assert_eq!(header.total_samples, 3 * BLOCK_SIZE as u64 + 700);
+}
+
+// ---- gaps and pushes that FLAC cannot count ------------------------------------
+
+use super::format::MAX_TOTAL_SAMPLES;
+
+/// Everything a refused push must leave alone.
+fn state_of(encoder: &FlacEncoder<Cursor<Vec<u8>>>) -> (u64, u64, usize, u64) {
+    (
+        encoder.frames_pushed(),
+        encoder.clipped_samples(),
+        encoder.pending.len(),
+        encoder.next_frame,
+    )
+}
+
+#[test]
+fn a_gap_whose_sample_count_overflows_is_refused_without_a_panic_or_a_change() {
+    // 2^63 frames of stereo is 2^64 samples: the product wraps to zero in a
+    // release build and panics in a debug build.
+    for (channels, frames) in [
+        (2u8, 1u64 << 63),
+        (2, u64::MAX),
+        (1, u64::MAX),
+        (2, (1 << 63) + 7),
+    ] {
+        let mut encoder = encoder(48_000, channels, 24);
+        encoder
+            .push_pcm(&vec![1; 5 * usize::from(channels)])
+            .unwrap();
+        let before = state_of(&encoder);
+        let result = encoder.push_silence(frames);
+        assert!(
+            matches!(result, Err(RecordingError::UnsupportedFormat { .. })),
+            "{channels} ch, {frames} frames: {result:?}"
+        );
+        assert_eq!(state_of(&encoder), before, "{channels} ch, {frames} frames");
+        // The encoder still works.
+        encoder.push_silence(10).unwrap();
+        assert_eq!(encoder.frames_pushed(), 15);
+    }
+}
+
+#[test]
+fn nothing_past_the_36_bit_sample_count_of_streaminfo_is_accepted() {
+    let mut encoder = encoder(48_000, 2, 24);
+    encoder.frames_pushed = MAX_TOTAL_SAMPLES - 5;
+    // Exactly up to the limit is fine ...
+    encoder.push_pcm(&[3; 10]).unwrap();
+    assert_eq!(encoder.frames_pushed(), MAX_TOTAL_SAMPLES);
+    // ... and one frame more is refused on every path, leaving no trace.
+    let before = state_of(&encoder);
+    for result in [
+        encoder.push_pcm(&[1, 2]),
+        encoder.push(&[2.0, 0.5]),
+        encoder.push_silence(1),
+    ] {
+        assert!(
+            matches!(result, Err(RecordingError::UnsupportedFormat { .. })),
+            "{result:?}"
+        );
+        assert_eq!(state_of(&encoder), before);
+    }
+    // A request that is too long is refused whole, not cut short.
+    let mut other = self::encoder(48_000, 1, 24);
+    other.frames_pushed = MAX_TOTAL_SAMPLES - 5;
+    let before = state_of(&other);
+    assert!(other.push_silence(6).is_err());
+    assert_eq!(state_of(&other), before);
+    other.push_silence(5).unwrap();
+    assert_eq!(other.frames_pushed(), MAX_TOTAL_SAMPLES);
+    // The track can still be ended.
+    assert!(other.finish_into_parts().is_ok());
+}
+
+#[test]
+fn the_room_check_agrees_with_the_pushes() {
+    let mut encoder = encoder(48_000, 1, 24);
+    encoder.frames_pushed = MAX_TOTAL_SAMPLES - 1;
+    assert!(encoder.ensure_room(1).is_ok());
+    assert!(encoder.ensure_room(2).is_err());
+    assert!(encoder.ensure_room(u64::MAX).is_err());
 }

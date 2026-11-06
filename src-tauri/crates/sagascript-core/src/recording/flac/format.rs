@@ -43,7 +43,7 @@ pub(crate) const RESERVED_START: usize = 4 + BLOCK_HEADER_LEN + STREAMINFO_LEN;
 /// The whole header of a file this store creates.
 pub(crate) const HEADER_LEN: usize = RESERVED_START + RESERVED_LEN;
 /// The largest total sample count STREAMINFO can hold (36 bits).
-const MAX_TOTAL_SAMPLES: u64 = (1 << 36) - 1;
+pub(crate) const MAX_TOTAL_SAMPLES: u64 = (1 << 36) - 1;
 
 // ---- CRCs ----------------------------------------------------------------
 
