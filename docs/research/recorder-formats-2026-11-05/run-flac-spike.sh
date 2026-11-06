@@ -36,6 +36,33 @@ else echo "CoreAudio decoded: FAIL"; fi
 echo "claxon on crash file:"; $BIN verify $IN $OUT/rs_crash.flac 1 2>&1 | tail -3
 echo "flac -t on crash file: $(flac -t -s $OUT/rs_crash.flac 2>&1 | head -2 | tr '\n' ' ')"
 
+echo "=== non-multiple length: 336123 samples = 82 blocks of 4096 + a short final frame of 251"
+sox $IN -b 24 $OUT/odd.wav trim 0 336123s
+$BIN stream $OUT/odd.wav $OUT/rs_odd.flac 1 1
+$BIN verify $OUT/odd.wav $OUT/rs_odd.flac 1
+flac -t $OUT/rs_odd.flac 2>&1 | egrep 'WARNING|ERROR|ok'
+metaflac --list --block-type=STREAMINFO $OUT/rs_odd.flac | egrep 'blocksize|total samples'
+afconvert $OUT/rs_odd.flac $OUT/rs_odd.ca.wav -f WAVE -d LEI24 && echo "CoreAudio md5: $(sox $OUT/rs_odd.ca.wav -t raw -e signed -b 24 - | md5)"
+echo "source md5:    $(sox $OUT/odd.wav -t raw -e signed -b 24 - | md5)"
+
+echo "=== torn tail: the crash file cut 1234 bytes short, which lands inside a frame"
+head -c $(( $(size $OUT/rs_crash.flac) - 1234 )) $OUT/rs_crash.flac > $OUT/rs_torn.flac
+echo "ffmpeg decoded seconds: $(ffmpeg -nostdin -v error -i $OUT/rs_torn.flac -ar 48000 -ac 1 -f s16le - 2>/dev/null | wc -c | awk '{printf "%.1f", $1/96000}')"
+afconvert $OUT/rs_torn.flac $OUT/rs_torn.ca.wav -f WAVE -d LEI16 && echo "CoreAudio decoded: $(afinfo $OUT/rs_torn.ca.wav | awk -F': ' '/estimated duration/ {print $2}')"
+echo "flac -t on torn file: $(flac -t -s $OUT/rs_torn.flac 2>&1 | head -2 | tr '\n' ' ')"
+
+echo "=== edge-case signals (24-bit, 480000 samples each), default config and with the fixed predictors off"
+python3 -I "$(dirname "$0")/gen-edge-signals.py" $OUT
+for n in silence dc_max dc_min square_fullscale white_fullscale alternating_extremes single_impulse; do
+  for mode in default nofixed; do
+    if [ $mode = nofixed ]; then export FLAC_NO_FIXED=1; else unset FLAC_NO_FIXED; fi
+    $BIN stream $OUT/$n.wav $OUT/$n.$mode.flac 1 1 | tail -1 | sed "s/^/$n $mode: /"
+    echo "  claxon: $($BIN verify $OUT/$n.wav $OUT/$n.$mode.flac 1 2>&1 | egrep 'mismatches|FormatError' | tail -1)  size $(size $OUT/$n.$mode.flac) (wav $(size $OUT/$n.wav))"
+    rm -f $OUT/$n.$mode.flac
+  done
+done
+unset FLAC_NO_FIXED
+
 echo "=== soak: 60 repeats = about 58 minutes of 48 kHz / 24-bit mono, streaming, peak memory"
 /usr/bin/time -l $BIN stream $IN $OUT/rs_soak.flac 1 60 2>&1 | egrep 'stream:|encode time|maximum resident|real'
 echo "soak output size: $(size $OUT/rs_soak.flac) bytes"

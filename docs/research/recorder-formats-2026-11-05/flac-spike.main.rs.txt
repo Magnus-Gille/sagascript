@@ -54,7 +54,15 @@ fn main() {
     let (mono, rate) = read_wav(&a[2]);
     let ch: usize = a[4].parse().unwrap();
     let inter = make_interleaved(&mono, ch);
-    let cfg = config::Encoder::default().into_verified().expect("config");
+    // FLAC_NO_LPC=1 / FLAC_NO_FIXED=1 switch subframe predictors off to isolate a pathological frame.
+    let mut raw_cfg = config::Encoder::default();
+    if std::env::var("FLAC_NO_LPC").is_ok() {
+        raw_cfg.subframe_coding.use_lpc = false;
+    }
+    if std::env::var("FLAC_NO_FIXED").is_ok() {
+        raw_cfg.subframe_coding.use_fixed = false;
+    }
+    let cfg = raw_cfg.into_verified().expect("config");
 
     match mode {
         "whole" => {
@@ -120,6 +128,10 @@ fn main() {
             } else {
                 stream.stream_info_mut().set_md5_digest(&ctx.md5_digest());
                 stream.stream_info_mut().set_total_samples(ctx.total_samples());
+                // update_frame_info() lowers min_blocksize to the length of a short final frame
+                // (for example 251). That makes libFLAC warn "file might not be seekable". In a
+                // fixed-blocksize stream the spec excludes the last block, so restore min = max.
+                stream.stream_info_mut().set_block_sizes(BLOCK, BLOCK).unwrap();
                 let fin = header_bytes(&stream);
                 assert_eq!(fin.len(), header_len);
                 f.flush().unwrap();
