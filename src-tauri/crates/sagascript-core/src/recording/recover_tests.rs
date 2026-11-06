@@ -853,3 +853,131 @@ fn a_journal_with_too_many_events_stops_recovery_before_anything_is_changed() {
         }
     );
 }
+
+// ---- links and other things that are not plain files ---------------------------------
+
+/// Run `recover_folder` on its own thread so a recovery that blocks (on a
+/// pipe, say) fails the test instead of hanging it.
+#[cfg(unix)]
+fn recover_within_a_deadline(folder: &Path) -> Result<RecoveredRecording, RecordingError> {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let folder = folder.to_path_buf();
+    std::thread::spawn(move || {
+        let _ = sender.send(recover_folder(&folder));
+    });
+    receiver
+        .recv_timeout(std::time::Duration::from_secs(20))
+        .expect("recovery returned instead of blocking")
+}
+
+#[cfg(unix)]
+#[test]
+fn a_track_file_that_is_a_link_is_never_followed_or_written_through() {
+    let killed = killed_blocks(3);
+    let outside = TempDir::new();
+    // The victim is another FLAC file that recovery would truncate and
+    // rewrite the header of if it followed the link.
+    let victim = outside.path().join("someone-elses.flac");
+    let mut bytes = std::fs::read(killed.folder.join("mic.flac")).unwrap();
+    bytes.extend_from_slice(b"trailing bytes the owner of this file cares about");
+    std::fs::write(&victim, &bytes).unwrap();
+    std::fs::remove_file(killed.folder.join("mic.flac")).unwrap();
+    std::os::unix::fs::symlink(&victim, killed.folder.join("mic.flac")).unwrap();
+    let before = snapshot(&killed.folder);
+
+    let error = recover_folder(&killed.folder).unwrap_err();
+    assert_eq!(error.code(), "recording_not_regular_file", "{error:?}");
+    assert!(
+        std::fs::read(&victim).unwrap() == bytes,
+        "the file behind the link is untouched"
+    );
+    assert_eq!(
+        snapshot(&killed.folder).len(),
+        before.len(),
+        "nothing was added to the folder"
+    );
+    assert_eq!(
+        read_manifest(&killed.folder).state,
+        RecordingState::Recording
+    );
+
+    // A link to nothing is refused the same way, not "created through".
+    std::fs::remove_file(killed.folder.join("mic.flac")).unwrap();
+    let missing = outside.path().join("not-there.flac");
+    std::os::unix::fs::symlink(&missing, killed.folder.join("mic.flac")).unwrap();
+    let error = recover_folder(&killed.folder).unwrap_err();
+    assert_eq!(error.code(), "recording_not_regular_file", "{error:?}");
+    assert!(!missing.exists(), "nothing was created behind the link");
+}
+
+#[cfg(unix)]
+#[test]
+fn the_manifest_the_journal_and_the_lock_are_not_followed_either() {
+    for member in ["recording.json", "mic.events.jsonl", "recording.lock"] {
+        let killed = killed_blocks(2);
+        let outside = TempDir::new();
+        let target = outside.path().join("target");
+        // The target is a copy of the real file, so a followed link would
+        // work out and the recovery would "succeed" through it.
+        let path = killed.folder.join(member);
+        std::fs::copy(&path, &target).unwrap();
+        let target_before = std::fs::read(&target).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        std::os::unix::fs::symlink(&target, &path).unwrap();
+
+        let result = recover_folder(&killed.folder);
+        let error = result.expect_err(member);
+        assert_eq!(error.code(), "recording_not_regular_file", "{member}");
+        assert!(
+            std::fs::read(&target).unwrap() == target_before,
+            "{member}: the file behind the link is untouched"
+        );
+        let mic = std::fs::read(killed.folder.join("mic.flac")).unwrap();
+        assert!(
+            parse_header(&mic).unwrap().total_samples == 0,
+            "{member}: the track was not finalised"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_directory_or_a_pipe_in_place_of_a_file_is_refused_without_blocking() {
+    // A directory where the journal should be.
+    let killed = killed_blocks(2);
+    std::fs::remove_file(killed.folder.join("mic.events.jsonl")).unwrap();
+    std::fs::create_dir(killed.folder.join("mic.events.jsonl")).unwrap();
+    let error = recover_within_a_deadline(&killed.folder).unwrap_err();
+    assert_eq!(error.code(), "recording_not_regular_file", "{error:?}");
+
+    // A pipe where the journal and where the track should be: opening one for
+    // reading would wait for a writer that never comes.
+    for member in ["mic.events.jsonl", "mic.flac"] {
+        let killed = killed_blocks(2);
+        let path = killed.folder.join(member);
+        std::fs::remove_file(&path).unwrap();
+        let c_path = std::ffi::CString::new(path.to_str().unwrap()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) }, 0);
+        let error = recover_within_a_deadline(&killed.folder).unwrap_err();
+        assert_eq!(error.code(), "recording_not_regular_file", "{member}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_manifest_link_in_the_store_is_reported_not_skipped() {
+    let killed = killed_blocks(1);
+    let outside = TempDir::new();
+    let target = outside.path().join("m.json");
+    std::fs::copy(killed.folder.join(MANIFEST_FILE), &target).unwrap();
+    std::fs::remove_file(killed.folder.join(MANIFEST_FILE)).unwrap();
+    std::os::unix::fs::symlink(&target, killed.folder.join(MANIFEST_FILE)).unwrap();
+    let reports = killed.store.recover_pending().unwrap();
+    assert_eq!(reports.len(), 1);
+    assert_eq!(
+        reports[0].outcome,
+        RecoveryOutcome::Failed {
+            code: "recording_not_regular_file"
+        }
+    );
+}

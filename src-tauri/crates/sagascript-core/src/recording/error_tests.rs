@@ -31,6 +31,9 @@ fn every_variant() -> Vec<RecordingError> {
         RecordingError::TrackFinished,
         RecordingError::CorruptTrack { reason: "magic" },
         RecordingError::JournalTooLarge,
+        RecordingError::NotRegularFile {
+            action: "open a track file",
+        },
         RecordingError::encoder("failed at /Users/someone/Music/secret.flac"),
     ]
 }

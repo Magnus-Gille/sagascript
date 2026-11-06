@@ -56,8 +56,9 @@ kodama = { version = "0.2", optional = true }
 ndarray = { version = "0.17", optional = true }
 
 # fsync(2) as the fallback for volumes that reject F_FULLFSYNC, which is all
-# std's `sync_all` does on Apple platforms (fsutil.rs). Already in the graph.
-[target.'cfg(target_vendor = "apple")'.dependencies]
+# std's `sync_all` does on Apple platforms (fsutil.rs), and O_NOFOLLOW for the
+# recording store's file opens (recording/io.rs). Already in the graph.
+[target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
 # whisper-rs is declared per-target because macOS enables Metal/CoreML;

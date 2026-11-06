@@ -22,6 +22,14 @@
 //!    refers to audio that was not kept (a gap that straddles the end is
 //!    shortened).
 //!
+//! The folder comes from anywhere, so nothing in it is trusted to be what its
+//! name says: the folder itself must not be a link, and the manifest, the
+//! lock, the journal and every track file are opened with
+//! [`open_member`](super::io::open_member), which refuses a link (never
+//! follows it), a directory, a pipe or a device. The track file named by the
+//! manifest can therefore never make recovery truncate or rewrite a file
+//! outside the folder.
+//!
 //! The manifest is then written with `state: complete`, `recovered: true` and
 //! `ended_reason: interrupted`. Recovery of a recovered folder finds nothing
 //! to do ([`RecordingError::NotRecording`]); a run that was itself interrupted
@@ -38,7 +46,7 @@ use super::flac::format::{
     BLOCK_SIZE, HEADER_LEN, RESERVED_LEN,
 };
 use super::flac::scan::scan_frames;
-use super::io::{create_new_private, open_read_write, replace_file_durably, sync_dir, sync_file};
+use super::io::{create_new_private, open_member, replace_file_durably, sync_dir, sync_file, Open};
 use super::journal::{journal_file_name, read_journal};
 use super::manifest::{
     is_plain_file_name, parse_manifest, serialize_manifest, Clock, EndedReason, Gap, Manifest,
@@ -115,7 +123,9 @@ impl RecordingStore {
         let mut folders: Vec<(String, PathBuf)> = entries
             .flatten()
             .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
-            .filter(|entry| entry.path().join(MANIFEST_FILE).is_file())
+            // Whatever is named like the manifest makes the folder a candidate;
+            // `recover_folder` then reports a link or a directory there.
+            .filter(|entry| fs::symlink_metadata(entry.path().join(MANIFEST_FILE)).is_ok())
             .map(|entry| {
                 (
                     entry.file_name().to_string_lossy().into_owned(),
@@ -221,17 +231,20 @@ fn recover_track(dir: &Path, track: &Track) -> Result<(Track, TrackRecovery), Re
     let mut tail_bytes = 0u64;
     let mut tail_file = None;
 
-    let mut file = match open_read_write(&path) {
+    let mut file = match open_member(&path, Open::ReadWrite, "open a track file") {
         Ok(file) => file,
         // The process died before the track file existed: nothing was lost.
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+        Err(RecordingError::Io {
+            kind: std::io::ErrorKind::NotFound,
+            ..
+        }) => {
             let file = create_new_private(&path)
                 .map_err(|error| RecordingError::io("create a track file", &error))?;
             sync_dir(dir)
                 .map_err(|error| RecordingError::io("sync the recording folder", &error))?;
             file
         }
-        Err(error) => return Err(RecordingError::io("open a track file", &error)),
+        Err(error) => return Err(error),
     };
     let length = file
         .metadata()

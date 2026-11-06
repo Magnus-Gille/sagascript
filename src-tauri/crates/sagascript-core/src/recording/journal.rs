@@ -23,7 +23,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use super::error::RecordingError;
-use super::io::{create_new_private, sync_file};
+use super::io::{create_new_private, open_member, sync_file, Open};
 use super::manifest::{Gap, GapReason};
 
 /// The journal's file name for a track id.
@@ -133,12 +133,13 @@ impl JournalSummary {
 /// in a stream with bounded memory per line, to its end, whatever its size;
 /// more events than [`MAX_JOURNAL_EVENTS`] is an error, never a short summary.
 pub fn read_journal(path: &Path) -> Result<JournalSummary, RecordingError> {
-    let file = match File::open(path) {
+    let file = match open_member(path, Open::Read, "open a track journal") {
         Ok(file) => file,
-        Err(error) if error.kind() == ErrorKind::NotFound => {
-            return Ok(JournalSummary::default());
-        }
-        Err(error) => return Err(RecordingError::io("open a track journal", &error)),
+        Err(RecordingError::Io {
+            kind: ErrorKind::NotFound,
+            ..
+        }) => return Ok(JournalSummary::default()),
+        Err(error) => return Err(error),
     };
     read_events(BufReader::with_capacity(64 * 1024, file))
 }

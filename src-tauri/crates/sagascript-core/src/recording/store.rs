@@ -40,7 +40,9 @@ use fs2::FileExt;
 use super::encoder::{TrackEncoder, TrackSummary};
 use super::error::RecordingError;
 use super::flac::FlacEncoder;
-use super::io::{create_dir_private, create_new_private, replace_file_durably, sync_dir};
+use super::io::{
+    create_dir_private, create_new_private, open_member, replace_file_durably, sync_dir, Open,
+};
 use super::journal::{journal_file_name, JournalEvent, JournalWriter};
 use super::manifest::{
     is_valid_track_id, serialize_manifest, Client, Clock, EndedReason, Gap, GapReason, Manifest,
@@ -226,20 +228,12 @@ fn folder_stamp(started_at: &str) -> Result<String, RecordingError> {
 /// `create` makes the lock file when it is absent (recovery of a folder whose
 /// lock file was removed by hand); it is never truncated.
 pub(crate) fn lock_folder(dir: &Path, create: bool) -> Result<File, RecordingError> {
-    let path = dir.join(LOCK_FILE);
-    let file = if create {
-        let mut options = fs::OpenOptions::new();
-        options.read(true).write(true).create(true).truncate(false);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
-        }
-        options.open(&path)
+    let mode = if create {
+        Open::ReadWriteCreate
     } else {
-        fs::OpenOptions::new().read(true).write(true).open(&path)
-    }
-    .map_err(|error| RecordingError::io("open the recording lock", &error))?;
+        Open::ReadWrite
+    };
+    let file = open_member(&dir.join(LOCK_FILE), mode, "open the recording lock")?;
     match FileExt::try_lock_exclusive(&file) {
         Ok(()) => Ok(file),
         Err(error) if error.raw_os_error() == fs2::lock_contended_error().raw_os_error() => {
@@ -623,8 +617,7 @@ impl RecordingWriter {
 
 /// Read a file of at most `limit` bytes into memory.
 pub(crate) fn read_bounded(path: &Path, limit: u64) -> Result<Vec<u8>, RecordingError> {
-    let file =
-        File::open(path).map_err(|error| RecordingError::io("open a recording file", &error))?;
+    let file = open_member(path, Open::Read, "open a recording file")?;
     let mut bytes = Vec::new();
     file.take(limit + 1)
         .read_to_end(&mut bytes)

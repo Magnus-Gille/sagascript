@@ -64,6 +64,13 @@ pub enum RecordingError {
     /// the format this store writes). It is left exactly as it was.
     #[error("a track file cannot be read as a recording track: {reason}")]
     CorruptTrack { reason: &'static str },
+    /// A file of the recording is a symbolic link (or a Windows reparse
+    /// point), a directory, a pipe or anything else but a regular file. It is
+    /// never followed or opened: a recording folder can come from anywhere
+    /// (a sync, an archive, a copy) and must not make recovery read or write
+    /// a file outside it.
+    #[error("a recording file is a link or not a regular file; could not {action}")]
+    NotRegularFile { action: &'static str },
     /// A track journal holds more events than a manifest can carry. Recovery
     /// stops instead of finishing a recording with events missing.
     #[error("the track journal has too many events to recover from")]
@@ -118,6 +125,7 @@ impl RecordingError {
             Self::TrackFinished => "recording_track_finished",
             Self::CorruptTrack { .. } => "recording_corrupt_track",
             Self::JournalTooLarge => "recording_journal_too_large",
+            Self::NotRegularFile { .. } => "recording_not_regular_file",
             Self::Encoder { .. } => "recording_encoder",
         }
     }
