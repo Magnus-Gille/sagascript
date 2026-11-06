@@ -3,7 +3,7 @@
 // first-use steps that gate the first recording, and the text and numbers the
 // window shows. Record.svelte renders from it.
 import { isBackendError, toErrorMessage } from "./errors";
-import type { RecordingFinished, RecordingQuality, RecordingSessionInfo, RecordingWarning } from "./record-types";
+import type { RecordingFinished, RecordingQuality, RecordingSessionInfo, RecordingWarning, RecoveryNote } from "./record-types";
 
 export type RecorderPhase = "idle" | "starting" | "recording" | "stopping" | "finished" | "error";
 
@@ -319,4 +319,40 @@ export function sessionNotices(info: RecordingSessionInfo): string[] {
   if (gaps) notices.push(`${gaps[0].toUpperCase()}${gaps.slice(1)}.`);
   for (const warning of info.warnings) notices.push(warningText(warning));
   return notices;
+}
+
+/** The heading over the recovery notes, or null when recovery had nothing to report (everything was complete already). */
+export function recoveryHeading(notes: readonly RecoveryNote[]): string | null {
+  const recovered = notes.filter((note) => note.outcome === "recovered").length;
+  const failed = notes.filter((note) => note.outcome === "failed").length;
+  const skipped = notes.filter((note) => note.outcome === "skipped_locked").length;
+  const parts: string[] = [];
+  if (recovered > 0) parts.push(`Recovered ${recovered} ${recovered === 1 ? "recording" : "recordings"}`);
+  if (failed > 0) parts.push(`could not recover ${failed}`);
+  if (skipped > 0) parts.push(`skipped ${skipped} in use`);
+  if (parts.length === 0) return null;
+  const heading = parts.join(", ");
+  return heading[0].toUpperCase() + heading.slice(1);
+}
+
+/** The notes worth showing: those that did something or went wrong. */
+export function noteworthyRecoveries(notes: readonly RecoveryNote[]): RecoveryNote[] {
+  return notes.filter((note) => note.outcome !== "already_complete");
+}
+
+/** The file manager for a platform id (`get_platform`). */
+export function fileManagerName(platform: string): string {
+  return platform === "macos" ? "Finder" : platform === "windows" ? "Explorer" : "file manager";
+}
+
+/** Where "Move to Trash" puts a recording. */
+export function trashName(platform: string): string {
+  return platform === "windows" ? "Recycle Bin" : "Trash";
+}
+
+/** A recording's start time for a list; the raw text when it is not a date. */
+export function formatStartedAt(startedAt: string, locale?: string): string {
+  const date = new Date(startedAt);
+  if (Number.isNaN(date.getTime())) return startedAt;
+  return date.toLocaleString(locale, { dateStyle: "medium", timeStyle: "short" });
 }

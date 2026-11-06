@@ -228,3 +228,73 @@ export const eventPayloads = {
   "update-aborted": string,
   navigate_tab: string,
 };
+
+// -- Recorder (src/lib/record-types.ts, SAGA-564) -------------------------------
+//
+// TODO(SAGA-564): add "recording-session-changed" and "recordings-recovered" to
+// `eventPayloads` (and to `EventMap`) once the Rust catalogue and
+// contracts/transport/events.json have them; until then they are not part of
+// the event-catalogue test, which compares the two lists. Parse the fixtures
+// with these schemas the same way once the Rust side blesses them.
+
+const recordingQuality = literal("lossless", "compact");
+
+export const recordingSessionInfo = object({
+  state: literal("idle", "starting", "recording", "finalizing", "done", "failed"),
+  recording_id: nullable(string),
+  folder_name: nullable(string),
+  title: nullable(string),
+  quality: nullable(recordingQuality),
+  elapsed_ms: number,
+  level: number,
+  clipped: boolean,
+  gap_count: number,
+  gap_ms: number,
+  stalled: boolean,
+  device_lost: boolean,
+  bytes_written: number,
+  free_disk_bytes: nullable(number),
+  warnings: array(string),
+  ended_early: nullable(string),
+  error_code: nullable(string),
+});
+
+export const recordingSummary = object(
+  {
+    folder_name: string,
+    recording_id: string,
+    title: string,
+    state: literal("recording", "complete"),
+    recovered: boolean,
+    started_at: string,
+    quality: recordingQuality,
+    duration_seconds: number,
+    bytes: number,
+    track_count: number,
+    gap_count: number,
+    gap_seconds: number,
+    ended_reason: nullable(string),
+    needs_recovery: boolean,
+    playable: boolean,
+  },
+  { ignored: ["codec", "sample_rate", "channels"] },
+);
+
+export const recordingFinished = object({ summary: recordingSummary, ended_early: nullable(string) });
+
+export const recoveryNote = object({
+  folder_name: string,
+  title: string,
+  outcome: literal("recovered", "already_complete", "skipped_locked", "failed"),
+  frames_kept: number,
+  tail_bytes: number,
+  message: string,
+});
+
+export const recordingFolderInfo = object({
+  path: string,
+  exists: boolean,
+  free_bytes: nullable(number),
+  warnings: array(string),
+  is_default: boolean,
+});

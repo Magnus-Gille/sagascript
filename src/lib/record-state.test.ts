@@ -6,7 +6,9 @@ import {
   describeRecordingError,
   endedEarlyText,
   estimateBytesPerHour,
+  fileManagerName,
   firstUseStep,
+  formatStartedAt,
   formatBytes,
   formatDuration,
   formatElapsed,
@@ -15,15 +17,18 @@ import {
   gapText,
   initialRecorderState,
   levelToPercent,
+  noteworthyRecoveries,
+  recoveryHeading,
   reduceRecorder,
   sessionNotices,
   toRecorderError,
+  trashName,
   warningText,
   type RecorderAction,
   type RecorderState,
 } from "./record-state";
 import { backendError } from "../test/ipc";
-import { finishedRecording, sessionInfo } from "../test/record";
+import { finishedRecording, recoveryNote, sessionInfo } from "../test/record";
 import { RECORDING_ERROR_CODES } from "./record-types";
 
 const ready: RecorderState = reduceRecorder(initialRecorderState, {
@@ -294,5 +299,36 @@ describe("notices", () => {
       warningText("cloud_synced"),
     ]);
     expect(sessionNotices(sessionInfo({ device_lost: true, stalled: true }))[0]).toMatch(/disconnected/);
+  });
+});
+
+describe("recovery and platform text", () => {
+  test("the heading counts what recovery did", () => {
+    expect(recoveryHeading([])).toBeNull();
+    expect(recoveryHeading([recoveryNote({ outcome: "already_complete" })])).toBeNull();
+    expect(recoveryHeading([recoveryNote()])).toBe("Recovered 1 recording");
+    expect(recoveryHeading([recoveryNote(), recoveryNote(), recoveryNote({ outcome: "failed" })])).toBe(
+      "Recovered 2 recordings, could not recover 1",
+    );
+    expect(recoveryHeading([recoveryNote({ outcome: "skipped_locked" })])).toBe("Skipped 1 in use");
+  });
+
+  test("only notes that did something are listed", () => {
+    const done = recoveryNote({ outcome: "already_complete" });
+    const kept = recoveryNote();
+    expect(noteworthyRecoveries([done, kept])).toEqual([kept]);
+  });
+
+  test("the file manager and the bin are named per platform", () => {
+    expect(fileManagerName("macos")).toBe("Finder");
+    expect(fileManagerName("windows")).toBe("Explorer");
+    expect(fileManagerName("linux")).toBe("file manager");
+    expect(trashName("windows")).toBe("Recycle Bin");
+    expect(trashName("macos")).toBe("Trash");
+  });
+
+  test("a start time that is no date is shown as sent", () => {
+    expect(formatStartedAt("not a date")).toBe("not a date");
+    expect(formatStartedAt("2026-11-06T10:00:00Z", "en-US")).toMatch(/2026/);
   });
 });
