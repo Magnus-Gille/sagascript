@@ -214,6 +214,9 @@ fn recover_track(dir: &Path, track: &Track) -> Result<(Track, TrackRecovery), Re
         .map_err(|_| RecordingError::CorruptTrack {
             reason: "the manifest describes a format this store does not write",
         })?;
+    // The journal first: if it cannot be read in full (too many events, an I/O
+    // error) nothing of the track has been touched yet and a retry starts clean.
+    let journal = read_journal(&dir.join(journal_file_name(&track.id)))?;
     let path = dir.join(&track.file);
     let mut tail_bytes = 0u64;
     let mut tail_file = None;
@@ -332,8 +335,10 @@ fn recover_track(dir: &Path, track: &Track) -> Result<(Track, TrackRecovery), Re
     }
 
     // The journal: the clock and the gaps, limited to the audio that is kept.
-    let journal = read_journal(&dir.join(journal_file_name(&track.id)))?;
     let frames = summary.samples;
+    // Only events inside the kept audio count: an event past it counted
+    // samples that were lost with the end of the file.
+    let clipped = journal.clipped_within(frames);
     let mut gaps = Vec::new();
     let mut gaps_dropped = 0;
     for gap in journal.gaps {
@@ -362,7 +367,7 @@ fn recover_track(dir: &Path, track: &Track) -> Result<(Track, TrackRecovery), Re
     updated.clock = clock;
     updated.gaps = gaps;
     updated.ended_reason = Some(EndedReason::Interrupted);
-    updated.clipped_samples = journal.clipped.max(track.clipped_samples);
+    updated.clipped_samples = clipped.max(track.clipped_samples);
     let report = TrackRecovery {
         id: track.id.clone(),
         frames_kept: frames,

@@ -64,6 +64,10 @@ pub enum RecordingError {
     /// the format this store writes). It is left exactly as it was.
     #[error("a track file cannot be read as a recording track: {reason}")]
     CorruptTrack { reason: &'static str },
+    /// A track journal holds more events than a manifest can carry. Recovery
+    /// stops instead of finishing a recording with events missing.
+    #[error("the track journal has too many events to recover from")]
+    JournalTooLarge,
     /// The FLAC encoder library refused a block (a bug or an out-of-range
     /// sample). The text is scrubbed of paths.
     #[error("the audio encoder failed: {message}")]
@@ -113,6 +117,7 @@ impl RecordingError {
             Self::UnknownTrack => "recording_unknown_track",
             Self::TrackFinished => "recording_track_finished",
             Self::CorruptTrack { .. } => "recording_corrupt_track",
+            Self::JournalTooLarge => "recording_journal_too_large",
             Self::Encoder { .. } => "recording_encoder",
         }
     }

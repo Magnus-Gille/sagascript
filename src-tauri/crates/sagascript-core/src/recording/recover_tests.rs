@@ -734,3 +734,122 @@ fn two_tracks_are_recovered_independently() {
     );
     assert_eq!(recovered.manifest.tracks[1].clock.domain, "mach_continuous");
 }
+
+// ---- the clipped-sample count of a recovered track ---------------------------------
+
+/// `blocks` blocks of quiet speech as f32, with `loud` samples (index, value)
+/// replaced by out-of-range values.
+fn quiet_block(seed: u64, loud: &[(usize, f32)]) -> Vec<f32> {
+    let mut samples = to_f32(&at_bits(&speechlike(BLOCK_SIZE, seed), 24), 24);
+    for (index, value) in loud {
+        samples[*index] = *value;
+    }
+    samples
+}
+
+#[test]
+fn clipping_in_audio_that_was_lost_is_not_reported_for_the_audio_that_was_kept() {
+    // One clean block reaches the disk. 100 more frames, three of them
+    // clipped, wait for a block; an anchor after them is journalled with a
+    // count of 3. The process dies: the 100 frames are gone, the anchor line
+    // survives, and no clipped sample is in the kept audio.
+    let killed = kill(mic(), |writer| {
+        writer.push("mic", &quiet_block(60, &[])).unwrap();
+        let mut tail = vec![0.0f32; 100];
+        tail[10] = 2.0;
+        tail[20] = -3.0;
+        tail[30] = 1.5;
+        writer.push("mic", &tail).unwrap();
+        writer.anchor("mic", 9_000_000).unwrap();
+        Vec::new()
+    });
+    let recovered = recover_folder(&killed.folder).unwrap();
+    assert_eq!(recovered.tracks[0].frames_kept, BLOCK_SIZE as u64);
+    assert_eq!(
+        recovered.manifest.tracks[0].clipped_samples, 0,
+        "the clipped samples were in the lost 100 frames"
+    );
+}
+
+#[test]
+fn clipping_in_the_kept_audio_is_counted_up_to_the_last_event_inside_it() {
+    // Five clipped samples in the first block, an anchor at its end (count 5),
+    // then two more clipped samples in frames that are lost, another anchor
+    // (count 7). The kept audio holds the five, not the seven.
+    let killed = kill(mic(), |writer| {
+        writer
+            .push(
+                "mic",
+                &quiet_block(
+                    61,
+                    &[(10, 1.5), (11, -2.0), (12, 9.0), (13, 1.0), (14, f32::NAN)],
+                ),
+            )
+            .unwrap();
+        writer.anchor("mic", 5_000_000).unwrap();
+        let mut more = vec![0.0f32; 200];
+        more[5] = 4.0;
+        more[6] = -4.0;
+        writer.push("mic", &more).unwrap();
+        writer.anchor("mic", 6_000_000).unwrap();
+        Vec::new()
+    });
+    let recovered = recover_folder(&killed.folder).unwrap();
+    assert_eq!(recovered.tracks[0].frames_kept, BLOCK_SIZE as u64);
+    assert_eq!(recovered.manifest.tracks[0].clipped_samples, 5);
+}
+
+#[test]
+fn a_gap_event_carries_the_clipping_that_came_before_it() {
+    let killed = kill(mic(), |writer| {
+        writer
+            .push("mic", &quiet_block(62, &[(100, 3.0), (200, -3.0)]))
+            .unwrap();
+        // The gap starts at frame 4096 (inside the kept audio's end) and
+        // runs 5000 frames, so a second block is kept.
+        writer.gap("mic", 5000, GapReason::Stall).unwrap();
+        Vec::new()
+    });
+    let recovered = recover_folder(&killed.folder).unwrap();
+    assert_eq!(recovered.tracks[0].frames_kept, 2 * BLOCK_SIZE as u64);
+    assert_eq!(recovered.manifest.tracks[0].clipped_samples, 2);
+}
+
+#[test]
+fn a_journal_with_too_many_events_stops_recovery_before_anything_is_changed() {
+    let killed = killed_blocks(3);
+    // Cut the file inside its last frame so recovery would have work to do.
+    let file = killed.folder.join("mic.flac");
+    let length = std::fs::metadata(&file).unwrap().len();
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&file)
+        .unwrap()
+        .set_len(length - 7)
+        .unwrap();
+    let journal = killed.folder.join("mic.events.jsonl");
+    let mut text = std::fs::read_to_string(&journal).unwrap();
+    for frame in 0..crate::recording::journal::MAX_JOURNAL_EVENTS + 1 {
+        text.push_str(&format!(
+            "{{\"t\":\"anchor\",\"host_ns\":1,\"frame\":{frame}}}\n"
+        ));
+    }
+    std::fs::write(&journal, text).unwrap();
+    let before = snapshot(&killed.folder);
+
+    let error = recover_folder(&killed.folder).unwrap_err();
+    assert_eq!(error.code(), "recording_journal_too_large");
+    assert_eq!(snapshot(&killed.folder), before, "no byte was changed");
+    assert_eq!(
+        read_manifest(&killed.folder).state,
+        RecordingState::Recording,
+        "the recording is not marked complete with events missing"
+    );
+    let reports = killed.store.recover_pending().unwrap();
+    assert_eq!(
+        reports[0].outcome,
+        RecoveryOutcome::Failed {
+            code: "recording_journal_too_large"
+        }
+    );
+}
