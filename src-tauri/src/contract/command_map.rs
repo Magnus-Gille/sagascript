@@ -71,6 +71,7 @@ const TYPESCRIPT_NAMES: &[(&str, &str, Option<&str>)] = &[
     ),
     ("MeetingReview", "MeetingReview", Some("./meeting-types")),
     ("MeetingSnapshot", "MeetingJobSnapshot", Some("./api")),
+    ("LiveSnapshot", "LiveSnapshot", Some("./live-meeting-types")),
     (
         "MeetingTranscript",
         "MeetingTranscript",

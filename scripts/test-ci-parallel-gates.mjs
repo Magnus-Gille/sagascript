@@ -25,11 +25,11 @@ const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 const workflow = loadWorkflow();
 const ASSERT_LANES = fileURLToPath(new URL("./ci/assert-lanes.mjs", import.meta.url));
 const SCOPE_CONDITION = "${{ needs.scope.result == 'success' && needs.scope.outputs.docs_only != 'true' }}";
-const LANES = ["test-macos", "build-macos", "test-linux", "msrv-linux", "test-windows", "build-windows"];
+const LANES = ["test-macos", "build-macos", "msrv-macos", "test-linux", "msrv-linux", "test-windows", "build-windows"];
 const CHECKS = { "check-macos": "macos", "check-linux": "linux", "check-windows": "windows" };
 const setupStep = (job) => job.steps.find((step) => step.uses === "./.github/actions/setup");
 
-test("the job set is the scope job, the six lanes and the three aggregators", () => {
+test("the job set is the scope job, the seven lanes and the three aggregators", () => {
   assert.deepEqual([...workflow.jobIds].sort(), ["scope", ...LANES, ...Object.keys(CHECKS)].sort());
 });
 
@@ -130,6 +130,7 @@ test("the setup action is the only toolchain preamble: every lane uses it with d
     "build-windows": "sagascript-ci-native",
     "test-linux": "sagascript-ci",
     "msrv-linux": "sagascript-msrv",
+    "msrv-macos": "sagascript-msrv-macos",
   };
   for (const id of LANES) {
     const job = workflow.job(id);
@@ -167,6 +168,14 @@ test("the setup action is the only toolchain preamble: every lane uses it with d
   const msrv = setupStep(workflow.job("msrv-linux"));
   assert.equal(actionInput(action, msrv, "rust"), "msrv");
   assert.equal(actionInput(action, msrv, "python"), "false");
+  const macosMsrv = setupStep(workflow.job("msrv-macos"));
+  assert.equal(workflow.job("msrv-macos").runsOn, "macos-14");
+  assert.equal(actionInput(action, macosMsrv, "rust"), "msrv");
+  assert.equal(actionInput(action, macosMsrv, "python"), "false");
+  assert.equal(actionInput(action, macosMsrv, "npm-ci"), "false");
+  assert.equal(actionInput(action, macosMsrv, "cache-workspaces"), "src-tauri");
+  const [macosInvocation] = workflow.job("msrv-macos").steps.map(gateInvocation).filter(Boolean);
+  assert.deepEqual([macosInvocation.os, macosInvocation.profile], ["macos", "msrv-live"]);
 });
 
 test("every lane that runs Python selects the supported runtime first", () => {

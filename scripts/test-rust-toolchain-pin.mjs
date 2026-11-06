@@ -94,6 +94,13 @@ test("the MSRV is declared once, inherited by every crate and checked in CI", ()
   const msrvLane = workflow.job("msrv-linux");
   const setup = msrvLane.steps.find((step) => step.uses === "./.github/actions/setup");
   assert.equal(setup?.with.rust, "msrv", "msrv-linux must install the declared MSRV, not a pinned release");
+  const macosMsrvLane = workflow.job("msrv-macos");
+  const macosSetup = macosMsrvLane.steps.find((step) => step.uses === "./.github/actions/setup");
+  assert.equal(macosSetup?.with.rust, "msrv", "msrv-macos must install the declared MSRV, not a pinned release");
+  assert.ok(
+    macosMsrvLane.steps.some((step) => commandLines(step).includes("node scripts/ci/cargo-gates.mjs --os macos --profile msrv-live")),
+    "msrv-macos must run the macOS record gate through the canonical cargo-gates script",
+  );
   const install = loadAction("setup").steps.find((step) => step.name === "Install the declared MSRV toolchain");
   const lines = commandLines(install);
   assert.ok(
@@ -104,6 +111,7 @@ test("the MSRV is declared once, inherited by every crate and checked in CI", ()
   assert.ok(msrvLane.steps.some((step) => commandLines(step).includes("node scripts/ci/cargo-gates.mjs --profile msrv")));
   assert.ok(gatesFor({ os: "linux", profile: "msrv" }).some((gate) => commandOf(gate) === "cargo check --workspace --locked"));
   assert.ok(workflow.job("check-linux").needs.includes("msrv-linux"), "check-linux must gate on msrv-linux");
+  assert.ok(workflow.job("check-macos").needs.includes("msrv-macos"), "check-macos must gate on msrv-macos");
 });
 
 test("Node.js is pinned to one major everywhere", () => {

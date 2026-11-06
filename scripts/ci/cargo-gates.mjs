@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // The one list of cargo gates of CI (#358). Every lane of .github/workflows/ci.yml
 // runs `node scripts/ci/cargo-gates.mjs --os <macos|linux|windows>` instead of
-// writing the cargo commands out per OS, and the MSRV lane runs it with
-// `--profile msrv`. scripts/test-ci-cargo-gates.mjs and
+// writing the cargo commands out per OS, and the MSRV lanes run it with
+// their `--profile` values. scripts/test-ci-cargo-gates.mjs and
 // scripts/test-verify-ci-parity.mjs read GATES from here, so the list cannot
 // drift between the OS lanes, `npm run verify` (scripts/verify.mjs) and the tests.
 //
@@ -27,6 +27,7 @@
 //   node scripts/ci/cargo-gates.mjs --os linux --keep-going   run all, fail at the end
 //   node scripts/ci/cargo-gates.mjs --os windows --list   print the commands, run nothing
 //   node scripts/ci/cargo-gates.mjs --profile msrv        needs RUSTUP_TOOLCHAIN (the lane sets it)
+//   node scripts/ci/cargo-gates.mjs --os macos --profile msrv-live  needs the same toolchain
 import { spawn } from "node:child_process";
 import { appendFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -34,7 +35,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 export const REPO_ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 export const OSES = ["macos", "linux", "windows"];
-export const PROFILES = ["main", "msrv"];
+export const PROFILES = ["main", "msrv", "msrv-live"];
 const OS_OF_PLATFORM = { darwin: "macos", linux: "linux", win32: "windows" };
 
 const APP = "src-tauri";
@@ -143,6 +144,11 @@ export const GATES = [
   gate("msrv-workspace", APP, ["check", "--workspace", "--locked"], { profile: "msrv" }),
   gate("msrv-cli-lean", APP, ["check", "-p", "sagascript-cli", "--no-default-features", "--locked"], { profile: "msrv" }),
   gate("msrv-ort", ORT, ["check", "--locked"], { profile: "msrv" }),
+  gate("msrv-live-macos", APP, ["check", "-p", "sagascript-core", "--features", "record", "--locked"], {
+    profile: "msrv-live",
+    os: ["macos"],
+    why: "the bundled WebRTC AEC dependency is macOS-only; Linux cannot compile the live recording path",
+  }),
 ];
 
 export const commandOf = (item) => ["cargo", ...item.args].join(" ");
@@ -223,9 +229,9 @@ async function main(argv) {
   if (options.explicitOs && OS_OF_PLATFORM[process.platform] !== options.os) {
     throw new Error(`refusing to run the ${options.os} gates on a ${OS_OF_PLATFORM[process.platform] ?? process.platform} runner`);
   }
-  if (options.profile === "msrv" && !process.env.RUSTUP_TOOLCHAIN) {
+  if (["msrv", "msrv-live"].includes(options.profile) && !process.env.RUSTUP_TOOLCHAIN) {
     throw new Error(
-      "the msrv profile needs RUSTUP_TOOLCHAIN set to the declared rust-version; without it cargo would use the development toolchain",
+      "MSRV profiles need RUSTUP_TOOLCHAIN set to the declared rust-version; without it cargo would use the development toolchain",
     );
   }
   const results = await runGates(gates, { execute: executeWithCargo, keepGoing: options.keepGoing, log: console.log });
