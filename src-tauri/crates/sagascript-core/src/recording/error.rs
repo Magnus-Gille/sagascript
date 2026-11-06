@@ -90,6 +90,13 @@ pub enum RecordingError {
     Encoder { message: String },
 }
 
+/// A recording error crosses a boundary as its text, which holds no path.
+impl serde::Serialize for RecordingError {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+
 fn os_suffix(os_code: &Option<i32>) -> String {
     os_code
         .map(|code| format!(" (os error {code})"))
