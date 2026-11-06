@@ -404,7 +404,12 @@ def main() -> None:
     parser.add_argument("--model", required=True, type=Path, help="Installed preprocessing/vocabulary model directory")
     parser.add_argument("--cache", required=True, type=Path)
     parser.add_argument("--output", type=Path, help="Required for --stage quantize")
+    parser.add_argument("--qos", choices=("system", "high", "eco"), help="Power QoS of this isolated converter process only")
     args = parser.parse_args()
+    if args.qos:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from windows_qos import process_qos
+        process_qos(os.getpid(), args.qos)
 
     source = args.source.resolve(strict=True)
     lab = args.lab.resolve(strict=True)

@@ -1,0 +1,662 @@
+{
+  "success": true,
+  "created_utc": "2026-11-01T14:02:00.692500+00:00",
+  "fixtures": {
+    "schema_version": 1,
+    "created_utc": "2026-11-01T13:59:55.154184+00:00",
+    "sample_rate": 16000,
+    "long_seconds_exact": 180,
+    "long_public_speech_seconds": 179.16,
+    "long_trailing_silence_seconds": 0.84,
+    "long_note": "Synthetic concatenation of complete, unique public FLEURS utterances plus trailing silence.",
+    "corpus_manifest_sha256": "f4afb8c1c98ca42be577b8711447ea2cdaac16699827351f3c035e07dc7e77a7",
+    "fixtures": {
+      "short": {
+        "duration_seconds": 4.74,
+        "reference": "I början var kläder starkt influerade av den bysantinska kulturen i öst.",
+        "reference_words": 12,
+        "sha256": "9e0e31482e833eb7ae9d9b64da60f564fb017519e9ee0da766b2ce6823361b57",
+        "cold_path": "C:\\Users\\magnu\\AppData\\Local\\Temp\\sagascript-accelerator-lab\\matrix-fixtures-final\\short-cold.wav",
+        "warm_path": "C:\\Users\\magnu\\AppData\\Local\\Temp\\sagascript-accelerator-lab\\matrix-fixtures-final\\short-warm.wav",
+        "cold_sha256": "9e0e31482e833eb7ae9d9b64da60f564fb017519e9ee0da766b2ce6823361b57",
+        "warm_sha256": "9e0e31482e833eb7ae9d9b64da60f564fb017519e9ee0da766b2ce6823361b57",
+        "composition": [
+          {
+            "id": "1621",
+            "filename": "2941336432573842440.wav",
+            "gender": "MALE",
+            "reference": "I början var kläder starkt influerade av den bysantinska kulturen i öst.",
+            "samples": 75840,
+            "duration_seconds": 4.74,
+            "sha256": "9e0e31482e833eb7ae9d9b64da60f564fb017519e9ee0da766b2ce6823361b57",
+            "source_format": {
+              "format": 3,
+              "bits_per_sample": 32,
+              "channels": 1,
+              "sample_rate": 16000
+            }
+          }
+        ],
+        "synthetic": false
+      },
+      "long": {
+        "duration_seconds": 180.0,
+        "reference": "Skogarna är dock inte bara mangroveträsk — de innehåller några av de sista kvarvarande ståndorterna av de stora djunglerna som en gång täckte Gangesslätten. Maciej Krezel i det polska herrlaget för synskadade och ledsagaren Anna Ogarzynska slutade på trettonde plats i Super-G. Sydkoreas Jong Seork Park hamnade på tjugofjärde plats i herrarnas sittande Super-G. Det nya kungarikets gamla egyptier förundrades över sina föregångares monument som vid den tiden var gott och väl över tusen år gamla. I början var kläder starkt influerade av den bysantinska kulturen i öst. Fjädrarnas struktur indikerar att de inte användes för att flyga utan istället för temperaturreglering eller för uppvisning. Forskarna föreslog att exemplaret visar en vuxen fjäderdräkt och inte kycklingdun, även om svansen kommer från en ung dinosaurie. Kurirföretag har bra betalt för att leverera saker snabbt. Ofta är tid väldigt viktigt när det gäller affärsdokument, handelsvaror eller reservdelar till en brådskande reparation. Att resa och lära sig är ett allt mer populärt alternativ för de som planerar ett friår. Mallorcansk mat, liksom den i liknande områden kring Medelhavet, baseras på bröd, grönsaker och kött (särskilt fläsk) och använder genomgående olivolja. Naturalister och filosofer fokuserade på klassiska texter och, i synnerhet, på Bibeln skriven på latin. För tusentals år sedan sa en man vid namn Aristarchos att solsystemet rörde sig runt solen. Liksom NSA hjälpte han Carter i diplomatisk hantering av världsfrågor, t.ex. Camp David-överenskommelserna 1978; normalisering av förbindelserna mellan USA och Kina i slutet av 1970-talet; den iranska revolutionen, som ledde till gisslankrisen i Iran 1979; och den sovjetiska invasionen i Afghanistan 1979. De breda boulevarderna, byggnaderna med glasfasaderna och moderna köpcentrum är blandade med traditionella rödkaklade tak, 1700-talsmarknaden och gamla moskéer och kyrkor, även om staden har en atmosfär som är mer likt Medelhavs-Europa än det traditionella Turkiet.",
+        "reference_words": 302,
+        "sha256": "b41dc3635453c506ddc5cf2eb52c0f1bbdd71c88d4714a2d52c05f30937571fd",
+        "cold_path": "C:\\Users\\magnu\\AppData\\Local\\Temp\\sagascript-accelerator-lab\\matrix-fixtures-final\\long-cold.wav",
+        "warm_path": "C:\\Users\\magnu\\AppData\\Local\\Temp\\sagascript-accelerator-lab\\matrix-fixtures-final\\long-warm.wav",
+        "cold_sha256": "b41dc3635453c506ddc5cf2eb52c0f1bbdd71c88d4714a2d52c05f30937571fd",
+        "warm_sha256": "b41dc3635453c506ddc5cf2eb52c0f1bbdd71c88d4714a2d52c05f30937571fd",
+        "composition": [
+          {
+            "id": "14347918279741910315",
+            "filename": "14347918279741910315.wav",
+            "gender": "MALE",
+            "reference": "Skogarna är dock inte bara mangroveträsk — de innehåller några av de sista kvarvarande ståndorterna av de stora djunglerna som en gång täckte Gangesslätten.",
+            "duration_seconds": 14.46,
+            "sha256": "0b2a779643d09527c55ed950038139bba637282495054b78612ca462bb4e80bc",
+            "format": {
+              "format": 3,
+              "bits_per_sample": 32,
+              "channels": 1,
+              "sample_rate": 16000
+            },
+            "source_kind": "corpus.json"
+          },
+          {
+            "id": "10411502267097546866",
+            "filename": "10411502267097546866.wav",
+            "gender": "MALE",
+            "reference": "Maciej Krezel i det polska herrlaget för synskadade och ledsagaren Anna Ogarzynska slutade på trettonde plats i Super-G. Sydkoreas Jong Seork Park hamnade på tjugofjärde plats i herrarnas sittande Super-G.",
+            "duration_seconds": 18.9,
+            "sha256": "e7fd048c760be5c6691ff85ab9f809963a81c655344dcbda90ca92589441ed8e",
+            "format": {
+              "format": 3,
+              "bits_per_sample": 32,
+              "channels": 1,
+              "sample_rate": 16000
+            },
+            "source_kind": "corpus.json"
+          },
+          {
+            "id": "9092741274593827020",
+            "filename": "9092741274593827020.wav",
+            "gender": "FEMALE",
+            "reference": "Det nya kungarikets gamla egyptier förundrades över sina föregångares monument som vid den tiden var gott och väl över tusen år gamla.",
+            "duration_seconds": 12.48,
+            "sha256": "72c7263e7092b4a87cbb7b4ec7995a1d8d83fa299b7b8fde1d8ed539c68079a1",
+            "format": {
+              "format": 3,
+              "bits_per_sample": 32,
+              "channels": 1,
+              "sample_rate": 16000
+            },
+            "source_kind": "corpus.json"
+          },
+          {
+            "id": "9191614290588137327",
+            "filename": "9191614290588137327.wav",
+            "gender": "MALE",
+            "reference": "I början var kläder starkt influerade av den bysantinska kulturen i öst.",
+            "duration_seconds": 9.06,
+            "sha256": "a21a06d1a901d8d0f5ca15377e8360ff3c1ae58f91bd94ae48e8ddaeeee5f018",
+            "format": {
+              "format": 3,
+              "bits_per_sample": 32,
+              "channels": 1,
+              "sample_rate": 16000
+            },
+            "source_kind": "corpus.json"
+          },
+          {
+            "id": "682426172675355782",
+            "filename": "682426172675355782.wav",
+            "gender": "MALE",
+            "reference": "Fjädrarnas struktur indikerar att de inte användes för att flyga utan istället för temperaturreglering eller för uppvisning. Forskarna föreslog att exemplaret visar en vuxen fjäderdräkt och inte kycklingdun, även om svansen kommer från en ung dinosaurie.",
+            "duration_seconds": 19.02,
+            "sha256": "4271de11d1b0619a1fda890d77ca902958988c5992e9d5d36f3a0941f552ea47",
+            "format": {
+              "format": 3,
+              "bits_per_sample": 32,
+              "channels": 1,
+              "sample_rate": 16000
+            },
+            "source_kind": "corpus.json"
+          },
+          {
+            "id": "13767655196060956559",
+            "filename": "13767655196060956559.wav",
+            "gender": "MALE",
+            "reference": "Kurirföretag har bra betalt för att leverera saker snabbt. Ofta är tid väldigt viktigt när det gäller affärsdokument, handelsvaror eller reservdelar till en brådskande reparation.",
+            "duration_seconds": 11.4,
+            "sha256": "91b57317b5e359fdc416fc000c12caef30d62cd9aea1ae9b92f1c018eadcb858",
+            "format": {
+              "format": 3,
+              "bits_per_sample": 32,
+              "channels": 1,
+              "sample_rate": 16000
+            },
+            "source_kind": "corpus.json"
+          },
+          {
+            "id": "14782532088492245120",
+            "filename": "14782532088492245120.wav",
+            "gender": "FEMALE",
+            "reference": "Att resa och lära sig är ett allt mer populärt alternativ för de som planerar ett friår.",
+            "duration_seconds": 8.34,
+            "sha256": "1e648d566e24854284fda2f29146add7d39f512137500a1d7d6b9422e684f5e1",
+            "format": {
+              "format": 3,
+              "bits_per_sample": 32,
+              "channels": 1,
+              "sample_rate": 16000
+            },
+            "source_kind": "corpus.json"
+          },
+          {
+            "id": "13930291059846386070",
+            "filename": "13930291059846386070.wav",
+            "gender": "FEMALE",
+            "reference": "Mallorcansk mat, liksom den i liknande områden kring Medelhavet, baseras på bröd, grönsaker och kött (särskilt fläsk) och använder genomgående olivolja.",
+            "duration_seconds": 16.26,
+            "sha256": "758ffe4271ed0fffb5ce63ae822602bedc6886b3b01687db88b66a2039481dd8",
+            "format": {
+              "format": 3,
+              "bits_per_sample": 32,
+              "channels": 1,
+              "sample_rate": 16000
+            },
+            "source_kind": "corpus.json"
+          },
+          {
+            "id": "4748525319668878312",
+            "filename": "4748525319668878312.wav",
+            "gender": "FEMALE",
+            "reference": "Naturalister och filosofer fokuserade på klassiska texter och, i synnerhet, på Bibeln skriven på latin.",
+            "duration_seconds": 8.88,
+            "sha256": "ef2e24a70be8968b776b6206741797e09f02b70c64a4d7f111aff83936893345",
+            "format": {
+              "format": 3,
+              "bits_per_sample": 32,
+              "channels": 1,
+              "sample_rate": 16000
+            },
+            "source_kind": "corpus.json"
+          },
+          {
+            "id": "3922683486251864943",
+            "filename": "3922683486251864943.wav",
+            "gender": "FEMALE",
+            "reference": "För tusentals år sedan sa en man vid namn Aristarchos att solsystemet rörde sig runt solen.",
+            "duration_seconds": 9.18,
+            "sha256": "6d3407477c607dd1dc3ca24ee53dd0b6ed66358713b8a3110de8cb5ee3334266",
+            "format": {
+              "format": 3,
+              "bits_per_sample": 32,
+              "channels": 1,
+              "sample_rate": 16000
+            },
+            "source_kind": "corpus.json"
+          },
+          {
+            "id": "1604",
+            "filename": "17669446668889921801.wav",
+            "gender": "MALE",
+            "reference": "Liksom NSA hjälpte han Carter i diplomatisk hantering av världsfrågor, t.ex. Camp David-överenskommelserna 1978; normalisering av förbindelserna mellan USA och Kina i slutet av 1970-talet; den iranska revolutionen, som ledde till gisslankrisen i Iran 1979; och den sovjetiska invasionen i Afghanistan 1979.",
+            "duration_seconds": 29.88,
+            "sha256": "1094d584eb0c1af2a096c5bc5188a91880064711f457546a1402718cecddbd01",
+            "format": {
+              "format": 3,
+              "bits_per_sample": 32,
+              "channels": 1,
+              "sample_rate": 16000
+            },
+            "source_kind": "fleurs-sv-dev.tsv/tar.gz"
+          },
+          {
+            "id": "1525",
+            "filename": "16794003699941737274.wav",
+            "gender": "MALE",
+            "reference": "De breda boulevarderna, byggnaderna med glasfasaderna och moderna köpcentrum är blandade med traditionella rödkaklade tak, 1700-talsmarknaden och gamla moskéer och kyrkor, även om staden har en atmosfär som är mer likt Medelhavs-Europa än det traditionella Turkiet.",
+            "duration_seconds": 21.3,
+            "sha256": "a03a8ca190aa433d9e47374d33439c90b10e9ca353a83efb654ba9c85f878bb1",
+            "format": {
+              "format": 3,
+              "bits_per_sample": 32,
+              "channels": 1,
+              "sample_rate": 16000
+            },
+            "source_kind": "fleurs-sv-dev.tsv/tar.gz"
+          }
+        ],
+        "synthetic": true
+      }
+    }
+  },
+  "runs": [
+    {
+      "backend": "cpu",
+      "case": "short",
+      "argv": [
+        "C:\\Users\\magnu\\AppData\\Local/Temp/sagascript-accelerator-lab/matrix-runtime/cpu/sagascript-cli.exe",
+        "transcribe",
+        "C:\\Users\\magnu\\AppData\\Local\\Temp\\sagascript-accelerator-lab\\matrix-fixtures-final\\short-cold.wav",
+        "C:\\Users\\magnu\\AppData\\Local\\Temp\\sagascript-accelerator-lab\\matrix-fixtures-final\\short-warm.wav",
+        "--language",
+        "sv",
+        "--model",
+        "pianissimo-sv",
+        "--no-vad",
+        "--jsonl",
+        "--progress-json"
+      ],
+      "exit_code": 0,
+      "items": [
+        {
+          "order": 0,
+          "slot": "cold",
+          "status": "ok",
+          "source": "C:\\Users\\magnu\\AppData\\Local\\Temp\\sagascript-accelerator-lab\\matrix-fixtures-final\\short-cold.wav",
+          "received_monotonic_ms": 5046.2031,
+          "process_start_to_result_ms": 5046.2031,
+          "input_sha256": "9e0e31482e833eb7ae9d9b64da60f564fb017519e9ee0da766b2ce6823361b57",
+          "audio_seconds": 4.74,
+          "transcript_chars": 71,
+          "quality": {
+            "errors": 1,
+            "words": 12,
+            "wer": 0.08333333333333333
+          },
+          "performance_total_seconds": 0.3017568,
+          "model_verification_seconds": 1.7463807,
+          "model_load_seconds": 2.8849206,
+          "decode_resample_seconds": 0.0010054,
+          "engine": "onnx",
+          "engine_warm": false
+        },
+        {
+          "order": 1,
+          "slot": "warm",
+          "status": "ok",
+          "source": "C:\\Users\\magnu\\AppData\\Local\\Temp\\sagascript-accelerator-lab\\matrix-fixtures-final\\short-warm.wav",
+          "received_monotonic_ms": 5414.6737,
+          "process_start_to_result_ms": 5414.6737,
+          "input_sha256": "9e0e31482e833eb7ae9d9b64da60f564fb017519e9ee0da766b2ce6823361b57",
+          "previous_result_to_result_ms": 368.4706,
+          "audio_seconds": 4.74,
+          "transcript_chars": 71,
+          "quality": {
+            "errors": 1,
+            "words": 12,
+            "wer": 0.08333333333333333
+          },
+          "performance_total_seconds": 0.3683446,
+          "model_verification_seconds": 0.0,
+          "model_load_seconds": 0.0,
+          "decode_resample_seconds": 0.0008089,
+          "engine": "onnx",
+          "engine_warm": true
+        }
+      ],
+      "run_json": "C:\\Users\\magnu\\AppData\\Local\\Temp\\sagascript-accelerator-lab\\matrix-results-final\\cpu-short.run.json"
+    },
+    {
+      "backend": "cpu",
+      "case": "long",
+      "argv": [
+        "C:\\Users\\magnu\\AppData\\Local/Temp/sagascript-accelerator-lab/matrix-runtime/cpu/sagascript-cli.exe",
+        "transcribe",
+        "C:\\Users\\magnu\\AppData\\Local\\Temp\\sagascript-accelerator-lab\\matrix-fixtures-final\\long-cold.wav",
+        "C:\\Users\\magnu\\AppData\\Local\\Temp\\sagascript-accelerator-lab\\matrix-fixtures-final\\long-warm.wav",
+        "--language",
+        "sv",
+        "--model",
+        "pianissimo-sv",
+        "--no-vad",
+        "--jsonl",
+        "--progress-json"
+      ],
+      "exit_code": 0,
+      "items": [
+        {
+          "order": 0,
+          "slot": "cold",
+          "status": "ok",
+          "source": "C:\\Users\\magnu\\AppData\\Local\\Temp\\sagascript-accelerator-lab\\matrix-fixtures-final\\long-cold.wav",
+          "received_monotonic_ms": 15811.8346,
+          "process_start_to_result_ms": 15811.8346,
+          "input_sha256": "b41dc3635453c506ddc5cf2eb52c0f1bbdd71c88d4714a2d52c05f30937571fd",
+          "audio_seconds": 180.0,
+          "transcript_chars": 1989,
+          "quality": {
+            "errors": 28,
+            "words": 302,
+            "wer": 0.09271523178807947
+          },
+          "performance_total_seconds": 11.4728037,
+          "model_verification_seconds": 1.7812407000000001,
+          "model_load_seconds": 2.5210349,
+          "decode_resample_seconds": 0.0146553,
+          "engine": "onnx",
+          "engine_warm": false
+        },
+        {
+          "order": 1,
+          "slot": "warm",
+          "status": "ok",
+          "source": "C:\\Users\\magnu\\AppData\\Local\\Temp\\sagascript-accelerator-lab\\matrix-fixtures-final\\long-warm.wav",
+          "received_monotonic_ms": 27089.7101,
+          "process_start_to_result_ms": 27089.7101,
+          "input_sha256": "b41dc3635453c506ddc5cf2eb52c0f1bbdd71c88d4714a2d52c05f30937571fd",
+          "previous_result_to_result_ms": 11277.8755,
+          "audio_seconds": 180.0,
+          "transcript_chars": 1989,
+          "quality": {
+            "errors": 28,
+            "words": 302,
+            "wer": 0.09271523178807947
+          },
+          "performance_total_seconds": 11.2762818,
+          "model_verification_seconds": 0.0,
+          "model_load_seconds": 0.0,
+          "decode_resample_seconds": 0.0155594,
+          "engine": "onnx",
+          "engine_warm": true
+        }
+      ],
+      "run_json": "C:\\Users\\magnu\\AppData\\Local\\Temp\\sagascript-accelerator-lab\\matrix-results-final\\cpu-long.run.json"
+    },
+    {
+      "backend": "gpu",
+      "case": "short",
+      "argv": [
+        "C:\\Users\\magnu\\AppData\\Local/Temp/sagascript-accelerator-lab/matrix-runtime/gpu/sagascript-cli.exe",
+        "transcribe",
+        "C:\\Users\\magnu\\AppData\\Local\\Temp\\sagascript-accelerator-lab\\matrix-fixtures-final\\short-cold.wav",
+        "C:\\Users\\magnu\\AppData\\Local\\Temp\\sagascript-accelerator-lab\\matrix-fixtures-final\\short-warm.wav",
+        "--language",
+        "sv",
+        "--model",
+        "pianissimo-sv",
+        "--no-vad",
+        "--jsonl",
+        "--progress-json"
+      ],
+      "exit_code": 0,
+      "items": [
+        {
+          "order": 0,
+          "slot": "cold",
+          "status": "ok",
+          "source": "C:\\Users\\magnu\\AppData\\Local\\Temp\\sagascript-accelerator-lab\\matrix-fixtures-final\\short-cold.wav",
+          "received_monotonic_ms": 9700.5211,
+          "process_start_to_result_ms": 9700.5211,
+          "input_sha256": "9e0e31482e833eb7ae9d9b64da60f564fb017519e9ee0da766b2ce6823361b57",
+          "audio_seconds": 4.74,
+          "transcript_chars": 71,
+          "quality": {
+            "errors": 1,
+            "words": 12,
+            "wer": 0.08333333333333333
+          },
+          "performance_total_seconds": 1.6612057999999998,
+          "model_verification_seconds": 1.8432709,
+          "model_load_seconds": 6.0633013,
+          "decode_resample_seconds": 0.0049074,
+          "engine": "onnx",
+          "engine_warm": false
+        },
+        {
+          "order": 1,
+          "slot": "warm",
+          "status": "ok",
+          "source": "C:\\Users\\magnu\\AppData\\Local\\Temp\\sagascript-accelerator-lab\\matrix-fixtures-final\\short-warm.wav",
+          "received_monotonic_ms": 10488.6005,
+          "process_start_to_result_ms": 10488.6005,
+          "input_sha256": "9e0e31482e833eb7ae9d9b64da60f564fb017519e9ee0da766b2ce6823361b57",
+          "previous_result_to_result_ms": 788.0794,
+          "audio_seconds": 4.74,
+          "transcript_chars": 71,
+          "quality": {
+            "errors": 1,
+            "words": 12,
+            "wer": 0.08333333333333333
+          },
+          "performance_total_seconds": 0.7879536,
+          "model_verification_seconds": 0.0,
+          "model_load_seconds": 0.0,
+          "decode_resample_seconds": 0.0010982,
+          "engine": "onnx",
+          "engine_warm": true
+        }
+      ],
+      "run_json": "C:\\Users\\magnu\\AppData\\Local\\Temp\\sagascript-accelerator-lab\\matrix-results-final\\gpu-short.run.json"
+    },
+    {
+      "backend": "gpu",
+      "case": "long",
+      "argv": [
+        "C:\\Users\\magnu\\AppData\\Local/Temp/sagascript-accelerator-lab/matrix-runtime/gpu/sagascript-cli.exe",
+        "transcribe",
+        "C:\\Users\\magnu\\AppData\\Local\\Temp\\sagascript-accelerator-lab\\matrix-fixtures-final\\long-cold.wav",
+        "C:\\Users\\magnu\\AppData\\Local\\Temp\\sagascript-accelerator-lab\\matrix-fixtures-final\\long-warm.wav",
+        "--language",
+        "sv",
+        "--model",
+        "pianissimo-sv",
+        "--no-vad",
+        "--jsonl",
+        "--progress-json"
+      ],
+      "exit_code": 0,
+      "items": [
+        {
+          "order": 0,
+          "slot": "cold",
+          "status": "ok",
+          "source": "C:\\Users\\magnu\\AppData\\Local\\Temp\\sagascript-accelerator-lab\\matrix-fixtures-final\\long-cold.wav",
+          "received_monotonic_ms": 26976.2629,
+          "process_start_to_result_ms": 26976.2629,
+          "input_sha256": "b41dc3635453c506ddc5cf2eb52c0f1bbdd71c88d4714a2d52c05f30937571fd",
+          "audio_seconds": 180.0,
+          "transcript_chars": 1991,
+          "quality": {
+            "errors": 30,
+            "words": 302,
+            "wer": 0.09933774834437085
+          },
+          "performance_total_seconds": 19.3526392,
+          "model_verification_seconds": 1.7590729999999999,
+          "model_load_seconds": 5.8208928,
+          "decode_resample_seconds": 0.0174481,
+          "engine": "onnx",
+          "engine_warm": false
+        },
+        {
+          "order": 1,
+          "slot": "warm",
+          "status": "ok",
+          "source": "C:\\Users\\magnu\\AppData\\Local\\Temp\\sagascript-accelerator-lab\\matrix-fixtures-final\\long-warm.wav",
+          "received_monotonic_ms": 45598.8662,
+          "process_start_to_result_ms": 45598.8662,
+          "input_sha256": "b41dc3635453c506ddc5cf2eb52c0f1bbdd71c88d4714a2d52c05f30937571fd",
+          "previous_result_to_result_ms": 18622.6033,
+          "audio_seconds": 180.0,
+          "transcript_chars": 1991,
+          "quality": {
+            "errors": 30,
+            "words": 302,
+            "wer": 0.09933774834437085
+          },
+          "performance_total_seconds": 18.6210036,
+          "model_verification_seconds": 0.0,
+          "model_load_seconds": 0.0,
+          "decode_resample_seconds": 0.0142148,
+          "engine": "onnx",
+          "engine_warm": true
+        }
+      ],
+      "run_json": "C:\\Users\\magnu\\AppData\\Local\\Temp\\sagascript-accelerator-lab\\matrix-results-final\\gpu-long.run.json"
+    },
+    {
+      "backend": "npu",
+      "case": "short",
+      "argv": [
+        "C:\\Users\\magnu\\AppData\\Local/Temp/sagascript-accelerator-lab/matrix-runtime/npu/sagascript-cli.exe",
+        "transcribe",
+        "C:\\Users\\magnu\\AppData\\Local\\Temp\\sagascript-accelerator-lab\\matrix-fixtures-final\\short-cold.wav",
+        "C:\\Users\\magnu\\AppData\\Local\\Temp\\sagascript-accelerator-lab\\matrix-fixtures-final\\short-warm.wav",
+        "--language",
+        "sv",
+        "--model",
+        "pianissimo-sv",
+        "--no-vad",
+        "--jsonl",
+        "--progress-json"
+      ],
+      "exit_code": 0,
+      "items": [
+        {
+          "order": 0,
+          "slot": "cold",
+          "status": "ok",
+          "source": "C:\\Users\\magnu\\AppData\\Local\\Temp\\sagascript-accelerator-lab\\matrix-fixtures-final\\short-cold.wav",
+          "received_monotonic_ms": 7001.044,
+          "process_start_to_result_ms": 7001.044,
+          "input_sha256": "9e0e31482e833eb7ae9d9b64da60f564fb017519e9ee0da766b2ce6823361b57",
+          "audio_seconds": 4.74,
+          "transcript_chars": 71,
+          "quality": {
+            "errors": 1,
+            "words": 12,
+            "wer": 0.08333333333333333
+          },
+          "performance_total_seconds": 0.198422,
+          "model_verification_seconds": 1.7587204,
+          "model_load_seconds": 4.9424699,
+          "decode_resample_seconds": 0.0018848,
+          "engine": "onnx",
+          "engine_warm": false
+        },
+        {
+          "order": 1,
+          "slot": "warm",
+          "status": "ok",
+          "source": "C:\\Users\\magnu\\AppData\\Local\\Temp\\sagascript-accelerator-lab\\matrix-fixtures-final\\short-warm.wav",
+          "received_monotonic_ms": 7189.7621,
+          "process_start_to_result_ms": 7189.7621,
+          "input_sha256": "9e0e31482e833eb7ae9d9b64da60f564fb017519e9ee0da766b2ce6823361b57",
+          "previous_result_to_result_ms": 188.7181,
+          "audio_seconds": 4.74,
+          "transcript_chars": 71,
+          "quality": {
+            "errors": 1,
+            "words": 12,
+            "wer": 0.08333333333333333
+          },
+          "performance_total_seconds": 0.188592,
+          "model_verification_seconds": 0.0,
+          "model_load_seconds": 0.0,
+          "decode_resample_seconds": 0.0009825,
+          "engine": "onnx",
+          "engine_warm": true
+        }
+      ],
+      "run_json": "C:\\Users\\magnu\\AppData\\Local\\Temp\\sagascript-accelerator-lab\\matrix-results-final\\npu-short.run.json"
+    },
+    {
+      "backend": "npu",
+      "case": "long",
+      "argv": [
+        "C:\\Users\\magnu\\AppData\\Local/Temp/sagascript-accelerator-lab/matrix-runtime/npu/sagascript-cli.exe",
+        "transcribe",
+        "C:\\Users\\magnu\\AppData\\Local\\Temp\\sagascript-accelerator-lab\\matrix-fixtures-final\\long-cold.wav",
+        "C:\\Users\\magnu\\AppData\\Local\\Temp\\sagascript-accelerator-lab\\matrix-fixtures-final\\long-warm.wav",
+        "--language",
+        "sv",
+        "--model",
+        "pianissimo-sv",
+        "--no-vad",
+        "--jsonl",
+        "--progress-json"
+      ],
+      "exit_code": 0,
+      "items": [
+        {
+          "order": 0,
+          "slot": "cold",
+          "status": "ok",
+          "source": "C:\\Users\\magnu\\AppData\\Local\\Temp\\sagascript-accelerator-lab\\matrix-fixtures-final\\long-cold.wav",
+          "received_monotonic_ms": 9416.9918,
+          "process_start_to_result_ms": 9416.9918,
+          "input_sha256": "b41dc3635453c506ddc5cf2eb52c0f1bbdd71c88d4714a2d52c05f30937571fd",
+          "audio_seconds": 180.0,
+          "transcript_chars": 1992,
+          "quality": {
+            "errors": 25,
+            "words": 302,
+            "wer": 0.08278145695364239
+          },
+          "performance_total_seconds": 3.3126588,
+          "model_verification_seconds": 1.7390568,
+          "model_load_seconds": 4.3207856,
+          "decode_resample_seconds": 0.0172288,
+          "engine": "onnx",
+          "engine_warm": false
+        },
+        {
+          "order": 1,
+          "slot": "warm",
+          "status": "ok",
+          "source": "C:\\Users\\magnu\\AppData\\Local\\Temp\\sagascript-accelerator-lab\\matrix-fixtures-final\\long-warm.wav",
+          "received_monotonic_ms": 12755.064,
+          "process_start_to_result_ms": 12755.064,
+          "input_sha256": "b41dc3635453c506ddc5cf2eb52c0f1bbdd71c88d4714a2d52c05f30937571fd",
+          "previous_result_to_result_ms": 3338.0722,
+          "audio_seconds": 180.0,
+          "transcript_chars": 1992,
+          "quality": {
+            "errors": 25,
+            "words": 302,
+            "wer": 0.08278145695364239
+          },
+          "performance_total_seconds": 3.3354483999999998,
+          "model_verification_seconds": 0.0,
+          "model_load_seconds": 0.0,
+          "decode_resample_seconds": 0.0143569,
+          "engine": "onnx",
+          "engine_warm": true
+        }
+      ],
+      "run_json": "C:\\Users\\magnu\\AppData\\Local\\Temp\\sagascript-accelerator-lab\\matrix-results-final\\npu-long.run.json"
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "C:\\Users\\magnu\\AppData\\Local\\Temp\\sagascript-accelerator-lab\\shift-npu-cache.onnx",
+      "size": 927,
+      "sha256": "f57134a1946f021abab24bad705fbf4d7cd73ad0f316960ce70edd3e7440dd9b"
+    },
+    {
+      "path": "C:\\Users\\magnu\\AppData\\Local\\Temp\\sagascript-accelerator-lab\\shift-npu-cache_qnn.bin",
+      "size": 1218572288,
+      "sha256": "008330d6fdfd60adcd84726b53c5568107eb56e00fa1047c39b8a2dfdc9c69a2"
+    },
+    {
+      "path": "C:\\Users\\magnu\\AppData\\Local\\Temp\\sagascript-accelerator-lab\\matrix-runtime\\cpu\\engine-host\\sagascript-engine-host-ort.exe",
+      "size": 781824,
+      "sha256": "3047cae09b25aaa59742932cb755059d0a3c4f04d22cb4b731c17a2f7d78fed3"
+    },
+    {
+      "path": "C:\\Users\\magnu\\AppData\\Local\\Temp\\sagascript-accelerator-lab\\matrix-runtime\\gpu\\engine-host\\sagascript-engine-host-ort.exe",
+      "size": 791552,
+      "sha256": "82ce0090860196faa82c203d2ae65371966c2ccee133af26ffe5f7b7ff857195"
+    },
+    {
+      "path": "C:\\Users\\magnu\\AppData\\Local\\Temp\\sagascript-accelerator-lab\\matrix-runtime\\npu\\engine-host\\sagascript-engine-host-ort.exe",
+      "size": 819712,
+      "sha256": "a22868e323fe5f81434a2d1b0a9f54e31b465f6bc64d371ccf4f91fd85f1b080"
+    }
+  ]
+}

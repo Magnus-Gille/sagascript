@@ -9,7 +9,11 @@ use crate::pcm;
 use crate::server::{Engine, HostError, LoadParams, WindowRequest};
 use crate::tdt::{self, DecodeError, DecoderState, Joint, HIDDEN};
 use crate::vocab::Vocab;
+#[cfg(all(feature = "dev-overrides", windows))]
+use ort::environment::Environment;
 use ort::ep;
+#[cfg(all(feature = "dev-overrides", windows))]
+use ort::memory::DeviceType;
 use ort::session::builder::GraphOptimizationLevel;
 use ort::session::Session;
 use ort::value::Tensor;
@@ -92,6 +96,121 @@ fn ort_error(context: &str, error: impl std::fmt::Display) -> HostError {
 }
 
 static RUNTIME: OnceLock<Result<String, String>> = OnceLock::new();
+
+#[cfg(all(feature = "dev-overrides", windows))]
+static QNN_PLUGIN: OnceLock<Result<PathBuf, String>> = OnceLock::new();
+
+#[cfg(feature = "dev-overrides")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LabExecutionProvider {
+    Cpu,
+    DirectMl,
+    Qnn,
+}
+
+#[cfg(feature = "dev-overrides")]
+fn parse_lab_ep(value: Option<&str>) -> Result<LabExecutionProvider, &'static str> {
+    match value {
+        None | Some("") | Some("cpu") => Ok(LabExecutionProvider::Cpu),
+        Some("dml") => Ok(LabExecutionProvider::DirectMl),
+        Some("qnn") => Ok(LabExecutionProvider::Qnn),
+        Some(_) => Err("expected cpu, dml, or qnn"),
+    }
+}
+
+#[cfg(feature = "dev-overrides")]
+fn lab_ep_mode() -> Result<LabExecutionProvider, ort::Error> {
+    let value = match std::env::var("SAGASCRIPT_LAB_EP") {
+        Ok(value) => Some(value),
+        Err(std::env::VarError::NotPresent) => None,
+        Err(std::env::VarError::NotUnicode(_)) => {
+            return Err(ort::Error::new("SAGASCRIPT_LAB_EP must be valid Unicode"));
+        }
+    };
+    let mode = parse_lab_ep(value.as_deref()).map_err(ort::Error::new)?;
+    #[cfg(not(windows))]
+    if mode == LabExecutionProvider::Qnn {
+        return Err(ort::Error::new(
+            "SAGASCRIPT_LAB_EP=qnn is supported only by the Windows lab host",
+        ));
+    }
+    Ok(mode)
+}
+
+#[cfg(feature = "dev-overrides")]
+#[derive(Debug)]
+struct LabQnnConfig {
+    library: PathBuf,
+    backend: PathBuf,
+    context_cache: Option<PathBuf>,
+}
+
+#[cfg(feature = "dev-overrides")]
+fn validate_lab_qnn_paths(
+    library: &Path,
+    backend: &Path,
+    context_cache: Option<&Path>,
+) -> Result<(), &'static str> {
+    if !library.is_absolute() || !library.is_file() {
+        return Err("QNN plugin library must be an existing absolute file path");
+    }
+    if !backend.is_absolute() || !backend.is_file() {
+        return Err("QNN backend must be an existing absolute file path");
+    }
+    if let Some(cache) = context_cache {
+        if !cache.is_absolute() {
+            return Err("QNN context cache path must be absolute");
+        }
+        if !cache.parent().is_some_and(Path::is_dir) {
+            return Err("QNN context cache parent directory must exist");
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "dev-overrides")]
+fn lab_qnn_config() -> Result<LabQnnConfig, ort::Error> {
+    let library = std::env::var_os("SAGASCRIPT_LAB_QNN_LIBRARY")
+        .map(PathBuf::from)
+        .ok_or_else(|| {
+            ort::Error::new("SAGASCRIPT_LAB_EP=qnn requires SAGASCRIPT_LAB_QNN_LIBRARY")
+        })?;
+    let backend = library
+        .parent()
+        .ok_or_else(|| ort::Error::new("QNN plugin library path has no parent directory"))?
+        .join("QnnHtp.dll");
+    let context_cache = std::env::var_os("SAGASCRIPT_LAB_QNN_CONTEXT_CACHE").map(PathBuf::from);
+    validate_lab_qnn_paths(&library, &backend, context_cache.as_deref())
+        .map_err(ort::Error::new)?;
+    Ok(LabQnnConfig {
+        library,
+        backend,
+        context_cache,
+    })
+}
+
+#[cfg(all(feature = "dev-overrides", windows))]
+fn register_lab_qnn(library: &Path) -> Result<(), ort::Error> {
+    let registered = QNN_PLUGIN.get_or_init(|| {
+        let environment = Environment::current().map_err(|error| error.to_string())?;
+        environment
+            .register_ep_library("QNNExecutionProvider", library)
+            .map_err(|error| error.to_string())?;
+        Ok(library.to_path_buf())
+    });
+    match registered {
+        Ok(path) if path == library => Ok(()),
+        Ok(path) => Err(ort::Error::new(format!(
+            "QNN plugin already registered from {}; requested {}",
+            path.display(),
+            library.display()
+        ))),
+        Err(error) => Err(ort::Error::new(format!(
+            "cannot register QNN plugin {}: {error}",
+            library.display()
+        ))),
+    }
+}
 
 /// Locate and load the ONNX Runtime shared library once per process.
 fn ensure_runtime() -> Result<&'static str, HostError> {
@@ -272,30 +391,101 @@ impl OrtEngine {
     }
 
     fn session(&self, path: &Path, threads: usize) -> Result<Session, HostError> {
+        #[cfg(feature = "dev-overrides")]
+        let is_encoder = path.file_name().is_some_and(|name| name == ENCODER_FILE);
         let arena = ep::CPU::default()
             .with_arena_allocator(self.config.arena)
             .build();
         let build = || -> Result<Session, ort::Error> {
             let mut builder = Session::builder()?
-                .with_execution_providers([arena])?
                 .with_intra_threads(threads)?
                 .with_inter_threads(1)?
                 .with_memory_pattern(false)?
                 .with_optimization_level(GraphOptimizationLevel::All)?;
+            #[cfg(feature = "dev-overrides")]
+            if is_encoder {
+                match lab_ep_mode()? {
+                    LabExecutionProvider::Qnn => {
+                        #[cfg(windows)]
+                        {
+                            let qnn = lab_qnn_config()?;
+                            register_lab_qnn(&qnn.library)?;
+                            let environment = Environment::current()?;
+                            let devices: Vec<_> = environment.devices().collect();
+                            let observed: Vec<_> = devices
+                                .iter()
+                                .map(|device| {
+                                    format!(
+                                        "{}:{:?}",
+                                        device.ep().unwrap_or("unknown"),
+                                        device.hardware_device().ty()
+                                    )
+                                })
+                                .collect();
+                            let device = devices.into_iter()
+                            .find(|device| {
+                                device.ep().ok() == Some("QNNExecutionProvider")
+                                    && device.hardware_device().ty() == DeviceType::NPU
+                            })
+                            .ok_or_else(|| {
+                                ort::Error::new(format!(
+                                    "QNN plugin registered, but ONNX Runtime exposed no QNN NPU device; observed {observed:?}"
+                                ))
+                            })?;
+                            let options = vec![
+                                (
+                                    "QNNExecutionProvider.backend_path".to_string(),
+                                    qnn.backend.display().to_string(),
+                                ),
+                                (
+                                    "QNNExecutionProvider.htp_performance_mode".to_string(),
+                                    "burst".to_string(),
+                                ),
+                            ];
+                            if let Some(cache_path) = qnn.context_cache {
+                                builder = builder
+                                    .with_config_entry("ep.context_enable", "1")?
+                                    .with_config_entry(
+                                        "ep.context_file_path",
+                                        cache_path.display().to_string(),
+                                    )?;
+                            }
+                            // ORT's device API routes through SessionOptionsAppendExecutionProvider_V2.
+                            // This avoids the legacy name-based QNN append path.
+                            builder = builder
+                                .with_devices([device], Some(&options))?
+                                .with_disable_cpu_fallback()?;
+                        }
+                        #[cfg(not(windows))]
+                        return Err(ort::Error::new(
+                            "SAGASCRIPT_LAB_EP=qnn is supported only by the Windows lab host",
+                        ));
+                    }
+                    LabExecutionProvider::DirectMl => {
+                        builder = builder
+                            .with_execution_providers([ep::DirectML::default()
+                                .with_device_id(0)
+                                .build()
+                                .error_on_failure()])?
+                            .with_parallel_execution(false)?;
+                    }
+                    LabExecutionProvider::Cpu => {
+                        builder = builder.with_execution_providers([arena])?;
+                    }
+                }
+            } else {
+                builder = builder.with_execution_providers([arena])?;
+            }
+            #[cfg(not(feature = "dev-overrides"))]
+            {
+                builder = builder.with_execution_providers([arena])?;
+            }
             // Lab-only knobs: never enabled in shipped builds. They apply to the encoder
             // alone so preprocessing and greedy decoding remain unchanged during comparison.
             #[cfg(feature = "dev-overrides")]
-            if path.file_name().is_some_and(|name| name == ENCODER_FILE) {
+            if is_encoder {
                 if std::env::var("SAGASCRIPT_LAB_BASIC").as_deref() == Ok("1") {
                     builder = builder.with_optimization_level(GraphOptimizationLevel::Level1)?;
-                }
-                if std::env::var("SAGASCRIPT_LAB_EP").as_deref() == Ok("dml") {
-                    builder = builder
-                        .with_execution_providers([ep::DirectML::default()
-                            .with_device_id(0)
-                            .build()
-                            .error_on_failure()])?
-                        .with_parallel_execution(false)?;
                 }
                 if let Ok(profile) = std::env::var("SAGASCRIPT_LAB_PROFILE") {
                     builder = builder.with_profiling(profile)?;
@@ -369,7 +559,7 @@ impl OrtEngine {
             model_id: params.model_id.clone(),
             load_ms: started.elapsed().as_millis() as u64,
             compiled: false,
-            window_s: WINDOW_S,
+            window_s: effective_window_s()?,
             frame_s: 0.01 * subsampling,
             vocab_size: vocab.len() as u32,
             blank_id: vocab.blank_id(),
@@ -464,14 +654,28 @@ fn millis(started: Instant) -> u64 {
 }
 
 #[cfg(feature = "dev-overrides")]
+fn window_for_pad_frames(frames: Option<usize>) -> f64 {
+    // nemo128 uses a 10 ms hop and includes the centered boundary frame.
+    // Whole seconds leave a conservative margin for a fixed encoder graph.
+    frames.map_or(WINDOW_S, |n| (((n - 1) / 100) as f64).min(WINDOW_S))
+}
+
+fn effective_window_s() -> Result<f64, HostError> {
+    #[cfg(feature = "dev-overrides")]
+    return lab_pad_frames().map(window_for_pad_frames);
+    #[cfg(not(feature = "dev-overrides"))]
+    Ok(WINDOW_S)
+}
+
+#[cfg(feature = "dev-overrides")]
 fn parse_lab_pad_frames(value: Option<&str>) -> Result<Option<usize>, &'static str> {
     value
         .map(|value| {
             let frames = value
                 .parse::<usize>()
                 .map_err(|_| "expected a positive integer")?;
-            if frames == 0 {
-                return Err("expected a positive integer");
+            if frames <= 100 {
+                return Err("expected at least 101 frames for a one-second window");
             }
             i64::try_from(frames).map_err(|_| "value exceeds the ONNX dimension range")?;
             Ok(frames)
@@ -745,11 +949,13 @@ impl Engine for OrtEngine {
     }
 
     fn capabilities(&self) -> Capabilities {
+        // Invalid lab configuration is rejected by load; hello cannot return an error.
+        let window_s = effective_window_s().unwrap_or(WINDOW_S);
         Capabilities {
             sample_rate: SAMPLE_RATE,
-            max_window_s: WINDOW_S,
-            preferred_window_s: WINDOW_S,
-            preferred_overlap_s: 6.0,
+            max_window_s: window_s,
+            preferred_window_s: window_s,
+            preferred_overlap_s: 6.0_f64.min(window_s / 2.0),
             max_in_flight: self.config.max_in_flight,
             token_timestamps: true,
             languages: vec!["sv".into()],
@@ -821,7 +1027,16 @@ mod dll_path_tests {
 
 #[cfg(all(test, feature = "dev-overrides"))]
 mod lab_padding_tests {
-    use super::{pad_encoder_features, parse_lab_pad_frames};
+    use super::{pad_encoder_features, parse_lab_pad_frames, window_for_pad_frames};
+
+    #[test]
+    fn advertised_window_fits_preprocessor_frames_with_center_padding() {
+        assert_eq!(window_for_pad_frames(None), 30.0);
+        assert_eq!(window_for_pad_frames(Some(2048)), 20.0);
+        assert_eq!(window_for_pad_frames(Some(3001)), 30.0);
+        assert_eq!(window_for_pad_frames(Some(768)), 7.0);
+        assert_eq!(window_for_pad_frames(Some(4096)), 30.0);
+    }
 
     #[test]
     fn pads_zeros_at_the_end_of_each_channel_time_axis() {
@@ -845,6 +1060,52 @@ mod lab_padding_tests {
         assert_eq!(parse_lab_pad_frames(None), Ok(None));
         assert_eq!(parse_lab_pad_frames(Some("768")), Ok(Some(768)));
         assert!(parse_lab_pad_frames(Some("0")).is_err());
+        assert!(parse_lab_pad_frames(Some("100")).is_err());
+        assert_eq!(parse_lab_pad_frames(Some("101")), Ok(Some(101)));
         assert!(parse_lab_pad_frames(Some("many")).is_err());
+    }
+}
+
+#[cfg(all(test, feature = "dev-overrides"))]
+mod lab_execution_provider_tests {
+    use super::{parse_lab_ep, validate_lab_qnn_paths, LabExecutionProvider};
+    use std::path::Path;
+
+    #[test]
+    fn lab_ep_defaults_to_cpu_and_accepts_supported_choices() {
+        assert_eq!(parse_lab_ep(None), Ok(LabExecutionProvider::Cpu));
+        assert_eq!(parse_lab_ep(Some("cpu")), Ok(LabExecutionProvider::Cpu));
+        assert_eq!(
+            parse_lab_ep(Some("dml")),
+            Ok(LabExecutionProvider::DirectMl)
+        );
+        assert_eq!(parse_lab_ep(Some("qnn")), Ok(LabExecutionProvider::Qnn));
+        assert!(parse_lab_ep(Some("cuda")).is_err());
+    }
+
+    #[test]
+    fn qnn_configuration_requires_existing_absolute_libraries_and_cache_parent() {
+        let executable = std::env::current_exe().expect("test executable path");
+        let parent = executable.parent().expect("test executable parent");
+        let cache_path = parent.join("qnn-context.bin");
+
+        assert!(validate_lab_qnn_paths(&executable, &executable, Some(&cache_path)).is_ok());
+        assert!(validate_lab_qnn_paths(Path::new("relative.dll"), &executable, None).is_err());
+        assert!(
+            validate_lab_qnn_paths(&parent.join("missing-qnn-plugin.dll"), &executable, None,)
+                .is_err()
+        );
+        assert!(validate_lab_qnn_paths(
+            &executable,
+            &executable,
+            Some(Path::new("relative-context.bin")),
+        )
+        .is_err());
+        assert!(validate_lab_qnn_paths(
+            &executable,
+            &executable,
+            Some(Path::new("Z:\\missing\\qnn-context.bin")),
+        )
+        .is_err());
     }
 }

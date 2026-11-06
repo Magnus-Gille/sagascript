@@ -1,0 +1,117 @@
+WINDOWS PIANISSIMO: CPU / GPU / QNN NPU
+Completed 2026-11-01. Local prototype; not installed in the daily app.
+
+RESULT
+All12 requested cases completed successfully through the real release CLI and
+shared Rust window/merge pipeline. The corrected QNN encoder is useful: about
+1.95x faster than CPU on warm4.74s speech and3.38x faster on warm180s speech.
+CPU remains quicker for a cold short utterance. GPU was slower than both.
+These results supersede the earlier conclusion that CPU was fastest with the
+then-working unoptimized accelerator graphs. They do not imply every NPU model
+or workload benefits equally.
+
+END-TO-END WAIT, SECONDS
+                  short cold   short warm   180s cold   180s warm
+CPU INT8              5.046        0.368       15.812      11.278
+GPU DirectML FP16     9.701        0.788       26.976      18.623
+NPU QNN FP16          7.001        0.189        9.417       3.338
+
+Cold = new CLI and engine process; model not loaded in that process. Timing
+starts before process launch and ends on receipt of the result. Filesystem
+cache and previously compiled NPU context are retained. This is not a reboot
+or an empty disk cache. Warm = next identical audio file in the same process;
+result-to-result timing includes the second decode/transcription/output. All
+warm results explicitly report engine_warm=true and zero model load/verify.
+One cold and one warm measurement per backend/duration; not confidence intervals.
+
+TRANSCRIPTION PIPELINE ONLY, SECONDS (excluding initial verify/model load)
+                  short cold   short warm   180s cold   180s warm
+CPU                   0.302        0.368       11.473      11.276
+GPU                   1.661        0.788       19.353      18.621
+NPU                   0.198        0.189        3.313       3.335
+
+Model verification on cold cases took1.74-1.84s. Model loading took CPU2.52-2.88s,
+GPU5.82-6.06s, NPU4.32-4.94s. First-ever NPU graph compilation, measured separately
+before this matrix, took54.1s and about8.46GB peak process-family RSS. The compiled
+QNN binary is1.219GB. The matrix used at most4.03GB sampled process-family RSS
+across its sequential runs; this is not device-memory or energy measurement.
+
+QUALITY
+Short public utterance:12 reference words,1 word error for every backend/run.
+Long public utterances:302 reference words; CPU28errors (9.27%), GPU30 (9.93%),
+NPU25 (8.28%). Cold/warm counts match within each backend. WER lowercases and
+splits Unicode words, ignoring punctuation/case; includes insertions/deletions/
+substitutions. This small corpus does not establish general quality superiority.
+All raw transcripts are retained with the reference manifest for inspection.
+
+A separate11-clip235-word corpus was used to validate graph correctness:
+transformed CPUFP16 exact tokens22/22 vs originalFP16; nativeNPU33runs13errors
+per235-word pass, CPUINT8 15errors. NPU vs CPUFP16 same per-clip error counts,
+but one clip's wording differs; do not claim bit/exact-text parity on NPU.
+
+METHOD AND CONDITIONS
+Snapdragon X Elite X1E78100,12CPUcores,32GB; AdrenoX1-85; HexagonNPU.
+Windows11ARM64. User connected AC; structured readings32% before and38% after.
+No global power/driver changes. Each host uses the existing scoped CPU HighQoS
+fix during model load/transcription, restoring its baseline at idle.
+Public Swedish FLEURS4.74s utterance and synthetic180.00s concatenation:
+12unique complete utterances179.16s plus0.84s trailing silence. No cut-off word.
+This is not a natural three-minute meeting or a speaker-diarization test.
+Identical WAV bytes across backends and cold/warm; different cold/warm paths
+avoid CLI input deduplication. Same model ID/vocabulary/decoder/preprocessor.
+VAD disabled. CPU/GPU30s windows with6s overlap; NPU20s/6s for fixed2048mel
+frames. This compares usable implementations, not isolated equal-shape chip speed.
+
+IMPLEMENTATION
+Mac DenseLocalAttention algebra ported to ONNX, retaining ONNX padding masks.
+11284 ->3099 nodes before further QNN rewrites. No retraining/changed weights.
+Actual hardware tensor tracing isolated QNN GatherElements lowering corruption:
+458752/524288 wrong values in an exactly representable integer reproducer.
+Equivalent reshape/slice relative shift removes that operation; explicit Floor
+before three length casts preserves nonnegative length truncation on QNN.
+The native Rust APIv2 provider registration now uses QNNExecutionProvider,
+selects an NPU device and disables CPU fallback for the encoder. Strict hardware
+smoke passed; profile recorded33QNN encoder executions. Preprocessor and TDT
+decoder remain on CPU. A lab-only fixed-window capability prevents oversize
+long-file chunks. Production builds default to the unchanged CPU behavior.
+
+NPU: ORT1.29 + QNN2.7/QAIRT2.51, HTP FP16, cached encoder context.
+GPU: WinML1.28.3 DirectML dynamic FP16 flattened graph. New static shift graph
+still produced empty text on DirectML and was rejected, not counted as speedup.
+The releaseCLI checks for providers_shared.dll even though standalone WinML
+does not ship/require it. The GPU test bundle includes installed1.28.2 auxiliary
+providers_shared.dll to satisfy that presence gate; actualCLI tests succeeded.
+CPU: installed approvedINT8 host fix ee2e86a279225439c7a1ebb3f45492c5a5285be4.
+Staged calibration/QDQ export tooling has synthetic regression tests, but a full
+quantized export was NOT completed. These NPU results are FP16, not INT8/QDQ.
+
+VALIDATION / LIMITS
+Native host:51 dev-overrides tests,45 default tests,fmt,clippy-Dwarnings,release
+build passed. Python graph/cache/benchmark suite15tests passed. Independent
+review requested Sol/high found CPU fallback and exporter shape-validation
+issues; both fixed, red/green regression checked and re-review closed.
+Broad cargo check --workspace --offline was blocked by missing libclang in
+unchanged whisper-rs-sys. Full workspace test/clippy/leanCLI build therefore not
+verified; standalone changed engine-host checks and realCLI matrix did pass.
+No battery-energy measurement, GUI NPU installation, long real meeting or
+diarization acceptance test. Local adaptation remains experimental/dev-gated.
+
+ARTIFACTS / REPRODUCIBILITY
+LAB = C:/Users/magnu/AppData/Local/Temp/sagascript-accelerator-lab
+LAB/matrix-results-final/matrix-results.json: all12 cells and timing receipts.
+LAB/matrix-results-final/*.stdout.jsonl: full public transcripts and timings.
+LAB/matrix-results-final/*.stderr.log: CLI progress/native diagnostics.
+LAB/matrix-fixtures-final/fixtures.json: references, composition and SHA256.
+LAB/matrix-config.json: exact CLI paths/backend flags; binaries in matrix-runtime.
+LAB/matrix-final-process.json: process-family memory/timeout guard receipt.
+LAB/shift-native-full.json and shift-native-profile_*.json: native corpus/placement.
+LAB/shift-native-strict.json: CPU fallback forbidden and correct output.
+LAB/gather-probe.json and dense-tensors-attention.json: numerical defect evidence.
+LAB/shift-npu.json: first compilation and corrected Python QNN corpus.
+matrix-summary.json beside this report: compact matrix/provenance snapshot.
+
+Installed settings and approved CPU executable hashes unchanged after tests.
+No GUI settings, installed models, installed app, driver or global policy changed.
+No push/PR/release. Recovery is to stop using the isolated test bundles; the
+installed CPU app is already intact. A product integration/installation is a
+separate next step, including model packaging/cache lifecycle and user acceptance.

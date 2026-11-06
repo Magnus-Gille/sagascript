@@ -1,0 +1,82 @@
+Mandate 2026-11-01: Magnus requested Windows NPU adaptation corresponding to
+Mac Pianissimo acceleration, and asked to reuse the Mac implementation.
+Endpoint: local implementation, verified full ASR, measured latency/quality,
+reviewable installation candidate if acceptance is met. No general release,
+push/PR, driver/global power changes, or remote inference deployment authorized.
+Installed approved CPU fix ee2e86a stays available; original models unchanged.
+
+Worktree codex/windows-npu-adaptation based on ee2e86a. Public audio only.
+Acceptance: use actual QNN/HTP, same-audio CPU baseline, no silent CPU-only
+success, correct fixed-window/padding handling, validate quality before latency,
+cache cold/warm behavior, focused tests, no installed app regression.
+Recovery: isolated model copies under task LAB; no installed changes in this
+phase. Per-heavy-process time/RSS and >=3GB available-memory guards remain.
+
+Reuse: Mac scripts/pianissimo-coreml/components.py DenseLocalAttention ported
+to ONNX, retaining original ONNX padding masks. Shared engine-host protocol,
+window/overlap/merge and TDT semantics retained. CoreML artifacts aren't QNN.
+Dense graph: 11284 -> 3099 nodes,24 layers. Full11-clip CPU reference verified
+text and token IDs22/22 identical to originalFP16fixed2048;13errors/235words.
+Scalar-reference regression test covers asymmetric relative position indexing,
+band cutoff and masked keys/queries. NPU correctness and native host now verified.
+
+Breakthrough: QNN GatherElements on [1,8,256,513] relative attention returned
+458752/524288 incorrect values in an exact-integer reproducer. Explicit
+reshape/slice relative shift preserves the attention algebra and works on HTP.
+Also make subsampler truncation explicit with Floor before three length casts.
+Transformed CPU outputs remain exact to original FP16 for all22 comparisons.
+Native QNN11clips/33runs:13errors/235words per pass, matching CPUFP16 error
+count for every clip (one clip text differs); median warm199ms versus paired
+installedCPUINT8 405ms/15errors. Small public corpus, not general accuracy proof.
+Native encoder profile:33QNN events. Preprocessor and TDT decoder remainCPU.
+with_disable_cpu_fallback now required on the QNN encoder; strict native smoke
+passed2/2 with correct text. Lab-only dev-overrides, default productionCPU unchanged.
+Native cached model load ~4.7s; first QNN compile ~54s and8.5GB peak process-family
+RSS. Cache retained for normal cold-model tests; no disk-cache purge or reboot.
+
+Latest user acceptance:12cells = CPU/GPU/NPU x short3-5s/long180s x cold/warm.
+Same public audio bytes and references, real CLI and shared window/merge pipeline.
+NPU advertises20s/6s overlap (2048mel frames); dynamicCPU/GPU30s/6s.
+Matrix runner delegated in windows-npu-matrix-leaf; final execution12/12 passed.
+Full report: scripts/accelerator-lab/NPU_REPORT.txt; compact evidence
+scripts/accelerator-lab/matrix-summary.json; raw LAB/matrix-results-final.
+End-to-end seconds shortcold/warm,longcold/warm:
+CPU5.046/.368,15.812/11.278; GPU9.701/.788,26.976/18.623;
+NPU7.001/.189,9.417/3.338. Long302words CPU28errors,GPU30,NPU25;
+short12words1error each.4.74s short;180s long179.16s speech+.84s silence.
+All warm runs report warm=true, zero verify/load; all cold runs warm=false.
+NativeNPU20s chunks work end-to-end. Matrix peak4.03GB familyRSS,111.49s run.
+Installed settings/CPU EXE hashes unchanged after matrix. AC throughout.
+Use LAB/matrix-runtime/{cpu,gpu,npu}/sagascript-cli.exe isolated bundles.
+GPU uses validated dynamic encoder-fp16-flat.onnx; newstaticshiftGPU stillempty
+text/100%WER and rejected. GPU WinML1.28.3 bundle also includes installed1.28.2
+providers_shared auxiliary DLL because releaseCLI checks its presence; standalone
+WinML DirectML does not ship/require that file. Must validate actualCLI result.
+NPU uses LAB/shift-npu-cache.onnx plus compiled external binary, ORT1.29/QNN2.7.
+Power nowAC,32% on explicit structured read; earlier1%claim was a table formatting
+misread and corrected to user. Do not use that mistaken value in reports.
+
+Checks:51feature Rust tests,45default tests,fmt,featureclippy-Dwarnings,release
+build pass.15Python graph/cache/bench/matrix tests pass. Workspace cargo check --offline
+blocked by missing libclang in unchanged whisper-rs-sys build dependency; broad
+workspace test/clippy/leanCLI build share that prerequisite, not verified.
+Independent Sol/high review found two issues: requireCPUfallbackdisabled and
+derive/validateencodedframes in relative_shift exporter. Both fixed, regression
+tested and reviewer recheck closed. Runtime-observed reviewer model unknown.
+Installedsettings andCPU EXE hashes saved LAB/matrix-installed-before.json.
+
+Memory fix: externalize FP32 weight casts one tensor at a time; opset21 graph
+conversion with external data, then separate calibration and QDQ rewrite
+processes. Older exporter duplicated whole model/runtime representations and
+its CalibMaxIntermediateOutputs=1 loses ranges in installed ORT1.29; remove it.
+
+Delegation: windows_qos_fix requested Luna/xhigh owns staged_qdq.py/tests in
+windows-npu-export-leaf; integration_check requested Luna/high owns native
+dev-onlyQNN hooks in windows-npu-host-leaf. No further delegation; no heavy
+model runs in leaves. Parent owns all heavyweight tests sequentially and final
+review. Runtime-observed model/effort unknown. Native integration leaf pass after
+parent registration-name and strict-placement fixes; matrix Luna/high leaf pass
+after parent review corrections and12/12 runtime validation. Staged export leaf
+partial: synthetic tests pass, no full QDQ run. Independent Sol/high review pass,
+two grounded findings corrected and rechecked. No publication or install.
+Munin decision795e4922-1ea0-418c-a877-bdbafc045887; statusCAS updated14:04UTC.
