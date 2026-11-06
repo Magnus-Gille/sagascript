@@ -256,7 +256,7 @@ fn recommended_model_per_language() {
     );
     assert_eq!(
         WhisperModel::recommended(Language::Danish),
-        WhisperModel::Small
+        WhisperModel::Medium
     );
     assert_eq!(
         WhisperModel::recommended(Language::Auto),

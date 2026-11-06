@@ -119,14 +119,14 @@ fn danish_selection_resets_swedish_models_and_keeps_multilingual_ones() {
         settings.profile_models["default"],
         FileModelPreference::Auto
     );
-    assert_eq!(settings.whisper_model, WhisperModel::Small);
+    assert_eq!(settings.whisper_model, WhisperModel::Medium);
     assert!(settings.auto_select_model);
 
     // A multilingual model stays, and Pianissimo is refused for Danish.
     settings
         .set_profile_model_gated(
             "default",
-            FileModelPreference::Whisper(WhisperModel::Medium),
+            FileModelPreference::Whisper(WhisperModel::Small),
             true,
         )
         .unwrap();
@@ -146,7 +146,7 @@ fn danish_selection_resets_swedish_models_and_keeps_multilingual_ones() {
         .is_err());
     assert_eq!(
         settings.profile_models["default"],
-        FileModelPreference::Whisper(WhisperModel::Medium)
+        FileModelPreference::Whisper(WhisperModel::Small)
     );
 }
 

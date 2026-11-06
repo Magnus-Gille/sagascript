@@ -65,7 +65,7 @@ Supported languages are English (`en`), Swedish (`sv`), Norwegian (`no`),
 Finnish (`fi`), Danish (`da`) and auto-detect (`auto`). Danish uses Klang AI's
 Danish Pianissimo model (`pianissimo-da`) where Pianissimo runs (macOS 14+ on
 Apple Silicon, Windows on ARM) and the multilingual Whisper models elsewhere
-(Small is the recommended one there). Each Pianissimo model serves only its own
+(Medium is the recommended one there). Each Pianissimo model serves only its own
 language: `pianissimo-sv` Swedish, `pianissimo-da` Danish.
 
 Use the CLI to discover the effective paths rather than duplicating the
