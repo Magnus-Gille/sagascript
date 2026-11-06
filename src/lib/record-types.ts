@@ -2,11 +2,9 @@
 // recording commands return and the `recording-session-changed` and
 // `recordings-recovered` events carry. They mirror the Rust payloads in
 // src-tauri (see docs/handoffs/saga-564-spec.md until that file is deleted).
-//
-// TODO(SAGA-564): once the Rust side regenerates `CommandMap`, move the wrappers
-// of record-api.ts into api.ts and add the two events to `EventMap`
-// (src/lib/events.ts) and `eventPayloads` (src/test/transport-schemas.ts, where
-// the schemas of these types already exist).
+// The command results and the two events are checked against the Rust payloads:
+// `CommandMap` (src/lib/ipc-contract.generated.ts), `EventMap` (src/lib/events.ts)
+// and the schemas in src/test/transport-schemas.ts.
 
 export type RecordingSessionState = "idle" | "starting" | "recording" | "finalizing" | "done" | "failed";
 
@@ -104,12 +102,3 @@ export const RECORDING_ERROR_CODES = [
 ] as const;
 
 export type RecordingErrorCode = (typeof RECORDING_ERROR_CODES)[number];
-
-/** The recorder settings the window reads from `get_settings` (fields Rust adds for SAGA-564). */
-export interface RecorderSettingsFields {
-  recording_quality?: RecordingQuality;
-  recording_directory?: string;
-  recording_channel_pair?: [number, number];
-  recording_folder_confirmed?: boolean;
-  recording_consent_acknowledged?: boolean;
-}

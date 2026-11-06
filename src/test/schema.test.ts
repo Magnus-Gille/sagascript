@@ -1,6 +1,20 @@
 // The contract-test schemas (#347) must reject what Rust could send wrongly.
 import { describe, expect, expectTypeOf, test } from "vitest";
-import { array, boolean, ContractError, literal, nullable, number, object, openObject, record, string, union, type Infer } from "./schema";
+import {
+  array,
+  boolean,
+  ContractError,
+  literal,
+  nullable,
+  number,
+  object,
+  openObject,
+  pair,
+  record,
+  string,
+  union,
+  type Infer,
+} from "./schema";
 
 const profile = object(
   { id: string, language: literal("en", "sv") },
@@ -37,6 +51,11 @@ describe("object", () => {
 test("containers check every element", () => {
   expect(array(number).parse([1, 2])).toEqual([1, 2]);
   expect(() => array(number).parse([1, "2"], "xs")).toThrow("xs[1]: expected a finite number");
+  expect(pair(number).parse([1, 2])).toEqual([1, 2]);
+  expectTypeOf<Infer<ReturnType<typeof pair<number>>>>().toEqualTypeOf<[number, number]>();
+  expect(() => pair(number).parse([1], "p")).toThrow("p: expected an array of two items");
+  expect(() => pair(number).parse([1, 2, 3], "p")).toThrow("p: expected an array of two items");
+  expect(() => pair(number).parse([1, "2"], "p")).toThrow("p[1]: expected a finite number");
   expect(() => record(boolean).parse({ a: true, b: 1 }, "m")).toThrow("m.b: expected a boolean");
   expect(() => number.parse(Number.NaN, "n")).toThrow("n: expected a finite number");
   expect(() => nullable(string).parse(undefined, "s")).toThrow("s: expected a string, got nothing");

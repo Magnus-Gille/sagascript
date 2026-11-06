@@ -1,15 +1,9 @@
-// `invoke` wrappers for the recorder commands (SAGA-564).
-//
-// TODO(SAGA-564): these commands are not in the generated `CommandMap` yet, so
-// the wrappers cannot live in the typed api.ts and src/lib/api.test.ts cannot
-// check them. Once `SAGASCRIPT_BLESS_CONTRACTS=1 cargo test -p sagascript
-// contract` has regenerated src/lib/ipc-contract.generated.ts, move them into
-// api.ts, add their rows to api.test.ts and delete this file. Argument keys are
-// the camelCase names Tauri derives from the Rust parameters.
+// `invoke` wrappers for the recorder commands (SAGA-564). Argument keys are the
+// camelCase names Tauri derives from the Rust parameters; src/lib/api.test.ts
+// checks each wrapper against the generated `CommandMap`.
 import { invoke } from "@tauri-apps/api/core";
-import { getSettings } from "./api";
+import { getSettings, type Settings } from "./api";
 import type {
-  RecorderSettingsFields,
   RecordingFinished,
   RecordingFolderInfo,
   RecordingQuality,
@@ -88,17 +82,13 @@ export async function acknowledgeRecordingConsent(): Promise<void> {
 
 /**
  * The recorder's settings, read from `get_settings`: the quality and the two
- * first-use markers. A backend that does not send a field gets its default (the
- * markers false, so the first-use steps show rather than being skipped).
- *
- * TODO(SAGA-564): the spec gives no dedicated command for these; this assumes
- * Rust serializes the fields into `Settings`. Replace if it does not.
+ * first-use markers. The markers are false until the user has answered, so the
+ * first-use steps show rather than being skipped.
  */
 export async function readRecorderSettings(): Promise<
-  Required<Pick<RecorderSettingsFields, "recording_quality" | "recording_folder_confirmed" | "recording_consent_acknowledged">>
+  Pick<Settings, "recording_quality" | "recording_folder_confirmed" | "recording_consent_acknowledged">
 > {
-  // `Settings` (api.ts) does not declare the recorder fields yet.
-  const settings = (await getSettings()) as unknown as RecorderSettingsFields;
+  const settings = await getSettings();
   return {
     recording_quality: settings.recording_quality === "compact" ? "compact" : "lossless",
     recording_folder_confirmed: settings.recording_folder_confirmed === true,

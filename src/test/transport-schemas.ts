@@ -1,7 +1,7 @@
 // Schemas of the payloads Rust sends over IPC (#347), one per frontend type.
 // src/test/transport.test.ts proves each equal to its TypeScript type and
 // parses the shared fixtures in contracts/transport/ with it.
-import { array, boolean, literal, nullable, number, object, openObject, record, string, union } from "./schema";
+import { array, boolean, literal, nullable, number, object, openObject, pair, record, string, union } from "./schema";
 
 // -- Settings (`get_settings`) ------------------------------------------------
 
@@ -34,6 +34,11 @@ export const settings = object(
     engine_prewarm: literal("off", "on_app_start", "on_key_down"),
     engine_idle_unload_minutes: number,
     has_completed_onboarding: boolean,
+    recording_quality: literal("lossless", "compact"),
+    recording_directory: string,
+    recording_channel_pair: pair(number),
+    recording_folder_confirmed: boolean,
+    recording_consent_acknowledged: boolean,
   },
   // Migration markers (ADR 0007): written and read by Rust only.
   { ignored: ["profile_glossary_migrated", "model_lineup_version", "engine_defaults_version", "schema_version"] },
@@ -209,34 +214,7 @@ export const engineLoadState = object(
   { optional: { source: literal("warm", "request"), loadMs: number, message: string } },
 );
 
-/** One schema per `EventMap` entry. */
-export const eventPayloads = {
-  "state-changed": literal("idle", "recording", "loading_model", "transcribing", "error", "settings_reloaded"),
-  "transcription-result": string,
-  error: backendError,
-  "model-download-progress": object({ progress: number }, { ignored: ["model", "downloaded", "total"] }),
-  "model-ready": literal(null),
-  "plain-transcription-progress": object({
-    runId: string,
-    phase: literal("decoding", "resampling", "loading", "preparing", "encoding", "transcribing", "finalizing"),
-    percent: nullable(number),
-  }),
-  "hotkey-registration-changed": hotkeyStatus,
-  "active-hotkey-profile-changed": hotkeyProfile,
-  "engine-load-state": engineLoadState,
-  "update-preparing": string,
-  "update-aborted": string,
-  navigate_tab: string,
-};
-
 // -- Recorder (src/lib/record-types.ts, SAGA-564) -------------------------------
-//
-// TODO(SAGA-564): add "recording-session-changed" and "recordings-recovered" to
-// `eventPayloads` (and to `EventMap`) once the Rust catalogue and
-// contracts/transport/events.json have them; until then they are not part of
-// the event-catalogue test, which compares the two lists. Parse the fixtures
-// with these schemas the same way once the Rust side blesses them.
-
 const recordingQuality = literal("lossless", "compact");
 
 export const recordingSessionInfo = object({
@@ -298,3 +276,25 @@ export const recordingFolderInfo = object({
   warnings: array(string),
   is_default: boolean,
 });
+
+/** One schema per `EventMap` entry. */
+export const eventPayloads = {
+  "state-changed": literal("idle", "recording", "loading_model", "transcribing", "error", "settings_reloaded"),
+  "transcription-result": string,
+  error: backendError,
+  "model-download-progress": object({ progress: number }, { ignored: ["model", "downloaded", "total"] }),
+  "model-ready": literal(null),
+  "plain-transcription-progress": object({
+    runId: string,
+    phase: literal("decoding", "resampling", "loading", "preparing", "encoding", "transcribing", "finalizing"),
+    percent: nullable(number),
+  }),
+  "hotkey-registration-changed": hotkeyStatus,
+  "active-hotkey-profile-changed": hotkeyProfile,
+  "engine-load-state": engineLoadState,
+  "update-preparing": string,
+  "update-aborted": string,
+  navigate_tab: string,
+  "recording-session-changed": recordingSessionInfo,
+  "recordings-recovered": array(recoveryNote),
+};
