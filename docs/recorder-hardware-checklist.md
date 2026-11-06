@@ -12,7 +12,7 @@ Tick each line per OS (macOS / Windows); note the build identity (tray menu) nex
 - [ ] First start shows the microphone permission prompt once; Deny gives the
       `recording_permission_denied` message and a way to the system settings, not a hang.
 - [ ] After granting, a session starts without relaunching the app.
-- [ ] The default input device is the one that records (the device name shows in the window).
+- [ ] The default input device is the one that records.
 - [ ] Headset or Bluetooth microphone: connecting it before and during a session. The profile
       switch (A2DP to HFP, 48 kHz to 16 kHz) ends the recording early with `device_changed` or
       `format_changed` and keeps everything recorded so far.
