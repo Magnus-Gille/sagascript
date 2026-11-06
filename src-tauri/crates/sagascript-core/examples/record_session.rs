@@ -17,7 +17,7 @@
 //! Record window.
 use std::time::{Duration, Instant};
 
-use sagascript_core::recording::capture::{MicConfig, MicSource};
+use sagascript_core::recording::capture::{CaptureSource, MicConfig, MicSource};
 use sagascript_core::recording::{
     Client, Quality, RecordingSession, RecordingStore, SessionConfig, SourceSpec,
 };
