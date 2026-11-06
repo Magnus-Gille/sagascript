@@ -228,6 +228,29 @@ fn handshake_rejects_protocol_mismatch() {
     assert!(!f.client.snapshot().running);
 }
 
+/// Why a host must never announce an overlap that is not below its window (for
+/// instance from an oversized `SAGASCRIPT_ENGINE_OVERLAP_S`): the client refuses it.
+#[test]
+fn handshake_rejects_an_overlap_that_is_not_below_the_preferred_window() {
+    for overlap in ["15", "20"] {
+        let f = fixture(&[("FAKE_WINDOW_S", "15"), ("FAKE_OVERLAP_S", overlap)]);
+        match f.client.warm() {
+            Err(EngineHostError::Handshake(m)) => {
+                assert!(m.contains("inconsistent window capabilities"), "{m}")
+            }
+            other => panic!("overlap {overlap}: {other:?}"),
+        }
+        assert!(!f.client.snapshot().running);
+    }
+    // Just below the window is fine.
+    let f = fixture(&[("FAKE_WINDOW_S", "15"), ("FAKE_OVERLAP_S", "14.9")]);
+    let caps = f.client.warm().unwrap();
+    assert_eq!(
+        (caps.preferred_window_s, caps.preferred_overlap_s),
+        (15.0, 14.9)
+    );
+}
+
 #[test]
 fn handshake_rejects_missing_git_sha() {
     let f = fixture(&[("FAKE_NO_SHA", "1")]);
@@ -2292,4 +2315,520 @@ fn startup_sweep_removes_only_pcm_dirs_of_dead_owners() {
     });
     assert_eq!(removed, 1);
     assert!(ours.path().is_file());
+}
+
+// ------------------------------------------- streamed input (decode overlap)
+
+use sagascript_core::transcription::engine_host::{Sink, SinkError, StreamError};
+use std::sync::Mutex as StdMutex;
+
+/// A pseudo-random piece length in `1..=max`, deterministic per call index.
+fn piece_len(i: usize, max: usize) -> usize {
+    1 + (i.wrapping_mul(2_654_435_761).rotate_left(7) % max)
+}
+
+/// Feed `samples` to `sink` in uneven pieces, sleeping `pause` between them.
+fn feed(
+    sink: &Sink<'_>,
+    samples: &[f32],
+    max_piece: usize,
+    pause: Duration,
+) -> Result<(), SinkError> {
+    let mut at = 0;
+    let mut i = 0;
+    while at < samples.len() {
+        let n = piece_len(i, max_piece).min(samples.len() - at);
+        sink.append(&samples[at..at + n])?;
+        at += n;
+        i += 1;
+        if !pause.is_zero() {
+            std::thread::sleep(pause);
+        }
+    }
+    Ok(())
+}
+
+fn stream_env() -> Vec<(&'static str, &'static str)> {
+    let mut env = LONG_ENV.to_vec();
+    env.push(("FAKE_MAX_IN_FLIGHT", "4"));
+    env
+}
+
+#[test]
+fn streamed_audio_gives_the_same_transcription_as_the_finished_audio() {
+    for (seconds, announce_length, pause_ms) in [
+        (0.4, false, 0),
+        (5.0, true, 0),
+        (10.0, false, 0),
+        (10.3, true, 1),
+        (47.0, true, 0),
+        (47.0, false, 1),
+        (95.5, true, 0),
+    ] {
+        let f = fixture(&stream_env());
+        let samples = pcm(seconds);
+        let want = f
+            .client
+            .transcribe_file_samples(&samples, &CancelToken::new(), None)
+            .unwrap();
+
+        let mut progress = Vec::new();
+        let mut cb = |m: usize, t: usize| progress.push((m, t));
+        let got = f
+            .client
+            .transcribe_file_stream(&CancelToken::new(), Some(&mut cb), |sink| {
+                if announce_length {
+                    sink.set_expected_total(samples.len());
+                }
+                feed(sink, &samples, 20_000, Duration::from_millis(pause_ms))
+            })
+            .unwrap_or_else(|e| panic!("{seconds}s: {e:?}"));
+
+        let label = format!("{seconds}s announce={announce_length}");
+        assert_eq!(
+            got.tokens.iter().map(|t| t.id).collect::<Vec<_>>(),
+            want.tokens.iter().map(|t| t.id).collect::<Vec<_>>(),
+            "{label}"
+        );
+        assert_eq!(got.text, want.text, "{label}");
+        assert_eq!(got.audio_s, want.audio_s, "{label}");
+        let plan = |t: &sagascript_core::transcription::engine_host::Transcription| {
+            t.windows
+                .iter()
+                .map(|w| (w.index, w.start_sample, w.end_sample))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(plan(&got), plan(&want), "{label}: same windows");
+        assert_eq!(
+            got.tokens
+                .iter()
+                .map(|t| (t.start.to_bits(), t.end.to_bits()))
+                .collect::<Vec<_>>(),
+            want.tokens
+                .iter()
+                .map(|t| (t.start.to_bits(), t.end.to_bits()))
+                .collect::<Vec<_>>(),
+            "{label}: same timings"
+        );
+
+        // Progress: in order, an estimate until the end, 100% only at the end.
+        let windows = got.windows.len();
+        if announce_length || windows == 1 {
+            assert!(
+                progress.windows(2).all(|p| p[1].0 == p[0].0 + 1),
+                "{progress:?}"
+            );
+            let (last_m, last_t) = *progress.last().expect("progress reported");
+            assert_eq!(
+                (last_m, last_t),
+                (windows, windows),
+                "{label}: {progress:?}"
+            );
+            for &(m, t) in &progress[..progress.len() - 1] {
+                assert!(m < t, "{label}: {m}/{t} implies the end early");
+            }
+        } else {
+            // No announced length and more than one window: no estimate to report
+            // before the end, but a report is never wrong.
+            assert!(progress.iter().all(|&(m, t)| m <= t), "{progress:?}");
+        }
+        assert_eq!(temp_entries(f.tmp.path()), 0, "{label}: temp PCM removed");
+    }
+}
+
+#[test]
+fn streaming_starts_transcribing_before_the_audio_has_ended() {
+    let f = fixture(&stream_env());
+    let samples = pcm(60.0);
+    let first_merge = Arc::new(AtomicBool::new(false));
+    let seen_early = Arc::new(AtomicBool::new(false));
+    let early = seen_early.clone();
+    let flag = first_merge.clone();
+    let mut cb = {
+        let flag = first_merge.clone();
+        move |m: usize, _t: usize| {
+            if m >= 1 {
+                flag.store(true, Ordering::SeqCst);
+            }
+        }
+    };
+    let out = f
+        .client
+        .transcribe_file_stream(&CancelToken::new(), Some(&mut cb), |sink| {
+            sink.set_expected_total(samples.len());
+            // 30 s are enough for several windows; hold the rest back until the
+            // engine has merged one of them. A non-streaming job would never
+            // start, so the wait would run out.
+            feed(sink, &samples[..30 * SR], 8_000, Duration::ZERO)?;
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while !flag.load(Ordering::SeqCst) && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            early.store(flag.load(Ordering::SeqCst), Ordering::SeqCst);
+            feed(sink, &samples[30 * SR..], 8_000, Duration::ZERO)
+        })
+        .unwrap();
+    assert!(
+        seen_early.load(Ordering::SeqCst),
+        "a window was merged while the producer was still running"
+    );
+    assert_eq!(
+        out.tokens.iter().map(|t| t.id).collect::<Vec<_>>(),
+        expected_ids(samples.len())
+    );
+    assert!(first_merge.load(Ordering::SeqCst));
+}
+
+#[test]
+fn nothing_is_submitted_before_all_lanes_have_a_window_or_the_audio_ended() {
+    // Lane count 3 (4 slots, one reserved): with only the first two windows' worth
+    // of audio, no window may be sent yet; the third completes the set.
+    let log = tempfile::tempdir().unwrap();
+    let log_path = log.path().join("ops.log");
+    let mut env = stream_env();
+    env.push(("FAKE_LOG", log_path.to_str().unwrap()));
+    let f = fixture(&env);
+    f.client.warm().unwrap();
+    let samples = pcm(60.0);
+    let windows_sent = |path: &Path| {
+        std::fs::read_to_string(path)
+            .unwrap_or_default()
+            .lines()
+            .filter(|l| l.starts_with("transcribe_window"))
+            .count()
+    };
+    let sent_before = Arc::new(StdMutex::new(Vec::new()));
+    let record = sent_before.clone();
+    let log_for_producer = log_path.clone();
+    let out = f
+        .client
+        .transcribe_file_stream(&CancelToken::new(), None, |sink| {
+            // Windows (10 s, step 6 s): ends at 10, 16, 22 s. Two are determined
+            // by 17 s of audio.
+            feed(sink, &samples[..17 * SR + 1], 4_000, Duration::ZERO)?;
+            std::thread::sleep(Duration::from_millis(400));
+            record.lock().unwrap().push(windows_sent(&log_for_producer));
+            feed(sink, &samples[17 * SR + 1..30 * SR], 4_000, Duration::ZERO)?;
+            std::thread::sleep(Duration::from_millis(400));
+            record.lock().unwrap().push(windows_sent(&log_for_producer));
+            feed(sink, &samples[30 * SR..], 4_000, Duration::ZERO)
+        })
+        .unwrap();
+    let sent = sent_before.lock().unwrap().clone();
+    assert_eq!(sent[0], 0, "two windows are not enough to fill three lanes");
+    assert!(
+        sent[1] >= 3,
+        "the lanes were filled once three windows existed: {sent:?}"
+    );
+    assert_eq!(
+        out.tokens.iter().map(|t| t.id).collect::<Vec<_>>(),
+        expected_ids(samples.len())
+    );
+}
+
+#[test]
+fn an_empty_stream_gives_an_empty_transcription() {
+    let f = fixture(&[]);
+    let out = f
+        .client
+        .transcribe_file_stream(&CancelToken::new(), None, |_sink| Ok::<(), ()>(()))
+        .unwrap();
+    assert!(out.text.is_empty() && out.tokens.is_empty() && out.windows.is_empty());
+    assert_eq!(out.audio_s, 0.0);
+    assert_eq!(temp_entries(f.tmp.path()), 0);
+}
+
+#[test]
+fn a_producer_error_ends_the_job_and_is_returned_as_is() {
+    let f = fixture(&stream_env());
+    let samples = pcm(60.0);
+    let started = Instant::now();
+    let r = f
+        .client
+        .transcribe_file_stream(&CancelToken::new(), None, |sink| {
+            feed(sink, &samples[..25 * SR], 8_000, Duration::ZERO).unwrap();
+            std::thread::sleep(Duration::from_millis(150));
+            Err("decode failed at 25 s".to_string())
+        });
+    match r {
+        Err(StreamError::Producer(message)) => assert_eq!(message, "decode failed at 25 s"),
+        other => panic!("expected the producer's error, got {other:?}"),
+    }
+    assert!(started.elapsed() < Duration::from_secs(3));
+    assert_eq!(temp_entries(f.tmp.path()), 0);
+    // The host is fine afterwards.
+    let again = f
+        .client
+        .transcribe_file_samples(&pcm(12.0), &CancelToken::new(), None)
+        .unwrap();
+    assert_eq!(again.tokens.len(), 24);
+}
+
+#[test]
+fn an_engine_failure_stops_the_producer_and_is_returned() {
+    let mut env = stream_env();
+    env.push(("FAKE_CRASH_ON_WINDOW", "1"));
+    let f = fixture_with(&env, |c| c.max_crash_retries = 0);
+    let producer_saw_closed = Arc::new(AtomicBool::new(false));
+    let saw = producer_saw_closed.clone();
+    let samples = pcm(600.0);
+    let started = Instant::now();
+    let r = f
+        .client
+        .transcribe_file_stream(&CancelToken::new(), None, |sink| {
+            // Far more audio than the job can use: the producer only stops
+            // because its sink closes.
+            match feed(sink, &samples, 16_000, Duration::from_millis(5)) {
+                Err(SinkError::Closed) => {
+                    saw.store(true, Ordering::SeqCst);
+                    Err("stopped".to_string())
+                }
+                other => panic!("the sink should have closed: {other:?}"),
+            }
+        });
+    assert!(
+        matches!(r, Err(StreamError::Engine(EngineHostError::Crashed { .. }))),
+        "{r:?}"
+    );
+    assert!(producer_saw_closed.load(Ordering::SeqCst));
+    assert!(started.elapsed() < Duration::from_secs(10));
+    assert_eq!(temp_entries(f.tmp.path()), 0);
+}
+
+#[test]
+fn cancelling_stops_both_sides_and_cleans_up() {
+    let mut env = stream_env();
+    env.push(("FAKE_WINDOW_DELAY_MS", "60"));
+    let f = fixture(&env);
+    let cancel = CancelToken::new();
+    let c2 = cancel.clone();
+    let producer_stopped = Arc::new(AtomicBool::new(false));
+    let stopped = producer_stopped.clone();
+    let samples = pcm(900.0);
+    let mut cb = move |m: usize, _t: usize| {
+        if m == 2 {
+            c2.cancel();
+        }
+    };
+    let started = Instant::now();
+    let r = f
+        .client
+        .transcribe_file_stream(&cancel, Some(&mut cb), |sink| {
+            sink.set_expected_total(samples.len());
+            let r = feed(sink, &samples, 16_000, Duration::from_millis(2));
+            stopped.store(r.is_err(), Ordering::SeqCst);
+            r.map_err(|e| e.to_string())
+        });
+    assert!(
+        matches!(r, Err(StreamError::Engine(EngineHostError::Cancelled))),
+        "{r:?}"
+    );
+    assert!(
+        producer_stopped.load(Ordering::SeqCst),
+        "the producer stopped"
+    );
+    assert!(started.elapsed() < Duration::from_secs(3));
+    assert_eq!(temp_entries(f.tmp.path()), 0);
+    wait_until("host idle after cancel", Duration::from_secs(2), || {
+        f.client.status().map(|s| s.in_flight == 0).unwrap_or(false)
+    });
+}
+
+#[test]
+fn a_pre_cancelled_stream_never_runs_the_producer_or_touches_the_host() {
+    let f = fixture(&[]);
+    let cancel = CancelToken::new();
+    cancel.cancel();
+    let ran = AtomicBool::new(false);
+    let r = f.client.transcribe_file_stream(&cancel, None, |_sink| {
+        ran.store(true, Ordering::SeqCst);
+        Ok::<(), ()>(())
+    });
+    assert!(matches!(
+        r,
+        Err(StreamError::Engine(EngineHostError::Cancelled))
+    ));
+    assert!(!ran.load(Ordering::SeqCst));
+    assert!(!f.client.snapshot().running);
+    assert_eq!(temp_entries(f.tmp.path()), 0);
+}
+
+#[test]
+fn a_host_crash_mid_stream_resubmits_and_still_reconstructs() {
+    let marker = tempfile::tempdir().unwrap();
+    let marker_path = marker.path().join("once");
+    let mut env = stream_env();
+    env.push(("FAKE_CRASH_ONCE_FILE", marker_path.to_str().unwrap()));
+    let f = fixture(&env);
+    let samples = pcm(47.0);
+    let out = f
+        .client
+        .transcribe_file_stream(&CancelToken::new(), None, |sink| {
+            feed(sink, &samples, 12_000, Duration::from_millis(1))
+        })
+        .unwrap_or_else(|e| panic!("{e:?}"));
+    assert_eq!(
+        out.tokens.iter().map(|t| t.id).collect::<Vec<_>>(),
+        expected_ids(samples.len())
+    );
+    assert_eq!(f.client.snapshot().crashes_in_window, 1);
+}
+
+#[test]
+fn a_panicking_producer_does_not_hang_the_job() {
+    let f = fixture(&stream_env());
+    let client = f.client.clone();
+    let (outcome, _) = run_bounded(Duration::from_secs(10), move || {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            client.transcribe_file_stream(&CancelToken::new(), None, |sink| {
+                sink.append(&pcm(3.0)).unwrap();
+                panic!("producer panic (expected by the test)");
+                #[allow(unreachable_code)]
+                Ok::<(), ()>(())
+            })
+        }))
+        .is_err()
+    });
+    assert!(outcome, "the producer's panic is propagated, not swallowed");
+    assert_eq!(temp_entries(f.tmp.path()), 0);
+}
+
+#[test]
+fn a_stream_job_does_not_starve_dictation() {
+    // The streamed file job holds at most the batch lane: dictation still gets its slot.
+    let mut env = stream_env();
+    env.push(("FAKE_BATCH_DELAY_MS", "300"));
+    let f = fixture(&env);
+    f.client.warm().unwrap();
+    let client = f.client.clone();
+    let job = std::thread::spawn(move || {
+        let samples = pcm(47.0);
+        client.transcribe_file_stream(&CancelToken::new(), None, |sink| {
+            feed(sink, &samples, 16_000, Duration::from_millis(1))
+        })
+    });
+    std::thread::sleep(Duration::from_millis(400));
+    let t = Instant::now();
+    let d = f
+        .client
+        .transcribe_dictation(&pcm(3.0), &CancelToken::new())
+        .unwrap();
+    assert_eq!(d.tokens.len(), 6);
+    assert!(
+        t.elapsed() < Duration::from_millis(800),
+        "{:?}",
+        t.elapsed()
+    );
+    job.join().unwrap().unwrap_or_else(|e| panic!("{e:?}"));
+}
+
+// ---- a failing producer interrupts the host waits of the scheduler
+
+fn windows_sent_in(log: &Path) -> usize {
+    std::fs::read_to_string(log)
+        .unwrap_or_default()
+        .lines()
+        .filter(|l| l.starts_with("transcribe_window"))
+        .count()
+}
+
+#[test]
+fn a_producer_failure_interrupts_a_slow_model_load() {
+    // The load takes 3 s (a first-time Core ML compile takes minutes). The decode
+    // fails after 150 ms: its error must not wait for the load.
+    let mut env = stream_env();
+    env.push(("FAKE_LOAD_DELAY_MS", "3000"));
+    let f = fixture(&env);
+    let cancel = CancelToken::new();
+    let started = Instant::now();
+    let r = f.client.transcribe_file_stream(&cancel, None, |sink| {
+        feed(sink, &pcm(2.0), 8_000, Duration::ZERO).unwrap();
+        std::thread::sleep(Duration::from_millis(150));
+        Err("file not found".to_string())
+    });
+    match r {
+        Err(StreamError::Producer(message)) => assert_eq!(message, "file not found"),
+        other => panic!("expected the producer's own error, got {other:?}"),
+    }
+    assert!(
+        started.elapsed() < Duration::from_millis(1500),
+        "returned after {:?}, not after the 3 s load",
+        started.elapsed()
+    );
+    assert!(!cancel.is_cancelled(), "the caller's token is the caller's");
+    assert_eq!(temp_entries(f.tmp.path()), 0);
+}
+
+#[test]
+fn a_producer_failure_interrupts_a_window_in_flight() {
+    // Each window takes 3 s on the host. The decode fails once windows were sent.
+    let log = tempfile::tempdir().unwrap();
+    let log_path = log.path().join("ops.log");
+    let mut env = stream_env();
+    env.push(("FAKE_WINDOW_DELAY_MS", "3000"));
+    env.push(("FAKE_LOG", log_path.to_str().unwrap()));
+    let f = fixture(&env);
+    f.client.warm().unwrap();
+    let cancel = CancelToken::new();
+    let samples = pcm(25.0);
+    let log_for_producer = log_path.clone();
+    let mut sent_when_failing = 0;
+    let started = Instant::now();
+    let r = f.client.transcribe_file_stream(&cancel, None, |sink| {
+        feed(sink, &samples, 8_000, Duration::ZERO).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while windows_sent_in(&log_for_producer) == 0 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        sent_when_failing = windows_sent_in(&log_for_producer);
+        Err("decode failed at 25 s".to_string())
+    });
+    match r {
+        Err(StreamError::Producer(message)) => assert_eq!(message, "decode failed at 25 s"),
+        other => panic!("expected the producer's own error, got {other:?}"),
+    }
+    assert!(sent_when_failing >= 1, "a window was in flight");
+    assert!(
+        started.elapsed() < Duration::from_millis(1800),
+        "returned after {:?}, not after the 3 s window",
+        started.elapsed()
+    );
+    assert!(!cancel.is_cancelled(), "the caller's token is the caller's");
+    assert_eq!(temp_entries(f.tmp.path()), 0);
+}
+
+#[test]
+fn a_caller_cancel_still_wins_during_a_slow_load_and_stops_the_producer() {
+    let mut env = stream_env();
+    env.push(("FAKE_LOAD_DELAY_MS", "3000"));
+    let f = fixture(&env);
+    let cancel = CancelToken::new();
+    let from_outside = cancel.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(150));
+        from_outside.cancel();
+    });
+    let producer_closed = Arc::new(AtomicBool::new(false));
+    let closed = producer_closed.clone();
+    let started = Instant::now();
+    let r = f.client.transcribe_file_stream(&cancel, None, |sink| loop {
+        match sink.append(&[0.0; 1_600]) {
+            Ok(()) => std::thread::sleep(Duration::from_millis(5)),
+            Err(_) => {
+                closed.store(true, Ordering::SeqCst);
+                return Err("stopped by the cancel".to_string());
+            }
+        }
+    });
+    assert!(
+        matches!(r, Err(StreamError::Engine(EngineHostError::Cancelled))),
+        "a genuine cancel is Cancelled, not the producer's error: {r:?}"
+    );
+    assert!(producer_closed.load(Ordering::SeqCst));
+    assert!(
+        started.elapsed() < Duration::from_millis(1500),
+        "{:?}",
+        started.elapsed()
+    );
+    assert_eq!(temp_entries(f.tmp.path()), 0);
 }

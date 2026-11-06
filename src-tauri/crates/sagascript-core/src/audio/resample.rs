@@ -145,6 +145,233 @@ pub(crate) fn resample_to_16khz_bounded(
     Ok(output)
 }
 
+/// The batch resampler's fixed input chunk size, in source samples.
+pub(crate) const STREAM_CHUNK: usize = 1024;
+
+pub(crate) fn sinc_params() -> SincInterpolationParameters {
+    SincInterpolationParameters {
+        sinc_len: 256,
+        f_cutoff: 0.95,
+        interpolation: SincInterpolationType::Linear,
+        oversampling_factor: 256,
+        window: WindowFunction::BlackmanHarris2,
+    }
+}
+
+/// Incremental counterpart of [`resample_to_16khz`]: feed mono source-rate
+/// samples in chunks of any length, get 16 kHz samples out as they become
+/// available.
+///
+/// The concatenation of everything [`Self::push`] and [`Self::finish`] append
+/// is **bit-identical** to `resample_to_16khz(all_input, source_rate)`, for any
+/// split of the input into chunks. It buffers input into the same fixed
+/// 1024-sample chunks with the same `SincFixedIn` parameters as the batch
+/// code, and `finish` treats the remainder exactly like the batch code does:
+/// `process_partial(Some(remainder))`, or `process_partial(None)` when the
+/// remainder is empty.
+///
+/// One batch quirk is reproduced on purpose: the batch code sizes its chunks
+/// `1024.min(len)`, so an input *shorter than 1024 samples* is one single
+/// chunk of its own length. This type cannot know the total up front, so it
+/// holds such a short input back and, in `finish`, builds the same
+/// shorter-chunk resampler; inputs of 1024 or more samples never take that
+/// path. At the 16 kHz target rate input passes straight through.
+///
+/// The resampler itself is created on the first non-empty input, so an empty
+/// stream (and a zero rate with no samples) is `Ok` with no output, as in the
+/// batch code.
+///
+/// Memory: [`Self::push_with`] and [`Self::finish_with`] hand the output on one
+/// resampled chunk at a time, so a long input never builds a long output. A
+/// chunk is `1024 * ratio` samples and the resampler's buffers are a few times
+/// that, so the ratio must be sane: this type does not bound it (the batch code
+/// bounds its whole output instead); the decoder refuses source rates under
+/// 1 kHz.
+pub struct StreamingResampler {
+    source_rate: u32,
+    /// Created at the first full chunk; `None` while fewer than
+    /// [`STREAM_CHUNK`] samples were seen (and always for 16 kHz input).
+    resampler: Option<SincFixedIn<f32>>,
+    /// Input not yet resampled: always fewer than [`STREAM_CHUNK`] samples
+    /// between calls.
+    pending: Vec<f32>,
+    finished: bool,
+}
+
+impl StreamingResampler {
+    pub fn new(source_rate: u32) -> Self {
+        Self {
+            source_rate,
+            resampler: None,
+            pending: Vec::new(),
+            finished: false,
+        }
+    }
+
+    fn passthrough(&self) -> bool {
+        self.source_rate == TARGET_SAMPLE_RATE
+    }
+
+    fn build(&self, chunk_size: usize) -> Result<SincFixedIn<f32>, String> {
+        if self.source_rate == 0 {
+            return Err("source sample rate must be > 0".to_string());
+        }
+        let ratio = TARGET_SAMPLE_RATE as f64 / self.source_rate as f64;
+        SincFixedIn::<f32>::new(ratio, 2.0, sinc_params(), chunk_size, 1)
+            .map_err(|e| format!("Failed to create resampler: {e}"))
+    }
+
+    /// Append the 16 kHz samples that `mono` completes to `out`. May append
+    /// nothing while input is still being buffered into a chunk.
+    pub fn push(&mut self, mono: &[f32], out: &mut Vec<f32>) -> Result<(), String> {
+        self.push_with(mono, &mut |chunk| {
+            out.extend_from_slice(chunk);
+            Ok::<(), std::convert::Infallible>(())
+        })
+        .map_err(StreamResampleError::into_message)
+    }
+
+    /// Like [`Self::push`], but hands the output to `emit` one resampled chunk
+    /// at a time, as it is produced: nothing accumulates, so memory stays
+    /// bounded by one chunk (1024 input samples, so `1024 * ratio` output
+    /// samples) however much `mono` holds. `emit` may refuse (for a limit, say),
+    /// which stops the resampling at once with its error.
+    pub fn push_with<E>(
+        &mut self,
+        mono: &[f32],
+        emit: &mut dyn FnMut(&[f32]) -> Result<(), E>,
+    ) -> Result<(), StreamResampleError<E>> {
+        debug_assert!(!self.finished, "push after finish");
+        if self.passthrough() {
+            if !mono.is_empty() {
+                emit(mono).map_err(StreamResampleError::Output)?;
+            }
+            return Ok(());
+        }
+        let mut rest = mono;
+        // Top up a partial chunk first.
+        if !self.pending.is_empty() {
+            let take = (STREAM_CHUNK - self.pending.len()).min(rest.len());
+            self.pending.extend_from_slice(&rest[..take]);
+            rest = &rest[take..];
+            if self.pending.len() < STREAM_CHUNK {
+                return Ok(());
+            }
+            let chunk = std::mem::take(&mut self.pending);
+            self.process_chunk(&chunk, emit)?;
+            self.pending = chunk;
+            self.pending.clear();
+        }
+        // Whole chunks straight from the caller's slice, without a copy.
+        let (chunks, remainder) = rest.as_chunks::<STREAM_CHUNK>();
+        for chunk in chunks {
+            self.process_chunk(chunk, emit)?;
+        }
+        self.pending.extend_from_slice(remainder);
+        Ok(())
+    }
+
+    fn process_chunk<E>(
+        &mut self,
+        chunk: &[f32],
+        emit: &mut dyn FnMut(&[f32]) -> Result<(), E>,
+    ) -> Result<(), StreamResampleError<E>> {
+        if self.resampler.is_none() {
+            self.resampler = Some(
+                self.build(STREAM_CHUNK)
+                    .map_err(StreamResampleError::Resample)?,
+            );
+        }
+        let resampler = self.resampler.as_mut().expect("created above");
+        let result = resampler
+            .process(&[chunk], None)
+            .map_err(|e| StreamResampleError::Resample(format!("Resample failed: {e}")))?;
+        emit_nonempty(&result[0], emit)
+    }
+
+    /// Flush: append the tail of the signal (the short last chunk and the
+    /// filter's flush). The resampler is spent afterwards.
+    pub fn finish(&mut self, out: &mut Vec<f32>) -> Result<(), String> {
+        self.finish_with(&mut |chunk| {
+            out.extend_from_slice(chunk);
+            Ok::<(), std::convert::Infallible>(())
+        })
+        .map_err(StreamResampleError::into_message)
+    }
+
+    /// [`Self::finish`], handing the tail to `emit` (see [`Self::push_with`]).
+    pub fn finish_with<E>(
+        &mut self,
+        emit: &mut dyn FnMut(&[f32]) -> Result<(), E>,
+    ) -> Result<(), StreamResampleError<E>> {
+        self.finished = true;
+        if self.passthrough() {
+            return Ok(());
+        }
+        let remainder = std::mem::take(&mut self.pending);
+        let Some(mut resampler) = self.resampler.take() else {
+            // Fewer than one chunk in total: the batch code makes the chunk as
+            // long as the whole input, processes it, then flushes.
+            if remainder.is_empty() {
+                return Ok(());
+            }
+            let mut resampler = self
+                .build(remainder.len())
+                .map_err(StreamResampleError::Resample)?;
+            let result = resampler
+                .process(&[remainder.as_slice()], None)
+                .map_err(|e| StreamResampleError::Resample(format!("Resample failed: {e}")))?;
+            emit_nonempty(&result[0], emit)?;
+            let result = resampler
+                .process_partial(None::<&[Vec<f32>]>, None)
+                .map_err(|e| {
+                    StreamResampleError::Resample(format!("Resample flush failed: {e}"))
+                })?;
+            return emit_nonempty(&result[0], emit);
+        };
+        let result = if remainder.is_empty() {
+            resampler
+                .process_partial(None::<&[Vec<f32>]>, None)
+                .map_err(|e| StreamResampleError::Resample(format!("Resample flush failed: {e}")))?
+        } else {
+            resampler
+                .process_partial(Some(&[remainder.as_slice()]), None)
+                .map_err(|e| {
+                    StreamResampleError::Resample(format!("Resample partial failed: {e}"))
+                })?
+        };
+        emit_nonempty(&result[0], emit)
+    }
+}
+
+/// Why [`StreamingResampler::push_with`] or [`StreamingResampler::finish_with`] stopped.
+#[derive(Debug)]
+pub enum StreamResampleError<E> {
+    /// The resampler failed (or could not be built).
+    Resample(String),
+    /// The `emit` callback returned this error.
+    Output(E),
+}
+
+impl StreamResampleError<std::convert::Infallible> {
+    fn into_message(self) -> String {
+        match self {
+            Self::Resample(message) => message,
+            Self::Output(never) => match never {},
+        }
+    }
+}
+
+fn emit_nonempty<E>(
+    chunk: &[f32],
+    emit: &mut dyn FnMut(&[f32]) -> Result<(), E>,
+) -> Result<(), StreamResampleError<E>> {
+    if chunk.is_empty() {
+        return Ok(());
+    }
+    emit(chunk).map_err(StreamResampleError::Output)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -331,6 +558,183 @@ mod tests {
             result.iter().all(|s| s.is_finite()),
             "Output contains NaN or Inf"
         );
+    }
+
+    // -- StreamingResampler --
+
+    /// xorshift64: deterministic pseudo-random numbers without a dependency.
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+        fn below(&mut self, n: usize) -> usize {
+            (self.next() % n as u64) as usize
+        }
+    }
+
+    fn signal(len: usize, seed: u64) -> Vec<f32> {
+        let mut rng = Rng(seed | 1);
+        (0..len)
+            .map(|i| {
+                (i as f32 * 0.037).sin() * 0.6
+                    + ((rng.next() >> 40) as f32 / 16_777_216.0 - 0.5) * 0.2
+            })
+            .collect()
+    }
+
+    fn bits(v: &[f32]) -> Vec<u32> {
+        v.iter().map(|f| f.to_bits()).collect()
+    }
+
+    /// Feed `input` in random pieces (including empty ones) and return the whole output.
+    fn stream_in_random_pieces(
+        input: &[f32],
+        rate: u32,
+        rng: &mut Rng,
+        max_piece: usize,
+    ) -> Vec<f32> {
+        let mut resampler = StreamingResampler::new(rate);
+        let mut out = Vec::new();
+        let mut at = 0;
+        while at < input.len() {
+            let n = rng.below(max_piece + 1).min(input.len() - at);
+            resampler.push(&input[at..at + n], &mut out).unwrap();
+            at += n;
+        }
+        resampler.finish(&mut out).unwrap();
+        out
+    }
+
+    #[test]
+    fn streaming_resample_is_bit_identical_to_batch_for_any_chunking() {
+        let mut rng = Rng(0x9e37_79b9_7f4a_7c15);
+        for rate in [8_000u32, 44_100, 48_000] {
+            // Lengths at, around and past the chunk size, with and without a
+            // remainder (multiples of 1024 take the `process_partial(None)` path).
+            let mut lengths = vec![1024, 1025, 2047, 2048, 3 * 1024, 5000, 12_345];
+            lengths.extend((0..2).map(|_| 1024 + rng.below(12_000)));
+            for len in lengths {
+                let input = signal(len, rng.next());
+                let batch = resample_to_16khz(input.clone(), rate).unwrap();
+                for max_piece in [1usize, 333, 1500, 9000] {
+                    let streamed = stream_in_random_pieces(&input, rate, &mut rng, max_piece);
+                    assert_eq!(
+                        bits(&streamed),
+                        bits(&batch),
+                        "rate {rate} len {len} max_piece {max_piece}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn streaming_resample_matches_batch_for_inputs_shorter_than_one_chunk() {
+        let mut rng = Rng(42);
+        for rate in [8_000u32, 44_100, 48_000] {
+            for len in [1usize, 2, 17, 700, 1023] {
+                let input = signal(len, rng.next());
+                let batch = resample_to_16khz(input.clone(), rate).unwrap();
+                for max_piece in [1usize, 5, 2000] {
+                    let streamed = stream_in_random_pieces(&input, rate, &mut rng, max_piece);
+                    assert_eq!(bits(&streamed), bits(&batch), "rate {rate} len {len}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn streaming_resample_passes_16khz_through_and_accepts_an_empty_stream() {
+        let input = signal(5000, 7);
+        let mut rng = Rng(5);
+        let streamed = stream_in_random_pieces(&input, TARGET_SAMPLE_RATE, &mut rng, 999);
+        assert_eq!(bits(&streamed), bits(&input));
+        // An empty stream is fine at any rate, even 0, like the batch code.
+        for rate in [0, 16_000, 44_100] {
+            let mut out = Vec::new();
+            let mut resampler = StreamingResampler::new(rate);
+            resampler.push(&[], &mut out).unwrap();
+            resampler.finish(&mut out).unwrap();
+            assert!(out.is_empty(), "rate {rate}");
+        }
+    }
+
+    #[test]
+    fn streaming_resample_rejects_a_zero_rate_with_samples() {
+        let mut out = Vec::new();
+        let mut resampler = StreamingResampler::new(0);
+        let error = resampler
+            .push(&vec![0.1; 2048], &mut out)
+            .and_then(|()| resampler.finish(&mut out))
+            .unwrap_err();
+        assert!(error.contains("source sample rate"), "{error}");
+        let mut short = StreamingResampler::new(0);
+        short.push(&[0.1, 0.2], &mut out).unwrap();
+        assert!(short
+            .finish(&mut out)
+            .unwrap_err()
+            .contains("source sample rate"));
+    }
+
+    #[test]
+    fn push_with_hands_out_one_chunk_at_a_time_and_stops_when_emit_refuses() {
+        let input = signal(5 * 1024 + 10, 11);
+        let mut resampler = StreamingResampler::new(48_000);
+        let mut sizes = Vec::new();
+        let mut joined = Vec::new();
+        resampler
+            .push_with(&input, &mut |chunk| {
+                sizes.push(chunk.len());
+                joined.extend_from_slice(chunk);
+                Ok::<(), ()>(())
+            })
+            .unwrap();
+        resampler
+            .finish_with(&mut |chunk| {
+                sizes.push(chunk.len());
+                joined.extend_from_slice(chunk);
+                Ok::<(), ()>(())
+            })
+            .unwrap();
+        assert!(sizes.len() >= 6, "five chunks, then the tail: {sizes:?}");
+        assert!(
+            sizes[..5].iter().all(|&n| (250..=400).contains(&n)),
+            "1024 samples at 48 kHz are about 341 at 16 kHz: {sizes:?}"
+        );
+        assert_eq!(
+            bits(&joined),
+            bits(&resample_to_16khz(input.clone(), 48_000).unwrap())
+        );
+
+        // A refusal stops the work at once and comes back as the caller's error.
+        let mut resampler = StreamingResampler::new(48_000);
+        let mut calls = 0;
+        let result = resampler.push_with(&input, &mut |_| {
+            calls += 1;
+            if calls == 2 {
+                Err("limit")
+            } else {
+                Ok(())
+            }
+        });
+        assert!(matches!(result, Err(StreamResampleError::Output("limit"))));
+        assert_eq!(calls, 2);
+    }
+
+    #[test]
+    fn streaming_resample_emits_output_as_input_arrives() {
+        // Output must not be held back until the end: after a few chunks some
+        // 16 kHz audio is out already.
+        let mut resampler = StreamingResampler::new(48_000);
+        let mut out = Vec::new();
+        resampler
+            .push(&vec![0.25; 4 * 1024 + 10], &mut out)
+            .unwrap();
+        assert!(out.len() >= 1300, "got {}", out.len());
     }
 
     #[test]

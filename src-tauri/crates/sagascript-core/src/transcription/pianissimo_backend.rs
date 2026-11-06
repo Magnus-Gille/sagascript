@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 
+use crate::audio::decoder::{decode_audio_file_streaming, StreamInfo};
 use crate::error::DictationError;
 use crate::models::PianissimoModel;
 use crate::path_scrub::scrub_paths;
@@ -26,7 +27,8 @@ use crate::sync::lock_or_recover;
 use crate::transcription::dev_overrides::env_override;
 use crate::transcription::engine_host::{
     CancelToken, ClientIdentity, EngineHostClient, EngineHostConfig, EngineHostError, ErrorCode,
-    LoadEvent, LoadObserver, LoadSpec, Transcription, WarmResult, WindowTiming,
+    LoadEvent, LoadObserver, LoadSpec, Sink, SinkError, StreamError, Transcription, WarmResult,
+    WindowTiming,
 };
 use crate::transcription::pianissimo_model;
 
@@ -968,6 +970,93 @@ fn engine_code(error: &EngineHostError) -> (&'static str, bool) {
     }
 }
 
+/// What [`PianissimoBackend::transcribe_file_streaming`] learned about the audio.
+#[derive(Debug, Clone, Copy)]
+pub struct StreamStats {
+    /// Length of the audio in 16 kHz samples (all of it, once decoded).
+    pub audio_samples: usize,
+    /// When the decoder finished the file. Inference normally runs on past this
+    /// instant: the decode overlaps it.
+    pub decode_finished_at: Instant,
+}
+
+impl StreamStats {
+    /// Length of the audio in seconds.
+    pub fn audio_seconds(&self) -> f64 {
+        self.audio_samples as f64 / 16_000.0
+    }
+}
+
+/// The error a producer returns for a refused [`Sink::append`].
+fn sink_error_to_dictation(error: SinkError) -> DictationError {
+    match error {
+        // The transcription was cancelled, or failed (its own error wins).
+        SinkError::Closed => cancelled_error(),
+        SinkError::Io(e) => map_engine_error(EngineHostError::Io(e)),
+    }
+}
+
+/// The audio length to expect when the container announces none: what was
+/// decoded so far, scaled by the fraction of the file read. Silent until at
+/// least 2% of the file was read, when the fraction means something.
+fn estimate_total_from_bytes(samples: usize, consumed: u64, total: u64) -> Option<usize> {
+    if total == 0 || consumed == 0 || consumed.saturating_mul(50) < total {
+        return None;
+    }
+    let estimate = samples as u128 * u128::from(total) / u128::from(consumed);
+    usize::try_from(estimate).ok()
+}
+
+/// The producer of a streamed file job: decode `path` into `sink` and record
+/// the decoder's stats.
+fn stream_decode_into(
+    path: &Path,
+    sink: &Sink<'_>,
+    cancelled: &AtomicBool,
+    token: &CancelToken,
+    stats: &Mutex<Option<StreamStats>>,
+) -> Result<(), DictationError> {
+    let checkpoint = || {
+        if cancelled.load(Ordering::SeqCst) || token.is_cancelled() {
+            Err(cancelled_error())
+        } else {
+            Ok(())
+        }
+    };
+    let opened: std::cell::RefCell<Option<StreamInfo>> = std::cell::RefCell::new(None);
+    let mut streamed = 0usize;
+    let done = decode_audio_file_streaming(
+        path,
+        &checkpoint,
+        &mut |info| {
+            if let Some(expected) = info.expected_samples {
+                sink.set_expected_total(expected);
+            }
+            *opened.borrow_mut() = Some(info.clone());
+        },
+        &mut |chunk| {
+            sink.append(chunk).map_err(sink_error_to_dictation)?;
+            streamed += chunk.len();
+            if let Some(info) = opened.borrow().as_ref() {
+                if info.expected_samples.is_none() {
+                    let consumed = info.consumed_bytes.load(Ordering::Relaxed);
+                    if let Some(total) =
+                        estimate_total_from_bytes(streamed, consumed, info.total_bytes)
+                    {
+                        sink.set_expected_total(total);
+                    }
+                }
+            }
+            Ok(())
+        },
+    )?;
+    *lock_or_recover(stats, "pianissimo.stream_stats") = Some(StreamStats {
+        audio_samples: done.samples,
+        decode_finished_at: Instant::now(),
+    });
+    Ok(())
+}
+
 pub(crate) fn to_result(transcription: Transcription) -> PianissimoResult {
     PianissimoResult {
         window_timings: transcription.windows,
@@ -1138,6 +1227,73 @@ impl PianissimoBackend {
         Ok(to_result(transcription))
     }
 
+    /// Decode `path` and transcribe it as a file job, the two at once: the
+    /// engine works on the first windows while the rest of the file is still
+    /// being decoded and resampled, so the decode (about 2.5 times faster than
+    /// inference) hides behind inference instead of preceding it.
+    ///
+    /// The transcript equals `transcribe_with_cancel(&decode_audio_file(path)?, ..)`:
+    /// the decoder output is bit-identical to the batch decode and the windows
+    /// are the same. `progress` receives non-decreasing 0..=100 percentages;
+    /// while the file is decoding they are estimates (from the container's
+    /// length, else from the fraction of the file read) and stay below 100
+    /// until the end. `cancelled` is observed continuously, by the decoder too.
+    /// Errors map as in [`Self::transcribe_with_cancel`]; decoder errors keep
+    /// their own variants.
+    pub fn transcribe_file_streaming(
+        &self,
+        path: &Path,
+        progress: impl Fn(u8),
+        cancelled: &AtomicBool,
+    ) -> Result<(PianissimoResult, StreamStats), DictationError> {
+        if cancelled.load(Ordering::SeqCst) {
+            return Err(cancelled_error());
+        }
+        let token = CancelToken::new();
+        {
+            let mut active = self.active.lock().map_err(|_| {
+                DictationError::TranscriptionFailed("Pianissimo operation lock was poisoned".into())
+            })?;
+            *active = Some(token.clone());
+        }
+        progress(0);
+        let stats: Mutex<Option<StreamStats>> = Mutex::new(None);
+        // Percentages only ever grow, and each is reported once.
+        let last_percent = std::cell::Cell::new(0u8);
+        let outcome = with_cancel_bridge(cancelled, &token, || {
+            let mut report = |merged: usize, total: usize| {
+                let percent = (merged * 100).checked_div(total).unwrap_or(100).min(100) as u8;
+                if percent > last_percent.get() {
+                    last_percent.set(percent);
+                    progress(percent);
+                }
+            };
+            self.client
+                .transcribe_file_stream(&token, Some(&mut report), |sink| {
+                    stream_decode_into(path, sink, cancelled, &token, &stats)
+                })
+        });
+        if let Ok(mut active) = self.active.lock() {
+            let _ = active.take();
+        }
+        let transcription = match outcome {
+            Ok(transcription) => transcription,
+            Err(StreamError::Engine(error)) => return Err(map_engine_error(error)),
+            Err(StreamError::Producer(error)) => return Err(error),
+        };
+        if last_percent.get() < 100 {
+            progress(100);
+        }
+        let stats = lock_or_recover(&stats, "pianissimo.stream_stats")
+            .take()
+            .ok_or_else(|| {
+                DictationError::TranscriptionFailed(
+                    "the decoder finished without reporting its result".into(),
+                )
+            })?;
+        Ok((to_result(transcription), stats))
+    }
+
     /// Cancel the running transcription (best effort, non-sticky).
     pub fn request_abort(&self) {
         if let Ok(active) = self.active.lock() {
@@ -1186,6 +1342,29 @@ mod tests {
             message: message.into(),
             retryable,
         }
+    }
+
+    #[test]
+    fn the_length_of_a_streamed_file_is_estimated_from_the_fraction_read() {
+        assert_eq!(estimate_total_from_bytes(16_000, 0, 1_000), None);
+        assert_eq!(estimate_total_from_bytes(16_000, 100, 0), None);
+        assert_eq!(
+            estimate_total_from_bytes(16_000, 10, 1_000),
+            None,
+            "1% of the file says too little"
+        );
+        assert_eq!(estimate_total_from_bytes(16_000, 100, 1_000), Some(160_000));
+        assert_eq!(estimate_total_from_bytes(usize::MAX, 1, u64::MAX), None);
+    }
+
+    #[test]
+    fn a_refused_append_ends_the_decode_as_cancelled() {
+        assert!(matches!(
+            sink_error_to_dictation(SinkError::Closed),
+            DictationError::Cancelled
+        ));
+        let io = sink_error_to_dictation(SinkError::Io(std::io::Error::other("disk full")));
+        assert_eq!(io.code(), "engine_io");
     }
 
     #[test]

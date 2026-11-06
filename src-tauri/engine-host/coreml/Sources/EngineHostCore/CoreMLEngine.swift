@@ -76,7 +76,7 @@ public final class CoreMLEngine: EngineBackend {
             self.cacheDirectory = home
                 .appendingPathComponent("Library/Caches/Sagascript/EngineHost", isDirectory: true)
         }
-        self.currentCapabilities = HostCapabilities(maxInFlight: Self.configuredMaxInFlight)
+        self.currentCapabilities = Self.defaultCapabilities
     }
 
     public var capabilities: HostCapabilities {
@@ -157,9 +157,9 @@ public final class CoreMLEngine: EngineBackend {
             lock.lock()
             model = loaded
             loadedSourcePath = modelDirectory
-            let overlap = ProcessInfo.processInfo.environment["SAGASCRIPT_ENGINE_OVERLAP_S"]
-                .flatMap(Double.init)
-                ?? (loaded.windowSeconds <= 15 ? 2 : 6)
+            let overlap = Self.overlapOverride(
+                environment: ProcessInfo.processInfo.environment, window: loaded.windowSeconds
+            ) ?? (loaded.windowSeconds <= 15 ? 2 : 6)
             currentCapabilities = HostCapabilities(
                 maxWindowSeconds: loaded.windowSeconds,
                 preferredWindowSeconds: loaded.windowSeconds,
@@ -343,7 +343,7 @@ public final class CoreMLEngine: EngineBackend {
         lock.lock()
         model = nil
         loadedSourcePath = nil
-        currentCapabilities = HostCapabilities(maxInFlight: configuredMaxInFlight)
+        currentCapabilities = Self.defaultCapabilities
         lock.unlock()
     }
 
@@ -369,6 +369,56 @@ public final class CoreMLEngine: EngineBackend {
 
     private static var configuredMaxInFlight: Int {
         configuredMaxInFlight(environment: ProcessInfo.processInfo.environment)
+    }
+
+    /// `SAGASCRIPT_ENGINE_OVERLAP_S` (seconds of window overlap, for benchmarking), if set
+    /// to a usable number: finite and not negative.
+    static func overlapOverride(environment: [String: String]) -> Double? {
+        environment["SAGASCRIPT_ENGINE_OVERLAP_S"]
+            .flatMap(Double.init).flatMap { $0.isFinite && $0 >= 0 ? $0 : nil }
+    }
+
+    /// The override, if it is a valid overlap for windows of `window` seconds: strictly
+    /// below the window. The client rejects a host that announces an overlap that is not,
+    /// so a larger value is ignored (with a one-line warning to `warn`) instead of
+    /// stopping the host.
+    static func overlapOverride(
+        environment: [String: String],
+        window: Double,
+        warn: (String) -> Void = { message in
+            FileHandle.standardError.write(Data("sagascript-engine-host: \(message)\n".utf8))
+        }
+    ) -> Double? {
+        guard let value = overlapOverride(environment: environment) else { return nil }
+        guard value < window else {
+            warn("ignoring SAGASCRIPT_ENGINE_OVERLAP_S=\(value): the overlap must be below the \(window) s window")
+            return nil
+        }
+        return value
+    }
+
+    /// What `hello` announces, before any model is loaded. The client plans its windows
+    /// from these values (only the window length is taken from `load` afterwards), so the
+    /// overlap override has to be in here to have any effect, and has to be valid for the
+    /// window announced with it.
+    static func defaultCapabilities(
+        environment: [String: String],
+        warn: (String) -> Void = { message in
+            FileHandle.standardError.write(Data("sagascript-engine-host: \(message)\n".utf8))
+        }
+    ) -> HostCapabilities {
+        let announcedWindow = HostCapabilities().preferredWindowSeconds
+        return HostCapabilities(
+            preferredWindowSeconds: announcedWindow,
+            preferredOverlapSeconds: overlapOverride(
+                environment: environment, window: announcedWindow, warn: warn
+            ) ?? 2,
+            maxInFlight: configuredMaxInFlight(environment: environment)
+        )
+    }
+
+    private static var defaultCapabilities: HostCapabilities {
+        defaultCapabilities(environment: ProcessInfo.processInfo.environment)
     }
 
     private func tuningUnits(_ variable: String, default fallback: MLComputeUnits) throws -> MLComputeUnits {

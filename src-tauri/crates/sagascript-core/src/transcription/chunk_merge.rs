@@ -99,6 +99,184 @@ pub fn plan_windows(
     out
 }
 
+/// How many windows [`plan_windows`] returns, computed from the length alone
+/// (saturating arithmetic, nothing allocated), so an absurd length is as cheap
+/// as a small one.
+///
+/// The plan starts a window every `step` samples, ends it at `start + size`,
+/// and stops after the first window that reaches the end (or when the next
+/// start would be past the end, which only happens when `step > size`). So it
+/// has `1 + ceil((total - size) / step)` windows, capped at `ceil(total / step)`
+/// starts before the end; a single window when the audio fits one or the
+/// parameters cannot slide (`size` or `step` zero).
+pub fn count_windows(
+    total_samples: usize,
+    sample_rate: u32,
+    window_s: f64,
+    overlap_s: f64,
+) -> usize {
+    let sr = f64::from(sample_rate);
+    let size = (window_s * sr) as usize;
+    let step = ((window_s - overlap_s) * sr) as usize;
+    if total_samples <= size || size == 0 || step == 0 {
+        return 1;
+    }
+    let starting_before_the_end = total_samples.div_ceil(step);
+    let up_to_the_one_that_reaches_it = (total_samples - size).div_ceil(step).saturating_add(1);
+    starting_before_the_end.min(up_to_the_one_that_reaches_it)
+}
+
+/// How many windows [`plan_for_total`] returns, without building them.
+pub fn count_planned_windows(
+    total_samples: usize,
+    sample_rate: u32,
+    max_window_s: f64,
+    preferred_window_s: f64,
+    overlap_s: f64,
+) -> usize {
+    let max_window = (max_window_s * f64::from(sample_rate)) as usize;
+    if total_samples <= max_window {
+        1
+    } else {
+        count_windows(
+            total_samples,
+            sample_rate,
+            preferred_window_s.min(max_window_s),
+            overlap_s,
+        )
+    }
+}
+
+/// The windows a file job transcribes, planned once the length is known: one
+/// window `[0, total)` when `total <= max_window_s * sr`, otherwise
+/// [`plan_windows`] with the window the engine prefers (capped at its maximum).
+///
+/// This is the plan [`WindowPlanner`] reproduces incrementally.
+pub fn plan_for_total(
+    total_samples: usize,
+    sample_rate: u32,
+    max_window_s: f64,
+    preferred_window_s: f64,
+    overlap_s: f64,
+) -> Vec<Window> {
+    let max_window = (max_window_s * f64::from(sample_rate)) as usize;
+    if total_samples <= max_window {
+        vec![Window {
+            start_sample: 0,
+            end_sample: total_samples,
+        }]
+    } else {
+        plan_windows(
+            total_samples,
+            sample_rate,
+            preferred_window_s.min(max_window_s),
+            overlap_s,
+        )
+    }
+}
+
+/// Plans the windows of [`plan_for_total`] while the audio is still arriving.
+///
+/// Feed it the number of samples available so far and whether the audio has
+/// ended; it hands out each window as soon as the window is *determined*, never
+/// before. For any arrival pattern the windows it hands out, in order, are
+/// exactly those `plan_for_total` returns for the final length.
+///
+/// Why this is possible: a window `[s, s + size)` is the same for every total
+/// length `>= s + size`, and a window that runs to the end of the audio needs
+/// the end to be known. Nothing is handed out while `available <= max_window`
+/// and the audio has not ended, because a total that short is a single window
+/// `[0, total)` rather than the first window of the regular plan.
+#[derive(Debug, Clone)]
+pub struct WindowPlanner {
+    /// Longest audio planned as one window.
+    max_window: usize,
+    /// Regular window length and start-to-start distance.
+    size: usize,
+    step: usize,
+    /// Start of the next regular window.
+    next_start: usize,
+    /// End of the last window handed out.
+    last_end: Option<usize>,
+    done: bool,
+}
+
+impl WindowPlanner {
+    pub fn new(
+        sample_rate: u32,
+        max_window_s: f64,
+        preferred_window_s: f64,
+        overlap_s: f64,
+    ) -> Self {
+        let sr = f64::from(sample_rate);
+        let window_s = preferred_window_s.min(max_window_s);
+        Self {
+            max_window: (max_window_s * sr) as usize,
+            size: (window_s * sr) as usize,
+            step: ((window_s - overlap_s) * sr) as usize,
+            next_start: 0,
+            last_end: None,
+            done: false,
+        }
+    }
+
+    /// True once every window was handed out: nothing more will ever come.
+    pub fn is_done(&self) -> bool {
+        self.done
+    }
+
+    /// The next window, if it is determined by `available` samples (the number
+    /// that exist now) and `finished` (no more will arrive). Call again until it
+    /// returns `None`; `available` may only grow between calls, and `finished`
+    /// may only go from false to true.
+    pub fn next_window(&mut self, available: usize, finished: bool) -> Option<Window> {
+        if self.done {
+            return None;
+        }
+        // The last window handed out already reached the end.
+        if finished && self.last_end.is_some_and(|end| end >= available) {
+            self.done = true;
+            return None;
+        }
+        if !finished && available <= self.max_window {
+            return None;
+        }
+        // Audio of up to one maximum window, or a plan that cannot slide
+        // (no window, or no step): one window over everything, once the end is known.
+        if self.last_end.is_none()
+            && (available <= self.max_window || self.size == 0 || self.step == 0)
+        {
+            if !finished {
+                return None;
+            }
+            self.done = true;
+            return Some(Window {
+                start_sample: 0,
+                end_sample: available,
+            });
+        }
+        let start = self.next_start;
+        let full_end = start.saturating_add(self.size);
+        let end = if full_end <= available {
+            full_end
+        } else if finished && start < available {
+            available
+        } else {
+            self.done = finished;
+            return None;
+        };
+        self.last_end = Some(end);
+        self.next_start = start.saturating_add(self.step);
+        if finished && end >= available {
+            self.done = true;
+        }
+        Some(Window {
+            start_sample: start,
+            end_sample: end,
+        })
+    }
+}
+
 /// Shift window-relative tokens onto the global timeline
 /// (`start += offset; end = start + duration`).
 pub(crate) fn offset_tokens(tokens: &mut [AlignedToken], offset_s: f64) {
@@ -524,5 +702,256 @@ mod tests {
             }
             assert_eq!(acc, full, "n={n} win={win} ov={ov}");
         }
+    }
+}
+
+#[cfg(test)]
+mod planner_tests {
+    use super::*;
+
+    /// xorshift64: deterministic pseudo-random numbers without a dependency.
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+        fn below(&mut self, n: usize) -> usize {
+            (self.next() % n as u64) as usize
+        }
+    }
+
+    /// Drive a planner over `total` samples arriving as `arrivals` (increasing
+    /// available counts ending at `total`), calling `next_window` until `None`
+    /// after every arrival and once more with `finished`. Returns the windows in
+    /// order, plus the `available` each was handed out at.
+    fn run(planner: &mut WindowPlanner, total: usize, arrivals: &[usize]) -> Vec<(Window, usize)> {
+        let mut out = Vec::new();
+        for &available in arrivals {
+            while let Some(w) = planner.next_window(available, false) {
+                out.push((w, available));
+            }
+        }
+        while let Some(w) = planner.next_window(total, true) {
+            out.push((w, total));
+        }
+        assert!(planner.is_done(), "done once the audio ended");
+        out
+    }
+
+    /// Increasing arrival counts ending at `total`: random steps, sometimes tiny,
+    /// sometimes spanning several windows.
+    fn arrivals(total: usize, sr: usize, rng: &mut Rng) -> Vec<usize> {
+        let mut out = Vec::new();
+        let mut at = 0;
+        while at < total {
+            let step = match rng.below(4) {
+                0 => 1 + rng.below(3),
+                1 => 1 + rng.below(sr / 2 + 1),
+                2 => sr + rng.below(sr),
+                _ => 1 + rng.below(8 * sr),
+            };
+            at = (at + step).min(total);
+            out.push(at);
+        }
+        out
+    }
+
+    /// (sample rate, max window s, preferred window s, overlap s)
+    const CAPS: &[(u32, f64, f64, f64)] = &[
+        (16_000, 15.0, 15.0, 2.0),
+        (16_000, 10.0, 10.0, 4.0),
+        (16_000, 30.0, 15.0, 2.0),
+        (16_000, 15.0, 20.0, 2.0),
+        (16_000, 15.0, 15.0, 0.0),
+        (16_000, 15.0, 15.0, 7.5),
+        (16_000, 15.0, 15.0, 15.0), // overlap == window: cannot slide
+        (16_000, 15.0, 15.0, 20.0),
+        (16_000, 15.0, 0.0, 0.0),
+        (100, 15.0, 15.0, 2.0),
+        (100, 1.5, 1.2, 0.3),
+        (1, 3.0, 3.0, 1.0),
+    ];
+
+    #[test]
+    fn incremental_plan_equals_the_batch_plan_for_any_arrival_pattern() {
+        let mut rng = Rng(0x2545_f491_4f6c_dd1d);
+        let mut cases = 0usize;
+        for &(sr, max_s, pref_s, overlap_s) in CAPS {
+            let max_window = (max_s * f64::from(sr)) as usize;
+            let mut totals: Vec<usize> = vec![0, 1, 2, max_window.saturating_sub(1), max_window];
+            // Around the max window and around the boundaries of the first windows.
+            let step = ((pref_s.min(max_s) - overlap_s) * f64::from(sr)) as usize;
+            let size = (pref_s.min(max_s) * f64::from(sr)) as usize;
+            for k in 0..5 {
+                for d in [0usize, 1, 2] {
+                    totals.push(max_window + k * step.max(1) + d);
+                    totals.push((k * step + size).saturating_sub(d));
+                    totals.push(k * step + size + d);
+                }
+            }
+            totals.extend((0..60).map(|_| rng.below(12 * max_window.max(8))));
+            for total in totals {
+                let want = plan_for_total(total, sr, max_s, pref_s, overlap_s);
+                for _ in 0..6 {
+                    let arrivals = arrivals(total, (sr as usize).max(1), &mut rng);
+                    let mut planner = WindowPlanner::new(sr, max_s, pref_s, overlap_s);
+                    let got = run(&mut planner, total, &arrivals);
+                    let windows: Vec<Window> = got.iter().map(|(w, _)| *w).collect();
+                    assert_eq!(
+                        windows, want,
+                        "sr {sr} max {max_s} pref {pref_s} overlap {overlap_s} total {total} arrivals {arrivals:?}"
+                    );
+                    // Nothing before the audio is longer than one maximum window, and
+                    // every window is handed out only once all its samples exist.
+                    for (w, available) in &got {
+                        assert!(w.end_sample <= *available);
+                        assert!(*available > max_window || *available == total);
+                    }
+                    cases += 1;
+                }
+                // The whole length at once (the batch case).
+                let mut planner = WindowPlanner::new(sr, max_s, pref_s, overlap_s);
+                let all_at_once = run(&mut planner, total, &[total]);
+                assert_eq!(
+                    all_at_once.iter().map(|(w, _)| *w).collect::<Vec<_>>(),
+                    want
+                );
+            }
+        }
+        assert!(cases > 4000, "{cases}");
+    }
+
+    /// Totals that exercise a plan: its edges (exact multiples of the step, the
+    /// window and the maximum window, and one either side) and random ones.
+    fn totals_around(
+        sr: u32,
+        max_s: f64,
+        pref_s: f64,
+        overlap_s: f64,
+        rng: &mut Rng,
+    ) -> Vec<usize> {
+        let max_window = (max_s * f64::from(sr)) as usize;
+        let size = (pref_s.min(max_s) * f64::from(sr)) as usize;
+        let step = ((pref_s.min(max_s) - overlap_s) * f64::from(sr)) as usize;
+        let mut totals = vec![0, 1, 2, 3, max_window, size];
+        for k in 0..40 {
+            for base in [
+                k * step.max(1),
+                k * step.max(1) + size,
+                k * step.max(1) + max_window,
+            ] {
+                for delta in [-2i64, -1, 0, 1, 2] {
+                    if let Some(total) = base.checked_add_signed(delta as isize) {
+                        totals.push(total);
+                    }
+                }
+            }
+        }
+        totals.extend((0..200).map(|_| rng.below(60 * max_window.max(8))));
+        totals
+    }
+
+    #[test]
+    fn the_window_count_formula_equals_the_length_of_the_plan() {
+        let mut rng = Rng(0x9e37_79b9_7f4a_7c15);
+        let mut caps = CAPS.to_vec();
+        // Windows that skip audio between them (a negative overlap), fractions
+        // that truncate, and a one-sample step.
+        caps.extend([
+            (16_000, 15.0, 15.0, -5.0),
+            (16_000, 15.0, 15.0, -0.5),
+            (100, 2.0, 2.0, 1.99), // a step of one sample
+            (16_000, 15.0, 7.3, 0.7),
+            (44_100, 10.0, 9.99, 0.01),
+            (7, 2.0, 2.0, 0.9),
+        ]);
+        let mut checked = 0;
+        for &(sr, max_s, pref_s, overlap_s) in &caps {
+            for total in totals_around(sr, max_s, pref_s, overlap_s, &mut rng) {
+                assert_eq!(
+                    count_windows(total, sr, pref_s.min(max_s), overlap_s),
+                    plan_windows(total, sr, pref_s.min(max_s), overlap_s).len(),
+                    "plan_windows: sr {sr} window {pref_s} overlap {overlap_s} total {total}"
+                );
+                assert_eq!(
+                    count_planned_windows(total, sr, max_s, pref_s, overlap_s),
+                    plan_for_total(total, sr, max_s, pref_s, overlap_s).len(),
+                    "plan_for_total: sr {sr} max {max_s} pref {pref_s} overlap {overlap_s} total {total}"
+                );
+                checked += 1;
+            }
+        }
+        assert!(checked > 5_000, "{checked}");
+    }
+
+    #[test]
+    fn counting_windows_of_an_absurd_length_neither_allocates_nor_overflows() {
+        // A header can claim any length. The count is arithmetic, not a plan.
+        for total in [usize::MAX, usize::MAX - 1, usize::MAX / 2, 1 << 62] {
+            let n = count_planned_windows(total, 16_000, 15.0, 15.0, 2.0);
+            let step = 13 * 16_000usize;
+            assert_eq!(n, 1 + (total - 15 * 16_000).div_ceil(step), "{total}");
+            assert_eq!(count_windows(total, 1, 1e-9, 0.0), 1, "no window to slide");
+        }
+        assert_eq!(count_windows(usize::MAX, 16_000, 15.0, 15.0), 1);
+    }
+
+    #[test]
+    fn nothing_is_planned_until_more_than_one_window_exists_or_the_audio_ended() {
+        let mut planner = WindowPlanner::new(16_000, 15.0, 15.0, 2.0);
+        assert_eq!(planner.next_window(0, false), None);
+        assert_eq!(planner.next_window(240_000, false), None, "== max window");
+        assert_eq!(
+            planner.next_window(240_001, false),
+            Some(Window {
+                start_sample: 0,
+                end_sample: 240_000
+            })
+        );
+        // The second window runs to the end of the audio, which is not known yet.
+        assert_eq!(planner.next_window(440_000, false), None);
+        assert_eq!(
+            planner.next_window(448_000, false),
+            Some(Window {
+                start_sample: 208_000,
+                end_sample: 448_000
+            })
+        );
+        // Audio that ends exactly there has no third window.
+        assert_eq!(planner.next_window(448_000, true), None);
+        assert!(planner.is_done());
+    }
+
+    #[test]
+    fn a_short_file_is_one_window_once_it_ended() {
+        let mut planner = WindowPlanner::new(16_000, 15.0, 15.0, 2.0);
+        assert_eq!(planner.next_window(100_000, false), None);
+        assert_eq!(
+            planner.next_window(100_000, true),
+            Some(Window {
+                start_sample: 0,
+                end_sample: 100_000
+            })
+        );
+        assert_eq!(planner.next_window(100_000, true), None);
+        assert!(planner.is_done());
+    }
+
+    #[test]
+    fn a_plan_that_cannot_slide_is_one_window_over_everything() {
+        // overlap == window: step 0.
+        let mut planner = WindowPlanner::new(16_000, 15.0, 15.0, 15.0);
+        assert_eq!(planner.next_window(1_000_000, false), None);
+        assert_eq!(
+            planner.next_window(1_000_000, true),
+            Some(Window {
+                start_sample: 0,
+                end_sample: 1_000_000
+            })
+        );
+        assert_eq!(planner.next_window(1_000_000, true), None);
     }
 }
