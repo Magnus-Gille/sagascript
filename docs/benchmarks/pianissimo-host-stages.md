@@ -111,9 +111,9 @@ means these rows cannot separate effects below roughly 30%. The streaming-vs-ins
    is the whole 3.8 s of the P1 gain; there is nothing more to hide.
 2. **The host is saturated.** The sum of host compute over the windows is 30.84 s; with 3 windows in
    flight that is 10.28 s, against 10.50 s measured: 98% of the end-to-end time is host compute
-   divided by the number of lanes. The per-window time (111 ms) is the same as a single window run
-   alone in the earlier ANE eviction measurements (31-41 ms encode), so the three lanes are not
-   queueing behind one another in the encoder either.
+   divided by the number of lanes. The median encode time with 3 lanes (35 ms) equals the solo
+   figure in `pianissimo-ane-eviction.md` (31-41 ms), so the lanes are not visibly queueing behind
+   one another inside the encoder call.
 3. **Inside the host the decoder loop is the largest stage, not the encoder:** 60% against 37% for
    the encoder and under 3% for preprocessing. The decoder + joint loop takes 66 ms per window
    against 35 ms for the encoder. At about 52 tokens per window that is roughly 1.3 ms per token
