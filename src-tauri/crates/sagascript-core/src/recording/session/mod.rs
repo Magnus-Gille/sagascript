@@ -26,16 +26,28 @@
 //! # Concurrency and locks
 //!
 //! The audio callback shares nothing but atomics and the lock-free queues with
-//! the rest (see [`capture`](super::capture)). The session has one mutex,
-//! `recording.session` (`inner`): it serialises `start` and `stop` and holds
-//! the sources and the thread handle. It is a **leaf for everything except**
-//! the status leaves (`recording.session.track_ended`,
-//! `recording.session.terminal`), which are taken inside it and never the
-//! other way round; no other lock of the program is taken while holding it,
-//! and no lock is held across an `.await` (the session has none). Poison is
-//! recovered with [`lock_or_recover`]: every critical section is a few
-//! assignments. The status snapshot takes no part of `inner`, so asking for it
-//! never waits for `start` or `stop`.
+//! the rest (see [`capture`](super::capture)). The session has the mutex
+//! `recording.session` (`inner`), which serialises `start` and elects the one
+//! `stop` that owns the shutdown, and the mutex `recording.session.sources`
+//! around the capture sources. `stop_all` holds the latter while the sources
+//! stop, so a second caller (the writer thread ending the recording by
+//! itself, or a second `stop`) waits until they have: nobody sees "stopped"
+//! while a source still delivers. Both are leaves apart from the status
+//! leaves (`recording.session.track_ended`, `recording.session.terminal`),
+//! which are taken inside them and never the other way round; a source's
+//! `stop` takes no lock of this module, so holding `sources` across it cannot
+//! deadlock, and the writer thread never joins itself. No lock is held across
+//! an `.await` (the session has none). Poison is recovered with
+//! [`lock_or_recover`]: every critical section is a few assignments. The
+//! status snapshot takes only the status leaves, so asking for it never waits
+//! for `start` or `stop`.
+//!
+//! # Who stops the sources
+//!
+//! Whoever ends the recording stops them *before* the terminal state is
+//! visible: `stop` (the owner, before it tells the writer to finish) or the
+//! writer thread (when every track has ended by itself, on failure, or when
+//! it panics). A `Done` or `Failed` session never has an open microphone.
 //!
 //! [`RecordingWriter`]: super::RecordingWriter
 
