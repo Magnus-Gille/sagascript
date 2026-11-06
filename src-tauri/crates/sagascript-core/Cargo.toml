@@ -97,3 +97,9 @@ workspace = true
 [[example]]
 name = "diarize_eval"
 required-features = ["diarization"]
+
+# Opens the microphone: a developer tool for the owner's hardware checks of the
+# recorder (SAGA-563), never run by a test.
+[[example]]
+name = "record_session"
+required-features = ["record"]
