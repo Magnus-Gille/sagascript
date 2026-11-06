@@ -1,0 +1,56 @@
+{
+ "r1_15s": {
+  "engine": "host:/Users/magnus/Library/Application Support/Sagascript/Models/pianissimo-sv-coreml-r1",
+  "clips": 759,
+  "words": 15390,
+  "errors": 1010,
+  "pooled_wer": 0.06562703053931124,
+  "mean_clip_wer": 0.06871176586463999,
+  "median_clip_wer": 0.043478260869565216
+ },
+ "r2_30s_gather": {
+  "engine": "host:/Users/magnus/.cache/sagascript-bench/issue-268/models/pianissimo-sv-coreml-r2-30s",
+  "clips": 759,
+  "words": 15390,
+  "errors": 985,
+  "pooled_wer": 0.06400259909031839,
+  "mean_clip_wer": 0.06787682744158069,
+  "median_clip_wer": 0.047619047619047616
+ },
+ "r2_40s_gather": {
+  "engine": "host:/Users/magnus/.cache/sagascript-bench/issue-268/models/pianissimo-sv-coreml-r2-40s",
+  "clips": 759,
+  "words": 15390,
+  "errors": 983,
+  "pooled_wer": 0.06387264457439897,
+  "mean_clip_wer": 0.06769345828044422,
+  "median_clip_wer": 0.046511627906976744
+ },
+ "r2_30s_skew": {
+  "engine": "host:/Users/magnus/.cache/sagascript-bench/issue-268/models/pianissimo-sv-coreml-r2s-30s",
+  "clips": 759,
+  "words": 15390,
+  "errors": 983,
+  "pooled_wer": 0.06387264457439897,
+  "mean_clip_wer": 0.06772110755787061,
+  "median_clip_wer": 0.047619047619047616
+ },
+ "r2_40s_skew": {
+  "engine": "host:/Users/magnus/.cache/sagascript-bench/issue-268/models/pianissimo-sv-coreml-r2s-40s",
+  "clips": 759,
+  "words": 15390,
+  "errors": 980,
+  "pooled_wer": 0.06367771280051981,
+  "mean_clip_wer": 0.06748005219982856,
+  "median_clip_wer": 0.046511627906976744
+ },
+ "mlx8": {
+  "engine": "mlx8",
+  "clips": 759,
+  "words": 15390,
+  "errors": 998,
+  "pooled_wer": 0.06484730344379468,
+  "mean_clip_wer": 0.06792425935424125,
+  "median_clip_wer": 0.045454545454545456
+ }
+}

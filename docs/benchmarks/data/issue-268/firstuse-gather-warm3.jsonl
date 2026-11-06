@@ -1,0 +1,3 @@
+{"model": "/Users/magnus/.cache/sagascript-bench/issue-268/models/pianissimo-sv-coreml-r2-30s", "ok": true, "window_s": 30, "first_load_s": 46.6, "thermal_max": 0, "host_rss_mb": 2594, "loadavg": 2.8359375}
+{"model": "/Users/magnus/Library/Application Support/Sagascript/Models/pianissimo-sv-coreml-r1", "ok": true, "window_s": 15, "first_load_s": 9.0, "thermal_max": 0, "host_rss_mb": 1324, "loadavg": 2.86669921875}
+{"model": "/Users/magnus/Library/Application Support/Sagascript/Models/pianissimo-sv-coreml-r1", "ok": true, "window_s": 15, "first_load_s": 9.3, "thermal_max": 0, "host_rss_mb": 1340, "loadavg": 3.69677734375}
