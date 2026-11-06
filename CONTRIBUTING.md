@@ -294,6 +294,7 @@ should happen only for the identity transition, not on every update.
 2. Make your changes, following the code style guidelines above.
 3. Run `npm run verify` (see [Running tests](#running-tests)). A bug fix includes a regression test that fails before the fix ([ADR 0004](docs/adr/0004-test-strategy.md)).
 4. Open a pull request with a clear description of what you changed and why.
+5. A pull request merges when `check-macos` and `check-windows` pass; it does not have to be up to date with `main`. Whoever merges watches the push CI on `main` and fixes or reverts a failure before the next merge ([ADR 0009](docs/adr/0009-merge-without-up-to-date.md)).
 
 Keep PRs focused -- one feature or fix per PR. If you're planning a large change, open an issue first to discuss the approach.
 
