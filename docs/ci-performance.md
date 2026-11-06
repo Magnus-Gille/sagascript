@@ -31,3 +31,16 @@ the step durations directly.
 
 This split keeps fast feedback focused on code and platform behavior while the
 release workflow remains the sole authority for distributable artifacts.
+
+## Windows Package Candidate on pull requests
+
+`windows-package.yml` takes about 30 minutes on two Windows runners and is not
+a required check, so a pull request runs it only when it is relevant. A small
+`decide` job (`scripts/ci/windows-package-gate.mjs`) lets the package build
+run when the pull request carries the label `windows-package`, changes the app
+version (`package.json` or `src-tauri/tauri.conf.json`, a release PR), or
+touches a file only Windows packaging reads (the path list, with reasons, is
+in that script). Otherwise the build job is skipped. To force a run on an open
+pull request, add the label `windows-package`; removing it does nothing. The
+release prebuild (`workflow_call`) and manual runs (`workflow_dispatch`) always
+build both packages.

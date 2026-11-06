@@ -160,7 +160,7 @@ test("the prebuilt cargo-deny install pins the version verify.mjs expects and a 
 
 test("windows-package.yml keeps the workspace commands the gates run", () => {
   const workflow = loadWorkflow("windows-package.yml");
-  const step = workflow.jobs[0].steps.find((candidate) => candidate.name === "Test and lint Rust workspace");
+  const step = workflow.job("build-windows-candidate").steps.find((candidate) => candidate.name === "Test and lint Rust workspace");
   const commands = commandLines(step);
   for (const id of ["test-workspace", "clippy-workspace"]) {
     const gate = GATES.find((candidate) => candidate.id === id);

@@ -79,6 +79,7 @@ export const TEST_GROUPS = {
     "scripts/test-windows-acceptance.mjs",
     "scripts/test-windows-arm-pianissimo.mjs",
     "scripts/test-windows-arm64-native.mjs",
+    "scripts/test-windows-package-gate.mjs",
     "scripts/test-windows-package-workflow.mjs",
     "scripts/test-windows-release-identity.mjs",
     "scripts/test-windows-x64-cpu-policy.mjs",
