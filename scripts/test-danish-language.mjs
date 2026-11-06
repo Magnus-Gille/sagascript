@@ -49,6 +49,7 @@ test("CLI help, config and listings name Danish", () => {
     cli,
     /Supported languages: English \(en\), Swedish \(sv\), Norwegian \(no\), Finnish \(fi\), Danish \(da\), Auto-detect \(auto\)\./,
   );
-  assert.match(cli, /Danish uses pianissimo-da where Pianissimo runs, otherwise the generic \\\nmultilingual Medium model/);
+  // The Rust string continues over a line break, which a Windows checkout writes as CRLF.
+  assert.match(cli, /Danish uses pianissimo-da where Pianissimo runs, otherwise the generic \\\r?\nmultilingual Medium model/);
   assert.match(cli, /sagascript list-models --language da/);
 });
