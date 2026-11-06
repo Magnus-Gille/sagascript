@@ -75,7 +75,7 @@
     sv: "about 600 MB",
     no: "55 MB",
     fi: "142 MB",
-    da: "466 MB",
+    da: "1530 MB",
   };
 
   // Fallback model ID per language (must match Rust serde rename). The backend
@@ -86,7 +86,7 @@
     sv: "kb-whisper-medium",
     no: "nb-whisper-base",
     fi: "base",
-    da: "small",
+    da: "medium",
   };
   let recommendedSizeMb: number | null = $state(null);
 

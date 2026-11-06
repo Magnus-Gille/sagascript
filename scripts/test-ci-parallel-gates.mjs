@@ -304,7 +304,7 @@ test("test-windows runs the build identity gates before npm ci and any Cargo wor
 });
 
 test("windows-package.yml leaves the Rust tests of a pull request to test-windows and keeps them for releases and manual runs", () => {
-  const windows = loadWorkflow("windows-package.yml").jobs[0];
+  const windows = loadWorkflow("windows-package.yml").job("build-windows-candidate");
   const names = windows.steps.map((step) => step.name);
   const tests = windows.steps[names.indexOf("Test and lint Rust workspace")];
   assert.equal(tests.condition, "github.event_name != 'pull_request'");

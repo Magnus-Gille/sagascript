@@ -45,7 +45,7 @@ test("signed test builds use the shared dependency cache without raw target dump
 test("Windows native cache is isolated by runner image and toolchain namespace", () => {
   assert.match(
     windowsWorkflow,
-    /concurrency:\s*\n\s*group:\s+\$\{\{ github\.workflow \}\}-\$\{\{ github\.event\.pull_request\.number \|\| github\.run_id \}\}\s*\n\s*cancel-in-progress:\s+true/,
+    /concurrency:\s*\n(?:\s*#[^\n]*\n)*\s*group:\s+\$\{\{ github\.workflow \}\}-\$\{\{ github\.event\.pull_request\.number \|\| github\.run_id \}\}[^\n]*\n\s*cancel-in-progress:\s+true/,
   );
 
   const imageStart = windowsWorkflow.indexOf("name: Identify Windows runner image");

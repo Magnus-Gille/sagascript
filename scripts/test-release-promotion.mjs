@@ -104,6 +104,9 @@ test("windows-package keeps the console CLI, installed-CLI and portable zip step
   const conditional = w
     .split("\n      - name: ")
     .slice(1)
+    // The build job's own `if:` (SAGA-551) trails the last step of the decide job in this split; it is
+    // checked structurally in test-windows-package-gate.mjs, so only step-level conditions count here.
+    .map((step) => step.split("\n  build-windows-candidate:")[0])
     .filter((step) => /if:[^\n]*github\.event_name/.test(step))
     .map((step) => step.split("\n")[0]);
   assert.deepEqual(conditional, ["Test and lint Rust workspace", "Build lean CLI (debug)"]);

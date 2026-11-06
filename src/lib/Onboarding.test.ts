@@ -232,13 +232,13 @@ describe("Finnish onboarding", () => {
 });
 
 describe("Danish onboarding", () => {
-  test("choosing Danish saves da and downloads the backend-recommended Small model", async () => {
-    const catalogSmall = whisperModel("small", "Catalog Small fixture", { size_mb: 466 });
+  test("choosing Danish saves da and downloads the backend-recommended Medium model", async () => {
+    const catalogMedium = whisperModel("medium", "Catalog Medium fixture", { size_mb: 1530 });
     const { ipc, user } = await renderOnboarding(
       backend({
         get_effective_model_info: ({ language }) => {
           expect(language).toBe("da");
-          return catalogSmall;
+          return catalogMedium;
         },
       }),
     );
@@ -246,14 +246,14 @@ describe("Danish onboarding", () => {
     await chooseDanish(user);
 
     expect(await screen.findByText("Speech engine ready")).toBeInTheDocument();
-    expect(screen.getByText(/Preparing the local speech engine \(466 MB\)/)).toBeInTheDocument();
+    expect(screen.getByText(/Preparing the local speech engine \(1530 MB\)/)).toBeInTheDocument();
     expect(ipc.callsTo("set_language")).toEqual([{ language: "da" }]);
     expect(ipc.callsTo("get_effective_model_info")).toEqual([{ language: "da" }]);
-    expect(ipc.callsTo("download_model")).toEqual([{ whisperModel: "small" }]);
+    expect(ipc.callsTo("download_model")).toEqual([{ whisperModel: "medium" }]);
     expect(ipc.callsTo("download_pianissimo_model")).toEqual([]);
   });
 
-  test("when the recommendation is unavailable, Danish falls back to Small and shows 466 MB", async () => {
+  test("when the recommendation is unavailable, Danish falls back to Medium and shows 1530 MB", async () => {
     const { ipc, user } = await renderOnboarding(
       backend({
         get_effective_model_info: () => {
@@ -265,10 +265,10 @@ describe("Danish onboarding", () => {
     await chooseDanish(user);
 
     expect(await screen.findByText("Speech engine ready")).toBeInTheDocument();
-    expect(screen.getByText(/Preparing the local speech engine \(466 MB\)/)).toBeInTheDocument();
+    expect(screen.getByText(/Preparing the local speech engine \(1530 MB\)/)).toBeInTheDocument();
     expect(ipc.callsTo("set_language")).toEqual([{ language: "da" }]);
     expect(ipc.callsTo("get_effective_model_info")).toEqual([{ language: "da" }]);
-    expect(ipc.callsTo("download_model")).toEqual([{ whisperModel: "small" }]);
+    expect(ipc.callsTo("download_model")).toEqual([{ whisperModel: "medium" }]);
     expect(ipc.callsTo("download_pianissimo_model")).toEqual([]);
   });
 });

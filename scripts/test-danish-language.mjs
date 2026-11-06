@@ -28,8 +28,8 @@ test("Danish is a core language with the id, name and Whisper code da", () => {
   assert.match(coreLanguage, /Language::Danish,\s+Language::Auto,\s+\];/);
 });
 
-test("Danish uses only the multilingual Whisper models and recommends Small", () => {
-  assert.match(coreWhisper, /Language::Danish => WhisperModel::Small/);
+test("Danish uses only the multilingual Whisper models and recommends Medium", () => {
+  assert.match(coreWhisper, /Language::Danish => WhisperModel::Medium/);
   assert.match(coreWhisper, /Language::Danish \| Language::Auto => \{\s+!self\.is_english_only\(\) && !self\.is_language_optimized\(\)/);
   assert.match(coreWhisper, /Language::Danish \| Language::Auto => &\[\s+WhisperModel::Tiny,/);
   // No Danish-specific fine-tune is registered.
@@ -49,6 +49,7 @@ test("CLI help, config and listings name Danish", () => {
     cli,
     /Supported languages: English \(en\), Swedish \(sv\), Norwegian \(no\), Finnish \(fi\), Danish \(da\), Auto-detect \(auto\)\./,
   );
-  assert.match(cli, /Danish uses the generic multilingual Small model/);
+  // The Rust string continues over a line break, which a Windows checkout writes as CRLF.
+  assert.match(cli, /Danish uses pianissimo-da where Pianissimo runs, otherwise the generic \\\r?\nmultilingual Medium model/);
   assert.match(cli, /sagascript list-models --language da/);
 });
