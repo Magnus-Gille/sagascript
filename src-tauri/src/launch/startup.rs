@@ -127,6 +127,7 @@ fn manage_app_state(app: &tauri::App) {
     app.manage(plain_file_jobs::SharedPlainFileJobs::default());
     app.manage(Arc::new(meeting_jobs::MeetingJobs::default()));
     app.manage(meeting_media::SharedMeetingAudio::default());
+    app.manage(crate::recording_session::SharedRecorder::default());
     // Process-wide hotkey registration health (see hotkey::health for
     // why this is deliberately independent of the AppController
     // mutex). Assumed healthy until the synchronous registration

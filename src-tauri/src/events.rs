@@ -186,6 +186,7 @@ pub mod event {
     use super::{ModelDownloadProgress, PlainPhase, PlainTranscriptionProgress, UiState};
     use crate::command_error::CommandError;
     use crate::hotkey::HotkeyStatus;
+    use crate::recording_session::{RecordingSessionInfo, RecoveryNote};
     use sagascript_core::settings::HotkeyProfile;
 
     catalogue! {
@@ -305,6 +306,25 @@ pub mod event {
         /// Producer: the tray menu, through launch/window.rs. Consumer: Settings.svelte.
         NAVIGATE_TAB: NavigateTab = "navigate_tab",
             payload<'a> = &'a str,
+            consumer = Consumer::Gui,
+            scope = None;
+
+        /// The recording session's status: on every state change and every
+        /// 250 ms while it records or finalizes (never from the audio
+        /// callback). Producer: `recording_session.rs`, started by
+        /// `start_recording_session`. Consumer: Record.svelte.
+        RECORDING_SESSION_CHANGED: RecordingSessionChanged = "recording-session-changed",
+            payload<'a> = RecordingSessionInfo,
+            consumer = Consumer::Gui,
+            scope = None;
+
+        /// What recovery kept of interrupted recordings, once after app start
+        /// when it kept anything. Producer: the startup recovery. Consumer:
+        /// Record.svelte.
+        // Sent by the startup recovery, which the Record window's tray work adds.
+        #[allow(dead_code)]
+        RECORDINGS_RECOVERED: RecordingsRecovered = "recordings-recovered",
+            payload<'a> = Vec<RecoveryNote>,
             consumer = Consumer::Gui,
             scope = None;
     }

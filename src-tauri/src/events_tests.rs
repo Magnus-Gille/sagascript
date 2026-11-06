@@ -11,6 +11,15 @@ use super::*;
 use crate::command_error::CommandError;
 use crate::contract;
 use crate::hotkey::{HotkeyHealth, OperationalHotkey};
+use crate::recording_session::{
+    session_info, RecordingSessionInfo, RecordingSessionState, RecoveryNote, RecoveryNoteOutcome,
+    SessionMeta,
+};
+use sagascript_core::recording::session::fsclass::FolderWarning;
+use sagascript_core::recording::{
+    EndedReason, SessionState, SessionStatus, SessionWarning, TrackStatus,
+};
+use sagascript_core::settings::RecordingQuality;
 
 /// Event names that predate the kebab-case rule. Renaming one changes the
 /// wire, so it stays, named here (#347).
@@ -113,6 +122,135 @@ fn plain_phases() -> Vec<PlainPhase> {
         }
     }
     all
+}
+
+/// A session status as the writer thread publishes it.
+fn session_status(state: SessionState, level: f32, gaps: (u32, u64)) -> SessionStatus {
+    SessionStatus {
+        state,
+        elapsed: std::time::Duration::from_millis(83_250),
+        tracks: vec![TrackStatus {
+            id: "mic".into(),
+            role: "mic".into(),
+            peak: level,
+            channel_peaks: [level, level / 2.0],
+            frames: 3_996_000,
+            frames_received: 3_996_000,
+            gap_count: gaps.0,
+            gap_frames: gaps.1,
+            dropped_frames: 0,
+            stalled: false,
+            device_lost: false,
+            ended: None,
+            queued_blocks: 0,
+        }],
+        bytes_written: 7_340_032,
+        free_disk_bytes: Some(120_000_000_000),
+        warnings: Vec::new(),
+        error_code: None,
+        ended_early: None,
+    }
+}
+
+/// What `recording-session-changed` carries in each state, built by the
+/// function the emitter uses. The loops fail to compile when a state is added.
+fn recording_session_samples() -> Vec<RecordingSessionInfo> {
+    let meta = |quality, track_rate| SessionMeta {
+        title: "Interview".into(),
+        quality,
+        recording_id: "0d2c1f3a-1111-4222-8333-444455556666".into(),
+        folder_name: "2026-11-06 10.00 Interview [0d2c1f]".into(),
+        track_rate,
+    };
+    let lossless = meta(RecordingQuality::Lossless, 48_000);
+    let mut recording = session_status(SessionState::Recording, 0.42, (0, 0));
+    recording.warnings = vec![
+        SessionWarning::Folder(FolderWarning::CloudSynced),
+        SessionWarning::LowDisk,
+    ];
+    let mut stalled = session_status(SessionState::Recording, 1.0, (2, 72_000));
+    stalled.tracks[0].stalled = true;
+    stalled.tracks[0].device_lost = true;
+    stalled.free_disk_bytes = None;
+    let mut done = session_status(SessionState::Done, 0.0, (1, 24_000));
+    done.ended_early = Some(EndedReason::DeviceChanged);
+    let mut failed = session_status(SessionState::Failed, 0.0, (0, 0));
+    failed.error_code = Some("recording_disk_full");
+    let all = vec![
+        RecordingSessionInfo::idle(),
+        session_info(
+            &session_status(SessionState::Starting, 0.0, (0, 0)),
+            &lossless,
+        ),
+        session_info(&recording, &lossless),
+        session_info(&stalled, &meta(RecordingQuality::Compact, 16_000)),
+        session_info(
+            &session_status(SessionState::Finalizing, 0.1, (0, 0)),
+            &lossless,
+        ),
+        session_info(&done, &lossless),
+        session_info(&failed, &lossless),
+    ];
+    for state in all.iter().map(|info| info.state) {
+        match state {
+            RecordingSessionState::Idle
+            | RecordingSessionState::Starting
+            | RecordingSessionState::Recording
+            | RecordingSessionState::Finalizing
+            | RecordingSessionState::Done
+            | RecordingSessionState::Failed => {}
+        }
+    }
+    all
+}
+
+/// What `recordings-recovered` carries: one note of each outcome.
+fn recovery_note_samples() -> Vec<Vec<RecoveryNote>> {
+    let note =
+        |folder: &str, title: &str, outcome, frames_kept, tail_bytes, message: &str| RecoveryNote {
+            folder_name: folder.into(),
+            title: title.into(),
+            outcome,
+            frames_kept,
+            tail_bytes,
+            message: message.into(),
+        };
+    vec![
+        vec![note(
+            "2026-11-05 15.30 Lecture [a1b2c3]",
+            "Lecture",
+            RecoveryNoteOutcome::Recovered,
+            2_880_000,
+            4_096,
+            "Recovered. Everything that was fully saved was kept; the unfinished end was set aside in the recording folder.",
+        )],
+        vec![
+            note(
+                "2026-11-04 09.00 Standup [d4e5f6]",
+                "Standup",
+                RecoveryNoteOutcome::AlreadyComplete,
+                0,
+                0,
+                "Already complete; there was nothing to recover.",
+            ),
+            note(
+                "2026-11-04 11.00 Call [0a0b0c]",
+                "Call",
+                RecoveryNoteOutcome::SkippedLocked,
+                0,
+                0,
+                "Another program is still recording this; it was left alone.",
+            ),
+            note(
+                "2026-11-03 17.45 Memo [9f8e7d]",
+                "Memo",
+                RecoveryNoteOutcome::Failed,
+                0,
+                0,
+                "Could not be recovered (recording_corrupt_track). The recording was left as it was; you can try again.",
+            ),
+        ],
+    ]
 }
 
 trait Named {
@@ -265,6 +403,8 @@ fn all_samples() -> Vec<(&'static str, Vec<Value>)> {
             vec!["Settings closed before recovery drafts were saved."],
         ),
         samples(NAVIGATE_TAB, vec!["dictate", "transcribe"]),
+        samples(RECORDING_SESSION_CHANGED, recording_session_samples()),
+        samples(RECORDINGS_RECOVERED, recovery_note_samples()),
     ]
 }
 

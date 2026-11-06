@@ -448,6 +448,11 @@ mod transport_contract_tests {
             temperature_fallback: false,
             vad_enabled: true,
             has_completed_onboarding: true,
+            recording_quality: sagascript_core::settings::RecordingQuality::Compact,
+            recording_directory: "/Volumes/Archive/Sagascript".into(),
+            recording_channel_pair: [3, 4],
+            recording_folder_confirmed: true,
+            recording_consent_acknowledged: true,
             ..Settings::default()
         }
     }
