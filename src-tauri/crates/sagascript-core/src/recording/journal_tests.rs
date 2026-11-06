@@ -221,9 +221,11 @@ fn a_journal_with_more_events_than_a_manifest_can_hold_is_a_typed_error_not_a_sh
     assert_eq!(summary.gaps.len(), 1);
     // One more is refused whole.
     write(MAX_JOURNAL_EVENTS);
-    let error = read_journal(&path)
-        .err()
-        .expect("a journal of too many events is refused");
+    // (`expect_err` would print every anchor of the summary on failure.)
+    let error = match read_journal(&path) {
+        Err(error) => error,
+        Ok(summary) => panic!("refused, but read {} anchors", summary.anchors.len()),
+    };
     assert_eq!(error.code(), "recording_journal_too_large");
     assert!(!error.retryable());
 }
