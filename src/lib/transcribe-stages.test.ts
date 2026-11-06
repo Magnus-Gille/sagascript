@@ -110,7 +110,11 @@ test("a streamed Pianissimo import (decoding 0, loading, transcribing) leaves no
   for (const pct of [4, 4, 17, 38, 61, 99, 100]) {
     state = updateStages(state, "transcribing", pct);
     seen.push(stageRows(state)[2].percent);
-    expect(stageRows(state).slice(0, 2).map((r) => r.status)).toStrictEqual(["completed", "completed"]);
+    expect(
+      stageRows(state)
+        .slice(0, 2)
+        .map((r) => r.status),
+    ).toStrictEqual(["completed", "completed"]);
   }
   expect(seen).toStrictEqual([4, 4, 17, 38, 61, 99, 100]);
   state = updateStages(state, "finalizing");
