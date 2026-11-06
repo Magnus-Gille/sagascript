@@ -34,9 +34,13 @@ test("only the pull_request event can skip the package jobs; every other event r
   assert.ok(gate("pull_request", "true"));
   assert.ok(!gate("pull_request", "false"));
   assert.ok(!gate("pull_request", ""));
-  // The only other job is the decision job itself, which is never skipped.
+  // The only other job is the decision job itself. It runs on pull requests only, so on workflow_call and
+  // workflow_dispatch it is skipped and cannot fail the reusable call prebuild-release.yml's manifest needs.
   assert.deepEqual(workflow.jobIds, ["decide", "build-windows-candidate"]);
-  assert.equal(workflow.job("decide").condition, undefined);
+  assert.equal(workflow.job("decide").condition, "github.event_name == 'pull_request'");
+  const prebuild = loadWorkflow("prebuild-release.yml");
+  assert.deepEqual(prebuild.job("build-windows").uses, "./.github/workflows/windows-package.yml");
+  assert.ok(prebuild.job("manifest").needs.includes("build-windows"), "the release manifest waits on the Windows call");
 });
 
 test("the decision job is small, secret-free and read-only", () => {
@@ -74,9 +78,11 @@ test("the decision covers the label, a version change and the packaging paths", 
     assert.equal(decide({ ...none, changedFiles: ["README.md", file] }).run, true, file);
   }
   // Dependency changes can change the bundler or what is packaged (Dependabot's groups do).
-  for (const file of ["package-lock.json", "src-tauri/Cargo.lock", "src-tauri/Cargo.toml"]) {
+  for (const file of ["package.json", "package-lock.json", "src-tauri/Cargo.lock", "src-tauri/Cargo.toml"]) {
     assert.ok(pathMatches(file), file);
   }
+  // A dependency change in package.json that keeps the version still builds.
+  assert.equal(decide({ ...none, changedFiles: ["package.json"] }).run, true);
   for (const file of ["src-tauri/src/lib.rs", "docs/ci-performance.md", "src-tauri/engine-host/coreml/x.swift", "scripts/cmake-notes.md"]) {
     assert.ok(!pathMatches(file), file);
   }

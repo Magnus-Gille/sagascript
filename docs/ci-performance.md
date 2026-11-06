@@ -41,8 +41,8 @@ run when the pull request carries the label `windows-package`, changes the app
 version (`package.json` or `src-tauri/tauri.conf.json`, a release PR), changes
 a dependency lockfile or `src-tauri/Cargo.toml`, or touches a file only Windows
 packaging reads (the path list, with reasons, is in that script). Otherwise the
-build job is skipped. A failed `decide` job never skips the release prebuild or
-a manual run. To force a run on an open
+build job is skipped. The `decide` job itself runs on pull requests only, so the
+release prebuild and manual runs never depend on it. To force a run on an open
 pull request, add the label `windows-package`; removing it does nothing. The
 release prebuild (`workflow_call`) and manual runs (`workflow_dispatch`) always
 build both packages.

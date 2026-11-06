@@ -27,10 +27,12 @@ env:
   CARGO_PROFILE_TEST_DEBUG: line-tables-only
 
 jobs:
-  # Decides whether a pull request needs the package build. It always succeeds and reports run=true for
-  # workflow_call (the release prebuild) and workflow_dispatch, which never depend on the gate's logic.
+  # Decides whether a pull request needs the package build. It runs on pull requests only: on
+  # workflow_call (the release prebuild) and workflow_dispatch it is skipped, so it can never fail the
+  # reusable call that prebuild-release.yml's manifest job needs.
   decide:
     name: Decide whether to build Windows packages
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:

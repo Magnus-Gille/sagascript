@@ -20,6 +20,7 @@ export const VERSION_FILES = ["package.json", "src-tauri/tauri.conf.json"];
 // bundler (the Tauri CLI from package-lock.json, tauri-build from Cargo.lock) or what is packaged,
 // which only this workflow exercises before a release.
 export const WINDOWS_PACKAGE_PATHS = [
+  "package.json", // dependency requirements, overrides and the build scripts `tauri build` runs
   "package-lock.json", // @tauri-apps/cli is the NSIS/MSI bundler; frontend dependencies are packaged
   "src-tauri/Cargo.toml", // app crate features and dependency requirements
   "src-tauri/Cargo.lock", // tauri-build and every crate compiled into the packaged app
