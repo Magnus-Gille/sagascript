@@ -19,6 +19,23 @@
 //! stream's error callback runs elsewhere and only sets a bit through the
 //! [`SignalHandle`](super::SignalHandle).
 //!
+//! # Device and format changes
+//!
+//! `cpal` reports a stream's own failure, which the error callback maps to
+//! `DeviceChanged` (unplugged) or `DeviceLost`. It reports **nothing** when
+//! the default input is switched to another device, or when the open
+//! device's sample rate or channel count is changed, while the old stream
+//! stays valid. So the capture thread also asks, every
+//! [`DEVICE_POLL`], what the default input device is now ([`DeviceProbe`])
+//! and compares it with what was opened ([`DeviceWatch`]); a different device
+//! or a different format, seen twice in a row, is signalled as
+//! `DeviceChanged` or `FormatChanged`, and the track ends. This is polling,
+//! not a platform notification (CoreAudio property listeners,
+//! `IMMNotificationClient`): it needs no unsafe FFI and works the same on
+//! every platform, at the price of up to half a second of latency and of
+//! identifying a device by its name. It is tested through the probe; that
+//! `cpal` shows a changed default or rate live is on the hardware checklist.
+//!
 //! # Time
 //!
 //! A block is stamped with `host_now_ns()` at the start of the callback minus
@@ -30,7 +47,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, SampleFormat, SizedSample};
@@ -107,6 +124,103 @@ pub fn negotiate(device: DeviceFormat, pair: (u16, u16)) -> Result<Negotiated, R
         pair: (usize::from(a - 1), usize::from(b - 1)),
         device_channels,
     })
+}
+
+/// How often the capture thread asks what the default input device is.
+pub const DEVICE_POLL: Duration = Duration::from_millis(500);
+
+/// The default input device as seen at one moment.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DeviceSnapshot {
+    pub name: Option<String>,
+    pub format: DeviceFormat,
+}
+
+/// Asks what the default input device is now. `None` when there is none, or
+/// it cannot be queried.
+pub trait DeviceProbe: Send {
+    fn default_input(&mut self) -> Option<DeviceSnapshot>;
+}
+
+/// The probe over `cpal`.
+pub struct CpalProbe;
+
+impl DeviceProbe for CpalProbe {
+    fn default_input(&mut self) -> Option<DeviceSnapshot> {
+        let device = cpal::default_host().default_input_device()?;
+        let config = device.default_input_config().ok()?;
+        Some(DeviceSnapshot {
+            name: device.name().ok(),
+            format: DeviceFormat {
+                sample_rate: config.sample_rate().0,
+                channels: config.channels(),
+            },
+        })
+    }
+}
+
+/// Compares the default input device with the one that was opened.
+///
+/// A difference must be seen on two consecutive checks before it is reported
+/// (a device being switched can answer oddly for an instant), and it is
+/// reported once.
+pub struct DeviceWatch {
+    probe: Box<dyn DeviceProbe>,
+    opened: DeviceSnapshot,
+    pair: (u16, u16),
+    pending: Option<SourceSignal>,
+    reported: bool,
+}
+
+impl DeviceWatch {
+    pub fn new(probe: Box<dyn DeviceProbe>, opened: DeviceSnapshot, pair: (u16, u16)) -> Self {
+        Self {
+            probe,
+            opened,
+            pair,
+            pending: None,
+            reported: false,
+        }
+    }
+
+    /// One look. Returns the signal the first time a change is confirmed.
+    pub fn check(&mut self) -> Option<SourceSignal> {
+        if self.reported {
+            return None;
+        }
+        let seen = match self.probe.default_input() {
+            // No default input at all: the device we have is gone.
+            None => Some(SourceSignal::DeviceChanged),
+            Some(now) => self.compare(&now),
+        };
+        match (seen, self.pending) {
+            (Some(signal), Some(before)) if signal == before => {
+                self.reported = true;
+                Some(signal)
+            }
+            (seen, _) => {
+                self.pending = seen;
+                None
+            }
+        }
+    }
+
+    fn compare(&self, now: &DeviceSnapshot) -> Option<SourceSignal> {
+        if now.name.is_some() && self.opened.name.is_some() && now.name != self.opened.name {
+            return Some(SourceSignal::DeviceChanged);
+        }
+        if now.format != self.opened.format {
+            // What the track would now hold, if it could change.
+            let format = negotiate(now.format, self.pair)
+                .map(|n| n.format)
+                .unwrap_or(NativeFormat {
+                    sample_rate: now.format.sample_rate,
+                    channels: now.format.channels.clamp(1, 2) as u8,
+                });
+            return Some(SourceSignal::FormatChanged(format));
+        }
+        None
+    }
 }
 
 /// The default input device as a capture source.
@@ -200,6 +314,8 @@ impl CaptureSource for MicSource {
             },
             sample_format: self.sample_format,
             channel_pair: self.config.channel_pair,
+            device_name: self.device_name.clone(),
+            probe: Box::new(CpalProbe),
             stop: Arc::clone(&stop),
         };
         let thread = std::thread::Builder::new()
@@ -244,6 +360,8 @@ impl Drop for MicSource {
 }
 
 struct StreamJob {
+    device_name: Option<String>,
+    probe: Box<dyn DeviceProbe>,
     expected: Negotiated,
     expected_device: DeviceFormat,
     sample_format: SampleFormat,
@@ -252,8 +370,21 @@ struct StreamJob {
 }
 
 /// The capture thread: owns the `!Send` stream from build to drop.
-fn run_stream(job: StreamJob, sink: BlockSink, ready: mpsc::Sender<Result<(), RecordingError>>) {
+fn run_stream(
+    mut job: StreamJob,
+    sink: BlockSink,
+    ready: mpsc::Sender<Result<(), RecordingError>>,
+) {
     let stop = Arc::clone(&job.stop);
+    let signals = sink.handle();
+    let mut watch = DeviceWatch::new(
+        std::mem::replace(&mut job.probe, Box::new(CpalProbe)),
+        DeviceSnapshot {
+            name: job.device_name.clone(),
+            format: job.expected_device,
+        },
+        job.channel_pair,
+    );
     match build_stream(job, sink) {
         Ok(stream) => {
             // Make the clock's one-time setup happen here, not in a callback.
@@ -265,8 +396,15 @@ fn run_stream(job: StreamJob, sink: BlockSink, ready: mpsc::Sender<Result<(), Re
                 return;
             }
             let _ = ready.send(Ok(()));
+            let mut next_look = Instant::now() + DEVICE_POLL;
             while !stop.load(Ordering::Acquire) {
                 std::thread::park_timeout(Duration::from_millis(20));
+                if Instant::now() >= next_look {
+                    next_look = Instant::now() + DEVICE_POLL;
+                    if let Some(signal) = watch.check() {
+                        signals.signal(signal);
+                    }
+                }
             }
             // The stream, its callbacks and the sink go with it.
             drop(stream);

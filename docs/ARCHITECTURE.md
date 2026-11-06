@@ -179,12 +179,14 @@ CLI and the app and wait for their own change: `settings::{WhisperModel, FileMod
   queue, the one `unsafe` of the recorder), `sink.rs` (`BlockSink` for the audio callback,
   `TrackReceiver` for the writer: pool, queue, dropped-frame count, peak atomics, signals),
   `source.rs` (`CaptureSource`), `clock.rs` (the host clock and its named domain, the session clock,
-  sleep detection), `fake.rs` (`FakeSource`, the hardware-free source every session test drives) and
-  `mic.rs` (`MicSource` over `cpal`, feature `record` only). `session/` is `mod.rs`
+  sleep detection from the growth of the offset between two clocks, armed before capture starts;
+  `win.rs` is its Windows half), `fake.rs` (`FakeSource`, the hardware-free source every session test
+  drives) and `mic.rs` (`MicSource` over `cpal`, feature `record` only; it also polls the default
+  input device for a switch or a format change that `cpal` does not report). `session/` is `mod.rs`
   (`RecordingSession`: the state machine, `start`/`stop`, the writer thread), `core.rs` (`SessionCore`,
   the writer's policy as a steppable object: gaps, clock anchors, endings, disk, FAT limit), `resampler.rs`
   (the streaming 16 kHz resampler of the compact tier), `disk.rs` (free-space thresholds),
-  `fsclass.rs` (folder warnings: FAT32, exFAT, network, cloud-synced) and `status.rs` (the snapshot).
+  `fsclass.rs` (folder warnings: FAT32, exFAT, network, cloud-synced; `win_volume.rs` is its Windows half) and `status.rs` (the snapshot). `recording.json` is sealed with a hash of its own bytes and an untouched `recording.start.json` is kept until the recording is finished, so recovery survives a manifest write that a crash cut short.
   The CLI, commands, settings and UI (1c) build on it and are not here. Only `flacenc` (exact pin,
   no default features) was added as a dependency.
 
