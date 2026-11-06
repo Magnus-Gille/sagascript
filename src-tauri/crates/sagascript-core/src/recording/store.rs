@@ -46,8 +46,8 @@ use super::io::{
 };
 use super::journal::{journal_file_name, JournalEvent, JournalWriter};
 use super::manifest::{
-    is_valid_track_id, serialize_manifest, Client, Clock, EndedReason, Gap, GapReason, Manifest,
-    Quality, RecordingState, Track, MANIFEST_FILE, MIN_READER_VERSION, SCHEMA_VERSION,
+    is_valid_track_id, serialize_manifest_sealed, Client, Clock, EndedReason, Gap, GapReason,
+    Manifest, Quality, RecordingState, Track, MANIFEST_FILE, MIN_READER_VERSION, SCHEMA_VERSION,
 };
 use super::naming;
 use super::recover::{recover_track, TailPolicy};
@@ -55,6 +55,9 @@ use super::SYNC_INTERVAL;
 
 /// The advisory lock file of a recording in progress.
 pub const LOCK_FILE: &str = "recording.lock";
+/// An independent copy of the manifest as it was at the start, written once
+/// and never modified, removed when the recording is finished.
+pub const START_COPY_FILE: &str = "recording.start.json";
 
 /// How many ids are tried for a free folder name.
 const MAX_NAME_ATTEMPTS: usize = 8;
@@ -335,7 +338,12 @@ fn start_in(
     })?;
 
     let manifest = initial_manifest(recording_id, &request);
-    let mut initial = serialize_manifest(&manifest)?;
+    // An independent copy first: if the final manifest is ever rewritten in
+    // place and that write is torn, recovery starts from this one.
+    let sealed = serialize_manifest_sealed(&manifest)?;
+    replace_file_durably(&dir.join(START_COPY_FILE), &sealed)
+        .map_err(|error| RecordingError::io("write the recording manifest copy", &error))?;
+    let mut initial = sealed;
     if initial.len() < MANIFEST_RESERVED_BYTES {
         initial.resize(MANIFEST_RESERVED_BYTES, b' ');
     }
@@ -642,14 +650,17 @@ impl RecordingWriter {
             Ok(summary) => summary,
             Err(error) => {
                 if error.is_disk_full() {
-                    // The encoder is gone; the file holds what reached the disk.
-                    let _ = self.cut_back(index, EndedReason::DiskFull, clipped);
+                    // The encoder is gone; the file holds what reached the
+                    // disk. A cut-back that fails is the error to report.
+                    self.cut_back(index, EndedReason::DiskFull, clipped)?;
                 }
                 return Err(error);
             }
         };
+        // The track is finished as soon as its file is: the journal's fsync
+        // below may still fail (a full disk finds no room even for that), and
+        // the track must then still be there to be reported.
         let track = &mut self.tracks[index];
-        track.journal.sync()?;
         track.finished = Some(FinishedTrack {
             frames: summary.frames,
             audio_sha256: summary.audio_sha256.clone(),
@@ -657,6 +668,14 @@ impl RecordingWriter {
             reason,
             rebuilt: None,
         });
+        if let Err(error) = track.journal.sync() {
+            if error.is_disk_full() {
+                if let Some(done) = track.finished.as_mut() {
+                    done.reason = EndedReason::DiskFull;
+                }
+            }
+            return Err(error);
+        }
         Ok(summary)
     }
 
@@ -704,6 +723,14 @@ impl RecordingWriter {
             .iter()
             .position(|t| t.id == track)
             .ok_or(RecordingError::UnknownTrack)
+    }
+
+    /// Tests: the next journal sync of the track fails like a full disk.
+    #[cfg(test)]
+    pub(crate) fn inject_journal_sync_failure(&mut self, track: &str) {
+        if let Some(t) = self.tracks.iter_mut().find(|t| t.id == track) {
+            t.journal.fail_next_sync(ErrorKind::StorageFull);
+        }
     }
 
     /// Whether the track has ended (finished or cut back).
@@ -780,8 +807,10 @@ impl RecordingWriter {
         }
         write_final_manifest(
             &self.dir.join(MANIFEST_FILE),
-            &serialize_manifest(&manifest)?,
+            &serialize_manifest_sealed(&manifest)?,
         )?;
+        // The copy of the start manifest has done its job.
+        let _ = fs::remove_file(self.dir.join(START_COPY_FILE));
         // The recording is complete whether or not the lock file goes.
         if let Err(error) = fs::remove_file(self.dir.join(LOCK_FILE)) {
             tracing::warn!(kind = ?error.kind(), "could not remove a recording lock file");
@@ -795,8 +824,12 @@ impl RecordingWriter {
 /// second file; or the folder has become read-only) the new manifest is
 /// written over the old one, whose blocks are already allocated, if it fits
 /// in the space the in-progress manifest was padded to. That write is not
-/// atomic, which is why it is only the fallback; when it fails too the
-/// manifest keeps `state: recording` and recovery finishes the job.
+/// atomic, which is why it is only the fallback, and why the bytes are sealed
+/// (`serialize_manifest_sealed`): a write cut short by a crash leaves a mixture
+/// of two manifests that parses but fails its seal, and recovery then starts
+/// from the untouched copy of the start manifest (`START_COPY_FILE`). When the
+/// write fails outright the manifest keeps `state: recording` and recovery
+/// finishes the job.
 fn write_final_manifest(path: &Path, bytes: &[u8]) -> Result<(), RecordingError> {
     let Err(first) = replace_file_durably(path, bytes) else {
         return Ok(());

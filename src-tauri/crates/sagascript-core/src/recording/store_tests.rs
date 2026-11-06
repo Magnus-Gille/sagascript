@@ -42,7 +42,8 @@ fn a_new_recording_is_a_folder_with_its_final_name_and_four_files() {
             "mic.events.jsonl",
             "mic.flac",
             "recording.json",
-            "recording.lock"
+            "recording.lock",
+            "recording.start.json"
         ]
     );
 
@@ -820,4 +821,107 @@ fn a_gap_the_track_cannot_hold_is_refused_before_it_is_journaled_or_written() {
     let manifest = writer.finish(EndedReason::Stopped).unwrap();
     assert_eq!(manifest.tracks[0].frames, 2000);
     assert!(manifest.tracks[0].gaps.is_empty());
+}
+
+// ---- Codex review of 1b -------------------------------------------------------
+
+#[test]
+fn a_full_disk_at_the_journal_sync_of_a_finished_track_still_gives_the_disk_full_manifest() {
+    let root = TempDir::new();
+    let mut writer = RecordingStore::new(root.path())
+        .create(mic_recording())
+        .unwrap();
+    writer
+        .push("mic", &to_f32(&speechlike(6_000, 21), 24))
+        .unwrap();
+    writer.inject_journal_sync_failure("mic");
+    // The last block was written; only the journal's fsync found no room.
+    let error = writer
+        .finish_track("mic", EndedReason::Stopped)
+        .unwrap_err();
+    assert!(error.is_disk_full(), "{error:?}");
+    assert!(writer.is_track_finished("mic"));
+    let dir = writer.folder().to_path_buf();
+    let manifest = writer.finish(EndedReason::Stopped).unwrap();
+    let track = &manifest.tracks[0];
+    assert_eq!(track.ended_reason, Some(EndedReason::DiskFull));
+    assert_eq!(track.frames, 6_000, "the audio was complete");
+    assert_eq!(manifest.state, RecordingState::Complete);
+    let decoded = decode_flac(&std::fs::read(dir.join("mic.flac")).unwrap());
+    assert_eq!(decoded.md5_verified, Some(true));
+    assert_eq!(decoded.samples.len(), 6_000);
+}
+
+/// A rewrite of `recording.json` in place can be cut short anywhere. The
+/// recording must stay recoverable at every offset (Codex finding 1).
+#[test]
+fn an_interrupted_in_place_manifest_write_leaves_a_recording_recovery_can_finish() {
+    let root = TempDir::new();
+    let mut writer = RecordingStore::new(root.path())
+        .create(mic_recording())
+        .unwrap();
+    writer
+        .push("mic", &to_f32(&speechlike(9_000, 22), 24))
+        .unwrap();
+    writer.sync().unwrap();
+    let dir = writer.folder().to_path_buf();
+    let original = std::fs::read(dir.join(MANIFEST_FILE)).unwrap();
+    let mut finished = writer.manifest().clone();
+    finished.state = RecordingState::Complete;
+    finished.tracks[0].frames = 9_000;
+    finished.tracks[0].ended_reason = Some(EndedReason::Stopped);
+    let complete = serialize_manifest_sealed(&finished).unwrap();
+    assert!(complete.len() < original.len());
+    drop(writer); // the process "dies" in the middle of the rewrite
+
+    let json_len = complete.len();
+    for cut in [
+        0,
+        1,
+        2,
+        17,
+        json_len / 3,
+        json_len / 2,
+        json_len - 2,
+        json_len - 1,
+    ] {
+        let copy = copy_dir(&dir, &root.path().join(format!("torn-{cut}")));
+        let mut torn = original.clone();
+        torn[..cut].copy_from_slice(&complete[..cut]);
+        std::fs::write(copy.join(MANIFEST_FILE), &torn).unwrap();
+        let recovered = crate::recording::recover_folder(&copy)
+            .unwrap_or_else(|e| panic!("cut at {cut} of {json_len}: {e:?}"));
+        assert_eq!(
+            recovered.manifest.state,
+            RecordingState::Complete,
+            "cut {cut}"
+        );
+        assert!(recovered.manifest.recovered, "cut {cut}");
+        assert_eq!(
+            recovered.tracks[0].frames_kept, 8_192,
+            "cut {cut}: whole blocks"
+        );
+        let on_disk = read_manifest(&copy);
+        assert_eq!(on_disk.state, RecordingState::Complete);
+        assert_eq!(on_disk.recording_id, recovered.manifest.recording_id);
+        assert_eq!(
+            on_disk.title, "Team meeting",
+            "the start copy supplied the description"
+        );
+    }
+}
+
+#[test]
+fn a_finished_recording_does_not_keep_the_start_copy() {
+    let root = TempDir::new();
+    let writer = RecordingStore::new(root.path())
+        .create(mic_recording())
+        .unwrap();
+    let dir = writer.folder().to_path_buf();
+    assert!(
+        dir.join(START_COPY_FILE).is_file(),
+        "written with the recording"
+    );
+    writer.finish(EndedReason::Stopped).unwrap();
+    assert!(!dir.join(START_COPY_FILE).exists());
 }

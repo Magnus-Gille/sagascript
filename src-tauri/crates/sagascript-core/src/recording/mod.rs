@@ -55,8 +55,9 @@ pub use encoder::{TrackEncoder, TrackSummary};
 pub use error::RecordingError;
 pub use flac::{FlacEncoder, TrackSink};
 pub use manifest::{
-    parse_manifest, serialize_manifest, Client, Clock, EndedReason, Gap, GapReason, Manifest,
-    Quality, RecordingState, Track, MANIFEST_FILE, MIN_READER_VERSION, SCHEMA_VERSION,
+    manifest_integrity, parse_manifest, serialize_manifest, serialize_manifest_sealed, Client,
+    Clock, EndedReason, Gap, GapReason, Integrity, Manifest, Quality, RecordingState, Track,
+    MANIFEST_FILE, MIN_READER_VERSION, SCHEMA_VERSION,
 };
 pub use recover::{
     recover_folder, RecoveredRecording, RecoveryOutcome, RecoveryReport, TrackRecovery,
@@ -65,7 +66,9 @@ pub use session::{
     RecordingSession, SessionConfig, SessionOutcome, SessionState, SessionStatus, SessionWarning,
     SourceSpec, TrackStatus,
 };
-pub use store::{NewRecording, NewTrack, RecordingStore, RecordingWriter, LOCK_FILE};
+pub use store::{
+    NewRecording, NewTrack, RecordingStore, RecordingWriter, LOCK_FILE, START_COPY_FILE,
+};
 
 /// The size of the header every track file starts with: STREAMINFO and the
 /// reserved region that holds the SEEKTABLE and PADDING. Audio frames follow.

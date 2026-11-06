@@ -222,6 +222,12 @@ impl SessionCore {
         self.syncs
     }
 
+    /// Tests: the writer, to inject a failure.
+    #[cfg(test)]
+    pub(crate) fn writer_for_tests(&mut self) -> &mut RecordingWriter {
+        self.writer()
+    }
+
     pub(crate) fn is_finished(&self) -> bool {
         self.finished
     }

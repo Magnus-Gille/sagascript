@@ -988,3 +988,18 @@ fn the_folder_is_final_named_and_owned_until_the_manifest_says_complete() {
     let done = rig.finish();
     assert_eq!(done.outcome.folder, folder);
 }
+
+#[test]
+fn a_full_disk_at_the_journal_sync_when_the_track_ends_still_ends_with_disk_full() {
+    let mut rig = Rig::mono();
+    rig.handle.deliver(ms(300));
+    rig.pump();
+    rig.core
+        .writer_for_tests()
+        .inject_journal_sync_failure("mic");
+    let done = rig.finish();
+    assert_eq!(done.track().ended_reason, Some(EndedReason::DiskFull));
+    assert_eq!(done.on_disk().state, RecordingState::Complete);
+    assert_eq!(done.track().frames, done.handle.position());
+    done.assert_audio(&[]);
+}

@@ -438,6 +438,9 @@ fn a_finished_recording_is_left_alone_without_taking_its_lock() {
 #[test]
 fn a_manifest_recovery_cannot_read_is_reported_and_left_as_it_is() {
     let killed = killed_blocks(2);
+    // The copy of the start manifest would rescue this (see store_tests); a
+    // folder without it, like one an older build left, is what this is about.
+    std::fs::remove_file(killed.folder.join(START_COPY_FILE)).unwrap();
     let before = snapshot(&killed.folder);
 
     let manifest_path = killed.folder.join(MANIFEST_FILE);
@@ -602,6 +605,7 @@ fn the_scan_of_a_store_recovers_every_unfinished_folder_in_name_order() {
     let bad_folder = bad.folder().to_path_buf();
     drop(bad);
     std::fs::write(bad_folder.join(MANIFEST_FILE), b"nope").unwrap();
+    std::fs::remove_file(bad_folder.join(START_COPY_FILE)).unwrap();
 
     let reports = store.recover_pending().unwrap();
     let summary: Vec<(String, &str)> = reports
