@@ -32,6 +32,11 @@ sha2 = "0.10"
 num_cpus = "1"
 symphonia = { version = "0.5", features = ["aac", "alac", "flac", "mp3", "pcm", "vorbis", "isomp4", "mkv", "ogg"] }
 rubato = "0.14"
+# Streaming FLAC frame encoder for the recorder's storage layer (SAGA-562,
+# ADR 0010). Pinned exactly: it is a 0.x crate with a known edge case that the
+# encoder works around (recording/flac). No default features: no `par`
+# (crossbeam), no `serde`, no `log`.
+flacenc = { version = "=0.5.1", default-features = false }
 regex = "1"
 sagascript-engine-protocol = { path = "../sagascript-engine-protocol" }
 tempfile = "3"
