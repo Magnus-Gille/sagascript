@@ -813,3 +813,55 @@ async fn startup_recovery_recovers_an_interrupted_recording_and_describes_it() {
     assert_eq!(h.recorder.take_notes(), notes);
     assert!(recover_at_startup(h.dir.path()).is_empty());
 }
+
+// -- Transcription input -----------------------------------------------------------
+
+#[tokio::test]
+async fn a_saved_recording_decodes_to_16_khz_samples_for_transcription() {
+    use crate::plain_file_jobs::decode_recording_samples;
+    let h = Harness::new();
+    h.start(Some("To transcribe")).await.expect("starts");
+    tokio::time::sleep(Duration::from_millis(700)).await;
+    let finished = stop_session(&h.recorder).await.expect("stops");
+    let folder = h.dir.path().join(&finished.summary.folder_name);
+
+    let percents = Mutex::new(Vec::new());
+    let audio = decode_recording_samples(&folder, &|| Ok(()), &|pct| {
+        percents.lock().expect("lock").push(pct);
+    })
+    .expect("decodes");
+    let seconds = audio.len() as f64 / 16_000.0;
+    assert!(
+        (seconds - finished.summary.duration_seconds).abs() < 0.1,
+        "{seconds} s decoded for {} s recorded",
+        finished.summary.duration_seconds
+    );
+    assert!(
+        audio.iter().any(|sample| sample.abs() > 0.1),
+        "the sine is in the samples"
+    );
+    assert_eq!(percents.lock().expect("lock").last(), Some(&100));
+}
+
+#[tokio::test]
+async fn a_recording_that_still_says_recording_is_not_decoded() {
+    use crate::plain_file_jobs::decode_recording_samples;
+    let h = Harness::new();
+    h.start(None).await.expect("starts");
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let finished = stop_session(&h.recorder).await.expect("stops");
+    let folder = h.dir.path().join(&finished.summary.folder_name);
+    let manifest = folder.join("recording.json");
+    let text = std::fs::read_to_string(&manifest).expect("read");
+    std::fs::write(
+        &manifest,
+        text.replace("\"state\": \"complete\"", "\"state\": \"recording\""),
+    )
+    .expect("write");
+
+    let error = decode_recording_samples(&folder, &|| Ok(()), &|_| {}).unwrap_err();
+    assert_eq!(
+        crate::command_error::CommandError::from(error).code(),
+        "recording_recovery_needed"
+    );
+}

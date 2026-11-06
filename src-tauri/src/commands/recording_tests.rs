@@ -39,15 +39,31 @@ fn a_relative_folder_is_refused_with_a_message_without_the_path() {
     assert!(!error.message().contains("Takes"), "{}", error.message());
 }
 
+// -- Transcribing a recording --------------------------------------------------
+
 #[test]
-fn the_unfinished_transcription_command_says_it_is_unavailable() {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .build()
-        .expect("runtime");
-    let error = runtime
-        .block_on(transcribe_recording("x".into()))
-        .expect_err("not yet");
-    assert_eq!(error.code(), "unavailable");
+fn a_finished_recording_may_be_transcribed() {
+    let finished = summary(RecordingState::Complete, Quality::Lossless, None, false);
+    assert!(ensure_transcribable(&finished, None).is_ok());
+    assert!(ensure_transcribable(&finished, Some("another folder")).is_ok());
+}
+
+#[test]
+fn the_recording_being_made_is_not_transcribed() {
+    let live = summary(RecordingState::Complete, Quality::Lossless, None, false);
+    let error = ensure_transcribable(&live, Some(&live.folder_name)).expect_err("still being made");
+    assert_eq!(error.code(), "busy");
+}
+
+#[test]
+fn a_recording_that_needs_recovery_is_refused_with_the_recovery_code() {
+    for recording in [
+        summary(RecordingState::Recording, Quality::Lossless, None, true),
+        summary(RecordingState::Recording, Quality::Lossless, None, false),
+    ] {
+        let error = ensure_transcribable(&recording, None).expect_err("not finished");
+        assert_eq!(error.code(), "recording_recovery_needed");
+    }
 }
 
 // -- The shared fixtures the frontend parses (contracts/transport/) ------------

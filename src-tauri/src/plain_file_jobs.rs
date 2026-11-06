@@ -4,6 +4,7 @@
 use crate::command_error::CommandError;
 use crate::commands::FileTranscriptionContext;
 use crate::events::{EmitEvent, PlainPhase, PlainTranscriptionProgress};
+use sagascript_core::recording::{decode_tracks, Manifest, RecordingError, TrackChunk};
 use sagascript_core::sync::lock_or_recover;
 use sagascript_core::transcription::whisper_backend::display_transcript;
 use sagascript_core::transcription::{
@@ -15,6 +16,7 @@ use sagascript_core::{
     transcription::{recommended_parallel_chunks, ContextProfile, WhisperBackend},
 };
 use std::collections::VecDeque;
+use std::path::PathBuf;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
@@ -147,7 +149,7 @@ pub async fn transcribe_pianissimo(
     app: tauri::AppHandle,
     jobs: SharedPlainFileJobs,
     run_id: String,
-    file_path: String,
+    input: PlainInput,
     model: sagascript_core::models::PianissimoModel,
     glossary: Glossary,
 ) -> Result<String, CommandError> {
@@ -166,7 +168,7 @@ pub async fn transcribe_pianissimo(
             );
         };
         let work = || -> Result<String, DictationError> {
-            let audio = decode_for_run(run, std::path::Path::new(&file_path), &progress)?;
+            let audio = decode_input_for_run(run, &input, &progress)?;
             let timeout = Duration::from_secs(((audio.len() / 16_000) as u64 * 10).max(180));
             progress(PlainPhase::Loading, None);
             let backend = Arc::new(PianissimoBackend::start_with_cancel(
@@ -231,6 +233,125 @@ pub async fn transcribe_pianissimo(
         result
     }
 }
+/// What a plain run transcribes.
+#[derive(Debug, Clone)]
+pub enum PlainInput {
+    /// An audio file the user chose, decoded to 16 kHz mono.
+    File(String),
+    /// A finished recording folder (SAGA-564): the samples of its `mic` track,
+    /// placed on the recording's timeline by `decode_tracks`.
+    Recording(PathBuf),
+}
+
+/// Decodes a run's input; see [`PlainInput`].
+fn decode_input_for_run(
+    run: &RunControl,
+    input: &PlainInput,
+    progress: &dyn Fn(PlainPhase, Option<u8>),
+) -> Result<Vec<f32>, DictationError> {
+    match input {
+        PlainInput::File(path) => decode_for_run(run, std::path::Path::new(path), progress),
+        PlainInput::Recording(folder) => {
+            run.check()?;
+            progress(PlainPhase::Decoding, Some(0));
+            let audio = decode_recording_samples(folder, &|| run.check(), &|pct| {
+                progress(PlainPhase::Decoding, Some(pct))
+            })?;
+            run.check()?;
+            Ok(audio)
+        }
+    }
+}
+
+/// The longest recording timeline decoded: a day of 16 kHz samples. A manifest
+/// that places audio beyond it is corrupt, and must not allocate for it.
+const MAX_RECORDING_SAMPLES: u64 = 24 * 3600 * 16_000;
+
+/// The most samples reserved up front from the manifest's word (about 512 MB);
+/// the buffer grows past it only with audio actually decoded.
+const MAX_RESERVED_SAMPLES: u64 = 1 << 27;
+
+/// 16 kHz mono samples of the `mic` track(s) of the finished recording in
+/// `folder`. A recording that still says `recording` is refused with
+/// `RecoveryNeeded` (core's `decode_tracks`). `check` is asked between chunks
+/// (cancellation), `progress` gets whole percents.
+pub(crate) fn decode_recording_samples(
+    folder: &std::path::Path,
+    check: &dyn Fn() -> Result<(), DictationError>,
+    progress: &dyn Fn(u8),
+) -> Result<Vec<f32>, DictationError> {
+    let decoder = decode_tracks(folder)?;
+    let expected = mic_samples_expected(decoder.manifest());
+    assemble_mic_samples(decoder, expected, check, progress)
+}
+
+/// How many 16 kHz samples the manifest says the `mic` tracks hold.
+fn mic_samples_expected(manifest: &Manifest) -> u64 {
+    manifest
+        .tracks
+        .iter()
+        .filter(|track| track.role == "mic")
+        .map(|track| {
+            let samples = u128::from(track.frames) * 16_000 / u128::from(track.sample_rate.max(1));
+            u64::try_from(samples).unwrap_or(u64::MAX)
+        })
+        .fold(0_u64, u64::saturating_add)
+}
+
+/// Place the `mic` chunks on one timeline (`start_sample`), in bounded steps:
+/// the buffer is the one allocation, there is no per-track Vec. Other roles
+/// are not transcribed. `expected` only paces `progress` and the reservation.
+fn assemble_mic_samples(
+    chunks: impl Iterator<Item = Result<TrackChunk, RecordingError>>,
+    expected: u64,
+    check: &dyn Fn() -> Result<(), DictationError>,
+    progress: &dyn Fn(u8),
+) -> Result<Vec<f32>, DictationError> {
+    let mut audio: Vec<f32> =
+        Vec::with_capacity(usize::try_from(expected.min(MAX_RESERVED_SAMPLES)).unwrap_or(0));
+    let mut decoded: u64 = 0;
+    let mut announced: u8 = 0;
+    for chunk in chunks {
+        check()?;
+        let chunk = chunk?;
+        if chunk.role != "mic" {
+            continue;
+        }
+        let end = chunk
+            .start_sample
+            .saturating_add(chunk.samples.len() as u64);
+        if end > MAX_RECORDING_SAMPLES {
+            return Err(RecordingError::CorruptTrack {
+                reason: "a track places audio beyond any plausible length",
+            }
+            .into());
+        }
+        let (start, end) = (chunk.start_sample as usize, end as usize);
+        if audio.len() < end {
+            audio.resize(end, 0.0);
+        }
+        audio[start..end].copy_from_slice(&chunk.samples);
+        decoded += chunk.samples.len() as u64;
+        if let Some(pct) = (decoded * 100).checked_div(expected) {
+            let pct = pct.min(100) as u8;
+            if pct != announced {
+                announced = pct;
+                progress(pct);
+            }
+        }
+    }
+    if audio.is_empty() {
+        return Err(DictationError::FileDecodeError(
+            "The recording holds no microphone audio".into(),
+        ));
+    }
+    // The resampler's count can be a sample short of the manifest's.
+    if announced < 100 {
+        progress(100);
+    }
+    Ok(audio)
+}
+
 /// Decodes a run's input, announcing the decoding and resampling phases and
 /// stopping at a cancellation. A file that is gone is `FileNotFound`, which the
 /// command reports as `file_not_found`.
@@ -264,7 +385,7 @@ pub async fn transcribe(
     app: tauri::AppHandle,
     jobs: SharedPlainFileJobs,
     run_id: String,
-    file_path: String,
+    input: PlainInput,
     context: FileTranscriptionContext,
 ) -> Result<String, CommandError> {
     let lease = jobs.begin(run_id)?;
@@ -283,7 +404,7 @@ pub async fn transcribe(
             );
         };
         let work = || -> Result<String, DictationError> {
-            let audio = decode_for_run(run, std::path::Path::new(&file_path), &progress)?;
+            let audio = decode_input_for_run(run, &input, &progress)?;
             let timeout = Duration::from_secs(((audio.len() / 16_000) as u64 * 6).max(60));
             *lock_or_recover(&run.deadline, DEADLINE_LOCK) = Some(Instant::now() + timeout);
             let mut options = context.options;
@@ -491,5 +612,86 @@ mod tests {
         assert!(jobs.begin("second".into()).is_err());
         drop(worker);
         assert!(jobs.begin("second".into()).is_ok());
+    }
+
+    fn chunk(role: &str, start: u64, samples: Vec<f32>) -> Result<TrackChunk, RecordingError> {
+        Ok(TrackChunk {
+            track_id: role.into(),
+            role: role.into(),
+            start_sample: start,
+            samples,
+        })
+    }
+
+    fn never_cancelled() -> Result<(), DictationError> {
+        Ok(())
+    }
+
+    /// Chunks are placed by `start_sample`, a gap between them is silence, and
+    /// other roles are not transcribed.
+    #[test]
+    fn mic_chunks_are_placed_on_the_timeline_and_other_roles_are_skipped() {
+        let chunks = vec![
+            chunk("mic", 0, vec![1.0; 4]),
+            chunk("system", 0, vec![9.0; 10]),
+            chunk("mic", 6, vec![2.0; 2]),
+        ];
+        let audio = assemble_mic_samples(chunks.into_iter(), 8, &never_cancelled, &|_| {})
+            .expect("assembled");
+        assert_eq!(audio, [1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 2.0, 2.0]);
+    }
+
+    #[test]
+    fn progress_counts_whole_percents_once_each() {
+        let chunks = (0..4).map(|i| chunk("mic", i * 25, vec![0.5; 25]));
+        let seen = Mutex::new(Vec::new());
+        assemble_mic_samples(chunks, 100, &never_cancelled, &|pct| {
+            seen.lock().unwrap().push(pct);
+        })
+        .expect("assembled");
+        assert_eq!(*seen.lock().unwrap(), [25, 50, 75, 100]);
+    }
+
+    #[test]
+    fn a_cancellation_stops_between_chunks() {
+        let chunks = vec![chunk("mic", 0, vec![1.0; 4]), chunk("mic", 4, vec![1.0; 4])];
+        let calls = std::cell::Cell::new(0);
+        let check = || {
+            calls.set(calls.get() + 1);
+            if calls.get() > 1 {
+                Err(DictationError::Cancelled)
+            } else {
+                Ok(())
+            }
+        };
+        let error = assemble_mic_samples(chunks.into_iter(), 8, &check, &|_| {}).unwrap_err();
+        assert!(matches!(error, DictationError::Cancelled), "{error:?}");
+    }
+
+    #[test]
+    fn a_decode_error_keeps_its_recording_code() {
+        let chunks = vec![
+            chunk("mic", 0, vec![1.0; 4]),
+            Err(RecordingError::CorruptTrack { reason: "short" }),
+        ];
+        let error =
+            assemble_mic_samples(chunks.into_iter(), 8, &never_cancelled, &|_| {}).unwrap_err();
+        assert_eq!(CommandError::from(error).code(), "recording_corrupt_track");
+    }
+
+    #[test]
+    fn a_track_that_claims_audio_beyond_a_day_is_corrupt_and_allocates_nothing() {
+        let chunks = vec![chunk("mic", MAX_RECORDING_SAMPLES, vec![1.0; 4])];
+        let error = assemble_mic_samples(chunks.into_iter(), u64::MAX, &never_cancelled, &|_| {})
+            .unwrap_err();
+        assert_eq!(CommandError::from(error).code(), "recording_corrupt_track");
+    }
+
+    #[test]
+    fn a_recording_without_microphone_audio_is_a_decode_error() {
+        let chunks = vec![chunk("system", 0, vec![1.0; 4])];
+        let error =
+            assemble_mic_samples(chunks.into_iter(), 4, &never_cancelled, &|_| {}).unwrap_err();
+        assert_eq!(CommandError::from(error).code(), "file_decode_error");
     }
 }

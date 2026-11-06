@@ -10,14 +10,18 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use sagascript_core::recording::{list_recordings as list_recordings_in, RecordingSummary};
+use sagascript_core::recording::{
+    list_recordings as list_recordings_in, summarize_folder, RecordingError, RecordingSummary,
+};
 use sagascript_core::settings::{expand_home, RecordingQuality, Settings};
 use tauri::State;
 use tracing::info;
 
+use super::transcribe_file::{transcribe_plain_input, PlainOptions};
 use super::{lock_controller, persist_and_sync, try_persist_and_mirror, SharedController};
 use crate::command_error::CommandError;
 use crate::events::{event, EmitEvent};
+use crate::plain_file_jobs::PlainInput;
 use crate::recording_session::{
     check_permission, delete_recording_in, folder_info_on_disk, recover_pending, start_session,
     state_is_live, stop_session, Emit, RecordingFinished, RecordingFolderInfo,
@@ -206,15 +210,64 @@ pub async fn recover_recordings(
     Ok(notes)
 }
 
-// TODO(agent2): transcribe_recording hands a finished recording to the file
-// transcription path (`decode_tracks` of the mic track). Until then the window
-// gets `unavailable`.
+/// What `transcribe_recording` may transcribe: a finished recording, not the
+/// one being made now and not one that still says `recording` (an interrupted
+/// one is recovered first, by `recover_recordings`). Pure: the summary and the
+/// active folder name in, a typed refusal out.
+pub(crate) fn ensure_transcribable(
+    summary: &RecordingSummary,
+    active: Option<&str>,
+) -> Result<(), CommandError> {
+    if active == Some(summary.folder_name.as_str()) {
+        return Err(CommandError::Busy(
+            "That recording is still being made. Stop it first.".into(),
+        ));
+    }
+    if summary.needs_recovery || !summary.playable {
+        return Err(RecordingError::RecoveryNeeded.into());
+    }
+    Ok(())
+}
+
+/// Hand a saved recording to the file transcription: its microphone track,
+/// 16 kHz mono through `decode_tracks`, with the model, the progress events
+/// (`plain-transcription-progress`)
+/// and the errors of a file run. The text is returned for the Record window; it
+/// is not pasted anywhere and is not held as an unsaved result for the updater.
 #[tauri::command]
-pub async fn transcribe_recording(folder_name: String) -> Result<Option<String>, CommandError> {
-    let _ = folder_name;
-    Err(CommandError::Unavailable(
-        "Transcribing a recording is not available yet.".into(),
-    ))
+pub async fn transcribe_recording(
+    app: tauri::AppHandle,
+    controller: State<'_, SharedController>,
+    recorder: State<'_, SharedRecorder>,
+    jobs: State<'_, crate::plain_file_jobs::SharedPlainFileJobs>,
+    activity: State<'_, Arc<crate::update_activity::UpdateActivity>>,
+    folder_name: String,
+) -> Result<Option<String>, CommandError> {
+    let root = recorder_settings(&controller).recordings_dir();
+    let active = recorder.active_folder_name();
+    let folder = blocking(move || -> Result<_, CommandError> {
+        let folder = recording_folder(&root, &folder_name)?;
+        ensure_transcribable(&summarize_folder(&folder)?, active.as_deref())?;
+        Ok(folder)
+    })
+    .await??;
+    let text = transcribe_plain_input(
+        app,
+        &controller,
+        jobs.inner().clone(),
+        activity.inner(),
+        uuid::Uuid::new_v4().to_string(),
+        PlainInput::Recording(folder),
+        PlainOptions {
+            prompt: None,
+            profile_id: None,
+            auto_paste: Some(false),
+            remember_result: false,
+        },
+    )
+    .await?;
+    info!("A recording was transcribed: {} chars", text.len());
+    Ok(Some(text))
 }
 
 /// The recordings folder (`path` null: the configured one) and its volume.
