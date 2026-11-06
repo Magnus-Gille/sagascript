@@ -105,7 +105,7 @@ tauri-plugin-updater = { version = "2", default-features = false, features = ["r
 # enigo (auto-paste) and the objc FFI stack are desktop-GUI integrations.
 enigo = { version = "0.6", features = ["serde"] }
 core-foundation = "0.10"
-cocoa = "0.26"
+cocoa = "0.27"
 objc = "0.2"
 objc2-app-kit = { version = "0.3.2", features = ["block2", "NSEvent"] }
 objc2-foundation = "0.3.2"
