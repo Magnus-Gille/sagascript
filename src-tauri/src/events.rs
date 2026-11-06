@@ -321,8 +321,6 @@ pub mod event {
         /// What recovery kept of interrupted recordings, once after app start
         /// when it kept anything. Producer: the startup recovery. Consumer:
         /// Record.svelte.
-        // Sent by the startup recovery, which the Record window's tray work adds.
-        #[allow(dead_code)]
         RECORDINGS_RECOVERED: RecordingsRecovered = "recordings-recovered",
             payload<'a> = Vec<RecoveryNote>,
             consumer = Consumer::Gui,
