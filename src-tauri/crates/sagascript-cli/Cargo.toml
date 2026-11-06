@@ -20,7 +20,7 @@ sagascript-core = { path = "../sagascript-core" }
 clap = { version = "4", features = ["derive", "string"] }
 clap_complete = "4"
 clap_mangen = "0.2"
-indicatif = "0.17"
+indicatif = "0.18"
 arboard = "3"
 uuid = { version = "1", features = ["v4"] }
 unicode-width = "0.2"
