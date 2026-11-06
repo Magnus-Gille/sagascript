@@ -31,6 +31,12 @@ export interface RecorderState {
   /** The recording just stopped, while `phase` is "finished". */
   finished: RecordingFinished | null;
   error: RecorderError | null;
+  /**
+   * True while this window's own stop command is in flight: its answer
+   * (`stop-succeeded` or `stop-failed`) is still to come and carries the
+   * result, so a terminal session report does not end "stopping" before it.
+   */
+  stopPending: boolean;
 }
 
 export const initialRecorderState: RecorderState = {
@@ -39,6 +45,7 @@ export const initialRecorderState: RecorderState = {
   session: null,
   finished: null,
   error: null,
+  stopPending: false,
 };
 
 export type RecorderAction =
@@ -103,16 +110,27 @@ function withSession(state: RecorderState, info: RecordingSessionInfo): Recorder
     case "finalizing":
       return { ...state, phase: "stopping", session: info };
     case "done":
-      // The result arrives with `stop-succeeded`; without it (stopped elsewhere) there is nothing to show but the list.
-      return state.phase === "recording" || state.phase === "starting"
-        ? { ...state, phase: "idle", session: info }
-        : { ...state, session: info };
+      return terminal(state, info);
     case "failed":
-      return { ...state, phase: "error", session: info, finished: null, error: sessionError(info) };
+      return { ...state, phase: "error", session: info, finished: null, error: sessionError(info), stopPending: false };
     case "idle":
-      // An idle report is stale while a start or stop command is in flight.
-      return state.phase === "recording" ? { ...state, phase: "idle", session: info } : { ...state, session: info };
+      // An idle report is stale while a start command is in flight.
+      return state.phase === "recording" || state.phase === "stopping" ? terminal(state, info) : { ...state, session: info };
   }
+}
+
+/**
+ * A report that the session is over (`done`, or `idle` after it). The result
+ * of a stop this window asked for arrives with `stop-succeeded`, so it keeps
+ * "stopping" until then. A session that ended by itself (a lost device, a full
+ * disk) or was stopped elsewhere has no such answer coming: the window goes
+ * back to idle, with nothing to show but the list.
+ */
+function terminal(state: RecorderState, info: RecordingSessionInfo): RecorderState {
+  if (state.phase === "stopping" && state.stopPending) return { ...state, session: info };
+  return state.phase === "recording" || state.phase === "starting" || state.phase === "stopping"
+    ? { ...state, phase: "idle", session: info }
+    : { ...state, session: info };
 }
 
 export function reduceRecorder(state: RecorderState, action: RecorderAction): RecorderState {
@@ -127,7 +145,7 @@ export function reduceRecorder(state: RecorderState, action: RecorderAction): Re
     case "consent-acknowledged":
       return { ...state, firstUse: { ...state.firstUse, consentAcknowledged: true } };
     case "start-requested":
-      return canStart(state) ? { ...state, phase: "starting", finished: null, error: null } : state;
+      return canStart(state) ? { ...state, phase: "starting", finished: null, error: null, stopPending: false } : state;
     case "start-succeeded":
       // Events may have moved on (a stop pressed at once): only a start still waiting takes the answer.
       return state.phase === "starting" ? withSession(state, action.info) : state;
@@ -136,15 +154,17 @@ export function reduceRecorder(state: RecorderState, action: RecorderAction): Re
     case "session":
       return withSession(state, action.info);
     case "stop-requested":
-      return canStop(state) ? { ...state, phase: "stopping" } : state;
+      return canStop(state) ? { ...state, phase: "stopping", stopPending: true } : state;
     case "stop-succeeded":
       return state.phase === "stopping" || state.phase === "recording"
-        ? { ...state, phase: "finished", finished: action.finished, error: null }
+        ? { ...state, phase: "finished", finished: action.finished, error: null, stopPending: false }
         : state;
     case "stop-failed":
-      return { ...state, phase: "error", error: action.error };
+      return { ...state, phase: "error", error: action.error, stopPending: false };
     case "dismiss":
-      return state.phase === "finished" || state.phase === "error" ? { ...state, phase: "idle", finished: null, error: null } : state;
+      return state.phase === "finished" || state.phase === "error"
+        ? { ...state, phase: "idle", finished: null, error: null, stopPending: false }
+        : state;
   }
 }
 

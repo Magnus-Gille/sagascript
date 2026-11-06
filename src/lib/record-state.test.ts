@@ -131,6 +131,68 @@ describe("recording lifecycle", () => {
     expect(reduceRecorder(recording, { type: "session", info: sessionInfo({ state: "idle" }) }).phase).toBe("idle");
   });
 
+  test("a session that finishes by itself (recording -> finalizing -> done) leaves stopping", () => {
+    // A device loss or a full disk ends the session; this window sent no stop.
+    const state = run(ready, { type: "session", info: sessionInfo() }, { type: "session", info: sessionInfo({ state: "finalizing" }) });
+    expect(state.phase).toBe("stopping");
+    for (const end of [{ state: "done" }, { state: "idle" }] as const) {
+      const after = reduceRecorder(state, { type: "session", info: sessionInfo(end) });
+      expect(after.phase, end.state).toBe("idle");
+      expect(canStart(after), end.state).toBe(true);
+    }
+    expect(
+      reduceRecorder(state, { type: "session", info: sessionInfo({ state: "failed", error_code: "recording_disk_full" }) }).phase,
+    ).toBe("error");
+  });
+
+  test("a pending stop keeps its result across the done report", () => {
+    const stopping = run(
+      ready,
+      { type: "session", info: sessionInfo() },
+      { type: "stop-requested" },
+      { type: "session", info: sessionInfo({ state: "finalizing" }) },
+      { type: "session", info: sessionInfo({ state: "done" }) },
+      { type: "session", info: sessionInfo({ state: "idle" }) },
+    );
+    expect(stopping.phase).toBe("stopping");
+    const finished = reduceRecorder(stopping, { type: "stop-succeeded", finished: finishedRecording });
+    expect(finished.phase).toBe("finished");
+    expect(finished.finished).toBe(finishedRecording);
+  });
+
+  test("a session that fails while a stop is pending does not leave the stop pending", () => {
+    const failed = run(
+      ready,
+      { type: "session", info: sessionInfo() },
+      { type: "stop-requested" },
+      { type: "session", info: sessionInfo({ state: "failed" }) },
+    );
+    expect(failed.phase).toBe("error");
+    const next = run(
+      failed,
+      { type: "dismiss" },
+      { type: "session", info: sessionInfo() },
+      { type: "session", info: sessionInfo({ state: "finalizing" }) },
+    );
+    expect(reduceRecorder(next, { type: "session", info: sessionInfo({ state: "done" }) }).phase).toBe("idle");
+  });
+
+  test("a stop that failed does not leave a stale pending stop behind", () => {
+    const failed = run(
+      ready,
+      { type: "session", info: sessionInfo() },
+      { type: "stop-requested" },
+      { type: "stop-failed", error: toRecorderError(new Error("x")) },
+    );
+    const next = run(
+      failed,
+      { type: "dismiss" },
+      { type: "session", info: sessionInfo() },
+      { type: "session", info: sessionInfo({ state: "finalizing" }) },
+    );
+    expect(reduceRecorder(next, { type: "session", info: sessionInfo({ state: "done" }) }).phase).toBe("idle");
+  });
+
   test("a result does not open the finished view unless a stop was pending", () => {
     expect(reduceRecorder(ready, { type: "stop-succeeded", finished: finishedRecording })).toBe(ready);
   });
