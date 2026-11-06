@@ -219,6 +219,13 @@ def exercise_without_model(binary, cache_dir, scratch):
             require_int(status_response, key, "status")
         unknown = host.send("conformance_unknown_op")
         assert_failure(host.wait_for(unknown, 5), unknown, "unsupported")
+        warm = host.send("warm")
+        warm_response = host.wait_for(warm, 5)
+        assert_success(warm_response, warm)
+        require(
+            warm_response.get("ran") is False and warm_response.get("skipped") == "not_loaded",
+            f"warm before load must be skipped as not_loaded: {warm_response}",
+        )
         missing = host.send(
             "load", model_dir=os.path.join(scratch, "no-such-model"),
             model_id="pianissimo-sv-coreml-conformance", compute_units="ane"
@@ -274,6 +281,24 @@ def exercise_host(binary, model_dir, cache_dir, pcm_path, expect_exit_on_eof=Fal
     try:
         _, load = hello_and_load(host, model_dir)
         window_samples = int(round(load["window_s"] * 16_000))
+
+        # warm (#397): the first canary after load runs; one sent at once after it is `recent`.
+        warm = host.send("warm")
+        warm_response = host.wait_for(warm, 180)
+        assert_success(warm_response, warm)
+        require(warm_response.get("ran") is True, f"the first warm after load must run: {warm_response}")
+        require_int(warm_response, "canary_ms", "warm")
+        require(
+            isinstance(warm_response.get("probable_recompile"), bool),
+            f"warm without probable_recompile: {warm_response}",
+        )
+        again = host.send("warm")
+        again_response = host.wait_for(again, 5)
+        assert_success(again_response, again)
+        require(
+            again_response.get("ran") is False and again_response.get("skipped") == "recent",
+            f"a warm right after a canary must be skipped as recent: {again_response}",
+        )
 
         first = host.send(
             "transcribe_window", pcm_path=pcm_path, offset_samples=0,

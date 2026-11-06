@@ -17,7 +17,8 @@ use std::path::{Path, PathBuf};
 
 use crate::settings::{store, LineupEnv, Settings};
 use crate::transcription::engine_host::client::TestHook;
-use crate::transcription::engine_host::{EngineHostClient, EngineHostConfig};
+use crate::transcription::engine_host::{EngineHostClient, EngineHostConfig, EngineHostError};
+use crate::transcription::pianissimo_backend::{self, WarmOutcome};
 #[cfg(feature = "diarization")]
 use crate::{
     diarization::speaker_hint::SpeakerCountHint,
@@ -58,6 +59,15 @@ pub fn set_engine_test_hook(
 /// this on a timer).
 pub fn run_idle_check_now(client: &EngineHostClient) {
     client.run_idle_check_now();
+}
+
+/// What the background pre-warm does with `client` (key-down, wake): load the
+/// model, or run a canary when it is loaded: `pianissimo_backend::warm_or_touch`.
+pub fn warm_or_touch(
+    client: &EngineHostClient,
+    load_allowed: bool,
+) -> Result<WarmOutcome, EngineHostError> {
+    pianissimo_backend::warm_or_touch(client, load_allowed)
 }
 
 /// One meeting run on the given `services` and `options`, as the app and reprocessing make it

@@ -4,7 +4,7 @@
 use sagascript_core::transcription::engine_host::client::WindowRequest;
 use sagascript_core::transcription::engine_host::{
     CancelToken, EngineHostClient, EngineHostConfig, EngineHostError, ErrorCode, LoadEvent,
-    LoadObserver, LoadSpec, Priority, Timeouts,
+    LoadObserver, LoadSpec, Priority, Timeouts, Transcription,
 };
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -38,8 +38,11 @@ fn config(env: &[(&str, &str)], tmp: &Path) -> EngineHostConfig {
         ping: Duration::from_millis(500),
         status: Duration::from_secs(2),
         unload: Duration::from_secs(2),
+        warm: Duration::from_secs(5),
         transcribe_min: Duration::from_secs(5),
         transcribe_factor: 0.0,
+        interactive_min: Duration::from_secs(5),
+        interactive_factor: 0.0,
         shutdown_grace: Duration::from_millis(500),
         write: Duration::from_secs(2),
         wedge_grace: Duration::from_millis(500),
@@ -115,6 +118,11 @@ fn wait_until(what: &str, limit: Duration, mut f: impl FnMut() -> bool) {
         std::thread::sleep(Duration::from_millis(20));
     }
     panic!("timed out waiting for {what}");
+}
+
+/// A file job (batch priority) over `samples`.
+fn file_job(client: &EngineHostClient, samples: &[f32]) -> Result<Transcription, EngineHostError> {
+    client.transcribe_file_samples(samples, &CancelToken::new(), None)
 }
 
 const LONG_ENV: [(&str, &str); 2] = [("FAKE_WINDOW_S", "10"), ("FAKE_OVERLAP_S", "4")];
@@ -377,6 +385,8 @@ fn out_of_order_responses_are_routed_by_id() {
     assert_eq!(b.tokens[0].id, 4);
 }
 
+/// A file job's timeout leaves a responsive host alone (a dictation's does not:
+/// see `interactive_window_timeout_*`).
 #[test]
 fn window_timeout_is_reported_and_host_stays_usable() {
     // Slow first window that honours cancel: a responsive host, not a wedged one.
@@ -386,10 +396,7 @@ fn window_timeout_is_reported_and_host_stays_usable() {
     f.client.warm().unwrap();
     let pid = f.client.snapshot().pid;
     let t = Instant::now();
-    match f
-        .client
-        .transcribe_dictation(&pcm(1.0), &CancelToken::new())
-    {
+    match file_job(&f.client, &pcm(1.0)) {
         Err(EngineHostError::Timeout {
             op: "transcribe_window",
             ..
@@ -404,10 +411,7 @@ fn window_timeout_is_reported_and_host_stays_usable() {
     assert_eq!(snap.pid, pid);
     assert_eq!(snap.crashes_in_window, 0);
     f.client.ping().unwrap();
-    let out = f
-        .client
-        .transcribe_dictation(&pcm(1.0), &CancelToken::new())
-        .unwrap();
+    let out = file_job(&f.client, &pcm(1.0)).unwrap();
     assert_eq!(out.tokens.len(), 2);
     assert_eq!(f.client.snapshot().pid, pid);
 }
@@ -430,10 +434,7 @@ fn malformed_late_answer_to_a_timed_out_window_is_an_answer_not_a_wedge() {
     );
     f.client.warm().unwrap();
     let pid = f.client.snapshot().pid;
-    match f
-        .client
-        .transcribe_dictation(&pcm(1.0), &CancelToken::new())
-    {
+    match file_job(&f.client, &pcm(1.0)) {
         Err(EngineHostError::Timeout {
             op: "transcribe_window",
             ..
@@ -446,15 +447,12 @@ fn malformed_late_answer_to_a_timed_out_window_is_an_answer_not_a_wedge() {
     assert!(snap.running);
     assert_eq!(snap.pid, pid, "the host was killed as wedged");
     assert_eq!(snap.crashes_in_window, 0);
-    let out = f
-        .client
-        .transcribe_dictation(&pcm(1.0), &CancelToken::new())
-        .unwrap();
+    let out = file_job(&f.client, &pcm(1.0)).unwrap();
     assert_eq!(out.tokens.len(), 2);
     assert_eq!(f.client.snapshot().pid, pid);
 }
 
-/// A host that never answers a timed-out window, even after `cancel`, is
+/// A host that never answers a timed-out file window, even after `cancel`, is
 /// killed after the wedge grace although it still answers `ping`.
 #[test]
 fn host_that_never_answers_a_timed_out_window_is_killed() {
@@ -464,9 +462,7 @@ fn host_that_never_answers_a_timed_out_window_is_killed() {
     });
     f.client.warm().unwrap();
     let pid = f.client.snapshot().pid.unwrap();
-    let r = f
-        .client
-        .transcribe_dictation(&pcm(1.0), &CancelToken::new());
+    let r = file_job(&f.client, &pcm(1.0));
     assert!(
         matches!(
             r,
@@ -791,9 +787,7 @@ fn no_orphan_host_when_dropped_with_hung_request() {
     });
     f.client.warm().unwrap();
     let pid = f.client.snapshot().pid.unwrap();
-    let r = f
-        .client
-        .transcribe_dictation(&pcm(1.0), &CancelToken::new());
+    let r = file_job(&f.client, &pcm(1.0));
     assert!(
         matches!(
             r,
@@ -1606,10 +1600,11 @@ fn failed_probe_load_on_a_live_host_enforces_the_new_cooldown() {
     assert!(snap.failed.is_some());
 }
 
-/// (b) A window that ignores cancel keeps its host slot while the host still
-/// answers `ping` (a Core ML prediction cannot be interrupted). Within the
-/// request timeout plus the wedge grace the client kills that host, and the
-/// next window succeeds on a fresh one.
+/// (b) A file window that ignores cancel keeps its host slot while the host
+/// still answers `ping` (a Core ML prediction cannot be interrupted). Within
+/// the request timeout plus the wedge grace the client kills that host, and the
+/// next window succeeds on a fresh one. (A dictation window's host is killed
+/// at its timeout, without the grace.)
 #[test]
 fn host_wedged_on_a_timed_out_window_is_restarted_and_the_next_window_succeeds() {
     let marker = tempfile::tempdir().unwrap();
@@ -1640,7 +1635,7 @@ fn host_wedged_on_a_timed_out_window_is_restarted_and_the_next_window_succeeds()
                 offset_samples: 0,
                 num_samples: samples.len() as u64,
                 sample_rate: 16_000,
-                priority: Priority::Interactive,
+                priority: Priority::Batch,
                 boost: None,
             },
             &cancel,
@@ -1714,9 +1709,7 @@ fn slow_uninterruptible_window_times_out_promptly_and_keeps_the_host() {
     let pid = f.client.snapshot().pid.unwrap();
 
     let started = Instant::now();
-    let r = f
-        .client
-        .transcribe_dictation(&pcm(1.0), &CancelToken::new());
+    let r = file_job(&f.client, &pcm(1.0));
     let elapsed = started.elapsed();
     assert!(
         matches!(
@@ -1759,6 +1752,251 @@ fn slow_uninterruptible_window_times_out_promptly_and_keeps_the_host() {
         .unwrap();
     assert_eq!(out.tokens.len(), 4);
     assert_eq!(f.client.snapshot().pid, Some(pid));
+}
+
+// ------------------------------- stalled dictation window: restart and retry
+
+/// A dictation window gets this long; a file window 5 s, and the wedge grace is
+/// far away, so only the interactive restart can end a stalled host quickly.
+const STALL: Duration = Duration::from_millis(400);
+
+fn stall_fixture(env: &[(&str, &str)], tweak: impl FnOnce(&mut EngineHostConfig)) -> Fixture {
+    fixture_with(env, |c| {
+        c.timeouts.interactive_min = STALL;
+        c.timeouts.transcribe_min = Duration::from_secs(5);
+        c.timeouts.wedge_grace = Duration::from_secs(30);
+        tweak(c);
+    })
+}
+
+fn window_requests(log: &Path) -> usize {
+    ops_of(log)
+        .iter()
+        .filter(|op| op.as_str() == "transcribe_window")
+        .count()
+}
+
+/// (a) The first window of a dictation never finishes on the first host (a
+/// stalled Neural Engine program). After the interactive timeout, not the
+/// 45 s one, the client kills that host, starts another, reloads the model
+/// and resubmits the in-flight windows: the dictation returns its full text.
+#[test]
+fn stalled_dictation_window_restarts_the_host_and_returns_the_full_text() {
+    let scratch = tempfile::tempdir().unwrap();
+    let wedge = scratch.path().join("wedge");
+    let log = scratch.path().join("log");
+    let mut env = LONG_ENV.to_vec();
+    env.extend([
+        ("FAKE_WEDGE_ONCE_FILE", wedge.to_str().unwrap()),
+        ("FAKE_MAX_IN_FLIGHT", "3"),
+        ("FAKE_LOG", log.to_str().unwrap()),
+    ]);
+    let f = stall_fixture(&env, |_| {});
+    f.client.warm().unwrap();
+    let first_pid = f.client.snapshot().pid.unwrap();
+
+    let started = Instant::now();
+    let out = f
+        .client
+        .transcribe_dictation(&pcm(25.0), &CancelToken::new())
+        .unwrap();
+    let elapsed = started.elapsed();
+
+    assert_eq!(
+        out.tokens.iter().map(|t| t.id).collect::<Vec<_>>(),
+        expected_ids(25 * SR),
+        "the dictation lost or duplicated text"
+    );
+    assert!(elapsed >= STALL, "{elapsed:?}");
+    assert!(
+        elapsed < Duration::from_secs(3),
+        "the dictation waited for more than the interactive timeout and a restart: {elapsed:?}"
+    );
+    assert!(!pid_alive(first_pid), "the stalled host was left running");
+    let snap = f.client.snapshot();
+    assert!(snap.running && snap.loaded, "{snap:?}");
+    assert_ne!(snap.pid, Some(first_pid));
+    assert_eq!(snap.spawns, 2);
+    assert_eq!(snap.loads, 2, "the model is reloaded on the new host");
+    assert_eq!(snap.crashes_in_window, 1, "the stall counts as one crash");
+    assert!(
+        window_requests(&log) > out.windows.len(),
+        "the in-flight windows were not resubmitted"
+    );
+}
+
+/// A dictation window whose answer arrived in time but is only waited on
+/// after its deadline (the pipeline waits on its windows in order, so a slow
+/// first window delays the others' waits) is a success: the queued answer is
+/// taken, and the healthy host is not killed and counts no crash.
+#[test]
+fn a_queued_answer_past_the_deadline_is_taken_and_the_host_kept() {
+    let f = stall_fixture(&LONG_ENV, |_| {});
+    f.client.warm().unwrap();
+    let pid = f.client.snapshot().pid.unwrap();
+    let samples = pcm(0.5);
+    let pcm_file = PcmFile::write(&samples, Some(f.tmp.path())).unwrap();
+    let req = WindowRequest {
+        pcm_path: pcm_file.path().to_path_buf(),
+        offset_samples: 0,
+        num_samples: samples.len() as u64,
+        sample_rate: 16_000,
+        priority: Priority::Interactive,
+        boost: None,
+    };
+    let ticket = f
+        .client
+        .submit_window(&req, &CancelToken::new(), Duration::from_secs(1))
+        .unwrap()
+        .expect("slot");
+    // The fake host answers within milliseconds; the wait starts well after
+    // the interactive deadline.
+    std::thread::sleep(STALL * 3);
+
+    ticket.wait(&CancelToken::new()).expect("the queued answer");
+
+    let snap = f.client.snapshot();
+    assert_eq!(snap.pid, Some(pid), "the healthy host was killed");
+    assert!(pid_alive(pid));
+    assert_eq!(snap.crashes_in_window, 0, "{snap:?}");
+    assert_eq!(snap.spawns, 1);
+}
+
+/// (b) The retry budget is `max_crash_retries`, as for a crash: a host that
+/// stalls on every attempt ends in the `Timeout`, after one restart per retry.
+#[test]
+fn dictation_that_keeps_stalling_ends_in_the_timeout_after_its_retries() {
+    for retries in [0u32, 1] {
+        let f = stall_fixture(&[("FAKE_HANG", "1")], |c| c.max_crash_retries = retries);
+        f.client.warm().unwrap();
+        let first_pid = f.client.snapshot().pid.unwrap();
+
+        let started = Instant::now();
+        let r = f
+            .client
+            .transcribe_dictation(&pcm(1.0), &CancelToken::new());
+        let elapsed = started.elapsed();
+
+        match &r {
+            Err(EngineHostError::Timeout {
+                op: "transcribe_window",
+                after,
+            }) => assert_eq!(*after, STALL, "retries {retries}"),
+            other => panic!("retries {retries}: expected the timeout, got {other:?}"),
+        }
+        let attempts = retries + 1;
+        assert!(
+            elapsed >= STALL * attempts,
+            "retries {retries}: {elapsed:?}"
+        );
+        assert!(
+            elapsed < Duration::from_secs(4),
+            "retries {retries}: {elapsed:?}"
+        );
+        let snap = f.client.snapshot();
+        assert_eq!(snap.spawns, u64::from(attempts), "retries {retries}");
+        assert_eq!(
+            snap.crashes_in_window, attempts as usize,
+            "retries {retries}"
+        );
+        assert!(!pid_alive(first_pid));
+        assert!(
+            !snap.running,
+            "retries {retries}: a stalled host was left running"
+        );
+    }
+}
+
+/// (c) A file job keeps its own timeout and wedge grace: it is not governed
+/// by the (here much shorter) interactive timeout, the host is not restarted
+/// when the window times out, and nothing is resubmitted. After the grace
+/// the watcher still kills a host that never answers.
+#[test]
+fn file_job_window_timeout_does_not_restart_the_host() {
+    let file_timeout = Duration::from_millis(800);
+    let grace = Duration::from_millis(1500);
+    let f = stall_fixture(&[("FAKE_HANG", "1")], |c| {
+        c.timeouts.interactive_min = Duration::from_millis(100);
+        c.timeouts.transcribe_min = file_timeout;
+        c.timeouts.wedge_grace = grace;
+    });
+    f.client.warm().unwrap();
+    let pid = f.client.snapshot().pid.unwrap();
+
+    let started = Instant::now();
+    let r = file_job(&f.client, &pcm(1.0));
+    let elapsed = started.elapsed();
+    match &r {
+        Err(EngineHostError::Timeout {
+            op: "transcribe_window",
+            after,
+        }) => assert_eq!(*after, file_timeout),
+        other => panic!("expected the timeout, got {other:?}"),
+    }
+    assert!(elapsed >= file_timeout, "{elapsed:?}");
+    assert!(elapsed < file_timeout + grace, "{elapsed:?}");
+    assert!(pid_alive(pid), "the host was killed before the wedge grace");
+    let snap = f.client.snapshot();
+    assert_eq!((snap.spawns, snap.crashes_in_window), (1, 0), "{snap:?}");
+
+    // Unchanged: a host that never answers is killed once the grace is over.
+    wait_until("hung host killed", grace + Duration::from_secs(2), || {
+        !pid_alive(pid)
+    });
+    let snap = f.client.snapshot();
+    assert_eq!((snap.spawns, snap.crashes_in_window), (1, 1), "{snap:?}");
+}
+
+/// The host is shared: a file job's windows in flight on the host that a
+/// dictation stall kills fail as crashed and take the file job's normal
+/// crash-resubmit path. The file job finishes with its full text.
+#[test]
+fn dictation_stall_restart_resubmits_a_concurrent_file_job_through_its_crash_path() {
+    let scratch = tempfile::tempdir().unwrap();
+    let wedge = scratch.path().join("wedge");
+    let log = scratch.path().join("log");
+    let mut env = LONG_ENV.to_vec();
+    env.extend([
+        ("FAKE_WEDGE_INTERACTIVE_ONCE_FILE", wedge.to_str().unwrap()),
+        ("FAKE_MAX_IN_FLIGHT", "3"),
+        ("FAKE_BATCH_DELAY_MS", "1500"),
+        ("FAKE_LOG", log.to_str().unwrap()),
+    ]);
+    let f = stall_fixture(&env, |_| {});
+    f.client.warm().unwrap();
+    let first_pid = f.client.snapshot().pid.unwrap();
+
+    // Two file windows (the batch lane) are in flight when the dictation starts.
+    let file = {
+        let client = f.client.clone();
+        std::thread::spawn(move || file_job(&client, &pcm(15.0)))
+    };
+    wait_until("file windows in flight", Duration::from_secs(3), || {
+        f.client.status().is_ok_and(|s| s.in_flight == 2)
+    });
+    let dictation = f
+        .client
+        .transcribe_dictation(&pcm(3.0), &CancelToken::new())
+        .unwrap();
+    assert_eq!(
+        dictation.tokens.iter().map(|t| t.id).collect::<Vec<_>>(),
+        expected_ids(3 * SR)
+    );
+
+    let file = file
+        .join()
+        .unwrap()
+        .expect("the file job must survive the restart through its crash path");
+    assert_eq!(
+        file.tokens.iter().map(|t| t.id).collect::<Vec<_>>(),
+        expected_ids(15 * SR)
+    );
+    assert!(!pid_alive(first_pid));
+    let snap = f.client.snapshot();
+    assert_eq!(snap.spawns, 2);
+    assert_eq!(snap.crashes_in_window, 1, "one stall, one crash: {snap:?}");
+    // 2 file windows + the stalled dictation window, then all three again.
+    assert_eq!(window_requests(&log), 2 + 1 + 3);
 }
 
 /// 500 terms of 64 four-byte characters: each window request line is about
