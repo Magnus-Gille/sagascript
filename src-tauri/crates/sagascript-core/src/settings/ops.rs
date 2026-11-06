@@ -32,7 +32,7 @@
 //! legacy field.
 
 use super::{FileModelPreference, HotkeyProfile, ModelResetNotice, Settings, SettingsError};
-use crate::models::{Language, WhisperModel};
+use crate::models::{Language, PianissimoModel, WhisperModel};
 
 /// What a surface knows about the Accessibility permission when it is asked to
 /// turn auto-paste on.
@@ -123,7 +123,7 @@ impl Settings {
     ) -> Result<(), SettingsError> {
         let profile_id = self.default_profile().id;
         let preference = if enabled {
-            FileModelPreference::PianissimoOriginal
+            FileModelPreference::Pianissimo(PianissimoModel::Swedish)
         } else {
             FileModelPreference::Auto
         };

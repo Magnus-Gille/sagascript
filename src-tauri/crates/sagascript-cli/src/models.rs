@@ -3,7 +3,7 @@ use unicode_width::UnicodeWidthStr;
 
 use sagascript_core::error::DictationError;
 use sagascript_core::machine;
-use sagascript_core::models::ModelInfo;
+use sagascript_core::models::{ModelInfo, PianissimoModel};
 use sagascript_core::settings::Language;
 use sagascript_core::transcription::model;
 use sagascript_core::transcription::pianissimo_model;
@@ -13,7 +13,7 @@ use crate::output::{errln, outln, Out};
 
 #[derive(Args)]
 pub struct ListModelsArgs {
-    /// Filter by language [possible values: en, sv, no, fi, auto (less accurate)]
+    /// Filter by language [possible values: en, sv, no, fi, da, auto (less accurate)]
     #[arg(short, long, value_name = "LANG")]
     pub language: Option<String>,
 }
@@ -184,11 +184,12 @@ pub struct DeleteModelArgs {
 }
 
 pub fn delete(args: DeleteModelArgs, out: &Out) -> Result<(), DictationError> {
-    if args.model == "pianissimo-sv" {
-        pianissimo_model::delete()?;
+    if let Some(pianissimo) = PianissimoModel::from_id(&args.model) {
+        pianissimo_model::delete(pianissimo)?;
         errln!(
             out,
-            "Deleted Pianissimo (model files and any legacy NeMo/GGUF files)"
+            "Deleted Pianissimo {} (model files and any legacy NeMo/GGUF files)",
+            pianissimo.language().display_name()
         );
         return Ok(());
     }
@@ -330,7 +331,7 @@ impl DownloadProgress {
 }
 
 pub async fn download(args: DownloadModelArgs, out: &Out) -> Result<(), DictationError> {
-    if args.model == "pianissimo-sv" {
+    if let Some(pianissimo) = PianissimoModel::from_id(&args.model) {
         if !sagascript_core::transcription::pianissimo_backend::runtime_supported_on_this_os() {
             return Err(DictationError::TranscriptionFailed(
                 sagascript_core::transcription::pianissimo_backend::UNSUPPORTED_MESSAGE.into(),
@@ -338,12 +339,13 @@ pub async fn download(args: DownloadModelArgs, out: &Out) -> Result<(), Dictatio
         }
         errln!(
             out,
-            "Downloading Pianissimo model (~{} MB, CC BY 4.0, Klang AI AB)...",
-            pianissimo_model::download_size_bytes() / 1_048_576
+            "Downloading Pianissimo {} model (~{} MB, CC BY 4.0, Klang AI AB)...",
+            pianissimo.language().display_name(),
+            pianissimo_model::download_size_bytes(pianissimo) / 1_048_576
         );
         let progress = DownloadProgress::new(out);
         let cb_progress = progress.clone();
-        let path = pianissimo_model::download(move |downloaded, total| {
+        let path = pianissimo_model::download(pianissimo, move |downloaded, total| {
             cb_progress.report(downloaded, total);
         })
         .await?;
@@ -586,6 +588,21 @@ mod lineup_tests {
             .collect();
         assert_eq!(base.len(), 2, "{lines:#?}");
         assert!(base[0].contains("Finnish") && base[1].contains("Auto-detect"));
+    }
+
+    #[test]
+    fn danish_lists_the_multilingual_models_under_its_own_name() {
+        let lines = table(&[Language::Danish], &FixedModelEnv::new());
+        let models = WhisperModel::models_for_language(Language::Danish);
+        assert_eq!(lines.len(), 2 + models.len(), "{lines:#?}");
+        for model in models {
+            let row = lines
+                .iter()
+                .find(|line| line.starts_with(&format!("{} ", model.id())))
+                .unwrap_or_else(|| panic!("no row for {model:?}: {lines:#?}"));
+            assert!(row.contains("Danish"), "{row}");
+        }
+        assert!(lines.iter().all(|line| !line.contains("pianissimo")));
     }
 }
 

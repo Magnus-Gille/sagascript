@@ -1,14 +1,20 @@
-//! Download metadata and lifecycle helpers for KlangAI's Swedish Pianissimo
-//! checkpoint. Two per-platform artifacts exist (see [`active`]):
+//! Download metadata and lifecycle helpers for KlangAI's Pianissimo
+//! checkpoints, one per [`PianissimoModel`]. Each has a per-platform artifact
+//! (see [`active`]):
 //!
-//! - macOS: our Core ML conversion (`pianissimo-sv-coreml`), one zip archive.
-//! - Windows: KlangAI's official ONNX int8 export (`pianissimo-sv-onnx`), a fixed
-//!   list of individually downloaded files pinned to a Hugging Face commit.
+//! - Swedish on macOS: our Core ML conversion (`pianissimo-sv-coreml`), one zip
+//!   archive (Klang publishes no Swedish Core ML build).
+//! - Danish on macOS: KlangAI's official compiled Core ML build
+//!   (`pianissimo-da-coreml`), individually downloaded files.
+//! - Windows: KlangAI's official ONNX int8 export (`pianissimo-sv-onnx`,
+//!   `pianissimo-da-onnx`), individually downloaded files.
 //!
-//! The checkpoint is distributed by Klang AI AB under the Creative Commons
-//! Attribution 4.0 International license (CC BY 4.0):
-//! <https://creativecommons.org/licenses/by/4.0/>.
-//! Source model card and attribution: <https://huggingface.co/KlangAI/pianissimo-sv>.
+//! File-list artifacts are pinned to a Hugging Face commit. The checkpoints are
+//! distributed by Klang AI AB under the Creative Commons Attribution 4.0
+//! International license (CC BY 4.0):
+//! <https://creativecommons.org/licenses/by/4.0/>. Model cards and attribution:
+//! <https://huggingface.co/KlangAI/pianissimo-sv>,
+//! <https://huggingface.co/KlangAI/pianissimo-da>.
 //!
 //! Every artifact has pinned SHA-256 digests. It is downloaded (and, for an
 //! archive, extracted) into a temporary directory next to the final location,
@@ -16,9 +22,10 @@
 //! `<models dir>/<model id>-<revision>/` so an interrupted install can
 //! never leave a half-populated model directory behind.
 //!
-//! Developers can point `SAGASCRIPT_PIANISSIMO_MODEL_DIR` at an existing model
-//! directory; downloads and hash verification are then skipped (the directory
-//! must still contain the four Core ML packages and the vocabulary).
+//! Developers can point `SAGASCRIPT_PIANISSIMO_MODEL_DIR` (Swedish) or
+//! `SAGASCRIPT_PIANISSIMO_DA_MODEL_DIR` (Danish) at an existing model directory;
+//! downloads and hash verification are then skipped (the directory must still
+//! contain the manifest's required items).
 
 use std::path::{Component, Path, PathBuf};
 
@@ -29,6 +36,7 @@ use crate::download::{
     DownloadIntegrity, ExistingArtifact,
 };
 use crate::error::DictationError;
+use crate::models::PianissimoModel;
 use crate::path_scrub::scrub_paths;
 use crate::transcription::model::models_dir;
 
@@ -39,11 +47,29 @@ pub const MODEL_ID: &str = "pianissimo-sv-coreml";
 /// Model family id of the Windows ONNX artifact.
 pub(crate) const ONNX_MODEL_ID: &str = "pianissimo-sv-onnx";
 
-/// Licence and attribution for both artifacts.
+/// Model family ids of the Danish artifacts (macOS, Windows).
+pub(crate) const DA_MODEL_ID: &str = "pianissimo-da-coreml";
+pub(crate) const DA_ONNX_MODEL_ID: &str = "pianissimo-da-onnx";
+
+/// Licence and attribution for both Swedish artifacts.
 pub(crate) const ATTRIBUTION: &str = "Pianissimo by Klang AI AB, CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/); https://huggingface.co/KlangAI/pianissimo-sv";
 
-/// Environment override (development): use this existing model directory.
+/// Licence and attribution for both Danish artifacts.
+pub(crate) const DA_ATTRIBUTION: &str = "Pianissimo for Danish by Klang AI AB, CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/); https://huggingface.co/KlangAI/pianissimo-da";
+
+/// Environment override (development): use this existing Swedish model directory.
 pub const MODEL_DIR_ENV: &str = "SAGASCRIPT_PIANISSIMO_MODEL_DIR";
+
+/// Environment override (development): use this existing Danish model directory.
+pub const DA_MODEL_DIR_ENV: &str = "SAGASCRIPT_PIANISSIMO_DA_MODEL_DIR";
+
+/// The development override variable for `model`.
+pub fn model_dir_env(model: PianissimoModel) -> &'static str {
+    match model {
+        PianissimoModel::Swedish => MODEL_DIR_ENV,
+        PianissimoModel::Danish => DA_MODEL_DIR_ENV,
+    }
+}
 
 /// Old NeMo-Speech.cpp artifacts removed on install and on explicit deletion.
 const LEGACY_GGUF_FILENAME: &str = "pianissimo-sv-q8-melfix.gguf";
@@ -63,6 +89,16 @@ pub(crate) const REQUIRED_ITEMS: [&str; 5] = [
     "Encoder.mlpackage",
     "Decoder.mlpackage",
     "JointDecisionv3.mlpackage",
+    "parakeet_vocab.json",
+];
+
+/// Compiled Core ML models the engine host loads as they are (Klang's
+/// FluidAudio-layout build), plus the vocabulary.
+pub(crate) const COMPILED_REQUIRED_ITEMS: [&str; 5] = [
+    "Preprocessor.mlmodelc",
+    "Encoder.mlmodelc",
+    "Decoder.mlmodelc",
+    "JointDecisionv3.mlmodelc",
     "parakeet_vocab.json",
 ];
 
@@ -159,14 +195,20 @@ impl ModelManifest {
     }
 }
 
-/// Manifest for the current platform: the ONNX int8 file set on Windows, the
-/// Core ML archive everywhere else.
-pub fn active() -> &'static ModelManifest {
-    if cfg!(target_os = "windows") {
-        &ONNX_MANIFEST
-    } else {
-        &MANIFEST
+/// Manifest of `model` for Windows (`windows`, the ONNX int8 file set) or
+/// macOS (Core ML).
+pub fn manifest(model: PianissimoModel, windows: bool) -> &'static ModelManifest {
+    match (model, windows) {
+        (PianissimoModel::Swedish, false) => &MANIFEST,
+        (PianissimoModel::Swedish, true) => &ONNX_MANIFEST,
+        (PianissimoModel::Danish, false) => &DA_MANIFEST,
+        (PianissimoModel::Danish, true) => &DA_ONNX_MANIFEST,
     }
+}
+
+/// Manifest of `model` for the current platform.
+pub fn active(model: PianissimoModel) -> &'static ModelManifest {
+    manifest(model, cfg!(target_os = "windows"))
 }
 
 /// The published artifact: our Core ML conversion of Klang Pianissimo (CC BY 4.0), revision r1,
@@ -303,13 +345,160 @@ pub(crate) const ONNX_MANIFEST: ModelManifest = ModelManifest {
     ],
 };
 
+/// Danish on macOS: KlangAI's official Core ML build (8-bit palettized encoder,
+/// compiled `.mlmodelc`, FluidAudio layout with 15 s windows), pinned to an
+/// immutable Hugging Face commit (CC BY 4.0, Klang AI AB). The engine host loads
+/// the compiled models directly. Klang's `parakeet_vocab.json` marks word starts
+/// with a space instead of `▁`; the host normalizes that when it loads.
+pub(crate) const DA_MANIFEST: ModelManifest = ModelManifest {
+    model_id: DA_MODEL_ID,
+    revision: "9e6213c",
+    source: ModelSource::Files {
+        base_url: "https://huggingface.co/KlangAI/pianissimo-da-coreml/resolve/9e6213c13d3a91b87f8e4a2310ac77bec45e54ef",
+    },
+    required_items: &COMPILED_REQUIRED_ITEMS,
+    attribution: DA_ATTRIBUTION,
+    files: &[
+        ManifestFile {
+            path: "Decoder.mlmodelc/analytics/coremldata.bin",
+            size: 243,
+            sha256: "7bba8f05f6cbd328b5a2d853a7ec552a0538e5e1b614c5755d84b4a0a14d1fad",
+        },
+        ManifestFile {
+            path: "Decoder.mlmodelc/coremldata.bin",
+            size: 560,
+            sha256: "5f5d73300252cf66a6a229017f7392133f9a91220f401f279e361d63ab9799a9",
+        },
+        ManifestFile {
+            path: "Decoder.mlmodelc/model.mil",
+            size: 13116,
+            sha256: "d709c111a8050f956c2e0bef8151201ce46788b3318c8ea99fbcf1d465cb4c71",
+        },
+        ManifestFile {
+            path: "Decoder.mlmodelc/weights/weight.bin",
+            size: 23604992,
+            sha256: "1cd3cef64f2e7d4777dff911e319c53a3c290dc66920bdd0981c1a0e3b7f399a",
+        },
+        ManifestFile {
+            path: "Encoder.mlmodelc/analytics/coremldata.bin",
+            size: 243,
+            sha256: "34c1ab900ad3d7631422d7f1be892b768c23db93e39eef95ab824f6dd8ca2efd",
+        },
+        ManifestFile {
+            path: "Encoder.mlmodelc/coremldata.bin",
+            size: 484,
+            sha256: "8cbaf7da3433a93afb44130c18a36825d9668a706897df38aea58abfb34d98b2",
+        },
+        ManifestFile {
+            path: "Encoder.mlmodelc/model.mil",
+            size: 960233,
+            sha256: "c276c85e4a898100fb4d3bef2c90b7c5ec8a4ad82f454e90fb46a23e759cb7ff",
+        },
+        ManifestFile {
+            path: "Encoder.mlmodelc/weights/weight.bin",
+            size: 593445952,
+            sha256: "01b7c312d3279119cac5c651dbb8181231e173da44b6046dafd7c9b1eaa58e0a",
+        },
+        ManifestFile {
+            path: "JointDecisionv3.mlmodelc/analytics/coremldata.bin",
+            size: 243,
+            sha256: "2fe2c04a97cf60d66487ebf243c06f387ec92893775af5faa81ea5d9f9725445",
+        },
+        ManifestFile {
+            path: "JointDecisionv3.mlmodelc/coremldata.bin",
+            size: 597,
+            sha256: "399ff3c28224538afbbb116fefdae7aa8f38188eb2e55c6db95e685d9d058e4a",
+        },
+        ManifestFile {
+            path: "JointDecisionv3.mlmodelc/model.mil",
+            size: 11783,
+            sha256: "2b1858c5a3c5648b9145a9dc4ff8710ca9ed6e78e214f80bd5be466bc9de210a",
+        },
+        ManifestFile {
+            path: "JointDecisionv3.mlmodelc/weights/weight.bin",
+            size: 12642764,
+            sha256: "18d70720039884a14639f5543b7e355a9c2ba97b59408de3a51326d0eaf1ddd8",
+        },
+        ManifestFile {
+            path: "Preprocessor.mlmodelc/analytics/coremldata.bin",
+            size: 243,
+            sha256: "c9beeb989c8d66f8be11df59bc6df277ec76cee404f6865b46243835ef562f6d",
+        },
+        ManifestFile {
+            path: "Preprocessor.mlmodelc/coremldata.bin",
+            size: 486,
+            sha256: "dbde3f2300842c1fd51ef3ff948a0bcffe65ffd2dca10707f2509f32c1d65b1d",
+        },
+        ManifestFile {
+            path: "Preprocessor.mlmodelc/metadata.json",
+            size: 2841,
+            sha256: "2a98699e22d279dd37fa1d238aeb1c6db1df0d6fad687775324157689d8f3acf",
+        },
+        ManifestFile {
+            path: "Preprocessor.mlmodelc/model.mil",
+            size: 28181,
+            sha256: "4b8518a956450fec57f06c2a21bdffc26973f7f1fa6842fb38fe917f896b6b93",
+        },
+        ManifestFile {
+            path: "Preprocessor.mlmodelc/weights/weight.bin",
+            size: 491072,
+            sha256: "129b76e3aeafa8afa3ea76d995b964b145fe83700d579f6ff42c4c38fa0968ea",
+        },
+        ManifestFile {
+            path: "parakeet_vocab.json",
+            size: 151122,
+            sha256: "7ec60e05f1b24480736ec0eed40900f4626bce1fa9a60fd700ec7e2a59198735",
+        },
+    ],
+};
+
+/// Danish on Windows on ARM: KlangAI's official ONNX int8 export, pinned to an
+/// immutable Hugging Face commit (CC BY 4.0, Klang AI AB). Same file set and
+/// shapes as the Swedish export; its decoder keeps the LSTM in fp16.
+pub(crate) const DA_ONNX_MANIFEST: ModelManifest = ModelManifest {
+    model_id: DA_ONNX_MODEL_ID,
+    revision: "07f0f28",
+    source: ModelSource::Files {
+        base_url: "https://huggingface.co/KlangAI/pianissimo-da-onnx/resolve/07f0f281017b06158012e463a60ee0e9b4817cab",
+    },
+    required_items: &ONNX_REQUIRED_ITEMS,
+    attribution: DA_ATTRIBUTION,
+    files: &[
+        ManifestFile {
+            path: "config.json",
+            size: 116,
+            sha256: "f19eee59d2ba995f6d5cdb164e30dd64d2a8b7ed0ce9f2198ab68a5467445694",
+        },
+        ManifestFile {
+            path: "decoder_joint-model.int8.onnx",
+            size: 53639765,
+            sha256: "90035d9a36a8fb3aacb6ae5ce8bf03c1505566fae0b35ec5306d36bc9078655a",
+        },
+        ManifestFile {
+            path: "encoder-model.int8.onnx",
+            size: 630313965,
+            sha256: "c24b31ad20d0ca17f7fda376edd36f2c3384fe3da2d55f25986a5cb190c7753d",
+        },
+        ManifestFile {
+            path: "nemo128.onnx",
+            size: 138824,
+            sha256: "5b4a84c52eeaa615dc46d781cc7e4598f9b432184831d57493c48adcd01371a9",
+        },
+        ManifestFile {
+            path: "vocab.txt",
+            size: 93939,
+            sha256: "d58544679ea4bc6ac563d1f545eb7d474bd6cfa467f0a6e2c1dc1c7d37e3c35d",
+        },
+    ],
+};
+
 // ---- locations ------------------------------------------------------------
 
 /// Developer override directory, when set and non-empty. Honored only in
 /// development builds (see [`super::dev_overrides`]); release builds always
 /// use the manifest-verified download.
-pub fn override_dir() -> Option<PathBuf> {
-    super::dev_overrides::env_override(MODEL_DIR_ENV).map(PathBuf::from)
+pub fn override_dir(model: PianissimoModel) -> Option<PathBuf> {
+    super::dev_overrides::env_override(model_dir_env(model)).map(PathBuf::from)
 }
 
 /// Installed model directory for `manifest` under `models`.
@@ -319,38 +508,28 @@ pub(crate) fn installed_dir_in(manifest: &ModelManifest, models: &Path) -> PathB
 
 /// Directory the engine host should load: the override, else the installed
 /// directory in the shared model cache.
-pub fn model_dir() -> PathBuf {
-    override_dir().unwrap_or_else(|| installed_dir_in(active(), &models_dir()))
-}
-
-/// Alias kept for callers that prefer the older name.
-pub fn path() -> PathBuf {
-    model_dir()
-}
-
-/// Alias for callers that prefer an explicit model name.
-pub fn model_path() -> PathBuf {
-    model_dir()
+pub fn model_dir(model: PianissimoModel) -> PathBuf {
+    override_dir(model).unwrap_or_else(|| installed_dir_in(active(model), &models_dir()))
 }
 
 /// Id announced to the engine host in `load` (`<model id>-<rev>`).
-pub fn model_id() -> String {
-    active().versioned_id()
+pub fn model_id(model: PianissimoModel) -> String {
+    active(model).versioned_id()
 }
 
 /// Bytes to download (the archive, or all files).
-pub fn download_size_bytes() -> u64 {
-    active().download_size()
+pub fn download_size_bytes(model: PianissimoModel) -> u64 {
+    active(model).download_size()
 }
 
 /// Bytes on disk once installed.
-pub fn installed_size_bytes() -> u64 {
-    active().installed_size()
+pub fn installed_size_bytes(model: PianissimoModel) -> u64 {
+    active(model).installed_size()
 }
 
 /// Whether the dev override is active (downloads/deletes are then no-ops).
-pub fn is_overridden() -> bool {
-    override_dir().is_some()
+pub fn is_overridden(model: PianissimoModel) -> bool {
+    override_dir(model).is_some()
 }
 
 // ---- presence and verification -------------------------------------------
@@ -374,13 +553,14 @@ fn is_downloaded_in(manifest: &ModelManifest, dir: &Path) -> bool {
 
 /// Fast presence check for model listings (existence + size of every manifest
 /// file). Hash verification happens through [`verify_downloaded`].
-pub fn is_downloaded() -> bool {
-    match override_dir() {
-        Some(dir) => override_is_usable(active(), &dir),
+pub fn is_downloaded(model: PianissimoModel) -> bool {
+    let manifest = active(model);
+    match override_dir(model) {
+        Some(dir) => override_is_usable(manifest, &dir),
         None => {
             let models = models_dir();
-            recover_in(active(), &models);
-            is_downloaded_in(active(), &installed_dir_in(active(), &models))
+            recover_in(manifest, &models);
+            is_downloaded_in(manifest, &installed_dir_in(manifest, &models))
         }
     }
 }
@@ -410,31 +590,33 @@ fn verify_in(manifest: &ModelManifest, dir: &Path, force: bool) -> Result<(), Di
 /// Verify the installed model against the manifest. Files with a matching
 /// persistent stamp are not re-hashed. With the dev override active only
 /// presence of the required items is checked.
-pub fn verify_downloaded() -> Result<(), DictationError> {
-    verify_installed(false)
+pub fn verify_downloaded(model: PianissimoModel) -> Result<(), DictationError> {
+    verify_installed(model, false)
 }
 
 /// Like [`verify_downloaded`] but ignores every stamp and re-hashes all files
 /// (`sagascript engine doctor --verify-model`).
-pub fn verify_downloaded_forced() -> Result<(), DictationError> {
-    verify_installed(true)
+pub fn verify_downloaded_forced(model: PianissimoModel) -> Result<(), DictationError> {
+    verify_installed(model, true)
 }
 
-fn verify_installed(force: bool) -> Result<(), DictationError> {
-    if let Some(dir) = override_dir() {
-        return if override_is_usable(active(), &dir) {
+fn verify_installed(model: PianissimoModel, force: bool) -> Result<(), DictationError> {
+    let manifest = active(model);
+    if let Some(dir) = override_dir(model) {
+        return if override_is_usable(manifest, &dir) {
             Ok(())
         } else {
             Err(DictationError::ModelDownloadFailed(format!(
-                "{MODEL_DIR_ENV}={} must contain {}",
+                "{}={} must contain {}",
+                model_dir_env(model),
                 dir.display(),
-                active().required_items.join(", ")
+                manifest.required_items.join(", ")
             )))
         };
     }
     let models = models_dir();
-    recover_in(active(), &models);
-    verify_in(active(), &installed_dir_in(active(), &models), force)
+    recover_in(manifest, &models);
+    verify_in(manifest, &installed_dir_in(manifest, &models), force)
 }
 
 // ---- install --------------------------------------------------------------
@@ -585,6 +767,53 @@ const LEGACY_TRASH_PREFIX: &str = ".pianissimo-old-";
 /// in another process (app + CLI) and are left alone.
 const STALE_STAGING_AGE: std::time::Duration = std::time::Duration::from_secs(60 * 60);
 
+/// Another model's staging directory is only abandoned past this age: a
+/// download's directory keeps its creation time while files fill it, and a
+/// slow download of a large file can outlast [`STALE_STAGING_AGE`].
+const OTHER_MODEL_STAGING_AGE: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+
+/// Every artifact's model id: staging directories are named after them.
+const ALL_MODEL_IDS: [&str; 4] = [MODEL_ID, ONNX_MODEL_ID, DA_MODEL_ID, DA_ONNX_MODEL_ID];
+
+/// A fresh staging directory for `manifest`'s install:
+/// `.pianissimo-extract-<model id>-<uuid>`.
+fn staging_dir_in(manifest: &ModelManifest, models: &Path) -> PathBuf {
+    models.join(format!(
+        "{STAGING_PREFIX}{}-{}",
+        manifest.model_id,
+        uuid::Uuid::new_v4()
+    ))
+}
+
+/// Whose leftover a directory in the models folder is, seen from `manifest`.
+#[derive(Debug, PartialEq, Eq)]
+enum Staging {
+    /// A staging directory of this model.
+    Own,
+    /// A staging directory of another model: possibly a download in progress
+    /// right now (a large file can take well over an hour), so only removed
+    /// past [`OTHER_MODEL_STAGING_AGE`].
+    Other,
+    /// From a release that did not name staging directories after the model,
+    /// or the legacy trash prefix.
+    Unowned,
+}
+
+fn staging_kind(name: &str, manifest: &ModelManifest) -> Option<Staging> {
+    if name.starts_with(LEGACY_TRASH_PREFIX) {
+        return Some(Staging::Unowned);
+    }
+    let rest = name.strip_prefix(STAGING_PREFIX)?;
+    let named = |id: &str| rest.starts_with(&format!("{id}-"));
+    Some(if named(manifest.model_id) {
+        Staging::Own
+    } else if ALL_MODEL_IDS.iter().any(|id| named(id)) {
+        Staging::Other
+    } else {
+        Staging::Unowned
+    })
+}
+
 /// Move the verified `root` into `final_dir`, keeping any previous install as
 /// `<final>.previous-<uuid>` until the new one is in place.
 ///
@@ -673,18 +902,22 @@ fn recover_in(manifest: &ModelManifest, models: &Path) {
     }
 }
 
-/// Remove abandoned staging directories (`.pianissimo-extract-*`, legacy
-/// `.pianissimo-old-*`) not modified within `min_age`. Backups and the active
-/// install are never touched here.
-fn remove_stale_staging(models: &Path, min_age: std::time::Duration) {
+/// Remove abandoned staging directories not modified within `min_age`: of
+/// `manifest`'s model and unowned ones (`.pianissimo-extract-*` of older
+/// releases, legacy `.pianissimo-old-*`); another model's only past
+/// [`OTHER_MODEL_STAGING_AGE`]. Backups and the active install are never
+/// touched here.
+fn remove_stale_staging(manifest: &ModelManifest, models: &Path, min_age: std::time::Duration) {
     let Ok(entries) = std::fs::read_dir(models) else {
         return;
     };
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
-        if !(name.starts_with(STAGING_PREFIX) || name.starts_with(LEGACY_TRASH_PREFIX)) {
-            continue;
-        }
+        let min_age = match staging_kind(&name, manifest) {
+            Some(Staging::Own | Staging::Unowned) => min_age,
+            Some(Staging::Other) => min_age.max(OTHER_MODEL_STAGING_AGE),
+            None => continue,
+        };
         let age = entry
             .metadata()
             .and_then(|m| m.modified())
@@ -739,7 +972,7 @@ pub(crate) fn install_archive_in(
 ) -> Result<PathBuf, DictationError> {
     std::fs::create_dir_all(models)
         .map_err(|e| install_err(format!("Failed to create models directory: {e}")))?;
-    let staging = models.join(format!("{STAGING_PREFIX}{}", uuid::Uuid::new_v4()));
+    let staging = staging_dir_in(manifest, models);
     let result = (|| {
         std::fs::create_dir(&staging)
             .map_err(|e| install_err(format!("Cannot create staging directory: {e}")))?;
@@ -802,7 +1035,7 @@ where
 {
     let manifest = *manifest;
     let models = models.to_path_buf();
-    let staging = models.join(format!("{STAGING_PREFIX}{}", uuid::Uuid::new_v4()));
+    let staging = staging_dir_in(&manifest, &models);
     run_blocking({
         let models = models.clone();
         move || {
@@ -863,18 +1096,17 @@ where
     result
 }
 
-/// Download the model for this platform (Core ML archive, or the ONNX files),
-/// verify and install it. Removes the archive and any legacy NeMo/GGUF files
-/// afterwards.
+/// Download `model` for this platform (Core ML archive or files, or the ONNX
+/// files), verify and install it. Removes the archive and any legacy NeMo/GGUF
+/// files afterwards.
 pub async fn download(
+    model: PianissimoModel,
     progress_callback: impl Fn(u64, u64) + Send + 'static,
 ) -> Result<PathBuf, DictationError> {
-    let manifest = active();
-    if let Some(dir) = override_dir() {
-        info!(
-            "Using {MODEL_DIR_ENV}={}; nothing to download",
-            dir.display()
-        );
+    let manifest = active(model);
+    let env = model_dir_env(model);
+    if let Some(dir) = override_dir(model) {
+        info!("Using {env}={}; nothing to download", dir.display());
         let usable = run_blocking({
             let dir = dir.clone();
             move || Ok(override_is_usable(manifest, &dir))
@@ -884,7 +1116,7 @@ pub async fn download(
             Ok(dir)
         } else {
             Err(install_err(format!(
-                "{MODEL_DIR_ENV}={} must contain {}",
+                "{env}={} must contain {}",
                 dir.display(),
                 manifest.required_items.join(", ")
             )))
@@ -929,7 +1161,7 @@ fn prepare_download(
             "The Pianissimo model has not been published yet (manifest placeholder)",
         ));
     }
-    remove_stale_staging(models, STALE_STAGING_AGE);
+    remove_stale_staging(manifest, models, STALE_STAGING_AGE);
     ensure_free_space(required_space(manifest), free_space(models))?;
     Ok(Preparation::Download)
 }
@@ -957,7 +1189,7 @@ async fn download_in(
                 &models,
                 progress_callback,
                 |url, dest, integrity, progress| async move {
-                    download_to_path(&url, &dest, "onnx", integrity, None, progress).await
+                    download_to_path(&url, &dest, "part", integrity, None, progress).await
                 },
             )
             .await?
@@ -1046,11 +1278,19 @@ pub(crate) fn remove_legacy_files_in(models: &Path) -> Result<(), DictationError
     remove_file_if_present(&models.join(LEGACY_NEMO_FILENAME))
 }
 
-/// Best-effort cleanup after a successful install: legacy files, older
-/// revisions, and leftover staging directories.
+/// Whether `manifest` is a Swedish artifact: only those replaced the NeMo-era
+/// legacy files.
+fn is_swedish(manifest: &ModelManifest) -> bool {
+    [MODEL_ID, ONNX_MODEL_ID].contains(&manifest.model_id)
+}
+
+/// Best-effort cleanup after a successful install: legacy files (Swedish),
+/// older revisions of this model, and leftover staging directories.
 fn cleanup_superseded(manifest: &ModelManifest, models: &Path) {
-    if let Err(error) = remove_legacy_files_in(models) {
-        warn!("Could not remove legacy Pianissimo files: {error}");
+    if is_swedish(manifest) {
+        if let Err(error) = remove_legacy_files_in(models) {
+            warn!("Could not remove legacy Pianissimo files: {error}");
+        }
     }
     let current = manifest.versioned_id();
     let prefix = format!("{}-", manifest.model_id);
@@ -1063,33 +1303,41 @@ fn cleanup_superseded(manifest: &ModelManifest, models: &Path) {
             && name != current
             && !name.contains(PREVIOUS_MARKER)
             && entry.path().is_dir();
-        let stale_staging =
-            name.starts_with(STAGING_PREFIX) || name.starts_with(LEGACY_TRASH_PREFIX);
-        if stale_revision || stale_staging {
+        if stale_revision {
             if let Err(error) = remove_dir_if_present(&entry.path()) {
                 warn!("{error}");
             }
         }
     }
+    // Fresh staging directories may be another process's download in progress
+    // (of this model or another), so only abandoned ones go.
+    remove_stale_staging(manifest, models, STALE_STAGING_AGE);
 }
 
 fn delete_in(manifest: &ModelManifest, models: &Path) -> Result<(), DictationError> {
     remove_dir_if_present(&installed_dir_in(manifest, models))?;
     remove_file_if_present(&models.join(format!("{}.zip", manifest.versioned_id())))?;
-    remove_legacy_files_in(models)
+    if is_swedish(manifest) {
+        remove_legacy_files_in(models)?;
+    }
+    Ok(())
 }
 
-/// Remove the installed model, any partial archive, and the legacy GGUF on
-/// explicit user-initiated deletion. A dev override directory is never touched.
-pub fn delete() -> Result<(), DictationError> {
+/// Remove the installed `model`, any partial archive, and (Swedish) the legacy
+/// GGUF on explicit user-initiated deletion. A dev override directory is never
+/// touched.
+pub fn delete(model: PianissimoModel) -> Result<(), DictationError> {
     // A running host may hold the model open; stop it before removing files.
     crate::transcription::pianissimo_backend::shutdown_shared_client();
     let models = models_dir();
-    if is_overridden() {
-        warn!("{MODEL_DIR_ENV} is set; leaving the override directory untouched");
+    if is_overridden(model) {
+        warn!(
+            "{} is set; leaving the override directory untouched",
+            model_dir_env(model)
+        );
     }
-    delete_in(active(), &models)?;
-    cleanup_superseded(active(), &models);
+    delete_in(active(model), &models)?;
+    cleanup_superseded(active(model), &models);
     Ok(())
 }
 
@@ -1721,10 +1969,52 @@ mod tests {
     #[test]
     fn active_manifest_matches_the_platform() {
         if cfg!(target_os = "windows") {
-            assert_eq!(active().model_id, ONNX_MODEL_ID);
+            assert_eq!(active(PianissimoModel::Swedish).model_id, ONNX_MODEL_ID);
+            assert_eq!(active(PianissimoModel::Danish).model_id, DA_ONNX_MODEL_ID);
         } else {
-            assert_eq!(active().model_id, MODEL_ID);
+            assert_eq!(active(PianissimoModel::Swedish).model_id, MODEL_ID);
+            assert_eq!(active(PianissimoModel::Danish).model_id, DA_MODEL_ID);
         }
+    }
+
+    #[test]
+    fn danish_manifests_are_pinned_complete_and_distinct_from_swedish() {
+        let hex40 = |s: &str| s.len() == 40 && s.bytes().all(|b| b.is_ascii_hexdigit());
+        let hex64 = |s: &str| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit());
+        for (manifest, repo) in [
+            (&DA_MANIFEST, "KlangAI/pianissimo-da-coreml"),
+            (&DA_ONNX_MANIFEST, "KlangAI/pianissimo-da-onnx"),
+        ] {
+            let ModelSource::Files { base_url } = manifest.source else {
+                panic!("{} must be a pinned file list", manifest.model_id);
+            };
+            let prefix = format!("https://huggingface.co/{repo}/resolve/");
+            let commit = base_url.strip_prefix(&prefix).expect("pinned repository");
+            assert!(hex40(commit), "{base_url} is not pinned to a commit");
+            assert!(!manifest.is_placeholder());
+            assert!(manifest.attribution.contains("KlangAI/pianissimo-da"));
+            for file in manifest.files {
+                assert!(hex64(file.sha256) && file.size > 0, "{}", file.path);
+            }
+            for item in manifest.required_items {
+                assert!(
+                    manifest.files.iter().any(
+                        |file| file.path == *item || file.path.starts_with(&format!("{item}/"))
+                    ),
+                    "{item} is required but not downloaded"
+                );
+            }
+            // Never shares an installed directory with a Swedish artifact.
+            assert!(![MODEL_ID, ONNX_MODEL_ID].contains(&manifest.model_id));
+            assert!(!is_swedish(manifest));
+        }
+        assert_eq!(DA_MANIFEST.required_items, COMPILED_REQUIRED_ITEMS);
+        assert_eq!(DA_ONNX_MANIFEST.required_items, ONNX_REQUIRED_ITEMS);
+        // Klang's export of the same architecture: same file names and front end.
+        let names = |m: &ModelManifest| m.files.iter().map(|f| f.path).collect::<Vec<_>>();
+        assert_eq!(names(&DA_ONNX_MANIFEST), names(&ONNX_MANIFEST));
+        assert_eq!(model_dir_env(PianissimoModel::Danish), DA_MODEL_DIR_ENV);
+        assert_ne!(DA_MODEL_DIR_ENV, MODEL_DIR_ENV);
     }
 
     #[test]
@@ -1927,14 +2217,50 @@ mod tests {
         let legacy = models.join(format!("{LEGACY_TRASH_PREFIX}abc"));
         fs::create_dir_all(&legacy).unwrap();
 
-        // Fresh dirs survive the default age guard.
-        remove_stale_staging(&models, STALE_STAGING_AGE);
-        assert!(staging.exists());
+        // Another model's staging directory: a download that may be running.
+        let other_id = ALL_MODEL_IDS
+            .into_iter()
+            .find(|id| *id != manifest.model_id)
+            .unwrap();
+        let other = models.join(format!("{STAGING_PREFIX}{other_id}-abc"));
+        fs::create_dir_all(other.join("Encoder.mlmodelc/weights")).unwrap();
+        let own = staging_dir_in(&manifest, &models);
+        fs::create_dir_all(&own).unwrap();
 
-        remove_stale_staging(&models, std::time::Duration::ZERO);
+        // Fresh dirs survive the default age guard.
+        remove_stale_staging(&manifest, &models, STALE_STAGING_AGE);
+        assert!(staging.exists() && own.exists());
+
+        // A successful install leaves fresh ones alone: they may be another
+        // process's download in progress, of this model or another.
+        cleanup_superseded(&manifest, &models);
+        assert!(staging.exists() && own.exists() && other.exists());
+
+        remove_stale_staging(&manifest, &models, std::time::Duration::ZERO);
         assert!(!staging.exists());
         assert!(!legacy.exists());
+        assert!(!own.exists());
+        assert!(other.exists(), "another model's download must survive");
         assert!(is_downloaded_in(&manifest, &dir));
+    }
+
+    #[test]
+    fn staging_directories_are_named_after_their_model() {
+        for manifest in [&MANIFEST, &ONNX_MANIFEST, &DA_MANIFEST, &DA_ONNX_MANIFEST] {
+            let dir = staging_dir_in(manifest, Path::new("/m"));
+            let name = dir.file_name().unwrap().to_string_lossy().into_owned();
+            assert_eq!(staging_kind(&name, manifest), Some(Staging::Own));
+            for other in [&MANIFEST, &ONNX_MANIFEST, &DA_MANIFEST, &DA_ONNX_MANIFEST] {
+                if other.model_id != manifest.model_id {
+                    assert_eq!(staging_kind(&name, other), Some(Staging::Other));
+                }
+            }
+        }
+        assert_eq!(
+            staging_kind(".pianissimo-extract-0b5e-uuid", &DA_MANIFEST),
+            Some(Staging::Unowned)
+        );
+        assert_eq!(staging_kind("pianissimo-sv-coreml-r1", &MANIFEST), None);
     }
 
     #[tokio::test]

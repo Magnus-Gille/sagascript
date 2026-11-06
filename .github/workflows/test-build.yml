@@ -21,7 +21,7 @@ permissions:
 
 jobs:
   build-macos-test:
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 60
     environment: updater-signing
 
@@ -50,9 +50,15 @@ jobs:
           node-version: 22
           cache: npm
 
+      # whisper.cpp targets Apple silicon's apple-m1 baseline, not the runner's CPU; before the
+      # Rust cache, whose key includes CMAKE_* variables (scripts/cmake/macos-arm64-portable.cmake).
+      - name: Use the portable whisper.cpp CPU baseline
+        run: bash scripts/ci/use-portable-whisper-macos.sh
+
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           workspaces: src-tauri
           shared-key: sagascript-test-macos-arm64
 

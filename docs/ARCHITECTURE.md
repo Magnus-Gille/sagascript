@@ -454,13 +454,27 @@ sequenceDiagram
   `engine-host\sagascript-engine-host-ort.exe`); `SAGASCRIPT_ENGINE_HOST` only in development
   builds (`dev-overrides`).
 - Recovery ([#366](https://github.com/Magnus-Gille/sagascript/issues/366)): `Failed` lasts
-  `failed_cooldown` (60 s), then one fresh start (half-open); a window that times out returns at
-  once, and a detached `engine-host-wedge-watch` thread kills the host if it sends no terminal
-  response within `wedge_grace` (30 s) after `cancel`; stdin writes are bounded
+  `failed_cooldown` (60 s), then one fresh start (half-open); a file-job window that times out
+  returns at once, and a detached `engine-host-wedge-watch` thread kills the host if it sends no
+  terminal response within `wedge_grace` (30 s) after `cancel`; a dictation (interactive) window
+  has `Timeouts::interactive` (by default the batch max(15 s, 3 × window), above a Neural Engine
+  recompile of 11.5-16.7 s, #397) and its timeout kills the host at once (`WindowTicket::wait`), after which the job resubmits its windows like after a crash (the
+  client is shared by dictation and file jobs of a model, so a file job's windows in flight on that
+  host fail as crashed and take their own crash-resubmit path); stdin writes are bounded
   (`Timeouts::write`); the restart backoff is slept unlocked and is cancel-aware.
   `EngineHostClient::reset()` clears `Failed` at once but has no production caller: settings that
   change the engine (host, model, compute units, idle policy) already replace the shared client
   (`shared_client`), model deletion shuts it down, and the CLI `engine doctor` uses its own client.
+- Neural Engine eviction ([#397](https://github.com/Magnus-Gille/sagascript/issues/397)): macOS can
+  evict a loaded model's Neural Engine program, and the next prediction then recompiles it. The
+  `warm` op runs one canary prediction outside the window queue (Swift `WarmCoordinator`, ONNX
+  `Server::handle_warm`). The app sends it on push-to-talk key-down and wake when the model is
+  loaded (`pianissimo_backend::warm_or_touch`, from the `pianissimo-warm` thread of
+  `warm_in_background`), so a recompile overlaps the user's speech. The Core ML host adds its own
+  canaries after memory pressure and wake (`WarmTriggers.swift`, wired in `main.swift`) and an
+  opt-in keep-alive (`SAGASCRIPT_ENGINE_KEEPALIVE_S`). Host stderr lines prefixed `info: ` are
+  logged at INFO (`process.rs`), all others at debug. Measurements:
+  `docs/benchmarks/pianissimo-ane-eviction.md`.
 - PCM temp dirs hold a locked `owner.lock`; `pipeline::sweep_stale_pcm_dirs` (app startup and
   shared-client creation, background, once per process; `engine doctor` on demand) removes the
   dirs of dead owners, and dirs whose owner cannot be proven dead (pre-#366, or on a file system

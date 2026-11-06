@@ -26,7 +26,7 @@ use sagascript_core::meeting::pipeline::plan::{CacheRequest, DiarizationFlags};
 #[cfg(feature = "diarization")]
 use sagascript_core::meeting::pipeline::plan::{FileOptions, FileRequest};
 use sagascript_core::meeting::pipeline::progress::*;
-use sagascript_core::settings::FileModel;
+use sagascript_core::settings::{FileModel, PianissimoModel};
 use sagascript_core::settings::{FileModelPreference, HotkeyProfile};
 use sagascript_core::transcription::diagnostics::LanguageDetection;
 use sagascript_core::transcription::whisper_backend::assemble_transcript;
@@ -1013,12 +1013,12 @@ fn file_model_resolution_keeps_live_choice_independent() {
     let settings = Settings {
         auto_select_model: false,
         whisper_model: WhisperModel::KbWhisperLarge,
-        file_transcription_model: FileModelPreference::PianissimoOriginal,
+        file_transcription_model: FileModelPreference::Pianissimo(PianissimoModel::Swedish),
         ..Default::default()
     };
     assert_eq!(
         resolve_file_model(None, Language::Swedish, &settings).unwrap(),
-        FileModel::PianissimoOriginal
+        FileModel::Pianissimo(PianissimoModel::Swedish)
     );
     assert_eq!(
         resolve_file_model(Some("kb-whisper-small"), Language::Swedish, &settings).unwrap(),
@@ -1316,9 +1316,9 @@ mod diarize_threshold_tests {
         let corrections: Vec<String> = Vec::new();
         let build = |engine: &str| {
             pianissimo_file_json(
+                PianissimoModel::Swedish,
                 "hej",
                 &words,
-                Language::Swedish,
                 Path::new("a.wav"),
                 1.5,
                 &corrections,

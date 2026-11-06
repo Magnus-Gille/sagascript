@@ -24,8 +24,9 @@ configure the variable for GUI processes as well, to keep GUI and CLI paths
 identical.
 
 The JSON file contains application settings and dictation profiles. Each
-profile owns its language, model (`auto`, a compatible Whisper ID, or Swedish
-`pianissimo-sv`), shortcuts and dictionary. The plain-text files under
+profile owns its language, model (`auto`, a compatible Whisper ID, or the
+language's Pianissimo model `pianissimo-sv` or `pianissimo-da`), shortcuts and
+dictionary. The plain-text files under
 `glossaries/` contain one entry per line. On upgrade, the old `glossary.txt`
 hint source is copied into the profiles while the original file is retained
 for rollback; it no longer participates in dictation. Auto-detect profiles
@@ -33,7 +34,8 @@ use their dictionary as hints only, without deterministic alias replacement.
 
 **Model rule.** The model belongs to the profile, not to a global setting.
 `auto` (the default) resolves to the recommended model for the profile's
-language; Pianissimo (`pianissimo-sv`) is Swedish-only. When a profile's
+language; each Pianissimo model serves only its own language (`pianissimo-sv`
+Swedish, `pianissimo-da` Danish). When a profile's
 language changes (in Settings, `config profiles update ID --language ...`,
 `config set language ...`) and its explicit model does not support the new
 language, that profile's model is reset to `auto` instead of the change being
@@ -58,6 +60,13 @@ profile's model alone and leaves these fields as they were (#373). A language
 is written as its code or its English name (`sv`, `swedish`) by `config set
 language`, `config profiles ... --language` and `--language` of the other
 commands alike.
+
+Supported languages are English (`en`), Swedish (`sv`), Norwegian (`no`),
+Finnish (`fi`), Danish (`da`) and auto-detect (`auto`). Danish uses Klang AI's
+Danish Pianissimo model (`pianissimo-da`) where Pianissimo runs (macOS 14+ on
+Apple Silicon, Windows on ARM) and the multilingual Whisper models elsewhere
+(Small is the recommended one there). Each Pianissimo model serves only its own
+language: `pianissimo-sv` Swedish, `pianissimo-da` Danish.
 
 Use the CLI to discover the effective paths rather than duplicating the
 resolution rules in scripts:
@@ -225,7 +234,18 @@ the first dictation does not wait on a cold model.
 - Migration (`engine_defaults_version` 1): settings still on the old defaults
   move to the new ones once; an explicit non-default choice is kept.
 - The model is unloaded when memory pressure is reported (idle engine only;
-  key-down and wake warms are then skipped for 5 minutes) and when no profile
-  uses Pianissimo any more. A busy engine is left to the idle timer.
+  a wake then does not reload it for 5 minutes) and when no profile uses
+  Pianissimo any more. A busy engine is left to the idle timer. Key-down is not
+  held back: the dictation that follows loads the model anyway, so loading at
+  key-down only moves that load in front of the user's speech (#397).
+- Key-down (and wake) on a model that is already loaded sends one canary
+  prediction (`warm`, see `docs/engine-host-protocol.md`), unless `engine_prewarm`
+  is `off`. macOS can evict a loaded model's Neural Engine program; the canary
+  then recompiles it while the user is still speaking instead of after key-up
+  (#397). It takes no window slot and is skipped while a window is queued or
+  running. The engine host also runs
+  a canary after memory pressure eases and after wake. `SAGASCRIPT_ENGINE_KEEPALIVE_S`
+  (host environment, at least 60) adds a periodic canary; off by default, see
+  `docs/benchmarks/pianissimo-ane-eviction.md`.
 - The overlay shows "Loading model..." only for loads that keep the user
   waiting; background warm-up failures are logged, not shown as dictation errors.

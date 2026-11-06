@@ -90,7 +90,7 @@ const STRINGS: Record<"en" | "sv", Strings> = {
     loading: "Loading model…",
     loadFailed: "Model failed to load",
     failed: "Transcription failed",
-    languages: { en: "English", sv: "Swedish", no: "Norwegian", fi: "Finnish", auto: "Auto" },
+    languages: { en: "English", sv: "Swedish", no: "Norwegian", fi: "Finnish", da: "Danish", auto: "Auto" },
   },
   sv: {
     recording: "Spelar in",
@@ -98,7 +98,7 @@ const STRINGS: Record<"en" | "sv", Strings> = {
     loading: "Laddar modell…",
     loadFailed: "Laddning misslyckades",
     failed: "Misslyckades",
-    languages: { en: "engelska", sv: "svenska", no: "norska", fi: "finska", auto: "auto" },
+    languages: { en: "engelska", sv: "svenska", no: "norska", fi: "finska", da: "danska", auto: "auto" },
   },
 };
 

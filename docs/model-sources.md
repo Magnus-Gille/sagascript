@@ -121,6 +121,34 @@ found lower aggregate WER than both baselines and lower warm latency than Base,
 but absolute error remained high. Base stays the default; the specialist remains
 an optional evaluation choice pending separate native and application acceptance.
 
+## Pianissimo models (Klang AI, CC BY 4.0)
+
+Pianissimo is downloaded on demand, one model per language, from pinned Hugging
+Face commits; the exact file lists, sizes and SHA-256 digests live in
+`src-tauri/crates/sagascript-core/src/transcription/pianissimo_model.rs` and its
+tests. Each artifact is verified file by file before it is installed.
+
+| Model | Platform | Source | Revision | Download |
+|---|---|---|---|---:|
+| `pianissimo-sv` | macOS | `magnusgille/pianissimo-sv-coreml` (our Core ML conversion of `KlangAI/pianissimo-sv`, `scripts/pianissimo-coreml/`) | `6e33b64e174330a13bd61b9e40cfef7cfa2d28ce` | 637,642,054 B zip |
+| `pianissimo-sv` | Windows on ARM | `KlangAI/pianissimo-sv-onnx` (int8) | `32118e6c01a88e3c4b4b735971195303a88d21ce` | 5 files |
+| `pianissimo-da` | macOS | `KlangAI/pianissimo-da-coreml` (Klang AI's compiled 8-bit Core ML build, used unmodified) | `9e6213c13d3a91b87f8e4a2310ac77bec45e54ef` | 18 files, 631,355,155 B |
+| `pianissimo-da` | Windows on ARM | `KlangAI/pianissimo-da-onnx` (int8) | `07f0f281017b06158012e463a60ee0e9b4817cab` | 5 files, 684,186,609 B |
+
+The Danish checkpoint `KlangAI/pianissimo-da` (revision
+`84b50304ce3c0eb4ca5e97c5ee1d6e6423c6e1a9`, `pianissimo-da.nemo` SHA-256
+`6f1e05f618f3495c76fe27b5191471f6cf407d72043e5c7e05b6654a90d9ebd4`) was also
+converted with our own pipeline (`convert.py --language da`). On 773 Danish
+FLEURS test clips of at most 15 s, through the same engine host on the Neural
+Engine of a MacBook Air M4, Klang AI's build scored 7.46 % WER in 35.8 s and our
+conversion 7.56 % in 48.0 s (lowercase, punctuation removed). Sagascript
+therefore downloads Klang AI's build and does not publish its own Danish
+conversion. Klang AI's `parakeet_vocab.json` marks word starts with a space
+instead of `▁`; the engine host normalizes that when it loads. Klang AI's ONNX
+manifest names a checkpoint digest (`a5d9a301…`, 2,509,332,480 B) that differs
+from the published `.nemo` file; we treat that as a repackaged archive and note
+it here for provenance.
+
 ## VAD and diarization models
 
 | Artifact/source | Revision | License | Bytes | SHA-256 |

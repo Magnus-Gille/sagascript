@@ -216,8 +216,8 @@ asks `downloadModelById(id)` instead of choosing the command.
 
 ## Remaining source-text boundary
 
-The `ui` manifest has two entries: `test-finnish-language.mjs` retains CLI/core and
-model-registry checks; `test-file-transcription-recovery.mjs` remains with the updater
+The `ui` manifest has three entries: `test-finnish-language.mjs` and
+`test-danish-language.mjs` retain CLI/core and model-registry checks; `test-file-transcription-recovery.mjs` remains with the updater
 owner. Native window and command-registration checks remain in `test-release-surface.mjs`:
 mocked frontend IPC does not prove native behavior. This migration does not close the
 updater-owned remainder of #361.
@@ -241,6 +241,7 @@ source identifiers, exact syntax and property declarations.
 | Meeting clock | `src/lib/FileTranscription.meetingReprocessing.test.ts` covers `the rendered meeting clock interpolates native time and ignores a stale poll` and `reprocessing resets the same rendered meeting clock before accepting its native timing`. |
 | MeetingReview actions | `src/lib/MeetingReview.actions.test.ts` covers `Rename applies`, `Discard restores`, `Save and each export button`, persistence gating and `a rejected save` recovery. |
 | Finnish selectors, onboarding, overlay and frontend type | `src/lib/Settings.test.ts` (`Finnish saves through Settings` and `the frontend language contract stays limited`), `src/lib/Onboarding.test.ts` (`choosing Finnish saves` and the recommendation fallback), and `src/lib/overlay-state.test.ts` (`the English overlay names a Finnish dictation profile`) cover the rendered controls, model/readback behavior, onboarding defaults and overlay label. CLI/core Finnish checks remain in `scripts/test-finnish-language.mjs`. |
+| Danish selectors, onboarding, overlay and frontend type | `src/lib/Settings.test.ts` (`Danish saves through Settings` and `the frontend language contract stays limited`), `src/lib/Onboarding.test.ts` (`choosing Danish saves` and the recommendation fallback), and `src/lib/overlay-state.test.ts` (`the overlay names a Danish dictation profile`) cover the rendered controls, model/readback behavior, onboarding defaults and overlay label. CLI/core Danish checks remain in `scripts/test-danish-language.mjs`. |
 
 ## Settings pilot: old assertion → new test
 
@@ -294,7 +295,7 @@ run in fresh contexts against synthetic IPC. They do not claim native Mac accept
 | Automatic hidden recommendation, skip after failure and missing-engine warning | `Onboarding.test.ts`: backend-recommended downloads, download progress/readiness, hidden engine name and failed-download skip flow. |
 | Missing profile engine action, model name and stable 152px layout | `Settings.downloads.test.ts` exercises download/ready/error and IPC; `qa-profile-download-layout.mjs` measures action, row and neighbor before download and at 1%/99%, requiring unchanged geometry and single-line, unclipped text. |
 | Backend loading/transcribing cannot start a conflicting recording | `Settings.releaseFlows.test.ts` injects loading and idle; `Settings.events.test.ts` exercises hotkey recording and transcribing state events. |
-| Platform pending and language save block duplicate submission; four languages including Finnish | `Onboarding.test.ts`: disabled Preparing/Saving clicks produce no additional IPC; four choices and Finnish aria-pressed/save/download checks. |
+| Platform pending and language save block duplicate submission; four languages including Finnish | `Onboarding.test.ts`: disabled Preparing/Saving clicks produce no additional IPC; five choices (the latest adds Danish) and Finnish aria-pressed/save/download checks. |
 | Reopening Accessibility Settings does not restart prompt/poll ownership | `Onboarding.test.ts` holds the permission request, reopens once without new request/check, then grants and advances the clock: the original operation still completes and retries registration once. `api.test.ts` covers the wrapper; the native registration source check remains. |
 | F03: older selected request queues behind another active job with its saved options | `qa-rerun-selection.mjs` drives the actual recent-file select. It distinguishes English/Astrid saved options from current Swedish/Bjorn options, asserts fresh run IDs and serial native submissions, and reruns a saved diarized meeting behind a plain job. Existing `FileTranscription.flow.test.ts` retains saved-option and retry wiring coverage. |
 

@@ -41,6 +41,7 @@ fn pianissimo_dictation_is_swedish_only() {
         Language::English,
         Language::Norwegian,
         Language::Finnish,
+        Language::Danish,
         Language::Auto,
     ] {
         assert!(!enabled.uses_pianissimo_for_dictation(language));
@@ -547,9 +548,10 @@ fn profiles_choose_independent_compatible_dictation_models() {
         ],
         ..Default::default()
     };
-    settings
-        .profile_models
-        .insert("swedish".into(), FileModelPreference::PianissimoOriginal);
+    settings.profile_models.insert(
+        "swedish".into(),
+        FileModelPreference::Pianissimo(PianissimoModel::Swedish),
+    );
     settings.profile_models.insert(
         "english".into(),
         FileModelPreference::Whisper(WhisperModel::BaseEn),
@@ -559,7 +561,7 @@ fn profiles_choose_independent_compatible_dictation_models() {
         settings
             .dictation_model_for_profile_gated("swedish", PIANISSIMO_SUPPORTED)
             .unwrap(),
-        FileModel::PianissimoOriginal
+        FileModel::Pianissimo(PianissimoModel::Swedish)
     );
     assert_eq!(
         settings
@@ -570,7 +572,7 @@ fn profiles_choose_independent_compatible_dictation_models() {
     assert!(settings
         .set_profile_model_gated(
             "english",
-            FileModelPreference::PianissimoOriginal,
+            FileModelPreference::Pianissimo(PianissimoModel::Swedish),
             PIANISSIMO_SUPPORTED
         )
         .is_err());
@@ -595,10 +597,18 @@ fn incompatible_language_change_resets_only_that_profile_to_auto_with_notice() {
         ..Default::default()
     };
     settings
-        .set_profile_model_gated("default", FileModelPreference::PianissimoOriginal, true)
+        .set_profile_model_gated(
+            "default",
+            FileModelPreference::Pianissimo(PianissimoModel::Swedish),
+            true,
+        )
         .unwrap();
     settings
-        .set_profile_model_gated("other", FileModelPreference::PianissimoOriginal, true)
+        .set_profile_model_gated(
+            "other",
+            FileModelPreference::Pianissimo(PianissimoModel::Swedish),
+            true,
+        )
         .unwrap();
     let mut english = swedish;
     english.language = Language::English;
@@ -627,7 +637,7 @@ fn incompatible_language_change_resets_only_that_profile_to_auto_with_notice() {
     );
     assert_eq!(
         settings.profile_models["other"],
-        FileModelPreference::PianissimoOriginal
+        FileModelPreference::Pianissimo(PianissimoModel::Swedish)
     );
 }
 
@@ -1158,7 +1168,7 @@ fn selected_file_model_must_match_language() {
         .is_err());
 
     let settings = Settings {
-        file_transcription_model: FileModelPreference::PianissimoOriginal,
+        file_transcription_model: FileModelPreference::Pianissimo(PianissimoModel::Swedish),
         ..Default::default()
     };
     assert_eq!(
@@ -1167,7 +1177,7 @@ fn selected_file_model_must_match_language() {
             PIANISSIMO_SUPPORTED,
             &nothing_downloaded
         ),
-        Ok(FileModel::PianissimoOriginal)
+        Ok(FileModel::Pianissimo(PianissimoModel::Swedish))
     );
     assert!(settings
         .effective_file_model_for_gated(
@@ -1183,7 +1193,7 @@ fn file_model_preference_does_not_change_live_model_resolution() {
     let settings = Settings {
         auto_select_model: false,
         whisper_model: WhisperModel::Medium,
-        file_transcription_model: FileModelPreference::PianissimoOriginal,
+        file_transcription_model: FileModelPreference::Pianissimo(PianissimoModel::Swedish),
         ..Default::default()
     };
 
@@ -1197,7 +1207,7 @@ fn file_model_preference_does_not_change_live_model_resolution() {
             PIANISSIMO_SUPPORTED,
             &nothing_downloaded
         ),
-        Ok(FileModel::PianissimoOriginal)
+        Ok(FileModel::Pianissimo(PianissimoModel::Swedish))
     );
 }
 
@@ -1209,7 +1219,10 @@ fn file_model_preference_serde_roundtrip_and_unknown_ids() {
             FileModelPreference::Whisper(WhisperModel::KbWhisperSmall),
             "\"kb-whisper-small\"",
         ),
-        (FileModelPreference::PianissimoOriginal, "\"pianissimo-sv\""),
+        (
+            FileModelPreference::Pianissimo(PianissimoModel::Swedish),
+            "\"pianissimo-sv\"",
+        ),
     ];
 
     for (preference, expected) in pairs {
@@ -1235,12 +1248,12 @@ fn file_model_preference_ids_are_the_model_ids() {
         );
     }
     assert_eq!(
-        FileModelPreference::parse_id(FileModel::PianissimoOriginal.id()),
-        Ok(FileModelPreference::PianissimoOriginal)
+        FileModelPreference::parse_id(FileModel::Pianissimo(PianissimoModel::Swedish).id()),
+        Ok(FileModelPreference::Pianissimo(PianissimoModel::Swedish))
     );
     assert_eq!(
-        serde_json::to_value(FileModelPreference::PianissimoOriginal).unwrap(),
-        serde_json::Value::String(FileModel::PIANISSIMO_ID.to_owned())
+        serde_json::to_value(FileModelPreference::Pianissimo(PianissimoModel::Swedish)).unwrap(),
+        serde_json::Value::String(PianissimoModel::Swedish.id().to_owned())
     );
     assert_eq!(
         FileModelPreference::parse_id("auto"),
@@ -1249,7 +1262,7 @@ fn file_model_preference_ids_are_the_model_ids() {
     for preference in [
         FileModelPreference::Auto,
         FileModelPreference::Whisper(WhisperModel::KbWhisperSmall),
-        FileModelPreference::PianissimoOriginal,
+        FileModelPreference::Pianissimo(PianissimoModel::Swedish),
     ] {
         assert_eq!(
             FileModelPreference::parse_id(preference.id()),
@@ -1315,7 +1328,11 @@ fn warm_model_plan_skips_pianissimo_profiles_but_keeps_whisper_profiles() {
         )
         .unwrap();
     settings
-        .set_profile_model_gated("default", FileModelPreference::PianissimoOriginal, true)
+        .set_profile_model_gated(
+            "default",
+            FileModelPreference::Pianissimo(PianissimoModel::Swedish),
+            true,
+        )
         .unwrap();
 
     assert_eq!(
@@ -1576,7 +1593,7 @@ fn unsupported_system_demotes_every_pianissimo_selection_to_recommended_whisper(
     let mut settings = Settings {
         language: Language::Swedish,
         pianissimo_dictation: true,
-        file_transcription_model: FileModelPreference::PianissimoOriginal,
+        file_transcription_model: FileModelPreference::Pianissimo(PianissimoModel::Swedish),
         hotkey_profiles: vec![
             profile("default", "Super+S", Language::Swedish),
             profile("second", "Super+T", Language::Swedish),
@@ -1590,7 +1607,7 @@ fn unsupported_system_demotes_every_pianissimo_selection_to_recommended_whisper(
     );
     assert_eq!(
         settings.profile_models["default"],
-        FileModelPreference::PianissimoOriginal
+        FileModelPreference::Pianissimo(PianissimoModel::Swedish)
     );
 
     assert!(
@@ -1623,7 +1640,7 @@ fn the_quiet_demotion_leaves_what_the_logging_one_leaves() {
     let mut loud = Settings {
         language: Language::Swedish,
         pianissimo_dictation: true,
-        file_transcription_model: FileModelPreference::PianissimoOriginal,
+        file_transcription_model: FileModelPreference::Pianissimo(PianissimoModel::Swedish),
         hotkey_profiles: vec![profile("default", "Super+S", Language::Swedish)],
         ..Default::default()
     };
@@ -1652,13 +1669,17 @@ fn selecting_pianissimo_is_refused_when_the_platform_gate_is_closed() {
         ..Default::default()
     };
     let error = settings
-        .set_profile_model_gated("default", FileModelPreference::PianissimoOriginal, false)
+        .set_profile_model_gated(
+            "default",
+            FileModelPreference::Pianissimo(PianissimoModel::Swedish),
+            false,
+        )
         .unwrap_err()
         .to_string();
     assert!(error.contains("macOS 14"), "{error}");
     assert_ne!(
         settings.profile_models.get("default"),
-        Some(&FileModelPreference::PianissimoOriginal)
+        Some(&FileModelPreference::Pianissimo(PianissimoModel::Swedish))
     );
 }
 
@@ -1668,7 +1689,7 @@ fn selecting_pianissimo_is_refused_when_the_platform_gate_is_closed() {
 fn recommended_swedish_resolves_by_platform_everywhere() {
     assert_eq!(
         FileModel::recommended_for(Language::Swedish, true),
-        FileModel::PianissimoOriginal
+        FileModel::Pianissimo(PianissimoModel::Swedish)
     );
     assert_eq!(
         FileModel::recommended_for(Language::Swedish, false),
@@ -1690,7 +1711,7 @@ fn recommended_swedish_resolves_by_platform_everywhere() {
     settings.materialize_profile_models();
     assert_eq!(settings.file_transcription_model, FileModelPreference::Auto);
     for (gate, expected) in [
-        (true, FileModel::PianissimoOriginal),
+        (true, FileModel::Pianissimo(PianissimoModel::Swedish)),
         (false, FileModel::Whisper(WhisperModel::KbWhisperMedium)),
     ] {
         assert_eq!(
@@ -1728,7 +1749,7 @@ fn auto_file_model_falls_back_to_downloaded_models() {
     };
     let base = FileModel::Whisper(WhisperModel::KbWhisperBase);
     let medium = FileModel::Whisper(WhisperModel::KbWhisperMedium);
-    let pian = FileModel::PianissimoOriginal;
+    let pian = FileModel::Pianissimo(PianissimoModel::Swedish);
 
     // Only Base downloaded: upgrading user keeps working, on both platforms.
     assert_eq!(
@@ -1776,13 +1797,13 @@ fn auto_whisper_file_model_never_returns_pianissimo() {
     assert_eq!(
         auto.effective_whisper_file_model_for_gated(
             Language::Swedish,
-            &ready_set(&[FileModel::PianissimoOriginal, base])
+            &ready_set(&[FileModel::Pianissimo(PianissimoModel::Swedish), base])
         ),
         Ok(base)
     );
     assert_eq!(
         auto.effective_whisper_file_model_for_gated(Language::Swedish, &|m| m
-            != FileModel::PianissimoOriginal
+            != FileModel::Pianissimo(PianissimoModel::Swedish)
             && m == base),
         Ok(base)
     );
@@ -1824,12 +1845,12 @@ fn auto_file_model_english_and_explicit_preferences_unchanged() {
         .effective_file_model_for_gated(Language::English, true, &|_| true)
         .is_err());
     let pian = Settings {
-        file_transcription_model: FileModelPreference::PianissimoOriginal,
+        file_transcription_model: FileModelPreference::Pianissimo(PianissimoModel::Swedish),
         ..Default::default()
     };
     assert_eq!(
         pian.effective_whisper_file_model_for_gated(Language::Swedish, &|_| false),
-        Ok(FileModel::PianissimoOriginal)
+        Ok(FileModel::Pianissimo(PianissimoModel::Swedish))
     );
 }
 
@@ -1881,7 +1902,7 @@ fn lineup_migration_matrix() {
                         &downloaded
                     ));
                     let target = if supported {
-                        FileModelPreference::PianissimoOriginal
+                        FileModelPreference::Pianissimo(PianissimoModel::Swedish)
                     } else {
                         FileModelPreference::Whisper(KbWhisperMedium)
                     };
@@ -1952,7 +1973,7 @@ fn lineup_migration_leaves_explicit_and_other_language_choices_alone() {
     for preference in [
         FileModelPreference::Whisper(WhisperModel::KbWhisperMedium),
         FileModelPreference::Whisper(WhisperModel::KbWhisperLarge),
-        FileModelPreference::PianissimoOriginal,
+        FileModelPreference::Pianissimo(PianissimoModel::Swedish),
     ] {
         let mut settings = swedish_settings(preference);
         migrate(&mut settings, true, true, &[WhisperModel::KbWhisperMedium]);

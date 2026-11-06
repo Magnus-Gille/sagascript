@@ -311,10 +311,11 @@ fn load_training_input(
                 model_id_string(model)
             )));
         }
-        FileModel::PianissimoOriginal if !pianissimo_model::is_downloaded() => {
-            return Err(DictationError::TranscriptionFailed(
-                "Pianissimo is not downloaded. Run: sagascript download-model pianissimo-sv".into(),
-            ));
+        FileModel::Pianissimo(pianissimo) if !pianissimo_model::is_downloaded(pianissimo) => {
+            return Err(DictationError::TranscriptionFailed(format!(
+                "Pianissimo is not downloaded. Run: sagascript download-model {}",
+                pianissimo.id()
+            )));
         }
         _ => {}
     }
@@ -341,12 +342,12 @@ fn load_training_input(
             };
             backend.transcribe_text(TranscribeRequest::new(&audio, profile.language, &options))?
         }
-        FileModel::PianissimoOriginal => {
+        FileModel::Pianissimo(pianissimo) => {
             errln!(
                 out,
                 "Transcribing training input locally with Pianissimo..."
             );
-            PianissimoBackend::start(&machine::load())?
+            PianissimoBackend::start(&machine::load(), pianissimo)?
                 .transcribe(&audio, |_| {})?
                 .text
         }

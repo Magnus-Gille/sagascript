@@ -58,7 +58,14 @@
   import { backendErrorRecovery, downloadFailureRecovery, isBackendError, toErrorMessage, type BackendErrorRecovery } from "./errors";
   import ErrorRecovery from "./ErrorRecovery.svelte";
   import { open } from "@tauri-apps/plugin-dialog";
-  import { PIANISSIMO_ID, downloadModelById, useModelDownloads } from "./models.svelte";
+  import {
+    downloadModelById,
+    firstPianissimoId,
+    isPianissimoId,
+    pianissimoIdForLanguage,
+    pianissimoIdsOf,
+    useModelDownloads,
+  } from "./models.svelte";
   import { requestAccessibility } from "./permissions";
   import { loadPlatform } from "./platform";
   import { createModelCatalogController } from "./modelCatalogController";
@@ -84,7 +91,9 @@
       : "",
   );
   let fileModelOptions: WhisperModel[] = $state([]);
-  const pianissimoSizeMb = $derived(fileModelOptions.find((model) => model.id === PIANISSIMO_ID)?.size_mb ?? 0);
+  const pianissimoSizeMb = $derived(
+    fileModelOptions.find((model) => model.id === settings?.file_transcription_model && isPianissimoId(model.id))?.size_mb ?? 0,
+  );
   // What Auto will use now (recommended if downloaded, else best downloaded) and what is recommended.
   let fileAutoModel: WhisperModel | null = $state(null);
   let fileRecommendedModel: WhisperModel | null = $state(null);
@@ -1095,7 +1104,7 @@
         return;
       }
       // Saved, whether or not the read-back could confirm it.
-      if (id === PIANISSIMO_ID) {
+      if (isPianissimoId(id)) {
         transcribeDiarize = false;
         transcribePrompt = "";
       }
@@ -2010,20 +2019,45 @@
    * fetches it again when it is missing or damaged. Progress shows like any
    * other download; rejects when the download fails.
    */
-  async function downloadEngineModelAgain(): Promise<void> {
+  async function downloadEngineModelAgain(ids: readonly string[]): Promise<void> {
+    // Reserved before the first await, so a second press cannot start another.
     engineModelDownloading = true;
-    downloads.start(PIANISSIMO_ID, fileModelOptions.find((model) => model.id === PIANISSIMO_ID)?.display_name ?? "Pianissimo");
     try {
-      try {
-        await downloadModelById(PIANISSIMO_ID);
-      } finally {
-        downloads.finish();
+      // One at a time: an installed, intact model only has its files checked.
+      for (const id of ids) {
+        downloads.start(id, fileModelOptions.find((model) => model.id === id)?.display_name ?? "Pianissimo");
+        try {
+          await downloadModelById(id);
+        } finally {
+          downloads.finish();
+        }
+        // Per model: a later failure must not hide what this one changed on disk.
+        fileModelDiskRevision += 1;
       }
-      fileModelDiskRevision += 1;
       await refreshProfileModels(settings?.hotkey_profiles ?? []);
     } finally {
       engineModelDownloading = false;
     }
+  }
+
+  /**
+   * The Pianissimo model a file job's engine error is about. A Pianissimo
+   * model only serves its own language, so the job's language decides: its
+   * profile's, or the default profile's for a job without one.
+   */
+  function filePianissimoId(job: { profileId: string | null }): string {
+    const profile = profileForId(job.profileId) ?? settings?.hotkey_profiles.find((p) => p.id === "default") ?? null;
+    return firstPianissimoId([pianissimoIdForLanguage(profile?.language), settings?.file_transcription_model]);
+  }
+
+  /**
+   * The Pianissimo models a dictation engine error can be about: every one a
+   * profile dictates with (Auto resolved). The error does not say which
+   * profile failed, so all of them are checked; an intact one costs only a
+   * verification.
+   */
+  function dictationPianissimoIds(): string[] {
+    return pianissimoIdsOf((settings?.hotkey_profiles ?? []).map((profile) => profileModels[profile.id]?.id));
   }
 
   /** "Download the model again" under the Dictate tab's error. */
@@ -2031,7 +2065,7 @@
     if (updatePreparing || downloads.busy || engineModelDownloading) return;
     const revision = dictationEventRevision;
     try {
-      await downloadEngineModelAgain();
+      await downloadEngineModelAgain(dictationPianissimoIds());
       // The model is there: the action can be repeated. Unless another event
       // replaced the error meanwhile (even one with the same text): that one
       // decides its own recovery.
@@ -2373,6 +2407,8 @@
         return "Norwegian";
       case "fi":
         return "Finnish";
+      case "da":
+        return "Danish";
       case "en":
         return "English";
       default:
@@ -2511,6 +2547,7 @@
                   <option value="sv">Swedish</option>
                   <option value="no">Norwegian</option>
                   <option value="fi">Finnish</option>
+                  <option value="da">Danish</option>
                   <option value="auto">Auto-detect</option>
                 </select>
               </div>
@@ -2790,7 +2827,7 @@
                     : "Download selected model"}
               </button>
             {/if}
-            {#if settings.file_transcription_model === PIANISSIMO_ID}
+            {#if isPianissimoId(settings.file_transcription_model)}
               <div class="hotkey-hint">
                 Requires macOS 14+ on Apple Silicon or Windows on ARM (Snapdragon). Runs locally (Neural Engine on Mac, CPU on Windows){pianissimoSizeMb >
                 0
@@ -2808,7 +2845,7 @@
               <input
                 type="checkbox"
                 bind:checked={transcribeDiarize}
-                disabled={transcribing || settings.file_transcription_model === PIANISSIMO_ID}
+                disabled={transcribing || isPianissimoId(settings.file_transcription_model)}
               />
               Speaker diarization
             </label>
@@ -2843,7 +2880,7 @@
             placeholder="Extra context, e.g. names to listen for: Astrid, Grimnir (optional)"
             bind:value={transcribePrompt}
             rows="2"
-            disabled={transcribing || settings.file_transcription_model === PIANISSIMO_ID}></textarea>
+            disabled={transcribing || isPianissimoId(settings.file_transcription_model)}></textarea>
         </div>
 
         <div class="drop-zone" class:drag-over={dragOver} class:transcribing>
@@ -2926,7 +2963,7 @@
               onMissingFile={forgetMissingFile}
               onRetry={retryFileJob}
               retryRefusal={retryRefusals[job.id] ?? ""}
-              onDownloadModel={downloadEngineModelAgain}
+              onDownloadModel={() => downloadEngineModelAgain([filePianissimoId(job)])}
               downloadBusy={downloads.busy || engineModelDownloading}
               {updatePreparing}
               onAttentionChange={updateFileAttention}
@@ -2955,6 +2992,7 @@
             <option value="sv">Swedish</option>
             <option value="no">Norwegian</option>
             <option value="fi">Finnish</option>
+            <option value="da">Danish</option>
             <option value="auto">Auto-detect</option>
           </select>
           {#if blockedLanguageChange}

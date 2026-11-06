@@ -440,7 +440,7 @@ fn resolve_runtime_from(
         true,
     )? {
         FileModel::Whisper(model) => model,
-        FileModel::PianissimoOriginal => {
+        FileModel::Pianissimo(_) => {
             return Err(DictationError::SettingsError(
                 "Meeting reprocessing requires a Whisper model; select one with --model".into(),
             ))

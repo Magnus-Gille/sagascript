@@ -49,6 +49,17 @@ async function chooseFinnish(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByRole("button", { name: "Continue" }));
 }
 
+async function chooseDanish(user: ReturnType<typeof userEvent.setup>) {
+  const english = screen.getByRole("button", { name: "EN English" });
+  const danish = screen.getByRole("button", { name: "DA Dansk" });
+  expect(english).toHaveAttribute("aria-pressed", "true");
+  expect(danish).toHaveAttribute("aria-pressed", "false");
+  await user.click(danish);
+  expect(danish).toHaveAttribute("aria-pressed", "true");
+  expect(english).toHaveAttribute("aria-pressed", "false");
+  await user.click(screen.getByRole("button", { name: "Continue" }));
+}
+
 describe("default onboarding language", () => {
   test("waits for the platform before it can submit a language", async () => {
     const platform = deferred<string>();
@@ -74,7 +85,7 @@ describe("default onboarding language", () => {
     expect(screen.getByText(/Choose your first profile's language/)).toBeInTheDocument();
     expect(screen.getByText(/recommended local model is selected automatically/)).toBeInTheDocument();
     expect(screen.queryByText(/Welcome to Sagascript/)).not.toBeInTheDocument();
-    expect(screen.getAllByRole("button", { name: /English|Svenska|Norsk|Suomi/ })).toHaveLength(4);
+    expect(screen.getAllByRole("button", { name: /English|Svenska|Norsk|Suomi|Dansk/ })).toHaveLength(5);
     expect(ipc.callsTo("set_language")).toEqual([]);
     await chooseSwedish(user);
     expect(await screen.findByRole("heading", { name: "Setting up speech engine" })).toBeInTheDocument();
@@ -216,6 +227,48 @@ describe("Finnish onboarding", () => {
     expect(ipc.callsTo("set_language")).toEqual([{ language: "fi" }]);
     expect(ipc.callsTo("get_effective_model_info")).toEqual([{ language: "fi" }]);
     expect(ipc.callsTo("download_model")).toEqual([{ whisperModel: "base" }]);
+    expect(ipc.callsTo("download_pianissimo_model")).toEqual([]);
+  });
+});
+
+describe("Danish onboarding", () => {
+  test("choosing Danish saves da and downloads the backend-recommended Small model", async () => {
+    const catalogSmall = whisperModel("small", "Catalog Small fixture", { size_mb: 466 });
+    const { ipc, user } = await renderOnboarding(
+      backend({
+        get_effective_model_info: ({ language }) => {
+          expect(language).toBe("da");
+          return catalogSmall;
+        },
+      }),
+    );
+
+    await chooseDanish(user);
+
+    expect(await screen.findByText("Speech engine ready")).toBeInTheDocument();
+    expect(screen.getByText(/Preparing the local speech engine \(466 MB\)/)).toBeInTheDocument();
+    expect(ipc.callsTo("set_language")).toEqual([{ language: "da" }]);
+    expect(ipc.callsTo("get_effective_model_info")).toEqual([{ language: "da" }]);
+    expect(ipc.callsTo("download_model")).toEqual([{ whisperModel: "small" }]);
+    expect(ipc.callsTo("download_pianissimo_model")).toEqual([]);
+  });
+
+  test("when the recommendation is unavailable, Danish falls back to Small and shows 466 MB", async () => {
+    const { ipc, user } = await renderOnboarding(
+      backend({
+        get_effective_model_info: () => {
+          throw backendError("unavailable", "model lineup unavailable");
+        },
+      }),
+    );
+
+    await chooseDanish(user);
+
+    expect(await screen.findByText("Speech engine ready")).toBeInTheDocument();
+    expect(screen.getByText(/Preparing the local speech engine \(466 MB\)/)).toBeInTheDocument();
+    expect(ipc.callsTo("set_language")).toEqual([{ language: "da" }]);
+    expect(ipc.callsTo("get_effective_model_info")).toEqual([{ language: "da" }]);
+    expect(ipc.callsTo("download_model")).toEqual([{ whisperModel: "small" }]);
     expect(ipc.callsTo("download_pianissimo_model")).toEqual([]);
   });
 });

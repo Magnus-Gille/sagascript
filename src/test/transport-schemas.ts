@@ -5,7 +5,7 @@ import { array, boolean, literal, nullable, number, object, openObject, record, 
 
 // -- Settings (`get_settings`) ------------------------------------------------
 
-export const language = literal("en", "sv", "no", "fi", "auto");
+export const language = literal("en", "sv", "no", "fi", "da", "auto");
 
 export const hotkeyProfile = object(
   { id: string, name: string, shortcut: string, language },

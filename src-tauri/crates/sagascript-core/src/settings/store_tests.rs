@@ -1,4 +1,5 @@
 use super::*;
+use crate::models::PianissimoModel;
 use crate::settings::{
     EnginePrewarm, FileModelPreference, HotkeyMode, Language, WhisperModel,
     ENGINE_DEFAULTS_VERSION, MODEL_LINEUP_VERSION,
@@ -86,7 +87,7 @@ fn legacy_global_model_selection_migrates_to_each_profile_without_losing_setting
         let migrated = startup_load(&path);
         assert_eq!(
             migrated.profile_models["default"],
-            FileModelPreference::PianissimoOriginal
+            FileModelPreference::Pianissimo(PianissimoModel::Swedish)
         );
         assert_eq!(
             migrated.profile_models["english"],
@@ -145,7 +146,7 @@ fn swedish_lineup_migration_persists_once_and_is_idempotent_on_disk() {
         let migrated = load_at_with_machine(&path, std::iter::empty(), &env);
         assert_eq!(
             migrated.profile_models["default"],
-            FileModelPreference::PianissimoOriginal
+            FileModelPreference::Pianissimo(PianissimoModel::Swedish)
         );
         let persisted: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
@@ -173,7 +174,7 @@ fn lineup_migration_preserves_unknown_keys_profiles_and_glossaries() {
         let migrated = load_at_with_machine(&path, std::iter::empty(), &env);
         assert_eq!(
             migrated.profile_models["default"],
-            FileModelPreference::PianissimoOriginal
+            FileModelPreference::Pianissimo(PianissimoModel::Swedish)
         );
         let persisted: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
@@ -284,7 +285,7 @@ fn a_choice_made_between_repair_and_restart_survives_the_restart() {
         assert_eq!(repaired.engine_prewarm, EnginePrewarm::OnAppStart);
         assert_eq!(
             repaired.profile_models["default"],
-            FileModelPreference::PianissimoOriginal
+            FileModelPreference::Pianissimo(PianissimoModel::Swedish)
         );
         assert_file_bytes(&path, original);
 
@@ -297,7 +298,7 @@ fn a_choice_made_between_repair_and_restart_survives_the_restart() {
         // The update starts from what the startup load showed.
         assert_eq!(
             updated.profile_models["default"],
-            FileModelPreference::PianissimoOriginal
+            FileModelPreference::Pianissimo(PianissimoModel::Swedish)
         );
         try_update_at(&path, |settings| {
             settings.profile_models.insert(
