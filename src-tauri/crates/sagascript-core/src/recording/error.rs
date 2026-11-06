@@ -73,6 +73,17 @@ pub enum RecordingError {
     /// out of order. The recording folder, if any, is left for recovery.
     #[error("the recording session failed: {reason}")]
     SessionFailed { reason: &'static str },
+    /// The recording ended early because the input device or its format
+    /// changed (a headset switching profile, an unplugged microphone). What
+    /// was recorded up to then is kept. `reason` is the manifest's
+    /// `ended_reason` (`device_changed`, `format_changed`).
+    #[error("the recording stopped early because the input device changed ({reason})")]
+    DeviceChanged { reason: &'static str },
+    /// The recording was not finished by the process that wrote it (a crash,
+    /// a kill) and must be recovered before it can be played, exported or
+    /// transcribed.
+    #[error("the recording was interrupted and needs recovery first")]
+    RecoveryNeeded,
     /// The FLAC encoder library refused a block (a bug or an out-of-range
     /// sample). The text is scrubbed of paths.
     #[error("the audio encoder failed: {message}")]
@@ -123,6 +134,8 @@ impl RecordingError {
             Self::TrackFinished => "recording_track_finished",
             Self::CorruptTrack { .. } => "recording_corrupt_track",
             Self::Encoder { .. } => "recording_encoder",
+            Self::DeviceChanged { .. } => "recording_device_changed",
+            Self::RecoveryNeeded => "recording_recovery_needed",
             Self::SourceUnavailable { .. } => "recording_source_unavailable",
             Self::SessionFailed { .. } => "recording_session_failed",
         }

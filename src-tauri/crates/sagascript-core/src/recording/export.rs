@@ -110,7 +110,7 @@ pub fn export_recording(
 ) -> Result<ExportReport, RecordingError> {
     let manifest = load_manifest(folder)?;
     if manifest.state != RecordingState::Complete {
-        return Err(RecordingError::NotRecording);
+        return Err(RecordingError::RecoveryNeeded);
     }
     if manifest.tracks.is_empty() {
         return Err(invalid("the recording has no tracks"));

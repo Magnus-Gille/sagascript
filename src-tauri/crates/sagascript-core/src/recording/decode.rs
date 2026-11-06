@@ -16,7 +16,7 @@
 //!   [`RecordingError::CorruptTrack`], never a short transcript.
 //! * Only a finished recording (`complete`, recovered or not) is read; one
 //!   whose manifest still says `recording` is refused with
-//!   [`RecordingError::NotRecording`] (recover it first).
+//!   [`RecordingError::RecoveryNeeded`] (recover it first).
 //!
 //! [`NativeTrackReader`] is the pull-based FLAC reader both this module and
 //! the WAV export use.
@@ -211,7 +211,7 @@ pub struct TrackDecoder {
 pub fn decode_tracks(folder: &Path) -> Result<TrackDecoder, RecordingError> {
     let manifest = load_manifest(folder)?;
     if manifest.state != RecordingState::Complete {
-        return Err(RecordingError::NotRecording);
+        return Err(RecordingError::RecoveryNeeded);
     }
     for track in &manifest.tracks {
         if track.sample_rate < MIN_RATE {

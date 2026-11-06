@@ -512,7 +512,7 @@ fn a_recording_in_progress_is_not_exported() {
         &options(ExportFormat::Flac, ExportLayout::Tracks, rig.out("t")),
     )
     .unwrap_err();
-    assert_eq!(error.code(), "recording_not_recording");
+    assert_eq!(error.code(), "recording_recovery_needed");
 }
 
 #[test]

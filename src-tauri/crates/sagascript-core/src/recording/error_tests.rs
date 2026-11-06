@@ -36,6 +36,10 @@ fn every_variant() -> Vec<RecordingError> {
         RecordingError::SessionFailed {
             reason: "the writer panicked",
         },
+        RecordingError::DeviceChanged {
+            reason: "device_changed",
+        },
+        RecordingError::RecoveryNeeded,
         RecordingError::encoder("failed at /Users/someone/Music/secret.flac"),
     ]
 }

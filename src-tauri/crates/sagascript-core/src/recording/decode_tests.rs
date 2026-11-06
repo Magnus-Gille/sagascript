@@ -199,7 +199,7 @@ fn a_recording_that_is_still_recording_is_refused() {
         .create(recording("Open", vec![track("mic", 48_000, 1, 24)]))
         .unwrap();
     let error = decode_tracks(writer.folder()).err().expect("refused");
-    assert_eq!(error.code(), "recording_not_recording");
+    assert_eq!(error.code(), "recording_recovery_needed");
 }
 
 #[test]
