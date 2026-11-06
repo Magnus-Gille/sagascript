@@ -2,9 +2,9 @@
 //! (SAGA-564): durations, sizes, levels and the wording of the recorder's
 //! warnings. Pure, so they are unit-tested without a recording.
 
-use sagascript_core::recording::{
-    session::fsclass::FolderWarning, EndedReason, Quality, SessionWarning,
-};
+#[cfg(feature = "record")]
+use sagascript_core::recording::{session::fsclass::FolderWarning, SessionWarning};
+use sagascript_core::recording::{EndedReason, Quality};
 
 /// `h:mm:ss`, for example `1:02:03`; rounds down to whole seconds.
 pub(crate) fn format_hms(seconds: f64) -> String {
@@ -31,6 +31,7 @@ pub(crate) fn format_bytes(bytes: u64) -> String {
     format!("{value:.1} {}", UNITS[unit])
 }
 
+#[cfg(feature = "record")]
 /// The level of a peak in dB relative to full scale, `-inf dB` for silence.
 pub(crate) fn format_level(peak: f32) -> String {
     if peak.is_finite() && peak > 1e-6 {
@@ -63,6 +64,7 @@ pub(crate) fn short_when(started_at: &str) -> String {
     }
 }
 
+#[cfg(feature = "record")]
 /// What the user is told about a folder or disk condition.
 pub(crate) fn warning_text(warning: &SessionWarning) -> &'static str {
     match warning {
@@ -82,6 +84,7 @@ pub(crate) fn warning_text(warning: &SessionWarning) -> &'static str {
     }
 }
 
+#[cfg(feature = "record")]
 /// How an early ending is described.
 pub(crate) fn ended_early_text(reason: &EndedReason) -> String {
     match reason {
@@ -121,6 +124,7 @@ mod tests {
         assert_eq!(format_bytes(u64::MAX), "18446744.1 TB");
     }
 
+    #[cfg(feature = "record")]
     #[test]
     fn levels_are_dbfs_and_silence_is_minus_infinity() {
         assert_eq!(format_level(1.0), "0 dB");
@@ -141,6 +145,7 @@ mod tests {
         assert_eq!(short_when("2026-11-05"), "2026-11-05");
     }
 
+    #[cfg(feature = "record")]
     #[test]
     fn every_warning_and_ending_has_words() {
         for warning in [

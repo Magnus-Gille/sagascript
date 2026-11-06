@@ -739,6 +739,56 @@ mod tests {
         assert!(summary_line(&many, Path::new("/r")).contains("3 gaps"));
     }
 
+    /// What `--transcribe` hands to the engine: the saved microphone track,
+    /// decoded to 16 kHz in chunks and joined.
+    #[test]
+    fn the_saved_microphone_track_is_decoded_to_sixteen_khz_samples() {
+        use sagascript_core::recording::{EndedReason, NewRecording, NewTrack};
+        let temp = sagascript_testsupport::TempDir::new();
+        let mut writer = RecordingStore::new(temp.path())
+            .create(NewRecording {
+                title: "t".into(),
+                started_at: "2026-11-05T14:02:11.482+01:00".into(),
+                client: client(),
+                quality: Quality::Lossless,
+                tracks: vec![NewTrack {
+                    id: "mic".into(),
+                    role: "mic".into(),
+                    sample_rate: 48_000,
+                    channels: 1,
+                    bits: 24,
+                    clock_domain: "test".into(),
+                    start_ns: 1,
+                    resampled_from: None,
+                    device: None,
+                }],
+            })
+            .unwrap();
+        let tone: Vec<f32> = (0..96_000)
+            .map(|i| 0.5 * (std::f32::consts::TAU * 440.0 * i as f32 / 48_000.0).sin())
+            .collect();
+        writer.push("mic", &tone).unwrap();
+        let folder = writer.folder().to_path_buf();
+        writer.finish(EndedReason::Stopped).unwrap();
+
+        let samples = mic_samples(&folder).unwrap();
+        // Two seconds at 16 kHz, give or take the resampler's edge.
+        assert!(
+            (31_000..=33_000).contains(&samples.len()),
+            "{}",
+            samples.len()
+        );
+        let peak = samples.iter().fold(0.0_f32, |peak, s| peak.max(s.abs()));
+        assert!((0.4..=0.6).contains(&peak), "peak {peak}");
+    }
+
+    #[test]
+    fn a_recording_that_is_not_finished_is_not_transcribed() {
+        let temp = sagascript_testsupport::TempDir::new();
+        let error = mic_samples(temp.path()).unwrap_err();
+        assert!(error.code().starts_with("recording_"), "{error}");
+    }
+
     #[test]
     fn chunks_are_placed_by_start_sample_and_holes_are_silence() {
         let mut samples = Vec::new();

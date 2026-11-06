@@ -1246,6 +1246,32 @@ mod tests {
             "record help should contain EXAMPLES"
         );
         assert!(help.contains("Ctrl+C"), "record help should mention Ctrl+C");
+        for flag in ["--quality", "--dir", "--name", "--transcribe"] {
+            assert!(help.contains(flag), "record help should describe {flag}");
+        }
+        assert!(help.contains("RECORDER MODE"));
+        assert!(help.contains("sagascript record --quality lossless"));
+    }
+
+    #[test]
+    fn recordings_help_lists_every_action_with_examples() {
+        let cmd = Cli::command();
+        let sub = cmd
+            .find_subcommand("recordings")
+            .expect("recordings subcommand missing");
+        let help = get_long_help(sub);
+        assert!(help.contains("EXAMPLES:"));
+        for action in ["list", "show", "export", "recover", "delete"] {
+            let action_cmd = sub
+                .find_subcommand(action)
+                .unwrap_or_else(|| panic!("recordings {action} missing"));
+            assert!(
+                get_long_help(action_cmd).contains("EXAMPLES:"),
+                "recordings {action} help should contain EXAMPLES"
+            );
+        }
+        let delete = get_long_help(sub.find_subcommand("delete").unwrap());
+        assert!(delete.contains("--yes") && delete.contains("Trash"));
     }
 
     #[test]
