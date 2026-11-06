@@ -818,6 +818,157 @@ async fn the_recording_being_made_is_not_deleted() {
     delete_recording_in(h.dir.path(), &name, None, h.trash.as_ref()).expect("moved");
 }
 
+// -- One owner of the microphone ----------------------------------------------------
+
+/// A dictation capture that touches no device.
+struct NoDevice;
+
+impl crate::app_controller::Capture for NoDevice {
+    fn start_capture(&mut self) -> Result<(), sagascript_core::error::DictationError> {
+        Ok(())
+    }
+
+    fn stop_capture(&mut self) -> Result<Vec<f32>, sagascript_core::error::DictationError> {
+        Ok(Vec::new())
+    }
+
+    fn stop_timings(&self) -> (Duration, Duration) {
+        (Duration::ZERO, Duration::ZERO)
+    }
+
+    fn metrics(&self) -> sagascript_core::audio::capture::AudioCaptureMetrics {
+        sagascript_core::audio::capture::AudioCaptureMetrics {
+            stream_play_return_ms: None,
+            first_callback_ms: None,
+            device_sample_rate_hz: None,
+        }
+    }
+}
+
+fn dictation_controller() -> SharedController {
+    Mutex::new(crate::app_controller::AppController::with_capture(
+        Settings::default(),
+        NoDevice,
+    ))
+}
+
+#[test]
+fn a_reserved_slot_keeps_dictation_out_while_the_permission_is_asked_for() {
+    let h = Harness::new();
+    let controller = dictation_controller();
+    // The recording command reserves before it awaits the permission prompt.
+    let (reservation, _settings) = reserve_for_recording(&controller, &h.recorder).expect("free");
+    assert!(h.recorder.is_active());
+    let refused = lock_controller_for_dictation(&controller, &h.recorder)
+        .err()
+        .expect("the microphone is reserved");
+    assert_eq!(refused.code(), "busy");
+    // A second recording is refused too.
+    assert_eq!(
+        reserve_for_recording(&controller, &h.recorder)
+            .err()
+            .expect("taken")
+            .code(),
+        "busy"
+    );
+    // A denied permission (the reservation dropped) frees the microphone.
+    drop(reservation);
+    assert!(!h.recorder.is_active());
+    lock_controller_for_dictation(&controller, &h.recorder).expect("free again");
+}
+
+#[test]
+fn a_dictation_that_started_keeps_the_recording_out() {
+    let h = Harness::new();
+    let controller = dictation_controller();
+    {
+        let mut ctrl = lock_controller_for_dictation(&controller, &h.recorder).expect("free");
+        assert!(ctrl.start_recording().expect("starts"));
+    }
+    let refused = reserve_for_recording(&controller, &h.recorder)
+        .err()
+        .expect("dictation holds the microphone");
+    assert_eq!(refused.code(), "busy");
+    assert!(!h.recorder.is_active(), "a refusal leaves no reservation");
+}
+
+#[tokio::test]
+async fn a_reservation_is_released_on_every_path() {
+    let h = Harness::new();
+    let controller = dictation_controller();
+
+    // Dropped unused (permission denied, command cancelled).
+    drop(
+        reserve_for_recording(&controller, &h.recorder)
+            .expect("reserved")
+            .0,
+    );
+    assert!(!h.recorder.is_active());
+
+    // A failed start.
+    let file = h.dir.path().join("a-file");
+    std::fs::write(&file, b"x").expect("write");
+    let (reservation, _) = reserve_for_recording(&controller, &h.recorder).expect("reserved");
+    let broken = Settings {
+        recording_directory: file.join("inside").to_string_lossy().into_owned(),
+        ..Settings::default()
+    };
+    start_reserved(reservation, broken, None, h.emit())
+        .await
+        .err()
+        .expect("the folder cannot exist");
+    assert!(!h.recorder.is_active());
+
+    // A start that works holds it until the stop.
+    let (reservation, _) = reserve_for_recording(&controller, &h.recorder).expect("reserved");
+    start_reserved(reservation, h.settings(), None, h.emit())
+        .await
+        .expect("starts");
+    assert!(h.recorder.is_active());
+    assert!(lock_controller_for_dictation(&controller, &h.recorder).is_err());
+    stop_session(&h.recorder).await.expect("stops");
+    assert!(lock_controller_for_dictation(&controller, &h.recorder).is_ok());
+}
+
+/// The two starts race on many fresh pairs; exactly one may win each round.
+#[test]
+fn a_recording_and_a_dictation_never_both_start() {
+    use std::sync::Barrier;
+    let mut recorder_wins = 0;
+    let mut dictation_wins = 0;
+    for _ in 0..300 {
+        let h = Arc::new(Harness::new());
+        let controller = Arc::new(dictation_controller());
+        let gate = Arc::new(Barrier::new(2));
+        let recording = {
+            let (h, controller, gate) = (h.clone(), controller.clone(), gate.clone());
+            std::thread::spawn(move || {
+                gate.wait();
+                reserve_for_recording(&controller, &h.recorder).map(|(reservation, _)| {
+                    // Keep the slot: the session would now start.
+                    std::mem::forget(reservation);
+                })
+            })
+        };
+        let dictation = {
+            let (h, controller, gate) = (h.clone(), controller.clone(), gate.clone());
+            std::thread::spawn(move || {
+                gate.wait();
+                lock_controller_for_dictation(&controller, &h.recorder)
+                    .and_then(|mut ctrl| ctrl.start_recording().map_err(Into::into))
+            })
+        };
+        let recording = recording.join().expect("recorder thread").is_ok();
+        let dictation = dictation.join().expect("dictation thread").unwrap_or(false);
+        assert!(!(recording && dictation), "both captured at once");
+        assert!(recording || dictation, "one of the two must win");
+        recorder_wins += usize::from(recording);
+        dictation_wins += usize::from(dictation);
+    }
+    // Not a statistical claim; only that the loop exercised the code.
+    assert_eq!(recorder_wins + dictation_wins, 300);
+}
+
 // -- The tray indicator and dictation ----------------------------------------------
 
 #[test]

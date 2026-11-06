@@ -10,7 +10,7 @@ use crate::commands::{lock_controller, SharedController};
 use crate::events::{self, EmitEvent, UiState};
 #[cfg(target_os = "macos")]
 use crate::platform;
-use crate::recording_session::{ensure_recorder_idle, SharedRecorder};
+use crate::recording_session::{lock_controller_for_dictation, SharedRecorder};
 use crate::tray::{select_profile_menu, update_tray_status};
 use crate::{focus_diag, hotkey, overlay, SAFE_FALLBACK_HOTKEY};
 
@@ -44,12 +44,6 @@ pub(crate) fn handle_hotkey_event(
     match state {
         hotkey::BareHotkeyState::Pressed => {
             info!("Hotkey pressed: {shortcut}");
-            // The audio recorder holds the microphone: a busy dictation, here
-            // as for a controller that is not idle, is a logged no-op.
-            if let Err(error) = ensure_recorder_idle(app.state::<SharedRecorder>().is_active()) {
-                warn!("Ignoring dictation hotkey: {error}");
-                return;
-            }
             #[cfg(target_os = "macos")]
             let pressed_target = platform::macos::frontmost_pid();
             #[cfg(target_os = "macos")]
@@ -66,7 +60,17 @@ pub(crate) fn handle_hotkey_event(
                 )
             };
             let (result, active_profile) = {
-                let mut c = lock_controller(&ctrl);
+                // The audio recorder holds the microphone: a dictation start
+                // is a logged no-op. Checked under the controller lock the
+                // start runs under, where the recorder reserves its slot.
+                let recorder: tauri::State<'_, SharedRecorder> = app.state();
+                let mut c = match lock_controller_for_dictation(&ctrl, &recorder) {
+                    Ok(guard) => guard,
+                    Err(error) => {
+                        warn!("Ignoring dictation hotkey: {error}");
+                        return;
+                    }
+                };
                 let binding = c.settings().resolved_hotkey_bindings().into_iter().find(
                     |(_, configured, _)| {
                         canonical_hotkey(configured).ok() == canonical_hotkey(shortcut).ok()

@@ -77,8 +77,7 @@ pub async fn start_recording(
     controller: State<'_, SharedController>,
     recorder: State<'_, crate::recording_session::SharedRecorder>,
 ) -> Result<(), CommandError> {
-    crate::recording_session::ensure_recorder_idle(recorder.is_active())?;
-    let mut ctrl = lock_controller(&controller);
+    let mut ctrl = crate::recording_session::lock_controller_for_dictation(&controller, &recorder)?;
     gui_start_recording_result(ctrl.start_recording())
 }
 
@@ -88,8 +87,7 @@ pub async fn start_training_recording(
     recorder: State<'_, crate::recording_session::SharedRecorder>,
     profile_id: String,
 ) -> Result<(), CommandError> {
-    crate::recording_session::ensure_recorder_idle(recorder.is_active())?;
-    let mut ctrl = lock_controller(&controller);
+    let mut ctrl = crate::recording_session::lock_controller_for_dictation(&controller, &recorder)?;
     let profile = ctrl.settings().dictation_profile(&profile_id)?;
     gui_start_recording_result(ctrl.start_training_recording_for_profile(profile))
 }

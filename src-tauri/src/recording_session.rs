@@ -31,9 +31,20 @@
 //! `app.recorder` (`SharedRecorder::state`) is a leaf in the lock order of
 //! docs/ARCHITECTURE.md §3: it guards a few assignments, is never held across
 //! an `.await`, and the calls that wait (`RecordingSession::start`/`stop`,
-//! `summarize_folder`, recovery) all run outside it. The commands read the
-//! controller first (a short block that is released) and only then take this
-//! lock; nothing takes `SharedController` while holding it.
+//! `summarize_folder`, recovery) all run outside it. Nothing takes
+//! `SharedController` while holding it, so it may be taken **inside** the
+//! controller lock (order: controller, then `app.recorder`).
+//!
+//! # One owner of the microphone
+//!
+//! Dictation and the recorder share the microphone. Both starts are decided
+//! under the controller lock, which makes the decision atomic: the recorder
+//! reserves its slot in [`reserve_for_recording`] (controller not busy, slot
+//! free, then `Phase::Starting`) *before* it waits for the microphone
+//! permission, and every dictation start takes the controller through
+//! [`lock_controller_for_dictation`], which refuses while the slot is
+//! reserved or live. The [`Reservation`] gives the slot back on every error
+//! path and when the command is dropped.
 
 use std::path::Path;
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
@@ -54,6 +65,7 @@ use sagascript_core::sync::lock_or_recover;
 use serde::Serialize;
 
 use crate::command_error::CommandError;
+use crate::commands::{lock_controller, SharedController};
 use crate::trash::{recording_folder, RecordingTrash, SystemTrash};
 
 const RECORDER_LOCK: &str = "app.recorder";
@@ -684,30 +696,97 @@ fn start_blocking(
     }
 }
 
-/// Start a recording session. The caller has checked that nothing else uses
-/// the microphone and that the permission allows it (`check_permission`).
+/// The recorder's slot, reserved for a session that is about to start. It
+/// keeps dictation out while the microphone permission is asked for and the
+/// source opens, and gives the slot back when dropped, on every error path and
+/// when the command is cancelled. [`start_reserved`] consumes it.
+#[must_use = "a reservation that is dropped frees the slot at once"]
+pub struct Reservation<'a> {
+    recorder: &'a SharedRecorder,
+    armed: bool,
+}
+
+impl Drop for Reservation<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            self.recorder.abort_start();
+        }
+    }
+}
+
+impl SharedRecorder {
+    /// Take the slot for a new session; see [`Reservation`].
+    fn reserve(&self) -> Result<Reservation<'_>, CommandError> {
+        self.begin()?;
+        Ok(Reservation {
+            recorder: self,
+            armed: true,
+        })
+    }
+}
+
+/// Reserve the microphone for a recording: the dictation controller must not
+/// be busy and the recorder's slot must be free, decided in one step under the
+/// controller lock (no dictation start can slip in between). The settings the
+/// session uses are copied under the same lock.
+pub fn reserve_for_recording<'a>(
+    controller: &SharedController,
+    recorder: &'a SharedRecorder,
+) -> Result<(Reservation<'a>, Settings), CommandError> {
+    let ctrl = lock_controller(controller);
+    if ctrl.state().is_busy() {
+        return Err(busy(
+            "Cannot start a recording while Sagascript is dictating or transcribing. Wait for it to finish.",
+        ));
+    }
+    let reservation = recorder.reserve()?;
+    Ok((reservation, ctrl.settings().clone()))
+}
+
+/// Lock the controller for a dictation start (hotkey, the start commands),
+/// refusing while the recorder holds the microphone. The check is made under
+/// the controller lock the start itself runs under, so a recording cannot be
+/// reserved between the check and the start.
+pub fn lock_controller_for_dictation<'a>(
+    controller: &'a SharedController,
+    recorder: &SharedRecorder,
+) -> Result<std::sync::MutexGuard<'a, crate::app_controller::AppController>, CommandError> {
+    let ctrl = lock_controller(controller);
+    ensure_recorder_idle(recorder.is_active())?;
+    Ok(ctrl)
+}
+
+/// Reserve the slot and start a session, for the tests of the session itself;
+/// the command reserves first ([`reserve_for_recording`]) and starts later.
+#[cfg(test)]
 pub async fn start_session(
     recorder: &SharedRecorder,
     settings: Settings,
     title: Option<String>,
     emit: Emit,
 ) -> Result<RecordingSessionInfo, CommandError> {
-    recorder.begin()?;
+    start_reserved(recorder.reserve()?, settings, title, emit).await
+}
+
+/// Start the session in a slot reserved by [`reserve_for_recording`]. The
+/// slot is freed again on a failed start.
+pub async fn start_reserved(
+    mut reservation: Reservation<'_>,
+    settings: Settings,
+    title: Option<String>,
+    emit: Emit,
+) -> Result<RecordingSessionInfo, CommandError> {
+    let recorder = reservation.recorder;
     let title = title_or_default(title.as_deref());
     let factory = Arc::clone(&recorder.factory);
     let started = tokio::task::spawn_blocking(move || start_blocking(&*factory, &settings, &title))
         .await
         .map_err(|error| CommandError::task_failed(error.to_string()));
+    // Dropping the reservation on an error frees the slot.
     let started = match started {
         Ok(Ok(started)) => started,
-        Ok(Err(error)) => {
-            recorder.abort_start();
-            return Err(error.into());
-        }
-        Err(error) => {
-            recorder.abort_start();
-            return Err(error);
-        }
+        Ok(Err(error)) => return Err(error.into()),
+        Err(error) => return Err(error),
     };
     let info = session_info(&started.session.status(), &started.meta);
     let (nudge, wake) = mpsc::channel();
@@ -723,6 +802,7 @@ pub async fn start_session(
         meta: started.meta,
         _events: nudge,
     });
+    reservation.armed = false;
     Ok(info)
 }
 

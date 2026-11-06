@@ -23,26 +23,15 @@ use crate::command_error::CommandError;
 use crate::events::{event, EmitEvent};
 use crate::plain_file_jobs::PlainInput;
 use crate::recording_session::{
-    check_permission, delete_recording_in, folder_info_on_disk, recover_pending, start_session,
-    state_is_live, stop_session, Emit, RecordingFinished, RecordingFolderInfo,
-    RecordingSessionInfo, RecoveryNote, SharedRecorder,
+    check_permission, delete_recording_in, folder_info_on_disk, recover_pending,
+    reserve_for_recording, start_reserved, state_is_live, stop_session, Emit, RecordingFinished,
+    RecordingFolderInfo, RecordingSessionInfo, RecoveryNote, SharedRecorder,
 };
 use crate::trash::recording_folder;
 
 /// The settings the recorder reads, from the controller's copy.
 fn recorder_settings(controller: &SharedController) -> Settings {
     lock_controller(controller).settings().clone()
-}
-
-/// Sagascript does not record a session while it dictates or transcribes.
-fn ensure_not_dictating(controller: &SharedController) -> Result<(), CommandError> {
-    if lock_controller(controller).state().is_busy() {
-        return Err(CommandError::Busy(
-            "Cannot start a recording while Sagascript is dictating or transcribing. Wait for it to finish."
-                .into(),
-        ));
-    }
-    Ok(())
 }
 
 /// The microphone permission, asked for if the user has not answered yet: the
@@ -80,9 +69,11 @@ pub async fn start_recording_session(
     recorder: State<'_, SharedRecorder>,
     title: Option<String>,
 ) -> Result<RecordingSessionInfo, CommandError> {
-    ensure_not_dictating(&controller)?;
+    // Reserve the microphone first, then wait for the permission prompt:
+    // dictation cannot start in the meantime, and the reservation frees the
+    // slot on a denial, an error or a cancelled command.
+    let (reservation, settings) = reserve_for_recording(&controller, &recorder)?;
     ensure_microphone_permission().await?;
-    let settings = recorder_settings(&controller);
     // The tray shows the recording while the session is live: redraw it when
     // the session stops being live by itself (the device went away, the disk
     // filled), not on every level update.
@@ -95,7 +86,7 @@ pub async fn start_recording_session(
         }
         let _ = emitter.emit_event(event::RECORDING_SESSION_CHANGED, info);
     });
-    let started = start_session(&recorder, settings, title, emit).await;
+    let started = start_reserved(reservation, settings, title, emit).await;
     // A failed start frees the slot; a successful one now records.
     refresh_tray(&app);
     let started = started?;
