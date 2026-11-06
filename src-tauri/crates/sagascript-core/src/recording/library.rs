@@ -105,6 +105,17 @@ pub fn read_recording(
     Ok((dir, manifest))
 }
 
+/// The summary of the recording in `folder` (a folder [`read_recording`] or a
+/// session returned), for a caller that holds the folder rather than the list.
+pub fn summarize_folder(folder: &Path) -> Result<RecordingSummary, RecordingError> {
+    let name = folder
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .ok_or_else(|| invalid("a recording folder has a name"))?;
+    let manifest = load_manifest(folder)?;
+    Ok(summarize(&name, folder, &manifest))
+}
+
 /// Remove a recording folder and everything in it. Refuses a folder that is
 /// not directly under `root`, has no `recording.json`, or is owned by a live
 /// recording ([`RecordingError::Locked`]). The app moves folders to the trash

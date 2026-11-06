@@ -91,6 +91,15 @@ fn a_summary_describes_the_recording() {
 }
 
 #[test]
+fn a_folder_can_be_summarised_without_listing_the_root() {
+    let (_temp, store) = store();
+    let made = mic(&store, "Solo", "2026-11-05T10:00:00.000+01:00");
+    let listed = list_recordings(store.root());
+    assert_eq!(summarize_folder(&made.folder).unwrap(), listed[0]);
+    assert!(summarize_folder(&made.folder.join("missing")).is_err());
+}
+
+#[test]
 fn gaps_and_an_early_ending_show_in_the_summary() {
     let (_temp, store) = store();
     let made = record(
