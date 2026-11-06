@@ -10,7 +10,8 @@
 //! Then, for example, `flac -t *.flac`, `ffmpeg -v error -i x.flac -f null -`,
 //! and `afconvert -f WAVE -d LEI24 x.flac x.wav`. `torn.flac` is the file a
 //! killed process left (cut mid-frame): `flac -t` must reject it and
-//! `recovered.flac`, made from it by recovery, must pass.
+//! `recovered.flac`, made from it by recovery, must pass, and so must
+//! `recovered-damaged-header.flac` (a torn metadata header, rebuilt).
 
 use std::path::Path;
 
@@ -166,9 +167,41 @@ fn write_files_for_the_manual_checks() {
     let store_dir = dir.join("store");
     std::fs::create_dir(&store_dir).unwrap();
     let store = RecordingStore::new(&store_dir);
+    let folder = killed_recording(&store, "Manual check");
+    let track = folder.join("mic.flac");
+    let torn = std::fs::metadata(&track).unwrap().len() - 1234;
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&track)
+        .unwrap()
+        .set_len(torn)
+        .unwrap();
+    std::fs::copy(&track, dir.join("torn.flac")).unwrap();
+    recover_folder(&folder).unwrap();
+    std::fs::copy(&track, dir.join("recovered.flac")).unwrap();
+    std::fs::copy(folder.join("mic.tail"), dir.join("recovered.tail")).unwrap();
+
+    // A killed recording whose metadata header was torn (the padding block
+    // claims 16 MiB): recovery rebuilds the header and keeps every frame, so
+    // `recovered-damaged-header.flac` must pass `flac -t`, ffmpeg and CoreAudio
+    // and hold all 12 blocks (49 152 frames; the cut `recovered.flac` has 11).
+    let folder = killed_recording(&store, "Damaged header");
+    let track = folder.join("mic.flac");
+    let mut bytes = std::fs::read(&track).unwrap();
+    bytes[42..46].copy_from_slice(&[0x01, 0xFF, 0xFF, 0xFF]);
+    std::fs::write(&track, &bytes).unwrap();
+    let recovered = recover_folder(&folder).unwrap();
+    assert!(recovered.tracks[0].header_rebuilt);
+    assert_eq!(recovered.tracks[0].tail_bytes, 0);
+    std::fs::copy(&track, dir.join("recovered-damaged-header.flac")).unwrap();
+    println!("wrote the files to {}", dir.display());
+}
+
+/// A 12.07-block mono recording left behind by a process that never finished.
+fn killed_recording(store: &RecordingStore, title: &str) -> std::path::PathBuf {
     let mut writer = store
         .create(NewRecording {
-            title: "Manual check".into(),
+            title: title.into(),
             started_at: "2026-11-06T09:30:00.000+01:00".into(),
             client: Client {
                 kind: "desktop".into(),
@@ -195,17 +228,5 @@ fn write_files_for_the_manual_checks() {
         .unwrap();
     let folder = writer.folder().to_path_buf();
     drop(writer);
-    let track = folder.join("mic.flac");
-    let torn = std::fs::metadata(&track).unwrap().len() - 1234;
-    std::fs::OpenOptions::new()
-        .write(true)
-        .open(&track)
-        .unwrap()
-        .set_len(torn)
-        .unwrap();
-    std::fs::copy(&track, dir.join("torn.flac")).unwrap();
-    recover_folder(&folder).unwrap();
-    std::fs::copy(&track, dir.join("recovered.flac")).unwrap();
-    std::fs::copy(folder.join("mic.tail"), dir.join("recovered.tail")).unwrap();
-    println!("wrote the files to {}", dir.display());
+    folder
 }
