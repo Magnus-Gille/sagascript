@@ -260,6 +260,13 @@
     return recording.title.trim() || recording.folder_name;
   }
 
+  function metaOf(recording: RecordingSummary): string {
+    const gaps = gapText(recording.gap_count, recording.gap_seconds);
+    return [formatStartedAt(recording.started_at), formatDuration(recording.duration_seconds), formatBytes(recording.bytes), gaps]
+      .filter(Boolean)
+      .join(" · ");
+  }
+
   async function run(recording: RecordingSummary, action: string, work: () => Promise<void>) {
     if (busy[recording.folder_name]) return;
     actionError = null;
@@ -561,12 +568,7 @@
               {#if recording.recovered}<span class="badge">Recovered</span>{/if}
               {#if recording.needs_recovery}<span class="badge warn">Interrupted</span>{/if}
             </div>
-            <div class="meta">
-              {formatStartedAt(recording.started_at)} · {formatDuration(recording.duration_seconds)} · {formatBytes(
-                recording.bytes,
-              )}{#if gapText(recording.gap_count, recording.gap_seconds)}
-                · {gapText(recording.gap_count, recording.gap_seconds)}{/if}
-            </div>
+            <div class="meta">{metaOf(recording)}</div>
             {@render actions(recording)}
           </li>
         {/each}
