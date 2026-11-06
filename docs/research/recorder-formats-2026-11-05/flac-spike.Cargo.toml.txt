@@ -1,0 +1,13 @@
+[package]
+name = "flacbench"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+flacenc = "0.5.1"
+hound = "3.5.1"
+claxon = "0.4"
+
+[profile.release]
+debug = false
