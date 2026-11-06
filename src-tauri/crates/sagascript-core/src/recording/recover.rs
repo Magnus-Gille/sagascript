@@ -17,10 +17,24 @@
 //!    it;
 //! 3. decodes the kept frames to recompute the MD5 of the PCM, hashes their
 //!    bytes for `audio_sha256`, and rewrites STREAMINFO and the SEEKTABLE in
-//!    place;
+//!    place. The audio always starts at the same offset ([`HEADER_LEN`]), so a
+//!    header that does not read (a torn rewrite at the end of a recording,
+//!    damage) is rebuilt from the manifest and the frames, never taken for
+//!    "the file ends in its header": only a file *shorter* than a header
+//!    has never held audio. A file that cannot be shown to be this track's
+//!    (no readable stream parameters and no valid first frame) is refused
+//!    and left as it is;
 //! 4. rebuilds the gaps and clock anchors from the journal, dropping what
 //!    refers to audio that was not kept (a gap that straddles the end is
 //!    shortened).
+//!
+//! The folder comes from anywhere, so nothing in it is trusted to be what its
+//! name says: the folder itself must not be a link, and the manifest, the
+//! lock, the journal and every track file are opened with
+//! [`open_member`](super::io::open_member), which refuses a link (never
+//! follows it), a directory, a pipe or a device. The track file named by the
+//! manifest can therefore never make recovery truncate or rewrite a file
+//! outside the folder.
 //!
 //! The manifest is then written with `state: complete`, `recovered: true` and
 //! `ended_reason: interrupted`. Recovery of a recovered folder finds nothing
@@ -34,21 +48,21 @@ use std::path::{Path, PathBuf};
 use super::error::RecordingError;
 use super::flac::decode::Md5Calculator;
 use super::flac::format::{
-    build_header, parse_header, HeaderError, ParsedHeader, SeekIndex, StreamParams, StreamTotals,
-    BLOCK_SIZE, HEADER_LEN, RESERVED_LEN,
+    build_header, parse_header, parse_prefix, HeaderError, ParsedHeader, SeekIndex, StreamParams,
+    StreamTotals, BLOCK_SIZE, HEADER_LEN, RESERVED_LEN,
 };
-use super::flac::scan::scan_frames;
-use super::io::{create_new_private, open_read_write, replace_file_durably, sync_dir, sync_file};
+use super::flac::scan::{scan_frames, walk_frame, Walk};
+use super::io::{create_new_private, open_member, replace_file_durably, sync_dir, sync_file, Open};
 use super::journal::{journal_file_name, read_journal};
 use super::manifest::{
-    is_plain_file_name, parse_manifest, serialize_manifest, Clock, EndedReason, Gap, Manifest,
-    RecordingState, Track, MANIFEST_FILE,
+    is_plain_file_name, manifest_integrity, parse_manifest, serialize_manifest_sealed, Clock,
+    EndedReason, Gap, Integrity, Manifest, RecordingState, Track, MANIFEST_FILE,
 };
-use super::store::{lock_folder, read_bounded, RecordingStore, LOCK_FILE, MAX_MANIFEST_BYTES};
+use super::store::{
+    lock_folder, read_bounded, RecordingStore, LOCK_FILE, MAX_MANIFEST_BYTES, START_COPY_FILE,
+};
 use crate::hash::StreamingSha256;
 
-/// How much of a track file is read to find its header.
-const HEADER_READ_LIMIT: usize = 1024 * 1024;
 /// How many `.tail` files of one track are tried.
 const MAX_TAIL_FILES: usize = 1000;
 
@@ -67,6 +81,9 @@ pub struct TrackRecovery {
     pub gaps_dropped: usize,
     /// Journal lines that were torn or not understood.
     pub journal_lines_ignored: usize,
+    /// The track's metadata header was missing or damaged and was written
+    /// again from the manifest and the frames.
+    pub header_rebuilt: bool,
 }
 
 /// A recording that recovery finished.
@@ -113,7 +130,9 @@ impl RecordingStore {
         let mut folders: Vec<(String, PathBuf)> = entries
             .flatten()
             .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
-            .filter(|entry| entry.path().join(MANIFEST_FILE).is_file())
+            // Whatever is named like the manifest makes the folder a candidate;
+            // `recover_folder` then reports a link or a directory there.
+            .filter(|entry| fs::symlink_metadata(entry.path().join(MANIFEST_FILE)).is_ok())
             .map(|entry| {
                 (
                     entry.file_name().to_string_lossy().into_owned(),
@@ -161,7 +180,7 @@ pub fn recover_folder(dir: &Path) -> Result<RecoveredRecording, RecordingError> 
     }
     let manifest_path = dir.join(MANIFEST_FILE);
     // A finished recording needs no lock and no write access.
-    let early = parse_manifest(&read_bounded(&manifest_path, MAX_MANIFEST_BYTES)?)?;
+    let early = read_manifest_for_recovery(dir)?;
     if early.state != RecordingState::Recording {
         return Err(RecordingError::NotRecording);
     }
@@ -174,7 +193,7 @@ pub fn recover_folder(dir: &Path) -> Result<RecoveredRecording, RecordingError> 
         result => result,
     }?;
     // Under the lock: the recording may have finished since the first look.
-    let manifest = parse_manifest(&read_bounded(&manifest_path, MAX_MANIFEST_BYTES)?)?;
+    let manifest = read_manifest_for_recovery(dir)?;
     if manifest.state != RecordingState::Recording {
         return Err(RecordingError::NotRecording);
     }
@@ -188,8 +207,9 @@ pub fn recover_folder(dir: &Path) -> Result<RecoveredRecording, RecordingError> 
     }
     recovered.state = RecordingState::Complete;
     recovered.recovered = true;
-    replace_file_durably(&manifest_path, &serialize_manifest(&recovered)?)
+    replace_file_durably(&manifest_path, &serialize_manifest_sealed(&recovered)?)
         .map_err(|error| RecordingError::io("write the recording manifest", &error))?;
+    let _ = fs::remove_file(dir.join(START_COPY_FILE));
     if let Err(error) = fs::remove_file(dir.join(LOCK_FILE)) {
         tracing::warn!(kind = ?error.kind(), "could not remove a recording lock file");
     }
@@ -198,6 +218,37 @@ pub fn recover_folder(dir: &Path) -> Result<RecoveredRecording, RecordingError> 
         manifest: recovered,
         tracks: reports,
     })
+}
+
+/// Read `recording.json`; if it cannot be trusted (it is not a manifest, or it
+/// is sealed and the seal fails: a rewrite in place that a crash cut short),
+/// read the copy of the start manifest instead. That copy says `recording` and
+/// describes the tracks; everything else recovery needs it takes from the
+/// track files and journals.
+fn read_manifest_for_recovery(dir: &Path) -> Result<Manifest, RecordingError> {
+    let bytes = read_bounded(&dir.join(MANIFEST_FILE), MAX_MANIFEST_BYTES)?;
+    let primary = match manifest_integrity(&bytes) {
+        Integrity::Invalid => Err(RecordingError::ManifestInvalid {
+            reason: "the manifest does not match its seal",
+        }),
+        _ => parse_manifest(&bytes),
+    };
+    let Err(error @ RecordingError::ManifestInvalid { .. }) = primary else {
+        return primary;
+    };
+    let copy = read_bounded(&dir.join(START_COPY_FILE), MAX_MANIFEST_BYTES);
+    match copy {
+        Ok(bytes) if manifest_integrity(&bytes) != Integrity::Invalid => {
+            match parse_manifest(&bytes) {
+                Ok(manifest) => {
+                    tracing::warn!("recovering from the start copy of the manifest");
+                    Ok(manifest)
+                }
+                Err(_) => Err(error),
+            }
+        }
+        _ => Err(error),
+    }
 }
 
 /// What recovery does with the bytes after the last valid frame.
@@ -227,39 +278,39 @@ pub(crate) fn recover_track(
         .map_err(|_| RecordingError::CorruptTrack {
             reason: "the manifest describes a format this store does not write",
         })?;
+    // The journal first: if it cannot be read in full (too many events, an I/O
+    // error) nothing of the track has been touched yet and a retry starts clean.
+    let journal = read_journal(&dir.join(journal_file_name(&track.id)))?;
     let path = dir.join(&track.file);
     let mut tail_bytes = 0u64;
     let mut tail_file = None;
 
-    let mut file = match open_read_write(&path) {
+    let mut file = match open_member(&path, Open::ReadWrite, "open a track file") {
         Ok(file) => file,
         // The process died before the track file existed: nothing was lost.
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+        Err(RecordingError::Io {
+            kind: std::io::ErrorKind::NotFound,
+            ..
+        }) => {
             let file = create_new_private(&path)
                 .map_err(|error| RecordingError::io("create a track file", &error))?;
             sync_dir(dir)
                 .map_err(|error| RecordingError::io("sync the recording folder", &error))?;
             file
         }
-        Err(error) => return Err(RecordingError::io("open a track file", &error)),
+        Err(error) => return Err(error),
     };
     let length = file
         .metadata()
         .map_err(|error| RecordingError::io("inspect a track file", &error))?
         .len();
 
-    let header = match load_header(&mut file, length)? {
-        Some(header) => {
-            if header.params != params {
-                return Err(RecordingError::CorruptTrack {
-                    reason: "the track file does not match the manifest",
-                });
-            }
-            header
-        }
-        None => {
-            // The process died while the header was being written: keep any
-            // bytes as a tail and start the file over.
+    let mut header_rebuilt = false;
+    let (header, length) = match classify_start(&mut file, length, params)? {
+        TrackStart::Intact(header) => (header, length),
+        TrackStart::Unfinished => {
+            // The process died while the file was being created: whatever
+            // bytes there are go to a tail and the file starts over.
             if length > 0 {
                 let (name, bytes) = save_tail(dir, &track.id, &mut file, 0, length)?;
                 tail_file = Some(name);
@@ -273,15 +324,19 @@ pub(crate) fn recover_track(
             file.write_all(&fresh)
                 .map_err(|error| RecordingError::io("write a track header", &error))?;
             sync_file(&file).map_err(|error| RecordingError::io("sync a track file", &error))?;
-            parse_header(&fresh).map_err(|_| RecordingError::CorruptTrack {
-                reason: "the track header could not be rebuilt",
-            })?
+            header_rebuilt = true;
+            (fresh_header(params)?, HEADER_LEN as u64)
         }
-    };
-    let length = if tail_file.is_some() {
-        HEADER_LEN as u64
-    } else {
-        length
+        TrackStart::Damaged => {
+            // The metadata is unreadable but the file is ours, so the audio
+            // starts where the layout says it does. The header is rebuilt in
+            // place at the end, from the manifest and the frames; nothing
+            // about the audio depends on what the old one said. (A recovery
+            // interrupted before that finds the same damage and does the
+            // same.)
+            header_rebuilt = true;
+            (fresh_header(params)?, length)
+        }
     };
 
     // Walk the frames, keeping the valid ones.
@@ -349,8 +404,10 @@ pub(crate) fn recover_track(
     }
 
     // The journal: the clock and the gaps, limited to the audio that is kept.
-    let journal = read_journal(&dir.join(journal_file_name(&track.id)))?;
     let frames = summary.samples;
+    // Only events inside the kept audio count: an event past it counted
+    // samples that were lost with the end of the file.
+    let clipped = journal.clipped_within(frames);
     let mut gaps = Vec::new();
     let mut gaps_dropped = 0;
     for gap in journal.gaps {
@@ -379,7 +436,7 @@ pub(crate) fn recover_track(
     updated.clock = clock;
     updated.gaps = gaps;
     updated.ended_reason = Some(EndedReason::Interrupted);
-    updated.clipped_samples = journal.clipped.max(track.clipped_samples);
+    updated.clipped_samples = clipped.max(track.clipped_samples);
     let report = TrackRecovery {
         id: track.id.clone(),
         frames_kept: frames,
@@ -388,32 +445,101 @@ pub(crate) fn recover_track(
         gaps_kept: updated.gaps.len(),
         gaps_dropped,
         journal_lines_ignored: journal.ignored_lines,
+        header_rebuilt,
     };
     Ok((updated, report))
 }
 
-/// The header at the start of a track file: `None` when the file is empty or
-/// ends inside its header (the process died while creating it).
-fn load_header(file: &mut File, length: u64) -> Result<Option<ParsedHeader>, RecordingError> {
-    let want = (length as usize).min(HEADER_READ_LIMIT);
-    let mut bytes = vec![0u8; want];
-    file.seek(SeekFrom::Start(0))
-        .map_err(|error| RecordingError::io("read a track file", &error))?;
-    file.read_exact(&mut bytes)
-        .map_err(|error| RecordingError::io("read a track file", &error))?;
-    if bytes.is_empty() {
-        return Ok(None);
+/// What the first bytes of a track file say about it.
+enum TrackStart {
+    /// A header of the layout this store writes, for the manifest's format.
+    Intact(ParsedHeader),
+    /// The file is empty or ends inside the header it was created with: it
+    /// never held a frame.
+    Unfinished,
+    /// The file is this track's, but its metadata header does not read: a torn
+    /// rewrite at the end of a recording or of an earlier recovery, or damage.
+    /// The audio starts at [`HEADER_LEN`], where this store always puts it.
+    Damaged,
+}
+
+/// How much of a file is looked at to find the first frame: more than any
+/// frame this store writes (4096 stereo 24-bit samples stored verbatim).
+const FIRST_FRAME_PROBE_BYTES: usize = 64 * 1024;
+
+/// Decide what a track file is, reading at most [`HEADER_LEN`] bytes of it
+/// and one frame. A header that does not parse is **not** taken to mean "the
+/// file ends inside its header": that is true only of a file shorter than a
+/// header. A file at least that long has had its header written whole, and an
+/// unreadable one is damage (a torn in-place rewrite, say) in front of audio
+/// that is still there. Anything that cannot be shown to be this track's is
+/// refused and left exactly as it is.
+fn classify_start(
+    file: &mut File,
+    length: u64,
+    params: StreamParams,
+) -> Result<TrackStart, RecordingError> {
+    if length == 0 {
+        return Ok(TrackStart::Unfinished);
     }
+    let read_error = |error: std::io::Error| RecordingError::io("read a track file", &error);
+    let mut bytes = vec![0u8; length.min(HEADER_LEN as u64) as usize];
+    file.seek(SeekFrom::Start(0)).map_err(read_error)?;
+    file.read_exact(&mut bytes).map_err(read_error)?;
+
+    let refuse = |reason| Err(RecordingError::CorruptTrack { reason });
+    let mismatch = "the track file does not match the manifest";
+    // The stream parameters are the first bytes ever written and the same in
+    // every version of the header: if they are readable, they must be right.
+    let prefix = parse_prefix(&bytes);
+    if prefix.is_some_and(|prefix| prefix != params) {
+        return refuse(mismatch);
+    }
+    let whole_header = length >= HEADER_LEN as u64;
     match parse_header(&bytes) {
-        Ok(header) => Ok(Some(header)),
-        Err(HeaderError::Truncated) if (bytes.len() as u64) == length => Ok(None),
-        Err(HeaderError::Truncated) => Err(RecordingError::CorruptTrack {
-            reason: "the track header is larger than this store writes",
-        }),
-        Err(HeaderError::NotFlac) => Err(RecordingError::CorruptTrack {
-            reason: "the track file is not a FLAC file written by this store",
-        }),
+        Ok(header) if header.params != params => refuse(mismatch),
+        Ok(header) if header.first_frame == HEADER_LEN => Ok(TrackStart::Intact(header)),
+        // A well-formed header of another layout is not damage: only audio
+        // where this store puts it shows that the file is ours.
+        Ok(_) if first_frame_is_valid(file, length, params)? => Ok(TrackStart::Damaged),
+        Ok(_) => refuse("the track file does not have the layout this store writes"),
+        Err(HeaderError::Truncated) if !whole_header => Ok(TrackStart::Unfinished),
+        Err(_) if !whole_header => {
+            refuse("the track file is not a FLAC file written by this store")
+        }
+        // A whole header's worth of bytes that does not read.
+        Err(_) if prefix.is_some() || first_frame_is_valid(file, length, params)? => {
+            Ok(TrackStart::Damaged)
+        }
+        Err(_) => refuse("the track file is not a FLAC file written by this store"),
     }
+}
+
+/// Is a valid frame number 0 of this stream at [`HEADER_LEN`]?
+fn first_frame_is_valid(
+    file: &mut File,
+    length: u64,
+    params: StreamParams,
+) -> Result<bool, RecordingError> {
+    let available = length.saturating_sub(HEADER_LEN as u64);
+    let mut bytes = vec![0u8; available.min(FIRST_FRAME_PROBE_BYTES as u64) as usize];
+    if bytes.is_empty() {
+        return Ok(false);
+    }
+    let read_error = |error: std::io::Error| RecordingError::io("read a track file", &error);
+    file.seek(SeekFrom::Start(HEADER_LEN as u64))
+        .map_err(read_error)?;
+    file.read_exact(&mut bytes).map_err(read_error)?;
+    Ok(matches!(walk_frame(&bytes, params, 0), Walk::Frame(_)))
+}
+
+/// The placeholder header for `params`, parsed: its STREAMINFO is what the
+/// MD5 decoder is configured with.
+fn fresh_header(params: StreamParams) -> Result<ParsedHeader, RecordingError> {
+    let fresh = build_header(params, None, &[], RESERVED_LEN)?;
+    parse_header(&fresh).map_err(|_| RecordingError::CorruptTrack {
+        reason: "the track header could not be rebuilt",
+    })
 }
 
 /// Copy `from..to` of `file` to a new `<track>.tail` file (fsynced) and return

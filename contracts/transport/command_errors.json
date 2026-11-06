@@ -109,6 +109,11 @@
     "message": "could not create the recording folder: NotFound (os error 2)",
     "retryable": false
   },
+  "recording_journal_too_large": {
+    "code": "recording_journal_too_large",
+    "message": "the track journal has too many events to recover from",
+    "retryable": false
+  },
   "recording_locked": {
     "code": "recording_locked",
     "message": "the recording is in use by another process",
@@ -132,6 +137,11 @@
   "recording_not_recording": {
     "code": "recording_not_recording",
     "message": "the recording is not in progress",
+    "retryable": false
+  },
+  "recording_not_regular_file": {
+    "code": "recording_not_regular_file",
+    "message": "a recording file is a link or not a regular file; could not open a track file",
     "retryable": false
   },
   "recording_permission_denied": {

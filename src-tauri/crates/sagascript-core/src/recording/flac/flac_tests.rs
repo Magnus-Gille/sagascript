@@ -568,3 +568,252 @@ impl TrackSink for DiscardSink {
         Ok(())
     }
 }
+
+// ---- the order of writes and syncs at finish -------------------------------------
+
+/// What a [`ScriptedSink`] saw, in order.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Op {
+    Write { at: u64, len: usize },
+    Sync,
+}
+
+/// An in-memory track that logs every write and sync and can fail the n-th
+/// sync, the way a disk does. The bytes and the log are shared so a test can
+/// look at them after the encoder (and with it the sink) is gone.
+#[derive(Clone)]
+struct ScriptedSink {
+    data: std::sync::Arc<std::sync::Mutex<Cursor<Vec<u8>>>>,
+    ops: std::sync::Arc<std::sync::Mutex<Vec<Op>>>,
+    syncs: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    /// Fail the sync with this number (counted from 0 after `arm`).
+    fail_sync: std::sync::Arc<std::sync::Mutex<Option<usize>>>,
+}
+
+impl ScriptedSink {
+    fn new() -> Self {
+        Self {
+            data: Default::default(),
+            ops: Default::default(),
+            syncs: Default::default(),
+            fail_sync: Default::default(),
+        }
+    }
+
+    /// Forget what happened so far and fail the `n`-th sync from now on.
+    fn arm(&self, fail_sync: Option<usize>) {
+        self.ops.lock().unwrap().clear();
+        self.syncs.store(0, std::sync::atomic::Ordering::SeqCst);
+        *self.fail_sync.lock().unwrap() = fail_sync;
+    }
+
+    fn ops(&self) -> Vec<Op> {
+        self.ops.lock().unwrap().clone()
+    }
+
+    fn bytes(&self) -> Vec<u8> {
+        self.data.lock().unwrap().get_ref().clone()
+    }
+}
+
+impl io::Write for ScriptedSink {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let mut data = self.data.lock().unwrap();
+        let at = data.position();
+        let written = data.write(buf)?;
+        self.ops
+            .lock()
+            .unwrap()
+            .push(Op::Write { at, len: written });
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+impl io::Seek for ScriptedSink {
+    fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
+        io::Seek::seek(&mut *self.data.lock().unwrap(), position)
+    }
+}
+
+impl TrackSink for ScriptedSink {
+    fn sync_data(&mut self) -> io::Result<()> {
+        let number = self.syncs.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.ops.lock().unwrap().push(Op::Sync);
+        if *self.fail_sync.lock().unwrap() == Some(number) {
+            return Err(io::Error::from(io::ErrorKind::StorageFull));
+        }
+        Ok(())
+    }
+}
+
+/// An encoder on a [`ScriptedSink`] that has taken three blocks and a bit
+/// (so the last frame is still waiting when `finish` starts).
+fn encoder_on_scripted_sink() -> (FlacEncoder<ScriptedSink>, ScriptedSink, Vec<i32>) {
+    let sink = ScriptedSink::new();
+    let mut encoder = FlacEncoder::new(sink.clone(), 48_000, 1, 24).unwrap();
+    let pcm = at_bits(&speechlike(3 * BLOCK_SIZE + 700, 41), 24);
+    encoder.push_pcm(&pcm).unwrap();
+    (encoder, sink, pcm)
+}
+
+#[test]
+fn finish_syncs_the_frames_before_the_header_is_rewritten_and_the_header_after() {
+    let (encoder, sink, _) = encoder_on_scripted_sink();
+    sink.arm(None);
+    encoder.finish_into_parts().unwrap();
+
+    let ops = sink.ops();
+    let rewrite = ops
+        .iter()
+        .position(|op| matches!(op, Op::Write { at: 0, .. }))
+        .expect("the header is rewritten at offset 0");
+    let last_frame_write = ops[..rewrite]
+        .iter()
+        .rposition(|op| matches!(op, Op::Write { at, .. } if *at >= HEADER_LEN as u64))
+        .expect("the last frame is written before the header");
+    assert!(
+        ops[last_frame_write..rewrite].contains(&Op::Sync),
+        "the frames are durable before the metadata changes: {ops:?}"
+    );
+    assert!(
+        ops[rewrite..].contains(&Op::Sync),
+        "the new metadata is synced too: {ops:?}"
+    );
+    assert_eq!(
+        ops.iter().filter(|op| **op == Op::Sync).count(),
+        2,
+        "one sync on each side of the rewrite: {ops:?}"
+    );
+}
+
+#[test]
+fn a_failed_sync_of_the_frames_leaves_the_placeholder_header_untouched() {
+    let (encoder, sink, pcm) = encoder_on_scripted_sink();
+    let placeholder = sink.bytes()[..HEADER_LEN].to_vec();
+    sink.arm(Some(0));
+    let error = encoder.finish_into_parts().err().expect("finish fails");
+    assert!(error.is_disk_full(), "{error:?}");
+
+    let bytes = sink.bytes();
+    assert!(
+        bytes[..HEADER_LEN] == placeholder,
+        "the metadata was not rewritten over frames that may not be durable"
+    );
+    assert!(
+        !sink
+            .ops()
+            .iter()
+            .any(|op| matches!(op, Op::Write { at: 0, .. })),
+        "no write at offset 0"
+    );
+    // The frames themselves reached the sink, whole: recovery can use them.
+    let mut kept = 0;
+    scan_frames(
+        &mut Cursor::new(&bytes[HEADER_LEN..]),
+        HEADER_LEN as u64,
+        params(48_000, 1, 24),
+        &mut |_| {
+            kept += 1;
+            true
+        },
+    )
+    .unwrap();
+    assert_eq!(kept, 4, "three blocks and the last short one");
+    let _ = pcm;
+}
+
+#[test]
+fn a_failed_sync_after_the_rewrite_is_reported_and_the_header_is_the_new_one() {
+    let (encoder, sink, _) = encoder_on_scripted_sink();
+    sink.arm(Some(1));
+    let error = encoder.finish_into_parts().err().expect("finish fails");
+    assert!(error.is_disk_full(), "{error:?}");
+    let header = parse_header(&sink.bytes()).expect("a header");
+    assert_eq!(header.total_samples, 3 * BLOCK_SIZE as u64 + 700);
+}
+
+// ---- gaps and pushes that FLAC cannot count ------------------------------------
+
+use super::format::MAX_TOTAL_SAMPLES;
+
+/// Everything a refused push must leave alone.
+fn state_of(encoder: &FlacEncoder<Cursor<Vec<u8>>>) -> (u64, u64, usize, u64) {
+    (
+        encoder.frames_pushed(),
+        encoder.clipped_samples(),
+        encoder.pending.len(),
+        encoder.next_frame,
+    )
+}
+
+#[test]
+fn a_gap_whose_sample_count_overflows_is_refused_without_a_panic_or_a_change() {
+    // 2^63 frames of stereo is 2^64 samples: the product wraps to zero in a
+    // release build and panics in a debug build.
+    for (channels, frames) in [
+        (2u8, 1u64 << 63),
+        (2, u64::MAX),
+        (1, u64::MAX),
+        (2, (1 << 63) + 7),
+    ] {
+        let mut encoder = encoder(48_000, channels, 24);
+        encoder
+            .push_pcm(&vec![1; 5 * usize::from(channels)])
+            .unwrap();
+        let before = state_of(&encoder);
+        let result = encoder.push_silence(frames);
+        assert!(
+            matches!(result, Err(RecordingError::UnsupportedFormat { .. })),
+            "{channels} ch, {frames} frames: {result:?}"
+        );
+        assert_eq!(state_of(&encoder), before, "{channels} ch, {frames} frames");
+        // The encoder still works.
+        encoder.push_silence(10).unwrap();
+        assert_eq!(encoder.frames_pushed(), 15);
+    }
+}
+
+#[test]
+fn nothing_past_the_36_bit_sample_count_of_streaminfo_is_accepted() {
+    let mut encoder = encoder(48_000, 2, 24);
+    encoder.frames_pushed = MAX_TOTAL_SAMPLES - 5;
+    // Exactly up to the limit is fine ...
+    encoder.push_pcm(&[3; 10]).unwrap();
+    assert_eq!(encoder.frames_pushed(), MAX_TOTAL_SAMPLES);
+    // ... and one frame more is refused on every path, leaving no trace.
+    let before = state_of(&encoder);
+    for result in [
+        encoder.push_pcm(&[1, 2]),
+        encoder.push(&[2.0, 0.5]),
+        encoder.push_silence(1),
+    ] {
+        assert!(
+            matches!(result, Err(RecordingError::UnsupportedFormat { .. })),
+            "{result:?}"
+        );
+        assert_eq!(state_of(&encoder), before);
+    }
+    // A request that is too long is refused whole, not cut short.
+    let mut other = self::encoder(48_000, 1, 24);
+    other.frames_pushed = MAX_TOTAL_SAMPLES - 5;
+    let before = state_of(&other);
+    assert!(other.push_silence(6).is_err());
+    assert_eq!(state_of(&other), before);
+    other.push_silence(5).unwrap();
+    assert_eq!(other.frames_pushed(), MAX_TOTAL_SAMPLES);
+    // The track can still be ended.
+    assert!(other.finish_into_parts().is_ok());
+}
+
+#[test]
+fn the_room_check_agrees_with_the_pushes() {
+    let mut encoder = encoder(48_000, 1, 24);
+    encoder.frames_pushed = MAX_TOTAL_SAMPLES - 1;
+    assert!(encoder.ensure_room(1).is_ok());
+    assert!(encoder.ensure_room(2).is_err());
+    assert!(encoder.ensure_room(u64::MAX).is_err());
+}

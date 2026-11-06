@@ -17,13 +17,13 @@
 //! after the recording finishes.
 
 use std::fs::File;
-use std::io::{Read, Write};
+use std::io::{BufRead, BufReader, ErrorKind, Write};
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
 use super::error::RecordingError;
-use super::io::{create_new_private, sync_file};
+use super::io::{create_new_private, open_member, sync_file, Open};
 use super::manifest::{Gap, GapReason};
 
 /// The journal's file name for a track id.
@@ -31,8 +31,15 @@ pub fn journal_file_name(track_id: &str) -> String {
     format!("{track_id}.events.jsonl")
 }
 
-/// The most a journal is read from: a day of anchors is a few hundred kilobytes.
-const MAX_JOURNAL_BYTES: u64 = 64 * 1024 * 1024;
+/// The longest line that is parsed. Our events are a few hundred bytes; a
+/// longer line is skipped (and counted) without being held in memory.
+const MAX_LINE_BYTES: usize = 64 * 1024;
+/// Anchors and gaps one journal may hold. A manifest carries all of them and
+/// is read back with a size limit, so a journal beyond this cannot be turned
+/// into one: recovery then stops with
+/// [`RecordingError::JournalTooLarge`] instead of finishing with events
+/// missing. A day of anchors is under 10 000.
+pub const MAX_JOURNAL_EVENTS: usize = 100_000;
 
 /// One journal line.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -66,6 +73,9 @@ pub enum JournalEvent {
 /// Appends events to a track's journal.
 pub struct JournalWriter {
     file: File,
+    /// Tests: make the next `sync` fail like a full disk (one shot).
+    #[cfg(test)]
+    fail_next_sync: Option<std::io::ErrorKind>,
 }
 
 impl JournalWriter {
@@ -73,7 +83,17 @@ impl JournalWriter {
     pub fn create(path: &Path) -> Result<Self, RecordingError> {
         let file = create_new_private(path)
             .map_err(|error| RecordingError::io("create a track journal", &error))?;
-        Ok(Self { file })
+        Ok(Self {
+            file,
+            #[cfg(test)]
+            fail_next_sync: None,
+        })
+    }
+
+    /// Tests: the next `sync` fails with `kind`.
+    #[cfg(test)]
+    pub(crate) fn fail_next_sync(&mut self, kind: std::io::ErrorKind) {
+        self.fail_next_sync = Some(kind);
     }
 
     /// Append one event as a single write of a complete line.
@@ -87,6 +107,13 @@ impl JournalWriter {
 
     /// Flush the journal to stable storage.
     pub fn sync(&mut self) -> Result<(), RecordingError> {
+        #[cfg(test)]
+        if let Some(kind) = self.fail_next_sync.take() {
+            return Err(RecordingError::io(
+                "sync a track journal",
+                &std::io::Error::from(kind),
+            ));
+        }
         sync_file(&self.file).map_err(|error| RecordingError::io("sync a track journal", &error))
     }
 }
@@ -99,45 +126,117 @@ pub struct JournalSummary {
     /// `(host_ns, frame_index)`, the start anchor first.
     pub anchors: Vec<(u64, u64)>,
     pub gaps: Vec<Gap>,
-    /// The largest clipped-sample count any event recorded.
-    pub clipped: u64,
-    /// Lines that were torn or not understood.
+    /// `(frame, clipped)` for every anchor and gap: how many samples had been
+    /// clamped before `frame` when the event was written.
+    pub clip_marks: Vec<(u64, u64)>,
+    /// Lines that were torn, too long or not understood.
     pub ignored_lines: usize,
 }
 
-/// Read a journal. A journal that does not exist is an empty summary (a crash
-/// before the first line); other read failures are errors.
-pub fn read_journal(path: &Path) -> Result<JournalSummary, RecordingError> {
-    let mut bytes = Vec::new();
-    match File::open(path) {
-        Ok(file) => {
-            file.take(MAX_JOURNAL_BYTES)
-                .read_to_end(&mut bytes)
-                .map_err(|error| RecordingError::io("read a track journal", &error))?;
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(JournalSummary::default());
-        }
-        Err(error) => return Err(RecordingError::io("open a track journal", &error)),
+impl JournalSummary {
+    /// A lower bound for the samples clamped in the first `frames` frames:
+    /// the largest count recorded by an event that lies inside them. An event
+    /// past `frames` counted audio that is not there (it was lost in a
+    /// crash), so it says nothing about the audio that is.
+    pub fn clipped_within(&self, frames: u64) -> u64 {
+        self.clip_marks
+            .iter()
+            .filter(|(frame, _)| *frame <= frames)
+            .map(|(_, clipped)| *clipped)
+            .max()
+            .unwrap_or(0)
     }
-    Ok(summarize(&bytes))
+}
+
+/// Read a journal. A journal that does not exist is an empty summary (a crash
+/// before the first line); other read failures are errors. The file is read
+/// in a stream with bounded memory per line, to its end, whatever its size;
+/// more events than [`MAX_JOURNAL_EVENTS`] is an error, never a short summary.
+pub fn read_journal(path: &Path) -> Result<JournalSummary, RecordingError> {
+    let file = match open_member(path, Open::Read, "open a track journal") {
+        Ok(file) => file,
+        Err(RecordingError::Io {
+            kind: ErrorKind::NotFound,
+            ..
+        }) => return Ok(JournalSummary::default()),
+        Err(error) => return Err(error),
+    };
+    read_events(BufReader::with_capacity(64 * 1024, file))
 }
 
 /// [`read_journal`] over bytes already in memory.
-pub fn summarize(bytes: &[u8]) -> JournalSummary {
-    let mut summary = JournalSummary::default();
-    let mut rest = bytes;
-    while !rest.is_empty() {
-        let Some(newline) = rest.iter().position(|b| *b == b'\n') else {
-            // No newline: the last write was torn.
-            summary.ignored_lines += 1;
-            break;
+pub fn summarize(bytes: &[u8]) -> Result<JournalSummary, RecordingError> {
+    read_events(bytes)
+}
+
+/// Fold the lines of a journal into a summary.
+fn read_events<R: BufRead>(mut reader: R) -> Result<JournalSummary, RecordingError> {
+    let mut folder = Folder::default();
+    let mut line: Vec<u8> = Vec::new();
+    // The current line has outgrown MAX_LINE_BYTES: the rest of it is skipped.
+    let mut overlong = false;
+    loop {
+        let chunk = match reader.fill_buf() {
+            Ok(chunk) => chunk,
+            Err(error) if error.kind() == ErrorKind::Interrupted => continue,
+            Err(error) => return Err(RecordingError::io("read a track journal", &error)),
         };
-        let line = &rest[..newline];
-        rest = &rest[newline + 1..];
-        if line.iter().all(u8::is_ascii_whitespace) {
-            continue;
+        if chunk.is_empty() {
+            break;
         }
+        let (part, ends_line) = match chunk.iter().position(|b| *b == b'\n') {
+            Some(newline) => (&chunk[..newline], true),
+            None => (chunk, false),
+        };
+        if !overlong {
+            if line.len() + part.len() > MAX_LINE_BYTES {
+                overlong = true;
+                line = Vec::new();
+            } else {
+                line.extend_from_slice(part);
+            }
+        }
+        let used = part.len() + usize::from(ends_line);
+        reader.consume(used);
+        if ends_line {
+            if overlong {
+                folder.summary.ignored_lines += 1;
+            } else {
+                folder.line(&line)?;
+            }
+            line.clear();
+            overlong = false;
+        }
+    }
+    // No newline at the end: the last write was torn.
+    if overlong || !line.is_empty() {
+        folder.summary.ignored_lines += 1;
+    }
+    Ok(folder.summary)
+}
+
+#[derive(Default)]
+struct Folder {
+    summary: JournalSummary,
+    /// Anchors and gaps seen.
+    events: usize,
+}
+
+impl Folder {
+    fn count_event(&mut self) -> Result<(), RecordingError> {
+        self.events += 1;
+        if self.events > MAX_JOURNAL_EVENTS {
+            return Err(RecordingError::JournalTooLarge);
+        }
+        Ok(())
+    }
+
+    /// One complete line, without its newline.
+    fn line(&mut self, line: &[u8]) -> Result<(), RecordingError> {
+        if line.iter().all(u8::is_ascii_whitespace) {
+            return Ok(());
+        }
+        let summary = &mut self.summary;
         match serde_json::from_slice::<JournalEvent>(line) {
             Ok(JournalEvent::Start {
                 domain, host_ns, ..
@@ -152,8 +251,10 @@ pub fn summarize(bytes: &[u8]) -> JournalSummary {
                 frame,
                 clipped,
             }) => {
+                self.count_event()?;
+                let summary = &mut self.summary;
                 summary.anchors.push((host_ns, frame));
-                summary.clipped = summary.clipped.max(clipped);
+                summary.clip_marks.push((frame, clipped));
             }
             Ok(JournalEvent::Gap {
                 at_frame,
@@ -161,13 +262,15 @@ pub fn summarize(bytes: &[u8]) -> JournalSummary {
                 reason,
                 clipped,
             }) => {
+                self.count_event()?;
+                let summary = &mut self.summary;
                 summary.gaps.push(Gap::new(at_frame, length, reason));
-                summary.clipped = summary.clipped.max(clipped);
+                summary.clip_marks.push((at_frame, clipped));
             }
             Err(_) => summary.ignored_lines += 1,
         }
+        Ok(())
     }
-    summary
 }
 
 #[cfg(test)]

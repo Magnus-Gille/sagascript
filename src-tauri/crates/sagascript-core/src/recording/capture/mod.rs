@@ -30,14 +30,16 @@ pub mod sink;
 pub mod source;
 pub(crate) mod spsc;
 pub mod synthetic;
+#[cfg(windows)]
+mod win;
 
 #[cfg(feature = "record")]
 pub mod mic;
 
 pub use block::{Block, NativeFormat};
 pub use clock::{
-    host_now_ns, sleep_offset_ns, ManualClock, SessionClock, SleepDetector, SystemClock,
-    HOST_CLOCK_DOMAIN, MANUAL_HOST_BASE_NS,
+    host_now_ns, sleep_offset_ns, system_sleep_probe, ManualClock, SessionClock, SleepDetector,
+    SleepProbe, SystemClock, HOST_CLOCK_DOMAIN, MANUAL_HOST_BASE_NS,
 };
 pub use fake::{FakeHandle, FakeSignal, FakeSource};
 #[cfg(feature = "record")]

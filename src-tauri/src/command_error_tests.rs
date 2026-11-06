@@ -186,6 +186,10 @@ fn recording_errors() -> Vec<RecordingError> {
             reason: "device_changed",
         },
         RecordingError::RecoveryNeeded,
+        RecordingError::NotRegularFile {
+            action: "open a track file",
+        },
+        RecordingError::JournalTooLarge,
         RecordingError::Encoder {
             message: "failed at /Users/x/Music/Sagascript/a/mic.flac".into(),
         },
@@ -209,6 +213,8 @@ fn recording_errors() -> Vec<RecordingError> {
             | RecordingError::SessionFailed { .. }
             | RecordingError::DeviceChanged { .. }
             | RecordingError::RecoveryNeeded
+            | RecordingError::NotRegularFile { .. }
+            | RecordingError::JournalTooLarge
             | RecordingError::Encoder { .. } => {}
         }
     }

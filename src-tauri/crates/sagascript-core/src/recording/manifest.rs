@@ -290,6 +290,21 @@ pub(crate) fn is_plain_file_name(name: &str) -> bool {
         })
 }
 
+/// Whether `name` is one the recording keeps for itself: the manifest (and the
+/// temporary file it is replaced through), the lock, a journal or a tail. A
+/// track file named like one would have recovery write FLAC into it.
+pub(crate) fn is_reserved_file_name(name: &str) -> bool {
+    let tail_number = name.rsplit_once(".tail.").is_some_and(|(_, number)| {
+        !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit())
+    });
+    name == MANIFEST_FILE
+        || name == format!("{MANIFEST_FILE}.tmp")
+        || name == super::store::LOCK_FILE
+        || name.ends_with(".events.jsonl")
+        || name.ends_with(".tail")
+        || tail_number
+}
+
 /// A track id is also the stem of its journal file name.
 pub(crate) fn is_valid_track_id(id: &str) -> bool {
     is_plain_file_name(id) && !id.ends_with('.') && !id.starts_with('.')
@@ -310,6 +325,9 @@ pub fn validate(manifest: &Manifest) -> Result<(), RecordingError> {
         }
         if !is_plain_file_name(&track.file) {
             return invalid("a track file is not a plain relative name");
+        }
+        if is_reserved_file_name(&track.file) {
+            return invalid("a track file is named like a file the recording keeps for itself");
         }
         if !ids.insert(&track.id) || !files.insert(&track.file) {
             return invalid("a track id or file is used twice");
@@ -360,6 +378,9 @@ pub fn parse_manifest(bytes: &[u8]) -> Result<Manifest, RecordingError> {
             reason: "a required field is missing or has the wrong type",
         })?;
     validate(&manifest)?;
+    let mut manifest = manifest;
+    // The seal is a property of the bytes, not of the description.
+    manifest.extra.remove(INTEGRITY_KEY);
     Ok(manifest)
 }
 
@@ -389,6 +410,72 @@ pub(crate) fn migrate_with(value: &mut Value, from: u32, steps: &[Migration], ta
             .unwrap_or(1)
             .max(1);
         object.insert("min_reader_version".into(), min_reader.into());
+    }
+}
+
+/// The top-level field that seals a manifest written by the store.
+pub const INTEGRITY_KEY: &str = "integrity";
+const INTEGRITY_MARKER: &[u8] = b"\"integrity\": \"";
+const DIGEST_HEX_LEN: usize = 64;
+
+/// Whether the bytes of a manifest carry a seal and if it holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Integrity {
+    /// No seal (a manifest of an earlier build, or written by another tool).
+    Absent,
+    /// The bytes are what was sealed.
+    Valid,
+    /// There is a seal and the bytes are not what it covers: a write that was
+    /// cut short or reordered by a crash left a mixture of two manifests.
+    Invalid,
+}
+
+/// [`serialize_manifest`] with a seal: a top-level `"integrity"` field holding
+/// the SHA-256 of the very bytes, computed with the 64 hex digits themselves
+/// replaced by zeros. Readers ignore the field (unknown fields are kept and
+/// ignored), so the file stays an ordinary manifest; the store checks it
+/// where a torn write is possible (see `RecordingWriter::finish`). The
+/// unsealed in-progress file is never rewritten in place without it.
+pub fn serialize_manifest_sealed(manifest: &Manifest) -> Result<Vec<u8>, RecordingError> {
+    let mut sealed = manifest.clone();
+    sealed.extra.insert(
+        INTEGRITY_KEY.into(),
+        Value::String("0".repeat(DIGEST_HEX_LEN)),
+    );
+    let mut bytes = serialize_manifest(&sealed)?;
+    let at = integrity_offset(&bytes).ok_or(RecordingError::ManifestInvalid {
+        reason: "could not be sealed",
+    })?;
+    let digest = crate::hash::sha256_hex(&bytes);
+    bytes[at..at + DIGEST_HEX_LEN].copy_from_slice(digest.as_bytes());
+    Ok(bytes)
+}
+
+fn integrity_offset(bytes: &[u8]) -> Option<usize> {
+    bytes
+        .windows(INTEGRITY_MARKER.len())
+        .rposition(|window| window == INTEGRITY_MARKER)
+        .map(|at| at + INTEGRITY_MARKER.len())
+}
+
+/// Check the seal of manifest bytes.
+pub fn manifest_integrity(bytes: &[u8]) -> Integrity {
+    let Some(at) = integrity_offset(bytes) else {
+        return Integrity::Absent;
+    };
+    let Some(digits) = bytes.get(at..at + DIGEST_HEX_LEN) else {
+        return Integrity::Invalid;
+    };
+    if !digits.iter().all(u8::is_ascii_hexdigit) {
+        return Integrity::Invalid;
+    }
+    let mut unsealed = bytes.to_vec();
+    unsealed[at..at + DIGEST_HEX_LEN].fill(b'0');
+    let want = crate::hash::sha256_hex(&unsealed);
+    if want.as_bytes() == digits.to_ascii_lowercase().as_slice() {
+        Integrity::Valid
+    } else {
+        Integrity::Invalid
     }
 }
 

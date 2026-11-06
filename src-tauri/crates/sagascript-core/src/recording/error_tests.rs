@@ -40,6 +40,10 @@ fn every_variant() -> Vec<RecordingError> {
             reason: "device_changed",
         },
         RecordingError::RecoveryNeeded,
+        RecordingError::JournalTooLarge,
+        RecordingError::NotRegularFile {
+            action: "open a track file",
+        },
         RecordingError::encoder("failed at /Users/someone/Music/secret.flac"),
     ]
 }

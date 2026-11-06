@@ -295,3 +295,87 @@ fn the_step_list_matches_the_version() {
     );
     const { assert!(MIN_READER_VERSION <= SCHEMA_VERSION) };
 }
+
+#[test]
+fn a_track_cannot_claim_a_file_the_recording_keeps_for_itself() {
+    // Recovery writes into the track file: it must never be the manifest, the
+    // lock, a journal or a tail.
+    for bad in [
+        "recording.json",
+        "recording.json.tmp",
+        "recording.lock",
+        "mic.events.jsonl",
+        "mic.tail",
+        "mic.tail.1",
+    ] {
+        let mut value = golden_value();
+        value["tracks"][0]["file"] = json!(bad);
+        assert!(
+            matches!(
+                parse_manifest(value.to_string().as_bytes()),
+                Err(RecordingError::ManifestInvalid { .. })
+            ),
+            "file {bad:?} must be refused"
+        );
+    }
+    // Ordinary names, including ones that merely look similar, are fine.
+    for good in [
+        "mic.flac",
+        "system audio.flac",
+        "recording.flac",
+        "tail.flac",
+    ] {
+        let mut value = golden_value();
+        value["tracks"][0]["file"] = json!(good);
+        assert!(
+            parse_manifest(value.to_string().as_bytes()).is_ok(),
+            "{good}"
+        );
+    }
+}
+
+#[test]
+fn a_sealed_manifest_is_an_ordinary_manifest_that_checks_itself() {
+    let manifest = parse_manifest(&serialize_manifest(&golden_manifest()).unwrap()).unwrap();
+    let sealed = serialize_manifest_sealed(&manifest).unwrap();
+    assert_eq!(manifest_integrity(&sealed), Integrity::Valid);
+    assert_eq!(
+        manifest_integrity(&serialize_manifest(&manifest).unwrap()),
+        Integrity::Absent
+    );
+    // Readers see the same manifest: the seal is not part of the description.
+    assert_eq!(parse_manifest(&sealed).unwrap(), manifest);
+    let value: serde_json::Value = serde_json::from_slice(&sealed).unwrap();
+    assert_eq!(value["integrity"].as_str().unwrap().len(), 64);
+
+    // Any change to the bytes breaks it, a hybrid of two manifests included.
+    let mut changed = sealed.clone();
+    let at = changed.windows(5).position(|w| w == b"title").unwrap_or(40);
+    changed[at] ^= 0x01;
+    assert_eq!(manifest_integrity(&changed), Integrity::Invalid);
+    let other = serialize_manifest_sealed(&Manifest {
+        title: "Other".into(),
+        ..manifest.clone()
+    })
+    .unwrap();
+    for cut in [at + 14, sealed.len() / 2, sealed.len() - 5] {
+        let mut hybrid = sealed.clone();
+        let n = cut.min(other.len());
+        hybrid[..n].copy_from_slice(&other[..n]);
+        assert_eq!(manifest_integrity(&hybrid), Integrity::Invalid, "cut {cut}");
+    }
+    // Sealing again replaces the seal rather than adding to it.
+    assert_eq!(
+        serialize_manifest_sealed(&parse_manifest(&sealed).unwrap()).unwrap(),
+        sealed
+    );
+}
+
+#[test]
+fn a_title_that_looks_like_a_seal_cannot_stand_in_for_one() {
+    let mut manifest = golden_manifest();
+    manifest.title = "\"integrity\": \"".to_string() + &"a".repeat(64);
+    let sealed = serialize_manifest_sealed(&manifest).unwrap();
+    assert_eq!(manifest_integrity(&sealed), Integrity::Valid);
+    assert_eq!(parse_manifest(&sealed).unwrap().title, manifest.title);
+}

@@ -6,6 +6,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io;
 use std::path::Path;
 
+use super::error::RecordingError;
 use crate::fsutil::{sync_durably, sync_unsupported};
 
 /// Create a new file (it must not exist) readable and writable by the owner
@@ -34,9 +35,97 @@ pub(crate) fn create_dir_private(path: &Path) -> io::Result<()> {
     builder.create(path)
 }
 
-/// Open an existing file for reading and writing.
-pub(crate) fn open_read_write(path: &Path) -> io::Result<File> {
-    OpenOptions::new().read(true).write(true).open(path)
+/// How [`open_member`] opens a file of a recording.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Open {
+    Read,
+    ReadWrite,
+    /// Read and write, creating the file (mode `0600`) when it is absent; an
+    /// existing file is not truncated.
+    ReadWriteCreate,
+}
+
+/// Open a file of a recording folder **without following links**, and only if
+/// it is a regular file.
+///
+/// A recording folder can arrive from anywhere (a synced folder, an archive,
+/// a copy made by another program), and its files are named by `recording.json`.
+/// Opened with a plain `OpenOptions`, a name that is a symbolic link would send
+/// recovery's truncate and header rewrite to whatever the link points at. So:
+///
+/// 1. the entry itself is looked at first (`symlink_metadata`): a link, a
+///    directory, a pipe or a device is refused before it is opened;
+/// 2. on Unix the open itself carries `O_NOFOLLOW` (a link that appears between
+///    the look and the open fails with `ELOOP`) and `O_NONBLOCK` (a pipe that
+///    appears there cannot make the open wait for a writer);
+/// 3. the opened handle is checked to be a regular file.
+///
+/// On Windows a symbolic link or junction is refused by step 1 and the handle
+/// by step 3; the open does not use `FILE_FLAG_OPEN_REPARSE_POINT`, because
+/// that would also turn a cloud-sync placeholder (OneDrive's recordings
+/// folder) into a file this code could not read. What remains is a link
+/// swapped in between steps 1 and 3 by a process that can already write the
+/// recordings folder.
+///
+/// The folder itself is not part of this: callers check it with
+/// `symlink_metadata` (see `recover_folder`).
+pub(crate) fn open_member(
+    path: &Path,
+    mode: Open,
+    action: &'static str,
+) -> Result<File, RecordingError> {
+    let refused = || RecordingError::NotRegularFile { action };
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if !metadata.is_file() => return Err(refused()),
+        Ok(_) => {}
+        // A file that is not there yet may be created; anything else is the
+        // caller's to report (a missing track file is not a link).
+        Err(error) if error.kind() == io::ErrorKind::NotFound && mode == Open::ReadWriteCreate => {}
+        Err(error) => return Err(RecordingError::io(action, &error)),
+    }
+    let mut options = OpenOptions::new();
+    options.read(true);
+    if mode != Open::Read {
+        options.write(true);
+    }
+    if mode == Open::ReadWriteCreate {
+        options.create(true).truncate(false);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+        if mode == Open::ReadWriteCreate {
+            options.mode(0o600);
+        }
+    }
+    let file = options.open(path).map_err(|error| {
+        if is_link_refusal(&error) {
+            refused()
+        } else {
+            RecordingError::io(action, &error)
+        }
+    })?;
+    let metadata = file
+        .metadata()
+        .map_err(|error| RecordingError::io(action, &error))?;
+    if !metadata.is_file() {
+        return Err(refused());
+    }
+    Ok(file)
+}
+
+/// `open` with `O_NOFOLLOW` fails with `ELOOP` for a symbolic link.
+fn is_link_refusal(error: &io::Error) -> bool {
+    #[cfg(unix)]
+    {
+        error.raw_os_error() == Some(libc::ELOOP)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = error;
+        false
+    }
 }
 
 /// Flush a file's data to stable storage. A volume that cannot fsync (some
@@ -120,3 +209,7 @@ fn rename_over(from: &Path, to: &Path) -> io::Result<()> {
         fs::rename(from, to)
     }
 }
+
+#[cfg(test)]
+#[path = "io_tests.rs"]
+mod tests;

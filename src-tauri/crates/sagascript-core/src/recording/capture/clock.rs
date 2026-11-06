@@ -21,6 +21,7 @@
 //! limit of this seam.
 
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 /// The name of the host clock's domain, as written to the manifest.
@@ -106,38 +107,71 @@ pub fn host_now_ns() -> u64 {
 
 /// How far the clock that counts through sleep is ahead of the one that does
 /// not. It grows by the length of every sleep and by nothing else, which is
-/// how a sleep is noticed after the fact without a notification API. `None`
-/// where there is no such pair of clocks (the seam for a Windows or Linux
-/// implementation; a notification registration would also fit here).
+/// how a sleep is noticed after the fact without a notification API: the pair
+/// `mach_continuous_time`/`mach_absolute_time` on macOS, and
+/// `QueryInterruptTime`/`QueryUnbiasedInterruptTime` on Windows. `None` where
+/// there is no such pair of clocks (Linux: a seam, and a notification
+/// registration would also fit here).
 pub fn sleep_offset_ns() -> Option<u64> {
     #[cfg(target_vendor = "apple")]
     {
         Some(host::now_ns().saturating_sub(host::awake_ns()))
     }
-    #[cfg(not(target_vendor = "apple"))]
+    #[cfg(windows)]
+    {
+        super::win::sleep_offset_ns()
+    }
+    #[cfg(not(any(target_vendor = "apple", windows)))]
     {
         None
     }
 }
 
-/// Notices a system sleep from the growth of [`sleep_offset_ns`].
-#[derive(Debug)]
+/// Reads the sleep offset: [`sleep_offset_ns`] in production, a closure in a
+/// test.
+pub type SleepProbe = Arc<dyn Fn() -> Option<u64> + Send + Sync>;
+
+/// The probe of the real clocks.
+pub fn system_sleep_probe() -> SleepProbe {
+    Arc::new(sleep_offset_ns)
+}
+
+/// Notices a system sleep from the growth of the sleep offset.
+///
+/// It is **armed** when it is made: the baseline is read then, not at the
+/// first poll, so a sleep that happens before the first poll counts. Any
+/// growth over the threshold since the previous reading is a sleep, down to
+/// sleeps of a tenth of a second (the clocks agree to nanoseconds while the
+/// machine is awake).
 pub struct SleepDetector {
+    probe: SleepProbe,
     last_offset: Option<u64>,
     threshold_ns: u64,
 }
 
 impl SleepDetector {
-    /// A sleep shorter than `threshold` is not noticed.
-    pub fn new(threshold: Duration) -> Self {
+    /// Read the baseline now. A sleep shorter than `threshold` is not noticed.
+    pub fn armed(threshold: Duration, probe: SleepProbe) -> Self {
+        let last_offset = probe();
         Self {
+            probe,
+            last_offset,
+            threshold_ns: threshold.as_nanos() as u64,
+        }
+    }
+
+    /// A detector with no baseline yet, fed through [`observe`](Self::observe).
+    pub fn unarmed(threshold: Duration) -> Self {
+        Self {
+            probe: Arc::new(|| None),
             last_offset: None,
             threshold_ns: threshold.as_nanos() as u64,
         }
     }
 
     /// Feed an offset; true when it has grown by more than the threshold since
-    /// the last one. The first observation only sets the baseline.
+    /// the last one. The first observation of an unarmed detector only sets the
+    /// baseline.
     pub fn observe(&mut self, offset_ns: u64) -> bool {
         let slept = match self.last_offset {
             Some(last) => offset_ns.saturating_sub(last) > self.threshold_ns,
@@ -147,9 +181,10 @@ impl SleepDetector {
         slept
     }
 
-    /// [`observe`](Self::observe) with the real clocks; false where they do not exist.
+    /// Read the probe; false where there is none.
     pub fn poll(&mut self) -> bool {
-        sleep_offset_ns().is_some_and(|offset| self.observe(offset))
+        let probe = Arc::clone(&self.probe);
+        probe().is_some_and(|offset| self.observe(offset))
     }
 }
 

@@ -318,6 +318,7 @@ fn recovery_notes_describe_every_outcome_and_skip_what_needs_nothing() {
                         gaps_kept: 0,
                         gaps_dropped: 0,
                         journal_lines_ignored: 0,
+                        header_rebuilt: false,
                     },
                     TrackRecovery {
                         id: "system".into(),
@@ -327,6 +328,7 @@ fn recovery_notes_describe_every_outcome_and_skip_what_needs_nothing() {
                         gaps_kept: 0,
                         gaps_dropped: 0,
                         journal_lines_ignored: 0,
+                        header_rebuilt: false,
                     },
                 ],
             })),
