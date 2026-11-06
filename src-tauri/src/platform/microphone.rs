@@ -170,15 +170,20 @@ mod macos_mic {
     /// current TCC state immediately (no dialog shown for already-determined
     /// states). This avoids opening a real audio stream as a side effect.
     pub fn authorization_status_string() -> String {
-        let cls = match get_av_capture_device_class() {
-            Some(c) => c,
-            None => {
-                tracing::warn!("AVCaptureDevice class not found — returning not_determined");
+        // Share the strictly read-only observation with CLI diagnostics, then
+        // retain this legacy GUI wrapper's denied-cache refresh behavior.
+        use sagascript_core::audio::permission::{
+            microphone_permission, MicrophonePermissionStatus,
+        };
+        let status = match microphone_permission().status {
+            MicrophonePermissionStatus::NotDetermined => 0,
+            MicrophonePermissionStatus::Restricted => 1,
+            MicrophonePermissionStatus::Denied => 2,
+            MicrophonePermissionStatus::Authorized => 3,
+            MicrophonePermissionStatus::Unknown | MicrophonePermissionStatus::Unsupported => {
                 return "not_determined".to_string();
             }
         };
-        let media_type = av_media_type_audio();
-        let status: isize = unsafe { msg_send![cls, authorizationStatusForMediaType: media_type] };
         // AVCaptureDevice may cache "denied" after a System Settings change.
         // The raw request API returns the current TCC state without a new dialog
         // for an already-determined permission.

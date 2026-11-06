@@ -162,6 +162,8 @@ function emit(mode, sha, buildDate, observed = []) {
   const payload = {
     mode,
     git_sha: sha,
+    source_revision: sha,
+    source_dirty: false,
     build_date: buildDate,
     allowed_generated_paths: ALLOWED_GENERATED_PATHS,
   };
@@ -183,7 +185,17 @@ function initialize() {
   }
   const buildDate = new Date().toISOString().slice(0, 10);
   try {
-    appendFileSync(githubEnv, "SAGASCRIPT_GIT_HASH=" + sha + "\nSAGASCRIPT_BUILD_DATE=" + buildDate + "\n", { encoding: "utf8" });
+    appendFileSync(
+      githubEnv,
+      "SAGASCRIPT_GIT_HASH=" +
+        sha +
+        "\nSAGASCRIPT_BUILD_DATE=" +
+        buildDate +
+        "\nSAGASCRIPT_SOURCE_REVISION_INPUT=" +
+        sha +
+        "\nSAGASCRIPT_SOURCE_DIRTY_INPUT=false\n",
+      { encoding: "utf8" },
+    );
   } catch (error) {
     const code = error && typeof error.code === "string" ? error.code : "unknown";
     throw new Error("could not append build identity to GITHUB_ENV (" + code + ")");
@@ -200,6 +212,13 @@ function verify() {
   const buildDate = process.env.SAGASCRIPT_BUILD_DATE;
   if (!validDate(buildDate)) {
     throw new Error("SAGASCRIPT_BUILD_DATE is not a valid UTC date");
+  }
+  const sourceRevision = process.env.SAGASCRIPT_SOURCE_REVISION_INPUT;
+  if (!SHA_PATTERN.test(sourceRevision ?? "") || sourceRevision !== sha) {
+    throw new Error("SAGASCRIPT_SOURCE_REVISION_INPUT does not match the validated source SHA");
+  }
+  if (process.env.SAGASCRIPT_SOURCE_DIRTY_INPUT !== "false") {
+    throw new Error("SAGASCRIPT_SOURCE_DIRTY_INPUT does not confirm a clean source tree");
   }
   emit("verify", sha, buildDate, verifyStatus(statusEntries()));
 }

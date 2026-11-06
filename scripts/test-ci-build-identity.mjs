@@ -14,6 +14,22 @@ const envDirs = [];
 const fixtureEnvironments = new Map();
 const allowedOutput = "src-tauri/gen/schemas/desktop-schema.json";
 
+test("desktop CLI dispatch binds preflight to the executable metadata used by GUI diagnostics", async () => {
+  const main = await readFile(new URL("../src-tauri/src/main.rs", import.meta.url), "utf8");
+  const permissions = await readFile(new URL("../src-tauri/src/commands/permissions.rs", import.meta.url), "utf8");
+  // Architectural regression guard: reverting the entry point to run(parsed)
+  // compiles, but silently selects the cached library's build identity again.
+  assert.doesNotMatch(main, /sagascript_cli::run\s*\(\s*parsed\s*\)/);
+  const dispatch = main.match(/return\s+sagascript_cli::run_with_build\(([\s\S]*?)\)\s*\.into\(\)/);
+  assert.ok(dispatch, "desktop CLI must supply executable identity");
+  assert.match(dispatch[1], /sagascript_core::acceptance::BuildObservation::new\(/);
+  for (const key of ["CARGO_PKG_VERSION", "SAGASCRIPT_SOURCE_REVISION", "SAGASCRIPT_SOURCE_DIRTY"]) {
+    const metadata = `env!("${key}")`;
+    assert.ok(dispatch[1].includes(metadata), `desktop CLI must use executable ${key}`);
+    assert.ok(permissions.includes(metadata), `GUI diagnostics must use executable ${key}`);
+  }
+});
+
 function git(cwd, args, extraEnv = {}) {
   return execFileSync("git", args, {
     cwd,
@@ -149,7 +165,17 @@ async function initialized(repo) {
   });
   assert.equal(result.status, 0, result.stderr);
   const envText = await readFile(githubEnv, "utf8");
-  assert.match(envText, new RegExp("^SAGASCRIPT_GIT_HASH=" + repo.sha + "\\nSAGASCRIPT_BUILD_DATE=\\d{4}-\\d{2}-\\d{2}\\n$"));
+  assert.match(
+    envText,
+    new RegExp(
+      "^SAGASCRIPT_GIT_HASH=" +
+        repo.sha +
+        "\\nSAGASCRIPT_BUILD_DATE=\\d{4}-\\d{2}-\\d{2}" +
+        "\\nSAGASCRIPT_SOURCE_REVISION_INPUT=" +
+        repo.sha +
+        "\\nSAGASCRIPT_SOURCE_DIRTY_INPUT=false\\n$",
+    ),
+  );
   return envText.match(/SAGASCRIPT_BUILD_DATE=(\d{4}-\d{2}-\d{2})/)[1];
 }
 
@@ -158,6 +184,8 @@ function verifyEnv(repo, date, overrides = {}) {
     GITHUB_SHA: repo.sha,
     SAGASCRIPT_GIT_HASH: repo.sha,
     SAGASCRIPT_BUILD_DATE: date,
+    SAGASCRIPT_SOURCE_REVISION_INPUT: repo.sha,
+    SAGASCRIPT_SOURCE_DIRTY_INPUT: "false",
     ...overrides,
   };
 }
@@ -179,6 +207,8 @@ test("initialize emits full SHA and UTC date for a clean fixture", async () => {
   const output = JSON.parse(result.stdout);
   assert.equal(output.mode, "initialize");
   assert.equal(output.git_sha, repo.sha);
+  assert.equal(output.source_revision, repo.sha);
+  assert.equal(output.source_dirty, false);
   assert.match(output.build_date, /^\d{4}-\d{2}-\d{2}$/);
   assert.deepEqual(output.allowed_generated_paths, [
     "src-tauri/gen/schemas/acl-manifests.json",
@@ -186,7 +216,7 @@ test("initialize emits full SHA and UTC date for a clean fixture", async () => {
     "src-tauri/gen/schemas/desktop-schema.json",
     "src-tauri/gen/schemas/windows-schema.json",
   ]);
-  assert.equal((await readFile(githubEnv, "utf8")).split("\n").length, 3);
+  assert.equal((await readFile(githubEnv, "utf8")).split("\n").length, 5);
 });
 
 test("initialize rejects wrong or malformed expected SHA", async () => {
@@ -294,11 +324,32 @@ test("verify rejects missing, wrong, and invalid metadata", async () => {
     { SAGASCRIPT_GIT_HASH: "", SAGASCRIPT_BUILD_DATE: "" },
     { SAGASCRIPT_GIT_HASH: "0".repeat(40) },
     { SAGASCRIPT_GIT_HASH: "not-a-sha", SAGASCRIPT_BUILD_DATE: "2026-09-06" },
+    { SAGASCRIPT_SOURCE_REVISION_INPUT: "short" },
+    { SAGASCRIPT_SOURCE_REVISION_INPUT: "0".repeat(40) },
+    { SAGASCRIPT_SOURCE_DIRTY_INPUT: "unknown" },
+    { SAGASCRIPT_SOURCE_DIRTY_INPUT: "true" },
   ]) {
     const repo = await fixture();
     const result = invoke(repo.cwd, ["--verify"], verifyEnv(repo, "2026-09-06", metadata));
     assertRejected(result);
   }
+});
+
+test("verify requires full revision and clean state metadata", async () => {
+  const repo = await fixture();
+  const result = invoke(repo.cwd, ["--verify"], verifyEnv(repo, "2026-09-06"));
+  assert.equal(result.status, 0, result.stderr);
+  const output = JSON.parse(result.stdout);
+  assert.equal(output.source_revision, repo.sha);
+  assert.equal(output.source_dirty, false);
+  const changed = invoke(
+    repo.cwd,
+    ["--verify"],
+    verifyEnv(repo, "2026-09-06", {
+      SAGASCRIPT_SOURCE_REVISION_INPUT: "f".repeat(40),
+    }),
+  );
+  assertRejected(changed);
 });
 
 test("verify rejects an invalid build date after SHA validation", async () => {

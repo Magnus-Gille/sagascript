@@ -73,7 +73,14 @@ function identity(repo) {
 function gateAccepts(repo) {
   const result = spawnSync(process.execPath, [join(repo.cwd, "scripts/ci-build-identity.mjs"), "--verify"], {
     cwd: repo.cwd,
-    env: { ...repo.env, GITHUB_SHA: repo.sha, SAGASCRIPT_GIT_HASH: repo.sha, SAGASCRIPT_BUILD_DATE: "2026-10-12" },
+    env: {
+      ...repo.env,
+      GITHUB_SHA: repo.sha,
+      SAGASCRIPT_GIT_HASH: repo.sha,
+      SAGASCRIPT_BUILD_DATE: "2026-10-12",
+      SAGASCRIPT_SOURCE_REVISION_INPUT: repo.sha,
+      SAGASCRIPT_SOURCE_DIRTY_INPUT: "false",
+    },
     encoding: "utf8",
   });
   return result.status === 0;
@@ -124,7 +131,12 @@ test("the script and the CI gate agree on what makes a tree dirty", { skip }, ()
 
 test("every consumer reads the one list of generated files", () => {
   const list = readFileSync(join(scripts, "build-identity-generated-paths.txt"), "utf8");
-  for (const consumer of ["engine-host-identity.sh", "ci-build-identity.mjs", "../src-tauri/engine-host/ort/build_identity.rs"]) {
+  for (const consumer of [
+    "engine-host-identity.sh",
+    "ci-build-identity.mjs",
+    "../src-tauri/engine-host/ort/build_identity.rs",
+    "../src-tauri/build_identity.rs",
+  ]) {
     assert.match(readFileSync(join(scripts, consumer), "utf8"), /build-identity-generated-paths\.txt/, consumer);
   }
   assert.match(readFileSync(join(scripts, "build-engine-host.sh"), "utf8"), /engine-host-identity\.sh/);
