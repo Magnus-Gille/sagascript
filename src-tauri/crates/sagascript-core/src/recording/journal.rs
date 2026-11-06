@@ -73,6 +73,9 @@ pub enum JournalEvent {
 /// Appends events to a track's journal.
 pub struct JournalWriter {
     file: File,
+    /// Tests: make the next `sync` fail like a full disk (one shot).
+    #[cfg(test)]
+    fail_next_sync: Option<std::io::ErrorKind>,
 }
 
 impl JournalWriter {
@@ -80,7 +83,17 @@ impl JournalWriter {
     pub fn create(path: &Path) -> Result<Self, RecordingError> {
         let file = create_new_private(path)
             .map_err(|error| RecordingError::io("create a track journal", &error))?;
-        Ok(Self { file })
+        Ok(Self {
+            file,
+            #[cfg(test)]
+            fail_next_sync: None,
+        })
+    }
+
+    /// Tests: the next `sync` fails with `kind`.
+    #[cfg(test)]
+    pub(crate) fn fail_next_sync(&mut self, kind: std::io::ErrorKind) {
+        self.fail_next_sync = Some(kind);
     }
 
     /// Append one event as a single write of a complete line.
@@ -94,6 +107,13 @@ impl JournalWriter {
 
     /// Flush the journal to stable storage.
     pub fn sync(&mut self) -> Result<(), RecordingError> {
+        #[cfg(test)]
+        if let Some(kind) = self.fail_next_sync.take() {
+            return Err(RecordingError::io(
+                "sync a track journal",
+                &std::io::Error::from(kind),
+            ));
+        }
         sync_file(&self.file).map_err(|error| RecordingError::io("sync a track journal", &error))
     }
 }

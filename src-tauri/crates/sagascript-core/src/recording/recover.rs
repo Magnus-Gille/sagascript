@@ -55,10 +55,10 @@ use super::flac::scan::{scan_frames, walk_frame, Walk};
 use super::io::{create_new_private, open_member, replace_file_durably, sync_dir, sync_file, Open};
 use super::journal::{journal_file_name, read_journal};
 use super::manifest::{
-    is_plain_file_name, parse_manifest, serialize_manifest, Clock, EndedReason, Gap, Manifest,
-    RecordingState, Track, MANIFEST_FILE,
+    is_plain_file_name, manifest_integrity, parse_manifest, serialize_manifest_sealed, Clock,
+    EndedReason, Gap, Integrity, Manifest, RecordingState, Track, MANIFEST_FILE,
 };
-use super::store::{lock_folder, read_bounded, RecordingStore, LOCK_FILE};
+use super::store::{lock_folder, read_bounded, RecordingStore, LOCK_FILE, START_COPY_FILE};
 use crate::hash::StreamingSha256;
 
 /// The largest manifest read.
@@ -180,7 +180,7 @@ pub fn recover_folder(dir: &Path) -> Result<RecoveredRecording, RecordingError> 
     }
     let manifest_path = dir.join(MANIFEST_FILE);
     // A finished recording needs no lock and no write access.
-    let early = parse_manifest(&read_bounded(&manifest_path, MAX_MANIFEST_BYTES)?)?;
+    let early = read_manifest_for_recovery(dir)?;
     if early.state != RecordingState::Recording {
         return Err(RecordingError::NotRecording);
     }
@@ -193,7 +193,7 @@ pub fn recover_folder(dir: &Path) -> Result<RecoveredRecording, RecordingError> 
         result => result,
     }?;
     // Under the lock: the recording may have finished since the first look.
-    let manifest = parse_manifest(&read_bounded(&manifest_path, MAX_MANIFEST_BYTES)?)?;
+    let manifest = read_manifest_for_recovery(dir)?;
     if manifest.state != RecordingState::Recording {
         return Err(RecordingError::NotRecording);
     }
@@ -201,14 +201,15 @@ pub fn recover_folder(dir: &Path) -> Result<RecoveredRecording, RecordingError> 
     let mut recovered = manifest.clone();
     let mut reports = Vec::with_capacity(manifest.tracks.len());
     for (entry, track) in recovered.tracks.iter_mut().zip(&manifest.tracks) {
-        let (updated, report) = recover_track(dir, track)?;
+        let (updated, report) = recover_track(dir, track, TailPolicy::Keep)?;
         *entry = updated;
         reports.push(report);
     }
     recovered.state = RecordingState::Complete;
     recovered.recovered = true;
-    replace_file_durably(&manifest_path, &serialize_manifest(&recovered)?)
+    replace_file_durably(&manifest_path, &serialize_manifest_sealed(&recovered)?)
         .map_err(|error| RecordingError::io("write the recording manifest", &error))?;
+    let _ = fs::remove_file(dir.join(START_COPY_FILE));
     if let Err(error) = fs::remove_file(dir.join(LOCK_FILE)) {
         tracing::warn!(kind = ?error.kind(), "could not remove a recording lock file");
     }
@@ -219,8 +220,54 @@ pub fn recover_folder(dir: &Path) -> Result<RecoveredRecording, RecordingError> 
     })
 }
 
+/// Read `recording.json`; if it cannot be trusted (it is not a manifest, or it
+/// is sealed and the seal fails: a rewrite in place that a crash cut short),
+/// read the copy of the start manifest instead. That copy says `recording` and
+/// describes the tracks; everything else recovery needs it takes from the
+/// track files and journals.
+fn read_manifest_for_recovery(dir: &Path) -> Result<Manifest, RecordingError> {
+    let bytes = read_bounded(&dir.join(MANIFEST_FILE), MAX_MANIFEST_BYTES)?;
+    let primary = match manifest_integrity(&bytes) {
+        Integrity::Invalid => Err(RecordingError::ManifestInvalid {
+            reason: "the manifest does not match its seal",
+        }),
+        _ => parse_manifest(&bytes),
+    };
+    let Err(error @ RecordingError::ManifestInvalid { .. }) = primary else {
+        return primary;
+    };
+    let copy = read_bounded(&dir.join(START_COPY_FILE), MAX_MANIFEST_BYTES);
+    match copy {
+        Ok(bytes) if manifest_integrity(&bytes) != Integrity::Invalid => {
+            match parse_manifest(&bytes) {
+                Ok(manifest) => {
+                    tracing::warn!("recovering from the start copy of the manifest");
+                    Ok(manifest)
+                }
+                Err(_) => Err(error),
+            }
+        }
+        _ => Err(error),
+    }
+}
+
+/// What recovery does with the bytes after the last valid frame.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TailPolicy {
+    /// Copy them to `<track>.tail` first (a recording left by a dead process).
+    Keep,
+    /// Drop them. Used by the live session when the disk is full: the bytes
+    /// are the part of one block that could not be written, there is no space
+    /// for a copy, and the process knows exactly what it had accepted.
+    Discard,
+}
+
 /// Recover one track: the new manifest entry and what was done.
-fn recover_track(dir: &Path, track: &Track) -> Result<(Track, TrackRecovery), RecordingError> {
+pub(crate) fn recover_track(
+    dir: &Path,
+    track: &Track,
+    policy: TailPolicy,
+) -> Result<(Track, TrackRecovery), RecordingError> {
     let params = StreamParams {
         sample_rate: track.sample_rate,
         channels: track.channels,
@@ -322,9 +369,13 @@ fn recover_track(dir: &Path, track: &Track) -> Result<(Track, TrackRecovery), Re
 
     // Anything after the last valid frame goes to the tail, then the file is cut.
     if length > summary.end_offset {
-        let (name, bytes) = save_tail(dir, &track.id, &mut file, summary.end_offset, length)?;
-        tail_file = Some(name);
-        tail_bytes += bytes;
+        if policy == TailPolicy::Keep {
+            let (name, bytes) = save_tail(dir, &track.id, &mut file, summary.end_offset, length)?;
+            tail_file = Some(name);
+            tail_bytes += bytes;
+        } else {
+            tail_bytes += length - summary.end_offset;
+        }
         file.set_len(summary.end_offset)
             .map_err(|error| RecordingError::io("truncate a track file", &error))?;
     }
