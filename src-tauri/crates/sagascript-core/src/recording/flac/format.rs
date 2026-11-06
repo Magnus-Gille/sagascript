@@ -324,6 +324,24 @@ pub(crate) fn parse_header(bytes: &[u8]) -> Result<ParsedHeader, HeaderError> {
     Ok(parsed)
 }
 
+/// The stream parameters in the first bytes of a file ("fLaC" and the
+/// STREAMINFO block), when those are intact. They are written once, at
+/// creation, and never differ between the placeholder header and the final
+/// one, so they survive a torn rewrite of the rest of the header.
+pub(crate) fn parse_prefix(bytes: &[u8]) -> Option<StreamParams> {
+    if bytes.len() < RESERVED_START
+        || &bytes[0..4] != b"fLaC"
+        || bytes[4] & 0x7F != 0
+        || (usize::from(bytes[5]) << 16 | usize::from(bytes[6]) << 8 | usize::from(bytes[7]))
+            != STREAMINFO_LEN
+    {
+        return None;
+    }
+    let mut body = [0u8; STREAMINFO_LEN];
+    body.copy_from_slice(&bytes[8..8 + STREAMINFO_LEN]);
+    parse_streaminfo(&body).ok().map(|header| header.params)
+}
+
 fn parse_streaminfo(body: &[u8; STREAMINFO_LEN]) -> Result<ParsedHeader, HeaderError> {
     let min_block_size = u16::from_be_bytes([body[0], body[1]]);
     let max_block_size = u16::from_be_bytes([body[2], body[3]]);

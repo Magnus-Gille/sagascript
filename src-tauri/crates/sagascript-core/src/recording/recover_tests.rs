@@ -981,3 +981,272 @@ fn a_manifest_link_in_the_store_is_reported_not_skipped() {
         }
     );
 }
+
+// ---- a damaged track header ----------------------------------------------------------
+
+/// The size of the padding block header: where a damaged length is planted.
+const PADDING_HEADER: std::ops::Range<usize> = 42..46;
+
+fn write_track(folder: &Path, bytes: &[u8]) {
+    std::fs::write(folder.join("mic.flac"), bytes).unwrap();
+}
+
+/// A recovery of `bytes` as the track file of a copy of `killed`.
+fn recover_with_track(
+    killed: &Killed,
+    scratch: &TempDir,
+    name: &str,
+    bytes: &[u8],
+) -> (PathBuf, Result<RecoveredRecording, RecordingError>) {
+    let folder = copy_dir(&killed.folder, &scratch.path().join(name));
+    write_track(&folder, bytes);
+    let result = recover_folder(&folder);
+    (folder, result)
+}
+
+/// Everything a recovery that kept `frames` frames of `killed` must show.
+fn assert_all_audio_kept(
+    folder: &Path,
+    killed: &Killed,
+    original: &[u8],
+    frames: usize,
+    what: &str,
+) {
+    let file = std::fs::read(folder.join("mic.flac")).unwrap();
+    assert!(
+        file[HEADER_LEN..] == original[HEADER_LEN..],
+        "{what}: not one byte of audio changed"
+    );
+    assert_recovered_track(folder, &killed.pcm, frames);
+    assert!(
+        !folder.join("mic.tail").exists(),
+        "{what}: nothing was set aside"
+    );
+}
+
+#[test]
+fn a_damaged_metadata_header_in_front_of_good_frames_costs_no_audio() {
+    let killed = killed_blocks(8);
+    let original = std::fs::read(killed.folder.join("mic.flac")).unwrap();
+    let scratch = TempDir::new();
+
+    let planted = |range: std::ops::Range<usize>, bytes: &[u8]| {
+        let mut file = original.clone();
+        file[range].copy_from_slice(bytes);
+        file
+    };
+    let mut garbage = original.clone();
+    let mut rng = Rng::new(31);
+    for byte in &mut garbage[..HEADER_LEN] {
+        *byte = rng.range(0, 256) as u8;
+    }
+    let mut zeroed = original.clone();
+    zeroed[..HEADER_LEN].fill(0);
+    let cases: Vec<(&str, Vec<u8>)> = vec![
+        // The padding block claims 16 MiB: the header runs past the file.
+        (
+            "huge padding, not last",
+            planted(PADDING_HEADER, &[0x01, 0xFF, 0xFF, 0xFF]),
+        ),
+        (
+            "huge padding, last",
+            planted(PADDING_HEADER, &[0x81, 0xFF, 0xFF, 0xFF]),
+        ),
+        // The last-block flag is gone: the header would run into the frames.
+        ("no last flag", planted(42..43, &[0x01])),
+        // The padding is shorter than it should be: the "header" ends early.
+        (
+            "short padding",
+            planted(PADDING_HEADER, &[0x81, 0x00, 0x00, 0x10]),
+        ),
+        ("magic gone", planted(0..4, &[0, 0, 0, 0])),
+        ("streaminfo header gone", planted(4..8, &[0xFF; 4])),
+        ("everything zero", zeroed),
+        ("random bytes", garbage),
+    ];
+    for (what, bytes) in cases {
+        let (folder, result) = recover_with_track(&killed, &scratch, what, &bytes);
+        let recovered = result.unwrap_or_else(|error| panic!("{what}: {error:?}"));
+        let report = &recovered.tracks[0];
+        assert_eq!(report.frames_kept, 8 * BLOCK_SIZE as u64, "{what}");
+        assert_eq!(
+            (report.tail_bytes, report.tail_file.clone()),
+            (0, None),
+            "{what}"
+        );
+        assert!(report.header_rebuilt, "{what}");
+        assert_all_audio_kept(&folder, &killed, &original, 8 * BLOCK_SIZE, what);
+    }
+}
+
+#[test]
+fn a_torn_rewrite_of_the_header_at_any_sector_boundary_costs_no_audio() {
+    let killed = killed_blocks(6);
+    let original = std::fs::read(killed.folder.join("mic.flac")).unwrap();
+    let placeholder = original[..HEADER_LEN].to_vec();
+    // The header a finished track carries: what recovery of an intact copy writes.
+    let scratch = TempDir::new();
+    let (reference, result) = recover_with_track(&killed, &scratch, "reference", &original);
+    result.unwrap();
+    let finished = std::fs::read(reference.join("mic.flac")).unwrap()[..HEADER_LEN].to_vec();
+    assert_ne!(placeholder, finished);
+
+    for cut in [
+        1usize,
+        4,
+        41,
+        42,
+        43,
+        46,
+        100,
+        512,
+        4096,
+        8192,
+        20_000,
+        36_864,
+        HEADER_LEN - 1,
+    ] {
+        // The new header reached the disk up to `cut`, or only from `cut` on.
+        for (what, header) in [
+            (
+                "new then old",
+                [&finished[..cut], &placeholder[cut..]].concat(),
+            ),
+            (
+                "old then new",
+                [&placeholder[..cut], &finished[cut..]].concat(),
+            ),
+        ] {
+            let mut file = header;
+            file.extend_from_slice(&original[HEADER_LEN..]);
+            let name = format!("{what} {cut}");
+            let (folder, result) = recover_with_track(&killed, &scratch, &name, &file);
+            let recovered = result.unwrap_or_else(|error| panic!("{name}: {error:?}"));
+            assert_eq!(
+                recovered.tracks[0].frames_kept,
+                6 * BLOCK_SIZE as u64,
+                "{name}"
+            );
+            assert_all_audio_kept(&folder, &killed, &original, 6 * BLOCK_SIZE, &name);
+            // And the header is the finished one, whatever the mixture was.
+            assert!(
+                std::fs::read(folder.join("mic.flac")).unwrap()[..HEADER_LEN] == finished[..],
+                "{name}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_damaged_header_in_a_file_larger_than_the_header_read_limit_is_recovered_too() {
+    // 100 blocks of noise are stored verbatim: 1.2 MB, past 1 MiB.
+    let killed = kill(mic(), |writer| {
+        let pcm = edge_signal(Edge::WhiteFullScale, 100 * BLOCK_SIZE);
+        writer.push("mic", &to_f32(&pcm, 24)).unwrap();
+        pcm
+    });
+    let original = std::fs::read(killed.folder.join("mic.flac")).unwrap();
+    assert!(original.len() > 1024 * 1024, "{}", original.len());
+    let mut damaged = original.clone();
+    damaged[PADDING_HEADER].copy_from_slice(&[0x01, 0xFF, 0xFF, 0xFF]);
+    let scratch = TempDir::new();
+    let (folder, result) = recover_with_track(&killed, &scratch, "big", &damaged);
+    let recovered = result.expect("recovered");
+    assert_eq!(recovered.tracks[0].frames_kept, 100 * BLOCK_SIZE as u64);
+    assert_all_audio_kept(&folder, &killed, &original, 100 * BLOCK_SIZE, "big");
+}
+
+#[test]
+fn an_empty_track_with_a_damaged_header_stays_an_empty_track_and_nothing_is_set_aside() {
+    let killed = kill(mic(), |_| Vec::new());
+    let original = std::fs::read(killed.folder.join("mic.flac")).unwrap();
+    assert_eq!(original.len(), HEADER_LEN);
+    let scratch = TempDir::new();
+    for (what, range, bytes) in [
+        ("huge padding", PADDING_HEADER, [0x01u8, 0xFF, 0xFF, 0xFF]),
+        ("no last flag", 42..46, [0x01, 0x00, 0x8F, 0xFC]),
+    ] {
+        let mut damaged = original.clone();
+        damaged[range].copy_from_slice(&bytes);
+        let (folder, result) = recover_with_track(&killed, &scratch, what, &damaged);
+        let recovered = result.unwrap_or_else(|error| panic!("{what}: {error:?}"));
+        let report = &recovered.tracks[0];
+        assert_eq!(
+            (
+                report.frames_kept,
+                report.tail_bytes,
+                report.tail_file.clone()
+            ),
+            (0, 0, None),
+            "{what}"
+        );
+        assert_recovered_track(&folder, &[], 0);
+        assert_eq!(
+            std::fs::metadata(folder.join("mic.flac")).unwrap().len(),
+            HEADER_LEN as u64
+        );
+        assert!(!folder.join("mic.tail").exists(), "{what}");
+    }
+}
+
+#[test]
+fn a_damaged_header_and_a_damaged_first_frame_set_the_bytes_aside_and_keep_the_track() {
+    let killed = killed_blocks(3);
+    let original = std::fs::read(killed.folder.join("mic.flac")).unwrap();
+    let mut damaged = original.clone();
+    damaged[PADDING_HEADER].copy_from_slice(&[0x01, 0xFF, 0xFF, 0xFF]);
+    damaged[HEADER_LEN + 30] ^= 0x10;
+    let scratch = TempDir::new();
+    let (folder, result) = recover_with_track(&killed, &scratch, "both", &damaged);
+    let recovered = result.expect("the prefix still says whose file this is");
+    let report = &recovered.tracks[0];
+    assert_eq!(report.frames_kept, 0);
+    assert_eq!(report.tail_bytes, (original.len() - HEADER_LEN) as u64);
+    assert!(
+        std::fs::read(folder.join("mic.tail")).unwrap() == damaged[HEADER_LEN..],
+        "every byte after the header is in the tail"
+    );
+    assert_recovered_track(&folder, &[], 0);
+}
+
+#[test]
+fn a_file_that_cannot_be_shown_to_be_ours_is_left_alone_however_long_it_is() {
+    let killed = killed_blocks(3);
+    let original = std::fs::read(killed.folder.join("mic.flac")).unwrap();
+    let mut wave = b"RIFF\x24\x80\x00\x00WAVEfmt ".to_vec();
+    wave.resize(50_000, 0x55);
+    let mut noise = vec![0u8; 40_000];
+    let mut rng = Rng::new(32);
+    for byte in &mut noise {
+        *byte = rng.range(0, 256) as u8;
+    }
+    // Our header, but another sample rate than the manifest says.
+    let mut other_rate = original.clone();
+    other_rate[PADDING_HEADER].copy_from_slice(&[0x01, 0xFF, 0xFF, 0xFF]);
+    other_rate[HEADER_LEN..].fill(0);
+    let mut streaminfo = parse_header(&original).unwrap().streaminfo;
+    streaminfo[10] = 0x0A; // 44.1 kHz in the top 20 bits: 0x0AC44
+    streaminfo[11] = 0xC4;
+    streaminfo[12] = 0x40 | (streaminfo[12] & 0x0F);
+    other_rate[8..42].copy_from_slice(&streaminfo);
+    let cases: Vec<(&str, Vec<u8>)> = vec![
+        ("a wave file", wave),
+        ("noise", noise),
+        ("zeros", vec![0u8; HEADER_LEN + 1000]),
+        ("our header at another rate, no frames", other_rate),
+    ];
+    let scratch = TempDir::new();
+    for (what, bytes) in cases {
+        let folder = copy_dir(&killed.folder, &scratch.path().join(what));
+        write_track(&folder, &bytes);
+        let before = snapshot(&folder);
+        let error = recover_folder(&folder).expect_err(what);
+        assert_eq!(error.code(), "recording_corrupt_track", "{what}: {error:?}");
+        assert_eq!(snapshot(&folder), before, "{what}: nothing was changed");
+        assert_eq!(
+            read_manifest(&folder).state,
+            RecordingState::Recording,
+            "{what}"
+        );
+    }
+}
