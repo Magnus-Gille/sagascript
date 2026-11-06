@@ -35,6 +35,7 @@
 //! CLI while the app starts, a second app instance) from recovering a
 //! recording that is still being written.
 
+pub mod capture;
 pub mod encoder;
 pub mod error;
 pub mod flac;
@@ -43,6 +44,7 @@ pub mod journal;
 pub mod manifest;
 pub mod naming;
 pub mod recover;
+pub mod session;
 pub mod store;
 #[cfg(test)]
 mod test_signals;
@@ -58,6 +60,10 @@ pub use manifest::{
 };
 pub use recover::{
     recover_folder, RecoveredRecording, RecoveryOutcome, RecoveryReport, TrackRecovery,
+};
+pub use session::{
+    RecordingSession, SessionConfig, SessionOutcome, SessionState, SessionStatus, SessionWarning,
+    SourceSpec, TrackStatus,
 };
 pub use store::{NewRecording, NewTrack, RecordingStore, RecordingWriter, LOCK_FILE};
 
