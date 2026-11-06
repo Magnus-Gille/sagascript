@@ -61,5 +61,9 @@ pub use recover::{
 };
 pub use store::{NewRecording, NewTrack, RecordingStore, RecordingWriter, LOCK_FILE};
 
+/// The size of the header every track file starts with: STREAMINFO and the
+/// reserved region that holds the SEEKTABLE and PADDING. Audio frames follow.
+pub const TRACK_HEADER_LEN: usize = flac::HEADER_LEN;
+
 /// How often tracks and journals are fsynced while recording, and at every gap.
 pub const SYNC_INTERVAL: Duration = Duration::from_secs(10);

@@ -507,3 +507,12 @@ fn the_start_event_of_every_track_is_journalled() {
         );
     }
 }
+
+/// The writer thread of phase 1b owns the writer: it must be `Send`.
+#[test]
+fn the_writer_and_the_encoder_can_move_to_a_writer_thread() {
+    fn is_send<T: Send>() {}
+    is_send::<RecordingWriter>();
+    is_send::<FlacEncoder<std::fs::File>>();
+    is_send::<Box<dyn TrackEncoder>>();
+}

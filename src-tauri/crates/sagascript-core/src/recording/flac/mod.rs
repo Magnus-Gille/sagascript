@@ -41,9 +41,9 @@ use flacenc::encode_fixed_size_frame;
 use flacenc::error::{Verified, Verify};
 use flacenc::source::{Context, Fill, FrameBuf};
 
+pub(crate) use self::format::HEADER_LEN;
 use self::format::{
-    build_header, crc16, crc8, SeekIndex, StreamParams, StreamTotals, BLOCK_SIZE, HEADER_LEN,
-    RESERVED_LEN,
+    build_header, crc16, crc8, SeekIndex, StreamParams, StreamTotals, BLOCK_SIZE, RESERVED_LEN,
 };
 use super::encoder::{quantise, TrackEncoder, TrackSummary};
 use super::error::RecordingError;
