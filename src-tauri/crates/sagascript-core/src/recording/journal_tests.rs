@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use sagascript_testsupport::TempDir;
 
 use super::*;
@@ -42,7 +44,9 @@ fn events_round_trip_through_a_file() {
         summary.gaps,
         vec![Gap::new(500_000, 480, GapReason::Overrun)]
     );
-    assert_eq!(summary.clipped, 5);
+    assert_eq!(summary.clipped_within(u64::MAX), 5);
+    assert_eq!(summary.clipped_within(480_000), 3, "the gap lies beyond");
+    assert_eq!(summary.clipped_within(479_999), 0);
     assert_eq!(summary.ignored_lines, 0);
 }
 
@@ -66,7 +70,7 @@ fn a_torn_last_line_is_skipped_not_fatal() {
     bytes.extend_from_slice(b"{\"t\":\"gap\",\"at_frame\":10,\"length\":5,\"reason\":\"stall\"}\n");
     // Torn: cut in the middle of the next event, no newline.
     bytes.extend_from_slice(b"{\"t\":\"gap\",\"at_frame\":99,\"len");
-    let summary = summarize(&bytes);
+    let summary = summarize(&bytes).unwrap();
     assert_eq!(summary.start, Some(("qpc".into(), 7)));
     assert_eq!(summary.gaps, vec![Gap::new(10, 5, GapReason::Stall)]);
     assert_eq!(summary.ignored_lines, 1);
@@ -74,7 +78,7 @@ fn a_torn_last_line_is_skipped_not_fatal() {
 
 #[test]
 fn a_complete_looking_line_without_a_newline_is_still_torn() {
-    let summary = summarize(b"{\"t\":\"anchor\",\"host_ns\":1,\"frame\":2}");
+    let summary = summarize(b"{\"t\":\"anchor\",\"host_ns\":1,\"frame\":2}").unwrap();
     assert!(summary.anchors.is_empty());
     assert_eq!(summary.ignored_lines, 1);
 }
@@ -87,7 +91,7 @@ fn events_of_a_newer_build_and_garbage_are_counted_and_skipped() {
                   not json at all\n\
                   \n\
                   {\"t\":\"anchor\",\"host_ns\":5,\"frame\":40}\n";
-    let summary = summarize(bytes);
+    let summary = summarize(bytes).unwrap();
     assert_eq!(summary.anchors, vec![(1, 0), (5, 40)]);
     assert_eq!(summary.ignored_lines, 2);
 }
@@ -108,7 +112,7 @@ fn only_the_first_start_counts() {
                 .as_bytes(),
         );
     }
-    let summary = summarize(&bytes);
+    let summary = summarize(&bytes).unwrap();
     assert_eq!(summary.start, Some(("d".into(), 1)));
     assert_eq!(summary.anchors, vec![(1, 0)]);
 }
@@ -132,4 +136,96 @@ fn a_journal_is_private_to_the_owner() {
         std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
         0o600
     );
+}
+
+// ---- journals of any size ---------------------------------------------------------
+
+/// A journal file made of `lines` and a final valid gap after them.
+fn write_journal(path: &Path, lines: impl FnOnce(&mut std::fs::File), last_gap_at: u64) {
+    let mut file = std::fs::File::create(path).unwrap();
+    file.write_all(
+        b"{\"t\":\"start\",\"domain\":\"d\",\"host_ns\":1,\"sample_rate\":8000,\"channels\":1}\n",
+    )
+    .unwrap();
+    lines(&mut file);
+    writeln!(
+        file,
+        "{{\"t\":\"gap\",\"at_frame\":{last_gap_at},\"length\":9,\"reason\":\"stall\"}}"
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_journal_larger_than_64_mib_is_read_to_its_end() {
+    // 66 000 lines of 1 KiB that a newer build might have written: 64.5 MiB
+    // before the last gap. A reader that stops at 64 MiB never sees it.
+    let dir = TempDir::new();
+    let path = dir.path().join("mic.events.jsonl");
+    let padding = "x".repeat(1000);
+    write_journal(
+        &path,
+        |file| {
+            let line = format!("{{\"t\":\"future\",\"pad\":\"{padding}\"}}\n");
+            for _ in 0..66_000 {
+                file.write_all(line.as_bytes()).unwrap();
+            }
+        },
+        777,
+    );
+    assert!(std::fs::metadata(&path).unwrap().len() > 64 * 1024 * 1024);
+
+    let summary = read_journal(&path).unwrap();
+    assert_eq!(summary.gaps, vec![Gap::new(777, 9, GapReason::Stall)]);
+    assert_eq!(summary.ignored_lines, 66_000);
+}
+
+#[test]
+fn a_line_that_is_far_too_long_is_skipped_without_being_held_in_memory() {
+    let dir = TempDir::new();
+    let path = dir.path().join("mic.events.jsonl");
+    write_journal(
+        &path,
+        |file| {
+            // 3 MiB on one line, then a normal line.
+            file.write_all(&vec![b'y'; 3 * 1024 * 1024]).unwrap();
+            file.write_all(b"\n{\"t\":\"anchor\",\"host_ns\":5,\"frame\":40}\n")
+                .unwrap();
+        },
+        10,
+    );
+    let summary = read_journal(&path).unwrap();
+    assert_eq!(summary.ignored_lines, 1);
+    assert_eq!(summary.anchors, vec![(1, 0), (5, 40)]);
+    assert_eq!(summary.gaps.len(), 1);
+}
+
+#[test]
+fn a_journal_with_more_events_than_a_manifest_can_hold_is_a_typed_error_not_a_short_summary() {
+    let dir = TempDir::new();
+    let path = dir.path().join("mic.events.jsonl");
+    let write = |events: usize| {
+        write_journal(
+            &path,
+            |file| {
+                for frame in 0..events {
+                    writeln!(file, "{{\"t\":\"anchor\",\"host_ns\":5,\"frame\":{frame}}}").unwrap();
+                }
+            },
+            1,
+        );
+    };
+    // Up to the limit (the last gap is one event too) everything is read.
+    write(MAX_JOURNAL_EVENTS - 1);
+    let summary = read_journal(&path).unwrap();
+    assert_eq!(summary.anchors.len(), MAX_JOURNAL_EVENTS);
+    assert_eq!(summary.gaps.len(), 1);
+    // One more is refused whole.
+    write(MAX_JOURNAL_EVENTS);
+    // (`expect_err` would print every anchor of the summary on failure.)
+    let error = match read_journal(&path) {
+        Err(error) => error,
+        Ok(summary) => panic!("refused, but read {} anchors", summary.anchors.len()),
+    };
+    assert_eq!(error.code(), "recording_journal_too_large");
+    assert!(!error.retryable());
 }

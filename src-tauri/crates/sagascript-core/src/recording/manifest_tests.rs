@@ -295,3 +295,41 @@ fn the_step_list_matches_the_version() {
     );
     const { assert!(MIN_READER_VERSION <= SCHEMA_VERSION) };
 }
+
+#[test]
+fn a_track_cannot_claim_a_file_the_recording_keeps_for_itself() {
+    // Recovery writes into the track file: it must never be the manifest, the
+    // lock, a journal or a tail.
+    for bad in [
+        "recording.json",
+        "recording.json.tmp",
+        "recording.lock",
+        "mic.events.jsonl",
+        "mic.tail",
+        "mic.tail.1",
+    ] {
+        let mut value = golden_value();
+        value["tracks"][0]["file"] = json!(bad);
+        assert!(
+            matches!(
+                parse_manifest(value.to_string().as_bytes()),
+                Err(RecordingError::ManifestInvalid { .. })
+            ),
+            "file {bad:?} must be refused"
+        );
+    }
+    // Ordinary names, including ones that merely look similar, are fine.
+    for good in [
+        "mic.flac",
+        "system audio.flac",
+        "recording.flac",
+        "tail.flac",
+    ] {
+        let mut value = golden_value();
+        value["tracks"][0]["file"] = json!(good);
+        assert!(
+            parse_manifest(value.to_string().as_bytes()).is_ok(),
+            "{good}"
+        );
+    }
+}

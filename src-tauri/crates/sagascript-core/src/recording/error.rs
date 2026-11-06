@@ -73,6 +73,17 @@ pub enum RecordingError {
     /// out of order. The recording folder, if any, is left for recovery.
     #[error("the recording session failed: {reason}")]
     SessionFailed { reason: &'static str },
+    /// A file of the recording is a symbolic link (or a Windows reparse
+    /// point), a directory, a pipe or anything else but a regular file. It is
+    /// never followed or opened: a recording folder can come from anywhere
+    /// (a sync, an archive, a copy) and must not make recovery read or write
+    /// a file outside it.
+    #[error("a recording file is a link or not a regular file; could not {action}")]
+    NotRegularFile { action: &'static str },
+    /// A track journal holds more events than a manifest can carry. Recovery
+    /// stops instead of finishing a recording with events missing.
+    #[error("the track journal has too many events to recover from")]
+    JournalTooLarge,
     /// The FLAC encoder library refused a block (a bug or an out-of-range
     /// sample). The text is scrubbed of paths.
     #[error("the audio encoder failed: {message}")]
@@ -122,6 +133,8 @@ impl RecordingError {
             Self::UnknownTrack => "recording_unknown_track",
             Self::TrackFinished => "recording_track_finished",
             Self::CorruptTrack { .. } => "recording_corrupt_track",
+            Self::JournalTooLarge => "recording_journal_too_large",
+            Self::NotRegularFile { .. } => "recording_not_regular_file",
             Self::Encoder { .. } => "recording_encoder",
             Self::SourceUnavailable { .. } => "recording_source_unavailable",
             Self::SessionFailed { .. } => "recording_session_failed",

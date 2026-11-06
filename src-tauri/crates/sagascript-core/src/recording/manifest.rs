@@ -290,6 +290,21 @@ pub(crate) fn is_plain_file_name(name: &str) -> bool {
         })
 }
 
+/// Whether `name` is one the recording keeps for itself: the manifest (and the
+/// temporary file it is replaced through), the lock, a journal or a tail. A
+/// track file named like one would have recovery write FLAC into it.
+pub(crate) fn is_reserved_file_name(name: &str) -> bool {
+    let tail_number = name.rsplit_once(".tail.").is_some_and(|(_, number)| {
+        !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit())
+    });
+    name == MANIFEST_FILE
+        || name == format!("{MANIFEST_FILE}.tmp")
+        || name == super::store::LOCK_FILE
+        || name.ends_with(".events.jsonl")
+        || name.ends_with(".tail")
+        || tail_number
+}
+
 /// A track id is also the stem of its journal file name.
 pub(crate) fn is_valid_track_id(id: &str) -> bool {
     is_plain_file_name(id) && !id.ends_with('.') && !id.starts_with('.')
@@ -310,6 +325,9 @@ pub fn validate(manifest: &Manifest) -> Result<(), RecordingError> {
         }
         if !is_plain_file_name(&track.file) {
             return invalid("a track file is not a plain relative name");
+        }
+        if is_reserved_file_name(&track.file) {
+            return invalid("a track file is named like a file the recording keeps for itself");
         }
         if !ids.insert(&track.id) || !files.insert(&track.file) {
             return invalid("a track id or file is used twice");

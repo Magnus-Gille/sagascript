@@ -16,8 +16,9 @@
 //!    files (placeholder header) and journals and fsync them, then the folder.
 //! 3. While recording the writer appends frames, journals the start, every
 //!    anchor and every gap, and fsyncs tracks and journals every
-//!    [`SYNC_INTERVAL`](super::SYNC_INTERVAL) (via [`RecordingWriter::sync_if_due`])
-//!    and at each gap.
+//!    [`SYNC_INTERVAL`](super::SYNC_INTERVAL) (via [`RecordingWriter::sync_if_due`]).
+//!    A gap is journaled and the journal fsynced **before** its silence is
+//!    written, and the track is fsynced after.
 //! 4. At the end of a track: last frame, fsync, STREAMINFO and SEEKTABLE
 //!    rewritten in place, fsync.
 //! 5. `recording.json.tmp` with `state: "complete"`, fsync, rename over
@@ -40,8 +41,8 @@ use super::encoder::{TrackEncoder, TrackSummary};
 use super::error::RecordingError;
 use super::flac::FlacEncoder;
 use super::io::{
-    create_dir_private, create_new_private, open_read_write, replace_file_durably, sync_dir,
-    sync_file,
+    create_dir_private, create_new_private, open_member, replace_file_durably, sync_dir, sync_file,
+    Open,
 };
 use super::journal::{journal_file_name, JournalEvent, JournalWriter};
 use super::manifest::{
@@ -259,20 +260,12 @@ fn folder_stamp(started_at: &str) -> Result<String, RecordingError> {
 /// `create` makes the lock file when it is absent (recovery of a folder whose
 /// lock file was removed by hand); it is never truncated.
 pub(crate) fn lock_folder(dir: &Path, create: bool) -> Result<File, RecordingError> {
-    let path = dir.join(LOCK_FILE);
-    let file = if create {
-        let mut options = fs::OpenOptions::new();
-        options.read(true).write(true).create(true).truncate(false);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
-        }
-        options.open(&path)
+    let mode = if create {
+        Open::ReadWriteCreate
     } else {
-        fs::OpenOptions::new().read(true).write(true).open(&path)
-    }
-    .map_err(|error| RecordingError::io("open the recording lock", &error))?;
+        Open::ReadWrite
+    };
+    let file = open_member(&dir.join(LOCK_FILE), mode, "open the recording lock")?;
     match FileExt::try_lock_exclusive(&file) {
         Ok(()) => Ok(file),
         Err(error) if error.raw_os_error() == fs2::lock_contended_error().raw_os_error() => {
@@ -378,6 +371,8 @@ fn start_in(
         manifest,
         tracks,
         last_sync: Instant::now(),
+        #[cfg(test)]
+        crash_after: None,
     })
 }
 
@@ -390,6 +385,49 @@ fn remove_fresh_folder(dir: &Path) {
         }
     }
     let _ = fs::remove_dir(dir);
+}
+
+/// The steps of [`RecordingWriter::gap`] at which a test can stop the
+/// "process", in the order the code takes them.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum GapStep {
+    /// The gap was checked; nothing is written yet.
+    Checked,
+    /// The journal line is written (not yet synced).
+    JournalAppended,
+    /// The journal line is durable; no silence has been encoded.
+    JournalSynced,
+    /// The silence is encoded (full blocks may be on their way to the file).
+    SilencePushed,
+    /// The writer knows of the gap.
+    GapRecorded,
+    /// The track is fsynced: the whole gap is durable.
+    TrackSynced,
+}
+
+#[cfg(test)]
+impl GapStep {
+    pub(crate) const ALL: [GapStep; 6] = [
+        GapStep::Checked,
+        GapStep::JournalAppended,
+        GapStep::JournalSynced,
+        GapStep::SilencePushed,
+        GapStep::GapRecorded,
+        GapStep::TrackSynced,
+    ];
+}
+
+/// A test's crash: fails with an I/O error when `armed` is `step`.
+#[cfg(test)]
+fn failpoint(armed: Option<GapStep>, step: GapStep) -> Result<(), RecordingError> {
+    if armed == Some(step) {
+        return Err(RecordingError::io(
+            "continue after an injected crash",
+            &std::io::Error::other("injected"),
+        ));
+    }
+    Ok(())
 }
 
 struct TrackWriter {
@@ -427,6 +465,9 @@ pub struct RecordingWriter {
     manifest: Manifest,
     tracks: Vec<TrackWriter>,
     last_sync: Instant,
+    /// Tests: stop `gap` after this step, as a killed process would.
+    #[cfg(test)]
+    pub(crate) crash_after: Option<GapStep>,
 }
 
 impl RecordingWriter {
@@ -504,8 +545,10 @@ impl RecordingWriter {
     }
 
     /// Insert `length` frames of silence into the track at its current end so
-    /// the frame index still maps to time, and record the gap. The track is
-    /// fsynced before the journal says the gap exists, and the journal after.
+    /// the frame index still maps to time, and record the gap. The journal
+    /// line is fsynced **before** the silence is written and the track after,
+    /// so a crash at any point leaves either no silence or silence the
+    /// journal accounts for. A gap the track cannot hold is refused first.
     pub fn gap(
         &mut self,
         track: &str,
@@ -515,23 +558,45 @@ impl RecordingWriter {
         if length == 0 {
             return Ok(());
         }
+        #[cfg(test)]
+        let crash_after = self.crash_after;
         let track = self.track_mut(track)?;
         let encoder = track
             .encoder
             .as_mut()
             .ok_or(RecordingError::TrackFinished)?;
+        // Refused here, before a byte is journaled or written: a gap the
+        // track cannot hold must leave no line that claims it exists.
+        encoder.ensure_room(length)?;
+        #[cfg(test)]
+        failpoint(crash_after, GapStep::Checked)?;
         let at_frame = encoder.frames_pushed();
-        encoder.push_silence(length)?;
-        encoder.sync()?;
         let clipped = encoder.clipped_samples();
+        // The intention is durable **before** any of the silence is written:
+        // the operating system may flush a written frame at any moment, and
+        // silence that reached the disk with no journal line would be
+        // presented as captured audio. A gap whose silence never arrives is
+        // harmless: recovery drops what lies beyond the kept audio.
         track.journal.append(&JournalEvent::Gap {
             at_frame,
             length,
             reason: reason.clone(),
             clipped,
         })?;
+        #[cfg(test)]
+        failpoint(crash_after, GapStep::JournalAppended)?;
         track.journal.sync()?;
+        #[cfg(test)]
+        failpoint(crash_after, GapStep::JournalSynced)?;
+        encoder.push_silence(length)?;
+        #[cfg(test)]
+        failpoint(crash_after, GapStep::SilencePushed)?;
         track.gaps.push(Gap::new(at_frame, length, reason));
+        #[cfg(test)]
+        failpoint(crash_after, GapStep::GapRecorded)?;
+        encoder.sync()?;
+        #[cfg(test)]
+        failpoint(crash_after, GapStep::TrackSynced)?;
         Ok(())
     }
 
@@ -739,7 +804,8 @@ fn write_final_manifest(path: &Path, bytes: &[u8]) -> Result<(), RecordingError>
     tracing::warn!(kind = ?first.kind(), "could not replace the manifest; writing it in place");
     let in_place = (|| -> std::io::Result<()> {
         use std::io::{Seek, SeekFrom, Write};
-        let mut file = open_read_write(path)?;
+        let mut file = open_member(path, Open::ReadWrite, "write the recording manifest")
+            .map_err(|_| std::io::Error::from(ErrorKind::PermissionDenied))?;
         let old_len = file.metadata()?.len();
         if (bytes.len() as u64) > old_len {
             return Err(std::io::Error::new(
@@ -758,8 +824,7 @@ fn write_final_manifest(path: &Path, bytes: &[u8]) -> Result<(), RecordingError>
 
 /// Read a file of at most `limit` bytes into memory.
 pub(crate) fn read_bounded(path: &Path, limit: u64) -> Result<Vec<u8>, RecordingError> {
-    let file =
-        File::open(path).map_err(|error| RecordingError::io("open a recording file", &error))?;
+    let file = open_member(path, Open::Read, "open a recording file")?;
     let mut bytes = Vec::new();
     file.take(limit + 1)
         .read_to_end(&mut bytes)

@@ -43,7 +43,8 @@ use flacenc::source::{Context, Fill, FrameBuf};
 
 pub(crate) use self::format::HEADER_LEN;
 use self::format::{
-    build_header, crc16, crc8, SeekIndex, StreamParams, StreamTotals, BLOCK_SIZE, RESERVED_LEN,
+    build_header, crc16, crc8, SeekIndex, StreamParams, StreamTotals, BLOCK_SIZE,
+    MAX_TOTAL_SAMPLES, RESERVED_LEN,
 };
 use super::encoder::{quantise, TrackEncoder, TrackSummary};
 use super::error::RecordingError;
@@ -215,7 +216,7 @@ impl<W: TrackSink> FlacEncoder<W> {
                 reason: "samples are not a whole number of frames",
             });
         }
-        self.frames_pushed += (interleaved.len() / channels) as u64;
+        self.frames_pushed = self.total_after((interleaved.len() / channels) as u64)?;
         let block_len = BLOCK_SIZE * channels;
         let mut rest = interleaved;
         while !rest.is_empty() {
@@ -234,6 +235,18 @@ impl<W: TrackSink> FlacEncoder<W> {
             return Err(RecordingError::TrackFinished);
         }
         Ok(())
+    }
+
+    /// The number of frames the track holds after `frames` more, or the error
+    /// when STREAMINFO could not count them (36 bits per channel). Checked
+    /// arithmetic: no length, however large, wraps or panics.
+    fn total_after(&self, frames: u64) -> Result<u64, RecordingError> {
+        self.frames_pushed
+            .checked_add(frames)
+            .filter(|total| *total <= MAX_TOTAL_SAMPLES)
+            .ok_or(RecordingError::UnsupportedFormat {
+                reason: "the track is longer than FLAC can describe",
+            })
     }
 
     fn encode_pending(&mut self) -> Result<(), RecordingError> {
@@ -332,7 +345,12 @@ impl<W: TrackSink> FlacEncoder<W> {
             self.encode_pending()?;
         }
         let io_error = |error: io::Error| RecordingError::io("finish a track file", &error);
+        // The last frame is made durable **before** the metadata is rewritten
+        // (design §4.5): a power loss during the rewrite must find the frames
+        // on disk, and the rewrite is the only thing that can then be torn.
+        // Recovery rebuilds a torn header from the frames.
         self.out.flush().map_err(io_error)?;
+        self.out.get_mut().sync_data().map_err(io_error)?;
         let md5 = self.context.md5_digest();
         let totals = StreamTotals {
             total_samples: self.frames_pushed,
@@ -373,7 +391,7 @@ impl<W: TrackSink> TrackEncoder for FlacEncoder<W> {
                 reason: "samples are not a whole number of frames",
             });
         }
-        self.frames_pushed += (interleaved.len() / channels) as u64;
+        self.frames_pushed = self.total_after((interleaved.len() / channels) as u64)?;
         let block_len = BLOCK_SIZE * channels;
         let bits = self.params.bits;
         for &sample in interleaved {
@@ -391,8 +409,17 @@ impl<W: TrackSink> TrackEncoder for FlacEncoder<W> {
         self.guard()?;
         let channels = usize::from(self.params.channels);
         let block_len = BLOCK_SIZE * channels;
-        self.frames_pushed += frames;
-        let mut remaining = frames * channels as u64;
+        // Everything is checked before the encoder changes: once the total
+        // fits in 36 bits the sample count (at most two channels) cannot
+        // overflow either, but the product is checked anyway.
+        let total = self.total_after(frames)?;
+        let mut remaining =
+            frames
+                .checked_mul(channels as u64)
+                .ok_or(RecordingError::UnsupportedFormat {
+                    reason: "the track is longer than FLAC can describe",
+                })?;
+        self.frames_pushed = total;
         while remaining > 0 {
             let take = ((block_len - self.pending.len()) as u64).min(remaining) as usize;
             self.pending.resize(self.pending.len() + take, 0);
@@ -402,6 +429,11 @@ impl<W: TrackSink> TrackEncoder for FlacEncoder<W> {
             }
         }
         Ok(())
+    }
+
+    fn ensure_room(&self, frames: u64) -> Result<(), RecordingError> {
+        self.guard()?;
+        self.total_after(frames).map(|_| ())
     }
 
     fn frames_pushed(&self) -> u64 {
