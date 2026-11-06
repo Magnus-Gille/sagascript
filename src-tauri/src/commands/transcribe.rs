@@ -73,7 +73,11 @@ pub(crate) fn apply_glossary(text: String, glossary: &Glossary) -> String {
 }
 
 #[tauri::command]
-pub async fn start_recording(controller: State<'_, SharedController>) -> Result<(), CommandError> {
+pub async fn start_recording(
+    controller: State<'_, SharedController>,
+    recorder: State<'_, crate::recording_session::SharedRecorder>,
+) -> Result<(), CommandError> {
+    crate::recording_session::ensure_recorder_idle(recorder.is_active())?;
     let mut ctrl = lock_controller(&controller);
     gui_start_recording_result(ctrl.start_recording())
 }
@@ -81,8 +85,10 @@ pub async fn start_recording(controller: State<'_, SharedController>) -> Result<
 #[tauri::command]
 pub async fn start_training_recording(
     controller: State<'_, SharedController>,
+    recorder: State<'_, crate::recording_session::SharedRecorder>,
     profile_id: String,
 ) -> Result<(), CommandError> {
+    crate::recording_session::ensure_recorder_idle(recorder.is_active())?;
     let mut ctrl = lock_controller(&controller);
     let profile = ctrl.settings().dictation_profile(&profile_id)?;
     gui_start_recording_result(ctrl.start_training_recording_for_profile(profile))

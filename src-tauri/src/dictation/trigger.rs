@@ -10,6 +10,7 @@ use crate::commands::{lock_controller, SharedController};
 use crate::events::{self, EmitEvent, UiState};
 #[cfg(target_os = "macos")]
 use crate::platform;
+use crate::recording_session::{ensure_recorder_idle, SharedRecorder};
 use crate::tray::{select_profile_menu, update_tray_status};
 use crate::{focus_diag, hotkey, overlay, SAFE_FALLBACK_HOTKEY};
 
@@ -43,6 +44,12 @@ pub(crate) fn handle_hotkey_event(
     match state {
         hotkey::BareHotkeyState::Pressed => {
             info!("Hotkey pressed: {shortcut}");
+            // The audio recorder holds the microphone: a busy dictation, here
+            // as for a controller that is not idle, is a logged no-op.
+            if let Err(error) = ensure_recorder_idle(app.state::<SharedRecorder>().is_active()) {
+                warn!("Ignoring dictation hotkey: {error}");
+                return;
+            }
             #[cfg(target_os = "macos")]
             let pressed_target = platform::macos::frontmost_pid();
             #[cfg(target_os = "macos")]

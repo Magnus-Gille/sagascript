@@ -733,3 +733,83 @@ async fn the_recording_being_made_is_not_deleted() {
     // Finished: it may go to the trash.
     delete_recording_in(h.dir.path(), &name, None, h.trash.as_ref()).expect("moved");
 }
+
+// -- The tray indicator and dictation ----------------------------------------------
+
+#[test]
+fn the_indicator_is_on_from_the_start_until_the_session_is_over() {
+    use RecordingSessionState::*;
+    for (state, live) in [
+        (Idle, false),
+        (Starting, true),
+        (Recording, true),
+        (Finalizing, true),
+        (Done, false),
+        (Failed, false),
+    ] {
+        assert_eq!(state_is_live(state), live, "{state:?}");
+    }
+}
+
+#[test]
+fn dictation_is_refused_while_the_recorder_is_active() {
+    let error = ensure_recorder_idle(true).expect_err("the microphone is in use");
+    assert_eq!(error.code(), "busy");
+    assert!(error.retryable());
+    assert!(ensure_recorder_idle(false).is_ok());
+}
+
+#[tokio::test]
+async fn the_recorder_answers_the_dictation_gate_while_it_runs() {
+    let h = Harness::new();
+    assert!(ensure_recorder_idle(h.recorder.is_active()).is_ok());
+    h.start(None).await.expect("starts");
+    assert!(ensure_recorder_idle(h.recorder.is_active()).is_err());
+    stop_session(&h.recorder).await.expect("stops");
+    assert!(ensure_recorder_idle(h.recorder.is_active()).is_ok());
+}
+
+// -- Recovery at start -------------------------------------------------------------
+
+#[test]
+fn startup_recovery_of_a_missing_folder_does_nothing_and_creates_nothing() {
+    let parent = TempDir::new();
+    let missing = parent.path().join("Sagascript");
+    assert!(recover_at_startup(&missing).is_empty());
+    assert!(!missing.exists(), "the folder is not created at start");
+}
+
+#[test]
+fn startup_recovery_of_a_folder_with_no_interrupted_recording_is_silent() {
+    let root = TempDir::new();
+    std::fs::create_dir_all(root.path().join("notes")).expect("folder");
+    assert!(recover_at_startup(root.path()).is_empty());
+}
+
+#[tokio::test]
+async fn startup_recovery_recovers_an_interrupted_recording_and_describes_it() {
+    let h = Harness::new();
+    h.start(Some("Kill -9")).await.expect("starts");
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    let finished = stop_session(&h.recorder).await.expect("stops");
+    let manifest = h
+        .dir
+        .path()
+        .join(&finished.summary.folder_name)
+        .join("recording.json");
+    let text = std::fs::read_to_string(&manifest).expect("read");
+    std::fs::write(
+        &manifest,
+        text.replace("\"state\": \"complete\"", "\"state\": \"recording\""),
+    )
+    .expect("write");
+
+    let notes = recover_at_startup(h.dir.path());
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    assert_eq!(notes[0].outcome, RecoveryNoteOutcome::Recovered);
+    assert_eq!(notes[0].title, "Kill -9");
+    // The notes wait for the window.
+    h.recorder.remember_notes(notes.clone());
+    assert_eq!(h.recorder.take_notes(), notes);
+    assert!(recover_at_startup(h.dir.path()).is_empty());
+}

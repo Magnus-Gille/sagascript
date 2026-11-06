@@ -318,6 +318,29 @@ pub fn folder_info_on_disk(settings: &Settings, requested: Option<&str>) -> Reco
     folder_info(settings, requested, &VolumeFreeSpace)
 }
 
+/// Whether a session in `state` holds the microphone, so that the tray shows
+/// the recording indicator: from the start until it is over. The same
+/// question `SharedRecorder::is_active` answers from the recorder.
+pub fn state_is_live(state: RecordingSessionState) -> bool {
+    matches!(
+        state,
+        RecordingSessionState::Starting
+            | RecordingSessionState::Recording
+            | RecordingSessionState::Finalizing
+    )
+}
+
+/// Dictation and the recorder share the microphone, so dictation does not
+/// start while the recorder is active. `Busy`, as when dictation is busy.
+pub fn ensure_recorder_idle(recorder_active: bool) -> Result<(), CommandError> {
+    if recorder_active {
+        return Err(busy(
+            "Cannot start dictation while Sagascript is recording audio. Stop the recording first.",
+        ));
+    }
+    Ok(())
+}
+
 /// The notes for a recovery scan of `root`. A folder that was complete already
 /// needs nothing and gets no note; neither does `skip` (the folder of the
 /// session that is recording now, which is locked by design).
@@ -481,9 +504,6 @@ impl SharedRecorder {
     /// Whether a session is starting or running (not one that has ended and
     /// waits for `stop_recording_session` to collect it). For the tray and the
     /// dictation hotkey, which must not start while a session records.
-    // Read by the tray indicator and the hotkey path, which the Record window
-    // work adds; the tests read it now.
-    #[allow(dead_code)]
     pub fn is_active(&self) -> bool {
         match &self.lock().phase {
             Phase::Idle => false,
@@ -578,8 +598,6 @@ impl SharedRecorder {
     }
 
     /// Keep recovery notes for the window's next `recover_recordings`.
-    // Called by the startup recovery, which the Record window work adds.
-    #[allow(dead_code)]
     pub fn remember_notes(&self, notes: Vec<RecoveryNote>) {
         self.lock().notes.extend(notes);
     }
@@ -823,6 +841,24 @@ pub fn delete_recording_in(
 pub fn recover_pending(root: &Path, skip: Option<&str>) -> Result<Vec<RecoveryNote>, CommandError> {
     let reports = RecordingStore::new(root).recover_pending()?;
     Ok(recovery_notes(root, reports, skip))
+}
+
+/// The recovery at app start: recover the interrupted recordings of `root`
+/// (the configured recordings folder) and describe what was done. A folder that
+/// does not exist is nothing to recover and is not created. A failure is
+/// logged (no path) and gives no notes: the Record window's own recovery
+/// reports it when the user asks. Blocking.
+pub fn recover_at_startup(root: &Path) -> Vec<RecoveryNote> {
+    match recover_pending(root, None) {
+        Ok(notes) => notes,
+        Err(error) => {
+            tracing::warn!(
+                "Recovering interrupted recordings at start failed ({})",
+                error.code()
+            );
+            Vec::new()
+        }
+    }
 }
 
 #[cfg(test)]

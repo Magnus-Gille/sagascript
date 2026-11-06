@@ -7,6 +7,7 @@
 //! code ([`sagascript_core::recording::RecordingError`]).
 
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use sagascript_core::recording::{list_recordings as list_recordings_in, RecordingSummary};
@@ -19,8 +20,8 @@ use crate::command_error::CommandError;
 use crate::events::{event, EmitEvent};
 use crate::recording_session::{
     check_permission, delete_recording_in, folder_info_on_disk, recover_pending, start_session,
-    stop_session, Emit, RecordingFinished, RecordingFolderInfo, RecordingSessionInfo, RecoveryNote,
-    SharedRecorder,
+    state_is_live, stop_session, Emit, RecordingFinished, RecordingFolderInfo,
+    RecordingSessionInfo, RecoveryNote, SharedRecorder,
 };
 use crate::trash::recording_folder;
 
@@ -52,6 +53,14 @@ async fn ensure_microphone_permission() -> Result<(), CommandError> {
     Ok(())
 }
 
+/// Redraw the tray after the recorder started or stopped. The caller may be a
+/// worker or the recording-events thread; tray calls go to the main thread
+/// (ADR 0003). The status is derived from the recorder when it runs, so the
+/// order of these redraws does not matter.
+fn refresh_tray(app: &tauri::AppHandle) {
+    crate::dispatch_to_main(app, crate::tray::refresh_tray_status);
+}
+
 async fn blocking<T: Send + 'static>(
     work: impl FnOnce() -> T + Send + 'static,
 ) -> Result<T, CommandError> {
@@ -70,19 +79,35 @@ pub async fn start_recording_session(
     ensure_not_dictating(&controller)?;
     ensure_microphone_permission().await?;
     let settings = recorder_settings(&controller);
+    // The tray shows the recording while the session is live: redraw it when
+    // the session stops being live by itself (the device went away, the disk
+    // filled), not on every level update.
+    let live = AtomicBool::new(false);
+    let emitter = app.clone();
     let emit: Emit = Arc::new(move |info| {
-        let _ = app.emit_event(event::RECORDING_SESSION_CHANGED, info);
+        let now = state_is_live(info.state);
+        if live.swap(now, Ordering::SeqCst) != now {
+            refresh_tray(&emitter);
+        }
+        let _ = emitter.emit_event(event::RECORDING_SESSION_CHANGED, info);
     });
-    let started = start_session(&recorder, settings, title, emit).await?;
+    let started = start_session(&recorder, settings, title, emit).await;
+    // A failed start frees the slot; a successful one now records.
+    refresh_tray(&app);
+    let started = started?;
     info!("Recording session started");
     Ok(started)
 }
 
 #[tauri::command]
 pub async fn stop_recording_session(
+    app: tauri::AppHandle,
     recorder: State<'_, SharedRecorder>,
 ) -> Result<RecordingFinished, CommandError> {
-    let finished = stop_session(&recorder).await?;
+    let stopped = stop_session(&recorder).await;
+    // Stopped, or failed to: either way the recorder's state changed.
+    refresh_tray(&app);
+    let finished = stopped?;
     info!("Recording session stopped");
     Ok(finished)
 }
