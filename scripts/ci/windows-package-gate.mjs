@@ -8,7 +8,9 @@
 //   3. it touches a file that only the Windows package build reads (WINDOWS_PACKAGE_PATHS).
 // Anything this script cannot work out (no base commit, unreadable file) fails open: it runs.
 import { execFileSync } from "node:child_process";
-import { appendFileSync, readFileSync } from "node:fs";
+import { appendFileSync, readFileSync, realpathSync } from "node:fs";
+import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 
 export const LABEL = "windows-package";
 export const VERSION_FILES = ["package.json", "src-tauri/tauri.conf.json"];
@@ -97,4 +99,15 @@ function main() {
   emit(decide({ labels, changedFiles, versions }));
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) main();
+// Node reports the real path in import.meta.url, so compare against the real path of argv[1]
+// (as run-frontend-tests.mjs does): a Windows path, a space or a symlinked temp dir must still run.
+function invokedDirectly() {
+  if (!process.argv[1]) return false;
+  try {
+    return import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href;
+  } catch {
+    return import.meta.url === pathToFileURL(resolve(process.argv[1])).href;
+  }
+}
+
+if (invokedDirectly()) main();

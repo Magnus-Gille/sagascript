@@ -1,7 +1,7 @@
 // SAGA-551: a pull request builds the Windows packages only when it is relevant; the release path never skips.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -105,7 +105,11 @@ test("every Windows-only script and config the workflow reads is in the path lis
 });
 
 test("the gate script reads a real merge commit: a docs-only change skips, a packaging change and a version bump run", () => {
-  const script = join(dirname(fileURLToPath(import.meta.url)), "ci/windows-package-gate.mjs");
+  // Run a copy from a path with a space: the script must recognise itself as the entry point on every
+  // OS and path (a `file://${argv[1]}` comparison never matched on Windows, so CI wrote no output there).
+  const scriptDir = mkdtempSync(join(tmpdir(), "wpg script "));
+  const script = join(scriptDir, "windows-package-gate.mjs");
+  copyFileSync(join(dirname(fileURLToPath(import.meta.url)), "ci/windows-package-gate.mjs"), script);
   const dir = mkdtempSync(join(tmpdir(), "wpg-"));
   const vcs = (...args) =>
     execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args], { cwd: dir, stdio: "pipe" });
@@ -116,7 +120,8 @@ test("the gate script reads a real merge commit: a docs-only change skips, a pac
   const outcome = (labels = []) => {
     const out = join(tmpdir(), `wpg-out-${process.pid}-${Math.random()}`);
     writeFileSync(out, "");
-    const env = { PATH: process.env.PATH, EVENT_NAME: "pull_request", PR_LABELS: JSON.stringify(labels), GITHUB_OUTPUT: out };
+    // Keep the inherited environment (Windows needs SYSTEMROOT and friends for git) and set only the gate's inputs.
+    const env = { ...process.env, EVENT_NAME: "pull_request", PR_LABELS: JSON.stringify(labels), GITHUB_OUTPUT: out };
     execFileSync("node", [script], { cwd: dir, stdio: "pipe", env });
     const text = readFileSync(out, "utf8").trim();
     rmSync(out);
@@ -150,5 +155,6 @@ test("the gate script reads a real merge commit: a docs-only change skips, a pac
     assert.equal(outcome(), "run=true");
   } finally {
     rmSync(dir, { recursive: true, force: true });
+    rmSync(scriptDir, { recursive: true, force: true });
   }
 });
