@@ -737,6 +737,9 @@ impl Engine for OrtEngine {
         let loaded = self
             .current()
             .ok_or_else(|| HostError::new(ErrorCode::NotLoaded, "No model is loaded"))?;
+        // `warm` runs this at key-down so the next dictation starts on a hot model; under
+        // Windows EcoQoS that work would be throttled exactly like a real window.
+        let _qos = crate::power_qos::high_qos_scope();
         canary_loaded(&loaded)
     }
 
