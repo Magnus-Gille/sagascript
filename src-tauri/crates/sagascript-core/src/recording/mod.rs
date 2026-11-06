@@ -42,6 +42,7 @@ pub mod error;
 pub mod flac;
 mod io;
 pub mod journal;
+pub mod library;
 pub mod manifest;
 pub mod naming;
 pub mod recover;
@@ -58,6 +59,10 @@ pub use decode::{decode_tracks, TrackChunk, TrackDecoder, CHUNK_SAMPLES};
 pub use encoder::{TrackEncoder, TrackSummary};
 pub use error::RecordingError;
 pub use flac::{FlacEncoder, TrackSink};
+pub use library::{
+    audio_track_path, delete_recording_folder, list_recordings, read_recording, RecordingSummary,
+    MIN_ID_PREFIX,
+};
 pub use manifest::{
     parse_manifest, serialize_manifest, Client, Clock, EndedReason, Gap, GapReason, Manifest,
     Quality, RecordingState, Track, MANIFEST_FILE, MIN_READER_VERSION, SCHEMA_VERSION,
