@@ -47,7 +47,7 @@ cpal = { version = "0.15", optional = true }
 # Diarization (optional, behind feature flag)
 ort = { version = "2.0.0-rc.12", features = ["ndarray"], optional = true }
 rustfft = { version = "6", optional = true }
-kodama = { version = "0.2", optional = true }
+kodama = { version = "0.3", optional = true }
 ndarray = { version = "0.17", optional = true }
 
 # fsync(2) as the fallback for volumes that reject F_FULLFSYNC, which is all
