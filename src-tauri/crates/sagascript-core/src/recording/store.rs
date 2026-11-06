@@ -16,8 +16,9 @@
 //!    files (placeholder header) and journals and fsync them, then the folder.
 //! 3. While recording the writer appends frames, journals the start, every
 //!    anchor and every gap, and fsyncs tracks and journals every
-//!    [`SYNC_INTERVAL`](super::SYNC_INTERVAL) (via [`RecordingWriter::sync_if_due`])
-//!    and at each gap.
+//!    [`SYNC_INTERVAL`](super::SYNC_INTERVAL) (via [`RecordingWriter::sync_if_due`]).
+//!    A gap is journaled and the journal fsynced **before** its silence is
+//!    written, and the track is fsynced after.
 //! 4. At the end of a track: last frame, fsync, STREAMINFO and SEEKTABLE
 //!    rewritten in place, fsync.
 //! 5. `recording.json.tmp` with `state: "complete"`, fsync, rename over
@@ -345,6 +346,8 @@ fn start_in(
         manifest,
         tracks,
         last_sync: Instant::now(),
+        #[cfg(test)]
+        crash_after: None,
     })
 }
 
@@ -357,6 +360,49 @@ fn remove_fresh_folder(dir: &Path) {
         }
     }
     let _ = fs::remove_dir(dir);
+}
+
+/// The steps of [`RecordingWriter::gap`] at which a test can stop the
+/// "process", in the order the code takes them.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum GapStep {
+    /// The gap was checked; nothing is written yet.
+    Checked,
+    /// The journal line is written (not yet synced).
+    JournalAppended,
+    /// The journal line is durable; no silence has been encoded.
+    JournalSynced,
+    /// The silence is encoded (full blocks may be on their way to the file).
+    SilencePushed,
+    /// The writer knows of the gap.
+    GapRecorded,
+    /// The track is fsynced: the whole gap is durable.
+    TrackSynced,
+}
+
+#[cfg(test)]
+impl GapStep {
+    pub(crate) const ALL: [GapStep; 6] = [
+        GapStep::Checked,
+        GapStep::JournalAppended,
+        GapStep::JournalSynced,
+        GapStep::SilencePushed,
+        GapStep::GapRecorded,
+        GapStep::TrackSynced,
+    ];
+}
+
+/// A test's crash: fails with an I/O error when `armed` is `step`.
+#[cfg(test)]
+fn failpoint(armed: Option<GapStep>, step: GapStep) -> Result<(), RecordingError> {
+    if armed == Some(step) {
+        return Err(RecordingError::io(
+            "continue after an injected crash",
+            &std::io::Error::other("injected"),
+        ));
+    }
+    Ok(())
 }
 
 struct TrackWriter {
@@ -379,6 +425,9 @@ pub struct RecordingWriter {
     manifest: Manifest,
     tracks: Vec<TrackWriter>,
     last_sync: Instant,
+    /// Tests: stop `gap` after this step, as a killed process would.
+    #[cfg(test)]
+    pub(crate) crash_after: Option<GapStep>,
 }
 
 impl RecordingWriter {
@@ -438,8 +487,10 @@ impl RecordingWriter {
     }
 
     /// Insert `length` frames of silence into the track at its current end so
-    /// the frame index still maps to time, and record the gap. The track is
-    /// fsynced before the journal says the gap exists, and the journal after.
+    /// the frame index still maps to time, and record the gap. The journal
+    /// line is fsynced **before** the silence is written and the track after,
+    /// so a crash at any point leaves either no silence or silence the
+    /// journal accounts for. A gap the track cannot hold is refused first.
     pub fn gap(
         &mut self,
         track: &str,
@@ -449,23 +500,45 @@ impl RecordingWriter {
         if length == 0 {
             return Ok(());
         }
+        #[cfg(test)]
+        let crash_after = self.crash_after;
         let track = self.track_mut(track)?;
         let encoder = track
             .encoder
             .as_mut()
             .ok_or(RecordingError::TrackFinished)?;
+        // Refused here, before a byte is journaled or written: a gap the
+        // track cannot hold must leave no line that claims it exists.
+        encoder.ensure_room(length)?;
+        #[cfg(test)]
+        failpoint(crash_after, GapStep::Checked)?;
         let at_frame = encoder.frames_pushed();
-        encoder.push_silence(length)?;
-        encoder.sync()?;
         let clipped = encoder.clipped_samples();
+        // The intention is durable **before** any of the silence is written:
+        // the operating system may flush a written frame at any moment, and
+        // silence that reached the disk with no journal line would be
+        // presented as captured audio. A gap whose silence never arrives is
+        // harmless: recovery drops what lies beyond the kept audio.
         track.journal.append(&JournalEvent::Gap {
             at_frame,
             length,
             reason: reason.clone(),
             clipped,
         })?;
+        #[cfg(test)]
+        failpoint(crash_after, GapStep::JournalAppended)?;
         track.journal.sync()?;
+        #[cfg(test)]
+        failpoint(crash_after, GapStep::JournalSynced)?;
+        encoder.push_silence(length)?;
+        #[cfg(test)]
+        failpoint(crash_after, GapStep::SilencePushed)?;
         track.gaps.push(Gap::new(at_frame, length, reason));
+        #[cfg(test)]
+        failpoint(crash_after, GapStep::GapRecorded)?;
+        encoder.sync()?;
+        #[cfg(test)]
+        failpoint(crash_after, GapStep::TrackSynced)?;
         Ok(())
     }
 
