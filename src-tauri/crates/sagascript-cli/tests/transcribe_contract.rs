@@ -1706,7 +1706,7 @@ mod pianissimo_with_the_fake_host {
     }
 
     #[test]
-    fn progress_events_run_decode_resample_transcribe_complete() {
+    fn progress_events_run_decoding_then_transcribing_then_complete() {
         let sandbox = Sandbox::new();
         sandbox.write("tone.wav", &wav(3));
         let run = run(&sandbox, &fake_host(), &with(&["--progress-json"]));
@@ -1744,13 +1744,20 @@ mod pianissimo_with_the_fake_host {
         assert_eq!(rest, ["[1/1] tone.wav"]);
         assert_eq!(
             phases,
+            // Decoding runs alongside transcription: `decoding` 0 opens the run, and
+            // no decoding or resampling stage events are interleaved after it.
             [
                 ("decoding".to_string(), 1),
-                ("resampling".to_string(), 2),
                 ("transcribing".to_string(), 3),
                 ("completed".to_string(), 3),
             ]
         );
+        let decoding: Vec<Option<u64>> = events
+            .iter()
+            .filter(|event| event["phase"] == "decoding")
+            .map(|event| event["percent"].as_u64())
+            .collect();
+        assert_eq!(decoding, [Some(0)]);
         assert_eq!(transcribing.first(), Some(&0));
         assert_eq!(transcribing.last(), Some(&100));
         assert!(

@@ -6,7 +6,7 @@
 //! from next to the executable, so building this crate needs no ORT binary.
 
 use crate::pcm;
-use crate::server::{Engine, HostError, LoadParams, WindowRequest};
+use crate::server::{Canary, Engine, HostError, LoadParams, WindowRequest};
 use crate::tdt::{self, DecodeError, DecoderState, Joint, HIDDEN};
 use crate::vocab::Vocab;
 use ort::ep;
@@ -440,12 +440,15 @@ fn millis(started: Instant) -> u64 {
     (started.elapsed().as_secs_f64() * 1000.0).round() as u64
 }
 
+fn cancelled() -> HostError {
+    HostError::new(ErrorCode::Cancelled, "Transcription was cancelled")
+}
+
 fn transcribe_loaded(
     loaded: &Loaded,
     request: &WindowRequest,
     is_cancelled: &dyn Fn() -> bool,
 ) -> Result<TranscribeWindowResult, HostError> {
-    let cancelled = || HostError::new(ErrorCode::Cancelled, "Transcription was cancelled");
     let total_started = Instant::now();
     let samples = pcm::read_window(
         &request.pcm_path,
@@ -453,11 +456,76 @@ fn transcribe_loaded(
         request.num_samples,
     )
     .map_err(|m| HostError::new(ErrorCode::BadRequest, m))?;
-    let audio_s = samples.len() as f64 / f64::from(SAMPLE_RATE);
     let read_ms = millis(total_started);
     if is_cancelled() {
         return Err(cancelled());
     }
+    run_pipeline(
+        loaded,
+        Pipeline {
+            label: "window",
+            samples,
+            read_ms,
+            total_started,
+            boost_terms: &request.boost_terms,
+            boost_weight: request.boost_weight,
+        },
+        is_cancelled,
+    )
+}
+
+/// The canary's input: one encoder frame (80 ms) of silence, in memory.
+const CANARY_SAMPLES: usize = 1280;
+
+/// One canary prediction: [`CANARY_SAMPLES`] zero samples through the same sessions as a window
+/// (nothing read from disk), the result discarded. Returns the wall time.
+fn canary_loaded(loaded: &Loaded) -> Result<Canary, HostError> {
+    let started = Instant::now();
+    run_pipeline(
+        loaded,
+        Pipeline {
+            label: "canary",
+            samples: vec![0.0; CANARY_SAMPLES],
+            read_ms: 0,
+            total_started: started,
+            boost_terms: &[],
+            boost_weight: 0.0,
+        },
+        &|| false,
+    )?;
+    Ok(Canary {
+        canary_ms: millis(started),
+        // No Neural Engine, so no program to recompile.
+        probable_recompile: false,
+    })
+}
+
+/// A window's samples (already read) and what its trace line reports.
+struct Pipeline<'a> {
+    /// `window` or `canary`, for the trace line.
+    label: &'static str,
+    samples: Vec<f32>,
+    read_ms: u64,
+    total_started: Instant,
+    boost_terms: &'a [String],
+    boost_weight: f32,
+}
+
+/// Preprocessor, encoder and greedy decoder over one window of samples.
+fn run_pipeline(
+    loaded: &Loaded,
+    pipeline: Pipeline<'_>,
+    is_cancelled: &dyn Fn() -> bool,
+) -> Result<TranscribeWindowResult, HostError> {
+    let Pipeline {
+        label,
+        samples,
+        read_ms,
+        total_started,
+        boost_terms,
+        boost_weight,
+    } = pipeline;
+    let audio_s = samples.len() as f64 / f64::from(SAMPLE_RATE);
 
     // Front end (nemo128.onnx): waveform -> log-mel features (1, 128, T).
     let started = Instant::now();
@@ -534,7 +602,7 @@ fn transcribe_loaded(
     let mut joint_steps = 0;
     let mut joint_run_ms = 0;
     let mut boost_us = 0u64;
-    let boosting = !request.boost_terms.is_empty() && request.boost_weight > 0.0;
+    let boosting = !boost_terms.is_empty() && boost_weight > 0.0;
     let mut boost_active = boosting.then_some(true);
     let raw = if valid == 0 {
         Vec::new()
@@ -546,7 +614,7 @@ fn transcribe_loaded(
             run_us: 0,
         };
         let trie = boosting.then(|| {
-            let (trie, micros) = loaded.boost_tries.get(&request.boost_terms, &loaded.vocab);
+            let (trie, micros) = loaded.boost_tries.get(boost_terms, &loaded.vocab);
             boost_us = micros;
             trie
         });
@@ -554,7 +622,7 @@ fn transcribe_loaded(
         if boosting && trie.is_none() {
             boost_active = Some(false); // no term could be tokenized
         }
-        let params = crate::boost::BiasParams::from_env(request.boost_weight);
+        let params = crate::boost::BiasParams::from_env(boost_weight);
         let blank = loaded.vocab.blank_id();
         let decoded = tdt::decode_biased(
             &frames,
@@ -576,7 +644,7 @@ fn transcribe_loaded(
     let decode_ms = millis(started);
     if loaded.trace {
         eprintln!(
-            "ort-trace window: audio_s={audio_s:.2} frames={valid} read_ms={read_ms} preprocess_ms={preprocess_ms} \
+            "ort-trace {label}: audio_s={audio_s:.2} frames={valid} read_ms={read_ms} preprocess_ms={preprocess_ms} \
              encode_ms={encode_ms} (session_run_ms={encoder_run_ms}) decode_ms={decode_ms} \
              (joint_steps={joint_steps} joint_run_ms={joint_run_ms}) tokens={} total_ms={}",
             raw.len(),
@@ -661,6 +729,13 @@ impl Engine for OrtEngine {
             .current()
             .ok_or_else(|| HostError::new(ErrorCode::NotLoaded, "No model is loaded"))?;
         transcribe_loaded(&loaded, request, is_cancelled)
+    }
+
+    fn canary(&self) -> Result<Canary, HostError> {
+        let loaded = self
+            .current()
+            .ok_or_else(|| HostError::new(ErrorCode::NotLoaded, "No model is loaded"))?;
+        canary_loaded(&loaded)
     }
 
     fn unload(&self) {

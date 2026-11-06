@@ -99,12 +99,24 @@ export function actionInput(action, step, name) {
   return String(step.with[name] ?? action.inputs[name]?.default ?? "");
 }
 
-// Evaluates the only condition form the local actions use: `${{ inputs.<name> == '<value>' }}`.
-function conditionHolds(condition, valueOf) {
+// The `runner.os` a job's literal runs-on label selects, or undefined (an expression or another label).
+const RUNNER_OS = [
+  [/^macos-/, "macOS"],
+  [/^windows-/, "Windows"],
+  [/^ubuntu-/, "Linux"],
+];
+const runnerOsOf = (job) => (typeof job.runsOn === "string" ? RUNNER_OS.find(([label]) => label.test(job.runsOn))?.[1] : undefined);
+
+// Evaluates the condition forms the local actions use: `${{ inputs.<name> == '<value>' }}` and
+// `${{ runner.os == '<OS>' }}`, the latter from the calling job's runs-on label.
+function conditionHolds(condition, valueOf, runnerOs) {
   if (condition === undefined) return true;
-  const match = /^\$\{\{\s*inputs\.([\w-]+) == '([^']*)'\s*\}\}$/.exec(condition.trim());
-  if (!match) throw new Error(`unsupported condition in a local action: ${condition}`);
-  return valueOf(match[1]) === match[2];
+  const input = /^\$\{\{\s*inputs\.([\w-]+) == '([^']*)'\s*\}\}$/.exec(condition.trim());
+  if (input) return valueOf(input[1]) === input[2];
+  const os = /^\$\{\{\s*runner\.os == '(Linux|macOS|Windows)'\s*\}\}$/.exec(condition.trim());
+  if (!os) throw new Error(`unsupported condition in a local action: ${condition}`);
+  if (runnerOs === undefined) throw new Error(`cannot evaluate ${condition}: the job's runs-on is not a known runner label`);
+  return runnerOs === os[1];
 }
 
 /**
@@ -117,7 +129,7 @@ export function expandedSteps(job) {
     if (!local) return [step];
     const action = loadAction(local[1]);
     return action.steps
-      .filter((inner) => inner.run !== "" && conditionHolds(inner.condition, (name) => actionInput(action, step, name)))
+      .filter((inner) => inner.run !== "" && conditionHolds(inner.condition, (name) => actionInput(action, step, name), runnerOsOf(job)))
       .map((inner) => ({ ...inner, viaAction: local[1] }));
   });
 }

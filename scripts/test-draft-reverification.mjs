@@ -266,7 +266,7 @@ test("verify-release-draft workflow is manual, read-only, pinned, and reuses the
   assert.deepEqual(Object.keys(workflow.jobs), ["verify-drafts"]);
 
   const job = workflow.jobs["verify-drafts"];
-  assert.equal(job["runs-on"], "macos-14");
+  assert.equal(job["runs-on"], "macos-15");
   assert.equal(job["timeout-minutes"], 60);
   assert.deepEqual(job.env, {
     RELEASE_RUN_ID: "${{ inputs.release_run_id }}",

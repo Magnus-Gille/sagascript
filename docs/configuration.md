@@ -234,7 +234,18 @@ the first dictation does not wait on a cold model.
 - Migration (`engine_defaults_version` 1): settings still on the old defaults
   move to the new ones once; an explicit non-default choice is kept.
 - The model is unloaded when memory pressure is reported (idle engine only;
-  key-down and wake warms are then skipped for 5 minutes) and when no profile
-  uses Pianissimo any more. A busy engine is left to the idle timer.
+  a wake then does not reload it for 5 minutes) and when no profile uses
+  Pianissimo any more. A busy engine is left to the idle timer. Key-down is not
+  held back: the dictation that follows loads the model anyway, so loading at
+  key-down only moves that load in front of the user's speech (#397).
+- Key-down (and wake) on a model that is already loaded sends one canary
+  prediction (`warm`, see `docs/engine-host-protocol.md`), unless `engine_prewarm`
+  is `off`. macOS can evict a loaded model's Neural Engine program; the canary
+  then recompiles it while the user is still speaking instead of after key-up
+  (#397). It takes no window slot and is skipped while a window is queued or
+  running. The engine host also runs
+  a canary after memory pressure eases and after wake. `SAGASCRIPT_ENGINE_KEEPALIVE_S`
+  (host environment, at least 60) adds a periodic canary; off by default, see
+  `docs/benchmarks/pianissimo-ane-eviction.md`.
 - The overlay shows "Loading model..." only for loads that keep the user
   waiting; background warm-up failures are logged, not shown as dictation errors.

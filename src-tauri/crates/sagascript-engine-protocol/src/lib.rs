@@ -90,6 +90,10 @@ pub enum RequestOp {
     Ping,
     Unload,
     Shutdown,
+    /// One canary prediction on the loaded model, so a Neural Engine recompile after the OS
+    /// evicted the program happens now instead of in the next window (#397). Never queued with
+    /// windows and never counted toward `max_in_flight`.
+    Warm,
 }
 
 impl RequestOp {
@@ -103,6 +107,7 @@ impl RequestOp {
             RequestOp::Ping => "ping",
             RequestOp::Unload => "unload",
             RequestOp::Shutdown => "shutdown",
+            RequestOp::Warm => "warm",
         }
     }
 }
@@ -201,7 +206,7 @@ pub fn decode_request(line: &str) -> Result<ParsedRequest, DecodeError> {
         .and_then(Value::as_str)
         .ok_or_else(|| DecodeError("missing op".into()))?
         .to_string();
-    const KNOWN: [&str; 8] = [
+    const KNOWN: [&str; 9] = [
         "hello",
         "load",
         "transcribe_window",
@@ -210,6 +215,7 @@ pub fn decode_request(line: &str) -> Result<ParsedRequest, DecodeError> {
         "ping",
         "unload",
         "shutdown",
+        "warm",
     ];
     if !KNOWN.contains(&op_name.as_str()) {
         return Ok(ParsedRequest::UnknownOp { id, op: op_name });
@@ -439,6 +445,36 @@ pub struct TranscribeWindowResult {
     /// `no_top_k_outputs` (the model cannot expose candidates). Absent otherwise.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub boost_reason: Option<String>,
+}
+
+/// [`lenient_u64`] for an optional field (absent stays `None`).
+fn lenient_opt_u64<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    lenient_u64(deserializer).map(Some)
+}
+
+/// `warm`: whether a canary prediction ran. A skipped canary (`ran: false`) carries `skipped`; one
+/// that ran carries `canary_ms` and `probable_recompile`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WarmResult {
+    pub ran: bool,
+    /// With `ran: false`: `not_loaded`, `busy` (a window is in flight), `recent` (the model ran
+    /// moments ago) or `in_progress` (another canary is running).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skipped: Option<String>,
+    /// With `ran: true`: wall time of the canary.
+    #[serde(
+        default,
+        deserialize_with = "lenient_opt_u64",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub canary_ms: Option<u64>,
+    /// With `ran: true`: the canary was slow enough that the Neural Engine program was most
+    /// likely recompiled (always false on a host without one).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub probable_recompile: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
