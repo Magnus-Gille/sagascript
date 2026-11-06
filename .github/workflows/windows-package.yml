@@ -4,22 +4,19 @@ on:
   workflow_dispatch:
   # Reused by prebuild-release.yml (#266) to build the final release packages.
   workflow_call:
+  # A pull request builds the packages only when scripts/ci/windows-package-gate.mjs says so (label
+  # `windows-package`, a version change, or a Windows-packaging-only path; SAGA-551). `labeled` lets
+  # adding the label start the run; `unlabeled` is not listened to, so removing it cancels nothing.
   pull_request:
     branches: [main]
-    paths:
-      - ".gitattributes"
-      - ".github/workflows/windows-package.yml"
-      - "package.json"
-      - "package-lock.json"
-      - "scripts/**"
-      - "src/**"
-      - "src-tauri/**"
+    types: [opened, synchronize, reopened, labeled]
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  # Adding an unrelated label gets a group of its own, so it cannot cancel a package build in flight.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}${{ github.event.action == 'labeled' && github.event.label.name != 'windows-package' && format('-label-{0}', github.run_id) || '' }}
   cancel-in-progress: true
 
 # Keep source/line backtraces for CI failures without full variable/type debug
@@ -30,8 +27,34 @@ env:
   CARGO_PROFILE_TEST_DEBUG: line-tables-only
 
 jobs:
+  # Decides whether a pull request needs the package build. It runs on pull requests only: on
+  # workflow_call (the release prebuild) and workflow_dispatch it is skipped, so it can never fail the
+  # reusable call that prebuild-release.yml's manifest job needs.
+  decide:
+    name: Decide whether to build Windows packages
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.gate.outputs.run }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 2
+      - name: Decide
+        id: gate
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: node scripts/ci/windows-package-gate.mjs
+
   build-windows-candidate:
     name: Build Windows ${{ matrix.architecture }} candidate
+    needs: decide
+    # Only a pull request can be skipped; every other event (workflow_call, workflow_dispatch) builds.
+    # `!cancelled()` keeps the release path free of the gate: even if `decide` failed, a non-PR event builds.
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.decide.outputs.run == 'true') }}
     strategy:
       fail-fast: false
       matrix:
