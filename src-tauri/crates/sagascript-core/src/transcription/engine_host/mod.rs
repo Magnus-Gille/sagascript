@@ -24,10 +24,12 @@ pub use client::{
     BoostReport, BoostSpec, ClientIdentity, EngineHostClient, EngineHostConfig, HostSnapshot,
     LoadEvent, LoadObserver, LoadSpec, Timeouts, WindowOutput,
 };
-pub use pipeline::{CancelToken, JobOptions, Transcription, WindowTiming};
+pub use pipeline::{
+    CancelToken, JobOptions, Sink, SinkError, StreamError, Transcription, WindowTiming,
+};
 pub use process::CrashInfo;
 pub use sagascript_engine_protocol as protocol;
-pub use sagascript_engine_protocol::{Capabilities, ErrorCode, Priority};
+pub use sagascript_engine_protocol::{Capabilities, ErrorCode, Priority, WarmResult};
 
 use std::time::Duration;
 

@@ -85,7 +85,7 @@ jobs:
       - name: Cache pinned LLVM for ARM64 bindgen
         id: llvm-cache
         if: matrix.architecture == 'arm64'
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: C:\sagascript-tools\llvm-20.1.8
           key: windows-arm64-llvm-20.1.8-7c4ac97eb2ae6b960ca5f9caf3ff6124c8d2a18cc07a7840a4d2ea15537bad8e
@@ -115,6 +115,14 @@ jobs:
           if ($process.ExitCode -ne 0) {
             throw "LLVM installer failed with exit code $($process.ExitCode)"
           }
+
+      # Restore-only above; only main saves (SAGA-546).
+      - name: Save pinned LLVM cache
+        if: matrix.architecture == 'arm64' && github.ref == 'refs/heads/main' && steps.llvm-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: C:\sagascript-tools\llvm-20.1.8
+          key: ${{ steps.llvm-cache.outputs.cache-primary-key }}
 
       - name: Activate pinned LLVM for ARM64 bindgen
         if: matrix.architecture == 'arm64'
@@ -215,6 +223,9 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
+          # Only main saves (SAGA-546): a pull request restores the cache that the release prebuild
+          # (prebuild-release.yml -> workflow_call on main) or a main dispatch saved.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           # The ORT engine host is a separate Cargo workspace with its own target dir.
           workspaces: |
             src-tauri
@@ -232,11 +243,13 @@ jobs:
       # Keep the candidate's larger model set under its own primary key. A
       # regular CI cache may restore the Norwegian smoke model, but the
       # candidate run must still save its additional base.en artifact.
+      # Restore only; the last step of the job saves it on main (SAGA-546).
       # `download-model` verifies every restored file against the immutable
       # manifest before using it; this path contains models only, never app
       # settings or logs.
       - name: Cache downloaded models
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        id: models-cache
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: ~\AppData\Roaming\Sagascript\Models
           key: windows-models-package-${{ matrix.architecture }}-${{ hashFiles('src-tauri/crates/sagascript-core/src/models/sources.rs', 'src-tauri/crates/sagascript-core/src/transcription/pianissimo_model.rs', 'src-tauri/crates/sagascript-core/src/transcription/model.rs', 'src-tauri/crates/sagascript-core/src/diarization/model.rs') }}
@@ -687,3 +700,12 @@ jobs:
           if-no-files-found: error
           # Release prebuilds are promoted by a later tag, so keep them longer than PR candidates.
           retention-days: ${{ github.event_name == 'pull_request' && 14 || 30 }}
+
+      # Mirrors actions/cache's post-job save: only after a successful job (every model is downloaded by
+      # now) and only on main (SAGA-546); the candidate primary key is the one restored above.
+      - name: Save downloaded models cache
+        if: success() && github.ref == 'refs/heads/main' && steps.models-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ~\AppData\Roaming\Sagascript\Models
+          key: ${{ steps.models-cache.outputs.cache-primary-key }}

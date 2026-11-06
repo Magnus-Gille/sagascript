@@ -465,6 +465,16 @@ sequenceDiagram
   `EngineHostClient::reset()` clears `Failed` at once but has no production caller: settings that
   change the engine (host, model, compute units, idle policy) already replace the shared client
   (`shared_client`), model deletion shuts it down, and the CLI `engine doctor` uses its own client.
+- Neural Engine eviction ([#397](https://github.com/Magnus-Gille/sagascript/issues/397)): macOS can
+  evict a loaded model's Neural Engine program, and the next prediction then recompiles it. The
+  `warm` op runs one canary prediction outside the window queue (Swift `WarmCoordinator`, ONNX
+  `Server::handle_warm`). The app sends it on push-to-talk key-down and wake when the model is
+  loaded (`pianissimo_backend::warm_or_touch`, from the `pianissimo-warm` thread of
+  `warm_in_background`), so a recompile overlaps the user's speech. The Core ML host adds its own
+  canaries after memory pressure and wake (`WarmTriggers.swift`, wired in `main.swift`) and an
+  opt-in keep-alive (`SAGASCRIPT_ENGINE_KEEPALIVE_S`). Host stderr lines prefixed `info: ` are
+  logged at INFO (`process.rs`), all others at debug. Measurements:
+  `docs/benchmarks/pianissimo-ane-eviction.md`.
 - PCM temp dirs hold a locked `owner.lock`; `pipeline::sweep_stale_pcm_dirs` (app startup and
   shared-client creation, background, once per process; `engine doctor` on demand) removes the
   dirs of dead owners, and dirs whose owner cannot be proven dead (pre-#366, or on a file system

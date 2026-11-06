@@ -1,4 +1,4 @@
-# 0009. Recordings are stored as one FLAC file per track plus a manifest
+# 0010. Recordings are stored as one FLAC file per track plus a manifest
 
 - Status: Accepted
 - Date: 2026-11-05 (proposed), 2026-11-06 (accepted by the owner)

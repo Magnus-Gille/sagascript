@@ -16,7 +16,8 @@ where the code shows them. The map of the code is [ARCHITECTURE.md](../ARCHITECT
 | [0006](0006-typed-errors.md) | Typed errors across boundaries: `{ code, message, retryable }`, match on `code`, scrub paths | Accepted |
 | [0007](0007-settings-file-evolution.md) | Settings file evolution: `schema_version`, ordered migrations, lenient fields | Accepted |
 | [0008](0008-publishing-new-files.md) | Publishing new files without replacing, and related outputs | Accepted |
-| [0009](0009-recording-storage.md) | Recordings are stored as one FLAC file per track plus a manifest | Accepted |
+| [0009](0009-merge-without-up-to-date.md) | Required checks without the up-to-date requirement | Accepted |
+| [0010](0010-recording-storage.md) | Recordings are stored as one FLAC file per track plus a manifest | Accepted |
 
 ## Writing an ADR
 

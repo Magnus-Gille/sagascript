@@ -2,7 +2,7 @@
 //! the engine host, with its own per-file JSON.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -10,7 +10,7 @@ use sagascript_core::error::DictationError;
 use sagascript_core::settings::{Language, PianissimoModel};
 use sagascript_core::transcription::engine_host::{BoostReport, BoostSpec, WindowTiming};
 use sagascript_core::transcription::pianissimo_backend::{
-    PianissimoBackend, PianissimoResult, WarmInfo,
+    PianissimoBackend, PianissimoResult, StreamStats, WarmInfo,
 };
 use sagascript_core::transcription::pianissimo_model;
 use sagascript_core::transcription::Glossary;
@@ -49,6 +49,34 @@ pub(super) trait PianissimoEngine: Send + Sync {
         cancelled: &AtomicBool,
     ) -> Result<PianissimoResult, DictationError>;
 
+    /// Decodes and transcribes one audio file as a file job; `progress` gets
+    /// non-decreasing 0..=100 percentages.
+    ///
+    /// The default decodes the whole file, then transcribes it. The engine host
+    /// overrides it to stream: inference starts on the first windows while the
+    /// rest of the file is still decoding, which hides most of the decode time.
+    /// Either way the transcript is the same.
+    fn transcribe_file(
+        &self,
+        path: &Path,
+        progress: &dyn Fn(u8),
+        cancelled: &AtomicBool,
+    ) -> Result<(PianissimoResult, StreamStats), DictationError> {
+        let audio = sagascript_core::audio::decoder::decode_audio_file_with_control(path, &|| {
+            if cancelled.load(Ordering::SeqCst) {
+                Err(DictationError::Cancelled)
+            } else {
+                Ok(())
+            }
+        })?;
+        let stats = StreamStats {
+            audio_samples: audio.len(),
+            decode_finished_at: Instant::now(),
+        };
+        let result = self.transcribe(&audio, progress, cancelled)?;
+        Ok((result, stats))
+    }
+
     /// The engine the host reported (`coreml`, `onnx`), once connected.
     fn engine_name(&self) -> Option<String>;
 
@@ -75,6 +103,15 @@ impl PianissimoEngine for PianissimoBackend {
         cancelled: &AtomicBool,
     ) -> Result<PianissimoResult, DictationError> {
         self.transcribe_with_cancel(samples, progress, cancelled)
+    }
+
+    fn transcribe_file(
+        &self,
+        path: &Path,
+        progress: &dyn Fn(u8),
+        cancelled: &AtomicBool,
+    ) -> Result<(PianissimoResult, StreamStats), DictationError> {
+        self.transcribe_file_streaming(path, progress, cancelled)
     }
 
     fn engine_name(&self) -> Option<String> {
@@ -138,6 +175,10 @@ impl PianissimoHost for InstalledPianissimo {
 pub(super) struct PianissimoPerformance {
     pub(super) model_load_seconds: f64,
     pub(super) model_verification_seconds: f64,
+    /// Seconds from the start of the file until decoding and resampling were
+    /// done. On the engine host this overlaps inference (it is the time the
+    /// last audio became available, not a stage that precedes it), so it is
+    /// not added to the time inference takes; `total_seconds` is the whole run.
     pub(super) decode_resample_seconds: f64,
     pub(super) total_seconds: f64,
     /// Engine the host reported in `hello` (`coreml`, `onnx`); `unknown` if it never connected.
@@ -446,23 +487,26 @@ fn transcribe_one(
         model_verification_seconds,
     } = *run;
     let started = Instant::now();
+    // Decoding runs alongside transcription (the engine starts on the first
+    // windows while the rest of the file is still being decoded and resampled),
+    // so there are no separate decode or resample stages to narrate: the run
+    // opens with `decoding` 0 and goes on with the engine's `transcribing`
+    // percentages, which only ever grow and stay below 100 until it is done.
     emit_progress(out, args.progress_json, started, "decoding", Some(0));
-    let audio = sagascript_core::audio::decoder::decode_audio_file_with_stage_progress(
+    let (result, stream) = engine.transcribe_file(
         file,
-        Some(&|| canceller.check()),
-        &|pct| emit_progress(out, args.progress_json, started, "decoding", Some(pct)),
-        &|pct| emit_progress(out, args.progress_json, started, "resampling", Some(pct)),
-    )?;
-    let duration = audio.len() as f64 / 16_000.0;
-    let decode_resample_seconds = started.elapsed().as_secs_f64();
-    emit_progress(out, args.progress_json, started, "transcribing", Some(0));
-    let result = engine.transcribe(
-        &audio,
         &|pct| {
             emit_progress(out, args.progress_json, started, "transcribing", Some(pct));
         },
         canceller.flag(),
     )?;
+    let duration = stream.audio_seconds();
+    // When decoding finished, which is before the end of transcription: the
+    // two overlap.
+    let decode_resample_seconds = stream
+        .decode_finished_at
+        .saturating_duration_since(started)
+        .as_secs_f64();
     let (text, corrections) = glossary.correct_text(&result.text);
     let output = pianissimo_file_json(
         model,

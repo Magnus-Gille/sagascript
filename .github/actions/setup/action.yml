@@ -91,11 +91,12 @@ runs:
     - name: Cache Rust dependencies
       uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       with:
-        # Pull requests only restore (SAGA-546). A cache saved from refs/pull/N/merge is scoped to that
-        # ref and no other branch can restore it, yet one PR run saved 4 GB and evicted the main-branch
-        # entries every PR restores from (the repository limit is 10 GB). Pushes to main save, so the
-        # shared entries stay fresh; the key rules above are unchanged.
-        save-if: ${{ github.event_name != 'pull_request' }}
+        # Only main saves (SAGA-546). A cache saved from refs/pull/N/merge or a tag is scoped to that
+        # ref and no other run can restore it, yet one PR run saved 4 GB and evicted the main-branch
+        # entries every PR restores from (the repository limit is 10 GB). Pull requests, tags and other
+        # branches only restore; pushes to main save, so the shared entries stay fresh. The key rules
+        # above are unchanged.
+        save-if: ${{ github.ref == 'refs/heads/main' }}
         workspaces: ${{ inputs.cache-workspaces }}
         shared-key: ${{ inputs.cache-key }}${{ inputs.native-build != 'true' && format('-{0}', hashFiles('scripts/ci/cargo-gates.mjs')) || '' }}
 

@@ -4,7 +4,7 @@
 - Date: 2026-11-05, base `dc6ef732` (origin/main when the worktree was created)
 - Status: study only. No product code was changed and no audio was captured from any device.
 - Design built on these results: [docs/recorder-design.md](../../recorder-design.md), ADR
-  [0009](../../adr/0009-recording-storage.md) (Accepted 2026-11-06).
+  [0010](../../adr/0010-recording-storage.md) (Accepted 2026-11-06).
 
 ## Question
 

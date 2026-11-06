@@ -3,10 +3,11 @@
 
 use sagascript_core::settings::{Language, WhisperModel};
 use sagascript_core::transcription::engine_host::{
-    EngineHostClient, EngineHostConfig, LoadSpec, Timeouts,
+    EngineHostClient, EngineHostConfig, EngineHostError, LoadSpec, Timeouts,
 };
 use sagascript_core::transcription::live_dictation::LiveDictationBackend;
 use sagascript_core::transcription::pianissimo_backend::PianissimoBackend;
+use sagascript_core::transcription::pianissimo_backend::WarmOutcome;
 use sagascript_core::transcription::whisper_backend::DictationTimings;
 use sagascript_core::transcription::{TranscribeOptions, WhisperBackend};
 use std::path::Path;
@@ -36,6 +37,7 @@ fn client(env: &[(&str, &str)], tmp: &Path) -> EngineHostClient {
         ping: Duration::from_millis(500),
         status: Duration::from_secs(2),
         unload: Duration::from_secs(2),
+        warm: Duration::from_secs(2),
         transcribe_min: Duration::from_secs(10),
         transcribe_factor: 0.0,
         interactive_min: Duration::from_secs(10),
@@ -349,4 +351,279 @@ fn live_abort_during_model_load_returns_promptly_and_keeps_the_host() {
     // The host survives so the first-use load can finish for the next utterance.
     assert!(shared.snapshot().running, "host must not be killed");
     assert_eq!(spawn_count(&log), 1);
+}
+
+// ---- decode and transcribe a file at once (streaming) ---------------------
+
+/// A WAV file of `seconds` of a chirp-like signal at `rate` Hz (16-bit mono),
+/// so the decoder resamples when `rate` is not 16 kHz.
+fn write_wav(dir: &Path, name: &str, rate: u32, seconds: usize) -> std::path::PathBuf {
+    let frames = rate as usize * seconds;
+    let samples: Vec<f32> = (0..frames)
+        .map(|i| ((i as f32 * 0.0007) * (1.0 + i as f32 * 1e-7)).sin() * 0.6)
+        .collect();
+    let mut wav = sagascript_core::audio::wav::encode_wav(&samples);
+    wav[24..28].copy_from_slice(&rate.to_le_bytes());
+    wav[28..32].copy_from_slice(&(rate * 2).to_le_bytes());
+    let path = dir.join(name);
+    std::fs::write(&path, wav).unwrap();
+    path
+}
+
+#[test]
+fn a_streamed_file_equals_the_decoded_file_and_reports_monotonic_progress() {
+    for (rate, seconds) in [
+        (16_000u32, 100usize),
+        (44_100, 70),
+        (48_000, 12),
+        (16_000, 4),
+    ] {
+        let tmp = tempfile::tempdir().unwrap();
+        let files = tempfile::tempdir().unwrap();
+        let path = write_wav(files.path(), "speech.wav", rate, seconds);
+        let backend =
+            PianissimoBackend::with_client(client(&[("FAKE_WINDOW_S", "30")], tmp.path()));
+        let decoded = sagascript_core::audio::decoder::decode_audio_file(&path).unwrap();
+        let want = backend.transcribe(&decoded, |_| {}).unwrap();
+
+        let seen = Mutex::new(Vec::new());
+        let (got, stats) = backend
+            .transcribe_file_streaming(
+                &path,
+                |p| seen.lock().unwrap().push(p),
+                &AtomicBool::new(false),
+            )
+            .unwrap();
+
+        let label = format!("{rate} Hz {seconds} s");
+        assert_eq!(got.text, want.text, "{label}");
+        assert_eq!(got.words, want.words, "{label}");
+        let windows = |r: &sagascript_core::transcription::pianissimo_backend::PianissimoResult| {
+            r.window_timings
+                .iter()
+                .map(|w| (w.index, w.start_sample, w.end_sample, w.tokens))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(windows(&got), windows(&want), "{label}");
+        assert_eq!(stats.audio_samples, decoded.len(), "{label}");
+        let seen = seen.into_inner().unwrap();
+        assert_eq!(seen.first(), Some(&0), "{label}: {seen:?}");
+        assert_eq!(seen.last(), Some(&100), "{label}: {seen:?}");
+        assert!(
+            seen.windows(2).all(|w| w[0] < w[1]),
+            "{label}: strictly increasing, no repeats: {seen:?}"
+        );
+        assert!(
+            seen[..seen.len() - 1].iter().all(|p| *p < 100),
+            "{label}: 100 only at the end: {seen:?}"
+        );
+        assert_eq!(std::fs::read_dir(tmp.path()).unwrap().count(), 0, "{label}");
+    }
+}
+
+#[test]
+fn a_streamed_file_that_is_missing_or_not_audio_fails_with_the_decoders_error() {
+    let tmp = tempfile::tempdir().unwrap();
+    let files = tempfile::tempdir().unwrap();
+    let backend = PianissimoBackend::with_client(client(&[("FAKE_WINDOW_S", "30")], tmp.path()));
+    let never = AtomicBool::new(false);
+
+    let missing = backend
+        .transcribe_file_streaming(&files.path().join("gone.wav"), |_| {}, &never)
+        .unwrap_err();
+    assert!(
+        matches!(
+            missing,
+            sagascript_core::error::DictationError::FileNotFound(_)
+        ),
+        "{missing:?}"
+    );
+
+    let junk = files.path().join("junk.mp3");
+    std::fs::write(&junk, vec![0x5Au8; 4096]).unwrap();
+    let error = backend
+        .transcribe_file_streaming(&junk, |_| {}, &never)
+        .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            sagascript_core::error::DictationError::FileDecodeError(_)
+        ),
+        "{error:?}"
+    );
+    assert_eq!(std::fs::read_dir(tmp.path()).unwrap().count(), 0);
+
+    // The backend is fine afterwards.
+    let ok = write_wav(files.path(), "ok.wav", 16_000, 3);
+    backend
+        .transcribe_file_streaming(&ok, |_| {}, &never)
+        .unwrap();
+}
+
+#[test]
+fn cancelling_a_streamed_file_stops_decoding_and_inference_quickly() {
+    let tmp = tempfile::tempdir().unwrap();
+    let files = tempfile::tempdir().unwrap();
+    let path = write_wav(files.path(), "long.wav", 44_100, 600);
+    let backend = Arc::new(PianissimoBackend::with_client(client(
+        &[("FAKE_WINDOW_S", "30"), ("FAKE_WINDOW_DELAY_MS", "1000")],
+        tmp.path(),
+    )));
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let job = {
+        let backend = backend.clone();
+        let cancelled = cancelled.clone();
+        std::thread::spawn(move || backend.transcribe_file_streaming(&path, |_| {}, &cancelled))
+    };
+    std::thread::sleep(Duration::from_millis(600));
+    let at = Instant::now();
+    cancelled.store(true, Ordering::SeqCst);
+
+    let error = job.join().unwrap().unwrap_err();
+
+    assert!(
+        matches!(error, sagascript_core::error::DictationError::Cancelled),
+        "{error:?}"
+    );
+    assert!(at.elapsed() < Duration::from_secs(2), "{:?}", at.elapsed());
+    assert_eq!(std::fs::read_dir(tmp.path()).unwrap().count(), 0);
+}
+
+#[test]
+fn request_abort_cancels_a_streamed_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    let files = tempfile::tempdir().unwrap();
+    let path = write_wav(files.path(), "long.wav", 16_000, 600);
+    let backend = Arc::new(PianissimoBackend::with_client(client(
+        &[("FAKE_WINDOW_S", "30"), ("FAKE_WINDOW_DELAY_MS", "1000")],
+        tmp.path(),
+    )));
+    let job = {
+        let backend = backend.clone();
+        std::thread::spawn(move || {
+            backend.transcribe_file_streaming(&path, |_| {}, &AtomicBool::new(false))
+        })
+    };
+    std::thread::sleep(Duration::from_millis(600));
+    let at = Instant::now();
+    backend.request_abort();
+
+    let error = job.join().unwrap().unwrap_err();
+
+    assert!(
+        matches!(error, sagascript_core::error::DictationError::Cancelled),
+        "{error:?}"
+    );
+    assert!(at.elapsed() < Duration::from_secs(2), "{:?}", at.elapsed());
+}
+
+fn ops_logged(log: &Path, op: &str) -> usize {
+    std::fs::read_to_string(log)
+        .unwrap_or_default()
+        .lines()
+        .filter(|line| line.starts_with(&format!("{op} ")))
+        .count()
+}
+
+/// #397: a key-down warm of an engine that is already loaded sends one canary
+/// (`warm`) instead of nothing, and never reloads the model.
+#[test]
+fn a_loaded_engine_gets_a_canary_and_no_reload() {
+    let tmp = tempfile::tempdir().unwrap();
+    let log = tmp.path().join("log");
+    let shared = client(&[("FAKE_LOG", log.to_str().unwrap())], tmp.path());
+    shared.warm().unwrap();
+
+    let outcome = sagascript_core::testing::warm_or_touch(&shared, true).unwrap();
+
+    let WarmOutcome::Canary(result) = outcome else {
+        panic!("expected a canary, got {outcome:?}");
+    };
+    assert!(result.ran, "{result:?}");
+    assert_eq!(result.probable_recompile, Some(false));
+    assert_eq!(ops_logged(&log, "warm"), 1);
+    assert_eq!(ops_logged(&log, "load"), 1, "the canary must not reload");
+}
+
+#[test]
+fn an_unloaded_engine_is_loaded_and_a_held_back_load_starts_nothing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let log = tmp.path().join("log");
+    let shared = client(&[("FAKE_LOG", log.to_str().unwrap())], tmp.path());
+
+    assert_eq!(
+        sagascript_core::testing::warm_or_touch(&shared, false).unwrap(),
+        WarmOutcome::LoadHeldBack
+    );
+    assert_eq!(spawn_count(&log), 0, "a held-back load starts no host");
+
+    assert_eq!(
+        sagascript_core::testing::warm_or_touch(&shared, true).unwrap(),
+        WarmOutcome::Loaded
+    );
+    assert_eq!(ops_logged(&log, "warm"), 0, "a load needs no canary");
+    assert!(shared.snapshot().loaded);
+}
+
+/// #397 acceptance: the key-down canary does not delay key-up. While a canary
+/// is still running (standing in for a Neural Engine recompile), a dictation
+/// window is answered at once.
+#[test]
+fn a_running_canary_does_not_delay_the_dictation() {
+    let tmp = tempfile::tempdir().unwrap();
+    let shared = client(&[("FAKE_WARM_DELAY_MS", "1500")], tmp.path());
+    shared.warm().unwrap();
+
+    let canary = {
+        let shared = shared.clone();
+        std::thread::spawn(move || {
+            let outcome = sagascript_core::testing::warm_or_touch(&shared, true);
+            (outcome, Instant::now())
+        })
+    };
+    std::thread::sleep(Duration::from_millis(100));
+    let started = Instant::now();
+    let (text, _) = dictate(&live(&shared));
+    let dictated = Instant::now();
+
+    assert!(!text.unwrap().is_empty());
+    let (outcome, canary_done) = canary.join().unwrap();
+    let Ok(WarmOutcome::Canary(result)) = outcome else {
+        panic!("the canary did not complete: {outcome:?}");
+    };
+    assert_eq!(result.canary_ms, Some(1500));
+    assert!(
+        dictated < canary_done,
+        "the dictation waited for the canary ({:?})",
+        dictated - started
+    );
+}
+
+#[test]
+fn a_host_without_warm_and_a_hanging_canary_leave_the_host_alone() {
+    let tmp = tempfile::tempdir().unwrap();
+    let old = client(&[("FAKE_WARM_UNSUPPORTED", "1")], tmp.path());
+    old.warm().unwrap();
+    assert_eq!(
+        sagascript_core::testing::warm_or_touch(&old, true).unwrap(),
+        WarmOutcome::CanaryUnsupported
+    );
+    assert!(old.snapshot().loaded);
+
+    let hanging = client(&[("FAKE_WARM_HANG", "1")], tmp.path());
+    hanging.warm().unwrap();
+    let pid = hanging.snapshot().pid;
+    let error = sagascript_core::testing::warm_or_touch(&hanging, true).unwrap_err();
+    assert!(
+        matches!(error, EngineHostError::Timeout { op: "warm", .. }),
+        "{error:?}"
+    );
+    let after = hanging.snapshot();
+    assert!(after.loaded, "a canary timeout must not kill the host");
+    assert_eq!(
+        (after.pid, after.spawns, after.crashes_in_window),
+        (pid, 1, 0)
+    );
+    let (text, _) = dictate(&live(&hanging));
+    assert!(!text.unwrap().is_empty());
 }

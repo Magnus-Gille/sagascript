@@ -6,7 +6,7 @@
 - Status: **D1, D2 and D4-D6 decided by the owner on 2026-11-06; D3 is open and blocks phase 2.**
   Nothing here is implemented. Evidence:
   [recorder-formats-2026-11-05](research/recorder-formats-2026-11-05/README.md). Decision record:
-  [ADR 0009](adr/0009-recording-storage.md) (Accepted).
+  [ADR 0010](adr/0010-recording-storage.md) (Accepted).
 - Date: 2026-11-05, base `dc6ef732`. Decisions recorded 2026-11-06.
 
 ## 1. Summary

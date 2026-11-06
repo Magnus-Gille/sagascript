@@ -21,6 +21,9 @@ public final class CoreMLEngine: EngineBackend {
         let decoderHidden: Int
         let blankID: Int
         let encoderMelPrecision: TensorPrecision
+        /// What the encoder was loaded with: only an encoder that may run on the Neural Engine can
+        /// have an evicted ANE program to recompile (`canary`).
+        let encoderComputeUnits: MLComputeUnits
 
         init(
             preprocessor: MLModel,
@@ -37,7 +40,8 @@ public final class CoreMLEngine: EngineBackend {
             decoderLayers: Int,
             decoderHidden: Int,
             blankID: Int,
-            encoderMelPrecision: TensorPrecision
+            encoderMelPrecision: TensorPrecision,
+            encoderComputeUnits: MLComputeUnits
         ) {
             self.preprocessor = preprocessor
             self.encoder = encoder
@@ -54,6 +58,7 @@ public final class CoreMLEngine: EngineBackend {
             self.decoderHidden = decoderHidden
             self.blankID = blankID
             self.encoderMelPrecision = encoderMelPrecision
+            self.encoderComputeUnits = encoderComputeUnits
         }
     }
 
@@ -71,7 +76,7 @@ public final class CoreMLEngine: EngineBackend {
             self.cacheDirectory = home
                 .appendingPathComponent("Library/Caches/Sagascript/EngineHost", isDirectory: true)
         }
-        self.currentCapabilities = HostCapabilities(maxInFlight: Self.configuredMaxInFlight)
+        self.currentCapabilities = Self.defaultCapabilities
     }
 
     public var capabilities: HostCapabilities {
@@ -146,14 +151,15 @@ public final class CoreMLEngine: EngineBackend {
                 decoder: decoder,
                 joint: joint,
                 vocabulary: vocabulary,
-                modelID: modelID
+                modelID: modelID,
+                encoderComputeUnits: units
             )
             lock.lock()
             model = loaded
             loadedSourcePath = modelDirectory
-            let overlap = ProcessInfo.processInfo.environment["SAGASCRIPT_ENGINE_OVERLAP_S"]
-                .flatMap(Double.init)
-                ?? (loaded.windowSeconds <= 15 ? 2 : 6)
+            let overlap = Self.overlapOverride(
+                environment: ProcessInfo.processInfo.environment, window: loaded.windowSeconds
+            ) ?? (loaded.windowSeconds <= 15 ? 2 : 6)
             currentCapabilities = HostCapabilities(
                 maxWindowSeconds: loaded.windowSeconds,
                 preferredWindowSeconds: loaded.windowSeconds,
@@ -197,6 +203,77 @@ public final class CoreMLEngine: EngineBackend {
         try checkCancelled(isCancelled)
 
         let samples = try readSamples(request: request, paddedTo: loaded.windowSamples)
+        let inference = try infer(
+            samples: samples,
+            numSamples: request.numSamples,
+            loaded: loaded,
+            boost: request.boost,
+            isCancelled: isCancelled
+        )
+        let decoded = inference.decoded
+        return WindowResult(
+            tokens: decoded.tokens,
+            audioSeconds: Double(request.numSamples) / Double(request.sampleRate),
+            preprocessMilliseconds: inference.preprocessMilliseconds,
+            encodeMilliseconds: inference.encodeMilliseconds,
+            decodeMilliseconds: inference.decodeMilliseconds,
+            boostActive: decoded.boostActive,
+            boostReason: decoded.boostReason,
+            boostMicroseconds: decoded.boostMicroseconds
+        )
+    }
+
+    /// One encoder frame (1280 samples): the shortest input the pipeline accepts.
+    static let canarySamples = 1280
+
+    /// An encoder stage this slow on a Neural Engine encoder is a recompile of an evicted program;
+    /// a resident encoder takes 30-40 ms for the canary (docs/engine-host-protocol.md, `warm`).
+    static let recompileThresholdMilliseconds = 1000.0
+
+    public func canary() throws -> CanaryResult? {
+        guard let loaded = snapshotModel() else { return nil }
+        let started = Date()
+        // Exactly the production path (`infer`), on silence padded to the model window.
+        let inference = try infer(
+            samples: [Float](repeating: 0, count: loaded.windowSamples),
+            numSamples: min(Self.canarySamples, loaded.windowSamples),
+            loaded: loaded,
+            boost: nil,
+            isCancelled: { false }
+        )
+        return CanaryResult(
+            milliseconds: Date().timeIntervalSince(started) * 1000,
+            probableRecompile: Self.isProbableRecompile(
+                encodeMilliseconds: inference.encodeMilliseconds,
+                encoderComputeUnits: loaded.encoderComputeUnits
+            )
+        )
+    }
+
+    static func isProbableRecompile(encodeMilliseconds: Double, encoderComputeUnits: MLComputeUnits) -> Bool {
+        encodeMilliseconds >= recompileThresholdMilliseconds && usesNeuralEngine(encoderComputeUnits)
+    }
+
+    static func usesNeuralEngine(_ units: MLComputeUnits) -> Bool {
+        units == .cpuAndNeuralEngine || units == .all
+    }
+
+    private struct Inference {
+        let preprocessMilliseconds: Double
+        let encodeMilliseconds: Double
+        let decodeMilliseconds: Double
+        let decoded: (tokens: [TranscriptionToken], boostActive: Bool?, boostReason: String?, boostMicroseconds: Int)
+    }
+
+    /// Everything after the PCM samples are in memory: preprocessor, encoder and TDT decoding.
+    /// `transcribe` and `canary` both run it, so the canary exercises the production path.
+    private func infer(
+        samples: [Float],
+        numSamples: Int,
+        loaded: LoadedModel,
+        boost: BoostConfig?,
+        isCancelled: @escaping () -> Bool
+    ) throws -> Inference {
         try checkCancelled(isCancelled)
 
         let preprocessStart = Date()
@@ -205,7 +282,7 @@ public final class CoreMLEngine: EngineBackend {
         // encoder frame (1280 samples), which reproduces its text exactly on the
         // ten fleurs clips but costs one word (Aristoteles -> Aristotels) versus
         // declaring the true length, so the true length is kept.
-        let audioLength = try makeIntArray([request.numSamples])
+        let audioLength = try makeIntArray([numSamples])
         let preprocessorInput = try MLDictionaryFeatureProvider(dictionary: [
             "audio_signal": MLFeatureValue(multiArray: audioSignal),
             "audio_length": MLFeatureValue(multiArray: audioLength),
@@ -243,26 +320,22 @@ public final class CoreMLEngine: EngineBackend {
         try checkCancelled(isCancelled)
 
         let decodeStart = Date()
-        let realAudioSeconds = Double(request.numSamples) / Double(request.sampleRate)
+        let realAudioSeconds = Double(numSamples) / 16_000
         let decoded = try decode(
             encoderOutput: encoderOutput,
             sequenceLength: sequenceLength,
             loaded: loaded,
             realAudioSeconds: realAudioSeconds,
-            boost: request.boost,
+            boost: boost,
             isCancelled: isCancelled
         )
         let decodeMilliseconds = Date().timeIntervalSince(decodeStart) * 1000
 
-        return WindowResult(
-            tokens: decoded.tokens,
-            audioSeconds: Double(request.numSamples) / Double(request.sampleRate),
+        return Inference(
             preprocessMilliseconds: preprocessMilliseconds,
             encodeMilliseconds: encodeMilliseconds,
             decodeMilliseconds: decodeMilliseconds,
-            boostActive: decoded.boostActive,
-            boostReason: decoded.boostReason,
-            boostMicroseconds: decoded.boostMicroseconds
+            decoded: decoded
         )
     }
 
@@ -270,7 +343,7 @@ public final class CoreMLEngine: EngineBackend {
         lock.lock()
         model = nil
         loadedSourcePath = nil
-        currentCapabilities = HostCapabilities(maxInFlight: configuredMaxInFlight)
+        currentCapabilities = Self.defaultCapabilities
         lock.unlock()
     }
 
@@ -296,6 +369,56 @@ public final class CoreMLEngine: EngineBackend {
 
     private static var configuredMaxInFlight: Int {
         configuredMaxInFlight(environment: ProcessInfo.processInfo.environment)
+    }
+
+    /// `SAGASCRIPT_ENGINE_OVERLAP_S` (seconds of window overlap, for benchmarking), if set
+    /// to a usable number: finite and not negative.
+    static func overlapOverride(environment: [String: String]) -> Double? {
+        environment["SAGASCRIPT_ENGINE_OVERLAP_S"]
+            .flatMap(Double.init).flatMap { $0.isFinite && $0 >= 0 ? $0 : nil }
+    }
+
+    /// The override, if it is a valid overlap for windows of `window` seconds: strictly
+    /// below the window. The client rejects a host that announces an overlap that is not,
+    /// so a larger value is ignored (with a one-line warning to `warn`) instead of
+    /// stopping the host.
+    static func overlapOverride(
+        environment: [String: String],
+        window: Double,
+        warn: (String) -> Void = { message in
+            FileHandle.standardError.write(Data("sagascript-engine-host: \(message)\n".utf8))
+        }
+    ) -> Double? {
+        guard let value = overlapOverride(environment: environment) else { return nil }
+        guard value < window else {
+            warn("ignoring SAGASCRIPT_ENGINE_OVERLAP_S=\(value): the overlap must be below the \(window) s window")
+            return nil
+        }
+        return value
+    }
+
+    /// What `hello` announces, before any model is loaded. The client plans its windows
+    /// from these values (only the window length is taken from `load` afterwards), so the
+    /// overlap override has to be in here to have any effect, and has to be valid for the
+    /// window announced with it.
+    static func defaultCapabilities(
+        environment: [String: String],
+        warn: (String) -> Void = { message in
+            FileHandle.standardError.write(Data("sagascript-engine-host: \(message)\n".utf8))
+        }
+    ) -> HostCapabilities {
+        let announcedWindow = HostCapabilities().preferredWindowSeconds
+        return HostCapabilities(
+            preferredWindowSeconds: announcedWindow,
+            preferredOverlapSeconds: overlapOverride(
+                environment: environment, window: announcedWindow, warn: warn
+            ) ?? 2,
+            maxInFlight: configuredMaxInFlight(environment: environment)
+        )
+    }
+
+    private static var defaultCapabilities: HostCapabilities {
+        defaultCapabilities(environment: ProcessInfo.processInfo.environment)
     }
 
     private func tuningUnits(_ variable: String, default fallback: MLComputeUnits) throws -> MLComputeUnits {
@@ -433,7 +556,8 @@ public final class CoreMLEngine: EngineBackend {
         decoder: MLModel,
         joint: MLModel,
         vocabulary: [Int: String],
-        modelID: String
+        modelID: String,
+        encoderComputeUnits: MLComputeUnits
     ) throws -> LoadedModel {
         guard let audioShape = shape(of: preprocessor, input: "audio_signal"), audioShape.count >= 2,
               let windowSamples = audioShape.last?.intValue, windowSamples > 0 else {
@@ -481,7 +605,8 @@ public final class CoreMLEngine: EngineBackend {
             decoderLayers: decoderLayers,
             decoderHidden: decoderHidden,
             blankID: blankID,
-            encoderMelPrecision: try floatPrecision(of: encoder, input: "mel", model: "Encoder")
+            encoderMelPrecision: try floatPrecision(of: encoder, input: "mel", model: "Encoder"),
+            encoderComputeUnits: encoderComputeUnits
         )
     }
 
