@@ -3,10 +3,11 @@
 - Ticket: SAGA-547. Related: SAGA-289 (system audio, draft PR #300), SAGA-519 (live meetings, draft PR
   #521), SAGA-303, SAGA-309, and the iPhone recorder epic SAGA-531 (SAGA-533 recording domain, SAGA-534
   storage, SAGA-536 app).
-- Status: **Proposed, for the owner's decision.** Nothing here is implemented. Evidence:
+- Status: **D1, D2 and D4-D6 decided by the owner on 2026-11-06; D3 is open and blocks phase 2.**
+  Nothing here is implemented. Evidence:
   [recorder-formats-2026-11-05](research/recorder-formats-2026-11-05/README.md). Decision record:
-  [ADR 0009](adr/0009-recording-storage.md).
-- Date: 2026-11-05, base `dc6ef732`.
+  [ADR 0009](adr/0009-recording-storage.md) (Accepted).
+- Date: 2026-11-05, base `dc6ef732`. Decisions recorded 2026-11-06.
 
 ## 1. Summary
 
@@ -281,16 +282,18 @@ choice) without touching system-audio capture.
 | System-audio permission and headset (duplex) devices | Decided in D3; SAGA-303 tracks the duplex case |
 | Disk fills during a long recording | Pre-flight estimate, polling, graceful stop, recovery |
 
-## 9. Decisions needed from the owner
+## 9. Decisions
 
-| # | Decision | Recommendation |
+The owner approved D1, D2 and D4-D6 as recommended on 2026-11-06. D3 stays open.
+
+| # | Decision | Outcome |
 |---|---|---|
-| D1 | Compact tier: reduced FLAC (16 kHz / 16-bit, 46 MB/h) or AAC (30 MB/h at 64 kbit/s) | Reduced FLAC in v1; add AAC only if users ask for smaller files |
-| D2 | One file per track + manifest, or one multichannel file | Per track + manifest (no resampling, independent recovery, matches SAGA-533 "tracks"); offer a single-file export |
-| D3 | Which capture code leads system audio: #521, #300, or a fresh `CaptureSource` that ports both | Decide before phase 2; lean on #521's tap and timeline and #300's Windows backend and CLI shape |
-| D4 | Default folder | A visible folder (for example `~/Music/Sagascript`) confirmed on first use |
-| D5 | Keep `record -o file.wav` unchanged | Yes |
-| D6 | Ship mic-only (phase 1) before system audio | Yes |
+| D1 | Compact tier: reduced FLAC (16 kHz / 16-bit, 46 MB/h) or AAC (30 MB/h at 64 kbit/s) | **Decided:** reduced FLAC in v1; add AAC only if users ask for smaller files |
+| D2 | One file per track + manifest, or one multichannel file | **Decided:** per track + manifest (no resampling, independent recovery, matches SAGA-533 "tracks"); offer a single-file export |
+| D3 | Which capture code leads system audio: #521, #300, or a fresh `CaptureSource` that ports both | **Open.** Decide before phase 2; recommendation: lean on #521's tap and timeline and #300's Windows backend and CLI shape |
+| D4 | Default folder | **Decided:** a visible folder (for example `~/Music/Sagascript`) confirmed on first use |
+| D5 | Keep `record -o file.wav` unchanged | **Decided:** yes |
+| D6 | Ship mic-only (phase 1) before system audio | **Decided:** yes |
 
 ## 10. Not done in this study
 

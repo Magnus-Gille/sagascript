@@ -1,7 +1,7 @@
 # 0009. Recordings are stored as one FLAC file per track plus a manifest
 
-- Status: Proposed
-- Date: 2026-11-05
+- Status: Accepted
+- Date: 2026-11-05 (proposed), 2026-11-06 (accepted by the owner)
 - Related: SAGA-547, SAGA-533, [ADR 0001](0001-cli-first.md), [ADR 0002](0002-privacy-first.md),
   [ADR 0008](0008-publishing-new-files.md), [recorder design](../recorder-design.md)
 
@@ -43,4 +43,6 @@ with 25 MB peak memory over an hour.
 - Real-microphone ratios, FLAC playback in WKWebView / WebView2 and iOS FLAC encoding are unverified
   (see the study). If AAC is wanted later, a crash-safe container (ADTS journal then remux, or
   fragmented MP4) is part of that decision.
-- Becomes **Accepted** when the owner decides D1 and D2 of the design.
+- Accepted on 2026-11-06 with the owner's decisions D1 (compact tier is reduced FLAC) and D2 (one file
+  per track plus a manifest) in the [design](../recorder-design.md#9-decisions). Which capture code
+  leads system audio (D3) is deliberately not part of this ADR.
