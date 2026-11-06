@@ -55,7 +55,7 @@ const BLOCKS_PER_STEP: usize = 256;
 /// The peak shown in the status covers at least this much time.
 const PEAK_WINDOW_NS: u64 = 100_000_000;
 /// How often the real clocks are looked at for a sleep.
-const SLEEP_POLL_NS: u64 = 250_000_000;
+const SLEEP_POLL_NS: u64 = 50_000_000;
 
 /// The numbers that drive the policy.
 #[derive(Clone, Debug)]

@@ -689,3 +689,32 @@ fn a_writer_that_fails_at_once_cannot_be_overwritten_by_the_start_finishing_late
     );
     assert!(session.stop().is_err());
 }
+
+// ---- Codex review of 1b, finding 7: the baseline is taken before capture ------
+
+#[test]
+fn a_sleep_before_the_writers_first_poll_still_ends_the_track() {
+    // The probe's first reading is the baseline, taken in `start` before the
+    // source is opened; every later reading is five seconds of sleep later.
+    let calls = Arc::new(AtomicU64::new(0));
+    let rig = rig_with(Quality::Lossless, MONO48, |config| {
+        config.detect_sleep = true;
+        let calls = Arc::clone(&calls);
+        config.sleep_probe = Arc::new(move || {
+            Some(if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                1_000
+            } else {
+                5_000_001_000
+            })
+        });
+    });
+    rig.handle.deliver(ms(200)); // moves the session clock past the first poll
+    wait_until("the track to end", || {
+        rig.session.state() == SessionState::Done
+    });
+    let outcome = rig.session.stop().unwrap();
+    assert_eq!(
+        outcome.manifest.tracks[0].ended_reason,
+        Some(EndedReason::SystemSleep)
+    );
+}

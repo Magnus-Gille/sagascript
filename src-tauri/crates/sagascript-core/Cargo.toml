@@ -70,7 +70,10 @@ whisper-rs = { version = "0.15", features = ["coreml", "metal", "tracing_backend
 
 [target.'cfg(target_os = "windows")'.dependencies]
 whisper-rs = { version = "0.15", features = ["tracing_backend"] }
-windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
+# Win32_System_WindowsProgramming: the interrupt-time pair that notices a
+# system sleep (recording/capture/win.rs). A feature of the crate already in
+# the graph, no new package.
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem", "Win32_System_WindowsProgramming"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 whisper-rs = { version = "0.15", features = ["tracing_backend"] }

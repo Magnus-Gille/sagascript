@@ -10,11 +10,13 @@
 //! | `NetworkVolume` | writes stall and fail with the network; fsync is a promise only the server keeps | macOS: not `MNT_LOCAL`, or `smbfs`/`nfs`/`afpfs`/`webdav`; UNC paths; Linux mount types |
 //! | `CloudSynced` | the sync client can lock or upload a growing folder | the folder is inside OneDrive, iCloud Drive, Dropbox, Google Drive or a macOS CloudStorage provider (by path) |
 //!
-//! **Not implemented here:** on Windows only the UNC check and the cloud
-//! folders are detected; the volume's file system (`GetVolumeInformationW`) is
-//! a seam for a Windows run, and nothing here could be compiled or run for
-//! Windows on the development Mac. A folder this module cannot classify gets
-//! no warning.
+//! On Windows the volume comes from `GetVolumePathNameW`, `GetDriveTypeW`
+//! (a mapped network drive is `DRIVE_REMOTE`) and `GetVolumeInformationW`
+//! (`FAT32`, `exFAT`), in `win_volume.rs`; the mapping from what it reports to
+//! warnings is [`warnings_for_volume`], which is tested everywhere. The Windows
+//! calls were compile-checked for `x86_64-pc-windows-msvc` but never run.
+//! Linux reads the mount table; any other system, and a folder this module
+//! cannot classify, gets no volume warning.
 
 use std::path::Path;
 
@@ -160,10 +162,26 @@ fn volume_warnings(folder: &Path) -> Vec<FolderWarning> {
         .collect()
 }
 
-#[cfg(not(any(target_vendor = "apple", target_os = "linux")))]
+/// The warnings for a volume described by its file-system name and whether it
+/// is a network volume (what Windows reports).
+pub fn warnings_for_volume(fs_name: Option<&str>, remote: bool) -> Vec<FolderWarning> {
+    let mut warnings: Vec<FolderWarning> = fs_name.and_then(classify_fs_type).into_iter().collect();
+    if remote {
+        warnings.push(FolderWarning::NetworkVolume);
+    }
+    warnings
+}
+
+#[cfg(windows)]
 fn volume_warnings(folder: &Path) -> Vec<FolderWarning> {
-    // The Windows seam: GetVolumeInformationW for the file-system name and
-    // GetDriveTypeW for remote drives, behind this function.
+    let Some(info) = existing_ancestor(folder).and_then(super::win_volume::volume_info) else {
+        return Vec::new();
+    };
+    warnings_for_volume(info.fs_name.as_deref(), info.remote)
+}
+
+#[cfg(not(any(target_vendor = "apple", target_os = "linux", windows)))]
+fn volume_warnings(folder: &Path) -> Vec<FolderWarning> {
     let _ = existing_ancestor(folder);
     Vec::new()
 }

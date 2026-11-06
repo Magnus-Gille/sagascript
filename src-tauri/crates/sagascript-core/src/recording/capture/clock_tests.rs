@@ -1,3 +1,5 @@
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use super::*;
@@ -28,7 +30,7 @@ fn the_domain_is_named_for_the_platform() {
 
 #[test]
 fn a_sleep_is_the_offset_between_the_clocks_growing() {
-    let mut detector = SleepDetector::new(Duration::from_secs(2));
+    let mut detector = SleepDetector::unarmed(Duration::from_secs(2));
     assert!(!detector.observe(5_000_000_000), "the baseline");
     assert!(!detector.observe(5_000_001_000), "ordinary drift");
     assert!(
@@ -42,13 +44,48 @@ fn a_sleep_is_the_offset_between_the_clocks_growing() {
     );
 }
 
+fn probe_of(offset: &Arc<AtomicU64>) -> SleepProbe {
+    let offset = Arc::clone(offset);
+    Arc::new(move || Some(offset.load(Ordering::SeqCst)))
+}
+
+#[test]
+fn the_baseline_is_read_when_the_detector_is_armed_so_an_early_sleep_counts() {
+    let offset = Arc::new(AtomicU64::new(1_000));
+    let mut detector = SleepDetector::armed(Duration::from_millis(100), probe_of(&offset));
+    // The machine sleeps before the detector has been polled even once.
+    offset.fetch_add(5_000_000_000, Ordering::SeqCst);
+    assert!(detector.poll(), "a sleep before the first poll was missed");
+    assert!(!detector.poll(), "and it is reported once");
+}
+
+#[test]
+fn a_short_sleep_of_a_fraction_of_a_second_is_noticed() {
+    let offset = Arc::new(AtomicU64::new(0));
+    let mut detector = SleepDetector::armed(Duration::from_millis(100), probe_of(&offset));
+    offset.fetch_add(60_000_000, Ordering::SeqCst); // clock noise, not a sleep
+    assert!(!detector.poll());
+    offset.fetch_add(150_000_000, Ordering::SeqCst); // 150 ms asleep
+    assert!(detector.poll());
+}
+
+#[test]
+fn a_probe_that_reads_nothing_never_reports_a_sleep() {
+    let mut detector = SleepDetector::armed(Duration::from_millis(100), Arc::new(|| None));
+    assert!(!detector.poll());
+    assert!(!SleepDetector::unarmed(Duration::from_millis(1)).poll());
+}
+
 #[test]
 fn the_real_offset_is_stable_while_the_machine_is_awake() {
-    let mut detector = SleepDetector::new(Duration::from_secs(1));
+    let mut detector = SleepDetector::armed(Duration::from_millis(100), system_sleep_probe());
     assert!(!detector.poll());
     std::thread::sleep(Duration::from_millis(20));
     assert!(!detector.poll());
-    assert_eq!(sleep_offset_ns().is_some(), cfg!(target_vendor = "apple"));
+    assert_eq!(
+        sleep_offset_ns().is_some(),
+        cfg!(any(target_vendor = "apple", windows))
+    );
 }
 
 #[test]

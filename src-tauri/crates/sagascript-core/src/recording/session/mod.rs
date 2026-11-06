@@ -56,6 +56,8 @@ pub mod disk;
 pub mod fsclass;
 pub mod resampler;
 pub mod status;
+#[cfg(windows)]
+mod win_volume;
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -72,8 +74,8 @@ use self::resampler::COMPACT_RATE;
 pub use self::status::{SessionOutcome, SessionState, SessionStatus, SessionWarning, TrackStatus};
 use self::status::{StatusShared, TrackCounters};
 use super::capture::{
-    track_channel, CaptureSource, ChannelConfig, SessionClock, SignalHandle, SleepDetector,
-    SourceSignal, SystemClock, HOST_CLOCK_DOMAIN,
+    system_sleep_probe, track_channel, CaptureSource, ChannelConfig, SessionClock, SignalHandle,
+    SleepDetector, SleepProbe, SourceSignal, SystemClock, HOST_CLOCK_DOMAIN,
 };
 use super::manifest::{Client, Quality};
 use super::store::{NewRecording, NewTrack, RecordingStore};
@@ -82,6 +84,10 @@ use crate::sync::lock_or_recover;
 
 const INNER_LOCK: &str = "recording.session";
 const SOURCES_LOCK: &str = "recording.session.sources";
+/// The shortest sleep that is noticed: the clocks agree to nanoseconds while
+/// the machine is awake (a Windows tick is 15 ms), so a tenth of a second is
+/// a sleep.
+const SLEEP_THRESHOLD: Duration = Duration::from_millis(100);
 const TERMINAL_LOCK: &str = "recording.session.terminal";
 
 /// One source and the track it records to.
@@ -141,9 +147,12 @@ pub struct SessionConfig {
     pub free_space: Arc<dyn FreeSpace>,
     /// Warnings about the folder; `None` detects them from the file system.
     pub folder_warnings: Option<Vec<FolderWarning>>,
-    /// Look at the OS clocks for a system sleep (the real thing; tests that
-    /// inject a sleep turn it off).
+    /// Look for a system sleep with `sleep_probe`. Tests that signal a sleep
+    /// by hand turn it off.
     pub detect_sleep: bool,
+    /// Reads how long the machine has slept (see `capture::sleep_offset_ns`);
+    /// a test supplies its own.
+    pub sleep_probe: SleepProbe,
     /// Tests: called right after the writer thread was spawned, to interleave
     /// what the writer does with the rest of `start`.
     #[cfg(test)]
@@ -176,6 +185,7 @@ impl SessionConfig {
             free_space: Arc::new(VolumeFreeSpace),
             folder_warnings: None,
             detect_sleep: true,
+            sleep_probe: system_sleep_probe(),
             #[cfg(test)]
             after_spawn: None,
         }
@@ -379,6 +389,12 @@ impl RecordingSession {
         let _ = self.handles.set(sinks.iter().map(|s| s.handle()).collect());
         let _ = self.status.tracks.set(counters);
 
+        // The sleep detector reads its baseline now, before any device is
+        // opened, so a sleep that comes before its first poll still counts.
+        let sleep = config
+            .detect_sleep
+            .then(|| SleepDetector::armed(SLEEP_THRESHOLD, Arc::clone(&config.sleep_probe)));
+
         // Open the sources.
         let mut started = 0;
         let mut start_error = None;
@@ -481,9 +497,6 @@ impl RecordingSession {
             disk: policy,
             file_limit_bytes: file_limit,
         };
-        let sleep = config
-            .detect_sleep
-            .then(|| SleepDetector::new(Duration::from_secs(2)));
         let core = match SessionCore::new(
             writer,
             pipeline_specs,

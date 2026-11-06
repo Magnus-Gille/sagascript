@@ -81,6 +81,8 @@ struct Opts {
     disk_full_after: Option<u64>,
     /// What the source plays, from its first (priming) block on.
     signal: FakeSignal,
+    /// The sleep offset the detector reads (armed before the first block).
+    sleep_offset: Option<Arc<AtomicU64>>,
 }
 
 impl Default for Opts {
@@ -97,6 +99,7 @@ impl Default for Opts {
                 amplitude: 0.5,
                 seed: 7,
             },
+            sleep_offset: None,
         }
     }
 }
@@ -215,7 +218,12 @@ impl Rig {
             clock,
             Arc::clone(&status),
             Arc::clone(&free) as Arc<dyn FreeSpace>,
-            None::<SleepDetector>,
+            opts.sleep_offset.map(|offset| {
+                SleepDetector::armed(
+                    Duration::from_millis(100),
+                    Arc::new(move || Some(offset.load(Ordering::SeqCst))),
+                )
+            }),
         )
         .unwrap();
         Self {
@@ -1059,4 +1067,23 @@ fn an_overrun_and_a_lost_device_before_the_same_block_keep_their_own_reasons() {
             (at + 480, 96_000, GapReason::DeviceLoss)
         ]
     );
+}
+
+// ---- Codex review of 1b, finding 7 --------------------------------------------
+
+#[test]
+fn a_sleep_of_a_fraction_of_a_second_ends_the_track_with_system_sleep() {
+    let offset = Arc::new(AtomicU64::new(7_000_000));
+    let mut rig = Rig::new(Opts {
+        sleep_offset: Some(Arc::clone(&offset)),
+        ..Opts::default()
+    });
+    rig.handle.deliver(ms(200));
+    rig.pump();
+    assert!(rig.track_status().ended.is_none());
+    offset.fetch_add(150_000_000, Ordering::SeqCst); // 150 ms asleep
+    rig.handle.deliver(ms(100));
+    let done = rig.finished_by_itself();
+    assert_eq!(done.track().ended_reason, Some(EndedReason::SystemSleep));
+    assert_eq!(done.outcome.ended_early, Some(EndedReason::SystemSleep));
 }

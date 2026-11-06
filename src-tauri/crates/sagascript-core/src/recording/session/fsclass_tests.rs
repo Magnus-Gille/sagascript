@@ -93,3 +93,30 @@ fn the_fat32_limit_is_below_four_gibibytes() {
     assert_eq!(FAT32_MAX_FILE_BYTES, 4_294_967_295);
     const { assert!(FAT32_TRACK_LIMIT_BYTES < FAT32_MAX_FILE_BYTES - 60_000_000) };
 }
+
+#[test]
+fn what_windows_reports_about_a_volume_becomes_the_same_warnings() {
+    assert_eq!(warnings_for_volume(Some("NTFS"), false), vec![]);
+    assert_eq!(warnings_for_volume(Some("ReFS"), false), vec![]);
+    assert_eq!(
+        warnings_for_volume(Some("FAT32"), false),
+        vec![FolderWarning::Fat32]
+    );
+    assert_eq!(
+        warnings_for_volume(Some("FAT"), false),
+        vec![FolderWarning::Fat32]
+    );
+    assert_eq!(
+        warnings_for_volume(Some("exFAT"), false),
+        vec![FolderWarning::ExFat]
+    );
+    assert_eq!(
+        warnings_for_volume(Some("NTFS"), true),
+        vec![FolderWarning::NetworkVolume]
+    );
+    assert_eq!(
+        warnings_for_volume(Some("FAT32"), true),
+        vec![FolderWarning::Fat32, FolderWarning::NetworkVolume]
+    );
+    assert_eq!(warnings_for_volume(None, false), vec![]);
+}
