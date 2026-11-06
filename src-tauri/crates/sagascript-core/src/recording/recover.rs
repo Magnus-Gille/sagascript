@@ -238,7 +238,7 @@ fn recover_track(dir: &Path, track: &Track) -> Result<(Track, TrackRecovery), Re
     let mut tail_bytes = 0u64;
     let mut tail_file = None;
 
-    let mut file = match open_member(&path, Open::ReadWrite, "open a track file") {
+    let mut file = match open_member(&path, Open::Rewrite, "open a track file") {
         Ok(file) => file,
         // The process died before the track file existed: nothing was lost.
         Err(RecordingError::Io {

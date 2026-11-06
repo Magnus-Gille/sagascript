@@ -176,6 +176,15 @@ CLI and the app and wait for their own change: `settings::{WhisperModel, FileMod
   (ADR 0006). The writer types are driven by one thread through `&mut self` and hold no mutex. Capture
   (`RecordingSession`, phase 1b) and the CLI, commands, settings and UI (1c) build on it and are not
   here. Only `flacenc` (exact pin, no default features) was added as a dependency.
+  A recording folder can come from anywhere, so recovery opens its files with `io::open_member`: no
+  link is followed, only regular files are opened, and the track file it rewrites in place must have
+  one name (Unix). **Not protected** (documented in `recording/io.rs`): the recording's folder being
+  swapped for a link between recovery's one look at it and the opens (files are opened by path, not
+  through a directory handle; it takes a local process with write access to the recordings folder
+  and a race); on Windows a link swapped in after the look (no `FILE_FLAG_OPEN_REPARSE_POINT`,
+  which would break cloud placeholders) and hard links to a track file (not detected).
+  A gap that fails part-way (journal or silence) ends its track until recovery
+  (`RecordingWriter::gap`).
 
 **The top level of `src/`.** A subsystem is a directory; the files beside `lib.rs` are the
 cross-cutting modules that belong to no one subsystem, and each has a row here.
