@@ -296,8 +296,7 @@ pub fn run(args: RecordArgs, out: &Out) -> Result<(), DictationError> {
 
     // Set up Ctrl+C handler
     let running = Arc::new(AtomicBool::new(true));
-    let r = running.clone();
-    ctrlc_handler(r);
+    install_stop_handler(running.clone())?;
 
     // Start recording
     let mut capture = AudioCaptureService::new();
@@ -504,10 +503,19 @@ pub(crate) fn write_plain_record_output(out: &Out, text: &str) -> Result<bool, W
     Ok(true)
 }
 
-pub(crate) fn ctrlc_handler(running: Arc<AtomicBool>) {
-    let _ = ctrlc::set_handler(move || {
+/// Make Ctrl+C and SIGTERM clear `running` instead of ending the process, so a
+/// recording is stopped and finished, not cut off. Install it **before** the
+/// microphone is opened, and fail if it cannot be installed: without it a
+/// signal would kill the process with an unfinished recording.
+pub(crate) fn install_stop_handler(running: Arc<AtomicBool>) -> Result<(), DictationError> {
+    ctrlc::set_handler(move || {
         running.store(false, Ordering::Relaxed);
-    });
+    })
+    .map_err(|error| {
+        DictationError::AudioCaptureError(format!(
+            "Could not install the handler for Ctrl+C and SIGTERM: {error}"
+        ))
+    })
 }
 
 #[cfg(test)]
@@ -523,6 +531,18 @@ mod tests {
     };
 
     const FALLBACK: WhisperModel = WhisperModel::KbWhisperLarge;
+
+    /// The stop handler is process-wide: a second installation is refused by
+    /// the library, and that refusal is an error, not something ignored.
+    #[test]
+    fn a_stop_handler_that_cannot_be_installed_is_an_error() {
+        use std::sync::atomic::AtomicBool;
+        use std::sync::Arc;
+        let running = Arc::new(AtomicBool::new(true));
+        super::install_stop_handler(running.clone()).expect("the first installation works");
+        let error = super::install_stop_handler(running).expect_err("a second one is refused");
+        assert!(error.to_string().contains("Ctrl+C"), "{error}");
+    }
 
     fn parsed(extra: &[&str]) -> Result<super::RecordArgs, clap::Error> {
         let mut argv = vec!["sagascript", "record"];

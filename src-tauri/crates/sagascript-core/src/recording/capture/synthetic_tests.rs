@@ -43,6 +43,28 @@ fn the_variable_names_a_synthetic_source_and_optionally_its_pitch() {
 }
 
 #[test]
+fn the_variable_may_delay_the_start_of_the_source() {
+    let delayed = parse_test_source(true, Some("synthetic:440:1500")).unwrap();
+    assert_eq!(delayed.hz, 440.0);
+    assert_eq!(delayed.startup_delay, Duration::from_millis(1500));
+    assert_eq!(
+        parse_test_source(true, Some("synthetic:440"))
+            .unwrap()
+            .startup_delay,
+        Duration::ZERO
+    );
+    for refused in [
+        "synthetic:440:",
+        "synthetic:440:abc",
+        "synthetic:440:-1",
+        "synthetic:440:10001",
+        "synthetic:440:5:6",
+    ] {
+        assert_eq!(parse_test_source(true, Some(refused)), None, "{refused:?}");
+    }
+}
+
+#[test]
 fn a_release_build_ignores_the_variable() {
     assert_eq!(parse_test_source(false, Some("synthetic")), None);
     assert_eq!(parse_test_source(false, Some("synthetic:440")), None);

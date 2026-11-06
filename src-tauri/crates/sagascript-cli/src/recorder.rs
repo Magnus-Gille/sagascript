@@ -30,7 +30,8 @@ use sagascript_core::settings::{RecordingQuality, Settings};
 
 use crate::output::{errln, outln, Out};
 use crate::record::{
-    ctrlc_handler, prepare, transcribe_samples, write_plain_record_output, Prepared, RecordArgs,
+    install_stop_handler, prepare, transcribe_samples, write_plain_record_output, Prepared,
+    RecordArgs,
 };
 use crate::recording_text::{
     ended_early_text, ended_reason_id, format_bytes, format_hms, format_level, quality_id,
@@ -280,6 +281,13 @@ pub(crate) fn run(args: RecordArgs, out: &Out) -> Result<(), DictationError> {
         None
     };
 
+    // Ctrl+C and SIGTERM stop and finish the recording; they do not cancel it.
+    // The handler is installed (and checked) before the microphone is opened,
+    // so a signal during the start is kept and honoured as soon as the
+    // recording runs, instead of killing the process with an unfinished one.
+    let running = Arc::new(AtomicBool::new(true));
+    install_stop_handler(running.clone())?;
+
     let pair = stored.recording_channel_pair_tuple();
     let source = choose_source(test_source_requested(), || open_mic(pair, out))?;
     let device = source.device_name();
@@ -309,9 +317,6 @@ pub(crate) fn run(args: RecordArgs, out: &Out) -> Result<(), DictationError> {
         }
     }
 
-    // Ctrl+C and SIGTERM stop and finish the recording; they do not cancel it.
-    let running = Arc::new(AtomicBool::new(true));
-    ctrlc_handler(running.clone());
     wait_for_stop(&session, &running, options.duration, out);
 
     errln!(out, "Stopping and finishing the recording...");

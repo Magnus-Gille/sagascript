@@ -11,7 +11,7 @@
 //! It is real code in the library, free of `cpal` (it compiles without the
 //! `record` feature), but nothing in a production path constructs one except
 //! through [`test_source_requested`], which reads `SAGASCRIPT_TEST_SOURCE`
-//! (`synthetic` or `synthetic:<hz>`) and answers `None` in a release build
+//! (`synthetic`, `synthetic:<hz>` or `synthetic:<hz>:<startup ms>`) and answers `None` in a release build
 //! unless the `dev-overrides` feature is on, the same rule as
 //! `SAGASCRIPT_ENGINE_HOST`. The app never reads the variable.
 //!
@@ -36,6 +36,9 @@ pub const TEST_SOURCE_ENV: &str = "SAGASCRIPT_TEST_SOURCE";
 /// The name of the device a synthetic source reports.
 pub const SYNTHETIC_DEVICE_NAME: &str = "Synthetic microphone";
 
+/// The longest startup delay `synthetic:<hz>:<ms>` accepts.
+const MAX_STARTUP_DELAY_MS: u64 = 10_000;
+
 /// How long one block of a synthetic source is.
 const BLOCK: Duration = Duration::from_millis(10);
 
@@ -46,6 +49,9 @@ pub struct SyntheticConfig {
     /// 0.0 to 1.0.
     pub amplitude: f32,
     pub format: NativeFormat,
+    /// How long `start` takes before the first block (a device that is slow to
+    /// open); lets a test deliver a signal while capture is starting.
+    pub startup_delay: Duration,
 }
 
 impl Default for SyntheticConfig {
@@ -57,6 +63,7 @@ impl Default for SyntheticConfig {
                 sample_rate: 48_000,
                 channels: 1,
             },
+            startup_delay: Duration::ZERO,
         }
     }
 }
@@ -99,6 +106,7 @@ impl CaptureSource for SyntheticSource {
                 reason: "the source was already started",
             });
         }
+        std::thread::sleep(self.config.startup_delay);
         self.stop.store(false, Ordering::Release);
         let stop = Arc::clone(&self.stop);
         let config = self.config.clone();
@@ -176,12 +184,23 @@ fn parse_test_source(enabled: bool, value: Option<&str>) -> Option<SyntheticConf
     match value.strip_prefix("synthetic")? {
         "" => {}
         rest => {
-            let hz: f64 = rest.strip_prefix(':')?.parse().ok()?;
+            let mut parts = rest.strip_prefix(':')?.split(':');
+            let hz: f64 = parts.next()?.parse().ok()?;
             let nyquist = f64::from(config.format.sample_rate) / 2.0;
             if !(hz.is_finite() && hz > 0.0 && hz < nyquist) {
                 return None;
             }
             config.hz = hz;
+            if let Some(delay) = parts.next() {
+                let millis: u64 = delay
+                    .parse()
+                    .ok()
+                    .filter(|ms| *ms <= MAX_STARTUP_DELAY_MS)?;
+                config.startup_delay = Duration::from_millis(millis);
+            }
+            if parts.next().is_some() {
+                return None;
+            }
         }
     }
     Some(config)

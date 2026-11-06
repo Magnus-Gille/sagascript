@@ -314,6 +314,59 @@ fn sigterm_stops_and_finishes_the_recording() {
     assert_eq!(manifest(&folder)["tracks"][0]["ended_reason"], "stopped");
 }
 
+/// A SIGTERM that arrives while the source is still starting is not lost: the
+/// handler is installed before capture starts, the stop request is kept
+/// through the start, and the recording is finished, not killed unfinished.
+#[cfg(unix)]
+#[test]
+fn a_sigterm_during_the_start_still_finishes_the_recording() {
+    use std::io::{BufRead, BufReader};
+    use std::time::Duration;
+
+    let settings = fake_settings();
+    let dir = TempDir::new();
+    let mut command = cli(&settings, &["record", "--dir", s(&dir), "--name", "Early"]);
+    // The synthetic source needs 2 s to start, like a slow device.
+    command.env(TEST_SOURCE_ENV, "synthetic:440:2000");
+    let mut child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn sagascript");
+    let pid = child.id().to_string();
+    let stderr_pipe = child.stderr.take().unwrap();
+    let mut lines = BufReader::new(stderr_pipe).lines();
+    // "Opening the microphone..." is printed just before the start.
+    let mut seen = false;
+    for line in lines.by_ref().map_while(Result::ok) {
+        if line.contains("Opening the microphone") {
+            seen = true;
+            break;
+        }
+    }
+    if !seen {
+        let _ = child.kill();
+        panic!("the start was never announced");
+    }
+    std::thread::sleep(Duration::from_millis(300));
+    let kill = Command::new("kill")
+        .args(["-TERM", &pid])
+        .status()
+        .expect("run kill");
+    assert!(kill.success());
+
+    let rest: String = lines.map_while(Result::ok).collect::<Vec<_>>().join("\n");
+    let output = child.wait_with_output().expect("wait for sagascript");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "killed by the signal instead of finishing the recording: {:?}\n{rest}",
+        output.status
+    );
+    let folder = PathBuf::from(stdout(&output).trim());
+    assert_eq!(manifest(&folder)["state"], "complete");
+}
+
 #[test]
 fn bad_recorder_arguments_fail_before_anything_is_recorded() {
     let settings = fake_settings();
