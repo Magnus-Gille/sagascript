@@ -66,7 +66,10 @@ keychain and set `APPLE_SIGNING_IDENTITY`. Set `APPLE_API_ISSUER`,
 2. Run `npm run release:check`, `npm run licenses:check`, `npm run check`,
    `cargo fmt --all -- --check`, `cargo test --workspace`, and
    `cargo clippy --workspace --all-targets -- -D warnings`.
-3. Merge the release commit to `main`. Do **not** tag yet.
+3. Update the release pull request from `main`, then merge the release commit to
+   `main`. Do **not** tag yet. The ruleset does not require pull requests to be up
+   to date ([ADR 0009](docs/adr/0009-merge-without-up-to-date.md)), so this update
+   is a release rule: the prebuild builds the commit that `main` will release.
 4. **Prebuild (owner touchpoint 1: signing approval).** The push to `main` starts
    `prebuild-release.yml`. Only a push that *changes* the version in
    `package.json` or `src-tauri/tauri.conf.json` (compared with the push's
@@ -83,8 +86,9 @@ keychain and set `APPLE_SIGNING_IDENTITY`. Set `APPLE_API_ISSUER`,
    that environment deployment on the prebuild run. The run ends by uploading
    `release-manifest.json` (`{version, sha, tree_sha, files:[{name,sha256,size}]}`)
    next to the artifacts (30-day retention). Nothing is published.
-5. **Tag (owner touchpoint 2: publish).** Create and push exactly `vVERSION` on
-   the prebuilt commit. `release.yml` then:
+5. **Tag (owner touchpoint 2: publish).** Check that the push CI on `main` is
+   green for the prebuilt commit, then create and push exactly `vVERSION` on
+   that commit. `release.yml` then:
    - looks for a successful `prebuild-release.yml` run on `main` (push or manual
      dispatch) for the tag's exact commit SHA whose artifacts are all present and
      not expired (otherwise it falls back, logging why in the step summary);
