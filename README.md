@@ -254,6 +254,11 @@ sagascript transcribe recordings/ --recursive --jsonl
 # Record from microphone and transcribe
 sagascript record
 
+# Keep a recording as FLAC files (Ctrl+C to stop), then work with it
+sagascript record --quality lossless --name 'Team meeting'
+sagascript recordings list
+sagascript recordings export a1b2c3d4 --format wav --layout mixdown --output meeting.wav
+
 # List available Whisper models
 sagascript list-models
 
@@ -284,6 +289,29 @@ sagascript manpages --dir /usr/local/share/man/man1
 ```
 
 Run `sagascript --help` for the full list of commands.
+
+**Recorder mode.** `sagascript record` with `--quality lossless|compact`, `--dir DIR`,
+`--name TITLE` or `--transcribe` keeps the microphone as a recording folder (one FLAC
+file per track and a `recording.json` manifest) instead of transcribing in memory;
+the flags cannot be combined with `-o` or `--clipboard`, and `record` and
+`record -o file.wav` work as before. Lossless stores what the device delivers
+(24-bit, native rate, about 300 MB per hour); compact stores 16 kHz, 16-bit (about
+50 MB per hour). Defaults come from the `recording_quality`, `recording_directory`
+and `recording_channel_pair` settings (`sagascript config`). Recording is never
+silent: stderr shows a start banner (folder, quality, device, a reminder that
+recording other people may need their consent), a status line every 10 seconds
+(elapsed time, level, gaps, free disk) and a summary; Ctrl-C, SIGTERM and
+`--duration` stop and finish the recording. stdout is the folder path, or with
+`--json` one object (`recording_id`, `folder`, `title`, `quality`,
+`duration_seconds`, `bytes`, `track_count`, `gap_count`, `ended_early`,
+`recovered`); with `--transcribe` the saved recording is then transcribed and
+stdout is the text (the JSON object gains `transcript`). Recordings an interrupted
+process left behind are finished with `sagascript recordings recover`, which keeps
+every complete frame and moves a torn tail aside instead of deleting it.
+`sagascript recordings list|show|export|recover|delete` takes `--dir` and `--json`;
+`delete` needs `--yes` and removes the folder for good (the app moves it to the
+Trash). `sagascript permissions status` includes the microphone permission for
+recording.
 
 Default CLI diagnostics retain Sagascript warnings and errors while suppressing
 routine native Whisper/GGML chatter, so machine-readable stdout (including
