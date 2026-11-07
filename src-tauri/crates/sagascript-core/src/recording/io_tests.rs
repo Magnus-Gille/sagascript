@@ -120,3 +120,28 @@ fn the_open_flag_alone_stops_a_link_that_appears_after_the_look() {
         .unwrap_err();
     assert!(is_link_refusal(&error), "{error:?}");
 }
+
+#[cfg(unix)]
+#[test]
+fn a_file_with_several_names_may_be_read_but_not_opened_to_be_rewritten() {
+    let dir = TempDir::new();
+    let path = dir.path().join("track");
+    std::fs::write(&path, b"data").unwrap();
+    // One name: every mode works.
+    for mode in [Open::Read, Open::ReadWrite, Open::Rewrite] {
+        assert_eq!(code(open_member(&path, mode, "x")), "ok", "{mode:?}");
+    }
+    let other = dir.path().join("other-name");
+    std::fs::hard_link(&path, &other).unwrap();
+    // Two names: reading (a journal, a manifest) and locking are harmless;
+    // truncating and rewriting would change the file under its other name.
+    assert_eq!(code(open_member(&path, Open::Read, "x")), "ok");
+    assert_eq!(code(open_member(&path, Open::ReadWrite, "x")), "ok");
+    assert_eq!(
+        code(open_member(&path, Open::Rewrite, "x")),
+        "recording_not_regular_file"
+    );
+    assert_eq!(std::fs::read(&other).unwrap(), b"data");
+    std::fs::remove_file(&other).unwrap();
+    assert_eq!(code(open_member(&path, Open::Rewrite, "x")), "ok");
+}

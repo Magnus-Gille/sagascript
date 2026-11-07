@@ -40,6 +40,11 @@ pub(crate) fn create_dir_private(path: &Path) -> io::Result<()> {
 pub(crate) enum Open {
     Read,
     ReadWrite,
+    /// Read and write a file the caller will truncate and rewrite in place:
+    /// like [`ReadWrite`](Self::ReadWrite), and on Unix the file must have
+    /// exactly one name (`st_nlink == 1`), so a hard link planted in the folder
+    /// cannot aim the rewrite at another file.
+    Rewrite,
     /// Read and write, creating the file (mode `0600`) when it is absent; an
     /// existing file is not truncated.
     ReadWriteCreate,
@@ -58,17 +63,34 @@ pub(crate) enum Open {
 /// 2. on Unix the open itself carries `O_NOFOLLOW` (a link that appears between
 ///    the look and the open fails with `ELOOP`) and `O_NONBLOCK` (a pipe that
 ///    appears there cannot make the open wait for a writer);
-/// 3. the opened handle is checked to be a regular file.
+/// 3. the opened handle is checked to be a regular file and, for
+///    [`Open::Rewrite`] on Unix, to have exactly one name.
 ///
-/// On Windows a symbolic link or junction is refused by step 1 and the handle
-/// by step 3; the open does not use `FILE_FLAG_OPEN_REPARSE_POINT`, because
-/// that would also turn a cloud-sync placeholder (OneDrive's recordings
-/// folder) into a file this code could not read. What remains is a link
-/// swapped in between steps 1 and 3 by a process that can already write the
-/// recordings folder.
+/// # What this does not protect against
 ///
-/// The folder itself is not part of this: callers check it with
-/// `symlink_metadata` (see `recover_folder`).
+/// The files are opened **by path**, not relative to a directory handle
+/// retained from a check of the folder, and `recover_folder` looks at the
+/// folder once. So:
+///
+/// * A process that can write the recordings folder, and replaces the
+///   recording's folder with a link between that look and the opens, is not
+///   stopped. That needs a local attacker with write access and a race; a
+///   folder that merely *contains* a link, a pipe or a hard link is handled.
+/// * Windows: a symbolic link or junction in the folder is refused by step 1
+///   and the handle check, but one swapped in between steps 1 and 3 is
+///   followed. The open does not use `FILE_FLAG_OPEN_REPARSE_POINT`, because
+///   that would turn a cloud-sync placeholder (OneDrive's recordings folder)
+///   into a file this code could not read. A hard link to a track file is not
+///   detected either: the link count needs `GetFileInformationByHandle` and
+///   another `windows-sys` feature, which could not be checked here.
+/// * Hard links elsewhere: only a file that is rewritten in place (the track,
+///   [`Open::Rewrite`]) is checked. The manifest is replaced through a
+///   temporary file and a rename, never written in place; the lock is never
+///   written; the journal is only read.
+///
+/// Recovering by writing new files and replacing directory entries (never
+/// touching an original inode) would close the hard-link case on every
+/// platform, at the cost of copying the audio; it is not done.
 pub(crate) fn open_member(
     path: &Path,
     mode: Open,
@@ -111,6 +133,13 @@ pub(crate) fn open_member(
         .map_err(|error| RecordingError::io(action, &error))?;
     if !metadata.is_file() {
         return Err(refused());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if mode == Open::Rewrite && metadata.nlink() > 1 {
+            return Err(refused());
+        }
     }
     Ok(file)
 }

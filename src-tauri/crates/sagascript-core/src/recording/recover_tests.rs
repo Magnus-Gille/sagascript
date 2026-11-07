@@ -1254,3 +1254,39 @@ fn a_file_that_cannot_be_shown_to_be_ours_is_left_alone_however_long_it_is() {
         );
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn a_track_file_that_is_a_hard_link_to_another_file_is_never_rewritten() {
+    let killed = killed_blocks(3);
+    let outside = TempDir::new();
+    // Another FLAC file of the user's, which a hard link makes the same
+    // inode as the track: recovery would truncate and rewrite it in place.
+    let victim = outside.path().join("someone-elses.flac");
+    let mut bytes = std::fs::read(killed.folder.join("mic.flac")).unwrap();
+    bytes.extend_from_slice(b"trailing bytes the owner of this file cares about");
+    std::fs::write(&victim, &bytes).unwrap();
+    std::fs::remove_file(killed.folder.join("mic.flac")).unwrap();
+    std::fs::hard_link(&victim, killed.folder.join("mic.flac")).unwrap();
+    let before = snapshot(&killed.folder);
+
+    let error = recover_folder(&killed.folder).unwrap_err();
+    assert_eq!(error.code(), "recording_not_regular_file", "{error:?}");
+    assert!(
+        std::fs::read(&victim).unwrap() == bytes,
+        "the file behind the second name is untouched"
+    );
+    assert_eq!(
+        snapshot(&killed.folder),
+        before,
+        "nothing in the folder changed"
+    );
+    assert_eq!(
+        read_manifest(&killed.folder).state,
+        RecordingState::Recording
+    );
+
+    // Once the other name is gone the track is an ordinary file again.
+    std::fs::remove_file(&victim).unwrap();
+    assert!(recover_folder(&killed.folder).is_ok());
+}
