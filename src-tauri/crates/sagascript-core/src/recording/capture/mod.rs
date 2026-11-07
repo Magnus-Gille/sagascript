@@ -33,8 +33,6 @@ pub mod synthetic;
 #[cfg(windows)]
 mod win;
 
-#[cfg(all(feature = "record", target_os = "macos"))]
-mod coreaudio_id;
 #[cfg(feature = "record")]
 pub mod mic;
 

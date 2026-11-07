@@ -651,6 +651,9 @@ struct FaultyEncoder {
     inner: Box<dyn TrackEncoder>,
     fail_silence: bool,
     fail_sync: bool,
+    /// `finish` does its work and then reports a failure (a last fsync that
+    /// fails): the track is complete on disk and the writer is told it is not.
+    fail_finish: bool,
 }
 
 fn injected(action: &'static str) -> RecordingError {
@@ -685,8 +688,16 @@ impl TrackEncoder for FaultyEncoder {
         }
         self.inner.sync()
     }
+    fn salvage(&mut self, keep_frames: u64) -> Result<(), RecordingError> {
+        self.inner.salvage(keep_frames)
+    }
     fn finish(self: Box<Self>) -> Result<TrackSummary, RecordingError> {
-        self.inner.finish()
+        let fail = self.fail_finish;
+        let summary = self.inner.finish()?;
+        if fail {
+            return Err(injected("sync a track file"));
+        }
+        Ok(summary)
     }
 }
 
@@ -705,15 +716,8 @@ enum GapFault {
     FinalSync,
 }
 
-/// A writer with 6000 frames of speech whose next `gap` of 3000 frames fails
-/// as `fault` says.
-fn writer_whose_next_gap_fails(fault: GapFault) -> (TempDir, RecordingWriter, Vec<i32>) {
-    let root = TempDir::new();
-    let store = RecordingStore::new(root.path());
-    let mut writer = store.create(mic_recording()).unwrap();
-    let first = at_bits(&speechlike(6000, 71), 24);
-    writer.push("mic", &to_f32(&first, 24)).unwrap();
-    let track = &mut writer.tracks[0];
+/// Make the next `gap` of `track` fail as `fault` says.
+fn arm_gap_fault(track: &mut TrackWriter, fault: GapFault) {
     match fault {
         GapFault::Append => track.journal.fault = Some(JournalFault::AppendNothing),
         GapFault::TornAppend => track.journal.fault = Some(JournalFault::AppendTorn),
@@ -724,9 +728,21 @@ fn writer_whose_next_gap_fails(fault: GapFault) -> (TempDir, RecordingWriter, Ve
                 inner,
                 fail_silence: matches!(fault, GapFault::Silence),
                 fail_sync: matches!(fault, GapFault::FinalSync),
+                fail_finish: false,
             }));
         }
     }
+}
+
+/// A writer with 6000 frames of speech whose next `gap` of 3000 frames fails
+/// as `fault` says.
+fn writer_whose_next_gap_fails(fault: GapFault) -> (TempDir, RecordingWriter, Vec<i32>) {
+    let root = TempDir::new();
+    let store = RecordingStore::new(root.path());
+    let mut writer = store.create(mic_recording()).unwrap();
+    let first = at_bits(&speechlike(6000, 71), 24);
+    writer.push("mic", &to_f32(&first, 24)).unwrap();
+    arm_gap_fault(&mut writer.tracks[0], fault);
     (root, writer, first)
 }
 
@@ -1177,4 +1193,162 @@ fn a_finished_recording_does_not_keep_the_start_copy() {
     );
     writer.finish(EndedReason::Stopped).unwrap();
     assert!(!dir.join(START_COPY_FILE).exists());
+}
+
+// ---- a track that ended early keeps what came before, and the others are finished ----
+
+/// The faults after which the track is in doubt (the final fsync is not one).
+const IN_DOUBT: [GapFault; 4] = [
+    GapFault::Append,
+    GapFault::TornAppend,
+    GapFault::JournalSync,
+    GapFault::Silence,
+];
+
+/// Two mono tracks, each with a partial block waiting for the rest of its
+/// block: "mic" (6000 frames, 24 bit, one block and 1904 frames waiting),
+/// whose next gap fails as `fault` says, and "system" (5000 frames, 16 bit,
+/// 904 waiting), which is healthy. `mic_first` is their order in the recording
+/// (the writer used to stop at the first track that did not finish).
+fn two_tracks_one_failing(
+    fault: GapFault,
+    mic_first: bool,
+) -> (TempDir, RecordingWriter, Vec<i32>, Vec<i32>) {
+    let root = TempDir::new();
+    let store = RecordingStore::new(root.path());
+    let mic = track("mic", 48_000, 1, 24);
+    let system = track("system", 48_000, 1, 16);
+    let tracks = if mic_first {
+        vec![mic, system]
+    } else {
+        vec![system, mic]
+    };
+    let mut writer = store.create(recording("Team meeting", tracks)).unwrap();
+    let mic_pcm = at_bits(&speechlike(6000, 81), 24);
+    let system_pcm = at_bits(&speechlike(5000, 82), 16);
+    writer.push("mic", &to_f32(&mic_pcm, 24)).unwrap();
+    writer.push("system", &to_f32(&system_pcm, 16)).unwrap();
+    let mic_writer = writer.tracks.iter_mut().find(|t| t.id == "mic").unwrap();
+    arm_gap_fault(mic_writer, fault);
+    (root, writer, mic_pcm, system_pcm)
+}
+
+fn decoded_track(folder: &Path, file: &str) -> Vec<i32> {
+    decode_flac(&std::fs::read(folder.join(file)).unwrap()).samples
+}
+
+#[test]
+fn a_failed_gap_loses_none_of_the_audio_that_came_before_it_on_any_track() {
+    for fault in IN_DOUBT {
+        for mic_first in [true, false] {
+            let what = format!("{fault:?}, mic first: {mic_first}");
+            let (_root, mut writer, mic_pcm, system_pcm) = two_tracks_one_failing(fault, mic_first);
+            writer.gap("mic", 3000, GapReason::Overrun).unwrap_err();
+
+            // The healthy track goes on; then the session ends.
+            let more = at_bits(&speechlike(700, 83), 16);
+            writer.push("system", &to_f32(&more, 16)).unwrap();
+            let folder = writer.folder().to_path_buf();
+            let error = writer.finish(EndedReason::Stopped).unwrap_err();
+            assert_eq!(error.code(), "recording_tracks_incomplete", "{what}");
+            assert_eq!(read_manifest(&folder).state, RecordingState::Recording);
+
+            let recovered = recover_folder(&folder).unwrap();
+            let kept = |id: &str| {
+                recovered
+                    .tracks
+                    .iter()
+                    .find(|t| t.id == id)
+                    .unwrap()
+                    .frames_kept
+            };
+            // Not a frame of what was accepted before the gap is gone: not
+            // the 1904 frames of the partial block, and not the 904 + 700 of
+            // the other track.
+            assert_eq!(kept("mic"), 6000, "{what}: the failed track");
+            assert_eq!(kept("system"), 5700, "{what}: the other track");
+            assert!(
+                decoded_track(&folder, "mic.flac") == mic_pcm,
+                "{what}: the failed track's audio"
+            );
+            let mut system_all = system_pcm;
+            system_all.extend_from_slice(&more);
+            assert!(
+                decoded_track(&folder, "system.flac") == system_all,
+                "{what}: the other track's audio"
+            );
+            // The disputed gap did not get any audio, or any silence.
+            assert!(recovered.manifest.tracks.iter().all(|t| t.gaps.is_empty()));
+            assert_eq!(recovered.manifest.state, RecordingState::Complete);
+        }
+    }
+}
+
+#[test]
+fn finishing_ends_the_healthy_tracks_and_names_the_ones_that_are_incomplete() {
+    for fault in IN_DOUBT {
+        for mic_first in [true, false] {
+            let what = format!("{fault:?}, mic first: {mic_first}");
+            let (_root, mut writer, _mic, system_pcm) = two_tracks_one_failing(fault, mic_first);
+            writer.gap("mic", 3000, GapReason::Overrun).unwrap_err();
+            let folder = writer.folder().to_path_buf();
+            let error = writer.finish(EndedReason::Stopped).unwrap_err();
+            let message = error.to_string();
+            assert!(
+                message.contains("mic") && !message.contains("system"),
+                "{what}: the message names the incomplete track and only it: {message}"
+            );
+
+            // The healthy track was finished by the writer itself: its header
+            // is the final one, before any recovery ran.
+            let bytes = std::fs::read(folder.join("system.flac")).unwrap();
+            let header = parse_header(&bytes).expect("a header");
+            assert_eq!(header.total_samples, 5000, "{what}");
+            assert!(
+                decode_flac(&bytes).samples == system_pcm,
+                "{what}: the healthy track is whole"
+            );
+            // The manifest stays `recording`, the lock file stays, and the
+            // journal of the failed track is still there for recovery.
+            assert_eq!(read_manifest(&folder).state, RecordingState::Recording);
+            assert!(folder.join(LOCK_FILE).exists(), "{what}");
+        }
+    }
+}
+
+#[test]
+fn a_track_that_cannot_be_finished_does_not_keep_the_others_from_being_finished() {
+    for mic_first in [true, false] {
+        let (_root, mut writer, mic_pcm, system_pcm) =
+            two_tracks_one_failing(GapFault::FinalSync, mic_first);
+        // No gap this time: the mic track's own finish reports a failure after
+        // it did its work (a last fsync that fails).
+        let mic_writer = writer.tracks.iter_mut().find(|t| t.id == "mic").unwrap();
+        let encoder = mic_writer.encoder.take().unwrap();
+        mic_writer.encoder = Some(Box::new(FaultyEncoder {
+            inner: encoder,
+            fail_silence: false,
+            fail_sync: false,
+            fail_finish: true,
+        }));
+        let folder = writer.folder().to_path_buf();
+        let error = writer.finish(EndedReason::Stopped).unwrap_err();
+        assert_eq!(
+            error.code(),
+            "recording_tracks_incomplete",
+            "mic first: {mic_first}"
+        );
+        assert!(error.to_string().contains("mic"), "{error}");
+        assert!(!error.to_string().contains("system"), "{error}");
+
+        let system = std::fs::read(folder.join("system.flac")).unwrap();
+        assert_eq!(parse_header(&system).unwrap().total_samples, 5000);
+        assert_eq!(read_manifest(&folder).state, RecordingState::Recording);
+
+        // Recovery completes the recording and loses nothing.
+        let recovered = recover_folder(&folder).unwrap();
+        assert!(decoded_track(&folder, "mic.flac") == mic_pcm);
+        assert!(decoded_track(&folder, "system.flac") == system_pcm);
+        assert_eq!(recovered.manifest.state, RecordingState::Complete);
+    }
 }

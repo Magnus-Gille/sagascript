@@ -44,6 +44,9 @@ fn every_variant() -> Vec<RecordingError> {
         RecordingError::NotRegularFile {
             action: "open a track file",
         },
+        RecordingError::TracksIncomplete {
+            tracks: vec!["mic".into(), "system".into()],
+        },
         RecordingError::encoder("failed at /Users/someone/Music/secret.flac"),
     ]
 }

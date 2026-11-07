@@ -305,3 +305,197 @@ fn a_device_that_goes_from_two_to_four_channels_is_a_format_change_although_the_
         }))
     );
 }
+
+// ---- Codex review of 1b, round 3: the identity belongs to the device that is opened ----
+
+use std::cell::Cell;
+
+use super::{
+    check_stream_target, describe, id_from_debug_text, same_device, verify_default, InputDevice,
+    OpenedInput,
+};
+
+/// A device as a value: its fields do not change when the system default does.
+#[derive(Clone)]
+struct FakeDevice {
+    id: Option<u64>,
+    name: &'static str,
+    format: DeviceFormat,
+}
+
+impl InputDevice for FakeDevice {
+    fn id(&self) -> Option<u64> {
+        self.id
+    }
+    fn name(&self) -> Option<String> {
+        Some(self.name.into())
+    }
+    fn default_format(&self) -> Option<(DeviceFormat, cpal::SampleFormat)> {
+        Some((self.format, cpal::SampleFormat::F32))
+    }
+}
+
+fn usb(id: u64) -> FakeDevice {
+    FakeDevice {
+        id: Some(id),
+        name: "USB Microphone",
+        format: DeviceFormat {
+            sample_rate: 48_000,
+            channels: 1,
+        },
+    }
+}
+
+/// A system whose default input is switched by the caller, between the moment
+/// the default device is handed out and anything else the caller reads.
+struct SwitchingHost {
+    devices: [FakeDevice; 2],
+    default: Cell<usize>,
+}
+
+impl SwitchingHost {
+    /// The default device now, and then the default is switched to the other.
+    fn default_input_device(&self) -> Option<FakeDevice> {
+        let device = self.devices[self.default.get()].clone();
+        self.default.set(1 - self.default.get());
+        Some(device)
+    }
+
+    /// What asking the system for "the current default" would say now: the
+    /// separate read the first version of the identity relied on.
+    fn current_default_id(&self) -> Option<u64> {
+        self.devices[self.default.get()].id
+    }
+}
+
+#[test]
+fn the_identity_is_read_from_the_device_value_not_from_the_current_default() {
+    // The default is A when the device is handed out and B right after.
+    let host = SwitchingHost {
+        devices: [usb(77), usb(41)],
+        default: Cell::new(0),
+    };
+    let device = host.default_input_device().unwrap();
+    // A separate "what is the default now" read would now say B (41)...
+    assert_eq!(host.current_default_id(), Some(41));
+    // ...but the snapshot of the device that was handed out says A.
+    let opened = describe(&device).unwrap();
+    assert_eq!(opened.snapshot.id, Some(77));
+    assert_eq!(opened.snapshot.name.as_deref(), Some("USB Microphone"));
+}
+
+#[test]
+fn a_start_on_a_device_that_replaced_the_expected_one_for_an_instant_is_refused() {
+    // The recording was set up on B (41). While it starts, the default is A
+    // (77: the same name, the same format) when the device is looked up, and
+    // B again right after. Capture would open A. It is refused.
+    let host = SwitchingHost {
+        devices: [usb(77), usb(41)],
+        default: Cell::new(0),
+    };
+    let expected = describe(&usb(41)).unwrap();
+    let result = verify_default(
+        host.default_input_device(),
+        &expected.snapshot,
+        expected.sample_format,
+    );
+    assert!(matches!(
+        result,
+        Err(RecordingError::SourceUnavailable { reason }) if reason.contains("changed")
+    ));
+    assert_eq!(
+        host.current_default_id(),
+        Some(41),
+        "and the default is B again"
+    );
+}
+
+#[test]
+fn a_start_on_the_expected_device_is_accepted_and_returns_that_device() {
+    let host = SwitchingHost {
+        devices: [usb(41), usb(77)],
+        default: Cell::new(0),
+    };
+    let expected = describe(&usb(41)).unwrap();
+    let device = verify_default(
+        host.default_input_device(),
+        &expected.snapshot,
+        expected.sample_format,
+    )
+    .unwrap();
+    assert_eq!(device.id, Some(41));
+}
+
+#[test]
+fn a_start_without_a_default_device_or_on_another_format_is_refused() {
+    let expected = describe(&usb(41)).unwrap();
+    assert!(
+        verify_default::<FakeDevice>(None, &expected.snapshot, expected.sample_format).is_err()
+    );
+    let mut other = usb(41);
+    other.format.sample_rate = 44_100;
+    assert!(verify_default(Some(other), &expected.snapshot, expected.sample_format).is_err());
+}
+
+#[test]
+fn the_stream_target_check_follows_the_same_identity_rules_as_the_watch() {
+    let opened = |device: FakeDevice| -> OpenedInput { describe(&device).unwrap() };
+    let expected = opened(usb(41));
+    let check = |device: FakeDevice| {
+        check_stream_target(&expected.snapshot, expected.sample_format, &opened(device)).is_ok()
+    };
+    assert!(check(usb(41)));
+    assert!(!check(usb(77)), "another id, the same name and format");
+    // The same id under another name is the same device.
+    let mut renamed = usb(41);
+    renamed.name = "Desk Mic";
+    assert!(check(renamed));
+    // With no id on one side, the names decide.
+    let mut unknown = usb(41);
+    unknown.id = None;
+    assert!(check(unknown.clone()));
+    unknown.name = "Another Mic";
+    assert!(!check(unknown));
+    assert!(same_device(&expected.snapshot, &expected.snapshot));
+}
+
+#[test]
+fn the_core_audio_id_is_found_in_cpals_debug_text_and_nothing_else_passes_for_one() {
+    // The text `cpal` 0.15.3 prints for a CoreAudio device (pinned: a newer
+    // `cpal` that prints something else yields no id, and names decide).
+    let text = r#"Device { audio_device_id: 73, name: Ok("MacBook Pro Microphone") }"#;
+    assert_eq!(id_from_debug_text(text), Some(73));
+    // A name that looks like the field does not confuse it.
+    let tricky = r#"Device { audio_device_id: 12, name: Ok("audio_device_id: 99") }"#;
+    assert_eq!(id_from_debug_text(tricky), Some(12));
+    for bad in [
+        "",
+        "Device { name: Ok(\"x\") }",
+        "Device { audio_device_id: 0, name: Ok(\"x\") }",
+        "Device { audio_device_id: -4, name: Ok(\"x\") }",
+        "Device { audio_device_id: 99999999999, name: Ok(\"x\") }",
+        "Device { audio_device_id: abc }",
+        "Device { audio_device_id: }",
+    ] {
+        assert_eq!(id_from_debug_text(bad), None, "{bad:?}");
+    }
+}
+
+/// Reads the default device's description; opens no stream and captures no
+/// audio. Ignored so that no test run touches the audio hardware at all.
+#[test]
+#[ignore = "queries the audio hardware (no capture); run by hand on a Mac"]
+fn the_default_input_device_of_a_mac_has_an_id_that_cpals_debug_text_gives() {
+    use cpal::traits::HostTrait;
+    let Some(device) = cpal::default_host().default_input_device() else {
+        eprintln!("no default input device");
+        return;
+    };
+    let Some(opened) = describe(&device) else {
+        eprintln!("the default input device reports no format");
+        return;
+    };
+    eprintln!("default input: {:?}", opened.snapshot);
+    #[cfg(target_os = "macos")]
+    assert!(opened.snapshot.id.is_some(), "cpal's Debug text changed?");
+}

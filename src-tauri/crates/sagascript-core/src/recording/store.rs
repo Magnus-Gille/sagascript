@@ -19,12 +19,15 @@
 //!    [`SYNC_INTERVAL`](super::SYNC_INTERVAL) (via [`RecordingWriter::sync_if_due`]).
 //!    A gap is journaled and the journal fsynced **before** its silence is
 //!    written, and the track is fsynced after. A gap that fails part-way ends
-//!    its track until recovery (see [`RecordingWriter::gap`]).
+//!    its track until recovery, after the audio it had accepted is written out
+//!    (see [`RecordingWriter::gap`]).
 //! 4. At the end of a track: last frame, fsync, STREAMINFO and SEEKTABLE
 //!    rewritten in place, fsync.
 //! 5. `recording.json.tmp` with `state: "complete"`, fsync, rename over
 //!    `recording.json` (replacing our own file is the intent), fsync the
-//!    folder, remove the lock.
+//!    folder, remove the lock. If a track cannot be finished the others still
+//!    are, the manifest stays `recording` and the result names the tracks
+//!    ([`RecordingError::TracksIncomplete`]); recovery completes them.
 //!
 //! A recording without a manifest is not a recording: a crash between steps 1
 //! and 2 leaves an empty folder that nothing reads. A manifest saying
@@ -480,6 +483,28 @@ impl TrackWriter {
         self.encoder.as_mut().ok_or(RecordingError::TrackFinished)
     }
 
+    /// The track ends here, in doubt, and recovery will finish it: write out
+    /// the audio accepted before frame `kept_frames` (the partial block that
+    /// is still waiting included, which a track that cannot be finished would
+    /// otherwise lose with the encoder) and let go of the file. Best effort:
+    /// a failure here is reported to the log, because the caller already has
+    /// the error that ended the track, and recovery keeps what reached the file.
+    fn salvage(&mut self, kept_frames: u64) {
+        self.failed = true;
+        if let Some(mut encoder) = self.encoder.take() {
+            if let Err(error) = encoder.salvage(kept_frames) {
+                tracing::warn!(
+                    code = error.code(),
+                    "could not write out the audio a track had accepted"
+                );
+            }
+        }
+        // The clock anchors since the last sync are worth keeping too.
+        if let Err(error) = self.journal.sync() {
+            tracing::warn!(code = error.code(), "could not sync a track journal");
+        }
+    }
+
     /// The part of a gap that cannot be undone: the intent, then the silence.
     /// Every failure in here leaves the track in doubt.
     fn commit_gap(
@@ -568,13 +593,7 @@ impl RecordingWriter {
     /// Record that the next frame of the track (index `frames_pushed`) was
     /// captured at `host_ns`: a clock anchor, journalled at once.
     pub fn anchor(&mut self, track: &str, host_ns: u64) -> Result<(), RecordingError> {
-        let frame = self
-            .tracks
-            .iter()
-            .find(|t| t.id == track)
-            .and_then(|t| t.encoder.as_ref())
-            .ok_or(RecordingError::UnknownTrack)?
-            .frames_pushed();
+        let frame = self.track_mut(track)?.live()?.frames_pushed();
         self.anchor_at(track, host_ns, frame)
     }
 
@@ -612,7 +631,9 @@ impl RecordingWriter {
     /// `anchor`, `gap` and `finish_track` then fail with
     /// [`RecordingError::TrackFinished`], `sync` skips it, and the recording
     /// stays `state: recording` for [`recover`](super::recover) to finish.
-    /// Nothing written before the failure is lost. A failing fsync of the
+    /// Nothing accepted before the failure is lost: the track writes out the
+    /// audio that came before the gap, the partial block still waiting for its
+    /// block included, and none of what comes later. A failing fsync of the
     /// finished gap is not in doubt; it is reported and the track goes on.
     pub fn gap(
         &mut self,
@@ -629,7 +650,10 @@ impl RecordingWriter {
         // Refused here, before a byte is journaled or written: a gap the
         // track cannot hold must leave no line that claims it exists, and the
         // track goes on as it was.
-        track.live()?.ensure_room(length)?;
+        let encoder = track.live()?;
+        encoder.ensure_room(length)?;
+        // What the track holds until the gap: all that is kept if it fails.
+        let at_frame = encoder.frames_pushed();
         #[cfg(test)]
         failpoint(crash_after, GapStep::Checked)?;
         // From here on a failure leaves the track in doubt: the intent may or
@@ -643,6 +667,13 @@ impl RecordingWriter {
             crash_after,
         ) {
             track.failed = true;
+            // A killed process cleans nothing up: the test that simulates one
+            // stops here.
+            #[cfg(test)]
+            if crash_after.is_some() {
+                return Err(error);
+            }
+            track.salvage(at_frame);
             return Err(error);
         }
         // The gap is committed. A failing fsync now is the same failure a
@@ -824,17 +855,27 @@ impl RecordingWriter {
     }
 
     /// End every track still running with `reason` and write the final
-    /// manifest (step 5). If a track fails to finish, the manifest keeps
-    /// `state: recording` and [`recover`](super::recover) finishes the job.
+    /// manifest (step 5). Every track is ended whatever happens to the others:
+    /// if some cannot be finished (one that ended early after a failed gap, or
+    /// whose last fsync failed) the manifest keeps `state: recording`, the
+    /// result is [`RecordingError::TracksIncomplete`] naming them, and
+    /// [`recover`](super::recover) finishes the job. The tracks that were
+    /// finished are whole; a track that ended early already wrote out the
+    /// audio it had accepted.
     pub fn finish(mut self, reason: EndedReason) -> Result<Manifest, RecordingError> {
-        let live: Vec<String> = self
-            .tracks
-            .iter()
-            .filter(|track| track.encoder.is_some())
-            .map(|track| track.id.clone())
-            .collect();
-        for id in live {
-            self.finish_track(&id, reason.clone())?;
+        let mut incomplete = Vec::new();
+        for index in 0..self.tracks.len() {
+            if self.tracks[index].finished.is_some() {
+                continue;
+            }
+            let id = self.tracks[index].id.clone();
+            if let Err(error) = self.finish_track(&id, reason.clone()) {
+                tracing::warn!(code = error.code(), "a track could not be finished");
+                incomplete.push(id);
+            }
+        }
+        if !incomplete.is_empty() {
+            return Err(RecordingError::TracksIncomplete { tracks: incomplete });
         }
 
         let mut manifest = self.manifest.clone();
