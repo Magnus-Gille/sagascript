@@ -33,13 +33,17 @@
 //! not a platform notification (CoreAudio property listeners,
 //! `IMMNotificationClient`): it needs no unsafe FFI and works the same on
 //! every platform, at the price of up to half a second of latency. A device
-//! is identified by its Core Audio object id on macOS (`coreaudio_id.rs`, one
-//! declared function, no crate), which tells two identical microphones apart;
-//! elsewhere by its name, so two devices with one name are **not** told apart
-//! there (`cpal` 0.15 exposes no id and a WASAPI endpoint id needs COM). A
+//! is identified by its Core Audio object id on macOS, which tells two
+//! identical microphones apart; elsewhere by its name, so two devices with one
+//! name are **not** told apart there (`cpal` 0.15 exposes no id and a WASAPI
+//! endpoint id needs COM). The id is read from the **same** `cpal` device value
+//! that gives the name, the format and the stream (`cpal` 0.15.3 prints it in
+//! the device's `Debug` text, a format a test pins), never by asking the system
+//! again for "the current default", which could by then be another device. A
 //! change is signalled even when the track format would not change (a stereo
-//! pair of a device that went from two to four channels). It is tested through the probe; that
-//! `cpal` shows a changed default or rate live is on the hardware checklist.
+//! pair of a device that went from two to four channels). It is tested through
+//! the probe; that `cpal` shows a changed default or rate live is on the
+//! hardware checklist.
 //!
 //! # Time
 //!
@@ -152,19 +156,139 @@ pub trait DeviceProbe: Send {
     fn default_input(&mut self) -> Option<DeviceSnapshot>;
 }
 
-/// The identity of the default input device, where the platform gives one
-/// without a new dependency.
-fn platform_default_input_id() -> Option<u64> {
+/// The identity of one `cpal` device, where the platform gives one without a
+/// new dependency: the Core Audio object id on macOS. It is read from the
+/// device value itself, so it always belongs to the device the name, the
+/// format and the stream come from.
+fn device_id(device: &cpal::Device) -> Option<u64> {
     #[cfg(target_os = "macos")]
     {
-        super::coreaudio_id::default_input_device_id()
+        match device.as_inner() {
+            cpal::platform::DeviceInner::CoreAudio(inner) => {
+                id_from_debug_text(&format!("{inner:?}"))
+            }
+        }
     }
     #[cfg(not(target_os = "macos"))]
     {
         // Documented limit: elsewhere (WASAPI endpoint ids need COM; `cpal`
         // 0.15 exposes no id) two devices with one name are not told apart.
+        let _ = device;
         None
     }
+}
+
+/// The `audio_device_id` field of `cpal` 0.15.3's `Debug` text for a CoreAudio
+/// device: `Device { audio_device_id: 73, name: Ok("...") }`. Anything else,
+/// including a number that is not a Core Audio object id, is no identity.
+pub(crate) fn id_from_debug_text(text: &str) -> Option<u64> {
+    const KEY: &str = "audio_device_id: ";
+    let rest = &text[text.find(KEY)? + KEY.len()..];
+    let digits = &rest[..rest
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(rest.len())];
+    // An `AudioObjectID` is a `u32`; 0 is `kAudioObjectUnknown`.
+    digits
+        .parse::<u32>()
+        .ok()
+        .filter(|id| *id != 0)
+        .map(u64::from)
+}
+
+/// Everything one `cpal` device value says about itself. All of it comes from
+/// the one value, so the identity cannot be another device's.
+pub(crate) struct OpenedInput {
+    pub(crate) snapshot: DeviceSnapshot,
+    pub(crate) sample_format: SampleFormat,
+}
+
+/// What the recording needs to know about one input device. It is a trait so
+/// that a test can hand out devices whose "current default" changes under it;
+/// `cpal::Device` is the real one.
+pub(crate) trait InputDevice {
+    /// The platform identity of this very device (see [`device_id`]).
+    fn id(&self) -> Option<u64>;
+    fn name(&self) -> Option<String>;
+    fn default_format(&self) -> Option<(DeviceFormat, SampleFormat)>;
+}
+
+impl InputDevice for cpal::Device {
+    fn id(&self) -> Option<u64> {
+        device_id(self)
+    }
+
+    fn name(&self) -> Option<String> {
+        DeviceTrait::name(self).ok()
+    }
+
+    fn default_format(&self) -> Option<(DeviceFormat, SampleFormat)> {
+        let config = self.default_input_config().ok()?;
+        Some((
+            DeviceFormat {
+                sample_rate: config.sample_rate().0,
+                channels: config.channels(),
+            },
+            config.sample_format(),
+        ))
+    }
+}
+
+/// Describe a device, from the device alone.
+pub(crate) fn describe<D: InputDevice>(device: &D) -> Option<OpenedInput> {
+    let (format, sample_format) = device.default_format()?;
+    Some(OpenedInput {
+        snapshot: DeviceSnapshot {
+            id: device.id(),
+            name: device.name(),
+            format,
+        },
+        sample_format,
+    })
+}
+
+/// The default input device `default` names, if it is the one the recording
+/// was set up with. Everything compared comes from the one device value that
+/// is returned, which the stream is then built on.
+pub(crate) fn verify_default<D: InputDevice>(
+    default: Option<D>,
+    expected: &DeviceSnapshot,
+    expected_sample_format: SampleFormat,
+) -> Result<D, RecordingError> {
+    let device = default.ok_or(RecordingError::SourceUnavailable {
+        reason: "no input device",
+    })?;
+    let opened = describe(&device).ok_or(RecordingError::SourceUnavailable {
+        reason: "the input device reports no format",
+    })?;
+    check_stream_target(expected, expected_sample_format, &opened)?;
+    Ok(device)
+}
+
+/// Whether two snapshots are the same device. Two ids that are both known
+/// decide, whatever the names say; otherwise the names are all there is.
+pub(crate) fn same_device(a: &DeviceSnapshot, b: &DeviceSnapshot) -> bool {
+    match (a.id, b.id) {
+        (Some(a), Some(b)) => a == b,
+        _ => !(a.name.is_some() && b.name.is_some() && a.name != b.name),
+    }
+}
+
+/// Whether the device a stream is about to be built on is the one that was
+/// looked at when the recording was set up. The format is part of that.
+pub(crate) fn check_stream_target(
+    expected: &DeviceSnapshot,
+    expected_sample_format: SampleFormat,
+    opened: &OpenedInput,
+) -> Result<(), RecordingError> {
+    if !same_device(expected, &opened.snapshot)
+        || opened.snapshot.format != expected.format
+        || opened.sample_format != expected_sample_format
+    {
+        return Err(RecordingError::SourceUnavailable {
+            reason: "the input device changed while the recording was starting",
+        });
+    }
+    Ok(())
 }
 
 /// The probe over `cpal`.
@@ -173,15 +297,7 @@ pub struct CpalProbe;
 impl DeviceProbe for CpalProbe {
     fn default_input(&mut self) -> Option<DeviceSnapshot> {
         let device = cpal::default_host().default_input_device()?;
-        let config = device.default_input_config().ok()?;
-        Some(DeviceSnapshot {
-            id: platform_default_input_id(),
-            name: device.name().ok(),
-            format: DeviceFormat {
-                sample_rate: config.sample_rate().0,
-                channels: config.channels(),
-            },
-        })
+        describe(&device).map(|opened| opened.snapshot)
     }
 }
 
@@ -232,12 +348,7 @@ impl DeviceWatch {
     }
 
     fn compare(&self, now: &DeviceSnapshot) -> Option<SourceSignal> {
-        let different_device = match (self.opened.id, now.id) {
-            // Both known: the identity decides, the names may even differ.
-            (Some(opened), Some(now_id)) => opened != now_id,
-            // Otherwise the best there is: the name.
-            _ => now.name.is_some() && self.opened.name.is_some() && now.name != self.opened.name,
-        };
+        let different_device = !same_device(&self.opened, now);
         if different_device {
             return Some(SourceSignal::DeviceChanged);
         }
@@ -282,25 +393,16 @@ impl MicSource {
             .ok_or(RecordingError::SourceUnavailable {
                 reason: "no input device",
             })?;
-        let supported =
-            device
-                .default_input_config()
-                .map_err(|_| RecordingError::SourceUnavailable {
-                    reason: "the input device reports no format",
-                })?;
-        let negotiated = negotiate(
-            DeviceFormat {
-                sample_rate: supported.sample_rate().0,
-                channels: supported.channels(),
-            },
-            config.channel_pair,
-        )?;
+        let opened = describe(&device).ok_or(RecordingError::SourceUnavailable {
+            reason: "the input device reports no format",
+        })?;
+        let negotiated = negotiate(opened.snapshot.format, config.channel_pair)?;
         Ok(Self {
             config,
             negotiated,
-            device_name: device.name().ok(),
-            device_id: platform_default_input_id(),
-            sample_format: supported.sample_format(),
+            device_name: opened.snapshot.name,
+            device_id: opened.snapshot.id,
+            sample_format: opened.sample_format,
             running: None,
         })
     }
@@ -454,32 +556,24 @@ fn run_stream(
 }
 
 fn build_stream(job: StreamJob, sink: BlockSink) -> Result<cpal::Stream, RecordingError> {
-    let host = cpal::default_host();
-    let device = host
-        .default_input_device()
-        .ok_or(RecordingError::SourceUnavailable {
-            reason: "no input device",
-        })?;
+    let expected = DeviceSnapshot {
+        id: job.device_id,
+        name: job.device_name.clone(),
+        format: job.expected_device,
+    };
+    // The default may have changed since `open`. Name, format and identity are
+    // all read from the one device value the stream is built on.
+    let device = verify_default(
+        cpal::default_host().default_input_device(),
+        &expected,
+        job.sample_format,
+    )?;
     let supported =
         device
             .default_input_config()
             .map_err(|_| RecordingError::SourceUnavailable {
                 reason: "the input device reports no format",
             })?;
-    // The default device may have changed between `open` and now.
-    let now = DeviceFormat {
-        sample_rate: supported.sample_rate().0,
-        channels: supported.channels(),
-    };
-    let other_id = matches!(
-        (job.device_id, platform_default_input_id()),
-        (Some(opened), Some(now_id)) if opened != now_id
-    );
-    if other_id || now != job.expected_device || supported.sample_format() != job.sample_format {
-        return Err(RecordingError::SourceUnavailable {
-            reason: "the input device changed while the recording was starting",
-        });
-    }
     let config: cpal::StreamConfig = supported.config();
     match job.sample_format {
         SampleFormat::F32 => typed::<f32>(&device, &config, job, sink),
