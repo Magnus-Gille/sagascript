@@ -333,3 +333,72 @@ fn a_track_cannot_claim_a_file_the_recording_keeps_for_itself() {
         );
     }
 }
+
+#[test]
+fn a_sealed_manifest_is_an_ordinary_manifest_that_checks_itself() {
+    let manifest = parse_manifest(&serialize_manifest(&golden_manifest()).unwrap()).unwrap();
+    let sealed = serialize_manifest_sealed(&manifest).unwrap();
+    assert_eq!(manifest_integrity(&sealed), Integrity::Valid);
+    assert_eq!(
+        manifest_integrity(&serialize_manifest(&manifest).unwrap()),
+        Integrity::Absent
+    );
+    // Readers see the same manifest: the seal is not part of the description.
+    assert_eq!(parse_manifest(&sealed).unwrap(), manifest);
+    let value: serde_json::Value = serde_json::from_slice(&sealed).unwrap();
+    assert_eq!(value["integrity"].as_str().unwrap().len(), 64);
+
+    // Any change to the bytes breaks it, a hybrid of two manifests included.
+    let mut changed = sealed.clone();
+    let at = changed.windows(5).position(|w| w == b"title").unwrap_or(40);
+    changed[at] ^= 0x01;
+    assert_eq!(manifest_integrity(&changed), Integrity::Invalid);
+    let other = serialize_manifest_sealed(&Manifest {
+        title: "Other".into(),
+        ..manifest.clone()
+    })
+    .unwrap();
+    for cut in [at + 14, sealed.len() / 2, sealed.len() - 5] {
+        let mut hybrid = sealed.clone();
+        let n = cut.min(other.len());
+        hybrid[..n].copy_from_slice(&other[..n]);
+        assert_eq!(manifest_integrity(&hybrid), Integrity::Invalid, "cut {cut}");
+    }
+    // Sealing again replaces the seal rather than adding to it.
+    assert_eq!(
+        serialize_manifest_sealed(&parse_manifest(&sealed).unwrap()).unwrap(),
+        sealed
+    );
+}
+
+#[test]
+fn a_title_that_looks_like_a_seal_cannot_stand_in_for_one() {
+    let mut manifest = golden_manifest();
+    manifest.title = "\"integrity\": \"".to_string() + &"a".repeat(64);
+    let sealed = serialize_manifest_sealed(&manifest).unwrap();
+    assert_eq!(manifest_integrity(&sealed), Integrity::Valid);
+    assert_eq!(parse_manifest(&sealed).unwrap().title, manifest.title);
+}
+
+#[test]
+fn the_seal_covers_the_manifest_and_not_the_padding_after_it() {
+    let sealed = serialize_manifest_sealed(&golden_manifest()).unwrap();
+    for padding in [0usize, 1, 100, 32 * 1024] {
+        let mut padded = sealed.clone();
+        padded.resize(sealed.len() + padding, b' ');
+        assert_eq!(
+            manifest_integrity(&padded),
+            Integrity::Valid,
+            "{padding} spaces"
+        );
+        assert_eq!(parse_manifest(&padded).unwrap(), golden_manifest());
+    }
+    // Whitespace of other kinds after the manifest is padding too; inside it, a change is not.
+    let mut tabs = sealed.clone();
+    tabs.extend_from_slice(b"\n\t \r\n");
+    assert_eq!(manifest_integrity(&tabs), Integrity::Valid);
+    let mut changed = sealed.clone();
+    let last = changed.iter().rposition(|b| *b == b'}').unwrap();
+    changed.insert(last, b' ');
+    assert_eq!(manifest_integrity(&changed), Integrity::Invalid);
+}

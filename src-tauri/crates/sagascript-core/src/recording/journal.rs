@@ -90,6 +90,9 @@ pub struct JournalWriter {
     torn: bool,
     #[cfg(test)]
     pub(crate) fault: Option<JournalFault>,
+    /// Tests: make the next `sync` fail like a full disk (one shot).
+    #[cfg(test)]
+    fail_next_sync: Option<std::io::ErrorKind>,
 }
 
 impl JournalWriter {
@@ -102,7 +105,15 @@ impl JournalWriter {
             torn: false,
             #[cfg(test)]
             fault: None,
+            #[cfg(test)]
+            fail_next_sync: None,
         })
+    }
+
+    /// Tests: the next `sync` fails with `kind`.
+    #[cfg(test)]
+    pub(crate) fn fail_next_sync(&mut self, kind: std::io::ErrorKind) {
+        self.fail_next_sync = Some(kind);
     }
 
     /// Append one event as a single write of a complete line.
@@ -141,6 +152,13 @@ impl JournalWriter {
 
     /// Flush the journal to stable storage.
     pub fn sync(&mut self) -> Result<(), RecordingError> {
+        #[cfg(test)]
+        if let Some(kind) = self.fail_next_sync.take() {
+            return Err(RecordingError::io(
+                "sync a track journal",
+                &std::io::Error::from(kind),
+            ));
+        }
         #[cfg(test)]
         if self.fault == Some(JournalFault::SyncFails) {
             self.fault = None;
