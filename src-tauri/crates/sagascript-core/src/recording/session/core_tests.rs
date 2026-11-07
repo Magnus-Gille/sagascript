@@ -651,14 +651,15 @@ fn a_channel_count_change_ends_the_track_too() {
     });
 }
 
+/// The device changed in a way the track format does not show (a stereo pair
+/// of a device that went from two to four channels is still a stereo pair),
+/// but the source built its channel extraction for the old device, so the track
+/// must end. A source that reports a format change is believed.
 #[test]
-fn the_same_format_reported_again_is_not_a_change() {
-    let rig = Rig::mono();
-    rig.handle.deliver(ms(100));
-    rig.handle.change_format(MONO48);
-    rig.handle.deliver(ms(100));
-    let done = rig.finish();
-    assert_eq!(done.track().ended_reason, Some(EndedReason::Stopped));
+fn a_format_change_that_leaves_the_track_format_the_same_still_ends_the_track() {
+    ended_by(EndedReason::FormatChanged, |rig| {
+        rig.handle.change_format(MONO48);
+    });
 }
 
 #[test]

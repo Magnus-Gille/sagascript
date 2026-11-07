@@ -315,10 +315,12 @@ impl SessionCore {
                 pipe.sleep_seen = true;
             }
             // One reason per track: the first signal wins, in the order of
-            // how specific the cause is.
+            // how specific the cause is. A format-change signal is believed
+            // even when the format it names is the track's own: the source
+            // knows the device changed in a way the track format does not show.
             let reason = if signals.system_sleep {
                 Some(EndedReason::SystemSleep)
-            } else if signals.format_changed.is_some_and(|f| f != pipe.native) {
+            } else if signals.format_changed.is_some() {
                 Some(EndedReason::FormatChanged)
             } else if signals.device_changed {
                 Some(EndedReason::DeviceChanged)
