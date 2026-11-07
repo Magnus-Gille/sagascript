@@ -108,9 +108,9 @@ impl Default for Opts {
 }
 
 /// A track file that stops accepting bytes like a full disk.
-struct FailingFile {
-    file: File,
-    budget: u64,
+pub(super) struct FailingFile {
+    pub(super) file: File,
+    pub(super) budget: u64,
 }
 
 impl Write for FailingFile {

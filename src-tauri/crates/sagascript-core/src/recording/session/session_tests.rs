@@ -833,3 +833,74 @@ fn an_automatic_ending_and_the_users_stop_share_one_orderly_shutdown() {
         Some(EndedReason::DeviceChanged)
     );
 }
+
+// ---- Codex review of 1b, round 4: the sources are in the set before the first block ----
+
+#[test]
+fn a_full_disk_at_the_first_block_stops_that_source_while_another_track_goes_on() {
+    use super::core_tests::FailingFile;
+    use crate::recording::encoder::TrackEncoder;
+    use crate::recording::flac::FlacEncoder;
+    use crate::recording::io::create_new_private;
+    use crate::recording::TRACK_HEADER_LEN;
+
+    let temp = TempDir::new();
+    let store = RecordingStore::new(temp.path().join("Recordings"));
+    // A first block of 65 536 frames is far more than the writer buffers: it is
+    // written at once, and the mic's file has room for the header only.
+    let (mic, mic_handle) = FakeSource::new(MONO48);
+    let (system, system_handle) = FakeSource::new(MONO48);
+    let mic = mic.with_prime(ms(1_400));
+    let mut config = config(mic_handle.clock(), Quality::Lossless);
+    config.block_frames = 65_536;
+    config.encoders = Some(Arc::new(move |path, new| {
+        let file =
+            create_new_private(path).map_err(|e| RecordingError::io("create a track file", &e))?;
+        let budget = if new.id == "mic" {
+            TRACK_HEADER_LEN as u64
+        } else {
+            u64::MAX
+        };
+        Ok(Box::new(FlacEncoder::new(
+            FailingFile { file, budget },
+            new.sample_rate,
+            new.channels,
+            new.bits,
+        )?) as Box<dyn TrackEncoder>)
+    }));
+    let session = RecordingSession::new(store, config);
+    session
+        .start(vec![
+            SourceSpec::mic(mic),
+            SourceSpec {
+                id: "system".into(),
+                role: "system".into(),
+                source: Box::new(system),
+            },
+        ])
+        .unwrap();
+
+    // `start` has returned: the mic's first write already met the full disk.
+    assert!(
+        !mic_handle.running(),
+        "the source of the cut-back track is still capturing"
+    );
+    assert!(
+        system_handle.running(),
+        "the other track is still recording"
+    );
+    assert_eq!(session.state(), SessionState::Recording);
+    let status = session.status();
+    assert_eq!(status.tracks[0].ended, Some(EndedReason::DiskFull));
+    assert_eq!(status.tracks[1].ended, None);
+
+    system_handle.deliver(ms(100));
+    let outcome = session.stop().unwrap();
+    assert_eq!(outcome.ended_early, Some(EndedReason::DiskFull));
+    assert_eq!(outcome.manifest.state, RecordingState::Complete);
+    assert_eq!(
+        outcome.manifest.tracks[0].ended_reason,
+        Some(EndedReason::DiskFull)
+    );
+    assert!(!system_handle.running());
+}
