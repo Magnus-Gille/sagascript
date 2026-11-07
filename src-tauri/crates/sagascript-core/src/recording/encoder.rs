@@ -53,6 +53,17 @@ pub trait TrackEncoder: Send {
 
     /// Write the last block, rewrite the metadata and fsync.
     fn finish(self: Box<Self>) -> Result<TrackSummary, RecordingError>;
+
+    /// The track ends without a finish: something went wrong after
+    /// `keep_frames` frames were accepted (a gap that failed part-way), so
+    /// whatever came after them is in doubt. Write out the audio up to
+    /// `keep_frames`, **including the partial block still waiting for the rest
+    /// of its block**, and fsync it. The metadata is left as it is for
+    /// recovery to complete, and nothing past `keep_frames` is added (blocks
+    /// of silence that already reached the file stay). The encoder takes
+    /// nothing more afterwards, and `keep_frames` more than it accepted is
+    /// refused.
+    fn salvage(&mut self, keep_frames: u64) -> Result<(), RecordingError>;
 }
 
 /// Convert one `f32` sample to a signed integer of `bits` bits:

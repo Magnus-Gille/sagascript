@@ -588,6 +588,10 @@ struct ScriptedSink {
     syncs: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     /// Fail the sync with this number (counted from 0 after `arm`).
     fail_sync: std::sync::Arc<std::sync::Mutex<Option<usize>>>,
+    writes: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    /// Fail the write with this number (counted from 0 after `arm_write`);
+    /// nothing of a failed write reaches the data.
+    fail_write: std::sync::Arc<std::sync::Mutex<Option<usize>>>,
 }
 
 impl ScriptedSink {
@@ -597,7 +601,16 @@ impl ScriptedSink {
             ops: Default::default(),
             syncs: Default::default(),
             fail_sync: Default::default(),
+            writes: Default::default(),
+            fail_write: Default::default(),
         }
+    }
+
+    /// Forget what happened so far and fail the `n`-th write from now on.
+    fn arm_write(&self, fail_write: Option<usize>) {
+        self.ops.lock().unwrap().clear();
+        self.writes.store(0, std::sync::atomic::Ordering::SeqCst);
+        *self.fail_write.lock().unwrap() = fail_write;
     }
 
     /// Forget what happened so far and fail the `n`-th sync from now on.
@@ -618,6 +631,12 @@ impl ScriptedSink {
 
 impl io::Write for ScriptedSink {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let number = self
+            .writes
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if *self.fail_write.lock().unwrap() == Some(number) {
+            return Err(io::Error::from(io::ErrorKind::StorageFull));
+        }
         let mut data = self.data.lock().unwrap();
         let at = data.position();
         let written = data.write(buf)?;
@@ -816,4 +835,224 @@ fn the_room_check_agrees_with_the_pushes() {
     assert!(encoder.ensure_room(1).is_ok());
     assert!(encoder.ensure_room(2).is_err());
     assert!(encoder.ensure_room(u64::MAX).is_err());
+}
+
+// ---- a track that ends early keeps the audio it had accepted ------------------------
+
+/// What the frames of a track file hold: how many, how many samples, and
+/// whether the file ends exactly at the end of the last whole frame.
+fn frames_in(bytes: &[u8]) -> (u64, u64, bool) {
+    let summary = scan_frames(
+        &mut Cursor::new(&bytes[HEADER_LEN..]),
+        HEADER_LEN as u64,
+        params(48_000, 1, 24),
+        &mut |_| true,
+    )
+    .unwrap();
+    (
+        summary.frames,
+        summary.samples,
+        summary.end_offset == bytes.len() as u64,
+    )
+}
+
+/// The file a track of `pcm` and then `silence` frames of silence has when it
+/// is finished, with every block stored verbatim (so a block is big enough to
+/// fill the write buffer).
+fn verbatim_reference(pcm: &[i32], silence: u64) -> Encoded {
+    let mut encoder = encoder(48_000, 1, 24);
+    encoder.force_verbatim = true;
+    encoder.push_pcm(pcm).unwrap();
+    if silence > 0 {
+        encoder.push_silence(silence).unwrap();
+    }
+    finish(encoder)
+}
+
+fn verbatim_encoder_on_scripted_sink() -> (FlacEncoder<ScriptedSink>, ScriptedSink) {
+    let sink = ScriptedSink::new();
+    let mut encoder = FlacEncoder::new(sink.clone(), 48_000, 1, 24).unwrap();
+    encoder.force_verbatim = true;
+    (encoder, sink)
+}
+
+#[test]
+fn salvage_writes_the_partial_block_syncs_it_and_leaves_the_header_for_recovery() {
+    let (mut encoder, sink, pcm) = encoder_on_scripted_sink();
+    let placeholder = sink.bytes()[..HEADER_LEN].to_vec();
+    sink.arm(None);
+    encoder.salvage(pcm.len() as u64).unwrap();
+
+    let bytes = sink.bytes();
+    assert!(
+        bytes[..HEADER_LEN] == placeholder,
+        "the header is not rewritten"
+    );
+    // Three blocks and the 700 frames that were waiting, whole.
+    assert_eq!(
+        frames_in(&bytes),
+        (4, 3 * BLOCK_SIZE as u64 + 700, true),
+        "the partial block is in the file"
+    );
+    // They are the frames a normal finish writes.
+    let reference = encode(48_000, 1, 24, &pcm);
+    assert!(bytes[HEADER_LEN..] == reference.bytes[HEADER_LEN..]);
+    // And durable: the last write is followed by a sync.
+    let ops = sink.ops();
+    let last_write = ops.iter().rposition(|op| matches!(op, Op::Write { .. }));
+    assert!(
+        last_write.is_some_and(|at| ops[at..].contains(&Op::Sync)),
+        "{ops:?}"
+    );
+    // The track takes nothing more.
+    assert!(matches!(
+        encoder.push_pcm(&[1; 4]),
+        Err(RecordingError::TrackFinished)
+    ));
+    assert!(matches!(
+        encoder.push_silence(4),
+        Err(RecordingError::TrackFinished)
+    ));
+}
+
+#[test]
+fn salvage_keeps_nothing_that_was_accepted_after_the_frame_it_is_given() {
+    let mut encoder = encoder(48_000, 1, 24);
+    let pcm = at_bits(&speechlike(3 * BLOCK_SIZE + 700, 42), 24);
+    encoder.push_pcm(&pcm).unwrap();
+    // A gap was under way: 10 000 frames of silence, two blocks of which
+    // (with the 700 frames that came first in the first one) were encoded.
+    encoder.push_silence(10_000).unwrap();
+    encoder.salvage(pcm.len() as u64).unwrap();
+
+    let parts = {
+        // Look at the sink the encoder wrote to.
+        let bytes = encoder.out.get_ref().get_ref().clone();
+        (bytes, encoder.frame_log().unwrap().to_vec())
+    };
+    let reference = {
+        let mut other = self::encoder(48_000, 1, 24);
+        other.push_pcm(&pcm).unwrap();
+        other.push_silence(10_000).unwrap();
+        finish(other)
+    };
+    let (kept, log) = parts;
+    assert_eq!(
+        log.len(),
+        5,
+        "three blocks, the straddling block, one of silence"
+    );
+    let size: usize = log.iter().map(|len| *len as usize).sum();
+    assert_eq!(kept.len(), HEADER_LEN + size);
+    assert!(
+        kept[HEADER_LEN..] == reference.bytes[HEADER_LEN..HEADER_LEN + size],
+        "the blocks that were encoded are untouched, and the 2508 frames of silence still waiting are not added"
+    );
+    assert_eq!(frames_in(&kept), (5, 5 * BLOCK_SIZE as u64, true));
+}
+
+#[test]
+fn salvage_of_a_track_with_nothing_waiting_adds_no_frame() {
+    let (mut encoder, sink) = verbatim_encoder_on_scripted_sink();
+    let pcm = at_bits(&speechlike(2 * BLOCK_SIZE, 43), 24);
+    encoder.push_pcm(&pcm).unwrap();
+    sink.arm(None);
+    encoder.salvage(pcm.len() as u64).unwrap();
+    let bytes = sink.bytes();
+    assert_eq!(frames_in(&bytes), (2, 2 * BLOCK_SIZE as u64, true));
+    assert!(sink.ops().contains(&Op::Sync));
+}
+
+#[test]
+fn salvage_refuses_to_keep_more_than_the_track_accepted_and_changes_nothing() {
+    let mut encoder = encoder(48_000, 1, 24);
+    encoder.push_pcm(&[5; 100]).unwrap();
+    for keep in [101, 1 << 40, u64::MAX] {
+        let result = encoder.salvage(keep);
+        assert!(
+            matches!(result, Err(RecordingError::InvalidInput { .. })),
+            "{keep}: {result:?}"
+        );
+    }
+    // Still a working track.
+    encoder.push_pcm(&[6; 28]).unwrap();
+    assert_eq!(encoder.frames_pushed(), 128);
+    let file = finish(encoder);
+    assert_eq!(header_of(&file).total_samples, 128);
+}
+
+#[test]
+fn a_silence_block_that_cannot_be_written_does_not_cost_the_audio_before_the_gap() {
+    // Two verbatim blocks wait in the write buffer, and 1000 frames of speech
+    // wait for the rest of their block.
+    let (mut encoder, sink) = verbatim_encoder_on_scripted_sink();
+    let pcm = at_bits(&speechlike(2 * BLOCK_SIZE + 1000, 44), 24);
+    encoder.push_pcm(&pcm).unwrap();
+    // The gap's silence completes that block, which needs the buffer to be
+    // written, and the disk refuses.
+    sink.arm_write(Some(0));
+    let error = encoder.push_silence(4000).unwrap_err();
+    assert!(error.is_disk_full(), "{error:?}");
+    assert!(matches!(
+        encoder.push_pcm(&[1; 4]),
+        Err(RecordingError::TrackFinished)
+    ));
+
+    // The block that failed held the 1000 frames and the start of the
+    // silence. The audio is written out on its own; the silence is not.
+    encoder.salvage(pcm.len() as u64).unwrap();
+    let bytes = sink.bytes();
+    assert_eq!(frames_in(&bytes), (3, pcm.len() as u64, true));
+    let reference = verbatim_reference(&pcm, 0);
+    assert!(
+        bytes[HEADER_LEN..] == reference.bytes[HEADER_LEN..],
+        "the audio before the gap, to the last frame of it"
+    );
+}
+
+#[test]
+fn a_later_silence_block_that_cannot_be_written_leaves_the_audio_and_the_silence_that_made_it() {
+    // 1000 frames of speech wait; the silence completes their block (which is
+    // then in the write buffer) and a second block; the third needs the
+    // buffer to be written, and the disk refuses.
+    let (mut encoder, sink) = verbatim_encoder_on_scripted_sink();
+    let pcm = at_bits(&speechlike(1000, 45), 24);
+    encoder.push_pcm(&pcm).unwrap();
+    sink.arm_write(Some(0));
+    let error = encoder.push_silence(3 * BLOCK_SIZE as u64).unwrap_err();
+    assert!(error.is_disk_full(), "{error:?}");
+
+    // The audio is already inside a block that was encoded: salvage writes
+    // the buffer (the disk works again) and adds nothing.
+    encoder.salvage(pcm.len() as u64).unwrap();
+    let bytes = sink.bytes();
+    assert_eq!(frames_in(&bytes), (2, 2 * BLOCK_SIZE as u64, true));
+    let reference = verbatim_reference(&pcm, 3 * BLOCK_SIZE as u64);
+    let two_frames: usize = reference.frame_lengths[..2]
+        .iter()
+        .map(|n| *n as usize)
+        .sum();
+    assert!(
+        bytes[HEADER_LEN..] == reference.bytes[HEADER_LEN..HEADER_LEN + two_frames],
+        "the straddling block and the silence block, as a finish would have written them"
+    );
+}
+
+#[test]
+fn a_write_that_keeps_failing_is_reported_by_salvage_and_leaves_a_file_recovery_can_use() {
+    let (mut encoder, sink) = verbatim_encoder_on_scripted_sink();
+    let pcm = at_bits(&speechlike(2 * BLOCK_SIZE + 300, 46), 24);
+    encoder.push_pcm(&pcm).unwrap();
+    // The first write of the salvage fails: the buffer cannot be written.
+    sink.arm_write(Some(0));
+    let error = encoder.salvage(pcm.len() as u64).unwrap_err();
+    assert!(error.is_disk_full(), "{error:?}");
+    // What reached the sink is the header: no torn frame, nothing to scan.
+    let bytes = sink.bytes();
+    assert_eq!(bytes.len(), HEADER_LEN);
+    // The track took nothing more even so.
+    assert!(matches!(
+        encoder.push_pcm(&[1; 4]),
+        Err(RecordingError::TrackFinished)
+    ));
 }

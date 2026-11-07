@@ -76,6 +76,12 @@ pub enum RecordingError {
     /// stops instead of finishing a recording with events missing.
     #[error("the track journal has too many events to recover from")]
     JournalTooLarge,
+    /// The recording was ended, but some tracks could not be finished (a gap
+    /// failed part-way, a last fsync failed). The other tracks were finished,
+    /// the manifest still says `recording` and [`recover`](super::recover)
+    /// completes the ones named here. Track ids are plain names, never paths.
+    #[error("the recording could not be completed; recovery must finish the track(s): {}", .tracks.join(", "))]
+    TracksIncomplete { tracks: Vec<String> },
     /// The FLAC encoder library refused a block (a bug or an out-of-range
     /// sample). The text is scrubbed of paths.
     #[error("the audio encoder failed: {message}")]
@@ -127,6 +133,7 @@ impl RecordingError {
             Self::CorruptTrack { .. } => "recording_corrupt_track",
             Self::JournalTooLarge => "recording_journal_too_large",
             Self::NotRegularFile { .. } => "recording_not_regular_file",
+            Self::TracksIncomplete { .. } => "recording_tracks_incomplete",
             Self::Encoder { .. } => "recording_encoder",
         }
     }

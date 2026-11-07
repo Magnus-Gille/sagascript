@@ -184,7 +184,10 @@ CLI and the app and wait for their own change: `settings::{WhisperModel, FileMod
   and a race); on Windows a link swapped in after the look (no `FILE_FLAG_OPEN_REPARSE_POINT`,
   which would break cloud placeholders) and hard links to a track file (not detected).
   A gap that fails part-way (journal or silence) ends its track until recovery
-  (`RecordingWriter::gap`).
+  (`RecordingWriter::gap`), after the track has written out the audio it had accepted before the
+  gap (the partial block still waiting included, nothing of what comes later). `finish` ends every
+  other track even then, leaves the manifest at `recording` and returns `TracksIncomplete` naming
+  the tracks recovery must finish.
 
 **The top level of `src/`.** A subsystem is a directory; the files beside `lib.rs` are the
 cross-cutting modules that belong to no one subsystem, and each has a row here.

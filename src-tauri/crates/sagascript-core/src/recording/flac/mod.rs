@@ -88,7 +88,10 @@ pub struct FlacEncoder<W: TrackSink> {
     stream: Stream,
     framebuf: FrameBuf,
     context: Context,
-    /// Interleaved samples waiting for a full block (always shorter than one).
+    /// Interleaved samples waiting for a full block (always shorter than one,
+    /// except after a block that could not be written: it stays here, so
+    /// [`TrackEncoder::salvage`] can still write the part that was accepted
+    /// before the failure).
     pending: Vec<i32>,
     verbatim: Vec<u8>,
     next_frame: u64,
@@ -253,8 +256,11 @@ impl<W: TrackSink> FlacEncoder<W> {
         let block = std::mem::take(&mut self.pending);
         let result = self.encode_block(&block);
         self.pending = block;
-        self.pending.clear();
-        if result.is_err() {
+        if result.is_ok() {
+            self.pending.clear();
+        } else {
+            // The block stays in `pending` (nothing of it is in the file):
+            // the track takes no more, but `salvage` may still write it.
             self.broken = true;
         }
         result
@@ -453,6 +459,30 @@ impl<W: TrackSink> TrackEncoder for FlacEncoder<W> {
 
     fn finish(mut self: Box<Self>) -> Result<TrackSummary, RecordingError> {
         self.finish_inner()
+    }
+
+    fn salvage(&mut self, keep_frames: u64) -> Result<(), RecordingError> {
+        let channels = usize::from(self.params.channels);
+        // The frames the blocks already encoded hold; the rest of what is to
+        // be kept is in `pending` (a block that failed to be written is still
+        // there, with the audio at its start).
+        let encoded = self.next_frame * BLOCK_SIZE as u64;
+        let keep_samples = usize::try_from(keep_frames.saturating_sub(encoded))
+            .ok()
+            .and_then(|frames| frames.checked_mul(channels))
+            .filter(|samples| *samples <= self.pending.len())
+            .ok_or(RecordingError::InvalidInput {
+                reason: "more audio was asked to be kept than the track accepted",
+            })?;
+        // Whatever happens below, the track takes nothing more.
+        self.broken = true;
+        self.pending.truncate(keep_samples);
+        if !self.pending.is_empty() {
+            self.encode_pending()?;
+        }
+        let io_error = |error: io::Error| RecordingError::io("sync a track file", &error);
+        self.out.flush().map_err(io_error)?;
+        self.out.get_mut().sync_data().map_err(io_error)
     }
 }
 
