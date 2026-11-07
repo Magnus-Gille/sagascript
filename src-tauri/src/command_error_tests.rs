@@ -190,6 +190,9 @@ fn recording_errors() -> Vec<RecordingError> {
             action: "open a track file",
         },
         RecordingError::JournalTooLarge,
+        RecordingError::TracksIncomplete {
+            tracks: vec!["mic".into()],
+        },
         RecordingError::Encoder {
             message: "failed at /Users/x/Music/Sagascript/a/mic.flac".into(),
         },
@@ -215,6 +218,7 @@ fn recording_errors() -> Vec<RecordingError> {
             | RecordingError::RecoveryNeeded
             | RecordingError::NotRegularFile { .. }
             | RecordingError::JournalTooLarge
+            | RecordingError::TracksIncomplete { .. }
             | RecordingError::Encoder { .. } => {}
         }
     }

@@ -169,6 +169,11 @@
     "message": "the track has already ended",
     "retryable": false
   },
+  "recording_tracks_incomplete": {
+    "code": "recording_tracks_incomplete",
+    "message": "the recording could not be completed; recovery must finish the track(s): mic",
+    "retryable": false
+  },
   "recording_unknown_track": {
     "code": "recording_unknown_track",
     "message": "the recording has no such track",
