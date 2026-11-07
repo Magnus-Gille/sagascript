@@ -162,7 +162,21 @@ pub struct SessionConfig {
     /// what the writer does with the rest of `start`.
     #[cfg(test)]
     pub(crate) after_spawn: Option<Arc<dyn Fn() + Send + Sync>>,
+    /// Tests: the encoder of each track, to make a track file fail like a full disk.
+    #[cfg(test)]
+    pub(crate) encoders: Option<TestEncoders>,
 }
+
+/// Tests: how a track's encoder is made.
+#[cfg(test)]
+pub(crate) type TestEncoders = Arc<
+    dyn Fn(
+            &std::path::Path,
+            &super::store::NewTrack,
+        ) -> Result<Box<dyn super::encoder::TrackEncoder>, RecordingError>
+        + Send
+        + Sync,
+>;
 
 impl SessionConfig {
     pub fn new(
@@ -193,6 +207,8 @@ impl SessionConfig {
             sleep_probe: system_sleep_probe(),
             #[cfg(test)]
             after_spawn: None,
+            #[cfg(test)]
+            encoders: None,
         }
     }
 }
@@ -478,7 +494,23 @@ impl RecordingSession {
                 })
                 .collect(),
         };
-        let writer = match self.store.create(request) {
+        #[cfg(test)]
+        let created = match &config.encoders {
+            Some(encoders) => {
+                let encoders = Arc::clone(encoders);
+                self.store.create_with(
+                    request,
+                    &mut || uuid::Uuid::new_v4().to_string(),
+                    &mut move |path: &std::path::Path, new: &super::store::NewTrack| {
+                        encoders(path, new)
+                    },
+                )
+            }
+            None => self.store.create(request),
+        };
+        #[cfg(not(test))]
+        let created = self.store.create(request);
+        let writer = match created {
             Ok(writer) => writer,
             Err(error) => {
                 for spec in specs.iter_mut() {
@@ -510,6 +542,13 @@ impl RecordingSession {
             disk: policy,
             file_limit_bytes: file_limit,
         };
+        // The sources belong to the set before the core exists: the core
+        // processes each track's first block as it is built, and a full disk
+        // there ends the track by stopping its source through this set. The
+        // state is `Recording` before the writer can publish a terminal
+        // state, so nothing here can overwrite one.
+        self.sources
+            .set(specs.into_iter().map(|spec| spec.source).collect());
         let core = match SessionCore::new(
             writer,
             pipeline_specs,
@@ -522,19 +561,11 @@ impl RecordingSession {
         ) {
             Ok(core) => core,
             Err(error) => {
-                for spec in specs.iter_mut() {
-                    spec.source.stop();
-                }
+                self.sources.stop_all();
                 return Err(error);
             }
         };
 
-        // The sources belong to the set before the writer exists: a writer that
-        // finishes at once must find them there to stop. The state is
-        // `Recording` before the writer can publish a terminal state, so
-        // nothing here can overwrite one.
-        self.sources
-            .set(specs.into_iter().map(|spec| spec.source).collect());
         self.status.set_state(SessionState::Recording);
         let status = Arc::clone(&self.status);
         let stop = Arc::clone(&self.stop_requested);
