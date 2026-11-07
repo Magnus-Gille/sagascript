@@ -352,6 +352,7 @@ public final class EngineHostServer {
             priority: parameters.priority,
             boost: parameters.boost
         )
+        StageTrace.emit("received", window: window.offsetSamples)
         scheduler.submit(id: id, priority: parameters.priority, work: { [weak self] flag in
             guard let self else { throw EngineHostError(code: .internalError, message: "Host deallocated") }
             let result = try self.engine.transcribe(window, isCancelled: { flag.isCancelled })
@@ -365,6 +366,7 @@ public final class EngineHostServer {
             case let .success(fields): self.sendSuccess(id: id, fields: fields)
             case let .failure(error): self.sendFailure(id: id, error: error)
             }
+            StageTrace.emit("sent", window: window.offsetSamples)
         })
     }
 
