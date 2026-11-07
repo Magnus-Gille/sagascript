@@ -1045,6 +1045,69 @@ async fn cancelling_a_start_keeps_the_microphone_until_the_blocking_start_is_ove
     );
 }
 
+/// The command is cancelled after the worker has started the session and
+/// decided to offer it, but before the command received it. No caller took
+/// ownership, so the session must be stopped and the microphone freed, not
+/// installed and left capturing.
+#[tokio::test]
+async fn cancelling_after_the_worker_decided_but_before_delivery_stops_the_session() {
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let dir = TempDir::new();
+    let recorder = Arc::new(SharedRecorder::new(
+        Arc::new(GatedFactory {
+            entered: Mutex::new(entered_tx),
+            release: Mutex::new(release_rx),
+        }),
+        Arc::new(FakeTrash::default()),
+    ));
+    let controller = dictation_controller();
+    let settings = Settings {
+        recording_directory: dir.path().to_string_lossy().into_owned(),
+        ..Settings::default()
+    };
+    let (reservation, _) = reserve_for_recording(&controller, &recorder).expect("reserved");
+    let emit: Emit = Arc::new(|_| {});
+    let mut start = Box::pin(start_reserved(
+        reservation,
+        settings,
+        Some("Late".into()),
+        emit,
+    ));
+    // One poll spawns the blocking start; the future is not polled again, so
+    // the result is never delivered to it.
+    std::future::poll_fn(|cx| {
+        assert!(std::future::Future::poll(start.as_mut(), cx).is_pending());
+        std::task::Poll::Ready(())
+    })
+    .await;
+    tokio::task::spawn_blocking(move || entered_rx.recv().expect("entered"))
+        .await
+        .expect("join");
+    release_tx.send(()).expect("release");
+    // The worker starts the session (its folder appears) and offers it.
+    eventually("the session started", || {
+        !sagascript_core::recording::list_recordings(dir.path()).is_empty()
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(recorder.is_active(), "offered, not yet taken or discarded");
+
+    // Cancelled after the decision, before delivery.
+    drop(start);
+    eventually("the slot is freed", || !recorder.is_active()).await;
+    assert_eq!(recorder.info().state, RecordingSessionState::Idle);
+    drop(lock_controller_for_dictation(&controller, &recorder).expect("free again"));
+    // What was started is finished and nothing keeps capturing.
+    let listed = sagascript_core::recording::list_recordings(dir.path());
+    assert_eq!(listed.len(), 1);
+    assert_eq!(
+        listed[0].state,
+        sagascript_core::recording::RecordingState::Complete
+    );
+    assert!(!recorder.is_active());
+}
+
 /// The two starts race on many fresh pairs; exactly one may win each round.
 #[test]
 fn a_recording_and_a_dictation_never_both_start() {

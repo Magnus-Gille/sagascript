@@ -633,6 +633,7 @@ fn abort_start_in(state: &Mutex<RecorderState>) {
 }
 
 /// The recorder's slot as the supervisor of a blocking start holds it.
+#[derive(Clone)]
 struct Slot(Arc<Mutex<RecorderState>>);
 
 impl Slot {
@@ -790,26 +791,61 @@ pub async fn start_session(
     start_reserved(recorder.reserve()?, settings, title, emit).await
 }
 
-/// Where a blocking start stands relative to the command waiting for it.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Waiter {
-    /// The command still awaits the result.
+/// Where the session a blocking start produced stands between the worker that
+/// started it and the command that asked for it.
+enum Handoff {
+    /// The worker has not decided yet.
     Waiting,
-    /// The command was dropped (cancelled) before the start ended.
-    Cancelled,
-    /// The session was installed in the slot.
-    Installed,
+    /// The worker started a session and offers it; nobody has taken it.
+    Offered(Started),
+    /// Taken by the command, or the command went away first.
+    Closed,
 }
 
-/// Marks the start cancelled if the command's future is dropped while it still
-/// waits.
-struct CancelOnDrop(Arc<Mutex<Waiter>>);
+type HandoffCell = Arc<Mutex<Handoff>>;
+
+fn lock_handoff(cell: &HandoffCell) -> std::sync::MutexGuard<'_, Handoff> {
+    lock_or_recover(cell, "app.recorder.handoff")
+}
+
+/// Stop a session nobody owns and give the slot back, off the async thread
+/// (stopping waits for the writer).
+fn discard_session(started: Started, slot: Slot) {
+    let cleanup = move || {
+        let _ = started.session.stop();
+        slot.release();
+    };
+    // A thread that cannot be spawned still must not leave the microphone held.
+    let cleanup = std::sync::Arc::new(Mutex::new(Some(cleanup)));
+    let again = Arc::clone(&cleanup);
+    let spawned = std::thread::Builder::new()
+        .name("recording-discard".into())
+        .spawn(move || {
+            if let Some(cleanup) = lock_or_recover(&cleanup, "app.recorder.discard").take() {
+                cleanup();
+            }
+        });
+    if spawned.is_err() {
+        if let Some(cleanup) = lock_or_recover(&again, "app.recorder.discard").take() {
+            cleanup();
+        }
+    }
+}
+
+/// Held by the command's future while it waits. Dropped before it took the
+/// session (the command was cancelled), it closes the handoff: a session the
+/// worker has offered but nobody took is stopped, and one the worker has not
+/// finished starting is stopped by the worker when it sees the handoff closed.
+struct CancelOnDrop {
+    cell: HandoffCell,
+    slot: Slot,
+}
 
 impl Drop for CancelOnDrop {
     fn drop(&mut self) {
-        let mut waiter = lock_or_recover(&self.0, "app.recorder.waiter");
-        if *waiter == Waiter::Waiting {
-            *waiter = Waiter::Cancelled;
+        let previous = std::mem::replace(&mut *lock_handoff(&self.cell), Handoff::Closed);
+        if let Handoff::Offered(started) = previous {
+            discard_session(started, self.slot.clone());
         }
     }
 }
@@ -819,10 +855,12 @@ impl Drop for CancelOnDrop {
 /// From the moment the blocking start is spawned, **it** owns the slot, not
 /// this future: a command that is cancelled meanwhile (the future dropped)
 /// leaves the start running, and the start must not hand the microphone to a
-/// dictation before it is over. So the blocking task is its own supervisor: it
-/// installs the session when the command still waits, and stops the session it
-/// started (finishing the recording) when the command was cancelled, and gives
-/// the slot back only after that, on every path including a panic.
+/// dictation before it is over. The worker never installs a session itself. It
+/// *offers* it through a [`Handoff`]; the command takes it in its last,
+/// synchronous step and installs it, so a session is installed exactly when a
+/// caller received ownership. A session nobody took (the command was dropped
+/// before the worker decided, or between the offer and the delivery) is stopped
+/// before the slot is given back, on every path including a panic.
 pub async fn start_reserved(
     mut reservation: Reservation<'_>,
     settings: Settings,
@@ -833,10 +871,11 @@ pub async fn start_reserved(
     let title = title_or_default(title.as_deref());
     let factory = Arc::clone(&recorder.factory);
     let slot = recorder.slot();
-    let waiter = Arc::new(Mutex::new(Waiter::Waiting));
-    let supervised_waiter = Arc::clone(&waiter);
+    let cell: HandoffCell = Arc::new(Mutex::new(Handoff::Waiting));
+    let worker_cell = Arc::clone(&cell);
+    let worker_slot = slot.clone();
     let task = tokio::task::spawn_blocking(move || {
-        /// Frees the slot unless the session was installed.
+        /// Frees the slot unless the session was offered.
         struct Release<'a>(&'a Slot, bool);
         impl Drop for Release<'_> {
             fn drop(&mut self) {
@@ -845,46 +884,65 @@ pub async fn start_reserved(
                 }
             }
         }
-        let mut release = Release(&slot, true);
+        let mut release = Release(&worker_slot, true);
         let started = start_blocking(&*factory, &settings, &title)?;
-        let cancelled = {
-            let mut waiter = lock_or_recover(&supervised_waiter, "app.recorder.waiter");
-            if *waiter == Waiter::Waiting {
-                *waiter = Waiter::Installed;
+        let rejected = {
+            let mut handoff = lock_handoff(&worker_cell);
+            if matches!(*handoff, Handoff::Waiting) {
+                *handoff = Handoff::Offered(started);
+                None
+            } else {
+                Some(started)
             }
-            *waiter == Waiter::Cancelled
         };
-        if cancelled {
-            // Nobody is waiting for this session: finish what was started
-            // before the microphone is given back.
+        if let Some(started) = rejected {
+            // The command is gone: finish what was started before the
+            // microphone is given back (the guard frees the slot).
             let _ = started.session.stop();
             return Err(CommandError::task_failed(
                 "The recording start was cancelled.".to_string(),
             ));
         }
-        let info = session_info(&started.session.status(), &started.meta);
-        let (nudge, wake) = mpsc::channel();
-        spawn_event_thread(
-            Arc::clone(&started.session),
-            started.meta.clone(),
-            EVENT_INTERVAL,
-            wake,
-            emit,
-        );
-        slot.finish_start(Active {
-            session: started.session,
-            meta: started.meta,
-            _events: nudge,
-        });
+        // Offered: whoever closes the handoff now owns the session and the slot.
         release.1 = false;
-        Ok::<_, CommandError>(info)
+        Ok::<_, CommandError>(())
     });
     // From here the blocking task owns the slot; this future's drop only
-    // marks the start cancelled.
+    // closes the handoff.
     reservation.armed = false;
-    let _cancel = CancelOnDrop(waiter);
+    let cancel = CancelOnDrop {
+        cell: Arc::clone(&cell),
+        slot: slot.clone(),
+    };
     task.await
-        .map_err(|error| CommandError::task_failed(error.to_string()))?
+        .map_err(|error| CommandError::task_failed(error.to_string()))??;
+    // The last step is synchronous: the session is taken and installed with no
+    // `.await` in between, so the command cannot be dropped halfway.
+    let started = match std::mem::replace(&mut *lock_handoff(&cell), Handoff::Closed) {
+        Handoff::Offered(started) => started,
+        _ => {
+            slot.release();
+            return Err(CommandError::task_failed(
+                "The recording start was cancelled.".to_string(),
+            ));
+        }
+    };
+    drop(cancel);
+    let info = session_info(&started.session.status(), &started.meta);
+    let (nudge, wake) = mpsc::channel();
+    spawn_event_thread(
+        Arc::clone(&started.session),
+        started.meta.clone(),
+        EVENT_INTERVAL,
+        wake,
+        emit,
+    );
+    slot.finish_start(Active {
+        session: started.session,
+        meta: started.meta,
+        _events: nudge,
+    });
+    Ok(info)
 }
 
 /// The thread that sends the status: when it changes, every `interval`, and
