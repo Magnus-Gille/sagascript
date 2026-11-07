@@ -83,6 +83,8 @@ struct Opts {
     signal: FakeSignal,
     /// The sleep offset the detector reads (armed before the first block).
     sleep_offset: Option<Arc<AtomicU64>>,
+    /// A block that arrives while the core stops the source.
+    final_block: Duration,
 }
 
 impl Default for Opts {
@@ -100,6 +102,7 @@ impl Default for Opts {
                 seed: 7,
             },
             sleep_offset: None,
+            final_block: Duration::ZERO,
         }
     }
 }
@@ -137,7 +140,26 @@ impl TrackSink for FailingFile {
     }
 }
 
+/// What the core calls to stop a source: here it first lets one more block
+/// arrive, as a callback that was already running would, and then stops.
+struct LateBlockThenStop {
+    handle: FakeHandle,
+    calls: Arc<AtomicU64>,
+    final_block: Duration,
+}
+
+impl super::core::SourceStopper for LateBlockThenStop {
+    fn stop_source(&self, _index: usize) {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        if !self.final_block.is_zero() {
+            self.handle.deliver(self.final_block);
+        }
+        self.handle.stop_source();
+    }
+}
+
 struct Rig {
+    stopper_calls: Arc<AtomicU64>,
     _temp: TempDir,
     root: PathBuf,
     handle: FakeHandle,
@@ -202,6 +224,7 @@ impl Rig {
                 .unwrap(),
         };
 
+        let stopper_calls = Arc::new(AtomicU64::new(0));
         let status = Arc::new(StatusShared::new());
         let _ = status.tracks.set(vec![TrackCounters::new("mic", "mic")]);
         let free = Arc::new(FreeBytes(AtomicU64::new(100 << 30)));
@@ -224,9 +247,15 @@ impl Rig {
                     Arc::new(move || Some(offset.load(Ordering::SeqCst))),
                 )
             }),
+            Arc::new(LateBlockThenStop {
+                handle: handle.clone(),
+                calls: Arc::clone(&stopper_calls),
+                final_block: opts.final_block,
+            }),
         )
         .unwrap();
         Self {
+            stopper_calls,
             _temp: temp,
             root,
             handle,
@@ -1086,4 +1115,107 @@ fn a_sleep_of_a_fraction_of_a_second_ends_the_track_with_system_sleep() {
     let done = rig.finished_by_itself();
     assert_eq!(done.track().ended_reason, Some(EndedReason::SystemSleep));
     assert_eq!(done.outcome.ended_early, Some(EndedReason::SystemSleep));
+}
+
+// ---- Codex review round 2, finding 1: stop the source before the last drain ---
+
+/// Every ending the core decides on by itself stops the source first and
+/// stores the block that arrives while it does (the stopper delivers one).
+fn auto_end(act: impl FnOnce(&mut Rig), want: EndedReason) -> Finished {
+    let mut rig = Rig::new(Opts {
+        final_block: ms(30),
+        ..Opts::default()
+    });
+    rig.handle.deliver(ms(200));
+    rig.pump();
+    act(&mut rig);
+    let calls = Arc::clone(&rig.stopper_calls);
+    let done = rig.finished_by_itself();
+    assert_eq!(done.track().ended_reason, Some(want));
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "the source was stopped by the core, once"
+    );
+    // 960 + 200 ms + whatever the act delivered, and the 30 ms that arrived
+    // while the source was being stopped.
+    assert_eq!(
+        done.track().frames,
+        done.handle.position(),
+        "no block was lost"
+    );
+    done.assert_audio(&[]);
+    done
+}
+
+#[test]
+fn a_device_change_stops_the_source_first_and_keeps_the_block_that_arrives_meanwhile() {
+    auto_end(|rig| rig.handle.change_device(), EndedReason::DeviceChanged);
+}
+
+#[test]
+fn a_format_change_stops_the_source_first() {
+    auto_end(
+        |rig| {
+            rig.handle.change_format(NativeFormat {
+                sample_rate: 44_100,
+                channels: 1,
+            })
+        },
+        EndedReason::FormatChanged,
+    );
+}
+
+#[test]
+fn a_sleep_signal_stops_the_source_first() {
+    auto_end(
+        |rig| {
+            rig.handle.sleep(Duration::ZERO);
+        },
+        EndedReason::SystemSleep,
+    );
+}
+
+#[test]
+fn a_full_disk_stop_stops_the_source_first() {
+    let mut rig = Rig::new(Opts {
+        final_block: ms(30),
+        ..Opts::default()
+    });
+    rig.handle.deliver(ms(100));
+    rig.pump();
+    rig.free.0.store(512 * 1024, Ordering::SeqCst);
+    rig.handle.deliver(ms(100));
+    rig.handle.idle(Duration::from_secs(6));
+    let calls = Arc::clone(&rig.stopper_calls);
+    let done = rig.finished_by_itself();
+    assert_eq!(done.track().ended_reason, Some(EndedReason::DiskFull));
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    // The 6 s of idle time before the last 30 ms are a stall gap; the 30 ms
+    // that arrived while the source was stopped are stored after it.
+    assert_eq!(done.track().frames, 960 + 4_800 + 4_800 + 288_000 + 1_440);
+    assert_eq!(done.gaps().len(), 1);
+}
+
+#[test]
+fn the_size_limit_stops_the_source_first() {
+    let mut s = settings();
+    s.file_limit_bytes = Some(TRACK_HEADER_LEN as u64 + 12_000);
+    let mut rig = Rig::new(Opts {
+        settings: s,
+        final_block: ms(30),
+        ..Opts::default()
+    });
+    for _ in 0..100 {
+        rig.handle.deliver(ms(20));
+        rig.pump();
+    }
+    let calls = Arc::clone(&rig.stopper_calls);
+    let done = rig.finished_by_itself();
+    assert_eq!(
+        done.track().ended_reason,
+        Some(EndedReason::Other("file_size_limit".into()))
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(done.track().frames, done.handle.position());
 }
