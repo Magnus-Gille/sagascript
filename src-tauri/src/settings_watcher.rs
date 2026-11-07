@@ -15,7 +15,7 @@ use crate::events::{self, EmitEvent, UiState};
 use crate::hotkey;
 use crate::hotkey::transition::{self, RollbackOutcome, TransitionFailure, TransitionFailureCause};
 use crate::hotkey::{HotkeyHealth, HotkeyStatusChange, NativeRegistrar, OperationalHotkey};
-use crate::launch::load_settings_with_permission_gate;
+use crate::launch::load_app_settings;
 use crate::tray::update_profiles_menu;
 
 #[derive(Debug)]
@@ -269,7 +269,7 @@ pub(crate) fn start_settings_watcher(app: tauri::AppHandle) {
                 }
             };
             let _transition = health.transition_guard();
-            let mut new_settings = load_settings_with_permission_gate();
+            let mut new_settings = load_app_settings();
             let old_settings = {
                 let c = lock_controller(&ctrl);
                 c.settings().clone()

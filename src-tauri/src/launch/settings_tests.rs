@@ -97,3 +97,38 @@ fn migrate_legacy_settings_does_not_panic_on_rename_failure() {
     assert!(legacy.exists(), "legacy file must survive a failed rename");
     assert!(!new_path.exists());
 }
+
+fn settings_with_auto_paste(auto_paste: bool) -> sagascript_core::settings::Settings {
+    sagascript_core::settings::Settings {
+        auto_paste,
+        ..Default::default()
+    }
+}
+
+/// SAGA-518: right after an update replaces the bundle, `AXIsProcessTrusted()` can answer
+/// false. Loading the settings must report that, not turn the stored preference off.
+#[test]
+fn an_untrusted_load_keeps_auto_paste_on() {
+    let settings = settings_with_auto_paste(true);
+    let before = serde_json::to_value(&settings).unwrap();
+
+    assert!(warn_if_auto_paste_waits_for_permission(&settings, false));
+
+    assert!(settings.auto_paste);
+    assert_eq!(serde_json::to_value(&settings).unwrap(), before);
+}
+
+#[test]
+fn an_explicitly_disabled_auto_paste_stays_off_and_does_not_wait() {
+    let settings = settings_with_auto_paste(false);
+    assert!(!warn_if_auto_paste_waits_for_permission(&settings, false));
+    assert!(!warn_if_auto_paste_waits_for_permission(&settings, true));
+    assert!(!settings.auto_paste);
+}
+
+#[test]
+fn a_trusted_load_keeps_auto_paste_on_without_a_warning() {
+    let settings = settings_with_auto_paste(true);
+    assert!(!warn_if_auto_paste_waits_for_permission(&settings, true));
+    assert!(settings.auto_paste);
+}
