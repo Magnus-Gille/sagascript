@@ -520,7 +520,14 @@ fn drain_stderr(stderr: impl Read, shared: &Shared) {
                     }
                 }
                 let line = String::from_utf8_lossy(&buf);
-                tracing::debug!(target: "engine_host::stderr", "{}", stderr_log_text(&line));
+                match line.strip_prefix(STDERR_INFO_PREFIX) {
+                    Some(info) => {
+                        tracing::info!(target: "engine_host::stderr", "{}", stderr_log_text(info))
+                    }
+                    None => {
+                        tracing::debug!(target: "engine_host::stderr", "{}", stderr_log_text(&line))
+                    }
+                }
             }
         }
     }
@@ -636,6 +643,11 @@ fn read_stdout(
 fn log_preview(line: &str) -> String {
     scrub_paths(line.trim()).chars().take(200).collect()
 }
+
+/// A host stderr line that starts with this is logged at INFO, without the
+/// prefix; every other line at debug. Hosts use it sparingly: the Core ML host
+/// for a canary that probably recompiled the Neural Engine program (#397).
+const STDERR_INFO_PREFIX: &str = "info: ";
 
 /// How much of one stderr line the drain thread scrubs and logs. A host that
 /// writes a line without end must not make the thread that keeps its pipe empty

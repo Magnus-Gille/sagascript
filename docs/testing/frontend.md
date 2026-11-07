@@ -4,7 +4,7 @@ How the Svelte/TypeScript frontend is tested ([ADR 0004](../adr/0004-test-strate
 [#361](https://github.com/Magnus-Gille/sagascript/issues/361)). Status: Vitest with unit and
 component tests (happy-dom, `@testing-library/svelte`), the typed IPC mock, Prettier and
 ESLint are in place. The Settings pilot and component migration replaced the private
-source harnesses (mappings below); the updater-owned recovery source test remains. happy-dom and ESLint bring BSD-2-Clause and BlueOak-1.0.0 packages, which
+source harnesses (mappings below); the updater recovery source test is now `FileTranscription.recovery.test.ts`. happy-dom and ESLint bring BSD-2-Clause and BlueOak-1.0.0 packages, which
 the owner accepted for dev tooling only
 ([decision](https://github.com/Magnus-Gille/sagascript/issues/361#issuecomment-6153321272)):
 `scripts/lib/npm-license-policy.mjs` accepts them only for `"dev": true` packages outside the
@@ -20,7 +20,7 @@ a real `vite build` bundles, emits or reads) and `npm run licenses:check` (relea
 | Unit and component (Vitest) | `src/**/*.test.ts`, next to the module or component | `npm run test:unit` (`npm run test:unit:coverage`: report in `coverage/`, no gate) |
 | Lint (ESLint) | `src/`, `scripts/`, `tests/`; `eslint.config.js` | `npm run lint` |
 | Browser flows (Playwright) | `scripts/qa-*.mjs` against `scripts/fixtures/transcription-browser-mock.js` | `npm run test:browser` |
-| Legacy source-text tests | `scripts/test-file-transcription-recovery.mjs` (updater owner); native assertions in Finnish/release scripts | `npm run test:ui`, `npm run test:release`; add no component source assertions |
+| Legacy source-text tests | native assertions in Finnish/release scripts | `npm run test:ui`, `npm run test:release`; add no component source assertions |
 
 ## Where tests live
 
@@ -176,9 +176,8 @@ not.
 - `eslint-suppressions.json` retains existing tooling findings in `scripts/`. There are
   no component or other `src/` entries. New findings fail. Prune resolved entries with
   `npx eslint --prune-suppressions`; never run `--suppress-all`.
-- Prettier includes Svelte components except `FileTranscription.svelte`, whose updater-owned
-  source-text recovery test remains unchanged. Remove that one exclusion when its owner
-  migrates the test. Formatting is verified separately from semantic behavior.
+- Prettier includes Svelte components except `FileTranscription.svelte` (`.prettierignore`); its
+  source-text test is gone, so that exclusion can be removed in a separate formatting-only change. Formatting is verified separately from semantic behavior.
 - Two choices in the configuration itself: `no-regex-spaces` is off for `scripts/` and
   `tests/` (the workflow tests match YAML indentation literally), and `scripts/qa-*.mjs` get
   browser globals for their `page.evaluate()` callbacks.
@@ -216,11 +215,11 @@ asks `downloadModelById(id)` instead of choosing the command.
 
 ## Remaining source-text boundary
 
-The `ui` manifest has two entries: `test-finnish-language.mjs` retains CLI/core and
-model-registry checks; `test-file-transcription-recovery.mjs` remains with the updater
-owner. Native window and command-registration checks remain in `test-release-surface.mjs`:
-mocked frontend IPC does not prove native behavior. This migration does not close the
-updater-owned remainder of #361.
+The `ui` manifest has two entries: `test-finnish-language.mjs` and
+`test-danish-language.mjs` retain CLI/core and model-registry checks. The update-recovery
+claims of `FileTranscription.svelte` are executed in `src/lib/FileTranscription.recovery.test.ts`
+(job-scoped hydration, drafts and proposals through MeetingReview, explicit clears, silent unmount). Native window and command-registration checks remain in `test-release-surface.mjs`:
+mocked frontend IPC does not prove native behavior.
 
 The file and meeting integration scripts, their `frontend-errors-source.mjs` loader and
 loader test have been removed after their behaviors passed in production-used typed modules,
@@ -241,6 +240,7 @@ source identifiers, exact syntax and property declarations.
 | Meeting clock | `src/lib/FileTranscription.meetingReprocessing.test.ts` covers `the rendered meeting clock interpolates native time and ignores a stale poll` and `reprocessing resets the same rendered meeting clock before accepting its native timing`. |
 | MeetingReview actions | `src/lib/MeetingReview.actions.test.ts` covers `Rename applies`, `Discard restores`, `Save and each export button`, persistence gating and `a rejected save` recovery. |
 | Finnish selectors, onboarding, overlay and frontend type | `src/lib/Settings.test.ts` (`Finnish saves through Settings` and `the frontend language contract stays limited`), `src/lib/Onboarding.test.ts` (`choosing Finnish saves` and the recommendation fallback), and `src/lib/overlay-state.test.ts` (`the English overlay names a Finnish dictation profile`) cover the rendered controls, model/readback behavior, onboarding defaults and overlay label. CLI/core Finnish checks remain in `scripts/test-finnish-language.mjs`. |
+| Danish selectors, onboarding, overlay and frontend type | `src/lib/Settings.test.ts` (`Danish saves through Settings` and `the frontend language contract stays limited`), `src/lib/Onboarding.test.ts` (`choosing Danish saves` and the recommendation fallback), and `src/lib/overlay-state.test.ts` (`the overlay names a Danish dictation profile`) cover the rendered controls, model/readback behavior, onboarding defaults and overlay label. CLI/core Danish checks remain in `scripts/test-danish-language.mjs`. |
 
 ## Settings pilot: old assertion → new test
 
@@ -294,14 +294,14 @@ run in fresh contexts against synthetic IPC. They do not claim native Mac accept
 | Automatic hidden recommendation, skip after failure and missing-engine warning | `Onboarding.test.ts`: backend-recommended downloads, download progress/readiness, hidden engine name and failed-download skip flow. |
 | Missing profile engine action, model name and stable 152px layout | `Settings.downloads.test.ts` exercises download/ready/error and IPC; `qa-profile-download-layout.mjs` measures action, row and neighbor before download and at 1%/99%, requiring unchanged geometry and single-line, unclipped text. |
 | Backend loading/transcribing cannot start a conflicting recording | `Settings.releaseFlows.test.ts` injects loading and idle; `Settings.events.test.ts` exercises hotkey recording and transcribing state events. |
-| Platform pending and language save block duplicate submission; four languages including Finnish | `Onboarding.test.ts`: disabled Preparing/Saving clicks produce no additional IPC; four choices and Finnish aria-pressed/save/download checks. |
+| Platform pending and language save block duplicate submission; four languages including Finnish | `Onboarding.test.ts`: disabled Preparing/Saving clicks produce no additional IPC; five choices (the latest adds Danish) and Finnish aria-pressed/save/download checks. |
 | Reopening Accessibility Settings does not restart prompt/poll ownership | `Onboarding.test.ts` holds the permission request, reopens once without new request/check, then grants and advances the clock: the original operation still completes and retries registration once. `api.test.ts` covers the wrapper; the native registration source check remains. |
 | F03: older selected request queues behind another active job with its saved options | `qa-rerun-selection.mjs` drives the actual recent-file select. It distinguishes English/Astrid saved options from current Swedish/Bjorn options, asserts fresh run IDs and serial native submissions, and reruns a saved diarized meeting behind a plain job. Existing `FileTranscription.flow.test.ts` retains saved-option and retry wiring coverage. |
 
 The F03 browser test is needed because happy-dom does not consistently expose a selected
 option through `option:checked`, which Svelte's select binding uses. No product behavior
 was changed to accommodate that test environment. The other seven private cases are
-mapped below. Updater recovery source coverage is owned separately and remains unchanged.
+mapped below. Updater recovery coverage is `FileTranscription.recovery.test.ts`.
 
 
 ## File and meeting harness parity

@@ -62,7 +62,7 @@ fn each_wrapper_equals_its_gated_sibling_under_this_machines_gate() {
     assert_eq!(
         settings.dictation_model_for_profile("default"),
         Ok(if supported {
-            FileModel::PianissimoOriginal
+            FileModel::Pianissimo(PianissimoModel::Swedish)
         } else {
             FileModel::Whisper(WhisperModel::KbWhisperMedium)
         })
@@ -71,10 +71,13 @@ fn each_wrapper_equals_its_gated_sibling_under_this_machines_gate() {
     let mut by_wrapper = settings.clone();
     let mut by_gated = settings.clone();
     assert_eq!(
-        by_wrapper.set_profile_model("default", FileModelPreference::PianissimoOriginal),
+        by_wrapper.set_profile_model(
+            "default",
+            FileModelPreference::Pianissimo(PianissimoModel::Swedish)
+        ),
         by_gated.set_profile_model_gated(
             "default",
-            FileModelPreference::PianissimoOriginal,
+            FileModelPreference::Pianissimo(PianissimoModel::Swedish),
             supported
         )
     );
@@ -105,8 +108,14 @@ fn the_file_model_wrappers_equal_their_gated_siblings_for_explicit_choices() {
         ..Settings::default()
     };
     for (preference, language) in [
-        (FileModelPreference::PianissimoOriginal, Language::Swedish),
-        (FileModelPreference::PianissimoOriginal, Language::English),
+        (
+            FileModelPreference::Pianissimo(PianissimoModel::Swedish),
+            Language::Swedish,
+        ),
+        (
+            FileModelPreference::Pianissimo(PianissimoModel::Swedish),
+            Language::English,
+        ),
         (
             FileModelPreference::Whisper(WhisperModel::KbWhisperLarge),
             Language::Swedish,
@@ -148,7 +157,10 @@ fn on_linux_the_gate_is_closed_and_swedish_auto_is_a_whisper_model() {
     assert!(!swedish.any_profile_uses_pianissimo());
     let mut selecting = swedish;
     assert_eq!(
-        selecting.set_profile_model("default", FileModelPreference::PianissimoOriginal),
+        selecting.set_profile_model(
+            "default",
+            FileModelPreference::Pianissimo(PianissimoModel::Swedish)
+        ),
         Err(crate::settings::SettingsError::PianissimoUnsupported)
     );
 }

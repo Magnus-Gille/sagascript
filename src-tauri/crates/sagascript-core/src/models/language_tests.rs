@@ -11,6 +11,7 @@ fn language_display_names() {
     assert_eq!(Language::Swedish.display_name(), "Swedish");
     assert_eq!(Language::Norwegian.display_name(), "Norwegian");
     assert_eq!(Language::Finnish.display_name(), "Finnish");
+    assert_eq!(Language::Danish.display_name(), "Danish");
     assert_eq!(Language::Auto.display_name(), "Auto-detect");
 }
 
@@ -20,6 +21,7 @@ fn language_whisper_codes() {
     assert_eq!(Language::Swedish.whisper_code(), Some("sv"));
     assert_eq!(Language::Norwegian.whisper_code(), Some("no"));
     assert_eq!(Language::Finnish.whisper_code(), Some("fi"));
+    assert_eq!(Language::Danish.whisper_code(), Some("da"));
     assert_eq!(Language::Auto.whisper_code(), None);
 }
 
@@ -39,6 +41,7 @@ fn language_serde_all_variants() {
         (Language::Swedish, "\"sv\""),
         (Language::Norwegian, "\"no\""),
         (Language::Finnish, "\"fi\""),
+        (Language::Danish, "\"da\""),
         (Language::Auto, "\"auto\""),
     ];
     for (lang, expected) in pairs {
@@ -70,6 +73,7 @@ fn language_all_lists_every_variant_once() {
             | Language::Swedish
             | Language::Norwegian
             | Language::Finnish
+            | Language::Danish
             | Language::Auto => {}
         }
     }
@@ -92,6 +96,8 @@ fn language_from_str_takes_the_id_or_the_english_name_and_nothing_else() {
         ("norwegian", Language::Norwegian),
         ("fi", Language::Finnish),
         ("finnish", Language::Finnish),
+        ("da", Language::Danish),
+        ("danish", Language::Danish),
         ("auto", Language::Auto),
     ] {
         assert_eq!(Language::from_str(text), Ok(expected), "{text}");
@@ -104,6 +110,8 @@ fn language_from_str_takes_the_id_or_the_english_name_and_nothing_else() {
         "English",
         "ENGLISH",
         "de",
+        "dansk",
+        "Danish",
         "svenska",
         "auto-detect",
         "\"sv\"",
@@ -121,6 +129,6 @@ fn language_from_str_takes_the_id_or_the_english_name_and_nothing_else() {
 fn unknown_language_message_lists_the_ids() {
     assert_eq!(
         UnknownLanguage("de".into()).to_string(),
-        "Unknown language 'de'. Valid: en, sv, no, fi, auto"
+        "Unknown language 'de'. Valid: en, sv, no, fi, da, auto"
     );
 }

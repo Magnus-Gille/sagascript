@@ -24,10 +24,12 @@ pub use client::{
     BoostReport, BoostSpec, ClientIdentity, EngineHostClient, EngineHostConfig, HostSnapshot,
     LoadEvent, LoadObserver, LoadSpec, Timeouts, WindowOutput,
 };
-pub use pipeline::{CancelToken, JobOptions, Transcription, WindowTiming};
+pub use pipeline::{
+    CancelToken, JobOptions, Sink, SinkError, StreamError, Transcription, WindowTiming,
+};
 pub use process::CrashInfo;
 pub use sagascript_engine_protocol as protocol;
-pub use sagascript_engine_protocol::{Capabilities, ErrorCode, Priority};
+pub use sagascript_engine_protocol::{Capabilities, ErrorCode, Priority, WarmResult};
 
 use std::time::Duration;
 
@@ -71,6 +73,19 @@ pub enum EngineHostError {
 impl EngineHostError {
     pub fn is_crash(&self) -> bool {
         matches!(self, EngineHostError::Crashed { .. })
+    }
+
+    /// A `transcribe_window` request was not answered in time. For an
+    /// interactive window the client has already killed the host (see
+    /// `WindowTicket::wait`), so a job may resubmit the window like a crashed one.
+    pub fn is_window_timeout(&self) -> bool {
+        matches!(
+            self,
+            EngineHostError::Timeout {
+                op: "transcribe_window",
+                ..
+            }
+        )
     }
 
     pub fn is_cancelled(&self) -> bool {

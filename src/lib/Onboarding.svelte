@@ -25,7 +25,7 @@
   let { oncomplete }: { oncomplete: () => void | Promise<void> } = $props();
 
   type Step = "language" | "download" | "microphone" | "accessibility" | "ready";
-  type OnboardingLanguage = "en" | "sv" | "no" | "fi";
+  type OnboardingLanguage = "en" | "sv" | "no" | "fi" | "da";
 
   let currentStep: Step = $state("language");
   let platform: string | null = $state(null);
@@ -75,6 +75,7 @@
     sv: "about 600 MB",
     no: "55 MB",
     fi: "142 MB",
+    da: "1530 MB",
   };
 
   // Fallback model ID per language (must match Rust serde rename). The backend
@@ -85,6 +86,7 @@
     sv: "kb-whisper-medium",
     no: "nb-whisper-base",
     fi: "base",
+    da: "medium",
   };
   let recommendedSizeMb: number | null = $state(null);
 
@@ -368,7 +370,7 @@
       hotkeyParts = settings.hotkey.split("+").map((part) => hotkeyKeyLabel(part, platform));
       // Map existing language to onboarding options (auto → en since onboarding requires a specific choice)
       const lang = settings.language;
-      if (lang === "en" || lang === "sv" || lang === "no" || lang === "fi") {
+      if (lang === "en" || lang === "sv" || lang === "no" || lang === "fi" || lang === "da") {
         selectedLanguage = lang;
       }
     } catch {
@@ -450,6 +452,15 @@
           >
             <span class="lang-flag">FI</span>
             <span class="lang-name">Suomi</span>
+          </button>
+          <button
+            class="language-option"
+            class:selected={selectedLanguage === "da"}
+            aria-pressed={selectedLanguage === "da"}
+            onclick={() => (selectedLanguage = "da")}
+          >
+            <span class="lang-flag">DA</span>
+            <span class="lang-name">Dansk</span>
           </button>
         </div>
         {#if languageError}
@@ -835,6 +846,8 @@
 
   .language-options {
     display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
     gap: 10px;
     margin: 20px 0 24px;
   }

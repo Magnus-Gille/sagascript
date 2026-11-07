@@ -58,8 +58,8 @@ export interface CommandMap {
   detach_meeting_audio: { args: { token: string }; result: void; error: BackendError };
   /** `commands::download_model(whisper_model: WhisperModel) -> Result<(), CommandError>` */
   download_model: { args: { whisperModel: string }; result: void; error: BackendError };
-  /** `commands::download_pianissimo_model() -> Result<(), CommandError>` */
-  download_pianissimo_model: { args: NoArgs; result: void; error: BackendError };
+  /** `commands::download_pianissimo_model(model: Option<String>) -> Result<(), CommandError>` */
+  download_pianissimo_model: { args: { model?: string | null }; result: void; error: BackendError };
   /** `commands::engine_status() -> Result<EngineStatus, CommandError>` */
   engine_status: { args: NoArgs; result: EngineStatus; error: BackendError };
   /** `commands::get_active_hotkey_profile() -> Result<Option<HotkeyProfile>, CommandError>` */
@@ -419,7 +419,7 @@ export const COMMAND_ARGUMENTS: {
   create_meeting_review: { required: ["transcript"], optional: [] },
   detach_meeting_audio: { required: ["token"], optional: [] },
   download_model: { required: ["whisperModel"], optional: [] },
-  download_pianissimo_model: { required: [], optional: [] },
+  download_pianissimo_model: { required: [], optional: ["model"] },
   engine_status: { required: [], optional: [] },
   get_active_hotkey_profile: { required: [], optional: [] },
   get_auto_file_model_info: { required: ["language"], optional: [] },

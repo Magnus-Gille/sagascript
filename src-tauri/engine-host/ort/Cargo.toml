@@ -5,7 +5,7 @@
 
 [package]
 name = "sagascript-engine-host-ort"
-version = "1.4.6"
+version = "1.4.8"
 edition = "2021"
 # Same MSRV as the main workspace (#353).
 rust-version = "1.88"
@@ -36,7 +36,7 @@ sagascript-engine-protocol = { path = "../../crates/sagascript-engine-protocol",
 # Windows only: restrict the DLL search path (SetDefaultDllDirectories) and load the ONNX
 # Runtime DLLs by absolute path. 0.52 is already in Cargo.lock via other dependencies.
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.52", features = ["Win32_Foundation", "Win32_System_LibraryLoader"] }
+windows-sys = { version = "0.52", features = ["Win32_Foundation", "Win32_System_LibraryLoader", "Win32_System_Threading"] }
 
 [features]
 # Honour ORT_DYLIB_PATH in release builds too (always honoured in debug builds). Off by default

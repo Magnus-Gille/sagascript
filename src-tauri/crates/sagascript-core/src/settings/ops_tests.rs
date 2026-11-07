@@ -1,5 +1,5 @@
 use super::*;
-use crate::models::{Language, WhisperModel};
+use crate::models::{Language, PianissimoModel, WhisperModel};
 
 fn profile(id: &str, shortcut: &str, language: Language) -> HotkeyProfile {
     HotkeyProfile {
@@ -108,6 +108,49 @@ fn language_selection_keeps_a_compatible_profile_model_silently() {
 }
 
 #[test]
+fn danish_selection_resets_swedish_models_and_keeps_multilingual_ones() {
+    let mut settings = swedish_with_explicit_model();
+    let notices = settings
+        .apply_language_selection_gated(Language::Danish, true)
+        .unwrap();
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert_eq!(notices[0].profile_id, "default");
+    assert_eq!(
+        settings.profile_models["default"],
+        FileModelPreference::Auto
+    );
+    assert_eq!(settings.whisper_model, WhisperModel::Medium);
+    assert!(settings.auto_select_model);
+
+    // A multilingual model stays, and Pianissimo is refused for Danish.
+    settings
+        .set_profile_model_gated(
+            "default",
+            FileModelPreference::Whisper(WhisperModel::Small),
+            true,
+        )
+        .unwrap();
+    assert!(settings
+        .set_profile_model_gated(
+            "default",
+            FileModelPreference::Pianissimo(PianissimoModel::Swedish),
+            true
+        )
+        .is_err());
+    assert!(settings
+        .set_profile_model_gated(
+            "default",
+            FileModelPreference::Whisper(WhisperModel::KbWhisperMedium),
+            true,
+        )
+        .is_err());
+    assert_eq!(
+        settings.profile_models["default"],
+        FileModelPreference::Whisper(WhisperModel::Small)
+    );
+}
+
+#[test]
 fn refused_language_selection_changes_nothing() {
     let mut settings = swedish_with_explicit_model();
     settings
@@ -212,7 +255,7 @@ fn pianissimo_dictation_needs_the_platform_and_a_swedish_profile() {
     settings.set_pianissimo_dictation_gated(true, true).unwrap();
     assert_eq!(
         settings.profile_models["default"],
-        FileModelPreference::PianissimoOriginal
+        FileModelPreference::Pianissimo(PianissimoModel::Swedish)
     );
     assert!(settings.pianissimo_dictation);
 
@@ -229,7 +272,12 @@ fn pianissimo_dictation_needs_the_platform_and_a_swedish_profile() {
     let error = english
         .set_pianissimo_dictation_gated(true, true)
         .unwrap_err();
-    assert_eq!(error, SettingsError::PianissimoRequiresSwedishProfile);
+    assert_eq!(
+        error,
+        SettingsError::PianissimoRequiresLanguageProfile {
+            language: "Swedish"
+        }
+    );
     assert_eq!(error.to_string(), "Pianissimo requires a Swedish profile");
     assert!(!english.pianissimo_dictation);
 }
@@ -276,7 +324,10 @@ fn profile_change_with_an_explicit_model_checks_it_against_the_new_language() {
     let error = settings
         .apply_profiles_change_gated(
             profiles,
-            Some(("default", FileModelPreference::PianissimoOriginal)),
+            Some((
+                "default",
+                FileModelPreference::Pianissimo(PianissimoModel::Swedish),
+            )),
             true,
         )
         .unwrap_err()
@@ -300,7 +351,11 @@ fn profile_change_keeps_the_notice_of_every_other_profile() {
     };
     for id in ["a", "b"] {
         settings
-            .set_profile_model_gated(id, FileModelPreference::PianissimoOriginal, true)
+            .set_profile_model_gated(
+                id,
+                FileModelPreference::Pianissimo(PianissimoModel::Swedish),
+                true,
+            )
             .unwrap();
     }
     let mut profiles = settings.resolved_hotkey_profiles();

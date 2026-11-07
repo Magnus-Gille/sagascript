@@ -149,3 +149,18 @@ struct ContextBiasingTests {
         #expect(WireProtocol.windowResult(result)["boost_active"] as? Bool == false)
     }
 }
+
+/// Klang's compiled Core ML builds ship FluidInference's vocabulary, which marks a word start
+/// with a space instead of `▁`.
+struct VocabularyNormalizationTests {
+    @Test func spaceMarkedWordStartsBecomeSentencePieceMarks() {
+        let fluid: [Int: String] = [0: "<unk>", 1: " s", 2: "en", 3: " ", 4: "▁d"]
+        #expect(normalizedVocabulary(fluid) == [0: "<unk>", 1: "▁s", 2: "en", 3: "▁", 4: "▁d"])
+    }
+
+    @Test func boostingSegmentsTermsTheSameWithEitherVocabulary() throws {
+        let sentencePiece: [Int: String] = [0: "▁Gil", 1: "le", 2: "▁Sag", 3: "a"]
+        let fluid = sentencePiece.mapValues { $0.replacingOccurrences(of: "▁", with: " ") }
+        #expect(normalizedVocabulary(fluid) == sentencePiece)
+    }
+}

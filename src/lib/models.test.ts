@@ -1,5 +1,14 @@
 import { describe, expect, test } from "vitest";
-import { ModelDownloads, PIANISSIMO_ID, downloadModelById } from "./models.svelte";
+import {
+  ModelDownloads,
+  PIANISSIMO_DA_ID,
+  PIANISSIMO_ID,
+  downloadModelById,
+  firstPianissimoId,
+  isPianissimoId,
+  pianissimoIdForLanguage,
+  pianissimoIdsOf,
+} from "./models.svelte";
 import { backendError, mockIpc } from "../test/ipc";
 
 describe("downloadModelById", () => {
@@ -9,6 +18,40 @@ describe("downloadModelById", () => {
     await downloadModelById(PIANISSIMO_ID);
 
     expect(ipc.calls).toEqual([{ command: "download_pianissimo_model", args: {} }]);
+  });
+
+  test("Danish Pianissimo goes through the same command, naming its model", async () => {
+    const ipc = mockIpc({ download_pianissimo_model: () => undefined });
+
+    await downloadModelById(PIANISSIMO_DA_ID);
+
+    expect(ipc.calls).toEqual([{ command: "download_pianissimo_model", args: { model: "pianissimo-da" } }]);
+  });
+
+  test("an engine repair downloads the model the error is about", () => {
+    // A Danish profile on Auto resolves to pianissimo-da: that is what to repair,
+    // not the Swedish model, and not a file preference the dictation never used.
+    expect(firstPianissimoId(["small", PIANISSIMO_DA_ID, PIANISSIMO_ID])).toBe(PIANISSIMO_DA_ID);
+    expect(firstPianissimoId([undefined, null, "auto"])).toBe(PIANISSIMO_ID);
+  });
+
+  test("each language has at most one Pianissimo model, its own", () => {
+    expect(pianissimoIdForLanguage("sv")).toBe(PIANISSIMO_ID);
+    expect(pianissimoIdForLanguage("da")).toBe(PIANISSIMO_DA_ID);
+    for (const language of ["en", "no", "fi", "auto", null, undefined]) expect(pianissimoIdForLanguage(language)).toBeNull();
+    // A failed Danish job is repaired with the Danish model even when the file preference is Swedish.
+    expect(firstPianissimoId([pianissimoIdForLanguage("da"), PIANISSIMO_ID])).toBe(PIANISSIMO_DA_ID);
+  });
+
+  test("a dictation repair covers every Pianissimo model the profiles use, once each", () => {
+    expect(pianissimoIdsOf([PIANISSIMO_ID, "small", PIANISSIMO_DA_ID, PIANISSIMO_ID])).toEqual([PIANISSIMO_ID, PIANISSIMO_DA_ID]);
+    expect(pianissimoIdsOf([PIANISSIMO_DA_ID, undefined])).toEqual([PIANISSIMO_DA_ID]);
+    expect(pianissimoIdsOf(["small", null])).toEqual([PIANISSIMO_ID]);
+  });
+
+  test("only the Pianissimo ids are Pianissimo", () => {
+    expect([PIANISSIMO_ID, PIANISSIMO_DA_ID].every(isPianissimoId)).toBe(true);
+    expect(["pianissimo", "pianissimo-sv-coreml", "small", "", null, undefined].some(isPianissimoId)).toBe(false);
   });
 
   test("every other model goes through download_model by id", async () => {

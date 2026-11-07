@@ -23,7 +23,7 @@ verification commands, [docs/recipes/](recipes/README.md) for step-by-step chang
 | `src-tauri/crates/sagascript-engine-protocol/` | Wire types for the engine-host JSON Lines protocol ([spec](engine-host-protocol.md)); used by the core client, the ORT host and the fake host. |
 | `src-tauri/crates/sagascript-testsupport/` | Dev-only test helpers shared by core, CLI and app tests: `TempDir` (unique, removed on drop), `fake_settings` (a settings file alone in its own `TempDir`), `sha256_hex`, `isolated_cli_env` (spawned CLI without inherited credentials, with `SAGASCRIPT_SETTINGS_PATH`). Never linked into a shipped binary. |
 | `src-tauri/engine-host/coreml/` | Swift package: Core ML host `sagascript-engine-host` (Pianissimo on macOS 14+ Apple silicon). |
-| `src-tauri/engine-host/ort/` | Standalone Cargo workspace (own `Cargo.lock`): ONNX Runtime CPU host `sagascript-engine-host-ort`, shipped for Windows on ARM. |
+| `src-tauri/engine-host/ort/` | Standalone Cargo workspace (own `Cargo.lock`): ONNX Runtime CPU host `sagascript-engine-host-ort`, shipped for Windows on ARM. While it loads a model, runs a `warm` canary or transcribes a window, `power_qos.rs` opts the process out of Windows EcoQoS (HighQoS) and restores the previous power-throttling state after the last overlapping scope. |
 | `src-tauri/engine-host/test-vectors/` | Vectors shared by both hosts' unit tests: `protocol/` (the golden JSONL transcripts and the scripted `fake-engine.json` that define the wire contract, also decoded by `sagascript-engine-protocol`; [spec](engine-host-protocol.md#golden-transcripts)) and `context-biasing.json`. |
 | `src-tauri/tauri.conf.json`, `src-tauri/capabilities/` | App config (`frontendDist: ../dist`) and plugin permissions. |
 | Meeting modules | Core `meeting/` (`mod.rs` the transcript document and its exports, `media.rs`, `review.rs`, `pipeline/` the shared file pipeline, `reprocess/{mod, matching, plan, proposal, io}.rs`, and with the `diarization` feature `reprocess/{native, orchestrate}.rs`: native execution, planning, and the staged publication of a reprocessing behind the `WorkBackend` seam; `control.rs` the cancellation and phases of a job, `source.rs` the hash that binds a document to its recording, `assemble.rs` the document from the segments of a diarized run); CLI `meeting.rs`, `meeting_proposal.rs` (the `meeting proposal` command), `meeting_reprocessing_cli.rs` (the `meeting reprocess` adapter), and `transcribe/` (CLI arguments, batch/output adapters and meeting-input validation); app `meeting_jobs.rs`, `meeting_media*.rs`, `meeting_review_commands.rs`, `meeting_reprocessing_commands.rs`, which call core entry points. Docs: `docs/meeting-*.md`. |
@@ -454,13 +454,27 @@ sequenceDiagram
   `engine-host\sagascript-engine-host-ort.exe`); `SAGASCRIPT_ENGINE_HOST` only in development
   builds (`dev-overrides`).
 - Recovery ([#366](https://github.com/Magnus-Gille/sagascript/issues/366)): `Failed` lasts
-  `failed_cooldown` (60 s), then one fresh start (half-open); a window that times out returns at
-  once, and a detached `engine-host-wedge-watch` thread kills the host if it sends no terminal
-  response within `wedge_grace` (30 s) after `cancel`; stdin writes are bounded
+  `failed_cooldown` (60 s), then one fresh start (half-open); a file-job window that times out
+  returns at once, and a detached `engine-host-wedge-watch` thread kills the host if it sends no
+  terminal response within `wedge_grace` (30 s) after `cancel`; a dictation (interactive) window
+  has `Timeouts::interactive` (by default the batch max(15 s, 3 × window), above a Neural Engine
+  recompile of 11.5-16.7 s, #397) and its timeout kills the host at once (`WindowTicket::wait`), after which the job resubmits its windows like after a crash (the
+  client is shared by dictation and file jobs of a model, so a file job's windows in flight on that
+  host fail as crashed and take their own crash-resubmit path); stdin writes are bounded
   (`Timeouts::write`); the restart backoff is slept unlocked and is cancel-aware.
   `EngineHostClient::reset()` clears `Failed` at once but has no production caller: settings that
   change the engine (host, model, compute units, idle policy) already replace the shared client
   (`shared_client`), model deletion shuts it down, and the CLI `engine doctor` uses its own client.
+- Neural Engine eviction ([#397](https://github.com/Magnus-Gille/sagascript/issues/397)): macOS can
+  evict a loaded model's Neural Engine program, and the next prediction then recompiles it. The
+  `warm` op runs one canary prediction outside the window queue (Swift `WarmCoordinator`, ONNX
+  `Server::handle_warm`). The app sends it on push-to-talk key-down and wake when the model is
+  loaded (`pianissimo_backend::warm_or_touch`, from the `pianissimo-warm` thread of
+  `warm_in_background`), so a recompile overlaps the user's speech. The Core ML host adds its own
+  canaries after memory pressure and wake (`WarmTriggers.swift`, wired in `main.swift`) and an
+  opt-in keep-alive (`SAGASCRIPT_ENGINE_KEEPALIVE_S`). Host stderr lines prefixed `info: ` are
+  logged at INFO (`process.rs`), all others at debug. Measurements:
+  `docs/benchmarks/pianissimo-ane-eviction.md`.
 - PCM temp dirs hold a locked `owner.lock`; `pipeline::sweep_stale_pcm_dirs` (app startup and
   shared-client creation, background, once per process; `engine doctor` on demand) removes the
   dirs of dead owners, and dirs whose owner cannot be proven dead (pre-#366, or on a file system

@@ -134,6 +134,20 @@ public struct WindowResult: Sendable {
     public var boostMicroseconds: Int = 0
 }
 
+/// What one canary prediction measured (`warm`, docs/engine-host-protocol.md).
+public struct CanaryResult: Equatable, Sendable {
+    /// Wall time of the whole canary.
+    public let milliseconds: Double
+    /// The encoder stage was slow enough, on a Neural Engine encoder, to be a recompile of an
+    /// evicted program rather than a resident run.
+    public let probableRecompile: Bool
+
+    public init(milliseconds: Double, probableRecompile: Bool) {
+        self.milliseconds = milliseconds
+        self.probableRecompile = probableRecompile
+    }
+}
+
 public protocol EngineBackend: AnyObject {
     var capabilities: HostCapabilities { get }
     var loadedModelID: String? { get }
@@ -141,5 +155,8 @@ public protocol EngineBackend: AnyObject {
 
     func load(modelDirectory: String, modelID: String, computeUnits: String) throws -> LoadResult
     func transcribe(_ request: WindowRequest, isCancelled: @escaping () -> Bool) throws -> WindowResult
+    /// One silent single-frame prediction through the whole pipeline on the loaded model, result
+    /// discarded. nil when no model is loaded.
+    func canary() throws -> CanaryResult?
     func unload()
 }

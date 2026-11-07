@@ -12,10 +12,12 @@
 mod file_model;
 mod language;
 mod listing;
+mod pianissimo;
 mod sources;
 mod whisper;
 
 pub use file_model::{FileModel, PIANISSIMO_UNSUPPORTED_MESSAGE};
 pub use language::{Language, UnknownLanguage};
 pub use listing::{app_picker, catalog, model_info, ModelEnv, ModelInfo};
+pub use pianissimo::PianissimoModel;
 pub use whisper::{UnknownModelId, WhisperModel};

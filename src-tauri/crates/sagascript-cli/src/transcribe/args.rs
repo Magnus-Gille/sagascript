@@ -26,7 +26,7 @@ pub struct TranscribeArgs {
     #[arg(long)]
     pub recursive: bool,
 
-    /// Language for transcription [possible values: en, sv, no, fi, auto (less accurate)]
+    /// Language for transcription [possible values: en, sv, no, fi, da, auto (less accurate)]
     #[arg(short, long, value_name = "LANG")]
     pub language: Option<String>,
 

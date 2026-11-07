@@ -8,7 +8,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use sagascript_core::audio::resample::TARGET_SAMPLE_RATE;
 use sagascript_core::audio::AudioCaptureService;
 use sagascript_core::error::DictationError;
-use sagascript_core::settings::{HotkeyProfile, Language, Settings, WhisperModel};
+use sagascript_core::settings::{HotkeyProfile, Language, PianissimoModel, Settings, WhisperModel};
 use sagascript_core::transcription::live_dictation::LiveDictationBackend;
 use sagascript_core::transcription::model;
 use sagascript_core::transcription::pianissimo_model;
@@ -23,7 +23,7 @@ use super::transcribe::{copy_to_clipboard, model_id_string, resolve_effective_mo
 
 #[derive(Args)]
 pub struct RecordArgs {
-    /// Language for transcription [possible values: en, sv, no, fi, auto (less accurate)]
+    /// Language for transcription [possible values: en, sv, no, fi, da, auto (less accurate)]
     #[arg(short, long, value_name = "LANG")]
     pub language: Option<String>,
 
@@ -31,7 +31,7 @@ pub struct RecordArgs {
     #[arg(long, value_name = "ID", conflicts_with = "language")]
     pub profile: Option<String>,
 
-    /// Whisper model ID or pianissimo-sv (Swedish only) [see: sagascript list-models]
+    /// Whisper model ID, or pianissimo-sv (Swedish) / pianissimo-da (Danish) [see: sagascript list-models]
     #[arg(short, long, value_name = "MODEL_ID")]
     pub model: Option<String>,
 
@@ -103,13 +103,13 @@ pub fn run(args: RecordArgs, out: &Out) -> Result<(), DictationError> {
                     .profile_models
                     .get(&profile.id)
                     .is_none_or(|p| *p == sagascript_core::settings::FileModelPreference::Auto));
-        if selected == RecordModel::Pianissimo
+        if matches!(selected, RecordModel::Pianissimo(_))
             && implicit_pianissimo
             && (args.prompt.is_some() || args.prompt_file.is_some())
         {
             selected = RecordModel::Whisper(WhisperModel::recommended(language));
         }
-        if selected == RecordModel::Pianissimo {
+        if matches!(selected, RecordModel::Pianissimo(_)) {
             validate_pianissimo_record_options(args.prompt.is_some(), args.prompt_file.is_some())?;
         }
         Some(selected)
@@ -132,7 +132,7 @@ pub fn run(args: RecordArgs, out: &Out) -> Result<(), DictationError> {
                     )));
                 }
             }
-            RecordModel::Pianissimo => {
+            RecordModel::Pianissimo(pianissimo) => {
                 if !sagascript_core::transcription::pianissimo_backend::runtime_supported_on_this_os(
                 ) {
                     return Err(DictationError::TranscriptionFailed(
@@ -140,10 +140,11 @@ pub fn run(args: RecordArgs, out: &Out) -> Result<(), DictationError> {
                             .into(),
                     ));
                 }
-                if !pianissimo_model::is_downloaded() {
-                    return Err(DictationError::TranscriptionFailed(
-                        "Pianissimo is not downloaded. Run: sagascript download-model pianissimo-sv".into(),
-                    ));
+                if !pianissimo_model::is_downloaded(pianissimo) {
+                    return Err(DictationError::TranscriptionFailed(format!(
+                        "Pianissimo is not downloaded. Run: sagascript download-model {}",
+                        pianissimo.id()
+                    )));
                 }
             }
         }
@@ -234,13 +235,13 @@ pub fn run(args: RecordArgs, out: &Out) -> Result<(), DictationError> {
             };
             (text, model_id_string(model))
         }
-        RecordModel::Pianissimo => {
+        RecordModel::Pianissimo(pianissimo) => {
             if glossary.decoder_prompt().is_some() {
                 errln!(out, "Pianissimo does not use Whisper decoder hints; aliases in the selected profile still correct the transcript after inference.");
             }
             errln!(out, "Loading model: Pianissimo...");
-            let text = transcribe_pianissimo_record(&audio, duration, out)?;
-            (text, "pianissimo-sv")
+            let text = transcribe_pianissimo_record(&audio, duration, pianissimo, out)?;
+            (text, pianissimo.id())
         }
     };
 
@@ -272,7 +273,7 @@ pub fn run(args: RecordArgs, out: &Out) -> Result<(), DictationError> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RecordModel {
     Whisper(WhisperModel),
-    Pianissimo,
+    Pianissimo(PianissimoModel),
 }
 
 fn resolve_record_model_for_profile(
@@ -285,10 +286,10 @@ fn resolve_record_model_for_profile(
         let (whisper, pianissimo) = stored
             .live_model_for_profile(&profile.id)
             .map_err(DictationError::from)?;
-        return Ok(if pianissimo {
-            RecordModel::Pianissimo
-        } else {
-            RecordModel::Whisper(whisper)
+        // A profile is on Pianissimo only in its model's language.
+        return Ok(match PianissimoModel::for_language(profile.language) {
+            Some(model) if pianissimo => RecordModel::Pianissimo(model),
+            _ => RecordModel::Whisper(whisper),
         });
     }
     resolve_record_model(
@@ -296,7 +297,7 @@ fn resolve_record_model_for_profile(
         language,
         true,
         WhisperModel::recommended(language),
-        // "Recommended for Swedish" is Pianissimo wherever it runs.
+        // "Recommended" is the language's Pianissimo model wherever it runs.
         sagascript_core::transcription::pianissimo_backend::runtime_supported_on_this_os(),
     )
 }
@@ -308,27 +309,24 @@ fn resolve_record_model(
     whisper_fallback: WhisperModel,
     use_saved_pianissimo: bool,
 ) -> Result<RecordModel, DictationError> {
-    match model_arg {
-        Some("pianissimo-sv") => {
-            if language != Language::Swedish {
-                return Err(DictationError::SettingsError(
-                    "Pianissimo supports Swedish dictation only; use --language sv or choose a Whisper model".into(),
-                ));
-            }
-            Ok(RecordModel::Pianissimo)
+    if let Some(model) = model_arg.and_then(PianissimoModel::from_id) {
+        let own = model.language();
+        if language != own {
+            return Err(DictationError::SettingsError(format!(
+                "Pianissimo supports {} dictation only; use --language {} or choose a Whisper model",
+                own.display_name(),
+                own.id()
+            )));
         }
-        Some(model_arg) => resolve_effective_model(
-            Some(model_arg),
-            language,
-            auto_select_model,
-            whisper_fallback,
-        )
-        .map(RecordModel::Whisper),
-        None if use_saved_pianissimo && language == Language::Swedish => {
-            Ok(RecordModel::Pianissimo)
+        return Ok(RecordModel::Pianissimo(model));
+    }
+    let saved_pianissimo = PianissimoModel::for_language(language).filter(|_| use_saved_pianissimo);
+    match (model_arg, saved_pianissimo) {
+        (None, Some(model)) => Ok(RecordModel::Pianissimo(model)),
+        (model_arg, _) => {
+            resolve_effective_model(model_arg, language, auto_select_model, whisper_fallback)
+                .map(RecordModel::Whisper)
         }
-        None => resolve_effective_model(None, language, auto_select_model, whisper_fallback)
-            .map(RecordModel::Whisper),
     }
 }
 
@@ -347,6 +345,7 @@ fn validate_pianissimo_record_options(
 fn transcribe_pianissimo_record(
     audio: &[f32],
     duration: f64,
+    model: PianissimoModel,
     out: &Out,
 ) -> Result<String, DictationError> {
     let backend = LiveDictationBackend::new(
@@ -359,7 +358,7 @@ fn transcribe_pianissimo_record(
         let result = backend.transcribe(
             WhisperModel::Base,
             audio,
-            Language::Swedish,
+            model.language(),
             &TranscribeOptions::default(),
             &mut Default::default(),
         );
@@ -413,7 +412,7 @@ mod tests {
     };
     use crate::output::Out;
     use sagascript_core::settings::{
-        FileModelPreference, HotkeyProfile, Language, Settings, WhisperModel,
+        FileModelPreference, HotkeyProfile, Language, PianissimoModel, Settings, WhisperModel,
     };
 
     const FALLBACK: WhisperModel = WhisperModel::KbWhisperLarge;
@@ -426,16 +425,17 @@ mod tests {
         english.id = "english".into();
         english.name = "English".into();
         settings.hotkey_profiles = vec![swedish.clone(), english.clone()];
-        settings
-            .profile_models
-            .insert("default".into(), FileModelPreference::PianissimoOriginal);
+        settings.profile_models.insert(
+            "default".into(),
+            FileModelPreference::Pianissimo(PianissimoModel::Swedish),
+        );
         settings.profile_models.insert(
             "english".into(),
             FileModelPreference::Whisper(WhisperModel::SmallEn),
         );
         assert_eq!(
             resolve_record_model_for_profile(&settings, &swedish, Language::Swedish, None).unwrap(),
-            RecordModel::Pianissimo
+            RecordModel::Pianissimo(PianissimoModel::Swedish)
         );
         assert_eq!(
             resolve_record_model_for_profile(&settings, &english, Language::English, None).unwrap(),
@@ -457,7 +457,13 @@ mod tests {
     fn pianissimo_silence_skips_native_model_in_record() {
         for audio in [vec![0.0; 1600], vec![0.00001; 1600]] {
             assert_eq!(
-                super::transcribe_pianissimo_record(&audio, 0.1, &Out::capture().0).unwrap(),
+                super::transcribe_pianissimo_record(
+                    &audio,
+                    0.1,
+                    PianissimoModel::Swedish,
+                    &Out::capture().0
+                )
+                .unwrap(),
                 ""
             );
         }
@@ -474,7 +480,7 @@ mod tests {
                 false,
             )
             .unwrap(),
-            RecordModel::Pianissimo
+            RecordModel::Pianissimo(PianissimoModel::Swedish)
         );
     }
 
@@ -484,6 +490,7 @@ mod tests {
             Language::English,
             Language::Norwegian,
             Language::Finnish,
+            Language::Danish,
             Language::Auto,
         ] {
             let error =
@@ -497,7 +504,7 @@ mod tests {
     fn saved_pianissimo_setting_applies_only_to_swedish() {
         assert_eq!(
             resolve_record_model(None, Language::Swedish, false, FALLBACK, true).unwrap(),
-            RecordModel::Pianissimo
+            RecordModel::Pianissimo(PianissimoModel::Swedish)
         );
         assert_eq!(
             resolve_record_model(None, Language::Swedish, false, FALLBACK, false).unwrap(),

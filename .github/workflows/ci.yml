@@ -82,7 +82,7 @@ jobs:
   test-macos:
     needs: scope
     if: ${{ needs.scope.result == 'success' && needs.scope.outputs.docs_only != 'true' }}
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -141,7 +141,7 @@ jobs:
   build-macos:
     needs: scope
     if: ${{ needs.scope.result == 'success' && needs.scope.outputs.docs_only != 'true' }}
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -192,9 +192,10 @@ jobs:
             src-tauri/engine-host/ort
       - name: Test offline dictation evaluation tooling
         run: python -m unittest discover -s scripts/dictation_eval -p 'test_*.py'
-      # The cargo-deny gates run first, before any compilation; rust-cache keeps the binary.
+      # The cargo-deny gates run first, before any compilation. The prebuilt release binary is
+      # checked against a pinned SHA-256 (SAGA-546); compiling it cost minutes on a cache miss.
       - name: Install cargo-deny
-        run: cargo install --locked cargo-deny --version 0.20.2
+        run: bash scripts/ci/install-cargo-deny.sh
       # tauri::generate_context! embeds ../dist, so the app crate needs it.
       - name: Build frontend
         run: npm run build

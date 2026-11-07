@@ -28,7 +28,7 @@ const englishProfile: HotkeyProfile = {
 };
 
 test("the frontend language contract stays limited to the supported values", () => {
-  expectTypeOf<Language>().toEqualTypeOf<"en" | "sv" | "no" | "fi" | "auto">();
+  expectTypeOf<Language>().toEqualTypeOf<"en" | "sv" | "no" | "fi" | "da" | "auto">();
 });
 
 /** True when `first` comes before `second` in document order. */
@@ -164,6 +164,48 @@ describe("Dictate: profiles and recording shortcuts", () => {
     const modelPicker = screen.getByRole("combobox", { name: "File transcription model" });
     await waitFor(() => expect(optionLabels(modelPicker)).toContain("Finnish Base fixture · 137 MB · download needed"));
     expect(ipc.callsTo("get_file_model_options")).toContainEqual({ language: "fi", include: null });
+    expect(ipc.unmocked).toEqual([]);
+  });
+
+  test("Danish saves through Settings, appears in profile choices, and loads the Danish file-model lineup", async () => {
+    let savedSettings = settingsValue();
+    const danishModel = whisperModel("small", "Danish Small fixture", { size_mb: 466, downloaded: false });
+    const { ipc } = await renderSettings(
+      settingsBackend({
+        get_settings: () => savedSettings,
+        set_language: ({ language }) => {
+          savedSettings = {
+            ...savedSettings,
+            language,
+            hotkey_profiles: savedSettings.hotkey_profiles.map((profile) =>
+              profile.id === "default" ? { ...profile, language } : profile,
+            ),
+          };
+          return [];
+        },
+        get_file_model_options: ({ language }) => (language === "da" ? [danishModel] : [kbWhisperMedium]),
+      }),
+    );
+
+    await userEvent.setup().click(screen.getByRole("button", { name: "Settings" }));
+    const defaultLanguage = screen.getByRole("combobox", { name: "Default profile language" });
+    expect(optionLabels(defaultLanguage)).toContain("Danish");
+    await userEvent.setup().selectOptions(defaultLanguage, "da");
+    await waitFor(() => expect(ipc.callsTo("set_language")).toEqual([{ language: "da" }]));
+    await waitFor(() => expect(defaultLanguage).toHaveValue("da"));
+
+    await userEvent.setup().click(screen.getByRole("button", { name: "Dictate" }));
+    const profileLanguage = screen.getByRole("combobox", { name: "Svenska language" });
+    expect(profileLanguage).toHaveValue("da");
+    expect(optionLabels(profileLanguage)).toContain("Danish");
+
+    await userEvent.setup().click(screen.getByRole("button", { name: "Transcribe" }));
+    const profile = screen.getByRole("combobox", { name: "Profile (optional)" });
+    expect(optionLabels(profile)).toContain("Svenska · Danish");
+    await waitFor(() => expect(screen.getByText("Danish", { selector: ".active-config-value" })).toBeInTheDocument());
+    const modelPicker = screen.getByRole("combobox", { name: "File transcription model" });
+    await waitFor(() => expect(optionLabels(modelPicker)).toContain("Danish Small fixture · 466 MB · download needed"));
+    expect(ipc.callsTo("get_file_model_options")).toContainEqual({ language: "da", include: null });
     expect(ipc.unmocked).toEqual([]);
   });
 });

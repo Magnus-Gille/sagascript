@@ -45,6 +45,7 @@ fn pianissimo_closes_the_swedish_catalog_only_where_it_runs() {
         Language::English,
         Language::Norwegian,
         Language::Finnish,
+        Language::Danish,
         Language::Auto,
     ] {
         assert!(
@@ -59,7 +60,7 @@ fn pianissimo_closes_the_swedish_catalog_only_where_it_runs() {
 #[test]
 fn pianissimo_carries_both_its_download_and_its_installed_size() {
     let info = model_info(
-        FileModel::PianissimoOriginal,
+        FileModel::Pianissimo(PianissimoModel::Swedish),
         &FixedModelEnv::with_pianissimo(),
     );
     assert_eq!(info.download_size_mb, 1_000);
@@ -87,8 +88,8 @@ fn an_entry_carries_the_names_of_its_model() {
         assert_eq!(info.description, model.description());
         assert_eq!(info.hidden_in_app, model.is_hidden_in_app());
     }
-    let pianissimo = model_info(FileModel::PianissimoOriginal, &env);
-    assert_eq!(pianissimo.id, FileModel::PIANISSIMO_ID);
+    let pianissimo = model_info(FileModel::Pianissimo(PianissimoModel::Swedish), &env);
+    assert_eq!(pianissimo.id, PianissimoModel::Swedish.id());
     assert_eq!(pianissimo.display_name, "Pianissimo");
     assert!(pianissimo
         .description
@@ -133,14 +134,14 @@ fn the_disk_is_asked_only_about_listed_models() {
         fn runs_pianissimo(&self) -> bool {
             true
         }
-        fn pianissimo_downloaded(&self) -> bool {
+        fn pianissimo_downloaded(&self, _: PianissimoModel) -> bool {
             self.pianissimo_checks.set(self.pianissimo_checks.get() + 1);
             false
         }
-        fn pianissimo_download_bytes(&self) -> u64 {
+        fn pianissimo_download_bytes(&self, _: PianissimoModel) -> u64 {
             0
         }
-        fn pianissimo_installed_bytes(&self) -> u64 {
+        fn pianissimo_installed_bytes(&self, _: PianissimoModel) -> u64 {
             0
         }
         fn whisper_downloaded(&self, _: WhisperModel) -> bool {
@@ -266,6 +267,9 @@ fn recommended_follows_the_pianissimo_gate() {
         ["nb-whisper-base"]
     );
     assert_eq!(recommended(Language::Finnish, &with), ["base"]);
+    // Danish has its own Pianissimo model where it runs, Whisper Medium elsewhere.
+    assert_eq!(recommended(Language::Danish, &with), ["pianissimo-da"]);
+    assert_eq!(recommended(Language::Danish, &without), ["medium"]);
     assert_eq!(recommended(Language::Auto, &without), ["base"]);
 }
 
@@ -284,10 +288,10 @@ fn every_language_of_an_entry_lists_it() {
     }
     assert_eq!(
         model_info(FileModel::Whisper(WhisperModel::Base), &env).languages,
-        [Language::Finnish, Language::Auto]
+        [Language::Finnish, Language::Danish, Language::Auto]
     );
     assert_eq!(
-        model_info(FileModel::PianissimoOriginal, &env).languages,
+        model_info(FileModel::Pianissimo(PianissimoModel::Swedish), &env).languages,
         [Language::Swedish]
     );
 }

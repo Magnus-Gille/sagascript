@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use crate::error::DictationError;
-use crate::models::{Language, WhisperModel};
+use crate::models::{Language, PianissimoModel, WhisperModel};
 use crate::settings::Settings;
 
 use super::engine_host::{CancelToken, EngineHostClient};
@@ -100,11 +100,12 @@ impl LiveDictationBackend {
         }
 
         *timings = DictationTimings::default();
-        if language != Language::Swedish {
-            return Err(DictationError::TranscriptionFailed(
-                "Pianissimo live dictation is only available for Swedish".into(),
-            ));
-        }
+        let Some(pianissimo) = PianissimoModel::for_language(language) else {
+            return Err(DictationError::TranscriptionFailed(format!(
+                "Pianissimo live dictation is not available for {}",
+                language.display_name()
+            )));
+        };
         if self.cancelled.load(Ordering::SeqCst) {
             return Err(cancelled_error());
         }
@@ -136,7 +137,7 @@ impl LiveDictationBackend {
         let acquired = with_cancel_bridge(&self.cancelled, &token, || {
             match &self.engine {
                 Engine::Client(client) => Ok(client.clone()),
-                Engine::Pianissimo { load_settings } => shared_client(&load_settings()),
+                Engine::Pianissimo { load_settings } => shared_client(&load_settings(), pianissimo),
                 Engine::Whisper => unreachable!("handled before the audio checks"),
             }
             .and_then(|client| warm_client(&client, &token).map(|warm| (client, warm)))
@@ -304,7 +305,7 @@ mod tests {
     }
 
     #[test]
-    fn pianissimo_adapter_rejects_non_swedish_without_starting_runtime() {
+    fn pianissimo_adapter_rejects_languages_without_a_model_without_starting_runtime() {
         let backend = pianissimo_that_reads_no_settings();
         let mut timings = DictationTimings::default();
 
@@ -318,7 +319,7 @@ mod tests {
             )
             .unwrap_err();
 
-        assert!(error.to_string().contains("only available for Swedish"));
+        assert!(error.to_string().contains("not available for Norwegian"));
         assert!(!timings.inference_started);
     }
 

@@ -480,7 +480,7 @@ impl AppController {
         {
             FileModel::Whisper(model) => serde_json::to_value(model)
                 .map_err(|error| DictationError::SettingsError(error.to_string()))?,
-            FileModel::PianissimoOriginal => serde_json::Value::String("pianissimo-sv".into()),
+            FileModel::Pianissimo(model) => serde_json::Value::String(model.id().into()),
         };
 
         let work_lease = self
@@ -1577,7 +1577,9 @@ mod tests {
         ctrl.settings_mut().hotkey_profiles = vec![profile.clone()];
         ctrl.settings_mut().profile_models.insert(
             "default".into(),
-            sagascript_core::settings::FileModelPreference::PianissimoOriginal,
+            sagascript_core::settings::FileModelPreference::Pianissimo(
+                sagascript_core::models::PianissimoModel::Swedish,
+            ),
         );
         assert!(ctrl
             .start_recording_for_profile_with_capture(profile, |_| Ok(()))

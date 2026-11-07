@@ -44,12 +44,12 @@ test("CLI Finnish language and model IDs use the core model registry", () => {
   assert.match(benchmarkConfig, /Language::Finnish/);
   assert.match(benchmarkConfig, /en, sv, no, or fi/);
   assert.match(latency, /\(Language::Finnish, "fi"\)/);
-  assert.match(config, /en, sv, no, fi, auto/);
-  assert.match(record, /en, sv, no, fi, auto/);
+  assert.match(config, /en, sv, no, fi, da, auto/);
+  assert.match(record, /en, sv, no, fi, da, auto/);
 });
 
 test("Finnish remains opt-in and does not alter generic defaults", () => {
-  assert.match(cli, /Supported languages: English \(en\), Swedish \(sv\), Norwegian \(no\), Finnish \(fi\), Auto-detect/);
+  assert.match(cli, /Supported languages: English \(en\), Swedish \(sv\), Norwegian \(no\), Finnish \(fi\), Danish \(da\), Auto-detect/);
   assert.match(cli, /Finnish uses the generic multilingual Base model/);
   assert.doesNotMatch(cli, /fi-whisper-medium|Finnish-NLP model/);
   assert.match(coreLanguage, /Language::Auto => "auto"/);

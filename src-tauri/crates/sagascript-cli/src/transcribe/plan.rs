@@ -9,7 +9,7 @@ use std::path::PathBuf;
 
 use sagascript_core::error::DictationError;
 use sagascript_core::run_context::RunContext;
-use sagascript_core::settings::{FileModel, Language, Settings, WhisperModel};
+use sagascript_core::settings::{FileModel, Language, PianissimoModel, Settings, WhisperModel};
 use sagascript_core::transcription::Glossary;
 
 #[cfg(feature = "diarization")]
@@ -40,7 +40,7 @@ pub(super) struct RunPlan {
 
 /// Which engine runs the files, with what only that engine needs.
 pub(super) enum EnginePlan {
-    Pianissimo,
+    Pianissimo(PianissimoModel),
     Whisper {
         model: WhisperModel,
         /// The single-word hint items `--correct-hints` may repair a miss to;
@@ -112,14 +112,15 @@ pub(super) fn plan_run_with(
         resolve_file_model_for_run(args.model.as_deref(), language, &stored, needs_whisper)?;
 
     let engine = match selected_model {
-        FileModel::PianissimoOriginal => {
+        FileModel::Pianissimo(model) => {
             #[cfg(feature = "diarization")]
             if args.diarize || args.meeting_json {
-                return Err(DictationError::SettingsError(
-                    "Pianissimo supports plain Swedish file transcription only; select a Whisper model for diarization or meeting output".into(),
-                ));
+                return Err(DictationError::SettingsError(format!(
+                    "Pianissimo supports plain {} file transcription only; select a Whisper model for diarization or meeting output",
+                    model.language().display_name()
+                )));
             }
-            EnginePlan::Pianissimo
+            EnginePlan::Pianissimo(model)
         }
         FileModel::Whisper(model) => {
             let correction_vocabulary = correction_vocabulary(args, &glossary)?;

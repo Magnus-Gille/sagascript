@@ -9,7 +9,7 @@ use std::collections::BTreeSet;
 
 /// Result fields the spec marks optional, as `op:path` (`[]` = every array item). Every other
 /// field of a result must be required by the types.
-const OPTIONAL: [&str; 9] = [
+const OPTIONAL: [&str; 12] = [
     "hello:host.git_sha",
     "hello:host.build_dirty",
     "hello:capabilities.min_macos",
@@ -19,9 +19,12 @@ const OPTIONAL: [&str; 9] = [
     "transcribe_window:boost_active",
     "transcribe_window:boost_reason",
     "status:model_id",
+    "warm:skipped",
+    "warm:canary_ms",
+    "warm:probable_recompile",
 ];
 
-const OPS: [&str; 8] = [
+const OPS: [&str; 9] = [
     "hello",
     "load",
     "transcribe_window",
@@ -30,6 +33,7 @@ const OPS: [&str; 8] = [
     "ping",
     "unload",
     "shutdown",
+    "warm",
 ];
 
 fn transcripts() -> Vec<Transcript> {
@@ -73,6 +77,7 @@ fn reencode(op: &str, result: Value) -> Result<Value, String> {
         "transcribe_window" => round::<TranscribeWindowResult>(result),
         "cancel" => round::<CancelResult>(result),
         "status" => round::<StatusResult>(result),
+        "warm" => round::<WarmResult>(result),
         "ping" | "unload" | "shutdown" if result == json!({}) => Ok(result),
         "ping" | "unload" | "shutdown" => Err(format!("{op} must answer {{}}, got {result}")),
         other => Err(format!("no result type for {other}")),
@@ -329,6 +334,7 @@ fn maximal_request(op: &str) -> RequestOp {
         "ping" => RequestOp::Ping,
         "unload" => RequestOp::Unload,
         "shutdown" => RequestOp::Shutdown,
+        "warm" => RequestOp::Warm,
         other => panic!("unknown op {other}"),
     }
 }

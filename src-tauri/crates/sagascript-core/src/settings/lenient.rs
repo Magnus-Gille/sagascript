@@ -211,6 +211,7 @@ mod tests {
             json!({"id": "english", "name": "English", "shortcut": "Super+E", "language": "en"});
         for (language, expected) in [
             (json!("sv"), Language::Swedish),
+            (json!("da"), Language::Danish),
             (json!("tlh"), Language::default()),
         ] {
             let decoded = decode(&object(json!({

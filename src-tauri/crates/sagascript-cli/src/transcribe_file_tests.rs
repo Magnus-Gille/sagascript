@@ -15,6 +15,7 @@ use std::sync::Mutex;
 
 use clap::Parser;
 use sagascript_core::audio::wav::encode_wav;
+use sagascript_core::settings::PianissimoModel;
 use sagascript_core::transcription::diagnostics::LanguageDetection;
 #[cfg(feature = "diarization")]
 use sagascript_core::transcription::DiarizationTranscription;
@@ -1725,7 +1726,10 @@ fn the_preflight_is_skipped_where_no_whisper_model_is_needed() {
     // Pianissimo has its own model, checked by its own batch.
     let plan = plan_for(&["--language", "sv", "--model", "pianissimo-sv"], &backend)
         .expect("Pianissimo plans without a Whisper model");
-    assert!(matches!(plan.engine, EnginePlan::Pianissimo));
+    assert!(matches!(
+        plan.engine,
+        EnginePlan::Pianissimo(PianissimoModel::Swedish)
+    ));
     assert!(backend.asked.lock().unwrap().is_empty());
 
     // A diarization cache may stand in for the model: the run decides on a hit.
