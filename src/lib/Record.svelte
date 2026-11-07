@@ -766,6 +766,13 @@
     cursor: pointer;
   }
 
+  /* A disabled radio (while recording) loses its checked look: the chosen
+     quality stays readable by its weight and colour. */
+  .choice.selected .choice-name {
+    color: var(--accent);
+    font-weight: 600;
+  }
+
   .choice-size {
     grid-column: 2;
     color: var(--text-muted);
