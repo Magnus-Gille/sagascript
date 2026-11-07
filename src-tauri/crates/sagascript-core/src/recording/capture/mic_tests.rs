@@ -324,14 +324,16 @@ struct FakeDevice {
 }
 
 impl InputDevice for FakeDevice {
+    type Config = ();
+
     fn id(&self) -> Option<u64> {
         self.id
     }
     fn name(&self) -> Option<String> {
         Some(self.name.into())
     }
-    fn default_format(&self) -> Option<(DeviceFormat, cpal::SampleFormat)> {
-        Some((self.format, cpal::SampleFormat::F32))
+    fn default_format(&self) -> Option<(DeviceFormat, cpal::SampleFormat, ())> {
+        Some((self.format, cpal::SampleFormat::F32, ()))
     }
 }
 
@@ -423,7 +425,7 @@ fn a_start_on_the_expected_device_is_accepted_and_returns_that_device() {
         expected.sample_format,
     )
     .unwrap();
-    assert_eq!(device.id, Some(41));
+    assert_eq!(device.0.id, Some(41));
 }
 
 #[test]
@@ -439,7 +441,7 @@ fn a_start_without_a_default_device_or_on_another_format_is_refused() {
 
 #[test]
 fn the_stream_target_check_follows_the_same_identity_rules_as_the_watch() {
-    let opened = |device: FakeDevice| -> OpenedInput { describe(&device).unwrap() };
+    let opened = |device: FakeDevice| -> OpenedInput<()> { describe(&device).unwrap() };
     let expected = opened(usb(41));
     let check = |device: FakeDevice| {
         check_stream_target(&expected.snapshot, expected.sample_format, &opened(device)).is_ok()
@@ -498,4 +500,75 @@ fn the_default_input_device_of_a_mac_has_an_id_that_cpals_debug_text_gives() {
     eprintln!("default input: {:?}", opened.snapshot);
     #[cfg(target_os = "macos")]
     assert!(opened.snapshot.id.is_some(), "cpal's Debug text changed?");
+}
+
+/// A device whose default configuration changes every time it is read: 2
+/// channels the first time, 4 after that (the read number is the "config").
+struct ChangingDevice {
+    reads: Cell<u32>,
+}
+
+impl InputDevice for ChangingDevice {
+    type Config = u32;
+
+    fn id(&self) -> Option<u64> {
+        Some(41)
+    }
+    fn name(&self) -> Option<String> {
+        Some("Interface".into())
+    }
+    fn default_format(&self) -> Option<(DeviceFormat, cpal::SampleFormat, u32)> {
+        let read = self.reads.get() + 1;
+        self.reads.set(read);
+        let channels = if read == 1 { 2 } else { 4 };
+        Some((
+            DeviceFormat {
+                sample_rate: 48_000,
+                channels,
+            },
+            cpal::SampleFormat::F32,
+            read,
+        ))
+    }
+}
+
+fn interface_snapshot(channels: u16) -> DeviceSnapshot {
+    DeviceSnapshot {
+        id: Some(41),
+        name: Some("Interface".into()),
+        format: DeviceFormat {
+            sample_rate: 48_000,
+            channels,
+        },
+    }
+}
+
+#[test]
+fn the_configuration_a_stream_is_built_with_is_the_one_that_was_checked() {
+    // The device is 2 channels when it is checked and 4 on any later read.
+    let device = ChangingDevice {
+        reads: Cell::new(0),
+    };
+    let (device, config) = verify_default(
+        Some(device),
+        &interface_snapshot(2),
+        cpal::SampleFormat::F32,
+    )
+    .unwrap();
+    assert_eq!(config, 1, "the configuration of the read that was checked");
+    assert_eq!(device.reads.get(), 1, "and it is the only read there is");
+}
+
+#[test]
+fn a_device_that_already_has_the_new_configuration_when_checked_is_refused() {
+    // Expecting 2 channels, the first read already says 4.
+    let device = ChangingDevice {
+        reads: Cell::new(1),
+    };
+    assert!(verify_default(
+        Some(device),
+        &interface_snapshot(2),
+        cpal::SampleFormat::F32
+    )
+    .is_err());
 }

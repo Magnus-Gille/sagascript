@@ -197,22 +197,32 @@ pub(crate) fn id_from_debug_text(text: &str) -> Option<u64> {
 
 /// Everything one `cpal` device value says about itself. All of it comes from
 /// the one value, so the identity cannot be another device's.
-pub(crate) struct OpenedInput {
+pub(crate) struct OpenedInput<C> {
     pub(crate) snapshot: DeviceSnapshot,
     pub(crate) sample_format: SampleFormat,
+    /// The configuration that was read and described above: the very one a
+    /// stream is built with, never a second read of it.
+    pub(crate) config: C,
 }
 
 /// What the recording needs to know about one input device. It is a trait so
 /// that a test can hand out devices whose "current default" changes under it;
 /// `cpal::Device` is the real one.
 pub(crate) trait InputDevice {
+    /// What the device's default input configuration is, as the platform
+    /// gives it (`cpal::SupportedStreamConfig`).
+    type Config;
+
     /// The platform identity of this very device (see [`device_id`]).
     fn id(&self) -> Option<u64>;
     fn name(&self) -> Option<String>;
-    fn default_format(&self) -> Option<(DeviceFormat, SampleFormat)>;
+    /// One read of the default input configuration.
+    fn default_format(&self) -> Option<(DeviceFormat, SampleFormat, Self::Config)>;
 }
 
 impl InputDevice for cpal::Device {
+    type Config = cpal::SupportedStreamConfig;
+
     fn id(&self) -> Option<u64> {
         device_id(self)
     }
@@ -221,7 +231,7 @@ impl InputDevice for cpal::Device {
         DeviceTrait::name(self).ok()
     }
 
-    fn default_format(&self) -> Option<(DeviceFormat, SampleFormat)> {
+    fn default_format(&self) -> Option<(DeviceFormat, SampleFormat, Self::Config)> {
         let config = self.default_input_config().ok()?;
         Some((
             DeviceFormat {
@@ -229,13 +239,14 @@ impl InputDevice for cpal::Device {
                 channels: config.channels(),
             },
             config.sample_format(),
+            config,
         ))
     }
 }
 
 /// Describe a device, from the device alone.
-pub(crate) fn describe<D: InputDevice>(device: &D) -> Option<OpenedInput> {
-    let (format, sample_format) = device.default_format()?;
+pub(crate) fn describe<D: InputDevice>(device: &D) -> Option<OpenedInput<D::Config>> {
+    let (format, sample_format, config) = device.default_format()?;
     Some(OpenedInput {
         snapshot: DeviceSnapshot {
             id: device.id(),
@@ -243,17 +254,19 @@ pub(crate) fn describe<D: InputDevice>(device: &D) -> Option<OpenedInput> {
             format,
         },
         sample_format,
+        config,
     })
 }
 
 /// The default input device `default` names, if it is the one the recording
 /// was set up with. Everything compared comes from the one device value that
-/// is returned, which the stream is then built on.
+/// is returned with the configuration that was checked, which the stream is
+/// then built on: the configuration is read once.
 pub(crate) fn verify_default<D: InputDevice>(
     default: Option<D>,
     expected: &DeviceSnapshot,
     expected_sample_format: SampleFormat,
-) -> Result<D, RecordingError> {
+) -> Result<(D, D::Config), RecordingError> {
     let device = default.ok_or(RecordingError::SourceUnavailable {
         reason: "no input device",
     })?;
@@ -261,7 +274,7 @@ pub(crate) fn verify_default<D: InputDevice>(
         reason: "the input device reports no format",
     })?;
     check_stream_target(expected, expected_sample_format, &opened)?;
-    Ok(device)
+    Ok((device, opened.config))
 }
 
 /// Whether two snapshots are the same device. Two ids that are both known
@@ -275,10 +288,10 @@ pub(crate) fn same_device(a: &DeviceSnapshot, b: &DeviceSnapshot) -> bool {
 
 /// Whether the device a stream is about to be built on is the one that was
 /// looked at when the recording was set up. The format is part of that.
-pub(crate) fn check_stream_target(
+pub(crate) fn check_stream_target<C>(
     expected: &DeviceSnapshot,
     expected_sample_format: SampleFormat,
-    opened: &OpenedInput,
+    opened: &OpenedInput<C>,
 ) -> Result<(), RecordingError> {
     if !same_device(expected, &opened.snapshot)
         || opened.snapshot.format != expected.format
@@ -563,17 +576,11 @@ fn build_stream(job: StreamJob, sink: BlockSink) -> Result<cpal::Stream, Recordi
     };
     // The default may have changed since `open`. Name, format and identity are
     // all read from the one device value the stream is built on.
-    let device = verify_default(
+    let (device, supported) = verify_default(
         cpal::default_host().default_input_device(),
         &expected,
         job.sample_format,
     )?;
-    let supported =
-        device
-            .default_input_config()
-            .map_err(|_| RecordingError::SourceUnavailable {
-                reason: "the input device reports no format",
-            })?;
     let config: cpal::StreamConfig = supported.config();
     match job.sample_format {
         SampleFormat::F32 => typed::<f32>(&device, &config, job, sink),
