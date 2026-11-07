@@ -7,7 +7,7 @@ use std::fs::File;
 use std::io::{self, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use sagascript_testsupport::TempDir;
@@ -146,11 +146,26 @@ struct LateBlockThenStop {
     handle: FakeHandle,
     calls: Arc<AtomicU64>,
     final_block: Duration,
+    /// Where the recording is, to read its manifest at the moment of the stop.
+    root: PathBuf,
+    /// The state the manifest on disk had when the source was first stopped.
+    state_at_stop: Arc<Mutex<Option<RecordingState>>>,
 }
 
 impl super::core::SourceStopper for LateBlockThenStop {
     fn stop_source(&self, _index: usize) {
-        self.calls.fetch_add(1, Ordering::SeqCst);
+        if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+            let folder = std::fs::read_dir(&self.root)
+                .ok()
+                .and_then(|mut entries| entries.next())
+                .and_then(Result::ok)
+                .map(|entry| entry.path());
+            let state = folder
+                .and_then(|folder| std::fs::read(folder.join("recording.json")).ok())
+                .and_then(|bytes| parse_manifest(&bytes).ok())
+                .map(|manifest| manifest.state);
+            *self.state_at_stop.lock().unwrap() = state;
+        }
         if !self.final_block.is_zero() {
             self.handle.deliver(self.final_block);
         }
@@ -160,6 +175,7 @@ impl super::core::SourceStopper for LateBlockThenStop {
 
 struct Rig {
     stopper_calls: Arc<AtomicU64>,
+    state_at_stop: Arc<Mutex<Option<RecordingState>>>,
     _temp: TempDir,
     root: PathBuf,
     handle: FakeHandle,
@@ -225,6 +241,7 @@ impl Rig {
         };
 
         let stopper_calls = Arc::new(AtomicU64::new(0));
+        let state_at_stop = Arc::new(Mutex::new(None));
         let status = Arc::new(StatusShared::new());
         let _ = status.tracks.set(vec![TrackCounters::new("mic", "mic")]);
         let free = Arc::new(FreeBytes(AtomicU64::new(100 << 30)));
@@ -251,11 +268,14 @@ impl Rig {
                 handle: handle.clone(),
                 calls: Arc::clone(&stopper_calls),
                 final_block: opts.final_block,
+                root: root.clone(),
+                state_at_stop: Arc::clone(&state_at_stop),
             }),
         )
         .unwrap();
         Self {
             stopper_calls,
+            state_at_stop,
             _temp: temp,
             root,
             handle,
@@ -1219,4 +1239,79 @@ fn the_size_limit_stops_the_source_first() {
     );
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     assert_eq!(done.track().frames, done.handle.position());
+}
+
+// ---- Codex review of 1b, round 3: a real full disk ends the source too ----------
+
+/// What the manifest said when the source was stopped, and whether the source is
+/// still running after the track has ended on a real write error.
+fn assert_source_stopped_before_the_manifest_is_final(rig: &Rig) {
+    assert_eq!(rig.stopper_calls.load(Ordering::SeqCst), 1);
+    assert!(!rig.handle.running(), "the source is still capturing");
+    assert_eq!(
+        *rig.state_at_stop.lock().unwrap(),
+        Some(RecordingState::Recording),
+        "the source was stopped only after the manifest was final"
+    );
+}
+
+#[test]
+fn a_write_error_from_a_full_disk_stops_the_source_before_the_manifest_is_final() {
+    let mut rig = Rig::new(Opts {
+        disk_full_after: Some(TRACK_HEADER_LEN as u64 + 20_000),
+        final_block: ms(30),
+        ..Opts::default()
+    });
+    for _ in 0..200 {
+        rig.handle.deliver(ms(10));
+        rig.pump();
+    }
+    assert_eq!(rig.track_status().ended, Some(EndedReason::DiskFull));
+    assert_source_stopped_before_the_manifest_is_final(&rig);
+    let done = rig.finished_by_itself();
+    assert_eq!(done.track().ended_reason, Some(EndedReason::DiskFull));
+    assert_eq!(done.on_disk().state, RecordingState::Complete);
+    assert_eq!(
+        done.handle.frames_dropped(),
+        0,
+        "a stopped source drops nothing"
+    );
+}
+
+#[test]
+fn a_full_disk_at_the_periodic_sync_stops_the_source_before_the_manifest_is_final() {
+    let mut rig = Rig::new(Opts {
+        final_block: ms(30),
+        ..Opts::default()
+    });
+    rig.handle.deliver(ms(300));
+    rig.pump();
+    rig.core
+        .writer_for_tests()
+        .inject_journal_sync_failure("mic");
+    // Past the sync interval: the next periodic pass syncs and fails.
+    rig.handle.deliver(ms(100));
+    rig.handle.idle(Duration::from_secs(11));
+    rig.pump();
+    assert_eq!(rig.track_status().ended, Some(EndedReason::DiskFull));
+    assert_source_stopped_before_the_manifest_is_final(&rig);
+    let done = rig.finished_by_itself();
+    assert_eq!(done.track().ended_reason, Some(EndedReason::DiskFull));
+    assert_eq!(done.on_disk().state, RecordingState::Complete);
+}
+
+#[test]
+fn a_full_disk_when_the_track_is_finished_stops_the_source_once() {
+    // The user's stop and the final write meet a full disk: the source was
+    // stopped by the shutdown owner already; the core asks for it once more
+    // at most (idempotent), never before the manifest is final.
+    let rig = Rig::new(Opts {
+        disk_full_after: Some(TRACK_HEADER_LEN as u64 + 14_000),
+        ..Opts::default()
+    });
+    rig.handle.deliver(ms(250));
+    let calls = Arc::clone(&rig.stopper_calls);
+    let done = rig.finish();
+    assert_eq!(done.track().ended_reason, Some(EndedReason::DiskFull));
+    assert!(calls.load(Ordering::SeqCst) <= 1);
 }

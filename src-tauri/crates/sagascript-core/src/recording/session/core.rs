@@ -370,10 +370,7 @@ impl SessionCore {
         if self.pipes[index].ended {
             return Ok(());
         }
-        if !self.pipes[index].source_stopped {
-            self.pipes[index].source_stopped = true;
-            self.stopper.stop_source(index);
-        }
+        self.stop_source_once(index);
         while let Some(block) = self.pipes[index].receiver.pop() {
             if !self.pipes[index].ended {
                 let now = self.clock.now_ns();
@@ -611,7 +608,24 @@ impl SessionCore {
         self.cut_back(index)
     }
 
+    /// Stop the source of a track that is ending by itself, through the
+    /// session's source set (the one owner of shutdown), once.
+    fn stop_source_once(&mut self, index: usize) {
+        if !self.pipes[index].source_stopped {
+            self.pipes[index].source_stopped = true;
+            self.stopper.stop_source(index);
+        }
+    }
+
+    /// The track ends here because the disk is full. What it still has queued
+    /// cannot be written and is let go of, but its source is stopped first,
+    /// through the same owner as every other ending, so capture does not run
+    /// on after the track has ended, or after the manifest is final.
     fn cut_back(&mut self, index: usize) -> Result<(), RecordingError> {
+        self.stop_source_once(index);
+        while let Some(block) = self.pipes[index].receiver.pop() {
+            self.pipes[index].receiver.recycle(block);
+        }
         let id = self.pipes[index].id.clone();
         if !self.writer().is_track_finished(&id) {
             self.writer().abort_track(&id, EndedReason::DiskFull)?;
