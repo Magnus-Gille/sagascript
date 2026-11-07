@@ -131,6 +131,11 @@ struct BinFacts {
     volume_bytes: Option<u64>,
     /// What the folder holds.
     folder_bytes: u64,
+    /// A read that decides the answer failed (a registry value that exists
+    /// but cannot be read, a file of the folder whose size is unknown, the
+    /// volume's settings key that cannot be named). Never "no setting" or
+    /// "0 bytes".
+    unreadable: bool,
 }
 
 /// Why a recording is not moved to the Recycle Bin.
@@ -141,6 +146,7 @@ enum BinRefusal {
     BinOff,
     TooLarge,
     Unknown,
+    Unreadable,
 }
 
 /// The share of a volume Windows keeps for its bin when no quota is set. The
@@ -157,6 +163,9 @@ fn recycle_guaranteed(facts: &BinFacts) -> Result<(), BinRefusal> {
     }
     if facts.bin_off {
         return Err(BinRefusal::BinOff);
+    }
+    if facts.unreadable {
+        return Err(BinRefusal::Unreadable);
     }
     let quota = facts.quota_bytes.or_else(|| {
         facts
@@ -180,6 +189,9 @@ fn refusal_error(refusal: BinRefusal) -> CommandError {
         BinRefusal::BinOff => "The Recycle Bin is switched off for this drive.",
         BinRefusal::TooLarge => "This recording is larger than the Recycle Bin of its drive can hold.",
         BinRefusal::Unknown => "Windows did not say whether the Recycle Bin can hold this recording.",
+        BinRefusal::Unreadable => {
+            "The Recycle Bin settings of this drive or the size of the recording could not be read."
+        }
     };
     CommandError::Unavailable(format!(
         "{why} It was not deleted. Delete the folder in File Explorer if you want it gone for good."
@@ -192,7 +204,7 @@ mod platform {
     use std::path::Path;
 
     use windows::core::HSTRING;
-    use windows::Win32::Foundation::ERROR_SUCCESS;
+    use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND, ERROR_SUCCESS};
     use windows::Win32::System::Com::{
         CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_ALL, COINIT_APARTMENTTHREADED,
     };
@@ -219,7 +231,17 @@ mod platform {
         text.encode_wide().chain(std::iter::once(0)).collect()
     }
 
-    fn reg_dword(root: HKEY, subkey: &str, name: &str) -> Option<u32> {
+    /// What reading one registry DWORD gave.
+    enum Reg {
+        Value(u32),
+        /// The key or value does not exist: the setting is at its default.
+        Absent,
+        /// Anything else (access denied, a value of another type, ...): the
+        /// setting may exist and is not known.
+        Failed,
+    }
+
+    fn reg_dword(root: HKEY, subkey: &str, name: &str) -> Reg {
         let subkey = HSTRING::from(subkey);
         let name = HSTRING::from(name);
         let mut value: u32 = 0;
@@ -237,36 +259,43 @@ mod platform {
                 Some(&mut size),
             )
         };
-        (status == ERROR_SUCCESS).then_some(value)
+        if status == ERROR_SUCCESS {
+            Reg::Value(value)
+        } else if status == ERROR_FILE_NOT_FOUND || status == ERROR_PATH_NOT_FOUND {
+            Reg::Absent
+        } else {
+            Reg::Failed
+        }
     }
 
-    /// The bytes in `dir`, files only, links not followed.
-    fn folder_bytes(dir: &Path) -> u64 {
+    /// The bytes in `dir`, files only, links not followed; `None` when any
+    /// part of the folder could not be read (an unknown size is not 0).
+    fn folder_bytes(dir: &Path) -> Option<u64> {
         let mut total = 0;
         let mut pending = vec![dir.to_path_buf()];
         while let Some(dir) = pending.pop() {
-            let Ok(entries) = std::fs::read_dir(&dir) else {
-                continue;
-            };
-            for entry in entries.flatten() {
-                match entry.file_type() {
-                    Ok(kind) if kind.is_dir() => pending.push(entry.path()),
-                    Ok(kind) if kind.is_file() => {
-                        total += entry.metadata().map_or(0, |metadata| metadata.len());
-                    }
-                    _ => {}
+            for entry in std::fs::read_dir(&dir).ok()? {
+                let entry = entry.ok()?;
+                let kind = entry.file_type().ok()?;
+                if kind.is_dir() {
+                    pending.push(entry.path());
+                } else if kind.is_file() {
+                    total += entry.metadata().ok()?.len();
                 }
             }
         }
-        total
+        Some(total)
     }
 
-    /// What Windows says about the Recycle Bin for the volume of `path`.
+    /// What Windows says about the Recycle Bin for the volume of `path`. A
+    /// read that fails where the answer matters sets `unreadable`: the caller
+    /// refuses, it does not assume the default.
     fn bin_facts(path: &Path) -> BinFacts {
-        let mut facts = BinFacts {
-            folder_bytes: folder_bytes(path),
-            ..BinFacts::default()
-        };
+        let mut facts = BinFacts::default();
+        match folder_bytes(path) {
+            Some(bytes) => facts.folder_bytes = bytes,
+            None => facts.unreadable = true,
+        }
         let wide_path = wide(path.as_os_str());
         let mut root = vec![0u16; 1024];
         // SAFETY: `wide_path` is NUL terminated and `root` has the length passed.
@@ -305,22 +334,40 @@ mod platform {
                 .to_owned();
             format!(r"{BIN_KEY}\Volume\{guid}")
         });
-        let nuke = |key: &str| reg_dword(HKEY_CURRENT_USER, key, "NukeOnDelete") == Some(1);
+        if volume_key.is_none() {
+            // Without the volume's key its settings cannot be looked at.
+            facts.unreadable = true;
+        }
+        let unreadable = std::cell::Cell::new(false);
+        let read = |hive: HKEY, key: &str, name: &str| match reg_dword(hive, key, name) {
+            Reg::Value(value) => Some(value),
+            Reg::Absent => None,
+            Reg::Failed => {
+                unreadable.set(true);
+                None
+            }
+        };
+        let nuke = |key: &str| read(HKEY_CURRENT_USER, key, "NukeOnDelete") == Some(1);
         facts.bin_off = nuke(BIN_KEY)
             || volume_key.as_deref().is_some_and(nuke)
             || [HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE]
                 .into_iter()
-                .any(|hive| reg_dword(hive, POLICY_KEY, "NoRecycleFiles") == Some(1));
+                .any(|hive| read(hive, POLICY_KEY, "NoRecycleFiles") == Some(1));
         facts.quota_bytes = volume_key
             .as_deref()
-            .and_then(|key| reg_dword(HKEY_CURRENT_USER, key, "MaxCapacity"))
+            .and_then(|key| read(HKEY_CURRENT_USER, key, "MaxCapacity"))
             .map(|megabytes| u64::from(megabytes) * MIB);
+        facts.unreadable |= unreadable.get();
         facts
     }
 
     /// `IFileOperation::DeleteItem` with `FOFX_RECYCLEONDELETE`: the item is
-    /// recycled or the operation fails. `FOF_WANTNUKEWARNING` stays as a
-    /// second line: if the shell ever means to delete for good anyway, it asks.
+    /// meant to be recycled or the operation to fail. That behaviour is not
+    /// documented well enough to rely on alone, and it has not been observed on
+    /// Windows from here, so `FOF_WANTNUKEWARNING` stays: if the shell ever
+    /// means to delete for good anyway it asks instead of doing it silently.
+    /// Remove it once the hardware checklist has shown that the flag alone
+    /// fails closed.
     /// Returns whether the shell aborted the operation.
     fn recycle(path: &str) -> windows::core::Result<bool> {
         // SAFETY: COM is initialised for this thread (and released below), and

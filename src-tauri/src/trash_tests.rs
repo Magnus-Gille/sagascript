@@ -138,6 +138,7 @@ fn good() -> BinFacts {
         quota_bytes: Some(10 * 1024 * 1024 * 1024),
         volume_bytes: Some(500 * 1024 * 1024 * 1024),
         folder_bytes: 600 * 1024 * 1024,
+        unreadable: false,
     }
 }
 
@@ -213,6 +214,25 @@ fn without_an_explicit_quota_a_low_estimate_of_the_default_is_used() {
     assert_eq!(recycle_guaranteed(&facts), Ok(()));
 }
 
+/// A registry value that cannot be read, a file of the folder whose size is
+/// unknown, a volume key that cannot be named: none of them is "no setting" or
+/// "0 bytes", whatever else the facts say.
+#[test]
+fn a_read_that_failed_is_refused_even_when_everything_else_looks_fine() {
+    let facts = BinFacts {
+        unreadable: true,
+        ..good()
+    };
+    assert_eq!(recycle_guaranteed(&facts), Err(BinRefusal::Unreadable));
+    // The drive type is judged first, a known switched-off bin before a read error.
+    let facts = BinFacts {
+        unreadable: true,
+        drive_type: Some(4),
+        ..good()
+    };
+    assert_eq!(recycle_guaranteed(&facts), Err(BinRefusal::NoBin));
+}
+
 #[test]
 fn what_cannot_be_established_is_refused() {
     let facts = BinFacts {
@@ -230,6 +250,7 @@ fn every_refusal_says_the_recording_was_not_deleted_and_carries_no_path() {
         BinRefusal::BinOff,
         BinRefusal::TooLarge,
         BinRefusal::Unknown,
+        BinRefusal::Unreadable,
     ] {
         let error = refusal_error(refusal);
         assert_eq!(error.code(), "unavailable");
