@@ -56,20 +56,24 @@ Tick each line per OS (macOS / Windows); note the build identity (tray menu) nex
 ## Delete, reveal, recover
 
 - [ ] macOS: "Move to Trash" puts the folder in the Trash (Put Back works).
-- [ ] Windows: it goes to the Recycle Bin (`SHFileOperationW` with `FOF_ALLOWUNDO`); it can be
-      restored; a path with non-ASCII characters works.
+- [ ] Windows: it goes to the Recycle Bin (`IFileOperation`, see below); it can be restored; a
+      path with non-ASCII characters works.
 - [ ] Windows: the move goes through `IFileOperation` with `FOFX_RECYCLEONDELETE` and never
       deletes for good. It is refused up front (the folder is **still there** afterwards, the
       window says "It was not deleted") for each of: a mapped network drive, a UNC share and a USB
       stick (no Recycle Bin); a fixed disk with "Don't move files to the Recycle Bin" ticked in the
       bin's properties; a recording larger than the bin's maximum size (set a small maximum in the
-      properties, or use a recording over 5 % of a small disk). A normal fixed disk works and the
-      folder can be restored from the bin.
+      properties, or use a recording over 5 % of a small disk); a bin setting or a file of the
+      recording that cannot be read (deny read access to one file of a recording folder, or to the
+      bin's registry key: any read that fails refuses, it never counts as "no setting" or
+      "0 bytes"). A normal fixed disk works and the folder can be restored from the bin.
 - [ ] Windows: confirm that `FOFX_RECYCLEONDELETE` really fails instead of deleting when the
       up-front checks are bypassed (the checks read the bin's registry settings under
       `...\Explorer\BitBucket\Volume\{GUID}` and estimate a default quota of 5 % of the volume;
       neither is documented). If Windows asks "permanently delete?" at any point, answer No and
-      report it: the registry layout or the estimate is wrong for that setup.
+      report it: the registry layout or the estimate is wrong for that setup. If the flag alone
+      fails closed in every case above, `FOF_WANTNUKEWARNING` in `src/trash.rs` can go (it stays
+      until then: answering Yes to its prompt would delete for good).
 - [ ] Windows: moving a recording to the Recycle Bin while the lock is held works. The app holds
       `recording.lock` open during the move; if the shell refuses to move a folder with an open
       file, the delete fails with an error and the folder stays: report it, the lock handling
@@ -94,3 +98,36 @@ Tick each line per OS (macOS / Windows); note the build identity (tray menu) nex
       people") appear once each and read correctly; they do not return after being answered.
 - [ ] The Record window opens from the tray ("Record…") at about 460 x 680, reopens to the same
       window, and fits a small screen.
+
+## Left over from phases 1a and 1b (platform code that could not run here)
+
+Windows code below compiles for `x86_64-pc-windows-msvc` but has never run; the macOS items need
+a real device.
+
+- [ ] Windows, hard links and link swaps: a hard link to a track file planted in a recording
+      folder is **not detected on Windows** (`recording/io.rs` checks `st_nlink` on Unix only;
+      detecting it needs another `windows-sys` feature). Plant one, start a recovery of that
+      folder, and see what it does to the link's other name; decide whether the feature is worth
+      adding. A symbolic link or junction swapped in for a track, journal or manifest between
+      the check and the open must be refused (`recording_not_regular_file`), never followed.
+- [ ] Windows, device identity: Windows devices are told apart by **name** only. With two
+      identical USB microphones (same name), switching the default input from one to the other
+      mid-recording should end the track with `device_changed`; if it does not, record that as
+      a known limitation of name-only identity.
+- [ ] Windows, sleep and volumes: a short sleep (under a minute) and a long one during a
+      recording are noticed (the `QueryInterruptTime` clock pair; Windows 10 or later) and show as
+      a gap or an early end. The volume classification names FAT32, exFAT, network and OneDrive
+      folders correctly (`recording/session/win_volume.rs`), including a mapped drive and a UNC
+      path.
+- [ ] macOS, device identity on a real microphone: the CoreAudio device id is read from
+      `cpal`'s `Debug` text (fragile across `cpal` versions). With the built-in microphone, a USB
+      microphone and two identical USB microphones, switching the default input mid-recording
+      ends the track with `device_changed`; an id that cannot be read must fall back to the name
+      without a false "device changed" on every start.
+- [ ] macOS, the Trash move while the app holds `recording.lock`: Put Back works afterwards and
+      the folder is complete (the lock file inside it is harmless).
+- [ ] Both: `sagascript record --transcribe` with a real model on a short real recording prints
+      the text (the happy path was never run against a model), and Ctrl+C or `kill -TERM` during
+      the first second of `sagascript record` (the source is still starting) still finishes and
+      saves the recording.
+- [ ] Both: FLAC playback in the web view (see Playback) decides `RECORDING_PLAYBACK_FALLBACK`.
