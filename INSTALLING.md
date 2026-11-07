@@ -38,7 +38,7 @@ standalone `-CLI.exe` and `-Portable.exe` files are single files without `engine
 
 On first launch, Sagascript will walk you through setup:
 
-1. **Language** — pick your primary dictation language (English, Swedish, or Norwegian)
+1. **Language** — pick your primary dictation language (English, Swedish, Norwegian, Finnish, or Danish)
 2. **Speech engine download** — downloads the recommended Whisper model for your language (55-142 MB)
 3. **Microphone permission** (macOS) — required for live dictation
 4. **Accessibility permission** (macOS) — allows auto-paste into any app after dictation

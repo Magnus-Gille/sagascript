@@ -64,24 +64,29 @@ pub async fn transcribe_file(
             settings.effective_file_model_for(language)?
         };
         match resolved {
-            FileModel::PianissimoOriginal => Some(Glossary::parse(
-                &settings.effective_glossary_source_with_prompt(
+            FileModel::Pianissimo(model) => Some((
+                model,
+                Glossary::parse(&settings.effective_glossary_source_with_prompt(
                     profile_id.as_deref(),
                     prompt.as_deref(),
-                ),
+                )),
             )),
             FileModel::Whisper(_) => None,
         }
     };
-    if let Some(glossary) = pianissimo_glossary {
+    if let Some((model, glossary)) = pianissimo_glossary {
         if diarize.unwrap_or(false) {
-            return Err(SettingsError::PianissimoNotForDiarization.into());
+            return Err(SettingsError::PianissimoNotForDiarization {
+                language: model.language().display_name(),
+            }
+            .into());
         }
         let text = crate::plain_file_jobs::transcribe_pianissimo(
             app.clone(),
             jobs.inner().clone(),
             result_id.clone(),
             file_path,
+            model,
             glossary,
         )
         .await?;

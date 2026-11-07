@@ -47,50 +47,5 @@
     "no-useless-escape": {
       "count": 6
     }
-  },
-  "src/lib/FileTranscription.svelte": {
-    "@typescript-eslint/no-unused-vars": {
-      "count": 3
-    }
-  },
-  "src/lib/MeetingReprocessing.svelte": {
-    "@typescript-eslint/no-unused-vars": {
-      "count": 1
-    },
-    "svelte/require-each-key": {
-      "count": 5
-    }
-  },
-  "src/lib/MeetingReview.svelte": {
-    "svelte/prefer-svelte-reactivity": {
-      "count": 1
-    }
-  },
-  "src/lib/Onboarding.svelte": {
-    "@typescript-eslint/no-unused-vars": {
-      "count": 2
-    },
-    "svelte/require-each-key": {
-      "count": 2
-    }
-  },
-  "src/lib/Settings.svelte": {
-    "@typescript-eslint/no-unused-vars": {
-      "count": 2
-    },
-    "no-useless-assignment": {
-      "count": 1
-    },
-    "svelte/no-useless-mustaches": {
-      "count": 1
-    },
-    "svelte/require-each-key": {
-      "count": 2
-    }
-  },
-  "src/lib/profile-shortcuts.ts": {
-    "@typescript-eslint/no-unused-vars": {
-      "count": 1
-    }
   }
 }

@@ -8,6 +8,7 @@
 // frontend code listens for are `Internal` in the Rust catalogue and are not
 // listed here.
 import type { EngineLoadState, HotkeyProfile, HotkeyStatus } from "./api";
+import type { BackendError } from "./errors";
 
 /**
  * The `state-changed` payload: the dictation state, plus `settings_reloaded`,
@@ -37,7 +38,8 @@ export interface ModelDownloadProgress {
 export interface EventMap {
   "state-changed": UiState;
   "transcription-result": string;
-  error: string;
+  /** A dictation error: what a failed command rejects with (ADR 0006), so the window decides by `code` and shows `message`. */
+  error: BackendError;
   "model-download-progress": ModelDownloadProgress;
   "model-ready": null;
   "plain-transcription-progress": PlainTranscriptionProgress;

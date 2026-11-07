@@ -11,9 +11,10 @@ use crate::platform;
 /// Pre-warm the engine on its own thread. The thread reads the settings file
 /// (`machine::load`) when it attaches to the engine, not the caller, which is
 /// the hotkey path or a wake callback.
-fn warm_in_background(reason: &'static str) {
+fn warm_in_background(reason: &'static str, model: sagascript_core::models::PianissimoModel) {
     sagascript_core::transcription::pianissimo_backend::warm_in_background(
         reason,
+        model,
         sagascript_core::machine::load,
     );
 }

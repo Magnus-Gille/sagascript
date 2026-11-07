@@ -9,8 +9,11 @@ use std::time::{Duration, Instant};
 
 use clap::{Args, Subcommand};
 use sagascript_core::error::DictationError;
+use sagascript_core::models::PianissimoModel;
+use sagascript_core::path_scrub::scrub_paths;
 use sagascript_core::transcription::engine_host::{
-    pipeline, CancelToken, EngineHostClient, EngineHostConfig,
+    pipeline, CancelToken, EngineHostClient, EngineHostConfig, EngineHostError, ErrorCode,
+    WarmResult,
 };
 use sagascript_core::transcription::{pianissimo_backend, pianissimo_model};
 use serde_json::{json, Value};
@@ -39,14 +42,18 @@ report says so and exits zero.
 
 The host is found in the copy bundled with the app (Sagascript.app, or engine-host\\ beside the Windows executable). Development builds \
 (debug, or built with the `dev-overrides` feature) also honor \
-SAGASCRIPT_ENGINE_HOST and SAGASCRIPT_PIANISSIMO_MODEL_DIR (an existing model \
-directory instead of the downloaded one); release builds ignore both.",
-        after_long_help = "EXAMPLES:\n  sagascript engine status\n  sagascript engine status --json"
+SAGASCRIPT_ENGINE_HOST and SAGASCRIPT_PIANISSIMO_MODEL_DIR or \
+SAGASCRIPT_PIANISSIMO_DA_MODEL_DIR (an existing model directory instead of the \
+downloaded one); release builds ignore them.",
+        after_long_help = "EXAMPLES:\n  sagascript engine status\n  sagascript engine status --json --model pianissimo-da"
     )]
     Status {
         /// Machine-readable JSON on stdout
         #[arg(long)]
         json: bool,
+        /// Pianissimo model to report on (pianissimo-sv, pianissimo-da)
+        #[arg(long, value_name = "ID", default_value = "pianissimo-sv", value_parser = parse_pianissimo)]
+        model: PianissimoModel,
     },
     /// Check that the engine works end to end
     #[command(
@@ -71,35 +78,73 @@ the app runs at startup) and reports how many it removed and how many are in use
         /// Re-hash all model files instead of trusting verification stamps
         #[arg(long)]
         verify_model: bool,
+        /// Pianissimo model to check (pianissimo-sv, pianissimo-da)
+        #[arg(long, value_name = "ID", default_value = "pianissimo-sv", value_parser = parse_pianissimo)]
+        model: PianissimoModel,
     },
     /// Load the model and hold the engine warm
     #[command(
         long_about = "\
 Start the engine host, load the Pianissimo model and keep it loaded until \
 Ctrl+C or --seconds elapse. Idle unloading is disabled while holding. Useful for \
-benchmarking warm latency or smoke-testing a signed build.",
-        after_long_help = "EXAMPLES:\n  sagascript engine warm --seconds 30"
+benchmarking warm latency or smoke-testing a signed build.
+
+After the load it runs one canary prediction, as the app does on push-to-talk \
+key-down, and prints its time. --canary-every repeats it while holding: a canary \
+that takes seconds instead of milliseconds means macOS had evicted the model's \
+Neural Engine program and the canary recompiled it (#397). A canary still \
+running when --seconds elapse is waited for (it may be recompiling); a failed \
+canary makes the command exit non-zero once the hold ends.",
+        after_long_help = "EXAMPLES:\n  sagascript engine warm --seconds 30\n  sagascript engine warm --model pianissimo-da --seconds 30\n  sagascript engine warm --seconds 3600 --canary-every 300"
     )]
     Warm {
         /// Stop after this many seconds (default: until Ctrl+C)
         #[arg(long, value_name = "N")]
         seconds: Option<u64>,
+        /// While holding, run a canary prediction every N seconds and print its time
+        #[arg(long, value_name = "N", value_parser = clap::value_parser!(u64).range(1..))]
+        canary_every: Option<u64>,
+        /// Pianissimo model to load (pianissimo-sv, pianissimo-da)
+        #[arg(long, value_name = "ID", default_value = "pianissimo-sv", value_parser = parse_pianissimo)]
+        model: PianissimoModel,
     },
+}
+
+/// `--model` of the engine commands: a Pianissimo model id.
+fn parse_pianissimo(id: &str) -> Result<PianissimoModel, String> {
+    PianissimoModel::from_id(id).ok_or_else(|| {
+        let ids: Vec<&str> = PianissimoModel::ALL
+            .iter()
+            .map(|model| model.id())
+            .collect();
+        format!(
+            "unknown Pianissimo model '{id}' (expected {})",
+            ids.join(", ")
+        )
+    })
 }
 
 pub fn run(args: EngineArgs, out: &Out) -> Result<(), CliError> {
     match args.action {
-        EngineAction::Status { json } => {
-            let probe = Probe::detect();
+        EngineAction::Status { json, model } => {
+            let probe = Probe::detect(model);
             let report = status_report(&probe);
             print_status(&report, json, out)?;
             Ok(())
         }
-        EngineAction::Doctor { json, verify_model } => {
-            let probe = Probe::detect();
+        EngineAction::Doctor {
+            json,
+            verify_model,
+            model,
+        } => {
+            let probe = Probe::detect(model);
             doctor(&probe, verify_model, json, out)
         }
-        EngineAction::Warm { seconds } => Ok(warm(seconds, out)?),
+        EngineAction::Warm {
+            seconds,
+            canary_every,
+            model,
+        } => Ok(warm(seconds, canary_every, model, out)?),
     }
 }
 
@@ -130,6 +175,7 @@ pub struct Probe {
     pub os: String,
     pub arch: String,
     pub host: Option<(PathBuf, &'static str)>,
+    pub model: PianissimoModel,
     pub model_id: String,
     pub model_dir: PathBuf,
     pub model_overridden: bool,
@@ -140,7 +186,7 @@ pub struct Probe {
 }
 
 impl Probe {
-    pub fn detect() -> Self {
+    pub fn detect(model: PianissimoModel) -> Self {
         let host = pianissimo_backend::resolve_host().map(|path| {
             let source = if std::env::var_os(pianissimo_backend::ENGINE_HOST_ENV)
                 .is_some_and(|value| !value.is_empty())
@@ -152,26 +198,36 @@ impl Probe {
             (path, source)
         });
         let config = host.as_ref().map(|(path, _)| {
-            pianissimo_backend::config_for_host(path.clone(), &sagascript_core::machine::load())
+            pianissimo_backend::config_for_host(
+                path.clone(),
+                &sagascript_core::machine::load(),
+                model,
+            )
         });
         Self {
             supported: pianissimo_backend::runtime_supported_on_this_os(),
             os: std::env::consts::OS.into(),
             arch: std::env::consts::ARCH.into(),
             host,
-            model_id: pianissimo_model::model_id(),
-            model_dir: pianissimo_model::model_dir(),
-            model_overridden: pianissimo_model::is_overridden(),
-            model_installed: pianissimo_model::is_downloaded(),
+            model,
+            model_id: pianissimo_model::model_id(model),
+            model_dir: pianissimo_model::model_dir(model),
+            model_overridden: pianissimo_model::is_overridden(model),
+            model_installed: pianissimo_model::is_downloaded(model),
             config,
-            verify: |force| {
-                if force {
-                    pianissimo_model::verify_downloaded_forced()
-                } else {
-                    pianissimo_model::verify_downloaded()
-                }
+            verify: match model {
+                PianissimoModel::Swedish => |force| verify_model(PianissimoModel::Swedish, force),
+                PianissimoModel::Danish => |force| verify_model(PianissimoModel::Danish, force),
             },
         }
+    }
+}
+
+fn verify_model(model: PianissimoModel, force: bool) -> Result<(), DictationError> {
+    if force {
+        pianissimo_model::verify_downloaded_forced(model)
+    } else {
+        pianissimo_model::verify_downloaded(model)
     }
 }
 
@@ -465,8 +521,9 @@ fn doctor_steps(probe: &Probe, verify_model: bool) -> DoctorReport {
         Ok(probe.model_dir.display().to_string())
     } else {
         Err(format!(
-            "model {} is not installed. Run: sagascript download-model pianissimo-sv",
-            probe.model_id
+            "model {} is not installed. Run: sagascript download-model {}",
+            probe.model_id,
+            probe.model.id()
         ))
     };
     if !step("model_installed", t, installed) {
@@ -590,9 +647,60 @@ fn print_doctor(report: &DoctorReport, json: bool, out: &Out) -> Result<(), Writ
 
 // ---- warm -----------------------------------------------------------------
 
-fn warm(seconds: Option<u64>, out: &Out) -> Result<(), DictationError> {
-    let config = pianissimo_backend::engine_config(&sagascript_core::machine::load())?;
-    pianissimo_model::verify_downloaded()?;
+/// One line for a `warm` canary result (or why there was none), and whether
+/// the canary failed. A host that predates `warm` is not a failure.
+fn canary_report(result: &Result<WarmResult, EngineHostError>) -> (String, bool) {
+    match result {
+        Ok(WarmResult {
+            ran: true,
+            canary_ms,
+            probable_recompile,
+            ..
+        }) => (
+            format!(
+                "Canary {} ms{}",
+                canary_ms.unwrap_or_default(),
+                if *probable_recompile == Some(true) {
+                    " (probable Neural Engine recompile)"
+                } else {
+                    ""
+                }
+            ),
+            false,
+        ),
+        Ok(WarmResult { skipped, .. }) => (
+            format!("Canary skipped: {}", skipped.as_deref().unwrap_or("?")),
+            false,
+        ),
+        Err(EngineHostError::Remote {
+            code: ErrorCode::Unsupported,
+            ..
+        }) => (
+            "Canary not supported by this engine host".to_string(),
+            false,
+        ),
+        Err(error) => (
+            format!("Canary failed: {}", scrub_paths(&error.to_string())),
+            true,
+        ),
+    }
+}
+
+/// Runs one canary and returns its line, counting a failure in `failures`.
+fn run_canary(client: &EngineHostClient, failures: &mut u32) -> String {
+    let (line, failed) = canary_report(&client.warm_canary());
+    *failures += u32::from(failed);
+    line
+}
+
+fn warm(
+    seconds: Option<u64>,
+    canary_every: Option<u64>,
+    model: PianissimoModel,
+    out: &Out,
+) -> Result<(), DictationError> {
+    let config = pianissimo_backend::engine_config(&sagascript_core::machine::load(), model)?;
+    pianissimo_model::verify_downloaded(model)?;
     let client = quiet(&config);
     let started = Instant::now();
     client
@@ -609,10 +717,26 @@ fn warm(seconds: Option<u64>, out: &Out) -> Result<(), DictationError> {
             None => "Holding until Ctrl+C...".to_string(),
         }
     );
+    // A failed canary does not end the hold; it fails the command at the end.
+    let mut failures = 0;
+    errln!(out, "{}", run_canary(&client, &mut failures));
     let deadline = seconds.map(|n| Instant::now() + Duration::from_secs(n));
+    let every = canary_every.map(Duration::from_secs);
+    let mut next_canary = every.map(|every| Instant::now() + every);
     loop {
         if deadline.is_some_and(|d| Instant::now() >= d) {
             break;
+        }
+        if let (Some(at), Some(every)) = (next_canary, every) {
+            if Instant::now() >= at {
+                errln!(
+                    out,
+                    "{:>6.0} s: {}",
+                    started.elapsed().as_secs_f64(),
+                    run_canary(&client, &mut failures)
+                );
+                next_canary = Some(Instant::now() + every);
+            }
         }
         // Detect a host that died while holding; Ctrl+C ends the process and the
         // host exits on stdin EOF.
@@ -625,6 +749,11 @@ fn warm(seconds: Option<u64>, out: &Out) -> Result<(), DictationError> {
         std::thread::sleep(Duration::from_millis(200));
     }
     client.shutdown();
+    if failures > 0 {
+        return Err(DictationError::TranscriptionFailed(format!(
+            "{failures} canary prediction(s) failed"
+        )));
+    }
     Ok(())
 }
 
@@ -742,6 +871,7 @@ mod tests {
             os: "testos".into(),
             arch: "testarch".into(),
             host: Some((host, "env")),
+            model: PianissimoModel::Swedish,
             model_id: "pianissimo-sv-coreml-test".into(),
             model_dir: "/models/ok".into(),
             model_overridden: false,
@@ -929,5 +1059,56 @@ mod tests {
         std::env::remove_var("ENGINE_TEST_FORCE_FAILS");
         assert!(normal.ok, "{:?}", normal.steps);
         assert_eq!(forced.failed_step.as_deref(), Some("model_verified"));
+    }
+
+    #[test]
+    fn only_a_failed_canary_fails_engine_warm() {
+        let ran = Ok(WarmResult {
+            ran: true,
+            skipped: None,
+            canary_ms: Some(1200),
+            probable_recompile: Some(true),
+        });
+        assert_eq!(
+            canary_report(&ran),
+            (
+                "Canary 1200 ms (probable Neural Engine recompile)".into(),
+                false
+            )
+        );
+        let skipped = Ok(WarmResult {
+            ran: false,
+            skipped: Some("recent".into()),
+            canary_ms: None,
+            probable_recompile: None,
+        });
+        assert_eq!(
+            canary_report(&skipped),
+            ("Canary skipped: recent".into(), false)
+        );
+        // A host that predates `warm` (#397) is tolerated, not a failure.
+        let unsupported = Err(EngineHostError::Remote {
+            code: ErrorCode::Unsupported,
+            message: "unknown op".into(),
+            retryable: false,
+        });
+        assert_eq!(
+            canary_report(&unsupported),
+            ("Canary not supported by this engine host".into(), false)
+        );
+        let failed = Err(EngineHostError::Remote {
+            code: ErrorCode::Engine,
+            message: "/Users/someone/Model.mlmodelc failed".into(),
+            retryable: false,
+        });
+        let (line, is_failure) = canary_report(&failed);
+        assert!(is_failure, "{line}");
+        assert!(line.starts_with("Canary failed:"), "{line}");
+        assert!(!line.contains("/Users/someone"), "{line}");
+        let timed_out = Err(EngineHostError::Timeout {
+            op: "warm",
+            after: Duration::from_secs(180),
+        });
+        assert!(canary_report(&timed_out).1);
     }
 }

@@ -300,6 +300,24 @@ mod tests {
     }
 
     #[test]
+    fn pending_microphone_permission_keeps_the_shared_cli_code_and_message() {
+        let (out, captured) = Out::capture();
+        let error = DictationError::MicrophonePermissionPending;
+        assert!(error.retryable());
+        let exit = conclude(Err(error.into()), Some(JsonOutput::Pretty), &out, None);
+
+        assert_eq!(exit, Exit::Failure);
+        assert_eq!(
+            captured.stdout(),
+            "{\n  \"status\": \"error\",\n  \"code\": \"microphone_permission_pending\",\n  \"error\": \"Microphone permission is awaiting your response. Choose Allow in the macOS dialog, then start recording again.\"\n}\n"
+        );
+        assert_eq!(
+            captured.stderr(),
+            "Error: Microphone permission is awaiting your response. Choose Allow in the macOS dialog, then start recording again.\n"
+        );
+    }
+
+    #[test]
     fn a_failed_jsonl_run_writes_one_error_line() {
         let (out, captured) = Out::capture();
         let error = DictationError::TranscriptionFailed("no model".into());

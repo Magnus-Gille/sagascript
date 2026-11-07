@@ -35,6 +35,7 @@
 //! | `launch_failed` | the OS could not open System Settings or a web page |
 //! | `accessibility_permission_denied` | the Accessibility permission a setting needs is missing |
 //! | `model_download_failed` | a model the command needed could not be downloaded |
+//! | `paste_error` | the automatic paste of a dictation failed (the `error` event; the text is what the paste task reported) |
 //!
 //! A failure whose text is fixed for the user but that has a cause worth
 //! keeping is [`CommandError::because`]: the cause is scrubbed, logged and kept
@@ -126,6 +127,12 @@ pub enum CommandError {
     /// [`DictationError::AccessibilityPermissionDenied`], with this command's text).
     #[error("{0}")]
     AccessibilityPermissionDenied(String),
+    /// The automatic paste of a finished dictation failed (`paste_error`, the
+    /// code of [`DictationError::PasteError`], with the paste task's own text,
+    /// which [`DictationError`] would prefix with "Paste error: "). Sent by the
+    /// hotkey path in the `error` event; the recognized text stays available.
+    #[error("{0}")]
+    PasteFailed(String),
     /// `error`, whose text the user sees, with the cause that produced it. The
     /// cause is scrubbed of absolute paths when it is attached and logged then;
     /// it is never sent to the webview. See [`CommandError::because`].
@@ -158,6 +165,7 @@ impl CommandError {
             Self::LaunchFailed(_) => "launch_failed",
             Self::DownloadFailed(_) => "model_download_failed",
             Self::AccessibilityPermissionDenied(_) => "accessibility_permission_denied",
+            Self::PasteFailed(_) => "paste_error",
             Self::Caused { error, .. } => error.code(),
         }
     }

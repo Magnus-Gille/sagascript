@@ -37,6 +37,13 @@ npm run verify:fast       # checks the setup; its preflight names anything missi
 cargo tauri dev
 ```
 
+Before the first Cargo build, and separately after dependency or lockfile updates, cache locked
+dependencies with `cargo fetch --locked --manifest-path
+src-tauri/Cargo.toml` (and repeat for `src-tauri/engine-host/ort/Cargo.toml` when working on
+the standalone ORT host) using your approved dependency setup. The storage preflight never fetches or
+installs dependencies; keep the Cargo registry/git cache and target directory on disk-backed
+storage.
+
 Two things a fresh clone or worktree needs before the checks below work:
 
 - `npm run build` creates `dist/`. Every cargo command that compiles the app crate (`cargo
@@ -54,6 +61,29 @@ common changes, follow the recipes in [docs/recipes/](docs/recipes/README.md).
 
 `npm run verify` is the one entry point; [scripts/verify.mjs](scripts/verify.mjs) defines every
 check (command, working directory, platforms, prerequisites, time budget, CI lanes).
+
+Routine Cargo dev/test builds use `debug = "line-tables-only"`, matching CI while preserving
+debug assertions, overflow checks, optimization levels, and panic behavior. For a one-off run
+that needs full debug information, opt in through Cargo's profile environment variables:
+
+```bash
+# From src-tauri/; set both profiles when a test builds dev-profile dependencies.
+CARGO_PROFILE_DEV_DEBUG=full CARGO_PROFILE_TEST_DEBUG=full cargo test --workspace
+
+# For the standalone ORT host, use the same variables with its manifest.
+CARGO_PROFILE_DEV_DEBUG=full CARGO_PROFILE_TEST_DEBUG=full \
+  cargo test --manifest-path engine-host/ort/Cargo.toml
+```
+
+The same `CARGO_PROFILE_DEV_DEBUG=full` override applies to `cargo tauri dev` when inspecting
+the app in a full-debug build.
+
+On Linux, verify checks the repository and the effective Cargo target/build directories before
+Cargo build, test, check, clippy, or run steps. It fails closed when those paths are on
+memory-backed filesystems such as tmpfs; set `CARGO_TARGET_DIR` to a disk-backed path and run
+verify again. The check follows Cargo metadata and does not run for rustfmt, frontend-only, or
+synthetic checks. If its locked offline metadata probe reports a cold cache, run the approved
+`cargo fetch --locked --manifest-path ...` command first; the storage preflight does not attempt network access.
 
 ```bash
 npm run verify:fast                      # inner loop: rustfmt, app clippy, svelte-check, Prettier, ESLint, unit and UI node tests
@@ -264,5 +294,45 @@ should happen only for the identity transition, not on every update.
 2. Make your changes, following the code style guidelines above.
 3. Run `npm run verify` (see [Running tests](#running-tests)). A bug fix includes a regression test that fails before the fix ([ADR 0004](docs/adr/0004-test-strategy.md)).
 4. Open a pull request with a clear description of what you changed and why.
+5. A pull request merges when `check-macos` and `check-windows` pass; it does not have to be up to date with `main`. Whoever merges watches the push CI on `main` and fixes or reverts a failure before the next merge ([ADR 0009](docs/adr/0009-merge-without-up-to-date.md)).
 
 Keep PRs focused -- one feature or fix per PR. If you're planning a large change, open an issue first to discuss the approach.
+
+### Read-only microphone diagnostics
+
+Run the same bundle binary used by the GUI:
+
+```sh
+Sagascript.app/Contents/MacOS/sagascript permissions status --json
+```
+
+The versioned report describes **the current CLI process**, not a separately
+running GUI process. It neither opens audio input nor requests permission or
+reads saved settings. On macOS it reports the raw AVFoundation state and whether
+this process has an app bundle identity. `unsupported` on other platforms means
+this probe cannot determine permission; it does not assert a grant. `unknown`
+means the platform query did not return a recognized state. AVFoundation may
+cache state within a process; after changing an OS grant, restart the exact app
+with its existing profile before comparing observations.
+
+The read-only report retains the raw status. Capture separately rechecks an
+already-determined denial through AVFoundation, matching the existing GUI
+recovery behavior; it does not request access for an undetermined state. A failed
+or timed-out recheck preserves the denial. This recheck requires a nonempty
+`NSMicrophoneUsageDescription` in the current process bundle; without it, capture
+retains the denial without requesting access. The denied-state recheck is bounded
+to two seconds; authorized capture does not wait for it.
+
+Both GUI and CLI recording use the shared capture preflight. Explicit `denied`
+or `restricted` states return `microphone_permission_denied` before opening input.
+For a bundled app with a microphone usage description, `not_determined` queues
+an OS permission request without waiting on the recording/main thread and returns
+retryable `microphone_permission_pending` before opening input. The controller
+stays idle: answer the dialog, then explicitly start recording again. A later
+start re-queries permission; nothing records automatically when permission is
+granted. An unbundled CLI retains its host-owned first-use flow because it cannot
+safely issue an app-scoped request without a usage description. The GUI capture log
+records only permission status and bundle-context presence, never audio content,
+so its own observation can be compared without assuming CLI/GUI attribution is
+identical. These diagnostics do not replace physical hotkey/focus or microphone
+acceptance and never reset TCC permissions.

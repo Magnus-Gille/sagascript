@@ -5,7 +5,10 @@ keeping the active review unchanged until a user accepts the result. It covers
 the GUI and the CLI surfaces implemented in
 [`MeetingReprocessing.svelte`](../src/lib/MeetingReprocessing.svelte), the
 Tauri commands in [`meeting_reprocessing_commands.rs`](../src-tauri/src/meeting_reprocessing_commands.rs),
-and the CLI adapters in
+the orchestration in core's
+[`meeting/reprocess/orchestrate.rs`](../src-tauri/crates/sagascript-core/src/meeting/reprocess/orchestrate.rs)
+(and the reading and writing of its documents in
+[`io.rs`](../src-tauri/crates/sagascript-core/src/meeting/reprocess/io.rs)), and the CLI adapters in
 [`meeting_reprocessing_cli.rs`](../src-tauri/crates/sagascript-cli/src/meeting_reprocessing_cli.rs)
 and [`meeting_proposal.rs`](../src-tauri/crates/sagascript-cli/src/meeting_proposal.rs).
 The lower-level invariants are in the
@@ -69,7 +72,7 @@ not permission to silently run a full job.
 These flags are derived in
 [`meeting/reprocess/plan.rs`](../src-tauri/crates/sagascript-core/src/meeting/reprocess/plan.rs)
 and enforced by
-[`meeting_reprocessing.rs`](../src-tauri/crates/sagascript-cli/src/meeting_reprocessing.rs).
+[`meeting/reprocess/orchestrate.rs`](../src-tauri/crates/sagascript-core/src/meeting/reprocess/orchestrate.rs).
 
 ## CLI: explicit files and revisions
 

@@ -10,8 +10,6 @@ mod benchmark_quality;
 pub mod cancel;
 pub mod config;
 pub mod diarization;
-#[cfg(feature = "diarization")]
-mod diarization_cache;
 pub mod engine;
 pub mod exit;
 pub mod glossary;
@@ -19,12 +17,11 @@ pub mod latency;
 pub mod meeting;
 pub mod meeting_proposal;
 #[cfg(feature = "diarization")]
-pub mod meeting_reprocessing;
-#[cfg(feature = "diarization")]
 pub mod meeting_reprocessing_cli;
 pub mod models;
 pub mod open;
 pub mod output;
+pub mod permissions;
 pub(crate) mod run_request;
 #[cfg(feature = "diarization")]
 pub mod speaker_args;
@@ -117,13 +114,15 @@ Workflow:
   2. Transcribe a file:  sagascript transcribe recording.wav
   3. Or record live:      sagascript record
 
-Supported languages: English (en), Swedish (sv), Norwegian (no), Finnish (fi), Auto-detect (auto).
+Supported languages: English (en), Swedish (sv), Norwegian (no), Finnish (fi), Danish (da), Auto-detect (auto).
 Models are downloaded from pinned publisher revisions and stored locally.
 
 NOTE: Auto-detect uses a generic multilingual model which is less accurate \
 than the dedicated language models (KBLab for Swedish, NbAiLab for Norwegian). \
 Finnish uses the generic multilingual Base model by default; optional \
 Finnish-optimized Tiny is available as fi-whisper-tiny. \
+Danish uses pianissimo-da where Pianissimo runs, otherwise the generic \
+multilingual Medium model. \
 For best results, set a specific language.";
 
 #[cfg(not(feature = "record"))]
@@ -140,13 +139,15 @@ Workflow:
   1. Download a model:   sagascript download-model base.en
   2. Transcribe a file:  sagascript transcribe recording.wav
 
-Supported languages: English (en), Swedish (sv), Norwegian (no), Finnish (fi), Auto-detect (auto).
+Supported languages: English (en), Swedish (sv), Norwegian (no), Finnish (fi), Danish (da), Auto-detect (auto).
 Models are downloaded from pinned publisher revisions and stored locally.
 
 NOTE: Auto-detect uses a generic multilingual model which is less accurate \
 than the dedicated language models (KBLab for Swedish, NbAiLab for Norwegian). \
 Finnish uses the generic multilingual Base model by default; optional \
 Finnish-optimized Tiny is available as fi-whisper-tiny. \
+Danish uses pianissimo-da where Pianissimo runs, otherwise the generic \
+multilingual Medium model. \
 For best results, set a specific language.";
 
 #[cfg(feature = "record")]
@@ -267,7 +268,8 @@ By default, uses the language and model from your persisted settings \
 NOTE: --language auto uses a generic multilingual model which is less \
 accurate than the dedicated language models. Finnish uses the generic \
 multilingual Base model by default; optional Finnish-optimized Tiny is \
-available as fi-whisper-tiny.
+available as fi-whisper-tiny. Danish uses pianissimo-da where Pianissimo \
+runs, otherwise the generic multilingual Medium model.
 
 INTERRUPTION: Press Ctrl+C to terminate the CLI invocation. A retry uses a \
 fresh in-process model backend with no on-disk warm-state lock. Re-run the \
@@ -290,6 +292,9 @@ EXAMPLES:
 
   # Transcribe in Finnish with the generic multilingual Base model
   sagascript transcribe tal.m4a --language fi --model base
+
+  # Transcribe in Danish with the generic multilingual Medium model
+  sagascript transcribe tale.m4a --language da --model medium
 
   # Output as JSON (includes metadata)
   sagascript transcribe podcast.mp3 --json
@@ -334,7 +339,8 @@ Use --output to save the raw audio as a WAV file without transcribing \
 NOTE: --language auto uses a generic multilingual model which is less \
 accurate than the dedicated language models. Finnish uses the generic \
 multilingual Base model by default; optional Finnish-optimized Tiny is \
-available as fi-whisper-tiny.",
+available as fi-whisper-tiny. Danish uses pianissimo-da where Pianissimo \
+runs, otherwise the generic multilingual Medium model.",
         after_long_help = "\
 EXAMPLES:
   # Record until Ctrl+C, then transcribe
@@ -357,8 +363,8 @@ EXAMPLES:
     /// Inspect and exercise the Pianissimo engine host
     #[command(
         long_about = "\
-Inspect and exercise the persistent engine host that runs Pianissimo (Swedish; \
-Core ML on the Apple Neural Engine, or ONNX Runtime on the CPU on Windows). Requires \
+Inspect and exercise the persistent engine host that runs Pianissimo (Swedish \
+pianissimo-sv or Danish pianissimo-da, chosen with --model; Core ML on the Apple Neural Engine, or ONNX Runtime on the CPU on Windows). Requires \
 macOS 14+ on Apple Silicon or Windows on ARM (Snapdragon).
 
   status   host path and build identity, protocol version, model state
@@ -376,7 +382,8 @@ List all available Whisper models with their size and download status.
 Models are organized by language. English uses OpenAI Whisper models, \
 Swedish uses KBLab models, Norwegian uses NbAiLab models, and Finnish uses \
 generic multilingual Whisper models plus an optional Finnish-optimized Tiny \
-(Base is recommended). \
+(Base is recommended). Danish uses pianissimo-da where Pianissimo runs, \
+otherwise the generic multilingual Whisper models (Medium is recommended). \
 Use --language to filter the list.
 
 The DOWNLOADED column shows whether each model is already available locally.",
@@ -392,7 +399,10 @@ EXAMPLES:
   sagascript list-models --language en
 
   # List Finnish models
-  sagascript list-models --language fi"
+  sagascript list-models --language fi
+
+  # List Danish models
+  sagascript list-models --language da"
     )]
     ListModels(models::ListModelsArgs),
 
@@ -422,6 +432,7 @@ AVAILABLE MODELS:
   Swedish:    kb-whisper-tiny, kb-whisper-base, kb-whisper-small
   Norwegian:  nb-whisper-tiny, nb-whisper-base, nb-whisper-small
   Finnish:    base (generic multilingual default), fi-whisper-tiny
+  Danish:     medium (generic multilingual default)
   Multilingual: tiny, base
 
 DIARIZATION MODELS (requires --features diarization):
@@ -479,7 +490,7 @@ View and modify Sagascript settings. Settings are persisted to a JSON file \
 and take effect immediately (the GUI hot-reloads changes made via CLI).
 
 Available setting keys:
-  language           Language for transcription (en, sv, no, fi, auto)
+  language           Language for transcription (en, sv, no, fi, da, auto)
   whisper_model      Whisper model ID (e.g. base.en, kb-whisper-base)
   hotkey_mode        Hotkey behavior: push (push-to-talk) or toggle
   show_overlay       Show recording overlay (true/false)
@@ -513,6 +524,13 @@ EXAMPLES:
   sagascript config path"
     )]
     Config(config::ConfigArgs),
+
+    /// Inspect microphone permission for this CLI process without changing it.
+    #[command(
+        long_about = "Inspect microphone permission for this CLI process. This command is read-only: it does not access saved settings, record audio, or request a permission prompt. The report describes this CLI process and does not inspect the running Sagascript GUI app.",
+        after_long_help = "EXAMPLES:\n  sagascript permissions status\n  sagascript permissions status --json"
+    )]
+    Permissions(permissions::PermissionsArgs),
 
     /// Manage global hint terms and explicit profile-scoped aliases used by live and batch transcription
     #[command(
@@ -639,8 +657,12 @@ fn json_output(command: &Command) -> Option<JsonOutput> {
         #[cfg(feature = "record")]
         Command::Record(args) if args.json => Some(JsonOutput::Pretty),
         Command::Engine(args) => match args.action {
-            engine::EngineAction::Status { json: true }
+            engine::EngineAction::Status { json: true, .. }
             | engine::EngineAction::Doctor { json: true, .. } => Some(JsonOutput::Pretty),
+            _ => None,
+        },
+        Command::Permissions(args) => match args.action {
+            permissions::PermissionsAction::Status { json: true } => Some(JsonOutput::Pretty),
             _ => None,
         },
         Command::Glossary(args) => match args.action {
@@ -694,6 +716,7 @@ fn dispatch(command: Command, out: &Out) -> Result<(), CliError> {
             );
         }
         Command::Config(args) => config::run(args, out)?,
+        Command::Permissions(args) => permissions::run(args, out)?,
         Command::Engine(args) => return engine::run(args, out),
         Command::Glossary(args) => glossary::run(args, out)?,
         Command::Formats => formats(out)?,

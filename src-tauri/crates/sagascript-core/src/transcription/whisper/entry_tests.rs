@@ -11,12 +11,9 @@ mod decode_flags_tests {
             assert!(!flags.no_timestamps);
             assert_eq!(flags.token_timestamps, segment_timestamps);
         }
-        #[cfg(feature = "diarization")]
-        {
-            let flags = DecodeFlags::for_path(DecodePath::WordTimestamps);
-            assert!(!flags.no_timestamps);
-            assert!(flags.token_timestamps);
-        }
+        let flags = DecodeFlags::for_path(DecodePath::WordTimestamps);
+        assert!(!flags.no_timestamps);
+        assert!(flags.token_timestamps);
     }
 }
 

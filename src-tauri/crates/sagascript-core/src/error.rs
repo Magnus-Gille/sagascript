@@ -15,6 +15,9 @@ pub enum DictationError {
     #[error("Microphone permission is required. Please enable it in System Settings > Privacy & Security > Microphone.")]
     MicrophonePermissionDenied,
 
+    #[error("Microphone permission is awaiting your response. Choose Allow in the macOS dialog, then start recording again.")]
+    MicrophonePermissionPending,
+
     #[error("Accessibility permission is required for automatic paste. Text has been copied to clipboard.")]
     AccessibilityPermissionDenied,
 
@@ -164,6 +167,7 @@ impl DictationError {
     pub fn code(&self) -> &str {
         match self {
             Self::MicrophonePermissionDenied => "microphone_permission_denied",
+            Self::MicrophonePermissionPending => "microphone_permission_pending",
             Self::AccessibilityPermissionDenied => "accessibility_permission_denied",
             Self::ModelNotLoaded => "model_not_loaded",
             Self::TranscriptionFailed(_) => "transcription_failed",
@@ -196,7 +200,10 @@ impl DictationError {
     /// time out again (ADR 0006).
     pub fn retryable(&self) -> bool {
         match self {
-            Self::ModelBusy | Self::ModelNotLoaded | Self::NoAudioCaptured => true,
+            Self::MicrophonePermissionPending
+            | Self::ModelBusy
+            | Self::ModelNotLoaded
+            | Self::NoAudioCaptured => true,
             Self::Engine(failure) => failure.retryable(),
             _ => false,
         }
@@ -242,6 +249,17 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("Microphone permission"));
         assert!(msg.contains("System Settings"));
+    }
+
+    #[test]
+    fn display_pending_microphone_permission() {
+        let err = DictationError::MicrophonePermissionPending;
+        assert_eq!(
+            err.to_string(),
+            "Microphone permission is awaiting your response. Choose Allow in the macOS dialog, then start recording again."
+        );
+        assert_eq!(err.code(), "microphone_permission_pending");
+        assert!(err.retryable());
     }
 
     #[test]
@@ -371,6 +389,10 @@ mod tests {
                 "microphone_permission_denied",
             ),
             (
+                DictationError::MicrophonePermissionPending,
+                "microphone_permission_pending",
+            ),
+            (
                 DictationError::AccessibilityPermissionDenied,
                 "accessibility_permission_denied",
             ),
@@ -434,6 +456,7 @@ mod tests {
         assert!(DictationError::ModelBusy.retryable());
         assert!(DictationError::ModelNotLoaded.retryable());
         assert!(DictationError::NoAudioCaptured.retryable());
+        assert!(DictationError::MicrophonePermissionPending.retryable());
         // A timeout is not offered as a retry: the same input under the same
         // budget tends to time out again, and a file that always exceeds it
         // would be retried forever (ADR 0006).

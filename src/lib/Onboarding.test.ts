@@ -7,7 +7,7 @@ import { describe, expect, test, vi } from "vitest";
 import Onboarding from "./Onboarding.svelte";
 import { deferred } from "../test/deferred";
 import { backendError, mockIpc, type CommandHandlers } from "../test/ipc";
-import { kbWhisperMedium, pianissimo, settingsValue } from "../test/settings";
+import { kbWhisperMedium, pianissimo, settingsValue, whisperModel } from "../test/settings";
 
 /** A first start on Windows: no permission steps (language, download, ready). */
 function backend(overrides: CommandHandlers = {}): CommandHandlers {
@@ -38,7 +38,259 @@ async function chooseSwedish(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByRole("button", { name: "Continue" }));
 }
 
+async function chooseFinnish(user: ReturnType<typeof userEvent.setup>) {
+  const english = screen.getByRole("button", { name: "EN English" });
+  const finnish = screen.getByRole("button", { name: "FI Suomi" });
+  expect(english).toHaveAttribute("aria-pressed", "true");
+  expect(finnish).toHaveAttribute("aria-pressed", "false");
+  await user.click(finnish);
+  expect(finnish).toHaveAttribute("aria-pressed", "true");
+  expect(english).toHaveAttribute("aria-pressed", "false");
+  await user.click(screen.getByRole("button", { name: "Continue" }));
+}
+
+async function chooseDanish(user: ReturnType<typeof userEvent.setup>) {
+  const english = screen.getByRole("button", { name: "EN English" });
+  const danish = screen.getByRole("button", { name: "DA Dansk" });
+  expect(english).toHaveAttribute("aria-pressed", "true");
+  expect(danish).toHaveAttribute("aria-pressed", "false");
+  await user.click(danish);
+  expect(danish).toHaveAttribute("aria-pressed", "true");
+  expect(english).toHaveAttribute("aria-pressed", "false");
+  await user.click(screen.getByRole("button", { name: "Continue" }));
+}
+
+describe("default onboarding language", () => {
+  test("waits for the platform before it can submit a language", async () => {
+    const platform = deferred<string>();
+    const ipc = mockIpc(backend({ get_platform: () => platform.promise }));
+    render(Onboarding, { oncomplete: vi.fn() });
+    const user = userEvent.setup();
+
+    const preparing = screen.getByRole("button", { name: "Preparing…" });
+    expect(preparing).toBeDisabled();
+    await user.click(preparing);
+    expect(ipc.callsTo("set_language")).toEqual([]);
+
+    platform.resolve("windows");
+    await waitFor(() => expect(screen.getByRole("button", { name: "Continue" })).toBeEnabled());
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+    await waitFor(() => expect(ipc.callsTo("set_language")).toEqual([{ language: "en" }]));
+  });
+
+  test("opens directly on language selection with the portable setup copy", async () => {
+    const { ipc, user } = await renderOnboarding(backend());
+
+    expect(screen.getByRole("heading", { name: "Set up Sagascript" })).toBeInTheDocument();
+    expect(screen.getByText(/Choose your first profile's language/)).toBeInTheDocument();
+    expect(screen.getByText(/recommended local model is selected automatically/)).toBeInTheDocument();
+    expect(screen.queryByText(/Welcome to Sagascript/)).not.toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: /English|Svenska|Norsk|Suomi|Dansk/ })).toHaveLength(5);
+    expect(ipc.callsTo("set_language")).toEqual([]);
+    await chooseSwedish(user);
+    expect(await screen.findByRole("heading", { name: "Setting up speech engine" })).toBeInTheDocument();
+    expect(screen.getByText(/Your recordings are processed on this device/)).toBeInTheDocument();
+    expect(screen.queryByText(/mac(?:os)?/i)).not.toBeInTheDocument();
+    expect(await screen.findByText("Speech engine ready")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+    expect(await screen.findByRole("heading", { name: "You're All Set!" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Microphone Access" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Accessibility Permission" })).not.toBeInTheDocument();
+  });
+
+  test("shows device-local copy and permission steps only on macOS", async () => {
+    const { user } = await renderOnboarding(backend({ get_platform: () => "macos", set_auto_paste: () => undefined }));
+
+    expect(screen.getByText(/recommended local model is selected automatically/)).toBeInTheDocument();
+    await chooseSwedish(user);
+    expect(await screen.findByRole("heading", { name: "Setting up speech engine" })).toBeInTheDocument();
+    expect(screen.getByText(/Your recordings are processed on this device/)).toBeInTheDocument();
+    expect(await screen.findByText("Speech engine ready")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+    expect(await screen.findByRole("heading", { name: "Microphone Access" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Skip" }));
+    expect(await screen.findByRole("heading", { name: "Accessibility Permission" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+    expect(await screen.findByRole("heading", { name: "You're All Set!" })).toBeInTheDocument();
+  });
+
+  test("blocks repeated language submission while the save is pending", async () => {
+    const save = deferred<string[]>();
+    const { ipc, user } = await renderOnboarding(backend({ set_language: () => save.promise }));
+
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+    await waitFor(() => expect(ipc.callsTo("set_language")).toEqual([{ language: "en" }]));
+    const saving = screen.getByRole("button", { name: "Saving…" });
+    expect(saving).toBeDisabled();
+    await user.click(saving);
+    expect(screen.queryByRole("heading", { name: "Setting up speech engine" })).not.toBeInTheDocument();
+
+    save.resolve([]);
+    expect(await screen.findByRole("heading", { name: "Setting up speech engine" })).toBeInTheDocument();
+    expect(ipc.callsTo("set_language")).toHaveLength(1);
+  });
+
+  test("keeps English selected when persisted language is auto", async () => {
+    const settingsRead = deferred<ReturnType<typeof settingsValue>>();
+    let settingsSettled = false;
+    const { ipc, user } = await renderOnboarding(
+      backend({
+        get_settings: async () => {
+          try {
+            return await settingsRead.promise;
+          } finally {
+            settingsSettled = true;
+          }
+        },
+      }),
+    );
+
+    await waitFor(() => expect(ipc.callsTo("get_settings")).toHaveLength(1));
+    settingsRead.resolve(settingsValue({ language: "auto", has_completed_onboarding: false }));
+    await waitFor(() => expect(settingsSettled).toBe(true));
+
+    const english = screen.getByRole("button", { name: "EN English" });
+    const finnish = screen.getByRole("button", { name: "FI Suomi" });
+    expect(english).toHaveAttribute("aria-pressed", "true");
+    expect(finnish).toHaveAttribute("aria-pressed", "false");
+
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+
+    await waitFor(() => expect(ipc.callsTo("set_language")).toEqual([{ language: "en" }]));
+  });
+
+  test("keeps English selected when persisted settings cannot be read", async () => {
+    const settingsRead = deferred<ReturnType<typeof settingsValue>>();
+    let settingsSettled = false;
+    const { ipc, user } = await renderOnboarding(
+      backend({
+        get_settings: async () => {
+          try {
+            return await settingsRead.promise;
+          } finally {
+            settingsSettled = true;
+          }
+        },
+      }),
+    );
+
+    await waitFor(() => expect(ipc.callsTo("get_settings")).toHaveLength(1));
+    settingsRead.reject(backendError("unavailable", "settings read failed"));
+    await waitFor(() => expect(settingsSettled).toBe(true));
+
+    const english = screen.getByRole("button", { name: "EN English" });
+    const finnish = screen.getByRole("button", { name: "FI Suomi" });
+    expect(english).toHaveAttribute("aria-pressed", "true");
+    expect(finnish).toHaveAttribute("aria-pressed", "false");
+
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+
+    await waitFor(() => expect(ipc.callsTo("set_language")).toEqual([{ language: "en" }]));
+  });
+});
+
+describe("Finnish onboarding", () => {
+  test("choosing Finnish saves fi and downloads the backend-recommended Base model", async () => {
+    const catalogBase = whisperModel("base", "Catalog Base fixture", { size_mb: 188 });
+    const { ipc, user } = await renderOnboarding(
+      backend({
+        get_effective_model_info: ({ language }) => {
+          expect(language).toBe("fi");
+          return catalogBase;
+        },
+      }),
+    );
+
+    await chooseFinnish(user);
+
+    expect(await screen.findByText("Speech engine ready")).toBeInTheDocument();
+    expect(screen.getByText(/Preparing the local speech engine \(188 MB\)/)).toBeInTheDocument();
+    expect(ipc.callsTo("set_language")).toEqual([{ language: "fi" }]);
+    expect(ipc.callsTo("get_effective_model_info")).toEqual([{ language: "fi" }]);
+    expect(ipc.callsTo("download_model")).toEqual([{ whisperModel: "base" }]);
+    expect(ipc.callsTo("download_pianissimo_model")).toEqual([]);
+  });
+
+  test("when the recommendation is unavailable, Finnish falls back to Base and shows 142 MB", async () => {
+    const { ipc, user } = await renderOnboarding(
+      backend({
+        get_effective_model_info: () => {
+          throw backendError("unavailable", "model lineup unavailable");
+        },
+      }),
+    );
+
+    await chooseFinnish(user);
+
+    expect(await screen.findByText("Speech engine ready")).toBeInTheDocument();
+    expect(screen.getByText(/Preparing the local speech engine \(142 MB\)/)).toBeInTheDocument();
+    expect(ipc.callsTo("set_language")).toEqual([{ language: "fi" }]);
+    expect(ipc.callsTo("get_effective_model_info")).toEqual([{ language: "fi" }]);
+    expect(ipc.callsTo("download_model")).toEqual([{ whisperModel: "base" }]);
+    expect(ipc.callsTo("download_pianissimo_model")).toEqual([]);
+  });
+});
+
+describe("Danish onboarding", () => {
+  test("choosing Danish saves da and downloads the backend-recommended Medium model", async () => {
+    const catalogMedium = whisperModel("medium", "Catalog Medium fixture", { size_mb: 1530 });
+    const { ipc, user } = await renderOnboarding(
+      backend({
+        get_effective_model_info: ({ language }) => {
+          expect(language).toBe("da");
+          return catalogMedium;
+        },
+      }),
+    );
+
+    await chooseDanish(user);
+
+    expect(await screen.findByText("Speech engine ready")).toBeInTheDocument();
+    expect(screen.getByText(/Preparing the local speech engine \(1530 MB\)/)).toBeInTheDocument();
+    expect(ipc.callsTo("set_language")).toEqual([{ language: "da" }]);
+    expect(ipc.callsTo("get_effective_model_info")).toEqual([{ language: "da" }]);
+    expect(ipc.callsTo("download_model")).toEqual([{ whisperModel: "medium" }]);
+    expect(ipc.callsTo("download_pianissimo_model")).toEqual([]);
+  });
+
+  test("when the recommendation is unavailable, Danish falls back to Medium and shows 1530 MB", async () => {
+    const { ipc, user } = await renderOnboarding(
+      backend({
+        get_effective_model_info: () => {
+          throw backendError("unavailable", "model lineup unavailable");
+        },
+      }),
+    );
+
+    await chooseDanish(user);
+
+    expect(await screen.findByText("Speech engine ready")).toBeInTheDocument();
+    expect(screen.getByText(/Preparing the local speech engine \(1530 MB\)/)).toBeInTheDocument();
+    expect(ipc.callsTo("set_language")).toEqual([{ language: "da" }]);
+    expect(ipc.callsTo("get_effective_model_info")).toEqual([{ language: "da" }]);
+    expect(ipc.callsTo("download_model")).toEqual([{ whisperModel: "medium" }]);
+    expect(ipc.callsTo("download_pianissimo_model")).toEqual([]);
+  });
+});
+
 describe("speech engine download", () => {
+  test("offers a clear skip path after a failed download and explains the missing engine", async () => {
+    const { ipc, user } = await renderOnboarding(
+      backend({
+        download_pianissimo_model: () => {
+          throw backendError("unavailable", "download failed");
+        },
+      }),
+    );
+
+    await chooseSwedish(user);
+    expect(await screen.findByText("download failed")).toBeInTheDocument();
+    expect(ipc.callsTo("download_pianissimo_model")).toEqual([{}]);
+    await user.click(screen.getByRole("button", { name: "Continue without speech engine" }));
+    expect(await screen.findByRole("heading", { name: "You're All Set!" })).toBeInTheDocument();
+    expect(screen.getByText(/Speech engine is not installed yet/)).toBeInTheDocument();
+  });
+
   test("Swedish downloads the model the backend recommends (Pianissimo where supported)", async () => {
     const { ipc, user } = await renderOnboarding(backend());
     await chooseSwedish(user);
@@ -47,6 +299,7 @@ describe("speech engine download", () => {
     expect(ipc.callsTo("get_effective_model_info")).toEqual([{ language: "sv" }]);
     expect(ipc.callsTo("download_pianissimo_model")).toEqual([{}]);
     expect(ipc.callsTo("download_model")).toEqual([]);
+    expect(screen.queryByText("Pianissimo")).not.toBeInTheDocument();
     expect(screen.getByText(/Preparing the local speech engine \(640 MB\)/)).toBeInTheDocument();
   });
 
@@ -84,6 +337,45 @@ describe("speech engine download", () => {
     expect(await screen.findByText("Speech engine ready")).toBeInTheDocument();
     expect(ipc.callsTo("download_model")).toEqual([{ whisperModel: "kb-whisper-medium" }]);
   });
+});
+
+test("Accessibility can reopen System Settings while its permission request is pending", async () => {
+  const permissionRequest = deferred<void>();
+  let granted = false;
+  const { ipc, user } = await renderOnboarding(
+    backend({
+      get_platform: () => "macos",
+      check_accessibility_permission: () => granted,
+      request_accessibility_permission: () => permissionRequest.promise,
+      open_accessibility_settings: () => undefined,
+      retry_hotkey_registration: () => undefined,
+    }),
+  );
+
+  await chooseSwedish(user);
+  await user.click(await screen.findByRole("button", { name: "Continue" }));
+  await user.click(await screen.findByRole("button", { name: "Skip" }));
+  expect(await screen.findByRole("heading", { name: "Accessibility Permission" })).toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "Open System Settings" }));
+  const reopen = await screen.findByRole("button", { name: "Open Accessibility Settings Again" });
+  expect(reopen).toBeEnabled();
+  const checksBeforeReopen = ipc.callsTo("check_accessibility_permission").length;
+  await user.click(reopen);
+
+  await waitFor(() => expect(ipc.callsTo("open_accessibility_settings")).toEqual([{}]));
+  expect(ipc.callsTo("request_accessibility_permission")).toEqual([{}]);
+  expect(ipc.callsTo("check_accessibility_permission")).toHaveLength(checksBeforeReopen);
+  vi.useFakeTimers();
+  try {
+    granted = true;
+    permissionRequest.resolve();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(screen.getByText("Accessibility granted")).toBeInTheDocument();
+    expect(ipc.callsTo("retry_hotkey_registration")).toEqual([{}]);
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 test("the last step explains both recording modes and where to configure them", async () => {

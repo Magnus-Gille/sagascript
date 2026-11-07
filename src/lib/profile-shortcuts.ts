@@ -83,7 +83,7 @@ function slotPrefixToMode(slot: ProfileShortcutSlot): HotkeyMode {
  * health. Explicit bindings replace legacy shortcut routing for that profile;
  * a profile with neither remains legacy-compatible.
  */
-export function profileShortcutValues(profile: HotkeyProfile, hotkeyMode: HotkeyMode = "push"): string[] {
+export function profileShortcutValues(profile: HotkeyProfile): string[] {
   const push = nonEmpty(profile.push_to_talk_shortcut);
   const toggle = nonEmpty(profile.toggle_shortcut);
   const legacy = nonEmpty(profile.shortcut);
@@ -92,7 +92,10 @@ export function profileShortcutValues(profile: HotkeyProfile, hotkeyMode: Hotkey
 }
 
 export function allProfileShortcutValues(profiles: HotkeyProfile[], hotkeyMode: HotkeyMode = "push"): string[] {
-  return profiles.flatMap((profile) => profileShortcutValues(profile, hotkeyMode));
+  // Keep accepting the legacy mode argument; explicit/legacy profile fields
+  // already contain the complete set of registration values.
+  void hotkeyMode;
+  return profiles.flatMap((profile) => profileShortcutValues(profile));
 }
 
 export function profileWithShortcut(

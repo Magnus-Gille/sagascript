@@ -42,9 +42,9 @@ impl HotkeyChange {
         fresh: &mut Settings,
         registered: &[String],
     ) -> Result<(), CommandError> {
-        let candidate = self
-            .prepare(fresh)
-            .map_err(|error| CommandError::HotkeyInvalid(error.to_string()))?;
+        // A refusal keeps the code of its `SettingsError` (ADR 0006): only the
+        // shortcuts moving underneath the change is a `hotkey_change_failed`.
+        let candidate = self.prepare(fresh).map_err(CommandError::Settings)?;
         if candidate.resolved_shortcuts() != registered {
             return Err(CommandError::HotkeyChangeFailed(
                 "Shortcut configuration changed concurrently; retry after settings refresh".into(),

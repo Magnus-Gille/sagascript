@@ -40,54 +40,36 @@ use sagascript_core::transcription::{Glossary, WhisperBackend};
 use crate::output::{errln, Out};
 
 mod args;
-mod diarize;
-#[cfg(feature = "diarization")]
-mod diarized;
-mod inference;
 mod inputs;
-mod language_detection;
-mod language_regions;
 mod meeting;
 mod output;
 mod pianissimo;
 mod plain;
 mod plan;
-mod progress;
 mod resolve;
-mod services;
-mod source;
 mod vocab_correction;
 
 pub use self::args::TranscribeArgs;
-#[cfg(feature = "diarization")]
-pub(crate) use self::meeting::{
-    meeting_transcript_from_plain_segments, stable_file_sha256, verify_meeting_source_unchanged,
-};
-#[cfg(feature = "diarization")]
-pub use self::meeting::{
-    transcribe_meeting_file, transcribe_meeting_file_full, transcribe_meeting_file_with_control,
-};
-pub use self::meeting::{MeetingControl, MeetingPhase};
 pub use self::output::copy_to_clipboard;
-#[cfg(feature = "diarization")]
-pub(crate) use self::output::prepare_diarized_plain_segments;
 pub(crate) use self::resolve::{effective_glossary, resolve_one_run_prompt};
 pub use self::resolve::{
     model_id_string, parse_language, parse_model, resolve_effective_model, resolve_file_model,
     resolve_file_model_for_run,
 };
 
-#[cfg(feature = "diarization")]
-use self::diarize::OnnxAnalyzer;
-#[cfg(feature = "diarization")]
-use self::diarized::run_diarized;
-use self::output::{BatchExecution, BatchSink, Clipboard, FileTranscription, SystemClipboard};
+use self::output::{BatchExecution, BatchSink, Clipboard, SystemClipboard};
 use self::pianissimo::{run_pianissimo_batch, InstalledPianissimo, PianissimoBatch};
 use self::plain::run_plain;
-use self::plan::{plan_file, plan_run, EnginePlan, FileMode, FileOptions, FileRequest, RunPlan};
-use self::progress::emit_progress;
-use self::services::Services;
+use self::plan::{file_options, plan_run, EnginePlan, RunPlan};
 use crate::cancel::Canceller;
+#[cfg(feature = "diarization")]
+use sagascript_core::meeting::pipeline::diarize::OnnxAnalyzer;
+#[cfg(feature = "diarization")]
+use sagascript_core::meeting::pipeline::diarized::run_diarized;
+use sagascript_core::meeting::pipeline::outcome::FileTranscription;
+use sagascript_core::meeting::pipeline::plan::{plan_file, FileMode, FileRequest};
+use sagascript_core::meeting::pipeline::progress::emit_progress;
+use sagascript_core::meeting::pipeline::services::Services;
 
 pub fn run(args: TranscribeArgs, out: &Out) -> Result<(), DictationError> {
     crate::cancel::install();
@@ -116,8 +98,9 @@ fn run_inner(args: TranscribeArgs, canceller: &Canceller, out: &Out) -> Result<(
         engine,
     } = plan_run(&args, &*backend)?;
     match engine {
-        EnginePlan::Pianissimo => run_pianissimo_batch(
+        EnginePlan::Pianissimo(model) => run_pianissimo_batch(
             &PianissimoBatch {
+                model,
                 args: &args,
                 files: &files,
                 language,
@@ -152,6 +135,7 @@ fn run_inner(args: TranscribeArgs, canceller: &Canceller, out: &Out) -> Result<(
                     #[cfg(feature = "diarization")]
                     analyzer: &OnnxAnalyzer,
                     canceller,
+                    build_revision: crate::GIT_HASH,
                 },
                 out,
             )
@@ -194,7 +178,7 @@ fn run_whisper_batch(
         clipboard,
     } = *batch;
     let mut model_loaded = false;
-    let options = FileOptions::from_args(args);
+    let options = file_options(args);
 
     let mut sink = BatchSink::new(args, files.len());
     let (processed, failures) = process_batch_with(

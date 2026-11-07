@@ -402,6 +402,8 @@ link; the upstream repository is authoritative for its license terms.
 | KB-Whisper | Tiny, Base, Small, Medium, Large Swedish models | Apache-2.0 | [KBLab, National Library of Sweden](https://huggingface.co/KBLab) |
 | Klang Pianissimo (ONNX, Windows on ARM) | \`KlangAI/pianissimo-sv-onnx\` @ \`32118e6c01a88e3c4b4b735971195303a88d21ce\`: \`encoder-model.int8.onnx\`, \`decoder_joint-model.int8.onnx\`, \`nemo128.onnx\`, \`vocab.txt\`, \`config.json\`; downloaded on Windows on ARM only | CC-BY-4.0 | [Klang AI AB, model card and attribution](https://huggingface.co/KlangAI/pianissimo-sv-onnx/tree/32118e6c01a88e3c4b4b735971195303a88d21ce), reviewed 2026-09-29 |
 | Klang Pianissimo (Core ML conversion) | Core ML archive converted from the original NeMo checkpoint (encoder int8, decoder and joint fp16); optional Swedish model | CC-BY-4.0 | [Klang AI model card and attribution](https://huggingface.co/KlangAI/pianissimo-sv), reviewed 2026-09-25 |
+| Klang Pianissimo for Danish (Core ML, macOS) | \`KlangAI/pianissimo-da-coreml\` @ \`9e6213c13d3a91b87f8e4a2310ac77bec45e54ef\`: Klang's compiled 8-bit build (\`Preprocessor\`, \`Encoder\`, \`Decoder\`, \`JointDecisionv3\` \`.mlmodelc\`, \`parakeet_vocab.json\`; the preprocessor and vocabulary are FluidInference's Parakeet v3 files, CC-BY-4.0); optional Danish model | CC-BY-4.0 | [Klang AI AB, model card and attribution](https://huggingface.co/KlangAI/pianissimo-da-coreml/tree/9e6213c13d3a91b87f8e4a2310ac77bec45e54ef), reviewed 2026-11-03 |
+| Klang Pianissimo for Danish (ONNX, Windows on ARM) | \`KlangAI/pianissimo-da-onnx\` @ \`07f0f281017b06158012e463a60ee0e9b4817cab\`: \`encoder-model.int8.onnx\`, \`decoder_joint-model.int8.onnx\`, \`nemo128.onnx\`, \`vocab.txt\`, \`config.json\`; downloaded on Windows on ARM only | CC-BY-4.0 | [Klang AI AB, model card and attribution](https://huggingface.co/KlangAI/pianissimo-da-onnx/tree/07f0f281017b06158012e463a60ee0e9b4817cab), reviewed 2026-11-03 |
 | NB-Whisper | Tiny, Base, Small, Medium, Large Norwegian models | Apache-2.0 | [NbAiLab, National Library of Norway](https://huggingface.co/NbAiLab) |
 | Finnish-NLP Whisper Tiny | Unmodified \`ggml-model-fi-tiny.bin\`, optional Finnish specialist | Apache-2.0 | [Finnish-NLP pinned GGML repository](https://huggingface.co/Finnish-NLP/Finnish-finetuned-whisper-models-ggml-format/tree/c58924b6deb4438756b3d38ecd67d65bdf20298d), reviewed 2026-09-06 |
 | Silero VAD (GGML conversion) | \`ggml-silero-v5.1.2.bin\` | MIT | [ggml-org/whisper-vad](https://huggingface.co/ggml-org/whisper-vad) |
@@ -441,8 +443,8 @@ the Rust table above) together with **ONNX Runtime 1.28.2** (\`onnxruntime.dll\`
 under the [MIT License](https://github.com/microsoft/onnxruntime/blob/v1.28.2/LICENSE).
 ONNX Runtime's own third-party notices are published in
 [ThirdPartyNotices.txt](https://github.com/microsoft/onnxruntime/blob/v1.28.2/ThirdPartyNotices.txt)
-of that release and apply to the bundled binaries. The Pianissimo ONNX model
-(CC BY 4.0, Klang AI AB) is downloaded on demand and is not bundled.
+of that release and apply to the bundled binaries. The Pianissimo ONNX models
+(CC BY 4.0, Klang AI AB) are downloaded on demand and are not bundled.
 
 The downloadable Pianissimo Core ML model is converted from Klang AI AB's
 [Pianissimo](https://huggingface.co/KlangAI/pianissimo-sv) (CC BY 4.0, converted, not
@@ -451,6 +453,8 @@ retrained) with scripts in \`scripts/pianissimo-coreml\` that are derived from
 864ef8050f2f281d0761de26e3a03108f9f1ce73), licensed under the
 [Apache-2.0 License](https://www.apache.org/licenses/LICENSE-2.0). Attribution and
 conversion details are kept in \`scripts/pianissimo-coreml/LICENSE-and-attribution.txt\`.
+The Danish Pianissimo Core ML model is Klang AI AB's own build, downloaded
+unmodified on demand and not bundled.
 
 ## Ported source code
 

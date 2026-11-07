@@ -27,7 +27,7 @@ concurrency:
 jobs:
   collect:
     if: ${{ (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main') && (github.event_name != 'schedule' || vars.CODE_HEALTH_COLLECTION_ENABLED == 'true') }}
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 45
     permissions:
       actions: read
@@ -48,6 +48,11 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+
+      # whisper.cpp targets Apple silicon's apple-m1 baseline, not the runner's CPU; before the
+      # Rust cache, whose key includes CMAKE_* variables (scripts/cmake/macos-arm64-portable.cmake).
+      - name: Use the portable whisper.cpp CPU baseline
+        run: bash scripts/ci/use-portable-whisper-macos.sh
 
       - name: Select collection mode
         id: mode

@@ -3,9 +3,10 @@
 //! Everything here is compiled in every build except `engine`, which needs the
 //! optional dependencies of the `diarization` feature (ONNX Runtime, ndarray, rustfft,
 //! kodama) and holds the stages and pipeline functions that run them. The types, the
-//! constants, the cached-analysis validation, [`report`], [`merge`], [`model`],
-//! [`speaker_hint`] and the offline scoring in [`eval`] need none of them (#372).
+//! constants, the cached-analysis validation, the reusable [`cache`], [`report`], [`merge`],
+//! [`model`], [`speaker_hint`] and the offline scoring in [`eval`] need none of them (#372, #374).
 
+pub mod cache;
 mod dictation_error;
 #[cfg(feature = "diarization")]
 pub mod engine;

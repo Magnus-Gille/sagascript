@@ -47,19 +47,18 @@ runs:
     - if: ${{ inputs.linux-deps == 'true' }}
       name: Install Tauri system dependencies
       shell: bash
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libasound2-dev build-essential file xdotool
+      # Retries and a per-attempt time limit bound a stalled mirror (SAGA-546); the package list is in the script.
+      run: bash scripts/ci/apt-install-tauri-deps.sh
 
     - if: ${{ inputs.python == 'true' }}
       name: Select evaluation Python runtime
-      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+      uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
       with:
         python-version: "3.12"
 
     - if: ${{ inputs.rust == 'true' }}
       name: Install Rust
-      uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # v1; toolchain must match rust-toolchain.toml
+      uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1; toolchain must match rust-toolchain.toml
       with:
         toolchain: 1.99.0
         components: ${{ inputs.rust-components }}
@@ -77,14 +76,27 @@ runs:
         echo "Checking against Rust $msrv"
 
     - name: Install Node.js
-      uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+      uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
       with:
         node-version: 22
         cache: npm
 
+    # whisper.cpp targets Apple silicon's apple-m1 baseline, not the runner's CPU; before the Rust cache,
+    # whose key includes CMAKE_* variables (scripts/cmake/macos-arm64-portable.cmake).
+    - if: ${{ runner.os == 'macOS' }}
+      name: Use the portable whisper.cpp CPU baseline
+      shell: bash
+      run: bash scripts/ci/use-portable-whisper-macos.sh
+
     - name: Cache Rust dependencies
       uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       with:
+        # Only main saves (SAGA-546). A cache saved from refs/pull/N/merge or a tag is scoped to that
+        # ref and no other run can restore it, yet one PR run saved 4 GB and evicted the main-branch
+        # entries every PR restores from (the repository limit is 10 GB). Pull requests, tags and other
+        # branches only restore; pushes to main save, so the shared entries stay fresh. The key rules
+        # above are unchanged.
+        save-if: ${{ github.ref == 'refs/heads/main' }}
         workspaces: ${{ inputs.cache-workspaces }}
         shared-key: ${{ inputs.cache-key }}${{ inputs.native-build != 'true' && format('-{0}', hashFiles('scripts/ci/cargo-gates.mjs')) || '' }}
 

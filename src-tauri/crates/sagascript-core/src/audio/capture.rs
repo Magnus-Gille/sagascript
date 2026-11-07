@@ -91,6 +91,22 @@ impl AudioCaptureService {
 
     /// Start capturing audio from the default input device
     pub fn start_capture(&mut self) -> Result<(), DictationError> {
+        let permission = super::permission::microphone_permission();
+        info!(status = ?permission.status, in_app_bundle = permission.in_app_bundle, "Microphone permission preflight");
+        let effective = super::permission::capture_permission_status(permission.status)?;
+        info!(status = ?effective, "Microphone permission capture decision");
+        self.start_capture_with_permission(effective)
+    }
+
+    fn start_capture_with_permission(
+        &mut self,
+        permission: super::permission::MicrophonePermissionStatus,
+    ) -> Result<(), DictationError> {
+        // Never enter CPAL after an explicit platform denial. This shared gate
+        // covers the desktop controller and CLI record alike.
+        if permission.capture_denied() {
+            return Err(DictationError::MicrophonePermissionDenied);
+        }
         // Clear previous buffer and stop signal
         {
             let mut buf = lock_or_recover(&self.buffer, BUFFER_LOCK);
@@ -719,5 +735,27 @@ mod tests {
         clear_worker_error(&svc.worker_error);
 
         assert!(svc.worker_error.lock().unwrap().is_none());
+    }
+}
+
+#[cfg(test)]
+mod permission_regression_tests {
+    use super::*;
+    use crate::audio::permission::MicrophonePermissionStatus;
+    #[test]
+    fn denied_capture_never_starts_worker_or_clears_previous_buffer() {
+        for permission in [
+            MicrophonePermissionStatus::Denied,
+            MicrophonePermissionStatus::Restricted,
+        ] {
+            let mut capture = AudioCaptureService::new();
+            lock_or_recover(&capture.buffer, BUFFER_LOCK).push(0.25);
+            assert!(matches!(
+                capture.start_capture_with_permission(permission),
+                Err(DictationError::MicrophonePermissionDenied)
+            ));
+            assert!(capture.capture_thread.is_none());
+            assert_eq!(*lock_or_recover(&capture.buffer, BUFFER_LOCK), vec![0.25]);
+        }
     }
 }

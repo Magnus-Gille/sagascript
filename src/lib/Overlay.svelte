@@ -46,23 +46,23 @@
 
   onMount(() => {
     let disposed = false;
-    Promise.all([profileEvents.ready, stateEvents.ready, engineEvents.ready]).then(async () => {
-      const initialRevision = revision;
-      const [active, state, engineLoad] = await Promise.all([
-        getActiveHotkeyProfile(),
-        getState(),
-        getEngineLoadState(),
-      ]);
-      if (!disposed && revision === initialRevision) {
-        profile = active;
-        dispatch({ type: "state", value: state });
-        // The overlay is created lazily, after the app-start warm began.
-        dispatch({ type: "engine", value: engineLoad.state, source: engineLoad.source });
-      }
-    }).catch((error) => {
-      console.warn("Could not initialize dictation indicator state", error);
-    });
-    return () => { disposed = true; };
+    Promise.all([profileEvents.ready, stateEvents.ready, engineEvents.ready])
+      .then(async () => {
+        const initialRevision = revision;
+        const [active, state, engineLoad] = await Promise.all([getActiveHotkeyProfile(), getState(), getEngineLoadState()]);
+        if (!disposed && revision === initialRevision) {
+          profile = active;
+          dispatch({ type: "state", value: state });
+          // The overlay is created lazily, after the app-start warm began.
+          dispatch({ type: "engine", value: engineLoad.state, source: engineLoad.source });
+        }
+      })
+      .catch((error) => {
+        console.warn("Could not initialize dictation indicator state", error);
+      });
+    return () => {
+      disposed = true;
+    };
   });
 </script>
 
@@ -110,14 +110,22 @@
     animation: none;
   }
 
-  @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
 
   @media (prefers-reduced-motion: reduce) {
-    .dot, .dot.working { animation: none; }
+    .dot,
+    .dot.working {
+      animation: none;
+    }
   }
 
   @keyframes pulse {
-    0%, 100% {
+    0%,
+    100% {
       opacity: 1;
       transform: scale(1);
     }
@@ -131,7 +139,7 @@
     color: #fff;
     font-size: 14px;
     font-weight: 500;
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     white-space: nowrap;
     max-width: 160px;
     overflow: hidden;

@@ -1456,72 +1456,6 @@ fn the_public_transcribe_paths_stay_importable() {
     let _: fn(Option<&str>, Language, &Settings, bool) -> Result<FileModel, DictationError> =
         resolve_file_model_for_run;
     let _: fn(&str) -> Result<(), DictationError> = copy_to_clipboard;
-
-    #[cfg(feature = "diarization")]
-    {
-        use std::path::Path;
-
-        use sagascript_cli::transcribe::{
-            transcribe_meeting_file, transcribe_meeting_file_full,
-            transcribe_meeting_file_with_control, MeetingControl, MeetingPhase,
-        };
-        use sagascript_core::diarization::speaker_hint::SpeakerCountHint;
-        use sagascript_core::meeting::MeetingTranscript;
-        use sagascript_core::transcription::{Glossary, WhisperBackend};
-
-        let _: fn(
-            &Path,
-            &Settings,
-            Language,
-            WhisperModel,
-            &Glossary,
-            &WhisperBackend,
-        ) -> Result<MeetingTranscript, DictationError> = transcribe_meeting_file;
-        let _: fn(
-            &Path,
-            &Settings,
-            Language,
-            WhisperModel,
-            &Glossary,
-            &WhisperBackend,
-            &MeetingControl<'_>,
-        ) -> Result<MeetingTranscript, DictationError> = transcribe_meeting_file_with_control;
-        let _: fn(
-            &Path,
-            &Settings,
-            Language,
-            WhisperModel,
-            &Glossary,
-            &WhisperBackend,
-            Option<&MeetingControl<'_>>,
-            f32,
-            Option<SpeakerCountHint>,
-            Option<&Path>,
-        ) -> Result<MeetingTranscript, DictationError> = transcribe_meeting_file_full;
-        // The phases are what the app maps to its job states, by serialized name.
-        let names: Vec<String> = [
-            MeetingPhase::Preparing,
-            MeetingPhase::Decoding,
-            MeetingPhase::LoadingModel,
-            MeetingPhase::Analyzing,
-            MeetingPhase::Clustering,
-            MeetingPhase::Finalizing,
-        ]
-        .iter()
-        .map(|phase| serde_json::to_string(phase).expect("phase serializes"))
-        .collect();
-        assert_eq!(
-            names,
-            [
-                "\"preparing\"",
-                "\"decoding\"",
-                "\"loading_model\"",
-                "\"analyzing\"",
-                "\"clustering\"",
-                "\"finalizing\""
-            ]
-        );
-    }
 }
 
 // ---- a Pianissimo run that succeeds, against the fake engine host ---------------
@@ -1597,7 +1531,11 @@ mod pianissimo_with_the_fake_host {
     fn model_dir(sandbox: &Sandbox) -> PathBuf {
         let dir = sandbox.root.join("pianissimo-model");
         std::fs::create_dir_all(&dir).expect("create the model directory");
-        for item in sagascript_core::transcription::pianissimo_model::active().required_items {
+        for item in sagascript_core::transcription::pianissimo_model::active(
+            sagascript_core::models::PianissimoModel::Swedish,
+        )
+        .required_items
+        {
             std::fs::write(dir.join(item), b"").expect("write a model item");
         }
         dir
@@ -1768,7 +1706,7 @@ mod pianissimo_with_the_fake_host {
     }
 
     #[test]
-    fn progress_events_run_decode_resample_transcribe_complete() {
+    fn progress_events_run_decoding_then_transcribing_then_complete() {
         let sandbox = Sandbox::new();
         sandbox.write("tone.wav", &wav(3));
         let run = run(&sandbox, &fake_host(), &with(&["--progress-json"]));
@@ -1806,13 +1744,20 @@ mod pianissimo_with_the_fake_host {
         assert_eq!(rest, ["[1/1] tone.wav"]);
         assert_eq!(
             phases,
+            // Decoding runs alongside transcription: `decoding` 0 opens the run, and
+            // no decoding or resampling stage events are interleaved after it.
             [
                 ("decoding".to_string(), 1),
-                ("resampling".to_string(), 2),
                 ("transcribing".to_string(), 3),
                 ("completed".to_string(), 3),
             ]
         );
+        let decoding: Vec<Option<u64>> = events
+            .iter()
+            .filter(|event| event["phase"] == "decoding")
+            .map(|event| event["percent"].as_u64())
+            .collect();
+        assert_eq!(decoding, [Some(0)]);
         assert_eq!(transcribing.first(), Some(&0));
         assert_eq!(transcribing.last(), Some(&100));
         assert!(

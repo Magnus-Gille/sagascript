@@ -1,0 +1,37 @@
+[
+  {
+    "mutation": "controls-enabled",
+    "source": "src/lib/Settings.svelte",
+    "test": "src/lib/Settings.meetingFlows.test.ts",
+    "exit_code": 1,
+    "detected": true
+  },
+  {
+    "mutation": "meeting-controls-enabled",
+    "source": "src/lib/Settings.svelte",
+    "test": "src/lib/Settings.meetingFlows.test.ts",
+    "exit_code": 1,
+    "detected": true
+  },
+  {
+    "mutation": "discard-saved-review",
+    "source": "src/lib/FileTranscription.svelte",
+    "test": "src/lib/Settings.meetingFlows.test.ts",
+    "exit_code": 1,
+    "detected": true
+  },
+  {
+    "mutation": "ignore-onboarding-completion",
+    "source": "src/App.svelte",
+    "test": "src/App.onboarding.test.ts",
+    "exit_code": 1,
+    "detected": true
+  },
+  {
+    "mutation": "frontend-hide",
+    "source": "src/App.svelte",
+    "test": "src/App.onboarding.test.ts",
+    "exit_code": 1,
+    "detected": true
+  }
+]

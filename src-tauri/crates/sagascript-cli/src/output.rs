@@ -35,7 +35,9 @@ use std::io::{self, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
+use indicatif::{ProgressBar, ProgressStyle};
 use sagascript_core::error::DictationError;
+use sagascript_core::meeting::pipeline::narrate::{DecodeBar, Narrator};
 use sagascript_core::sync::lock_or_recover;
 use serde::Serialize;
 
@@ -248,6 +250,49 @@ impl Out {
         lock_or_recover(&self.shared.stdout_error, STDOUT_ERROR_LOCK)
             .get_or_insert_with(|| error.to_string());
         WriteError::Io(error)
+    }
+}
+
+/// The file pipeline narrates through the CLI's own output layer (#374): its lines go to this
+/// stderr, and a large decode gets the byte-fraction bar that stderr draws when it is a terminal.
+impl Narrator for Out {
+    fn err_line(&self, args: fmt::Arguments<'_>) {
+        Out::err_line(self, args);
+    }
+
+    fn handle(&self) -> Arc<dyn Narrator> {
+        Arc::new(self.clone())
+    }
+
+    /// A bar for a decode of more than 8 MB (#237): smaller files decode sub-second, so a bar
+    /// would only flicker.
+    fn decode_bar(&self, input_bytes: u64) -> Option<Box<dyn DecodeBar>> {
+        (input_bytes > 8_000_000).then(|| {
+            let bar = ProgressBar::new(100);
+            bar.set_style(ProgressStyle::with_template("  Decoding [{bar:40}] {pos}%").unwrap());
+            Box::new(IndicatifDecodeBar(bar)) as Box<dyn DecodeBar>
+        })
+    }
+}
+
+/// The decode bar of [`Out`]: decoding and then resampling, each from 0 to 100 %.
+struct IndicatifDecodeBar(ProgressBar);
+
+impl DecodeBar for IndicatifDecodeBar {
+    fn decoding(&self, percent: u8) {
+        self.0.set_position(u64::from(percent));
+    }
+
+    fn resampling(&self, percent: u8) {
+        if percent == 0 {
+            self.0
+                .set_style(ProgressStyle::with_template("  Resampling [{bar:40}] {pos}%").unwrap());
+        }
+        self.0.set_position(u64::from(percent));
+    }
+
+    fn finish(&self) {
+        self.0.finish_and_clear();
     }
 }
 

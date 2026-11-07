@@ -21,14 +21,7 @@
     pollingFailed: boolean;
   }
 
-  let {
-    status,
-    phase,
-    elapsedMs,
-    phaseElapsedMs,
-    lastCheckedAgoMs,
-    pollingFailed,
-  }: Props = $props();
+  let { status, phase, elapsedMs, phaseElapsedMs, lastCheckedAgoMs, pollingFailed }: Props = $props();
 
   const isTerminal = $derived(status === "completed" || status === "cancelled" || status === "failed");
   const isStale = $derived((lastCheckedAgoMs ?? elapsedMs) > 10_000);
@@ -213,17 +206,33 @@
   }
 
   @keyframes meeting-progress-sweep {
-    from { transform: translateX(-100%); }
-    to { transform: translateX(300%); }
+    from {
+      transform: translateX(-100%);
+    }
+    to {
+      transform: translateX(300%);
+    }
   }
 
   @media (max-width: 420px) {
-    .meeting-progress { padding: 12px; }
-    .progress-meta { align-items: flex-start; flex-direction: column; gap: 3px; }
-    .status-note { flex: none; text-align: left; }
+    .meeting-progress {
+      padding: 12px;
+    }
+    .progress-meta {
+      align-items: flex-start;
+      flex-direction: column;
+      gap: 3px;
+    }
+    .status-note {
+      flex: none;
+      text-align: left;
+    }
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .progress-indicator { animation: none; transform: translateX(0); }
+    .progress-indicator {
+      animation: none;
+      transform: translateX(0);
+    }
   }
 </style>

@@ -23,6 +23,7 @@ use sagascript_core::diarization::eval::qualification::{
     qualify, reference_identity, QualificationError,
 };
 use sagascript_core::diarization::eval::reference::{ReferenceDocument, ReferenceStatus};
+use sagascript_core::diarization::eval::rttm::{parse_rttm, parse_uem};
 use sagascript_core::diarization::eval::strata::{measure_strata, DiarizationStrataReport};
 use sagascript_core::diarization::report::{
     DecoderEvidence, DiarizationParameters, DiarizationReport,
@@ -32,7 +33,6 @@ use sagascript_core::hash::sha256_hex;
 use sagascript_core::meeting::MeetingTranscript;
 
 const MAX_INPUT_BYTES: usize = 24 * 1024 * 1024;
-const MAX_LINES: usize = 1_000_000;
 
 #[derive(Args, Debug)]
 pub struct DiarizationArgs {
@@ -1044,151 +1044,6 @@ fn parse_report(bytes: &[u8]) -> Result<DiarizationReport, DictationError> {
         ));
     }
     Ok(report)
-}
-
-fn parse_rttm(text: &str) -> Result<(String, Vec<SpeakerTurn>, f64), DictationError> {
-    let mut recording_id = None;
-    let mut turns = Vec::new();
-    let mut seen = BTreeSet::new();
-    let mut duration: f64 = 0.0;
-    for (index, line) in text.lines().enumerate() {
-        if index >= MAX_LINES {
-            return Err(cli_error("RTTM contains too many lines"));
-        }
-        let fields: Vec<_> = line.split_whitespace().collect();
-        if fields.is_empty() || fields[0].starts_with('#') {
-            continue;
-        }
-        if fields.len() < 8 || fields[0] != "SPEAKER" {
-            return Err(cli_error(format!("malformed RTTM line {}", index + 1)));
-        }
-        if fields[2] != "1" {
-            return Err(cli_error(format!(
-                "unsupported RTTM channel at line {}",
-                index + 1
-            )));
-        }
-        let id = fields[1];
-        if id.is_empty() || id == "<NA>" {
-            return Err(cli_error(format!(
-                "invalid RTTM recording ID at line {}",
-                index + 1
-            )));
-        }
-        if let Some(existing) = &recording_id {
-            if existing != id {
-                return Err(cli_error("RTTM contains multiple recording IDs"));
-            }
-        } else {
-            recording_id = Some(id.to_owned());
-        }
-        let start = parse_nonnegative(fields[3], "RTTM start", index)?;
-        let duration_seconds = parse_nonnegative(fields[4], "RTTM duration", index)?;
-        if duration_seconds == 0.0 {
-            return Err(cli_error(format!(
-                "RTTM zero duration at line {}",
-                index + 1
-            )));
-        }
-        let end = start + duration_seconds;
-        if !end.is_finite() || end > 14_400.0 {
-            return Err(cli_error(format!(
-                "RTTM interval out of bounds at line {}",
-                index + 1
-            )));
-        }
-        let speaker = fields[7];
-        if speaker.is_empty() || speaker == "<NA>" {
-            return Err(cli_error(format!(
-                "invalid RTTM speaker at line {}",
-                index + 1
-            )));
-        }
-        let key = (start.to_bits(), end.to_bits(), speaker.to_owned());
-        if !seen.insert(key) {
-            return Err(cli_error(format!(
-                "duplicate RTTM interval at line {}",
-                index + 1
-            )));
-        }
-        duration = duration.max(end);
-        turns.push(SpeakerTurn {
-            start,
-            end,
-            speakers: vec![speaker.to_owned()],
-        });
-    }
-    let recording_id = recording_id.ok_or_else(|| cli_error("RTTM contains no SPEAKER records"))?;
-    Ok((recording_id, turns, duration))
-}
-
-fn parse_uem(
-    text: &str,
-    expected_recording_id: Option<&str>,
-    duration: f64,
-) -> Result<Vec<ScoringRegion>, DictationError> {
-    let mut recording_id = None;
-    let mut regions = Vec::new();
-    for (index, line) in text.lines().enumerate() {
-        if index >= MAX_LINES {
-            return Err(cli_error("UEM contains too many lines"));
-        }
-        let fields: Vec<_> = line.split_whitespace().collect();
-        if fields.is_empty() || fields[0].starts_with('#') {
-            continue;
-        }
-        if fields.len() != 4 {
-            return Err(cli_error(format!("malformed UEM line {}", index + 1)));
-        }
-        if fields[1] != "1" {
-            return Err(cli_error(format!(
-                "unsupported UEM channel at line {}",
-                index + 1
-            )));
-        }
-        let id = fields[0];
-        if id.is_empty() || id == "<NA>" {
-            return Err(cli_error(format!(
-                "invalid UEM recording ID at line {}",
-                index + 1
-            )));
-        }
-        if let Some(existing) = &recording_id {
-            if existing != id {
-                return Err(cli_error("UEM contains multiple recording IDs"));
-            }
-        } else {
-            recording_id = Some(id.to_owned());
-        }
-        if let Some(expected) = expected_recording_id {
-            if expected != id {
-                return Err(cli_error("UEM recording ID does not match RTTM reference"));
-            }
-        }
-        let start = parse_nonnegative(fields[2], "UEM start", index)?;
-        let end = parse_nonnegative(fields[3], "UEM end", index)?;
-        if start >= end || end > duration {
-            return Err(cli_error(format!(
-                "UEM interval out of bounds at line {}",
-                index + 1
-            )));
-        }
-        regions.push(ScoringRegion { start, end });
-    }
-    if recording_id.is_none() {
-        return Err(cli_error("UEM contains no regions"));
-    }
-    Ok(regions)
-}
-
-fn parse_nonnegative(value: &str, kind: &str, index: usize) -> Result<f64, DictationError> {
-    let parsed = value
-        .parse::<f64>()
-        .map_err(|_| cli_error(format!("invalid {kind} at line {}", index + 1)))?;
-    if !parsed.is_finite() || parsed < 0.0 {
-        return Err(cli_error(format!("invalid {kind} at line {}", index + 1)));
-    }
-    Ok(parsed)
 }
 
 fn read_input(path: &Path) -> Result<InputFile, DictationError> {

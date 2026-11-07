@@ -59,31 +59,35 @@ pub enum SettingsError {
         language: &'static str,
     },
 
-    /// Pianissimo only serves a Swedish profile, and this one is not.
-    #[error("Pianissimo is only available for Swedish profile '{profile_id}'")]
-    PianissimoSwedishProfileOnly { profile_id: String },
+    /// A Pianissimo model only serves a profile in its own language
+    /// (`language`), and this one is not.
+    #[error("Pianissimo is only available for {language} profile '{profile_id}'")]
+    PianissimoProfileLanguageOnly {
+        profile_id: String,
+        language: &'static str,
+    },
 
-    /// Pianissimo was chosen for a profile that is not Swedish.
-    #[error("Pianissimo requires a Swedish profile")]
-    PianissimoRequiresSwedishProfile,
+    /// A Pianissimo model was chosen for a profile in another language.
+    #[error("Pianissimo requires a {language} profile")]
+    PianissimoRequiresLanguageProfile { language: &'static str },
 
-    /// Pianissimo Original was chosen for a file run in another language.
-    #[error("Pianissimo Original is only available for Swedish file transcription")]
-    PianissimoSwedishFilesOnly,
+    /// A Pianissimo model was chosen for a file run in another language.
+    #[error("Pianissimo Original is only available for {language} file transcription")]
+    PianissimoFileLanguageOnly { language: &'static str },
 
-    /// The file model is Pianissimo, which only transcribes plain Swedish files,
-    /// and the run is a meeting import or diarization (the app's wording; the
-    /// CLI says it in its own words).
+    /// The file model is Pianissimo, which only transcribes plain files in its
+    /// own language, and the run is a meeting import or diarization (the app's
+    /// wording; the CLI says it in its own words).
     #[error(
-        "Pianissimo supports plain Swedish file transcription only; select a Whisper file model for meetings or diarization"
+        "Pianissimo supports plain {language} file transcription only; select a Whisper file model for meetings or diarization"
     )]
-    PianissimoPlainFilesOnly,
+    PianissimoPlainFilesOnly { language: &'static str },
 
     /// The file model is Pianissimo and the run asks for diarization.
     #[error(
-        "Pianissimo supports plain Swedish file transcription only; choose a Whisper file model for diarization"
+        "Pianissimo supports plain {language} file transcription only; choose a Whisper file model for diarization"
     )]
-    PianissimoNotForDiarization,
+    PianissimoNotForDiarization { language: &'static str },
 
     /// This system cannot run Pianissimo (selecting it, or downloading its
     /// model).
@@ -153,8 +157,9 @@ pub enum SettingsError {
     Storage(String),
 }
 
-/// The display text, for a caller that reports plain text (the CLI's glossary
-/// editor, which has always flattened what its closures report). Like
+/// The display text, for a caller that reports plain text: today the test
+/// helpers (`test_support`, the app's persist tests), which compare refusals by
+/// their text. Production code keeps the typed error (ADR 0006). Like
 /// `From<DictationError> for String`.
 impl From<SettingsError> for String {
     fn from(error: SettingsError) -> String {
@@ -173,11 +178,11 @@ impl SettingsError {
             Self::UnknownProfile { .. } | Self::UnknownDictationProfile { .. } => "unknown_profile",
             Self::ModelIncompatibleWithProfile { .. }
             | Self::ModelIncompatibleWithLanguage { .. } => "model_incompatible",
-            Self::PianissimoSwedishProfileOnly { .. }
-            | Self::PianissimoRequiresSwedishProfile
-            | Self::PianissimoSwedishFilesOnly
-            | Self::PianissimoPlainFilesOnly
-            | Self::PianissimoNotForDiarization
+            Self::PianissimoProfileLanguageOnly { .. }
+            | Self::PianissimoRequiresLanguageProfile { .. }
+            | Self::PianissimoFileLanguageOnly { .. }
+            | Self::PianissimoPlainFilesOnly { .. }
+            | Self::PianissimoNotForDiarization { .. }
             | Self::PianissimoUnsupported => "pianissimo_unavailable",
             Self::InvalidHotkey(_)
             | Self::DuplicateHotkey { .. }

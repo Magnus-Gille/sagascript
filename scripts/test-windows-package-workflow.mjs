@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { WINDOWS_PACKAGE_PATHS } from "./ci/windows-package-gate.mjs";
 
 // The ordering of ci.yml's Windows build identity gates (they run before `npm ci`, so this file must
 // stay free of npm packages) is asserted in scripts/test-ci-parallel-gates.mjs.
@@ -33,7 +34,8 @@ const acceptanceScript = await readFile(new URL("./accept-windows-candidate.ps1"
 
 test("Windows candidate workflow stays non-publishing and explicitly unsigned", () => {
   assert.match(workflow, /workflow_dispatch:/);
-  assert.match(workflow, /- "\.gitattributes"/, "checkout normalization changes must trigger candidate builds");
+  // The pull_request paths: filter moved into scripts/ci/windows-package-gate.mjs (SAGA-551, scripts/test-windows-package-gate.mjs).
+  assert.ok(WINDOWS_PACKAGE_PATHS.includes(".gitattributes"), "checkout normalization changes must trigger candidate builds");
   assert.match(workflow, /permissions:\s*\n\s*contents: read/);
   assert.match(workflow, /tauri build --ci --bundles nsis,msi --no-sign/);
   assert.match(workflow, /SignaturePolicy Internal/);
@@ -53,7 +55,7 @@ test("Windows candidate workflow stays non-publishing and explicitly unsigned", 
   assert.match(workflow, /CMAKE_CXX_COMPILER_TARGET=aarch64-pc-windows-msvc/);
   assert.match(
     workflow,
-    /concurrency:\s*\n\s*group:\s+\$\{\{ github\.workflow \}\}-\$\{\{ github\.event\.pull_request\.number \|\| github\.run_id \}\}\s*\n\s*cancel-in-progress:\s+true/,
+    /concurrency:\s*\n(?:\s*#[^\n]*\n)*\s*group:\s+\$\{\{ github\.workflow \}\}-\$\{\{ github\.event\.pull_request\.number \|\| github\.run_id \}\}[^\n]*\n\s*cancel-in-progress:\s+true/,
   );
   assert.match(workflow, /name: Identify Windows runner image/);
   assert.match(workflow, /\$env:ImageOS/);

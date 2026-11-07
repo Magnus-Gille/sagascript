@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import test from "node:test";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -135,19 +135,32 @@ test("every OS lane runs the gate script once with its own OS, and the MSRV lane
   }
 });
 
-test("ci.yml writes no cargo gate command of its own: the only cargo it runs is the cargo-deny install", () => {
+test("ci.yml writes no cargo gate command of its own: it runs no cargo, and installs cargo-deny from the pinned script", () => {
   const workflow = loadWorkflow();
   const cargo = allSteps(workflow).flatMap(({ job, step }) =>
     commandLines(step)
       .filter((line) => /^cargo\s/.test(line))
       .map((line) => `${job.id}: ${line}`),
   );
-  assert.deepEqual(cargo, ["test-linux: cargo install --locked cargo-deny --version 0.20.2"]);
+  assert.deepEqual(cargo, []);
+  const install = allSteps(workflow).filter(({ step }) => step.name === "Install cargo-deny");
+  assert.deepEqual(
+    install.map(({ job, step }) => `${job.id}: ${commandLines(step).join(" ")}`),
+    ["test-linux: bash scripts/ci/install-cargo-deny.sh"],
+  );
+});
+
+test("the prebuilt cargo-deny install pins the version verify.mjs expects and a SHA-256", () => {
+  const script = readFileSync(join(REPO_ROOT, "scripts/ci/install-cargo-deny.sh"), "utf8");
+  const verify = readFileSync(join(REPO_ROOT, "scripts/verify.mjs"), "utf8");
+  assert.equal(/^VERSION=(\S+)$/m.exec(script)?.[1], /CARGO_DENY_VERSION = "([^"]+)"/.exec(verify)?.[1]);
+  assert.match(script, /^SHA256=[0-9a-f]{64}$/m);
+  assert.match(script, /sha256sum --check --strict/);
 });
 
 test("windows-package.yml keeps the workspace commands the gates run", () => {
   const workflow = loadWorkflow("windows-package.yml");
-  const step = workflow.jobs[0].steps.find((candidate) => candidate.name === "Test and lint Rust workspace");
+  const step = workflow.job("build-windows-candidate").steps.find((candidate) => candidate.name === "Test and lint Rust workspace");
   const commands = commandLines(step);
   for (const id of ["test-workspace", "clippy-workspace"]) {
     const gate = GATES.find((candidate) => candidate.id === id);

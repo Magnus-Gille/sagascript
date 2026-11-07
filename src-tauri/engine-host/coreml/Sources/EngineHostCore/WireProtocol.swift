@@ -34,6 +34,7 @@ public enum WireRequest: Sendable {
     case load(modelDirectory: String, modelID: String, computeUnits: String)
     case transcribeWindow(WireWindowParameters)
     case cancel(target: UInt64)
+    case warm
     case status
     case ping
     case unload
@@ -73,7 +74,7 @@ public enum WireProtocol {
     public static let maxLineBytes = 16 * 1024 * 1024
     public static let hostName = "sagascript-engine-host"
     public static let knownOps: Set<String> = [
-        "hello", "load", "transcribe_window", "cancel", "status", "ping", "unload", "shutdown",
+        "hello", "load", "transcribe_window", "cancel", "warm", "status", "ping", "unload", "shutdown",
     ]
     /// Fixed `bad_request` texts for dictionaries: terms are personal data and never echoed.
     public static let boostTermsMessage =
@@ -135,6 +136,7 @@ public enum WireProtocol {
         case "cancel":
             guard let target = unsignedInteger(object["target"]) else { return bad("cancel requires target") }
             return .success(.cancel(target: target))
+        case "warm": return .success(.warm)
         case "status": return .success(.status)
         case "ping": return .success(.ping)
         case "unload": return .success(.unload)
@@ -319,6 +321,19 @@ public enum WireProtocol {
 
     public static func cancelResult(cancelled: Bool) -> [String: Any] {
         ["cancelled": cancelled]
+    }
+
+    public static func warmResult(_ outcome: WarmOutcome) -> [String: Any] {
+        switch outcome {
+        case let .ran(canary):
+            return [
+                "ran": true,
+                "canary_ms": milliseconds(canary.milliseconds),
+                "probable_recompile": canary.probableRecompile,
+            ]
+        case let .skipped(reason):
+            return ["ran": false, "skipped": reason.rawValue]
+        }
     }
 
     /// One response as JSON (no trailing newline; the writer adds it). Sorted keys keep the output

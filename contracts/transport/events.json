@@ -48,7 +48,26 @@
   "error": {
     "consumer": "gui",
     "samples": [
-      "Recording failed: no audio input device"
+      {
+        "code": "no_audio_captured",
+        "message": "No audio was captured. Please try again.",
+        "retryable": true
+      },
+      {
+        "code": "engine_model_missing",
+        "message": "Pianissimo engine: Model directory does not exist: <path>/foo",
+        "retryable": false
+      },
+      {
+        "code": "unknown_profile",
+        "message": "Unknown dictation profile 'gone'",
+        "retryable": false
+      },
+      {
+        "code": "paste_error",
+        "message": "Accessibility permission denied",
+        "retryable": false
+      }
     ]
   },
   "hotkey-registration-changed": {

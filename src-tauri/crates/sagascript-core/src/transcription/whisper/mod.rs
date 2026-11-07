@@ -8,7 +8,9 @@
 //! - `parallel`: long-file chunking across several Whisper states;
 //! - `stitch`: joining overlapping chunk results and assembling the transcript;
 //! - `progress`: progress callbacks;
-//! - `words`: DTW word timestamps for diarization (the `diarization` feature).
+//! - `words`: DTW word timestamps and the word-timed transcription that
+//!   diarization reads. Always compiled: DTW is a whisper.cpp option, and the
+//!   module uses none of the `diarization` feature's dependencies.
 //!
 //! The old path `transcription::whisper_backend` is an alias of this module.
 
@@ -27,13 +29,11 @@ mod progress;
 mod request;
 mod runtime;
 mod stitch;
-#[cfg(feature = "diarization")]
 mod words;
 
 pub use parallel::{recommended_parallel_chunks, MAX_PARALLEL_CHUNKS};
 pub use request::{TranscribeHooks, TranscribeRequest};
 pub use stitch::{assemble_transcript, contains_no_speech_marker, display_transcript};
-#[cfg(feature = "diarization")]
 pub use words::{
     group_tokens_into_words, DiarizationTranscription, DiarizationTranscriptionTimings, TokenTiming,
 };

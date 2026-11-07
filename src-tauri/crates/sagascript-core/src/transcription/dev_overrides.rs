@@ -99,12 +99,18 @@ mod tests {
     #[cfg(not(any(debug_assertions, feature = "dev-overrides")))]
     #[test]
     fn release_build_ignores_the_real_environment() {
+        use crate::models::PianissimoModel;
+        use crate::transcription::pianissimo_model::{model_dir_env, override_dir};
         std::env::set_var("SAGASCRIPT_ENGINE_HOST", "/tmp/rogue-host");
-        std::env::set_var("SAGASCRIPT_PIANISSIMO_MODEL_DIR", "/tmp/rogue-model");
+        for model in PianissimoModel::ALL {
+            std::env::set_var(model_dir_env(model), "/tmp/rogue-model");
+        }
         assert_eq!(
             crate::transcription::pianissimo_backend::resolve_host(),
             None
         );
-        assert_eq!(crate::transcription::pianissimo_model::override_dir(), None);
+        for model in PianissimoModel::ALL {
+            assert_eq!(override_dir(model), None, "{model:?}");
+        }
     }
 }

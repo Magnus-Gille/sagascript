@@ -60,12 +60,16 @@ keychain and set `APPLE_SIGNING_IDENTITY`. Set `APPLE_API_ISSUER`,
 ## Release procedure
 
 1. Update the version in `package.json`, `package-lock.json`,
-   `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock`, and
-   `src-tauri/tauri.conf.json`.
+   `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock`,
+   `src-tauri/engine-host/ort/Cargo.toml`,
+   `src-tauri/engine-host/ort/Cargo.lock`, and `src-tauri/tauri.conf.json`.
 2. Run `npm run release:check`, `npm run licenses:check`, `npm run check`,
    `cargo fmt --all -- --check`, `cargo test --workspace`, and
    `cargo clippy --workspace --all-targets -- -D warnings`.
-3. Merge the release commit to `main`. Do **not** tag yet.
+3. Update the release pull request from `main`, then merge the release commit to
+   `main`. Do **not** tag yet. The ruleset does not require pull requests to be up
+   to date ([ADR 0009](docs/adr/0009-merge-without-up-to-date.md)), so this update
+   is a release rule: the prebuild builds the commit that `main` will release.
 4. **Prebuild (owner touchpoint 1: signing approval).** The push to `main` starts
    `prebuild-release.yml`. Only a push that *changes* the version in
    `package.json` or `src-tauri/tauri.conf.json` (compared with the push's
@@ -82,8 +86,9 @@ keychain and set `APPLE_SIGNING_IDENTITY`. Set `APPLE_API_ISSUER`,
    that environment deployment on the prebuild run. The run ends by uploading
    `release-manifest.json` (`{version, sha, tree_sha, files:[{name,sha256,size}]}`)
    next to the artifacts (30-day retention). Nothing is published.
-5. **Tag (owner touchpoint 2: publish).** Create and push exactly `vVERSION` on
-   the prebuilt commit. `release.yml` then:
+5. **Tag (owner touchpoint 2: publish).** Check that the push CI on `main` is
+   green for the prebuilt commit, then create and push exactly `vVERSION` on
+   that commit. `release.yml` then:
    - looks for a successful `prebuild-release.yml` run on `main` (push or manual
      dispatch) for the tag's exact commit SHA whose artifacts are all present and
      not expired (otherwise it falls back, logging why in the step summary);
@@ -159,6 +164,27 @@ from the prebuild artifacts. `--require-windows` (used by the promote path) turn
 missing Windows SHA256 file, `windows-beta-VERSION` release, or (in CI only,
 `GITHUB_ACTIONS=true`) acceptance JSON from a skip into a failure. It exits non-zero
 on any failure.
+
+If the verifier itself needs a correction after promotion, merge and review that
+correction first. Then dispatch `verify-release-draft.yml` on `main` with the
+original Release run ID, version, exact 40-character release SHA from its accepted
+receipt, and a fresh `draft_manifest` JSON snapshot. The authorized operator reads
+the stable and Windows draft metadata by release ID and supplies
+`{ schema_version: 1, repo, version, sha, capturedAt, release, windowsRelease }`.
+Each release needs `id`, `tag_name`, `draft`, `prerelease`, and `assets`; each
+asset needs `id`, `name`, `size`, and its provider `digest` (`sha256:…`).
+
+The workflow keeps a read-only token: draft discovery needs privileges it does
+not hold, so it validates the supplied snapshot, not live draft metadata. It
+requires a successful original promotion, downloads its draft snapshot and
+Windows acceptance evidence, and matches every file to the supplied inventory,
+size and SHA-256 digest before running the full verifier. The operator must
+re-read the live draft IDs, flags and asset digests before dispatch and after
+success, confirming they still match the recorded snapshot. Retain both readbacks
+with the CI receipt, which distinguishes verifier and application revisions.
+
+This path never rebuilds, signs, creates or publishes a release. Do not move the
+tag to the verifier fix or weaken the checks to obtain a successful result.
 
 Windows beta publication is a separate owner action: the promote step drafts the
 `windows-beta-VERSION` prerelease from the exact prebuilt x64 artifacts; publish it

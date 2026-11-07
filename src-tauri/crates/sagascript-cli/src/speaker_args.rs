@@ -1,7 +1,7 @@
 //! Shared `--speakers` / `--min-speakers` / `--max-speakers` / `--force-speakers` flags (issue #305).
 
 use clap::Args;
-use sagascript_core::diarization::speaker_hint::SpeakerCountHint;
+use sagascript_core::diarization::speaker_hint::{SpeakerCountFlags, SpeakerCountHint};
 
 /// Speaker-count hint flags, flattened into every command that clusters speakers.
 #[derive(Args, Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -36,14 +36,17 @@ pub struct SpeakerCountArgs {
 impl SpeakerCountArgs {
     /// The validated hint, or `None` when no flag was given.
     pub fn hint(&self) -> Result<Option<SpeakerCountHint>, String> {
-        match self.force_speakers {
-            Some(n) => Ok(Some(SpeakerCountHint::forced(n))),
-            None => SpeakerCountHint::from_parts(
-                self.speakers,
-                self.min_speakers,
-                self.max_speakers,
-                false,
-            ),
+        SpeakerCountFlags::from(*self).hint()
+    }
+}
+
+impl From<SpeakerCountArgs> for SpeakerCountFlags {
+    fn from(args: SpeakerCountArgs) -> Self {
+        Self {
+            speakers: args.speakers,
+            min_speakers: args.min_speakers,
+            max_speakers: args.max_speakers,
+            force_speakers: args.force_speakers,
         }
     }
 }

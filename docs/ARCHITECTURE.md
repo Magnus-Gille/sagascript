@@ -18,18 +18,18 @@ verification commands, [docs/recipes/](recipes/README.md) for step-by-step chang
 | `src/lib/*.ts`, `src/lib/*.js` | DOM-free logic (reducers, queues, update recovery), tested by Vitest next to the module and by the remaining `scripts/test-*.mjs`. |
 | `src/lib/tauri-events.svelte.ts`, `models.svelte.ts`, `permissions.ts`, `platform.ts` | Shared by the windows. Tauri events are only listened to through `useTauriEvent`/`useDragDropEvent`/`subscribeTauriEvent` (they own the unlisten; ESLint forbids raw `listen()` in `src/`) and take their payload types from `EventMap` in `events.ts`; `models.svelte.ts` holds `PIANISSIMO_ID` and `downloadModelById`; `permissions.ts` the macOS Accessibility request and wait; `platform.ts` one `get_platform` lookup per window. |
 | `src-tauri/src/` | App crate `sagascript`: CLI dispatch, Tauri shell, tray, hotkeys, paste, overlay, updater, Tauri commands. |
-| `src-tauri/crates/sagascript-core/` | Library: audio decode/resample/capture, Whisper and Pianissimo transcription, engine-host client, model catalog (`models/`), settings store, model downloads, diarization (`diarization/`), meeting documents (`meeting/`), `fsutil` (publish a new file without ever replacing one, [ADR 0008](adr/0008-publishing-new-files.md)). |
-| `src-tauri/crates/sagascript-cli/` | Library + headless `sagascript` binary: every clap subcommand. Also holds meeting/diarization pipelines that the app imports. |
+| `src-tauri/crates/sagascript-core/` | Library: audio decode/resample/capture, Whisper and Pianissimo transcription, engine-host client, model catalog (`models/`), settings store, model downloads, diarization (`diarization/`), shared meeting pipeline (`meeting/pipeline/`), and with the `diarization` feature the native reprocessing backend (`meeting/reprocess/native.rs`); meeting documents (`meeting/`), `fsutil` (publish a new file without ever replacing one, [ADR 0008](adr/0008-publishing-new-files.md)). |
+| `src-tauri/crates/sagascript-cli/` | Library + headless `sagascript` binary: clap subcommands, CLI adapters, batch orchestration and output. Its `transcribe/` modules call the shared core meeting pipeline; with the `diarization` feature, `meeting_reprocessing_cli.rs` calls the native reprocessing backend. The app uses this crate for dispatch and launch integration. |
 | `src-tauri/crates/sagascript-engine-protocol/` | Wire types for the engine-host JSON Lines protocol ([spec](engine-host-protocol.md)); used by the core client, the ORT host and the fake host. |
 | `src-tauri/crates/sagascript-testsupport/` | Dev-only test helpers shared by core, CLI and app tests: `TempDir` (unique, removed on drop), `fake_settings` (a settings file alone in its own `TempDir`), `sha256_hex`, `isolated_cli_env` (spawned CLI without inherited credentials, with `SAGASCRIPT_SETTINGS_PATH`). Never linked into a shipped binary. |
 | `src-tauri/engine-host/coreml/` | Swift package: Core ML host `sagascript-engine-host` (Pianissimo on macOS 14+ Apple silicon). |
-| `src-tauri/engine-host/ort/` | Standalone Cargo workspace (own `Cargo.lock`): ONNX Runtime CPU host `sagascript-engine-host-ort`, shipped for Windows on ARM. |
+| `src-tauri/engine-host/ort/` | Standalone Cargo workspace (own `Cargo.lock`): ONNX Runtime CPU host `sagascript-engine-host-ort`, shipped for Windows on ARM. While it loads a model, runs a `warm` canary or transcribes a window, `power_qos.rs` opts the process out of Windows EcoQoS (HighQoS) and restores the previous power-throttling state after the last overlapping scope. |
 | `src-tauri/engine-host/test-vectors/` | Vectors shared by both hosts' unit tests: `protocol/` (the golden JSONL transcripts and the scripted `fake-engine.json` that define the wire contract, also decoded by `sagascript-engine-protocol`; [spec](engine-host-protocol.md#golden-transcripts)) and `context-biasing.json`. |
 | `src-tauri/tauri.conf.json`, `src-tauri/capabilities/` | App config (`frontendDist: ../dist`) and plugin permissions. |
-| Meeting modules | Core `meeting/` (`mod.rs` the transcript document and its exports, `media.rs`, `review.rs`, `reprocess/{mod, matching, plan, proposal}.rs`); CLI `meeting.rs`, `meeting_proposal.rs`, `meeting_reprocessing*.rs` and `transcribe/meeting.rs`; app `meeting_jobs.rs`, `meeting_media*.rs`, `meeting_review_commands.rs`, `meeting_reprocessing_commands.rs`. Docs: `docs/meeting-*.md`. |
+| Meeting modules | Core `meeting/` (`mod.rs` the transcript document and its exports, `media.rs`, `review.rs`, `pipeline/` the shared file pipeline, `reprocess/{mod, matching, plan, proposal, io}.rs`, and with the `diarization` feature `reprocess/{native, orchestrate}.rs`: native execution, planning, and the staged publication of a reprocessing behind the `WorkBackend` seam; `control.rs` the cancellation and phases of a job, `source.rs` the hash that binds a document to its recording, `assemble.rs` the document from the segments of a diarized run); CLI `meeting.rs`, `meeting_proposal.rs` (the `meeting proposal` command), `meeting_reprocessing_cli.rs` (the `meeting reprocess` adapter), and `transcribe/` (CLI arguments, batch/output adapters and meeting-input validation); app `meeting_jobs.rs`, `meeting_media*.rs`, `meeting_review_commands.rs`, `meeting_reprocessing_commands.rs`, which call core entry points. Docs: `docs/meeting-*.md`. |
 | Run context (#346) | Which profile, language and dictionary a file, recording or reprocessing run uses: core `run_context.rs` (`RunSelection` = profile and language, `RunContext` = those plus the dictionary; pure, no I/O; also `file_beam_size`, the beam default of a file run) and CLI `run_request.rs` (`RunRequest`: `--profile`, `--language`, `--prompt`, `--prompt-file` as typed; parses the language, reads the prompt file). `transcribe`, `record`, `meeting reprocess` and the app's file transcription (`commands/files.rs` `file_transcription_context`, which has no language override) all use it. The model is not resolved there: each caller chooses its own from the resolved language, which also fixes its order of errors (`tests/run_context_cli.rs`). |
 | Settings operations (#373) | One implementation per settings operation that both `sagascript config` and the app's setters perform. Core `settings/ops.rs` holds them as `Settings` methods (`apply_language_selection`, `set_whisper_model`, `set_auto_select_model`, `set_pianissimo_dictation`, `apply_profiles_change`, `set_auto_paste`, `set_vad_enabled`; the machine-aware siblings of the `_gated` ones are in `machine.rs`). The CLI applies them from a key table (`config/keys.rs`, section 2.2), the app from `commands/settings.rs`; side effects stay with the surface. The CLI/app parity table is `core::test_support::settings_ops_table`. |
-| Transcribe command (#343) | CLI `transcribe/`: `mod.rs` runs a command (`run`, `run_inner`, the Whisper batch `run_whisper_batch`) and delegates one input to `transcribe_file`, which plans the file and runs the plain or the diarized pipeline. `plan.rs` decides before any work starts (`plan_run` → `RunPlan` with its `EnginePlan`, its model preflight asking the same `InferenceBackend` the run uses; `plan_file` → `FilePlan` with `FileMode`; `FileRequest` is one input with everything it is told, and `FileOptions` is what the command line says about it, narrowed from `TranscribeArgs` so the meeting entry points need not build one). `services.rs` bundles the collaborators a file run reaches outside itself through, all of which a test replaces: the `InferenceBackend`, with diarization the `DiarizationAnalyzer`, and the `Canceller` (the process-wide one is named once, in `run`). `source.rs` is where the audio comes from: `decode_file` and, for a diarized run, `enum Source { Cached, Decoded }` with `acquire_source` (cache identity, lookup, decode; `Cached` exists only with the diarization feature). `inference.rs` is the Whisper backend as a run uses it: the `InferenceBackend` trait (which models are installed, load, language probe, plain and diarization transcription; `WhisperBackend` is the one implementation, a test brings its own), model loading and the language check that follows. `plain.rs` (decoder options, the backend call with its narration, `assemble_plain_result` in `output.rs`) and `diarized/` are the two pipelines. `diarized/mod.rs` only delegates, in order, to steps that each take a request type and return a result type: `prepare.rs` (the language evidence, the clustering settings), `analysis.rs` (the speaker analysis and Whisper word timings, from the cache or computed, and the cache write under `CachePolicy::Normal` or `RefreshNew`), `speakers.rs` (clustering, then merging the words into the speakers with the report) and `result.rs` (the `--json` object or the meeting document). Around them: `args.rs` (the command line), `inputs.rs` (directory expansion), `resolve.rs` (language and model IDs, which model a run gets, the one-run glossary), `vocab_correction.rs`, `language_detection.rs` (the language check; it asks for its detectors through `DetectorLoader`, naming an `EncoderPolicy`, and `InstalledDetectors::load` is the one place that touches the models directory, local files only today; which models are installed it asks the backend; a new policy is a deliberate change, but the types do not stop code in the loader from fetching, so review and `language_detection_never_downloads_an_encoder` have to) and `language_regions.rs`, `diarize.rs` (cache policy, the `DiarizationAnalyzer` seam with `OnnxAnalyzer` the one implementation, decoder options, the overlapped or sequential analysis, the performance report), `meeting.rs` (entry points the app and reprocessing call), `pianissimo.rs` (the Pianissimo batch, behind `PianissimoHost` and `PianissimoEngine`; `InstalledPianissimo` and `PianissimoBackend` are the ones that ship), `progress.rs` (`--progress-json`, `Progress`), `output.rs` (the per-file result, `BatchSink`, the `Clipboard` seam for `--clipboard`, warnings). `transcribe/mod.rs` re-exports the paths other code imports. Tests: the sibling `transcribe_tests.rs`; `transcribe_file_tests.rs`, which drives a Whisper run in-process with a scripted `InferenceBackend` and, nested, the diarized path (`transcribe_diarized_tests.rs`: scripted `DiarizationAnalyzer`, cache hit and miss under both policies, failures and cancels that must keep the previous cache) and the Pianissimo batch (`transcribe_pianissimo_tests.rs`: scripted host and engine); and the whole command's observable contract (streams, exit status, error `code`, cache hits, cancellation, and a successful Pianissimo run against the fake engine host on macOS) in `tests/transcribe_contract.rs`. |
+| Transcribe command (#343) | The shared file pipeline is core `meeting/pipeline/`: it owns the plan, source, inference, language detection, diarization steps, services, progress and result types. CLI `transcribe/` owns command arguments and input expansion (`args.rs`, `inputs.rs`), CLI resolution and adapters (`plan.rs`, `resolve.rs`, `vocab_correction.rs`, `plain.rs`), the Pianissimo batch, and `output.rs`/`BatchSink` for batch results, clipboard and output modes; `meeting.rs` validates the single-input meeting scope. Core's `Narrator` seam lets CLI `output::Out` provide captured stderr and a decode bar, while app meeting jobs use `StderrNarrator`. Tests: the sibling `transcribe_tests.rs`; `transcribe_file_tests.rs`, which drives a Whisper run in-process with a scripted `InferenceBackend` and, nested, the diarized path (`transcribe_diarized_tests.rs`: scripted `DiarizationAnalyzer`, cache hit and miss under both policies, failures and cancels that must keep the previous cache) and the Pianissimo batch (`transcribe_pianissimo_tests.rs`: scripted host and engine); and the whole command's observable contract (streams, exit status, error `code`, cache hits, cancellation, and a successful Pianissimo run against the fake engine host on macOS) in `tests/transcribe_contract.rs`. |
 | `scripts/` | Build/release/CI helpers (`*.sh`, `*.mjs`, `*.ps1`), Node tests `test-*.mjs`, Playwright suites `qa-*.mjs`, browser IPC mock `fixtures/transcription-browser-mock.js`, Python tooling `dictation_eval/` and `diarization_sv/`, Core ML conversion `pianissimo-coreml/`. |
 | `tests/` | Code-health contract tests (`tests/scripts/`) and fixtures (`tests/fixtures/code-health/`). |
 | `contracts/` | The Rust–TypeScript transport contract: shared payload fixtures in `transport/` that Rust writes and Vitest parses ([README](../contracts/README.md), #347). |
@@ -51,17 +51,19 @@ App crate modules (`src-tauri/src/`):
 | `app_controller.rs` | `AppController`: dictation state (`AppState`), audio capture, in-memory `Settings` copy, session logging. |
 | `events.rs` | Event catalogue: every event's name, payload type, producer and consumer (`events::event::*`); emit with `EmitEvent::emit_event`, since a raw `tauri::Emitter::emit` is a clippy error. |
 | `contract/` | Tests only: the shared fixture helper and the `CommandMap` generator (`command_map.rs`, parses `generate_handler!` and the command signatures with `syn`; a registered `commands::name` is looked up in `commands/mod.rs` and the files below it). |
-| `hotkey/` | Shortcut registration, `HotkeyHealth`, bare F-key monitor `macos_bare.rs`. |
+| `hotkey/` | Shortcut registration, startup selection/cleanup (`startup.rs`), runtime replacement/rollback (`transition.rs`), `HotkeyHealth`, bare F-key monitor `macos_bare.rs`. |
 | `paste/` | `PasteService` (clipboard + simulated paste: enigo on macOS/Windows, `xdotool` on Linux). `paste/completion.rs` (completion wait) is mounted from `main.rs` via `#[path]` as `crate::paste_completion`. |
 | `platform/`, `overlay.rs`, `focus_diag.rs`, `logging/` | Per-OS helpers (`platform::mic_permission()`: the macOS microphone permission and its `unsafe` AVFoundation calls; `platform/macos.rs`), recording indicator window, focus diagnostics, app log file. |
 | `plain_file_jobs.rs`, `meeting_*.rs` | File-transcription and meeting job slots, cancel, deadlines. |
 
 **Dependency direction:** `sagascript-engine-protocol` ← `sagascript-core` ← `sagascript-cli`
-← app. The app uses the CLI crate for CLI dispatch (`sagascript_cli::try_parse`,
-`sagascript_cli::run`) and for meeting pipelines (`sagascript_cli::transcribe`,
-`sagascript_cli::meeting_reprocessing`, `sagascript_cli::meeting_proposal`).
-**Planned:** [#374](https://github.com/Magnus-Gille/sagascript/issues/374) moves those
-pipelines into core.
+← app. Core owns the shared meeting pipeline (`sagascript_core::meeting::pipeline`) and, with the
+`diarization` feature, the native reprocessing backend (`sagascript_core::meeting::reprocess::native`). The CLI crate owns
+clap parsing, subcommand dispatch, batch/output adapters and launch markers; the app imports it
+only for dispatch and launch integration (`sagascript_cli::try_parse`, `run`,
+`effective_log_filter` and `open::*`). App meeting jobs call core's pipeline and reprocessing
+entry points directly. The reprocessing domain (plans, results, orchestration, proposal reading
+and the diarization cache) is core's as well (`sagascript_core::meeting::reprocess::{orchestrate, io}`).
 
 `sagascript-testsupport` is only a dev-dependency (of core, the CLI and the app) and depends
 on none of them; fixtures made of core types (`meeting_transcript()`) live in
@@ -69,8 +71,10 @@ on none of them; fixtures made of core types (`meeting_transcript()`) live in
 the CLI and the app enable as a dev-dependency.
 
 **Binaries:** the app crate and the CLI crate both build `sagascript`; a bare app invocation
-starts the GUI, a subcommand runs the CLI and exits. The headless CLI prints help and exits 2
-without a subcommand. `target/<profile>/sagascript` is whichever was built last. Core also
+starts the GUI, a subcommand runs the CLI and exits. The combined app/CLI binary intentionally
+retains the CLI's clap dependency transitively for this dispatch path; separate binaries are a
+later design decision. The headless CLI prints help and exits 2 without a subcommand.
+`target/<profile>/sagascript` is whichever was built last. Core also
 builds `sagascript-fake-engine-host` (`crates/sagascript-core/tests/support/fake_engine_host.rs`)
 for tests.
 
@@ -133,15 +137,23 @@ CLI and the app and wait for their own change: `settings::{WhisperModel, FileMod
   (`MeetingTranscript`); `media.rs` the audio attached to a meeting; `review.rs` the replayable
   corrections (`MeetingReview`); `reprocess/` the migration of a review onto a new
   transcript (`mod.rs` the preview, `matching.rs` segment and speaker matching, `plan.rs` what
-  work a reprocessing needs, `proposal.rs` the saved proposal). All of it is pure and compiled
-  in every build.
+  work a reprocessing needs, `proposal.rs` the saved proposal, `io.rs` the bounded reading and the
+  no-replace writing of those documents, `orchestrate.rs` the execution of a plan: planning from
+  the files, the staged publication, and the `WorkBackend` seam that a test replaces) (#374).
+  `control.rs`, `source.rs` and `assemble.rs` are what a meeting run is made of: the
+  cancellation flag and phases a job reports (`MeetingControl`, `MeetingPhase`), the stable hash
+  of the recording, and the meeting document from the segments of a diarized run. Everything is
+  compiled in every build except `orchestrate.rs`, which clusters through `diarization::engine`
+  and so needs the `diarization` feature.
 - `diarization/`: compiled in every build, except `engine/`. `mod.rs` holds the types
   (`DiarizeConfig`, `DiarizationAnalysis`, the segment types), the constants and the
   validation of a cached analysis; `speaker_hint.rs` the speaker-count hint, which the meeting
   document records; `model.rs` the model registry; `merge.rs` the join of speakers and
-  transcript segments; `report/` the evidence types (`mod.rs`) and the projection of a cached
+  transcript segments; `cache.rs` the reusable cache of a diarized run (#374: what `--diarize-cache`
+  and selective reprocessing read and write; its types are the cache file's format); `report/` the evidence types (`mod.rs`) and the projection of a cached
   analysis onto them (`projection.rs`, `DiarizationAnalysis::report`); `eval/` the offline scoring
-  against a reference, which only the CLI's `diarization` commands use. `engine/` is what needs
+  against a reference, which only the CLI's `diarization` commands use (`rttm.rs` parses the RTTM and
+  UEM files they read). `engine/` is what needs
   an optional dependency of the `diarization` feature (ONNX Runtime and ndarray in
   `segmentation.rs` and `embedding.rs`, rustfft in `fbank.rs`, kodama in `clustering.rs`) and
   the pipeline functions `analyze`, `diarize` and `cluster` that run them. Only `engine/` may name `ort`, `kodama`, `ndarray` or `rustfft` (tested), so the rest builds without the feature; `diarization::
@@ -232,6 +244,10 @@ sequenceDiagram
   `crates/sagascript-core/src/transcription/live_dictation.rs` (Whisper via
   `transcription/whisper/` (still importable as `transcription::whisper_backend`), Pianissimo via
   `pianissimo_backend.rs` and the engine host, 2.4).
+- `dictation/inference_wait.rs` owns only the asynchronous wait/abort/grace policy used by the
+  live pipeline; model selection and inference remain one blocking transaction, and the caller
+  retains timing, error, and logging behavior. This is the first small seam for #344; broader
+  orchestration, generation, and whole-cycle boundaries remain in the existing pipeline.
 - Callback thread: `tauri-plugin-global-shortcut` calls `handle_hotkey_event` inline from
   `global-hotkey`. On macOS that is the main thread (Carbon handler; the `macos_bare` NSEvent
   monitors too); on Windows key-down arrives on the main thread and key-up on a spawned
@@ -283,7 +299,30 @@ sequenceDiagram
 | Store | `crates/sagascript-core/src/settings/store.rs` | `load_with`, `load_from`, `save`, `update_with`, `try_update_with` take the machine state as a `MachineProbe`; `machine::{load, update, try_update}` are them with this machine's probes (`store::{load, update, try_update}` re-export those for one release); cross-process `fs2` lock on `<file>.json.lock`; read-merge-write keeps unknown keys; atomic rename. |
 | AppController | `app_controller.rs` | In-memory copy: `settings()`, `update_settings()` (`settings_mut()` in tests only). Dictation reads it at use time. It can differ from the file on purpose: the watcher keeps the registered shortcuts after a failed reload, and a host that cannot run Pianissimo demotes a selection of it in this copy only. |
 | Watcher | `start_settings_watcher` in `settings_watcher.rs` | `PollWatcher` on macOS, `RecommendedWatcher` elsewhere; filter `configuration_event_may_affect`; waits while a dictation records (`acquire_hotkey_configuration`). Fires for the app's own writes too (harmless reload). |
-| Frontend | `getSettings()` / setters in `src/lib/api.ts`; `saveSetting()`, `applySetting()` and the `settings_reloaded` listener in `Settings.svelte` | Re-reads after a write. A rejected setter saved nothing; a saved change whose re-read fails is reported as saved, never repeated and never rolled back: the window shows a Reload settings notice, disables the controls that save a setting and sends no further change until a read succeeds. Reads are settled in the order they were issued, so a late answer, success or failure, cannot replace or hide a newer one ([#341](https://github.com/Magnus-Gille/sagascript/issues/341)). |
+| Frontend | `getSettings()` / setters in `src/lib/api.ts`; `settingsTransactionController.ts`, `modelCatalogController.ts`, `applySetting()` and the `settings_reloaded` listener in `Settings.svelte` | Re-reads after a write. A rejected setter saved nothing; a saved change whose re-read fails is reported as saved, never repeated and never rolled back: the window shows a Reload settings notice, disables the controls that save a setting and sends no further change until a read succeeds. Reads are settled in the order they were issued, so a late answer, success or failure, cannot replace or hide a newer one ([#341](https://github.com/Magnus-Gille/sagascript/issues/341)). File and profile model catalog requests publish only the latest complete result and are invalidated on unmount. Clearing a blocking dictionary and retrying its language change remains a separate compare-and-swap recovery flow. |
+
+**Adding a frontend setting.** `Settings.svelte` owns the runes, visible notices,
+control values and settings-read ordering. `settingsTransactionController.ts` owns
+the write/read-back outcome: `saved: false` means no confirmed write; `saved: true`
+with `confirmed: false` means the write completed but its read-back is uncertain.
+Never retry the write just because that read-back failed. Add the typed API setter,
+then use `applyScalarSetting` for a value that does not affect model selection, or
+`applySetting` when profile models need refreshing. For example, the existing beam
+size handler calls `await applyScalarSetting(() => setBeamSize(value))` and restores
+the native select's previous value only when that call reports an unsaved change.
+Use `saveSetting` directly when the caller needs the typed result or an `afterSave`
+callback (for example, ending hotkey capture); that callback runs before read-back.
+Add a rendered control test for rejection and for a successful write whose read-back
+fails, using the typed mock IPC helpers in `src/test/settings.ts`.
+
+`modelCatalogController.ts` owns request generation, cancellation and disposal;
+the component's injected `load`, `publish` and `reject` callbacks own query composition
+and UI state. File and profile catalogs use separate controller instances. Refresh
+the existing instance instead of issuing an independent query: only the latest
+complete answer may publish, and cancelling an older effect cannot cancel a newer
+manual refresh. Dispose both instances when the component unmounts. The explicit
+dictionary-clear/language-retry recovery transaction remains separate because it
+coordinates two writes with compare-and-swap and its own recovery state.
 
 Rules: write through `store::update`/`try_update` (never `save()` a possibly stale clone);
 release the file lock before taking the controller lock; the watcher replays only hotkey
@@ -416,13 +455,27 @@ sequenceDiagram
   `engine-host\sagascript-engine-host-ort.exe`); `SAGASCRIPT_ENGINE_HOST` only in development
   builds (`dev-overrides`).
 - Recovery ([#366](https://github.com/Magnus-Gille/sagascript/issues/366)): `Failed` lasts
-  `failed_cooldown` (60 s), then one fresh start (half-open); a window that times out returns at
-  once, and a detached `engine-host-wedge-watch` thread kills the host if it sends no terminal
-  response within `wedge_grace` (30 s) after `cancel`; stdin writes are bounded
+  `failed_cooldown` (60 s), then one fresh start (half-open); a file-job window that times out
+  returns at once, and a detached `engine-host-wedge-watch` thread kills the host if it sends no
+  terminal response within `wedge_grace` (30 s) after `cancel`; a dictation (interactive) window
+  has `Timeouts::interactive` (by default the batch max(15 s, 3 × window), above a Neural Engine
+  recompile of 11.5-16.7 s, #397) and its timeout kills the host at once (`WindowTicket::wait`), after which the job resubmits its windows like after a crash (the
+  client is shared by dictation and file jobs of a model, so a file job's windows in flight on that
+  host fail as crashed and take their own crash-resubmit path); stdin writes are bounded
   (`Timeouts::write`); the restart backoff is slept unlocked and is cancel-aware.
   `EngineHostClient::reset()` clears `Failed` at once but has no production caller: settings that
   change the engine (host, model, compute units, idle policy) already replace the shared client
   (`shared_client`), model deletion shuts it down, and the CLI `engine doctor` uses its own client.
+- Neural Engine eviction ([#397](https://github.com/Magnus-Gille/sagascript/issues/397)): macOS can
+  evict a loaded model's Neural Engine program, and the next prediction then recompiles it. The
+  `warm` op runs one canary prediction outside the window queue (Swift `WarmCoordinator`, ONNX
+  `Server::handle_warm`). The app sends it on push-to-talk key-down and wake when the model is
+  loaded (`pianissimo_backend::warm_or_touch`, from the `pianissimo-warm` thread of
+  `warm_in_background`), so a recompile overlaps the user's speech. The Core ML host adds its own
+  canaries after memory pressure and wake (`WarmTriggers.swift`, wired in `main.swift`) and an
+  opt-in keep-alive (`SAGASCRIPT_ENGINE_KEEPALIVE_S`). Host stderr lines prefixed `info: ` are
+  logged at INFO (`process.rs`), all others at debug. Measurements:
+  `docs/benchmarks/pianissimo-ane-eviction.md`.
 - PCM temp dirs hold a locked `owner.lock`; `pipeline::sweep_stale_pcm_dirs` (app startup and
   shared-client creation, background, once per process; `engine doctor` on demand) removes the
   dirs of dead owners, and dirs whose owner cannot be proven dead (pre-#366, or on a file system
@@ -456,6 +509,20 @@ sequenceDiagram
 
 Observed acquisition order (outer → inner). Nothing enforces it; keep new code consistent:
 
+Shortcut replacement order and rollback outcomes live in `hotkey/transition.rs` behind the
+`Registrar` seam. `NativeRegistrar` delegates to the existing Tauri registration functions;
+the command and settings watcher retain their own locks, health messages, settings handling,
+and events. Startup uses `hotkey/startup.rs`: `prepare` validates the whole saved
+profile configuration and selects its shortcuts or the safe fallback; `apply`
+registers that set and cleans up the entire attempted set if registration fails.
+Its result distinguishes registered, inactive after successful cleanup, and unknown
+after failed cleanup. The launch caller releases the controller lock before
+registration and retains diagnostic logging, health recording and event emission.
+Startup runs synchronously before the settings watcher starts; it does not acquire
+the runtime transition guard. The native registrar and its thread placement are
+unchanged. Startup tests inject the same `Registrar` seam as the transition tests;
+they exercise production selection and cleanup without Tauri or real OS shortcuts.
+
 1. `HotkeyHealth.transition` is held for a whole hotkey transaction (`apply_hotkey_change`,
    settings watcher). Inside it the controller lock and the settings file lock are each taken
    and released in turn, never nested. The configuration lease (`acquire_hotkey_configuration`)
@@ -468,6 +535,12 @@ Observed acquisition order (outer → inner). Nothing enforces it; keep new code
    and → `LoggingService` locks.
    - (4b) `SharedController` → `HotkeyHealth.state`: `handle_hotkey_event` reads
      `health.operational_hotkey()` under the controller guard; no reverse order exists.
+   - (4c) Live dictation's queued UI callback keeps `SharedController` through its
+     generation/state check and synchronous main-thread UI commit. Tray updates
+     briefly take `HotkeyHealth.state` and `SharedStatusItem`; neither has a reverse
+     path to the controller. The UI adapters must not reacquire the controller or
+     wait for a worker. This prevents a new recording from starting between an old
+     callback's validation and its overlay/tray/window changes.
 5. `PlainFileJobs.active` → `pending_cancels`.
 6. Engine host `lifecycle` → `state`.
 7. Whisper `load_lock` → `state` → `loaded_runtime` → `cached_runtime` (comment above the lock
@@ -499,15 +572,23 @@ settings watcher runs each event under `catch_unwind`; its health is
 | app | `updater-smoke-test` | off | `SIGNED_UPDATE_MANIFEST_URL` → `http://127.0.0.1:34827/latest.json`; enabled only by `.github/workflows/test-build.yml`. |
 | app, core, CLI | `dev-overrides` | off | Release builds honor `SAGASCRIPT_ENGINE_HOST` / `SAGASCRIPT_PIANISSIMO_MODEL_DIR` (`transcription/dev_overrides.rs`; debug builds always do). |
 | core | `record` | off | `audio::capture` / `AudioCaptureService` (cpal; ALSA on Linux). The app always enables it. |
-| core | `diarization` | off | `ort`, `rustfft`, `kodama`, `ndarray`; `diarization/engine/` (and the re-exports of its old paths from `diarization`); the `diarize_eval` example; DTW word timestamps in `transcription/whisper/words.rs`. |
+| core | `diarization` | off | `ort`, `rustfft`, `kodama`, `ndarray`; `meeting/reprocess/orchestrate.rs` (it clusters through the engine); `diarization/engine/` (and the re-exports of its old paths from `diarization`); the `diarize_eval` example. |
 | CLI | `record` | on | The `record` subcommand. |
-| CLI | `diarization` | on | `--diarize`, `meeting_reprocessing*`, `speaker_args`, `diarization_cache`. |
+| CLI | `diarization` | on | `--diarize`, `meeting_reprocessing*` (the `meeting reprocess` command and the native backend), `speaker_args`. |
 | ORT host | `dev-overrides` | off | Release builds honor `ORT_DYLIB_PATH`. |
 
 Feature unification: `cargo test --workspace` builds core with `record` and `diarization`
 (enabled by the app and CLI). CI therefore also runs core and CLI per package to keep the
 no-feature builds honest, and asserts that `cargo tree -p sagascript-cli --no-default-features`
 contains no cpal/ALSA.
+
+DTW word timestamps (`transcription/whisper/words.rs`, `ContextProfile::TokenAlignment`) have no
+feature (#371). DTW is a whisper.cpp context option and whisper.cpp is linked into every build;
+`words.rs` uses only `whisper-rs` and core types, none of the `diarization` feature's dependencies.
+So the lean CLI and a core built without features load a token-alignment context and run the word
+tests; the `diarization` feature gates the ONNX speaker pipeline that asks for it, not the timestamps.
+Do not put a `cfg(feature = "diarization")` on code in `transcription/whisper/` unless it names `ort`,
+`ndarray`, `rustfft` or `kodama`.
 
 ## 5. Where tests live and how CI runs them
 

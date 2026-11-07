@@ -412,6 +412,9 @@ fn language_code(language: Language) -> &'static str {
         Language::Swedish => "sv",
         Language::Norwegian => "no",
         Language::Finnish => "fi",
+        // The benchmark language parser does not accept Danish yet (the
+        // dictation_eval tooling pins en/sv/no/fi), but the code is the same.
+        Language::Danish => "da",
         Language::Auto => unreachable!("benchmark language parser excludes auto"),
     }
 }

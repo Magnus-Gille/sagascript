@@ -14,11 +14,12 @@ use std::sync::{Arc, Mutex};
 
 use sagascript_core::transcription::engine_host::{BoostReport, BoostSpec, WindowTiming};
 use sagascript_core::transcription::pianissimo_backend::{
-    PianissimoResult, PianissimoWord, WarmInfo, UNSUPPORTED_MESSAGE,
+    PianissimoResult, PianissimoWord, StreamStats, WarmInfo, UNSUPPORTED_MESSAGE,
 };
 
 use super::*;
 use crate::transcribe::pianissimo::{PianissimoEngine, PianissimoHost};
+use sagascript_core::settings::PianissimoModel;
 
 // ---- the scripted engine --------------------------------------------------------
 
@@ -168,16 +169,78 @@ impl PianissimoEngine for FakeEngine {
     }
 }
 
+/// An engine that streams, like the engine host: it overrides `transcribe_file`,
+/// reads no audio itself, and reports what the stream found (a length, and that
+/// decoding finished when it was asked). Everything else is the scripted engine.
+struct StreamingEngine {
+    inner: Arc<FakeEngine>,
+    audio_samples: usize,
+    /// The paths asked for, in order.
+    files: Mutex<Vec<PathBuf>>,
+}
+
+impl PianissimoEngine for StreamingEngine {
+    fn set_boost(&self, boost: Option<BoostSpec>) {
+        self.inner.set_boost(boost);
+    }
+
+    fn warm_up(&self, cancelled: &AtomicBool) -> Result<WarmInfo, DictationError> {
+        self.inner.warm_up(cancelled)
+    }
+
+    fn transcribe(
+        &self,
+        samples: &[f32],
+        progress: &dyn Fn(u8),
+        cancelled: &AtomicBool,
+    ) -> Result<PianissimoResult, DictationError> {
+        self.inner.transcribe(samples, progress, cancelled)
+    }
+
+    fn transcribe_file(
+        &self,
+        path: &Path,
+        progress: &dyn Fn(u8),
+        cancelled: &AtomicBool,
+    ) -> Result<(PianissimoResult, StreamStats), DictationError> {
+        self.files.lock().unwrap().push(path.to_path_buf());
+        let stats = StreamStats {
+            audio_samples: self.audio_samples,
+            decode_finished_at: std::time::Instant::now(),
+        };
+        // Inference goes on after the decode finished.
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        let result = self.inner.transcribe(&[], progress, cancelled)?;
+        Ok((result, stats))
+    }
+
+    fn engine_name(&self) -> Option<String> {
+        self.inner.engine_name()
+    }
+
+    fn boost_report(&self) -> BoostReport {
+        self.inner.boost_report()
+    }
+
+    fn request_abort(&self) {
+        self.inner.request_abort();
+    }
+}
+
 struct FakeHost {
     supported: bool,
     installed: bool,
-    engine: Arc<FakeEngine>,
+    engine: Arc<dyn PianissimoEngine>,
     start_failure: Mutex<Option<DictationError>>,
     starts: AtomicUsize,
 }
 
 impl FakeHost {
     fn new(engine: Arc<FakeEngine>) -> Self {
+        Self::with_engine(engine)
+    }
+
+    fn with_engine(engine: Arc<dyn PianissimoEngine>) -> Self {
         Self {
             supported: true,
             installed: true,
@@ -197,11 +260,15 @@ impl PianissimoHost for FakeHost {
         self.supported
     }
 
-    fn model_installed(&self) -> bool {
+    fn model_installed(&self, _: PianissimoModel) -> bool {
         self.installed
     }
 
-    fn start(&self, cancelled: &AtomicBool) -> Result<Arc<dyn PianissimoEngine>, DictationError> {
+    fn start(
+        &self,
+        cancelled: &AtomicBool,
+        _: PianissimoModel,
+    ) -> Result<Arc<dyn PianissimoEngine>, DictationError> {
         self.starts.fetch_add(1, Ordering::SeqCst);
         // Like the real one: attaching fails at once for a run already cancelled.
         if cancelled.load(Ordering::SeqCst) {
@@ -242,6 +309,7 @@ fn run_with_out(
     let args = args_for(job.flags);
     run_pianissimo_batch(
         &PianissimoBatch {
+            model: PianissimoModel::Swedish,
             args: &args,
             files,
             language: job.language,
@@ -431,17 +499,60 @@ fn progress_events_narrate_decoding_transcribing_and_completion() {
     );
 
     run.result.as_ref().expect("the run succeeds");
-    assert_eq!(
-        run.phases(),
-        ["decoding", "resampling", "transcribing", "completed"]
-    );
-    // The batch says 0, then the engine reports its own 0, 40 and 100.
-    assert_eq!(
-        run.percents("transcribing"),
-        [Some(0), Some(0), Some(40), Some(100)]
-    );
+    // Decoding runs alongside transcription: no stage events of its own (and so
+    // none interleaved with the transcribing percentages), just `decoding` 0 at
+    // the start, then the engine's progress, then completion.
+    assert_eq!(run.phases(), ["decoding", "transcribing", "completed"]);
+    assert_eq!(run.percents("decoding"), [Some(0)]);
+    assert_eq!(run.percents("transcribing"), [Some(0), Some(40), Some(100)]);
     assert_eq!(run.percents("completed"), [Some(100)]);
-    assert_eq!(run.percents("decoding").first(), Some(&Some(0)));
+}
+
+#[test]
+fn a_streaming_engine_decides_the_duration_and_when_decoding_finished() {
+    let dir = TempDir::new();
+    let files = one_file(&dir);
+    let inner = FakeEngine::new(vec![EngineReply::says("hej")]);
+    let engine = Arc::new(StreamingEngine {
+        inner: inner.clone(),
+        // Not the length of the WAV on disk: it is the stream's count that counts.
+        audio_samples: 80_000,
+        files: Mutex::new(Vec::new()),
+    });
+    let run = run_pianissimo(
+        &Job {
+            flags: &["--json", "--progress-json"],
+            ..Job::default()
+        },
+        &files,
+        &FakeHost::with_engine(engine.clone()),
+    );
+
+    run.result.as_ref().expect("the run succeeds");
+    let result: Value = serde_json::from_str(&run.stdout).unwrap();
+    assert_eq!(result["duration_seconds"], 5.0);
+    let performance = &result["performance"];
+    let decode = performance["decode_resample_seconds"].as_f64().unwrap();
+    let total = performance["total_seconds"].as_f64().unwrap();
+    assert!(decode >= 0.0, "{decode}");
+    assert!(
+        total >= decode + 0.03,
+        "decoding finished before inference did, so it is part of the run: {decode} vs {total}"
+    );
+    assert_eq!(*engine.files.lock().unwrap(), files);
+    assert_eq!(
+        inner.transcriptions(),
+        1,
+        "the file went to the engine once, as a file"
+    );
+    // The same progress shape as with a separate decode.
+    assert_eq!(run.phases(), ["decoding", "transcribing", "completed"]);
+    let percents: Vec<u64> = run
+        .percents("transcribing")
+        .into_iter()
+        .map(|p| p.unwrap())
+        .collect();
+    assert!(percents.windows(2).all(|w| w[0] <= w[1]), "{percents:?}");
 }
 
 // ---- the checks ---------------------------------------------------------------------

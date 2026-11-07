@@ -7,23 +7,6 @@ use std::path::{Path, PathBuf};
 use sagascript_core::audio::decoder::SUPPORTED_EXTENSIONS;
 use sagascript_core::error::DictationError;
 
-#[cfg(feature = "diarization")]
-pub(super) fn paths_refer_to_same_file(left: &Path, right: &Path) -> bool {
-    if let (Ok(left), Ok(right)) = (std::fs::canonicalize(left), std::fs::canonicalize(right)) {
-        if left == right {
-            return true;
-        }
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        if let (Ok(left), Ok(right)) = (std::fs::metadata(left), std::fs::metadata(right)) {
-            return left.dev() == right.dev() && left.ino() == right.ino();
-        }
-    }
-    false
-}
-
 pub(super) fn expand_inputs(
     inputs: &[PathBuf],
     recursive: bool,

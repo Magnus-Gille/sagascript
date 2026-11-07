@@ -16,6 +16,7 @@ use tracing::{error, info, warn};
 use super::{ensure_known_profile, lock_controller, SharedController, SharedWhisper};
 use crate::app_controller::StopRecordingOutcome;
 use crate::command_error::CommandError;
+use crate::dictation::inference_wait::{wait_for_inference, WaitOutcome};
 use crate::events::{EmitEvent, UiState};
 
 /// Maximum time to wait for whisper inference before aborting (seconds)
@@ -217,8 +218,16 @@ async fn stop_and_transcribe_impl(
         });
 
         let timeout = Duration::from_secs(TRANSCRIPTION_TIMEOUT_SECS);
-        match tokio::time::timeout(timeout, &mut fut).await {
-            Ok(Ok((result, timings))) => {
+        match wait_for_inference(
+            &mut fut,
+            timeout,
+            Duration::from_secs(ABORT_GRACE_SECS),
+            || {
+                warn!("Transcription timed out after {TRANSCRIPTION_TIMEOUT_SECS}s — requesting abort");
+                live_backend.request_abort();
+            },
+        ).await {
+            WaitOutcome::Completed(Ok((result, timings))) => {
                 let mut ctrl = lock_controller(&controller);
                 if timings.model_acquisition_started {
                     ctrl.record_phase(
@@ -235,23 +244,19 @@ async fn stop_and_transcribe_impl(
                 }
                 result.map_err(CommandError::from)
             }
-            Ok(Err(error)) => Err(DictationError::TaskFailed(format!(
+            WaitOutcome::Completed(Err(error)) => Err(DictationError::TaskFailed(format!(
                 "Transcription task failed: {error}"
             ))
             .into()),
-            Err(_) => {
-                warn!("Transcription timed out after {TRANSCRIPTION_TIMEOUT_SECS}s — requesting abort");
-                live_backend.request_abort();
-                // Give the aborted inference a brief grace to unwind, and log which
-                // outcome occurred so a genuine hang is distinguishable from a clean
-                // abort.
-                match tokio::time::timeout(Duration::from_secs(ABORT_GRACE_SECS), &mut fut).await {
-                    Ok(_) => info!("Aborted transcription task exited — warm-state lock released"),
-                    Err(_) => error!(
+            WaitOutcome::TimedOut { unwound } => {
+                if unwound {
+                    info!("Aborted transcription task exited — warm-state lock released");
+                } else {
+                    error!(
                         "Transcription task still running {ABORT_GRACE_SECS}s after abort — the \
                          warm state may stay locked until it unwinds; further transcriptions will \
                          report ModelBusy rather than block forever"
-                    ),
+                    );
                 }
                 Err(DictationError::TranscriptionTimedOut(format!(
                     "Transcription timed out after {TRANSCRIPTION_TIMEOUT_SECS}s (inference aborted)"
@@ -356,20 +361,23 @@ pub async fn transcribe_training_file(
         })
     });
 
-    let result = match tokio::time::timeout(timeout, &mut task).await {
-        Ok(Ok(result)) => result.map_err(CommandError::from),
-        Ok(Err(error)) => {
+    let result = match wait_for_inference(
+        &mut task,
+        timeout,
+        Duration::from_secs(ABORT_GRACE_SECS),
+        || live_backend.request_abort(),
+    )
+    .await
+    {
+        WaitOutcome::Completed(Ok(result)) => result.map_err(CommandError::from),
+        WaitOutcome::Completed(Err(error)) => {
             Err(DictationError::TaskFailed(format!("Transcription task failed: {error}")).into())
         }
-        Err(_) => {
-            live_backend.request_abort();
-            let _ = tokio::time::timeout(Duration::from_secs(ABORT_GRACE_SECS), &mut task).await;
-            Err(DictationError::TranscriptionTimedOut(format!(
-                "Training transcription timed out after {}s",
-                timeout.as_secs()
-            ))
-            .into())
-        }
+        WaitOutcome::TimedOut { .. } => Err(DictationError::TranscriptionTimedOut(format!(
+            "Training transcription timed out after {}s",
+            timeout.as_secs()
+        ))
+        .into()),
     };
     let _ = app.emit_event(crate::events::event::STATE_CHANGED, UiState::Idle);
 

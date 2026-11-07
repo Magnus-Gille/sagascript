@@ -153,89 +153,26 @@ fn register_startup_hotkeys(app: &tauri::App) {
     // dictate. Recorded in the process-wide health flag so the tray
     // and Settings UI can surface it.
     let health: tauri::State<'_, hotkey::HotkeyHealth> = app.state();
-    let validation_error = requested_settings
-        .validate_shortcut_configuration()
-        .err()
-        .map(|error| error.to_string());
-    let registration_shortcuts: Vec<String> = if validation_error.is_some() {
-        vec![SAFE_FALLBACK_HOTKEY.to_string()]
-    } else {
-        requested_settings.resolved_shortcuts()
-    };
-    if let Some(error) = &validation_error {
+    let plan = hotkey::startup::prepare(&requested_settings);
+    let registration_count = plan.shortcuts.len();
+    if let Some(error) = &plan.validation_error {
         warn!(
             "Refusing invalid saved hotkey profiles: {error}; trying safe fallback '{SAFE_FALLBACK_HOTKEY}'"
         );
     }
-    let registration_error = hotkey::register_shortcuts(app.handle(), &registration_shortcuts)
-        .err()
-        .map(|error| error.to_string());
-    let cleanup_error = registration_error.as_ref().and_then(|_| {
-        hotkey::unregister_shortcuts(app.handle(), &registration_shortcuts)
-            .err()
-            .map(|error| error.to_string())
-    });
-    if let Some(error) = &registration_error {
+    let outcome = hotkey::startup::apply(plan, &mut hotkey::NativeRegistrar::new(app.handle()));
+    if let Some(error) = &outcome.registration_error {
         error!("Failed to register hotkey profiles: {error}");
     } else {
-        info!(
-            "Registered {} hotkey profile(s)",
-            registration_shortcuts.len()
-        );
+        info!("Registered {} hotkey profile(s)", registration_count);
     }
-    let (health_error, operational_hotkey) = startup_hotkey_health(
-        validation_error,
-        registration_error,
-        cleanup_error,
-        registration_shortcuts,
+    let change = health.record(
+        &requested_primary,
+        outcome.health_error,
+        outcome.operational_hotkey,
     );
-    let change = health.record(&requested_primary, health_error, operational_hotkey);
     if change.changed {
         let _ = app.emit_event(events::event::HOTKEY_REGISTRATION_CHANGED, &change.status);
-    }
-}
-
-/// What the hotkey health records after the startup registration: the error to
-/// show, if any, and what the OS now holds. `validation_error` is the saved
-/// profiles' validation failure (the safe fallback was tried instead),
-/// `registration_error` the failed registration and `cleanup_error` the failed
-/// cleanup of a partial registration.
-fn startup_hotkey_health(
-    validation_error: Option<String>,
-    registration_error: Option<String>,
-    cleanup_error: Option<String>,
-    registration_shortcuts: Vec<String>,
-) -> (Option<String>, hotkey::OperationalHotkey) {
-    match (validation_error, registration_error, cleanup_error) {
-        (validation, Some(registration), Some(cleanup)) => (
-            Some(format!("{}registration failed: {registration}; partial-registration cleanup failed: {cleanup}", validation.map(|error| format!("{error}; ")).unwrap_or_default())),
-            hotkey::OperationalHotkey::Unknown,
-        ),
-        (None, None, None) => (
-            None,
-            hotkey::OperationalHotkey::registered_many(&registration_shortcuts),
-        ),
-        (Some(validation), None, None) => (
-            Some(format!(
-                "{validation}; using safe fallback '{SAFE_FALLBACK_HOTKEY}'"
-            )),
-            hotkey::OperationalHotkey::registered_many(&registration_shortcuts),
-        ),
-        (None, Some(registration), None) => {
-            (Some(registration), hotkey::OperationalHotkey::Inactive)
-        }
-        (Some(validation), Some(registration), None) => (
-            Some(format!(
-                "{validation}; fallback '{SAFE_FALLBACK_HOTKEY}' also failed: {registration}"
-            )),
-            hotkey::OperationalHotkey::Inactive,
-        ),
-        // Cleanup runs only after a registration failure, so no run gets here;
-        // if one did, the OS state is unknown, not registered.
-        (validation, None, Some(cleanup)) => (
-            Some(format!("{}partial-registration cleanup failed without a registration error: {cleanup}", validation.map(|error| format!("{error}; ")).unwrap_or_default())),
-            hotkey::OperationalHotkey::Unknown,
-        ),
     }
 }
 
@@ -255,7 +192,3 @@ fn open_initial_window(app: &tauri::App, gui_launch_mode: GuiLaunchMode) {
         }
     }
 }
-
-#[cfg(test)]
-#[path = "startup_tests.rs"]
-mod tests;

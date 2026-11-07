@@ -1,12 +1,14 @@
 use std::collections::BTreeSet;
 
-use sagascript_core::settings::{HotkeyProfile, Language, WhisperModel};
+use sagascript_core::error::DictationError;
+use sagascript_core::settings::{HotkeyProfile, Language, SettingsError, WhisperModel};
 use sagascript_core::transcription::engine_host::LoadEvent;
 use sagascript_core::transcription::pianissimo_backend::{load_state_payload, LoadSource};
 use serde_json::{json, Map, Value};
 
 use super::event::*;
 use super::*;
+use crate::command_error::CommandError;
 use crate::contract;
 use crate::hotkey::{HotkeyHealth, OperationalHotkey};
 
@@ -201,10 +203,23 @@ fn all_samples() -> Vec<(&'static str, Vec<Value>)> {
     });
     let swedish = profile("swedish", Language::Swedish, Some("F13"), Some("F14"));
     let english = profile("english", Language::English, None, None);
+    // What the hotkey path sends in the `error` event (dictation/pipeline.rs,
+    // trigger.rs): a retryable failure, a missing model whose path the host
+    // reported, a settings refusal and a paste failure.
+    let errors = [
+        CommandError::from(DictationError::NoAudioCaptured),
+        CommandError::from(DictationError::engine(
+            "engine_model_missing",
+            false,
+            "Pianissimo engine: Model directory does not exist: /Users/x/Library/Application Support/Sagascript/models/foo",
+        )),
+        CommandError::Settings(SettingsError::UnknownDictationProfile { id: "gone".into() }),
+        CommandError::PasteFailed("Accessibility permission denied".into()),
+    ];
     vec![
         samples(STATE_CHANGED, ui_states()),
         samples(TRANSCRIPTION_RESULT, vec!["Hej, det här är en diktering."]),
-        samples(ERROR, vec!["Recording failed: no audio input device"]),
+        samples(ERROR, errors.iter().collect()),
         samples(
             MODEL_DOWNLOAD_PROGRESS,
             vec![

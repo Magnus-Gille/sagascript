@@ -1,0 +1,41 @@
+Sagascript quality continuation — 2026-10-21
+
+Owner mandate: finish the next bounded quality package in Magnus-Gille/sagascript,
+including relevant push, PR and merge after fresh green CI and independent review.
+Base: 1fd4a365532e0dfea4bf13eed8b7829f8d1c512d (fresh origin/main).
+Archive: 7d19ff52847bd16396572008907b8a345bce5978.
+All 71 SHA256SUMS entries verified. The archive is not the implementation base.
+
+Selected package: #361 rendered frontend behavior before #379 Settings decomposition.
+1. Settings meeting controls stay disabled through begin acknowledgement and pending
+   polling; terminal job settlement enables them again.
+2. Open saved meeting invokes the existing command and presents its review without
+   starting transcription; cover observable cancellation/failure where applicable.
+3. Completing rendered onboarding presents Settings after acknowledgement; preserve
+   URL behavior and check frontend window calls without claiming native visibility.
+Only retire old assertions with demonstrated observable parity. Preserve all eight
+remaining private-state executions and all unmatched backend/native checks.
+
+Acceptance: focused and broad frontend tests, types, lint, format, build; sensitivity
+checks for the new behavioral assertions; fresh complete provider CI; independent
+cross-model review of immutable candidate; guarded normal merge and provider readback.
+No production code change is planned. Rust/platform gates remain required in CI.
+Recovery: revert this bounded PR through normal reviewed Git workflow; no data migration.
+
+Exclusions: updater #483/#259/#466/#376; release publication; draft modifications;
+new tags/signing; installation; credentials; destructive cleanup; other repositories;
+paused nightly follow-up. Shared app/CLI binary and local transcription remain required.
+Publication preflight: ci.yml runs PRs; main prebuild signs only changed versions or
+manual dispatch. This test-only package changes neither versions nor workflows.
+
+Orientation: current AGENTS.md, architecture, frontend testing guide, #351/#344/#375/
+#361/#379 read. Internal infrastructure follow-up is tracked separately in a private operations repository.
+#344 still lacks whole-session adapters/fencing/native acceptance. #375 still has its
+startup-call exception and historical characterization gap. Neither is closed here.
+Primary checkout and existing worktrees are preserved, including untracked
+src-tauri/gen/schemas/linux-schema.json in the primary checkout.
+
+Delegation: two native bounded leaves requested gpt-6-luna/high. Runtime model/effort
+not exposed; self-reported model strings are not evidence. Separate task worktrees;
+no external mutations, secrets, product edits or further delegation delegated.
+Conductor owns integration, review dispositions, publication and final acceptance.

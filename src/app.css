@@ -59,7 +59,9 @@ button.secondary {
   border: 1px solid var(--border);
 }
 
-button.secondary:hover {
+/* aria-disabled marks a button that cannot act now but keeps the focus (the
+   recovery buttons); it must not look pressable. */
+button.secondary:hover:not([aria-disabled="true"]) {
   border-color: var(--accent);
   color: var(--text);
 }

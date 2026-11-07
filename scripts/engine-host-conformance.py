@@ -42,8 +42,12 @@ class Host:
             args, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.PIPE, text=True, bufsize=1
         )
+        self.stdout_fd = self.process.stdout.fileno()
+        self.stdout_buffer = bytearray()
+        self.stdout_eof = False
         self.next_id = 1
         self.pending = {}
+        self.request_ops = {}
 
     def send(self, op, **fields):
         request_id = self.next_id
@@ -52,31 +56,72 @@ class Host:
         request.update(fields)
         self.process.stdin.write(json.dumps(request, ensure_ascii=False) + "\n")
         self.process.stdin.flush()
+        self.request_ops[request_id] = op
         return request_id
 
-    def read_line(self, timeout=30):
-        ready, _, _ = select.select([self.process.stdout], [], [], timeout)
-        if not ready:
-            fail(f"timed out waiting for host response; stderr={self.stderr_tail()!r}")
-        line = self.process.stdout.readline()
-        if not line:
-            fail(f"host exited before response; returncode={self.process.poll()} stderr={self.stderr_tail()!r}")
+    def read_line(self, timeout=30, request_context=None):
+        deadline = time.monotonic() + timeout
+        while True:
+            newline = self.stdout_buffer.find(b"\n")
+            if newline >= 0:
+                line = bytes(self.stdout_buffer[:newline])
+                del self.stdout_buffer[:newline + 1]
+                return self._parse_line(line, request_context)
+            if self.stdout_eof:
+                if self.stdout_buffer:
+                    line = bytes(self.stdout_buffer)
+                    self.stdout_buffer.clear()
+                    return self._parse_line(line, request_context)
+                context = f" while waiting for {request_context}" if request_context else ""
+                fail(
+                    f"host exited before response{context}; returncode={self.process.poll()} "
+                    f"stderr={self.stderr_tail()!r}"
+                )
+
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                context = f" while waiting for {request_context}" if request_context else ""
+                fail(f"timed out waiting for host response{context}; stderr={self.stderr_tail()!r}")
+            ready, _, _ = select.select([self.stdout_fd], [], [], remaining)
+            if not ready:
+                context = f" while waiting for {request_context}" if request_context else ""
+                fail(f"timed out waiting for host response{context}; stderr={self.stderr_tail()!r}")
+            chunk = os.read(self.stdout_fd, 4096)
+            if chunk:
+                self.stdout_buffer.extend(chunk)
+            else:
+                self.stdout_eof = True
+
+    def _parse_line(self, line, request_context=None):
         try:
-            return json.loads(line)
+            text = line.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            context = f" while waiting for {request_context}" if request_context else ""
+            fail(f"stdout was not UTF-8{context}: {exc}")
+        try:
+            return json.loads(text)
         except json.JSONDecodeError as exc:
-            fail(f"stdout was not JSONL: {line!r}: {exc}")
+            context = f" while waiting for {request_context}" if request_context else ""
+            fail(f"stdout was not JSONL{context}: {exc}")
+
+    def request_context(self, request_id):
+        op = self.request_ops.get(request_id, "unknown")
+        return f"id {request_id} (op {op!r})"
 
     def wait_for(self, request_id, timeout=30):
         if request_id in self.pending:
             return self.pending.pop(request_id)
+        context = self.request_context(request_id)
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            response = self.read_line(max(0.01, deadline - time.monotonic()))
+            response = self.read_line(max(0.01, deadline - time.monotonic()), context)
             if response.get("id") == request_id and "ok" in response:
+                self.request_ops.pop(request_id, None)
                 return response
             if "id" in response and "ok" in response:
                 self.pending[response["id"]] = response
-        fail(f"timed out waiting for id {request_id}")
+                self.request_ops.pop(response["id"], None)
+        fail(f"timed out waiting for {context}")
 
     def stderr_tail(self, limit=1000, budget=1 << 20):
         """The last `limit` characters the host has written to stderr so far, without blocking.
@@ -174,6 +219,13 @@ def exercise_without_model(binary, cache_dir, scratch):
             require_int(status_response, key, "status")
         unknown = host.send("conformance_unknown_op")
         assert_failure(host.wait_for(unknown, 5), unknown, "unsupported")
+        warm = host.send("warm")
+        warm_response = host.wait_for(warm, 5)
+        assert_success(warm_response, warm)
+        require(
+            warm_response.get("ran") is False and warm_response.get("skipped") == "not_loaded",
+            f"warm before load must be skipped as not_loaded: {warm_response}",
+        )
         missing = host.send(
             "load", model_dir=os.path.join(scratch, "no-such-model"),
             model_id="pianissimo-sv-coreml-conformance", compute_units="ane"
@@ -229,6 +281,24 @@ def exercise_host(binary, model_dir, cache_dir, pcm_path, expect_exit_on_eof=Fal
     try:
         _, load = hello_and_load(host, model_dir)
         window_samples = int(round(load["window_s"] * 16_000))
+
+        # warm (#397): the first canary after load runs; one sent at once after it is `recent`.
+        warm = host.send("warm")
+        warm_response = host.wait_for(warm, 180)
+        assert_success(warm_response, warm)
+        require(warm_response.get("ran") is True, f"the first warm after load must run: {warm_response}")
+        require_int(warm_response, "canary_ms", "warm")
+        require(
+            isinstance(warm_response.get("probable_recompile"), bool),
+            f"warm without probable_recompile: {warm_response}",
+        )
+        again = host.send("warm")
+        again_response = host.wait_for(again, 5)
+        assert_success(again_response, again)
+        require(
+            again_response.get("ran") is False and again_response.get("skipped") == "recent",
+            f"a warm right after a canary must be skipped as recent: {again_response}",
+        )
 
         first = host.send(
             "transcribe_window", pcm_path=pcm_path, offset_samples=0,

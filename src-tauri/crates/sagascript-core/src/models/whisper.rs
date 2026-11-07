@@ -262,7 +262,11 @@ impl WhisperModel {
                         && !self.is_swedish_optimized()
                         && !self.is_norwegian_optimized())
             }
-            Language::Auto => !self.is_english_only() && !self.is_language_optimized(),
+            // No Danish fine-tune is bundled: only the multilingual models serve
+            // it, exactly as for auto-detect.
+            Language::Danish | Language::Auto => {
+                !self.is_english_only() && !self.is_language_optimized()
+            }
         }
     }
 
@@ -331,6 +335,12 @@ impl WhisperModel {
             Language::Swedish => WhisperModel::KbWhisperMedium,
             Language::Norwegian => WhisperModel::NbWhisperBase,
             Language::Finnish => WhisperModel::Base,
+            // Whisper fallback for Danish, where Pianissimo does not run (Windows
+            // x64, macOS 13, Intel Macs). Medium about halves Small's Danish error
+            // rate. Large v3 Turbo is more accurate still, but its encoder costs at
+            // least twice Medium's on every utterance: too slow for CPU-only
+            // dictation.
+            Language::Danish => WhisperModel::Medium,
             Language::Auto => WhisperModel::Base,
         }
     }
@@ -379,7 +389,7 @@ impl WhisperModel {
                 WhisperModel::LargeV3Turbo,
                 WhisperModel::LargeV3TurboQ8,
             ],
-            Language::Auto => &[
+            Language::Danish | Language::Auto => &[
                 WhisperModel::Tiny,
                 WhisperModel::Base,
                 WhisperModel::Small,

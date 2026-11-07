@@ -199,6 +199,8 @@ test("the Rust cache key follows the gate list for the lanes that run gates, and
     cache.with["shared-key"],
     "${{ inputs.cache-key }}${{ inputs.native-build != 'true' && format('-{0}', hashFiles('scripts/ci/cargo-gates.mjs')) || '' }}",
   );
+  // Only main saves: a cache saved from a PR or tag ref is unreadable by other runs and evicts shared ones (SAGA-546).
+  assert.equal(cache.with["save-if"], "${{ github.ref == 'refs/heads/main' }}");
   for (const id of LANES) {
     const job = workflow.job(id);
     const runsGates = job.steps.some((step) => gateInvocation(step));
@@ -302,7 +304,7 @@ test("test-windows runs the build identity gates before npm ci and any Cargo wor
 });
 
 test("windows-package.yml leaves the Rust tests of a pull request to test-windows and keeps them for releases and manual runs", () => {
-  const windows = loadWorkflow("windows-package.yml").jobs[0];
+  const windows = loadWorkflow("windows-package.yml").job("build-windows-candidate");
   const names = windows.steps.map((step) => step.name);
   const tests = windows.steps[names.indexOf("Test and lint Rust workspace")];
   assert.equal(tests.condition, "github.event_name != 'pull_request'");

@@ -4,7 +4,7 @@
 use sagascript_core::transcription::engine_host::client::WindowRequest;
 use sagascript_core::transcription::engine_host::{
     CancelToken, EngineHostClient, EngineHostConfig, EngineHostError, ErrorCode, LoadEvent,
-    LoadObserver, LoadSpec, Priority, Timeouts,
+    LoadObserver, LoadSpec, Priority, Timeouts, Transcription,
 };
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -38,8 +38,11 @@ fn config(env: &[(&str, &str)], tmp: &Path) -> EngineHostConfig {
         ping: Duration::from_millis(500),
         status: Duration::from_secs(2),
         unload: Duration::from_secs(2),
+        warm: Duration::from_secs(5),
         transcribe_min: Duration::from_secs(5),
         transcribe_factor: 0.0,
+        interactive_min: Duration::from_secs(5),
+        interactive_factor: 0.0,
         shutdown_grace: Duration::from_millis(500),
         write: Duration::from_secs(2),
         wedge_grace: Duration::from_millis(500),
@@ -115,6 +118,11 @@ fn wait_until(what: &str, limit: Duration, mut f: impl FnMut() -> bool) {
         std::thread::sleep(Duration::from_millis(20));
     }
     panic!("timed out waiting for {what}");
+}
+
+/// A file job (batch priority) over `samples`.
+fn file_job(client: &EngineHostClient, samples: &[f32]) -> Result<Transcription, EngineHostError> {
+    client.transcribe_file_samples(samples, &CancelToken::new(), None)
 }
 
 const LONG_ENV: [(&str, &str); 2] = [("FAKE_WINDOW_S", "10"), ("FAKE_OVERLAP_S", "4")];
@@ -218,6 +226,29 @@ fn handshake_rejects_protocol_mismatch() {
         other => panic!("{other:?}"),
     }
     assert!(!f.client.snapshot().running);
+}
+
+/// Why a host must never announce an overlap that is not below its window (for
+/// instance from an oversized `SAGASCRIPT_ENGINE_OVERLAP_S`): the client refuses it.
+#[test]
+fn handshake_rejects_an_overlap_that_is_not_below_the_preferred_window() {
+    for overlap in ["15", "20"] {
+        let f = fixture(&[("FAKE_WINDOW_S", "15"), ("FAKE_OVERLAP_S", overlap)]);
+        match f.client.warm() {
+            Err(EngineHostError::Handshake(m)) => {
+                assert!(m.contains("inconsistent window capabilities"), "{m}")
+            }
+            other => panic!("overlap {overlap}: {other:?}"),
+        }
+        assert!(!f.client.snapshot().running);
+    }
+    // Just below the window is fine.
+    let f = fixture(&[("FAKE_WINDOW_S", "15"), ("FAKE_OVERLAP_S", "14.9")]);
+    let caps = f.client.warm().unwrap();
+    assert_eq!(
+        (caps.preferred_window_s, caps.preferred_overlap_s),
+        (15.0, 14.9)
+    );
 }
 
 #[test]
@@ -354,6 +385,8 @@ fn out_of_order_responses_are_routed_by_id() {
     assert_eq!(b.tokens[0].id, 4);
 }
 
+/// A file job's timeout leaves a responsive host alone (a dictation's does not:
+/// see `interactive_window_timeout_*`).
 #[test]
 fn window_timeout_is_reported_and_host_stays_usable() {
     // Slow first window that honours cancel: a responsive host, not a wedged one.
@@ -363,10 +396,7 @@ fn window_timeout_is_reported_and_host_stays_usable() {
     f.client.warm().unwrap();
     let pid = f.client.snapshot().pid;
     let t = Instant::now();
-    match f
-        .client
-        .transcribe_dictation(&pcm(1.0), &CancelToken::new())
-    {
+    match file_job(&f.client, &pcm(1.0)) {
         Err(EngineHostError::Timeout {
             op: "transcribe_window",
             ..
@@ -381,10 +411,7 @@ fn window_timeout_is_reported_and_host_stays_usable() {
     assert_eq!(snap.pid, pid);
     assert_eq!(snap.crashes_in_window, 0);
     f.client.ping().unwrap();
-    let out = f
-        .client
-        .transcribe_dictation(&pcm(1.0), &CancelToken::new())
-        .unwrap();
+    let out = file_job(&f.client, &pcm(1.0)).unwrap();
     assert_eq!(out.tokens.len(), 2);
     assert_eq!(f.client.snapshot().pid, pid);
 }
@@ -407,10 +434,7 @@ fn malformed_late_answer_to_a_timed_out_window_is_an_answer_not_a_wedge() {
     );
     f.client.warm().unwrap();
     let pid = f.client.snapshot().pid;
-    match f
-        .client
-        .transcribe_dictation(&pcm(1.0), &CancelToken::new())
-    {
+    match file_job(&f.client, &pcm(1.0)) {
         Err(EngineHostError::Timeout {
             op: "transcribe_window",
             ..
@@ -423,15 +447,12 @@ fn malformed_late_answer_to_a_timed_out_window_is_an_answer_not_a_wedge() {
     assert!(snap.running);
     assert_eq!(snap.pid, pid, "the host was killed as wedged");
     assert_eq!(snap.crashes_in_window, 0);
-    let out = f
-        .client
-        .transcribe_dictation(&pcm(1.0), &CancelToken::new())
-        .unwrap();
+    let out = file_job(&f.client, &pcm(1.0)).unwrap();
     assert_eq!(out.tokens.len(), 2);
     assert_eq!(f.client.snapshot().pid, pid);
 }
 
-/// A host that never answers a timed-out window, even after `cancel`, is
+/// A host that never answers a timed-out file window, even after `cancel`, is
 /// killed after the wedge grace although it still answers `ping`.
 #[test]
 fn host_that_never_answers_a_timed_out_window_is_killed() {
@@ -441,9 +462,7 @@ fn host_that_never_answers_a_timed_out_window_is_killed() {
     });
     f.client.warm().unwrap();
     let pid = f.client.snapshot().pid.unwrap();
-    let r = f
-        .client
-        .transcribe_dictation(&pcm(1.0), &CancelToken::new());
+    let r = file_job(&f.client, &pcm(1.0));
     assert!(
         matches!(
             r,
@@ -768,9 +787,7 @@ fn no_orphan_host_when_dropped_with_hung_request() {
     });
     f.client.warm().unwrap();
     let pid = f.client.snapshot().pid.unwrap();
-    let r = f
-        .client
-        .transcribe_dictation(&pcm(1.0), &CancelToken::new());
+    let r = file_job(&f.client, &pcm(1.0));
     assert!(
         matches!(
             r,
@@ -1583,10 +1600,11 @@ fn failed_probe_load_on_a_live_host_enforces_the_new_cooldown() {
     assert!(snap.failed.is_some());
 }
 
-/// (b) A window that ignores cancel keeps its host slot while the host still
-/// answers `ping` (a Core ML prediction cannot be interrupted). Within the
-/// request timeout plus the wedge grace the client kills that host, and the
-/// next window succeeds on a fresh one.
+/// (b) A file window that ignores cancel keeps its host slot while the host
+/// still answers `ping` (a Core ML prediction cannot be interrupted). Within
+/// the request timeout plus the wedge grace the client kills that host, and the
+/// next window succeeds on a fresh one. (A dictation window's host is killed
+/// at its timeout, without the grace.)
 #[test]
 fn host_wedged_on_a_timed_out_window_is_restarted_and_the_next_window_succeeds() {
     let marker = tempfile::tempdir().unwrap();
@@ -1617,7 +1635,7 @@ fn host_wedged_on_a_timed_out_window_is_restarted_and_the_next_window_succeeds()
                 offset_samples: 0,
                 num_samples: samples.len() as u64,
                 sample_rate: 16_000,
-                priority: Priority::Interactive,
+                priority: Priority::Batch,
                 boost: None,
             },
             &cancel,
@@ -1691,9 +1709,7 @@ fn slow_uninterruptible_window_times_out_promptly_and_keeps_the_host() {
     let pid = f.client.snapshot().pid.unwrap();
 
     let started = Instant::now();
-    let r = f
-        .client
-        .transcribe_dictation(&pcm(1.0), &CancelToken::new());
+    let r = file_job(&f.client, &pcm(1.0));
     let elapsed = started.elapsed();
     assert!(
         matches!(
@@ -1736,6 +1752,251 @@ fn slow_uninterruptible_window_times_out_promptly_and_keeps_the_host() {
         .unwrap();
     assert_eq!(out.tokens.len(), 4);
     assert_eq!(f.client.snapshot().pid, Some(pid));
+}
+
+// ------------------------------- stalled dictation window: restart and retry
+
+/// A dictation window gets this long; a file window 5 s, and the wedge grace is
+/// far away, so only the interactive restart can end a stalled host quickly.
+const STALL: Duration = Duration::from_millis(400);
+
+fn stall_fixture(env: &[(&str, &str)], tweak: impl FnOnce(&mut EngineHostConfig)) -> Fixture {
+    fixture_with(env, |c| {
+        c.timeouts.interactive_min = STALL;
+        c.timeouts.transcribe_min = Duration::from_secs(5);
+        c.timeouts.wedge_grace = Duration::from_secs(30);
+        tweak(c);
+    })
+}
+
+fn window_requests(log: &Path) -> usize {
+    ops_of(log)
+        .iter()
+        .filter(|op| op.as_str() == "transcribe_window")
+        .count()
+}
+
+/// (a) The first window of a dictation never finishes on the first host (a
+/// stalled Neural Engine program). After the interactive timeout, not the
+/// 45 s one, the client kills that host, starts another, reloads the model
+/// and resubmits the in-flight windows: the dictation returns its full text.
+#[test]
+fn stalled_dictation_window_restarts_the_host_and_returns_the_full_text() {
+    let scratch = tempfile::tempdir().unwrap();
+    let wedge = scratch.path().join("wedge");
+    let log = scratch.path().join("log");
+    let mut env = LONG_ENV.to_vec();
+    env.extend([
+        ("FAKE_WEDGE_ONCE_FILE", wedge.to_str().unwrap()),
+        ("FAKE_MAX_IN_FLIGHT", "3"),
+        ("FAKE_LOG", log.to_str().unwrap()),
+    ]);
+    let f = stall_fixture(&env, |_| {});
+    f.client.warm().unwrap();
+    let first_pid = f.client.snapshot().pid.unwrap();
+
+    let started = Instant::now();
+    let out = f
+        .client
+        .transcribe_dictation(&pcm(25.0), &CancelToken::new())
+        .unwrap();
+    let elapsed = started.elapsed();
+
+    assert_eq!(
+        out.tokens.iter().map(|t| t.id).collect::<Vec<_>>(),
+        expected_ids(25 * SR),
+        "the dictation lost or duplicated text"
+    );
+    assert!(elapsed >= STALL, "{elapsed:?}");
+    assert!(
+        elapsed < Duration::from_secs(3),
+        "the dictation waited for more than the interactive timeout and a restart: {elapsed:?}"
+    );
+    assert!(!pid_alive(first_pid), "the stalled host was left running");
+    let snap = f.client.snapshot();
+    assert!(snap.running && snap.loaded, "{snap:?}");
+    assert_ne!(snap.pid, Some(first_pid));
+    assert_eq!(snap.spawns, 2);
+    assert_eq!(snap.loads, 2, "the model is reloaded on the new host");
+    assert_eq!(snap.crashes_in_window, 1, "the stall counts as one crash");
+    assert!(
+        window_requests(&log) > out.windows.len(),
+        "the in-flight windows were not resubmitted"
+    );
+}
+
+/// A dictation window whose answer arrived in time but is only waited on
+/// after its deadline (the pipeline waits on its windows in order, so a slow
+/// first window delays the others' waits) is a success: the queued answer is
+/// taken, and the healthy host is not killed and counts no crash.
+#[test]
+fn a_queued_answer_past_the_deadline_is_taken_and_the_host_kept() {
+    let f = stall_fixture(&LONG_ENV, |_| {});
+    f.client.warm().unwrap();
+    let pid = f.client.snapshot().pid.unwrap();
+    let samples = pcm(0.5);
+    let pcm_file = PcmFile::write(&samples, Some(f.tmp.path())).unwrap();
+    let req = WindowRequest {
+        pcm_path: pcm_file.path().to_path_buf(),
+        offset_samples: 0,
+        num_samples: samples.len() as u64,
+        sample_rate: 16_000,
+        priority: Priority::Interactive,
+        boost: None,
+    };
+    let ticket = f
+        .client
+        .submit_window(&req, &CancelToken::new(), Duration::from_secs(1))
+        .unwrap()
+        .expect("slot");
+    // The fake host answers within milliseconds; the wait starts well after
+    // the interactive deadline.
+    std::thread::sleep(STALL * 3);
+
+    ticket.wait(&CancelToken::new()).expect("the queued answer");
+
+    let snap = f.client.snapshot();
+    assert_eq!(snap.pid, Some(pid), "the healthy host was killed");
+    assert!(pid_alive(pid));
+    assert_eq!(snap.crashes_in_window, 0, "{snap:?}");
+    assert_eq!(snap.spawns, 1);
+}
+
+/// (b) The retry budget is `max_crash_retries`, as for a crash: a host that
+/// stalls on every attempt ends in the `Timeout`, after one restart per retry.
+#[test]
+fn dictation_that_keeps_stalling_ends_in_the_timeout_after_its_retries() {
+    for retries in [0u32, 1] {
+        let f = stall_fixture(&[("FAKE_HANG", "1")], |c| c.max_crash_retries = retries);
+        f.client.warm().unwrap();
+        let first_pid = f.client.snapshot().pid.unwrap();
+
+        let started = Instant::now();
+        let r = f
+            .client
+            .transcribe_dictation(&pcm(1.0), &CancelToken::new());
+        let elapsed = started.elapsed();
+
+        match &r {
+            Err(EngineHostError::Timeout {
+                op: "transcribe_window",
+                after,
+            }) => assert_eq!(*after, STALL, "retries {retries}"),
+            other => panic!("retries {retries}: expected the timeout, got {other:?}"),
+        }
+        let attempts = retries + 1;
+        assert!(
+            elapsed >= STALL * attempts,
+            "retries {retries}: {elapsed:?}"
+        );
+        assert!(
+            elapsed < Duration::from_secs(4),
+            "retries {retries}: {elapsed:?}"
+        );
+        let snap = f.client.snapshot();
+        assert_eq!(snap.spawns, u64::from(attempts), "retries {retries}");
+        assert_eq!(
+            snap.crashes_in_window, attempts as usize,
+            "retries {retries}"
+        );
+        assert!(!pid_alive(first_pid));
+        assert!(
+            !snap.running,
+            "retries {retries}: a stalled host was left running"
+        );
+    }
+}
+
+/// (c) A file job keeps its own timeout and wedge grace: it is not governed
+/// by the (here much shorter) interactive timeout, the host is not restarted
+/// when the window times out, and nothing is resubmitted. After the grace
+/// the watcher still kills a host that never answers.
+#[test]
+fn file_job_window_timeout_does_not_restart_the_host() {
+    let file_timeout = Duration::from_millis(800);
+    let grace = Duration::from_millis(1500);
+    let f = stall_fixture(&[("FAKE_HANG", "1")], |c| {
+        c.timeouts.interactive_min = Duration::from_millis(100);
+        c.timeouts.transcribe_min = file_timeout;
+        c.timeouts.wedge_grace = grace;
+    });
+    f.client.warm().unwrap();
+    let pid = f.client.snapshot().pid.unwrap();
+
+    let started = Instant::now();
+    let r = file_job(&f.client, &pcm(1.0));
+    let elapsed = started.elapsed();
+    match &r {
+        Err(EngineHostError::Timeout {
+            op: "transcribe_window",
+            after,
+        }) => assert_eq!(*after, file_timeout),
+        other => panic!("expected the timeout, got {other:?}"),
+    }
+    assert!(elapsed >= file_timeout, "{elapsed:?}");
+    assert!(elapsed < file_timeout + grace, "{elapsed:?}");
+    assert!(pid_alive(pid), "the host was killed before the wedge grace");
+    let snap = f.client.snapshot();
+    assert_eq!((snap.spawns, snap.crashes_in_window), (1, 0), "{snap:?}");
+
+    // Unchanged: a host that never answers is killed once the grace is over.
+    wait_until("hung host killed", grace + Duration::from_secs(2), || {
+        !pid_alive(pid)
+    });
+    let snap = f.client.snapshot();
+    assert_eq!((snap.spawns, snap.crashes_in_window), (1, 1), "{snap:?}");
+}
+
+/// The host is shared: a file job's windows in flight on the host that a
+/// dictation stall kills fail as crashed and take the file job's normal
+/// crash-resubmit path. The file job finishes with its full text.
+#[test]
+fn dictation_stall_restart_resubmits_a_concurrent_file_job_through_its_crash_path() {
+    let scratch = tempfile::tempdir().unwrap();
+    let wedge = scratch.path().join("wedge");
+    let log = scratch.path().join("log");
+    let mut env = LONG_ENV.to_vec();
+    env.extend([
+        ("FAKE_WEDGE_INTERACTIVE_ONCE_FILE", wedge.to_str().unwrap()),
+        ("FAKE_MAX_IN_FLIGHT", "3"),
+        ("FAKE_BATCH_DELAY_MS", "1500"),
+        ("FAKE_LOG", log.to_str().unwrap()),
+    ]);
+    let f = stall_fixture(&env, |_| {});
+    f.client.warm().unwrap();
+    let first_pid = f.client.snapshot().pid.unwrap();
+
+    // Two file windows (the batch lane) are in flight when the dictation starts.
+    let file = {
+        let client = f.client.clone();
+        std::thread::spawn(move || file_job(&client, &pcm(15.0)))
+    };
+    wait_until("file windows in flight", Duration::from_secs(3), || {
+        f.client.status().is_ok_and(|s| s.in_flight == 2)
+    });
+    let dictation = f
+        .client
+        .transcribe_dictation(&pcm(3.0), &CancelToken::new())
+        .unwrap();
+    assert_eq!(
+        dictation.tokens.iter().map(|t| t.id).collect::<Vec<_>>(),
+        expected_ids(3 * SR)
+    );
+
+    let file = file
+        .join()
+        .unwrap()
+        .expect("the file job must survive the restart through its crash path");
+    assert_eq!(
+        file.tokens.iter().map(|t| t.id).collect::<Vec<_>>(),
+        expected_ids(15 * SR)
+    );
+    assert!(!pid_alive(first_pid));
+    let snap = f.client.snapshot();
+    assert_eq!(snap.spawns, 2);
+    assert_eq!(snap.crashes_in_window, 1, "one stall, one crash: {snap:?}");
+    // 2 file windows + the stalled dictation window, then all three again.
+    assert_eq!(window_requests(&log), 2 + 1 + 3);
 }
 
 /// 500 terms of 64 four-byte characters: each window request line is about
@@ -2054,4 +2315,520 @@ fn startup_sweep_removes_only_pcm_dirs_of_dead_owners() {
     });
     assert_eq!(removed, 1);
     assert!(ours.path().is_file());
+}
+
+// ------------------------------------------- streamed input (decode overlap)
+
+use sagascript_core::transcription::engine_host::{Sink, SinkError, StreamError};
+use std::sync::Mutex as StdMutex;
+
+/// A pseudo-random piece length in `1..=max`, deterministic per call index.
+fn piece_len(i: usize, max: usize) -> usize {
+    1 + (i.wrapping_mul(2_654_435_761).rotate_left(7) % max)
+}
+
+/// Feed `samples` to `sink` in uneven pieces, sleeping `pause` between them.
+fn feed(
+    sink: &Sink<'_>,
+    samples: &[f32],
+    max_piece: usize,
+    pause: Duration,
+) -> Result<(), SinkError> {
+    let mut at = 0;
+    let mut i = 0;
+    while at < samples.len() {
+        let n = piece_len(i, max_piece).min(samples.len() - at);
+        sink.append(&samples[at..at + n])?;
+        at += n;
+        i += 1;
+        if !pause.is_zero() {
+            std::thread::sleep(pause);
+        }
+    }
+    Ok(())
+}
+
+fn stream_env() -> Vec<(&'static str, &'static str)> {
+    let mut env = LONG_ENV.to_vec();
+    env.push(("FAKE_MAX_IN_FLIGHT", "4"));
+    env
+}
+
+#[test]
+fn streamed_audio_gives_the_same_transcription_as_the_finished_audio() {
+    for (seconds, announce_length, pause_ms) in [
+        (0.4, false, 0),
+        (5.0, true, 0),
+        (10.0, false, 0),
+        (10.3, true, 1),
+        (47.0, true, 0),
+        (47.0, false, 1),
+        (95.5, true, 0),
+    ] {
+        let f = fixture(&stream_env());
+        let samples = pcm(seconds);
+        let want = f
+            .client
+            .transcribe_file_samples(&samples, &CancelToken::new(), None)
+            .unwrap();
+
+        let mut progress = Vec::new();
+        let mut cb = |m: usize, t: usize| progress.push((m, t));
+        let got = f
+            .client
+            .transcribe_file_stream(&CancelToken::new(), Some(&mut cb), |sink| {
+                if announce_length {
+                    sink.set_expected_total(samples.len());
+                }
+                feed(sink, &samples, 20_000, Duration::from_millis(pause_ms))
+            })
+            .unwrap_or_else(|e| panic!("{seconds}s: {e:?}"));
+
+        let label = format!("{seconds}s announce={announce_length}");
+        assert_eq!(
+            got.tokens.iter().map(|t| t.id).collect::<Vec<_>>(),
+            want.tokens.iter().map(|t| t.id).collect::<Vec<_>>(),
+            "{label}"
+        );
+        assert_eq!(got.text, want.text, "{label}");
+        assert_eq!(got.audio_s, want.audio_s, "{label}");
+        let plan = |t: &sagascript_core::transcription::engine_host::Transcription| {
+            t.windows
+                .iter()
+                .map(|w| (w.index, w.start_sample, w.end_sample))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(plan(&got), plan(&want), "{label}: same windows");
+        assert_eq!(
+            got.tokens
+                .iter()
+                .map(|t| (t.start.to_bits(), t.end.to_bits()))
+                .collect::<Vec<_>>(),
+            want.tokens
+                .iter()
+                .map(|t| (t.start.to_bits(), t.end.to_bits()))
+                .collect::<Vec<_>>(),
+            "{label}: same timings"
+        );
+
+        // Progress: in order, an estimate until the end, 100% only at the end.
+        let windows = got.windows.len();
+        if announce_length || windows == 1 {
+            assert!(
+                progress.windows(2).all(|p| p[1].0 == p[0].0 + 1),
+                "{progress:?}"
+            );
+            let (last_m, last_t) = *progress.last().expect("progress reported");
+            assert_eq!(
+                (last_m, last_t),
+                (windows, windows),
+                "{label}: {progress:?}"
+            );
+            for &(m, t) in &progress[..progress.len() - 1] {
+                assert!(m < t, "{label}: {m}/{t} implies the end early");
+            }
+        } else {
+            // No announced length and more than one window: no estimate to report
+            // before the end, but a report is never wrong.
+            assert!(progress.iter().all(|&(m, t)| m <= t), "{progress:?}");
+        }
+        assert_eq!(temp_entries(f.tmp.path()), 0, "{label}: temp PCM removed");
+    }
+}
+
+#[test]
+fn streaming_starts_transcribing_before_the_audio_has_ended() {
+    let f = fixture(&stream_env());
+    let samples = pcm(60.0);
+    let first_merge = Arc::new(AtomicBool::new(false));
+    let seen_early = Arc::new(AtomicBool::new(false));
+    let early = seen_early.clone();
+    let flag = first_merge.clone();
+    let mut cb = {
+        let flag = first_merge.clone();
+        move |m: usize, _t: usize| {
+            if m >= 1 {
+                flag.store(true, Ordering::SeqCst);
+            }
+        }
+    };
+    let out = f
+        .client
+        .transcribe_file_stream(&CancelToken::new(), Some(&mut cb), |sink| {
+            sink.set_expected_total(samples.len());
+            // 30 s are enough for several windows; hold the rest back until the
+            // engine has merged one of them. A non-streaming job would never
+            // start, so the wait would run out.
+            feed(sink, &samples[..30 * SR], 8_000, Duration::ZERO)?;
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while !flag.load(Ordering::SeqCst) && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            early.store(flag.load(Ordering::SeqCst), Ordering::SeqCst);
+            feed(sink, &samples[30 * SR..], 8_000, Duration::ZERO)
+        })
+        .unwrap();
+    assert!(
+        seen_early.load(Ordering::SeqCst),
+        "a window was merged while the producer was still running"
+    );
+    assert_eq!(
+        out.tokens.iter().map(|t| t.id).collect::<Vec<_>>(),
+        expected_ids(samples.len())
+    );
+    assert!(first_merge.load(Ordering::SeqCst));
+}
+
+#[test]
+fn nothing_is_submitted_before_all_lanes_have_a_window_or_the_audio_ended() {
+    // Lane count 3 (4 slots, one reserved): with only the first two windows' worth
+    // of audio, no window may be sent yet; the third completes the set.
+    let log = tempfile::tempdir().unwrap();
+    let log_path = log.path().join("ops.log");
+    let mut env = stream_env();
+    env.push(("FAKE_LOG", log_path.to_str().unwrap()));
+    let f = fixture(&env);
+    f.client.warm().unwrap();
+    let samples = pcm(60.0);
+    let windows_sent = |path: &Path| {
+        std::fs::read_to_string(path)
+            .unwrap_or_default()
+            .lines()
+            .filter(|l| l.starts_with("transcribe_window"))
+            .count()
+    };
+    let sent_before = Arc::new(StdMutex::new(Vec::new()));
+    let record = sent_before.clone();
+    let log_for_producer = log_path.clone();
+    let out = f
+        .client
+        .transcribe_file_stream(&CancelToken::new(), None, |sink| {
+            // Windows (10 s, step 6 s): ends at 10, 16, 22 s. Two are determined
+            // by 17 s of audio.
+            feed(sink, &samples[..17 * SR + 1], 4_000, Duration::ZERO)?;
+            std::thread::sleep(Duration::from_millis(400));
+            record.lock().unwrap().push(windows_sent(&log_for_producer));
+            feed(sink, &samples[17 * SR + 1..30 * SR], 4_000, Duration::ZERO)?;
+            std::thread::sleep(Duration::from_millis(400));
+            record.lock().unwrap().push(windows_sent(&log_for_producer));
+            feed(sink, &samples[30 * SR..], 4_000, Duration::ZERO)
+        })
+        .unwrap();
+    let sent = sent_before.lock().unwrap().clone();
+    assert_eq!(sent[0], 0, "two windows are not enough to fill three lanes");
+    assert!(
+        sent[1] >= 3,
+        "the lanes were filled once three windows existed: {sent:?}"
+    );
+    assert_eq!(
+        out.tokens.iter().map(|t| t.id).collect::<Vec<_>>(),
+        expected_ids(samples.len())
+    );
+}
+
+#[test]
+fn an_empty_stream_gives_an_empty_transcription() {
+    let f = fixture(&[]);
+    let out = f
+        .client
+        .transcribe_file_stream(&CancelToken::new(), None, |_sink| Ok::<(), ()>(()))
+        .unwrap();
+    assert!(out.text.is_empty() && out.tokens.is_empty() && out.windows.is_empty());
+    assert_eq!(out.audio_s, 0.0);
+    assert_eq!(temp_entries(f.tmp.path()), 0);
+}
+
+#[test]
+fn a_producer_error_ends_the_job_and_is_returned_as_is() {
+    let f = fixture(&stream_env());
+    let samples = pcm(60.0);
+    let started = Instant::now();
+    let r = f
+        .client
+        .transcribe_file_stream(&CancelToken::new(), None, |sink| {
+            feed(sink, &samples[..25 * SR], 8_000, Duration::ZERO).unwrap();
+            std::thread::sleep(Duration::from_millis(150));
+            Err("decode failed at 25 s".to_string())
+        });
+    match r {
+        Err(StreamError::Producer(message)) => assert_eq!(message, "decode failed at 25 s"),
+        other => panic!("expected the producer's error, got {other:?}"),
+    }
+    assert!(started.elapsed() < Duration::from_secs(3));
+    assert_eq!(temp_entries(f.tmp.path()), 0);
+    // The host is fine afterwards.
+    let again = f
+        .client
+        .transcribe_file_samples(&pcm(12.0), &CancelToken::new(), None)
+        .unwrap();
+    assert_eq!(again.tokens.len(), 24);
+}
+
+#[test]
+fn an_engine_failure_stops_the_producer_and_is_returned() {
+    let mut env = stream_env();
+    env.push(("FAKE_CRASH_ON_WINDOW", "1"));
+    let f = fixture_with(&env, |c| c.max_crash_retries = 0);
+    let producer_saw_closed = Arc::new(AtomicBool::new(false));
+    let saw = producer_saw_closed.clone();
+    let samples = pcm(600.0);
+    let started = Instant::now();
+    let r = f
+        .client
+        .transcribe_file_stream(&CancelToken::new(), None, |sink| {
+            // Far more audio than the job can use: the producer only stops
+            // because its sink closes.
+            match feed(sink, &samples, 16_000, Duration::from_millis(5)) {
+                Err(SinkError::Closed) => {
+                    saw.store(true, Ordering::SeqCst);
+                    Err("stopped".to_string())
+                }
+                other => panic!("the sink should have closed: {other:?}"),
+            }
+        });
+    assert!(
+        matches!(r, Err(StreamError::Engine(EngineHostError::Crashed { .. }))),
+        "{r:?}"
+    );
+    assert!(producer_saw_closed.load(Ordering::SeqCst));
+    assert!(started.elapsed() < Duration::from_secs(10));
+    assert_eq!(temp_entries(f.tmp.path()), 0);
+}
+
+#[test]
+fn cancelling_stops_both_sides_and_cleans_up() {
+    let mut env = stream_env();
+    env.push(("FAKE_WINDOW_DELAY_MS", "60"));
+    let f = fixture(&env);
+    let cancel = CancelToken::new();
+    let c2 = cancel.clone();
+    let producer_stopped = Arc::new(AtomicBool::new(false));
+    let stopped = producer_stopped.clone();
+    let samples = pcm(900.0);
+    let mut cb = move |m: usize, _t: usize| {
+        if m == 2 {
+            c2.cancel();
+        }
+    };
+    let started = Instant::now();
+    let r = f
+        .client
+        .transcribe_file_stream(&cancel, Some(&mut cb), |sink| {
+            sink.set_expected_total(samples.len());
+            let r = feed(sink, &samples, 16_000, Duration::from_millis(2));
+            stopped.store(r.is_err(), Ordering::SeqCst);
+            r.map_err(|e| e.to_string())
+        });
+    assert!(
+        matches!(r, Err(StreamError::Engine(EngineHostError::Cancelled))),
+        "{r:?}"
+    );
+    assert!(
+        producer_stopped.load(Ordering::SeqCst),
+        "the producer stopped"
+    );
+    assert!(started.elapsed() < Duration::from_secs(3));
+    assert_eq!(temp_entries(f.tmp.path()), 0);
+    wait_until("host idle after cancel", Duration::from_secs(2), || {
+        f.client.status().map(|s| s.in_flight == 0).unwrap_or(false)
+    });
+}
+
+#[test]
+fn a_pre_cancelled_stream_never_runs_the_producer_or_touches_the_host() {
+    let f = fixture(&[]);
+    let cancel = CancelToken::new();
+    cancel.cancel();
+    let ran = AtomicBool::new(false);
+    let r = f.client.transcribe_file_stream(&cancel, None, |_sink| {
+        ran.store(true, Ordering::SeqCst);
+        Ok::<(), ()>(())
+    });
+    assert!(matches!(
+        r,
+        Err(StreamError::Engine(EngineHostError::Cancelled))
+    ));
+    assert!(!ran.load(Ordering::SeqCst));
+    assert!(!f.client.snapshot().running);
+    assert_eq!(temp_entries(f.tmp.path()), 0);
+}
+
+#[test]
+fn a_host_crash_mid_stream_resubmits_and_still_reconstructs() {
+    let marker = tempfile::tempdir().unwrap();
+    let marker_path = marker.path().join("once");
+    let mut env = stream_env();
+    env.push(("FAKE_CRASH_ONCE_FILE", marker_path.to_str().unwrap()));
+    let f = fixture(&env);
+    let samples = pcm(47.0);
+    let out = f
+        .client
+        .transcribe_file_stream(&CancelToken::new(), None, |sink| {
+            feed(sink, &samples, 12_000, Duration::from_millis(1))
+        })
+        .unwrap_or_else(|e| panic!("{e:?}"));
+    assert_eq!(
+        out.tokens.iter().map(|t| t.id).collect::<Vec<_>>(),
+        expected_ids(samples.len())
+    );
+    assert_eq!(f.client.snapshot().crashes_in_window, 1);
+}
+
+#[test]
+fn a_panicking_producer_does_not_hang_the_job() {
+    let f = fixture(&stream_env());
+    let client = f.client.clone();
+    let (outcome, _) = run_bounded(Duration::from_secs(10), move || {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            client.transcribe_file_stream(&CancelToken::new(), None, |sink| {
+                sink.append(&pcm(3.0)).unwrap();
+                panic!("producer panic (expected by the test)");
+                #[allow(unreachable_code)]
+                Ok::<(), ()>(())
+            })
+        }))
+        .is_err()
+    });
+    assert!(outcome, "the producer's panic is propagated, not swallowed");
+    assert_eq!(temp_entries(f.tmp.path()), 0);
+}
+
+#[test]
+fn a_stream_job_does_not_starve_dictation() {
+    // The streamed file job holds at most the batch lane: dictation still gets its slot.
+    let mut env = stream_env();
+    env.push(("FAKE_BATCH_DELAY_MS", "300"));
+    let f = fixture(&env);
+    f.client.warm().unwrap();
+    let client = f.client.clone();
+    let job = std::thread::spawn(move || {
+        let samples = pcm(47.0);
+        client.transcribe_file_stream(&CancelToken::new(), None, |sink| {
+            feed(sink, &samples, 16_000, Duration::from_millis(1))
+        })
+    });
+    std::thread::sleep(Duration::from_millis(400));
+    let t = Instant::now();
+    let d = f
+        .client
+        .transcribe_dictation(&pcm(3.0), &CancelToken::new())
+        .unwrap();
+    assert_eq!(d.tokens.len(), 6);
+    assert!(
+        t.elapsed() < Duration::from_millis(800),
+        "{:?}",
+        t.elapsed()
+    );
+    job.join().unwrap().unwrap_or_else(|e| panic!("{e:?}"));
+}
+
+// ---- a failing producer interrupts the host waits of the scheduler
+
+fn windows_sent_in(log: &Path) -> usize {
+    std::fs::read_to_string(log)
+        .unwrap_or_default()
+        .lines()
+        .filter(|l| l.starts_with("transcribe_window"))
+        .count()
+}
+
+#[test]
+fn a_producer_failure_interrupts_a_slow_model_load() {
+    // The load takes 3 s (a first-time Core ML compile takes minutes). The decode
+    // fails after 150 ms: its error must not wait for the load.
+    let mut env = stream_env();
+    env.push(("FAKE_LOAD_DELAY_MS", "3000"));
+    let f = fixture(&env);
+    let cancel = CancelToken::new();
+    let started = Instant::now();
+    let r = f.client.transcribe_file_stream(&cancel, None, |sink| {
+        feed(sink, &pcm(2.0), 8_000, Duration::ZERO).unwrap();
+        std::thread::sleep(Duration::from_millis(150));
+        Err("file not found".to_string())
+    });
+    match r {
+        Err(StreamError::Producer(message)) => assert_eq!(message, "file not found"),
+        other => panic!("expected the producer's own error, got {other:?}"),
+    }
+    assert!(
+        started.elapsed() < Duration::from_millis(1500),
+        "returned after {:?}, not after the 3 s load",
+        started.elapsed()
+    );
+    assert!(!cancel.is_cancelled(), "the caller's token is the caller's");
+    assert_eq!(temp_entries(f.tmp.path()), 0);
+}
+
+#[test]
+fn a_producer_failure_interrupts_a_window_in_flight() {
+    // Each window takes 3 s on the host. The decode fails once windows were sent.
+    let log = tempfile::tempdir().unwrap();
+    let log_path = log.path().join("ops.log");
+    let mut env = stream_env();
+    env.push(("FAKE_WINDOW_DELAY_MS", "3000"));
+    env.push(("FAKE_LOG", log_path.to_str().unwrap()));
+    let f = fixture(&env);
+    f.client.warm().unwrap();
+    let cancel = CancelToken::new();
+    let samples = pcm(25.0);
+    let log_for_producer = log_path.clone();
+    let mut sent_when_failing = 0;
+    let started = Instant::now();
+    let r = f.client.transcribe_file_stream(&cancel, None, |sink| {
+        feed(sink, &samples, 8_000, Duration::ZERO).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while windows_sent_in(&log_for_producer) == 0 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        sent_when_failing = windows_sent_in(&log_for_producer);
+        Err("decode failed at 25 s".to_string())
+    });
+    match r {
+        Err(StreamError::Producer(message)) => assert_eq!(message, "decode failed at 25 s"),
+        other => panic!("expected the producer's own error, got {other:?}"),
+    }
+    assert!(sent_when_failing >= 1, "a window was in flight");
+    assert!(
+        started.elapsed() < Duration::from_millis(1800),
+        "returned after {:?}, not after the 3 s window",
+        started.elapsed()
+    );
+    assert!(!cancel.is_cancelled(), "the caller's token is the caller's");
+    assert_eq!(temp_entries(f.tmp.path()), 0);
+}
+
+#[test]
+fn a_caller_cancel_still_wins_during_a_slow_load_and_stops_the_producer() {
+    let mut env = stream_env();
+    env.push(("FAKE_LOAD_DELAY_MS", "3000"));
+    let f = fixture(&env);
+    let cancel = CancelToken::new();
+    let from_outside = cancel.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(150));
+        from_outside.cancel();
+    });
+    let producer_closed = Arc::new(AtomicBool::new(false));
+    let closed = producer_closed.clone();
+    let started = Instant::now();
+    let r = f.client.transcribe_file_stream(&cancel, None, |sink| loop {
+        match sink.append(&[0.0; 1_600]) {
+            Ok(()) => std::thread::sleep(Duration::from_millis(5)),
+            Err(_) => {
+                closed.store(true, Ordering::SeqCst);
+                return Err("stopped by the cancel".to_string());
+            }
+        }
+    });
+    assert!(
+        matches!(r, Err(StreamError::Engine(EngineHostError::Cancelled))),
+        "a genuine cancel is Cancelled, not the producer's error: {r:?}"
+    );
+    assert!(producer_closed.load(Ordering::SeqCst));
+    assert!(
+        started.elapsed() < Duration::from_millis(1500),
+        "{:?}",
+        started.elapsed()
+    );
+    assert_eq!(temp_entries(f.tmp.path()), 0);
 }
