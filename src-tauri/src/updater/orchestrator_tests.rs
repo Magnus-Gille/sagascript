@@ -627,3 +627,35 @@ async fn successful_install_releases_the_permit_only_when_the_caller_drops_it() 
     drop(permit);
     assert_eq!(released.load(Ordering::SeqCst), 1);
 }
+
+/// `install` is the production entry point (with the production wait policy); it must drive the
+/// same phase sequence as the test-tuned path. It also keeps `install` in use in test builds on
+/// every OS, where the macOS-only caller in `signed.rs` is compiled out.
+#[tokio::test]
+async fn the_production_install_entry_point_drives_the_same_sequence() {
+    let sink = RecordingSink::new();
+    let orchestrator = Orchestrator::new(sink.clone());
+    let recovery = FakeRecovery::new([Step::Ready]);
+
+    let outcome = orchestrator
+        .install(FakeProvider::new(), recovery, "1.2.3")
+        .await;
+
+    assert!(matches!(outcome, InstallOutcome::RestartReady { .. }));
+    assert_eq!(
+        sink.phases(),
+        vec![
+            UpdatePhase::Downloading {
+                version: "1.2.3".to_string(),
+                percent: None,
+            },
+            UpdatePhase::PreparingDrafts,
+            UpdatePhase::Installing {
+                version: "1.2.3".to_string(),
+            },
+            UpdatePhase::Installed {
+                version: "1.2.3".to_string(),
+            },
+        ]
+    );
+}
