@@ -97,6 +97,7 @@ describe("Auto-paste that is on but waits for Accessibility (SAGA-518)", () => {
     );
     const link = await screen.findByRole("button", { name: "Open System Settings" });
     expect(screen.getByRole("switch", { name: "Auto-paste transcription" })).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByText(/Auto-paste is on and waits for approval/)).toBeInTheDocument();
 
     await userEvent.setup().click(link);
     await waitFor(() => expect(ipc.callsTo("request_accessibility_permission")).toHaveLength(1));

@@ -2719,10 +2719,11 @@
         <div class="hotkey-hint">Automatically paste dictated text into the active app when transcription finishes.</div>
         {#if platform === "macos" && !accessibilityGranted && (settings.auto_paste || accessibilityRequested)}
           <div class="hotkey-error">
-            Requires Accessibility permission. Auto-paste remains off until approved. <button
-              class="link-btn"
-              onclick={onAutoPastePermissionRequest}
-              disabled={accessibilityChecking || settingsLocked}>{accessibilityChecking ? "Checking…" : "Open System Settings"}</button
+            Requires Accessibility permission. {settings.auto_paste
+              ? "Auto-paste is on and waits for approval."
+              : "Auto-paste remains off until approved."}
+            <button class="link-btn" onclick={onAutoPastePermissionRequest} disabled={accessibilityChecking || settingsLocked}
+              >{accessibilityChecking ? "Checking…" : "Open System Settings"}</button
             >
           </div>
         {/if}
