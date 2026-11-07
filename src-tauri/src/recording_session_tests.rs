@@ -760,6 +760,24 @@ impl RecordingTrash for ProbingTrash {
     }
 }
 
+/// Run `attempt` again for a moment while it says the recording is locked. A
+/// `flock` belongs to the open file, and a child another test forks in this
+/// process holds a copy of the descriptor until its `exec`, so a lock that was
+/// just dropped can look held for a few milliseconds.
+fn retry_while_locked(
+    mut attempt: impl FnMut() -> Result<(), CommandError>,
+) -> Result<(), CommandError> {
+    for _ in 0..40 {
+        match attempt() {
+            Err(error) if error.code() == "recording_locked" => {
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            other => return other,
+        }
+    }
+    attempt()
+}
+
 #[test]
 fn a_recording_another_process_holds_is_not_trashed() {
     let root = TempDir::new();
@@ -772,7 +790,8 @@ fn a_recording_another_process_holds_is_not_trashed() {
     assert_eq!(error.code(), "recording_locked");
     assert!(trash.0.lock().expect("lock").is_empty());
     drop(held);
-    delete_recording_in(root.path(), "one", None, &trash).expect("free again");
+    retry_while_locked(|| delete_recording_in(root.path(), "one", None, &trash))
+        .expect("free again");
     assert_eq!(trash.0.lock().expect("lock").len(), 1);
 }
 
@@ -799,8 +818,12 @@ fn the_lock_is_held_for_the_whole_move_and_released_after_it() {
         [Some("recording_locked")],
         "recovery or a second remover is kept out during the move"
     );
-    sagascript_core::recording::lock_recording_for_removal(root.path(), "one")
-        .expect("released after the move");
+    retry_while_locked(|| {
+        sagascript_core::recording::lock_recording_for_removal(root.path(), "one")
+            .map(drop)
+            .map_err(CommandError::from)
+    })
+    .expect("released after the move");
 }
 
 #[tokio::test]
@@ -927,6 +950,99 @@ async fn a_reservation_is_released_on_every_path() {
     assert!(lock_controller_for_dictation(&controller, &h.recorder).is_err());
     stop_session(&h.recorder).await.expect("stops");
     assert!(lock_controller_for_dictation(&controller, &h.recorder).is_ok());
+}
+
+/// A factory whose `open` waits until the test lets it go, like a device that
+/// is slow to open: the blocking start is in flight while the test cancels.
+struct GatedFactory {
+    entered: Mutex<std::sync::mpsc::Sender<()>>,
+    release: Mutex<std::sync::mpsc::Receiver<()>>,
+}
+
+impl SourceFactory for GatedFactory {
+    fn open(&self, _pair: (u16, u16)) -> Result<Box<dyn CaptureSource>, RecordingError> {
+        self.entered
+            .lock()
+            .expect("lock")
+            .send(())
+            .expect("announce");
+        self.release.lock().expect("lock").recv().expect("released");
+        Ok(Box::new(SyntheticSource::new(SyntheticConfig::default())))
+    }
+}
+
+/// Wait until `done` holds (the supervisor finishes on its own thread).
+async fn eventually(what: &str, mut done: impl FnMut() -> bool) {
+    for _ in 0..200 {
+        if done() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    panic!("never happened: {what}");
+}
+
+/// The command is cancelled while the blocking start is still opening the
+/// source. The microphone stays owned until that start is over and a session
+/// it started is stopped; dictation cannot slip in meanwhile.
+#[tokio::test]
+async fn cancelling_a_start_keeps_the_microphone_until_the_blocking_start_is_over() {
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let dir = TempDir::new();
+    let recorder = Arc::new(SharedRecorder::new(
+        Arc::new(GatedFactory {
+            entered: Mutex::new(entered_tx),
+            release: Mutex::new(release_rx),
+        }),
+        Arc::new(FakeTrash::default()),
+    ));
+    let controller = dictation_controller();
+    let settings = Settings {
+        recording_directory: dir.path().to_string_lossy().into_owned(),
+        ..Settings::default()
+    };
+
+    let (reservation, _) = reserve_for_recording(&controller, &recorder).expect("reserved");
+    let emit: Emit = Arc::new(|_| {});
+    // Cancelled (dropped) once the source is being opened.
+    let start = start_reserved(reservation, settings, Some("Cancelled".into()), emit);
+    tokio::select! {
+        _ = start => panic!("the start cannot finish before it is released"),
+        _ = tokio::task::spawn_blocking(move || entered_rx.recv().expect("entered")) => {}
+    }
+    // The future is gone; the blocking start is not.
+    assert!(
+        recorder.is_active(),
+        "the slot was given back while the start runs"
+    );
+    assert_eq!(
+        lock_controller_for_dictation(&controller, &recorder)
+            .err()
+            .expect("the microphone is still being opened")
+            .code(),
+        "busy"
+    );
+    assert_eq!(
+        reserve_for_recording(&controller, &recorder)
+            .err()
+            .expect("taken")
+            .code(),
+        "busy"
+    );
+
+    // Let the start finish: its session is stopped, then the slot is free.
+    release_tx.send(()).expect("release");
+    eventually("the slot is freed", || !recorder.is_active()).await;
+    assert_eq!(recorder.info().state, RecordingSessionState::Idle);
+    drop(lock_controller_for_dictation(&controller, &recorder).expect("free again"));
+    // What was started was finished, not left recording.
+    let listed = sagascript_core::recording::list_recordings(dir.path());
+    assert_eq!(listed.len(), 1);
+    assert_eq!(
+        listed[0].state,
+        sagascript_core::recording::RecordingState::Complete
+    );
 }
 
 /// The two starts race on many fresh pairs; exactly one may win each round.

@@ -44,7 +44,8 @@
 //! permission, and every dictation start takes the controller through
 //! [`lock_controller_for_dictation`], which refuses while the slot is
 //! reserved or live. The [`Reservation`] gives the slot back on every error
-//! path and when the command is dropped.
+//! path and when the command is dropped before the blocking start is spawned;
+//! after that the blocking start supervises the slot itself ([`start_reserved`]).
 
 use std::path::Path;
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
@@ -480,7 +481,7 @@ struct RecorderState {
 
 /// The recorder's managed state: see the module documentation.
 pub struct SharedRecorder {
-    state: Mutex<RecorderState>,
+    state: Arc<Mutex<RecorderState>>,
     factory: Arc<dyn SourceFactory>,
     trash: Arc<dyn RecordingTrash>,
 }
@@ -500,11 +501,11 @@ struct Started {
 impl SharedRecorder {
     pub fn new(factory: Arc<dyn SourceFactory>, trash: Arc<dyn RecordingTrash>) -> Self {
         Self {
-            state: Mutex::new(RecorderState {
+            state: Arc::new(Mutex::new(RecorderState {
                 phase: Phase::Idle,
                 last: None,
                 notes: Vec::new(),
-            }),
+            })),
             factory,
             trash,
         }
@@ -571,14 +572,13 @@ impl SharedRecorder {
     }
 
     fn abort_start(&self) {
-        let mut state = self.lock();
-        if matches!(state.phase, Phase::Starting) {
-            state.phase = Phase::Idle;
-        }
+        abort_start_in(&self.state);
     }
 
-    fn finish_start(&self, active: Active) {
-        self.lock().phase = Phase::Active(active);
+    /// A handle on the slot that outlives this borrow, for the supervisor of a
+    /// blocking start (see [`start_reserved`]).
+    fn slot(&self) -> Slot {
+        Slot(Arc::clone(&self.state))
     }
 
     /// The running session and what is known about it.
@@ -622,6 +622,28 @@ impl SharedRecorder {
 
     pub fn trash(&self) -> Arc<dyn RecordingTrash> {
         Arc::clone(&self.trash)
+    }
+}
+
+fn abort_start_in(state: &Mutex<RecorderState>) {
+    let mut state = lock_or_recover(state, RECORDER_LOCK);
+    if matches!(state.phase, Phase::Starting) {
+        state.phase = Phase::Idle;
+    }
+}
+
+/// The recorder's slot as the supervisor of a blocking start holds it.
+struct Slot(Arc<Mutex<RecorderState>>);
+
+impl Slot {
+    fn finish_start(&self, active: Active) {
+        lock_or_recover(&self.0, RECORDER_LOCK).phase = Phase::Active(active);
+    }
+
+    /// Give the slot back if the start never became a session (an error, a
+    /// panic, a cancelled start whose session was stopped).
+    fn release(&self) {
+        abort_start_in(&self.0);
     }
 }
 
@@ -768,8 +790,39 @@ pub async fn start_session(
     start_reserved(recorder.reserve()?, settings, title, emit).await
 }
 
-/// Start the session in a slot reserved by [`reserve_for_recording`]. The
-/// slot is freed again on a failed start.
+/// Where a blocking start stands relative to the command waiting for it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Waiter {
+    /// The command still awaits the result.
+    Waiting,
+    /// The command was dropped (cancelled) before the start ended.
+    Cancelled,
+    /// The session was installed in the slot.
+    Installed,
+}
+
+/// Marks the start cancelled if the command's future is dropped while it still
+/// waits.
+struct CancelOnDrop(Arc<Mutex<Waiter>>);
+
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        let mut waiter = lock_or_recover(&self.0, "app.recorder.waiter");
+        if *waiter == Waiter::Waiting {
+            *waiter = Waiter::Cancelled;
+        }
+    }
+}
+
+/// Start the session in a slot reserved by [`reserve_for_recording`].
+///
+/// From the moment the blocking start is spawned, **it** owns the slot, not
+/// this future: a command that is cancelled meanwhile (the future dropped)
+/// leaves the start running, and the start must not hand the microphone to a
+/// dictation before it is over. So the blocking task is its own supervisor: it
+/// installs the session when the command still waits, and stops the session it
+/// started (finishing the recording) when the command was cancelled, and gives
+/// the slot back only after that, on every path including a panic.
 pub async fn start_reserved(
     mut reservation: Reservation<'_>,
     settings: Settings,
@@ -779,31 +832,59 @@ pub async fn start_reserved(
     let recorder = reservation.recorder;
     let title = title_or_default(title.as_deref());
     let factory = Arc::clone(&recorder.factory);
-    let started = tokio::task::spawn_blocking(move || start_blocking(&*factory, &settings, &title))
-        .await
-        .map_err(|error| CommandError::task_failed(error.to_string()));
-    // Dropping the reservation on an error frees the slot.
-    let started = match started {
-        Ok(Ok(started)) => started,
-        Ok(Err(error)) => return Err(error.into()),
-        Err(error) => return Err(error),
-    };
-    let info = session_info(&started.session.status(), &started.meta);
-    let (nudge, wake) = mpsc::channel();
-    spawn_event_thread(
-        Arc::clone(&started.session),
-        started.meta.clone(),
-        EVENT_INTERVAL,
-        wake,
-        emit,
-    );
-    recorder.finish_start(Active {
-        session: started.session,
-        meta: started.meta,
-        _events: nudge,
+    let slot = recorder.slot();
+    let waiter = Arc::new(Mutex::new(Waiter::Waiting));
+    let supervised_waiter = Arc::clone(&waiter);
+    let task = tokio::task::spawn_blocking(move || {
+        /// Frees the slot unless the session was installed.
+        struct Release<'a>(&'a Slot, bool);
+        impl Drop for Release<'_> {
+            fn drop(&mut self) {
+                if self.1 {
+                    self.0.release();
+                }
+            }
+        }
+        let mut release = Release(&slot, true);
+        let started = start_blocking(&*factory, &settings, &title)?;
+        let cancelled = {
+            let mut waiter = lock_or_recover(&supervised_waiter, "app.recorder.waiter");
+            if *waiter == Waiter::Waiting {
+                *waiter = Waiter::Installed;
+            }
+            *waiter == Waiter::Cancelled
+        };
+        if cancelled {
+            // Nobody is waiting for this session: finish what was started
+            // before the microphone is given back.
+            let _ = started.session.stop();
+            return Err(CommandError::task_failed(
+                "The recording start was cancelled.".to_string(),
+            ));
+        }
+        let info = session_info(&started.session.status(), &started.meta);
+        let (nudge, wake) = mpsc::channel();
+        spawn_event_thread(
+            Arc::clone(&started.session),
+            started.meta.clone(),
+            EVENT_INTERVAL,
+            wake,
+            emit,
+        );
+        slot.finish_start(Active {
+            session: started.session,
+            meta: started.meta,
+            _events: nudge,
+        });
+        release.1 = false;
+        Ok::<_, CommandError>(info)
     });
+    // From here the blocking task owns the slot; this future's drop only
+    // marks the start cancelled.
     reservation.armed = false;
-    Ok(info)
+    let _cancel = CancelOnDrop(waiter);
+    task.await
+        .map_err(|error| CommandError::task_failed(error.to_string()))?
 }
 
 /// The thread that sends the status: when it changes, every `interval`, and
