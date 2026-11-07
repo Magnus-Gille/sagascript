@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { actionNames, allSteps, loadAction, loadWorkflow, workflowFiles } from "./lib/ci-workflow.mjs";
+import { actionNames, allSteps, loadAction, loadWorkflow, readRepoFile, workflowFiles } from "./lib/ci-workflow.mjs";
 
 const rustCacheRef = "Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6";
 
@@ -150,4 +150,39 @@ test("only main saves Actions caches (SAGA-546)", () => {
     }
   }
   assert.ok(rustCaches >= 5 && saves >= 4, `the scan must find the cache steps (rust ${rustCaches}, save ${saves})`);
+});
+
+// SAGA-546: the Linux apt step restores cached .deb files, and only main saves them.
+test("the setup action caches apt packages on Linux, restore-only off main (SAGA-546)", () => {
+  const steps = loadAction("setup").steps;
+  const at = (name) => steps.findIndex((step) => step.name === name);
+  const keyStep = steps[at("Compute the apt cache key")];
+  const restore = steps[at("Restore apt packages cache")];
+  const install = steps[at("Install Tauri system dependencies")];
+  const save = steps[at("Save apt packages cache")];
+  assert.ok(keyStep && restore && install && save, "the apt cache steps exist");
+  assert.ok(keyStep.index < restore.index && restore.index < install.index && install.index < save.index);
+  for (const step of [keyStep, restore, install, save]) {
+    assert.match(step.condition, /inputs\.linux-deps == 'true'/, `${step.name} runs only for linux-deps`);
+  }
+  assert.match(restore.uses, /^actions\/cache\/restore@[0-9a-f]{40}$/);
+  assert.equal(restore.continueOnError, true, "a failed restore must fall back to downloading");
+  assert.match(save.uses, /^actions\/cache\/save@[0-9a-f]{40}$/);
+  assert.equal(save.continueOnError, true);
+  for (const part of ["success()", "github.ref == 'refs/heads/main'", "steps.apt-cache.outputs.cache-hit != 'true'"]) {
+    assert.ok(save.condition.includes(part), `save condition must include ${part}: ${save.condition}`);
+  }
+  assert.equal(restore.with.key, save.with.key);
+  assert.equal(restore.with.path, save.with.path);
+  assert.match(keyStep.run, /\$\{RUNNER_OS\}/);
+  assert.match(keyStep.run, /\$\{ImageOS:-unknown\}/);
+  assert.match(keyStep.run, /\$\{ImageVersion:-unknown\}/);
+  assert.match(keyStep.run, /\$\{PACKAGES_HASH\}/);
+  assert.equal(keyStep.env.PACKAGES_HASH, "${{ hashFiles('scripts/ci/apt-install-tauri-deps.sh') }}");
+  assert.equal(install.env.APT_DEB_CACHE_DIR, "${{ steps.apt-key.outputs.dir }}");
+
+  const script = readRepoFile("scripts/ci/apt-install-tauri-deps.sh");
+  assert.doesNotMatch(script, /allow-unauthenticated|AllowInsecure|--force-yes|allow-insecure|trusted=yes|--no-check/i);
+  assert.match(script, /sudo apt-get "\$\{APT_OPTS\[@\]\}" install -y --no-download/, "the retry/timeout structure stays");
+  assert.match(script, /timeout "\$ATTEMPT_SECONDS" sudo apt-get/);
 });
