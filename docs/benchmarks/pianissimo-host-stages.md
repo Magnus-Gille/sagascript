@@ -190,3 +190,187 @@ src-tauri/target/release/sagascript transcribe --language sv --model pianissimo-
 # sweeps: SAGASCRIPT_ENGINE_MAX_IN_FLIGHT=2|3|5|8, SAGASCRIPT_ENGINE_DECODER_UNITS=cpu
 # baseline: /usr/local/bin/sagascript (1.4.8, dd14591)
 ```
+
+# SAGA-565: which resource saturates
+
+Measured 2026-11-07, branch `claude/saga-565-lane-experiment` (main `09dd9807` plus the
+measurement-only host trace in commit `d9284566`). Question left open by SAGA-558: at the default 3
+batch lanes, is the saturated resource the Neural Engine (encoder), the CPU (per-token decoder +
+joint loop), or Core ML dispatch?
+
+## Answer
+
+**The Neural Engine (encoder) saturates; the decoder loop does not.** Encoder predictions are
+executed one at a time below the `MLModel` object: with N predictions in flight each takes about
+N x the solo time (31 ms), the encoder is busy 92% of the wall time at 3 lanes and 98% at 4, and
+loading one encoder instance per lane changes nothing. The decoder/joint loop is CPU work that
+scales across lanes (3.8 of 10 cores in use at 3 lanes) and is not what limits throughput. Both
+still matter for the time per run, because the run is the larger of an encoder floor and a
+lane-latency term (below), and at 3 lanes the two are within about 15% of each other.
+
+## Setup and conditions
+
+- Same machine, file (`uu24-60-r1.mp3`, 277 windows), model (`pianissimo-sv`, compute units `ane`) and
+  CLI build as SAGA-558. Host built from `d9284566`. Temp `SAGASCRIPT_SETTINGS_PATH`,
+  `SAGASCRIPT_ENGINE_HOST` pointing at the built host. `SAGASCRIPT_ENGINE_STAGE_TRACE=<path>` makes
+  the host append one JSON line per event with a monotonic nanosecond timestamp and the worker
+  thread id: `received`, `work_start`, `pre_start`, `enc_start`, `enc_predict_start/end`, `dec_start`,
+  `dec_end`, `sent`, and per window the count and summed wall time of decoder and joint `prediction()`
+  calls. Windows are keyed by `offset_samples`. A lane is a worker thread holding a slot.
+- "L<n>" means n batch lanes = `SAGASCRIPT_ENGINE_MAX_IN_FLIGHT` n+1 (the client keeps one slot for
+  dictation; default 4 slots = L3). SAGA-558 used the same convention.
+- **Power: AC, charging, 86-98% battery for every run in the tables. Thermal: `pmset -g therm`
+  reported no thermal, performance or CPU-power warning before any run.**
+- **Load average (1 min) before each run: 4.5-5.0 for all runs in the main tables.** The Mac was not
+  idle: other sessions kept the load at 5-30 for the whole session (a first sweep taken while it
+  reached 30-78 was discarded as unusable, except its round-1 GPU rows, flagged below). The runner
+  waited for the 1-minute load to drop below 5.0 before each run; my own previous run keeps it from
+  going lower. Treat absolute seconds as "moderately busy machine"; the relative picture and the
+  trace ratios are the evidence.
+- 3 runs per config, rounds interleaved (config order rotated), after one discarded warm-up run. Medians.
+  Per-run totals (s): L1 21.77 / 21.39 / 21.68; L2 13.81 / 12.54 / 13.48; L3 10.71 / 10.08 / 10.24;
+  L4 9.41 / 10.00 / 9.74; L3 decoder-cpu 11.64 / 9.80 / 10.19. Spread inside one config is up to about
+  0.6 s (1.2 s once), so differences below about 0.6 s are noise (L3 vs L4, L3 vs decoder-cpu).
+- `powermetrics` needs superuser (`must be invoked as the superuser`); skipped, no sudo used. CPU use
+  below is `getrusage(RUSAGE_CHILDREN)` user+sys of the CLI and host, divided by wall time.
+
+## Results: lane sweep (clean set, medians of 3)
+
+| Config | total s | CPU cores in use | encoder busy (>=1 running) | mean encoder concurrency | max enc. concurrency | time with >=2 encoders | encoder call ms (median) | decoder loop ms (median) | wait received to encoder start ms |
+|---|---|---|---|---|---|---|---|---|---|
+| L1 | 21.68 | 1.43 | 40.4% | 0.40 | 1 | 0% | 31.1 | 45.4 | 2.0 |
+| L2 | 13.48 | 2.87 | 70.8% | 0.75 | 2 | 4.7% | 32.4 | 57.2 | 2.9 |
+| L3 (default) | 10.24 | 3.81 | 92.5% | 1.20 | 3 | 25.9% | 40.1 | 63.6 | 3.3 |
+| L4 | 9.74 | 4.03 | 97.9% | 1.90 | 4 | 72.7% | 62.4 | 67.7 | 3.8 |
+| L3, decoder units cpu | 10.19 | 3.78 | 92.1% | 1.17 | 3 | 23.8% | 37.4 | 65.4 | 3.4 |
+
+Mean decoder-loop concurrency: L1 0.56, L2 1.17, L3 1.67, L4 1.92 (max equals the lane count). Mean
+preprocess 1.7-3.2 ms. Queueing: a window waits 2-4 ms from `received` to encoder start, nearly all of
+it its own mel preprocessing; the host scheduler start delay is under 0.1 ms. The client never has
+more windows outstanding than lanes, so no window waits for a slot; the contention shows up as longer
+calls, not as queueing.
+
+### Encoder predictions are serialised
+
+If predictions executed in parallel, the call time would stay at 31 ms as concurrency rises. It does
+not: it rises in proportion to how many predictions are running at once.
+
+| Config | mean encoder concurrency while busy | predicted call ms (31.1 x concurrency) | measured call ms |
+|---|---|---|---|
+| L2 | 1.07 | 33.1 | 32.4 |
+| L3 | 1.29 | 40.2 | 40.1 |
+| L4 | 1.94 | 60.3 | 62.4 |
+
+Encoder predictions overlap in time (max concurrency 3 and 4 in the trace, 26% / 73% of the time at
+two or more), but each overlapped prediction is slowed to its share, so the *throughput* of the
+encoder is one window per about 31 ms regardless of lanes. That is 277 x 31.1 ms = **8.6 s, the
+encoder floor** for this file. The run takes 10.2 s at L3 (the encoder is busy 92.5% of it) and 9.7 s
+at L4 (97.9% busy, 13% above the floor, so the interleaving costs a little). Going from L3 to L4
+gains 0.5 s while every encoder call gets 56% slower; that is what a saturated serial resource looks
+like.
+
+### The decoder loop is not the saturated resource
+
+- The decoder loop is almost entirely Core ML `prediction()` calls: per window 67 decoder calls
+  (272 us each at L1) and 85 joint calls (293 us each), 43.2 ms of the 45.4 ms loop. About 0.3 ms per
+  call with tiny networks: dispatch overhead, not arithmetic (confirms the SAGA-558 estimate; it is
+  152 calls per window, not the 2 x 52 assumed).
+- It scales across lanes: mean concurrency 1.67 at L3 and 1.92 at L4, using 3.8 and 4.0 of 10 cores.
+  A CPU-bound loop would stop scaling and saturate the cores; here most cores are free. The per-call
+  time does rise with load (272 us at L1, 374 at L3, 406 at L4), which is the 45 to 64 ms growth of
+  the loop: shared dispatch/memory/driver contention, not core exhaustion.
+- `SAGASCRIPT_ENGINE_DECODER_UNITS=cpu` is indistinguishable from the default (10.19 vs 10.24 s,
+  call times 380/421 us vs 374/413 us): the default decoder already runs on the CPU in practice.
+
+### Per-lane latency, and why both terms matter
+
+Lane latency per window at L3 = preprocess 3 + encoder 40 + decoder 64 = 107 ms; with 3 lanes the
+lane-limited time is 277 x 107 / 3 = 9.9 s, which is what is measured (10.2 s). The encoder floor
+is 8.6 s. The measured time sits just above the larger of the two, because encoder calls from
+different lanes wait on each other and the decoder phases of other lanes fill the gaps. Reducing only
+one term moves the run only until the other binds.
+
+### Is the serialisation per `MLModel` instance (Core ML) or below it (ANE)? Experiment, not committed
+
+An uncommitted throw-away patch loaded N independent `MLModel` encoder instances and sent windows to
+them round-robin (`SAGASCRIPT_EXP_ENCODER_COPIES`, not in the branch). If Core ML serialised calls
+per model instance, N instances would restore parallelism.
+
+| Config (same session, interleaved) | total s (3 runs) | median | encoder call ms | mean enc. concurrency |
+|---|---|---|---|---|
+| L3, one encoder | 10.47 / 13.51 (load spike) / 10.07 | 10.47 | 39.8 | 1.15 |
+| L3, 3 encoder instances | 10.41 / 10.57 / 10.58 | 10.57 | 40.1 | 1.18 |
+| L4, 4 encoder instances | 10.93 / 11.22 / 9.37 | 10.93 | 63.1 | 1.73 |
+
+No change in encoder call time or total. The serialisation is below the model instance: the Neural
+Engine (or its driver queue) executes one encoder program at a time. This cannot separate ANE
+hardware from the ANE driver/firmware queue; both are outside anything the host controls.
+
+### Encoder on the GPU (`SAGASCRIPT_ENGINE_COMPUTE_UNITS=gpu`, decoder kept on ane or cpu)
+
+Only the first round is usable (load 7-8 before; the second and third rounds ran at load 10-76):
+
+| Config (round 1) | total s | encoder call ms | mean enc. concurrency | decoder loop ms | CPU cores |
+|---|---|---|---|---|---|
+| L3, encoder gpu, decoder ane | 64.3 | 238 | 2.1 | 219 | 1.75 |
+| L3, encoder gpu, decoder cpu | 65.1 | 247 | 2.0 | 216 | 1.88 |
+
+The GPU encoder is serial too (call time about 2.1 x 113 ms), and 113 ms per window is 3.6 times the
+Neural Engine's 31 ms. The 6x slower totals also include the decoder loop getting 3.4x slower (about
+220 ms, with only 1.8 cores in use: the CPU side waits on the busy GPU/driver). Moving the encoder
+entirely to the GPU does not change the saturation point, it only moves it to a much slower resource.
+The other two rounds were taken under heavy foreign load (64.8-95 s) and are not used.
+
+## Recommendation
+
+1. **Do both of the following; neither alone gives more than about 10-12%.**
+   - **(a) Cut the per-token Core ML call count** (fuse Decoder + JointDecisionv3 into one model, or run
+     the greedy loop on the CPU outside Core ML, as SAGA-558 proposed). It halves the loop at best, from
+     64 to about 32 ms per window at 3 lanes. Lane-limited time falls to 277 x (3 + 40 + 32) / 3 = 6.9 s,
+     but the encoder floor (8.6 s at 31 ms, in practice 8.7-9.0 s) now binds: **estimated 10.2 s to
+     about 9.0 s, a 10-12% gain**, not the 30% SAGA-558 estimated when the decoder was assumed to be the
+     only limiter. It may also lower contention, so the encoder call time at 3 lanes could fall back
+     toward 31-35 ms.
+   - **(b) Reduce ANE time per window** (cheaper encoder: the W8A8 build, banded attention, a shorter
+     padded input). This lowers the hard floor. With (a) in place, a 22% cheaper encoder gives
+     277 x 24 ms = 6.7 s floor and a lane-limited 277 x (3 + 24 + 32) / 3 = 5.4 s: **estimated about
+     7 s in total, about 30% faster than now**. Without (a), a cheaper encoder alone gives lane-limited
+     277 x (3 + 31 + 64) / 3 = 9.0 s, about 10%. This corrects the SAGA-558 suggestion that encoder
+     work is not worth doing: on its own it is not, combined with (a) it is what produces the 30%.
+   - If only one can be done, start with (a): it is a host-only change, it also helps dictation
+     latency, and its gain does not depend on the encoder model.
+2. **Do not resume the GPU lane (P2b) for the encoder.** A GPU encoder is 3.6x slower per window than
+   the Neural Engine. As a *second* lane beside the ANE it could at best take about 21% of the windows
+   (31 / (31 + 113)), lowering the encoder floor from 8.6 to about 6.8 s in an ideal split, but the
+   all-GPU run also slowed the CPU-side decoder loop 3.4x (shared dispatch/driver path), so the real
+   gain is probably smaller and the complexity is high. Revisit only after (a) and (b), if the ANE is
+   still the binding resource.
+3. **More lanes: no.** L4 gains 0.5 s (about 5%, near the noise of this set) and makes every window
+   slower; the default of 3 stays.
+4. Before building (a) or (b), an encoder-only and a decoder-only microbenchmark would confirm the solo
+   31 ms and 45 ms and size the gains better than this two-term model.
+
+## What limits confidence
+
+- The machine was not idle (load 4.5-5.0 before each run, 5-30 around them, and a discarded earlier
+  sweep at 30-78). Run-to-run spread is up to 0.6-1.2 s; the conclusions rest on ratios inside each run
+  (encoder busy, call time versus concurrency, call counts), which are stable across the three runs.
+- "ANE" means "below `MLModel`": the experiment excludes a per-instance Core ML lock but cannot tell the
+  Neural Engine from the ANE driver. `powermetrics` (ANE power) was not available without sudo.
+- The tracing costs a few microseconds per event under one lock; traced L3 runs (10.1-10.7 s) match the
+  untraced SAGA-558 quiet figure (10.5 s), so the effect is small, but an untraced A/B was not run.
+- The GPU rows are single runs taken at load 7-8; the other two GPU rounds were disturbed.
+- The recommended gains are estimates from a two-term model (encoder floor, lane latency), not
+  measurements of the optimised builds.
+
+## Commands
+
+```bash
+# host with trace: SAGASCRIPT_ENGINE_STAGE_TRACE=<file> (1 writes to stderr)
+SAGASCRIPT_ENGINE_HOST=src-tauri/engine-host/coreml/.build/out/Products/Release/sagascript-engine-host \
+SAGASCRIPT_SETTINGS_PATH=<tmp> SAGASCRIPT_ENGINE_STAGE_TRACE=<file> \
+SAGASCRIPT_ENGINE_MAX_IN_FLIGHT=4 \
+  src-tauri/target/release/sagascript transcribe --language sv --model pianissimo-sv --json <file>
+# configs: MAX_IN_FLIGHT=2..5; +SAGASCRIPT_ENGINE_DECODER_UNITS=cpu;
+#          +SAGASCRIPT_ENGINE_COMPUTE_UNITS=gpu (+SAGASCRIPT_ENGINE_DECODER_UNITS=ane|cpu)
+```
