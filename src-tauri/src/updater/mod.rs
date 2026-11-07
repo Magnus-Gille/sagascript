@@ -338,12 +338,20 @@ fn check_for_updates_with_intent(app: tauri::AppHandle, install_when_available: 
         #[cfg(target_os = "macos")]
         if updates::updater_public_key().is_some() {
             let source = SignedCheck::new(app.clone());
-            if let Ok(Some(checked)) = orchestrator.check(&source).await {
-                if install_when_available {
-                    if let Some(update) = source.take_update() {
+            if !install_when_available {
+                let _ = orchestrator.check(&source).await;
+                return;
+            }
+            // The user already chose to install: go straight from Checking to
+            // the download, as before the orchestrator, without an actionable
+            // Available phase in between.
+            if let Ok(Some(checked)) = orchestrator.check_for_install(&source).await {
+                match source.take_update() {
+                    Some(update) => {
                         install_signed_update(&orchestrator, app.clone(), update, &checked.version)
                             .await;
                     }
+                    None => orchestrator.announce_available(&checked),
                 }
             }
             return;

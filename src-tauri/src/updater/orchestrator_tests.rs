@@ -659,3 +659,58 @@ async fn the_production_install_entry_point_drives_the_same_sequence() {
         ]
     );
 }
+
+#[tokio::test]
+async fn a_check_for_install_never_hands_the_menu_back_before_the_download() {
+    // An Available phase re-enables the menu action, which would let a second
+    // request start a parallel check or install before the download begins.
+    let sink = RecordingSink::new();
+    let orchestrator = Orchestrator::new(sink.clone());
+
+    let checked = orchestrator
+        .check_for_install(&FakeCheck::available("1.2.3", true))
+        .await
+        .unwrap()
+        .expect("a release is found");
+    assert_eq!(sink.phases(), vec![UpdatePhase::Checking]);
+
+    let outcome = orchestrator
+        .install(
+            FakeProvider::new(),
+            FakeRecovery::new([Step::Ready]),
+            &checked.version,
+        )
+        .await;
+    assert!(matches!(outcome, InstallOutcome::RestartReady { .. }));
+    assert!(
+        !sink
+            .phases()
+            .iter()
+            .any(|phase| matches!(phase, UpdatePhase::Available { .. })),
+        "the auto-install path never shows an actionable Available phase"
+    );
+}
+
+#[tokio::test]
+async fn a_check_for_install_that_cannot_install_announces_the_release() {
+    let sink = RecordingSink::new();
+    let orchestrator = Orchestrator::new(sink.clone());
+
+    let checked = orchestrator
+        .check_for_install(&FakeCheck::available("1.2.3", true))
+        .await
+        .unwrap()
+        .expect("a release is found");
+    orchestrator.announce_available(&checked);
+
+    assert_eq!(
+        sink.phases(),
+        vec![
+            UpdatePhase::Checking,
+            UpdatePhase::Available {
+                version: "1.2.3".into(),
+                install_offered: true,
+            },
+        ]
+    );
+}

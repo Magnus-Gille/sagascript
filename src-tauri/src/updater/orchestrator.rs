@@ -154,6 +154,35 @@ impl<S: MenuSink> Orchestrator<S> {
     /// Shows Checking, then the source's terminal phase (Available, UpToDate
     /// or Failed{Check}). Warns on a failed check, like the old inline flow.
     pub async fn check(&self, source: &impl CheckSource) -> Result<Option<CheckedRelease>, String> {
+        self.check_and_announce(source, true).await
+    }
+
+    /// Like [`Self::check`], but a found release is not announced: the caller
+    /// installs it next. An actionable Available phase would hand the menu back
+    /// between the check and the download, so a second request could start a
+    /// parallel check or install. If the caller cannot install after all, it
+    /// announces the release with [`Self::announce_available`].
+    #[cfg(any(target_os = "macos", test))]
+    pub async fn check_for_install(
+        &self,
+        source: &impl CheckSource,
+    ) -> Result<Option<CheckedRelease>, String> {
+        self.check_and_announce(source, false).await
+    }
+
+    #[cfg(any(target_os = "macos", test))]
+    pub fn announce_available(&self, checked: &CheckedRelease) {
+        self.sink.show(&UpdatePhase::Available {
+            version: checked.version.clone(),
+            install_offered: checked.install_offered,
+        });
+    }
+
+    async fn check_and_announce(
+        &self,
+        source: &impl CheckSource,
+        announce_available: bool,
+    ) -> Result<Option<CheckedRelease>, String> {
         self.sink.show(&UpdatePhase::Checking);
         match source.check().await {
             Ok(None) => {
@@ -161,10 +190,12 @@ impl<S: MenuSink> Orchestrator<S> {
                 Ok(None)
             }
             Ok(Some(checked)) => {
-                self.sink.show(&UpdatePhase::Available {
-                    version: checked.version.clone(),
-                    install_offered: checked.install_offered,
-                });
+                if announce_available {
+                    self.sink.show(&UpdatePhase::Available {
+                        version: checked.version.clone(),
+                        install_offered: checked.install_offered,
+                    });
+                }
                 Ok(Some(checked))
             }
             Err(error) => {
