@@ -268,6 +268,20 @@ assert_text "$(cat "$evidence_root/unwatched-restored.identity")" "$initial_hash
 unwatched_same=$(build_count "$evidence_root/unwatched-same.log")
 assert_eq "$unwatched_same" 0 "unchanged build after unwatched restore is cached"
 
+# Deleting a tracked file reruns the helper once and marks the tree dirty, but the
+# missing path must not be watched: Cargo would otherwise rerun on every build.
+sleep 1
+rm "$fixture_root/docs/notes.md"
+deleted_first=$(build_count "$evidence_root/deleted-tracked-1.log")
+assert_eq "$deleted_first" 1 "deleted tracked file reruns once"
+assert_text "$(cat "$evidence_root/deleted-tracked-1.identity")" "$initial_hash-dirty $initial_date $fixture_sha true" "deleted tracked file is dirty"
+deleted_same=$(build_count "$evidence_root/deleted-tracked-2.log")
+assert_eq "$deleted_same" 0 "unchanged build with a deleted tracked file is cached"
+git -C "$fixture_root" checkout -- docs/notes.md
+deleted_restored=$(build_count "$evidence_root/deleted-restored.log")
+assert_eq "$deleted_restored" 1 "restored tracked file reruns through the index"
+assert_text "$(cat "$evidence_root/deleted-restored.identity")" "$initial_hash $initial_date $fixture_sha false" "restored tracked file is clean"
+
 # Changes to the shared helper and generated-path policy must invalidate the
 # cached build script. The new policy entry is committed in the fixture so the
 # later untracked generated file is the only worktree change.

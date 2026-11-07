@@ -90,6 +90,12 @@ const BUILD_WRITTEN_PREFIX: &str = "src-tauri/gen/schemas/";
 /// (under `scripts/` or `docs/`, for example) leaves a cached `SAGASCRIPT_SOURCE_DIRTY=false`.
 /// Untracked files are not watched: Cargo cannot watch the repository root without also
 /// watching `target/`. A new untracked file is picked up at the next rerun for any other reason.
+/// `src-tauri/gen/schemas/` is not watched either: Tauri's build regenerates it from inputs it
+/// watches itself, and watching what the build writes would invalidate every build.
+/// A tracked file that is missing (deleted but not yet staged) is not watched, because Cargo
+/// treats a missing watched path as changed on every build. The deletion itself already reran
+/// the script and marked the tree dirty; restoring the file stays dirty until the next rerun
+/// (for example from the index update a `git checkout` makes), which errs on the safe side.
 pub fn emit_tracked_file_rerun_triggers() {
     let Some(root) = repository_root() else {
         return;
@@ -105,10 +111,12 @@ pub fn emit_tracked_file_rerun_triggers() {
         {
             continue;
         }
-        println!(
-            "cargo:rerun-if-changed={}",
-            Path::new(&root).join(path).display()
-        );
+        let path = Path::new(&root).join(path);
+        // `exists` follows symlinks, so a dangling tracked symlink is skipped as well.
+        if !path.exists() {
+            continue;
+        }
+        println!("cargo:rerun-if-changed={}", path.display());
     }
 }
 
