@@ -6,6 +6,7 @@
 import { describe, expect, test } from "vitest";
 import * as api from "./api";
 import * as reprocessing from "./meeting-reprocessing-api";
+import * as record from "./record-api";
 import { PIANISSIMO_ID } from "./models.svelte";
 import { COMMAND_NAMES, mockIpc, type CommandArgs, type CommandHandlers, type CommandName, type CommandResult } from "../test/ipc";
 import type { CorrectionFile, MeetingReview, MeetingTranscript } from "./meeting-types";
@@ -211,6 +212,24 @@ const contracts: Contract[] = [
   contract(api.openMicrophoneSettings, [], "open_microphone_settings", {}),
   contract(api.getPlatform, [], "get_platform", {}),
   contract(api.setOnboardingCompleted, [], "set_onboarding_completed", {}),
+  contract(record.startRecordingSession, ["Interview"], "start_recording_session", { title: "Interview" }),
+  contract(record.startRecordingSession, [], "start_recording_session", { title: null }),
+  contract(record.stopRecordingSession, [], "stop_recording_session", {}),
+  contract(record.getRecordingSession, [], "get_recording_session", {}),
+  contract(record.listRecordings, [], "list_recordings", {}),
+  contract(record.deleteRecording, ["2026-11-06 10.00 Interview"], "delete_recording", { folderName: "2026-11-06 10.00 Interview" }),
+  contract(record.revealRecording, ["2026-11-06 10.00 Interview"], "reveal_recording", { folderName: "2026-11-06 10.00 Interview" }),
+  contract(record.recoverRecordings, [], "recover_recordings", {}),
+  contract(record.transcribeRecording, ["2026-11-06 10.00 Interview"], "transcribe_recording", {
+    folderName: "2026-11-06 10.00 Interview",
+  }),
+  contract(record.getRecordingFolderInfo, [], "get_recording_folder_info", { path: null }),
+  contract(record.getRecordingFolderInfo, ["/Volumes/Archive"], "get_recording_folder_info", { path: "/Volumes/Archive" }),
+  contract(record.setRecordingQuality, ["compact"], "set_recording_quality", { quality: "compact" }),
+  contract(record.setRecordingDirectory, ["/Volumes/Archive"], "set_recording_directory", { path: "/Volumes/Archive" }),
+  contract(record.setRecordingChannelPair, [3, 4], "set_recording_channel_pair", { first: 3, second: 4 }),
+  contract(record.confirmRecordingFolder, [], "confirm_recording_folder", {}),
+  contract(record.acknowledgeRecordingConsent, [], "acknowledge_recording_consent", {}),
   contract(reprocessing.planMeetingReprocessing, [review, "recluster", 0.5, true, "names", "default"], "plan_meeting_reprocessing", {
     previous: review,
     mode: "recluster",

@@ -92,6 +92,32 @@ const TYPESCRIPT_NAMES: &[(&str, &str, Option<&str>)] = &[
         "ReprocessingRequest",
         Some("./meeting-reprocessing-types"),
     ),
+    (
+        "RecordingFinished",
+        "RecordingFinished",
+        Some("./record-types"),
+    ),
+    (
+        "RecordingFolderInfo",
+        "RecordingFolderInfo",
+        Some("./record-types"),
+    ),
+    (
+        "RecordingQuality",
+        "RecordingQuality",
+        Some("./record-types"),
+    ),
+    (
+        "RecordingSessionInfo",
+        "RecordingSessionInfo",
+        Some("./record-types"),
+    ),
+    (
+        "RecordingSummary",
+        "RecordingSummary",
+        Some("./record-types"),
+    ),
+    ("RecoveryNote", "RecoveryNote", Some("./record-types")),
     ("ReviewState", "MeetingReviewState", Some("./meeting-types")),
     (
         "SelectedReprocessingPlan",

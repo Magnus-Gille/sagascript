@@ -97,6 +97,82 @@ fn settings_default_values() {
     assert_eq!(s.beam_size, 0);
     assert!(s.temperature_fallback);
     assert!(!s.vad_enabled);
+    assert_eq!(s.recording_quality, RecordingQuality::Lossless);
+    assert_eq!(s.recording_directory, "");
+    assert_eq!(s.recording_channel_pair, [1, 2]);
+    assert!(!s.recording_folder_confirmed);
+    assert!(!s.recording_consent_acknowledged);
+}
+
+#[test]
+fn recording_settings_roundtrip_and_use_snake_case() {
+    let original = Settings {
+        recording_quality: RecordingQuality::Compact,
+        recording_directory: "/Volumes/Audio/Sagascript".into(),
+        recording_channel_pair: [3, 3],
+        recording_folder_confirmed: true,
+        recording_consent_acknowledged: true,
+        ..Default::default()
+    };
+    let json = serde_json::to_value(&original).unwrap();
+    assert_eq!(json["recording_quality"], "compact");
+    assert_eq!(json["recording_channel_pair"], serde_json::json!([3, 3]));
+    let decoded: Settings = serde_json::from_value(json).unwrap();
+    assert_eq!(decoded.recording_quality, RecordingQuality::Compact);
+    assert_eq!(decoded.recording_directory, "/Volumes/Audio/Sagascript");
+    assert_eq!(decoded.recording_channel_pair, [3, 3]);
+    assert!(decoded.recording_folder_confirmed);
+    assert!(decoded.recording_consent_acknowledged);
+}
+
+#[test]
+fn recording_quality_ids_parse_and_map_to_the_recorder_tier() {
+    for quality in RecordingQuality::ALL {
+        assert_eq!(RecordingQuality::parse_id(quality.id()).unwrap(), quality);
+    }
+    assert!(RecordingQuality::parse_id("studio").is_err());
+    assert_eq!(
+        RecordingQuality::Lossless.to_quality(),
+        crate::recording::Quality::Lossless
+    );
+    assert_eq!(
+        RecordingQuality::Compact.to_quality(),
+        crate::recording::Quality::Compact
+    );
+}
+
+#[test]
+fn recordings_dir_is_the_configured_folder_or_the_default() {
+    let mut settings = Settings::default();
+    assert_eq!(
+        settings.recordings_dir(),
+        crate::recording::default_recordings_dir()
+    );
+    assert!(settings.recordings_dir().ends_with("Sagascript"));
+    settings.recording_directory = "  ".into();
+    assert_eq!(
+        settings.recordings_dir(),
+        crate::recording::default_recordings_dir()
+    );
+    settings.recording_directory = "/Volumes/Audio/Takes".into();
+    assert_eq!(
+        settings.recordings_dir(),
+        std::path::PathBuf::from("/Volumes/Audio/Takes")
+    );
+    settings.recording_channel_pair = [3, 4];
+    assert_eq!(settings.recording_channel_pair_tuple(), (3, 4));
+}
+
+#[test]
+fn expand_home_replaces_only_a_leading_tilde() {
+    let Some(home) = dirs::home_dir() else {
+        return;
+    };
+    assert_eq!(expand_home("~"), home.to_string_lossy());
+    assert_eq!(expand_home("~/Takes"), home.join("Takes").to_string_lossy());
+    assert_eq!(expand_home("/a/~/b"), "/a/~/b");
+    assert_eq!(expand_home("~other/x"), "~other/x");
+    assert_eq!(expand_home("relative"), "relative");
 }
 
 #[test]

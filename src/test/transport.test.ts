@@ -14,11 +14,14 @@ import { pollMeetingJob } from "../lib/meeting-job-client";
 import { meetingPhases } from "../lib/meeting-progress";
 import { initialMeetingDrafts, reconcileMeetingDrafts, type CorrectionOperation } from "../lib/meeting-types";
 import { initialOverlayState, reduceOverlay, type OverlayState } from "../lib/overlay-state";
+import type { RecordingFinished, RecordingFolderInfo, RecordingSessionInfo, RecoveryNote } from "../lib/record-types";
 import { acceptRunProgress, startStages, type StageState } from "../lib/transcribe-stages";
 import commandErrorsFixture from "../../contracts/transport/command_errors.json";
 import eventsFixture from "../../contracts/transport/events.json";
 import meetingJobFixture from "../../contracts/transport/get_meeting_job.json";
+import recordingFolderInfoFixture from "../../contracts/transport/get_recording_folder_info.json";
 import settingsFixture from "../../contracts/transport/get_settings.json";
+import recordingFinishedFixture from "../../contracts/transport/stop_recording_session.json";
 import { ContractError, type Infer, type Schema } from "./schema";
 import * as schemas from "./transport-schemas";
 
@@ -41,12 +44,23 @@ test("each schema is exactly the frontend type it mirrors", () => {
   expectTypeOf<Infer<typeof schemas.settings>>().toEqualTypeOf<Settings>();
   expectTypeOf<Infer<typeof schemas.meetingJobSnapshot>>().toEqualTypeOf<MeetingJobSnapshot>();
   expectTypeOf<Infer<typeof schemas.backendError>>().toEqualTypeOf<BackendError>();
+  expectTypeOf<Infer<typeof schemas.recordingSessionInfo>>().toEqualTypeOf<RecordingSessionInfo>();
+  expectTypeOf<Infer<typeof schemas.recordingFinished>>().toEqualTypeOf<RecordingFinished>();
+  expectTypeOf<Infer<typeof schemas.recordingFolderInfo>>().toEqualTypeOf<RecordingFolderInfo>();
+  expectTypeOf<Infer<typeof schemas.recoveryNote>>().toEqualTypeOf<RecoveryNote>();
   expectTypeOf<{ [E in keyof EventPayloadSchemas]: Infer<EventPayloadSchemas[E]> }>().toEqualTypeOf<EventMap>();
 });
 
 test("the suite reads every shared fixture", () => {
   const onDisk = Object.keys(import.meta.glob("../../contracts/transport/*.json")).map((path) => path.split("/").at(-1));
-  expect(onDisk.sort()).toEqual(["command_errors.json", "events.json", "get_meeting_job.json", "get_settings.json"]);
+  expect(onDisk.sort()).toEqual([
+    "command_errors.json",
+    "events.json",
+    "get_meeting_job.json",
+    "get_recording_folder_info.json",
+    "get_settings.json",
+    "stop_recording_session.json",
+  ]);
 });
 
 describe("command_errors", () => {
@@ -130,6 +144,37 @@ describe("get_settings", () => {
     expect(Object.keys(customised.profile_models).length).toBeGreaterThan(0);
     // A fresh install's implicit legacy profile arrives explicit.
     expect(variants().get("default")!.hotkey_profiles).toHaveLength(1);
+  });
+});
+
+describe("stop_recording_session", () => {
+  const fixture: Record<string, unknown> = recordingFinishedFixture;
+
+  test.each(Object.keys(fixture))("%s parses as RecordingFinished", (variant) => {
+    schemas.recordingFinished.parse(fixture[variant], `stop_recording_session.json:${variant}`);
+  });
+
+  test("the fixtures cover a user stop, an early end and a recording that needs recovery", () => {
+    const variants = variantsOf(fixture, schemas.recordingFinished, "stop_recording_session.json")();
+    expect(variants.get("stopped")!.ended_early).toBeNull();
+    expect(variants.get("device_changed")!.ended_early).toBe("device_changed");
+    const interrupted = variants.get("interrupted")!.summary;
+    expect([interrupted.state, interrupted.needs_recovery, interrupted.playable]).toEqual(["recording", true, false]);
+    expect(variants.get("stopped")!.summary.playable).toBe(true);
+  });
+});
+
+describe("get_recording_folder_info", () => {
+  const fixture: Record<string, unknown> = recordingFolderInfoFixture;
+
+  test.each(Object.keys(fixture))("%s parses as RecordingFolderInfo", (variant) => {
+    schemas.recordingFolderInfo.parse(fixture[variant], `get_recording_folder_info.json:${variant}`);
+  });
+
+  test("the fixtures cover an unknown volume and the warnings", () => {
+    const variants = variantsOf(fixture, schemas.recordingFolderInfo, "get_recording_folder_info.json")();
+    expect(variants.get("existing")!.warnings).toEqual(["exfat", "cloud_synced"]);
+    expect(variants.get("not_created_yet")!.free_bytes).toBeNull();
   });
 });
 

@@ -35,7 +35,9 @@ mod paste;
 mod paste_completion;
 mod plain_file_jobs;
 mod platform;
+mod recording_session;
 mod settings_watcher;
+mod trash;
 mod tray;
 mod updater;
 
@@ -246,6 +248,20 @@ fn build_app(gui_launch_mode: GuiLaunchMode) -> tauri::App {
             commands::open_microphone_settings,
             commands::get_platform,
             commands::set_onboarding_completed,
+            commands::start_recording_session,
+            commands::stop_recording_session,
+            commands::get_recording_session,
+            commands::list_recordings,
+            commands::delete_recording,
+            commands::reveal_recording,
+            commands::recover_recordings,
+            commands::transcribe_recording,
+            commands::get_recording_folder_info,
+            commands::set_recording_quality,
+            commands::set_recording_directory,
+            commands::set_recording_channel_pair,
+            commands::confirm_recording_folder,
+            commands::acknowledge_recording_consent,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Sagascript")

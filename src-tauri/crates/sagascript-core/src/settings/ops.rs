@@ -52,6 +52,37 @@ pub enum Accessibility {
 }
 
 impl Settings {
+    /// Record input channels `first` and `second` (1-based; equal = mono).
+    /// Refused, with nothing changed, when either is 0.
+    pub fn set_recording_channel_pair(
+        &mut self,
+        first: u16,
+        second: u16,
+    ) -> Result<(), SettingsError> {
+        if first == 0 || second == 0 {
+            return Err(SettingsError::InvalidRecordingChannelPair { first, second });
+        }
+        self.recording_channel_pair = [first, second];
+        Ok(())
+    }
+
+    /// Keep recordings in `directory` (empty = the default folder). The folder
+    /// need not exist: it is created on the first recording. `is_file` is what
+    /// the surface found when it looked at the path; it is refused, with
+    /// nothing changed, when the path is a file. Surrounding whitespace is
+    /// dropped.
+    pub fn set_recording_directory(
+        &mut self,
+        directory: &str,
+        is_file: bool,
+    ) -> Result<(), SettingsError> {
+        if is_file {
+            return Err(SettingsError::RecordingDirectoryIsAFile);
+        }
+        self.recording_directory = directory.trim().to_string();
+        Ok(())
+    }
+
     /// Make `language` the default profile's language, as the app's language
     /// picker and `config set language` both mean it: the default profile takes
     /// the language (a model of its own that the language cannot use is reset to

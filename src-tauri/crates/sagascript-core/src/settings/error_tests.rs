@@ -30,6 +30,24 @@ fn every_variant_keeps_its_text_and_has_a_stable_snake_case_code() {
             "invalid_setting_value",
         ),
         (
+            SettingsError::InvalidRecordingQuality { value: "x".into() },
+            "recording_quality must be lossless or compact, got 'x'",
+            "invalid_setting_value",
+        ),
+        (
+            SettingsError::InvalidRecordingChannelPair {
+                first: 0,
+                second: 2,
+            },
+            "recording_channel_pair channels count from 1, got 0-2",
+            "invalid_setting_value",
+        ),
+        (
+            SettingsError::RecordingDirectoryIsAFile,
+            "recording_directory is a file, not a folder",
+            "invalid_setting_value",
+        ),
+        (
             SettingsError::UnknownProfile { id: "p".into() },
             "Unknown profile 'p'",
             "unknown_profile",

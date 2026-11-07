@@ -36,24 +36,48 @@
 //! recording that is still being written.
 
 pub mod capture;
+pub mod decode;
 pub mod encoder;
 pub mod error;
+pub mod export;
 pub mod flac;
 mod io;
 pub mod journal;
+pub mod library;
 pub mod manifest;
 pub mod naming;
 pub mod recover;
 pub mod session;
 pub mod store;
 #[cfg(test)]
+mod test_recordings;
+#[cfg(test)]
 mod test_signals;
 
+use std::path::PathBuf;
 use std::time::Duration;
 
+/// Folder recordings go to when `recording_directory` is empty: `Sagascript`
+/// in the user's audio folder (`~/Music` on macOS), else in the home folder.
+pub fn default_recordings_dir() -> PathBuf {
+    dirs::audio_dir()
+        .or_else(dirs::home_dir)
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("Sagascript")
+}
+
+pub use capture::{
+    test_source_requested, SyntheticConfig, SyntheticSource, SYNTHETIC_DEVICE_NAME, TEST_SOURCE_ENV,
+};
+pub use decode::{decode_tracks, TrackChunk, TrackDecoder, CHUNK_SAMPLES};
 pub use encoder::{TrackEncoder, TrackSummary};
 pub use error::RecordingError;
+pub use export::{export_recording, ExportFormat, ExportLayout, ExportOptions, ExportReport};
 pub use flac::{FlacEncoder, TrackSink};
+pub use library::{
+    audio_track_path, delete_recording_folder, list_recordings, lock_recording_for_removal,
+    read_recording, summarize_folder, RecordingSummary, RemovalLock, MIN_ID_PREFIX,
+};
 pub use manifest::{
     manifest_integrity, parse_manifest, serialize_manifest, serialize_manifest_sealed, Client,
     Clock, EndedReason, Gap, GapReason, Integrity, Manifest, Quality, RecordingState, Track,

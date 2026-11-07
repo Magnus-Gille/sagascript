@@ -2,6 +2,7 @@ use serde::Serialize;
 use thiserror::Error;
 
 use crate::path_scrub::scrub_paths;
+use crate::recording::RecordingError;
 use crate::settings::SettingsError;
 
 /// Errors that can occur during dictation workflow.
@@ -107,6 +108,12 @@ pub enum DictationError {
     /// again. The payload is the complete user-facing text.
     #[error("{0}")]
     MeetingStale(String),
+
+    /// A recorder failure (SAGA-564): the recording store, a capture source,
+    /// export or recovery. The code is the [`RecordingError`]'s own
+    /// (`recording_disk_full`, ...); its text holds no path.
+    #[error("Recording error: {0}")]
+    Recording(RecordingError),
 }
 
 /// What the engine host reported, kept apart from [`DictationError::Engine`]'s
@@ -189,6 +196,7 @@ impl DictationError {
             Self::DiarizationError(_) => "diarization_error",
             Self::MeetingInvalid(_) => "meeting_invalid",
             Self::MeetingStale(_) => "meeting_stale",
+            Self::Recording(error) => error.code(),
         }
     }
 
@@ -205,8 +213,15 @@ impl DictationError {
             | Self::ModelNotLoaded
             | Self::NoAudioCaptured => true,
             Self::Engine(failure) => failure.retryable(),
+            Self::Recording(error) => error.retryable(),
             _ => false,
         }
+    }
+}
+
+impl From<RecordingError> for DictationError {
+    fn from(error: RecordingError) -> Self {
+        Self::Recording(error)
     }
 }
 
@@ -379,6 +394,26 @@ mod tests {
         let busy = DictationError::engine("engine_busy", true, "queue full");
         assert_eq!(busy.code(), "engine_busy");
         assert!(busy.retryable());
+    }
+
+    #[test]
+    fn a_recording_error_keeps_its_code_retry_hint_and_text() {
+        let full = DictationError::from(RecordingError::DiskFull {
+            action: "start a recording",
+        });
+        assert_eq!(full.code(), "recording_disk_full");
+        assert!(full.retryable());
+        assert_eq!(
+            full.to_string(),
+            "Recording error: the disk is full; could not start a recording"
+        );
+        let json = serde_json::to_value(&full).unwrap();
+        assert_eq!(json["kind"], "Recording");
+        assert!(json["message"].as_str().unwrap().contains("disk is full"));
+
+        let locked = DictationError::Recording(RecordingError::UnknownTrack);
+        assert_eq!(locked.code(), "recording_unknown_track");
+        assert!(!locked.retryable());
     }
 
     #[test]

@@ -50,8 +50,9 @@ use super::io::{
 };
 use super::journal::{journal_file_name, JournalEvent, JournalWriter};
 use super::manifest::{
-    is_valid_track_id, serialize_manifest_sealed, Client, Clock, EndedReason, Gap, GapReason,
-    Manifest, Quality, RecordingState, Track, MANIFEST_FILE, MIN_READER_VERSION, SCHEMA_VERSION,
+    is_valid_track_id, parse_manifest, serialize_manifest_sealed, Client, Clock, EndedReason, Gap,
+    GapReason, Manifest, Quality, RecordingState, Track, MANIFEST_FILE, MIN_READER_VERSION,
+    SCHEMA_VERSION,
 };
 use super::naming;
 use super::recover::{recover_track, TailPolicy};
@@ -948,6 +949,14 @@ fn write_final_manifest(path: &Path, bytes: &[u8]) -> Result<(), RecordingError>
         sync_file(&file)
     })();
     in_place.map_err(|_| RecordingError::io("write the recording manifest", &first))
+}
+
+/// The largest manifest read.
+pub(crate) const MAX_MANIFEST_BYTES: u64 = 16 * 1024 * 1024;
+
+/// Read and parse `recording.json` of the recording folder `dir`.
+pub(crate) fn load_manifest(dir: &Path) -> Result<Manifest, RecordingError> {
+    parse_manifest(&read_bounded(&dir.join(MANIFEST_FILE), MAX_MANIFEST_BYTES)?)
 }
 
 /// Read a file of at most `limit` bytes into memory.
