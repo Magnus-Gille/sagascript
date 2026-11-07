@@ -63,10 +63,15 @@ Tick each line per OS (macOS / Windows); note the build identity (tray menu) nex
       window says "It was not deleted") for each of: a mapped network drive, a UNC share and a USB
       stick (no Recycle Bin); a fixed disk with "Don't move files to the Recycle Bin" ticked in the
       bin's properties; a recording larger than the bin's maximum size (set a small maximum in the
-      properties, or use a recording over 5 % of a small disk); a bin setting or a file of the
-      recording that cannot be read (deny read access to one file of a recording folder, or to the
-      bin's registry key: any read that fails refuses, it never counts as "no setting" or
-      "0 bytes"). A normal fixed disk works and the folder can be restored from the bin.
+      properties, or use a recording over 5 % of a small disk); a recording folder that cannot be
+      listed (in the folder's Properties, Security, Advanced, give your user a Deny for "List
+      folder / read data" on the recording folder only; denying read access to a single file
+      does **not** do it, because a file's size is still readable through its directory entry).
+      The folder's size cannot be read then, and the move must be refused with the folder
+      untouched, never treated as "0 bytes". Remove the Deny afterwards. A bin setting that exists
+      but cannot be read is the same refusal; it is hard to provoke on purpose (it needs a
+      denied registry key under `...\Explorer\BitBucket`, which can upset Explorer), so it is
+      covered by the unit test of the policy only. A normal fixed disk works and the folder can be restored from the bin.
 - [ ] Windows: confirm that `FOFX_RECYCLEONDELETE` really fails instead of deleting when the
       up-front checks are bypassed (the checks read the bin's registry settings under
       `...\Explorer\BitBucket\Volume\{GUID}` and estimate a default quota of 5 % of the volume;
