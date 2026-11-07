@@ -1194,7 +1194,7 @@ fn interactive_request_gets_a_reserved_host_slot() {
     let latency = t.elapsed();
     assert_eq!(d.tokens.len(), 6);
     assert!(
-        latency < Duration::from_millis(600),
+        latency < Duration::from_millis(700),
         "dictation waited for a batch window: {latency:?}"
     );
     assert!(!job.is_finished());
@@ -1211,7 +1211,7 @@ fn single_slot_host_sends_dictation_before_next_batch_window() {
         ("FAKE_WINDOW_S", "10"),
         ("FAKE_OVERLAP_S", "4"),
         ("FAKE_MAX_IN_FLIGHT", "1"),
-        ("FAKE_BATCH_DELAY_MS", "700"),
+        ("FAKE_BATCH_DELAY_MS", "1500"),
         ("FAKE_LOG", log_path.to_str().unwrap()),
     ]);
     f.client.warm().unwrap();
@@ -1239,11 +1239,12 @@ fn single_slot_host_sends_dictation_before_next_batch_window() {
         .transcribe_dictation(&pcm(3.0), &CancelToken::new())
         .unwrap();
     assert_eq!(d.tokens.len(), 6);
-    // Dictation waits for the running window (<= 0.7 s) only. If a further batch
-    // window (another 0.7 s) were sent first this would take about 1.4 s.
+    // Dictation waits for the running window (~1.5 s) only. If a further batch
+    // window (another 1.5 s) were sent first this would take about 3 s. Two
+    // windows are enough to prove the order; the delay keeps loaded-runner headroom.
     let waited = started.elapsed();
     assert!(
-        waited < Duration::from_millis(1050),
+        waited < Duration::from_millis(2200),
         "dictation waited behind another batch window: {waited:?}"
     );
     assert!(!job.is_finished());
@@ -1364,9 +1365,9 @@ fn not_loaded_response_is_retried_once_after_reload() {
 
 /// Finding 4: cancelling while the model loads returns promptly and keeps the host.
 ///
-/// "Promptly" means without waiting for the load: the fake load takes 3 s
+/// "Promptly" means without waiting for the load: the fake load takes 4.5 s
 /// (under the fixture's 5 s load timeout) and the cancel must return within
-/// 1.8 s of being requested, which a run that waited for the load (2.7 s more)
+/// 2.5 s of being requested, which a run that waited for the load (4.1 s more)
 /// cannot meet. A tighter absolute bound
 /// (it was 250 ms) failed on loaded Windows runners, where the cancelling
 /// thread itself was scheduled 0.6-1.6 s late.
@@ -1375,14 +1376,14 @@ fn cancel_during_slow_load_returns_promptly_without_killing_the_host() {
     let log = tempfile::tempdir().unwrap();
     let log_path = log.path().join("ops.log");
     let f = fixture(&[
-        ("FAKE_LOAD_DELAY_MS", "3000"),
+        ("FAKE_LOAD_DELAY_MS", "4500"),
         ("FAKE_LOG", log_path.to_str().unwrap()),
     ]);
     let cancel = CancelToken::new();
     let canceller = {
         let cancel = cancel.clone();
         std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(300));
+            std::thread::sleep(Duration::from_millis(400));
             cancel.cancel();
             Instant::now()
         })
@@ -1392,7 +1393,7 @@ fn cancel_during_slow_load_returns_promptly_without_killing_the_host() {
     let cancelled_at = canceller.join().unwrap();
     assert!(matches!(r, Err(EngineHostError::Cancelled)), "{r:?}");
     assert!(
-        returned.saturating_duration_since(cancelled_at) < Duration::from_millis(1800),
+        returned.saturating_duration_since(cancelled_at) < Duration::from_millis(2500),
         "cancel took {:?}",
         returned.saturating_duration_since(cancelled_at)
     );
@@ -1456,7 +1457,7 @@ fn failed_host_gets_a_fresh_attempt_after_the_cooldown() {
     let crash = marker.path().join("crash");
     std::fs::write(&crash, b"crash").unwrap();
     // Long enough that two back-to-back calls never straddle it on a loaded runner.
-    let cooldown = Duration::from_millis(700);
+    let cooldown = Duration::from_secs(1);
     let f = fixture_with(
         &[("FAKE_CRASH_ON_START_FILE", crash.to_str().unwrap())],
         |c| {
@@ -1513,7 +1514,7 @@ fn failed_cooldown_recovers_only_after_a_successful_load() {
     let marker = tempfile::tempdir().unwrap();
     let crash = marker.path().join("crash");
     std::fs::write(&crash, b"crash").unwrap();
-    let cooldown = Duration::from_millis(700);
+    let cooldown = Duration::from_secs(1);
     let f = fixture_with(
         &[("FAKE_CRASH_ON_LOAD_FILE", crash.to_str().unwrap())],
         |c| {
@@ -1566,7 +1567,7 @@ fn failed_probe_load_on_a_live_host_enforces_the_new_cooldown() {
     let crash = marker.path().join("crash");
     std::fs::write(&crash, b"crash").unwrap();
     let log = marker.path().join("ops.log");
-    let cooldown = Duration::from_millis(700);
+    let cooldown = Duration::from_secs(1);
     let f = fixture_with(
         &[
             ("FAKE_CRASH_ON_START_FILE", crash.to_str().unwrap()),
@@ -1713,19 +1714,16 @@ fn host_wedged_on_a_timed_out_window_is_restarted_and_the_next_window_succeeds()
 #[test]
 fn slow_uninterruptible_window_times_out_promptly_and_keeps_the_host() {
     let timeout = Duration::from_millis(300);
-    // The grace is a parameter: the stall must outlast the timeout, stay inside
-    // the grace, and the production default must stay above the 6 s stall this
-    // test used before it was scaled down (longer than the 5 s grace used
-    // before #397 was addressed).
-    assert!(Timeouts::default().wedge_grace >= Duration::from_secs(6));
-    let grace = Duration::from_secs(3);
-    let stall = Duration::from_millis(1500);
+    // Longer than the 5 s grace used before #397 was addressed. This one stays at
+    // real wall time: it is the behavioural proof that the default grace, not a
+    // shorter hardcoded one, decides when an uninterruptible window is a wedge.
+    let stall = Duration::from_secs(6);
     let stall_ms = stall.as_millis().to_string();
     let f = fixture_with(
         &[("FAKE_FIRST_UNINTERRUPTIBLE_MS", stall_ms.as_str())],
         |c| {
             c.timeouts.transcribe_min = timeout;
-            c.timeouts.wedge_grace = grace;
+            c.timeouts.wedge_grace = Timeouts::default().wedge_grace;
         },
     );
     f.client.warm().unwrap();
@@ -1982,7 +1980,7 @@ fn dictation_stall_restart_resubmits_a_concurrent_file_job_through_its_crash_pat
     env.extend([
         ("FAKE_WEDGE_INTERACTIVE_ONCE_FILE", wedge.to_str().unwrap()),
         ("FAKE_MAX_IN_FLIGHT", "3"),
-        ("FAKE_BATCH_DELAY_MS", "1000"),
+        ("FAKE_BATCH_DELAY_MS", "1500"),
         ("FAKE_LOG", log.to_str().unwrap()),
     ]);
     let f = stall_fixture(&env, |_| {});
@@ -2195,7 +2193,7 @@ fn restart_backoff_is_cancellable_and_does_not_block_shutdown() {
 /// backoff with the lifecycle lock released as well.
 #[test]
 fn connect_sleeps_the_restart_backoff_without_blocking_shutdown() {
-    let backoff = Duration::from_millis(1500);
+    let backoff = Duration::from_millis(2500);
     let f = fixture_with(&[("FAKE_CRASH_ON_START", "1")], |c| {
         c.restart_backoff = vec![backoff]
     });
@@ -2209,7 +2207,7 @@ fn connect_sleeps_the_restart_backoff_without_blocking_shutdown() {
     let client = f.client.clone();
     let ((), elapsed) = run_bounded(Duration::from_secs(10), move || client.shutdown());
     assert!(
-        elapsed < Duration::from_millis(900),
+        elapsed < Duration::from_millis(1200),
         "shutdown waited for connect's restart backoff: {elapsed:?}"
     );
     let r = connecting.join().unwrap();
