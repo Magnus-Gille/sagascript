@@ -141,7 +141,7 @@
   },
   "recording_not_regular_file": {
     "code": "recording_not_regular_file",
-    "message": "a recording file is a link or not a regular file; could not open a track file",
+    "message": "a recording file is a link, has several names or is not a regular file; could not open a track file",
     "retryable": false
   },
   "recording_permission_denied": {
