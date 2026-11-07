@@ -13,17 +13,23 @@ use tracing::{info, warn};
 /// identity is still reset by the settings migration, and a value the CLI set is
 /// still never pasted without approval.
 pub(crate) fn load_app_settings() -> sagascript_core::settings::Settings {
-    let settings = sagascript_core::machine::load();
     #[cfg(target_os = "macos")]
-    warn_if_auto_paste_waits_for_permission(
-        &settings,
-        crate::platform::macos::is_accessibility_trusted(),
-    );
+    let accessibility_trusted = crate::platform::macos::is_accessibility_trusted();
+    #[cfg(not(target_os = "macos"))]
+    let accessibility_trusted = true;
+    load_app_settings_with(sagascript_core::machine::load, accessibility_trusted)
+}
+
+fn load_app_settings_with(
+    load: impl FnOnce() -> sagascript_core::settings::Settings,
+    accessibility_trusted: bool,
+) -> sagascript_core::settings::Settings {
+    let settings = load();
+    warn_if_auto_paste_waits_for_permission(&settings, accessibility_trusted);
     settings
 }
 
 /// Only reports. It takes the settings by reference so that it cannot change them.
-#[cfg(any(target_os = "macos", test))]
 fn warn_if_auto_paste_waits_for_permission(
     settings: &sagascript_core::settings::Settings,
     accessibility_trusted: bool,
@@ -35,7 +41,6 @@ fn warn_if_auto_paste_waits_for_permission(
     waits
 }
 
-#[cfg(any(target_os = "macos", test))]
 fn auto_paste_permitted(requested: bool, accessibility_trusted: bool) -> bool {
     !requested || accessibility_trusted
 }

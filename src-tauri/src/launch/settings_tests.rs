@@ -132,3 +132,29 @@ fn a_trusted_load_keeps_auto_paste_on_without_a_warning() {
     assert!(!warn_if_auto_paste_waits_for_permission(&settings, true));
     assert!(settings.auto_paste);
 }
+
+/// The actual load path, against a real settings file: an untrusted load returns the stored
+/// `true` and leaves the file byte for byte as it was (SAGA-518).
+#[test]
+fn an_untrusted_load_returns_and_keeps_the_stored_preference() {
+    for stored in [true, false] {
+        let dir = TempDir::new();
+        let path = dir.join("settings.json");
+        std::fs::write(
+            &path,
+            serde_json::to_string(&settings_with_auto_paste(stored)).unwrap(),
+        )
+        .unwrap();
+        let before = std::fs::read(&path).unwrap();
+
+        let loaded =
+            load_app_settings_with(|| sagascript_core::settings::store::load_from(&path), false);
+
+        assert_eq!(loaded.auto_paste, stored);
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            before,
+            "loading never writes the file"
+        );
+    }
+}

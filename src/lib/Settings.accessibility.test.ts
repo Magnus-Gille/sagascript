@@ -86,6 +86,44 @@ describe("Auto-paste on macOS", () => {
   });
 });
 
+describe("Auto-paste that is on but waits for Accessibility (SAGA-518)", () => {
+  test("Open System Settings asks for the permission and keeps auto-paste on", async () => {
+    let granted = false;
+    const { ipc } = await renderSettings(
+      macBackend({
+        get_settings: () => settingsValue({ auto_paste: true }),
+        check_accessibility_permission: () => granted,
+      }),
+    );
+    const link = await screen.findByRole("button", { name: "Open System Settings" });
+    expect(screen.getByRole("switch", { name: "Auto-paste transcription" })).toHaveAttribute("aria-checked", "true");
+
+    await userEvent.setup().click(link);
+    await waitFor(() => expect(ipc.callsTo("request_accessibility_permission")).toHaveLength(1));
+    granted = true;
+
+    await waitFor(() => expect(screen.queryByText(/Requires Accessibility permission/)).not.toBeInTheDocument());
+    expect(ipc.callsTo("set_auto_paste")).toEqual([]);
+    expect(screen.getByRole("switch", { name: "Auto-paste transcription" })).toHaveAttribute("aria-checked", "true");
+  });
+
+  test("a refused request leaves the preference on and says that auto-paste waits", async () => {
+    const { ipc } = await renderSettings(
+      macBackend({
+        get_settings: () => settingsValue({ auto_paste: true }),
+        request_accessibility_permission: () => {
+          throw backendError("launch_failed", "System Settings did not open");
+        },
+      }),
+    );
+
+    await userEvent.setup().click(await screen.findByRole("button", { name: "Open System Settings" }));
+
+    expect(await screen.findByText("System Settings did not open")).toBeInTheDocument();
+    expect(ipc.callsTo("set_auto_paste")).toEqual([]);
+  });
+});
+
 describe("a bare F13 shortcut on macOS", () => {
   test("is saved once the permission is granted", async () => {
     let granted = false;
