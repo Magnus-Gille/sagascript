@@ -141,3 +141,36 @@ fn update_action_targets_the_exact_stable_release() {
         "https://github.com/Magnus-Gille/sagascript/releases/tag/v1.2.0"
     );
 }
+
+fn menu_state(checking: bool, attempt: u64) -> UpdateMenuState {
+    UpdateMenuState {
+        items: None,
+        checking,
+        installing: false,
+        available_version: None,
+        attempt,
+    }
+}
+
+#[test]
+fn a_check_that_ended_without_a_result_is_reset() {
+    let mut state = menu_state(true, 4);
+    assert!(check_attempt_needs_reset(&mut state, 4));
+    assert!(!state.checking);
+}
+
+#[test]
+fn a_check_ended_by_its_terminal_phase_is_left_alone() {
+    // The terminal phase already cleared the flag on the main thread.
+    let mut state = menu_state(false, 4);
+    assert!(!check_attempt_needs_reset(&mut state, 4));
+    assert!(!state.checking);
+}
+
+#[test]
+fn the_end_of_an_older_check_never_resets_a_newer_one() {
+    // Check 4 finished, check 5 started before 4's reset reached the main thread.
+    let mut state = menu_state(true, 5);
+    assert!(!check_attempt_needs_reset(&mut state, 4));
+    assert!(state.checking, "the newer check keeps owning the menu");
+}

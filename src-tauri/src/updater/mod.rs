@@ -45,6 +45,8 @@ struct UpdateMenuState {
     checking: bool,
     installing: bool,
     available_version: Option<String>,
+    /// Numbers each check, so the end of one check task can never reset a newer one.
+    attempt: u64,
 }
 
 type SharedUpdateMenuState = Mutex<UpdateMenuState>;
@@ -300,7 +302,7 @@ fn check_for_updates_with_intent(app: tauri::AppHandle, install_when_available: 
     #[cfg(not(target_os = "macos"))]
     let _ = install_when_available;
 
-    let items = {
+    let (items, attempt) = {
         let state: tauri::State<'_, SharedUpdateMenuState> = app.state();
         let mut state = lock_or_recover(&state, UPDATE_MENU_LOCK);
         if state.checking || state.installing {
@@ -310,7 +312,8 @@ fn check_for_updates_with_intent(app: tauri::AppHandle, install_when_available: 
             return;
         };
         state.checking = true;
-        items
+        state.attempt = state.attempt.wrapping_add(1);
+        (items, state.attempt)
     };
 
     if let Err(error) = items.status.set_text("Checking for updates…") {
@@ -321,13 +324,14 @@ fn check_for_updates_with_intent(app: tauri::AppHandle, install_when_available: 
     }
 
     tauri::async_runtime::spawn(async move {
-        // Clears the checking flag on every exit path, including a panic in
-        // the update task, so a crashed check cannot freeze the menu (#376).
+        // Ends this check on every exit path, including a panic in the update
+        // task, so a crashed check cannot freeze the menu (#376). The reset is
+        // queued on the main thread behind every phase update this task has
+        // already queued, so it runs after the terminal phase, and the attempt
+        // number keeps it from touching a check that started since.
         let guard_app = app.clone();
         let _checking_guard = CheckingGuard::new(move || {
-            let state: tauri::State<'_, SharedUpdateMenuState> = guard_app.state();
-            let mut state = lock_or_recover(&state, UPDATE_MENU_LOCK);
-            state.checking = false;
+            dispatch_to_main(&guard_app, move |app| end_check_attempt(app, attempt));
         });
         let orchestrator = Orchestrator::new(Arc::new(TrayUpdateMenu::new(app.clone())));
 
@@ -349,12 +353,51 @@ fn check_for_updates_with_intent(app: tauri::AppHandle, install_when_available: 
     });
 }
 
+/// Whether the end of check `attempt` must restore the menu: only when that check is
+/// still the current one and no terminal phase has ended it, which means the task
+/// stopped (panicked or returned) without reporting a result. Clears the flag if so.
+fn check_attempt_needs_reset(state: &mut UpdateMenuState, attempt: u64) -> bool {
+    if state.attempt != attempt || !state.checking {
+        return false;
+    }
+    state.checking = false;
+    state.available_version = None;
+    true
+}
+
+fn end_check_attempt(app: &tauri::AppHandle, attempt: u64) {
+    let items = {
+        let state: tauri::State<'_, SharedUpdateMenuState> = app.state();
+        let mut state = lock_or_recover(&state, UPDATE_MENU_LOCK);
+        if !check_attempt_needs_reset(&mut state, attempt) {
+            return;
+        }
+        state.items.clone()
+    };
+    let Some(items) = items else {
+        return;
+    };
+    let texts = texts_for(&UpdatePhase::Failed {
+        failure: UpdateFailure::Check,
+    });
+    if let Err(error) = items.status.set_text(texts.status) {
+        error!("Failed to update tray update status: {error}");
+    }
+    if let Err(error) = items.check.set_text(texts.action) {
+        error!("Failed to update tray update action: {error}");
+    }
+    if let Err(error) = items.check.set_enabled(texts.enabled) {
+        error!("Failed to update tray update action availability: {error}");
+    }
+}
+
 pub(crate) fn manage_update_menu_state(app: &tauri::App) {
     let update_menu: SharedUpdateMenuState = Mutex::new(UpdateMenuState {
         items: None,
         checking: false,
         installing: false,
         available_version: None,
+        attempt: 0,
     });
     app.manage(update_menu);
 }
