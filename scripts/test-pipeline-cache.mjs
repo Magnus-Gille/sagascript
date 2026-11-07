@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
-import { actionNames, allSteps, loadAction, loadWorkflow, readRepoFile, workflowFiles } from "./lib/ci-workflow.mjs";
+import { REPO_ROOT, actionNames, allSteps, loadAction, loadWorkflow, readRepoFile, workflowFiles } from "./lib/ci-workflow.mjs";
 
 const rustCacheRef = "Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6";
 
@@ -186,3 +191,58 @@ test("the setup action caches apt packages on Linux, restore-only off main (SAGA
   assert.match(script, /sudo apt-get "\$\{APT_OPTS\[@\]\}" install -y --no-download/, "the retry/timeout structure stays");
   assert.match(script, /timeout "\$ATTEMPT_SECONDS" sudo apt-get/);
 });
+
+// Runs the real script with stubbed sudo/apt/dpkg: only a cached .deb whose SHA-256 the (signed) index
+// lists for its package and version reaches apt's archive, and caching problems never fail the step.
+test(
+  "the apt script seeds only index-verified cached packages and never fails on the cache (SAGA-546)",
+  { skip: process.platform === "win32" && "bash script" },
+  () => {
+    const root = mkdtempSync(join(tmpdir(), "apt-cache-"));
+    try {
+      const bin = join(root, "bin");
+      const archive = join(root, "archive");
+      const cache = join(root, "cache");
+      for (const dir of [bin, archive, cache]) mkdirSync(dir);
+      writeFileSync(join(cache, "good_1.0_amd64.deb"), "good package bytes");
+      writeFileSync(join(cache, "tampered_1.0_amd64.deb"), "tampered bytes");
+      symlinkSync(join(cache, "good_1.0_amd64.deb"), join(cache, "link_1.0_amd64.deb"));
+      const goodSum = createHash("sha256").update("good package bytes").digest("hex");
+      const stub = (name, body) => {
+        writeFileSync(join(bin, name), `#!/usr/bin/env bash\n${body}\n`);
+        chmodSync(join(bin, name), 0o755);
+      };
+      stub("sudo", 'exec "$@"');
+      stub("timeout", 'shift; exec "$@"');
+      stub("apt-get", "exit 0");
+      // dpkg-deb -f FILE Package Version: the file name says which package the stub claims to be.
+      stub("dpkg-deb", 'n=$(basename "$2"); echo "Package: ${n%%_*}"; echo "Version: 1.0"');
+      // The index lists the good file's hash for every package, so the tampered one cannot match.
+      stub("apt-cache", `echo "Package: $2"; echo "SHA256: ${goodSum}"`);
+      stub("sha256sum", 'shasum -a 256 "$@" 2>/dev/null || command -p sha256sum "$@"');
+      const run = (cacheDir) =>
+        spawnSync("bash", [join(REPO_ROOT, "scripts/ci/apt-install-tauri-deps.sh")], {
+          env: {
+            ...process.env,
+            PATH: `${bin}:${process.env.PATH}`,
+            APT_ARCHIVE_DIR: archive,
+            APT_DEB_CACHE_DIR: cacheDir,
+            APT_SOURCES_DIR: root,
+          },
+          encoding: "utf8",
+        });
+      const seeded = run(cache);
+      assert.equal(seeded.status, 0, seeded.stderr);
+      assert.deepEqual(readdirSync(archive).sort(), ["good_1.0_amd64.deb"], "only the verified file is seeded");
+      assert.match(seeded.stdout, /Seeded apt with 1 verified cached packages \(2 discarded\)/);
+      // A cache directory that cannot be created (a file is in the way) is only a warning.
+      const blocked = join(root, "blocked");
+      writeFileSync(blocked, "not a directory");
+      const failedExport = run(blocked);
+      assert.equal(failedExport.status, 0, failedExport.stderr);
+      assert.match(failedExport.stderr, /could not create the apt cache directory/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  },
+);
