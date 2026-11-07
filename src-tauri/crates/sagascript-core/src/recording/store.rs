@@ -18,7 +18,8 @@
 //!    anchor and every gap, and fsyncs tracks and journals every
 //!    [`SYNC_INTERVAL`](super::SYNC_INTERVAL) (via [`RecordingWriter::sync_if_due`]).
 //!    A gap is journaled and the journal fsynced **before** its silence is
-//!    written, and the track is fsynced after.
+//!    written, and the track is fsynced after. A gap that fails part-way ends
+//!    its track until recovery (see [`RecordingWriter::gap`]).
 //! 4. At the end of a track: last frame, fsync, STREAMINFO and SEEKTABLE
 //!    rewritten in place, fsync.
 //! 5. `recording.json.tmp` with `state: "complete"`, fsync, rename over
@@ -369,6 +370,7 @@ fn start_in(
             anchors: vec![(new.start_ns, 0)],
             gaps: Vec::new(),
             finished: None,
+            failed: false,
         });
     }
     sync_dir(dir).map_err(|error| RecordingError::io("sync the recording folder", &error))?;
@@ -446,6 +448,12 @@ struct TrackWriter {
     anchors: Vec<(u64, u64)>,
     gaps: Vec<Gap>,
     finished: Option<FinishedTrack>,
+    /// A gap failed part-way (see [`RecordingWriter::gap`]): the journal may
+    /// hold an intent for silence that was never written, and audio written
+    /// now would fall inside it. The track takes nothing more and cannot be
+    /// finished by the writer; recovery finishes it (`abort_track` is that
+    /// recovery, run in this process).
+    failed: bool,
 }
 
 /// The gaps and the clock anchors of a track, as the journal says they are.
@@ -461,6 +469,52 @@ struct FinishedTrack {
     /// anchors that survive the cut, from the journal. `None` means the
     /// writer's own lists are complete.
     rebuilt: Option<RebuiltTrack>,
+}
+
+impl TrackWriter {
+    /// The encoder, if the track can still be written to.
+    fn live(&mut self) -> Result<&mut Box<dyn TrackEncoder>, RecordingError> {
+        if self.failed {
+            return Err(RecordingError::TrackFinished);
+        }
+        self.encoder.as_mut().ok_or(RecordingError::TrackFinished)
+    }
+
+    /// The part of a gap that cannot be undone: the intent, then the silence.
+    /// Every failure in here leaves the track in doubt.
+    fn commit_gap(
+        &mut self,
+        length: u64,
+        reason: &GapReason,
+        #[cfg(test)] crash_after: Option<GapStep>,
+    ) -> Result<(), RecordingError> {
+        let encoder = self.encoder.as_mut().ok_or(RecordingError::TrackFinished)?;
+        let at_frame = encoder.frames_pushed();
+        let clipped = encoder.clipped_samples();
+        // The intention is durable **before** any of the silence is written:
+        // the operating system may flush a written frame at any moment, and
+        // silence that reached the disk with no journal line would be
+        // presented as captured audio. A gap whose silence never arrives is
+        // harmless: recovery drops what lies beyond the kept audio.
+        self.journal.append(&JournalEvent::Gap {
+            at_frame,
+            length,
+            reason: reason.clone(),
+            clipped,
+        })?;
+        #[cfg(test)]
+        failpoint(crash_after, GapStep::JournalAppended)?;
+        self.journal.sync()?;
+        #[cfg(test)]
+        failpoint(crash_after, GapStep::JournalSynced)?;
+        encoder.push_silence(length)?;
+        #[cfg(test)]
+        failpoint(crash_after, GapStep::SilencePushed)?;
+        self.gaps.push(Gap::new(at_frame, length, reason.clone()));
+        #[cfg(test)]
+        failpoint(crash_after, GapStep::GapRecorded)?;
+        Ok(())
+    }
 }
 
 /// A recording in progress. It is driven by one thread (`&mut self`) and holds
@@ -508,12 +562,7 @@ impl RecordingWriter {
 
     /// Append interleaved samples to a track.
     pub fn push(&mut self, track: &str, interleaved: &[f32]) -> Result<(), RecordingError> {
-        let track = self.track_mut(track)?;
-        track
-            .encoder
-            .as_mut()
-            .ok_or(RecordingError::TrackFinished)?
-            .push(interleaved)
+        self.track_mut(track)?.live()?.push(interleaved)
     }
 
     /// Record that the next frame of the track (index `frames_pushed`) was
@@ -539,10 +588,7 @@ impl RecordingWriter {
         frame: u64,
     ) -> Result<(), RecordingError> {
         let track = self.track_mut(track)?;
-        let encoder = track
-            .encoder
-            .as_ref()
-            .ok_or(RecordingError::TrackFinished)?;
+        let encoder = track.live()?;
         let clipped = encoder.clipped_samples();
         track.journal.append(&JournalEvent::Anchor {
             host_ns,
@@ -557,7 +603,17 @@ impl RecordingWriter {
     /// the frame index still maps to time, and record the gap. The journal
     /// line is fsynced **before** the silence is written and the track after,
     /// so a crash at any point leaves either no silence or silence the
-    /// journal accounts for. A gap the track cannot hold is refused first.
+    /// journal accounts for. A gap the track cannot hold is refused first,
+    /// and the track goes on.
+    ///
+    /// If the journal line cannot be appended or synced, or the silence cannot
+    /// be written, the outcome is in doubt (the line may be on disk for
+    /// silence that is not), so the track **ends until recovery**: `push`,
+    /// `anchor`, `gap` and `finish_track` then fail with
+    /// [`RecordingError::TrackFinished`], `sync` skips it, and the recording
+    /// stays `state: recording` for [`recover`](super::recover) to finish.
+    /// Nothing written before the failure is lost. A failing fsync of the
+    /// finished gap is not in doubt; it is reported and the track goes on.
     pub fn gap(
         &mut self,
         track: &str,
@@ -570,40 +626,28 @@ impl RecordingWriter {
         #[cfg(test)]
         let crash_after = self.crash_after;
         let track = self.track_mut(track)?;
-        let encoder = track
-            .encoder
-            .as_mut()
-            .ok_or(RecordingError::TrackFinished)?;
         // Refused here, before a byte is journaled or written: a gap the
-        // track cannot hold must leave no line that claims it exists.
-        encoder.ensure_room(length)?;
+        // track cannot hold must leave no line that claims it exists, and the
+        // track goes on as it was.
+        track.live()?.ensure_room(length)?;
         #[cfg(test)]
         failpoint(crash_after, GapStep::Checked)?;
-        let at_frame = encoder.frames_pushed();
-        let clipped = encoder.clipped_samples();
-        // The intention is durable **before** any of the silence is written:
-        // the operating system may flush a written frame at any moment, and
-        // silence that reached the disk with no journal line would be
-        // presented as captured audio. A gap whose silence never arrives is
-        // harmless: recovery drops what lies beyond the kept audio.
-        track.journal.append(&JournalEvent::Gap {
-            at_frame,
+        // From here on a failure leaves the track in doubt: the intent may or
+        // may not be on disk and the silence may or may not be written. The
+        // track ends (until recovery), because a caller that went on writing
+        // audio would put it where the journal says there is silence.
+        if let Err(error) = track.commit_gap(
             length,
-            reason: reason.clone(),
-            clipped,
-        })?;
-        #[cfg(test)]
-        failpoint(crash_after, GapStep::JournalAppended)?;
-        track.journal.sync()?;
-        #[cfg(test)]
-        failpoint(crash_after, GapStep::JournalSynced)?;
-        encoder.push_silence(length)?;
-        #[cfg(test)]
-        failpoint(crash_after, GapStep::SilencePushed)?;
-        track.gaps.push(Gap::new(at_frame, length, reason));
-        #[cfg(test)]
-        failpoint(crash_after, GapStep::GapRecorded)?;
-        encoder.sync()?;
+            &reason,
+            #[cfg(test)]
+            crash_after,
+        ) {
+            track.failed = true;
+            return Err(error);
+        }
+        // The gap is committed. A failing fsync now is the same failure a
+        // periodic sync can have: reported, and the track is not in doubt.
+        track.live()?.sync()?;
         #[cfg(test)]
         failpoint(crash_after, GapStep::TrackSynced)?;
         Ok(())
@@ -612,6 +656,11 @@ impl RecordingWriter {
     /// Fsync every live track and journal.
     pub fn sync(&mut self) -> Result<(), RecordingError> {
         for track in &mut self.tracks {
+            // A failed track writes nothing more; its error was reported when
+            // it happened.
+            if track.failed {
+                continue;
+            }
             if let Some(encoder) = track.encoder.as_mut() {
                 encoder.sync()?;
                 track.journal.sync()?;
@@ -642,6 +691,11 @@ impl RecordingWriter {
         reason: EndedReason,
     ) -> Result<TrackSummary, RecordingError> {
         let index = self.index_of(track)?;
+        // A track in doubt is finished by recovery, not here: its journal may
+        // hold an intent that its audio does not.
+        if self.tracks[index].failed {
+            return Err(RecordingError::TrackFinished);
+        }
         let encoder = self.tracks[index]
             .encoder
             .take()

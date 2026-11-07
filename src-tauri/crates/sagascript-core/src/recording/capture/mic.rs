@@ -32,8 +32,13 @@
 //! `DeviceChanged` or `FormatChanged`, and the track ends. This is polling,
 //! not a platform notification (CoreAudio property listeners,
 //! `IMMNotificationClient`): it needs no unsafe FFI and works the same on
-//! every platform, at the price of up to half a second of latency and of
-//! identifying a device by its name. It is tested through the probe; that
+//! every platform, at the price of up to half a second of latency. A device
+//! is identified by its Core Audio object id on macOS (`coreaudio_id.rs`, one
+//! declared function, no crate), which tells two identical microphones apart;
+//! elsewhere by its name, so two devices with one name are **not** told apart
+//! there (`cpal` 0.15 exposes no id and a WASAPI endpoint id needs COM). A
+//! change is signalled even when the track format would not change (a stereo
+//! pair of a device that went from two to four channels). It is tested through the probe; that
 //! `cpal` shows a changed default or rate live is on the hardware checklist.
 //!
 //! # Time
@@ -132,6 +137,11 @@ pub const DEVICE_POLL: Duration = Duration::from_millis(500);
 /// The default input device as seen at one moment.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DeviceSnapshot {
+    /// The platform's identity of the device, where it is available without
+    /// another crate (the Core Audio object id on macOS, `None` elsewhere).
+    /// Two ids that are both known decide whether it is the same device,
+    /// whatever the names say.
+    pub id: Option<u64>,
     pub name: Option<String>,
     pub format: DeviceFormat,
 }
@@ -142,6 +152,21 @@ pub trait DeviceProbe: Send {
     fn default_input(&mut self) -> Option<DeviceSnapshot>;
 }
 
+/// The identity of the default input device, where the platform gives one
+/// without a new dependency.
+fn platform_default_input_id() -> Option<u64> {
+    #[cfg(target_os = "macos")]
+    {
+        super::coreaudio_id::default_input_device_id()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        // Documented limit: elsewhere (WASAPI endpoint ids need COM; `cpal`
+        // 0.15 exposes no id) two devices with one name are not told apart.
+        None
+    }
+}
+
 /// The probe over `cpal`.
 pub struct CpalProbe;
 
@@ -150,6 +175,7 @@ impl DeviceProbe for CpalProbe {
         let device = cpal::default_host().default_input_device()?;
         let config = device.default_input_config().ok()?;
         Some(DeviceSnapshot {
+            id: platform_default_input_id(),
             name: device.name().ok(),
             format: DeviceFormat {
                 sample_rate: config.sample_rate().0,
@@ -206,7 +232,13 @@ impl DeviceWatch {
     }
 
     fn compare(&self, now: &DeviceSnapshot) -> Option<SourceSignal> {
-        if now.name.is_some() && self.opened.name.is_some() && now.name != self.opened.name {
+        let different_device = match (self.opened.id, now.id) {
+            // Both known: the identity decides, the names may even differ.
+            (Some(opened), Some(now_id)) => opened != now_id,
+            // Otherwise the best there is: the name.
+            _ => now.name.is_some() && self.opened.name.is_some() && now.name != self.opened.name,
+        };
+        if different_device {
             return Some(SourceSignal::DeviceChanged);
         }
         if now.format != self.opened.format {
@@ -228,6 +260,8 @@ pub struct MicSource {
     config: MicConfig,
     negotiated: Negotiated,
     device_name: Option<String>,
+    /// The platform identity of the device that was opened (see `DeviceSnapshot`).
+    device_id: Option<u64>,
     sample_format: SampleFormat,
     running: Option<Running>,
 }
@@ -265,6 +299,7 @@ impl MicSource {
             config,
             negotiated,
             device_name: device.name().ok(),
+            device_id: platform_default_input_id(),
             sample_format: supported.sample_format(),
             running: None,
         })
@@ -315,6 +350,7 @@ impl CaptureSource for MicSource {
             sample_format: self.sample_format,
             channel_pair: self.config.channel_pair,
             device_name: self.device_name.clone(),
+            device_id: self.device_id,
             probe: Box::new(CpalProbe),
             stop: Arc::clone(&stop),
         };
@@ -361,6 +397,7 @@ impl Drop for MicSource {
 
 struct StreamJob {
     device_name: Option<String>,
+    device_id: Option<u64>,
     probe: Box<dyn DeviceProbe>,
     expected: Negotiated,
     expected_device: DeviceFormat,
@@ -380,6 +417,7 @@ fn run_stream(
     let mut watch = DeviceWatch::new(
         std::mem::replace(&mut job.probe, Box::new(CpalProbe)),
         DeviceSnapshot {
+            id: job.device_id,
             name: job.device_name.clone(),
             format: job.expected_device,
         },
@@ -433,7 +471,11 @@ fn build_stream(job: StreamJob, sink: BlockSink) -> Result<cpal::Stream, Recordi
         sample_rate: supported.sample_rate().0,
         channels: supported.channels(),
     };
-    if now != job.expected_device || supported.sample_format() != job.sample_format {
+    let other_id = matches!(
+        (job.device_id, platform_default_input_id()),
+        (Some(opened), Some(now_id)) if opened != now_id
+    );
+    if other_id || now != job.expected_device || supported.sample_format() != job.sample_format {
         return Err(RecordingError::SourceUnavailable {
             reason: "the input device changed while the recording was starting",
         });

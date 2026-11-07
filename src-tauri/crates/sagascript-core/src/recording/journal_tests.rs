@@ -229,3 +229,43 @@ fn a_journal_with_more_events_than_a_manifest_can_hold_is_a_typed_error_not_a_sh
     assert_eq!(error.code(), "recording_journal_too_large");
     assert!(!error.retryable());
 }
+
+#[test]
+fn a_failed_append_does_not_swallow_the_next_event() {
+    // The failure leaves half a line without its newline. The next event
+    // must not be glued to it, or an event (a gap's intent, say) is lost.
+    for fault in [JournalFault::AppendTorn, JournalFault::AppendNothing] {
+        let dir = TempDir::new();
+        let path = dir.path().join("mic.events.jsonl");
+        let mut writer = JournalWriter::create(&path).unwrap();
+        writer.append(&start()).unwrap();
+        writer.fault = Some(fault);
+        assert!(writer
+            .append(&JournalEvent::Anchor {
+                host_ns: 5,
+                frame: 40,
+                clipped: 0
+            })
+            .is_err());
+        writer
+            .append(&JournalEvent::Gap {
+                at_frame: 100,
+                length: 7,
+                reason: GapReason::Stall,
+                clipped: 0,
+            })
+            .unwrap();
+        let summary = read_journal(&path).unwrap();
+        assert_eq!(
+            summary.gaps,
+            vec![Gap::new(100, 7, GapReason::Stall)],
+            "{fault:?}"
+        );
+        assert_eq!(summary.anchors, vec![(1_000, 0)], "{fault:?}");
+        assert_eq!(
+            summary.ignored_lines,
+            usize::from(fault == JournalFault::AppendTorn),
+            "{fault:?}: the fragment is one ignored line"
+        );
+    }
+}

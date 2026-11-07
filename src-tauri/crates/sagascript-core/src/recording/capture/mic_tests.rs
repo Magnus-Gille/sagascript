@@ -105,6 +105,7 @@ impl DeviceProbe for Scripted {
 
 fn snapshot(name: &str, sample_rate: u32, channels: u16) -> DeviceSnapshot {
     DeviceSnapshot {
+        id: None,
         name: Some(name.into()),
         format: DeviceFormat {
             sample_rate,
@@ -189,6 +190,7 @@ fn an_unknown_name_still_catches_a_format_change_but_not_a_swap() {
             None,
         )),
         DeviceSnapshot {
+            id: None,
             name: None,
             format: DeviceFormat {
                 sample_rate: 48_000,
@@ -228,4 +230,78 @@ fn a_change_reaches_the_writer_as_the_signal_that_ends_the_track() {
         }
     }
     assert!(receiver.take_signals().device_changed);
+}
+
+fn with_id(id: u64, mut snapshot: DeviceSnapshot) -> DeviceSnapshot {
+    snapshot.id = Some(id);
+    snapshot
+}
+
+#[test]
+fn two_devices_with_the_same_name_and_format_are_told_apart_by_their_identity() {
+    let opened = with_id(41, snapshot("USB Microphone", 48_000, 1));
+    let other = with_id(77, snapshot("USB Microphone", 48_000, 1));
+    let mut w = DeviceWatch::new(
+        Box::new(Scripted(
+            vec![Some(other.clone()), Some(other)].into(),
+            None,
+        )),
+        opened,
+        (1, 2),
+    );
+    assert_eq!(w.check(), None);
+    assert_eq!(w.check(), Some(SourceSignal::DeviceChanged));
+}
+
+#[test]
+fn the_same_identity_is_the_same_device_even_if_its_name_changed() {
+    let opened = with_id(41, snapshot("USB Microphone", 48_000, 1));
+    let renamed = with_id(41, snapshot("Desk Mic", 48_000, 1));
+    let mut w = DeviceWatch::new(
+        Box::new(Scripted(vec![Some(renamed); 3].into(), None)),
+        opened,
+        (1, 2),
+    );
+    for _ in 0..3 {
+        assert_eq!(w.check(), None);
+    }
+}
+
+#[test]
+fn without_an_identity_on_both_sides_the_name_is_all_there_is() {
+    // The documented limit: two devices that are not told apart by anything but
+    // a name that is the same are not told apart.
+    let opened = with_id(41, snapshot("USB Microphone", 48_000, 1));
+    let same_name_no_id = snapshot("USB Microphone", 48_000, 1);
+    let mut w = DeviceWatch::new(
+        Box::new(Scripted(vec![Some(same_name_no_id); 3].into(), None)),
+        opened,
+        (1, 2),
+    );
+    for _ in 0..3 {
+        assert_eq!(w.check(), None);
+    }
+}
+
+#[test]
+fn a_device_that_goes_from_two_to_four_channels_is_a_format_change_although_the_pair_stays_stereo()
+{
+    let mut w = DeviceWatch::new(
+        Box::new(Scripted(
+            vec![Some(snapshot("Interface", 48_000, 4)); 2].into(),
+            None,
+        )),
+        snapshot("Interface", 48_000, 2),
+        (1, 2),
+    );
+    assert_eq!(w.check(), None);
+    // The track format would still be 48 kHz stereo: the signal is raised
+    // all the same, and the session believes it.
+    assert_eq!(
+        w.check(),
+        Some(SourceSignal::FormatChanged(NativeFormat {
+            sample_rate: 48_000,
+            channels: 2
+        }))
+    );
 }

@@ -379,3 +379,26 @@ fn a_title_that_looks_like_a_seal_cannot_stand_in_for_one() {
     assert_eq!(manifest_integrity(&sealed), Integrity::Valid);
     assert_eq!(parse_manifest(&sealed).unwrap().title, manifest.title);
 }
+
+#[test]
+fn the_seal_covers_the_manifest_and_not_the_padding_after_it() {
+    let sealed = serialize_manifest_sealed(&golden_manifest()).unwrap();
+    for padding in [0usize, 1, 100, 32 * 1024] {
+        let mut padded = sealed.clone();
+        padded.resize(sealed.len() + padding, b' ');
+        assert_eq!(
+            manifest_integrity(&padded),
+            Integrity::Valid,
+            "{padding} spaces"
+        );
+        assert_eq!(parse_manifest(&padded).unwrap(), golden_manifest());
+    }
+    // Whitespace of other kinds after the manifest is padding too; inside it, a change is not.
+    let mut tabs = sealed.clone();
+    tabs.extend_from_slice(b"\n\t \r\n");
+    assert_eq!(manifest_integrity(&tabs), Integrity::Valid);
+    let mut changed = sealed.clone();
+    let last = changed.iter().rposition(|b| *b == b'}').unwrap();
+    changed.insert(last, b' ');
+    assert_eq!(manifest_integrity(&changed), Integrity::Invalid);
+}

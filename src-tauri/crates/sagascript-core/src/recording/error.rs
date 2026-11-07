@@ -85,11 +85,12 @@ pub enum RecordingError {
     #[error("the recording was interrupted and needs recovery first")]
     RecoveryNeeded,
     /// A file of the recording is a symbolic link (or a Windows reparse
-    /// point), a directory, a pipe or anything else but a regular file. It is
+    /// point), a directory, a pipe or anything else but a regular file, or a
+    /// track file that has more than one name (a hard link, Unix). It is
     /// never followed or opened: a recording folder can come from anywhere
     /// (a sync, an archive, a copy) and must not make recovery read or write
     /// a file outside it.
-    #[error("a recording file is a link or not a regular file; could not {action}")]
+    #[error("a recording file is a link, has several names or is not a regular file; could not {action}")]
     NotRegularFile { action: &'static str },
     /// A track journal holds more events than a manifest can carry. Recovery
     /// stops instead of finishing a recording with events missing.

@@ -57,6 +57,17 @@ const PEAK_WINDOW_NS: u64 = 100_000_000;
 /// How often the real clocks are looked at for a sleep.
 const SLEEP_POLL_NS: u64 = 50_000_000;
 
+/// Stops a track's capture source. The session's [`SourceSet`](super::SourceSet)
+/// implements it (under the lock that makes the single shutdown owner and
+/// the writer wait for each other); the core calls it when a track ends by
+/// itself, **before** the last drain, so a callback cannot deliver a block
+/// after the core has looked at an empty queue.
+pub(crate) trait SourceStopper: Send + Sync {
+    /// Stop source number `index` (idempotent). When it returns no callback of
+    /// that source runs any more.
+    fn stop_source(&self, index: usize);
+}
+
 /// The numbers that drive the policy.
 #[derive(Clone, Debug)]
 pub(crate) struct CoreSettings {
@@ -100,6 +111,8 @@ struct Pipeline {
     /// Set by a signal; applied once the queue is empty.
     pending_end: Option<EndedReason>,
     sleep_seen: bool,
+    /// The source was stopped by the core (an automatic ending).
+    source_stopped: bool,
     ended: bool,
     frames_received: u64,
     gap_count: u32,
@@ -129,6 +142,7 @@ pub(crate) struct SessionCore {
     status: Arc<StatusShared>,
     free_space: Arc<dyn FreeSpace>,
     sleep: Option<SleepDetector>,
+    stopper: Arc<dyn SourceStopper>,
     base: Instant,
     next_sleep_poll_ns: u64,
     next_disk_poll_ns: u64,
@@ -151,6 +165,7 @@ impl SessionCore {
         status: Arc<StatusShared>,
         free_space: Arc<dyn FreeSpace>,
         sleep: Option<SleepDetector>,
+        stopper: Arc<dyn SourceStopper>,
     ) -> Result<Self, RecordingError> {
         let now = clock.now_ns();
         let mut pipes = Vec::with_capacity(specs.len());
@@ -180,6 +195,7 @@ impl SessionCore {
                 segment_start: 0,
                 pending_end: None,
                 sleep_seen: false,
+                source_stopped: false,
                 ended: false,
                 frames_received: 0,
                 gap_count: 0,
@@ -198,6 +214,7 @@ impl SessionCore {
             status,
             free_space,
             sleep,
+            stopper,
             base,
             next_sleep_poll_ns: now + SLEEP_POLL_NS,
             next_disk_poll_ns: now,
@@ -298,10 +315,12 @@ impl SessionCore {
                 pipe.sleep_seen = true;
             }
             // One reason per track: the first signal wins, in the order of
-            // how specific the cause is.
+            // how specific the cause is. A format-change signal is believed
+            // even when the format it names is the track's own: the source
+            // knows the device changed in a way the track format does not show.
             let reason = if signals.system_sleep {
                 Some(EndedReason::SystemSleep)
-            } else if signals.format_changed.is_some_and(|f| f != pipe.native) {
+            } else if signals.format_changed.is_some() {
                 Some(EndedReason::FormatChanged)
             } else if signals.device_changed {
                 Some(EndedReason::DeviceChanged)
@@ -332,14 +351,41 @@ impl SessionCore {
         if self.pipes[index].ended || !emptied {
             return Ok(progress);
         }
-        // The queue is empty: everything the source delivered before an event
-        // is stored. Now the track may end.
+        // The queue looks empty. A track that is ending by itself still has a
+        // running source, which may deliver one more block at any moment, so
+        // it is stopped first and drained again (`close_track`).
         if let Some(reason) = self.pipes[index].pending_end.clone() {
-            self.end_track(index, reason)?;
+            self.close_track(index, reason)?;
         } else if stopping {
             self.stop_track(index)?;
         }
         Ok(progress)
+    }
+
+    /// End a track that ends by itself (a device or format change, a sleep, the
+    /// disk, the size limit): stop its source, store everything it had
+    /// delivered up to that moment, account for what it dropped after its last
+    /// block, and only then finish the track.
+    fn close_track(&mut self, index: usize, reason: EndedReason) -> Result<(), RecordingError> {
+        if self.pipes[index].ended {
+            return Ok(());
+        }
+        if !self.pipes[index].source_stopped {
+            self.pipes[index].source_stopped = true;
+            self.stopper.stop_source(index);
+        }
+        while let Some(block) = self.pipes[index].receiver.pop() {
+            if !self.pipes[index].ended {
+                let now = self.clock.now_ns();
+                self.process_block(index, &block, now)?;
+            }
+            self.pipes[index].receiver.recycle(block);
+        }
+        let trailing = self.pipes[index].receiver.closed().unwrap_or(0);
+        if trailing > 0 {
+            self.insert_gap(index, trailing, GapReason::Overrun)?;
+        }
+        self.end_track(index, reason)
     }
 
     /// The user stopped: the audio the source dropped after its last block and
@@ -611,15 +657,7 @@ impl SessionCore {
 
     fn end_all(&mut self, reason: EndedReason) -> Result<(), RecordingError> {
         for index in 0..self.pipes.len() {
-            // Whatever the source delivered is stored first.
-            while let Some(block) = self.pipes[index].receiver.pop() {
-                if !self.pipes[index].ended {
-                    let now = self.clock.now_ns();
-                    self.process_block(index, &block, now)?;
-                }
-                self.pipes[index].receiver.recycle(block);
-            }
-            self.end_track(index, reason.clone())?;
+            self.close_track(index, reason.clone())?;
         }
         Ok(())
     }

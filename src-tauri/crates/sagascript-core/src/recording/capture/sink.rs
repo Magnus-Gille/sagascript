@@ -55,7 +55,10 @@ pub enum SourceSignal {
     /// The device was removed or replaced: the track ends (`device_changed`).
     DeviceChanged,
     /// The device now delivers another rate or channel count: the track ends
-    /// (`format_changed`), because a FLAC stream cannot change either.
+    /// (`format_changed`), because a FLAC stream cannot change either. The
+    /// payload is what the track would now hold; it may equal the track's own
+    /// format (a stereo pair of a device that went from two to four channels),
+    /// and the signal is a change all the same.
     FormatChanged(NativeFormat),
     /// The system is going to sleep or has just woken: the track ends
     /// (`system_sleep`).

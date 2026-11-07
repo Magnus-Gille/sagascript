@@ -430,9 +430,22 @@ pub enum Integrity {
     Invalid,
 }
 
+/// The range a seal covers: the bytes without trailing whitespace. The store
+/// pads a manifest with spaces to a fixed size (so a later one can be written
+/// over it in place), and a pretty-printed one ends in a newline; neither is
+/// part of the manifest, so neither is sealed, and the same range is used to
+/// seal and to verify, whatever the padding is.
+fn sealed_range(bytes: &[u8]) -> &[u8] {
+    let end = bytes
+        .iter()
+        .rposition(|b| !b.is_ascii_whitespace())
+        .map_or(0, |last| last + 1);
+    &bytes[..end]
+}
+
 /// [`serialize_manifest`] with a seal: a top-level `"integrity"` field holding
-/// the SHA-256 of the very bytes, computed with the 64 hex digits themselves
-/// replaced by zeros. Readers ignore the field (unknown fields are kept and
+/// the SHA-256 of the manifest's bytes (see `sealed_range`: without trailing
+/// whitespace), computed with the 64 hex digits themselves replaced by zeros. Readers ignore the field (unknown fields are kept and
 /// ignored), so the file stays an ordinary manifest; the store checks it
 /// where a torn write is possible (see `RecordingWriter::finish`). The
 /// unsealed in-progress file is never rewritten in place without it.
@@ -446,7 +459,7 @@ pub fn serialize_manifest_sealed(manifest: &Manifest) -> Result<Vec<u8>, Recordi
     let at = integrity_offset(&bytes).ok_or(RecordingError::ManifestInvalid {
         reason: "could not be sealed",
     })?;
-    let digest = crate::hash::sha256_hex(&bytes);
+    let digest = crate::hash::sha256_hex(sealed_range(&bytes));
     bytes[at..at + DIGEST_HEX_LEN].copy_from_slice(digest.as_bytes());
     Ok(bytes)
 }
@@ -460,6 +473,7 @@ fn integrity_offset(bytes: &[u8]) -> Option<usize> {
 
 /// Check the seal of manifest bytes.
 pub fn manifest_integrity(bytes: &[u8]) -> Integrity {
+    let bytes = sealed_range(bytes);
     let Some(at) = integrity_offset(bytes) else {
         return Integrity::Absent;
     };

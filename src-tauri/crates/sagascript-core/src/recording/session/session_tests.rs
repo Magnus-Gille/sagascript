@@ -718,3 +718,118 @@ fn a_sleep_before_the_writers_first_poll_still_ends_the_track() {
         Some(EndedReason::SystemSleep)
     );
 }
+
+// ---- Codex review round 2, finding 1: a block that arrives while a source stops
+
+/// A source whose first `stop` waits at a barrier and then lets one more block
+/// arrive, as an audio callback already in flight would, before it is stopped.
+struct LateBlockOnStop {
+    inner: FakeSource,
+    handle: FakeHandle,
+    entered: std::sync::mpsc::Sender<()>,
+    release: std::sync::mpsc::Receiver<()>,
+    held_once: bool,
+}
+
+impl CaptureSource for LateBlockOnStop {
+    fn format(&self) -> NativeFormat {
+        self.inner.format()
+    }
+    fn device_name(&self) -> Option<String> {
+        None
+    }
+    fn start(&mut self, sink: BlockSink) -> Result<(), RecordingError> {
+        self.inner.start(sink)
+    }
+    fn stop(&mut self) {
+        if !self.held_once {
+            self.held_once = true;
+            let _ = self.entered.send(());
+            let _ = self.release.recv();
+            self.handle.deliver(ms(50));
+        }
+        self.inner.stop();
+    }
+}
+
+fn late_block_session() -> (
+    Arc<RecordingSession>,
+    FakeHandle,
+    std::sync::mpsc::Receiver<()>,
+    std::sync::mpsc::Sender<()>,
+    TempDir,
+) {
+    let temp = TempDir::new();
+    let store = RecordingStore::new(temp.path().join("Recordings"));
+    let (source, handle) = FakeSource::new(MONO48);
+    let (entered_tx, entered) = std::sync::mpsc::channel();
+    let (release, release_rx) = std::sync::mpsc::channel();
+    let session = Arc::new(RecordingSession::new(
+        store,
+        config(handle.clock(), Quality::Lossless),
+    ));
+    session
+        .start(vec![SourceSpec {
+            id: "mic".into(),
+            role: "mic".into(),
+            source: Box::new(LateBlockOnStop {
+                inner: source,
+                handle: handle.clone(),
+                entered: entered_tx,
+                release: release_rx,
+                held_once: false,
+            }),
+        }])
+        .unwrap();
+    (session, handle, entered, release, temp)
+}
+
+#[test]
+fn a_block_delivered_while_an_automatic_ending_stops_the_source_is_kept() {
+    let (session, handle, entered, release, _temp) = late_block_session();
+    handle.deliver(ms(200));
+    handle.change_device();
+    // The writer decided to end the track and is now stopping the source.
+    entered
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the writer stopped the source before it closed the track");
+    assert!(
+        !session.state().is_terminal(),
+        "the track was closed with the source still running"
+    );
+    release.send(()).unwrap();
+    wait_until("the session to finish", || {
+        session.state() == SessionState::Done
+    });
+    let outcome = session.stop().unwrap();
+    assert_eq!(outcome.ended_early, Some(EndedReason::DeviceChanged));
+    assert_eq!(
+        outcome.manifest.tracks[0].frames,
+        handle.position(),
+        "the block that arrived while the source was stopping was lost"
+    );
+    assert!(!handle.running());
+}
+
+#[test]
+fn an_automatic_ending_and_the_users_stop_share_one_orderly_shutdown() {
+    let (session, handle, entered, release, _temp) = late_block_session();
+    handle.deliver(ms(200));
+    handle.change_device();
+    entered.recv_timeout(Duration::from_secs(10)).unwrap();
+    // The user presses stop while the writer is stopping the source.
+    let user = {
+        let session = Arc::clone(&session);
+        std::thread::spawn(move || session.stop())
+    };
+    std::thread::sleep(ms(100));
+    assert!(!session.state().is_terminal());
+    release.send(()).unwrap();
+    let outcome = user.join().unwrap().unwrap();
+    assert_eq!(outcome.manifest.tracks[0].frames, handle.position());
+    assert_eq!(outcome.manifest.state, RecordingState::Complete);
+    assert_eq!(
+        outcome.manifest.tracks[0].ended_reason,
+        Some(EndedReason::DeviceChanged)
+    );
+}

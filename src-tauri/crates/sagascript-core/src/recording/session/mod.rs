@@ -44,10 +44,15 @@
 //!
 //! # Who stops the sources
 //!
-//! Whoever ends the recording stops them *before* the terminal state is
-//! visible: `stop` (the owner, before it tells the writer to finish) or the
-//! writer thread (when every track has ended by itself, on failure, or when
-//! it panics). A `Done` or `Failed` session never has an open microphone.
+//! Whoever ends the recording stops them *before* it looks at the queue for
+//! the last time and before the terminal state is visible. `stop` (the owner)
+//! stops them and only then tells the writer to finish. When a track ends by
+//! itself (a device or format change, a sleep, the disk, the size limit) the
+//! core stops that track's source through [`SourceStopper`] first, drains what
+//! the source had delivered up to then and only afterwards finishes the track,
+//! so a callback already in flight cannot deliver a block into a queue nobody
+//! reads. On failure or a panic the writer thread stops them all. A `Done` or
+//! `Failed` session never has an open microphone.
 //!
 //! [`RecordingWriter`]: super::RecordingWriter
 
@@ -65,7 +70,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use self::core::{CoreSettings, PipelineSpec, SessionCore};
+use self::core::{CoreSettings, PipelineSpec, SessionCore, SourceStopper};
 use self::disk::{
     uncompressed_bytes_per_second, DiskLevel, DiskPolicy, FreeSpace, VolumeFreeSpace,
 };
@@ -226,6 +231,14 @@ impl SourceSet {
     /// callback of any source runs any more.
     fn stop_all(&self) {
         for source in lock_or_recover(&self.sources, SOURCES_LOCK).iter_mut() {
+            source.stop();
+        }
+    }
+}
+
+impl SourceStopper for SourceSet {
+    fn stop_source(&self, index: usize) {
+        if let Some(source) = lock_or_recover(&self.sources, SOURCES_LOCK).get_mut(index) {
             source.stop();
         }
     }
@@ -505,6 +518,7 @@ impl RecordingSession {
             Arc::clone(&self.status),
             Arc::clone(&config.free_space),
             sleep,
+            Arc::clone(&self.sources) as Arc<dyn SourceStopper>,
         ) {
             Ok(core) => core,
             Err(error) => {

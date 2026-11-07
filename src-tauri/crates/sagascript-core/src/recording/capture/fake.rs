@@ -347,6 +347,14 @@ impl FakeHandle {
         lock_or_recover(&self.shared.state, FAKE_LOCK).position
     }
 
+    /// Stop the source the way `CaptureSource::stop` does (for a test that
+    /// stands in for the session's own stopper).
+    pub fn stop_source(&self) {
+        let mut state = lock_or_recover(&self.shared.state, FAKE_LOCK);
+        state.sink = None;
+        state.handle = None;
+    }
+
     /// Whether the source is started and not stopped.
     pub fn running(&self) -> bool {
         lock_or_recover(&self.shared.state, FAKE_LOCK)
