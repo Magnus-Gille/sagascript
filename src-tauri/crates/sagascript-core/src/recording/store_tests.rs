@@ -865,6 +865,17 @@ fn the_in_progress_manifest_is_padded_so_the_last_one_can_be_written_in_place() 
         .unwrap();
     let on_disk = std::fs::read(writer.folder().join(MANIFEST_FILE)).unwrap();
     assert_eq!(on_disk.len(), MANIFEST_RESERVED_BYTES);
+    // Padded, and still sealed: the seal covers the manifest, not the padding.
+    assert_eq!(
+        crate::recording::manifest_integrity(&on_disk),
+        crate::recording::Integrity::Valid
+    );
+    assert_eq!(
+        crate::recording::manifest_integrity(
+            &std::fs::read(writer.folder().join(START_COPY_FILE)).unwrap()
+        ),
+        crate::recording::Integrity::Valid
+    );
     // Trailing spaces are JSON whitespace: the manifest reads as before.
     assert_eq!(read_manifest(writer.folder()), *writer.manifest());
 }
@@ -995,6 +1006,20 @@ mod no_room_for_a_second_file {
         assert_eq!(manifest.state, RecordingState::Complete);
         assert_eq!(read_manifest(&dir), manifest);
         if restricted {
+            // Written in place over the padded file, and its seal holds: the
+            // finished recording is not mistaken for a torn one.
+            let on_disk = std::fs::read(dir.join(MANIFEST_FILE)).unwrap();
+            assert_eq!(on_disk.len(), MANIFEST_RESERVED_BYTES);
+            assert_eq!(
+                crate::recording::manifest_integrity(&on_disk),
+                crate::recording::Integrity::Valid
+            );
+            assert!(matches!(
+                crate::recording::recover_folder(&dir),
+                Err(RecordingError::NotRecording)
+            ));
+        }
+        if restricted {
             // It really was written in place: the reserved size is unchanged.
             assert_eq!(
                 std::fs::metadata(dir.join(MANIFEST_FILE)).unwrap().len(),
@@ -1085,6 +1110,23 @@ fn an_interrupted_in_place_manifest_write_leaves_a_recording_recovery_can_finish
     assert!(complete.len() < original.len());
     drop(writer); // the process "dies" in the middle of the rewrite
 
+    // Missing only the final newline is not torn: the seal covers the
+    // manifest, and the rewrite had written all of it.
+    {
+        let copy = copy_dir(&dir, &root.path().join("torn-newline"));
+        let mut almost = original.clone();
+        almost[..complete.len() - 1].copy_from_slice(&complete[..complete.len() - 1]);
+        std::fs::write(copy.join(MANIFEST_FILE), &almost).unwrap();
+        assert_eq!(
+            crate::recording::manifest_integrity(&almost),
+            crate::recording::Integrity::Valid
+        );
+        assert!(matches!(
+            crate::recording::recover_folder(&copy),
+            Err(RecordingError::NotRecording)
+        ));
+    }
+
     let json_len = complete.len();
     for cut in [
         0,
@@ -1093,8 +1135,8 @@ fn an_interrupted_in_place_manifest_write_leaves_a_recording_recovery_can_finish
         17,
         json_len / 3,
         json_len / 2,
+        json_len - 3,
         json_len - 2,
-        json_len - 1,
     ] {
         let copy = copy_dir(&dir, &root.path().join(format!("torn-{cut}")));
         let mut torn = original.clone();
