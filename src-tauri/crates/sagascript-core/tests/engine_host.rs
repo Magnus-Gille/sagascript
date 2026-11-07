@@ -60,6 +60,14 @@ fn config(env: &[(&str, &str)], tmp: &Path) -> EngineHostConfig {
     cfg
 }
 
+/// Restart backoff for tests where the backoff is not the property: the
+/// crash-budget and cooldown tests only need the restarts to happen.
+const QUICK_BACKOFF: [Duration; 3] = [
+    Duration::ZERO,
+    Duration::from_millis(10),
+    Duration::from_millis(20),
+];
+
 fn fixture_with(env: &[(&str, &str)], tweak: impl FnOnce(&mut EngineHostConfig)) -> Fixture {
     let tmp = tempfile::tempdir().unwrap();
     let mut cfg = config(env, tmp.path());
@@ -442,7 +450,7 @@ fn malformed_late_answer_to_a_timed_out_window_is_an_answer_not_a_wedge() {
         other => panic!("{other:?}"),
     }
     // Well past the grace: a watcher that missed the answer would have killed the host.
-    std::thread::sleep(Duration::from_millis(1500));
+    std::thread::sleep(Duration::from_millis(1000));
     let snap = f.client.snapshot();
     assert!(snap.running);
     assert_eq!(snap.pid, pid, "the host was killed as wedged");
@@ -930,7 +938,7 @@ fn dictation_is_not_queued_behind_a_running_file_job() {
     let f = fixture(&[
         ("FAKE_WINDOW_S", "10"),
         ("FAKE_OVERLAP_S", "4"),
-        ("FAKE_BATCH_DELAY_MS", "400"),
+        ("FAKE_BATCH_DELAY_MS", "300"),
     ]);
     f.client.warm().unwrap();
     let job_done = Arc::new(AtomicBool::new(false));
@@ -946,7 +954,7 @@ fn dictation_is_not_queued_behind_a_running_file_job() {
             (out, samples.len())
         })
     };
-    std::thread::sleep(Duration::from_millis(300));
+    std::thread::sleep(Duration::from_millis(200));
     let t = Instant::now();
     let d = f
         .client
@@ -955,12 +963,12 @@ fn dictation_is_not_queued_behind_a_running_file_job() {
     let latency = t.elapsed();
     assert_eq!(d.tokens.len(), 6);
     assert!(
-        latency < Duration::from_millis(800),
+        latency < Duration::from_millis(600),
         "dictation took {latency:?}"
     );
     assert!(
         !job_done.load(Ordering::SeqCst),
-        "file job should still be running (8 windows x 400 ms / 2)"
+        "file job should still be running (8 windows x 300 ms / 2)"
     );
     let (out, n) = job.join().unwrap();
     assert_eq!(
@@ -1150,15 +1158,17 @@ fn interactive_request_gets_a_reserved_host_slot() {
         ("FAKE_WINDOW_S", "10"),
         ("FAKE_OVERLAP_S", "4"),
         ("FAKE_MAX_IN_FLIGHT", "3"),
-        ("FAKE_BATCH_DELAY_MS", "1500"),
+        ("FAKE_BATCH_DELAY_MS", "1000"),
         ("FAKE_LOG", log_path.to_str().unwrap()),
     ]);
     f.client.warm().unwrap();
     let job = {
         let client = f.client.clone();
         std::thread::spawn(move || {
+            // 17 s with 10 s windows and a 4 s overlap: three batch windows,
+            // so a third slot given to batch work would start all of them.
             client
-                .transcribe_file_samples(&pcm(47.0), &CancelToken::new(), None)
+                .transcribe_file_samples(&pcm(17.0), &CancelToken::new(), None)
                 .map(|o| o.tokens.len())
         })
     };
@@ -1208,8 +1218,9 @@ fn single_slot_host_sends_dictation_before_next_batch_window() {
     let job = {
         let client = f.client.clone();
         std::thread::spawn(move || {
+            // 12 s with 10 s windows and a 4 s overlap: two batch windows.
             client
-                .transcribe_file_samples(&pcm(47.0), &CancelToken::new(), None)
+                .transcribe_file_samples(&pcm(12.0), &CancelToken::new(), None)
                 .map(|o| o.tokens.len())
         })
     };
@@ -1229,7 +1240,8 @@ fn single_slot_host_sends_dictation_before_next_batch_window() {
         .unwrap();
     assert_eq!(d.tokens.len(), 6);
     // Dictation waits for the running window (~1.5 s) only. If a further batch
-    // window (another 1.5 s) were sent first this would take about 3 s.
+    // window (another 1.5 s) were sent first this would take about 3 s. Two
+    // windows are enough to prove the order; the delay keeps loaded-runner headroom.
     let waited = started.elapsed();
     assert!(
         waited < Duration::from_millis(2200),
@@ -1448,7 +1460,10 @@ fn failed_host_gets_a_fresh_attempt_after_the_cooldown() {
     let cooldown = Duration::from_secs(1);
     let f = fixture_with(
         &[("FAKE_CRASH_ON_START_FILE", crash.to_str().unwrap())],
-        |c| c.failed_cooldown = cooldown,
+        |c| {
+            c.failed_cooldown = cooldown;
+            c.restart_backoff = QUICK_BACKOFF.to_vec();
+        },
     );
     for _ in 0..4 {
         let r = f.client.warm();
@@ -1502,7 +1517,10 @@ fn failed_cooldown_recovers_only_after_a_successful_load() {
     let cooldown = Duration::from_secs(1);
     let f = fixture_with(
         &[("FAKE_CRASH_ON_LOAD_FILE", crash.to_str().unwrap())],
-        |c| c.failed_cooldown = cooldown,
+        |c| {
+            c.failed_cooldown = cooldown;
+            c.restart_backoff = QUICK_BACKOFF.to_vec();
+        },
     );
     for _ in 0..4 {
         let r = f.client.warm();
@@ -1557,6 +1575,7 @@ fn failed_probe_load_on_a_live_host_enforces_the_new_cooldown() {
         ],
         |c| {
             c.failed_cooldown = cooldown;
+            c.restart_backoff = QUICK_BACKOFF.to_vec();
             c.load.model_dir = "/models/missing".into();
         },
     );
@@ -1695,7 +1714,9 @@ fn host_wedged_on_a_timed_out_window_is_restarted_and_the_next_window_succeeds()
 #[test]
 fn slow_uninterruptible_window_times_out_promptly_and_keeps_the_host() {
     let timeout = Duration::from_millis(300);
-    // Longer than the 5 s grace used before #397 was addressed.
+    // Longer than the 5 s grace used before #397 was addressed. This one stays at
+    // real wall time: it is the behavioural proof that the default grace, not a
+    // shorter hardcoded one, decides when an uninterruptible window is a wedge.
     let stall = Duration::from_secs(6);
     let stall_ms = stall.as_millis().to_string();
     let f = fixture_with(
