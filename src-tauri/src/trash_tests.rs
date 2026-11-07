@@ -130,27 +130,111 @@ fn elsewhere_the_system_trash_is_unavailable() {
     assert_eq!(error.code(), "unavailable");
 }
 
+/// A fixed disk with a normal bin and a small folder: the one accepted case.
+fn good() -> BinFacts {
+    BinFacts {
+        drive_type: Some(3),
+        bin_off: false,
+        quota_bytes: Some(10 * 1024 * 1024 * 1024),
+        volume_bytes: Some(500 * 1024 * 1024 * 1024),
+        folder_bytes: 600 * 1024 * 1024,
+    }
+}
+
+#[test]
+fn a_fixed_disk_with_room_in_its_bin_is_accepted() {
+    assert_eq!(recycle_guaranteed(&good()), Ok(()));
+}
+
 /// The Windows drive types of `GetDriveTypeW`: only a fixed disk is trusted to
 /// have a Recycle Bin (the shell deletes for good on the others).
 #[test]
 fn only_a_fixed_disk_is_expected_to_have_a_recycle_bin() {
-    const DRIVE_UNKNOWN: u32 = 0;
-    const DRIVE_NO_ROOT_DIR: u32 = 1;
-    const DRIVE_REMOVABLE: u32 = 2;
-    const DRIVE_FIXED: u32 = 3;
-    const DRIVE_REMOTE: u32 = 4;
-    const DRIVE_CDROM: u32 = 5;
-    const DRIVE_RAMDISK: u32 = 6;
-    assert!(recycle_bin_expected(DRIVE_FIXED));
     for other in [
-        DRIVE_UNKNOWN,
-        DRIVE_NO_ROOT_DIR,
-        DRIVE_REMOVABLE,
-        DRIVE_REMOTE,
-        DRIVE_CDROM,
-        DRIVE_RAMDISK,
-        99,
+        Some(0),
+        Some(1),
+        Some(2),
+        Some(4),
+        Some(5),
+        Some(6),
+        Some(99),
+        None,
     ] {
-        assert!(!recycle_bin_expected(other), "{other}");
+        let facts = BinFacts {
+            drive_type: other,
+            ..good()
+        };
+        assert_eq!(
+            recycle_guaranteed(&facts),
+            Err(BinRefusal::NoBin),
+            "{other:?}"
+        );
+    }
+}
+
+#[test]
+fn a_switched_off_bin_is_refused() {
+    let facts = BinFacts {
+        bin_off: true,
+        ..good()
+    };
+    assert_eq!(recycle_guaranteed(&facts), Err(BinRefusal::BinOff));
+}
+
+#[test]
+fn a_folder_larger_than_the_quota_is_refused() {
+    let facts = BinFacts {
+        folder_bytes: 10 * 1024 * 1024 * 1024 + 1,
+        ..good()
+    };
+    assert_eq!(recycle_guaranteed(&facts), Err(BinRefusal::TooLarge));
+    // At the quota exactly it fits.
+    let facts = BinFacts {
+        folder_bytes: 10 * 1024 * 1024 * 1024,
+        ..good()
+    };
+    assert_eq!(recycle_guaranteed(&facts), Ok(()));
+}
+
+#[test]
+fn without_an_explicit_quota_a_low_estimate_of_the_default_is_used() {
+    // 5 % of a 100 GB disk is 5 GB.
+    let facts = BinFacts {
+        quota_bytes: None,
+        volume_bytes: Some(100 * 1024 * 1024 * 1024),
+        folder_bytes: 6 * 1024 * 1024 * 1024,
+        ..good()
+    };
+    assert_eq!(recycle_guaranteed(&facts), Err(BinRefusal::TooLarge));
+    let facts = BinFacts {
+        folder_bytes: 4 * 1024 * 1024 * 1024,
+        ..facts
+    };
+    assert_eq!(recycle_guaranteed(&facts), Ok(()));
+}
+
+#[test]
+fn what_cannot_be_established_is_refused() {
+    let facts = BinFacts {
+        quota_bytes: None,
+        volume_bytes: None,
+        ..good()
+    };
+    assert_eq!(recycle_guaranteed(&facts), Err(BinRefusal::Unknown));
+}
+
+#[test]
+fn every_refusal_says_the_recording_was_not_deleted_and_carries_no_path() {
+    for refusal in [
+        BinRefusal::NoBin,
+        BinRefusal::BinOff,
+        BinRefusal::TooLarge,
+        BinRefusal::Unknown,
+    ] {
+        let error = refusal_error(refusal);
+        assert_eq!(error.code(), "unavailable");
+        let message = error.message();
+        assert!(message.contains("not deleted"), "{message}");
+        assert!(!message.contains(['\\', '/']), "{message}");
     }
 }

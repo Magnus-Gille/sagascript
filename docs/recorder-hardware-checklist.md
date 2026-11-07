@@ -58,14 +58,18 @@ Tick each line per OS (macOS / Windows); note the build identity (tray menu) nex
 - [ ] macOS: "Move to Trash" puts the folder in the Trash (Put Back works).
 - [ ] Windows: it goes to the Recycle Bin (`SHFileOperationW` with `FOF_ALLOWUNDO`); it can be
       restored; a path with non-ASCII characters works.
-- [ ] Windows: the move fails closed where there is no Recycle Bin. A recordings folder on a
-      mapped network drive, a UNC share and a USB stick each give "This recording is on a drive
-      without a Recycle Bin ...", and the folder is **still there** afterwards (nothing deleted).
-- [ ] Windows: on a fixed disk whose Recycle Bin is switched off ("Don't move files to the Recycle
-      Bin" in the bin's properties), or for a recording larger than the bin's maximum size, Windows
-      asks before deleting for good (`FOF_WANTNUKEWARNING`); answering No leaves the folder and the
-      window reports it was not moved. (Answering Yes deletes it for good: that is Windows' own,
-      explicit question.)
+- [ ] Windows: the move goes through `IFileOperation` with `FOFX_RECYCLEONDELETE` and never
+      deletes for good. It is refused up front (the folder is **still there** afterwards, the
+      window says "It was not deleted") for each of: a mapped network drive, a UNC share and a USB
+      stick (no Recycle Bin); a fixed disk with "Don't move files to the Recycle Bin" ticked in the
+      bin's properties; a recording larger than the bin's maximum size (set a small maximum in the
+      properties, or use a recording over 5 % of a small disk). A normal fixed disk works and the
+      folder can be restored from the bin.
+- [ ] Windows: confirm that `FOFX_RECYCLEONDELETE` really fails instead of deleting when the
+      up-front checks are bypassed (the checks read the bin's registry settings under
+      `...\Explorer\BitBucket\Volume\{GUID}` and estimate a default quota of 5 % of the volume;
+      neither is documented). If Windows asks "permanently delete?" at any point, answer No and
+      report it: the registry layout or the estimate is wrong for that setup.
 - [ ] Windows: moving a recording to the Recycle Bin while the lock is held works. The app holds
       `recording.lock` open during the move; if the shell refuses to move a folder with an open
       file, the delete fails with an error and the folder stays: report it, the lock handling
