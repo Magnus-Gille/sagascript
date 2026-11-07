@@ -110,6 +110,13 @@ fn emit_git_rerun_triggers() {
 fn main() {
     emit_git_rerun_triggers();
     emit_source_rerun_triggers();
+    // Local identity is observed from the whole worktree, so every tracked file must
+    // invalidate it. CI supplies both values and skips the per-file watch.
+    if std::env::var_os("SAGASCRIPT_GIT_HASH").is_none()
+        || std::env::var_os("SAGASCRIPT_SOURCE_DIRTY_INPUT").is_none()
+    {
+        build_identity::emit_tracked_file_rerun_triggers();
+    }
 
     let is_macos_release = std::env::var("PROFILE").as_deref() == Ok("release")
         && std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos");

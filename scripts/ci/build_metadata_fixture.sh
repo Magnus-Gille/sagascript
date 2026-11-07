@@ -16,7 +16,8 @@ mkdir -p "$fixture/src" \
     "$fixture_root/src-tauri/crates/sagascript-testsupport/src" \
     "$fixture_root/src-tauri/gen/schemas" \
     "$fixture_root/src" \
-    "$fixture_root/scripts"
+    "$fixture_root/scripts" \
+    "$fixture_root/docs"
 cp src-tauri/crates/sagascript-cli/build.rs "$fixture/build.rs"
 cp src-tauri/build_identity.rs "$fixture_root/src-tauri/build_identity.rs"
 cp scripts/build-identity-generated-paths.txt "$fixture_root/scripts/build-identity-generated-paths.txt"
@@ -70,6 +71,7 @@ EOF
 cat > "$fixture_root/src/main.ts" <<'EOF'
 export const frontendFixtureValue = 1;
 EOF
+printf 'fixture notes\n' > "$fixture_root/docs/notes.md"
 : > "$fixture_root/package-lock.json"
 cat > "$fixture_root/src-tauri/gen/schemas/windows-schema.json" <<'EOF'
 {"schema": 1}
@@ -250,6 +252,21 @@ assert_eq "$touch_source_hash_after" "$touch_source_hash" "touch preserves sourc
 assert_eq "$index_after" "$index_before" "helper status query does not mutate Git index"
 touch_warm_same=$(build_count "$evidence_root/touch-warm-same.log")
 assert_eq "$touch_warm_same" 0 "unchanged build after touch is cached"
+
+# A tracked file outside every watched source tree still feeds the dirtiness
+# observation, so editing it must rerun the helper on a warm build. Otherwise the
+# cached build keeps reporting a clean source tree for a dirty worktree.
+sleep 1
+printf 'unwatched edit\n' >> "$fixture_root/docs/notes.md"
+unwatched_dirty=$(build_count "$evidence_root/unwatched-tracked.log")
+assert_eq "$unwatched_dirty" 1 "unwatched tracked file change on a warm build"
+assert_text "$(cat "$evidence_root/unwatched-tracked.identity")" "$initial_hash-dirty $initial_date $fixture_sha true" "warm unwatched tracked change is dirty"
+git -C "$fixture_root" checkout -- docs/notes.md
+unwatched_restored=$(build_count "$evidence_root/unwatched-restored.log")
+assert_eq "$unwatched_restored" 1 "unwatched tracked file restore"
+assert_text "$(cat "$evidence_root/unwatched-restored.identity")" "$initial_hash $initial_date $fixture_sha false" "restored unwatched tracked file is clean"
+unwatched_same=$(build_count "$evidence_root/unwatched-same.log")
+assert_eq "$unwatched_same" 0 "unchanged build after unwatched restore is cached"
 
 # Changes to the shared helper and generated-path policy must invalidate the
 # cached build script. The new policy entry is committed in the fixture so the

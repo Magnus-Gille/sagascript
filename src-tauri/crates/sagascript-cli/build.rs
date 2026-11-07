@@ -134,6 +134,7 @@ fn main() {
     // the Git watches because they still derive identity from the checkout.
     if !has_complete_ci_metadata() {
         emit_git_rerun_triggers();
+        build_identity::emit_tracked_file_rerun_triggers();
     }
     emit_source_rerun_triggers();
 

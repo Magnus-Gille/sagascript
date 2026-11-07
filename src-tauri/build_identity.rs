@@ -81,6 +81,37 @@ fn status_is_clean(status: &[u8], repository_root: &str) -> bool {
     true
 }
 
+/// Tauri's build script rewrites these, so watching them would invalidate every build.
+const BUILD_WRITTEN_PREFIX: &str = "src-tauri/gen/schemas/";
+
+/// Emits a Cargo rerun trigger for every tracked file, so that a warm build observes
+/// [`local_source_dirty`] again after any tracked change, not only changes in the source
+/// trees each build script watches. Without this, editing an unwatched tracked file
+/// (under `scripts/` or `docs/`, for example) leaves a cached `SAGASCRIPT_SOURCE_DIRTY=false`.
+/// Untracked files are not watched: Cargo cannot watch the repository root without also
+/// watching `target/`. A new untracked file is picked up at the next rerun for any other reason.
+pub fn emit_tracked_file_rerun_triggers() {
+    let Some(root) = repository_root() else {
+        return;
+    };
+    let Some(output) = git_output(&["ls-files", "-z", "--full-name", "--", ":/"]) else {
+        return;
+    };
+    for path in output.split(|byte| *byte == 0) {
+        let Ok(path) = str::from_utf8(path) else {
+            continue;
+        };
+        if path.is_empty() || path.contains(['\n', '\r']) || path.starts_with(BUILD_WRITTEN_PREFIX)
+        {
+            continue;
+        }
+        println!(
+            "cargo:rerun-if-changed={}",
+            Path::new(&root).join(path).display()
+        );
+    }
+}
+
 /// Local Git dirtiness, excluding only existing generated files in the shared allow-list.
 /// `None` means Git could not provide a trustworthy status; callers must not report clean.
 pub fn local_source_dirty() -> Option<bool> {

@@ -305,6 +305,8 @@ jobs:
           if (-not (Test-Path -LiteralPath $env:SAGASCRIPT_PWSH -PathType Leaf)) {
             throw "The running PowerShell installation has no pwsh.exe"
           }
+          # test-windows-x64-cpu-policy.mjs reads PWSH rather than SAGASCRIPT_PWSH.
+          $env:PWSH = $env:SAGASCRIPT_PWSH
           npm run test:frontend
           exit $LASTEXITCODE
 
