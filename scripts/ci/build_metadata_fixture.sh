@@ -76,6 +76,9 @@ printf 'fixture notes\n' > "$fixture_root/docs/notes.md"
 cat > "$fixture_root/src-tauri/gen/schemas/windows-schema.json" <<'EOF'
 {"schema": 1}
 EOF
+cat > "$fixture_root/src-tauri/gen/schemas/macOS-schema.json" <<'EOF'
+{"schema": 1}
+EOF
 cat > "$fixture_root/.gitignore" <<'EOF'
 /src-tauri/Cargo.lock
 /src-tauri/target/
@@ -307,6 +310,8 @@ assert_text "$(cat "$evidence_root/policy-changed.identity")" "$policy_hash $pol
 # regular file and still treats all other worktree changes as dirty.
 echo '{"schema": 3}' >> "$fixture_root/src-tauri/gen/schemas/windows-schema.json"
 echo '{"schema": 4}' > "$fixture_root/src-tauri/gen/schemas/acl-manifests.json"
+# A local macOS build adds the updater plugin's entries to the tracked macOS schema.
+echo '{"schema": 5}' >> "$fixture_root/src-tauri/gen/schemas/macOS-schema.json"
 clean_fixture
 generated_only=$(build_count "$evidence_root/generated-only.log")
 assert_eq "$generated_only" 1 "generated-only fallback identity"
@@ -322,7 +327,8 @@ assert_text "$(cat "$evidence_root/generated-symlink.identity")" "$policy_hash-d
 rm "$fixture_root/src-tauri/gen/schemas/acl-manifests.json"
 
 # An unmerged add/add conflict at an allow-listed path is also dirty.
-git -C "$fixture_root" restore --worktree -- src-tauri/gen/schemas/windows-schema.json
+git -C "$fixture_root" restore --worktree -- src-tauri/gen/schemas/windows-schema.json \
+    src-tauri/gen/schemas/macOS-schema.json
 rm -f "$fixture_root/src-tauri/gen/schemas/custom-fixture-schema.json"
 aa_base=$(git -C "$fixture_root" rev-parse HEAD)
 base_branch=$(git -C "$fixture_root" branch --show-current)

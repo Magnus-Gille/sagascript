@@ -91,9 +91,9 @@ const BUILD_WRITTEN_PREFIX: &str = "src-tauri/gen/schemas/";
 /// Untracked files are not watched: Cargo cannot watch the repository root without also
 /// watching `target/`. A new untracked file is picked up at the next rerun for any other reason.
 /// `src-tauri/gen/schemas/` is not watched either, because Tauri's build rewrites it and
-/// watching what the build writes would invalidate every build. The trade-off: a hand edit or
-/// deletion there (including the tracked `macOS-schema.json`, which is not on the generated-path
-/// allow-list) can leave a cached clean identity until something else reruns the script.
+/// watching what the build writes would invalidate every build. The trade-off: a hand edit of a
+/// schema on the generated-path allow-list is clean by policy, but deleting one (which is dirty)
+/// can leave a cached clean identity until something else reruns the script.
 /// A tracked file that is missing (deleted but not yet staged) is not watched, because Cargo
 /// treats a missing watched path as changed on every build. The deletion itself already reran
 /// the script and marked the tree dirty; restoring the file stays dirty until the next rerun

@@ -3,7 +3,8 @@
 # and a local macOS build adds the macOS-only updater plugin's entries to the macOS schema.
 # One repository-relative path per line; lines starting with # are comments. Read by
 # scripts/engine-host-identity.sh (Core ML host), src-tauri/engine-host/ort/build_identity.rs
-# (ONNX host) and scripts/ci-build-identity.mjs (Windows packaging gate).
+# (ONNX host), src-tauri/build_identity.rs (app and CLI) and scripts/ci-build-identity.mjs
+# (Windows packaging gate).
 src-tauri/gen/schemas/acl-manifests.json
 src-tauri/gen/schemas/capabilities.json
 src-tauri/gen/schemas/desktop-schema.json
