@@ -251,3 +251,16 @@ test("ARM64 candidate records generated debug and release CPU flags", () => {
     assert.match(step, /node scripts\/report-windows-arm64-native\.mjs src-tauri\/target/);
   }
 });
+
+test("Windows candidate downloads retry transient GitHub failures before verifying hashes", () => {
+  // A 504 ("We couldn't respond to your request in time") from the GitHub
+  // release CDN failed the arm64 candidate twice in a row on 2026-11-08.
+  // The release prebuild calls this workflow, so one flaky download must not
+  // stop a release; the SHA-256 check after each download is unchanged.
+  const downloads = workflow.split("\n").filter((line) => line.includes("Invoke-WebRequest"));
+  assert.equal(downloads.length, 2, "expected the LLVM and ONNX Runtime downloads");
+  for (const line of downloads) {
+    assert.match(line, /-MaximumRetryCount [1-9]\d*/, line.trim());
+    assert.match(line, /-RetryIntervalSec [1-9]\d*/, line.trim());
+  }
+});
