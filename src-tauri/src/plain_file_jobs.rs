@@ -7,7 +7,8 @@ use crate::events::{EmitEvent, PlainPhase, PlainTranscriptionProgress};
 use sagascript_core::sync::lock_or_recover;
 use sagascript_core::transcription::whisper_backend::display_transcript;
 use sagascript_core::transcription::{
-    pianissimo_backend::PianissimoBackend, Glossary, TranscribeRequest,
+    pianissimo_backend::{AudioLength, PianissimoBackend},
+    Glossary, TranscribeRequest,
 };
 use sagascript_core::{
     audio::decoder,
@@ -166,8 +167,12 @@ pub async fn transcribe_pianissimo(
             );
         };
         let work = || -> Result<String, DictationError> {
-            let audio = decode_for_run(run, std::path::Path::new(&file_path), &progress)?;
-            let timeout = Duration::from_secs(((audio.len() / 16_000) as u64 * 10).max(180));
+            // The file is decoded while the engine transcribes it, so there is
+            // no decode or resample stage of its own: `Decoding` at 0 opens the
+            // run, `Loading` covers the engine, then `Transcribing` carries the
+            // percentages.
+            let path = std::path::Path::new(&file_path);
+            announce_file(run, path, &progress)?;
             progress(PlainPhase::Loading, None);
             let backend = Arc::new(PianissimoBackend::start_with_cancel(
                 &run.cancelled,
@@ -183,12 +188,14 @@ pub async fn transcribe_pianissimo(
             // compile can take minutes and is not inference time.
             backend.warm_up_with_cancel(&run.cancelled)?;
             run.check()?;
-            *lock_or_recover(&run.deadline, DEADLINE_LOCK) = Some(Instant::now() + timeout);
-            progress(PlainPhase::Transcribing, Some(0));
-            let result = backend.transcribe_with_cancel(
-                &audio,
+            // The decode runs alongside inference and the length is known only
+            // when it ends: the limit is set then (see `StreamDeadline`).
+            let deadline = StreamDeadline::new(&run.deadline);
+            let (result, _) = backend.transcribe_file_streaming_with_length(
+                path,
                 |pct| progress(PlainPhase::Transcribing, Some(pct)),
                 &run.cancelled,
+                |length| deadline.audio_length(length, Instant::now()),
             )?;
             run.check()?;
             progress(PlainPhase::Finalizing, None);
@@ -249,6 +256,67 @@ fn decode_for_run(
     )?;
     run.check()?;
     Ok(audio)
+}
+
+/// Opens a streamed import: stops at a cancellation, announces `Decoding` at 0
+/// and refuses a file that is gone. The check is made here, not left to the
+/// decoder, because the decoder only runs once the engine is loaded (a first-time
+/// compile can take minutes) and a moved file must still be reported at once as
+/// `FileNotFound`, which the command reports as `file_not_found`.
+fn announce_file(
+    run: &RunControl,
+    path: &std::path::Path,
+    progress: &dyn Fn(PlainPhase, Option<u8>),
+) -> Result<(), DictationError> {
+    run.check()?;
+    progress(PlainPhase::Decoding, Some(0));
+    match std::fs::metadata(path) {
+        // Typed like the decoder's own error, so callers never match its text.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            Err(DictationError::FileNotFound(e.to_string()))
+        }
+        // Any other reason it cannot be read is for the decoder to report.
+        _ => Ok(()),
+    }
+}
+
+/// The inference time limit for `samples` of 16 kHz audio:
+/// `max(whole audio seconds * 10, 180 s)`.
+fn pianissimo_timeout(samples: usize) -> Duration {
+    Duration::from_secs(((samples / 16_000) as u64).saturating_mul(10).max(180))
+}
+
+/// The deadline of a streamed Pianissimo import. The decode runs alongside
+/// inference and the audio's length is known only when it ends, so no deadline
+/// runs while the file decodes (as before, when the file was decoded before any
+/// deadline was set: a slow decode never counts against it). When the decode
+/// ends, the deadline is `max(audio seconds * 10, 180 s)` from that moment,
+/// which is never earlier than the one the same file got when it was decoded in
+/// full first. Estimates (a container's announcement, the length decoded so
+/// far) are ignored: an understating header cannot shorten the limit.
+struct StreamDeadline<'a> {
+    slot: &'a Mutex<Option<Instant>>,
+}
+
+impl<'a> StreamDeadline<'a> {
+    fn new(slot: &'a Mutex<Option<Instant>>) -> Self {
+        Self { slot }
+    }
+
+    /// The decoder reported `length` at `now`. Only the exact length sets the
+    /// deadline, and it only ever moves out.
+    fn audio_length(&self, length: AudioLength, now: Instant) {
+        let AudioLength::Exact(samples) = length else {
+            return;
+        };
+        let Some(end) = now.checked_add(pianissimo_timeout(samples)) else {
+            return;
+        };
+        let mut slot = lock_or_recover(self.slot, DEADLINE_LOCK);
+        if slot.is_none_or(|current| end > current) {
+            *slot = Some(end);
+        }
+    }
 }
 
 impl RunControl {
@@ -433,6 +501,143 @@ mod tests {
         assert!(jobs.cancel("run-2"));
         let stopped = decode_for_run(&lease.control, missing, &progress).unwrap_err();
         assert!(matches!(stopped, DictationError::Cancelled), "{stopped:?}");
+    }
+
+    /// A streamed import has to see a moved file at once, before the engine
+    /// loads, and with the same typed error as the decoder; a stopped run still
+    /// reports `cancelled` first.
+    #[test]
+    fn a_streamed_import_of_a_missing_file_fails_with_file_not_found_before_the_engine() {
+        let jobs = Arc::new(PlainFileJobs::default());
+        let lease = jobs.begin("run-1".into()).unwrap();
+        let phases = Mutex::new(Vec::new());
+        let progress = |phase: PlainPhase, percent: Option<u8>| {
+            phases.lock().unwrap().push((phase, percent));
+        };
+        let missing = std::path::Path::new("/nonexistent/sagascript/missing-audio.wav");
+
+        let failure = announce_file(&lease.control, missing, &progress)
+            .map(|_| String::new())
+            .map_err(CommandError::from);
+        let failure = jobs.finish(&lease, failure).unwrap_err();
+
+        assert_eq!(failure.code(), "file_not_found");
+        assert!(!failure.retryable());
+        assert!(
+            !failure.message().contains("nonexistent"),
+            "the message names no path: {}",
+            failure.message()
+        );
+        assert_eq!(
+            *phases.lock().unwrap(),
+            vec![(PlainPhase::Decoding, Some(0))],
+            "decoding was announced; nothing else (no engine phase) followed"
+        );
+
+        let lease = jobs.begin("run-2".into()).unwrap();
+        assert!(jobs.cancel("run-2"));
+        let stopped = announce_file(&lease.control, missing, &progress).unwrap_err();
+        assert!(matches!(stopped, DictationError::Cancelled), "{stopped:?}");
+
+        // A file that exists passes; the decoder judges its content later.
+        drop(lease);
+        let lease = jobs.begin("run-3".into()).unwrap();
+        let here = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+        assert!(announce_file(&lease.control, &here, &progress).is_ok());
+    }
+
+    /// The limit of a streamed import is never shorter than the one the same
+    /// file got when it was decoded in full first: `max(audio_secs * 10, 180)`.
+    #[test]
+    fn the_pianissimo_timeout_is_the_batch_formula() {
+        for samples in [
+            0usize,
+            1,
+            15_999,
+            16_000,
+            17 * 16_000,
+            18 * 16_000,
+            18 * 16_000 + 15_999,
+            19 * 16_000,
+            3_600 * 16_000,
+            4 * 3_600 * 16_000,
+        ] {
+            let batch = Duration::from_secs(((samples / 16_000) as u64 * 10).max(180));
+            assert_eq!(pianissimo_timeout(samples), batch, "{samples} samples");
+        }
+        assert_eq!(pianissimo_timeout(0), Duration::from_secs(180));
+        assert_eq!(
+            pianissimo_timeout(3_600 * 16_000),
+            Duration::from_secs(36_000)
+        );
+        // No overflow on a nonsensical length.
+        assert!(pianissimo_timeout(usize::MAX) >= Duration::from_secs(180));
+    }
+
+    fn deadline_after(slot: &Mutex<Option<Instant>>, from: Instant) -> Duration {
+        slot.lock().unwrap().expect("a deadline is set") - from
+    }
+
+    /// While the file decodes no limit runs, whatever the estimates say.
+    #[test]
+    fn the_stream_deadline_is_not_set_while_the_file_decodes() {
+        let slot = Mutex::new(None);
+        let deadline = StreamDeadline::new(&slot);
+        let now = Instant::now();
+        for samples in [0, 10 * 16_000, 3_600 * 16_000, usize::MAX] {
+            deadline.audio_length(AudioLength::Estimate(samples), now);
+        }
+        assert!(slot.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn the_stream_deadline_is_the_batch_limit_from_the_end_of_the_decode() {
+        let decoded = Instant::now();
+        for (seconds, limit) in [(10usize, 180u64), (45, 450), (3_600, 36_000)] {
+            let slot = Mutex::new(None);
+            StreamDeadline::new(&slot).audio_length(AudioLength::Exact(seconds * 16_000), decoded);
+            assert_eq!(
+                deadline_after(&slot, decoded),
+                Duration::from_secs(limit),
+                "{seconds} s"
+            );
+        }
+    }
+
+    /// The review finding: a limit that started with the decode could expire
+    /// before a slow decode reported the length. A decode slower than the
+    /// 180 s floor now leaves the whole limit for after it.
+    #[test]
+    fn a_decode_slower_than_the_floor_does_not_eat_into_the_limit() {
+        let slot = Mutex::new(None);
+        let deadline = StreamDeadline::new(&slot);
+        let started = Instant::now();
+        deadline.audio_length(AudioLength::Estimate(0), started);
+        let decoded = started + Duration::from_secs(400);
+        deadline.audio_length(AudioLength::Exact(45 * 16_000), decoded);
+        assert_eq!(deadline_after(&slot, decoded), Duration::from_secs(450));
+    }
+
+    #[test]
+    fn the_stream_deadline_never_moves_in() {
+        let slot = Mutex::new(None);
+        let deadline = StreamDeadline::new(&slot);
+        let now = Instant::now();
+        deadline.audio_length(AudioLength::Exact(1_800 * 16_000), now);
+        let longest = deadline_after(&slot, now);
+        deadline.audio_length(AudioLength::Exact(60 * 16_000), now);
+        assert_eq!(deadline_after(&slot, now), longest);
+    }
+
+    #[test]
+    fn the_stream_deadline_ignores_a_length_it_cannot_represent() {
+        let slot = Mutex::new(None);
+        let now = Instant::now();
+        StreamDeadline::new(&slot).audio_length(AudioLength::Exact(usize::MAX), now);
+        let end = *slot.lock().unwrap();
+        if let Some(end) = end {
+            assert!(end >= now + Duration::from_secs(180), "never a short limit");
+        }
     }
 
     #[test]
