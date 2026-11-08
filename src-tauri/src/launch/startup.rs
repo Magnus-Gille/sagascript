@@ -7,7 +7,7 @@ use tracing::{error, info, warn};
 use super::mode::{
     initial_window_request, should_install_update_at_launch, GuiLaunchMode, InitialWindowRequest,
 };
-use super::settings::{load_settings_with_permission_gate, migrate_legacy_settings_at_startup};
+use super::settings::{load_app_settings, migrate_legacy_settings_at_startup};
 use super::window::open_settings_window;
 use crate::app_controller::AppController;
 use crate::commands::{lock_controller, SharedController, SharedWhisper};
@@ -105,7 +105,7 @@ pub(crate) fn setup_app(
 /// Build the controller, the Whisper backend and the other shared state, and
 /// register it with Tauri. Runs before anything can reach the controller.
 fn manage_app_state(app: &tauri::App) {
-    let settings = load_settings_with_permission_gate();
+    let settings = load_app_settings();
     let default_profile = settings.default_profile();
     info!(
         "Loaded settings: default_profile={}, language={:?}, model={:?}, hotkey={}",

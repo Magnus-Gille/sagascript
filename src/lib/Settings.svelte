@@ -1666,6 +1666,35 @@
     }
   }
 
+  // The "Open System Settings" link under Auto-paste. With the preference already
+  // on and only the permission missing (for example right after an update,
+  // SAGA-518), it asks for the permission and never turns the preference off. With
+  // the preference off it is the same request as the switch.
+  async function onAutoPastePermissionRequest() {
+    if (!settings) return;
+    if (!settings.auto_paste) {
+      await onAutoPasteToggle();
+      return;
+    }
+
+    accessibilityChecking = true;
+    accessibilityRequested = true;
+    settingsError = "";
+    try {
+      accessibilityGranted = await checkAccessibilityPermission();
+      if (!accessibilityGranted) {
+        accessibilityGranted = await requestAccessibility({ onGranted: refreshHotkeyRegistration });
+      }
+      if (!accessibilityGranted) {
+        settingsError = "Accessibility permission was not granted. Auto-paste waits for approval.";
+      }
+    } catch (e) {
+      settingsError = toErrorMessage(e, "Failed to check Accessibility permission.");
+    } finally {
+      accessibilityChecking = false;
+    }
+  }
+
   // Non-blocking hint when a configured shortcut is bare F14/F15 on macOS.
   let brightnessKeyWarning = $derived.by(() => {
     if (!settings) return null;
@@ -2690,10 +2719,11 @@
         <div class="hotkey-hint">Automatically paste dictated text into the active app when transcription finishes.</div>
         {#if platform === "macos" && !accessibilityGranted && (settings.auto_paste || accessibilityRequested)}
           <div class="hotkey-error">
-            Requires Accessibility permission. Auto-paste remains off until approved. <button
-              class="link-btn"
-              onclick={onAutoPasteToggle}
-              disabled={accessibilityChecking || settingsLocked}>{accessibilityChecking ? "Checking…" : "Open System Settings"}</button
+            Requires Accessibility permission. {settings.auto_paste
+              ? "Auto-paste is on and waits for approval."
+              : "Auto-paste remains off until approved."}
+            <button class="link-btn" onclick={onAutoPastePermissionRequest} disabled={accessibilityChecking || settingsLocked}
+              >{accessibilityChecking ? "Checking…" : "Open System Settings"}</button
             >
           </div>
         {/if}
