@@ -1,5 +1,8 @@
 use std::process::Command;
 
+#[path = "build_identity.rs"]
+mod build_identity;
+
 fn command_output(args: &[&str]) -> Option<String> {
     Command::new("git")
         .args(args)
@@ -17,8 +20,7 @@ fn metadata_value(key: &str, fallback: impl FnOnce() -> String) -> String {
 fn local_git_hash() -> String {
     let hash =
         command_output(&["rev-parse", "--short", "HEAD"]).unwrap_or_else(|| "unknown".to_string());
-    let dirty = command_output(&["status", "--porcelain=v1", "--untracked-files=all"])
-        .is_some_and(|status| !status.is_empty());
+    let dirty = build_identity::local_source_dirty().unwrap_or(true);
     if dirty {
         format!("{hash}-dirty")
     } else {
@@ -26,10 +28,50 @@ fn local_git_hash() -> String {
     }
 }
 
+fn local_source_revision() -> String {
+    command_output(&["rev-parse", "HEAD"])
+        .filter(|revision| revision.len() == 40 && revision.bytes().all(|b| b.is_ascii_hexdigit()))
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn local_source_dirty() -> String {
+    match build_identity::local_source_dirty() {
+        Some(dirty) => dirty.to_string(),
+        None => "unknown".to_string(),
+    }
+}
+
+fn source_revision() -> String {
+    match std::env::var_os("SAGASCRIPT_SOURCE_REVISION_INPUT") {
+        Some(raw) => match raw.to_str() {
+            Some(revision)
+                if revision.len() == 40 && revision.bytes().all(|b| b.is_ascii_hexdigit()) =>
+            {
+                revision.to_string()
+            }
+            _ => "unknown".to_string(),
+        },
+        None => local_source_revision(),
+    }
+}
+
+fn source_dirty() -> String {
+    match std::env::var_os("SAGASCRIPT_SOURCE_DIRTY_INPUT") {
+        Some(raw) => match raw.to_str() {
+            Some("true") => "true".to_string(),
+            Some("false") => "false".to_string(),
+            _ => "unknown".to_string(),
+        },
+        None => local_source_dirty(),
+    }
+}
+
 fn emit_source_rerun_triggers() {
     // Watch source trees that affect the binary's identity without watching
     // the package root, which would include target/ and cause rebuild loops.
     for path in [
+        "build_identity.rs",
+        "../scripts/build-identity-generated-paths.txt",
         "src",
         "crates",
         "../src",
@@ -44,6 +86,8 @@ fn emit_source_rerun_triggers() {
 fn emit_git_rerun_triggers() {
     println!("cargo:rerun-if-env-changed=SAGASCRIPT_GIT_HASH");
     println!("cargo:rerun-if-env-changed=SAGASCRIPT_BUILD_DATE");
+    println!("cargo:rerun-if-env-changed=SAGASCRIPT_SOURCE_REVISION_INPUT");
+    println!("cargo:rerun-if-env-changed=SAGASCRIPT_SOURCE_DIRTY_INPUT");
     println!("cargo:rerun-if-env-changed=SAGASCRIPT_UPDATER_PUBKEY");
     println!("cargo:rerun-if-changed=build-meta.env");
 
@@ -66,6 +110,13 @@ fn emit_git_rerun_triggers() {
 fn main() {
     emit_git_rerun_triggers();
     emit_source_rerun_triggers();
+    // Local identity is observed from the whole worktree, so every tracked file must
+    // invalidate it. CI supplies both values and skips the per-file watch.
+    if std::env::var_os("SAGASCRIPT_GIT_HASH").is_none()
+        || std::env::var_os("SAGASCRIPT_SOURCE_DIRTY_INPUT").is_none()
+    {
+        build_identity::emit_tracked_file_rerun_triggers();
+    }
 
     let is_macos_release = std::env::var("PROFILE").as_deref() == Ok("release")
         && std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos");
@@ -87,6 +138,11 @@ fn main() {
 
     println!("cargo:rustc-env=GIT_HASH={git_hash}");
     println!("cargo:rustc-env=BUILD_DATE={build_date}");
+    println!(
+        "cargo:rustc-env=SAGASCRIPT_SOURCE_REVISION={}",
+        source_revision()
+    );
+    println!("cargo:rustc-env=SAGASCRIPT_SOURCE_DIRTY={}", source_dirty());
 
     tauri_build::build();
 }

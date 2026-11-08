@@ -3,6 +3,7 @@
 //! (headless CLI) and the Tauri app crate (GUI), which layer their own
 //! entry points and integrations on top.
 
+pub mod acceptance;
 pub mod audio;
 pub mod diarization;
 pub mod download;
