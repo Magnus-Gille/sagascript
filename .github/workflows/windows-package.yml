@@ -125,7 +125,8 @@ jobs:
           $installerPath = Join-Path $env:RUNNER_TEMP 'LLVM-20.1.8-woa64.exe'
           $installRoot = 'C:\sagascript-tools\llvm-20.1.8'
 
-          Invoke-WebRequest -Uri $llvmUrl -OutFile $installerPath
+          # Retries cover transient GitHub release CDN errors such as 504; the SHA-256 check below is unchanged.
+          Invoke-WebRequest -Uri $llvmUrl -OutFile $installerPath -MaximumRetryCount 5 -RetryIntervalSec 20
           $actualHash = (Get-FileHash -LiteralPath $installerPath -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($actualHash -ne $expectedHash) {
             throw "LLVM installer SHA256 mismatch: expected $expectedHash, got $actualHash"
@@ -444,7 +445,8 @@ jobs:
           if (-not (Test-Path -LiteralPath $hostExe -PathType Leaf)) { throw "Missing engine host binary: $hostExe" }
 
           $zipPath = Join-Path $env:RUNNER_TEMP $ortZipName
-          Invoke-WebRequest -Uri $ortUrl -OutFile $zipPath
+          # Retries cover transient GitHub release CDN errors such as 504; the SHA-256 check below is unchanged.
+          Invoke-WebRequest -Uri $ortUrl -OutFile $zipPath -MaximumRetryCount 5 -RetryIntervalSec 20
           $actualHash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($actualHash -ne $expectedHash) {
             throw "ONNX Runtime zip SHA256 mismatch: expected $expectedHash, got $actualHash"
