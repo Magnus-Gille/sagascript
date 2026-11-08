@@ -214,6 +214,7 @@ test("initialize emits full SHA and UTC date for a clean fixture", async () => {
     "src-tauri/gen/schemas/acl-manifests.json",
     "src-tauri/gen/schemas/capabilities.json",
     "src-tauri/gen/schemas/desktop-schema.json",
+    "src-tauri/gen/schemas/macOS-schema.json",
     "src-tauri/gen/schemas/windows-schema.json",
   ]);
   assert.equal((await readFile(githubEnv, "utf8")).split("\n").length, 5);

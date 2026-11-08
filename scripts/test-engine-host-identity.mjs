@@ -53,6 +53,7 @@ function fixture() {
   writeFileSync(join(cwd, ".gitignore"), ".fixture-gitconfig\nignored/\n");
   writeFileSync(join(cwd, "src-tauri/tauri.conf.json"), '{\n  "productName": "Sagascript",\n  "version": "9.8.7"\n}\n');
   writeFileSync(join(cwd, "src-tauri/gen/schemas/desktop-schema.json"), "{}\n");
+  writeFileSync(join(cwd, "src-tauri/gen/schemas/macOS-schema.json"), "{}\n");
   writeFileSync(join(cwd, "src-tauri/lib.rs"), "fn main() {}\n");
   git("add", ".");
   git("commit", "-qm", "fixture");
@@ -115,8 +116,14 @@ test("the script and the CI gate agree on what makes a tree dirty", { skip }, ()
     { name: "modified source", change: (cwd) => writeFileSync(join(cwd, "src-tauri/lib.rs"), "fn main() { }\n"), dirty: true },
     { name: "untracked source", change: (cwd) => writeFileSync(join(cwd, "src-tauri/new.rs"), "\n"), dirty: true },
     {
+      // A local macOS build adds the updater plugin's entries to the tracked macOS schema.
+      name: "rewritten macOS schema",
+      change: (cwd) => writeFileSync(join(cwd, "src-tauri/gen/schemas/macOS-schema.json"), '{"x":1}\n'),
+      dirty: false,
+    },
+    {
       name: "schema not in the list",
-      change: (cwd) => writeFileSync(join(cwd, "src-tauri/gen/schemas/macOS-schema.json"), "{}\n"),
+      change: (cwd) => writeFileSync(join(cwd, "src-tauri/gen/schemas/fixture-only-schema.json"), "{}\n"),
       dirty: true,
     },
     { name: "deleted source", change: (cwd) => rmSync(join(cwd, "src-tauri/lib.rs")), dirty: true },
