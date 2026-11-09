@@ -1,16 +1,8 @@
 <script lang="ts">
-  import { drainUpdateWork, UpdatePreparationTimeoutError } from "./update-preparation";
   import FileTranscription from "./FileTranscription.svelte";
   import { createFileJobs, nextQueuedFile, updateFileJob, fileJobName, type FileJob, type FileJobStatus } from "./transcription-queue";
   import { onMount, tick } from "svelte";
   import { rememberTranscription, type RecentTranscription } from "./recent-transcriptions";
-  import {
-    createUpdateRecoveryPayload,
-    readPersistedUpdateRecoveryPayload,
-    serializeUpdateRecoveryPayload,
-    type UpdateRecoveryFile,
-    type UpdateRecoveryMeeting,
-  } from "./update-recovery";
   import {
     getSettings,
     getLastError,
@@ -69,6 +61,7 @@
   import { requestAccessibility } from "./permissions";
   import { loadPlatform } from "./platform";
   import { createModelCatalogController } from "./modelCatalogController";
+  import { UpdateRecoveryController } from "./settings/updateRecovery.svelte";
   import { createSettingsTransactionController, type SaveOutcome } from "./settingsTransactionController";
   import { useDragDropEvent, useTauriEvent } from "./tauri-events.svelte";
   import { dictateButtonAction, retainTestRecordingOwnership, type BackendDictationState } from "./dictation-ui-state";
@@ -224,404 +217,75 @@
   let testResultActionMessage: string = $state("");
   let testResultRecoveryPending: boolean = $state(false);
   let testResultEdited: boolean = $state(false);
-  let updatePreparing: boolean = $state(false);
-  let activePreparationNonce: string | null = null;
-  let liveDictationRevision = 0;
-  let observedNativeDictation: string | null = null;
-  let nativeEditorOrigin: { text: string; lineage: number } | null = null;
-  let fileComponents: Record<string, { prepareUpdateRecovery(): Promise<void> } | undefined> = $state({});
-
-  let fileRecoveryEntries = $state<UpdateRecoveryFile[]>([]);
-  let meetingRecoveryEntries = $state<UpdateRecoveryMeeting[]>([]);
-  let recoveredFileIds = $state<string[]>([]);
-  let recoveredMeetingIds = $state<string[]>([]);
-  let recoveredDictationText: string | null = $state(null);
-  let recoveredDictationActive = $state(false);
-  let recoveredDraftsNotice = $state(false);
-  let recoveryReadError: string = $state("");
-  let recoveryWriteQueue: Promise<void> = Promise.resolve();
-  let recoveryRestore: Promise<void> = Promise.resolve();
-  let recoveryCleanupWarning = false;
-  let dictationEditorLineage = 0;
-  let recoveryPersistenceRevision = 0;
-  let lastPersistedDictation: { text: string; lineage: number; revision: number } | null = null;
-
-  type RecoveryCleanup = {
-    fileJobIds?: readonly string[];
-    meetingJobIds?: readonly string[];
-    dictationTexts?: readonly string[];
-    dictationLineage?: number;
-    dictationText?: string;
-    dictationPersistenceRevision?: number;
-  };
-
-  type DictationDelivery = {
-    text: string;
-    lineage: number;
-    wasEdited: boolean;
-    nativeSourceText: string | null;
-    recoveredText: string | null;
-    persistedText: string | null;
-    persistedRevision: number | null;
-  };
-
-  function clearRecoveryCleanupWarning(): void {
-    if (!recoveryCleanupWarning) return;
-    recoveryCleanupWarning = false;
-    recoveryReadError = "";
-  }
-
-  function recoveryCleanupError(error: unknown): string {
-    const detail = toErrorMessage(error).replace(/[.]$/, "");
-    return `Update recovery draft was retained after delivery. ${detail}. Back up or repair update-recovery.json in Sagascript's app data folder, then restart Sagascript before retrying the update.`;
-  }
-
-  function enqueueRecoveryMutation<T>(mutation: () => Promise<T>): Promise<T> {
-    const operation = recoveryWriteQueue.catch(() => undefined).then(mutation);
-    recoveryWriteQueue = operation.then(
-      () => undefined,
-      () => undefined,
-    );
-    return operation;
-  }
-
-  function enqueueRecoveryCleanup(removals: RecoveryCleanup): Promise<void> {
-    const fileJobIds = new Set(removals.fileJobIds ?? []);
-    const meetingJobIds = new Set(removals.meetingJobIds ?? []);
-    const dictationTexts = new Set(removals.dictationTexts ?? []);
-    return enqueueRecoveryMutation(async () => {
-      const previous = readPersistedUpdateRecoveryPayload(await loadUpdateRecovery());
-      if (!previous) {
-        clearRecoveryCleanupWarning();
-        return;
-      }
-      const dictationMatches = Boolean(
-        previous.dictation &&
-        dictationTexts.has(previous.dictation.text) &&
-        (removals.dictationLineage === undefined ||
-          (lastPersistedDictation?.lineage === removals.dictationLineage &&
-            lastPersistedDictation.text === previous.dictation.text &&
-            (previous.dictation.text === removals.dictationText ||
-              lastPersistedDictation.revision === removals.dictationPersistenceRevision))),
-      );
-      const remaining = {
-        ...previous,
-        dictation: dictationMatches ? null : previous.dictation,
-        files: previous.files.filter((entry) => !fileJobIds.has(entry.job_id)),
-        meetings: previous.meetings.filter((entry) => !meetingJobIds.has(entry.job_id)),
-      };
-      const changed =
-        dictationMatches || remaining.files.length !== previous.files.length || remaining.meetings.length !== previous.meetings.length;
-      if (!changed) {
-        clearRecoveryCleanupWarning();
-        return;
-      }
-      if (!remaining.dictation && remaining.files.length === 0 && remaining.meetings.length === 0) {
-        await clearUpdateRecovery();
-      } else {
-        serializeUpdateRecoveryPayload(remaining);
-        await saveUpdateRecovery(remaining);
-      }
-      if (dictationMatches) lastPersistedDictation = null;
-      clearRecoveryCleanupWarning();
-    });
-  }
-
-  function persistRemainingRecoveredDrafts(removals: RecoveryCleanup): void {
-    void enqueueRecoveryCleanup(removals).catch((error) => {
-      recoveryCleanupWarning = true;
-      recoveryReadError = recoveryCleanupError(error);
-    });
-  }
-
-  function refreshRecoveredDraftsNotice(): void {
-    if (!recoveredDictationActive && recoveredFileIds.length === 0 && recoveredMeetingIds.length === 0) {
-      recoveredDraftsNotice = false;
-    }
-  }
-
-  function updateFileRecovery(entry: UpdateRecoveryFile): void {
-    const existing = fileRecoveryEntries.some((current) => current.job_id === entry.job_id);
-    fileRecoveryEntries = existing
-      ? fileRecoveryEntries.map((current) => (current.job_id === entry.job_id ? entry : current))
-      : [...fileRecoveryEntries, entry];
-  }
-
-  function clearFileRecovery(jobId: string): void {
-    fileRecoveryEntries = fileRecoveryEntries.filter((entry) => entry.job_id !== jobId);
-    if (recoveredFileIds.includes(jobId)) {
-      recoveredFileIds = recoveredFileIds.filter((id) => id !== jobId);
-      refreshRecoveredDraftsNotice();
-      persistRemainingRecoveredDrafts({ fileJobIds: [jobId] });
-    }
-  }
-
-  function onFileRecoveryChange(entry: UpdateRecoveryFile | null, jobId?: string): void {
-    if (entry === null) {
-      if (jobId) clearFileRecovery(jobId);
-      return;
-    }
-    updateFileRecovery(entry);
-  }
-
-  function updateMeetingRecovery(entry: UpdateRecoveryMeeting | null): void {
-    if (entry === null) return;
-    const existing = meetingRecoveryEntries.some((current) => current.job_id === entry.job_id);
-    meetingRecoveryEntries = existing
-      ? meetingRecoveryEntries.map((current) => (current.job_id === entry.job_id ? entry : current))
-      : [...meetingRecoveryEntries, entry];
-  }
-
-  function clearMeetingRecovery(jobId: string): void {
-    meetingRecoveryEntries = meetingRecoveryEntries.filter((entry) => entry.job_id !== jobId);
-    if (recoveredMeetingIds.includes(jobId)) {
-      recoveredMeetingIds = recoveredMeetingIds.filter((id) => id !== jobId);
-      refreshRecoveredDraftsNotice();
-      persistRemainingRecoveredDrafts({ meetingJobIds: [jobId] });
-    }
-  }
-
-  function onMeetingRecoveryChange(entry: UpdateRecoveryMeeting | null, jobId?: string): void {
-    if (entry === null) {
-      if (jobId) clearMeetingRecovery(jobId);
-      return;
-    }
-    updateMeetingRecovery(entry);
-  }
-
-  async function restoreUpdateRecovery(): Promise<void> {
-    const dictationRevision = liveDictationRevision;
-    const existingFileIds = new Set(fileJobs.map((job) => job.id));
-    const existingMeetingIds = new Set(savedReviewIds);
-    try {
-      const persisted = readPersistedUpdateRecoveryPayload(await loadUpdateRecovery());
-      recoveryReadError = "";
-      if (!persisted) return;
-
-      const recoveredDictation = persisted.dictation?.text.trim() ? persisted.dictation : null;
-      if (recoveredDictation && !testResult.trim() && liveDictationRevision === dictationRevision) {
-        dictationEditorLineage++;
-        testResult = recoveredDictation.text;
-        testResultRecoveryPending = true;
-        testResultEdited = false;
-        recoveredDictationText = recoveredDictation.text;
-        recoveredDictationActive = true;
-        nativeEditorOrigin = null;
-        recoveryPersistenceRevision++;
-        lastPersistedDictation = {
-          text: recoveredDictation.text,
-          lineage: dictationEditorLineage,
-          revision: recoveryPersistenceRevision,
-        };
-      }
-
-      const filesToRestore = persisted.files.filter((entry) => !existingFileIds.has(entry.job_id));
-      if (filesToRestore.length) {
-        fileRecoveryEntries = [...fileRecoveryEntries, ...filesToRestore];
-        recoveredFileIds = [...recoveredFileIds, ...filesToRestore.map((entry) => entry.job_id)];
-        fileJobs = [
-          ...fileJobs,
-          ...filesToRestore.map((entry) => ({
-            id: entry.job_id,
-            path: entry.path,
-            diarize: false,
-            prompt: null,
-            profileId: null,
-            status: "completed" as const,
-          })),
-        ];
-      }
-
-      const meetingsToRestore = persisted.meetings.filter((entry) => !existingMeetingIds.has(entry.job_id));
-      if (meetingsToRestore.length) {
-        meetingRecoveryEntries = [...meetingRecoveryEntries, ...meetingsToRestore];
-        recoveredMeetingIds = [...recoveredMeetingIds, ...meetingsToRestore.map((entry) => entry.job_id)];
-        fileJobs = [
-          ...fileJobs,
-          ...meetingsToRestore.map((entry) => ({
-            id: entry.job_id,
-            path: entry.path,
-            diarize: false,
-            prompt: null,
-            profileId: null,
-            status: "completed" as const,
-          })),
-        ];
-        savedReviewIds = [...savedReviewIds, ...meetingsToRestore.map((entry) => entry.job_id)];
-      }
-
-      if (selectedFileId === null) {
-        selectedFileId = filesToRestore[0]?.job_id ?? meetingsToRestore[0]?.job_id ?? null;
-      }
-
-      if (recoveredDictation || filesToRestore.length || meetingsToRestore.length) {
-        recoveredDraftsNotice = true;
-      }
-    } catch (error) {
-      console.warn("Could not restore update recovery drafts", error);
-      recoveryReadError = `Update blocked: unreadable recovery drafts were retained. ${toErrorMessage(error).replace(/[.]$/, "")}. Back up or repair update-recovery.json in Sagascript's app data folder, then restart Sagascript before retrying.`;
-      throw error;
-    }
-  }
-
-  async function discardRecoveredDrafts(): Promise<void> {
-    try {
-      await enqueueRecoveryMutation(async () => {
-        await clearUpdateRecovery();
-      });
-      recoveryCleanupWarning = false;
-      recoveryReadError = "";
-    } catch (error) {
-      settingsError = `Could not discard recovered drafts: ${toErrorMessage(error)}`;
-      return;
-    }
-
-    const recoveredFileIdSet = new Set(recoveredFileIds);
-    const recoveredMeetingIdSet = new Set(recoveredMeetingIds);
-    fileJobs = fileJobs.filter((job) => !recoveredFileIdSet.has(job.id) && !recoveredMeetingIdSet.has(job.id));
-    savedReviewIds = savedReviewIds.filter((id) => !recoveredMeetingIdSet.has(id));
-    fileRecoveryEntries = fileRecoveryEntries.filter((entry) => !recoveredFileIdSet.has(entry.job_id));
-    meetingRecoveryEntries = meetingRecoveryEntries.filter((entry) => !recoveredMeetingIdSet.has(entry.job_id));
-    if (recoveredDictationActive && testResult === recoveredDictationText) {
-      testResult = "";
-      testResultRecoveryPending = false;
-      testResultEdited = false;
-    }
-    recoveredFileIds = [];
-    recoveredMeetingIds = [];
-    recoveredDictationText = null;
-    recoveredDictationActive = false;
-    lastPersistedDictation = null;
-    recoveredDraftsNotice = false;
-    selectedFileId = fileJobs[0]?.id ?? null;
-  }
-
-  function isActivePreparation(nonce: string): boolean {
-    return activePreparationNonce === nonce;
-  }
-
-  async function prepareForUpdate(nonce: string): Promise<void> {
-    try {
-      await recoveryRestore;
-      if (!isActivePreparation(nonce)) return;
-      await tick();
-      if (!isActivePreparation(nonce)) return;
-      await Promise.all(
-        fileJobs.map(async (job) => {
-          const component = fileComponents[job.id];
-          if (!component) throw new Error("A transcription result is still opening. Retry the update.");
-          await component.prepareUpdateRecovery();
-        }),
-      );
-      if (!isActivePreparation(nonce)) return;
-      // The updater holds the native exclusive lease here. Capture the stable
-      // native snapshot before draining any result event that is still in
-      // transit, but defer the conflict decision until after the drain.
-      const stableNativeDictation = await getLastTranscription();
-      if (!isActivePreparation(nonce)) return;
-      const initialNativeResultPending = await getUpdateResultPending("live-dictation");
-      if (!isActivePreparation(nonce)) return;
-      try {
-        await drainUpdateWork({
-          busy: () =>
-            testTranscribing ||
-            Boolean(initialNativeResultPending && stableNativeDictation?.trim() && observedNativeDictation !== stableNativeDictation),
-          failure: () => (isActivePreparation(nonce) ? null : "Update preparation expired."),
-          settle: tick,
-        });
-      } catch (error) {
-        // A completed native result whose event was missed needs the actual
-        // conflict decision below, not advice to wait for already-finished work.
-        // Rendering failures, cancellation and ongoing transcription still fail.
-        const missedNativeResult =
-          error instanceof UpdatePreparationTimeoutError &&
-          !testTranscribing &&
-          initialNativeResultPending &&
-          stableNativeDictation?.trim() &&
-          observedNativeDictation !== stableNativeDictation;
-        if (!missedNativeResult) throw error;
-      }
-      if (!isActivePreparation(nonce)) return;
-      await tick();
-      if (!isActivePreparation(nonce)) return;
-      await enqueueRecoveryMutation(async () => {
-        if (!isActivePreparation(nonce)) return;
-        // Refresh the pending flag and capture the editor only after earlier
-        // recovery mutations finish. The exclusive lease keeps native text stable.
-        const nativeResultPending = await getUpdateResultPending("live-dictation");
-        if (!isActivePreparation(nonce)) return;
-        const payloadLineage = dictationEditorLineage;
-        const nativeEditorOwnsResult = nativeEditorOrigin?.lineage === payloadLineage && nativeEditorOrigin.text === stableNativeDictation;
-        const editedNativeResult = testResultEdited && !recoveredDictationActive && nativeEditorOwnsResult;
-        if (
-          nativeResultPending &&
-          stableNativeDictation?.trim() &&
-          ((!testResult.trim() && !nativeEditorOwnsResult) ||
-            (testResult.trim() && testResult !== stableNativeDictation && !editedNativeResult))
-        ) {
-          throw new Error("A different unsaved dictation is already open. Copy or save both results before retrying the update.");
-        }
-        const payload = createUpdateRecoveryPayload({
-          dictation:
-            testResultRecoveryPending && (nativeResultPending || recoveredDictationActive || testResultEdited) && testResult.trim()
-              ? { text: testResult }
-              : null,
-          files: fileRecoveryEntries,
-          meetings: meetingRecoveryEntries,
-        });
-        // A result event can arrive before recovery is hydrated (or replace an
-        // older recovered draft). Replace persisted bytes only when they are
-        // the session's last successful save in this same editor lineage.
-        const previous = readPersistedUpdateRecoveryPayload(await loadUpdateRecovery());
-        if (!isActivePreparation(nonce)) return;
-        const ownsPersistedDictation = Boolean(
-          previous?.dictation?.text.trim() &&
-          lastPersistedDictation?.text === previous.dictation.text &&
-          lastPersistedDictation.lineage === payloadLineage,
-        );
-        if (previous?.dictation?.text.trim() && previous.dictation.text !== payload.dictation?.text && !ownsPersistedDictation) {
-          throw new Error(
-            "A different unsaved dictation is already in update recovery. Copy or save both results before retrying the update.",
-          );
-        }
-        // Validate the exact serialized size before handing the payload to Rust.
-        serializeUpdateRecoveryPayload(payload);
-        await saveUpdateRecovery(payload);
-        if (payload.dictation) {
-          recoveryPersistenceRevision++;
-          lastPersistedDictation = {
-            text: payload.dictation.text,
-            lineage: payloadLineage,
-            revision: recoveryPersistenceRevision,
-          };
-        } else {
-          lastPersistedDictation = null;
-        }
-        if (!isActivePreparation(nonce)) return;
-        await completeUpdatePreparation(nonce, null);
-      });
-    } catch (error) {
-      if (!isActivePreparation(nonce)) return;
-      const message = toErrorMessage(error);
-      updatePreparing = false;
-      try {
-        await enqueueRecoveryMutation(async () => {
-          if (!isActivePreparation(nonce)) return;
-          await completeUpdatePreparation(nonce, message);
-        });
-      } catch (ackError) {
-        console.warn("Could not acknowledge failed update preparation", ackError);
-      }
-    }
-  }
+  // Update recovery (settings/updateRecovery.svelte.ts) reads and writes the
+  // dictation editor above and the Transcribe tab's file queue below through
+  // these two ports.
+  const recovery = new UpdateRecoveryController({
+    api: {
+      loadUpdateRecovery,
+      saveUpdateRecovery,
+      clearUpdateRecovery,
+      completeUpdatePreparation,
+      getLastTranscription,
+      getUpdateResultPending,
+      acknowledgeUpdateResult,
+    },
+    dictation: {
+      get text() {
+        return testResult;
+      },
+      set text(value) {
+        testResult = value;
+      },
+      get recoveryPending() {
+        return testResultRecoveryPending;
+      },
+      set recoveryPending(value) {
+        testResultRecoveryPending = value;
+      },
+      get edited() {
+        return testResultEdited;
+      },
+      set edited(value) {
+        testResultEdited = value;
+      },
+      get transcribing() {
+        return testTranscribing;
+      },
+    },
+    files: {
+      get jobs() {
+        return fileJobs;
+      },
+      set jobs(value) {
+        fileJobs = value;
+      },
+      get savedReviewIds() {
+        return savedReviewIds;
+      },
+      set savedReviewIds(value) {
+        savedReviewIds = value;
+      },
+      get selectedId() {
+        return selectedFileId;
+      },
+      set selectedId(value) {
+        selectedFileId = value;
+      },
+    },
+    onDiscardFailed: (message) => {
+      settingsError = message;
+    },
+  });
+  const updatePreparing = $derived(recovery.preparing);
 
   async function copyTestResult(): Promise<void> {
     if (!testResult.trim()) return;
     try {
       const text = testResult;
-      const delivery = captureDictationDelivery(text);
+      const delivery = recovery.captureDelivery(text);
       await copyTranscriptionText(text);
-      const nextResultShown = await markTestResultDelivered(delivery);
+      const nextResultShown = await recovery.markDelivered(delivery);
       testResultActionMessage = nextResultShown ? "Copied result. Another unsaved dictation is now shown." : "Copied to clipboard.";
     } catch (error) {
       testResultActionMessage = toErrorMessage(error);
@@ -632,81 +296,15 @@
     if (!testResult.trim()) return;
     try {
       const text = testResult;
-      const delivery = captureDictationDelivery(text);
+      const delivery = recovery.captureDelivery(text);
       const saved = await saveTranscriptionText(text, "dictation.txt", null);
       if (saved) {
-        const nextResultShown = await markTestResultDelivered(delivery);
+        const nextResultShown = await recovery.markDelivered(delivery);
         testResultActionMessage = nextResultShown ? "Saved result. Another unsaved dictation is now shown." : "Saved.";
       }
       if (!saved) testResultActionMessage = "Save cancelled — nothing was written.";
     } catch (error) {
       testResultActionMessage = toErrorMessage(error);
-    }
-  }
-
-  function captureDictationDelivery(text: string): DictationDelivery {
-    const lineage = dictationEditorLineage;
-    return {
-      text,
-      lineage,
-      wasEdited: testResultEdited,
-      nativeSourceText: nativeEditorOrigin?.lineage === lineage ? nativeEditorOrigin.text : null,
-      recoveredText: recoveredDictationText,
-      persistedText: lastPersistedDictation?.lineage === lineage ? lastPersistedDictation.text : null,
-      persistedRevision: lastPersistedDictation?.lineage === lineage ? lastPersistedDictation.revision : null,
-    };
-  }
-
-  async function markTestResultDelivered(delivery: DictationDelivery): Promise<boolean> {
-    const { text, lineage, wasEdited, nativeSourceText, recoveredText, persistedText, persistedRevision } = delivery;
-    const nativePending = await getUpdateResultPending("live-dictation");
-    const nativeText = nativePending ? await getLastTranscription() : null;
-    const matchesNative =
-      lineage === dictationEditorLineage &&
-      nativePending &&
-      (nativeText === text || (wasEdited && nativeSourceText !== null && nativeSourceText === nativeText));
-    const deliveredNative = matchesNative && nativeText !== null ? await acknowledgeUpdateResult(nativeText) : false;
-    const cleanupTexts = [persistedText, recoveredText, text].filter((value): value is string => value !== null);
-    await clearDeliveredRecoveryDraft(cleanupTexts, lineage, text, persistedRevision);
-    if (testResult !== text || dictationEditorLineage !== lineage) return false; // a newer result arrived during Copy/Save
-    testResultRecoveryPending = false;
-    testResultEdited = false;
-    recoveredDictationActive = false;
-    refreshRecoveredDraftsNotice();
-    const currentNative =
-      nativePending && !deliveredNative && (await getUpdateResultPending("live-dictation")) ? await getLastTranscription() : null;
-    if (currentNative?.trim()) {
-      // The copied recovered draft was not the latest native dictation. Show
-      // that still-unsaved result next, keeping its update guard intact.
-      dictationEditorLineage++;
-      testResult = currentNative;
-      testResultRecoveryPending = true;
-      nativeEditorOrigin = { text: currentNative, lineage: dictationEditorLineage };
-      observedNativeDictation = currentNative;
-      return true;
-    }
-    return false;
-  }
-
-  async function clearDeliveredRecoveryDraft(
-    texts: readonly string[],
-    lineage: number,
-    deliveredText: string,
-    persistedRevision: number | null,
-  ): Promise<void> {
-    try {
-      await enqueueRecoveryCleanup({
-        dictationTexts: texts,
-        dictationLineage: lineage,
-        dictationText: deliveredText,
-        dictationPersistenceRevision: persistedRevision ?? undefined,
-      });
-    } catch (error) {
-      // Delivery already succeeded. Preserve the unreadable snapshot and
-      // surface a concrete warning without turning Copy/Save into a failure.
-      console.warn("Could not clear delivered update recovery draft", error);
-      recoveryCleanupWarning = true;
-      recoveryReadError = recoveryCleanupError(error);
     }
   }
 
@@ -718,14 +316,7 @@
   });
   const resultEvents = useTauriEvent("transcription-result", (text) => {
     dictationEventRevision++;
-    liveDictationRevision++;
-    dictationEditorLineage++;
-    testResultRecoveryPending = true;
-    testResultEdited = false;
-    recoveredDictationActive = false;
-    observedNativeDictation = text;
-    nativeEditorOrigin = { text, lineage: dictationEditorLineage };
-    testResult = text;
+    recovery.showNativeResult(text);
     clearTestError();
   });
 
@@ -736,25 +327,13 @@
     Promise.all([errorEvents.ready, resultEvents.ready, stateEvents.ready])
       .then(async () => {
         const initialRevision = dictationEventRevision;
-        await recoveryRestore.catch(() => undefined);
+        await recovery.restored.catch(() => undefined);
         const [error, text] = await Promise.all([getLastError(), getLastTranscription()]);
         if (!disposed && dictationEventRevision === initialRevision) {
-          // Native delivery has settled even if a different recovered draft is
-          // already visible in the editor. Otherwise updater preparation waits
-          // forever for an event that preceded listener registration.
-          observedNativeDictation = text;
           // The last error is plain text: it has no code to decide a recovery by.
           testError = error ?? "";
           testRecovery = null;
-          if (text && !testResult.trim()) {
-            observedNativeDictation = text;
-            liveDictationRevision++;
-            dictationEditorLineage++;
-            nativeEditorOrigin = { text, lineage: dictationEditorLineage };
-            testResultRecoveryPending = true;
-            recoveredDictationActive = false;
-            testResult = text;
-          }
+          recovery.nativeResultSettled(text);
         }
       })
       .catch((error) => {
@@ -1220,16 +799,9 @@
   // the fetch sequence must never prevent them from wiring up (e.g. a
   // stuck-at-0% download).
   useTauriEvent("update-preparing", (nonce) => {
-    if (nonce) {
-      activePreparationNonce = nonce;
-      updatePreparing = true;
-      void prepareForUpdate(nonce);
-    }
+    if (nonce) recovery.beginPreparation(nonce);
   });
-  useTauriEvent("update-aborted", () => {
-    activePreparationNonce = null;
-    updatePreparing = false;
-  });
+  useTauriEvent("update-aborted", () => recovery.abortPreparation());
 
   useTauriEvent("model-ready", async () => {
     // The event can arrive before the download command settles. Its caller
@@ -1255,7 +827,7 @@
       // A new dictation supersedes the restored result and error, and
       // outdates the restore that waits for the listeners above.
       dictationEventRevision++;
-      liveDictationRevision++;
+      recovery.dictationStarted();
       clearTestError();
     }
 
@@ -1295,8 +867,7 @@
   });
 
   onMount(() => {
-    recoveryRestore = restoreUpdateRecovery();
-    void recoveryRestore.catch(() => undefined);
+    recovery.restore();
 
     // Fetch initial data. A rejection here surfaces as a visible inline
     // error instead of leaving a half-initialized window.
@@ -1343,7 +914,7 @@
       }
     })();
     return () => {
-      activePreparationNonce = null;
+      recovery.dispose();
       fileModelCatalogController.dispose();
       profileModelCatalogController.dispose();
     };
@@ -2148,10 +1719,7 @@
       clearTestError();
       try {
         const text = await stopAndTranscribe();
-        observedNativeDictation = text;
-        nativeEditorOrigin = { text, lineage: dictationEditorLineage };
-        testResultRecoveryPending = true;
-        testResult = testResult ? testResult + " " + text : text;
+        recovery.appendTestRecording(text);
       } catch (e) {
         showTestError(e, "Transcription failed");
       } finally {
@@ -2448,8 +2016,8 @@
       {#if initError}
         <div class="transcribe-error">{initError}</div>
       {/if}
-      {#if recoveryReadError}
-        <div class="transcribe-error" role="alert">{recoveryReadError}</div>
+      {#if recovery.readError}
+        <div class="transcribe-error" role="alert">{recovery.readError}</div>
       {/if}
       {#if settingsError}
         <div class="transcribe-error" role={pendingGlossaryNavigation ? undefined : "alert"}>{settingsError}</div>
@@ -2476,11 +2044,11 @@
           >
         </section>
       {/if}
-      {#if recoveredDraftsNotice}
+      {#if recovery.draftsNotice}
         <section class="recovery-notice" role="status" aria-label="Recovered drafts">
           <strong>Recovered drafts</strong>
           <span>Unsaved dictation and transcription results were restored after the update.</span>
-          <button class="secondary" type="button" disabled={updatePreparing} onclick={() => void discardRecoveredDrafts()}
+          <button class="secondary" type="button" disabled={updatePreparing} onclick={() => void recovery.discardDrafts()}
             >Discard recovered drafts</button
           >
         </section>
@@ -2953,7 +2521,7 @@
           >
             <FileTranscription
               {job}
-              bind:this={fileComponents[job.id]}
+              bind:this={() => recovery.resultPanel(job.id), (panel) => recovery.setResultPanel(job.id, panel)}
               otherBusy={updatePreparing ||
                 fileJobs.some((other) => other.id !== job.id && other.status === "running") ||
                 Object.entries(fileBusy).some(([id, busy]) => id !== job.id && busy)}
@@ -2967,10 +2535,10 @@
               downloadBusy={downloads.busy || engineModelDownloading}
               {updatePreparing}
               onAttentionChange={updateFileAttention}
-              initialRecoveryFile={fileRecoveryEntries.find((entry) => entry.job_id === job.id) ?? null}
-              initialRecoveryMeeting={meetingRecoveryEntries.find((entry) => entry.job_id === job.id) ?? null}
-              onFileRecoveryChange={(entry) => onFileRecoveryChange(entry, job.id)}
-              onMeetingRecoveryChange={(entry) => onMeetingRecoveryChange(entry, job.id)}
+              initialRecoveryFile={recovery.fileEntries.find((entry) => entry.job_id === job.id) ?? null}
+              initialRecoveryMeeting={recovery.meetingEntries.find((entry) => entry.job_id === job.id) ?? null}
+              onFileRecoveryChange={(entry) => recovery.onFileRecoveryChange(entry, job.id)}
+              onMeetingRecoveryChange={(entry) => recovery.onMeetingRecoveryChange(entry, job.id)}
               active={activeTab === "transcribe" && selectedFileId === job.id}
             />
           </div>
