@@ -41,21 +41,15 @@ jobs:
           node-version: 22
           cache: npm
 
-      # Same rust-cache scheme as CI (#178): per-crate fingerprints shared
-      # across branches instead of a `Cargo.lock`-keyed multi-GB target dump.
-      # `build-macos` below uses the same shared key so the release Tauri
-      # build reuses dependencies this gate job just compiled.
-      # whisper.cpp targets Apple silicon's apple-m1 baseline, not the runner's CPU; before the
-      # Rust cache, whose key includes CMAKE_* variables (scripts/cmake/macos-arm64-portable.cmake).
+      # whisper.cpp targets Apple silicon's apple-m1 baseline, not the runner's CPU; before anything
+      # compiles (scripts/cmake/macos-arm64-portable.cmake).
       - name: Use the portable whisper.cpp CPU baseline
         run: bash scripts/ci/use-portable-whisper-macos.sh
 
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2, pinned (#180 review: release handles signing credentials)
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-          workspaces: src-tauri
-          shared-key: sagascript-release
+      # No Rust cache (SAGA-546). The `sagascript-release` entry (~1.2 GB) this job saved for
+      # build-macos never served the next release (the version bump changes its key, and it was evicted
+      # first), and saved after main's CI entries on the release push it made GitHub evict those. In the
+      # prebuild, this job and build-macos together still finish before the Windows arm64 package build.
 
       # The inference gates re-download `nb-whisper-tiny`, `tiny` and the
       # diarization models every run (#178). Dedicated release primary key:
@@ -129,11 +123,8 @@ jobs:
         working-directory: src-tauri
         run: cargo clippy --workspace --all-targets -- -D warnings
 
-      # Same explicit triple as `build-macos` below (#178): the shared
-      # rust-cache key covers one target dir, so building the gate binary
-      # here lets the release Tauri build reuse these compiled dependencies
-      # instead of compiling them cold. macos-15 runners are aarch64, so no
-      # extra rustup target is needed.
+      # Same explicit triple as the release build (#178), so the gate tests the binary layout that
+      # ships. macos-15 runners are aarch64, so no extra rustup target is needed.
       - name: Build release CLI for inference smoke tests
         working-directory: src-tauri
         run: cargo build --release --target aarch64-apple-darwin -p sagascript-cli

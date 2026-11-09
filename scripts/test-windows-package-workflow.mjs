@@ -57,29 +57,9 @@ test("Windows candidate workflow stays non-publishing and explicitly unsigned", 
     workflow,
     /concurrency:\s*\n(?:\s*#[^\n]*\n)*\s*group:\s+\$\{\{ github\.workflow \}\}-\$\{\{ github\.event\.pull_request\.number \|\| github\.run_id \}\}[^\n]*\n\s*cancel-in-progress:\s+true/,
   );
-  assert.match(workflow, /name: Identify Windows runner image/);
-  assert.match(workflow, /\$env:ImageOS/);
-  assert.match(workflow, /\$env:ImageVersion/);
-  assert.match(workflow, /IsNullOrWhiteSpace\(\$imageOs\)/);
-  assert.match(workflow, /IsNullOrWhiteSpace\(\$imageVersion\)/);
-  assert.match(workflow, /GITHUB_OUTPUT/);
-  const imageStart = workflow.indexOf("name: Identify Windows runner image");
-  const cacheStart = workflow.indexOf("name: Cache Rust dependencies");
-  const nodeStart = workflow.indexOf("name: Install Node.js");
-  assert.ok(imageStart >= 0 && cacheStart > imageStart && nodeStart > cacheStart);
-  const rustCache = workflow.slice(cacheStart, nodeStart);
-  assert.match(rustCache, /uses: Swatinem\/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6/);
-  assert.match(rustCache, /workspaces:\s*\|\s*\n\s+src-tauri\s*\n\s+src-tauri\/engine-host\/ort/);
-  assert.doesNotMatch(
-    rustCache,
-    /cache-targets:\s*\$\{\{ matrix\.architecture != 'arm64' \}\}/,
-    "arm64 targets are cacheable now that LLVM has a fixed path",
-  );
-  assert.match(
-    rustCache,
-    /shared-key:\s+windows-package-\$\{\{ matrix\.architecture \}\}-\$\{\{ steps\.windows-image\.outputs\.image_os \}\}-\$\{\{ steps\.windows-image\.outputs\.image_version \}\}-\$\{\{ hashFiles\('\.github\/workflows\/windows-package\.yml', 'scripts\/cmake\/windows-x64-portable\.cmake', 'scripts\/cmake\/windows-arm64-native\.cmake', 'scripts\/verify-windows-x64-cpu-policy\.ps1'\) \}\}/,
-  );
-  assert.doesNotMatch(rustCache, /actions\/cache/, "native cache must use the target-aware Rust cache namespace");
+  // No Rust cache (SAGA-546): its ~1.6 GB entries per architecture never served a later run and evicted
+  // main's CI caches; scripts/test-pipeline-cache.mjs holds the repository's cache budget.
+  assert.doesNotMatch(workflow, /Swatinem\/rust-cache@|name: Identify Windows runner image|steps\.windows-image\./);
   assert.match(workflow, /accept-windows-candidate\.ps1/);
   assert.match(workflow, /norwegian-short-3s\.mp3/);
   assert.match(workflow, /Sagascript-Windows-\$architecture-Portable\.exe/);
@@ -99,7 +79,7 @@ test("Windows candidate workflow stays non-publishing and explicitly unsigned", 
   assert.doesNotMatch(workflow, /action-gh-release|gh release|contents: write/);
 });
 
-test("Windows ARM64 disables unsupported scalable vectors before restoring native cache", () => {
+test("Windows ARM64 disables unsupported scalable vectors before the native build", () => {
   const start = workflow.indexOf("name: Configure native ARM64 C and C++ toolchain");
   const end = workflow.indexOf("name: Configure portable x64 inference baseline", start);
   assert.ok(start >= 0 && end > start);
@@ -107,14 +87,14 @@ test("Windows ARM64 disables unsupported scalable vectors before restoring nativ
   assert.match(arm, /if: matrix\.architecture == 'arm64'/);
   assert.match(arm, /scripts\/cmake\/windows-arm64-native\.cmake/);
   assert.match(arm, /CMAKE_PROJECT_INCLUDE=\$policy/);
-  assert.ok(end < workflow.indexOf("name: Cache Rust dependencies"));
+  assert.ok(end < workflow.indexOf("name: Install Node.js"));
 });
 
 test("Windows ARM64 pins and validates the LLVM toolchain before native configuration", () => {
   const pinStart = workflow.indexOf("name: Install pinned LLVM for ARM64 bindgen");
   const nativeStart = workflow.indexOf("name: Configure native ARM64 C and C++ toolchain");
-  const cacheStart = workflow.indexOf("name: Cache Rust dependencies");
-  assert.ok(pinStart >= 0 && nativeStart > pinStart && cacheStart > nativeStart);
+  const nodeStart = workflow.indexOf("name: Install Node.js");
+  assert.ok(pinStart >= 0 && nativeStart > pinStart && nodeStart > nativeStart);
 
   const pin = workflow.slice(pinStart, nativeStart);
   assert.match(pin, /if: matrix\.architecture == 'arm64'/);
@@ -150,11 +130,11 @@ test("Windows ARM64 pins and validates the LLVM toolchain before native configur
   assert.doesNotMatch(pin, /WHISPER_DONT_GENERATE_BINDINGS|disable ABI asserts/);
 });
 
-test("Windows x64 caches and artifacts use an explicit verified CPU baseline", () => {
+test("Windows x64 builds and artifacts use an explicit verified CPU baseline", () => {
   const policyStart = workflow.indexOf("name: Configure portable x64 inference baseline");
-  const cacheStart = workflow.indexOf("name: Cache Rust dependencies");
-  assert.ok(policyStart >= 0 && policyStart < cacheStart);
-  const policy = workflow.slice(policyStart, cacheStart);
+  const nodeStart = workflow.indexOf("name: Install Node.js");
+  assert.ok(policyStart >= 0 && policyStart < nodeStart);
+  const policy = workflow.slice(policyStart, nodeStart);
   assert.match(policy, /if: matrix\.architecture == 'x64'/);
   assert.match(policy, /CMAKE_PROJECT_INCLUDE=\$policy/);
   assert.match(policy, /SAGASCRIPT_WINDOWS_X64_BASELINE=avx2/);

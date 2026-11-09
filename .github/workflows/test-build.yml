@@ -50,17 +50,14 @@ jobs:
           node-version: 22
           cache: npm
 
-      # whisper.cpp targets Apple silicon's apple-m1 baseline, not the runner's CPU; before the
-      # Rust cache, whose key includes CMAKE_* variables (scripts/cmake/macos-arm64-portable.cmake).
+      # whisper.cpp targets Apple silicon's apple-m1 baseline, not the runner's CPU; before anything
+      # compiles (scripts/cmake/macos-arm64-portable.cmake).
       - name: Use the portable whisper.cpp CPU baseline
         run: bash scripts/ci/use-portable-whisper-macos.sh
 
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-          workspaces: src-tauri
-          shared-key: sagascript-test-macos-arm64
+      # No Rust cache (SAGA-546). Only a dispatch on main saved one (~1.2 GB; the last was 2026-10-02),
+      # so branch builds, the usual case, found none to restore, and a main dispatch would make GitHub
+      # evict the CI entries every pull request compiles from.
 
       - name: Install npm dependencies
         run: npm ci

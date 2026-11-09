@@ -16,8 +16,14 @@ const appliesBaseline = (step) => step.run === SCRIPT;
 const isRustCache = (step) => step.uses?.startsWith("Swatinem/rust-cache@") ?? false;
 const isSetup = (step) => step.uses === "./.github/actions/setup";
 
-// Jobs that compile the workspace without a Rust cache step of their own.
-const UNCACHED_COMPILERS = { "code-health.yml": { collect: "Collect static measurements" } };
+// Jobs that compile the workspace without a Rust cache step of their own, by the first step that compiles
+// Rust. The release, signed test and package builds keep no Rust cache (SAGA-546, test-pipeline-cache.mjs).
+const UNCACHED_COMPILERS = {
+  "code-health.yml": { collect: "Collect static measurements" },
+  "release-build-macos.yml": { "build-macos": "Build, sign, notarize, and staple Apple Silicon app" },
+  "release-quality-gate.yml": { "quality-gate": "Test Rust workspace" },
+  "test-build.yml": { "build-macos-test": "Build, sign, notarize, and staple Apple Silicon app" },
+};
 
 test("the setup action applies the baseline on macOS before its Rust cache", () => {
   const { steps } = loadAction("setup");

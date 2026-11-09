@@ -648,6 +648,13 @@ YAML (`scripts/lib/ci-workflow.mjs`), not as text.
 **Planned:** [#361](https://github.com/Magnus-Gille/sagascript/issues/361) phase B
 replaces the remaining source-text tests in the `ui` group with component tests.
 
+The repository's Actions cache holds 10 GB, and GitHub evicts the least recently used entries first, so
+a workflow that saves after main's CI entries on the same push can push them out (SAGA-546). Only main
+saves, and only the six Rust lanes of `ci.yml` (through the setup action) keep a Rust cache: about 6.0 GB
+of the roughly 8.3 GB expected. The release, Windows package and test builds compile cold. Every step
+that saves a cache has a measured size in `scripts/test-pipeline-cache.mjs`, whose total must stay under
+85% of the limit.
+
 ## 6. Known drift and planned changes
 
 - Event and payload exceptions are named in the catalogue rather than removed
