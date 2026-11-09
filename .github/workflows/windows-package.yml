@@ -21,7 +21,6 @@ concurrency:
 
 # Keep source/line backtraces for CI failures without full variable/type debug
 # information in every dependency and PDB. Release profiles are unchanged.
-# rust-cache includes CARGO_* environment variables in its compatibility key.
 env:
   CARGO_PROFILE_DEV_DEBUG: line-tables-only
   CARGO_PROFILE_TEST_DEBUG: line-tables-only
@@ -467,19 +466,6 @@ jobs:
             Write-Host "::warning::Engine host latency probe failed: $_"
           }
           $global:LASTEXITCODE = 0
-
-      - name: Remove cached installer bundles
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $PSNativeCommandUseErrorActionPreference = $true
-          $bundleRoot = "src-tauri\target\${{ matrix.rust_target }}\release\bundle"
-          foreach ($format in @("nsis", "msi")) {
-            $bundleDirectory = Join-Path $bundleRoot $format
-            if (Test-Path -LiteralPath $bundleDirectory) {
-              Remove-Item -LiteralPath $bundleDirectory -Recurse -Force
-            }
-          }
 
       - name: Verify source before installer build
         run: node scripts/ci-build-identity.mjs --verify

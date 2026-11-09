@@ -648,12 +648,14 @@ YAML (`scripts/lib/ci-workflow.mjs`), not as text.
 **Planned:** [#361](https://github.com/Magnus-Gille/sagascript/issues/361) phase B
 replaces the remaining source-text tests in the `ui` group with component tests.
 
-The repository's Actions cache holds 10 GB, and GitHub evicts the least recently used entries first, so
-a workflow that saves after main's CI entries on the same push can push them out (SAGA-546). Only main
-saves, and only the six Rust lanes of `ci.yml` (through the setup action) keep a Rust cache: about 6.0 GB
-of the roughly 8.3 GB expected. The release, Windows package and test builds compile cold. Every step
-that saves a cache has a measured size in `scripts/test-pipeline-cache.mjs`, whose total must stay under
-85% of the limit.
+The repository's Actions cache holds 10 GB, and GitHub evicts the least recently used entries first
+(SAGA-546). Every cache step saves only on main, except setup-node's npm cache, which saves on any ref
+whose lockfile main has no entry for. Only the Rust lanes that use the setup action keep a Rust cache;
+the release, Windows package and test builds compile cold. The setup action restores the native lanes'
+models, and those lanes save them last, on main. Every cache that saves has a measured size and matrix
+row count in `scripts/test-pipeline-cache.mjs`, about 8.2 GB in all, which must stay under 90% of the
+limit. The CI entries are read on every run and survive; the LLVM, Windows package model and release
+model caches are read only by release and package runs, so they are best-effort and evicted first.
 
 ## 6. Known drift and planned changes
 
