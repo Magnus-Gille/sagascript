@@ -1,0 +1,4 @@
+s40 overlap 4 errors 132 wer 8.32 tx 2.98
+s40 overlap 12 errors 106 wer 6.68 tx 3.74
+s30 overlap 4 errors 104 wer 6.55 tx 3.03
+s30 overlap 10 errors 97 wer 6.11 tx 3.8
