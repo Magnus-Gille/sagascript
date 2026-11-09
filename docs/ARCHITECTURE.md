@@ -633,8 +633,9 @@ and over the lean CLI (`--no-default-features`). Besides the cargo gates test-li
 counts (`scripts/clippy-policy.mjs`, which must not rise) and the offline diarization evaluation;
 msrv-linux runs `cargo check --workspace --locked`, the lean CLI and the ORT host on the `rust-version`
 toolchain (1.88), and check-linux requires it; frontend-linux runs `npm audit --audit-level=high`, the
-frontend suites (Prettier, ESLint, Vitest, Node), Svelte types and the browser tests, with no Rust or
-Python, and check-linux requires it too (SAGA-546 moved these out of test-macos, the critical path);
+frontend suites (Prettier, ESLint, Vitest, Node), Svelte types and the browser tests, without a Rust
+toolchain or a Python setup (the few Node tests that call `python3` use the runner's), and check-linux
+requires it too (SAGA-546 moved these out of test-macos, the critical path);
 test-macos runs the Swift tests and the engine-host conformance subset; test-windows runs the frontend
 suites except ESLint, Svelte types and the browser tests, and the Windows build identity gates. test-windows owns the Windows tests of every pull request:
 `windows-package.yml` (on PRs touching `src/`, `src-tauri/`, `scripts/`, package files,

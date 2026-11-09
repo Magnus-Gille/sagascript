@@ -169,7 +169,8 @@ test("the setup action is the only toolchain preamble: every lane uses it with d
   const msrv = setupStep(workflow.job("msrv-linux"));
   assert.equal(actionInput(action, msrv, "rust"), "msrv");
   assert.equal(actionInput(action, msrv, "python"), "false");
-  // The frontend lane compiles nothing and runs no Python (SAGA-546); it still installs Node and runs npm ci.
+  // The frontend lane compiles nothing and sets up no Python (SAGA-546; Node tests that call python3 use the
+  // runner's preinstalled one); it still installs Node and runs npm ci.
   const frontend = setupStep(workflow.job("frontend-linux"));
   assert.equal(actionInput(action, frontend, "rust"), "false");
   assert.equal(actionInput(action, frontend, "python"), "false");

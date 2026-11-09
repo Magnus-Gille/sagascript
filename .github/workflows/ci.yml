@@ -239,9 +239,10 @@ jobs:
         run: node scripts/ci/cargo-gates.mjs --profile msrv
 
   # The frontend suites and the browser tests (SAGA-546), on a Linux runner of their own and parallel
-  # to the native lanes, so they no longer lengthen test-macos, the critical path. No Rust and no
-  # Python: none of these commands compiles or needs `dist/` (the browser tests serve src/ through
-  # Vite). test-windows still runs the Node suite, Vitest and Prettier on a Windows checkout.
+  # to the native lanes, so they no longer lengthen test-macos, the critical path. No Rust toolchain
+  # and no Python setup: none of these commands compiles or needs `dist/` (the browser tests serve
+  # src/ through Vite), and the few Node tests that call python3 use the runner's preinstalled one.
+  # test-windows still runs the Node suite, Vitest and Prettier on a Windows checkout.
   frontend-linux:
     needs: scope
     if: ${{ needs.scope.result == 'success' && needs.scope.outputs.docs_only != 'true' }}
