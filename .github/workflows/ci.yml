@@ -3,7 +3,9 @@ name: CI
 # Shared parts live once, outside this file (#358): .github/actions/setup (toolchain preamble),
 # scripts/ci/cargo-gates.mjs (THE list of cargo gates; per-OS exclusions are documented there),
 # scripts/ci/smoke-cli.mjs and scripts/ci/assert-lanes.mjs (the check-* aggregators). Branch
-# protection requires check-macos and check-windows by name: keep both, `needs:` every lane of their OS.
+# protection requires check-macos, check-linux and check-windows by name: keep all three, `needs:`
+# every lane of their OS. check-linux is required because frontend-linux is the only lane that runs
+# ESLint, svelte-check, npm audit and the browser tests (SAGA-546, ADR 0009).
 # assert-lanes.mjs comes from the PR checkout, at the trust level of this file itself (contents: read, no secrets).
 #
 # Windows tests have one owner on a pull request: test-windows (x64), the required lane.
@@ -95,27 +97,8 @@ jobs:
         run: |
           python -m unittest discover -s scripts/dictation_eval -p 'test_*.py'
           python -m unittest discover -s scripts/diarization_sv -p 'test_reference_dataset.py'
-      - name: Frontend checks (npm audit, format, lint, unit tests, Node tests, types)
-        run: |
-          npm audit --audit-level=high
-          npm run format:check
-          npm run lint
-          npm run test:unit
-          npm run test:frontend
-          npx svelte-check --tsconfig ./tsconfig.json
-      - name: Test transcription result tabs in browser
-        env:
-          QA_OUTPUT_DIR: ${{ runner.temp }}/transcription-browser
-        run: |
-          npx playwright install chromium
-          npm run test:browser
-      - name: Upload browser regression diagnostics
-        if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: transcription-browser-diagnostics
-          path: ${{ runner.temp }}/transcription-browser
-          if-no-files-found: ignore
+      # The frontend suites and the browser tests run in frontend-linux (SAGA-546): here they were
+      # about 3 minutes of the critical path, ahead of the macOS-only Rust and Swift work.
       - name: Build frontend
         run: npm run build
       - name: Cargo gates
@@ -255,8 +238,47 @@ jobs:
       - name: Cargo gates (MSRV profile)
         run: node scripts/ci/cargo-gates.mjs --profile msrv
 
+  # The frontend suites and the browser tests (SAGA-546), on a Linux runner of their own and parallel
+  # to the native lanes, so they no longer lengthen test-macos, the critical path. No Rust and no
+  # Python: none of these commands compiles or needs `dist/` (the browser tests serve src/ through
+  # Vite). test-windows still runs the Node suite, Vitest and Prettier on a Windows checkout.
+  frontend-linux:
+    needs: scope
+    if: ${{ needs.scope.result == 'success' && needs.scope.outputs.docs_only != 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - name: Set up toolchain
+        uses: ./.github/actions/setup
+        with:
+          python: "false"
+          rust: "false"
+          cache-key: sagascript-frontend
+      - name: Frontend checks (npm audit, format, lint, unit tests, Node tests, types)
+        run: |
+          npm audit --audit-level=high
+          npm run format:check
+          npm run lint
+          npm run test:unit
+          npm run test:frontend
+          npx svelte-check --tsconfig ./tsconfig.json
+      - name: Test transcription result tabs in browser
+        env:
+          QA_OUTPUT_DIR: ${{ runner.temp }}/transcription-browser
+        run: |
+          npx playwright install chromium
+          npm run test:browser
+      - name: Upload browser regression diagnostics
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: transcription-browser-diagnostics
+          path: ${{ runner.temp }}/transcription-browser
+          if-no-files-found: ignore
+
   check-linux:
-    needs: [scope, test-linux, msrv-linux]
+    needs: [scope, test-linux, msrv-linux, frontend-linux]
     if: ${{ always() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20

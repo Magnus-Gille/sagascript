@@ -126,6 +126,7 @@
       "check-macos",
       "test-linux",
       "msrv-linux",
+      "frontend-linux",
       "check-linux",
       "test-windows",
       "build-windows",

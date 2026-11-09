@@ -9,7 +9,7 @@ export default {
   printWidth: 140,
   // Windows checkouts get CRLF from core.autocrlf (the default on GitHub's
   // runners) and git converts it back on commit, so accept the checkout's
-  // line endings there; everywhere else (and so in test-macos) files are LF.
+  // line endings there; everywhere else (and so in frontend-linux) files are LF.
   endOfLine: process.platform === "win32" ? "auto" : "lf",
   plugins: ["prettier-plugin-svelte"],
   overrides: [{ files: "*.svelte", options: { parser: "svelte" } }],

@@ -16,8 +16,8 @@ Rust, Svelte 5, and local Whisper inference.
   identity in the tray menu, prominently in Settings, and in CLI `--version` output.
   Use generated build metadata rather than manually maintained display strings.
 - Make changes only on a task branch in a separate worktree; never edit the primary checkout.
-- A pull request merges once `check-macos` and `check-windows` pass, without being up to date
-  with `main`; whoever merges watches `main`'s push CI and fixes or reverts a red `main` before
+- A pull request merges once `check-macos`, `check-linux` and `check-windows` pass, without
+  being up to date with `main`; whoever merges watches `main`'s push CI and fixes or reverts a red `main` before
   the next merge ([ADR 0009](docs/adr/0009-merge-without-up-to-date.md)).
 - Never read, print, modify, or commit `.env`, `.env.*`, or `secrets/**` without explicit
   user authorization. Never hardcode secrets.

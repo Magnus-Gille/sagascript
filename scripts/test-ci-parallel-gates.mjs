@@ -25,11 +25,11 @@ const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 const workflow = loadWorkflow();
 const ASSERT_LANES = fileURLToPath(new URL("./ci/assert-lanes.mjs", import.meta.url));
 const SCOPE_CONDITION = "${{ needs.scope.result == 'success' && needs.scope.outputs.docs_only != 'true' }}";
-const LANES = ["test-macos", "build-macos", "test-linux", "msrv-linux", "test-windows", "build-windows"];
+const LANES = ["test-macos", "build-macos", "test-linux", "msrv-linux", "frontend-linux", "test-windows", "build-windows"];
 const CHECKS = { "check-macos": "macos", "check-linux": "linux", "check-windows": "windows" };
 const setupStep = (job) => job.steps.find((step) => step.uses === "./.github/actions/setup");
 
-test("the job set is the scope job, the six lanes and the three aggregators", () => {
+test("the job set is the scope job, the seven lanes and the three aggregators", () => {
   assert.deepEqual([...workflow.jobIds].sort(), ["scope", ...LANES, ...Object.keys(CHECKS)].sort());
 });
 
@@ -130,6 +130,8 @@ test("the setup action is the only toolchain preamble: every lane uses it with d
     "build-windows": "sagascript-ci-native",
     "test-linux": "sagascript-ci",
     "msrv-linux": "sagascript-msrv",
+    // Required by the action, unused: frontend-linux installs no Rust, so it restores and saves no Rust cache.
+    "frontend-linux": "sagascript-frontend",
   };
   for (const id of LANES) {
     const job = workflow.job(id);
@@ -167,6 +169,12 @@ test("the setup action is the only toolchain preamble: every lane uses it with d
   const msrv = setupStep(workflow.job("msrv-linux"));
   assert.equal(actionInput(action, msrv, "rust"), "msrv");
   assert.equal(actionInput(action, msrv, "python"), "false");
+  // The frontend lane compiles nothing and runs no Python (SAGA-546); it still installs Node and runs npm ci.
+  const frontend = setupStep(workflow.job("frontend-linux"));
+  assert.equal(actionInput(action, frontend, "rust"), "false");
+  assert.equal(actionInput(action, frontend, "python"), "false");
+  assert.equal(actionInput(action, frontend, "npm-ci"), "true");
+  assert.equal(actionInput(action, frontend, "linux-deps"), "false");
 });
 
 test("every lane that runs Python selects the supported runtime first", () => {
@@ -201,8 +209,14 @@ test("the Rust cache key follows the gate list for the lanes that run gates, and
   );
   // Only main saves: a cache saved from a PR or tag ref is unreadable by other runs and evicts shared ones (SAGA-546).
   assert.equal(cache.with["save-if"], "${{ github.ref == 'refs/heads/main' }}");
+  // A lane without Rust caches none: rust-cache would run cargo, and rustup would fetch the pinned toolchain.
+  assert.equal(cache.condition, "${{ inputs.rust != 'false' }}");
   for (const id of LANES) {
     const job = workflow.job(id);
+    if (actionInput(action, setupStep(job), "rust") === "false") {
+      assert.ok(!job.steps.some((step) => gateInvocation(step)), `${id} installs no Rust, so it must run no cargo gate`);
+      continue;
+    }
     const runsGates = job.steps.some((step) => gateInvocation(step));
     const nativeBuild = actionInput(action, setupStep(job), "native-build") === "true";
     assert.equal(

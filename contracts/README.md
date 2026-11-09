@@ -34,7 +34,7 @@ A change on one side fails a test:
 Everything runs in the existing gates, with no model, GUI or network: `cargo test` of the app
 crate (test-macos, test-windows; `npm run verify`'s `test-workspace`) compares the fixtures and
 the generated file, clippy of the app crate (test-linux, test-macos, test-windows) rejects a raw event name,
-svelte-check (test-macos) checks each schema against its type, and Vitest (test-macos,
+svelte-check (frontend-linux) checks each schema against its type, and Vitest (frontend-linux,
 test-windows) parses the fixtures. The generated `CommandMap` and the fixtures need no check of
 their own in `ci.yml` or `scripts/verify.mjs`: the app crate's tests are the "up to date"
 check, so `scripts/test-verify-ci-parity.mjs` has no new command to match.

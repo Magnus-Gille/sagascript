@@ -121,7 +121,10 @@ runs:
       shell: bash
       run: bash scripts/ci/use-portable-whisper-macos.sh
 
-    - name: Cache Rust dependencies
+    # A lane without Rust (frontend-linux) caches none: rust-cache would run cargo, and the pinned
+    # rust-toolchain.toml would make rustup download the toolchain just to compute the key.
+    - if: ${{ inputs.rust != 'false' }}
+      name: Cache Rust dependencies
       uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       with:
         # Only main saves (SAGA-546). A cache saved from refs/pull/N/merge or a tag is scoped to that
