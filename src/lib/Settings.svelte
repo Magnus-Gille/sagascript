@@ -50,17 +50,11 @@
   import { backendErrorRecovery, downloadFailureRecovery, isBackendError, toErrorMessage, type BackendErrorRecovery } from "./errors";
   import ErrorRecovery from "./ErrorRecovery.svelte";
   import { open } from "@tauri-apps/plugin-dialog";
-  import {
-    downloadModelById,
-    firstPianissimoId,
-    isPianissimoId,
-    pianissimoIdForLanguage,
-    pianissimoIdsOf,
-    useModelDownloads,
-  } from "./models.svelte";
+  import { firstPianissimoId, isPianissimoId, pianissimoIdForLanguage, pianissimoIdsOf } from "./models.svelte";
   import { requestAccessibility } from "./permissions";
   import { loadPlatform } from "./platform";
   import { createModelCatalogController } from "./modelCatalogController";
+  import { useSettingsModelDownloads } from "./settings/modelDownloads.svelte";
   import { UpdateRecoveryController } from "./settings/updateRecovery.svelte";
   import { createSettingsTransactionController, type SaveOutcome } from "./settingsTransactionController";
   import { useDragDropEvent, useTauriEvent } from "./tauri-events.svelte";
@@ -90,15 +84,20 @@
   // What Auto will use now (recommended if downloaded, else best downloaded) and what is recommended.
   let fileAutoModel: WhisperModel | null = $state(null);
   let fileRecommendedModel: WhisperModel | null = $state(null);
-  let fileModelError = $state("");
   let fileModelSaving = $state(false);
   type SettingsTab = "dictate" | "transcribe" | "settings";
   let activeTab: SettingsTab = $state("dictate");
-  // One download at a time; its progress follows the backend's events.
-  const downloads = useModelDownloads();
-  const downloading = $derived(downloads.id);
-  const downloadingName = $derived(downloads.name);
-  const downloadProgress = $derived(downloads.progress);
+  // One download at a time, with the errors it leaves (settings/modelDownloads.svelte.ts);
+  // its progress follows the backend's events.
+  const modelDownloads = useSettingsModelDownloads({
+    onDiskChanged: () => {
+      fileModelDiskRevision += 1;
+    },
+    refreshProfileModels: () => refreshProfileModels(settings?.hotkey_profiles ?? []),
+  });
+  const downloading = $derived(modelDownloads.id);
+  const downloadingName = $derived(modelDownloads.name);
+  const downloadProgress = $derived(modelDownloads.progress);
   let profileModels: Record<string, WhisperModel> = $state({});
   let profileModelOptions: Record<string, WhisperModel[]> = $state({});
   // What "Recommended" resolves to per profile (Pianissimo, or KB-Whisper Medium
@@ -107,7 +106,6 @@
   // Swedish models the app no longer offers. A profile still on one keeps
   // working; Settings suggests the recommended model instead of switching silently.
   const retiredSwedishModelIds = ["kb-whisper-tiny", "kb-whisper-base", "kb-whisper-small"];
-  let profileModelErrors: Record<string, string> = $state({});
 
   let platform: string = $state("unknown");
 
@@ -653,7 +651,7 @@
       fileRecommendedModel = recommended;
     },
     reject: (error) => {
-      fileModelError = toErrorMessage(error);
+      modelDownloads.fileError = toErrorMessage(error);
     },
   });
 
@@ -672,14 +670,14 @@
     const select = event.currentTarget as HTMLSelectElement;
     const id = select.value;
     fileModelSaving = true;
-    fileModelError = "";
+    modelDownloads.fileError = "";
     try {
       const outcome = await saveSetting(() => setFileTranscriptionModel(id));
       if (!outcome.saved) {
         // Nothing was saved. A one-way bound native select keeps the rejected
         // choice unless it is put back by hand.
         if (settings) select.value = settings.file_transcription_model;
-        fileModelError = toErrorMessage(outcome.error);
+        modelDownloads.fileError = toErrorMessage(outcome.error);
         return;
       }
       // Saved, whether or not the read-back could confirm it.
@@ -696,24 +694,15 @@
     const preference = settings?.file_transcription_model;
     // "Auto" downloads the recommended model (it may currently use an older downloaded one).
     const id = preference === "auto" ? fileRecommendedModel?.id : preference;
-    if (!id || downloads.busy) return;
-    downloads.start(
-      id,
+    if (!id) return;
+    const name =
       fileModelOptions.find((model) => model.id === id)?.display_name ??
-        (fileRecommendedModel?.id === id ? fileRecommendedModel.display_name : id),
+      (fileRecommendedModel?.id === id ? fileRecommendedModel.display_name : id);
+    await modelDownloads.downloadFileModel(
+      id,
+      name,
+      () => fileModelCatalogController.request({ language: transcribeLanguage(), selected: id !== "auto" ? id : undefined }).done,
     );
-    fileModelError = "";
-    try {
-      await downloadModelById(id);
-      await fileModelCatalogController.request({
-        language: transcribeLanguage(),
-        selected: id !== "auto" ? id : undefined,
-      }).done;
-    } catch (error) {
-      fileModelError = toErrorMessage(error);
-    } finally {
-      downloads.finish();
-    }
   }
 
   // Settings can be reloaded after hotkey/profile changes. Never leave a
@@ -961,10 +950,7 @@
     if (settingsError === unconfirmedBlock || (rejectionWithoutPreview && settingsError === rejectionWithoutPreview)) settingsError = "";
     rejectionWithoutPreview = "";
     if (hotkeyError === unconfirmedBlock) hotkeyError = "";
-    if (fileModelError === unconfirmedBlock) fileModelError = "";
-    profileModelErrors = Object.fromEntries(
-      Object.entries(profileModelErrors).map(([id, message]) => [id, message === unconfirmedBlock ? "" : message]),
-    );
+    modelDownloads.dismiss(unconfirmedBlock);
   }
 
   /**
@@ -1557,58 +1543,9 @@
     await applyScalarSetting(() => setVadEnabled(next));
   }
 
-  async function downloadProfileModel(profile: HotkeyProfile) {
-    const model = profileModels[profile.id];
-    if (!model || model.downloaded || downloads.busy) return;
-    downloads.start(model.id, model.display_name);
-    profileModelErrors = { ...profileModelErrors, [profile.id]: "" };
-    try {
-      await downloadModelById(model.id);
-      fileModelDiskRevision += 1;
-      await refreshProfileModels(settings?.hotkey_profiles ?? []);
-    } catch (e) {
-      profileModelErrors = {
-        ...profileModelErrors,
-        [profile.id]: toErrorMessage(e, "Speech engine download failed."),
-      };
-    } finally {
-      downloads.finish();
-    }
-  }
-
-  /**
-   * True from the press of "Download the model again" to the end of the model
-   * list's refresh after it, longer than `downloads.busy`, which ends with the
-   * download itself: in between the button must not start a second one.
-   */
-  let engineModelDownloading = $state(false);
-
-  /**
-   * Download the speech engine's model again: what "Download the model again"
-   * does for `engine_model_missing` and `engine_model_load_failed`, the codes
-   * of the Pianissimo engine. The download first checks an installed model and
-   * fetches it again when it is missing or damaged. Progress shows like any
-   * other download; rejects when the download fails.
-   */
-  async function downloadEngineModelAgain(ids: readonly string[]): Promise<void> {
-    // Reserved before the first await, so a second press cannot start another.
-    engineModelDownloading = true;
-    try {
-      // One at a time: an installed, intact model only has its files checked.
-      for (const id of ids) {
-        downloads.start(id, fileModelOptions.find((model) => model.id === id)?.display_name ?? "Pianissimo");
-        try {
-          await downloadModelById(id);
-        } finally {
-          downloads.finish();
-        }
-        // Per model: a later failure must not hide what this one changed on disk.
-        fileModelDiskRevision += 1;
-      }
-      await refreshProfileModels(settings?.hotkey_profiles ?? []);
-    } finally {
-      engineModelDownloading = false;
-    }
+  /** "Download the model again" for the Pianissimo models `ids`; rejects when a download fails. */
+  function downloadEngineModelAgain(ids: readonly string[]): Promise<void> {
+    return modelDownloads.downloadAgain(ids, (id) => fileModelOptions.find((model) => model.id === id)?.display_name ?? "Pianissimo");
   }
 
   /**
@@ -1633,7 +1570,7 @@
 
   /** "Download the model again" under the Dictate tab's error. */
   async function onDictateDownloadModel(): Promise<void> {
-    if (updatePreparing || downloads.busy || engineModelDownloading) return;
+    if (updatePreparing || modelDownloads.busy || modelDownloads.repairing) return;
     const revision = dictationEventRevision;
     try {
       await downloadEngineModelAgain(dictationPianissimoIds());
@@ -1659,30 +1596,16 @@
 
   async function switchProfileToRecommended(profile: HotkeyProfile) {
     const target = retiredModelSuggestion(profile);
-    if (!target || downloads.busy || dictationModelSaving) return;
-    profileModelErrors = { ...profileModelErrors, [profile.id]: "" };
+    if (!target || modelDownloads.busy || dictationModelSaving) return;
     dictationModelSaving = true;
-    let downloaded = false;
     try {
-      // Download first: the old model keeps dictating until the new one is ready.
-      if (!target.downloaded) {
-        downloads.start(target.id, target.display_name);
-        await downloadModelById(target.id);
-        downloaded = true;
-      }
-      const outcome = await saveSetting(() => setProfileModel(profile.id, target.id));
-      if (!outcome.saved) throw outcome.error;
-      if (outcome.confirmed && settings) await refreshProfileModels(settings.hotkey_profiles);
-    } catch (e) {
-      profileModelErrors = {
-        ...profileModelErrors,
-        [profile.id]: toErrorMessage(e, `Could not switch to ${target.display_name}.`),
-      };
+      await modelDownloads.downloadThenSwitch(profile.id, target, async () => {
+        const outcome = await saveSetting(() => setProfileModel(profile.id, target.id));
+        if (!outcome.saved) throw outcome.error;
+        if (outcome.confirmed && settings) await refreshProfileModels(settings.hotkey_profiles);
+      });
     } finally {
-      downloads.finish();
       dictationModelSaving = false;
-      // The Transcribe tab's lineup follows what is on disk, also after a failed switch.
-      if (downloaded) fileModelDiskRevision += 1;
     }
   }
 
@@ -1691,12 +1614,12 @@
     const select = event.target as HTMLSelectElement;
     const previous = settings.profile_models[profile.id] ?? "auto";
     dictationModelSaving = true;
-    profileModelErrors = { ...profileModelErrors, [profile.id]: "" };
+    modelDownloads.setProfileError(profile.id, "");
     try {
       const outcome = await saveSetting(() => setProfileModel(profile.id, select.value));
       if (!outcome.saved) {
         select.value = previous;
-        profileModelErrors = { ...profileModelErrors, [profile.id]: toErrorMessage(outcome.error, "Could not change profile model.") };
+        modelDownloads.setProfileError(profile.id, toErrorMessage(outcome.error, "Could not change profile model."));
       } else if (outcome.confirmed && settings) {
         await refreshProfileModels(settings.hotkey_profiles);
       }
@@ -1706,7 +1629,7 @@
   }
 
   async function onTestRecord() {
-    if (updatePreparing || dictationModelSaving || downloads.busy) return;
+    if (updatePreparing || dictationModelSaving || modelDownloads.busy) return;
     const action = dictateButtonAction(backendDictationState, testOwnsRecording);
     if (action === "blocked") return;
 
@@ -2191,7 +2114,7 @@
                   {#if !profileModels[profile.id].downloaded}
                     <button
                       class="link-btn profile-engine-action"
-                      onclick={() => downloadProfileModel(profile)}
+                      onclick={() => modelDownloads.downloadProfileModel(profile.id, profileModels[profile.id])}
                       disabled={downloading !== null}
                     >
                       {downloading === profileModels[profile.id].id
@@ -2215,8 +2138,8 @@
                     </button>
                   </div>
                 {/if}
-                {#if profileModelErrors[profile.id]}
-                  <div class="hotkey-error">{profileModelErrors[profile.id]}</div>
+                {#if modelDownloads.profileErrors[profile.id]}
+                  <div class="hotkey-error">{modelDownloads.profileErrors[profile.id]}</div>
                 {/if}
               {/if}
             </div>
@@ -2297,8 +2220,8 @@
             <ErrorRecovery
               recovery={testRecovery}
               busy={updatePreparing ||
-                downloads.busy ||
-                engineModelDownloading ||
+                modelDownloads.busy ||
+                modelDownloads.repairing ||
                 dictationModelSaving ||
                 dictateButtonAction(backendDictationState, testOwnsRecording) !== "start"}
               onRetry={() => void onDictateRetry()}
@@ -2403,7 +2326,7 @@
                   : "; downloaded once"}.
               </div>
             {/if}
-            {#if fileModelError}<div class="transcribe-error" role="alert">{fileModelError}</div>{/if}
+            {#if modelDownloads.fileError}<div class="transcribe-error" role="alert">{modelDownloads.fileError}</div>{/if}
           </div>
           {#if selectedTranscribeProfile()}
             <div class="hotkey-hint">This profile fixes the file language and uses its personal dictionary.</div>
@@ -2532,7 +2455,7 @@
               onRetry={retryFileJob}
               retryRefusal={retryRefusals[job.id] ?? ""}
               onDownloadModel={() => downloadEngineModelAgain([filePianissimoId(job)])}
-              downloadBusy={downloads.busy || engineModelDownloading}
+              downloadBusy={modelDownloads.busy || modelDownloads.repairing}
               {updatePreparing}
               onAttentionChange={updateFileAttention}
               initialRecoveryFile={recovery.fileEntries.find((entry) => entry.job_id === job.id) ?? null}
