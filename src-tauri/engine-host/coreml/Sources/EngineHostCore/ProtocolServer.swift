@@ -1,6 +1,6 @@
 import Foundation
 
-private final class CancellationFlag {
+final class CancellationFlag {
     private let lock = NSLock()
     private var value = false
 
@@ -14,7 +14,7 @@ private final class CancellationFlag {
     }
 }
 
-private final class ScheduledJob {
+final class ScheduledJob {
     let id: UInt64
     let priority: WindowPriority
     let sequence: UInt64
@@ -37,13 +37,14 @@ private final class ScheduledJob {
     }
 }
 
-private final class RequestScheduler {
-    private let lock = NSLock()
+final class RequestScheduler {
+    // `lock`, `running` and `pumpLocked` are internal so a test can free several slots in one pump.
+    let lock = NSLock()
     private let queue: DispatchQueue
     private let maximum: Int
     private var nextSequence: UInt64 = 0
     private var pending: [ScheduledJob] = []
-    private var running: [UInt64: ScheduledJob] = [:]
+    var running: [UInt64: ScheduledJob] = [:]
 
     init(maximum: Int) {
         self.maximum = maximum
@@ -116,9 +117,10 @@ private final class RequestScheduler {
         }
     }
 
-    private func pumpLocked() -> [ScheduledJob] {
+    func pumpLocked() -> [ScheduledJob] {
         var result: [ScheduledJob] = []
-        while running.count + result.count < maximum, !pending.isEmpty {
+        // `running` already holds the jobs started in this pump; counting `result` too would count each twice.
+        while running.count < maximum, !pending.isEmpty {
             let index = pending.indices.min { left, right in
                 let leftPriority = pending[left].priority == .interactive ? 0 : 1
                 let rightPriority = pending[right].priority == .interactive ? 0 : 1
