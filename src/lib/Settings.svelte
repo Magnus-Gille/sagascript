@@ -1,145 +1,49 @@
 <script lang="ts">
   import FileTranscription from "./FileTranscription.svelte";
-  import { createFileJobs, nextQueuedFile, updateFileJob, fileJobName, type FileJob, type FileJobStatus } from "./transcription-queue";
-  import { onMount, tick } from "svelte";
-  import { rememberTranscription, type RecentTranscription } from "./recent-transcriptions";
+  import { fileJobName } from "./transcription-queue";
+  import { tick } from "svelte";
   import {
-    getSettings,
-    getLastError,
-    getLastTranscription,
     setLanguage,
-    setHotkeyProfiles,
-    setProfileModel,
-    setAutoPaste,
     setProfileGlossary,
     setShowOverlay,
-    setFileTranscriptionModel,
-    getProfileModelInfo,
     setBeamSize,
     setTemperatureFallback,
     setVadEnabled,
     setEnginePrewarm,
     setEngineIdleUnloadMinutes,
-    getEngineStatus,
-    getBuildInfo,
-    getFileModelOptions,
-    getEffectiveModelInfo,
-    getAutoFileModelInfo,
-    getSupportedFormats,
-    checkAccessibilityPermission,
-    retryHotkeyRegistration,
-    startRecording,
-    stopAndTranscribe,
-    copyTranscriptionText,
-    saveTranscriptionText,
-    getUpdateResultPending,
-    acknowledgeUpdateResult,
-    saveUpdateRecovery,
-    loadUpdateRecovery,
-    clearUpdateRecovery,
-    completeUpdatePreparation,
-    hotkeyStatus,
-    type Settings,
-    type BuildInfo,
     type EnginePrewarm,
-    type EngineStatus,
     type Language,
-    type WhisperModel,
     type HotkeyProfile,
   } from "./api";
-  import { backendErrorRecovery, downloadFailureRecovery, isBackendError, toErrorMessage, type BackendErrorRecovery } from "./errors";
+  import { isBackendError, toErrorMessage } from "./errors";
   import ErrorRecovery from "./ErrorRecovery.svelte";
-  import { open } from "@tauri-apps/plugin-dialog";
-  import { firstPianissimoId, isPianissimoId, pianissimoIdForLanguage, pianissimoIdsOf } from "./models.svelte";
-  import { requestAccessibility } from "./permissions";
-  import { loadPlatform } from "./platform";
-  import { createModelCatalogController } from "./modelCatalogController";
+  import { isPianissimoId } from "./models.svelte";
   import GlossaryEditor from "./settings/GlossaryEditor.svelte";
   import { languageLabel } from "./settings/languageLabel";
-  import { useSettingsModelDownloads } from "./settings/modelDownloads.svelte";
-  import { UpdateRecoveryController } from "./settings/updateRecovery.svelte";
-  import { createSettingsTransactionController, type SaveOutcome } from "./settingsTransactionController";
-  import { useDragDropEvent, useTauriEvent } from "./tauri-events.svelte";
-  import { dictateButtonAction, retainTestRecordingOwnership, type BackendDictationState } from "./dictation-ui-state";
-  import {
-    canUseBareHotkey,
-    brightnessKeyHotkeyWarning,
-    formatHotkeyDisplay as formatShortcutDisplay,
-    supportedBareFunctionKeyRange,
-    tauriKeyName,
-  } from "./hotkey";
-  import { allProfileShortcutValues, displayProfileShortcut, profileWithShortcut, suggestedProfileShortcuts } from "./profile-shortcuts";
+  import { shortcutControls } from "./settings/hotkeyProfiles.svelte";
+  import { useSettingsWindow } from "./settings/settingsWindow.svelte";
+  import { dictateButtonAction } from "./dictation-ui-state";
+  import { supportedBareFunctionKeyRange } from "./hotkey";
+  import { displayProfileShortcut } from "./profile-shortcuts";
 
-  let settings: Settings | null = $state(null);
-  let buildInfo: BuildInfo | null = $state(null);
-  let engineStatus = $state<EngineStatus | null>(null);
+  // The window's state and logic live in its controllers (settings/settingsWindow.svelte.ts),
+  // which register their effects, listeners and mount callbacks here, as the component initializes.
+  const win = useSettingsWindow();
+  const { session, router, profileModels, profiles, dictation, queue, fileModel, recovery } = win;
+  const modelDownloads = win.downloads;
+
+  const settings = $derived(session.settings);
   const engineIdleChoices = [5, 10, 30, 60, 0];
-  const engineHostIdentity = $derived(
-    engineStatus?.host_version
-      ? `Engine ${engineStatus.host_version}${engineStatus.host_git_sha ? ` (${engineStatus.host_git_sha.slice(0, 7)})` : ""}`
-      : "",
-  );
-  let fileModelOptions: WhisperModel[] = $state([]);
-  const pianissimoSizeMb = $derived(
-    fileModelOptions.find((model) => model.id === settings?.file_transcription_model && isPianissimoId(model.id))?.size_mb ?? 0,
-  );
-  // What Auto will use now (recommended if downloaded, else best downloaded) and what is recommended.
-  let fileAutoModel: WhisperModel | null = $state(null);
-  let fileRecommendedModel: WhisperModel | null = $state(null);
-  let fileModelSaving = $state(false);
-  type SettingsTab = "dictate" | "transcribe" | "settings";
-  let activeTab: SettingsTab = $state("dictate");
-  // One download at a time, with the errors it leaves (settings/modelDownloads.svelte.ts);
-  // its progress follows the backend's events.
-  const modelDownloads = useSettingsModelDownloads({
-    onDiskChanged: () => {
-      fileModelDiskRevision += 1;
-    },
-    refreshProfileModels: () => refreshProfileModels(settings?.hotkey_profiles ?? []),
-  });
   const downloading = $derived(modelDownloads.id);
   const downloadingName = $derived(modelDownloads.name);
   const downloadProgress = $derived(modelDownloads.progress);
-  let profileModels: Record<string, WhisperModel> = $state({});
-  let profileModelOptions: Record<string, WhisperModel[]> = $state({});
-  // What "Recommended" resolves to per profile (Pianissimo, or KB-Whisper Medium
-  // where Pianissimo is unsupported).
-  let profileRecommended: Record<string, WhisperModel> = $state({});
-  // Swedish models the app no longer offers. A profile still on one keeps
-  // working; Settings suggests the recommended model instead of switching silently.
-  const retiredSwedishModelIds = ["kb-whisper-tiny", "kb-whisper-base", "kb-whisper-small"];
 
-  let platform: string = $state("unknown");
-
-  // Initial data-fetch + settings-mutation error states
-  let initError: string = $state("");
-  let settingsError: string = $state("");
-  // Reads of the persisted settings carry a ticket in the order they are issued
-  // (#341). `settingsReadSettled` is the highest ticket that has answered, with a
-  // copy or with a failure. An answer older than that is dropped, so answers that
-  // arrive out of order cannot put an older copy over a newer one, nor hide a
-  // newer failure.
-  let settingsReadIssued = 0;
-  let settingsReadSettled = 0;
-  // Set while `settings` is known to be behind what the backend holds: a change was
-  // saved (or the file changed) and the read that should confirm it failed. Until a
-  // read succeeds the window says so, disables the controls that save a setting and
-  // sends no further change.
-  let settingsUnconfirmed: { afterSave: boolean; detail: string } | null = $state(null);
-  const settingsLocked = $derived(settingsUnconfirmed !== null);
-  let settingsReloading = $state(false);
-  // The rejection message of a language change whose preview read then failed. No
-  // preview follows it, so the read that confirms the settings lifts it too.
-  let rejectionWithoutPreview = "";
   // Height of the sticky notice, so focus scrolling can leave room for it.
   let unconfirmedNoticeHeight = $state(0);
   let reloadButtonEl: HTMLButtonElement | undefined = $state();
   let windowTitleEl: HTMLHeadingElement | undefined = $state();
-  // Non-blocking notices: a profile's model was reset to Auto by a language change.
-  let profileModelNotices: string[] = $state([]);
   /** A language change a personal dictionary blocks: the dictionary of `profileId`, previewed so that clearing it is a compare-and-swap. */
   let blockedLanguageChange: { language: Language; source: string; profileId: string } | null = $state(null);
-  let languageSaving = $state(false);
   let languageSelectEl: HTMLSelectElement | undefined = $state();
   let languageRecoveryTitle: HTMLHeadingElement | undefined = $state();
 
@@ -157,208 +61,15 @@
     void restoreLanguageFocus();
   }
 
-  // Model selection state
-
-  let accessibilityGranted: boolean = $state(true); // assume true; checked on mount for macOS
-  let accessibilityChecking: boolean = $state(false);
-  let accessibilityRequested: boolean = $state(false);
-
-  // Hotkey recorder state
-  let recordingProfileId: string | null = $state(null);
-  type ExplicitShortcutSlot = "push_to_talk_shortcut" | "toggle_shortcut";
-  const shortcutControls: { slot: ExplicitShortcutSlot; label: string; helper: string }[] = [
-    {
-      slot: "push_to_talk_shortcut",
-      label: "Hold to record",
-      helper: "Hold the shortcut while speaking. Release to stop.",
-    },
-    {
-      slot: "toggle_shortcut",
-      label: "Press to start/stop",
-      helper: "Press the shortcut to start recording. Press it again to stop.",
-    },
-  ];
-  let recordingShortcutSlot: ExplicitShortcutSlot | null = $state(null);
-  let hotkeyCaptureGeneration = 0;
-  let draftProfileId: string | null = $state(null);
-  let hotkeyError: string = $state("");
   let hotkeyRecorderEl: HTMLButtonElement | undefined = $state();
 
-  // Hotkey registration health — is the saved hotkey actually bound right
-  // now? (distinct from hotkeyError above, which is about validating a
-  // shortcut the user is in the middle of entering.) Assume healthy until
-  // proven otherwise so there's no flash of a warning before the initial
-  // fetch resolves.
-  let hotkeyStatusOk: boolean = $state(true);
-  let hotkeyStatusError: string = $state("");
-
   $effect(() => {
-    if (recordingProfileId && recordingShortcutSlot && hotkeyRecorderEl) hotkeyRecorderEl.focus();
+    if (profiles.recordingProfileId && profiles.recordingShortcutSlot && hotkeyRecorderEl) hotkeyRecorderEl.focus();
   });
 
-  // Dictate test state
-  let testRecording: boolean = $state(false);
-  let testTranscribing: boolean = $state(false);
-  let backendDictationState: BackendDictationState = $state("idle");
-  let testOwnsRecording: boolean = $state(false);
-  let testResult: string = $state("");
-  let testError: string = $state("");
-  /** The way out of `testError`, decided by the error's code (`backendErrorRecovery`); null for plain text. */
-  let testRecovery: BackendErrorRecovery | null = $state(null);
   let testRecordButton: HTMLButtonElement | undefined = $state();
-  function showTestError(failure: unknown, fallback: string): void {
-    testError = toErrorMessage(failure, fallback);
-    testRecovery = backendErrorRecovery(failure);
-  }
-  function clearTestError(): void {
-    testError = "";
-    testRecovery = null;
-  }
-  let testResultActionMessage: string = $state("");
-  let testResultRecoveryPending: boolean = $state(false);
-  let testResultEdited: boolean = $state(false);
-  // Update recovery (settings/updateRecovery.svelte.ts) reads and writes the
-  // dictation editor above and the Transcribe tab's file queue below through
-  // these two ports.
-  const recovery = new UpdateRecoveryController({
-    api: {
-      loadUpdateRecovery,
-      saveUpdateRecovery,
-      clearUpdateRecovery,
-      completeUpdatePreparation,
-      getLastTranscription,
-      getUpdateResultPending,
-      acknowledgeUpdateResult,
-    },
-    dictation: {
-      get text() {
-        return testResult;
-      },
-      set text(value) {
-        testResult = value;
-      },
-      get recoveryPending() {
-        return testResultRecoveryPending;
-      },
-      set recoveryPending(value) {
-        testResultRecoveryPending = value;
-      },
-      get edited() {
-        return testResultEdited;
-      },
-      set edited(value) {
-        testResultEdited = value;
-      },
-      get transcribing() {
-        return testTranscribing;
-      },
-    },
-    files: {
-      get jobs() {
-        return fileJobs;
-      },
-      set jobs(value) {
-        fileJobs = value;
-      },
-      get savedReviewIds() {
-        return savedReviewIds;
-      },
-      set savedReviewIds(value) {
-        savedReviewIds = value;
-      },
-      get selectedId() {
-        return selectedFileId;
-      },
-      set selectedId(value) {
-        selectedFileId = value;
-      },
-    },
-    onDiscardFailed: (message) => {
-      settingsError = message;
-    },
-  });
   const updatePreparing = $derived(recovery.preparing);
 
-  async function copyTestResult(): Promise<void> {
-    if (!testResult.trim()) return;
-    try {
-      const text = testResult;
-      const delivery = recovery.captureDelivery(text);
-      await copyTranscriptionText(text);
-      const nextResultShown = await recovery.markDelivered(delivery);
-      testResultActionMessage = nextResultShown ? "Copied result. Another unsaved dictation is now shown." : "Copied to clipboard.";
-    } catch (error) {
-      testResultActionMessage = toErrorMessage(error);
-    }
-  }
-
-  async function saveTestResult(): Promise<void> {
-    if (!testResult.trim()) return;
-    try {
-      const text = testResult;
-      const delivery = recovery.captureDelivery(text);
-      const saved = await saveTranscriptionText(text, "dictation.txt", null);
-      if (saved) {
-        const nextResultShown = await recovery.markDelivered(delivery);
-        testResultActionMessage = nextResultShown ? "Saved result. Another unsaved dictation is now shown." : "Saved.";
-      }
-      if (!saved) testResultActionMessage = "Save cancelled — nothing was written.";
-    } catch (error) {
-      testResultActionMessage = toErrorMessage(error);
-    }
-  }
-
-  let dictationEventRevision = 0;
-  const errorEvents = useTauriEvent("error", (failure) => {
-    dictationEventRevision++;
-    showTestError(failure, "Transcription failed");
-    requestTabChange("dictate");
-  });
-  const resultEvents = useTauriEvent("transcription-result", (text) => {
-    dictationEventRevision++;
-    recovery.showNativeResult(text);
-    clearTestError();
-  });
-
-  onMount(() => {
-    let disposed = false;
-    // A failed background dictation may create this window after its event.
-    // Recover the persisted-in-memory result without racing newer events.
-    Promise.all([errorEvents.ready, resultEvents.ready, stateEvents.ready])
-      .then(async () => {
-        const initialRevision = dictationEventRevision;
-        await recovery.restored.catch(() => undefined);
-        const [error, text] = await Promise.all([getLastError(), getLastTranscription()]);
-        if (!disposed && dictationEventRevision === initialRevision) {
-          // The last error is plain text: it has no code to decide a recovery by.
-          testError = error ?? "";
-          testRecovery = null;
-          recovery.nativeResultSettled(text);
-        }
-      })
-      .catch((error) => {
-        console.warn("Could not restore the last dictation result", error);
-      });
-    return () => {
-      disposed = true;
-    };
-  });
-
-  // Transcribe tab state
-  let supportedFormats: string[] = $state([]);
-  let dragOver = $state(false);
-  let transcribePrompt = $state("");
-  let transcribeDiarize = $state(false);
-  let transcribeProfileId: string | null = $state(null);
-  let fileJobs = $state<FileJob[]>([]);
-  let selectedFileId = $state<string | null>(null);
-  let fileBusy = $state<Record<string, boolean>>({});
-  let fileAttention = $state<Record<string, boolean>>({});
-  let filesNeedingRetry = $derived(fileJobs.filter((job) => fileAttention[job.id]));
-  let savedReviewIds = $state<string[]>([]);
-  let recentTranscriptions = $state<RecentTranscription[]>([]);
-  let selectedRerunPath = $state("");
-  let rerunError = $state("");
   let showDiarizeInfo = $state(false);
   let diarizeDialog: HTMLDialogElement | undefined = $state();
   let diarizeInfoButton: HTMLButtonElement | undefined = $state();
@@ -370,517 +81,24 @@
     await tick();
     diarizeInfoButton?.focus();
   }
-  let transcribing = $derived(
-    fileJobs.some((job) => job.status === "queued" || job.status === "running") || Object.values(fileBusy).some(Boolean),
-  );
-
-  $effect(() => {
-    if (updatePreparing) return;
-    const next = nextQueuedFile(fileJobs, Object.values(fileBusy).some(Boolean));
-    if (next) {
-      fileJobs = updateFileJob(fileJobs, next.id, "running");
-    }
-  });
-
-  function handleFilesTranscription(paths: string[], openReview = false): void {
-    if (updatePreparing) return;
-    const jobs = createFileJobs(
-      paths,
-      {
-        diarize: transcribeDiarize,
-        prompt: transcribePrompt.trim() || null,
-        profileId: selectedTranscribeProfile()?.id ?? null,
-      },
-      () => crypto.randomUUID(),
-    );
-    if (!jobs.length) return;
-    if (openReview) savedReviewIds = [...savedReviewIds, ...jobs.map((job) => job.id)];
-    else
-      for (const job of jobs) {
-        recentTranscriptions = rememberTranscription(recentTranscriptions, {
-          path: job.path,
-          profileId: job.profileId,
-          prompt: job.prompt ?? "",
-          diarize: job.diarize,
-        });
-        selectedRerunPath = job.path;
-      }
-    const keepSelection = transcribing && selectedFileId !== null;
-    fileJobs = [...fileJobs, ...jobs];
-    if (!keepSelection) selectedFileId = jobs[0].id;
-  }
-
-  function completeFile(id: string, status: FileJobStatus): void {
-    fileJobs = updateFileJob(fileJobs, id, status);
-  }
-
-  function retryLastTranscription(): void {
-    const run = recentTranscriptions.find((run) => run.path === selectedRerunPath);
-    if (!run) return;
-    const refusal = rerunRefusal(run);
-    rerunError = refusal ?? "";
-    if (refusal === null) queueRerun(run);
-  }
-
-  /** Why a file cannot run again, or null: the profile it ran with is gone. */
-  function rerunRefusal(run: RecentTranscription): string | null {
-    return run.profileId && !profileForId(run.profileId)
-      ? "The profile for this file is no longer available. Choose a profile and open the file again."
-      : null;
-  }
-
-  /**
-   * Run a file again as a new job, and select it: what Re-run does, and what
-   * "Try again" does for a run that failed in a way the backend says can be
-   * repeated (ADR 0006). Both keep the file's profile, dictionary prompt and
-   * diarization choice. Returns the new job's id.
-   */
-  function queueRerun(run: RecentTranscription): string {
-    recentTranscriptions = rememberTranscription(recentTranscriptions, run);
-    // A fresh queued job preserves every previous result and review. Only the
-    // serial scheduler can start it; model/decoder settings apply at execution.
-    const jobs = createFileJobs([run.path], { profileId: run.profileId, prompt: run.prompt || null, diarize: run.diarize }, () =>
-      crypto.randomUUID(),
-    );
-    fileJobs = [...fileJobs, ...jobs];
-    selectedFileId = jobs[0].id;
-    return jobs[0].id;
-  }
-
-  /** Why a "Try again" under a failed file was refused, by the job's id: shown in that file's panel. */
-  let retryRefusals = $state<Record<string, string>>({});
-
-  /**
-   * "Try again" under a failed file: the same file, profile and prompt, as a new
-   * job, whose tab then has the focus (the button that was pressed goes away with
-   * the panel it was in). False when nothing was queued; a refusal is shown in the
-   * file's own panel, next to the button, and not above the tab strip.
-   */
-  function retryFileJob(job: FileJob): boolean {
-    if (updatePreparing) return false;
-    const run = { path: job.path, profileId: job.profileId, prompt: job.prompt ?? "", diarize: job.diarize };
-    const refusal = rerunRefusal(run);
-    if (refusal !== null) {
-      retryRefusals = { ...retryRefusals, [job.id]: refusal };
-      return false;
-    }
-    if (job.id in retryRefusals) {
-      const others = { ...retryRefusals };
-      delete others[job.id];
-      retryRefusals = others;
-    }
-    const id = queueRerun(run);
-    void tick().then(() => document.getElementById(`file-tab-${id}`)?.focus());
-    return true;
-  }
-
-  function updateFileBusy(id: string, busy: boolean): void {
-    if (fileBusy[id] !== busy) fileBusy = { ...fileBusy, [id]: busy };
-  }
-
-  function forgetMissingFile(path: string): void {
-    recentTranscriptions = recentTranscriptions.filter((run) => run.path !== path);
-    if (selectedRerunPath === path) selectedRerunPath = recentTranscriptions[0]?.path ?? "";
-  }
-
-  function updateFileAttention(id: string, needsRetry: boolean): void {
-    if (fileAttention[id] !== needsRetry) fileAttention = { ...fileAttention, [id]: needsRetry };
-  }
-
-  function showFileNeedingRetry(id: string): void {
-    requestTabChange("transcribe", () => {
-      selectedFileId = id;
-      void tick().then(() => document.getElementById(`file-tab-${id}`)?.focus());
-    });
-  }
-
-  function onResultTabKeydown(event: KeyboardEvent, index: number): void {
-    let next: number;
-    if (event.key === "ArrowRight") next = (index + 1) % fileJobs.length;
-    else if (event.key === "ArrowLeft") next = (index + fileJobs.length - 1) % fileJobs.length;
-    else if (event.key === "Home") next = 0;
-    else if (event.key === "End") next = fileJobs.length - 1;
-    else return;
-    event.preventDefault();
-    selectedFileId = fileJobs[next].id;
-    document.getElementById(`file-tab-${selectedFileId}`)?.focus();
-  }
 
   // The personal dictionary editor (settings/GlossaryEditor.svelte) owns its
   // drafts and the dirty guard that requestTabChange asks before a tab change.
   let glossaryEditor: GlossaryEditor | undefined = $state();
   const glossarySaving = $derived(glossaryEditor?.isSaving() ?? false);
-
-  function explicitProfiles(source: Settings | null = settings): HotkeyProfile[] {
-    return source?.hotkey_profiles ?? [];
-  }
-
-  function profileForId(profileId: string | null, source: Settings | null = settings): HotkeyProfile | null {
-    if (!profileId) return null;
-    return explicitProfiles(source).find((profile) => profile.id === profileId) ?? null;
-  }
-
-  function selectedTranscribeProfile(): HotkeyProfile | null {
-    return (
-      profileForId(transcribeProfileId) ??
-      settings?.hotkey_profiles.find((profile) => profile.id === "default") ??
-      settings?.hotkey_profiles[0] ??
-      null
-    );
-  }
-
-  function transcribeLanguage(): Language {
-    return selectedTranscribeProfile()?.language ?? "auto";
-  }
-
-  // The file model lineup depends on these two values and on what is on disk.
-  // Read the first two as derived primitives: the effect below must not run
-  // again for every new `settings` object (a Voice activity detection toggle,
-  // say). A download that finishes elsewhere in the window bumps the third.
-  const fileModelLanguage = $derived.by(() => (settings ? transcribeLanguage() : null));
-  const fileModelSelection = $derived.by(() => settings?.file_transcription_model);
-  let fileModelDiskRevision = $state(0);
-
-  type FileModelCatalogQuery = { language: Language; selected?: string };
-  const fileModelCatalogController = createModelCatalogController<
-    FileModelCatalogQuery,
-    {
-      options: WhisperModel[];
-      automatic: WhisperModel;
-      recommended: WhisperModel;
-    }
-  >({
-    load: async ({ language, selected }) => {
-      const [options, automatic, recommended] = await Promise.all([
-        getFileModelOptions(language, selected && selected !== "auto" ? selected : undefined),
-        getAutoFileModelInfo(language),
-        getEffectiveModelInfo(language),
-      ]);
-      return { options, automatic, recommended };
+  router.guard = {
+    requestLeave: (leave) => {
+      if (glossaryEditor) glossaryEditor.requestLeave(leave);
+      else leave();
     },
-    publish: ({ options, automatic, recommended }) => {
-      fileModelOptions = Array.isArray(options) ? options : [];
-      fileAutoModel = automatic;
-      fileRecommendedModel = recommended;
-    },
-    reject: (error) => {
-      modelDownloads.fileError = toErrorMessage(error);
-    },
-  });
-
-  $effect(() => {
-    const language = fileModelLanguage;
-    void fileModelDiskRevision;
-    if (language === null) return;
-    const selected = fileModelSelection;
-    const request = fileModelCatalogController.request({ language, selected });
-    return request.cancel;
-  });
-
-  async function onFileModelChange(event: Event): Promise<void> {
-    if (!settings || fileModelSaving) return;
-    // Read before the first await: currentTarget is gone once the handler yields.
-    const select = event.currentTarget as HTMLSelectElement;
-    const id = select.value;
-    fileModelSaving = true;
-    modelDownloads.fileError = "";
-    try {
-      const outcome = await saveSetting(() => setFileTranscriptionModel(id));
-      if (!outcome.saved) {
-        // Nothing was saved. A one-way bound native select keeps the rejected
-        // choice unless it is put back by hand.
-        if (settings) select.value = settings.file_transcription_model;
-        modelDownloads.fileError = toErrorMessage(outcome.error);
-        return;
-      }
-      // Saved, whether or not the read-back could confirm it.
-      if (isPianissimoId(id)) {
-        transcribeDiarize = false;
-        transcribePrompt = "";
-      }
-    } finally {
-      fileModelSaving = false;
-    }
-  }
-
-  async function downloadSelectedFileModel(): Promise<void> {
-    const preference = settings?.file_transcription_model;
-    // "Auto" downloads the recommended model (it may currently use an older downloaded one).
-    const id = preference === "auto" ? fileRecommendedModel?.id : preference;
-    if (!id) return;
-    const name =
-      fileModelOptions.find((model) => model.id === id)?.display_name ??
-      (fileRecommendedModel?.id === id ? fileRecommendedModel.display_name : id);
-    await modelDownloads.downloadFileModel(
-      id,
-      name,
-      () => fileModelCatalogController.request({ language: transcribeLanguage(), selected: id !== "auto" ? id : undefined }).done,
-    );
-  }
-
-  // Settings can be reloaded after hotkey/profile changes. Never leave a
-  // removed profile selected for file transcription.
-  $effect(() => {
-    const currentSettings = settings;
-    const currentTranscribeProfile = transcribeProfileId;
-    if (!currentSettings) return;
-    if (!currentTranscribeProfile || !profileForId(currentTranscribeProfile, currentSettings)) {
-      transcribeProfileId =
-        currentSettings.hotkey_profiles.find((profile) => profile.id === "default")?.id ?? currentSettings.hotkey_profiles[0]?.id ?? null;
-    }
-  });
-
-  let dictationModelSaving = $state(false);
-
-  const profileModelCatalogController = createModelCatalogController<
-    HotkeyProfile[],
-    {
-      models: Record<string, WhisperModel>;
-      options: Record<string, WhisperModel[]>;
-      recommended: Record<string, WhisperModel>;
-    }
-  >({
-    load: async (profiles) => {
-      const entries = await Promise.all(
-        profiles.map(async (profile) => {
-          const model =
-            profile.id === draftProfileId ? await getEffectiveModelInfo(profile.language) : await getProfileModelInfo(profile.id);
-          // Keep this lookup after the model-info await: a settings read that
-          // settles while that invoke is pending decides the selected model.
-          const selected = settings?.profile_models?.[profile.id];
-          const options = await getFileModelOptions(profile.language, selected && selected !== "auto" ? selected : undefined);
-          const recommended = await getEffectiveModelInfo(profile.language);
-          return [profile.id, model, options, recommended] as const;
-        }),
-      );
-      return {
-        models: Object.fromEntries(entries.map(([id, model]) => [id, model])),
-        options: Object.fromEntries(entries.map(([id, , options]) => [id, options])),
-        recommended: Object.fromEntries(entries.map(([id, , , recommended]) => [id, recommended])),
-      };
-    },
-    publish: ({ models, options, recommended }) => {
-      profileModels = models;
-      profileModelOptions = options;
-      profileRecommended = recommended;
-    },
-    reject: (error) => {
-      settingsError = toErrorMessage(error, "Failed to check speech engines.");
-    },
-  });
-
-  async function refreshProfileModels(profiles: HotkeyProfile[]): Promise<void> {
-    await profileModelCatalogController.request(profiles).done;
-  }
-
-  // The listeners below register as the component initializes, before the
-  // data fetch in onMount: they don't depend on it, so a rejected invoke in
-  // the fetch sequence must never prevent them from wiring up (e.g. a
-  // stuck-at-0% download).
-  useTauriEvent("update-preparing", (nonce) => {
-    if (nonce) recovery.beginPreparation(nonce);
-  });
-  useTauriEvent("update-aborted", () => recovery.abortPreparation());
-
-  useTauriEvent("model-ready", async () => {
-    // The event can arrive before the download command settles. Its caller
-    // owns the busy flag through its finally block so a second operation
-    // cannot start during the remaining selection or refresh work.
-    if (settings) await refreshProfileModels(settings.hotkey_profiles);
-  });
-
-  // Hotkey registration health can change at any time (settings-file
-  // hot-reload, a failed re-register racing a Spotlight/Raycast combo
-  // claim, etc.) — not just as a result of something this window did.
-  useTauriEvent("hotkey-registration-changed", (status) => {
-    hotkeyStatusOk = status.ok;
-    hotkeyStatusError = status.error ?? "";
-  });
-
-  // Keep Dictate synchronized with hotkey-driven work. Previously these
-  // states were ignored, so the button still offered "Start recording"
-  // while the backend was loading/transcribing and the next click produced
-  // a misleading busy error.
-  const stateEvents = useTauriEvent("state-changed", async (nextState) => {
-    if (nextState === "recording") {
-      // A new dictation supersedes the restored result and error, and
-      // outdates the restore that waits for the listeners above.
-      dictationEventRevision++;
-      recovery.dictationStarted();
-      clearTestError();
-    }
-
-    if (nextState === "settings_reloaded") {
-      await syncSettings();
-      return;
-    }
-
-    if (!["idle", "recording", "loading_model", "transcribing"].includes(nextState)) return;
-    const acceptedState = nextState as BackendDictationState;
-    testOwnsRecording = retainTestRecordingOwnership(acceptedState, testOwnsRecording);
-    backendDictationState = acceptedState;
-    testRecording = nextState === "recording";
-    testTranscribing = nextState === "loading_model" || nextState === "transcribing";
-  });
-
-  // Listen for tab navigation from tray menu
-  useTauriEvent("navigate_tab", (t) => {
-    if (t === "dictate" || t === "transcribe" || t === "settings") {
-      requestTabChange(t);
-    }
-  });
-
-  // Listen for drag-and-drop events
-  useDragDropEvent((payload) => {
-    if (payload.type === "over") {
-      dragOver = true;
-    } else if (payload.type === "drop") {
-      dragOver = false;
-      const paths = payload.paths;
-      if (paths.length > 0 && !updatePreparing) {
-        requestTabChange("transcribe", () => handleFilesTranscription(paths));
-      }
-    } else {
-      dragOver = false;
-    }
-  });
-
-  onMount(() => {
-    recovery.restore();
-
-    // Fetch initial data. A rejection here surfaces as a visible inline
-    // error instead of leaving a half-initialized window.
-    (async () => {
-      initError = "";
-      try {
-        buildInfo = await getBuildInfo();
-      } catch (error) {
-        // Build identity is diagnostic only. Keep it independent from the
-        // settings bootstrap so it remains visible when another query fails.
-        console.warn("Failed to load build information", error);
-      }
-      getEngineStatus()
-        .then((status) => {
-          engineStatus = status;
-        })
-        .catch((error) => {
-          // Diagnostic and optional: Pianissimo controls stay hidden without it.
-          console.warn("Failed to load engine status", error);
-        });
-      try {
-        const loaded = await readSettings();
-        await refreshProfileModels(loaded.hotkey_profiles);
-        platform = await loadPlatform();
-        if (platform === "macos") {
-          accessibilityGranted = await checkAccessibilityPermission();
-        }
-        supportedFormats = await getSupportedFormats();
-        const status = await hotkeyStatus();
-        hotkeyStatusOk = status.ok;
-        hotkeyStatusError = status.error ?? "";
-        if (platform === "macos" && accessibilityGranted && !status.ok && configuredShortcutsUseBareHotkey()) {
-          await refreshHotkeyRegistration();
-        }
-
-        // Check URL params for initial tab
-        const params = new URLSearchParams(window.location.search);
-        const tab = params.get("tab");
-        if (tab === "dictate" || tab === "transcribe" || tab === "settings") {
-          requestTabChange(tab);
-        }
-      } catch (e) {
-        initError = toErrorMessage(e, "Failed to load settings.");
-      }
-    })();
-    return () => {
-      recovery.dispose();
-      fileModelCatalogController.dispose();
-      profileModelCatalogController.dispose();
-    };
-  });
-
-  /**
-   * Read the persisted settings and show them; showing a copy confirms it.
-   * Resolves with the copy now shown. A read that a later-issued read has
-   * already answered is dropped, whether it succeeds or fails: that answer
-   * stands. Any other failure rejects. When a copy is already shown it also
-   * marks that copy unconfirmed, for every caller, because a read failed and
-   * the copy may be behind the saved state; `afterSave` says a change of ours
-   * was saved before this read, which the notice then states.
-   */
-  async function readSettings(afterSave = false): Promise<Settings> {
-    const ticket = ++settingsReadIssued;
-    let fresh: Settings;
-    try {
-      fresh = await getSettings();
-    } catch (error) {
-      const superseded = ticket < settingsReadSettled;
-      settingsReadSettled = Math.max(settingsReadSettled, ticket);
-      if (superseded && settings) return settings;
-      if (settings) markSettingsUnconfirmed(error, afterSave);
-      throw error;
-    }
-    if (ticket > settingsReadSettled) {
-      settingsReadSettled = ticket;
-      settings = fresh;
-      confirmSettings();
-    } else if (!settings) {
-      // A newer read failed before this older one answered. Nothing is shown
-      // yet, so nothing can go stale: show this copy rather than none. The
-      // newer failure's notice stays, with Reload settings.
-      settings = fresh;
-    }
-    return settings ?? fresh;
-  }
-
-  /** A read showed the saved state: lift the notice and the messages that only said a change was held back. */
-  function confirmSettings(): void {
-    if (!settingsUnconfirmed) return;
-    settingsUnconfirmed = null;
-    if (settingsError === unconfirmedBlock || (rejectionWithoutPreview && settingsError === rejectionWithoutPreview)) settingsError = "";
-    rejectionWithoutPreview = "";
-    if (hotkeyError === unconfirmedBlock) hotkeyError = "";
-    modelDownloads.dismiss(unconfirmedBlock);
-  }
-
-  /**
-   * After a read that resolved: a newer read may have failed meanwhile and marked the
-   * copy, while this one was dropped. Then the change of ours that this read followed
-   * (`afterSave`) was saved but is still unconfirmed. Resolves whether the copy is unconfirmed.
-   */
-  function restampUnconfirmed(afterSave: boolean): boolean {
-    const unconfirmed = settingsUnconfirmed;
-    if (!unconfirmed) return false;
-    markSettingsUnconfirmed(unconfirmed.detail, afterSave);
-    return true;
-  }
-
-  function markSettingsUnconfirmed(error: unknown, afterSave: boolean): void {
-    settingsUnconfirmed = {
-      afterSave: afterSave || (settingsUnconfirmed?.afterSave ?? false),
-      detail: toErrorMessage(error, "unknown error"),
-    };
-  }
-
-  /**
-   * Read the settings again and refresh what depends on them, for the
-   * settings-changed event and the Reload settings button. A failed read keeps
-   * the notice, with the newest reason.
-   */
-  async function syncSettings(): Promise<void> {
-    try {
-      const current = await readSettings();
-      await refreshProfileModels(current.hotkey_profiles);
-    } catch (error) {
-      markSettingsUnconfirmed(error, false);
-    }
-  }
+    isAsking: () => glossaryEditor?.isAsking() ?? false,
+  };
 
   // When the lock engages, a focused control that just became disabled drops the
   // keyboard focus; hand it to Reload settings, the one thing to do next.
   let lockFocusHandled = false;
   $effect(() => {
-    if (!settingsLocked) {
+    if (!session.locked) {
       lockFocusHandled = false;
       return;
     }
@@ -893,86 +111,19 @@
   });
 
   async function reloadSettings(): Promise<void> {
-    if (settingsReloading) return;
-    settingsReloading = true;
+    if (session.reloading) return;
+    session.reloading = true;
     const hadFocus = document.activeElement === reloadButtonEl;
     try {
-      await syncSettings();
+      await session.sync();
     } finally {
-      settingsReloading = false;
+      session.reloading = false;
     }
     // The button leaves with the notice: keep a keyboard user's place in the window.
-    if (hadFocus && !settingsUnconfirmed) {
+    if (hadFocus && !session.unconfirmed) {
       await tick();
       windowTitleEl?.focus();
     }
-  }
-
-  /** Why a change was not sent while the window cannot tell what is saved. */
-  const unconfirmedBlock = "This change was not sent: the window could not confirm the last saved change. Reload settings first.";
-
-  /**
-   * One settings change followed by its read-back, kept apart (#341):
-   * - `saved: false`: the backend rejected the change (or the window held it
-   *   back, see below). Nothing was saved and nothing was read.
-   * - `saved: true`: the change is saved; it is never repeated. `confirmed` says
-   *   whether the read-back showed the saved state. When it failed, the window
-   *   keeps the old copy, marks it unconfirmed and shows the notice that offers
-   *   Reload settings; it does not claim the save failed.
-   * While unconfirmed, no change is sent: it could be built from the old copy
-   * (a toggle, a whole profile list, a dictionary save) and overwrite what was
-   * saved. The controls that save a setting are disabled then (`settingsLocked`),
-   * so this hold only catches what stays enabled, such as the dictionary Save.
-   * `afterSave` runs as soon as the change is saved, before the read-back.
-   */
-  const settingsTransactionController = createSettingsTransactionController({
-    isUnconfirmed: () => settingsUnconfirmed !== null,
-    unconfirmedError: unconfirmedBlock,
-    readBack: () => readSettings(true),
-    markUnconfirmed: markSettingsUnconfirmed,
-    restamp: restampUnconfirmed,
-  });
-
-  function saveSetting<T>(mutate: () => Promise<T>, afterSave?: (result: T) => void): Promise<SaveOutcome<T>> {
-    return settingsTransactionController.save(mutate, afterSave);
-  }
-
-  /**
-   * Shared wrapper for the common "mutate then refresh settings" pattern.
-   * Resolves true when the change is saved, even if the read-back that should
-   * confirm it failed (then the unconfirmed notice is shown, see saveSetting).
-   * When it is rejected: records a visible error, reassigns `settings` so
-   * rendered values come from the last known copy, and resolves false. A native
-   * select or input keeps the rejected value on its own: callers put the saved
-   * one back by hand. Never re-throws.
-   */
-  async function applySetting(
-    mutate: () => Promise<void | string[]>,
-    errorSink?: { value: string; code: string | null },
-    reportError = true,
-    refreshModels = true,
-  ): Promise<boolean> {
-    if (reportError) settingsError = "";
-    const outcome = await saveSetting(mutate, (notices) => {
-      profileModelNotices = Array.isArray(notices) ? notices : [];
-    });
-    if (!outcome.saved) {
-      const message = toErrorMessage(outcome.error, "Failed to save setting.");
-      if (reportError) settingsError = message;
-      if (errorSink) {
-        errorSink.value = message;
-        errorSink.code = isBackendError(outcome.error) ? outcome.error.code : null;
-      }
-      if (settings) settings = { ...settings };
-      return false;
-    }
-    if (refreshModels && outcome.confirmed && settings) await refreshProfileModels(settings.hotkey_profiles);
-    return true;
-  }
-
-  /** `applySetting` for a setting no model depends on: the models are not queried again. */
-  function applyScalarSetting(mutate: () => Promise<void | string[]>): Promise<boolean> {
-    return applySetting(mutate, undefined, true, false);
   }
 
   /**
@@ -993,13 +144,13 @@
     // Native selects change before the async handler. A rejected value must
     // never remain visible merely because Svelte's saved value did not change.
     select.value = settings.language;
-    if (languageSaving || glossarySaving) return;
+    if (router.held || glossarySaving) return;
     blockedLanguageChange = null;
-    languageSaving = true;
+    router.held = true;
     let saved = false;
     try {
       let rejection: unknown = null;
-      const ok = await applySetting(() =>
+      const ok = await session.apply(() =>
         setLanguage(value).catch((error: unknown) => {
           rejection = error;
           throw error;
@@ -1011,26 +162,26 @@
       if (!ok && isBackendError(rejection, "dictionary_blocks_language_change")) {
         // Show the actual blocking dictionary, not whichever editor scope is
         // selected. Freeze the preview for the existing compare-and-swap API.
-        const current = await readSettings();
+        const current = await session.read();
         const profileId = languageProfileId(current.hotkey_profiles);
         const source = current.profile_glossaries[profileId] ?? "";
         if (source.trim()) blockedLanguageChange = { language: value, source, profileId };
-        else settingsError = "The blocking dictionary was cleared elsewhere. Select the language again to retry.";
+        else session.error = "The blocking dictionary was cleared elsewhere. Select the language again to retry.";
       }
     } catch (error) {
       // The change was rejected, so nothing was saved; only the preview of the blocking dictionary is missing.
-      if (restampUnconfirmed(false)) {
+      if (session.restampUnconfirmed(false)) {
         // The failed read locked the window and the notice says so; the language select is disabled
         // until Reload settings, which also lifts the rejection message above.
-        rejectionWithoutPreview = settingsError;
+        session.rejectionWithoutPreview = session.error;
       } else {
-        settingsError += `${settingsError ? " " : ""}The window could not read the settings to show the blocking dictionary (${toErrorMessage(error, "unknown error")}). Select the language again to retry.`;
+        session.error += `${session.error ? " " : ""}The window could not read the settings to show the blocking dictionary (${toErrorMessage(error, "unknown error")}). Select the language again to retry.`;
       }
     } finally {
       // A saved language whose read-back failed is shown as chosen: `settings` is
       // the old copy then, and the notice says it may be out of date.
-      select.value = saved && settingsUnconfirmed ? value : settings.language;
-      languageSaving = false;
+      select.value = saved && session.unconfirmed ? value : settings.language;
+      router.held = false;
       if (!blockedLanguageChange) void restoreLanguageFocus();
     }
   }
@@ -1041,12 +192,12 @@
   // sends only the language. The language select that opens it and the button that
   // starts it are both disabled while unconfirmed anyway.
   async function clearDictionaryAndSwitchLanguage(): Promise<void> {
-    if (!settings || !blockedLanguageChange || languageSaving || glossarySaving) return;
+    if (!settings || !blockedLanguageChange || router.held || glossarySaving) return;
     const request = blockedLanguageChange;
     const { profileId } = request;
     const scopeDraft = glossaryEditor?.unsavedDraftOf(profileId) ?? null;
-    languageSaving = true;
-    settingsError = "";
+    router.held = true;
+    session.error = "";
     let cleared = false;
     try {
       await setProfileGlossary(profileId, "", request.source);
@@ -1055,282 +206,68 @@
       // erase a dictionary that may have been populated again in the meantime.
       blockedLanguageChange = null;
       if (scopeDraft !== null) glossaryEditor?.preserveDraft(profileId, scopeDraft);
-      settings = { ...settings, profile_glossaries: { ...settings.profile_glossaries, [profileId]: "" } };
+      session.settings = { ...settings, profile_glossaries: { ...settings.profile_glossaries, [profileId]: "" } };
       glossaryEditor?.discardChangesOf(profileId);
       const notices = await setLanguage(request.language);
-      profileModelNotices = Array.isArray(notices) ? notices : [];
+      session.profileModelNotices = Array.isArray(notices) ? notices : [];
     } catch (error) {
       const message = toErrorMessage(error, "Unknown error");
       if (cleared) glossaryEditor?.preserveDraft(profileId, request.source);
-      settingsError = cleared
+      session.error = cleared
         ? `The default dictionary was cleared, but the language change failed: ${message}`
         : `The dictionary could not be cleared; the language was not changed: ${message}`;
       blockedLanguageChange = null;
     } finally {
       try {
-        const current = await readSettings();
-        await refreshProfileModels(current.hotkey_profiles);
-        restampUnconfirmed(cleared);
+        const current = await session.read();
+        await profileModels.refresh(current.hotkey_profiles);
+        session.restampUnconfirmed(cleared);
       } catch (error) {
         // The notice says what happened and offers Reload settings.
-        markSettingsUnconfirmed(error, cleared);
+        session.markUnconfirmed(error, cleared);
       }
-      languageSaving = false;
+      router.held = false;
       void restoreLanguageFocus();
     }
-  }
-
-  async function onAutoPasteToggle() {
-    if (!settings) return;
-    const enabling = !settings.auto_paste;
-    if (!enabling || platform !== "macos") {
-      await applyScalarSetting(() => setAutoPaste(enabling));
-      return;
-    }
-
-    // Keep the preference off until TCC actually reports approval. This is an
-    // explicit user action, so it is the one place where prompting is allowed.
-    accessibilityChecking = true;
-    accessibilityRequested = true;
-    settingsError = "";
-    try {
-      accessibilityGranted = await checkAccessibilityPermission();
-      if (!accessibilityGranted) {
-        accessibilityGranted = await requestAccessibility({ onGranted: refreshHotkeyRegistration });
-      }
-
-      if (accessibilityGranted) {
-        await applyScalarSetting(() => setAutoPaste(true));
-      } else {
-        await applyScalarSetting(() => setAutoPaste(false));
-        settingsError = "Accessibility permission was not granted. Auto-paste remains off.";
-      }
-    } catch (e) {
-      await applyScalarSetting(() => setAutoPaste(false));
-      settingsError = toErrorMessage(e, "Failed to check Accessibility permission.");
-    } finally {
-      accessibilityChecking = false;
-    }
-  }
-
-  // Non-blocking hint when a configured shortcut is bare F14/F15 on macOS.
-  let brightnessKeyWarning = $derived.by(() => {
-    if (!settings) return null;
-    const shortcuts = [settings.hotkey, ...allProfileShortcutValues(settings.hotkey_profiles, settings.hotkey_mode)];
-    for (const shortcut of shortcuts) {
-      const warning = brightnessKeyHotkeyWarning(shortcut, platform);
-      if (warning) return warning;
-    }
-    return null;
-  });
-
-  function configuredShortcutsUseBareHotkey(): boolean {
-    // Only bare F13–F24 registrations depend on the macOS Accessibility
-    // grant, so only those benefit from an automatic retry on Settings
-    // open. Retrying other failures (e.g. shortcut-in-use) would just churn
-    // unregister/register without helping. Gated on shortcut content, not
-    // on backend error text, to avoid fragile string coupling.
-    if (!settings) return false;
-    const shortcuts = [settings.hotkey, ...allProfileShortcutValues(settings.hotkey_profiles, settings.hotkey_mode)];
-    return shortcuts.some((shortcut) => canUseBareHotkey(shortcut, platform));
-  }
-
-  async function refreshHotkeyRegistration(): Promise<void> {
-    let retryError: unknown = null;
-    try {
-      await retryHotkeyRegistration();
-      const current = await readSettings();
-      await refreshProfileModels(current.hotkey_profiles);
-    } catch (error) {
-      // The registration-health response below contains the backend's full
-      // diagnostic and keeps the failure visible in Settings.
-      console.warn("Failed to retry hotkey registration", error);
-      retryError = error;
-    }
-    const status = await hotkeyStatus();
-    hotkeyStatusOk = status.ok;
-    hotkeyStatusError = status.error ?? "";
-    // A retry that was refused as busy (the macOS event monitor is still
-    // starting, or a dictation is active) attempted nothing, so the health
-    // above has no diagnostic for it and only says the old failure: show why
-    // the retry did not happen, and that trying again will work.
-    if (isBackendError(retryError, "busy")) hotkeyStatusError = toErrorMessage(retryError);
   }
 
   async function onShowOverlayToggle() {
     if (!settings) return;
     const next = !settings.show_overlay;
-    await applyScalarSetting(() => setShowOverlay(next));
-  }
-
-  function requestTabChange(nextTab: SettingsTab, afterNavigate?: () => void): void {
-    if (languageSaving) return;
-    if (nextTab === activeTab) {
-      afterNavigate?.();
-      return;
-    }
-    const leave = (): void => {
-      activeTab = nextTab;
-      afterNavigate?.();
-    };
-    // The dictionary editor asks first while it holds unsaved changes.
-    if (glossaryEditor) glossaryEditor.requestLeave(leave);
-    else leave();
+    await session.applyScalar(() => setShowOverlay(next));
   }
 
   async function onBeamSizeChange(e: Event) {
     const select = e.currentTarget as HTMLSelectElement;
     const value = Number(select.value);
-    const saved = await applyScalarSetting(() => setBeamSize(value));
+    const saved = await session.applyScalar(() => setBeamSize(value));
     if (!saved && settings) select.value = String(settings.beam_size);
   }
 
   async function onTemperatureFallbackToggle() {
     if (!settings) return;
     const next = !settings.temperature_fallback;
-    await applyScalarSetting(() => setTemperatureFallback(next));
+    await session.applyScalar(() => setTemperatureFallback(next));
   }
 
   async function onEnginePrewarmChange(e: Event) {
     const select = e.currentTarget as HTMLSelectElement;
     const value = select.value as EnginePrewarm;
-    const saved = await applyScalarSetting(() => setEnginePrewarm(value));
+    const saved = await session.applyScalar(() => setEnginePrewarm(value));
     if (!saved && settings) select.value = settings.engine_prewarm;
   }
 
   async function onEngineIdleChange(e: Event) {
     const select = e.currentTarget as HTMLSelectElement;
     const value = Number(select.value);
-    const saved = await applyScalarSetting(() => setEngineIdleUnloadMinutes(value));
+    const saved = await session.applyScalar(() => setEngineIdleUnloadMinutes(value));
     if (!saved && settings) select.value = String(settings.engine_idle_unload_minutes);
   }
 
   async function onVadToggle() {
     if (!settings) return;
     const next = !settings.vad_enabled;
-    await applyScalarSetting(() => setVadEnabled(next));
-  }
-
-  /** "Download the model again" for the Pianissimo models `ids`; rejects when a download fails. */
-  function downloadEngineModelAgain(ids: readonly string[]): Promise<void> {
-    return modelDownloads.downloadAgain(ids, (id) => fileModelOptions.find((model) => model.id === id)?.display_name ?? "Pianissimo");
-  }
-
-  /**
-   * The Pianissimo model a file job's engine error is about. A Pianissimo
-   * model only serves its own language, so the job's language decides: its
-   * profile's, or the default profile's for a job without one.
-   */
-  function filePianissimoId(job: { profileId: string | null }): string {
-    const profile = profileForId(job.profileId) ?? settings?.hotkey_profiles.find((p) => p.id === "default") ?? null;
-    return firstPianissimoId([pianissimoIdForLanguage(profile?.language), settings?.file_transcription_model]);
-  }
-
-  /**
-   * The Pianissimo models a dictation engine error can be about: every one a
-   * profile dictates with (Auto resolved). The error does not say which
-   * profile failed, so all of them are checked; an intact one costs only a
-   * verification.
-   */
-  function dictationPianissimoIds(): string[] {
-    return pianissimoIdsOf((settings?.hotkey_profiles ?? []).map((profile) => profileModels[profile.id]?.id));
-  }
-
-  /** "Download the model again" under the Dictate tab's error. */
-  async function onDictateDownloadModel(): Promise<void> {
-    if (updatePreparing || modelDownloads.busy || modelDownloads.repairing) return;
-    const revision = dictationEventRevision;
-    try {
-      await downloadEngineModelAgain(dictationPianissimoIds());
-      // The model is there: the action can be repeated. Unless another event
-      // replaced the error meanwhile (even one with the same text): that one
-      // decides its own recovery.
-      if (dictationEventRevision === revision) testRecovery = "retry";
-    } catch (failure) {
-      showTestError(failure, "Speech engine download failed.");
-      // The download again, only where it can pass; a refusal offers nothing.
-      testRecovery = downloadFailureRecovery(failure);
-    }
-  }
-
-  /** The recommended model to suggest for a Swedish profile still on a retired model. */
-  function retiredModelSuggestion(profile: HotkeyProfile): WhisperModel | null {
-    const current = profileModels[profile.id];
-    const recommended = profileRecommended[profile.id];
-    if (profile.language !== "sv" || !current || !recommended) return null;
-    if (!retiredSwedishModelIds.includes(current.id) || recommended.id === current.id) return null;
-    return recommended;
-  }
-
-  async function switchProfileToRecommended(profile: HotkeyProfile) {
-    const target = retiredModelSuggestion(profile);
-    if (!target || modelDownloads.busy || dictationModelSaving) return;
-    dictationModelSaving = true;
-    try {
-      await modelDownloads.downloadThenSwitch(profile.id, target, async () => {
-        const outcome = await saveSetting(() => setProfileModel(profile.id, target.id));
-        if (!outcome.saved) throw outcome.error;
-        if (outcome.confirmed && settings) await refreshProfileModels(settings.hotkey_profiles);
-      });
-    } finally {
-      dictationModelSaving = false;
-    }
-  }
-
-  async function changeProfileModel(profile: HotkeyProfile, event: Event) {
-    if (!settings || dictationModelSaving) return;
-    const select = event.target as HTMLSelectElement;
-    const previous = settings.profile_models[profile.id] ?? "auto";
-    dictationModelSaving = true;
-    modelDownloads.setProfileError(profile.id, "");
-    try {
-      const outcome = await saveSetting(() => setProfileModel(profile.id, select.value));
-      if (!outcome.saved) {
-        select.value = previous;
-        modelDownloads.setProfileError(profile.id, toErrorMessage(outcome.error, "Could not change profile model."));
-      } else if (outcome.confirmed && settings) {
-        await refreshProfileModels(settings.hotkey_profiles);
-      }
-    } finally {
-      dictationModelSaving = false;
-    }
-  }
-
-  async function onTestRecord() {
-    if (updatePreparing || dictationModelSaving || modelDownloads.busy) return;
-    const action = dictateButtonAction(backendDictationState, testOwnsRecording);
-    if (action === "blocked") return;
-
-    if (action === "stop") {
-      // Stop and transcribe
-      testOwnsRecording = false;
-      testRecording = false;
-      testTranscribing = true;
-      backendDictationState = "transcribing";
-      clearTestError();
-      try {
-        const text = await stopAndTranscribe();
-        recovery.appendTestRecording(text);
-      } catch (e) {
-        showTestError(e, "Transcription failed");
-      } finally {
-        testTranscribing = false;
-        backendDictationState = "idle";
-      }
-    } else {
-      // Start recording
-      clearTestError();
-      try {
-        await startRecording();
-        testOwnsRecording = true;
-        testRecording = true;
-        backendDictationState = "recording";
-      } catch (e) {
-        testOwnsRecording = false;
-        backendDictationState = "idle";
-        showTestError(e, "Failed to start recording");
-      }
-    }
+    await session.applyScalar(() => setVadEnabled(next));
   }
 
   /**
@@ -1343,229 +280,19 @@
    */
   async function onDictateRetry(): Promise<void> {
     testRecordButton?.focus();
-    await onTestRecord();
+    await dictation.toggleRecording();
     await tick();
     testRecordButton?.focus();
   }
-
-  function onTranscribeProfileChange(e: Event) {
-    const nextProfileId = (e.target as HTMLSelectElement).value;
-    transcribeProfileId = profileForId(nextProfileId)?.id ?? selectedTranscribeProfile()?.id ?? null;
-  }
-
-  async function onPickFile() {
-    if (updatePreparing) return;
-    const exts = supportedFormats.length > 0 ? supportedFormats : ["wav", "mp3", "m4a", "mp4", "ogg", "flac"];
-    const file = await open({
-      multiple: true,
-      filters: [
-        {
-          name: "Audio/Video",
-          extensions: exts,
-        },
-      ],
-    });
-    if (file && !updatePreparing) {
-      handleFilesTranscription(file);
-    }
-  }
-
-  /** Platform-correct modifier display names */
-  function modifierNames(): { ctrl: string; alt: string; meta: string } {
-    const mac = platform === "macos";
-    return {
-      ctrl: mac ? "Control" : "Ctrl",
-      alt: mac ? "Option" : "Alt",
-      meta: mac ? "Cmd" : "Win",
-    };
-  }
-
-  /** Format a shortcut string for display (e.g. "Control+Shift+Space" → "Ctrl + Shift + Space") */
-  function formatHotkeyDisplay(shortcut: string): string {
-    return formatShortcutDisplay(shortcut, platform);
-  }
-
-  function beginHotkeyCapture(profileId: string, slot: ExplicitShortcutSlot) {
-    hotkeyCaptureGeneration += 1;
-    recordingProfileId = profileId;
-    recordingShortcutSlot = slot;
-    hotkeyError = "";
-  }
-
-  async function onHotkeyKeydown(e: KeyboardEvent, profileId: string, slot: ExplicitShortcutSlot) {
-    const captureGeneration = hotkeyCaptureGeneration;
-    e.preventDefault();
-    e.stopPropagation();
-
-    // Escape cancels recording
-    if (e.key === "Escape") {
-      hotkeyCaptureGeneration += 1;
-      recordingProfileId = null;
-      recordingShortcutSlot = null;
-      hotkeyError = "";
-      return;
-    }
-
-    // Ignore bare modifier presses — wait for a non-modifier key
-    if (["Control", "Shift", "Alt", "Meta"].includes(e.key)) return;
-
-    const keyName = tauriKeyName(e.key, e.code, platform);
-    if (!keyName) {
-      hotkeyError =
-        e.code === "IntlBackslash"
-          ? "The ISO section key is supported only on macOS and Windows. Choose another key."
-          : `"${e.key}" is not a supported key. Use A–Z, 0–9, F1–F24, Space, Arrow keys, or Tab/Enter/Delete.`;
-      return;
-    }
-
-    // Ordinary keys require a modifier. Extended function keys are reserved
-    // for programmable buttons and may be used directly through the native
-    // macOS monitor or the Windows global-shortcut backend.
-    const hasModifier = e.ctrlKey || e.altKey || e.metaKey || e.shiftKey;
-    if (platform === "macos" && hasModifier && /^F2[1-4]$/.test(keyName)) {
-      hotkeyError = `${keyName} is supported without modifiers on macOS, but its modified forms cannot be registered reliably.`;
-      return;
-    }
-    if (!hasModifier && !canUseBareHotkey(keyName, platform)) {
-      const m = modifierNames();
-      const bareRange = supportedBareFunctionKeyRange(platform);
-      hotkeyError = `Shortcut must include a modifier (${m.ctrl}, ${m.alt}, ${m.meta}, or Shift).${bareRange ? ` ${bareRange} may be used alone.` : ""}`;
-      return;
-    }
-
-    if (platform === "macos" && !hasModifier && /^F(?:1[3-9]|2[0-4])$/.test(keyName)) {
-      accessibilityChecking = true;
-      try {
-        accessibilityGranted = await checkAccessibilityPermission();
-        if (!accessibilityGranted) {
-          accessibilityGranted = await requestAccessibility({ onGranted: refreshHotkeyRegistration });
-        }
-      } catch (error) {
-        hotkeyError = toErrorMessage(error, "Failed to check Accessibility permission.");
-        return;
-      } finally {
-        accessibilityChecking = false;
-      }
-      if (!accessibilityGranted) {
-        hotkeyError = "F13–F24 requires Accessibility permission on macOS. Permission was not granted.";
-        return;
-      }
-      if (captureGeneration !== hotkeyCaptureGeneration) return;
-    }
-
-    // Build Tauri-format shortcut string (order: Control, Alt, Super, Shift, Key)
-    // Note: muda crate uses "Super" (not "Meta") for Cmd on macOS / Win key on Windows
-    const parts: string[] = [];
-    if (e.ctrlKey) parts.push("Control");
-    if (e.altKey) parts.push("Alt");
-    if (e.metaKey) parts.push("Super");
-    if (e.shiftKey) parts.push("Shift");
-    parts.push(keyName);
-
-    const shortcut = parts.join("+");
-    hotkeyError = "";
-
-    const currentSettings = settings;
-    if (!currentSettings) return;
-    const profiles = currentSettings.hotkey_profiles.map((profile) =>
-      profile.id === profileId ? profileWithShortcut(profile, slot, shortcut, currentSettings.hotkey_mode) : profile,
-    );
-    const outcome = await saveSetting(
-      () => setHotkeyProfiles(profiles),
-      () => {
-        recordingProfileId = null;
-        recordingShortcutSlot = null;
-        draftProfileId = null;
-      },
-    );
-    if (!outcome.saved) hotkeyError = toErrorMessage(outcome.error, "Failed to set hotkey");
-    else if (outcome.confirmed && settings) await refreshProfileModels(settings.hotkey_profiles);
-  }
-
-  async function clearProfileShortcut(profileId: string, slot: ExplicitShortcutSlot) {
-    const currentSettings = settings;
-    if (!currentSettings) return;
-    const profile = currentSettings.hotkey_profiles.find((candidate) => candidate.id === profileId);
-    if (!profile || !profile.push_to_talk_shortcut || !profile.toggle_shortcut) return;
-    const profiles = currentSettings.hotkey_profiles.map((candidate) =>
-      candidate.id === profileId ? profileWithShortcut(candidate, slot, null, currentSettings.hotkey_mode) : candidate,
-    );
-    if (profileId === draftProfileId) {
-      settings = { ...currentSettings, hotkey_profiles: profiles };
-      await refreshProfileModels(profiles);
-      return;
-    }
-    const saved = await applySetting(() => setHotkeyProfiles(profiles));
-    if (!saved && settingsError) hotkeyError = settingsError;
-  }
-
-  /** Resolves true when the change is kept (saved, or applied to a profile that is still a draft). */
-  async function updateProfile(profileId: string, changes: Partial<HotkeyProfile>): Promise<boolean> {
-    if (!settings) return false;
-    const profiles = settings.hotkey_profiles.map((profile) => (profile.id === profileId ? { ...profile, ...changes } : profile));
-    if (profileId === draftProfileId) {
-      settings = { ...settings, hotkey_profiles: profiles };
-      await refreshProfileModels(profiles);
-      return true;
-    }
-    return applySetting(() => setHotkeyProfiles(profiles));
-  }
-
-  async function onProfileLanguageChange(event: Event, profile: HotkeyProfile) {
-    const select = event.currentTarget as HTMLSelectElement;
-    const saved = await updateProfile(profile.id, { language: select.value as Language });
-    if (!saved) select.value = profileForId(profile.id)?.language ?? profile.language;
-  }
-
-  async function onProfileNameBlur(event: Event, profile: HotkeyProfile) {
-    const input = event.currentTarget as HTMLInputElement;
-    // Leaving an untouched field sends nothing while the window cannot confirm what is saved.
-    if (settingsUnconfirmed && input.value === profile.name) return;
-    const saved = await updateProfile(profile.id, { name: input.value });
-    if (!saved) input.value = profileForId(profile.id)?.name ?? profile.name;
-  }
-
-  function addProfile() {
-    if (!settings) return;
-    let suffix = settings.hotkey_profiles.length + 1;
-    while (
-      settings.hotkey_profiles.some((profile) => profile.id === `profile-${suffix}`) ||
-      Object.hasOwn(settings.profile_glossaries, `profile-${suffix}`)
-    )
-      suffix += 1;
-    const suggested = suggestedProfileShortcuts(settings.hotkey_profiles, settings.hotkey, platform);
-    const profile: HotkeyProfile = {
-      id: `profile-${suffix}`,
-      name: `Profile ${suffix}`,
-      ...suggested,
-      language: settings.language === "sv" ? "en" : "sv",
-    };
-    settings = { ...settings, hotkey_profiles: [...settings.hotkey_profiles, profile] };
-    draftProfileId = profile.id;
-    beginHotkeyCapture(profile.id, "push_to_talk_shortcut");
-    void refreshProfileModels(settings.hotkey_profiles);
-  }
-
-  async function removeProfile(profileId: string) {
-    if (!settings || settings.hotkey_profiles.length <= 1) return;
-    if (profileId === draftProfileId) {
-      settings = { ...settings, hotkey_profiles: settings.hotkey_profiles.filter((profile) => profile.id !== profileId) };
-      draftProfileId = null;
-      recordingProfileId = null;
-      recordingShortcutSlot = null;
-      return;
-    }
-    await applySetting(() => setHotkeyProfiles(settings!.hotkey_profiles.filter((profile) => profile.id !== profileId)));
-  }
 </script>
 
-<div class="settings-window" class:settings-locked={settingsLocked}>
+<div class="settings-window" class:settings-locked={session.locked}>
   <header class="window-header">
     <h1 class="window-title" bind:this={windowTitleEl} tabindex="-1">Sagascript</h1>
     <div class="build-info" aria-label="Build information">
-      {#if buildInfo}
-        Version {buildInfo.version} · Build {buildInfo.git_hash} · {buildInfo.build_date}{engineHostIdentity
-          ? ` · ${engineHostIdentity}`
+      {#if win.buildInfo}
+        Version {win.buildInfo.version} · Build {win.buildInfo.git_hash} · {win.buildInfo.build_date}{win.engineHostIdentity
+          ? ` · ${win.engineHostIdentity}`
           : ""}
       {:else}
         Version information unavailable
@@ -1574,29 +301,29 @@
   </header>
 
   <div class="tabs">
-    <button class="tab" class:active={activeTab === "dictate"} onclick={() => requestTabChange("dictate")} disabled={languageSaving}>
+    <button class="tab" class:active={router.active === "dictate"} onclick={() => router.request("dictate")} disabled={router.held}>
       Dictate
     </button>
-    <button class="tab" class:active={activeTab === "transcribe"} onclick={() => requestTabChange("transcribe")} disabled={languageSaving}>
+    <button class="tab" class:active={router.active === "transcribe"} onclick={() => router.request("transcribe")} disabled={router.held}>
       Transcribe
     </button>
-    <button class="tab" class:active={activeTab === "settings"} onclick={() => requestTabChange("settings")} disabled={languageSaving}>
+    <button class="tab" class:active={router.active === "settings"} onclick={() => router.request("settings")} disabled={router.held}>
       Settings
     </button>
   </div>
 
   {#if settings}
-    <div class="content" style:--notice-clearance={settingsUnconfirmed ? `${unconfirmedNoticeHeight + 12}px` : null}>
-      {#if initError}
-        <div class="transcribe-error">{initError}</div>
+    <div class="content" style:--notice-clearance={session.unconfirmed ? `${unconfirmedNoticeHeight + 12}px` : null}>
+      {#if session.initError}
+        <div class="transcribe-error">{session.initError}</div>
       {/if}
       {#if recovery.readError}
         <div class="transcribe-error" role="alert">{recovery.readError}</div>
       {/if}
-      {#if settingsError}
-        <div class="transcribe-error" role={glossaryEditor?.isAsking() ? undefined : "alert"}>{settingsError}</div>
+      {#if session.error}
+        <div class="transcribe-error" role={router.asking ? undefined : "alert"}>{session.error}</div>
       {/if}
-      {#if settingsUnconfirmed}
+      {#if session.unconfirmed}
         <section
           class="recovery-notice settings-unconfirmed"
           role="alert"
@@ -1604,16 +331,16 @@
           bind:offsetHeight={unconfirmedNoticeHeight}
         >
           <span>
-            {settingsUnconfirmed.afterSave
+            {session.unconfirmed.afterSave
               ? "Your change was saved, but could not be read back to confirm it"
               : "The settings could not be re-read"}
-            ({settingsUnconfirmed.detail}). Values shown may be out of date; reload before changing anything.
+            ({session.unconfirmed.detail}). Values shown may be out of date; reload before changing anything.
           </span>
           <button
             class="secondary"
             type="button"
             bind:this={reloadButtonEl}
-            aria-disabled={settingsReloading ? "true" : "false"}
+            aria-disabled={session.reloading ? "true" : "false"}
             onclick={() => void reloadSettings()}>Reload settings</button
           >
         </section>
@@ -1629,43 +356,45 @@
       {/if}
       <p
         class="queue-summary"
-        class:queue-empty={fileJobs.length === 0}
+        class:queue-empty={queue.jobs.length === 0}
         role="status"
         aria-label="File transcription status"
         aria-atomic="true"
       >
-        {#if fileJobs.length}
-          {fileJobs.filter((job) => job.status === "completed" && !fileBusy[job.id]).length} completed ·
-          {fileJobs.filter((job) => job.status === "failed").length} failed ·
-          {fileJobs.filter((job) => job.status === "cancelled").length} cancelled ·
-          {fileJobs.filter((job) => job.status === "queued").length} queued ·
-          {fileJobs.filter((job) => job.status === "running" || fileBusy[job.id]).length} running ·
-          {filesNeedingRetry.length} needs retry
+        {#if queue.jobs.length}
+          {queue.jobs.filter((job) => job.status === "completed" && !queue.busy[job.id]).length} completed ·
+          {queue.jobs.filter((job) => job.status === "failed").length} failed ·
+          {queue.jobs.filter((job) => job.status === "cancelled").length} cancelled ·
+          {queue.jobs.filter((job) => job.status === "queued").length} queued ·
+          {queue.jobs.filter((job) => job.status === "running" || queue.busy[job.id]).length} running ·
+          {queue.needingRetry.length} needs retry
         {/if}
       </p>
-      {#if filesNeedingRetry.length}
+      {#if queue.needingRetry.length}
         <div class="queue-attention">
-          {#each filesNeedingRetry as job (job.id)}
+          {#each queue.needingRetry as job (job.id)}
             <div>
               <span
-                >{fileJobName(job.path)} needs a status check.{#if fileJobs.some((file) => file.status === "queued")}
+                >{fileJobName(job.path)} needs a status check.{#if queue.jobs.some((file) => file.status === "queued")}
                   The queue is paused.{/if}</span
               >
-              <button class="secondary" onclick={() => showFileNeedingRetry(job.id)}>Show {fileJobName(job.path)}</button>
+              <button class="secondary" onclick={() => queue.showNeedingRetry(job.id)}>Show {fileJobName(job.path)}</button>
             </div>
           {/each}
         </div>
       {/if}
-      {#if activeTab === "dictate"}
+      {#if router.active === "dictate"}
         <div class="field profile-field">
           <div class="profile-heading">
             <span class="field-label">Dictation profiles · shortcut, language, model</span>
-            <button class="link-btn" onclick={addProfile} disabled={settingsLocked}>+ Add profile</button>
+            <button class="link-btn" onclick={profiles.add} disabled={session.locked}>+ Add profile</button>
           </div>
-          {#if profileModelNotices.length}
+          {#if session.profileModelNotices.length}
             <div class="profile-model-notice" role="status">
-              <span>{profileModelNotices.join(" ")}</span>
-              <button class="link-btn" type="button" aria-label="Dismiss notice" onclick={() => (profileModelNotices = [])}>Dismiss</button>
+              <span>{session.profileModelNotices.join(" ")}</span>
+              <button class="link-btn" type="button" aria-label="Dismiss notice" onclick={() => (session.profileModelNotices = [])}
+                >Dismiss</button
+              >
             </div>
           {/if}
           {#each settings.hotkey_profiles as profile (profile.id)}
@@ -1676,14 +405,14 @@
                   class="profile-name"
                   aria-label="Profile name"
                   value={profile.name}
-                  onblur={(event) => onProfileNameBlur(event, profile)}
-                  disabled={settingsLocked}
+                  onblur={(event) => profiles.onNameBlur(event, profile)}
+                  disabled={session.locked}
                 />
                 <select
                   aria-label={`${profile.name} language`}
                   value={profile.language}
-                  onchange={(event) => onProfileLanguageChange(event, profile)}
-                  disabled={settingsLocked}
+                  onchange={(event) => profiles.onLanguageChange(event, profile)}
+                  disabled={session.locked}
                 >
                   <option value="en">English</option>
                   <option value="sv">Swedish</option>
@@ -1698,11 +427,14 @@
                 <select
                   aria-label={`Model for ${profile.name}`}
                   value={settings.profile_models[profile.id] ?? "auto"}
-                  onchange={(event) => changeProfileModel(profile, event)}
-                  disabled={profile.id === draftProfileId || dictationModelSaving || backendDictationState !== "idle" || settingsLocked}
+                  onchange={(event) => profileModels.change(profile, event)}
+                  disabled={profile.id === profiles.draftProfileId ||
+                    profileModels.saving ||
+                    dictation.backendState !== "idle" ||
+                    session.locked}
                 >
                   <option value="auto">Recommended for {languageLabel(profile.language)}</option>
-                  {#each profileModelOptions[profile.id] ?? [] as option (option.id)}
+                  {#each profileModels.options[profile.id] ?? [] as option (option.id)}
                     <option value={option.id}>{option.display_name}</option>
                   {/each}
                 </select>
@@ -1711,25 +443,21 @@
                 {#each shortcutControls as shortcutControl (shortcutControl.slot)}
                   <div class="shortcut-control">
                     <span class="shortcut-label">{shortcutControl.label}</span>
-                    {#if recordingProfileId === profile.id && recordingShortcutSlot === shortcutControl.slot}
+                    {#if profiles.recordingProfileId === profile.id && profiles.recordingShortcutSlot === shortcutControl.slot}
                       <button
                         class="hotkey-recorder recording"
                         bind:this={hotkeyRecorderEl}
                         aria-label={`${profile.name} ${shortcutControl.label} shortcut`}
-                        onkeydown={(event) => onHotkeyKeydown(event, profile.id, shortcutControl.slot)}
-                        onblur={() => {
-                          recordingProfileId = null;
-                          recordingShortcutSlot = null;
-                          hotkeyError = "";
-                        }}>Press shortcut...</button
+                        onkeydown={(event) => profiles.onKeydown(event, profile.id, shortcutControl.slot)}
+                        onblur={() => profiles.abandonCapture()}>Press shortcut...</button
                       >
                     {:else}
                       <button
                         class="hotkey-recorder"
                         aria-label={`${profile.name} ${shortcutControl.label} shortcut`}
-                        onclick={() => beginHotkeyCapture(profile.id, shortcutControl.slot)}
-                        disabled={settingsLocked}
-                        >{formatHotkeyDisplay(
+                        onclick={() => profiles.beginCapture(profile.id, shortcutControl.slot)}
+                        disabled={session.locked}
+                        >{profiles.formatHotkeyDisplay(
                           displayProfileShortcut(profile, shortcutControl.slot, settings.hotkey_mode) || "Not set",
                         )}</button
                       >
@@ -1740,8 +468,8 @@
                         type="button"
                         class="shortcut-clear"
                         aria-label={`Clear ${shortcutControl.label} shortcut for ${profile.name}`}
-                        onclick={() => clearProfileShortcut(profile.id, shortcutControl.slot)}
-                        disabled={settingsLocked}>Clear</button
+                        onclick={() => profiles.clearShortcut(profile.id, shortcutControl.slot)}
+                        disabled={session.locked}>Clear</button
                       >
                     {/if}
                   </div>
@@ -1751,37 +479,37 @@
                 <button
                   class="profile-remove"
                   aria-label={`Remove ${profile.name}`}
-                  onclick={() => removeProfile(profile.id)}
-                  disabled={settingsLocked}>Remove</button
+                  onclick={() => profiles.remove(profile.id)}
+                  disabled={session.locked}>Remove</button
                 >
               {/if}
-              {#if profileModels[profile.id]}
-                <div class="profile-engine" class:missing={!profileModels[profile.id].downloaded}>
+              {#if profileModels.models[profile.id]}
+                <div class="profile-engine" class:missing={!profileModels.models[profile.id].downloaded}>
                   <span>
-                    {profileModels[profile.id].downloaded
-                      ? `${profileModels[profile.id].display_name} · Ready`
-                      : `${profileModels[profile.id].display_name} required${profileModels[profile.id].size_mb > 0 ? ` · ${profileModels[profile.id].size_mb} MB` : ""}`}
+                    {profileModels.models[profile.id].downloaded
+                      ? `${profileModels.models[profile.id].display_name} · Ready`
+                      : `${profileModels.models[profile.id].display_name} required${profileModels.models[profile.id].size_mb > 0 ? ` · ${profileModels.models[profile.id].size_mb} MB` : ""}`}
                   </span>
-                  {#if !profileModels[profile.id].downloaded}
+                  {#if !profileModels.models[profile.id].downloaded}
                     <button
                       class="link-btn profile-engine-action"
-                      onclick={() => modelDownloads.downloadProfileModel(profile.id, profileModels[profile.id])}
+                      onclick={() => modelDownloads.downloadProfileModel(profile.id, profileModels.models[profile.id])}
                       disabled={downloading !== null}
                     >
-                      {downloading === profileModels[profile.id].id
+                      {downloading === profileModels.models[profile.id].id
                         ? `Downloading ${Math.round(downloadProgress)}%`
                         : "Download speech engine"}
                     </button>
                   {/if}
                 </div>
-                {#if retiredModelSuggestion(profile)}
-                  {@const suggested = retiredModelSuggestion(profile)!}
+                {#if profileModels.retiredSuggestion(profile)}
+                  {@const suggested = profileModels.retiredSuggestion(profile)!}
                   <div class="profile-engine">
                     <span>{suggested.display_name} is faster and more accurate for Swedish.</span>
                     <button
                       class="link-btn profile-engine-action"
-                      onclick={() => switchProfileToRecommended(profile)}
-                      disabled={downloading !== null || dictationModelSaving || settingsLocked}
+                      onclick={() => profileModels.switchToRecommended(profile)}
+                      disabled={downloading !== null || profileModels.saving || session.locked}
                     >
                       {downloading === suggested.id
                         ? `Downloading ${Math.round(downloadProgress)}%`
@@ -1795,24 +523,24 @@
               {/if}
             </div>
           {/each}
-          {#if hotkeyError}
-            <div class="hotkey-error">{hotkeyError}</div>
-          {:else if !hotkeyStatusOk}
+          {#if profiles.hotkeyError}
+            <div class="hotkey-error">{profiles.hotkeyError}</div>
+          {:else if !profiles.statusOk}
             <div class="hotkey-error">
-              ⚠ Not registered{hotkeyStatusError ? `: ${hotkeyStatusError}` : ""}{#if platform === "macos"}
+              ⚠ Not registered{profiles.statusError ? `: ${profiles.statusError}` : ""}{#if win.platform === "macos"}
                 — check Accessibility permission or whether another app uses this shortcut.{:else}
                 — this shortcut may already be in use by another app. Try a different combination.{/if}
             </div>
           {/if}
-          {#if brightnessKeyWarning}
-            <div class="hotkey-error" role="status">⚠ {brightnessKeyWarning}</div>
+          {#if profiles.brightnessKeyWarning}
+            <div class="hotkey-error" role="status">⚠ {profiles.brightnessKeyWarning}</div>
           {/if}
           <div class="hotkey-hint">
-            Each shortcut above is independent and either or both may be configured. Use a modifier ({modifierNames().meta}, {modifierNames()
-              .ctrl}, {modifierNames().alt}, Shift) + key{#if supportedBareFunctionKeyRange(platform)}, or {supportedBareFunctionKeyRange(
-                platform,
-              )} by itself{/if}. {#if platform === "macos"}Bare F13–F24 requires Accessibility permission: macOS sends keyboard events to
-              Sagascript, which immediately ignores everything except bare F13–F24 and never stores or sends them.{/if}
+            Each shortcut above is independent and either or both may be configured. Use a modifier ({profiles.modifierNames().meta}, {profiles.modifierNames()
+              .ctrl}, {profiles.modifierNames().alt}, Shift) + key{#if supportedBareFunctionKeyRange(win.platform)}, or {supportedBareFunctionKeyRange(
+                win.platform,
+              )} by itself{/if}. {#if win.platform === "macos"}Bare F13–F24 requires Accessibility permission: macOS sends keyboard events
+              to Sagascript, which immediately ignores everything except bare F13–F24 and never stores or sends them.{/if}
           </div>
         </div>
 
@@ -1822,20 +550,21 @@
             type="button"
             class="toggle"
             class:active={settings.auto_paste}
-            onclick={onAutoPasteToggle}
+            onclick={profiles.onAutoPasteToggle}
             role="switch"
             aria-checked={settings.auto_paste}
             aria-label="Auto-paste transcription"
-            disabled={accessibilityChecking || settingsLocked}
+            disabled={profiles.accessibilityChecking || session.locked}
           ></button>
         </div>
         <div class="hotkey-hint">Automatically paste dictated text into the active app when transcription finishes.</div>
-        {#if platform === "macos" && !accessibilityGranted && (settings.auto_paste || accessibilityRequested)}
+        {#if win.platform === "macos" && !profiles.accessibilityGranted && (settings.auto_paste || profiles.accessibilityRequested)}
           <div class="hotkey-error">
             Requires Accessibility permission. Auto-paste remains off until approved. <button
               class="link-btn"
-              onclick={onAutoPasteToggle}
-              disabled={accessibilityChecking || settingsLocked}>{accessibilityChecking ? "Checking…" : "Open System Settings"}</button
+              onclick={profiles.onAutoPasteToggle}
+              disabled={profiles.accessibilityChecking || session.locked}
+              >{profiles.accessibilityChecking ? "Checking…" : "Open System Settings"}</button
             >
           </div>
         {/if}
@@ -1845,64 +574,64 @@
           <button
             class="test-record-btn"
             bind:this={testRecordButton}
-            class:recording={testRecording}
-            class:transcribing={testTranscribing}
-            onclick={onTestRecord}
+            class:recording={dictation.recording}
+            class:transcribing={dictation.transcribing}
+            onclick={dictation.toggleRecording}
             disabled={updatePreparing ||
-              dictateButtonAction(backendDictationState, testOwnsRecording) === "blocked" ||
+              dictateButtonAction(dictation.backendState, dictation.ownsRecording) === "blocked" ||
               downloading !== null ||
-              dictationModelSaving}
+              profileModels.saving}
           >
-            {#if testTranscribing}
+            {#if dictation.transcribing}
               <div class="spinner small"></div>
-              {backendDictationState === "loading_model" ? "Preparing speech engine..." : "Transcribing..."}
+              {dictation.backendState === "loading_model" ? "Preparing speech engine..." : "Transcribing..."}
             {:else if downloading !== null}
               <div class="spinner small"></div>
               Downloading speech engine...
-            {:else if testRecording}
+            {:else if dictation.recording}
               <div class="recording-dot"></div>
-              {testOwnsRecording ? "Stop recording" : "Recording via hotkey..."}
+              {dictation.ownsRecording ? "Stop recording" : "Recording via hotkey..."}
             {:else}
               Start recording
             {/if}
           </button>
-          {#if testError}
-            <div class="transcribe-error" role="alert">{testError}</div>
+          {#if dictation.error}
+            <div class="transcribe-error" role="alert">{dictation.error}</div>
             <ErrorRecovery
-              recovery={testRecovery}
+              recovery={dictation.errorRecovery}
               busy={updatePreparing ||
                 modelDownloads.busy ||
                 modelDownloads.repairing ||
-                dictationModelSaving ||
-                dictateButtonAction(backendDictationState, testOwnsRecording) !== "start"}
+                profileModels.saving ||
+                dictateButtonAction(dictation.backendState, dictation.ownsRecording) !== "start"}
               onRetry={() => void onDictateRetry()}
-              onDownloadModel={() => void onDictateDownloadModel()}
+              onDownloadModel={() => void dictation.downloadModelAgain()}
             />
           {/if}
           <textarea
             class="test-result"
-            bind:value={testResult}
+            bind:value={dictation.text}
             oninput={() => {
-              testResultRecoveryPending = true;
-              testResultEdited = true;
+              dictation.recoveryPending = true;
+              dictation.edited = true;
             }}
             disabled={updatePreparing}
             placeholder="Click here and use your hotkey, or press the button above"></textarea>
-          {#if testResult.trim()}
+          {#if dictation.text.trim()}
             <div class="result-actions">
-              <button class="secondary" onclick={() => void copyTestResult()} disabled={updatePreparing}>Copy result</button>
-              <button class="secondary" onclick={() => void saveTestResult()} disabled={updatePreparing}>Save result…</button>
-              {#if testResultActionMessage}<span role="status">{testResultActionMessage}</span>{/if}
+              <button class="secondary" onclick={() => void dictation.copyResult()} disabled={updatePreparing}>Copy result</button>
+              <button class="secondary" onclick={() => void dictation.saveResult()} disabled={updatePreparing}>Save result…</button>
+              {#if dictation.actionMessage}<span role="status">{dictation.actionMessage}</span>{/if}
             </div>
           {/if}
         </div>
       {/if}
-      <section hidden={activeTab !== "transcribe"} aria-label="File transcription">
+      <section hidden={router.active !== "transcribe"} aria-label="File transcription">
         <div class="transcribe-settings-row">
-          <button class="active-config-bar" onclick={() => requestTabChange("settings")}>
+          <button class="active-config-bar" onclick={() => router.request("settings")}>
             <div class="active-config-row">
               <span class="active-config-label">Language</span>
-              <span class="active-config-value">{languageLabel(transcribeLanguage())}</span>
+              <span class="active-config-value">{languageLabel(queue.language())}</span>
             </div>
             <span class="active-config-link">Settings</span>
           </button>
@@ -1910,11 +639,11 @@
             <label for="transcribe-profile">Profile (optional)</label>
             <select
               id="transcribe-profile"
-              value={selectedTranscribeProfile()?.id ?? ""}
-              onchange={onTranscribeProfileChange}
-              disabled={transcribing}
+              value={queue.selectedProfile()?.id ?? ""}
+              onchange={queue.onProfileChange}
+              disabled={queue.transcribing}
             >
-              {#each explicitProfiles() as profile (profile.id)}
+              {#each session.profiles() as profile (profile.id)}
                 <option value={profile.id}>{profile.name} · {languageLabel(profile.language)}</option>
               {/each}
             </select>
@@ -1927,22 +656,22 @@
             <select
               id="file-model"
               value={settings.file_transcription_model}
-              onchange={(event) => void onFileModelChange(event)}
-              disabled={transcribing || fileModelSaving || downloading !== null || settingsLocked}
+              onchange={(event) => void fileModel.onChange(event)}
+              disabled={queue.transcribing || fileModel.saving || downloading !== null || session.locked}
             >
               <option value="auto"
-                >Auto — {fileAutoModel?.display_name ?? "loading…"}{fileAutoModel &&
-                fileRecommendedModel &&
-                fileAutoModel.id !== fileRecommendedModel.id
+                >Auto — {fileModel.auto?.display_name ?? "loading…"}{fileModel.auto &&
+                fileModel.recommended &&
+                fileModel.auto.id !== fileModel.recommended.id
                   ? " (downloaded)"
                   : " (recommended)"}</option
               >
-              {#if settings.file_transcription_model !== "auto" && !fileModelOptions.some((model) => model.id === settings?.file_transcription_model)}
+              {#if settings.file_transcription_model !== "auto" && !fileModel.options.some((model) => model.id === settings?.file_transcription_model)}
                 <option value={settings.file_transcription_model}
-                  >Current choice is incompatible with {languageLabel(transcribeLanguage())}</option
+                  >Current choice is incompatible with {languageLabel(queue.language())}</option
                 >
               {/if}
-              {#each fileModelOptions as model (model.id)}
+              {#each fileModel.options as model (model.id)}
                 <option value={model.id}
                   >{model.display_name} · {model.size_mb} MB{model.downloaded ? " · ready" : " · download needed"}</option
                 >
@@ -1950,44 +679,48 @@
             </select>
             <div class="hotkey-hint">
               Effective model: {settings.file_transcription_model === "auto"
-                ? (fileAutoModel?.display_name ?? "loading…")
-                : (fileModelOptions.find((model) => model.id === settings?.file_transcription_model)?.display_name ??
+                ? (fileModel.auto?.display_name ?? "loading…")
+                : (fileModel.options.find((model) => model.id === settings?.file_transcription_model)?.display_name ??
                   "incompatible with this language")}.
-              {#if settings.file_transcription_model === "auto" && fileAutoModel && fileRecommendedModel && fileAutoModel.id !== fileRecommendedModel.id}
-                {fileRecommendedModel.display_name} is recommended{fileRecommendedModel.size_mb > 0
-                  ? ` (${fileRecommendedModel.size_mb} MB download)`
+              {#if settings.file_transcription_model === "auto" && fileModel.auto && fileModel.recommended && fileModel.auto.id !== fileModel.recommended.id}
+                {fileModel.recommended.display_name} is recommended{fileModel.recommended.size_mb > 0
+                  ? ` (${fileModel.recommended.size_mb} MB download)`
                   : ""}; Auto keeps using the model you already have.
               {/if}
               This choice affects files only; dictation shortcuts keep their own model.
             </div>
-            {#if (settings.file_transcription_model !== "auto" && fileModelOptions.some((model) => model.id === settings?.file_transcription_model && !model.downloaded)) || (settings.file_transcription_model === "auto" && fileRecommendedModel && !fileRecommendedModel.downloaded)}
-              <button class="secondary" onclick={() => void downloadSelectedFileModel()} disabled={downloading !== null || transcribing}>
+            {#if (settings.file_transcription_model !== "auto" && fileModel.options.some((model) => model.id === settings?.file_transcription_model && !model.downloaded)) || (settings.file_transcription_model === "auto" && fileModel.recommended && !fileModel.recommended.downloaded)}
+              <button
+                class="secondary"
+                onclick={() => void fileModel.downloadSelected()}
+                disabled={downloading !== null || queue.transcribing}
+              >
                 {downloading !== null
                   ? `Downloading ${downloadingName}… ${downloadProgress}%`
-                  : settings.file_transcription_model === "auto" && fileRecommendedModel
-                    ? `Download ${fileRecommendedModel.display_name}`
+                  : settings.file_transcription_model === "auto" && fileModel.recommended
+                    ? `Download ${fileModel.recommended.display_name}`
                     : "Download selected model"}
               </button>
             {/if}
             {#if isPianissimoId(settings.file_transcription_model)}
               <div class="hotkey-hint">
-                Requires macOS 14+ on Apple Silicon or Windows on ARM (Snapdragon). Runs locally (Neural Engine on Mac, CPU on Windows){pianissimoSizeMb >
+                Requires macOS 14+ on Apple Silicon or Windows on ARM (Snapdragon). Runs locally (Neural Engine on Mac, CPU on Windows){fileModel.pianissimoSizeMb >
                 0
-                  ? `; one-time download of about ${pianissimoSizeMb} MB`
+                  ? `; one-time download of about ${fileModel.pianissimoSizeMb} MB`
                   : "; downloaded once"}.
               </div>
             {/if}
             {#if modelDownloads.fileError}<div class="transcribe-error" role="alert">{modelDownloads.fileError}</div>{/if}
           </div>
-          {#if selectedTranscribeProfile()}
+          {#if queue.selectedProfile()}
             <div class="hotkey-hint">This profile fixes the file language and uses its personal dictionary.</div>
           {/if}
           <div class="diarize-row">
             <label class="diarize-option">
               <input
                 type="checkbox"
-                bind:checked={transcribeDiarize}
-                disabled={transcribing || isPianissimoId(settings.file_transcription_model)}
+                bind:checked={queue.diarize}
+                disabled={queue.transcribing || isPianissimoId(settings.file_transcription_model)}
               />
               Speaker diarization
             </label>
@@ -2020,26 +753,30 @@
             class="prompt-input"
             aria-label="Extra context for this file"
             placeholder="Extra context, e.g. names to listen for: Astrid, Grimnir (optional)"
-            bind:value={transcribePrompt}
+            bind:value={queue.prompt}
             rows="2"
-            disabled={transcribing || isPianissimoId(settings.file_transcription_model)}></textarea>
+            disabled={queue.transcribing || isPianissimoId(settings.file_transcription_model)}></textarea>
         </div>
 
-        <div class="drop-zone" class:drag-over={dragOver} class:transcribing>
+        <div class="drop-zone" class:drag-over={queue.dragOver} class:transcribing={queue.transcribing}>
           <div class="drop-zone-icon">&#x1F4C1;</div>
           <div class="drop-zone-text">Drop audio or video files here</div>
-          <button class="primary open-file-btn" onclick={onPickFile} disabled={updatePreparing}>Open Files...</button>
-          {#if recentTranscriptions.length}
+          <button class="primary open-file-btn" onclick={queue.pickFiles} disabled={updatePreparing}>Open Files...</button>
+          {#if queue.recent.length}
             <div class="rerun-controls">
               <button
                 class="secondary rerun-highlight"
-                onclick={retryLastTranscription}
+                onclick={queue.rerunSelected}
                 title="Queue a new run with current model settings and this file's saved profile/context">Re-run</button
               >
-              <select aria-label="Recent files to re-run (last 5, this session)" bind:value={selectedRerunPath} title={selectedRerunPath}>
-                {#each recentTranscriptions as run (run.path)}
+              <select
+                aria-label="Recent files to re-run (last 5, this session)"
+                bind:value={queue.selectedRerunPath}
+                title={queue.selectedRerunPath}
+              >
+                {#each queue.recent as run (run.path)}
                   <option value={run.path}
-                    >{recentTranscriptions.filter((item) => fileJobName(item.path) === fileJobName(run.path)).length > 1
+                    >{queue.recent.filter((item) => fileJobName(item.path) === fileJobName(run.path)).length > 1
                       ? run.path
                       : fileJobName(run.path)}</option
                   >
@@ -2047,79 +784,75 @@
               </select>
             </div>
           {/if}
-          <button
-            class="secondary"
-            onclick={() => handleFilesTranscription(["Saved review"], true)}
-            disabled={transcribing || updatePreparing}
-          >
+          <button class="secondary" onclick={() => queue.addFiles(["Saved review"], true)} disabled={queue.transcribing || updatePreparing}>
             Open saved meeting...
           </button>
         </div>
-        {#if rerunError}<div class="transcribe-error" role="alert">{rerunError}</div>{/if}
+        {#if queue.rerunError}<div class="transcribe-error" role="alert">{queue.rerunError}</div>{/if}
 
         <div class="formats-hint">
-          Supported: {supportedFormats.map((f) => f.toUpperCase()).join(", ") || "WAV, MP3, M4A, AAC, MP4, MOV, OGG, WEBM, FLAC"}
+          Supported: {queue.supportedFormats.map((f) => f.toUpperCase()).join(", ") || "WAV, MP3, M4A, AAC, MP4, MOV, OGG, WEBM, FLAC"}
         </div>
 
-        {#if fileJobs.length}
+        {#if queue.jobs.length}
           <div class="result-tabs" role="tablist" aria-label="Transcription results">
-            {#each fileJobs as job, index (job.id)}
+            {#each queue.jobs as job, index (job.id)}
               <button
                 class="result-tab"
-                class:active={selectedFileId === job.id}
+                class:active={queue.selectedId === job.id}
                 id={`file-tab-${job.id}`}
                 role="tab"
-                aria-selected={selectedFileId === job.id}
+                aria-selected={queue.selectedId === job.id}
                 aria-controls={`file-panel-${job.id}`}
-                tabindex={selectedFileId === job.id ? 0 : -1}
+                tabindex={queue.selectedId === job.id ? 0 : -1}
                 title={job.path}
                 onclick={() => {
-                  selectedFileId = job.id;
+                  queue.selectedId = job.id;
                 }}
-                onkeydown={(event) => onResultTabKeydown(event, index)}
+                onkeydown={(event) => queue.onResultTabKeydown(event, index)}
               >
                 <span class="result-filename">{fileJobName(job.path)}</span>
-                <span class="result-status">{fileAttention[job.id] ? "needs retry" : job.status}</span>
+                <span class="result-status">{queue.attention[job.id] ? "needs retry" : job.status}</span>
               </button>
             {/each}
           </div>
         {/if}
-        {#each fileJobs as job (job.id)}
+        {#each queue.jobs as job (job.id)}
           <div
             id={`file-panel-${job.id}`}
             role="tabpanel"
             aria-labelledby={`file-tab-${job.id}`}
             inert={updatePreparing}
             tabindex="0"
-            hidden={selectedFileId !== job.id}
+            hidden={queue.selectedId !== job.id}
           >
             <FileTranscription
               {job}
               bind:this={() => recovery.resultPanel(job.id), (panel) => recovery.setResultPanel(job.id, panel)}
               otherBusy={updatePreparing ||
-                fileJobs.some((other) => other.id !== job.id && other.status === "running") ||
-                Object.entries(fileBusy).some(([id, busy]) => id !== job.id && busy)}
-              openReview={savedReviewIds.includes(job.id)}
-              onComplete={completeFile}
-              onBusyChange={updateFileBusy}
-              onMissingFile={forgetMissingFile}
-              onRetry={retryFileJob}
-              retryRefusal={retryRefusals[job.id] ?? ""}
-              onDownloadModel={() => downloadEngineModelAgain([filePianissimoId(job)])}
+                queue.jobs.some((other) => other.id !== job.id && other.status === "running") ||
+                Object.entries(queue.busy).some(([id, busy]) => id !== job.id && busy)}
+              openReview={queue.savedReviewIds.includes(job.id)}
+              onComplete={queue.complete}
+              onBusyChange={queue.setBusy}
+              onMissingFile={queue.forgetMissing}
+              onRetry={queue.retryJob}
+              retryRefusal={queue.retryRefusals[job.id] ?? ""}
+              onDownloadModel={() => fileModel.downloadEngineModelAgain([fileModel.pianissimoIdFor(job)])}
               downloadBusy={modelDownloads.busy || modelDownloads.repairing}
               {updatePreparing}
-              onAttentionChange={updateFileAttention}
+              onAttentionChange={queue.setAttention}
               initialRecoveryFile={recovery.fileEntries.find((entry) => entry.job_id === job.id) ?? null}
               initialRecoveryMeeting={recovery.meetingEntries.find((entry) => entry.job_id === job.id) ?? null}
               onFileRecoveryChange={(entry) => recovery.onFileRecoveryChange(entry, job.id)}
               onMeetingRecoveryChange={(entry) => recovery.onMeetingRecoveryChange(entry, job.id)}
-              active={activeTab === "transcribe" && selectedFileId === job.id}
+              active={router.active === "transcribe" && queue.selectedId === job.id}
             />
           </div>
         {/each}
       </section>
 
-      {#if activeTab === "settings"}
+      {#if router.active === "settings"}
         <div class="field">
           <label for="language">Default profile language</label>
           <div class="hotkey-hint">This edits the default profile in Dictate. Other profiles keep their own language and model.</div>
@@ -2128,7 +861,7 @@
             bind:this={languageSelectEl}
             value={settings.language}
             onchange={onLanguageChange}
-            disabled={languageSaving || glossarySaving || settingsLocked}
+            disabled={router.held || glossarySaving || session.locked}
           >
             <option value="en">English</option>
             <option value="sv">Swedish</option>
@@ -2158,16 +891,14 @@
               </p>
               <p>To keep this dictionary, cancel and use or add a language profile in the Dictate tab.</p>
               <div class="dictionary-actions">
-                <button type="button" class="secondary" onclick={cancelLanguageChange} disabled={languageSaving}>Cancel</button>
+                <button type="button" class="secondary" onclick={cancelLanguageChange} disabled={router.held}>Cancel</button>
                 <button
                   type="button"
                   class="danger"
                   onclick={() => void clearDictionaryAndSwitchLanguage()}
-                  disabled={languageSaving || glossarySaving || settingsLocked}
+                  disabled={router.held || glossarySaving || session.locked}
                 >
-                  {languageSaving
-                    ? "Switching…"
-                    : `Clear default dictionary and switch to ${languageLabel(blockedLanguageChange.language)}`}
+                  {router.held ? "Switching…" : `Clear default dictionary and switch to ${languageLabel(blockedLanguageChange.language)}`}
                 </button>
               </div>
             </section>
@@ -2184,20 +915,20 @@
             role="switch"
             aria-checked={settings.show_overlay}
             aria-label="Show recording overlay"
-            disabled={settingsLocked}
+            disabled={session.locked}
           ></button>
         </div>
       {/if}
       <GlossaryEditor
         bind:this={glossaryEditor}
         {settings}
-        active={activeTab === "settings"}
-        {languageSaving}
-        bind:settingsError
-        {applySetting}
-        {readSettings}
+        active={router.active === "settings"}
+        languageSaving={router.held}
+        bind:settingsError={session.error}
+        applySetting={session.apply}
+        readSettings={session.read}
       />
-      {#if activeTab === "settings"}
+      {#if router.active === "settings"}
         <details class="advanced-section">
           <summary>Advanced</summary>
           <div class="advanced-content">
@@ -2208,7 +939,7 @@
 
             <div class="field advanced-field">
               <label for="beam-size">Decoding mode</label>
-              <select id="beam-size" value={settings.beam_size} onchange={onBeamSizeChange} disabled={settingsLocked}>
+              <select id="beam-size" value={settings.beam_size} onchange={onBeamSizeChange} disabled={session.locked}>
                 <option value={0}>Greedy (fast)</option>
                 <option value={5}>Beam search (accurate)</option>
               </select>
@@ -2224,15 +955,15 @@
                 role="switch"
                 aria-checked={settings.temperature_fallback}
                 aria-label="Temperature fallback"
-                disabled={settingsLocked}
+                disabled={session.locked}
               ></button>
             </div>
             <div class="hotkey-hint">Re-decode hard segments; off is faster but less robust.</div>
 
-            {#if engineStatus?.supported}
+            {#if win.engineStatus?.supported}
               <div class="field advanced-field">
                 <label for="engine-prewarm">Prepare Pianissimo when</label>
-                <select id="engine-prewarm" value={settings.engine_prewarm} onchange={onEnginePrewarmChange} disabled={settingsLocked}>
+                <select id="engine-prewarm" value={settings.engine_prewarm} onchange={onEnginePrewarmChange} disabled={session.locked}>
                   <option value="on_app_start">When Sagascript starts (recommended)</option>
                   <option value="on_key_down">When I press the dictation key</option>
                   <option value="off">Only when needed</option>
@@ -2246,7 +977,7 @@
                   id="engine-idle"
                   value={settings.engine_idle_unload_minutes}
                   onchange={onEngineIdleChange}
-                  disabled={settingsLocked}
+                  disabled={session.locked}
                 >
                   {#each engineIdleChoices as minutes (minutes)}
                     <option value={minutes}>{minutes === 0 ? "Never" : `${minutes} minutes`}</option>
@@ -2269,7 +1000,7 @@
                 role="switch"
                 aria-checked={settings.vad_enabled}
                 aria-label="Voice activity detection"
-                disabled={settingsLocked}
+                disabled={session.locked}
               ></button>
             </div>
             <div class="hotkey-hint">Skip silence; downloads a small model on first enable.</div>
@@ -2279,8 +1010,8 @@
     </div>
   {:else}
     <div class="loading">
-      {#if initError}
-        <div class="transcribe-error">{initError}</div>
+      {#if session.initError}
+        <div class="transcribe-error">{session.initError}</div>
       {:else}
         Loading settings...
       {/if}
