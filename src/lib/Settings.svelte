@@ -1,21 +1,22 @@
 <script lang="ts">
-  import { fileJobName } from "./transcription-queue";
   import { tick } from "svelte";
-  import DictateTab from "./settings/DictateTab.svelte";
-  import SettingsTab from "./settings/SettingsTab.svelte";
-  import TranscribeTab from "./settings/TranscribeTab.svelte";
+  import DownloadStatusBar from "./settings/DownloadStatusBar.svelte";
+  import QueueStatus from "./settings/QueueStatus.svelte";
+  import TabPanel from "./settings/TabPanel.svelte";
   import { useSettingsWindow } from "./settings/settingsWindow.svelte";
+  import { SETTINGS_TABS, type SettingsTabDefinition } from "./settings/tabs";
+
+  // The tabs are SETTINGS_TABS; the app never passes `tabs`, a test does to show a panel is one entry.
+  let { tabs = SETTINGS_TABS }: { tabs?: readonly SettingsTabDefinition[] } = $props();
 
   // The window's state and logic live in its controllers (settings/settingsWindow.svelte.ts),
   // which register their effects, listeners and mount callbacks here, as the component initializes.
-  const win = useSettingsWindow();
-  const { session, router, queue, recovery } = win;
-  const modelDownloads = win.downloads;
+  // The tabs are read once, as the window initializes.
+  // svelte-ignore state_referenced_locally
+  const win = useSettingsWindow(tabs.map((tab) => tab.id));
+  const { session, router, recovery } = win;
 
   const settings = $derived(session.settings);
-  const downloading = $derived(modelDownloads.id);
-  const downloadingName = $derived(modelDownloads.name);
-  const downloadProgress = $derived(modelDownloads.progress);
   const updatePreparing = $derived(recovery.preparing);
 
   // Height of the sticky notice, so focus scrolling can leave room for it.
@@ -71,15 +72,11 @@
   </header>
 
   <div class="tabs">
-    <button class="tab" class:active={router.active === "dictate"} onclick={() => router.request("dictate")} disabled={router.held}>
-      Dictate
-    </button>
-    <button class="tab" class:active={router.active === "transcribe"} onclick={() => router.request("transcribe")} disabled={router.held}>
-      Transcribe
-    </button>
-    <button class="tab" class:active={router.active === "settings"} onclick={() => router.request("settings")} disabled={router.held}>
-      Settings
-    </button>
+    {#each tabs as tab (tab.id)}
+      <button class="tab" class:active={router.active === tab.id} onclick={() => router.request(tab.id)} disabled={router.held}>
+        {tab.label}
+      </button>
+    {/each}
   </div>
 
   {#if settings}
@@ -124,40 +121,10 @@
           >
         </section>
       {/if}
-      <p
-        class="queue-summary"
-        class:queue-empty={queue.jobs.length === 0}
-        role="status"
-        aria-label="File transcription status"
-        aria-atomic="true"
-      >
-        {#if queue.jobs.length}
-          {queue.jobs.filter((job) => job.status === "completed" && !queue.busy[job.id]).length} completed ·
-          {queue.jobs.filter((job) => job.status === "failed").length} failed ·
-          {queue.jobs.filter((job) => job.status === "cancelled").length} cancelled ·
-          {queue.jobs.filter((job) => job.status === "queued").length} queued ·
-          {queue.jobs.filter((job) => job.status === "running" || queue.busy[job.id]).length} running ·
-          {queue.needingRetry.length} needs retry
-        {/if}
-      </p>
-      {#if queue.needingRetry.length}
-        <div class="queue-attention">
-          {#each queue.needingRetry as job (job.id)}
-            <div>
-              <span
-                >{fileJobName(job.path)} needs a status check.{#if queue.jobs.some((file) => file.status === "queued")}
-                  The queue is paused.{/if}</span
-              >
-              <button class="secondary" onclick={() => queue.showNeedingRetry(job.id)}>Show {fileJobName(job.path)}</button>
-            </div>
-          {/each}
-        </div>
-      {/if}
-      {#if router.active === "dictate"}
-        <DictateTab {win} active={true} />
-      {/if}
-      <TranscribeTab {win} active={router.active === "transcribe"} />
-      <SettingsTab {win} active={router.active === "settings"} />
+      <QueueStatus {win} />
+      {#each tabs as tab (tab.id)}
+        <TabPanel {tab} {win} />
+      {/each}
     </div>
   {:else}
     <div class="loading">
@@ -169,17 +136,7 @@
     </div>
   {/if}
 
-  {#if downloading}
-    <div class="download-status-bar">
-      <div class="download-status-info">
-        <span class="download-status-label">Downloading {downloadingName}...</span>
-        <span class="download-status-pct">{Math.round(downloadProgress)}%</span>
-      </div>
-      <div class="download-status-track">
-        <div class="download-status-fill" style:width="{downloadProgress}%"></div>
-      </div>
-    </div>
-  {/if}
+  <DownloadStatusBar {win} />
 </div>
 
 <style>
@@ -277,49 +234,6 @@
     max-width: 100%;
   }
 
-  /* Download status bar (bottom of window, visible on all tabs) */
-
-  .download-status-bar {
-    padding: 10px 20px 14px;
-    border-top: 1px solid var(--border);
-    background: var(--bg-secondary);
-    flex-shrink: 0;
-  }
-
-  .download-status-info {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 6px;
-  }
-
-  .download-status-label {
-    font-size: 12px;
-    font-weight: 500;
-    color: var(--text);
-  }
-
-  .download-status-pct {
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--accent);
-    font-variant-numeric: tabular-nums;
-  }
-
-  .download-status-track {
-    height: 6px;
-    background: var(--border);
-    border-radius: 3px;
-    overflow: hidden;
-  }
-
-  .download-status-fill {
-    height: 100%;
-    background: var(--accent);
-    border-radius: 3px;
-    transition: width 0.2s;
-  }
-
   .loading {
     padding: 40px 20px;
     text-align: center;
@@ -369,35 +283,6 @@
     color: var(--text-muted);
   }
   .recovery-notice button {
-    flex-shrink: 0;
-  }
-
-  .queue-summary {
-    font-size: 12px;
-    color: var(--text-muted);
-    margin-bottom: 12px;
-    line-height: 1.6;
-  }
-
-  .queue-summary.queue-empty {
-    margin: 0;
-  }
-
-  .queue-attention {
-    border: 1px solid var(--accent);
-    border-radius: var(--radius);
-    padding: 10px 12px;
-    margin-bottom: 12px;
-    font-size: 13px;
-  }
-
-  .queue-attention > div {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    justify-content: space-between;
-  }
-  .queue-attention button {
     flex-shrink: 0;
   }
 </style>

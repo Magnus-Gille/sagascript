@@ -2,8 +2,6 @@
 // to change it. A panel can hold the tabs (`held`) or ask before they change
 // (`guard`, the dictionary editor's dirty guard).
 
-export type SettingsTab = "dictate" | "transcribe" | "settings";
-
 /** What a panel with unsaved work asks before the tab changes. */
 export interface LeaveGuard {
   requestLeave(leave: () => void): void;
@@ -11,16 +9,27 @@ export interface LeaveGuard {
 }
 
 export class TabRouter {
-  active = $state<SettingsTab>("dictate");
+  readonly ids: readonly string[];
+  active = $state<string>("");
   /** A panel holds the tabs while it is set: a language change is in flight. */
   held = $state(false);
   guard = $state.raw<LeaveGuard | null>(null);
+
+  constructor(ids: readonly string[]) {
+    this.ids = ids;
+    this.active = ids[0] ?? "";
+  }
+
+  /** Whether `id` names one of the tabs. */
+  has(id: unknown): id is string {
+    return typeof id === "string" && this.ids.includes(id);
+  }
 
   get asking(): boolean {
     return this.guard?.isAsking() ?? false;
   }
 
-  request(nextTab: SettingsTab, afterNavigate?: () => void): void {
+  request(nextTab: string, afterNavigate?: () => void): void {
     if (this.held) return;
     if (nextTab === this.active) {
       afterNavigate?.();

@@ -61,7 +61,7 @@ export class SettingsWindow {
     return this.recovery.preparing;
   }
 
-  constructor() {
+  constructor(tabIds: readonly string[]) {
     // One download at a time, with the errors it leaves (settings/modelDownloads.svelte.ts);
     // its progress follows the backend's events.
     this.downloads = useSettingsModelDownloads({
@@ -72,7 +72,7 @@ export class SettingsWindow {
     });
 
     this.session = new SettingsSession(this);
-    this.router = new TabRouter();
+    this.router = new TabRouter(tabIds);
     this.profileModels = new ProfileModels(this);
     this.profiles = new HotkeyProfiles(this);
     this.dictation = new Dictation(this);
@@ -154,9 +154,7 @@ export class SettingsWindow {
 
     // Listen for tab navigation from tray menu
     useTauriEvent("navigate_tab", (t) => {
-      if (t === "dictate" || t === "transcribe" || t === "settings") {
-        this.router.request(t);
-      }
+      if (this.router.has(t)) this.router.request(t);
     });
 
     // Listen for drag-and-drop events
@@ -206,7 +204,7 @@ export class SettingsWindow {
 
           // Check URL params for initial tab
           const tab = tabFromUrl();
-          if (tab === "dictate" || tab === "transcribe" || tab === "settings") {
+          if (tab !== null && this.router.has(tab)) {
             this.router.request(tab);
           }
         } catch (e) {
@@ -223,6 +221,6 @@ export class SettingsWindow {
 }
 
 /** The Settings window's controllers. Call it while a component initializes: it registers effects, listeners and mount callbacks. */
-export function useSettingsWindow(): SettingsWindow {
-  return new SettingsWindow();
+export function useSettingsWindow(tabIds: readonly string[]): SettingsWindow {
+  return new SettingsWindow(tabIds);
 }
