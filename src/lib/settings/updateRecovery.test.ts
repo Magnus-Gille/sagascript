@@ -364,6 +364,39 @@ describe("the snapshot (beginPreparation)", () => {
     expect(prepareUpdateRecovery).toHaveBeenCalledTimes(1);
   });
 
+  test("a panel that unregistered is not asked: its job fails the preparation as still opening", async () => {
+    const prepareUpdateRecovery = vi.fn(() => Promise.resolve());
+    const h = harness({ files: { jobs: [completedJob("job-1", "/audio/a.wav")] } });
+    h.controller.setResultPanel("job-1", { prepareUpdateRecovery });
+    expect(h.controller.resultPanel("job-1")).toBeDefined();
+    h.controller.setResultPanel("job-1", null); // what `bind:this` reports when the view removes the panel
+    expect(h.controller.resultPanel("job-1")).toBeUndefined();
+    h.controller.beginPreparation("nonce-1");
+
+    expect(await acknowledged(h.ipc, "nonce-1")).toEqual({
+      nonce: "nonce-1",
+      error: "A transcription result is still opening. Retry the update.",
+    });
+    expect(prepareUpdateRecovery).not.toHaveBeenCalled();
+    expect(h.ipc.callsTo("save_update_recovery")).toEqual([]);
+  });
+
+  test("a panel that unregisters while the view settles is not asked", async () => {
+    const prepareUpdateRecovery = vi.fn(() => Promise.resolve());
+    const h = harness({
+      files: { jobs: [completedJob("job-1", "/audio/a.wav")] },
+      settle: async () => h.controller.setResultPanel("job-1", null),
+    });
+    h.controller.setResultPanel("job-1", { prepareUpdateRecovery });
+    h.controller.beginPreparation("nonce-1");
+
+    expect(await acknowledged(h.ipc, "nonce-1")).toEqual({
+      nonce: "nonce-1",
+      error: "A transcription result is still opening. Retry the update.",
+    });
+    expect(prepareUpdateRecovery).not.toHaveBeenCalled();
+  });
+
   test("a panel that cannot finish its work fails the preparation with its message and nothing is saved", async () => {
     const h = harness({ files: { jobs: [completedJob("job-1", "/audio/a.wav")] } });
     h.controller.setResultPanel("job-1", {
