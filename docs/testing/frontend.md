@@ -28,7 +28,8 @@ a real `vite build` bundles, emits or reads) and `npm run licenses:check` (relea
   are `src/lib/<Component>.test.ts` (or `<Component>.<topic>.test.ts`, such as
   `Settings.recovery.test.ts` and `Settings.readback.test.ts`). Name tests after the behaviour they pin.
 - Shared test code lives in `src/test/`: `setup.ts` (runs before every file), `ipc.ts`,
-  `deferred.ts`, `EventProbe.svelte` and backends for rendering components (`settings.ts`). Nothing in the app
+  `deferred.ts`, `EventProbe.svelte` and backends for rendering components (`settings.ts` for the
+  whole Settings window, `settingsPanel.ts` for one of its panels). Nothing in the app
   imports it, so it is never bundled; `svelte-check` type-checks tests like app code.
 - Import `describe`/`test`/`expect` from `"vitest"` (no globals). Every file runs in happy-dom
   (a DOM in Node) with Svelte's browser runtime; logic modules stay DOM-free by design, not by
@@ -153,7 +154,8 @@ await waitFor(() => expect(ipc.callsTo("complete_update_preparation")).toEqual([
 ```
 
 - `renderSettings()` (`src/test/settings.ts`) mounts Settings with an answer for every command
-  it invokes while mounting and waits until its listeners are registered. For another
+  it invokes while mounting and waits until its listeners are registered. `renderPanel()`
+  (`src/test/settingsPanel.ts`) does the same for one panel of the window. For another
   component: `mockIpc({...})`, then `render(Component, props)`; add `mockWindows("main")`
   from `@tauri-apps/api/mocks` when it calls `getCurrentWebview()` or other window APIs.
 - The jest-dom matchers (`toBeInTheDocument`, `toHaveValue`, `toBeDisabled`, …) are
@@ -195,13 +197,30 @@ Tests reach logic through modules, not through component source:
    to the moved code. Example: MeetingReview.svelte's `<script module>` became
    `src/lib/meeting-review-drafts.ts`.
 
-Settings.svelte is being split this way (SAGA-379). Its parts live in `src/lib/settings/`
-with their tests next to them: `updateRecovery.svelte.ts` (a class with the backend commands
-injected, and the dictation editor and file queue as two ports a test fills with plain
-objects), `modelDownloads.svelte.ts` (a store over the shared `ModelDownloads`) and
-`GlossaryEditor.svelte` (rendered directly in `GlossaryEditor.test.ts`; its exports, such as
-the dirty guard `requestLeave`, are on `render(...).component`). The `Settings.*.test.ts`
-files keep testing the same flows through the whole window.
+Settings.svelte was split this way (SAGA-379). It is a shell; its parts live in
+`src/lib/settings/` with their tests next to them, and there are three ways to test them:
+
+- A controller with injected dependencies is constructed directly:
+  `updateRecovery.svelte.ts` (a class with the backend commands injected, and the dictation
+  editor and file queue as two ports a test fills with plain objects),
+  `modelDownloads.svelte.ts` (a store over the shared `ModelDownloads`), `tabRouter.svelte.ts`.
+- A panel (`DictateTab.svelte`, `TranscribeTab.svelte`, `SettingsTab.svelte`,
+  `AdvancedPanel.svelte`, and the shell's `QueueStatus.svelte` and `DownloadStatusBar.svelte`)
+  is rendered on its own with `renderPanel(Panel, handlers, { active })` from
+  `src/test/settingsPanel.ts`: the panel over the window's real controllers and the IPC mock,
+  without the shell. It returns `{ ipc, win, view, setActive }`; `win` is the `SettingsWindow`,
+  for what reaches a panel from outside it (`win.router.request("dictate")`,
+  `win.queue.addFiles([...])`) and for what the shell shows and the panel does not
+  (`win.session.error`, the banner). The other controllers (`settingsSession`,
+  `hotkeyProfiles`, `profileModels`, `dictation`, `fileQueue`, `fileModel`) reach each other
+  through the window and are tested this way, through the panel that shows them.
+  `GlossaryEditor.svelte` takes plain props and is rendered directly in
+  `GlossaryEditor.test.ts`; its exports, such as the dirty guard `requestLeave`, are on
+  `render(...).component`.
+- The `Settings.*.test.ts` files test the same flows through the whole window
+  (`renderSettings`), including what crosses panels: the tab strip, the notices, the guard
+  that stops a tab change. `Settings.tabs.test.ts` adds a fixture panel through the `tabs`
+  prop to show that a panel is one component and one entry in `SETTINGS_TABS`.
 
 Code that more than one component needs lives in shared modules (#362), each with its own
 unit tests: `tauri-events.svelte.ts` (listeners, above), `models.svelte.ts` (`PIANISSIMO_ID`,

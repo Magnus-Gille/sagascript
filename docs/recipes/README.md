@@ -8,6 +8,7 @@ rules and their reasons: [docs/adr/](../adr/README.md).
 | Recipe | Use it when you… |
 |---|---|
 | [add-setting.md](add-setting.md) | add a user setting (struct field, CLI `config` key, Tauri setter, UI, tests, CLI/GUI parity) |
+| [add-settings-tab.md](add-settings-tab.md) | add a tab to the Settings window (a panel component, one entry in `SETTINGS_TABS`, tests) |
 | [add-tauri-command.md](add-tauri-command.md) | expose a backend operation to the frontend (`#[tauri::command]`, `generate_handler!`, `api.ts`, browser mock) |
 | [add-cli-subcommand.md](add-cli-subcommand.md) | add a `sagascript` subcommand (clap, `--json`, exit codes, both feature modes) |
 | [add-event.md](add-event.md) | push a backend notification to the frontend (`events.rs`, emit, listener cleanup) |

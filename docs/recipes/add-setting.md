@@ -142,7 +142,7 @@ of the controller's copy, so a setter does not repeat it.
   (`apply_language_selection` / `language_selection_tests`, `auto_paste_tests`; the rule itself is
   tested in `settings/ops_tests.rs`).
 
-## 4. Frontend: `src/lib/api.ts`, `src/lib/Settings.svelte`
+## 4. Frontend: `src/lib/api.ts`, `src/lib/settings/`
 
 1. `api.ts`: add `example_flag: boolean;` to `interface Settings` (enum: a string-literal union
    like `EnginePrewarm`) and the same field to `settings` in `src/test/transport-schemas.ts`
@@ -150,20 +150,23 @@ of the controller's copy, so a setter does not repeat it.
    type lacks), and a wrapper:
    `export async function setExampleFlag(enabled: boolean): Promise<void> { return invoke("set_example_flag", { enabled }); }`
    (Rust parameter names arrive as camelCase keys).
-2. `Settings.svelte`: import the wrapper; add a handler next to `onTemperatureFallbackToggle`
-   that calls `applyScalarSetting(() => setExampleFlag(next))`. It writes, re-reads the
-   settings and shows errors, and does not query the models again. Use plain `applySetting`
-   only when the value feeds `dictation_model_for_profile` or the file-model resolution
+2. The panel under `src/lib/settings/` that shows the setting: import the wrapper; add a
+   handler like `onTemperatureFallbackToggle` in `AdvancedPanel.svelte` that calls
+   `session.applyScalar(() => setExampleFlag(next))` (`session` is `win.session`, the
+   window's `SettingsSession`). It writes, re-reads the settings and shows errors, and does
+   not query the models again. Use plain `session.apply` only when the value feeds `dictation_model_for_profile` or the file-model resolution
    (language, the profile list, a profile's or the file model): it also re-queries every
    profile's models. Both resolve `true` once the change is saved, even if the re-read
    failed, which the window reports separately; for a native `<select>` or `<input>` put the
    saved value back when it resolves `false`, as `onBeamSizeChange` does. Add the new control
    to the `changes` table in `src/lib/Settings.saving.test.ts`, which pins one write and one
    read-back with no model queries. Copy the `.field-row` toggle markup of "Show recording overlay"
-   (`role="switch"`, `aria-checked`, `aria-label`, and the `hotkey-hint` line under it). Put it
-   next to related settings: dictation and paste behaviour lives in the Dictate tab (next to
-   the auto-paste toggle), general settings in `{#if activeTab === "settings"}`, tuning knobs
-   in the `Advanced` `<details>`. Use runes, not stores.
+   in `SettingsTab.svelte` (`role="switch"`, `aria-checked`, `aria-label`, and the `hotkey-hint`
+   line under it). Put it next to related settings: dictation and paste behaviour lives in the
+   Dictate tab (`DictateTab.svelte`, next to the auto-paste toggle, whose handler is in
+   `hotkeyProfiles.svelte.ts`), general settings in `SettingsTab.svelte`, tuning knobs in the
+   `Advanced` `<details>` (`AdvancedPanel.svelte`). A panel's `<style>` is scoped: it carries
+   the rules its own markup uses. Use runes, not stores.
 3. `scripts/fixtures/transcription-browser-mock.js`: add the field to the object returned by
    `case "get_settings"`. Setter commands need no case (unknown commands return `null`).
 
@@ -176,7 +179,7 @@ of the controller's copy, so a setter does not repeat it.
 | `config.rs` | Extend `get_setting_value_returns_serialized_values`; add a set/reset/reject test modeled on `engine_settings_can_be_set_reset_and_reject_bad_values`. |
 | `settings/ops_tests.rs`, `test_support/settings_ops_table.rs` | The rule of an operation, and its row in the CLI/app parity table (run by `tests/settings_parity.rs` and `commands/persist_parity_tests.rs`). |
 | `commands/settings_tests.rs`, `commands/persist_tests.rs` | Unit-test any extracted setter logic; add the setter's row to the `persist_and_sync` table. |
-| Frontend | New logic in a `.ts` module gets a Vitest test in `src/lib/<module>.test.ts`; what Settings shows or invokes gets a component test (`src/lib/Settings.test.ts`, [docs/testing/frontend.md](../testing/frontend.md)). Do not add regex tests over `Settings.svelte` source ([ADR 0004](../adr/0004-test-strategy.md)). |
+| Frontend | New logic in a `.ts` module gets a Vitest test in `src/lib/<module>.test.ts`; what Settings shows or invokes gets a component test (`src/lib/Settings.test.ts` for the whole window, `src/lib/settings/<Panel>.test.ts` for one panel, [docs/testing/frontend.md](../testing/frontend.md)). Do not add regex tests over `.svelte` source ([ADR 0004](../adr/0004-test-strategy.md)). |
 
 ## 6. Verify, including CLI/GUI parity
 
@@ -203,7 +206,7 @@ cli config reset example_flag && grep example_flag "$SAGASCRIPT_SETTINGS_PATH"  
 cd ..
 grep -n set_example_flag src-tauri/src/commands/settings.rs src-tauri/src/main.rs src/lib/api.ts  # all three
 npx svelte-check --tsconfig ./tsconfig.json && npm run test:unit && npm run test:frontend
-npx playwright install chromium && npm run test:browser   # you touched Settings.svelte and the mock
+npx playwright install chromium && npm run test:browser   # you touched the Settings window and the mock
 ```
 
 The app crate's tests fail on a `#[tauri::command]` missing from `generate_handler!`, and
