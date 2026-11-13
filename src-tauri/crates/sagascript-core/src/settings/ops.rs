@@ -46,8 +46,7 @@ pub enum Accessibility {
     /// The surface cannot ask. The CLI is not the installed app: the permission
     /// belongs to the app's bundle identity, so a CLI process would test the
     /// wrong program. It stores the request, and the app, which can ask, applies
-    /// the permission when it loads the settings
-    /// (`load_settings_with_permission_gate`).
+    /// the permission when it pastes (the paste service checks it every time).
     Unknown,
 }
 
