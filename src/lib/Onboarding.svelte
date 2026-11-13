@@ -7,6 +7,11 @@
   import { loadPlatform } from "./platform";
   import { awaitDownloadCompletion, completedDownloadState } from "./onboarding-download-state";
   import { useTauriEvent } from "./tauri-events.svelte";
+  import DownloadStep from "./onboarding/DownloadStep.svelte";
+  import LanguageStep from "./onboarding/LanguageStep.svelte";
+  import MicrophoneStep from "./onboarding/MicrophoneStep.svelte";
+  import ReadyStep from "./onboarding/ReadyStep.svelte";
+  import type { OnboardingLanguage } from "./onboarding/types";
   import {
     getSettings,
     setLanguage,
@@ -25,7 +30,6 @@
   let { oncomplete }: { oncomplete: () => void | Promise<void> } = $props();
 
   type Step = "language" | "download" | "microphone" | "accessibility" | "ready";
-  type OnboardingLanguage = "en" | "sv" | "no" | "fi" | "da";
 
   let currentStep: Step = $state("language");
   let platform: string | null = $state(null);
@@ -69,14 +73,6 @@
     }),
     useTauriEvent("model-ready", markDownloadComplete),
   ];
-
-  const engineSize: Record<OnboardingLanguage, string> = {
-    en: "142 MB",
-    sv: "about 600 MB",
-    no: "55 MB",
-    fi: "142 MB",
-    da: "1530 MB",
-  };
 
   // Fallback model ID per language (must match Rust serde rename). The backend
   // decides the real recommendation (Swedish is Pianissimo where supported,
@@ -339,10 +335,6 @@
     }
   }
 
-  function formatProgress(pct: number): string {
-    return `${Math.round(pct)}%`;
-  }
-
   onMount(async () => {
     // Failed registrations are already logged; the download still completes
     // through its command result.
@@ -398,224 +390,31 @@
   <div class="content">
     <!-- Language -->
     {#if currentStep === "language"}
-      <div class="step">
-        <div class="icon">
-          <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
-            <rect width="48" height="48" rx="12" fill="var(--accent-dim)" />
-            <path
-              d="M14 18h10M19 14v4M16 22c1.5 3 4 5.5 7 7M22 22c-1.5 3-4 5.5-7 7"
-              stroke="var(--accent)"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            />
-            <path d="M26 34l3-8 3 8M27 32h4" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
-          </svg>
-        </div>
-        <h1>Set up Sagascript</h1>
-        <p class="description">
-          Choose your first profile's language. Its recommended local model is selected automatically; you can add more profiles later.
-        </p>
-        <div class="language-options">
-          <button
-            class="language-option"
-            class:selected={selectedLanguage === "en"}
-            aria-pressed={selectedLanguage === "en"}
-            onclick={() => (selectedLanguage = "en")}
-          >
-            <span class="lang-flag">EN</span>
-            <span class="lang-name">English</span>
-          </button>
-          <button
-            class="language-option"
-            class:selected={selectedLanguage === "sv"}
-            aria-pressed={selectedLanguage === "sv"}
-            onclick={() => (selectedLanguage = "sv")}
-          >
-            <span class="lang-flag">SV</span>
-            <span class="lang-name">Svenska</span>
-          </button>
-          <button
-            class="language-option"
-            class:selected={selectedLanguage === "no"}
-            aria-pressed={selectedLanguage === "no"}
-            onclick={() => (selectedLanguage = "no")}
-          >
-            <span class="lang-flag">NO</span>
-            <span class="lang-name">Norsk</span>
-          </button>
-          <button
-            class="language-option"
-            class:selected={selectedLanguage === "fi"}
-            aria-pressed={selectedLanguage === "fi"}
-            onclick={() => (selectedLanguage = "fi")}
-          >
-            <span class="lang-flag">FI</span>
-            <span class="lang-name">Suomi</span>
-          </button>
-          <button
-            class="language-option"
-            class:selected={selectedLanguage === "da"}
-            aria-pressed={selectedLanguage === "da"}
-            onclick={() => (selectedLanguage = "da")}
-          >
-            <span class="lang-flag">DA</span>
-            <span class="lang-name">Dansk</span>
-          </button>
-        </div>
-        {#if languageError}
-          <div class="status-indicator error">
-            <span class="status-dot"></span>
-            <span>{languageError}</span>
-          </div>
-        {/if}
-        <div class="actions">
-          <button class="primary" onclick={selectLanguageAndContinue} disabled={languageSaving || platform === null}>
-            {platform === null ? "Preparing…" : languageSaving ? "Saving…" : "Continue"}
-          </button>
-        </div>
-      </div>
+      <LanguageStep
+        {selectedLanguage}
+        selectLanguage={(language) => (selectedLanguage = language)}
+        {languageError}
+        {languageSaving}
+        {platform}
+        {selectLanguageAndContinue}
+      />
 
       <!-- Download -->
     {:else if currentStep === "download"}
-      <div class="step">
-        <div class="icon">
-          <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
-            <rect width="48" height="48" rx="12" fill="var(--accent-dim)" />
-            <path
-              d="M24 16v12m0 0l-4-4m4 4l4-4M16 32h16"
-              stroke="var(--accent)"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            />
-          </svg>
-        </div>
-        <h1>Setting up speech engine</h1>
-        <p class="description">
-          Preparing the local speech engine ({recommendedSizeMb !== null ? `${recommendedSizeMb} MB` : engineSize[selectedLanguage]}). Your
-          recordings are processed on this device.
-        </p>
-
-        {#if downloadError}
-          <div class="status-indicator error">
-            <span class="status-dot"></span>
-            <span>{downloadError}</span>
-          </div>
-          <div class="actions">
-            <button class="primary" onclick={startDownload}>Try Again</button>
-            <button class="secondary" onclick={nextStep}>Continue without speech engine</button>
-          </div>
-        {:else if downloadComplete}
-          <div class="status-indicator granted">
-            <span class="status-dot"></span>
-            <span>Speech engine ready</span>
-          </div>
-          <div class="actions">
-            <button class="primary" onclick={nextStep}>Continue</button>
-          </div>
-        {:else if downloading}
-          <div class="progress-bar-container">
-            <div class="progress-bar" style:width="{downloadProgress}%"></div>
-          </div>
-          <p class="progress-text">{formatProgress(downloadProgress)}</p>
-        {:else}
-          <div class="actions">
-            <button class="primary" onclick={startDownload}>Download</button>
-          </div>
-        {/if}
-      </div>
+      <DownloadStep
+        {selectedLanguage}
+        {recommendedSizeMb}
+        {downloadError}
+        {downloadComplete}
+        {downloading}
+        {downloadProgress}
+        {startDownload}
+        {nextStep}
+      />
 
       <!-- Microphone (macOS only) -->
     {:else if currentStep === "microphone"}
-      <div class="step">
-        <div class="icon">
-          <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
-            <rect width="48" height="48" rx="12" fill="var(--accent-dim)" />
-            <path d="M24 12a4 4 0 0 0-4 4v8a4 4 0 0 0 8 0v-8a4 4 0 0 0-4-4z" stroke="var(--accent)" stroke-width="2" fill="none" />
-            <path d="M16 22v2a8 8 0 0 0 16 0v-2M24 32v4m-4 0h8" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" />
-          </svg>
-        </div>
-        <h1>Microphone Access</h1>
-        <p class="description">
-          Sagascript can record your voice for live dictation. All audio is processed locally on your device — nothing leaves your device.
-        </p>
-
-        {#if micStatus === "authorized"}
-          <div class="status-indicator granted">
-            <span class="status-dot"></span>
-            <span>Microphone access granted</span>
-          </div>
-          <div class="actions">
-            <button class="primary" onclick={nextStep}>Continue</button>
-          </div>
-        {:else if micStatus === "denied"}
-          <div class="status-indicator">
-            <span class="status-dot"></span>
-            <span>Permission was denied</span>
-          </div>
-          <p class="description">
-            Please enable Sagascript in
-            <strong>System Settings &rsaquo; Privacy &amp; Security &rsaquo; Microphone</strong>.
-          </p>
-          <div class="actions">
-            <button class="primary" onclick={openMicrophoneSettingsAndPoll}>
-              <span class="button-spinner"></span>
-              Waiting — Open System Settings
-            </button>
-            <button
-              class="secondary"
-              onclick={() => {
-                stopPoll();
-                nextStep();
-              }}
-            >
-              I don't need this — I'll only transcribe files
-            </button>
-          </div>
-        {:else if micStatus === "restricted"}
-          <div class="status-indicator">
-            <span class="status-dot"></span>
-            <span>Restricted by your organization</span>
-          </div>
-          <div class="actions">
-            <button class="secondary" onclick={nextStep}>Skip</button>
-          </div>
-        {:else if micStatus === "unsupported"}
-          <div class="status-indicator">
-            <span class="status-dot"></span>
-            <span>Permission checks require a built app bundle. Skip to continue.</span>
-          </div>
-          <div class="actions">
-            <button class="primary" onclick={nextStep}>Skip</button>
-          </div>
-        {:else}
-          <!-- not_determined or checking -->
-          <div class="status-indicator">
-            <span class="status-dot"></span>
-            <span>Microphone access not granted</span>
-          </div>
-          <div class="actions">
-            <button class="primary" onclick={grantMicrophone} disabled={micStatus === "checking"}>
-              {#if micStatus === "checking"}
-                <span class="button-spinner"></span>
-                Waiting for permission...
-              {:else}
-                Grant Microphone Access
-              {/if}
-            </button>
-            <button
-              class="secondary"
-              onclick={() => {
-                stopPoll();
-                nextStep();
-              }}
-            >
-              I don't need this — I'll only transcribe files
-            </button>
-          </div>
-        {/if}
-      </div>
+      <MicrophoneStep {micStatus} {nextStep} {stopPoll} {openMicrophoneSettingsAndPoll} {grantMicrophone} />
 
       <!-- Accessibility (macOS only) -->
     {:else if currentStep === "accessibility"}
@@ -682,58 +481,7 @@
 
       <!-- Ready -->
     {:else if currentStep === "ready"}
-      <div class="step">
-        <div class="icon">
-          <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
-            <rect width="48" height="48" rx="12" fill="var(--accent-dim)" />
-            <path d="M17 25l5 5 10-12" stroke="var(--accent)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" />
-          </svg>
-        </div>
-        <h1>You're All Set!</h1>
-
-        {#if !downloadComplete}
-          <div class="status-indicator error" role="alert">
-            <span class="status-dot"></span>
-            <span>Speech engine is not installed yet. Download it from Dictate before your first use.</span>
-          </div>
-        {/if}
-
-        {#if micStatus === "authorized" || platform !== "macos"}
-          <div class="hotkey-display">
-            <div class="hotkey-keys">
-              {#each hotkeyParts as part, i (i)}
-                {#if i > 0}<span class="key-sep">+</span>{/if}
-                <kbd>{part}</kbd>
-              {/each}
-            </div>
-            <p class="hotkey-hint hotkey-mode-intro">Configure separate shortcuts for these recording modes in Dictate.</p>
-            <div class="hotkey-mode-copy">
-              <p class="hotkey-mode-label">Hold to record</p>
-              <p class="hotkey-hint">Hold the shortcut while speaking. Release to stop.</p>
-              <p class="hotkey-mode-label">Press to start/stop</p>
-              <p class="hotkey-hint">Press the shortcut to start recording. Press it again to stop.</p>
-            </div>
-          </div>
-        {:else}
-          <p class="description">
-            Open the <strong>Transcribe</strong> tab to convert audio files to text. You can grant microphone access later in Settings if you
-            want live dictation.
-          </p>
-        {/if}
-
-        <p class="subdescription">You can change any of this in Settings.</p>
-
-        {#if finishError}
-          <div class="status-indicator error">
-            <span class="status-dot"></span>
-            <span>{finishError}</span>
-          </div>
-        {/if}
-
-        <div class="actions">
-          <button class="primary" onclick={finish}>Start Using Sagascript</button>
-        </div>
-      </div>
+      <ReadyStep {downloadComplete} {micStatus} {platform} {hotkeyParts} {finishError} {finish} />
     {/if}
   </div>
 </div>
@@ -835,89 +583,6 @@
     margin: 0 0 8px;
   }
 
-  .subdescription {
-    font-size: 12px;
-    color: var(--text-muted);
-    opacity: 0.7;
-    margin: 0 0 24px;
-  }
-
-  /* Language selector */
-
-  .language-options {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: center;
-    gap: 10px;
-    margin: 20px 0 24px;
-  }
-
-  .language-option {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 6px;
-    padding: 14px 20px;
-    background: var(--bg-secondary);
-    border: 2px solid var(--border);
-    border-radius: 10px;
-    cursor: pointer;
-    transition:
-      border-color 0.2s,
-      background 0.2s;
-    min-width: 90px;
-  }
-
-  .language-option:hover {
-    border-color: var(--text-muted);
-  }
-
-  .language-option.selected {
-    border-color: var(--accent);
-    background: color-mix(in srgb, var(--accent) 8%, var(--bg-secondary));
-  }
-
-  .lang-flag {
-    font-size: 14px;
-    font-weight: 700;
-    color: var(--accent);
-    letter-spacing: 1px;
-  }
-
-  .lang-name {
-    font-size: 12px;
-    color: var(--text-muted);
-  }
-
-  .language-option.selected .lang-name {
-    color: var(--text);
-  }
-
-  /* Progress bar */
-
-  .progress-bar-container {
-    width: 100%;
-    max-width: 300px;
-    height: 6px;
-    background: var(--bg-secondary);
-    border-radius: 3px;
-    overflow: hidden;
-    margin: 20px 0 8px;
-  }
-
-  .progress-bar {
-    height: 100%;
-    background: var(--accent);
-    border-radius: 3px;
-    transition: width 0.3s ease;
-  }
-
-  .progress-text {
-    font-size: 12px;
-    color: var(--text-muted);
-    margin: 0 0 16px;
-  }
-
   /* Status indicators */
 
   .status-indicator {
@@ -991,61 +656,5 @@
     to {
       transform: rotate(360deg);
     }
-  }
-
-  /* Hotkey display */
-
-  .hotkey-display {
-    margin: 16px 0 8px;
-  }
-
-  .hotkey-keys {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 4px;
-    margin-bottom: 8px;
-  }
-
-  kbd {
-    display: inline-block;
-    padding: 6px 12px;
-    background: var(--bg-secondary);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    font-family: inherit;
-    font-size: 14px;
-    font-weight: 600;
-    color: var(--accent);
-    box-shadow: 0 2px 0 var(--border);
-  }
-
-  .key-sep {
-    color: var(--text-muted);
-    font-size: 14px;
-  }
-
-  .hotkey-hint {
-    font-size: 12px;
-    color: var(--text-muted);
-    margin: 0;
-  }
-
-  .hotkey-mode-copy {
-    display: grid;
-    gap: 2px;
-    text-align: left;
-  }
-
-  .hotkey-mode-label {
-    font-size: 12px;
-    color: var(--text);
-    font-weight: 600;
-    margin: 4px 0 0;
-  }
-
-  strong {
-    color: var(--accent);
-    font-weight: 600;
   }
 </style>
