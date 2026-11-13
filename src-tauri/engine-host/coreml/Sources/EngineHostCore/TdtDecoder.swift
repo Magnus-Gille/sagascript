@@ -147,6 +147,11 @@ final class TdtDecodeSession {
     private let decoderStepDestination: FloatVectorDestination
     private let tokenProbPrecision: TensorPrecision
     private var bias: BiasState?
+    // Measurement only (SAGA-565): prediction() call counts and wall time, filled when StageTrace is on.
+    private(set) var traceDecoderCalls: UInt64 = 0
+    private(set) var traceDecoderNanos: UInt64 = 0
+    private(set) var traceJointCalls: UInt64 = 0
+    private(set) var traceJointNanos: UInt64 = 0
     /// Biasing was requested and the joint exposes top-K outputs, so it is in effect.
     private(set) var boostActive: Bool
     private(set) var boostReason: String?
@@ -235,7 +240,9 @@ final class TdtDecodeSession {
     /// The LSTM state is updated in place through the output backings.
     private func runDecoder(token: Int) throws {
         target[0] = NSNumber(value: token)
+        let traceStart = StageTrace.enabled ? StageTrace.now() : 0
         let output = try decoder.prediction(from: decoderInput, options: decoderOptions)
+        if StageTrace.enabled { traceDecoderCalls += 1; traceDecoderNanos += StageTrace.now() - traceStart }
         guard let projection = output.featureValue(for: "decoder")?.multiArrayValue else {
             throw EngineHostError(
                 code: .engine,
@@ -272,7 +279,9 @@ final class TdtDecodeSession {
     /// the end-of-audio flush revisits encoder frames out of order, so it passes its own clock).
     private func runJoint(frames: EncoderFrames, frame: Int, biasFrame: Int? = nil) throws -> Decision {
         frames.copyFrame(frame, to: encoderStepDestination)
+        let traceStart = StageTrace.enabled ? StageTrace.now() : 0
         _ = try joint.prediction(from: jointInput, options: jointOptions)
+        if StageTrace.enabled { traceJointCalls += 1; traceJointNanos += StageTrace.now() - traceStart }
         var token = Int(tokenIDBacking.dataPointer.bindMemory(to: Int32.self, capacity: 1)[0])
         var probability = loadFloat(UnsafeRawPointer(tokenProbBacking.dataPointer), tokenProbPrecision, 0)
         var duration = Int(durationBacking.dataPointer.bindMemory(to: Int32.self, capacity: 1)[0])
