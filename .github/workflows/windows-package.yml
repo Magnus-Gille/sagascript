@@ -21,7 +21,6 @@ concurrency:
 
 # Keep source/line backtraces for CI failures without full variable/type debug
 # information in every dependency and PDB. Release profiles are unchanged.
-# rust-cache includes CARGO_* environment variables in its compatibility key.
 env:
   CARGO_PROFILE_DEV_DEBUG: line-tables-only
   CARGO_PROFILE_TEST_DEBUG: line-tables-only
@@ -101,10 +100,9 @@ jobs:
             throw "Expected native ${{ matrix.architecture }} runner, got $runnerArchitecture"
           }
 
-      # LLVM lives at a FIXED path and is cached (#266). The previous per-run
-      # GUID install path leaked into CMake target state, which is why arm64
-      # `target/` could not be cached and every run recompiled whisper.cpp and
-      # all dependencies from scratch. A stable path makes target caching safe.
+      # LLVM lives at a FIXED path and is cached (#266): the previous per-run GUID install path leaked
+      # into CMake target state. The download is about a minute; the entry (~0.8 GB) is part of the
+      # cache budget in scripts/test-pipeline-cache.mjs.
       - name: Cache pinned LLVM for ARM64 bindgen
         id: llvm-cache
         if: matrix.architecture == 'arm64'
@@ -227,37 +225,12 @@ jobs:
           $features | ConvertTo-Json -Compress
           if ($features.Values -contains $false) { throw 'Runner does not support the packaged x64 CPU baseline' }
 
-      - name: Identify Windows runner image
-        id: windows-image
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $PSNativeCommandUseErrorActionPreference = $true
-          $imageOs = $env:ImageOS
-          $imageVersion = $env:ImageVersion
-          if ([string]::IsNullOrWhiteSpace($imageOs)) {
-            throw "ImageOS is unavailable; refusing to share native build cache"
-          }
-          if ([string]::IsNullOrWhiteSpace($imageVersion)) {
-            throw "ImageVersion is unavailable; refusing to share native build cache"
-          }
-          "image_os=$imageOs" >> $env:GITHUB_OUTPUT
-          "image_version=$imageVersion" >> $env:GITHUB_OUTPUT
-
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          # Only main saves (SAGA-546): a pull request restores the cache that the release prebuild
-          # (prebuild-release.yml -> workflow_call on main) or a main dispatch saved.
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-          # The ORT engine host is a separate Cargo workspace with its own target dir.
-          workspaces: |
-            src-tauri
-            src-tauri/engine-host/ort
-          # LLVM now installs at a fixed path (see the LLVM cache step), so arm64 CMake
-          # targets no longer embed a per-run path and are safe to cache (#266).
-          shared-key: windows-package-${{ matrix.architecture }}-${{ steps.windows-image.outputs.image_os }}-${{ steps.windows-image.outputs.image_version }}-${{ hashFiles('.github/workflows/windows-package.yml', 'scripts/cmake/windows-x64-portable.cmake', 'scripts/cmake/windows-arm64-native.cmake', 'scripts/verify-windows-x64-cpu-policy.ps1') }}
-
+      # No Rust cache (SAGA-546). The two entries it saved (~1.6 GB each, keyed on the runner image, this
+      # file and the CMake hooks) were written by the release prebuild about once per release and evicted
+      # before any run restored them: no hit in the five pull request and three prebuild runs sampled on
+      # 2026-11-09. Saved after main's CI entries on the same push, they were the newest entries, so
+      # GitHub's least-recently-used eviction removed the CI caches every pull request compiles from.
+      # Every package build compiles cold, as it already did in practice; the CI lanes' build is cached.
       - name: Install Node.js
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
@@ -493,19 +466,6 @@ jobs:
             Write-Host "::warning::Engine host latency probe failed: $_"
           }
           $global:LASTEXITCODE = 0
-
-      - name: Remove cached installer bundles
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $PSNativeCommandUseErrorActionPreference = $true
-          $bundleRoot = "src-tauri\target\${{ matrix.rust_target }}\release\bundle"
-          foreach ($format in @("nsis", "msi")) {
-            $bundleDirectory = Join-Path $bundleRoot $format
-            if (Test-Path -LiteralPath $bundleDirectory) {
-              Remove-Item -LiteralPath $bundleDirectory -Recurse -Force
-            }
-          }
 
       - name: Verify source before installer build
         run: node scripts/ci-build-identity.mjs --verify

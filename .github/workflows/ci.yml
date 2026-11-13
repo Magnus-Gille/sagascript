@@ -146,6 +146,7 @@ jobs:
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
       - name: Set up toolchain
+        id: toolchain
         uses: ./.github/actions/setup
         with:
           cache-key: sagascript-ci-native
@@ -161,6 +162,14 @@ jobs:
         run: |
           node scripts/ci/smoke-cli.mjs basic
           node scripts/ci/smoke-cli.mjs model
+      # The setup action only restores the models; this lane saves them on main, last (SAGA-546). The
+      # path is the one the setup action restores for this OS (scripts/test-pipeline-cache.mjs).
+      - name: Save downloaded models cache
+        if: ${{ success() && github.ref == 'refs/heads/main' && steps.toolchain.outputs.models-cache-hit != 'true' }}
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ~/Library/Application Support/Sagascript/Models
+          key: ${{ steps.toolchain.outputs.models-cache-key }}
 
   check-macos:
     needs: [scope, test-macos, build-macos]
@@ -310,6 +319,7 @@ jobs:
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
       - name: Set up toolchain
+        id: toolchain
         uses: ./.github/actions/setup
         with:
           cache-key: sagascript-ci-native
@@ -336,6 +346,14 @@ jobs:
         run: |
           echo "Windows smoke test, tier 2 (model): $MODEL_OUTCOME" >> "$GITHUB_STEP_SUMMARY"
           [ "$MODEL_OUTCOME" = success ] || echo "::warning title=Windows smoke test failed (non-blocking)::Tier 2 (model): $MODEL_OUTCOME, masked by continue-on-error (#357)"
+      # The setup action only restores the models; this lane saves them on main, last (SAGA-546). The
+      # path is the one the setup action restores for this OS (scripts/test-pipeline-cache.mjs).
+      - name: Save downloaded models cache
+        if: ${{ success() && github.ref == 'refs/heads/main' && steps.toolchain.outputs.models-cache-hit != 'true' }}
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ~\AppData\Roaming\Sagascript\Models
+          key: ${{ steps.toolchain.outputs.models-cache-key }}
 
   check-windows:
     needs: [scope, test-windows, build-windows]

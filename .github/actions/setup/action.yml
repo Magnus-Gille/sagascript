@@ -41,6 +41,14 @@ inputs:
     description: Run `npm ci`. test-windows turns it off to run its build identity gates first, then installs.
     default: "true"
 
+outputs:
+  models-cache-hit:
+    description: The native build lanes' model cache restored its exact key ("true"); nothing to save then.
+    value: ${{ steps.models-cache.outputs.cache-hit }}
+  models-cache-key:
+    description: The model cache's primary key, for the lane's own save step on main.
+    value: ${{ steps.models-cache.outputs.cache-primary-key }}
+
 runs:
   using: composite
   steps:
@@ -133,9 +141,13 @@ runs:
         workspaces: ${{ inputs.cache-workspaces }}
         shared-key: ${{ inputs.cache-key }}${{ inputs.native-build != 'true' && format('-{0}', hashFiles('scripts/ci/cargo-gates.mjs')) || '' }}
 
+    # Restore only (SAGA-546): a composite action has no post-job step, so the native build lanes save the
+    # models themselves as their last step, on main, after the smoke tests downloaded what was missing
+    # (outputs models-cache-*). The combined actions/cache saved under every pull request ref.
     - if: ${{ inputs.native-build == 'true' }}
       name: Cache downloaded models
-      uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+      id: models-cache
+      uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
       with:
         path: ${{ runner.os == 'Windows' && '~\AppData\Roaming\Sagascript\Models' || '~/Library/Application Support/Sagascript/Models' }}
         key: ${{ runner.os == 'Windows' && 'windows' || 'macos' }}-models-${{ hashFiles('src-tauri/crates/sagascript-core/src/models/sources.rs', 'src-tauri/crates/sagascript-core/src/transcription/model.rs', 'src-tauri/crates/sagascript-core/src/diarization/model.rs') }}

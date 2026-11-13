@@ -6,7 +6,16 @@ import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { REPO_ROOT, actionNames, allSteps, loadAction, loadWorkflow, readRepoFile, workflowFiles } from "./lib/ci-workflow.mjs";
+import {
+  REPO_ROOT,
+  actionInput,
+  actionNames,
+  allSteps,
+  loadAction,
+  loadWorkflow,
+  readRepoFile,
+  workflowFiles,
+} from "./lib/ci-workflow.mjs";
 
 const rustCacheRef = "Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6";
 
@@ -35,56 +44,28 @@ test("CI rust caches use the reviewed immutable action revision", () => {
   );
 });
 
-test("signed test builds use the shared dependency cache without raw target dumps", () => {
-  const cache = section(testBuildWorkflow, "name: Cache Rust dependencies", "name: Install npm dependencies");
-  assert.match(cache, new RegExp(`uses: ${rustCacheRef.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
-  assert.match(cache, /workspaces:\s+src-tauri/);
-  assert.match(cache, /shared-key:\s+sagascript-test-macos-arm64/);
-  assert.doesNotMatch(cache, /actions\/cache|src-tauri\/target/);
-  assert.ok(
-    testBuildWorkflow.indexOf("name: Import Developer ID certificate") > testBuildWorkflow.indexOf("name: Cache Rust dependencies"),
-    "signing must remain after the dependency cache",
-  );
-});
-
-test("Windows native cache is isolated by runner image and toolchain namespace", () => {
-  assert.match(
-    windowsWorkflow,
-    /concurrency:\s*\n(?:\s*#[^\n]*\n)*\s*group:\s+\$\{\{ github\.workflow \}\}-\$\{\{ github\.event\.pull_request\.number \|\| github\.run_id \}\}[^\n]*\n\s*cancel-in-progress:\s+true/,
-  );
-
-  const imageStart = windowsWorkflow.indexOf("name: Identify Windows runner image");
-  const cacheStart = windowsWorkflow.indexOf("name: Cache Rust dependencies");
-  const nodeStart = windowsWorkflow.indexOf("name: Install Node.js");
-  const armSetupStart = windowsWorkflow.indexOf("name: Configure native ARM64 C and C++ toolchain");
-  assert.ok(imageStart > armSetupStart && cacheStart > imageStart);
-  assert.ok(nodeStart > cacheStart, "cache must stay before Node setup and after native toolchain setup");
-
-  const imageStep = section(windowsWorkflow, "name: Identify Windows runner image", "name: Cache Rust dependencies");
-  assert.match(imageStep, /\$env:ImageOS/);
-  assert.match(imageStep, /\$env:ImageVersion/);
-  assert.match(imageStep, /IsNullOrWhiteSpace\(\$imageOs\)/);
-  assert.match(imageStep, /IsNullOrWhiteSpace\(\$imageVersion\)/);
-  assert.match(imageStep, /GITHUB_OUTPUT/);
-
-  const cache = section(windowsWorkflow, "name: Cache Rust dependencies", "name: Install npm dependencies");
-  assert.match(cache, new RegExp(`uses: ${rustCacheRef.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
-  assert.match(cache, /workspaces:\s*\|\s*\n\s+src-tauri\s*\n\s+src-tauri\/engine-host\/ort/);
-  assert.match(
-    cache,
-    /shared-key:\s+windows-package-\$\{\{ matrix\.architecture \}\}-\$\{\{ steps\.windows-image\.outputs\.image_os \}\}-\$\{\{ steps\.windows-image\.outputs\.image_version \}\}-\$\{\{ hashFiles\('\.github\/workflows\/windows-package\.yml', 'scripts\/cmake\/windows-x64-portable\.cmake', 'scripts\/cmake\/windows-arm64-native\.cmake', 'scripts\/verify-windows-x64-cpu-policy\.ps1'\) \}\}/,
-  );
-  assert.ok(
-    windowsWorkflow.indexOf("name: Remove cached installer bundles") > cacheStart,
-    "installer cleanup must remain after the native build gates",
-  );
+// SAGA-546: the release, signed test and Windows package builds saved Rust caches of 1.2 to 1.6 GB that
+// no later run restored (the version bump, the runner image or eviction always came first), and saved
+// after main's CI entries on the same push they made GitHub evict those. They compile cold.
+test("only the setup action keeps a Rust cache: no other workflow saves or restores one (SAGA-546)", () => {
+  for (const file of workflowFiles()) {
+    for (const { job, step } of allSteps(loadWorkflow(file))) {
+      const where = `${file} job ${job.id} step "${step.name}"`;
+      assert.ok(!step.uses?.startsWith("Swatinem/rust-cache@"), `${where} must not keep a Rust cache of its own`);
+      if (step.uses?.startsWith("actions/cache")) {
+        assert.doesNotMatch(String(step.with.path ?? ""), /target/, `${where} must not cache a Cargo target directory`);
+      }
+    }
+  }
+  assert.doesNotMatch(windowsWorkflow, /name: Identify Windows runner image|steps\.windows-image\./);
+  assert.doesNotMatch(testBuildWorkflow, /name: Cache Rust dependencies/);
 });
 
 test("Windows candidates cache only verified models with a candidate primary key", () => {
   const modelCacheStart = windowsWorkflow.indexOf("name: Cache downloaded models");
   const identityStart = windowsWorkflow.indexOf("name: Pin validated Windows build identity");
-  const rustCacheStart = windowsWorkflow.indexOf("name: Cache Rust dependencies");
-  assert.ok(modelCacheStart > rustCacheStart && identityStart > modelCacheStart);
+  const nodeStart = windowsWorkflow.indexOf("name: Install Node.js");
+  assert.ok(nodeStart >= 0 && modelCacheStart > nodeStart && identityStart > modelCacheStart);
 
   const cache = section(windowsWorkflow, "name: Cache downloaded models", "name: Pin validated Windows build identity");
   // SHA-pinned (#354); the trailing comment names the v5 release it resolves to. Restore only (SAGA-546):
@@ -127,8 +108,6 @@ test("Windows candidates cache only verified models with a candidate primary key
 // read by another run, yet it counts against the repository's 10 GB limit and evicts what main saved.
 test("only main saves Actions caches (SAGA-546)", () => {
   const mainOnly = "github.ref == 'refs/heads/main'";
-  // The single combined actions/cache step: ~23 MB, saves only when the model manifest hash changes.
-  const combinedAllowlist = { ".github/actions/setup": "Cache downloaded models" };
   const units = [
     ...workflowFiles().map((file) => ({
       label: `.github/workflows/${file}`,
@@ -149,12 +128,125 @@ test("only main saves Actions caches (SAGA-546)", () => {
         saves += 1;
         assert.ok(step.condition?.includes(mainOnly), `${where} must save only on main, got: ${step.condition}`);
       }
-      if (step.uses?.startsWith("actions/cache@") && combinedAllowlist[label] !== step.name) {
+      if (step.uses?.startsWith("actions/cache@")) {
         assert.fail(`${where} uses the combined actions/cache, which saves on every ref; split it into restore + save`);
       }
     }
   }
-  assert.ok(rustCaches >= 5 && saves >= 4, `the scan must find the cache steps (rust ${rustCaches}, save ${saves})`);
+  assert.ok(rustCaches === 1 && saves >= 6, `the scan must find the cache steps (rust ${rustCaches}, save ${saves})`);
+});
+
+// SAGA-546: the setup action restores the native build lanes' models; a composite action has no post-job
+// step, so each native build lane saves them itself, last, on main, under the key and path it restored.
+test("the native build lanes save the models the setup action restored, on main and last (SAGA-546)", () => {
+  const setup = loadAction("setup");
+  const restore = setup.steps.find((step) => step.name === "Cache downloaded models");
+  assert.match(restore.uses, /^actions\/cache\/restore@[0-9a-f]{40}$/);
+  assert.equal(restore.id, "models-cache");
+  assert.equal(setup.doc.outputs["models-cache-hit"].value, "${{ steps.models-cache.outputs.cache-hit }}");
+  assert.equal(setup.doc.outputs["models-cache-key"].value, "${{ steps.models-cache.outputs.cache-primary-key }}");
+  const restorePath = { macOS: "~/Library/Application Support/Sagascript/Models", Windows: "~\\AppData\\Roaming\\Sagascript\\Models" };
+  assert.equal(restore.with.path, `\${{ runner.os == 'Windows' && '${restorePath.Windows}' || '${restorePath.macOS}' }}`);
+  const lanes = [];
+  for (const file of workflowFiles()) {
+    for (const job of loadWorkflow(file).jobs) {
+      const setupStep = job.steps.find((step) => step.uses === "./.github/actions/setup");
+      if (!setupStep || actionInput(setup, setupStep, "native-build") !== "true") continue;
+      const where = `${file} job ${job.id}`;
+      lanes.push(where);
+      const save = job.steps.at(-1);
+      assert.equal(save.name, "Save downloaded models cache", `${where} must save the models as its last step`);
+      assert.match(save.uses, /^actions\/cache\/save@[0-9a-f]{40}$/);
+      assert.equal(
+        save.condition,
+        `\${{ success() && github.ref == 'refs/heads/main' && steps.${setupStep.id}.outputs.models-cache-hit != 'true' }}`,
+      );
+      assert.equal(save.with.key, `\${{ steps.${setupStep.id}.outputs.models-cache-key }}`);
+      const os = String(job.runsOn).startsWith("windows-") ? "Windows" : "macOS";
+      assert.equal(save.with.path, restorePath[os], `${where} must save the path the setup action restores on ${os}`);
+    }
+  }
+  assert.deepEqual(lanes, ["ci.yml job build-macos", "ci.yml job build-windows"]);
+});
+
+// SAGA-546: the repository's Actions cache holds 10 GB, and GitHub evicts the least recently used entries
+// first. Every cache that saves therefore has its measured size here, and the total must leave headroom
+// under the limit, or the Rust entries every pull request compiles from are the ones evicted. Sizes in MB
+// as `gh cache list` reports them on 2026-11-09 (the Rust entries evicted before then: the restore logs of
+// main's CI run 42484311483). `rows` is the job's matrix size: a saving step in a matrix job saves once
+// per row, so a new row needs a new measurement. A new cache, or a lane that installs Rust through the
+// setup action in any workflow, fails this test until it has an entry.
+//
+// Which entries survive: the CI lanes read their entries on every pull request and every main push, so
+// they are always among the most recently used. `bestEffort` entries are read only by the release prebuild
+// and Windows package runs; when a lockfile change starts a new Rust generation, they are older than the
+// previous generation (read at the start of that push's runs) and are evicted first. That costs a download.
+const CACHE_LIMIT_MB = 9536; // 10 GB, conservatively in bytes
+const CACHE_BUDGET = {
+  // The setup action's Rust cache, one entry per lane that installs Rust (key: cache-key and OS).
+  "ci.yml job test-macos Rust cache": { mb: 1110 }, // sagascript-ci-checks, Darwin
+  "ci.yml job build-macos Rust cache": { mb: 640 }, // sagascript-ci-native, Darwin
+  "ci.yml job test-linux Rust cache": { mb: 1621 }, // sagascript-ci, Linux (both workspaces)
+  "ci.yml job msrv-linux Rust cache": { mb: 662 }, // sagascript-msrv, Linux
+  "ci.yml job test-windows Rust cache": { mb: 1073 }, // sagascript-ci-checks, Windows
+  "ci.yml job build-windows Rust cache": { mb: 636 }, // sagascript-ci-native, Windows
+  // Steps that save.
+  '.github/actions/setup step "Save apt packages cache"': { mb: 59 }, // one key for every Linux lane
+  // macos-models restores from the release model set through its `macos-models-` restore key, so it saves 131.
+  'ci.yml job build-macos step "Save downloaded models cache"': { mb: 131 },
+  'ci.yml job build-windows step "Save downloaded models cache"': { mb: 22 },
+  'release-quality-gate.yml job quality-gate step "Save downloaded models cache"': { mb: 131, bestEffort: true },
+  'release-quality-gate.yml job quality-gate step "Save diarization fixture cache"': { mb: 1, bestEffort: true },
+  // Saves on the arm64 row only.
+  'windows-package.yml job build-windows-candidate step "Save pinned LLVM cache"': { mb: 807, rows: 2, bestEffort: true },
+  'windows-package.yml job build-windows-candidate step "Save downloaded models cache"': { mb: 837, rows: 2, bestEffort: true }, // arm64 688, x64 149
+};
+// setup-node's npm caches are outside the main-only rule: it saves on any ref whose lockfile hash main
+// has no entry for. Measured: main 191 (45 to 55 per OS), pull request refs 306 (6 entries).
+const NPM_MB = 500;
+
+// The number of rows a job's matrix runs. Only the shapes in use are supported; extend for others.
+function matrixRows(job) {
+  const matrix = job.strategy?.matrix;
+  if (matrix === undefined) return 1;
+  assert.equal(typeof matrix, "object", `job ${job.id}: a matrix expression cannot be counted here`);
+  const { include = [], exclude = [], ...axes } = matrix;
+  const sizes = Object.values(axes);
+  if (sizes.length === 0) return include.length;
+  assert.ok(include.length === 0, `job ${job.id}: count matrix axes plus include by hand`);
+  assert.ok(sizes.every(Array.isArray), `job ${job.id}: every matrix axis must be a literal list`);
+  return sizes.reduce((rows, axis) => rows * axis.length, 1) - exclude.length;
+}
+
+test("every cache that saves has a measured size, and together they fit the 10 GB limit with headroom (SAGA-546)", () => {
+  const setup = loadAction("setup");
+  const found = {};
+  for (const file of workflowFiles()) {
+    for (const job of loadWorkflow(file).jobs) {
+      const rows = matrixRows(job);
+      for (const step of job.steps) {
+        if (step.uses === "./.github/actions/setup" && actionInput(setup, step, "rust") !== "false") {
+          found[`${file} job ${job.id} Rust cache`] = rows;
+        }
+        if (step.uses?.startsWith("actions/cache/save@") || step.uses?.startsWith("actions/cache@")) {
+          found[`${file} job ${job.id} step "${step.name}"`] = rows;
+        }
+      }
+    }
+  }
+  for (const name of actionNames()) {
+    for (const step of loadAction(name).steps) {
+      if (step.uses?.startsWith("actions/cache/save@") || step.uses?.startsWith("actions/cache@")) {
+        found[`.github/actions/${name} step "${step.name}"`] = 1;
+      }
+    }
+  }
+  assert.deepEqual(Object.keys(found).sort(), Object.keys(CACHE_BUDGET).sort(), "every cache that saves needs a measured budget entry");
+  for (const [unit, rows] of Object.entries(found)) {
+    assert.equal(CACHE_BUDGET[unit].rows ?? 1, rows, `${unit} saves once per matrix row: measure ${rows} entries`);
+  }
+  const total = Object.values(CACHE_BUDGET).reduce((sum, { mb }) => sum + mb, 0) + NPM_MB;
+  assert.ok(total <= CACHE_LIMIT_MB * 0.9, `the caches total ${total} MB, more than 90% of the ${CACHE_LIMIT_MB} MB limit`);
 });
 
 // SAGA-546: the Linux apt step restores cached .deb files, and only main saves them.
