@@ -15,6 +15,9 @@
     MeetingTranscript,
   } from "./meeting-types";
   import { activeSegmentsAtTime } from "./meeting-playback";
+  import AcousticPanel from "./meeting-review/AcousticPanel.svelte";
+  import ExportPanel from "./meeting-review/ExportPanel.svelte";
+  import SpeakerPanel from "./meeting-review/SpeakerPanel.svelte";
 
   interface Props {
     idPrefix?: string;
@@ -57,14 +60,6 @@
     resetDraftKey = 0,
   }: Props = $props();
 
-  const exportFormats: Array<{ format: MeetingExportFormat; label: string }> = [
-    { format: "plain", label: "Plain text" },
-    { format: "markdown", label: "Markdown" },
-    { format: "json", label: "Review JSON" },
-    { format: "srt", label: "SRT subtitles" },
-    { format: "vtt", label: "WebVTT subtitles" },
-  ];
-
   let labelDrafts: Record<string, string> = $state({});
   let mergeTargets: Record<string, string> = $state({});
   let textDrafts: Record<string, string> = $state({});
@@ -90,18 +85,6 @@
 
   const sortedSegments = $derived([...transcript.segments].sort((a, b) => a.start - b.start || a.end - b.end || a.id.localeCompare(b.id)));
   const acousticReport = $derived(transcript.diarization ?? null);
-  const overlapSpans = $derived(acousticReport?.activity.filter((span) => span.speakers.length > 1) ?? []);
-  const renderedOverlapSpans = $derived(overlapSpans.slice(0, 100));
-  const omittedOverlapCount = $derived(Math.max(0, overlapSpans.length - renderedOverlapSpans.length));
-  const overlapDuration = $derived(overlapSpans.reduce((total, span) => total + Math.max(0, span.end - span.start), 0));
-  const fallbackRegionCount = $derived(acousticReport?.regions.filter((region) => region.used_track_fallback).length ?? 0);
-  const attributionReasons = $derived.by(() => {
-    const counts: Record<string, number> = Object.create(null);
-    for (const attribution of acousticReport?.attributions ?? []) {
-      counts[attribution.reason] = (counts[attribution.reason] ?? 0) + 1;
-    }
-    return Object.entries(counts).sort(([left], [right]) => left.localeCompare(right));
-  });
   const activeSegments = $derived(audioUrl ? activeSegmentsAtTime(transcript.segments, playbackTime) : []);
   const activeIds = $derived(new Set(activeSegments.map((segment) => segment.id)));
 
@@ -292,6 +275,14 @@
     mergeTargets[speakerId] = "";
   }
 
+  function setLabelDraft(speakerId: string, label: string): void {
+    labelDrafts[speakerId] = label;
+  }
+
+  function setMergeTarget(speakerId: string, target: string): void {
+    mergeTargets[speakerId] = target;
+  }
+
   async function applySegment(segment: MeetingSegment): Promise<void> {
     const text = textDrafts[segment.id] ?? segment.text;
     const speaker = speakerDrafts[segment.id] ?? segment.speaker;
@@ -423,56 +414,7 @@
   {#if actionNotice}<p class="success-note" role="status">{actionNotice}</p>{/if}
 
   {#if acousticReport}
-    <section class="acoustic-panel" aria-labelledby={idPrefix + "acoustic-panel-title"}>
-      <div class="section-heading">
-        <div>
-          <h2 id={idPrefix + "acoustic-panel-title"}>Acoustic activity</h2>
-          <p>Original speaker activity from the recording, kept separate from reviewed transcript text.</p>
-        </div>
-        {#if acousticReport.transcript_modified}<span class="edited-badge">Transcript edited</span>{/if}
-      </div>
-      {#if overlapSpans.length > 0}
-        <p class="overlap-notice" role="status">
-          Simultaneous speaker activity appears in {overlapSpans.length} interval{overlapSpans.length === 1 ? "" : "s"}
-          ({overlapDuration.toFixed(2)} seconds). Transcript words remain shown once; this panel does not duplicate words for overlapping speakers.
-        </p>
-        <div class="acoustic-overlap-list" role="list" aria-label="Simultaneous speaker activity">
-          {#each renderedOverlapSpans as span (span.start + "-" + span.end + "-" + span.speakers.join(","))}
-            <div class="acoustic-overlap-row" role="listitem">
-              <span class="timestamp">{formatTimestamp(span.start)}–{formatTimestamp(span.end)}</span>
-              <span>{span.speakers.map(displayLabel).join(", ")}</span>
-            </div>
-          {/each}
-        </div>
-        {#if omittedOverlapCount > 0}
-          <p class="diagnostic-note">
-            {omittedOverlapCount} additional overlap interval{omittedOverlapCount === 1 ? " was" : "s were"} omitted from this view.
-          </p>
-        {/if}
-      {:else}
-        <p class="empty">No simultaneous speaker activity was recorded in the acoustic timeline.</p>
-      {/if}
-      <p class="diagnostic-note">
-        Diagnostic evidence only: activity and any included attribution evidence are not calibrated speaker confidence.
-        {#if acousticReport.diagnostics_included === true}
-          {#if acousticReport.decoder}
-            Decoder {acousticReport.decoder.strategy}, beam {acousticReport.decoder.beam_size}, VAD {acousticReport.decoder.vad_enabled
-              ? "on"
-              : "off"}.{/if}
-        {:else}
-          Additional diagnostic evidence was not included for this run.
-        {/if}
-      </p>
-      {#if acousticReport.diagnostics_included === true && (fallbackRegionCount > 0 || attributionReasons.length > 0)}
-        <div class="diagnostic-details" aria-label="Diarization diagnostic evidence">
-          {#if fallbackRegionCount > 0}<span>{fallbackRegionCount} region{fallbackRegionCount === 1 ? "" : "s"} used track fallback.</span
-            >{/if}
-          {#if attributionReasons.length > 0}<span
-              >Attribution reasons: {attributionReasons.map(([reason, count]) => `${reason} (${count})`).join(", ")}.</span
-            >{/if}
-        </div>
-      {/if}
-    </section>
+    <AcousticPanel {idPrefix} {acousticReport} {displayLabel} {formatTimestamp} />
   {/if}
 
   <section class="review-actions" aria-label="Review actions">
@@ -495,88 +437,18 @@
     </p>
   {/if}
 
-  <section class="speaker-panel" aria-labelledby={idPrefix + "speaker-panel-title"}>
-    <div class="section-heading">
-      <div>
-        <h2 id={idPrefix + "speaker-panel-title"}>Speakers</h2>
-        <p>Rename a speaker or merge two speaker IDs when they belong to the same person.</p>
-      </div>
-    </div>
-    {#if transcript.speakers.length === 0}
-      <p class="empty">No speaker labels are available for this transcript.</p>
-    {:else}
-      <div class="speaker-list">
-        {#each transcript.speakers as speaker, index (speaker.id)}
-          <div class="speaker-row">
-            <div class="speaker-identity">
-              <span class="speaker-dot" aria-hidden="true">{index + 1}</span>
-              <div>
-                <label for={idPrefix + "speaker-name-" + index}>Speaker {index + 1} name</label>
-                <input
-                  id={idPrefix + "speaker-name-" + index}
-                  type="text"
-                  value={labelDrafts[speaker.id] ?? speaker.label}
-                  aria-label={"Rename " + speaker.label}
-                  disabled={disabled()}
-                  oninput={(event) => (labelDrafts[speaker.id] = (event.currentTarget as HTMLInputElement).value)}
-                  onkeydown={(event) => {
-                    if (event.key === "Enter") void renameSpeaker(speaker);
-                  }}
-                />
-              </div>
-            </div>
-            <div class="speaker-actions">
-              <button
-                type="button"
-                class="secondary"
-                disabled={disabled() || !(labelDrafts[speaker.id] ?? "").trim() || (labelDrafts[speaker.id] ?? "").trim() === speaker.label}
-                onclick={() => void renameSpeaker(speaker)}
-              >
-                Rename
-              </button>
-              {#if transcript.speakers.length > 1}
-                <label class="merge-control">
-                  <span>Merge into</span>
-                  <select
-                    aria-label={"Merge " + speaker.label + " into"}
-                    value={mergeTargets[speaker.id] ?? ""}
-                    disabled={disabled()}
-                    onchange={(event) => (mergeTargets[speaker.id] = (event.currentTarget as HTMLSelectElement).value)}
-                  >
-                    <option value="">Choose speaker</option>
-                    {#each transcript.speakers as target (target.id)}
-                      {#if target.id !== speaker.id}
-                        <option value={target.id}>{target.label}</option>
-                      {/if}
-                    {/each}
-                  </select>
-                </label>
-                <button
-                  type="button"
-                  class="secondary"
-                  disabled={disabled() || !mergeTargets[speaker.id]}
-                  onclick={() => void mergeSpeaker(speaker.id)}
-                >
-                  Merge
-                </button>
-                {#if mergeTargets[speaker.id]}
-                  <button
-                    type="button"
-                    class="secondary"
-                    disabled={disabled()}
-                    aria-label={"Clear merge selection for " + speaker.label}
-                    onclick={() => discardMerge(speaker.id)}
-                  >
-                    Clear selection
-                  </button>
-                {/if}
-              {/if}
-            </div>
-          </div>
-        {/each}
-      </div>
-    {/if}
-  </section>
+  <SpeakerPanel
+    {idPrefix}
+    {transcript}
+    {labelDrafts}
+    {mergeTargets}
+    {disabled}
+    {renameSpeaker}
+    {mergeSpeaker}
+    {discardMerge}
+    {setLabelDraft}
+    {setMergeTarget}
+  />
 
   <section class="audio-panel" aria-labelledby={idPrefix + "audio-panel-title"}>
     <div class="section-heading">
@@ -670,30 +542,7 @@
     {/if}
   </section>
 
-  <section class="export-panel" aria-labelledby={idPrefix + "export-panel-title"}>
-    <div class="section-heading">
-      <div>
-        <h2 id={idPrefix + "export-panel-title"}>Export reviewed transcript</h2>
-        <p>Choose a format explicitly. Each export uses the current reviewed text and speaker labels.</p>
-      </div>
-    </div>
-    {#if acousticReport}<p class="diagnostic-note export-limitation">
-        Plain text and subtitle exports use transcript segments and cannot represent simultaneous acoustic activity. Review JSON retains the
-        source report.
-      </p>{/if}
-    <div class="export-actions">
-      {#each exportFormats as item (item.format)}
-        <button
-          type="button"
-          class="secondary export-button"
-          disabled={persistenceDisabled()}
-          onclick={() => void exportReview(item.format)}
-        >
-          {pendingAction === "export-" + item.format ? "Exporting…" : item.label}
-        </button>
-      {/each}
-    </div>
-  </section>
+  <ExportPanel {idPrefix} {acousticReport} {pendingAction} {persistenceDisabled} {exportReview} />
 </section>
 
 <style>
@@ -705,7 +554,6 @@
   }
   .review-header,
   .section-heading,
-  .speaker-row,
   .segment-heading,
   .segment-controls,
   .review-actions,
@@ -741,7 +589,6 @@
   .section-heading p,
   .empty,
   label,
-  .merge-control span,
   .revision-note {
     color: var(--text-muted);
     font-size: 12px;
@@ -767,11 +614,8 @@
     color: #ffb0b0;
   }
   .review-actions,
-  .speaker-panel,
   .audio-panel,
-  .acoustic-panel,
-  .transcript-panel,
-  .export-panel {
+  .transcript-panel {
     margin-top: 24px;
   }
   .review-actions {
@@ -789,99 +633,9 @@
   .section-heading p {
     margin-top: 3px;
   }
-  .acoustic-panel {
-    padding: 14px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    background: var(--bg-secondary);
-  }
-  .overlap-notice {
-    margin: 0 0 10px;
-    color: var(--text);
-    font-size: 13px;
-    line-height: 1.5;
-  }
-  .acoustic-overlap-list {
-    display: grid;
-    gap: 6px;
-  }
-  .acoustic-overlap-row {
-    display: flex;
-    align-items: baseline;
-    gap: 12px;
-    padding: 8px 10px;
-    border-left: 3px solid var(--accent);
-    background: var(--bg);
-    font-size: 13px;
-  }
-  .diagnostic-note {
-    margin: 10px 0 0;
-    color: var(--text-muted);
-    font-size: 12px;
-    line-height: 1.5;
-  }
-  .diagnostic-details {
-    display: grid;
-    gap: 3px;
-    margin-top: 8px;
-    color: var(--text-muted);
-    font-size: 12px;
-  }
-  .speaker-list,
   .conversation {
     display: grid;
     gap: 8px;
-  }
-  .speaker-row {
-    align-items: center;
-    justify-content: space-between;
-    padding: 12px;
-    background: var(--bg-secondary);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-  }
-  .speaker-identity {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    min-width: 0;
-  }
-  .speaker-identity > div {
-    min-width: 0;
-  }
-  .speaker-dot {
-    display: grid;
-    flex: 0 0 28px;
-    place-items: center;
-    width: 28px;
-    height: 28px;
-    color: var(--bg);
-    background: var(--accent);
-    border-radius: 50%;
-    font-size: 12px;
-    font-weight: 700;
-  }
-  .speaker-identity input {
-    width: min(220px, 100%);
-    margin-top: 3px;
-  }
-  .speaker-actions {
-    display: flex;
-    align-items: end;
-    justify-content: flex-end;
-    gap: 8px;
-    flex-wrap: wrap;
-  }
-  .speaker-actions button {
-    white-space: nowrap;
-  }
-  .merge-control {
-    display: grid;
-    gap: 3px;
-    min-width: 140px;
-  }
-  .merge-control select {
-    min-width: 0;
   }
   .audio-actions {
     display: flex;
@@ -967,43 +721,17 @@
   .segment-controls select {
     min-width: 150px;
   }
-  .export-actions {
-    display: grid;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
-    gap: 8px;
-  }
-  .export-button {
-    min-height: 40px;
-  }
-  .export-limitation {
-    margin-bottom: 10px;
-  }
   @media (max-width: 600px) {
     .meeting-review {
       padding: 18px 14px 36px;
     }
     .review-header,
-    .section-heading,
-    .speaker-row {
+    .section-heading {
       flex-direction: column;
     }
     .privacy-note {
       max-width: none;
       text-align: left;
-    }
-    .speaker-actions {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr);
-      align-items: stretch;
-      width: 100%;
-    }
-    .speaker-actions > button,
-    .merge-control {
-      width: 100%;
-      min-width: 0;
-    }
-    .export-actions {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
     }
   }
 </style>
