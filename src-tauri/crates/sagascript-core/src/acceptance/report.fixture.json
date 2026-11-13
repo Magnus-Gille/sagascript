@@ -1,0 +1,92 @@
+{
+  "schema_version": 1,
+  "scope": "current_process",
+  "expected_revision": "0123456789012345678901234567890123456789",
+  "platform": "fixture_os",
+  "architecture": "fixture_arch",
+  "build": {
+    "version": "1.4.6",
+    "revision": {
+      "status": "observed",
+      "source": "generated_metadata",
+      "value": "0123456789012345678901234567890123456789"
+    },
+    "dirty": {
+      "status": "observed",
+      "source": "generated_metadata",
+      "value": false
+    }
+  },
+  "process": {
+    "microphone": {
+      "status": "observed",
+      "source": "current_process",
+      "value": "authorized"
+    },
+    "accessibility": {
+      "status": "observed",
+      "source": "current_process",
+      "value": "trusted"
+    },
+    "in_app_bundle": {
+      "status": "observed",
+      "source": "current_process",
+      "value": true
+    },
+    "binary_sha256": {
+      "status": "observed",
+      "source": "current_process",
+      "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  },
+  "onboarding": {
+    "status": "observed",
+    "source": "persisted_fixture",
+    "value": true
+  },
+  "engine": {
+    "status": "not_observed",
+    "source": "not_observed",
+    "value": null
+  },
+  "model": {
+    "status": "not_observed",
+    "source": "not_observed",
+    "value": null
+  },
+  "gui_session": {
+    "status": "not_observed",
+    "source": "not_observed",
+    "value": null
+  },
+  "summary": {
+    "status": "passed",
+    "checks": [
+      {
+        "name": "source_revision",
+        "status": "passed"
+      },
+      {
+        "name": "clean_source",
+        "status": "passed"
+      },
+      {
+        "name": "binary_sha256",
+        "status": "passed"
+      },
+      {
+        "name": "microphone",
+        "status": "passed"
+      },
+      {
+        "name": "accessibility",
+        "status": "passed"
+      },
+      {
+        "name": "onboarding",
+        "status": "passed"
+      }
+    ],
+    "remaining_manual_steps": []
+  }
+}
