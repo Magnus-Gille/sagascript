@@ -8,6 +8,7 @@
 // every shipped package to the runtime license list on every PR
 // (licenses:check runs only in the release gate).
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -76,6 +77,46 @@ test("the generator's synthetic policy cases pass (also run by the release gate)
     { encoding: "utf8" },
   );
   assert.match(output, /dev-only npm license policy passed/);
+});
+
+test("the generator verifies the vendored live AEC legal texts and overrides", () => {
+  const output = execFileSync(
+    process.execPath,
+    [fileURLToPath(new URL("./generate-third-party-notices.mjs", import.meta.url)), "--test-live-aec-licenses"],
+    { encoding: "utf8" },
+  );
+  assert.match(output, /live AEC license override validation passed/);
+});
+
+test("live AEC license hashes survive a Windows-style Git checkout", () => {
+  const directory = mkdtempSync(join(tmpdir(), "sagascript-license-checkout-"));
+  try {
+    const manifest = JSON.parse(readFileSync(join(root, "third-party/live-aec/manifest.json"), "utf8"));
+    writeFileSync(join(directory, ".gitattributes"), readFileSync(join(root, ".gitattributes")));
+    for (const record of manifest.files) {
+      const path = join(directory, "third-party/live-aec", record.filename);
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, readFileSync(join(root, "third-party/live-aec", record.filename)));
+    }
+    const emptyConfig = join(directory, "empty-git-config");
+    writeFileSync(emptyConfig, "");
+    const env = { ...process.env, GIT_CONFIG_GLOBAL: emptyConfig, GIT_CONFIG_NOSYSTEM: "1" };
+    for (const key of ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR"]) delete env[key];
+    const git = (args) => execFileSync("git", args, { cwd: directory, env, stdio: "pipe" });
+    git(["init", "--quiet"]);
+    git(["-c", "core.autocrlf=false", "add", ".gitattributes", "third-party"]);
+    for (const record of manifest.files) unlinkSync(join(directory, "third-party/live-aec", record.filename));
+    git(["-c", "core.autocrlf=true", "checkout-index", "--force", "--all"]);
+    const mismatches = manifest.files
+      .filter((record) => {
+        const bytes = readFileSync(join(directory, "third-party/live-aec", record.filename));
+        return createHash("sha256").update(bytes).digest("hex") !== record.sha256;
+      })
+      .map((record) => record.filename);
+    assert.deepEqual(mismatches, [], "Git must preserve every upstream legal-text byte");
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test("the two dev-only license families are not in the runtime list", () => {

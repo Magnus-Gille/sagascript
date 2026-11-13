@@ -38,6 +38,7 @@ updates:
     directories:
       - "/"
       - "/.github/actions/setup"
+      - "/.github/actions/setup-live-aec"
     schedule:
       interval: monthly
     open-pull-requests-limit: 5

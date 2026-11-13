@@ -30,6 +30,7 @@ pub const BLESS_ENV: &str = "SAGASCRIPT_BLESS_CONTRACTS";
 pub const FIXTURES: &[&str] = &[
     "command_errors.json",
     "events.json",
+    "get_live_meeting.json",
     "get_meeting_job.json",
     "get_settings.json",
 ];

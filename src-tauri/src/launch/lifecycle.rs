@@ -52,8 +52,22 @@ pub(crate) fn handle_run_event(_app_handle: &tauri::AppHandle, event: tauri::Run
         tauri::RunEvent::ExitRequested {
             api, code: None, ..
         } => api.prevent_exit(),
+        tauri::RunEvent::ExitRequested {
+            api, code: Some(_), ..
+        } if _app_handle
+            .try_state::<crate::live_meeting_commands::SharedLiveMeetings>()
+            .is_some_and(|jobs| jobs.has_pending_session()) =>
+        {
+            api.prevent_exit();
+            open_settings_window(_app_handle, Some("live"), "pending_live_meeting_on_quit");
+        }
         // Stop the Pianissimo engine host with the app instead of leaving it to stdin EOF.
         tauri::RunEvent::Exit => {
+            if let Some(jobs) =
+                _app_handle.try_state::<crate::live_meeting_commands::SharedLiveMeetings>()
+            {
+                jobs.shutdown();
+            }
             sagascript_core::transcription::pianissimo_backend::shutdown_shared_client()
         }
         // Finder/Spotlight sends Reopen when the already-running app is

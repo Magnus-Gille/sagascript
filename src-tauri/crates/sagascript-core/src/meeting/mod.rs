@@ -12,6 +12,7 @@
 pub mod assemble;
 pub mod control;
 mod dictation_error;
+pub mod live;
 pub mod media;
 pub mod pipeline;
 pub mod reprocess;

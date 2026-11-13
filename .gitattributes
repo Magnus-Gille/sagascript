@@ -2,3 +2,5 @@ src-tauri/Cargo.toml text eol=lf
 # The settings golden corpus (#365) is compared byte for byte: never convert
 # its line endings (Windows checkouts would otherwise get CRLF).
 src-tauri/crates/sagascript-core/tests/fixtures/settings/** -text
+# Upstream live AEC legal texts are SHA-256 verified byte for byte.
+third-party/live-aec/** -text
