@@ -1,6 +1,6 @@
 # 0009. Required checks without the up-to-date requirement
 
-- Status: Accepted (2026-11-06)
+- Status: Accepted (2026-11-06); amended 2026-11-09: `check-linux` is required too
 - Related: SAGA-549, SAGA-546, SAGA-178 (Plane),
   [#545](https://github.com/Magnus-Gille/sagascript/pull/545)–[#547](https://github.com/Magnus-Gille/sagascript/pull/547)
 
@@ -50,3 +50,17 @@ runners and Actions cache storage above 10 GB are not.
   Only the up-to-date requirement changed.
 - Revisit if the repository moves to an organization, where a merge queue becomes available,
   or if `main` turns red after merges more than occasionally.
+
+## Amendment 2026-11-09: `check-linux` is required too
+
+SAGA-546 moved the frontend suites (`npm audit`, Prettier, ESLint, Vitest, the Node tests, Svelte
+types) and the browser tests out of test-macos, the longest lane, into frontend-linux, a Linux lane
+of their own that runs parallel to the native lanes. ESLint, Svelte types, `npm audit` and the
+browser tests run in no other lane, and only check-linux waits for frontend-linux. The owner chose
+this over splitting test-macos into two macOS jobs, which costs a scarce macOS runner per pull
+request, and over relying on test-windows, which skips some Node tests on win32.
+
+1. The "Protect main" ruleset requires `check-macos`, `check-linux` and `check-windows`. The owner
+   sets the ruleset; the change that moved the suites merges only after `check-linux` is required.
+2. Everything else in this decision is unchanged: no up-to-date requirement, the push CI on `main`
+   is the integration check, and the ruleset has no bypass actors.

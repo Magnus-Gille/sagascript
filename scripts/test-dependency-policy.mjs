@@ -79,12 +79,17 @@ test("npm run verify runs the same cargo-deny release CI installs", async () => 
   );
 });
 
-test("test-macos gates the npm lockfile on npm audit", () => {
-  const audit = stepIndex("test-macos", runs("npm audit --audit-level=high"));
-  assert.ok(audit >= 0, "test-macos must run npm audit");
-  assertBlocking(workflow.job("test-macos").steps[audit], "`npm audit --audit-level=high`");
-  assert.ok(audit > stepIndex("test-macos", (step) => step.uses === "./.github/actions/setup"), "audit after npm ci (the setup action)");
-  assert.ok(audit < stepIndex("test-macos", runs("npm run build")), "audit before the bundle is built");
+// SAGA-546: the audit moved with the other frontend checks from test-macos to frontend-linux.
+test("frontend-linux gates the npm lockfile on npm audit", () => {
+  const audit = stepIndex("frontend-linux", runs("npm audit --audit-level=high"));
+  assert.ok(audit >= 0, "frontend-linux must run npm audit");
+  const step = workflow.job("frontend-linux").steps[audit];
+  assertBlocking(step, "`npm audit --audit-level=high`");
+  assert.ok(
+    audit > stepIndex("frontend-linux", (candidate) => candidate.uses === "./.github/actions/setup"),
+    "audit after npm ci (the setup action)",
+  );
+  assert.equal(commandLines(step)[0], "npm audit --audit-level=high", "the audit fails before the other frontend checks run");
 });
 
 // SPDX expression satisfiability: AND binds tighter than OR, the legacy "/"

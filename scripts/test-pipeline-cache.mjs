@@ -25,8 +25,9 @@ function section(content, startMarker, endMarker) {
 test("CI rust caches use the reviewed immutable action revision", () => {
   const cacheUses = (steps) => steps.map((step) => step.uses).filter((uses) => uses?.startsWith("Swatinem/rust-cache@"));
   // The cache is part of the setup action (#358), the one place that names the revision; ci.yml's
-  // six lanes (test-macos, build-macos, test-linux, msrv-linux #353, test-windows, build-windows)
-  // reach it through the action, which scripts/test-ci-parallel-gates.mjs checks lane by lane.
+  // six Rust lanes (test-macos, build-macos, test-linux, msrv-linux #353, test-windows, build-windows)
+  // reach it through the action, which scripts/test-ci-parallel-gates.mjs checks lane by lane;
+  // frontend-linux installs no Rust and skips it (SAGA-546).
   assert.deepEqual(cacheUses(loadAction("setup").steps), [rustCacheRef]);
   assert.deepEqual(
     cacheUses(allSteps(loadWorkflow()).map(({ step }) => step)),
