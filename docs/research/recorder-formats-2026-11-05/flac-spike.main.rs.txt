@@ -1,0 +1,176 @@
+// SAGA-547 spike: can flacenc encode incrementally (bounded memory), crash-safely,
+// and verifiably bit-exact? Throwaway code, not part of Sagascript.
+//
+//   flacbench stream <in.wav> <out.flac> <channels 1|2> <repeat> [crash]
+//   flacbench whole  <in.wav> <out.flac> <channels 1|2>
+//   flacbench verify <in.wav> <flac> <channels 1|2>
+
+use std::fs::File;
+use std::io::{BufWriter, Seek, SeekFrom, Write};
+use std::time::Instant;
+
+use flacenc::bitsink::ByteSink;
+use flacenc::component::{BitRepr, Stream};
+use flacenc::config;
+use flacenc::error::Verify;
+use flacenc::source::{Context, Fill, FrameBuf, MemSource};
+
+const BLOCK: usize = 4096;
+const BITS: usize = 24;
+
+fn read_wav(path: &str) -> (Vec<i32>, u32) {
+    let mut r = hound::WavReader::open(path).expect("open wav");
+    let spec = r.spec();
+    assert_eq!(spec.channels, 1, "input fixture must be mono");
+    assert_eq!(spec.bits_per_sample, 24);
+    let s: Vec<i32> = r.samples::<i32>().map(|x| x.unwrap()).collect();
+    (s, spec.sample_rate)
+}
+
+/// Interleaved samples for 1 or 2 channels. Channel 2 is a quieter, delayed copy
+/// (stand-in for a second track; real mic + system audio will differ).
+fn make_interleaved(mono: &[i32], channels: usize) -> Vec<i32> {
+    if channels == 1 {
+        return mono.to_vec();
+    }
+    let delay = 24_000;
+    let mut out = Vec::with_capacity(mono.len() * 2);
+    for i in 0..mono.len() {
+        out.push(mono[i]);
+        out.push(if i >= delay { mono[i - delay] >> 1 } else { 0 });
+    }
+    out
+}
+
+fn header_bytes(stream: &Stream) -> Vec<u8> {
+    let mut sink = ByteSink::new();
+    stream.write(&mut sink).expect("write header");
+    sink.as_slice().to_vec()
+}
+
+fn main() {
+    let a: Vec<String> = std::env::args().collect();
+    let mode = a[1].as_str();
+    let (mono, rate) = read_wav(&a[2]);
+    let ch: usize = a[4].parse().unwrap();
+    let inter = make_interleaved(&mono, ch);
+    // FLAC_NO_LPC=1 / FLAC_NO_FIXED=1 switch subframe predictors off to isolate a pathological frame.
+    let mut raw_cfg = config::Encoder::default();
+    if std::env::var("FLAC_NO_LPC").is_ok() {
+        raw_cfg.subframe_coding.use_lpc = false;
+    }
+    if std::env::var("FLAC_NO_FIXED").is_ok() {
+        raw_cfg.subframe_coding.use_fixed = false;
+    }
+    let cfg = raw_cfg.into_verified().expect("config");
+
+    match mode {
+        "whole" => {
+            let t = Instant::now();
+            let src = MemSource::from_samples(&inter, ch, BITS, rate as usize);
+            let stream = flacenc::encode_with_fixed_block_size(&cfg, src, BLOCK).expect("encode");
+            let mut sink = ByteSink::new();
+            stream.write(&mut sink).unwrap();
+            std::fs::write(&a[3], sink.as_slice()).unwrap();
+            println!("whole: {} bytes in {:.3}s", sink.as_slice().len(), t.elapsed().as_secs_f64());
+        }
+        "stream" => {
+            let repeat: usize = a[5].parse().unwrap();
+            let crash = a.get(6).map(|s| s == "crash").unwrap_or(false);
+            let total_frames = inter.len() / ch * repeat; // sample frames
+            let cut_at = if crash { total_frames * 6 / 10 } else { total_frames };
+
+            let mut stream = Stream::new(rate as usize, ch, BITS).expect("stream");
+            stream.stream_info_mut().set_block_sizes(BLOCK, BLOCK).unwrap();
+            let mut fb = FrameBuf::with_size(ch, BLOCK).unwrap();
+            let mut ctx = Context::new(BITS, ch);
+
+            let mut f = BufWriter::new(File::create(&a[3]).unwrap());
+            // Placeholder header (total samples = 0 means "unknown" in FLAC).
+            let placeholder = header_bytes(&stream);
+            let header_len = placeholder.len();
+            f.write_all(&placeholder).unwrap();
+
+            let t = Instant::now();
+            let mut pos = 0usize; // sample frame index into the repeated input
+            let mut done = 0usize;
+            let n = inter.len() / ch;
+            let mut chunk: Vec<i32> = Vec::with_capacity(BLOCK * ch);
+            let mut peak_frame_bytes = 0usize;
+            while done < cut_at {
+                let want = BLOCK.min(cut_at - done);
+                chunk.clear();
+                for _ in 0..want {
+                    let base = pos * ch;
+                    chunk.extend_from_slice(&inter[base..base + ch]);
+                    pos = (pos + 1) % n;
+                }
+                fb.fill_interleaved(&chunk).unwrap();
+                ctx.fill_interleaved(&chunk).unwrap();
+                let frame = flacenc::encode_fixed_size_frame(
+                    &cfg,
+                    &fb,
+                    ctx.current_frame_number().unwrap(),
+                    stream.stream_info(),
+                )
+                .expect("frame");
+                stream.stream_info_mut().update_frame_info(&frame);
+                let mut sink = ByteSink::new();
+                frame.write(&mut sink).unwrap();
+                peak_frame_bytes = peak_frame_bytes.max(sink.as_slice().len());
+                f.write_all(sink.as_slice()).unwrap();
+                done += want;
+            }
+            if crash {
+                // Simulated kill: no flush of the final header, no md5, no total samples.
+                f.flush().unwrap();
+                println!("stream (crash at 60%): wrote {} sample frames, header left as placeholder", done);
+            } else {
+                stream.stream_info_mut().set_md5_digest(&ctx.md5_digest());
+                stream.stream_info_mut().set_total_samples(ctx.total_samples());
+                // update_frame_info() lowers min_blocksize to the length of a short final frame
+                // (for example 251). That makes libFLAC warn "file might not be seekable". In a
+                // fixed-blocksize stream the spec excludes the last block, so restore min = max.
+                stream.stream_info_mut().set_block_sizes(BLOCK, BLOCK).unwrap();
+                let fin = header_bytes(&stream);
+                assert_eq!(fin.len(), header_len);
+                f.flush().unwrap();
+                let mut file = f.into_inner().unwrap();
+                file.seek(SeekFrom::Start(0)).unwrap();
+                file.write_all(&fin).unwrap();
+                file.flush().unwrap();
+                println!("stream: {} sample frames, {:.1}s of audio", done, done as f64 / rate as f64);
+            }
+            let secs = t.elapsed().as_secs_f64();
+            println!(
+                "encode time {:.3}s, realtime factor {:.0}x, largest frame {} bytes",
+                secs,
+                (done as f64 / rate as f64) / secs,
+                peak_frame_bytes
+            );
+        }
+        "verify" => {
+            let mut reader = claxon::FlacReader::open(&a[3]).expect("claxon open");
+            let info = reader.streaminfo();
+            println!(
+                "streaminfo: rate={} ch={} bits={} total_samples={:?} md5_set={}",
+                info.sample_rate,
+                info.channels,
+                info.bits_per_sample,
+                info.samples,
+                info.md5sum.iter().any(|b| *b != 0)
+            );
+            let mut idx = 0usize;
+            let mut mismatches = 0usize;
+            for s in reader.samples() {
+                let s = s.expect("decode");
+                if idx < inter.len() && s != inter[idx] {
+                    mismatches += 1;
+                }
+                idx += 1;
+            }
+            println!("decoded {} samples, expected {}, mismatches {}", idx, inter.len(), mismatches);
+        }
+        _ => panic!("unknown mode"),
+    }
+}
