@@ -16,7 +16,8 @@ export interface RenderedPanel {
   /**
    * The window the panel renders from. For what reaches a panel from outside
    * it (`win.router.request(...)`, `win.queue.addFiles(...)`) and for what the
-   * shell shows and the panel does not (`win.session.error`, the banner).
+   * shell shows and the panel does not (`win.errors.of("settings").message`,
+   * the tab's error).
    */
   win: SettingsWindow;
   view: ReturnType<typeof render<typeof SettingsPanelHarness>>;

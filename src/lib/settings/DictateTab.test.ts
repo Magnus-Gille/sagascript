@@ -121,7 +121,7 @@ describe("renaming a profile", () => {
     expect(ipc.callsTo("set_hotkey_profiles")[0].profiles).toEqual([expect.objectContaining({ id: "default", name: "Norsk" })]);
   });
 
-  test("a rejected name puts the saved one back and the window's banner says why", async () => {
+  test("a rejected name puts the saved one back and the tab's error says why", async () => {
     const { ipc, win } = await render({
       set_hotkey_profiles: () => {
         throw backendError("invalid_profile", "Profile names must be unique");
@@ -136,7 +136,8 @@ describe("renaming a profile", () => {
 
     await waitFor(() => expect(name).toHaveValue("Svenska"));
     expect(ipc.callsTo("set_hotkey_profiles")).toHaveLength(1);
-    expect(win.session.error).toBe("Profile names must be unique");
+    expect(win.errors.of("dictate").message).toBe("Profile names must be unique");
+    expect(win.errors.of("settings").message).toBe("");
   });
 });
 
@@ -227,7 +228,82 @@ describe("auto-paste", () => {
     expect(await screen.findByText(/Requires Accessibility permission/)).toBeInTheDocument();
     await waitFor(() => expect(ipc.callsTo("set_auto_paste")).toEqual([{ enabled: false }]));
     expect(screen.getByRole("switch", { name: "Auto-paste transcription" })).toHaveAttribute("aria-checked", "false");
-    await waitFor(() => expect(win.session.error).toBe("Accessibility permission was not granted. Auto-paste remains off."));
+    await waitFor(() => expect(win.errors.of("dictate").message).toBe("Accessibility permission was not granted. Auto-paste remains off."));
+    expect(win.errors.of("settings").message).toBe("");
+  });
+});
+
+describe("the tab's error", () => {
+  test("a saved change clears the tab's own error and leaves the Settings tab's", async () => {
+    const { ipc, win } = await render();
+    win.errors.of("dictate").message = "An earlier failure on Dictate";
+    win.errors.of("settings").message = "An earlier failure on Settings";
+
+    await userEvent.setup().click(screen.getByRole("switch", { name: "Auto-paste transcription" }));
+
+    await waitFor(() => expect(ipc.callsTo("set_auto_paste")).toEqual([{ enabled: true }]));
+    await waitFor(() => expect(win.errors.of("dictate").message).toBe(""));
+    expect(win.errors.of("settings").message).toBe("An earlier failure on Settings");
+  });
+
+  test("a failed check of the speech engines is reported here, and the next check that succeeds lifts it", async () => {
+    let failing = false;
+    const { ipc, win } = await render({
+      get_profile_model_info: () => {
+        if (failing) throw backendError("io", "The speech engines could not be listed.");
+        return pianissimo;
+      },
+    });
+
+    failing = true;
+    ipc.emit("model-ready", null);
+    await waitFor(() => expect(win.errors.of("dictate").message).toBe("The speech engines could not be listed."));
+    expect(win.errors.of("settings").message).toBe("");
+
+    failing = false;
+    ipc.emit("model-ready", null);
+    await waitFor(() => expect(win.errors.of("dictate").message).toBe(""));
+  });
+
+  test("a check that succeeds leaves an error that is not about the speech engines", async () => {
+    const { ipc, win } = await render();
+    win.errors.of("dictate").message = "Profile names must be unique";
+    const checks = ipc.callsTo("get_effective_model_info").length;
+
+    ipc.emit("model-ready", null);
+    // The recommended model is the last thing a check asks for.
+    await waitFor(() => expect(ipc.callsTo("get_effective_model_info").length).toBeGreaterThan(checks));
+    await settle(20);
+
+    expect(win.errors.of("dictate").message).toBe("Profile names must be unique");
+  });
+
+  test("a check that succeeds leaves a later change's error, even one that says the same as the failed check did", async () => {
+    let failing = false;
+    const { ipc, win } = await render({
+      get_profile_model_info: () => {
+        if (failing) throw backendError("io", "The disk is not responding.");
+        return pianissimo;
+      },
+      set_auto_paste: () => {
+        throw backendError("io", "The disk is not responding.");
+      },
+    });
+    failing = true;
+    ipc.emit("model-ready", null);
+    await waitFor(() => expect(win.errors.of("dictate").message).toBe("The disk is not responding."));
+    failing = false;
+
+    // The rejected change replaces the check's message with its own.
+    await userEvent.setup().click(screen.getByRole("switch", { name: "Auto-paste transcription" }));
+    await waitFor(() => expect(ipc.callsTo("set_auto_paste")).toHaveLength(1));
+    await settle(20);
+    const checks = ipc.callsTo("get_effective_model_info").length;
+    ipc.emit("model-ready", null);
+    await waitFor(() => expect(ipc.callsTo("get_effective_model_info").length).toBeGreaterThan(checks));
+    await settle(20);
+
+    expect(win.errors.of("dictate").message).toBe("The disk is not responding.");
   });
 });
 

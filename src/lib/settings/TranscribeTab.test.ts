@@ -121,6 +121,25 @@ describe("the file transcription model", () => {
     expect(select).toHaveValue("auto");
   });
 
+  test("a model the backend rejects writes no tab's error: the message is the panel's own", async () => {
+    const { ipc, win } = await renderPanel(
+      TranscribeTab,
+      backend({
+        set_file_transcription_model: () => {
+          throw backendError("settings_write_failed", "The settings file is read-only.");
+        },
+      }),
+    );
+    const select = screen.getByRole("combobox", { name: "File transcription model" });
+    await waitFor(() => expect(within(select).getAllByRole("option")).toHaveLength(3));
+
+    await userEvent.setup().selectOptions(select, "kb-whisper-medium");
+
+    await waitFor(() => expect(ipc.callsTo("set_file_transcription_model")).toHaveLength(1));
+    await screen.findByText("The settings file is read-only.");
+    expect(["dictate", "transcribe", "settings"].map((id) => win.errors.of(id).message)).toEqual(["", "", ""]);
+  });
+
   test("a selected model that is not downloaded is downloaded on request, and the lineup is read again", async () => {
     const download = deferred<void>();
     const { ipc } = await renderPanel(

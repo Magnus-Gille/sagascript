@@ -103,7 +103,8 @@ describe("choosing the default language", () => {
 
     await user.selectOptions(languageSelect(), "English");
 
-    await waitFor(() => expect(win.session.error).toBe("disk full"));
+    await waitFor(() => expect(win.errors.of("settings").message).toBe("disk full"));
+    expect(win.errors.of("dictate").message).toBe("");
     await waitFor(() => expect(languageSelect()).toBeEnabled());
     expect(languageSelect()).toHaveDisplayValue("Swedish");
     expect(win.router.held).toBe(false);
@@ -182,6 +183,53 @@ describe("the recording overlay switch", () => {
     await user.click(overlaySwitch());
     await waitFor(() => expect(overlaySwitch()).toHaveAttribute("aria-checked", "true"));
     expect(ipc.callsTo("set_show_overlay")).toEqual([{ enabled: false }, { enabled: true }]);
+  });
+});
+
+describe("the tab's error", () => {
+  test("a rejected overlay change is reported on the Settings tab and the switch keeps the saved value", async () => {
+    const { win } = await renderPanel(SettingsTab, {
+      ...settingsFile({ show_overlay: true }).handlers,
+      set_show_overlay: () => {
+        throw backendError("settings_storage_failed", "disk full");
+      },
+    });
+
+    await userEvent.setup().click(overlaySwitch());
+
+    await waitFor(() => expect(win.errors.of("settings").message).toBe("disk full"));
+    expect(win.errors.of("dictate").message).toBe("");
+    expect(overlaySwitch()).toHaveAttribute("aria-checked", "true");
+  });
+
+  test("a rejected dictionary save is reported on the Settings tab", async () => {
+    const { ipc, win } = await renderPanel(SettingsTab, {
+      ...settingsFile().handlers,
+      set_profile_glossary: () => {
+        throw backendError("busy", "The dictionary write was refused.");
+      },
+    });
+    const user = userEvent.setup();
+    await user.type(dictionary(), "merge = merch");
+
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => expect(win.errors.of("settings").message).toBe("The dictionary write was refused."));
+    expect(win.errors.of("dictate").message).toBe("");
+    expect(ipc.callsTo("set_profile_glossary")).toHaveLength(1);
+    expect(dictionary()).toHaveValue("merge = merch");
+  });
+
+  test("a saved change clears the tab's own error and leaves the Dictate tab's", async () => {
+    const { ipc, win } = await renderPanel(SettingsTab, settingsFile({ show_overlay: true }).handlers);
+    win.errors.of("settings").message = "An earlier failure on Settings";
+    win.errors.of("dictate").message = "An earlier failure on Dictate";
+
+    await userEvent.setup().click(overlaySwitch());
+
+    await waitFor(() => expect(ipc.callsTo("set_show_overlay")).toEqual([{ enabled: false }]));
+    await waitFor(() => expect(win.errors.of("settings").message).toBe(""));
+    expect(win.errors.of("dictate").message).toBe("An earlier failure on Dictate");
   });
 });
 
