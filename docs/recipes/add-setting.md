@@ -152,9 +152,10 @@ of the controller's copy, so a setter does not repeat it.
    (Rust parameter names arrive as camelCase keys).
 2. The panel under `src/lib/settings/` that shows the setting: import the wrapper; add a
    handler like `onTemperatureFallbackToggle` in `AdvancedPanel.svelte` that calls
-   `session.applyScalar(() => setExampleFlag(next))` (`session` is `win.session`, the
-   window's `SettingsSession`). It writes, re-reads the settings and shows errors, and does
-   not query the models again. Use plain `session.apply` only when the value feeds `dictation_model_for_profile` or the file-model resolution
+   `session.applyScalar(() => setExampleFlag(next), error)` (`session` is `win.session`, the
+   window's `SettingsSession`; `error` is the error of the tab the control is on,
+   `win.errors.of("settings")` on the Settings tab). It writes, re-reads the settings and
+   reports a rejection on that tab, and does not query the models again. Use plain `session.apply` only when the value feeds `dictation_model_for_profile` or the file-model resolution
    (language, the profile list, a profile's or the file model): it also re-queries every
    profile's models. Both resolve `true` once the change is saved, even if the re-read
    failed, which the window reports separately; for a native `<select>` or `<input>` put the

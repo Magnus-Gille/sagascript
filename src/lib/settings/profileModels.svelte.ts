@@ -27,6 +27,9 @@ export class ProfileModels {
   // where Pianissimo is unsupported).
   recommended: Record<string, WhisperModel> = $state({});
   saving = $state(false);
+  // The message of the last check of the speech engines that failed, while the
+  // Dictate tab's error may still show it: the next check that succeeds lifts it.
+  #checkError = "";
 
   constructor(win: SettingsWindow) {
     this.#win = win;
@@ -65,9 +68,13 @@ export class ProfileModels {
       this.models = models;
       this.options = options;
       this.recommended = recommended;
+      this.#win.errors.of("dictate").dismiss(this.#checkError);
+      this.#checkError = "";
     },
+    // The profiles' models are Dictate's, whichever tab or event asked for the check.
     reject: (error) => {
-      this.#win.session.error = toErrorMessage(error, "Failed to check speech engines.");
+      this.#checkError = toErrorMessage(error, "Failed to check speech engines.");
+      this.#win.errors.of("dictate").message = this.#checkError;
     },
   });
 

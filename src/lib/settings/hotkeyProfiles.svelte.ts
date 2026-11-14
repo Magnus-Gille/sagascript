@@ -22,6 +22,7 @@ import {
 import { requestAccessibility } from "../permissions";
 import { allProfileShortcutValues, profileWithShortcut, suggestedProfileShortcuts } from "../profile-shortcuts";
 import type { SettingsWindow } from "./settingsWindow.svelte";
+import type { TabError } from "./tabErrors.svelte";
 
 export type ExplicitShortcutSlot = "push_to_talk_shortcut" | "toggle_shortcut";
 export const shortcutControls: { slot: ExplicitShortcutSlot; label: string; helper: string }[] = [
@@ -63,6 +64,11 @@ export class HotkeyProfiles {
     this.#win = win;
   }
 
+  /** The Dictate tab's error: what a change made here that fails is reported in. */
+  get #error(): TabError {
+    return this.#win.errors.of("dictate");
+  }
+
   setStatus(status: HotkeyStatus): void {
     this.statusOk = status.ok;
     this.statusError = status.error ?? "";
@@ -72,7 +78,7 @@ export class HotkeyProfiles {
     if (!this.#win.session.settings) return;
     const enabling = !this.#win.session.settings.auto_paste;
     if (!enabling || this.#win.platform !== "macos") {
-      await this.#win.session.applyScalar(() => setAutoPaste(enabling));
+      await this.#win.session.applyScalar(() => setAutoPaste(enabling), this.#error);
       return;
     }
 
@@ -80,7 +86,7 @@ export class HotkeyProfiles {
     // explicit user action, so it is the one place where prompting is allowed.
     this.accessibilityChecking = true;
     this.accessibilityRequested = true;
-    this.#win.session.error = "";
+    this.#error.message = "";
     try {
       this.accessibilityGranted = await checkAccessibilityPermission();
       if (!this.accessibilityGranted) {
@@ -88,14 +94,14 @@ export class HotkeyProfiles {
       }
 
       if (this.accessibilityGranted) {
-        await this.#win.session.applyScalar(() => setAutoPaste(true));
+        await this.#win.session.applyScalar(() => setAutoPaste(true), this.#error);
       } else {
-        await this.#win.session.applyScalar(() => setAutoPaste(false));
-        this.#win.session.error = "Accessibility permission was not granted. Auto-paste remains off.";
+        await this.#win.session.applyScalar(() => setAutoPaste(false), this.#error);
+        this.#error.message = "Accessibility permission was not granted. Auto-paste remains off.";
       }
     } catch (e) {
-      await this.#win.session.applyScalar(() => setAutoPaste(false));
-      this.#win.session.error = toErrorMessage(e, "Failed to check Accessibility permission.");
+      await this.#win.session.applyScalar(() => setAutoPaste(false), this.#error);
+      this.#error.message = toErrorMessage(e, "Failed to check Accessibility permission.");
     } finally {
       this.accessibilityChecking = false;
     }
@@ -284,8 +290,8 @@ export class HotkeyProfiles {
       await this.#win.profileModels.refresh(profiles);
       return;
     }
-    const saved = await this.#win.session.apply(() => setHotkeyProfiles(profiles));
-    if (!saved && this.#win.session.error) this.hotkeyError = this.#win.session.error;
+    const saved = await this.#win.session.apply(() => setHotkeyProfiles(profiles), this.#error);
+    if (!saved && this.#error.message) this.hotkeyError = this.#error.message;
   }
 
   /** Resolves true when the change is kept (saved, or applied to a profile that is still a draft). */
@@ -299,7 +305,7 @@ export class HotkeyProfiles {
       await this.#win.profileModels.refresh(profiles);
       return true;
     }
-    return this.#win.session.apply(() => setHotkeyProfiles(profiles));
+    return this.#win.session.apply(() => setHotkeyProfiles(profiles), this.#error);
   }
 
   async onLanguageChange(event: Event, profile: HotkeyProfile) {
@@ -356,8 +362,9 @@ export class HotkeyProfiles {
       this.recordingShortcutSlot = null;
       return;
     }
-    await this.#win.session.apply(() =>
-      setHotkeyProfiles(this.#win.session.settings!.hotkey_profiles.filter((profile) => profile.id !== profileId)),
+    await this.#win.session.apply(
+      () => setHotkeyProfiles(this.#win.session.settings!.hotkey_profiles.filter((profile) => profile.id !== profileId)),
+      this.#error,
     );
   }
 }

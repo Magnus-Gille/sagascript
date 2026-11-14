@@ -86,15 +86,13 @@ function harness(options: HarnessOptions = {}) {
   });
   const dictation = { text: "", recoveryPending: false, edited: false, transcribing: false, ...options.dictation };
   const files: FileQueuePort = { jobs: [], savedReviewIds: [], selectedId: null, ...options.files };
-  const discardFailures: string[] = [];
   const controller = new UpdateRecoveryController({
     api,
     dictation,
     files,
-    onDiscardFailed: (message) => discardFailures.push(message),
     settle: options.settle,
   });
-  return { file, ipc, dictation, files, discardFailures, controller };
+  return { file, ipc, dictation, files, controller };
 }
 
 /** Restore the stored drafts and wait until they are open. */
@@ -162,7 +160,7 @@ describe("the write queue", () => {
     await h.controller.discardDrafts();
 
     expect(commandsSince(h.ipc, from)).toEqual(["load_update_recovery", "clear_update_recovery"]);
-    expect(h.discardFailures).toEqual([]);
+    expect(h.controller.discardError).toBe("");
     expect(h.controller.readError).toBe("");
   });
 
@@ -664,10 +662,54 @@ describe("discard", () => {
 
     await h.controller.discardDrafts();
 
-    expect(h.discardFailures).toEqual(["Could not discard recovered drafts: Permission denied"]);
+    expect(h.controller.discardError).toBe("Could not discard recovered drafts: Permission denied");
     expect(h.files.jobs).toEqual([completedJob("file-1", fileEntry.path)]);
     expect(h.controller.fileEntries).toEqual([fileEntry]);
     expect(h.dictation).toMatchObject({ text: DRAFT, recoveryPending: true });
     expect(h.controller.draftsNotice).toBe(true);
+  });
+
+  test("the next discard replaces the earlier failure, and one that succeeds leaves none", async () => {
+    let reason: string | null = "Permission denied";
+    const h = await restoredHarness({
+      initial: stored({ files: [fileEntry] }),
+      handlers: {
+        clear_update_recovery: () => {
+          if (reason) throw backendError("io", reason);
+        },
+      },
+    });
+
+    await h.controller.discardDrafts();
+    expect(h.controller.discardError).toBe("Could not discard recovered drafts: Permission denied");
+
+    reason = "The disk is busy";
+    await h.controller.discardDrafts();
+    expect(h.controller.discardError).toBe("Could not discard recovered drafts: The disk is busy");
+
+    reason = null;
+    await h.controller.discardDrafts();
+    expect(h.controller.discardError).toBe("");
+    expect(h.controller.draftsNotice).toBe(false);
+  });
+
+  test("a discard failure leaves with the notice when the last recovered draft is closed", async () => {
+    let failing = true;
+    const h = await restoredHarness({
+      initial: stored({ files: [fileEntry] }),
+      handlers: {
+        clear_update_recovery: () => {
+          if (failing) throw backendError("io", "Permission denied");
+        },
+      },
+    });
+    await h.controller.discardDrafts();
+    expect(h.controller.discardError).toBe("Could not discard recovered drafts: Permission denied");
+    failing = false;
+
+    h.controller.onFileRecoveryChange(null, "file-1"); // file-1 was delivered and its panel closed
+
+    expect(h.controller.draftsNotice).toBe(false);
+    expect(h.controller.discardError).toBe("");
   });
 });
