@@ -151,6 +151,14 @@ debug = "line-tables-only"
 [profile.test]
 debug = "line-tables-only"
 
+# Optimize dependencies in dev/test builds so locally built test apps (e.g.
+# `cargo tauri build --debug` for TCC permission checks) keep release-like
+# speed. Without this, rubato's resampler in `stop_capture` ran ~40x slower
+# (66 ms vs 1.5 ms per audio second, SAGA-399). Workspace crates keep
+# opt-level 0 so incremental rebuilds stay fast.
+[profile.dev.package."*"]
+opt-level = 3
+
 # Optimize the Rust DSP/glue (rubato resampler, symphonia decode, audio mixing)
 # in release builds. whisper.cpp itself is compiled -O3 by whisper-rs's build
 # script in release; use `cargo tauri build` for production (`cargo tauri dev`
