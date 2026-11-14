@@ -1,16 +1,8 @@
 <script lang="ts">
-  import { drainUpdateWork, UpdatePreparationTimeoutError } from "./update-preparation";
   import FileTranscription from "./FileTranscription.svelte";
   import { createFileJobs, nextQueuedFile, updateFileJob, fileJobName, type FileJob, type FileJobStatus } from "./transcription-queue";
   import { onMount, tick } from "svelte";
   import { rememberTranscription, type RecentTranscription } from "./recent-transcriptions";
-  import {
-    createUpdateRecoveryPayload,
-    readPersistedUpdateRecoveryPayload,
-    serializeUpdateRecoveryPayload,
-    type UpdateRecoveryFile,
-    type UpdateRecoveryMeeting,
-  } from "./update-recovery";
   import {
     getSettings,
     getLastError,
@@ -58,17 +50,14 @@
   import { backendErrorRecovery, downloadFailureRecovery, isBackendError, toErrorMessage, type BackendErrorRecovery } from "./errors";
   import ErrorRecovery from "./ErrorRecovery.svelte";
   import { open } from "@tauri-apps/plugin-dialog";
-  import {
-    downloadModelById,
-    firstPianissimoId,
-    isPianissimoId,
-    pianissimoIdForLanguage,
-    pianissimoIdsOf,
-    useModelDownloads,
-  } from "./models.svelte";
+  import { firstPianissimoId, isPianissimoId, pianissimoIdForLanguage, pianissimoIdsOf } from "./models.svelte";
   import { requestAccessibility } from "./permissions";
   import { loadPlatform } from "./platform";
   import { createModelCatalogController } from "./modelCatalogController";
+  import GlossaryEditor from "./settings/GlossaryEditor.svelte";
+  import { languageLabel } from "./settings/languageLabel";
+  import { useSettingsModelDownloads } from "./settings/modelDownloads.svelte";
+  import { UpdateRecoveryController } from "./settings/updateRecovery.svelte";
   import { createSettingsTransactionController, type SaveOutcome } from "./settingsTransactionController";
   import { useDragDropEvent, useTauriEvent } from "./tauri-events.svelte";
   import { dictateButtonAction, retainTestRecordingOwnership, type BackendDictationState } from "./dictation-ui-state";
@@ -97,15 +86,20 @@
   // What Auto will use now (recommended if downloaded, else best downloaded) and what is recommended.
   let fileAutoModel: WhisperModel | null = $state(null);
   let fileRecommendedModel: WhisperModel | null = $state(null);
-  let fileModelError = $state("");
   let fileModelSaving = $state(false);
   type SettingsTab = "dictate" | "transcribe" | "settings";
   let activeTab: SettingsTab = $state("dictate");
-  // One download at a time; its progress follows the backend's events.
-  const downloads = useModelDownloads();
-  const downloading = $derived(downloads.id);
-  const downloadingName = $derived(downloads.name);
-  const downloadProgress = $derived(downloads.progress);
+  // One download at a time, with the errors it leaves (settings/modelDownloads.svelte.ts);
+  // its progress follows the backend's events.
+  const modelDownloads = useSettingsModelDownloads({
+    onDiskChanged: () => {
+      fileModelDiskRevision += 1;
+    },
+    refreshProfileModels: () => refreshProfileModels(settings?.hotkey_profiles ?? []),
+  });
+  const downloading = $derived(modelDownloads.id);
+  const downloadingName = $derived(modelDownloads.name);
+  const downloadProgress = $derived(modelDownloads.progress);
   let profileModels: Record<string, WhisperModel> = $state({});
   let profileModelOptions: Record<string, WhisperModel[]> = $state({});
   // What "Recommended" resolves to per profile (Pianissimo, or KB-Whisper Medium
@@ -114,7 +108,6 @@
   // Swedish models the app no longer offers. A profile still on one keeps
   // working; Settings suggests the recommended model instead of switching silently.
   const retiredSwedishModelIds = ["kb-whisper-tiny", "kb-whisper-base", "kb-whisper-small"];
-  let profileModelErrors: Record<string, string> = $state({});
 
   let platform: string = $state("unknown");
 
@@ -224,404 +217,75 @@
   let testResultActionMessage: string = $state("");
   let testResultRecoveryPending: boolean = $state(false);
   let testResultEdited: boolean = $state(false);
-  let updatePreparing: boolean = $state(false);
-  let activePreparationNonce: string | null = null;
-  let liveDictationRevision = 0;
-  let observedNativeDictation: string | null = null;
-  let nativeEditorOrigin: { text: string; lineage: number } | null = null;
-  let fileComponents: Record<string, { prepareUpdateRecovery(): Promise<void> } | undefined> = $state({});
-
-  let fileRecoveryEntries = $state<UpdateRecoveryFile[]>([]);
-  let meetingRecoveryEntries = $state<UpdateRecoveryMeeting[]>([]);
-  let recoveredFileIds = $state<string[]>([]);
-  let recoveredMeetingIds = $state<string[]>([]);
-  let recoveredDictationText: string | null = $state(null);
-  let recoveredDictationActive = $state(false);
-  let recoveredDraftsNotice = $state(false);
-  let recoveryReadError: string = $state("");
-  let recoveryWriteQueue: Promise<void> = Promise.resolve();
-  let recoveryRestore: Promise<void> = Promise.resolve();
-  let recoveryCleanupWarning = false;
-  let dictationEditorLineage = 0;
-  let recoveryPersistenceRevision = 0;
-  let lastPersistedDictation: { text: string; lineage: number; revision: number } | null = null;
-
-  type RecoveryCleanup = {
-    fileJobIds?: readonly string[];
-    meetingJobIds?: readonly string[];
-    dictationTexts?: readonly string[];
-    dictationLineage?: number;
-    dictationText?: string;
-    dictationPersistenceRevision?: number;
-  };
-
-  type DictationDelivery = {
-    text: string;
-    lineage: number;
-    wasEdited: boolean;
-    nativeSourceText: string | null;
-    recoveredText: string | null;
-    persistedText: string | null;
-    persistedRevision: number | null;
-  };
-
-  function clearRecoveryCleanupWarning(): void {
-    if (!recoveryCleanupWarning) return;
-    recoveryCleanupWarning = false;
-    recoveryReadError = "";
-  }
-
-  function recoveryCleanupError(error: unknown): string {
-    const detail = toErrorMessage(error).replace(/[.]$/, "");
-    return `Update recovery draft was retained after delivery. ${detail}. Back up or repair update-recovery.json in Sagascript's app data folder, then restart Sagascript before retrying the update.`;
-  }
-
-  function enqueueRecoveryMutation<T>(mutation: () => Promise<T>): Promise<T> {
-    const operation = recoveryWriteQueue.catch(() => undefined).then(mutation);
-    recoveryWriteQueue = operation.then(
-      () => undefined,
-      () => undefined,
-    );
-    return operation;
-  }
-
-  function enqueueRecoveryCleanup(removals: RecoveryCleanup): Promise<void> {
-    const fileJobIds = new Set(removals.fileJobIds ?? []);
-    const meetingJobIds = new Set(removals.meetingJobIds ?? []);
-    const dictationTexts = new Set(removals.dictationTexts ?? []);
-    return enqueueRecoveryMutation(async () => {
-      const previous = readPersistedUpdateRecoveryPayload(await loadUpdateRecovery());
-      if (!previous) {
-        clearRecoveryCleanupWarning();
-        return;
-      }
-      const dictationMatches = Boolean(
-        previous.dictation &&
-        dictationTexts.has(previous.dictation.text) &&
-        (removals.dictationLineage === undefined ||
-          (lastPersistedDictation?.lineage === removals.dictationLineage &&
-            lastPersistedDictation.text === previous.dictation.text &&
-            (previous.dictation.text === removals.dictationText ||
-              lastPersistedDictation.revision === removals.dictationPersistenceRevision))),
-      );
-      const remaining = {
-        ...previous,
-        dictation: dictationMatches ? null : previous.dictation,
-        files: previous.files.filter((entry) => !fileJobIds.has(entry.job_id)),
-        meetings: previous.meetings.filter((entry) => !meetingJobIds.has(entry.job_id)),
-      };
-      const changed =
-        dictationMatches || remaining.files.length !== previous.files.length || remaining.meetings.length !== previous.meetings.length;
-      if (!changed) {
-        clearRecoveryCleanupWarning();
-        return;
-      }
-      if (!remaining.dictation && remaining.files.length === 0 && remaining.meetings.length === 0) {
-        await clearUpdateRecovery();
-      } else {
-        serializeUpdateRecoveryPayload(remaining);
-        await saveUpdateRecovery(remaining);
-      }
-      if (dictationMatches) lastPersistedDictation = null;
-      clearRecoveryCleanupWarning();
-    });
-  }
-
-  function persistRemainingRecoveredDrafts(removals: RecoveryCleanup): void {
-    void enqueueRecoveryCleanup(removals).catch((error) => {
-      recoveryCleanupWarning = true;
-      recoveryReadError = recoveryCleanupError(error);
-    });
-  }
-
-  function refreshRecoveredDraftsNotice(): void {
-    if (!recoveredDictationActive && recoveredFileIds.length === 0 && recoveredMeetingIds.length === 0) {
-      recoveredDraftsNotice = false;
-    }
-  }
-
-  function updateFileRecovery(entry: UpdateRecoveryFile): void {
-    const existing = fileRecoveryEntries.some((current) => current.job_id === entry.job_id);
-    fileRecoveryEntries = existing
-      ? fileRecoveryEntries.map((current) => (current.job_id === entry.job_id ? entry : current))
-      : [...fileRecoveryEntries, entry];
-  }
-
-  function clearFileRecovery(jobId: string): void {
-    fileRecoveryEntries = fileRecoveryEntries.filter((entry) => entry.job_id !== jobId);
-    if (recoveredFileIds.includes(jobId)) {
-      recoveredFileIds = recoveredFileIds.filter((id) => id !== jobId);
-      refreshRecoveredDraftsNotice();
-      persistRemainingRecoveredDrafts({ fileJobIds: [jobId] });
-    }
-  }
-
-  function onFileRecoveryChange(entry: UpdateRecoveryFile | null, jobId?: string): void {
-    if (entry === null) {
-      if (jobId) clearFileRecovery(jobId);
-      return;
-    }
-    updateFileRecovery(entry);
-  }
-
-  function updateMeetingRecovery(entry: UpdateRecoveryMeeting | null): void {
-    if (entry === null) return;
-    const existing = meetingRecoveryEntries.some((current) => current.job_id === entry.job_id);
-    meetingRecoveryEntries = existing
-      ? meetingRecoveryEntries.map((current) => (current.job_id === entry.job_id ? entry : current))
-      : [...meetingRecoveryEntries, entry];
-  }
-
-  function clearMeetingRecovery(jobId: string): void {
-    meetingRecoveryEntries = meetingRecoveryEntries.filter((entry) => entry.job_id !== jobId);
-    if (recoveredMeetingIds.includes(jobId)) {
-      recoveredMeetingIds = recoveredMeetingIds.filter((id) => id !== jobId);
-      refreshRecoveredDraftsNotice();
-      persistRemainingRecoveredDrafts({ meetingJobIds: [jobId] });
-    }
-  }
-
-  function onMeetingRecoveryChange(entry: UpdateRecoveryMeeting | null, jobId?: string): void {
-    if (entry === null) {
-      if (jobId) clearMeetingRecovery(jobId);
-      return;
-    }
-    updateMeetingRecovery(entry);
-  }
-
-  async function restoreUpdateRecovery(): Promise<void> {
-    const dictationRevision = liveDictationRevision;
-    const existingFileIds = new Set(fileJobs.map((job) => job.id));
-    const existingMeetingIds = new Set(savedReviewIds);
-    try {
-      const persisted = readPersistedUpdateRecoveryPayload(await loadUpdateRecovery());
-      recoveryReadError = "";
-      if (!persisted) return;
-
-      const recoveredDictation = persisted.dictation?.text.trim() ? persisted.dictation : null;
-      if (recoveredDictation && !testResult.trim() && liveDictationRevision === dictationRevision) {
-        dictationEditorLineage++;
-        testResult = recoveredDictation.text;
-        testResultRecoveryPending = true;
-        testResultEdited = false;
-        recoveredDictationText = recoveredDictation.text;
-        recoveredDictationActive = true;
-        nativeEditorOrigin = null;
-        recoveryPersistenceRevision++;
-        lastPersistedDictation = {
-          text: recoveredDictation.text,
-          lineage: dictationEditorLineage,
-          revision: recoveryPersistenceRevision,
-        };
-      }
-
-      const filesToRestore = persisted.files.filter((entry) => !existingFileIds.has(entry.job_id));
-      if (filesToRestore.length) {
-        fileRecoveryEntries = [...fileRecoveryEntries, ...filesToRestore];
-        recoveredFileIds = [...recoveredFileIds, ...filesToRestore.map((entry) => entry.job_id)];
-        fileJobs = [
-          ...fileJobs,
-          ...filesToRestore.map((entry) => ({
-            id: entry.job_id,
-            path: entry.path,
-            diarize: false,
-            prompt: null,
-            profileId: null,
-            status: "completed" as const,
-          })),
-        ];
-      }
-
-      const meetingsToRestore = persisted.meetings.filter((entry) => !existingMeetingIds.has(entry.job_id));
-      if (meetingsToRestore.length) {
-        meetingRecoveryEntries = [...meetingRecoveryEntries, ...meetingsToRestore];
-        recoveredMeetingIds = [...recoveredMeetingIds, ...meetingsToRestore.map((entry) => entry.job_id)];
-        fileJobs = [
-          ...fileJobs,
-          ...meetingsToRestore.map((entry) => ({
-            id: entry.job_id,
-            path: entry.path,
-            diarize: false,
-            prompt: null,
-            profileId: null,
-            status: "completed" as const,
-          })),
-        ];
-        savedReviewIds = [...savedReviewIds, ...meetingsToRestore.map((entry) => entry.job_id)];
-      }
-
-      if (selectedFileId === null) {
-        selectedFileId = filesToRestore[0]?.job_id ?? meetingsToRestore[0]?.job_id ?? null;
-      }
-
-      if (recoveredDictation || filesToRestore.length || meetingsToRestore.length) {
-        recoveredDraftsNotice = true;
-      }
-    } catch (error) {
-      console.warn("Could not restore update recovery drafts", error);
-      recoveryReadError = `Update blocked: unreadable recovery drafts were retained. ${toErrorMessage(error).replace(/[.]$/, "")}. Back up or repair update-recovery.json in Sagascript's app data folder, then restart Sagascript before retrying.`;
-      throw error;
-    }
-  }
-
-  async function discardRecoveredDrafts(): Promise<void> {
-    try {
-      await enqueueRecoveryMutation(async () => {
-        await clearUpdateRecovery();
-      });
-      recoveryCleanupWarning = false;
-      recoveryReadError = "";
-    } catch (error) {
-      settingsError = `Could not discard recovered drafts: ${toErrorMessage(error)}`;
-      return;
-    }
-
-    const recoveredFileIdSet = new Set(recoveredFileIds);
-    const recoveredMeetingIdSet = new Set(recoveredMeetingIds);
-    fileJobs = fileJobs.filter((job) => !recoveredFileIdSet.has(job.id) && !recoveredMeetingIdSet.has(job.id));
-    savedReviewIds = savedReviewIds.filter((id) => !recoveredMeetingIdSet.has(id));
-    fileRecoveryEntries = fileRecoveryEntries.filter((entry) => !recoveredFileIdSet.has(entry.job_id));
-    meetingRecoveryEntries = meetingRecoveryEntries.filter((entry) => !recoveredMeetingIdSet.has(entry.job_id));
-    if (recoveredDictationActive && testResult === recoveredDictationText) {
-      testResult = "";
-      testResultRecoveryPending = false;
-      testResultEdited = false;
-    }
-    recoveredFileIds = [];
-    recoveredMeetingIds = [];
-    recoveredDictationText = null;
-    recoveredDictationActive = false;
-    lastPersistedDictation = null;
-    recoveredDraftsNotice = false;
-    selectedFileId = fileJobs[0]?.id ?? null;
-  }
-
-  function isActivePreparation(nonce: string): boolean {
-    return activePreparationNonce === nonce;
-  }
-
-  async function prepareForUpdate(nonce: string): Promise<void> {
-    try {
-      await recoveryRestore;
-      if (!isActivePreparation(nonce)) return;
-      await tick();
-      if (!isActivePreparation(nonce)) return;
-      await Promise.all(
-        fileJobs.map(async (job) => {
-          const component = fileComponents[job.id];
-          if (!component) throw new Error("A transcription result is still opening. Retry the update.");
-          await component.prepareUpdateRecovery();
-        }),
-      );
-      if (!isActivePreparation(nonce)) return;
-      // The updater holds the native exclusive lease here. Capture the stable
-      // native snapshot before draining any result event that is still in
-      // transit, but defer the conflict decision until after the drain.
-      const stableNativeDictation = await getLastTranscription();
-      if (!isActivePreparation(nonce)) return;
-      const initialNativeResultPending = await getUpdateResultPending("live-dictation");
-      if (!isActivePreparation(nonce)) return;
-      try {
-        await drainUpdateWork({
-          busy: () =>
-            testTranscribing ||
-            Boolean(initialNativeResultPending && stableNativeDictation?.trim() && observedNativeDictation !== stableNativeDictation),
-          failure: () => (isActivePreparation(nonce) ? null : "Update preparation expired."),
-          settle: tick,
-        });
-      } catch (error) {
-        // A completed native result whose event was missed needs the actual
-        // conflict decision below, not advice to wait for already-finished work.
-        // Rendering failures, cancellation and ongoing transcription still fail.
-        const missedNativeResult =
-          error instanceof UpdatePreparationTimeoutError &&
-          !testTranscribing &&
-          initialNativeResultPending &&
-          stableNativeDictation?.trim() &&
-          observedNativeDictation !== stableNativeDictation;
-        if (!missedNativeResult) throw error;
-      }
-      if (!isActivePreparation(nonce)) return;
-      await tick();
-      if (!isActivePreparation(nonce)) return;
-      await enqueueRecoveryMutation(async () => {
-        if (!isActivePreparation(nonce)) return;
-        // Refresh the pending flag and capture the editor only after earlier
-        // recovery mutations finish. The exclusive lease keeps native text stable.
-        const nativeResultPending = await getUpdateResultPending("live-dictation");
-        if (!isActivePreparation(nonce)) return;
-        const payloadLineage = dictationEditorLineage;
-        const nativeEditorOwnsResult = nativeEditorOrigin?.lineage === payloadLineage && nativeEditorOrigin.text === stableNativeDictation;
-        const editedNativeResult = testResultEdited && !recoveredDictationActive && nativeEditorOwnsResult;
-        if (
-          nativeResultPending &&
-          stableNativeDictation?.trim() &&
-          ((!testResult.trim() && !nativeEditorOwnsResult) ||
-            (testResult.trim() && testResult !== stableNativeDictation && !editedNativeResult))
-        ) {
-          throw new Error("A different unsaved dictation is already open. Copy or save both results before retrying the update.");
-        }
-        const payload = createUpdateRecoveryPayload({
-          dictation:
-            testResultRecoveryPending && (nativeResultPending || recoveredDictationActive || testResultEdited) && testResult.trim()
-              ? { text: testResult }
-              : null,
-          files: fileRecoveryEntries,
-          meetings: meetingRecoveryEntries,
-        });
-        // A result event can arrive before recovery is hydrated (or replace an
-        // older recovered draft). Replace persisted bytes only when they are
-        // the session's last successful save in this same editor lineage.
-        const previous = readPersistedUpdateRecoveryPayload(await loadUpdateRecovery());
-        if (!isActivePreparation(nonce)) return;
-        const ownsPersistedDictation = Boolean(
-          previous?.dictation?.text.trim() &&
-          lastPersistedDictation?.text === previous.dictation.text &&
-          lastPersistedDictation.lineage === payloadLineage,
-        );
-        if (previous?.dictation?.text.trim() && previous.dictation.text !== payload.dictation?.text && !ownsPersistedDictation) {
-          throw new Error(
-            "A different unsaved dictation is already in update recovery. Copy or save both results before retrying the update.",
-          );
-        }
-        // Validate the exact serialized size before handing the payload to Rust.
-        serializeUpdateRecoveryPayload(payload);
-        await saveUpdateRecovery(payload);
-        if (payload.dictation) {
-          recoveryPersistenceRevision++;
-          lastPersistedDictation = {
-            text: payload.dictation.text,
-            lineage: payloadLineage,
-            revision: recoveryPersistenceRevision,
-          };
-        } else {
-          lastPersistedDictation = null;
-        }
-        if (!isActivePreparation(nonce)) return;
-        await completeUpdatePreparation(nonce, null);
-      });
-    } catch (error) {
-      if (!isActivePreparation(nonce)) return;
-      const message = toErrorMessage(error);
-      updatePreparing = false;
-      try {
-        await enqueueRecoveryMutation(async () => {
-          if (!isActivePreparation(nonce)) return;
-          await completeUpdatePreparation(nonce, message);
-        });
-      } catch (ackError) {
-        console.warn("Could not acknowledge failed update preparation", ackError);
-      }
-    }
-  }
+  // Update recovery (settings/updateRecovery.svelte.ts) reads and writes the
+  // dictation editor above and the Transcribe tab's file queue below through
+  // these two ports.
+  const recovery = new UpdateRecoveryController({
+    api: {
+      loadUpdateRecovery,
+      saveUpdateRecovery,
+      clearUpdateRecovery,
+      completeUpdatePreparation,
+      getLastTranscription,
+      getUpdateResultPending,
+      acknowledgeUpdateResult,
+    },
+    dictation: {
+      get text() {
+        return testResult;
+      },
+      set text(value) {
+        testResult = value;
+      },
+      get recoveryPending() {
+        return testResultRecoveryPending;
+      },
+      set recoveryPending(value) {
+        testResultRecoveryPending = value;
+      },
+      get edited() {
+        return testResultEdited;
+      },
+      set edited(value) {
+        testResultEdited = value;
+      },
+      get transcribing() {
+        return testTranscribing;
+      },
+    },
+    files: {
+      get jobs() {
+        return fileJobs;
+      },
+      set jobs(value) {
+        fileJobs = value;
+      },
+      get savedReviewIds() {
+        return savedReviewIds;
+      },
+      set savedReviewIds(value) {
+        savedReviewIds = value;
+      },
+      get selectedId() {
+        return selectedFileId;
+      },
+      set selectedId(value) {
+        selectedFileId = value;
+      },
+    },
+    onDiscardFailed: (message) => {
+      settingsError = message;
+    },
+  });
+  const updatePreparing = $derived(recovery.preparing);
 
   async function copyTestResult(): Promise<void> {
     if (!testResult.trim()) return;
     try {
       const text = testResult;
-      const delivery = captureDictationDelivery(text);
+      const delivery = recovery.captureDelivery(text);
       await copyTranscriptionText(text);
-      const nextResultShown = await markTestResultDelivered(delivery);
+      const nextResultShown = await recovery.markDelivered(delivery);
       testResultActionMessage = nextResultShown ? "Copied result. Another unsaved dictation is now shown." : "Copied to clipboard.";
     } catch (error) {
       testResultActionMessage = toErrorMessage(error);
@@ -632,81 +296,15 @@
     if (!testResult.trim()) return;
     try {
       const text = testResult;
-      const delivery = captureDictationDelivery(text);
+      const delivery = recovery.captureDelivery(text);
       const saved = await saveTranscriptionText(text, "dictation.txt", null);
       if (saved) {
-        const nextResultShown = await markTestResultDelivered(delivery);
+        const nextResultShown = await recovery.markDelivered(delivery);
         testResultActionMessage = nextResultShown ? "Saved result. Another unsaved dictation is now shown." : "Saved.";
       }
       if (!saved) testResultActionMessage = "Save cancelled — nothing was written.";
     } catch (error) {
       testResultActionMessage = toErrorMessage(error);
-    }
-  }
-
-  function captureDictationDelivery(text: string): DictationDelivery {
-    const lineage = dictationEditorLineage;
-    return {
-      text,
-      lineage,
-      wasEdited: testResultEdited,
-      nativeSourceText: nativeEditorOrigin?.lineage === lineage ? nativeEditorOrigin.text : null,
-      recoveredText: recoveredDictationText,
-      persistedText: lastPersistedDictation?.lineage === lineage ? lastPersistedDictation.text : null,
-      persistedRevision: lastPersistedDictation?.lineage === lineage ? lastPersistedDictation.revision : null,
-    };
-  }
-
-  async function markTestResultDelivered(delivery: DictationDelivery): Promise<boolean> {
-    const { text, lineage, wasEdited, nativeSourceText, recoveredText, persistedText, persistedRevision } = delivery;
-    const nativePending = await getUpdateResultPending("live-dictation");
-    const nativeText = nativePending ? await getLastTranscription() : null;
-    const matchesNative =
-      lineage === dictationEditorLineage &&
-      nativePending &&
-      (nativeText === text || (wasEdited && nativeSourceText !== null && nativeSourceText === nativeText));
-    const deliveredNative = matchesNative && nativeText !== null ? await acknowledgeUpdateResult(nativeText) : false;
-    const cleanupTexts = [persistedText, recoveredText, text].filter((value): value is string => value !== null);
-    await clearDeliveredRecoveryDraft(cleanupTexts, lineage, text, persistedRevision);
-    if (testResult !== text || dictationEditorLineage !== lineage) return false; // a newer result arrived during Copy/Save
-    testResultRecoveryPending = false;
-    testResultEdited = false;
-    recoveredDictationActive = false;
-    refreshRecoveredDraftsNotice();
-    const currentNative =
-      nativePending && !deliveredNative && (await getUpdateResultPending("live-dictation")) ? await getLastTranscription() : null;
-    if (currentNative?.trim()) {
-      // The copied recovered draft was not the latest native dictation. Show
-      // that still-unsaved result next, keeping its update guard intact.
-      dictationEditorLineage++;
-      testResult = currentNative;
-      testResultRecoveryPending = true;
-      nativeEditorOrigin = { text: currentNative, lineage: dictationEditorLineage };
-      observedNativeDictation = currentNative;
-      return true;
-    }
-    return false;
-  }
-
-  async function clearDeliveredRecoveryDraft(
-    texts: readonly string[],
-    lineage: number,
-    deliveredText: string,
-    persistedRevision: number | null,
-  ): Promise<void> {
-    try {
-      await enqueueRecoveryCleanup({
-        dictationTexts: texts,
-        dictationLineage: lineage,
-        dictationText: deliveredText,
-        dictationPersistenceRevision: persistedRevision ?? undefined,
-      });
-    } catch (error) {
-      // Delivery already succeeded. Preserve the unreadable snapshot and
-      // surface a concrete warning without turning Copy/Save into a failure.
-      console.warn("Could not clear delivered update recovery draft", error);
-      recoveryCleanupWarning = true;
-      recoveryReadError = recoveryCleanupError(error);
     }
   }
 
@@ -718,14 +316,7 @@
   });
   const resultEvents = useTauriEvent("transcription-result", (text) => {
     dictationEventRevision++;
-    liveDictationRevision++;
-    dictationEditorLineage++;
-    testResultRecoveryPending = true;
-    testResultEdited = false;
-    recoveredDictationActive = false;
-    observedNativeDictation = text;
-    nativeEditorOrigin = { text, lineage: dictationEditorLineage };
-    testResult = text;
+    recovery.showNativeResult(text);
     clearTestError();
   });
 
@@ -736,25 +327,13 @@
     Promise.all([errorEvents.ready, resultEvents.ready, stateEvents.ready])
       .then(async () => {
         const initialRevision = dictationEventRevision;
-        await recoveryRestore.catch(() => undefined);
+        await recovery.restored.catch(() => undefined);
         const [error, text] = await Promise.all([getLastError(), getLastTranscription()]);
         if (!disposed && dictationEventRevision === initialRevision) {
-          // Native delivery has settled even if a different recovered draft is
-          // already visible in the editor. Otherwise updater preparation waits
-          // forever for an event that preceded listener registration.
-          observedNativeDictation = text;
           // The last error is plain text: it has no code to decide a recovery by.
           testError = error ?? "";
           testRecovery = null;
-          if (text && !testResult.trim()) {
-            observedNativeDictation = text;
-            liveDictationRevision++;
-            dictationEditorLineage++;
-            nativeEditorOrigin = { text, lineage: dictationEditorLineage };
-            testResultRecoveryPending = true;
-            recoveredDictationActive = false;
-            testResult = text;
-          }
+          recovery.nativeResultSettled(text);
         }
       })
       .catch((error) => {
@@ -927,62 +506,10 @@
     document.getElementById(`file-tab-${selectedFileId}`)?.focus();
   }
 
-  // Every editable dictionary belongs to a named dictation profile.
-  let glossaryScopeId: string = $state("default");
-  let glossaryDraft: string = $state("");
-  let glossaryDraftInitialized = false;
-  let glossaryScopeGeneration = $state(0);
-  let glossaryDraftGeneration = $state(0);
-  let lastStoredGlossarySources: Record<string, string> = {};
-  let glossaryEditBaseline: { scopeId: string; source: string; generation: number } | null = $state(null);
-  let glossarySaving: boolean = $state(false);
-  let glossarySaveInFlight: Promise<boolean> | null = null;
-  type PendingGlossaryNavigation = { kind: "scope"; scopeId: string } | { kind: "tab"; tab: SettingsTab; afterNavigate?: () => void };
-  let pendingGlossaryNavigation: PendingGlossaryNavigation | null = $state(null);
-  let glossaryDialogEl: HTMLDivElement | undefined = $state();
-  let glossaryReturnFocusEl: HTMLElement | null = null;
-  type RecoveredGlossaryDraft = { scopeId: string; draft: string; conflicted: boolean };
-  type GlossarySaveRequest = {
-    scopeId: string;
-    generation: number;
-    draftGeneration: number;
-    value: string;
-  };
-  let recoveredGlossaryDrafts: RecoveredGlossaryDraft[] = $state([]);
-  let glossaryConflictScopeId: string | null = $state(null);
-
-  // The backend rejects a dictionary save whose baseline went stale with the
-  // code below (ADR 0006); the code decides, never the message text. The
-  // conflict is "shown" while `settingsError` still holds the message of that
-  // rejection; a different error replaces it.
-  const dictionaryConflictCode = "dictionary_changed_elsewhere";
-  let dictionaryConflictMessage: string | null = $state(null);
-
-  function isDictionaryConflictShown(): boolean {
-    return dictionaryConflictMessage !== null && settingsError === dictionaryConflictMessage;
-  }
-
-  // The dictionary editor is intentionally local state. Settings reloads may
-  // update the saved source, but must never replace a draft that differs from
-  // the source we last saw for this scope.
-  function glossaryHasUnsavedChanges(): boolean {
-    if (glossarySaving) return true;
-    const baseline = glossaryEditBaseline;
-    const draftChanged = baseline?.scopeId === glossaryScopeId && glossaryDraft !== baseline.source;
-    const conflict = glossaryConflictScopeId === glossaryScopeId && isDictionaryConflictShown();
-    return Boolean(draftChanged || conflict);
-  }
-
-  $effect(() => {
-    if (!pendingGlossaryNavigation || !glossaryDialogEl) return;
-    queueMicrotask(() => {
-      if (glossarySaving) {
-        glossaryDialogEl?.focus();
-      } else {
-        glossaryDialogEl?.querySelector<HTMLButtonElement>("[data-dialog-stay]")?.focus();
-      }
-    });
-  });
+  // The personal dictionary editor (settings/GlossaryEditor.svelte) owns its
+  // drafts and the dirty guard that requestTabChange asks before a tab change.
+  let glossaryEditor: GlossaryEditor | undefined = $state();
+  const glossarySaving = $derived(glossaryEditor?.isSaving() ?? false);
 
   function explicitProfiles(source: Settings | null = settings): HotkeyProfile[] {
     return source?.hotkey_profiles ?? [];
@@ -991,43 +518,6 @@
   function profileForId(profileId: string | null, source: Settings | null = settings): HotkeyProfile | null {
     if (!profileId) return null;
     return explicitProfiles(source).find((profile) => profile.id === profileId) ?? null;
-  }
-
-  function glossarySourceForScope(scopeId: string, source: Settings | null = settings): string {
-    return source?.profile_glossaries[scopeId] ?? "";
-  }
-
-  function isValidGlossaryScope(scopeId: string, source: Settings | null = settings): boolean {
-    return profileForId(scopeId, source) !== null;
-  }
-
-  function glossaryScopeLabel(scopeId: string, source: Settings | null = settings): string {
-    return profileForId(scopeId, source)?.name ?? scopeId;
-  }
-
-  function rememberGlossaryRecovery(scopeId: string, draft: string, conflicted = false): void {
-    const existing = recoveredGlossaryDrafts.find((recovery) => recovery.scopeId === scopeId && recovery.draft === draft);
-    if (existing) {
-      if (conflicted && !existing.conflicted) {
-        recoveredGlossaryDrafts = recoveredGlossaryDrafts.map((recovery) =>
-          recovery === existing ? { ...recovery, conflicted: true } : recovery,
-        );
-      }
-      return;
-    }
-    recoveredGlossaryDrafts = [...recoveredGlossaryDrafts, { scopeId, draft, conflicted }];
-  }
-
-  function removeGlossaryRecovery(scopeId: string, draft: string): void {
-    recoveredGlossaryDrafts = recoveredGlossaryDrafts.filter((recovery) => recovery.scopeId !== scopeId || recovery.draft !== draft);
-  }
-
-  function isCurrentGlossaryRequest(request: GlossarySaveRequest): boolean {
-    return (
-      request.generation === glossaryScopeGeneration &&
-      request.scopeId === glossaryScopeId &&
-      request.draftGeneration === glossaryDraftGeneration
-    );
   }
 
   function selectedTranscribeProfile(): HotkeyProfile | null {
@@ -1074,7 +564,7 @@
       fileRecommendedModel = recommended;
     },
     reject: (error) => {
-      fileModelError = toErrorMessage(error);
+      modelDownloads.fileError = toErrorMessage(error);
     },
   });
 
@@ -1093,14 +583,14 @@
     const select = event.currentTarget as HTMLSelectElement;
     const id = select.value;
     fileModelSaving = true;
-    fileModelError = "";
+    modelDownloads.fileError = "";
     try {
       const outcome = await saveSetting(() => setFileTranscriptionModel(id));
       if (!outcome.saved) {
         // Nothing was saved. A one-way bound native select keeps the rejected
         // choice unless it is put back by hand.
         if (settings) select.value = settings.file_transcription_model;
-        fileModelError = toErrorMessage(outcome.error);
+        modelDownloads.fileError = toErrorMessage(outcome.error);
         return;
       }
       // Saved, whether or not the read-back could confirm it.
@@ -1117,55 +607,23 @@
     const preference = settings?.file_transcription_model;
     // "Auto" downloads the recommended model (it may currently use an older downloaded one).
     const id = preference === "auto" ? fileRecommendedModel?.id : preference;
-    if (!id || downloads.busy) return;
-    downloads.start(
-      id,
+    if (!id) return;
+    const name =
       fileModelOptions.find((model) => model.id === id)?.display_name ??
-        (fileRecommendedModel?.id === id ? fileRecommendedModel.display_name : id),
+      (fileRecommendedModel?.id === id ? fileRecommendedModel.display_name : id);
+    await modelDownloads.downloadFileModel(
+      id,
+      name,
+      () => fileModelCatalogController.request({ language: transcribeLanguage(), selected: id !== "auto" ? id : undefined }).done,
     );
-    fileModelError = "";
-    try {
-      await downloadModelById(id);
-      await fileModelCatalogController.request({
-        language: transcribeLanguage(),
-        selected: id !== "auto" ? id : undefined,
-      }).done;
-    } catch (error) {
-      fileModelError = toErrorMessage(error);
-    } finally {
-      downloads.finish();
-    }
   }
 
   // Settings can be reloaded after hotkey/profile changes. Never leave a
-  // removed or newly-Auto profile selected, and never show another scope's
-  // text after that reconciliation.
+  // removed profile selected for file transcription.
   $effect(() => {
     const currentSettings = settings;
-    const currentScope = glossaryScopeId;
     const currentTranscribeProfile = transcribeProfileId;
     if (!currentSettings) return;
-
-    const currentStored = glossarySourceForScope(currentScope, currentSettings);
-    const previousStored = lastStoredGlossarySources[currentScope];
-    if (!glossaryDraftInitialized || glossaryDraft === previousStored) {
-      glossaryDraft = currentStored;
-      glossaryDraftInitialized = true;
-    }
-    lastStoredGlossarySources[currentScope] = currentStored;
-    if (!isValidGlossaryScope(currentScope, currentSettings)) {
-      const removedProfileHasDraft =
-        glossaryEditBaseline?.scopeId === currentScope || (glossaryDraftInitialized && glossaryDraft !== (previousStored ?? currentStored));
-      if (removedProfileHasDraft) {
-        rememberGlossaryRecovery(currentScope, glossaryDraft, glossaryConflictScopeId === currentScope && isDictionaryConflictShown());
-      }
-      glossaryScopeGeneration += 1;
-      glossaryScopeId = currentSettings.hotkey_profiles[0]?.id ?? "default";
-      glossaryDraft = glossarySourceForScope(glossaryScopeId, currentSettings);
-      glossaryDraftGeneration += 1;
-      glossaryEditBaseline = null;
-      glossaryConflictScopeId = null;
-    }
     if (!currentTranscribeProfile || !profileForId(currentTranscribeProfile, currentSettings)) {
       transcribeProfileId =
         currentSettings.hotkey_profiles.find((profile) => profile.id === "default")?.id ?? currentSettings.hotkey_profiles[0]?.id ?? null;
@@ -1220,16 +678,9 @@
   // the fetch sequence must never prevent them from wiring up (e.g. a
   // stuck-at-0% download).
   useTauriEvent("update-preparing", (nonce) => {
-    if (nonce) {
-      activePreparationNonce = nonce;
-      updatePreparing = true;
-      void prepareForUpdate(nonce);
-    }
+    if (nonce) recovery.beginPreparation(nonce);
   });
-  useTauriEvent("update-aborted", () => {
-    activePreparationNonce = null;
-    updatePreparing = false;
-  });
+  useTauriEvent("update-aborted", () => recovery.abortPreparation());
 
   useTauriEvent("model-ready", async () => {
     // The event can arrive before the download command settles. Its caller
@@ -1255,7 +706,7 @@
       // A new dictation supersedes the restored result and error, and
       // outdates the restore that waits for the listeners above.
       dictationEventRevision++;
-      liveDictationRevision++;
+      recovery.dictationStarted();
       clearTestError();
     }
 
@@ -1295,8 +746,7 @@
   });
 
   onMount(() => {
-    recoveryRestore = restoreUpdateRecovery();
-    void recoveryRestore.catch(() => undefined);
+    recovery.restore();
 
     // Fetch initial data. A rejection here surfaces as a visible inline
     // error instead of leaving a half-initialized window.
@@ -1343,7 +793,7 @@
       }
     })();
     return () => {
-      activePreparationNonce = null;
+      recovery.dispose();
       fileModelCatalogController.dispose();
       profileModelCatalogController.dispose();
     };
@@ -1390,10 +840,7 @@
     if (settingsError === unconfirmedBlock || (rejectionWithoutPreview && settingsError === rejectionWithoutPreview)) settingsError = "";
     rejectionWithoutPreview = "";
     if (hotkeyError === unconfirmedBlock) hotkeyError = "";
-    if (fileModelError === unconfirmedBlock) fileModelError = "";
-    profileModelErrors = Object.fromEntries(
-      Object.entries(profileModelErrors).map(([id, message]) => [id, message === unconfirmedBlock ? "" : message]),
-    );
+    modelDownloads.dismiss(unconfirmedBlock);
   }
 
   /**
@@ -1597,7 +1044,7 @@
     if (!settings || !blockedLanguageChange || languageSaving || glossarySaving) return;
     const request = blockedLanguageChange;
     const { profileId } = request;
-    const scopeDraft = glossaryScopeId === profileId && glossaryHasUnsavedChanges() ? glossaryDraft : null;
+    const scopeDraft = glossaryEditor?.unsavedDraftOf(profileId) ?? null;
     languageSaving = true;
     settingsError = "";
     let cleared = false;
@@ -1607,14 +1054,14 @@
       // Clear the confirmation immediately: a failed retry must not offer to
       // erase a dictionary that may have been populated again in the meantime.
       blockedLanguageChange = null;
-      if (scopeDraft !== null) rememberGlossaryRecovery(profileId, scopeDraft);
+      if (scopeDraft !== null) glossaryEditor?.preserveDraft(profileId, scopeDraft);
       settings = { ...settings, profile_glossaries: { ...settings.profile_glossaries, [profileId]: "" } };
-      if (glossaryScopeId === profileId) discardGlossaryChanges();
+      glossaryEditor?.discardChangesOf(profileId);
       const notices = await setLanguage(request.language);
       profileModelNotices = Array.isArray(notices) ? notices : [];
     } catch (error) {
       const message = toErrorMessage(error, "Unknown error");
-      if (cleared) rememberGlossaryRecovery(profileId, request.source);
+      if (cleared) glossaryEditor?.preserveDraft(profileId, request.source);
       settingsError = cleared
         ? `The default dictionary was cleared, but the language change failed: ${message}`
         : `The dictionary could not be cleared; the language was not changed: ${message}`;
@@ -1716,241 +1163,19 @@
     await applyScalarSetting(() => setShowOverlay(next));
   }
 
-  async function refreshDictionaryAfterConflict(primaryError: string, request: GlossarySaveRequest) {
-    try {
-      await readSettings();
-    } catch (error) {
-      console.warn("Could not refresh the dictionary after a concurrent change", error);
-    }
-    // A stale request still refreshes the source of truth, but cannot replace
-    // a newer scope's error or draft. The recovery item carries its context.
-    if (isCurrentGlossaryRequest(request)) {
-      settingsError = primaryError;
-      glossaryConflictScopeId = request.scopeId;
-    } else {
-      rememberGlossaryRecovery(request.scopeId, request.value, true);
-    }
-  }
-
-  async function saveGlossary(): Promise<boolean> {
-    if (languageSaving) return false;
-    if (glossarySaveInFlight) return glossarySaveInFlight;
-
-    const request: GlossarySaveRequest = {
-      scopeId: glossaryScopeId,
-      generation: glossaryScopeGeneration,
-      draftGeneration: glossaryDraftGeneration,
-      value: glossaryDraft,
-    };
-    const scopeId = request.scopeId;
-    const draftGeneration = request.draftGeneration;
-    const value = request.value;
-    const editBaseline = glossaryEditBaseline;
-    const expectedSource =
-      editBaseline?.scopeId === scopeId && editBaseline.generation <= draftGeneration
-        ? editBaseline.source
-        : (lastStoredGlossarySources[scopeId] ?? glossarySourceForScope(scopeId));
-
-    if (!settings || !isValidGlossaryScope(scopeId)) return false;
-    if (!glossaryHasUnsavedChanges()) {
-      if (glossaryEditBaseline?.scopeId === scopeId) glossaryEditBaseline = null;
-      return true;
-    }
-
-    const saveError: { value: string; code: string | null } = { value: "", code: null };
-    const operation = (async (): Promise<boolean> => {
-      glossarySaving = true;
-      settingsError = "";
-      try {
-        const saved = await applySetting(() => setProfileGlossary(scopeId, value, expectedSource), saveError, false);
-        const conflict = saveError.code === dictionaryConflictCode;
-        let requestIsCurrent = isCurrentGlossaryRequest(request);
-        if (conflict) {
-          dictionaryConflictMessage = saveError.value;
-          await refreshDictionaryAfterConflict(saveError.value, request);
-          requestIsCurrent = isCurrentGlossaryRequest(request);
-        } else if (!saved && !requestIsCurrent) {
-          rememberGlossaryRecovery(scopeId, value);
-        }
-
-        if (requestIsCurrent) {
-          settingsError = saved ? "" : saveError.value;
-          if (saved) glossaryConflictScopeId = null;
-        }
-        if (saved) removeGlossaryRecovery(scopeId, value);
-
-        // If our own save won the CAS race while the user kept typing in the
-        // same edit lineage, advance only that lineage's baseline to our
-        // value. A stale request never clears a newer draft.
-        if (saved && editBaseline && glossaryEditBaseline === editBaseline && editBaseline.scopeId === scopeId) {
-          if (draftGeneration === glossaryDraftGeneration) {
-            glossaryEditBaseline = null;
-          } else {
-            glossaryEditBaseline = { ...editBaseline, source: value };
-          }
-        }
-
-        // A scope removal/reload while the invoke was pending owns the
-        // textarea now; never navigate based on a stale request.
-        return saved && requestIsCurrent;
-      } finally {
-        glossarySaving = false;
-      }
-    })();
-    glossarySaveInFlight = operation;
-    try {
-      return await operation;
-    } finally {
-      if (glossarySaveInFlight === operation) glossarySaveInFlight = null;
-    }
-  }
-
-  function onGlossaryInput(e: Event) {
-    if (!glossaryEditBaseline || glossaryEditBaseline.scopeId !== glossaryScopeId) {
-      glossaryEditBaseline = {
-        scopeId: glossaryScopeId,
-        source: lastStoredGlossarySources[glossaryScopeId] ?? glossarySourceForScope(glossaryScopeId),
-        generation: glossaryDraftGeneration + 1,
-      };
-    }
-    glossaryDraftGeneration += 1;
-    glossaryDraft = (e.target as HTMLTextAreaElement).value;
-  }
-
-  function discardGlossaryChanges(): void {
-    if (!settings || glossarySaving) return;
-    const currentSource = glossarySourceForScope(glossaryScopeId, settings);
-    glossaryDraftGeneration += 1;
-    glossaryDraft = currentSource;
-    glossaryDraftInitialized = true;
-    lastStoredGlossarySources[glossaryScopeId] = currentSource;
-    glossaryEditBaseline = null;
-    if (glossaryConflictScopeId === glossaryScopeId) {
-      glossaryConflictScopeId = null;
-      if (isDictionaryConflictShown()) settingsError = "";
-    }
-  }
-
-  function commitGlossaryScopeChange(nextScope: string): void {
-    if (!settings || !isValidGlossaryScope(nextScope)) return;
-    glossaryScopeGeneration += 1;
-    glossaryDraftGeneration += 1;
-    glossaryEditBaseline = null;
-    glossaryConflictScopeId = null;
-    settingsError = isDictionaryConflictShown() ? "" : settingsError;
-    glossaryScopeId = nextScope;
-    glossaryDraft = glossarySourceForScope(nextScope, settings);
-    glossaryDraftInitialized = true;
-    lastStoredGlossarySources[nextScope] = glossaryDraft;
-  }
-
-  function onGlossaryScopeChange(e: Event) {
-    const nextScope = (e.target as HTMLSelectElement).value;
-    if (!settings || !isValidGlossaryScope(nextScope)) return;
-    if (nextScope === glossaryScopeId) return;
-    if (glossaryHasUnsavedChanges()) {
-      // The browser changes a select's displayed value before onchange fires.
-      // Restore the current scope until the user makes an explicit decision.
-      (e.currentTarget as HTMLSelectElement).value = glossaryScopeId;
-      promptGlossaryNavigation({ kind: "scope", scopeId: nextScope }, e.currentTarget as HTMLElement);
-      return;
-    }
-    commitGlossaryScopeChange(nextScope);
-  }
-
-  function promptGlossaryNavigation(pending: PendingGlossaryNavigation, returnFocusEl?: HTMLElement): void {
-    const activeElement = returnFocusEl ?? (typeof document === "undefined" ? null : document.activeElement);
-    glossaryReturnFocusEl = activeElement instanceof HTMLElement ? activeElement : null;
-    pendingGlossaryNavigation = pending;
-  }
-
-  function restoreGlossaryNavigationFocus(): void {
-    const returnFocusEl = glossaryReturnFocusEl;
-    glossaryReturnFocusEl = null;
-    queueMicrotask(() => {
-      if (returnFocusEl?.isConnected && !returnFocusEl.matches(":disabled")) {
-        returnFocusEl.focus();
-      }
-    });
-  }
-
-  function onGlossaryDialogKeydown(event: KeyboardEvent): void {
-    if (event.key === "Escape") {
-      event.preventDefault();
-      event.stopPropagation();
-      if (!glossarySaving) stayOnGlossaryDraft();
-      return;
-    }
-    if (event.key !== "Tab") return;
-
-    const dialog = glossaryDialogEl;
-    if (!dialog) return;
-    const focusable = Array.from(
-      dialog.querySelectorAll<HTMLElement>(
-        "button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])",
-      ),
-    ).filter((element) => !element.matches(":disabled"));
-    event.preventDefault();
-    if (focusable.length === 0) {
-      dialog.focus();
-      return;
-    }
-
-    const activeElement = typeof document === "undefined" ? null : document.activeElement;
-    const activeIndex = activeElement ? focusable.indexOf(activeElement as HTMLElement) : -1;
-    const nextIndex =
-      activeIndex < 0
-        ? event.shiftKey
-          ? focusable.length - 1
-          : 0
-        : (activeIndex + (event.shiftKey ? -1 : 1) + focusable.length) % focusable.length;
-    focusable[nextIndex]?.focus();
-  }
-
-  function finishPendingGlossaryNavigation(pending: PendingGlossaryNavigation): void {
-    pendingGlossaryNavigation = null;
-    restoreGlossaryNavigationFocus();
-    if (pending.kind === "scope") {
-      commitGlossaryScopeChange(pending.scopeId);
-    } else {
-      activeTab = pending.tab;
-      pending.afterNavigate?.();
-    }
-  }
-
-  async function saveAndFinishGlossaryNavigation(): Promise<void> {
-    const pending = pendingGlossaryNavigation;
-    if (!pending || glossarySaving || languageSaving) return;
-    if ((await saveGlossary()) && pendingGlossaryNavigation === pending) {
-      finishPendingGlossaryNavigation(pending);
-    }
-  }
-
-  function discardAndFinishGlossaryNavigation(): void {
-    const pending = pendingGlossaryNavigation;
-    if (!pending || glossarySaving || languageSaving) return;
-    discardGlossaryChanges();
-    finishPendingGlossaryNavigation(pending);
-  }
-
-  function stayOnGlossaryDraft(): void {
-    pendingGlossaryNavigation = null;
-    restoreGlossaryNavigationFocus();
-  }
-
   function requestTabChange(nextTab: SettingsTab, afterNavigate?: () => void): void {
     if (languageSaving) return;
     if (nextTab === activeTab) {
       afterNavigate?.();
       return;
     }
-    if (glossarySaving) return;
-    if (glossaryHasUnsavedChanges()) {
-      promptGlossaryNavigation({ kind: "tab", tab: nextTab, afterNavigate });
-      return;
-    }
-    activeTab = nextTab;
-    afterNavigate?.();
+    const leave = (): void => {
+      activeTab = nextTab;
+      afterNavigate?.();
+    };
+    // The dictionary editor asks first while it holds unsaved changes.
+    if (glossaryEditor) glossaryEditor.requestLeave(leave);
+    else leave();
   }
 
   async function onBeamSizeChange(e: Event) {
@@ -1986,58 +1211,9 @@
     await applyScalarSetting(() => setVadEnabled(next));
   }
 
-  async function downloadProfileModel(profile: HotkeyProfile) {
-    const model = profileModels[profile.id];
-    if (!model || model.downloaded || downloads.busy) return;
-    downloads.start(model.id, model.display_name);
-    profileModelErrors = { ...profileModelErrors, [profile.id]: "" };
-    try {
-      await downloadModelById(model.id);
-      fileModelDiskRevision += 1;
-      await refreshProfileModels(settings?.hotkey_profiles ?? []);
-    } catch (e) {
-      profileModelErrors = {
-        ...profileModelErrors,
-        [profile.id]: toErrorMessage(e, "Speech engine download failed."),
-      };
-    } finally {
-      downloads.finish();
-    }
-  }
-
-  /**
-   * True from the press of "Download the model again" to the end of the model
-   * list's refresh after it, longer than `downloads.busy`, which ends with the
-   * download itself: in between the button must not start a second one.
-   */
-  let engineModelDownloading = $state(false);
-
-  /**
-   * Download the speech engine's model again: what "Download the model again"
-   * does for `engine_model_missing` and `engine_model_load_failed`, the codes
-   * of the Pianissimo engine. The download first checks an installed model and
-   * fetches it again when it is missing or damaged. Progress shows like any
-   * other download; rejects when the download fails.
-   */
-  async function downloadEngineModelAgain(ids: readonly string[]): Promise<void> {
-    // Reserved before the first await, so a second press cannot start another.
-    engineModelDownloading = true;
-    try {
-      // One at a time: an installed, intact model only has its files checked.
-      for (const id of ids) {
-        downloads.start(id, fileModelOptions.find((model) => model.id === id)?.display_name ?? "Pianissimo");
-        try {
-          await downloadModelById(id);
-        } finally {
-          downloads.finish();
-        }
-        // Per model: a later failure must not hide what this one changed on disk.
-        fileModelDiskRevision += 1;
-      }
-      await refreshProfileModels(settings?.hotkey_profiles ?? []);
-    } finally {
-      engineModelDownloading = false;
-    }
+  /** "Download the model again" for the Pianissimo models `ids`; rejects when a download fails. */
+  function downloadEngineModelAgain(ids: readonly string[]): Promise<void> {
+    return modelDownloads.downloadAgain(ids, (id) => fileModelOptions.find((model) => model.id === id)?.display_name ?? "Pianissimo");
   }
 
   /**
@@ -2062,7 +1238,7 @@
 
   /** "Download the model again" under the Dictate tab's error. */
   async function onDictateDownloadModel(): Promise<void> {
-    if (updatePreparing || downloads.busy || engineModelDownloading) return;
+    if (updatePreparing || modelDownloads.busy || modelDownloads.repairing) return;
     const revision = dictationEventRevision;
     try {
       await downloadEngineModelAgain(dictationPianissimoIds());
@@ -2088,30 +1264,16 @@
 
   async function switchProfileToRecommended(profile: HotkeyProfile) {
     const target = retiredModelSuggestion(profile);
-    if (!target || downloads.busy || dictationModelSaving) return;
-    profileModelErrors = { ...profileModelErrors, [profile.id]: "" };
+    if (!target || modelDownloads.busy || dictationModelSaving) return;
     dictationModelSaving = true;
-    let downloaded = false;
     try {
-      // Download first: the old model keeps dictating until the new one is ready.
-      if (!target.downloaded) {
-        downloads.start(target.id, target.display_name);
-        await downloadModelById(target.id);
-        downloaded = true;
-      }
-      const outcome = await saveSetting(() => setProfileModel(profile.id, target.id));
-      if (!outcome.saved) throw outcome.error;
-      if (outcome.confirmed && settings) await refreshProfileModels(settings.hotkey_profiles);
-    } catch (e) {
-      profileModelErrors = {
-        ...profileModelErrors,
-        [profile.id]: toErrorMessage(e, `Could not switch to ${target.display_name}.`),
-      };
+      await modelDownloads.downloadThenSwitch(profile.id, target, async () => {
+        const outcome = await saveSetting(() => setProfileModel(profile.id, target.id));
+        if (!outcome.saved) throw outcome.error;
+        if (outcome.confirmed && settings) await refreshProfileModels(settings.hotkey_profiles);
+      });
     } finally {
-      downloads.finish();
       dictationModelSaving = false;
-      // The Transcribe tab's lineup follows what is on disk, also after a failed switch.
-      if (downloaded) fileModelDiskRevision += 1;
     }
   }
 
@@ -2120,12 +1282,12 @@
     const select = event.target as HTMLSelectElement;
     const previous = settings.profile_models[profile.id] ?? "auto";
     dictationModelSaving = true;
-    profileModelErrors = { ...profileModelErrors, [profile.id]: "" };
+    modelDownloads.setProfileError(profile.id, "");
     try {
       const outcome = await saveSetting(() => setProfileModel(profile.id, select.value));
       if (!outcome.saved) {
         select.value = previous;
-        profileModelErrors = { ...profileModelErrors, [profile.id]: toErrorMessage(outcome.error, "Could not change profile model.") };
+        modelDownloads.setProfileError(profile.id, toErrorMessage(outcome.error, "Could not change profile model."));
       } else if (outcome.confirmed && settings) {
         await refreshProfileModels(settings.hotkey_profiles);
       }
@@ -2135,7 +1297,7 @@
   }
 
   async function onTestRecord() {
-    if (updatePreparing || dictationModelSaving || downloads.busy) return;
+    if (updatePreparing || dictationModelSaving || modelDownloads.busy) return;
     const action = dictateButtonAction(backendDictationState, testOwnsRecording);
     if (action === "blocked") return;
 
@@ -2148,10 +1310,7 @@
       clearTestError();
       try {
         const text = await stopAndTranscribe();
-        observedNativeDictation = text;
-        nativeEditorOrigin = { text, lineage: dictationEditorLineage };
-        testResultRecoveryPending = true;
-        testResult = testResult ? testResult + " " + text : text;
+        recovery.appendTestRecording(text);
       } catch (e) {
         showTestError(e, "Transcription failed");
       } finally {
@@ -2398,23 +1557,6 @@
     }
     await applySetting(() => setHotkeyProfiles(settings!.hotkey_profiles.filter((profile) => profile.id !== profileId)));
   }
-
-  function languageLabel(lang: Language): string {
-    switch (lang) {
-      case "sv":
-        return "Swedish";
-      case "no":
-        return "Norwegian";
-      case "fi":
-        return "Finnish";
-      case "da":
-        return "Danish";
-      case "en":
-        return "English";
-      default:
-        return "Auto-detect";
-    }
-  }
 </script>
 
 <div class="settings-window" class:settings-locked={settingsLocked}>
@@ -2448,11 +1590,11 @@
       {#if initError}
         <div class="transcribe-error">{initError}</div>
       {/if}
-      {#if recoveryReadError}
-        <div class="transcribe-error" role="alert">{recoveryReadError}</div>
+      {#if recovery.readError}
+        <div class="transcribe-error" role="alert">{recovery.readError}</div>
       {/if}
       {#if settingsError}
-        <div class="transcribe-error" role={pendingGlossaryNavigation ? undefined : "alert"}>{settingsError}</div>
+        <div class="transcribe-error" role={glossaryEditor?.isAsking() ? undefined : "alert"}>{settingsError}</div>
       {/if}
       {#if settingsUnconfirmed}
         <section
@@ -2476,11 +1618,11 @@
           >
         </section>
       {/if}
-      {#if recoveredDraftsNotice}
+      {#if recovery.draftsNotice}
         <section class="recovery-notice" role="status" aria-label="Recovered drafts">
           <strong>Recovered drafts</strong>
           <span>Unsaved dictation and transcription results were restored after the update.</span>
-          <button class="secondary" type="button" disabled={updatePreparing} onclick={() => void discardRecoveredDrafts()}
+          <button class="secondary" type="button" disabled={updatePreparing} onclick={() => void recovery.discardDrafts()}
             >Discard recovered drafts</button
           >
         </section>
@@ -2623,7 +1765,7 @@
                   {#if !profileModels[profile.id].downloaded}
                     <button
                       class="link-btn profile-engine-action"
-                      onclick={() => downloadProfileModel(profile)}
+                      onclick={() => modelDownloads.downloadProfileModel(profile.id, profileModels[profile.id])}
                       disabled={downloading !== null}
                     >
                       {downloading === profileModels[profile.id].id
@@ -2647,8 +1789,8 @@
                     </button>
                   </div>
                 {/if}
-                {#if profileModelErrors[profile.id]}
-                  <div class="hotkey-error">{profileModelErrors[profile.id]}</div>
+                {#if modelDownloads.profileErrors[profile.id]}
+                  <div class="hotkey-error">{modelDownloads.profileErrors[profile.id]}</div>
                 {/if}
               {/if}
             </div>
@@ -2729,8 +1871,8 @@
             <ErrorRecovery
               recovery={testRecovery}
               busy={updatePreparing ||
-                downloads.busy ||
-                engineModelDownloading ||
+                modelDownloads.busy ||
+                modelDownloads.repairing ||
                 dictationModelSaving ||
                 dictateButtonAction(backendDictationState, testOwnsRecording) !== "start"}
               onRetry={() => void onDictateRetry()}
@@ -2835,7 +1977,7 @@
                   : "; downloaded once"}.
               </div>
             {/if}
-            {#if fileModelError}<div class="transcribe-error" role="alert">{fileModelError}</div>{/if}
+            {#if modelDownloads.fileError}<div class="transcribe-error" role="alert">{modelDownloads.fileError}</div>{/if}
           </div>
           {#if selectedTranscribeProfile()}
             <div class="hotkey-hint">This profile fixes the file language and uses its personal dictionary.</div>
@@ -2953,7 +2095,7 @@
           >
             <FileTranscription
               {job}
-              bind:this={fileComponents[job.id]}
+              bind:this={() => recovery.resultPanel(job.id), (panel) => recovery.setResultPanel(job.id, panel)}
               otherBusy={updatePreparing ||
                 fileJobs.some((other) => other.id !== job.id && other.status === "running") ||
                 Object.entries(fileBusy).some(([id, busy]) => id !== job.id && busy)}
@@ -2964,13 +2106,13 @@
               onRetry={retryFileJob}
               retryRefusal={retryRefusals[job.id] ?? ""}
               onDownloadModel={() => downloadEngineModelAgain([filePianissimoId(job)])}
-              downloadBusy={downloads.busy || engineModelDownloading}
+              downloadBusy={modelDownloads.busy || modelDownloads.repairing}
               {updatePreparing}
               onAttentionChange={updateFileAttention}
-              initialRecoveryFile={fileRecoveryEntries.find((entry) => entry.job_id === job.id) ?? null}
-              initialRecoveryMeeting={meetingRecoveryEntries.find((entry) => entry.job_id === job.id) ?? null}
-              onFileRecoveryChange={(entry) => onFileRecoveryChange(entry, job.id)}
-              onMeetingRecoveryChange={(entry) => onMeetingRecoveryChange(entry, job.id)}
+              initialRecoveryFile={recovery.fileEntries.find((entry) => entry.job_id === job.id) ?? null}
+              initialRecoveryMeeting={recovery.meetingEntries.find((entry) => entry.job_id === job.id) ?? null}
+              onFileRecoveryChange={(entry) => recovery.onFileRecoveryChange(entry, job.id)}
+              onMeetingRecoveryChange={(entry) => recovery.onMeetingRecoveryChange(entry, job.id)}
               active={activeTab === "transcribe" && selectedFileId === job.id}
             />
           </div>
@@ -3045,82 +2187,17 @@
             disabled={settingsLocked}
           ></button>
         </div>
-
-        <div class="field">
-          <div class="dictionary-heading">
-            <label for="initial-prompt">Personal dictionary</label>
-            {#if glossaryHasUnsavedChanges()}
-              <span class="unsaved-indicator" role="status">Unsaved changes</span>
-            {/if}
-          </div>
-          <select
-            id="dictionary-scope"
-            value={glossaryScopeId}
-            onchange={onGlossaryScopeChange}
-            disabled={glossarySaving || languageSaving}
-          >
-            {#each explicitProfiles() as profile (profile.id)}
-              <option value={profile.id}>{profile.name} · {languageLabel(profile.language)}</option>
-            {/each}
-          </select>
-          <textarea
-            id="initial-prompt"
-            class="initial-prompt-input"
-            rows="5"
-            value={glossaryDraft}
-            oninput={onGlossaryInput}
-            disabled={glossarySaving || languageSaving}
-            placeholder="OpenRouter = open router | open vrouter&#10;merge = merch&#10;Cloudflare = cloud flare"></textarea>
-          <div class="dictionary-actions">
-            <button
-              type="button"
-              class="primary"
-              onclick={() => void saveGlossary()}
-              disabled={!glossaryHasUnsavedChanges() || glossarySaving || languageSaving}
-              >{glossarySaving ? "Saving…" : "Save changes"}</button
-            >
-            <button
-              type="button"
-              class="secondary"
-              onclick={discardGlossaryChanges}
-              disabled={!glossaryHasUnsavedChanges() || glossarySaving || languageSaving}>Discard changes</button
-            >
-          </div>
-          <div class="hotkey-hint glossary-migration">
-            This profile owns its dictionary. Save changes explicitly; switching profiles never moves entries to another dictionary.
-          </div>
-          {#if glossaryConflictScopeId === glossaryScopeId && isDictionaryConflictShown()}
-            <div class="hotkey-hint glossary-migration">
-              This dictionary changed elsewhere. Your draft is preserved; copy it if needed, then switch scopes and reselect this scope to
-              reload the saved value. If it still shows the old text, close and reopen Settings.
-            </div>
-          {/if}
-          {#if recoveredGlossaryDrafts.length > 0}
-            <div class="hotkey-hint glossary-migration">
-              Unsaved drafts are preserved below for manual recovery. They are never saved or copied automatically into another dictionary.
-            </div>
-            {#each recoveredGlossaryDrafts as recovery (recovery.scopeId + "\u0000" + recovery.draft)}
-              <div class="glossary-recovery">
-                <div class="hotkey-hint">
-                  <strong>Unsaved draft</strong> for <code>{glossaryScopeLabel(recovery.scopeId)}</code>
-                  {#if recovery.conflicted}
-                    — the saved dictionary changed elsewhere.{/if}
-                </div>
-                <textarea
-                  class="initial-prompt-input"
-                  rows="3"
-                  aria-label={`Unsaved draft for ${glossaryScopeLabel(recovery.scopeId)}`}
-                  value={recovery.draft}
-                  readonly></textarea>
-              </div>
-            {/each}
-          {/if}
-          <div class="hotkey-hint">
-            One preferred spelling per line. Add exact mishearings after <code>=</code>, separated by <code>|</code>. Plain terms still
-            guide Whisper. Save explicitly to use changes for live dictation and batch jobs.
-          </div>
-        </div>
-
+      {/if}
+      <GlossaryEditor
+        bind:this={glossaryEditor}
+        {settings}
+        active={activeTab === "settings"}
+        {languageSaving}
+        bind:settingsError
+        {applySetting}
+        {readSettings}
+      />
+      {#if activeTab === "settings"}
         <details class="advanced-section">
           <summary>Advanced</summary>
           <div class="advanced-content">
@@ -3218,43 +2295,6 @@
       </div>
       <div class="download-status-track">
         <div class="download-status-fill" style:width="{downloadProgress}%"></div>
-      </div>
-    </div>
-  {/if}
-
-  {#if pendingGlossaryNavigation}
-    <div class="dialog-backdrop">
-      <div
-        class="unsaved-dialog"
-        bind:this={glossaryDialogEl}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="unsaved-dialog-title"
-        aria-describedby="unsaved-dialog-description"
-        tabindex="-1"
-        onkeydown={onGlossaryDialogKeydown}
-      >
-        <h2 id="unsaved-dialog-title">Unsaved dictionary changes</h2>
-        <p id="unsaved-dialog-description">
-          {pendingGlossaryNavigation.kind === "scope"
-            ? `Save changes before switching to ${glossaryScopeLabel(pendingGlossaryNavigation.scopeId)}?`
-            : "Save changes before leaving Settings?"}
-        </p>
-        {#if settingsError}
-          <div class="hotkey-error" role="alert">{settingsError}</div>
-        {/if}
-        <div class="dialog-actions">
-          <button
-            type="button"
-            class="primary"
-            onclick={() => void saveAndFinishGlossaryNavigation()}
-            disabled={glossarySaving || languageSaving}>{glossarySaving ? "Saving…" : "Save"}</button
-          >
-          <button type="button" class="danger" onclick={discardAndFinishGlossaryNavigation} disabled={glossarySaving || languageSaving}
-            >Discard</button
-          >
-          <button type="button" class="secondary" data-dialog-stay onclick={stayOnGlossaryDraft} disabled={glossarySaving}>Stay</button>
-        </div>
       </div>
     </div>
   {/if}
@@ -3716,21 +2756,7 @@
     border-color: var(--accent);
   }
 
-  .dictionary-heading {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: 8px;
-  }
-
-  .unsaved-indicator {
-    color: var(--accent);
-    font-size: 11px;
-    font-weight: 600;
-  }
-
-  .dictionary-actions,
-  .dialog-actions {
+  .dictionary-actions {
     display: flex;
     align-items: center;
     gap: 8px;
@@ -3738,41 +2764,9 @@
     margin-top: 8px;
   }
 
-  .dictionary-actions button:disabled,
-  .dialog-actions button:disabled {
+  .dictionary-actions button:disabled {
     cursor: default;
     opacity: 0.6;
-  }
-
-  .dialog-backdrop {
-    position: fixed;
-    inset: 0;
-    z-index: 20;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 20px;
-    background: color-mix(in srgb, var(--bg) 78%, transparent);
-  }
-
-  .unsaved-dialog {
-    width: min(100%, 420px);
-    padding: 20px;
-    background: var(--bg-secondary);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    box-shadow: 0 12px 36px rgba(0, 0, 0, 0.35);
-  }
-
-  .unsaved-dialog h2 {
-    margin-bottom: 8px;
-    color: var(--text);
-    font-size: 15px;
-  }
-
-  .unsaved-dialog p {
-    color: var(--text-muted);
-    font-size: 13px;
   }
 
   .loading {

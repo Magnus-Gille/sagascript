@@ -195,6 +195,14 @@ Tests reach logic through modules, not through component source:
    to the moved code. Example: MeetingReview.svelte's `<script module>` became
    `src/lib/meeting-review-drafts.ts`.
 
+Settings.svelte is being split this way (SAGA-379). Its parts live in `src/lib/settings/`
+with their tests next to them: `updateRecovery.svelte.ts` (a class with the backend commands
+injected, and the dictation editor and file queue as two ports a test fills with plain
+objects), `modelDownloads.svelte.ts` (a store over the shared `ModelDownloads`) and
+`GlossaryEditor.svelte` (rendered directly in `GlossaryEditor.test.ts`; its exports, such as
+the dirty guard `requestLeave`, are on `render(...).component`). The `Settings.*.test.ts`
+files keep testing the same flows through the whole window.
+
 Code that more than one component needs lives in shared modules (#362), each with its own
 unit tests: `tauri-events.svelte.ts` (listeners, above), `models.svelte.ts` (`PIANISSIMO_ID`,
 `downloadModelById`, `ModelDownloads`), `permissions.ts` (`requestAccessibility`,
