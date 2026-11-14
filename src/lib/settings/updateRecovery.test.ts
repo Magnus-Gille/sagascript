@@ -712,4 +712,47 @@ describe("discard", () => {
     expect(h.controller.draftsNotice).toBe(false);
     expect(h.controller.discardError).toBe("");
   });
+
+  // The failure is shown with the notice and its button. Once they are gone nothing
+  // could replace or clear it, so a failure that arrives then is not shown.
+  test("a discard that fails after the last recovered draft was closed reports nothing", async () => {
+    const held = deferred<void>();
+    const h = await restoredHarness({
+      initial: stored({ files: [fileEntry] }),
+      handlers: { clear_update_recovery: () => held.promise },
+    });
+    const discard = h.controller.discardDrafts();
+    await vi.waitFor(() => expect(h.ipc.callsTo("clear_update_recovery")).toHaveLength(1));
+
+    h.controller.onFileRecoveryChange(null, "file-1"); // file-1 was delivered and its panel closed
+    expect(h.controller.draftsNotice).toBe(false);
+    held.reject(backendError("io", "Permission denied"));
+    await discard;
+
+    expect(h.controller.discardError).toBe("");
+  });
+
+  test("of two discards in flight, one that fails before the other succeeds leaves no failure", async () => {
+    const first = deferred<void>();
+    let attempts = 0;
+    const h = await restoredHarness({
+      initial: stored({ files: [fileEntry] }),
+      handlers: {
+        clear_update_recovery: () => {
+          attempts += 1;
+          return attempts === 1 ? first.promise : undefined;
+        },
+      },
+    });
+    const failing = h.controller.discardDrafts();
+    await vi.waitFor(() => expect(h.ipc.callsTo("clear_update_recovery")).toHaveLength(1));
+    const succeeding = h.controller.discardDrafts(); // the button is not held while a discard is in flight
+
+    first.reject(backendError("io", "Permission denied"));
+    await Promise.all([failing, succeeding]);
+
+    expect(attempts).toBe(2);
+    expect(h.controller.draftsNotice).toBe(false);
+    expect(h.controller.discardError).toBe("");
+  });
 });

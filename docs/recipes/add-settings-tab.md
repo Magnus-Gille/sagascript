@@ -37,7 +37,9 @@ Example: a "History" tab with the id `history`.
 - A settings change that fails is reported in the tab's own error,
   `win.errors.of("history")` (`tabErrors.svelte.ts`): pass it to `session.apply` or
   `session.applyScalar`, which clear it when the change starts and write the message when
-  the change is rejected, or set its `message`. The shell shows it above the panel while the
+  the change is rejected, or set its `message`. A message that a later event can make untrue
+  is shown with `show` and taken away with `retract`, which leaves whatever was written since
+  (`profileModels.svelte.ts`). The shell shows the tab's error above the panel while the
   tab shows and marks the tab's button while another tab shows; nothing on another tab shows
   or clears it. A message that belongs next to one control stays in the panel instead.
 - A panel that asks before the tab changes (unsaved work) sets `win.router.guard`, as

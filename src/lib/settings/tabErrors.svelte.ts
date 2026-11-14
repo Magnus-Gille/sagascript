@@ -6,9 +6,35 @@
 
 /** One tab's error message; empty while it has none. */
 export class TabError {
-  message: string = $state("");
+  #message = $state("");
+  // Counts the writes, to tell a message from a later one that says the same.
+  #writes = 0;
 
-  /** Take `message` away if it is the one shown: what it said is no longer true. */
+  get message(): string {
+    return this.#message;
+  }
+
+  set message(value: string) {
+    this.#writes += 1;
+    this.#message = value;
+  }
+
+  /** Show `message`. The receipt takes exactly this message away again: `retract`. */
+  show(message: string): number {
+    this.message = message;
+    return this.#writes;
+  }
+
+  /** Take away the message `show` gave `receipt` for, unless the tab's error was written since. */
+  retract(receipt: number): void {
+    if (receipt === this.#writes) this.message = "";
+  }
+
+  /**
+   * Take `message` away if it is the one shown, whoever wrote it: for a fixed
+   * message that an event made untrue. A message with free text is retracted
+   * by its receipt instead.
+   */
   dismiss(message: string): void {
     if (message && this.message === message) this.message = "";
   }

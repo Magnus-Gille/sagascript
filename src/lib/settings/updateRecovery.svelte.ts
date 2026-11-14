@@ -104,7 +104,10 @@ export class UpdateRecoveryController {
   draftsNotice = $state(false);
   /** Why the stored drafts could not be read, or could not be cleaned up after a delivery. */
   readError = $state("");
-  /** Why "Discard recovered drafts" could not delete the stored drafts; they stay open. The next attempt replaces it. */
+  /**
+   * Why "Discard recovered drafts" could not delete the stored drafts; they stay open.
+   * Set only while `draftsNotice` is: the next attempt replaces it, and it leaves with the notice.
+   */
   discardError = $state("");
 
   readonly #api: UpdateRecoveryApi;
@@ -257,7 +260,8 @@ export class UpdateRecoveryController {
       this.#cleanupWarning = false;
       this.readError = "";
     } catch (error) {
-      this.discardError = `Could not discard recovered drafts: ${toErrorMessage(error)}`;
+      // Shown only with the notice: without it and its button, nothing would replace or clear the message.
+      if (this.draftsNotice) this.discardError = `Could not discard recovered drafts: ${toErrorMessage(error)}`;
       return;
     }
 
@@ -278,6 +282,8 @@ export class UpdateRecoveryController {
     this.#recoveredDictationActive = false;
     this.#lastPersistedDictation = null;
     this.draftsNotice = false;
+    // An earlier attempt may have failed while this one was in flight.
+    this.discardError = "";
     this.#files.selectedId = this.#files.jobs[0]?.id ?? null;
   }
 

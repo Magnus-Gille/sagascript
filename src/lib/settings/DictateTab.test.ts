@@ -277,6 +277,34 @@ describe("the tab's error", () => {
 
     expect(win.errors.of("dictate").message).toBe("Profile names must be unique");
   });
+
+  test("a check that succeeds leaves a later change's error, even one that says the same as the failed check did", async () => {
+    let failing = false;
+    const { ipc, win } = await render({
+      get_profile_model_info: () => {
+        if (failing) throw backendError("io", "The disk is not responding.");
+        return pianissimo;
+      },
+      set_auto_paste: () => {
+        throw backendError("io", "The disk is not responding.");
+      },
+    });
+    failing = true;
+    ipc.emit("model-ready", null);
+    await waitFor(() => expect(win.errors.of("dictate").message).toBe("The disk is not responding."));
+    failing = false;
+
+    // The rejected change replaces the check's message with its own.
+    await userEvent.setup().click(screen.getByRole("switch", { name: "Auto-paste transcription" }));
+    await waitFor(() => expect(ipc.callsTo("set_auto_paste")).toHaveLength(1));
+    await settle(20);
+    const checks = ipc.callsTo("get_effective_model_info").length;
+    ipc.emit("model-ready", null);
+    await waitFor(() => expect(ipc.callsTo("get_effective_model_info").length).toBeGreaterThan(checks));
+    await settle(20);
+
+    expect(win.errors.of("dictate").message).toBe("The disk is not responding.");
+  });
 });
 
 describe("the hotkey registration health", () => {

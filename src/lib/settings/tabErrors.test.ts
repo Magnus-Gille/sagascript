@@ -55,6 +55,40 @@ describe("TabErrors", () => {
     expect(errors.of("two").message).toBe("disk full");
   });
 
+  test("retract takes away the message its receipt was given for", () => {
+    const error = new TabErrors(["one"]).of("one");
+
+    const receipt = error.show("the engines could not be listed");
+    expect(error.message).toBe("the engines could not be listed");
+
+    error.retract(receipt);
+    expect(error.message).toBe("");
+  });
+
+  test("retract leaves a message written since, even one that says the same", () => {
+    const error = new TabErrors(["one"]).of("one");
+
+    const receipt = error.show("disk full");
+    error.message = "disk full"; // another failure, with the same words
+
+    error.retract(receipt);
+    expect(error.message).toBe("disk full");
+  });
+
+  test("retract leaves a tab that was cleared and written again alone, and an older receipt does nothing", () => {
+    const error = new TabErrors(["one"]).of("one");
+
+    const older = error.show("first");
+    const newer = error.show("second");
+    error.retract(older);
+    expect(error.message).toBe("second");
+
+    error.message = "";
+    error.message = "third";
+    error.retract(newer);
+    expect(error.message).toBe("third");
+  });
+
   test("dismissing the empty message changes nothing", () => {
     const errors = new TabErrors(["one"]);
     errors.of("one").message = "disk full";
