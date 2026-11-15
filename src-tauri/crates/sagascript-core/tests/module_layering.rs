@@ -182,12 +182,32 @@ fn join(path: &mut String, segment: &str) {
     path.push_str(segment);
 }
 
+/// The `{ .. }` group starting at `i` (on the `{`), each tree appended to
+/// `out` under `prefix`. Returns the index after it.
+fn use_group(t: &[Token], mut i: usize, prefix: &str, out: &mut Vec<String>) -> usize {
+    i += 1;
+    loop {
+        if t.get(i) == Some(&Token::RBrace) {
+            return i + 1; // `{}` or a trailing comma
+        }
+        i = use_tree(t, i, prefix, out);
+        match t.get(i) {
+            Some(Token::Comma) => i += 1,
+            Some(Token::RBrace) => return i + 1,
+            _ => return i,
+        }
+    }
+}
+
 /// One `use` tree starting at `i`, appended to `out` as full paths. Returns
 /// the index after it. `prefix` is the path of the enclosing group.
 fn use_tree(t: &[Token], mut i: usize, prefix: &str, out: &mut Vec<String>) -> usize {
     let mut path = prefix.to_string();
     if t.get(i) == Some(&Token::PathSep) {
         i += 1; // `use ::std::..`
+    }
+    if t.get(i) == Some(&Token::LBrace) {
+        return use_group(t, i, &path, out); // `use {a, b::c};`
     }
     while let Some(Token::Ident(name)) = t.get(i) {
         if name != "self" {
@@ -199,22 +219,7 @@ fn use_tree(t: &[Token], mut i: usize, prefix: &str, out: &mut Vec<String>) -> u
         }
         i += 1;
         match t.get(i) {
-            Some(Token::LBrace) => {
-                i += 1;
-                loop {
-                    i = use_tree(t, i, &path, out);
-                    match t.get(i) {
-                        Some(Token::Comma) => {
-                            i += 1;
-                            if t.get(i) == Some(&Token::RBrace) {
-                                return i + 1;
-                            }
-                        }
-                        Some(Token::RBrace) => return i + 1,
-                        _ => return i,
-                    }
-                }
-            }
+            Some(Token::LBrace) => return use_group(t, i, &path, out),
             Some(Token::Star) => {
                 join(&mut path, "*");
                 i += 1;
@@ -240,9 +245,18 @@ fn paths(source: &str) -> Vec<String> {
     let mut i = 0;
     while i < t.len() {
         let starts_use = matches!(&t[i], Token::Ident(word) if word == "use")
-            && matches!(t.get(i + 1), Some(Token::Ident(_)) | Some(Token::PathSep));
+            && matches!(
+                t.get(i + 1),
+                Some(Token::Ident(_)) | Some(Token::PathSep) | Some(Token::LBrace)
+            );
+        // `extern crate name [as alias];` names the crate itself.
+        let extern_crate = matches!(&t[i], Token::Ident(word) if word == "extern")
+            && matches!(t.get(i + 1), Some(Token::Ident(word)) if word == "crate");
         if starts_use {
             i = use_tree(&t, i + 1, "", &mut out);
+        } else if let (true, Some(Token::Ident(name))) = (extern_crate, t.get(i + 2)) {
+            out.push(name.clone());
+            i += 3;
         } else {
             rest.push(t[i].clone());
             i += 1;
@@ -1078,6 +1092,10 @@ fn a_glob_or_rename_of_the_core_crate_is_seen() {
         "use sagascript_core as core;\nfn f() { core::testing::x(); }",
         "use sagascript_core::{self as c, settings};",
         "use ::sagascript_core::*;",
+        "use {sagascript_core as c};\nuse c::testing;",
+        "use {std::fmt, sagascript_core::*};",
+        "extern crate sagascript_core as c;\nuse c::testing;",
+        "extern crate sagascript_core;",
     ] {
         assert!(
             paths(source).iter().any(|path| hides_core_paths(path)),
@@ -1095,6 +1113,20 @@ fn a_glob_or_rename_of_the_core_crate_is_seen() {
             "wrongly flagged: {source}"
         );
     }
+}
+
+#[test]
+fn an_outer_use_group_is_expanded_like_any_other() {
+    assert_eq!(
+        sorted(paths(
+            "use {sagascript_core::{testing}, std::fmt as f};\nuse {};\n"
+        )),
+        strings(&["sagascript_core::testing", "std::fmt"])
+    );
+    assert_eq!(
+        sorted(paths("pub use ::{a::b, c};")),
+        strings(&["a::b", "c"])
+    );
 }
 
 #[test]
