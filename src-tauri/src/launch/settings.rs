@@ -1,37 +1,46 @@
 use tauri::Manager;
-#[cfg(target_os = "macos")]
-use tracing::error;
 use tracing::{info, warn};
 
-/// Treat macOS TCC approval as runtime authorization, never as a preference
-/// that can be inherited from another bundle identity or forced by the CLI.
-pub(crate) fn load_settings_with_permission_gate() -> sagascript_core::settings::Settings {
-    let settings = sagascript_core::machine::load();
-
+/// Loads the settings for app startup and for the settings watcher.
+///
+/// macOS Accessibility (TCC) approval is runtime authorization, never folded into
+/// the stored preference: the paste service checks it before every paste and
+/// leaves the text on the clipboard when it is missing, and Settings shows that
+/// auto-paste waits for approval. An earlier version wrote `auto_paste = false`
+/// here whenever `AXIsProcessTrusted()` answered false, which turned the user's
+/// preference off for good after an update replaced the bundle and the first
+/// answer came back false (SAGA-518). A preference inherited from another bundle
+/// identity is still reset by the settings migration, and a value the CLI set is
+/// still never pasted without approval.
+pub(crate) fn load_app_settings() -> sagascript_core::settings::Settings {
     #[cfg(target_os = "macos")]
-    {
-        let mut settings = settings;
-        if !auto_paste_permitted(
-            settings.auto_paste,
-            crate::platform::macos::is_accessibility_trusted(),
-        ) {
-            warn!("Auto-paste was enabled without Accessibility permission; disabling it");
-            match sagascript_core::machine::update(|latest| latest.auto_paste = false) {
-                Ok(persisted) => settings = persisted,
-                Err(error) => {
-                    error!("Failed to persist permission-gated auto-paste setting: {error}");
-                    settings.auto_paste = false;
-                }
-            }
-        }
-        settings
-    }
-
+    let accessibility_trusted = crate::platform::macos::is_accessibility_trusted();
     #[cfg(not(target_os = "macos"))]
+    let accessibility_trusted = true;
+    load_app_settings_with(sagascript_core::machine::load, accessibility_trusted)
+}
+
+fn load_app_settings_with(
+    load: impl FnOnce() -> sagascript_core::settings::Settings,
+    accessibility_trusted: bool,
+) -> sagascript_core::settings::Settings {
+    let settings = load();
+    warn_if_auto_paste_waits_for_permission(&settings, accessibility_trusted);
     settings
 }
 
-#[cfg(any(target_os = "macos", test))]
+/// Only reports. It takes the settings by reference so that it cannot change them.
+fn warn_if_auto_paste_waits_for_permission(
+    settings: &sagascript_core::settings::Settings,
+    accessibility_trusted: bool,
+) -> bool {
+    let waits = !auto_paste_permitted(settings.auto_paste, accessibility_trusted);
+    if waits {
+        warn!("Auto-paste is on but Accessibility is not approved yet; pasting waits for approval");
+    }
+    waits
+}
+
 fn auto_paste_permitted(requested: bool, accessibility_trusted: bool) -> bool {
     !requested || accessibility_trusted
 }

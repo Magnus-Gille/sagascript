@@ -56,6 +56,7 @@ final class FakeEngine: EngineBackend {
     private let gateCondition = NSCondition()
     private var loaded = false
     private var gateOpen = false
+    private var openedGates: Set<String> = []
     private var started: [String] = []
     private var canaryGateOpen = true
     private var canaryStarts = 0
@@ -76,6 +77,11 @@ final class FakeEngine: EngineBackend {
             if !gateCondition.wait(until: deadline) { return false }
         }
         return true
+    }
+
+    /// Opens only the gated request with this exact path, leaving every other gate closed.
+    func openGate(_ path: String) {
+        gateCondition.lock(); openedGates.insert(path); gateCondition.broadcast(); gateCondition.unlock()
     }
 
     func openGates() {
@@ -107,7 +113,7 @@ final class FakeEngine: EngineBackend {
         started.append(request.pcmPath)
         gateCondition.broadcast()
         if request.pcmPath.contains("gate") {
-            while !gateOpen {
+            while !gateOpen && !openedGates.contains(request.pcmPath) {
                 if isCancelled() { gateCondition.unlock(); throw EngineHostError(code: .cancelled, message: "fake cancelled") }
                 _ = gateCondition.wait(until: Date().addingTimeInterval(0.01))
             }
@@ -240,9 +246,15 @@ func sendWindow(_ server: EngineHostServer, id: UInt64, path: String, priority: 
     #expect(fake.waitUntilStarted(count: 2))
     sendWindow(server, id: 12, path: "/tmp/fast-batch", priority: "batch")
     sendWindow(server, id: 13, path: "/tmp/fast-interactive", priority: "interactive")
+    // Free one slot at a time. The workers run concurrently, so freeing both slots at once would
+    // let 12 reach `transcribe` before 13 even though the scheduler picked 13 first (SAGA-320).
+    // One free slot has exactly one correct taker: the interactive request.
+    fake.openGate("/tmp/gate-1")
+    #expect(fake.waitUntilStarted(count: 3))
+    #expect(fake.startedPaths[2] == "/tmp/fast-interactive")
     fake.openGates()
     _ = output.waitFor(id: 10); _ = output.waitFor(id: 11); _ = output.waitFor(id: 12); _ = output.waitFor(id: 13)
-    // The interactive request was queued last but must be started first.
+    // The interactive request was queued last but started first, ahead of the batch window.
     let started = fake.startedPaths
     #expect(started.count == 4)
     let interactive = started.firstIndex(of: "/tmp/fast-interactive")
@@ -252,6 +264,26 @@ func sendWindow(_ server: EngineHostServer, id: UInt64, path: String, priority: 
     for id: UInt64 in [10, 11, 12, 13] {
         #expect(output.responses(for: id).first?["ok"] as? Bool == true)
     }
+}
+
+/// SAGA-401: a job started by `pumpLocked` is already in `running`, so it must not also count
+/// against `maximum` within the same pump. When several slots are free at once, every one of them
+/// must be refilled. Through the public protocol only one slot frees per pump, so this drives the
+/// scheduler directly: three running (held) jobs, three queued, all slots freed in one go.
+@Test func onePumpRefillsEveryFreeSlot() {
+    let scheduler = RequestScheduler(maximum: 3)
+    let release = DispatchSemaphore(value: 0)
+    let work: (CancellationFlag) throws -> [String: Any] = { _ in release.wait(); return [:] }
+    for id: UInt64 in 1...6 {
+        scheduler.submit(id: id, priority: .batch, work: work, completion: { _ in })
+    }
+    #expect(scheduler.inFlight == 3)
+    scheduler.lock.lock()
+    scheduler.running.removeAll()
+    let started = scheduler.pumpLocked()
+    scheduler.lock.unlock()
+    #expect(started.map(\.id) == [4, 5, 6])
+    for _ in 0..<6 { release.signal() }
 }
 
 /// The client caps batch windows at `max_in_flight - 1`. With that lane full and
