@@ -1,7 +1,7 @@
 //! Lenient per-field decoding of the settings object (ADR 0007).
 //!
 //! One value the current [`Settings`] cannot read, such as a model removed
-//! from [`WhisperModel`](super::WhisperModel), a language a newer release
+//! from [`WhisperModel`](crate::models::WhisperModel), a language a newer release
 //! added or a hand-edited wrong type, used to load the whole file as
 //! defaults, and the next save wrote those defaults over every other value
 //! (#340). Instead only that top-level field takes its default. A field is

@@ -664,7 +664,8 @@ fn old_paths() -> Vec<String> {
 
 /// The compatibility paths a source file names, as `path` strings.
 ///
-/// `in_core` is a file of `sagascript-core/src`, where an old path is reached
+/// `module` is the module path of a file of `sagascript-core/src` (`None`
+/// elsewhere); there an old path is reached
 /// as `crate::..` (a bare `speaker_hint::..` is the real module in
 /// `diarization/`); any other file reaches core as `sagascript_core::..`, and
 /// a bare `meeting_media::..` there is the app's own module of that name.
@@ -678,9 +679,23 @@ fn old_paths() -> Vec<String> {
 ///
 /// A glob or a rename of the crate itself is caught by
 /// `nothing_outside_core_globs_or_renames_the_core_crate`.
-fn compat_uses(source: &str, in_core: bool, old: &[String]) -> Vec<String> {
-    let krate = if in_core { "crate" } else { "sagascript_core" };
-    let all = paths(source);
+fn compat_uses(source: &str, module: Option<&str>, old: &[String]) -> Vec<String> {
+    let krate = if module.is_some() {
+        "crate"
+    } else {
+        "sagascript_core"
+    };
+    // Inside core, `super::..` and `self::..` are spelt out from the crate root
+    // (`use super::Language;` in `settings/glossary_ops.rs` is
+    // `crate::settings::Language`). A relative glob (`use super::*;` in a test
+    // module) is left alone: it names whatever the parent has in scope.
+    let all: Vec<String> = paths(source)
+        .into_iter()
+        .map(|path| match module {
+            Some(module) if !path.ends_with("::*") => resolve_relative(&path, module),
+            _ => path,
+        })
+        .collect();
     let tokens = tokens(&code_only(source));
     let mut found = Vec::new();
     for old_path in old {
@@ -691,9 +706,14 @@ fn compat_uses(source: &str, in_core: bool, old: &[String]) -> Vec<String> {
                 found.push(path.clone());
             }
         }
-        // Through an imported parent module: `use <crate>::a::b;` then `b::c`.
         for depth in 1..old_segments.len() {
             let parent = format!("{krate}::{}", old_segments[..depth].join("::"));
+            // A glob of a parent module brings the old name in bare.
+            let glob = format!("{parent}::*");
+            if all.iter().any(|path| path == &glob) {
+                found.push(glob);
+            }
+            // Through an imported parent module: `use <crate>::a::b;` then `b::c`.
             if !all.iter().any(|path| path == &parent) {
                 continue;
             }
@@ -703,16 +723,19 @@ fn compat_uses(source: &str, in_core: bool, old: &[String]) -> Vec<String> {
                     found.push(path.clone());
                 }
             }
-            // `use <crate>::a::b as x;` then `x::c`: the alias reaches the old path.
+            // `use <crate>::a::b as x;` then `x::c`, `x::*` or `x::<next module>`
+            // (which a further import or rename could carry on to `c`).
             let name = old_segments[depth - 1];
-            let rest = old_segments[depth..].join("::");
+            let next = old_segments[depth];
             let renamed = tokens.windows(3).any(|triple| match triple {
                 [Token::Ident(first), Token::Ident(word), Token::Ident(alias)]
                     if first == name && word == "as" =>
                 {
-                    let through_alias = format!("{alias}::{rest}");
+                    let through_alias = format!("{alias}::{next}");
                     all.iter().any(|path| {
-                        path == &through_alias || path.starts_with(&format!("{through_alias}::"))
+                        path == &format!("{alias}::*")
+                            || path == &through_alias
+                            || path.starts_with(&format!("{through_alias}::"))
                     })
                 }
                 _ => false,
@@ -725,6 +748,55 @@ fn compat_uses(source: &str, in_core: bool, old: &[String]) -> Vec<String> {
     found.sort();
     found.dedup();
     found
+}
+
+/// `path` with a leading `self::` or `super::` chain replaced by the crate
+/// path of `module` (`settings::glossary_ops`); other paths unchanged.
+fn resolve_relative(path: &str, module: &str) -> String {
+    let mut base: Vec<&str> = module.split("::").filter(|part| !part.is_empty()).collect();
+    let mut rest = path;
+    let mut relative = false;
+    loop {
+        if let Some(tail) = rest.strip_prefix("self::") {
+            rest = tail;
+            relative = true;
+        } else if let Some(tail) = rest.strip_prefix("super::") {
+            base.pop();
+            rest = tail;
+            relative = true;
+        } else {
+            break;
+        }
+    }
+    if !relative {
+        return path.to_string();
+    }
+    let mut resolved = vec!["crate"];
+    resolved.extend(base);
+    resolved.push(rest);
+    resolved.join("::")
+}
+
+/// The module path of a file of `sagascript-core/src`, from its name relative
+/// to `src/`: `lib.rs` is the root, `a/mod.rs` is `a`, `a/b.rs` is `a::b`,
+/// and a test file `a/b_tests.rs` (pulled in with `#[path]` as `mod tests`)
+/// is `a::b::tests`.
+fn core_module_path(file: &str) -> String {
+    let stem = file.trim_end_matches(".rs");
+    let mut parts: Vec<String> = stem.split('/').map(str::to_string).collect();
+    match parts.last().map(String::as_str) {
+        Some("lib") | Some("mod") => {
+            parts.pop();
+        }
+        Some(last) if last.ends_with("_tests") => {
+            let owner = last.trim_end_matches("_tests").to_string();
+            parts.pop();
+            parts.push(owner);
+            parts.push("tests".to_string());
+        }
+        _ => {}
+    }
+    parts.join("::")
 }
 
 /// Every `.rs` file of the workspace that is Rust the repository maintains:
@@ -765,8 +837,10 @@ fn nothing_in_the_workspace_uses_a_compatibility_path() {
         if name == SHIM_DEFINITION {
             continue;
         }
-        let in_core = name.starts_with("crates/sagascript-core/src/");
-        for path in compat_uses(&text, in_core, &old) {
+        let module = name
+            .strip_prefix("crates/sagascript-core/src/")
+            .map(core_module_path);
+        for path in compat_uses(&text, module.as_deref(), &old) {
             found.push((name.clone(), path));
         }
     }
@@ -972,7 +1046,8 @@ fn test_old_paths() -> Vec<String> {
 }
 
 fn uses(source: &str, in_core: bool) -> Vec<String> {
-    sorted(compat_uses(source, in_core, &test_old_paths()))
+    let module = in_core.then_some("settings::glossary_ops");
+    sorted(compat_uses(source, module, &test_old_paths()))
 }
 
 /// The mutation of the real check: each of these makes it red.
@@ -1045,6 +1120,72 @@ fn a_use_of_an_old_module_or_store_path_is_seen_however_it_is_spelt() {
         renamed,
         strings(&["sagascript_core::settings::store as <alias>"])
     );
+}
+
+/// Review findings on SAGA-478 part B: each of these reached an old path
+/// unseen before the scan resolved them.
+#[test]
+fn relative_paths_parent_globs_and_alias_chains_are_seen() {
+    // Inside core, `super::` from `settings/glossary_ops.rs` is `crate::settings`.
+    assert_eq!(
+        uses("use super::{store::load, Settings};", true),
+        strings(&["crate::settings::store::load"])
+    );
+    assert_eq!(
+        uses("fn f() { self::super::store::update(); }", true),
+        strings(&["crate::settings::store::update"])
+    );
+    // A glob of a parent module brings the old name in bare.
+    assert_eq!(
+        uses(
+            "use sagascript_core::settings::store::*;\nfn f() { load(); }",
+            false
+        ),
+        strings(&["sagascript_core::settings::store::*"])
+    );
+    // A renamed parent module, then a glob or a further import through the alias.
+    assert_eq!(
+        uses(
+            "use sagascript_core::settings as s;\nuse s::*;\nfn f() { store::load(); }",
+            false
+        ),
+        strings(&["sagascript_core::settings as <alias>"])
+    );
+    assert_eq!(
+        uses(
+            "use sagascript_core::settings as s;\nuse s::store as t;\nuse t::load;",
+            false
+        ),
+        strings(&["sagascript_core::settings as <alias>"])
+    );
+    // Not old paths: a relative glob in a test module, another store function.
+    assert!(uses("use super::*;", true).is_empty());
+    assert!(uses("use super::store::load_from;", true).is_empty());
+}
+
+#[test]
+fn core_files_map_to_their_module_paths() {
+    assert_eq!(core_module_path("lib.rs"), "");
+    assert_eq!(core_module_path("settings/mod.rs"), "settings");
+    assert_eq!(
+        core_module_path("settings/glossary_ops.rs"),
+        "settings::glossary_ops"
+    );
+    assert_eq!(
+        core_module_path("settings/manager_tests.rs"),
+        "settings::manager::tests"
+    );
+    assert_eq!(
+        resolve_relative("super::Language", "settings::glossary_ops"),
+        "crate::settings::Language"
+    );
+    assert_eq!(
+        resolve_relative("super::super::models::X", "a::b::c"),
+        "crate::a::models::X"
+    );
+    assert_eq!(resolve_relative("self::x::Y", "a"), "crate::a::x::Y");
+    assert_eq!(resolve_relative("crate::a::B", "z"), "crate::a::B");
+    assert_eq!(resolve_relative("std::fmt", "z"), "std::fmt");
 }
 
 #[test]
