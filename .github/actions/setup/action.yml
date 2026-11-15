@@ -142,6 +142,10 @@ runs:
         # above are unchanged.
         save-if: ${{ github.ref == 'refs/heads/main' }}
         workspaces: ${{ inputs.cache-workspaces }}
+        # The gate hash in the key is also what shrinks the gate lanes' entries (SAGA-546): rust-cache never
+        # re-saves a key that fully matches, so the oversized entries saved before cargo-gates.mjs started
+        # passing `--config profile.dev.package."*".opt-level=0` would have been restored forever. Editing that
+        # file gave the gate lanes a new key; the native lanes (no gate hash) keep theirs.
         shared-key: ${{ inputs.cache-key }}${{ inputs.native-build != 'true' && format('-{0}', hashFiles('scripts/ci/cargo-gates.mjs')) || '' }}
 
     # Restore only (SAGA-546): a composite action has no post-job step, so the native build lanes save the

@@ -185,6 +185,10 @@ test("the native build lanes save the models the setup action restored, on main 
 const CACHE_LIMIT_MB = 9536; // 10 GB, conservatively in bytes
 const CACHE_BUDGET = {
   // The setup action's Rust cache, one entry per lane that installs Rust (key: cache-key and OS).
+  // The four gate lanes (test-*, msrv-linux) are the 2026-11-09 sizes, from before Cargo.toml's dev-profile
+  // `opt-level = 3` for dependencies (SAGA-399) roughly doubled them (1621, 1110, 1074, 661 became 2980,
+  // 2095, 1991, 1175). cargo-gates.mjs now overrides it to 0 in CI (SAGA-546), so these are the EXPECTED
+  // sizes: re-measure them after the first main save with the new key, and raise them if they are larger.
   "ci.yml job test-macos Rust cache": { mb: 1110 }, // sagascript-ci-checks, Darwin
   "ci.yml job build-macos Rust cache": { mb: 640 }, // sagascript-ci-native, Darwin
   "ci.yml job test-linux Rust cache": { mb: 1621 }, // sagascript-ci, Linux (both workspaces)

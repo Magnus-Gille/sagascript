@@ -12,8 +12,12 @@ import {
   RELEASE_GUARD_ENV,
   RELEASE_GUARD_PROOF,
   REPO_ROOT,
+  COMPILING_SUBCOMMANDS,
+  DEV_DEPS_OVERRIDE,
+  cargoArgv,
   commandOf,
   gatesFor,
+  runCommandOf,
   runGates,
 } from "./ci/cargo-gates.mjs";
 
@@ -84,6 +88,24 @@ test("every gate is well formed, and every per-OS exclusion states its reason", 
 test("each lane runs exactly the expected cargo commands, in order", () => {
   for (const os of OSES) assert.deepEqual(lines(os), EXPECTED[os], `${os} gates`);
   assert.deepEqual(lines("linux", "msrv"), EXPECTED.msrv, "msrv gates");
+});
+
+test("every compiling gate runs with the dev-profile dependency override CI needs (SAGA-546, SAGA-399)", () => {
+  assert.equal(DEV_DEPS_OVERRIDE, 'profile.dev.package."*".opt-level=0');
+  for (const gate of GATES) {
+    const argv = cargoArgv(gate);
+    if (COMPILING_SUBCOMMANDS.includes(gate.args[0])) {
+      // One argv element right after the subcommand, so it precedes any `--` and needs no shell quoting.
+      assert.deepEqual(argv.slice(0, 3), [gate.args[0], "--config", DEV_DEPS_OVERRIDE], `${gate.id} carries the override`);
+      assert.deepEqual([...argv.slice(0, 1), ...argv.slice(3)], gate.args, `${gate.id}: nothing else changes`);
+      assert.ok(runCommandOf(gate).includes(`--config '${DEV_DEPS_OVERRIDE}'`), `${gate.id}: --list shows it`);
+    } else {
+      assert.deepEqual(argv, gate.args, `${gate.id} compiles nothing or forwards --config elsewhere`);
+      assert.deepEqual(["deny", "fmt", "tree"].includes(gate.args[0]), true, `${gate.id}: only deny, fmt and tree are exempt`);
+    }
+  }
+  // The stated command (verify.mjs and the parity tests compare it) is unchanged: local verify gets no override.
+  assert.ok(GATES.every((gate) => !commandOf(gate).includes("--config")));
 });
 
 test("the core gates run on every OS; every other difference between the OS lists is an exclusion in the list", () => {
@@ -251,9 +273,27 @@ test("--list prints a lane's commands and runs nothing", () => {
   for (const os of OSES) {
     const result = cli(["--os", os, "--list"]);
     assert.equal(result.status, 0, result.stderr);
-    assert.deepEqual(result.stdout.trim().split("\n"), EXPECTED[os]);
+    assert.deepEqual(
+      result.stdout.trim().split("\n"),
+      gatesFor({ os }).map((gate) => `${gate.cwd}: ${runCommandOf(gate)}`),
+    );
+    assert.equal(
+      result.stdout
+        .trim()
+        .split("\n")
+        .filter((line) => line.includes(`--config '${DEV_DEPS_OVERRIDE}'`)).length,
+      gatesFor({ os }).filter((gate) => COMPILING_SUBCOMMANDS.includes(gate.args[0])).length,
+    );
   }
-  assert.deepEqual(cli(["--profile", "msrv", "--list"]).stdout.trim().split("\n"), EXPECTED.msrv);
+  const msrv = cli(["--profile", "msrv", "--list"]).stdout.trim().split("\n");
+  assert.deepEqual(
+    msrv,
+    gatesFor({ os: "linux", profile: "msrv" }).map((gate) => `${gate.cwd}: ${runCommandOf(gate)}`),
+  );
+  assert.ok(
+    msrv.every((line) => line.includes(`--config '${DEV_DEPS_OVERRIDE}'`)),
+    "every MSRV gate carries the override",
+  );
 });
 
 test("the script refuses to run another OS's gates, an unknown option and an MSRV run without a toolchain", () => {
