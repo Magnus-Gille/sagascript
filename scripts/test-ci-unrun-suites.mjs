@@ -183,18 +183,20 @@ test("frontend-linux runs ESLint after npm ci, in a lane without Cargo work", ()
   assertBlocking("frontend-linux", lint, "`npm run lint`");
 });
 
-test("frontend-linux and test-windows run the Vitest unit tests and the Prettier check after npm ci", () => {
-  for (const [jobId, os] of [
-    ["frontend-linux", null],
-    ["test-windows", "windows"],
-  ]) {
-    const install = npmInstall(jobId);
-    assert.ok(install >= 0, `${jobId} must install npm dependencies`);
-    for (const command of ["npm run test:unit", "npm run format:check"]) {
-      const index = stepIndex(jobId, runs(command));
-      assert.ok(index > install, `${jobId}: \`${command}\` needs node_modules`);
-      if (os) assert.ok(index < stepIndex(jobId, gatesStep(os)), `${jobId}: \`${command}\` must fail before Cargo work`);
-      assertBlocking(jobId, index, `\`${command}\``);
-    }
+test("frontend-linux runs the Vitest unit tests and the Prettier check after npm ci", () => {
+  const install = npmInstall("frontend-linux");
+  assert.ok(install >= 0, "frontend-linux must install npm dependencies");
+  for (const command of ["npm run test:unit", "npm run format:check"]) {
+    const index = stepIndex("frontend-linux", runs(command));
+    assert.ok(index > install, `frontend-linux: \`${command}\` needs node_modules`);
+    assertBlocking("frontend-linux", index, `\`${command}\``);
+  }
+});
+
+// SAGA-546: neither has Windows-only coverage (no platform branches in src/**/*.test.ts, and
+// prettier.config.js accepts CRLF on Windows), so test-windows leaves them to frontend-linux.
+test("test-windows leaves the Vitest unit tests and the Prettier check to frontend-linux", () => {
+  for (const command of ["npm run test:unit", "npm run format:check"]) {
+    assert.equal(stepIndex("test-windows", runs(command)), -1, `test-windows must not run \`${command}\``);
   }
 });
