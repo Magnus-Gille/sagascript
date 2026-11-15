@@ -113,7 +113,7 @@ export const CHECKS = [
     requires: ["npm:prettier", "npm:prettier-plugin-svelte"],
     timeoutMinutes: 5,
     ci: [ci("npm run format:check")],
-    lanes: ["frontend-linux", "test-windows"],
+    lanes: ["frontend-linux"],
   },
   {
     id: "lint",
@@ -137,7 +137,7 @@ export const CHECKS = [
     requires: ["npm:vitest", "npm:vite", "npm:@sveltejs/vite-plugin-svelte"],
     timeoutMinutes: 10,
     ci: [ci("npm run test:unit")],
-    lanes: ["frontend-linux", "test-windows"],
+    lanes: ["frontend-linux"],
   },
   {
     id: "node-ui",

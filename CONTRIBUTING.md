@@ -121,9 +121,9 @@ npm run verify -- --list                 # every check with its commands, budget
 | `deps` | `deny`, `npm-audit` | `cargo deny --locked --workspace check` and the same for the ORT host (`src-tauri`; policy and what to do about a new advisory: `src-tauri/deny.toml`); `npm audit --audit-level=high` (root lockfile). Both fetch advisory data over the network | `cargo install --locked cargo-deny --version 0.20.2` | deny: test-linux; audit: frontend-linux |
 | `release-guard` | `release-guard` | `cargo test --release -p sagascript-core --lib dev_overrides` | Rust | test-linux |
 | `svelte-check` | `svelte-check` | `npx svelte-check --tsconfig ./tsconfig.json` | `npm ci` | frontend-linux |
-| `format` | `format` | `npm run format:check` (Prettier over src/, scripts/, tests/; scope in `.prettierignore`; `npm run format` fixes) | `npm ci` | frontend-linux, test-windows |
+| `format` | `format` | `npm run format:check` (Prettier over src/, scripts/, tests/; scope in `.prettierignore`; `npm run format` fixes) | `npm ci` | frontend-linux |
 | `lint` | `lint` | `npm run lint` (ESLint over src/, scripts/, tests/; `eslint.config.js`; findings that predate it are counted in `eslint-suppressions.json`) | `npm ci` | frontend-linux |
-| `unit` | `unit` | `npm run test:unit` (Vitest unit and component tests, `src/**/*.test.ts`; see [docs/testing/frontend.md](docs/testing/frontend.md)) | `npm ci` | frontend-linux, test-windows |
+| `unit` | `unit` | `npm run test:unit` (Vitest unit and component tests, `src/**/*.test.ts`; see [docs/testing/frontend.md](docs/testing/frontend.md)) | `npm ci` | frontend-linux |
 | `node` | `node-ui`, `node-ci`, `node-release` | `npm run test:ui`, `npm run test:ci`, `npm run test:release` | `npm ci` (ui) | frontend-linux, test-windows (`npm run test:frontend`) |
 | `code-health` | `code-health` | `npm run test:code-health` | Node | `code-health.yml`; also in `test:frontend` |
 | `python` | `python-dictation-eval`, `python-diarization-reference`; `python-diarization` (opt-in) | `python -m unittest discover -s scripts/dictation_eval -p 'test_*.py'`; `scripts/diarization_sv` reference tests; opt-in: the full suite against a freshly built lean CLI | Python 3.10+; opt-in: `pip install -r scripts/diarization_sv/requirements-evaluation.txt` | all three; diarization: test-macos, test-linux |
