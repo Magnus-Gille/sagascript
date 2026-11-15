@@ -175,16 +175,17 @@ test("test-windows runs the full frontend suite after npm ci and before Cargo wo
   assert.ok(identity >= 0 && identity < install, "the early build identity gates stay ahead of npm ci");
 });
 
-test("test-macos runs ESLint after npm ci and before Cargo work", () => {
-  const lint = stepIndex("test-macos", runs("npm run lint"));
-  assert.ok(lint > npmInstall("test-macos"), "`npm run lint` needs node_modules");
-  assert.ok(lint < stepIndex("test-macos", gatesStep("macos")), "`npm run lint` must fail before Cargo work");
-  assertBlocking("test-macos", lint, "`npm run lint`");
+// SAGA-546: the frontend suites left test-macos for frontend-linux, a lane with no Cargo work at all.
+test("frontend-linux runs ESLint after npm ci, in a lane without Cargo work", () => {
+  const lint = stepIndex("frontend-linux", runs("npm run lint"));
+  assert.ok(lint > npmInstall("frontend-linux"), "`npm run lint` needs node_modules");
+  assert.equal(stepIndex("frontend-linux", gatesStep("linux")), -1, "frontend-linux runs no cargo gate");
+  assertBlocking("frontend-linux", lint, "`npm run lint`");
 });
 
-test("test-macos and test-windows run the Vitest unit tests and the Prettier check after npm ci", () => {
+test("frontend-linux and test-windows run the Vitest unit tests and the Prettier check after npm ci", () => {
   for (const [jobId, os] of [
-    ["test-macos", "macos"],
+    ["frontend-linux", null],
     ["test-windows", "windows"],
   ]) {
     const install = npmInstall(jobId);
@@ -192,7 +193,7 @@ test("test-macos and test-windows run the Vitest unit tests and the Prettier che
     for (const command of ["npm run test:unit", "npm run format:check"]) {
       const index = stepIndex(jobId, runs(command));
       assert.ok(index > install, `${jobId}: \`${command}\` needs node_modules`);
-      assert.ok(index < stepIndex(jobId, gatesStep(os)), `${jobId}: \`${command}\` must fail before Cargo work`);
+      if (os) assert.ok(index < stepIndex(jobId, gatesStep(os)), `${jobId}: \`${command}\` must fail before Cargo work`);
       assertBlocking(jobId, index, `\`${command}\``);
     }
   }
