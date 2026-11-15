@@ -143,6 +143,9 @@ const contracts: Contract[] = [
   contract(api.getAutoFileModelInfo, ["en"], "get_auto_file_model_info", { language: "en" }),
   contract(api.downloadModel, ["base"], "download_model", { whisperModel: "base" }),
   contract(api.getBuildInfo, [], "get_build_info", {}),
+  contract(api.acceptancePreflight, ["0123456789abcdef0123456789abcdef01234567"], "acceptance_preflight", {
+    expectRevision: "0123456789abcdef0123456789abcdef01234567",
+  }),
   contract(api.transcribeFile, ["/audio/a.wav"], "transcribe_file", {
     filePath: "/audio/a.wav",
     prompt: null,
