@@ -101,7 +101,7 @@ export const CHECKS = [
     requires: ["npm:svelte-check", "npm:svelte", "npm:typescript"],
     timeoutMinutes: 10,
     ci: [ci("npx svelte-check --tsconfig ./tsconfig.json")],
-    lanes: ["test-macos"],
+    lanes: ["frontend-linux"],
   },
   {
     id: "format",
@@ -113,7 +113,7 @@ export const CHECKS = [
     requires: ["npm:prettier", "npm:prettier-plugin-svelte"],
     timeoutMinutes: 5,
     ci: [ci("npm run format:check")],
-    lanes: ["test-macos", "test-windows"],
+    lanes: ["frontend-linux", "test-windows"],
   },
   {
     id: "lint",
@@ -125,7 +125,7 @@ export const CHECKS = [
     requires: ["npm:eslint", "npm:@eslint/js", "npm:typescript-eslint", "npm:eslint-plugin-svelte", "npm:globals"],
     timeoutMinutes: 5,
     ci: [ci("npm run lint")],
-    lanes: ["test-macos"],
+    lanes: ["frontend-linux"],
   },
   {
     id: "unit",
@@ -137,7 +137,7 @@ export const CHECKS = [
     requires: ["npm:vitest", "npm:vite", "npm:@sveltejs/vite-plugin-svelte"],
     timeoutMinutes: 10,
     ci: [ci("npm run test:unit")],
-    lanes: ["test-macos", "test-windows"],
+    lanes: ["frontend-linux", "test-windows"],
   },
   {
     id: "node-ui",
@@ -149,7 +149,7 @@ export const CHECKS = [
     requires: ["npm:typescript"],
     timeoutMinutes: 15,
     ci: [ci("npm run test:frontend")],
-    lanes: ["test-macos", "test-windows"],
+    lanes: ["frontend-linux", "test-windows"],
   },
   {
     id: "node-ci",
@@ -162,7 +162,7 @@ export const CHECKS = [
     requires: ["npm:vite", "npm:@sveltejs/vite-plugin-svelte", "npm:svelte", "npm:typescript"],
     timeoutMinutes: 15,
     ci: [ci("npm run test:frontend")],
-    lanes: ["test-macos", "test-windows"],
+    lanes: ["frontend-linux", "test-windows"],
   },
   {
     id: "node-release",
@@ -174,7 +174,7 @@ export const CHECKS = [
     requires: [],
     timeoutMinutes: 15,
     ci: [ci("npm run test:frontend")],
-    lanes: ["test-macos", "test-windows"],
+    lanes: ["frontend-linux", "test-windows"],
   },
   {
     id: "code-health",
@@ -186,7 +186,7 @@ export const CHECKS = [
     requires: [],
     timeoutMinutes: 10,
     ci: [ci("npm run test:frontend")],
-    lanes: ["test-macos", "test-windows", "code-health.yml"],
+    lanes: ["frontend-linux", "test-windows", "code-health.yml"],
   },
   {
     id: "python-dictation-eval",
@@ -301,7 +301,7 @@ export const CHECKS = [
     requires: [],
     timeoutMinutes: 5,
     ci: [ci("npm audit --audit-level=high")],
-    lanes: ["test-macos"],
+    lanes: ["frontend-linux"],
   },
   {
     id: "core-clippy",
@@ -542,7 +542,7 @@ export const CHECKS = [
     requires: ["npm:vite", "npm:playwright", "playwright-chromium"],
     timeoutMinutes: 15,
     ci: [ci("npm run test:browser")],
-    lanes: ["test-macos"],
+    lanes: ["frontend-linux"],
   },
 ];
 

@@ -118,18 +118,18 @@ npm run verify -- --list                 # every check with its commands, budget
 | `core-features` | `core-clippy`, `core-clippy-diarization`, `core-test`, `core-test-record`, `core-test-diarization` | `cargo clippy`/`cargo test -p sagascript-core` without features, with `record`, with `diarization` | Rust | without features: test-macos, test-linux, test-windows; with a feature: test-linux |
 | `engine-protocol` | `engine-protocol` | `cargo test -p sagascript-engine-protocol` | Rust | every test lane, through `cargo test --workspace` |
 | `ort-host` | `ort-host-clippy`, `ort-host-test` | `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked` (`src-tauri/engine-host/ort`) | Rust | test-linux, test-windows |
-| `deps` | `deny`, `npm-audit` | `cargo deny --locked --workspace check` and the same for the ORT host (`src-tauri`; policy and what to do about a new advisory: `src-tauri/deny.toml`); `npm audit --audit-level=high` (root lockfile). Both fetch advisory data over the network | `cargo install --locked cargo-deny --version 0.20.2` | deny: test-linux; audit: test-macos |
+| `deps` | `deny`, `npm-audit` | `cargo deny --locked --workspace check` and the same for the ORT host (`src-tauri`; policy and what to do about a new advisory: `src-tauri/deny.toml`); `npm audit --audit-level=high` (root lockfile). Both fetch advisory data over the network | `cargo install --locked cargo-deny --version 0.20.2` | deny: test-linux; audit: frontend-linux |
 | `release-guard` | `release-guard` | `cargo test --release -p sagascript-core --lib dev_overrides` | Rust | test-linux |
-| `svelte-check` | `svelte-check` | `npx svelte-check --tsconfig ./tsconfig.json` | `npm ci` | test-macos |
-| `format` | `format` | `npm run format:check` (Prettier over src/, scripts/, tests/; scope in `.prettierignore`; `npm run format` fixes) | `npm ci` | test-macos, test-windows |
-| `lint` | `lint` | `npm run lint` (ESLint over src/, scripts/, tests/; `eslint.config.js`; findings that predate it are counted in `eslint-suppressions.json`) | `npm ci` | test-macos |
-| `unit` | `unit` | `npm run test:unit` (Vitest unit and component tests, `src/**/*.test.ts`; see [docs/testing/frontend.md](docs/testing/frontend.md)) | `npm ci` | test-macos, test-windows |
-| `node` | `node-ui`, `node-ci`, `node-release` | `npm run test:ui`, `npm run test:ci`, `npm run test:release` | `npm ci` (ui) | test-macos, test-windows (`npm run test:frontend`) |
+| `svelte-check` | `svelte-check` | `npx svelte-check --tsconfig ./tsconfig.json` | `npm ci` | frontend-linux |
+| `format` | `format` | `npm run format:check` (Prettier over src/, scripts/, tests/; scope in `.prettierignore`; `npm run format` fixes) | `npm ci` | frontend-linux, test-windows |
+| `lint` | `lint` | `npm run lint` (ESLint over src/, scripts/, tests/; `eslint.config.js`; findings that predate it are counted in `eslint-suppressions.json`) | `npm ci` | frontend-linux |
+| `unit` | `unit` | `npm run test:unit` (Vitest unit and component tests, `src/**/*.test.ts`; see [docs/testing/frontend.md](docs/testing/frontend.md)) | `npm ci` | frontend-linux, test-windows |
+| `node` | `node-ui`, `node-ci`, `node-release` | `npm run test:ui`, `npm run test:ci`, `npm run test:release` | `npm ci` (ui) | frontend-linux, test-windows (`npm run test:frontend`) |
 | `code-health` | `code-health` | `npm run test:code-health` | Node | `code-health.yml`; also in `test:frontend` |
 | `python` | `python-dictation-eval`, `python-diarization-reference`; `python-diarization` (opt-in) | `python -m unittest discover -s scripts/dictation_eval -p 'test_*.py'`; `scripts/diarization_sv` reference tests; opt-in: the full suite against a freshly built lean CLI | Python 3.10+; opt-in: `pip install -r scripts/diarization_sv/requirements-evaluation.txt` | all three; diarization: test-macos, test-linux |
 | `swift` | `swift`, `engine-host-conformance` (macOS) | `swift`: `./scripts/build-engine-host.sh` (generates `BuildInfo.swift`), `./scripts/check-engine-host-identity.sh` on the built host against `git rev-parse HEAD`, then `swift test` (`src-tauri/engine-host/coreml`, including the golden-transcript replay); CI also pins `DEVELOPER_DIR` to the newest Xcode, verify uses the selected one. `engine-host-conformance`: `./scripts/stage-engine-host.sh`, then `python scripts/engine-host-conformance.py build/engine-host/sagascript-engine-host --no-model` (the model-free subset against the real host process; the full run with a model is in the release gate, see [RELEASING.md](RELEASING.md#automated-draft-verification)) | Xcode 16+; Python 3 (conformance) | test-macos |
 | `msrv` | `msrv` (opt-in; run it for dependency bumps or newer language features) | `cargo check --workspace --locked`, the lean CLI and the ORT host on the `rust-version` toolchain | `rustup toolchain install 1.88 --profile minimal`; `dist/` | msrv-linux |
-| `browser` | `browser` (opt-in) | `npm run test:browser` (Playwright against the mocked IPC) | `npx playwright install chromium` | test-macos |
+| `browser` | `browser` (opt-in) | `npm run test:browser` (Playwright against the mocked IPC) | `npx playwright install chromium` | frontend-linux |
 
 CI keeps its cargo commands in one list, `scripts/ci/cargo-gates.mjs`, with a reason for every gate that
 is not run on all three OSes; `--list` shows which CI commands each check stands for, and
@@ -294,7 +294,7 @@ should happen only for the identity transition, not on every update.
 2. Make your changes, following the code style guidelines above.
 3. Run `npm run verify` (see [Running tests](#running-tests)). A bug fix includes a regression test that fails before the fix ([ADR 0004](docs/adr/0004-test-strategy.md)).
 4. Open a pull request with a clear description of what you changed and why.
-5. A pull request merges when `check-macos` and `check-windows` pass; it does not have to be up to date with `main`. Whoever merges watches the push CI on `main` and fixes or reverts a failure before the next merge ([ADR 0009](docs/adr/0009-merge-without-up-to-date.md)).
+5. A pull request merges when `check-macos`, `check-linux` and `check-windows` pass; it does not have to be up to date with `main`. Whoever merges watches the push CI on `main` and fixes or reverts a failure before the next merge ([ADR 0009](docs/adr/0009-merge-without-up-to-date.md)).
 
 Keep PRs focused -- one feature or fix per PR. If you're planning a large change, open an issue first to discuss the approach.
 
