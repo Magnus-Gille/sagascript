@@ -4,11 +4,12 @@
 use crate::command_error::CommandError;
 use crate::commands::FileTranscriptionContext;
 use crate::events::{EmitEvent, PlainPhase, PlainTranscriptionProgress};
+use sagascript_core::glossary::Glossary;
 use sagascript_core::sync::lock_or_recover;
 use sagascript_core::transcription::whisper_backend::display_transcript;
 use sagascript_core::transcription::{
     pianissimo_backend::{AudioLength, PianissimoBackend},
-    Glossary, TranscribeRequest,
+    TranscribeRequest,
 };
 use sagascript_core::{
     audio::decoder,

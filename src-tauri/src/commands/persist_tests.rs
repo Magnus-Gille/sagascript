@@ -21,7 +21,6 @@
 //!
 //! Each table row calls the real setter (a `State` from Tauri's mock runtime),
 //! after the file was changed behind the controller's back the way the CLI does.
-use sagascript_core::models::PianissimoModel;
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -29,12 +28,12 @@ use std::process::Command;
 use std::sync::Mutex;
 use std::time::Duration;
 
+use sagascript_core::glossary::Glossary;
 use sagascript_core::machine;
-use sagascript_core::settings::{
-    store, EnginePrewarm, FileModelPreference, HotkeyMode, Language, Settings, WhisperModel,
-};
+use sagascript_core::models::{Language, PianissimoModel, WhisperModel};
+use sagascript_core::settings::{store, EnginePrewarm, FileModelPreference, HotkeyMode, Settings};
 use sagascript_core::transcription::{
-    model as whisper_model_files, pianissimo_model, suggest_glossary_candidates, Glossary,
+    model as whisper_model_files, pianissimo_model, suggest_glossary_candidates,
 };
 use sagascript_testsupport::{fake_settings, isolated_cli_env};
 use tauri::test::MockRuntime;

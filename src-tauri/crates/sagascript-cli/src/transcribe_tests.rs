@@ -26,7 +26,7 @@ use sagascript_core::meeting::pipeline::plan::{CacheRequest, DiarizationFlags};
 #[cfg(feature = "diarization")]
 use sagascript_core::meeting::pipeline::plan::{FileOptions, FileRequest};
 use sagascript_core::meeting::pipeline::progress::*;
-use sagascript_core::settings::{FileModel, PianissimoModel};
+use sagascript_core::models::{FileModel, PianissimoModel};
 use sagascript_core::settings::{FileModelPreference, HotkeyProfile};
 use sagascript_core::transcription::diagnostics::LanguageDetection;
 use sagascript_core::transcription::whisper_backend::assemble_transcript;

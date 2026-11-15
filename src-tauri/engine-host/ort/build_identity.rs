@@ -40,6 +40,7 @@ mod tests {
                 "src-tauri/gen/schemas/acl-manifests.json",
                 "src-tauri/gen/schemas/capabilities.json",
                 "src-tauri/gen/schemas/desktop-schema.json",
+                "src-tauri/gen/schemas/macOS-schema.json",
                 "src-tauri/gen/schemas/windows-schema.json",
             ]
         );
@@ -53,6 +54,10 @@ mod tests {
             " M src-tauri/gen/schemas/windows-schema.json\n M src-tauri/src/lib.rs"
         ));
         assert!(is_dirty("?? scripts/__pycache__/x.pyc"));
-        assert!(is_dirty("?? src-tauri/gen/schemas/macOS-schema.json"));
+        // A local macOS build rewrites the tracked macOS schema; that alone stays clean.
+        assert!(!is_dirty(" M src-tauri/gen/schemas/macOS-schema.json"));
+        assert!(is_dirty(
+            "?? src-tauri/gen/schemas/fixture-only-schema.json"
+        ));
     }
 }

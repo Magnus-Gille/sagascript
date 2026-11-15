@@ -20,7 +20,7 @@ use serde::Deserialize;
 
 use crate::audio::decoder::{decode_audio_file_streaming, StreamInfo, MAX_DECODE_SAMPLES};
 use crate::error::DictationError;
-use crate::models::PianissimoModel;
+use crate::models::{PianissimoModel, PIANISSIMO_UNSUPPORTED_MESSAGE};
 use crate::path_scrub::scrub_paths;
 use crate::settings::{EnginePrewarm, Settings};
 use crate::sync::lock_or_recover;
@@ -33,9 +33,9 @@ use crate::transcription::engine_host::{
 use crate::transcription::pianissimo_model;
 
 /// Shown wherever Pianissimo is refused for platform reasons. Defined with the
-/// model catalog, which settings need too (#372). Shim for the old path: remove
-/// it, one release on, when its callers (the CLI and the app) use
-/// `models::PIANISSIMO_UNSUPPORTED_MESSAGE`.
+/// model catalog, which settings need too (#372). Shim for the old path: the CLI
+/// and the app use `models::PIANISSIMO_UNSUPPORTED_MESSAGE` (SAGA-478 part B);
+/// remove it after the next release.
 pub const UNSUPPORTED_MESSAGE: &str = crate::models::PIANISSIMO_UNSUPPORTED_MESSAGE;
 
 /// Environment override (development builds only): path of the `sagascript-engine-host` binary.
@@ -361,7 +361,7 @@ pub fn config_for_host(
 fn precheck(model: PianissimoModel) -> Result<PathBuf, DictationError> {
     if !runtime_supported_on_this_os() {
         return Err(DictationError::TranscriptionFailed(
-            UNSUPPORTED_MESSAGE.into(),
+            PIANISSIMO_UNSUPPORTED_MESSAGE.into(),
         ));
     }
     let host = resolve_host().ok_or_else(|| {

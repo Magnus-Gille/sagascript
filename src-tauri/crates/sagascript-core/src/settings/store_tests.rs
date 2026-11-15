@@ -1,8 +1,7 @@
 use super::*;
-use crate::models::PianissimoModel;
+use crate::models::{Language, PianissimoModel, WhisperModel};
 use crate::settings::{
-    EnginePrewarm, FileModelPreference, HotkeyMode, Language, WhisperModel,
-    ENGINE_DEFAULTS_VERSION, MODEL_LINEUP_VERSION,
+    EnginePrewarm, FileModelPreference, HotkeyMode, ENGINE_DEFAULTS_VERSION, MODEL_LINEUP_VERSION,
 };
 use sagascript_testsupport::{fake_settings, TempDir};
 use std::fs;

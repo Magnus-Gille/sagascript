@@ -100,6 +100,9 @@ test("Windows ARM64 pins and validates the LLVM toolchain before native configur
   assert.match(pin, /if: matrix\.architecture == 'arm64'/);
   assert.match(pin, /https:\/\/github\.com\/llvm\/llvm-project\/releases\/download\/llvmorg-20\.1\.8\/LLVM-20\.1\.8-woa64\.exe/);
   assert.match(pin, /7c4ac97eb2ae6b960ca5f9caf3ff6124c8d2a18cc07a7840a4d2ea15537bad8e/);
+  // SAGA-574: MSVC STL 14.52 rejects clang-cl < 22 (STL1000), so the compiler is pinned separately.
+  assert.match(pin, /https:\/\/github\.com\/llvm\/llvm-project\/releases\/download\/llvmorg-22\.1\.8\/LLVM-22\.1\.8-woa64\.exe/);
+  assert.match(pin, /76f44ef1ba6eeb5a65904e9500f042f588fade49952778ce48f0374daa934396/);
 
   const download = pin.indexOf("Invoke-WebRequest");
   const verifyHash = pin.indexOf("Get-FileHash");
@@ -107,17 +110,30 @@ test("Windows ARM64 pins and validates the LLVM toolchain before native configur
   assert.ok(download >= 0 && verifyHash > download && execute > verifyHash);
   assert.match(pin, /-Algorithm SHA256/);
   assert.match(pin, /if \(\$actualHash -ne \$expectedHash\)/);
-  assert.match(pin, /-ArgumentList @\('\/S', "\/D=\$installRoot"\)/);
+  assert.match(pin, /-ArgumentList @\('\/S', "\/D=\$stagingRoot"\)/);
+  // SAGA-574: a silent LLVM installer uninstalls any registered LLVM, so each pin is copied out
+  // of its staging install before the next installer runs, then every pin is re-checked.
+  const install = pin.indexOf("Start-Process");
+  const copy = pin.indexOf("Copy-Item -LiteralPath $stagingRoot -Destination $installRoot -Recurse");
+  assert.ok(copy > install, "each pin is copied out of its staging install");
+  assert.match(pin, /Pinned LLVM file is missing after installing every pin/);
   assert.match(pin, /if \(\$process\.ExitCode -ne 0\)/);
   assert.doesNotMatch(pin, /NewGuid/, "a per-run LLVM path makes arm64 CMake targets uncacheable");
   assert.match(pin, /C:\\sagascript-tools\\llvm-20\.1\.8/);
-  assert.match(workflow, /path: C:\\sagascript-tools\\llvm-20\.1\.8\s+key: windows-arm64-llvm-20\.1\.8-7c4ac97eb2ae/);
+  assert.match(pin, /C:\\sagascript-tools\\llvm-22\.1\.8/);
+  assert.match(
+    workflow,
+    /path: \|\s+C:\\sagascript-tools\\llvm-20\.1\.8\s+C:\\sagascript-tools\\llvm-22\.1\.8\s+key: windows-arm64-llvm-20\.1\.8-7c4ac97eb2ae-22\.1\.8-76f44ef1ba6e/,
+  );
 
   assert.match(pin, /clang-cl\.exe/);
   assert.match(pin, /libclang\.dll/);
   assert.match(pin, /Test-Path -LiteralPath \$clangPath -PathType Leaf/);
   assert.match(pin, /Test-Path -LiteralPath \$libclangPath -PathType Leaf/);
-  assert.match(pin, /clang version 20\\\.1\\\.8/);
+  assert.match(pin, /Version = '22\\\.1\\\.8'; Role = 'C\/C\+\+ compiler'/);
+  assert.match(pin, /Version = '20\\\.1\\\.8'; Role = 'bindgen libclang'/);
+  assert.match(pin, /\$llvmBin = 'C:\\sagascript-tools\\llvm-22\.1\.8\\bin'/);
+  assert.match(pin, /\$libclangBin = 'C:\\sagascript-tools\\llvm-20\.1\.8\\bin'/);
   assert.match(pin, /Write-Output \$clangVersion/);
   assert.match(pin, /\[regex\]::Match\(\$clangVersion/);
   assert.match(pin, /Target:\\s\*\(\?<target>\\S\+\)/);
@@ -125,7 +141,8 @@ test("Windows ARM64 pins and validates the LLVM toolchain before native configur
   assert.match(pin, /\$targetMatch\.Groups\['target'\]\.Value -ne 'aarch64-pc-windows-msvc'/);
   assert.doesNotMatch(pin, /-dumpmachine/);
   assert.match(pin, /\$llvmBin \| Out-File -FilePath \$env:GITHUB_PATH/);
-  assert.match(pin, /LIBCLANG_PATH=\$llvmBin/);
+  assert.match(pin, /LIBCLANG_PATH=\$libclangBin/);
+  assert.doesNotMatch(pin, /\$libclangBin \| Out-File -FilePath \$env:GITHUB_PATH/, "clang-cl 20 must not shadow clang-cl 22 on PATH");
   assert.match(pin, /rust-bindgen#3264/);
   assert.doesNotMatch(pin, /WHISPER_DONT_GENERATE_BINDINGS|disable ABI asserts/);
 });

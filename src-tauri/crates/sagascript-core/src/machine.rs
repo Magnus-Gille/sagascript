@@ -15,9 +15,6 @@
 //!   `set_profile_model`, `effective_file_model_for`, ...): each is its `_gated`
 //!   sibling with this machine's probe, so callers that do not inject keep one
 //!   short call.
-//!
-//! The old paths `settings::store::{load, update, try_update}` re-export the
-//! entry points for one release.
 
 use crate::models::{
     self, FileModel, Language, ModelEnv, ModelInfo, PianissimoModel, WhisperModel,

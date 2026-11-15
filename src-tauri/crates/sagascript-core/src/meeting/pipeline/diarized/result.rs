@@ -9,13 +9,12 @@ use crate::diarization::report::DiarizationReport;
 use crate::diarization::speaker_hint::{SpeakerCountHint, SpeakerHintOutcome};
 use crate::diarization::DiarizedSegment;
 use crate::error::DictationError;
+use crate::glossary::{Glossary, GlossaryCorrection};
 use crate::meeting::assemble::prepare_diarized_plain_segments;
 use crate::meeting::MeetingTranscript;
 use crate::models::Language;
 use crate::transcription::diagnostics::{analyze_coverage_profile, CoverageProfile};
-use crate::transcription::{
-    normalize_nonspeech_markers, Glossary, GlossaryCorrection, TranscriptSegment,
-};
+use crate::transcription::{normalize_nonspeech_markers, TranscriptSegment};
 
 use super::super::diarize::DiarizationPerformance;
 use super::super::inference::LanguageEvidence;

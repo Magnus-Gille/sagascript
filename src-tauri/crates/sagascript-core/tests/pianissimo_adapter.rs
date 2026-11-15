@@ -1,7 +1,7 @@
 //! `PianissimoBackend` / `LiveDictationBackend` over the fake engine host:
 //! progress, cancellation and warm reuse (no real model, no network).
 
-use sagascript_core::settings::{Language, WhisperModel};
+use sagascript_core::models::{Language, WhisperModel};
 use sagascript_core::transcription::engine_host::{
     EngineHostClient, EngineHostConfig, EngineHostError, LoadSpec, Timeouts,
 };

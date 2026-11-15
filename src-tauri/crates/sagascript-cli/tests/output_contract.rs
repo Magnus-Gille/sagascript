@@ -263,7 +263,7 @@ fn human_output_failures_leave_stdout_empty() {
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod with_a_placeholder_model {
     use super::*;
-    use sagascript_core::settings::WhisperModel;
+    use sagascript_core::models::WhisperModel;
 
     fn install_placeholder_model(sandbox: &Sandbox) {
         #[cfg(target_os = "macos")]
