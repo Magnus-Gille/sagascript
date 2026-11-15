@@ -153,12 +153,29 @@ jobs:
               throw "LLVM installer SHA256 mismatch for ${llvmUrl}: expected $expectedHash, got $actualHash"
             }
 
-            if (Test-Path -LiteralPath $installRoot) { Remove-Item -LiteralPath $installRoot -Recurse -Force }
-            New-Item -ItemType Directory -Path $installRoot -Force | Out-Null
+            # A silent LLVM installer uninstalls any LLVM it finds registered, so the second
+            # installer would delete the first pin (SAGA-574). Install into a throwaway staging
+            # directory and copy the result to the fixed, unregistered path the build uses.
+            $stagingRoot = Join-Path $env:RUNNER_TEMP ('llvm-staging-' + [System.IO.Path]::GetFileName($installRoot))
+            foreach ($dir in @($stagingRoot, $installRoot)) {
+              if (Test-Path -LiteralPath $dir) { Remove-Item -LiteralPath $dir -Recurse -Force }
+            }
+            New-Item -ItemType Directory -Path $stagingRoot -Force | Out-Null
             # NSIS requires /D to be the final, unquoted argument.
-            $process = Start-Process -FilePath $installerPath -ArgumentList @('/S', "/D=$installRoot") -Wait -PassThru
+            $process = Start-Process -FilePath $installerPath -ArgumentList @('/S', "/D=$stagingRoot") -Wait -PassThru
             if ($process.ExitCode -ne 0) {
               throw "LLVM installer $llvmUrl failed with exit code $($process.ExitCode)"
+            }
+            New-Item -ItemType Directory -Path (Split-Path -Parent $installRoot) -Force | Out-Null
+            Copy-Item -LiteralPath $stagingRoot -Destination $installRoot -Recurse
+          }
+
+          foreach ($toolchain in $toolchains) {
+            foreach ($file in @('clang-cl.exe', 'libclang.dll')) {
+              $path = Join-Path $toolchain.Root "bin\$file"
+              if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+                throw "Pinned LLVM file is missing after installing every pin: $path"
+              }
             }
           }
 

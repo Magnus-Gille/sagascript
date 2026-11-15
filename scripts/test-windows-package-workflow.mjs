@@ -130,7 +130,13 @@ test("Windows ARM64 pins and validates the LLVM toolchain before native configur
   assert.ok(download >= 0 && verifyHash > download && execute > verifyHash);
   assert.match(pin, /-Algorithm SHA256/);
   assert.match(pin, /if \(\$actualHash -ne \$expectedHash\)/);
-  assert.match(pin, /-ArgumentList @\('\/S', "\/D=\$installRoot"\)/);
+  assert.match(pin, /-ArgumentList @\('\/S', "\/D=\$stagingRoot"\)/);
+  // SAGA-574: a silent LLVM installer uninstalls any registered LLVM, so each pin is copied out
+  // of its staging install before the next installer runs, then every pin is re-checked.
+  const install = pin.indexOf("Start-Process");
+  const copy = pin.indexOf("Copy-Item -LiteralPath $stagingRoot -Destination $installRoot -Recurse");
+  assert.ok(copy > install, "each pin is copied out of its staging install");
+  assert.match(pin, /Pinned LLVM file is missing after installing every pin/);
   assert.match(pin, /if \(\$process\.ExitCode -ne 0\)/);
   assert.doesNotMatch(pin, /NewGuid/, "a per-run LLVM path makes arm64 CMake targets uncacheable");
   assert.match(pin, /C:\\sagascript-tools\\llvm-20\.1\.8/);
