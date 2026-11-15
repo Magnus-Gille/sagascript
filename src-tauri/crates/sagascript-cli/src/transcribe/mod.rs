@@ -34,8 +34,10 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use sagascript_core::error::DictationError;
-use sagascript_core::settings::{Language, Settings, WhisperModel};
-use sagascript_core::transcription::{Glossary, WhisperBackend};
+use sagascript_core::glossary::Glossary;
+use sagascript_core::models::{Language, WhisperModel};
+use sagascript_core::settings::Settings;
+use sagascript_core::transcription::WhisperBackend;
 
 use crate::output::{errln, Out};
 

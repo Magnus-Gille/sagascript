@@ -4,9 +4,11 @@
 
 use sagascript_core::audio::decoder;
 use sagascript_core::error::DictationError;
+use sagascript_core::glossary::Glossary;
+use sagascript_core::models::{FileModel, Language, WhisperModel};
 use sagascript_core::run_context::{file_beam_size, RunContext, RunOverrides, RunSelection};
-use sagascript_core::settings::{FileModel, Language, Settings, SettingsError, WhisperModel};
-use sagascript_core::transcription::{Glossary, TranscribeOptions};
+use sagascript_core::settings::{Settings, SettingsError};
+use sagascript_core::transcription::TranscribeOptions;
 use tauri_plugin_dialog::DialogExt;
 
 use super::build_transcribe_options;

@@ -5,14 +5,16 @@ use clap::{Args, Subcommand};
 use sagascript_core::audio::decoder::decode_audio_file;
 use sagascript_core::error::DictationError;
 use sagascript_core::glossary::contains_delimiter;
+use sagascript_core::glossary::Glossary;
 use sagascript_core::machine;
+use sagascript_core::models::FileModel;
 use sagascript_core::settings;
-use sagascript_core::settings::{DictionaryRefusal, FileModel};
+use sagascript_core::settings::DictionaryRefusal;
 use sagascript_core::transcription::model;
 use sagascript_core::transcription::pianissimo_backend::PianissimoBackend;
 use sagascript_core::transcription::pianissimo_model;
 use sagascript_core::transcription::{
-    apply_glossary_candidates, suggest_glossary_candidates, Glossary, GlossarySuggestionKind,
+    apply_glossary_candidates, suggest_glossary_candidates, GlossarySuggestionKind,
     TranscribeOptions, TranscribeRequest, WhisperBackend,
 };
 

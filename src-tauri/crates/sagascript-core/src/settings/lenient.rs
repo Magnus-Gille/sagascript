@@ -125,7 +125,7 @@ fn decodes_alone(key: &str, value: &Value) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::settings::{Language, WhisperModel};
+    use crate::models::{Language, WhisperModel};
     use serde_json::json;
 
     fn object(value: Value) -> Object {

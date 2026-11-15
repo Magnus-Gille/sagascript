@@ -634,7 +634,25 @@ fn marked_shims(lib: &str) -> Vec<String> {
 /// Old paths below the top level that core still re-exports for callers
 /// outside it (`settings::store::load`-style, relative to the crate root).
 /// The marked lines of `lib.rs` cover the top-level names; list deeper ones here.
-const OLD_PATHS: [&str; 0] = [];
+///
+/// SAGA-478 part B: the model catalog moved to `models` and the personal
+/// dictionary to `glossary` (#372); these re-exports go one release after
+/// nothing in the workspace names them.
+const OLD_PATHS: [&str; 13] = [
+    "settings::FileModel",
+    "settings::Language",
+    "settings::PianissimoModel",
+    "settings::WhisperModel",
+    "settings::manager::FileModel",
+    "settings::manager::Language",
+    "settings::manager::PianissimoModel",
+    "settings::manager::WhisperModel",
+    "transcription::Glossary",
+    "transcription::GlossaryCorrection",
+    "transcription::GlossaryEntry",
+    "transcription::glossary",
+    "transcription::pianissimo_backend::UNSUPPORTED_MESSAGE",
+];
 
 /// Every old path, relative to the crate root (`meeting_review`,
 /// `settings::store::load`).
@@ -655,8 +673,8 @@ fn old_paths() -> Vec<String> {
 /// - `<crate>::a::b::c..`;
 /// - `b::c..` in a file that imports `<crate>::a::b` (or `c..` after
 ///   importing `<crate>::a::b::c`'s parent group, which is the first rule);
-/// - a rename of such a parent module (`use <crate>::a::b as x;`), which
-///   would hide the later uses from the second rule.
+/// - a rename of such a parent module (`use <crate>::a::b as x;`) whose
+///   alias then reaches the old path (`x::c..`).
 ///
 /// A glob or a rename of the crate itself is caught by
 /// `nothing_outside_core_globs_or_renames_the_core_crate`.
@@ -685,9 +703,19 @@ fn compat_uses(source: &str, in_core: bool, old: &[String]) -> Vec<String> {
                     found.push(path.clone());
                 }
             }
+            // `use <crate>::a::b as x;` then `x::c`: the alias reaches the old path.
             let name = old_segments[depth - 1];
-            let renamed = tokens.windows(2).any(|pair| {
-                matches!(pair, [Token::Ident(first), Token::Ident(second)] if first == name && second == "as")
+            let rest = old_segments[depth..].join("::");
+            let renamed = tokens.windows(3).any(|triple| match triple {
+                [Token::Ident(first), Token::Ident(word), Token::Ident(alias)]
+                    if first == name && word == "as" =>
+                {
+                    let through_alias = format!("{alias}::{rest}");
+                    all.iter().any(|path| {
+                        path == &through_alias || path.starts_with(&format!("{through_alias}::"))
+                    })
+                }
+                _ => false,
             });
             if renamed {
                 found.push(format!("{parent} as <alias>"));
@@ -1034,6 +1062,8 @@ fn the_new_paths_and_unrelated_names_are_not_compatibility_uses() {
         // Store functions that are not the old three, and `store` of another crate.
         "use sagascript_core::settings::store;\nfn f() { store::load_from(p); store::load_with(m); }",
         "fn f() { other::store::load(); store::update(1); }",
+        // A renamed parent module whose alias never reaches an old path.
+        "use sagascript_core::settings::store as s;\nfn f() { s::load_from(p); }",
     ] {
         assert!(uses(source, false).is_empty(), "wrongly flagged: {source}");
     }

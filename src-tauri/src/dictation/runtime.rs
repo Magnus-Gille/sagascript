@@ -6,7 +6,7 @@ use std::sync::MutexGuard;
 use std::time::{Duration, Instant};
 
 use sagascript_core::error::DictationError;
-use sagascript_core::settings::{Language, WhisperModel};
+use sagascript_core::models::{Language, WhisperModel};
 use sagascript_core::transcription::whisper_backend::DictationTimings;
 use sagascript_core::transcription::TranscribeOptions;
 use tauri::Manager;

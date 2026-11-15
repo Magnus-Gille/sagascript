@@ -534,7 +534,7 @@ fn profile(id: &str, shortcut: &str) -> HotkeyProfile {
         id: id.into(),
         name: format!("Profile {id}"),
         shortcut: shortcut.into(),
-        language: sagascript_core::settings::Language::Swedish,
+        language: sagascript_core::models::Language::Swedish,
         push_to_talk_shortcut: None,
         toggle_shortcut: None,
     }
@@ -556,7 +556,8 @@ fn settings_with(profiles: Vec<HotkeyProfile>) -> Settings {
 /// #360 part 2b).
 #[test]
 fn a_refused_hotkey_change_rejects_with_the_code_and_text_of_its_settings_error() {
-    use sagascript_core::settings::{FileModelPreference, Language, WhisperModel};
+    use sagascript_core::models::{Language, WhisperModel};
+    use sagascript_core::settings::FileModelPreference;
 
     let default_profile = profile("default", "Control+Shift+Space");
 

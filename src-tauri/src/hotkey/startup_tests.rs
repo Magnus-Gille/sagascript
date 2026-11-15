@@ -1,5 +1,6 @@
 use super::*;
-use sagascript_core::settings::{HotkeyProfile, Language, Settings};
+use sagascript_core::models::Language;
+use sagascript_core::settings::{HotkeyProfile, Settings};
 use std::collections::VecDeque;
 
 #[derive(Debug, Clone, PartialEq, Eq)]

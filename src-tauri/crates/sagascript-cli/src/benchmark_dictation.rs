@@ -6,7 +6,7 @@ use serde::Serialize;
 
 use sagascript_core::audio::decoder::decode_audio_file;
 use sagascript_core::error::DictationError;
-use sagascript_core::settings::Language;
+use sagascript_core::models::Language;
 use sagascript_core::transcription::model;
 use sagascript_core::transcription::whisper_backend::{
     DictationTimings, TranscribeRequest, WhisperBackend,
@@ -869,7 +869,7 @@ mod tests {
             build_version: super::super::LONG_VERSION,
             language: "sv",
             model: "kb-whisper-base",
-            model_expected_sha256: sagascript_core::settings::WhisperModel::KbWhisperBase
+            model_expected_sha256: sagascript_core::models::WhisperModel::KbWhisperBase
                 .download_integrity()
                 .sha256,
             model_expected_bytes: 123,

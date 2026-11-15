@@ -6,10 +6,12 @@ use std::time::Duration;
 
 use sagascript_core::audio::decoder;
 use sagascript_core::error::DictationError;
-use sagascript_core::settings::{FileModel, SettingsError};
+use sagascript_core::glossary::Glossary;
+use sagascript_core::models::FileModel;
+use sagascript_core::settings::SettingsError;
 use sagascript_core::transcription::whisper_backend::display_transcript;
 use sagascript_core::transcription::{
-    recommended_parallel_chunks, ContextProfile, Glossary, TranscribeRequest,
+    recommended_parallel_chunks, ContextProfile, TranscribeRequest,
 };
 use tauri::State;
 use tracing::{error, info, warn};

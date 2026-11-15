@@ -204,8 +204,9 @@ impl MeetingTranscriptBuilder {
 /// Every settings value carries an explicit file model, so resolving a model
 /// from it never looks at the models downloaded on the machine running the test.
 pub mod run_context_table {
-    use crate::settings::{FileModelPreference, HotkeyProfile, Language, Settings, WhisperModel};
-    use crate::transcription::Glossary;
+    use crate::glossary::Glossary;
+    use crate::models::{Language, WhisperModel};
+    use crate::settings::{FileModelPreference, HotkeyProfile, Settings};
 
     /// One shape of stored settings and the profile arguments to try on it.
     pub struct Shape {

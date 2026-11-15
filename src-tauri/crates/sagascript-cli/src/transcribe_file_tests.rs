@@ -15,7 +15,7 @@ use std::sync::Mutex;
 
 use clap::Parser;
 use sagascript_core::audio::wav::encode_wav;
-use sagascript_core::settings::PianissimoModel;
+use sagascript_core::models::PianissimoModel;
 use sagascript_core::transcription::diagnostics::LanguageDetection;
 #[cfg(feature = "diarization")]
 use sagascript_core::transcription::DiarizationTranscription;
