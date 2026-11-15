@@ -1,9 +1,9 @@
-//! Signed download and install of an update (macOS), and the pure decisions
-//! around it, which the unit tests cover on every platform.
+//! Signed download and install of an update (macOS), behind the orchestrator's
+//! `CheckSource` / `UpdateProvider` / `Recovery` seams, plus the pure recovery
+//! decision the unit tests cover on every platform.
 
 #[cfg(target_os = "macos")]
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::sync::{Arc, Mutex};
 
 #[cfg(target_os = "macos")]
 use tauri::Manager;
@@ -11,9 +11,14 @@ use tauri::Manager;
 use tracing::warn;
 
 #[cfg(target_os = "macos")]
-use super::{
-    activity as update_activity, recovery as update_recovery, set_update_menu, UpdateMenuMode,
+use super::activity::ExclusiveLease;
+#[cfg(target_os = "macos")]
+use super::orchestrator::{
+    ActivityAttempt, BoxFuture, CheckSource, CheckedRelease, InstallOutcome, MenuSink,
+    Orchestrator, ProgressSink, Recovery, UpdateProvider, PROGRESS_UNKNOWN,
 };
+#[cfg(target_os = "macos")]
+use super::recovery as update_recovery;
 #[cfg(target_os = "macos")]
 use crate::commands::{lock_controller, SharedController};
 #[cfg(target_os = "macos")]
@@ -22,21 +27,180 @@ use crate::dispatch_to_main;
 use crate::events::{self, EmitEvent};
 
 #[cfg(target_os = "macos")]
-pub(super) fn finish_update_check_error(app: &tauri::AppHandle, error: String) {
-    warn!("Update check failed: {error}");
-    set_update_menu(
-        app,
-        "Couldn't check for updates",
-        "Try Again…",
-        true,
-        UpdateMenuMode::Idle,
-    );
+use sagascript_core::sync::lock_or_recover;
+
+// The stashed `Update` is recovered as-is after a panic (ADR 0005): it is a
+// single `Option` swap, and the next check overwrites or clears it.
+#[cfg(target_os = "macos")]
+const SIGNED_CHECK_LOCK: &str = "update.signed_check";
+
+/// Check seam for the signed updater manifest: one successful check stashes
+/// the plugin's `Update` for a later install offer.
+#[cfg(target_os = "macos")]
+pub(super) struct SignedCheck {
+    app: tauri::AppHandle,
+    update: Mutex<Option<tauri_plugin_updater::Update>>,
+}
+
+#[cfg(target_os = "macos")]
+impl SignedCheck {
+    pub(super) fn new(app: tauri::AppHandle) -> Self {
+        Self {
+            app,
+            update: Mutex::new(None),
+        }
+    }
+
+    pub(super) fn take_update(&self) -> Option<tauri_plugin_updater::Update> {
+        lock_or_recover(&self.update, SIGNED_CHECK_LOCK).take()
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl CheckSource for SignedCheck {
+    fn check(&self) -> BoxFuture<'_, Result<Option<CheckedRelease>, String>> {
+        Box::pin(async {
+            match super::updates::check_signed_update(&self.app).await? {
+                None => Ok(None),
+                Some(update) => {
+                    let version = semver::Version::parse(update.version.trim_start_matches('v'))
+                        .map_err(|error| format!("invalid updater version: {error}"))?;
+                    *lock_or_recover(&self.update, SIGNED_CHECK_LOCK) = Some(update);
+                    Ok(Some(CheckedRelease {
+                        version: version.to_string(),
+                        install_offered: true,
+                    }))
+                }
+            }
+        })
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub(super) struct SignedUpdate {
+    app: tauri::AppHandle,
+    update: tauri_plugin_updater::Update,
+}
+
+#[cfg(target_os = "macos")]
+impl SignedUpdate {
+    fn new(app: tauri::AppHandle, update: tauri_plugin_updater::Update) -> Self {
+        Self { app, update }
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl UpdateProvider for SignedUpdate {
+    fn download(&self, on_progress: ProgressSink) -> BoxFuture<'_, Result<Vec<u8>, String>> {
+        Box::pin(async {
+            let mut downloaded = 0_u64;
+            let last_percent = Arc::new(std::sync::atomic::AtomicU8::new(PROGRESS_UNKNOWN));
+            self.update
+                .download(
+                    move |chunk, total| {
+                        downloaded = downloaded.saturating_add(chunk as u64);
+                        let percent = total
+                            .filter(|total| *total > 0)
+                            .map(|total| (downloaded.saturating_mul(100) / total).min(100) as u8);
+                        let byte = percent.unwrap_or(PROGRESS_UNKNOWN);
+                        if last_percent.swap(byte, std::sync::atomic::Ordering::Relaxed) != byte {
+                            on_progress((byte != PROGRESS_UNKNOWN).then_some(byte));
+                        }
+                    },
+                    || {},
+                )
+                .await
+                .map_err(|error| error.to_string())
+        })
+    }
+
+    fn install(&self, bytes: &[u8]) -> Result<(), String> {
+        self.update.install(bytes).map_err(|error| {
+            let _ = self.app.emit_event_to(
+                "settings",
+                events::event::UPDATE_ABORTED,
+                &error.to_string(),
+            );
+            error.to_string()
+        })
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub(super) struct DraftRecovery {
+    app: tauri::AppHandle,
+}
+
+#[cfg(target_os = "macos")]
+impl DraftRecovery {
+    fn new(app: tauri::AppHandle) -> Self {
+        Self { app }
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl Recovery for DraftRecovery {
+    type Permit = super::activity::ExclusiveLease;
+
+    fn try_begin(&self) -> ActivityAttempt<ExclusiveLease> {
+        use super::activity::{ExclusiveError, UpdateActivity};
+
+        let activity: Arc<UpdateActivity> = self.app.state::<Arc<UpdateActivity>>().inner().clone();
+        match activity.try_exclusive(false) {
+            Ok(permit) => ActivityAttempt::Ready(permit),
+            Err(ExclusiveError::WorkActive) => ActivityAttempt::WorkActive,
+            Err(ExclusiveError::ResultsPending) => ActivityAttempt::Blocked,
+            Err(ExclusiveError::AlreadyExclusive) => {
+                ActivityAttempt::Failed("an update is already being applied".into())
+            }
+        }
+    }
+
+    fn prepare<'a>(&'a self, _permit: &ExclusiveLease) -> BoxFuture<'a, Result<(), String>> {
+        Box::pin(async {
+            prepare_update_recovery(&self.app)
+                .await
+                .inspect_err(|error| {
+                    let _ =
+                        self.app
+                            .emit_event_to("settings", events::event::UPDATE_ABORTED, error);
+                })
+        })
+    }
+}
+
+/// Drives the signed install through the orchestrator, then restarts with the
+/// permit held so no new work starts before the process is replaced.
+#[cfg(target_os = "macos")]
+pub(super) async fn install_signed_update<S: MenuSink>(
+    orchestrator: &Orchestrator<S>,
+    app: tauri::AppHandle,
+    update: tauri_plugin_updater::Update,
+    version: &str,
+) {
+    let provider = SignedUpdate::new(app.clone(), update);
+    let recovery = DraftRecovery::new(app.clone());
+    match orchestrator.install(provider, recovery, version).await {
+        InstallOutcome::RestartReady { permit } => {
+            dispatch_to_main(&app, move |app| {
+                let _permit = permit;
+                app.restart();
+            });
+        }
+        InstallOutcome::Stopped { failure } => {
+            warn!("Update installation stopped: {failure}");
+        }
+    }
 }
 
 #[cfg(target_os = "macos")]
 async fn prepare_update_recovery(app: &tauri::AppHandle) -> Result<(), String> {
+    use std::time::Duration;
+
+    use super::activity::UpdatePreparation;
+
     if app.get_webview_window("settings").is_some() {
-        let preparation: tauri::State<'_, update_activity::UpdatePreparation> = app.state();
+        let preparation: tauri::State<'_, UpdatePreparation> = app.state();
         let (nonce, response) = preparation.begin();
         if let Err(error) = app.emit_event_to("settings", events::event::UPDATE_PREPARING, &nonce) {
             preparation.cancel(&nonce);
@@ -109,181 +273,6 @@ fn native_recovery_conflicts(payload: &serde_json::Value, text: &str) -> bool {
         .and_then(|dictation| dictation.get("text"))
         .and_then(serde_json::Value::as_str)
         .is_some_and(|existing| !existing.trim().is_empty() && existing != text)
-}
-
-#[cfg(target_os = "macos")]
-pub(super) async fn install_signed_update(
-    app: tauri::AppHandle,
-    update: tauri_plugin_updater::Update,
-    version: semver::Version,
-) {
-    use super::activity::{ExclusiveError, UpdateActivity};
-
-    set_update_menu(
-        &app,
-        format!("Downloading update v{version}…"),
-        "Downloading update…",
-        false,
-        UpdateMenuMode::Installing,
-    );
-
-    let mut downloaded = 0_u64;
-    let mut last_percent = None;
-    let app_for_progress = app.clone();
-    let progress_version = version.clone();
-    let bytes = match update
-        .download(
-            move |chunk, total| {
-                downloaded = downloaded.saturating_add(chunk as u64);
-                let percent = total
-                    .filter(|total| *total > 0)
-                    .map(|total| (downloaded.saturating_mul(100) / total).min(100) as u8);
-                if percent != last_percent {
-                    last_percent = percent;
-                    let action = percent.map_or_else(
-                        || "Downloading update…".to_string(),
-                        |percent| format!("Downloading update… {percent}%"),
-                    );
-                    set_update_menu(
-                        &app_for_progress,
-                        format!("Downloading update v{progress_version}…"),
-                        action,
-                        false,
-                        UpdateMenuMode::Installing,
-                    );
-                }
-            },
-            || {},
-        )
-        .await
-    {
-        Ok(bytes) => bytes,
-        Err(error) => {
-            warn!("Signed updater download/verification failed: {error}");
-            set_update_menu(
-                &app,
-                "Update download failed",
-                "Try Again…",
-                true,
-                UpdateMenuMode::Idle,
-            );
-            return;
-        }
-    };
-
-    let activity: Arc<UpdateActivity> = app.state::<Arc<UpdateActivity>>().inner().clone();
-    let work_wait_started = Instant::now();
-    loop {
-        match activity.try_exclusive(false) {
-            Ok(update_permit) => {
-                set_update_menu(
-                    &app,
-                    "Saving recoverable drafts…",
-                    "Preparing update…",
-                    false,
-                    UpdateMenuMode::Installing,
-                );
-                if let Err(error) = prepare_update_recovery(&app).await {
-                    warn!("Could not safely prepare update: {error}");
-                    let _ = app.emit_event_to("settings", events::event::UPDATE_ABORTED, &error);
-                    drop(update_permit);
-                    set_update_menu(
-                        &app,
-                        "Could not save drafts for update",
-                        "Try Again…",
-                        true,
-                        UpdateMenuMode::Idle,
-                    );
-                    return;
-                }
-                set_update_menu(
-                    &app,
-                    format!("Installing update v{version}…"),
-                    "Installing update…",
-                    false,
-                    UpdateMenuMode::Installing,
-                );
-                if let Err(error) = update.install(&bytes) {
-                    warn!("Signed updater installation failed: {error}");
-                    let _ = app.emit_event_to(
-                        "settings",
-                        events::event::UPDATE_ABORTED,
-                        &error.to_string(),
-                    );
-                    drop(update_permit);
-                    set_update_menu(
-                        &app,
-                        "Update installation failed",
-                        "Try Again…",
-                        true,
-                        UpdateMenuMode::Idle,
-                    );
-                    return;
-                }
-
-                set_update_menu(
-                    &app,
-                    format!("Update v{version} installed; restarting Sagascript…"),
-                    "Restarting…",
-                    false,
-                    UpdateMenuMode::Installing,
-                );
-                dispatch_to_main(&app, move |app| {
-                    let _update_permit = update_permit;
-                    app.restart();
-                });
-                return;
-            }
-            Err(ExclusiveError::ResultsPending) => {
-                warn!("Update activity unexpectedly rejected the recovery path");
-                set_update_menu(
-                    &app,
-                    "Update preparation blocked",
-                    "Try Again…",
-                    true,
-                    UpdateMenuMode::Idle,
-                );
-                return;
-            }
-            Err(ExclusiveError::WorkActive) => {
-                if update_work_wait_expired(work_wait_started, Instant::now()) {
-                    warn!("Update wait exceeded ten minutes; current work remains untouched");
-                    set_update_menu(
-                        &app,
-                        "Update wait timed out",
-                        "Try Again…",
-                        true,
-                        UpdateMenuMode::Idle,
-                    );
-                    return;
-                }
-                set_update_menu(
-                    &app,
-                    "Waiting for current dictation or transcription to finish…",
-                    "Waiting for current work…",
-                    false,
-                    UpdateMenuMode::Installing,
-                );
-            }
-            Err(error) => {
-                warn!(?error, "Could not safely apply update");
-                set_update_menu(
-                    &app,
-                    "Update preparation failed",
-                    "Try Again…",
-                    true,
-                    UpdateMenuMode::Idle,
-                );
-                return;
-            }
-        }
-        tokio::time::sleep(Duration::from_millis(250)).await;
-    }
-}
-
-#[cfg(any(target_os = "macos", test))]
-fn update_work_wait_expired(start: Instant, now: Instant) -> bool {
-    now.saturating_duration_since(start) >= Duration::from_secs(600)
 }
 
 #[cfg(test)]
