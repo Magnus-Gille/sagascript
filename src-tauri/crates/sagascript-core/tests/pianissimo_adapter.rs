@@ -24,6 +24,10 @@ fn client(env: &[(&str, &str)], tmp: &Path) -> EngineHostClient {
 }
 
 fn client_with_model(env: &[(&str, &str)], tmp: &Path, model_dir: &str) -> EngineHostClient {
+    EngineHostClient::new(config_with_model(env, tmp, model_dir))
+}
+
+fn config_with_model(env: &[(&str, &str)], tmp: &Path, model_dir: &str) -> EngineHostConfig {
     let mut cfg = EngineHostConfig::new(
         FAKE,
         LoadSpec {
@@ -54,7 +58,7 @@ fn client_with_model(env: &[(&str, &str)], tmp: &Path, model_dir: &str) -> Engin
     cfg.idle_unload = None;
     cfg.idle_shutdown = None;
     cfg.temp_dir = Some(tmp.to_path_buf());
-    EngineHostClient::new(cfg)
+    cfg
 }
 
 /// The fake host derives token ids from the sample value (= absolute index).
@@ -830,4 +834,56 @@ fn warm_timings_skip_the_host_start_when_the_host_already_runs() {
 
     assert_eq!(timings.host_start_ms, None);
     assert!(timings.load_ms.is_some(), "{timings:?}");
+}
+
+/// SAGA-543: when a dictation performs the host start and the load while a warm
+/// waits for the lifecycle lock, the warm did neither and reports neither.
+#[test]
+fn a_warm_that_waited_for_anothers_start_and_load_reports_no_phases() {
+    use sagascript_core::transcription::engine_host::{LoadEvent, LoadObserver};
+    let tmp = tempfile::tempdir().unwrap();
+    let log = tmp.path().join("log");
+    let mut cfg = config_with_model(
+        &[
+            ("FAKE_LOG", log.to_str().unwrap()),
+            ("FAKE_LOAD_DELAY_MS", "300"),
+        ],
+        tmp.path(),
+        "/models/ok",
+    );
+    // The dictation's `Started` (it holds the lifecycle lock then) releases the
+    // warm thread; the warm's own `Started`, later, must not wait again.
+    let release_warm = Arc::new(std::sync::Barrier::new(2));
+    let first = Arc::new(AtomicBool::new(true));
+    {
+        let release_warm = release_warm.clone();
+        cfg.load_observer = Some(LoadObserver(Arc::new(move |event| {
+            if event == LoadEvent::Started && first.swap(false, Ordering::SeqCst) {
+                release_warm.wait();
+            }
+        })));
+    }
+    let shared = EngineHostClient::new(cfg);
+    let warm = {
+        let shared = shared.clone();
+        std::thread::spawn(move || {
+            release_warm.wait();
+            sagascript_core::testing::warm_or_touch_timed(&shared, true)
+        })
+    };
+
+    let (text, _) = dictate(&live(&shared));
+
+    assert!(!text.unwrap().is_empty());
+    let (outcome, timings) = warm.join().unwrap().unwrap();
+    assert!(
+        matches!(outcome, WarmOutcome::Loaded | WarmOutcome::Canary(_)),
+        "{outcome:?}"
+    );
+    assert_eq!(
+        (timings.host_start_ms, timings.load_ms),
+        (None, None),
+        "the dictation did the work: {timings:?}"
+    );
+    assert_eq!((spawn_count(&log), ops_logged(&log, "load")), (1, 1));
 }

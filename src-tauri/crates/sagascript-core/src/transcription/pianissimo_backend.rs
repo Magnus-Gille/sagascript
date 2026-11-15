@@ -858,26 +858,21 @@ pub(crate) fn warm_or_touch_timed(
 }
 
 /// Start the host and load the model like [`EngineHostClient::warm`], timing
-/// the two phases apart. The host start is the time of the `hello` handshake
-/// (`None` when the host was running); the load is the `load_ms` the host
-/// reported for the load this call made (`None` when the model was loaded
-/// already, or another caller loaded it while this one waited).
+/// the two phases apart. The client measures them under its lifecycle lock, so
+/// a phase another caller performed while this one waited is `None` here (the
+/// host start covers spawn and `hello`; the load covers the `load` request).
 pub fn warm_load_timed(
     client: &EngineHostClient,
 ) -> Result<(Capabilities, WarmTimings), EngineHostError> {
-    let before = client.snapshot();
-    let mut timings = WarmTimings::default();
-    if !before.running {
-        let started = Instant::now();
-        client.connect()?;
-        timings.host_start_ms = Some(elapsed_ms(started));
-    }
-    let caps = client.warm()?;
-    let after = client.snapshot();
-    if after.loads > before.loads {
-        timings.load_ms = after.last_load.map(|load| load.load_ms);
-    }
-    Ok((caps, timings))
+    let (caps, work) = client.warm_timed()?;
+    Ok((
+        caps,
+        WarmTimings {
+            host_start_ms: work.host_start_ms,
+            load_ms: work.load_ms,
+            ..WarmTimings::default()
+        },
+    ))
 }
 
 fn log_warm_outcome(
