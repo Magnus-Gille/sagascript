@@ -208,6 +208,13 @@ scales across lanes (3.8 of 10 cores in use at 3 lanes) and is not what limits t
 still matter for the time per run, because the run is the larger of an encoder floor and a
 lane-latency term (below), and at 3 lanes the two are within about 15% of each other.
 
+"Encoder busy" here means *at least one encoder `prediction()` call is outstanding*, measured
+around the synchronous call in the host. It includes Core ML dispatch, queueing and scheduling, not
+only time on the Neural Engine. That the Neural Engine itself is the saturated resource is an
+inference from the call-time-versus-concurrency pattern and the per-instance experiment below; it
+was not confirmed with a device-level counter (`powermetrics` needs sudo), and it cannot separate
+the Neural Engine from its driver queue.
+
 ## Setup and conditions
 
 - Same machine, file (`uu24-60-r1.mp3`, 277 windows), model (`pianissimo-sv`, compute units `ane`) and
