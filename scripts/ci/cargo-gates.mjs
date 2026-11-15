@@ -157,7 +157,29 @@ export const GATES = [
   gate("msrv-ort", ORT, ["check", "--locked"], { profile: "msrv" }),
 ];
 
+// Cargo.toml sets `[profile.dev.package."*"] opt-level = 3` so `cargo tauri build --debug` has a usable
+// whisper.cpp locally (SAGA-399). That doubled the Rust caches of every lane that runs these gates
+// (test-linux 1.6 -> 3.0 GB, msrv-linux 0.7 -> 1.2 GB; SAGA-546) and CI has no use for fast dependencies.
+// So CI, and only CI, overrides it back to 0 on the command line; Cargo.toml and `npm run verify`
+// (scripts/verify.mjs, which spells out its own cargo commands) are untouched. The test profile inherits
+// dev. It is one argv element, never a shell string, so no quoting differs between runners.
+export const DEV_DEPS_OVERRIDE = 'profile.dev.package."*".opt-level=0';
+// Subcommands that compile. `fmt` is exempt on purpose (cargo-fmt forwards `--config` to rustfmt, where
+// it means something else), and `deny` and `tree` compile nothing.
+export const COMPILING_SUBCOMMANDS = ["build", "check", "clippy", "test"];
+
+/** The command as the lanes and verify.mjs state it; scripts/test-verify-ci-parity.mjs compares this. */
 export const commandOf = (item) => ["cargo", ...item.args].join(" ");
+
+/** The argv CI really passes to cargo: `args` plus the override right after a compiling subcommand. */
+export function cargoArgv(item) {
+  const [subcommand, ...rest] = item.args;
+  return COMPILING_SUBCOMMANDS.includes(subcommand) ? [subcommand, "--config", DEV_DEPS_OVERRIDE, ...rest] : [...item.args];
+}
+
+const displayArgument = (argument) => (/[^\w@%+=:,./-]/.test(argument) ? `'${argument}'` : argument);
+/** `cargoArgv` for display (`--list`, the log group titles). */
+export const runCommandOf = (item) => ["cargo", ...cargoArgv(item).map(displayArgument)].join(" ");
 
 /** The gates of one lane, in run order. */
 export function gatesFor({ os, profile = "main" }) {
@@ -178,7 +200,7 @@ export async function runGates(gates, { execute, keepGoing = false, log = () => 
     const envNote = Object.entries(item.env ?? {})
       .map(([name, value]) => `${name}=${value} `)
       .join("");
-    log(`::group::${envNote}${commandOf(item)}  (${item.cwd})`);
+    log(`::group::${envNote}${runCommandOf(item)}  (${item.cwd})`);
     const { code, output } = await execute(item);
     let failure = code === 0 ? null : `exited with status ${code}`;
     if (failure === null && item.forbidOutput?.pattern.test(output)) failure = item.forbidOutput.message;
@@ -195,7 +217,7 @@ export async function runGates(gates, { execute, keepGoing = false, log = () => 
 function executeWithCargo(item) {
   return new Promise((resolve, reject) => {
     const watched = item.forbidOutput !== undefined || item.requireOutput !== undefined;
-    const child = spawn("cargo", item.args, {
+    const child = spawn("cargo", cargoArgv(item), {
       cwd: join(REPO_ROOT, item.cwd),
       env: { ...process.env, ...item.env },
       stdio: watched ? ["inherit", "pipe", "pipe"] : "inherit",
@@ -235,7 +257,7 @@ async function main(argv) {
   const options = parseArguments(argv);
   const gates = gatesFor(options);
   if (options.list) {
-    for (const item of gates) console.log(`${item.cwd}: ${commandOf(item)}`);
+    for (const item of gates) console.log(`${item.cwd}: ${runCommandOf(item)}`);
     return 0;
   }
   // A lane that names another OS would silently run the wrong list.
