@@ -101,6 +101,35 @@ export class HotkeyProfiles {
     }
   };
 
+  // The "Open System Settings" link under Auto-paste. With the preference already
+  // on and only the permission missing (for example right after an update,
+  // SAGA-518), it asks for the permission and never turns the preference off. With
+  // the preference off it is the same request as the switch.
+  onAutoPastePermissionRequest = async () => {
+    if (!this.#win.session.settings) return;
+    if (!this.#win.session.settings.auto_paste) {
+      await this.onAutoPasteToggle();
+      return;
+    }
+
+    this.accessibilityChecking = true;
+    this.accessibilityRequested = true;
+    this.#win.session.error = "";
+    try {
+      this.accessibilityGranted = await checkAccessibilityPermission();
+      if (!this.accessibilityGranted) {
+        this.accessibilityGranted = await requestAccessibility({ onGranted: this.refreshRegistration });
+      }
+      if (!this.accessibilityGranted) {
+        this.#win.session.error = "Accessibility permission was not granted. Auto-paste waits for approval.";
+      }
+    } catch (e) {
+      this.#win.session.error = toErrorMessage(e, "Failed to check Accessibility permission.");
+    } finally {
+      this.accessibilityChecking = false;
+    }
+  };
+
   // Non-blocking hint when a configured shortcut is bare F14/F15 on macOS.
   brightnessKeyWarning = $derived.by(() => {
     if (!this.#win.session.settings) return null;

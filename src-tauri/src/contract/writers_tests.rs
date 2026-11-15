@@ -201,14 +201,14 @@ fn every_spelling_of_a_store_write_is_a_bypass() {
     );
 }
 
-/// The only function outside persist.rs that writes the settings file. It is
-/// the startup/hot-reload permission gate in main.rs: it takes auto-paste off
-/// in the file when Accessibility is missing and hands the result to its caller,
-/// which sets up or replaces the controller itself. A new writer is added here
-/// with its reason, or goes through `persist_and_sync`.
-const STORE_WRITERS_OUTSIDE_PERSIST: &[&str] = &["load_settings_with_permission_gate"];
+/// Functions outside persist.rs that write the settings file. There are none:
+/// the startup/hot-reload load once took auto-paste off in the file when
+/// Accessibility was missing, which lost the preference after an update
+/// (SAGA-518). A new writer is added here with its reason, or goes through
+/// `persist_and_sync`.
+const STORE_WRITERS_OUTSIDE_PERSIST: &[&str] = &[];
 
 #[test]
-fn nothing_but_the_permission_gate_writes_the_store_outside_persist() {
+fn nothing_writes_the_store_outside_persist() {
     assert_eq!(settings_writers().bypassing, STORE_WRITERS_OUTSIDE_PERSIST);
 }

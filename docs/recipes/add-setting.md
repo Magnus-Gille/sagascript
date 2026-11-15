@@ -108,9 +108,8 @@ of the controller's copy, so a setter does not repeat it.
   inside a macro such as `dbg!`. What it cannot see: functions and methods are matched by
   name across files (a same-named function can ask for a row you do not need), glob imports
   (`use x::*`), `macro_rules!`-generated code, a turbofish call inside a macro, and calls
-  through a function pointer or closure kept in a variable. A second test fails when a
-  function other than the permission gate (`load_settings_with_permission_gate` in
-  `launch/settings.rs`) calls `store::update`, `try_update`,
+  through a function pointer or closure kept in a variable. A second test fails when any
+  function outside `persist.rs` calls `store::update`, `try_update`,
   `update_with`, `try_update_with`, `save` or `machine::{update, try_update}` itself.
 - A setting that is more than a field is a `Settings` operation in `settings/ops.rs` (take the
   Pianissimo gate or the Accessibility answer as an argument, never probe the machine), the setter

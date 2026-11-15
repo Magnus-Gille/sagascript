@@ -213,10 +213,10 @@
 <div class="hotkey-hint">Automatically paste dictated text into the active app when transcription finishes.</div>
 {#if win.platform === "macos" && !profiles.accessibilityGranted && (settings.auto_paste || profiles.accessibilityRequested)}
   <div class="hotkey-error">
-    Requires Accessibility permission. Auto-paste remains off until approved. <button
-      class="link-btn"
-      onclick={profiles.onAutoPasteToggle}
-      disabled={profiles.accessibilityChecking || session.locked}
+    Requires Accessibility permission. {settings.auto_paste
+      ? "Auto-paste is on and waits for approval."
+      : "Auto-paste remains off until approved."}
+    <button class="link-btn" onclick={profiles.onAutoPastePermissionRequest} disabled={profiles.accessibilityChecking || session.locked}
       >{profiles.accessibilityChecking ? "Checking…" : "Open System Settings"}</button
     >
   </div>
