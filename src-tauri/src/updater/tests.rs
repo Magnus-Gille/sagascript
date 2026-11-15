@@ -33,7 +33,7 @@ fn native_runner_update_menu_smoke() {
     set_update_menu(
         app.handle(),
         "Update available — v1.4.6",
-        "Open Release v1.4.6…",
+        Some("Open Release v1.4.6…".to_string()),
         true,
         UpdateMenuMode::Available(version.clone()),
     );
@@ -50,7 +50,7 @@ fn native_runner_update_menu_smoke() {
     set_update_menu(
         app.handle(),
         "Update unavailable while busy",
-        "Please wait…",
+        Some("Please wait…".to_string()),
         false,
         UpdateMenuMode::Available(version),
     );
@@ -60,7 +60,7 @@ fn native_runner_update_menu_smoke() {
     set_update_menu(
         app.handle(),
         "Sagascript is up to date",
-        "Check Again…",
+        Some("Check Again…".to_string()),
         true,
         UpdateMenuMode::Idle,
     );
@@ -108,10 +108,12 @@ fn release_action_respects_platform_support_and_busy_state() {
 }
 
 #[test]
-fn checking_phase_shows_a_disabled_check_action() {
+fn checking_phase_disables_the_action_and_keeps_its_label() {
+    // Like main before the orchestrator: a check started from "Check Again…",
+    // "Try Again…" or "Install and Restart v…" keeps that label while disabled.
     let texts = texts_for(&UpdatePhase::Checking);
     assert_eq!(texts.status, "Checking for updates…");
-    assert_eq!(texts.action, UPDATE_CHECK_ACTION);
+    assert_eq!(texts.action, None);
     assert!(!texts.enabled);
     assert_eq!(texts.mode, UpdateMenuMode::Checking);
 }
@@ -123,7 +125,7 @@ fn available_release_with_install_offer_is_actionable() {
         install_offered: true,
     });
     assert_eq!(texts.status, "Update available — v1.2.0");
-    assert_eq!(texts.action, "Install and Restart v1.2.0…");
+    assert_eq!(texts.action.as_deref(), Some("Install and Restart v1.2.0…"));
     assert!(texts.enabled);
     assert_eq!(texts.mode, UpdateMenuMode::Available("1.2.0".to_string()));
 }
@@ -135,7 +137,7 @@ fn available_release_without_install_offer_opens_the_release_page() {
         install_offered: false,
     });
     assert_eq!(texts.status, "Update available — v1.2.0");
-    assert_eq!(texts.action, "Open Release v1.2.0…");
+    assert_eq!(texts.action.as_deref(), Some("Open Release v1.2.0…"));
     assert!(texts.enabled);
     assert_eq!(texts.mode, UpdateMenuMode::Available("1.2.0".to_string()));
 }
@@ -144,7 +146,7 @@ fn available_release_without_install_offer_opens_the_release_page() {
 fn up_to_date_keeps_a_clear_recheck_action() {
     let texts = texts_for(&UpdatePhase::UpToDate);
     assert_eq!(texts.status, "Sagascript is up to date");
-    assert_eq!(texts.action, "Check Again…");
+    assert_eq!(texts.action.as_deref(), Some("Check Again…"));
     assert!(texts.enabled);
     assert_eq!(texts.mode, UpdateMenuMode::Idle);
 }
@@ -155,7 +157,7 @@ fn check_failure_offers_a_retry() {
         failure: UpdateFailure::Check,
     });
     assert_eq!(texts.status, "Couldn't check for updates");
-    assert_eq!(texts.action, "Try Again…");
+    assert_eq!(texts.action.as_deref(), Some("Try Again…"));
     assert!(texts.enabled);
     assert_eq!(texts.mode, UpdateMenuMode::Idle);
 }
@@ -167,7 +169,7 @@ fn download_progress_drives_the_action_percent() {
         percent: None,
     });
     assert_eq!(without_total.status, "Downloading update v1.2.0…");
-    assert_eq!(without_total.action, "Downloading update…");
+    assert_eq!(without_total.action.as_deref(), Some("Downloading update…"));
     assert!(!without_total.enabled);
     assert_eq!(without_total.mode, UpdateMenuMode::Installing);
 
@@ -176,7 +178,10 @@ fn download_progress_drives_the_action_percent() {
         percent: Some(42),
     });
     assert_eq!(with_percent.status, "Downloading update v1.2.0…");
-    assert_eq!(with_percent.action, "Downloading update… 42%");
+    assert_eq!(
+        with_percent.action.as_deref(),
+        Some("Downloading update… 42%")
+    );
     assert!(!with_percent.enabled);
 }
 
@@ -187,20 +192,20 @@ fn install_flow_phases_keep_ownership_of_the_menu() {
         waiting.status,
         "Waiting for current dictation or transcription to finish…"
     );
-    assert_eq!(waiting.action, "Waiting for current work…");
+    assert_eq!(waiting.action.as_deref(), Some("Waiting for current work…"));
     assert!(!waiting.enabled);
     assert_eq!(waiting.mode, UpdateMenuMode::Installing);
 
     let preparing = texts_for(&UpdatePhase::PreparingDrafts);
     assert_eq!(preparing.status, "Saving recoverable drafts…");
-    assert_eq!(preparing.action, "Preparing update…");
+    assert_eq!(preparing.action.as_deref(), Some("Preparing update…"));
     assert!(!preparing.enabled);
 
     let installing = texts_for(&UpdatePhase::Installing {
         version: "1.2.0".to_string(),
     });
     assert_eq!(installing.status, "Installing update v1.2.0…");
-    assert_eq!(installing.action, "Installing update…");
+    assert_eq!(installing.action.as_deref(), Some("Installing update…"));
 
     let installed = texts_for(&UpdatePhase::Installed {
         version: "1.2.0".to_string(),
@@ -209,7 +214,7 @@ fn install_flow_phases_keep_ownership_of_the_menu() {
         installed.status,
         "Update v1.2.0 installed; restarting Sagascript…"
     );
-    assert_eq!(installed.action, "Restarting…");
+    assert_eq!(installed.action.as_deref(), Some("Restarting…"));
     assert!(!installed.enabled);
 }
 
@@ -235,7 +240,7 @@ fn install_failures_map_to_retryable_statuses() {
     for (failure, status) in cases {
         let texts = texts_for(&UpdatePhase::Failed { failure });
         assert_eq!(texts.status, status);
-        assert_eq!(texts.action, "Try Again…");
+        assert_eq!(texts.action.as_deref(), Some("Try Again…"));
         assert!(texts.enabled);
         assert_eq!(texts.mode, UpdateMenuMode::Idle);
     }

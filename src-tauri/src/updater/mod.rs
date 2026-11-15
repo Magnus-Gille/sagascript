@@ -95,7 +95,8 @@ impl UpdateMenuState {
 
 struct TrayTexts {
     status: String,
-    action: String,
+    /// The action item's label; `None` keeps the current one (Checking).
+    action: Option<String>,
     enabled: bool,
     mode: UpdateMenuMode,
 }
@@ -105,20 +106,23 @@ struct TrayTexts {
 fn texts_for(phase: &UpdatePhase) -> TrayTexts {
     let retry = |status: String| TrayTexts {
         status,
-        action: "Try Again…".to_string(),
+        action: Some("Try Again…".to_string()),
         enabled: true,
         mode: UpdateMenuMode::Idle,
     };
     match phase {
+        // A check keeps the label it was started from ("Check Again…",
+        // "Try Again…", "Install and Restart v…") and only disables it, as
+        // before the orchestrator.
         UpdatePhase::Checking => TrayTexts {
             status: "Checking for updates…".to_string(),
-            action: UPDATE_CHECK_ACTION.to_string(),
+            action: None,
             enabled: false,
             mode: UpdateMenuMode::Checking,
         },
         UpdatePhase::UpToDate => TrayTexts {
             status: "Sagascript is up to date".to_string(),
-            action: "Check Again…".to_string(),
+            action: Some("Check Again…".to_string()),
             enabled: true,
             mode: UpdateMenuMode::Idle,
         },
@@ -134,7 +138,7 @@ fn texts_for(phase: &UpdatePhase) -> TrayTexts {
             };
             TrayTexts {
                 status,
-                action,
+                action: Some(action),
                 enabled: true,
                 mode: UpdateMenuMode::Available(version.clone()),
             }
@@ -160,38 +164,38 @@ fn texts_for(phase: &UpdatePhase) -> TrayTexts {
         #[cfg(any(target_os = "macos", test))]
         UpdatePhase::Downloading { version, percent } => TrayTexts {
             status: format!("Downloading update v{version}…"),
-            action: percent.map_or_else(
+            action: Some(percent.map_or_else(
                 || "Downloading update…".to_string(),
                 |percent| format!("Downloading update… {percent}%"),
-            ),
+            )),
             enabled: false,
             mode: UpdateMenuMode::Installing,
         },
         #[cfg(any(target_os = "macos", test))]
         UpdatePhase::WaitingForWork => TrayTexts {
             status: "Waiting for current dictation or transcription to finish…".to_string(),
-            action: "Waiting for current work…".to_string(),
+            action: Some("Waiting for current work…".to_string()),
             enabled: false,
             mode: UpdateMenuMode::Installing,
         },
         #[cfg(any(target_os = "macos", test))]
         UpdatePhase::PreparingDrafts => TrayTexts {
             status: "Saving recoverable drafts…".to_string(),
-            action: "Preparing update…".to_string(),
+            action: Some("Preparing update…".to_string()),
             enabled: false,
             mode: UpdateMenuMode::Installing,
         },
         #[cfg(any(target_os = "macos", test))]
         UpdatePhase::Installing { version } => TrayTexts {
             status: format!("Installing update v{version}…"),
-            action: "Installing update…".to_string(),
+            action: Some("Installing update…".to_string()),
             enabled: false,
             mode: UpdateMenuMode::Installing,
         },
         #[cfg(any(target_os = "macos", test))]
         UpdatePhase::Installed { version } => TrayTexts {
             status: format!("Update v{version} installed; restarting Sagascript…"),
-            action: "Restarting…".to_string(),
+            action: Some("Restarting…".to_string()),
             enabled: false,
             mode: UpdateMenuMode::Installing,
         },
@@ -267,12 +271,11 @@ fn open_update_release(version: &str) -> Result<(), updates::UpdateError> {
 fn set_update_menu(
     app: &tauri::AppHandle,
     status_text: impl Into<String>,
-    action_text: impl Into<String>,
+    action_text: Option<String>,
     enabled: bool,
     mode: UpdateMenuMode,
 ) {
     let status_text = status_text.into();
-    let action_text = action_text.into();
     let status_enabled = mode.status_enabled(enabled);
     dispatch_to_main(app, move |app| {
         let items = {
@@ -312,8 +315,10 @@ fn set_update_menu(
         if let Err(error) = items.status.set_enabled(status_enabled) {
             error!("Failed to update tray update status availability: {error}");
         }
-        if let Err(error) = items.check.set_text(action_text) {
-            error!("Failed to update tray update action: {error}");
+        if let Some(action_text) = action_text {
+            if let Err(error) = items.check.set_text(action_text) {
+                error!("Failed to update tray update action: {error}");
+            }
         }
         if let Err(error) = items.check.set_enabled(enabled) {
             error!("Failed to update tray update action availability: {error}");
@@ -435,8 +440,10 @@ fn end_check_attempt(app: &tauri::AppHandle, attempt: u64) {
     {
         error!("Failed to update tray update status availability: {error}");
     }
-    if let Err(error) = items.check.set_text(texts.action) {
-        error!("Failed to update tray update action: {error}");
+    if let Some(action) = texts.action {
+        if let Err(error) = items.check.set_text(action) {
+            error!("Failed to update tray update action: {error}");
+        }
     }
     if let Err(error) = items.check.set_enabled(texts.enabled) {
         error!("Failed to update tray update action availability: {error}");
@@ -487,7 +494,7 @@ pub(crate) fn handle_check_for_updates_menu_action(app: &tauri::AppHandle) {
                     set_update_menu(
                         app,
                         "Couldn't open update page",
-                        format!("Retry Open Release v{version}…"),
+                        Some(format!("Retry Open Release v{version}…")),
                         true,
                         UpdateMenuMode::Available(version),
                     );
