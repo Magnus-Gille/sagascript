@@ -13,8 +13,9 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use sagascript_core::models::WhisperModel;
 use sagascript_core::settings::{
-    store, EnginePrewarm, FileModelPreference, LineupEnv, Settings, WhisperModel, SCHEMA_VERSION,
+    store, EnginePrewarm, FileModelPreference, LineupEnv, Settings, SCHEMA_VERSION,
 };
 use sagascript_core::testing::load_settings_at;
 use serde_json::Value;

@@ -1,6 +1,7 @@
 //! Settings fixtures shared by the commands' test files.
 
-use sagascript_core::settings::{HotkeyProfile, Language, Settings};
+use sagascript_core::models::Language;
+use sagascript_core::settings::{HotkeyProfile, Settings};
 
 /// Three profiles (Swedish, English, Auto-detect) with scoped dictionaries and
 /// a global one, the shape the file-transcription and dictionary tests need.

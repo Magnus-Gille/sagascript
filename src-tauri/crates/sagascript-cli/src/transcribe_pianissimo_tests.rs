@@ -14,12 +14,12 @@ use std::sync::{Arc, Mutex};
 
 use sagascript_core::transcription::engine_host::{BoostReport, BoostSpec, WindowTiming};
 use sagascript_core::transcription::pianissimo_backend::{
-    PianissimoResult, PianissimoWord, StreamStats, WarmInfo, UNSUPPORTED_MESSAGE,
+    PianissimoResult, PianissimoWord, StreamStats, WarmInfo,
 };
 
 use super::*;
 use crate::transcribe::pianissimo::{PianissimoEngine, PianissimoHost};
-use sagascript_core::settings::PianissimoModel;
+use sagascript_core::models::{PianissimoModel, PIANISSIMO_UNSUPPORTED_MESSAGE};
 
 // ---- the scripted engine --------------------------------------------------------
 
@@ -578,7 +578,13 @@ fn the_checks_run_in_a_fixed_order_and_none_of_them_starts_the_host() {
             false,
             "Pianissimo supports Swedish files only",
         ),
-        (Language::Swedish, &[], false, false, UNSUPPORTED_MESSAGE),
+        (
+            Language::Swedish,
+            &[],
+            false,
+            false,
+            PIANISSIMO_UNSUPPORTED_MESSAGE,
+        ),
         (
             Language::Swedish,
             &[],

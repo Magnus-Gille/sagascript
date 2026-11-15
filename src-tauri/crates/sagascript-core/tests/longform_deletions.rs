@@ -13,7 +13,7 @@
 use std::path::PathBuf;
 
 use sagascript_core::audio::decoder::decode_audio_file;
-use sagascript_core::settings::{Language, WhisperModel};
+use sagascript_core::models::{Language, WhisperModel};
 use sagascript_core::transcription::model;
 use sagascript_core::transcription::whisper_backend::{TranscribeRequest, WhisperBackend};
 use sagascript_core::transcription::TranscribeOptions;

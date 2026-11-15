@@ -5,8 +5,9 @@
 use std::path::Path;
 
 use sagascript_core::error::DictationError;
-use sagascript_core::settings::{FileModel, FileModelPreference, Language, Settings, WhisperModel};
-use sagascript_core::transcription::Glossary;
+use sagascript_core::glossary::Glossary;
+use sagascript_core::models::{FileModel, Language, WhisperModel};
+use sagascript_core::settings::{FileModelPreference, Settings};
 
 /// A language as typed on the command line: the id or the English name
 /// (`sv`, `swedish`), the spellings of `Language`'s `FromStr`, which

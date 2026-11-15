@@ -9,7 +9,8 @@ use crate::logging::log_events;
 use crate::logging::LoggingService;
 use sagascript_core::audio::AudioCaptureService;
 use sagascript_core::error::DictationError;
-use sagascript_core::settings::{canonical_hotkey, FileModel, HotkeyMode, HotkeyProfile, Settings};
+use sagascript_core::models::FileModel;
+use sagascript_core::settings::{canonical_hotkey, HotkeyMode, HotkeyProfile, Settings};
 
 mod capture;
 
@@ -227,7 +228,7 @@ impl AppController {
         self.model_ready
     }
 
-    pub fn language(&self) -> sagascript_core::settings::Language {
+    pub fn language(&self) -> sagascript_core::models::Language {
         self.active_hotkey_profile
             .as_ref()
             .map(|profile| profile.language)
@@ -965,14 +966,11 @@ mod tests {
     #[test]
     fn initial_language_from_settings() {
         let settings = Settings {
-            language: sagascript_core::settings::Language::Swedish,
+            language: sagascript_core::models::Language::Swedish,
             ..Default::default()
         };
         let ctrl = AppController::new(settings);
-        assert_eq!(
-            ctrl.language(),
-            sagascript_core::settings::Language::Swedish
-        );
+        assert_eq!(ctrl.language(), sagascript_core::models::Language::Swedish);
     }
 
     // -- Settings --
@@ -982,17 +980,17 @@ mod tests {
         let ctrl = default_controller();
         assert_eq!(
             ctrl.settings().language,
-            sagascript_core::settings::Language::English
+            sagascript_core::models::Language::English
         );
     }
 
     #[test]
     fn settings_mut_modifiable() {
         let mut ctrl = default_controller();
-        ctrl.settings_mut().language = sagascript_core::settings::Language::Norwegian;
+        ctrl.settings_mut().language = sagascript_core::models::Language::Norwegian;
         assert_eq!(
             ctrl.settings().language,
-            sagascript_core::settings::Language::Norwegian
+            sagascript_core::models::Language::Norwegian
         );
     }
 
@@ -1001,14 +999,14 @@ mod tests {
         let mut ctrl = default_controller();
         let new_settings = Settings {
             auto_paste: false,
-            language: sagascript_core::settings::Language::Swedish,
+            language: sagascript_core::models::Language::Swedish,
             ..Default::default()
         };
         ctrl.update_settings(new_settings);
         assert!(!ctrl.settings().auto_paste);
         assert_eq!(
             ctrl.settings().language,
-            sagascript_core::settings::Language::Swedish
+            sagascript_core::models::Language::Swedish
         );
     }
 
@@ -1241,7 +1239,7 @@ mod tests {
                 id: "default".into(),
                 name: "English".into(),
                 shortcut: "Control+Shift+E".into(),
-                language: sagascript_core::settings::Language::English,
+                language: sagascript_core::models::Language::English,
                 push_to_talk_shortcut: None,
                 toggle_shortcut: None,
             },
@@ -1249,7 +1247,7 @@ mod tests {
                 id: "swedish".into(),
                 name: "Swedish".into(),
                 shortcut: "Option+Space".into(),
-                language: sagascript_core::settings::Language::Swedish,
+                language: sagascript_core::models::Language::Swedish,
                 push_to_talk_shortcut: None,
                 toggle_shortcut: None,
             },
@@ -1261,10 +1259,7 @@ mod tests {
         ctrl.state = AppState::Recording;
         ctrl.active_hotkey_profile = Some(profiles[1].clone());
 
-        assert_eq!(
-            ctrl.language(),
-            sagascript_core::settings::Language::Swedish
-        );
+        assert_eq!(ctrl.language(), sagascript_core::models::Language::Swedish);
         assert!(ctrl.should_stop_profile_on_key_up("Alt+Space"));
         assert!(!ctrl.should_stop_profile_on_key_up("Control+Shift+E"));
     }
@@ -1278,7 +1273,7 @@ mod tests {
             id: "english".into(),
             name: "English".into(),
             shortcut: "Control+Shift+E".into(),
-            language: sagascript_core::settings::Language::English,
+            language: sagascript_core::models::Language::English,
             push_to_talk_shortcut: None,
             toggle_shortcut: None,
         });
@@ -1286,7 +1281,7 @@ mod tests {
             id: "swedish".into(),
             name: "Swedish".into(),
             shortcut: "Option+Space".into(),
-            language: sagascript_core::settings::Language::Swedish,
+            language: sagascript_core::models::Language::Swedish,
             push_to_talk_shortcut: None,
             toggle_shortcut: None,
         };
@@ -1357,14 +1352,14 @@ mod tests {
     #[test]
     fn english_alt_e_profile_freezes_english_model_with_global_swedish() {
         let settings = Settings {
-            language: sagascript_core::settings::Language::Swedish,
+            language: sagascript_core::models::Language::Swedish,
             auto_select_model: true,
             hotkey_profiles: vec![
                 HotkeyProfile {
                     id: "default".into(),
                     name: "Swedish".into(),
                     shortcut: "Control+Shift+Space".into(),
-                    language: sagascript_core::settings::Language::Swedish,
+                    language: sagascript_core::models::Language::Swedish,
                     push_to_talk_shortcut: None,
                     toggle_shortcut: None,
                 },
@@ -1372,7 +1367,7 @@ mod tests {
                     id: "english".into(),
                     name: "English".into(),
                     shortcut: "Alt+E".into(),
-                    language: sagascript_core::settings::Language::English,
+                    language: sagascript_core::models::Language::English,
                     push_to_talk_shortcut: None,
                     toggle_shortcut: None,
                 },
@@ -1388,10 +1383,7 @@ mod tests {
         assert!(ctrl
             .start_recording_for_profile_with_capture(english, |_| Ok(()))
             .unwrap());
-        assert_eq!(
-            ctrl.language(),
-            sagascript_core::settings::Language::English
-        );
+        assert_eq!(ctrl.language(), sagascript_core::models::Language::English);
 
         let session = ctrl
             .session_data
@@ -1402,8 +1394,8 @@ mod tests {
 
         // Changes to global settings during an active recording must not
         // replace the profile model selected when Alt+E started the session.
-        ctrl.settings_mut().language = sagascript_core::settings::Language::Swedish;
-        ctrl.settings_mut().whisper_model = sagascript_core::settings::WhisperModel::KbWhisperBase;
+        ctrl.settings_mut().language = sagascript_core::models::Language::Swedish;
+        ctrl.settings_mut().whisper_model = sagascript_core::models::WhisperModel::KbWhisperBase;
         assert_eq!(
             ctrl.session_data.as_ref().unwrap()["model"],
             serde_json::json!("base.en")
@@ -1572,7 +1564,7 @@ mod tests {
         let mut ctrl = default_controller();
         let profile = HotkeyProfile::legacy_default(
             "Super+S".into(),
-            sagascript_core::settings::Language::Swedish,
+            sagascript_core::models::Language::Swedish,
         );
         ctrl.settings_mut().hotkey_profiles = vec![profile.clone()];
         ctrl.settings_mut().profile_models.insert(

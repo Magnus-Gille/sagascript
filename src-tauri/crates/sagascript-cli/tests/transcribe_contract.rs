@@ -980,7 +980,7 @@ mod with_a_placeholder_model {
     use std::path::Path;
 
     use super::*;
-    use sagascript_core::settings::WhisperModel;
+    use sagascript_core::models::WhisperModel;
 
     fn models_dir(sandbox: &Sandbox) -> PathBuf {
         #[cfg(target_os = "macos")]
@@ -1443,7 +1443,8 @@ fn the_public_transcribe_paths_stay_importable() {
         resolve_file_model, resolve_file_model_for_run, run, TranscribeArgs,
     };
     use sagascript_core::error::DictationError;
-    use sagascript_core::settings::{FileModel, Language, Settings, WhisperModel};
+    use sagascript_core::models::{FileModel, Language, WhisperModel};
+    use sagascript_core::settings::Settings;
 
     let _: fn(TranscribeArgs, &Out) -> Result<(), DictationError> = run;
     let _: fn(&str) -> Result<Language, DictationError> = parse_language;

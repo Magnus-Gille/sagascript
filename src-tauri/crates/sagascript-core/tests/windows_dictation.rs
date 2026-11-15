@@ -23,7 +23,7 @@ use std::sync::Arc;
 use std::thread;
 
 use sagascript_core::audio::decoder::decode_audio_file;
-use sagascript_core::settings::{Language, WhisperModel};
+use sagascript_core::models::{Language, WhisperModel};
 use sagascript_core::transcription::model;
 use sagascript_core::transcription::whisper_backend::{
     DictationTimings, TranscribeRequest, WhisperBackend,

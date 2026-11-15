@@ -125,10 +125,12 @@ deleted after the 1.4.9 release (SAGA-478). A compatibility re-export in `lib.rs
 `// Shim (..)`, and `nothing_in_the_workspace_uses_a_compatibility_path` keeps the CLI and the
 app off it. Outside core no code globs or renames the `sagascript_core` crate, and the
 production code of the app and the CLI never names `sagascript_core::testing` (only `tests/`,
-`tests.rs` and `*_tests.rs` files may; both tested). Two other families of old paths are still
-imported by the CLI and the app and wait for their own change: `settings::{WhisperModel,
-FileModel, Language}` (re-exports of `models`) and `transcription::{glossary, Glossary, ...}`
-(re-exports of `glossary`), with `pianissimo_backend::UNSUPPORTED_MESSAGE`.
+`tests.rs` and `*_tests.rs` files may; both tested). Three other families of old paths stay
+re-exported for one more release, with no user in the workspace (SAGA-478 part B; the test's
+`OLD_PATHS` lists them): `settings::{WhisperModel, FileModel, Language, PianissimoModel}`
+(re-exports of `models`), `transcription::{glossary, Glossary, ...}` (re-exports of
+`glossary`) and `pianissimo_backend::UNSUPPORTED_MESSAGE` (now
+`models::PIANISSIMO_UNSUPPORTED_MESSAGE`).
 
 **The subsystems.**
 
@@ -194,8 +196,8 @@ is read earlier than it was. The re-export itself went after the 1.4.9 release (
 
 Public items that no code outside core names are `pub(crate)` (#372): an item the CLI or the app
 needs is `pub`, one only core's own tests need is reached through `testing`. **Planned:**
-SAGA-478 moves the callers of the three remaining families to their real paths, then deletes
-those re-exports one release later.
+SAGA-478 deletes the re-exports of the three remaining families after the release that
+follows 1.4.9.
 
 ## 2. Data flows
 

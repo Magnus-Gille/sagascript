@@ -31,9 +31,9 @@
 use serde_json::Value;
 
 use crate::glossary::Glossary;
+use crate::models::{Language, WhisperModel};
 use crate::settings::{
-    Accessibility, EnginePrewarm, FileModelPreference, HotkeyMode, HotkeyProfile, Language,
-    Settings, WhisperModel,
+    Accessibility, EnginePrewarm, FileModelPreference, HotkeyMode, HotkeyProfile, Settings,
 };
 
 /// The two entry points to a setting.

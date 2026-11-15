@@ -1,7 +1,8 @@
 //! Opt-in vocabulary corrections of transcript segments (#343): the explicit
 //! aliases of the glossary and the strict one-edit `--correct-hints` repair.
 
-use sagascript_core::transcription::{Glossary, TranscriptSegment};
+use sagascript_core::glossary::Glossary;
+use sagascript_core::transcription::TranscriptSegment;
 
 /// Segment scores in this band are uncertain enough to consider an explicit
 /// user-supplied spelling, but not so unreliable that a blind edit is useful.

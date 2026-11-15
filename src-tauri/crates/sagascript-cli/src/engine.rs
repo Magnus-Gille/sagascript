@@ -249,7 +249,7 @@ fn quiet(config: &EngineHostConfig) -> EngineHostClient {
 // ---- status ---------------------------------------------------------------
 
 pub fn status_report(probe: &Probe) -> Value {
-    let requirement = pianissimo_backend::UNSUPPORTED_MESSAGE;
+    let requirement = sagascript_core::models::PIANISSIMO_UNSUPPORTED_MESSAGE;
     let mut host = json!({
         "path": probe.host.as_ref().map(|(p, _)| p.display().to_string()),
         "source": probe.host.as_ref().map_or("none", |(_, s)| *s),
@@ -494,7 +494,7 @@ fn doctor_steps(probe: &Probe, verify_model: bool) -> DoctorReport {
         } else {
             Err(format!(
                 "{} ({} {})",
-                pianissimo_backend::UNSUPPORTED_MESSAGE,
+                sagascript_core::models::PIANISSIMO_UNSUPPORTED_MESSAGE,
                 probe.os,
                 probe.arch
             ))

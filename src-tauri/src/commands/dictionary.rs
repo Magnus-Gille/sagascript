@@ -1,10 +1,11 @@
 //! The personal dictionary: per-profile glossaries and the training suggestions
 //! that extend them.
 
+use sagascript_core::glossary::Glossary;
 use sagascript_core::settings::{DictionaryRefusal, Settings};
 use sagascript_core::transcription::{
-    apply_glossary_candidates, is_reviewable_term, suggest_glossary_candidates, Glossary,
-    GlossarySuggestion, GlossarySuggestionKind,
+    apply_glossary_candidates, is_reviewable_term, suggest_glossary_candidates, GlossarySuggestion,
+    GlossarySuggestionKind,
 };
 use tauri::State;
 use tracing::info;

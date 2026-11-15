@@ -27,9 +27,9 @@ mod save_name_tests {
 #[cfg(test)]
 mod run_context_parity_tests {
     use super::{file_transcription_context, file_transcription_language};
-    use sagascript_core::models::PianissimoModel;
+    use sagascript_core::models::{PianissimoModel, WhisperModel};
     use sagascript_core::run_context::{RunOverrides, RunSelection};
-    use sagascript_core::settings::{FileModelPreference, Settings, WhisperModel};
+    use sagascript_core::settings::{FileModelPreference, Settings};
     use sagascript_core::test_support::run_context_table::{entries, migrated, shapes, PROMPTS};
 
     #[test]

@@ -5,12 +5,13 @@
 use std::path::{Path, PathBuf};
 
 use sagascript_core::error::DictationError;
-use sagascript_core::settings::{Language, WhisperModel};
+use sagascript_core::glossary::Glossary;
+use sagascript_core::models::{Language, WhisperModel};
 use sagascript_core::transcription::diagnostics::{
     analyze_coverage, analyze_repetition, TranscriptionWarning,
 };
 use sagascript_core::transcription::whisper_backend::assemble_transcript;
-use sagascript_core::transcription::{normalize_nonspeech_markers, Glossary, TranscriptSegment};
+use sagascript_core::transcription::{normalize_nonspeech_markers, TranscriptSegment};
 
 use super::args::TranscribeArgs;
 use super::resolve::model_id_string;

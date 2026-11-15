@@ -7,13 +7,13 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use sagascript_core::error::DictationError;
-use sagascript_core::settings::{Language, PianissimoModel};
+use sagascript_core::glossary::Glossary;
+use sagascript_core::models::{Language, PianissimoModel};
 use sagascript_core::transcription::engine_host::{BoostReport, BoostSpec, WindowTiming};
 use sagascript_core::transcription::pianissimo_backend::{
     PianissimoBackend, PianissimoResult, StreamStats, WarmInfo,
 };
 use sagascript_core::transcription::pianissimo_model;
-use sagascript_core::transcription::Glossary;
 
 use super::args::TranscribeArgs;
 use super::output::{BatchSink, Clipboard};
@@ -371,7 +371,7 @@ fn check_request(
     }
     if !host.runtime_supported() {
         return Err(DictationError::TranscriptionFailed(
-            sagascript_core::transcription::pianissimo_backend::UNSUPPORTED_MESSAGE.into(),
+            sagascript_core::models::PIANISSIMO_UNSUPPORTED_MESSAGE.into(),
         ));
     }
     if !host.model_installed(model) {

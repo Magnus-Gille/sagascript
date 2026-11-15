@@ -8,7 +8,7 @@
 //! `language_detection_never_downloads_an_encoder` have to catch.
 
 use crate::error::DictationError;
-use crate::settings::WhisperModel;
+use crate::models::WhisperModel;
 use crate::transcription::diagnostics::LanguageDetection;
 use crate::transcription::WhisperBackend;
 
