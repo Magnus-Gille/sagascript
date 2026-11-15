@@ -5,7 +5,17 @@ import test from "node:test";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { allSteps, commandLines, gateInvocation, loadWorkflow } from "./lib/ci-workflow.mjs";
-import { GATES, OSES, PROFILES, RELEASE_GUARD_PROOF, REPO_ROOT, commandOf, gatesFor, runGates } from "./ci/cargo-gates.mjs";
+import {
+  GATES,
+  OSES,
+  PROFILES,
+  RELEASE_GUARD_ENV,
+  RELEASE_GUARD_PROOF,
+  REPO_ROOT,
+  commandOf,
+  gatesFor,
+  runGates,
+} from "./ci/cargo-gates.mjs";
 
 // The list of cargo gates (scripts/ci/cargo-gates.mjs) is the one source of the cargo commands every
 // lane of ci.yml runs (#358). These tests hold the list, its wiring into the lanes and its runner.
@@ -101,6 +111,23 @@ test("the release guard proves its test ran and the dependency-tree gate forbids
   const tree = GATES.find((gate) => gate.id === "no-alsa");
   assert.ok(tree.forbidOutput.pattern.test("├── cpal v0.15.3") && tree.forbidOutput.pattern.test("alsa-sys"));
   assert.ok(!tree.forbidOutput.pattern.test("sagascript-core v1.4.4"));
+});
+
+test("the release guard builds a cheap release profile that still has no debug assertions, and no other gate overrides the environment", () => {
+  const guard = GATES.find((gate) => gate.id === "release-guard");
+  assert.equal(guard.env, RELEASE_GUARD_ENV);
+  assert.deepEqual(RELEASE_GUARD_ENV, {
+    CARGO_PROFILE_RELEASE_OPT_LEVEL: "0",
+    CARGO_PROFILE_RELEASE_LTO: "off",
+    CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "256",
+  });
+  // The guard test is compiled out when debug assertions or the dev-overrides feature are on (SAGA-552).
+  assert.ok(Object.keys(guard.env).every((name) => !/DEBUG_ASSERTIONS|OVERFLOW|PROFILE_(DEV|TEST)/.test(name)));
+  assert.ok(!guard.args.some((argument) => /dev-overrides|--all-features/.test(argument)));
+  assert.deepEqual(
+    GATES.filter((gate) => gate.env !== undefined).map((gate) => gate.id),
+    ["release-guard"],
+  );
 });
 
 test("cargo-deny gates run first, before any gate that compiles", () => {

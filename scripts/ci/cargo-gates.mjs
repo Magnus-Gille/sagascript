@@ -46,9 +46,20 @@ const gate = (id, cwd, args, extra = {}) => ({ id, cwd, args, profile: "main", .
 // test exits 0 when its name filter matches nothing: prove the test ran.
 export const RELEASE_GUARD_PROOF = /release_build_ignores_the_real_environment \.\.\. ok/;
 
+// The guard depends on `cfg(not(debug_assertions))` and a missing `dev-overrides` feature, nothing
+// else of the release profile. The shipped profile (opt-level 3, thin LTO, one codegen unit) made this
+// one gate rebuild core and relink its test binary for 130 s on the Linux runner (SAGA-552, SAGA-546);
+// unoptimized code without LTO (debug assertions stay off, as in release) takes seconds. The profile
+// is overridden through Cargo's environment, never in Cargo.toml, so shipped builds are untouched.
+export const RELEASE_GUARD_ENV = {
+  CARGO_PROFILE_RELEASE_OPT_LEVEL: "0",
+  CARGO_PROFILE_RELEASE_LTO: "off",
+  CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "256",
+};
+
 /**
  * Each gate: { id, cwd (repository relative), args (cargo arguments), profile,
- * os? + why? (restriction and its reason), forbidOutput?/requireOutput?
+ * os? + why? (restriction and its reason), env? (extra environment variables of this gate only), forbidOutput?/requireOutput?
  * ({ pattern, message }), quiet? (show the output only on failure) }.
  */
 export const GATES = [
@@ -135,6 +146,7 @@ export const GATES = [
   gate("release-guard", APP, ["test", "--release", "-p", "sagascript-core", "--lib", "dev_overrides"], {
     os: LINUX,
     why: "a build-profile property of core, not OS code; one release compile is enough",
+    env: RELEASE_GUARD_ENV,
     requireOutput: { pattern: RELEASE_GUARD_PROOF, message: "the release-profile guard test did not run" },
   }),
 
@@ -163,7 +175,10 @@ export async function runGates(gates, { execute, keepGoing = false, log = () => 
   const results = [];
   for (const item of gates) {
     const started = Date.now();
-    log(`::group::${commandOf(item)}  (${item.cwd})`);
+    const envNote = Object.entries(item.env ?? {})
+      .map(([name, value]) => `${name}=${value} `)
+      .join("");
+    log(`::group::${envNote}${commandOf(item)}  (${item.cwd})`);
     const { code, output } = await execute(item);
     let failure = code === 0 ? null : `exited with status ${code}`;
     if (failure === null && item.forbidOutput?.pattern.test(output)) failure = item.forbidOutput.message;
@@ -180,7 +195,11 @@ export async function runGates(gates, { execute, keepGoing = false, log = () => 
 function executeWithCargo(item) {
   return new Promise((resolve, reject) => {
     const watched = item.forbidOutput !== undefined || item.requireOutput !== undefined;
-    const child = spawn("cargo", item.args, { cwd: join(REPO_ROOT, item.cwd), stdio: watched ? ["inherit", "pipe", "pipe"] : "inherit" });
+    const child = spawn("cargo", item.args, {
+      cwd: join(REPO_ROOT, item.cwd),
+      env: { ...process.env, ...item.env },
+      stdio: watched ? ["inherit", "pipe", "pipe"] : "inherit",
+    });
     let output = "";
     for (const [stream, sink] of [
       [child.stdout, process.stdout],

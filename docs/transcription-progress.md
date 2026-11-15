@@ -77,9 +77,26 @@ decoding and resampling were finished; it overlaps inference, so it is not a sta
 that comes before it and must not be added to it (`total_seconds` is the whole run).
 
 The detailed terminal-independent timeline covers both plain transcription and
-the meeting phase boundaries described above. GUI plain imports use the same
-core decode/conversion callbacks; they do not perform the CLI's separate
+the meeting phase boundaries described above. GUI plain imports with Whisper use
+the same core decode/conversion callbacks; they do not perform the CLI's separate
 language diagnostics.
+
+GUI plain imports with a Pianissimo model stream like the CLI: the file is decoded
+while the engine transcribes it, so they emit no `resampling` events and no
+decoding percentage. The events are `decoding` at 0, `loading` while the engine
+starts and the model loads, then `transcribing` percentages (estimates until
+decoding is done, never decreasing, below 100 until the last window) and
+`finalizing`. The progress stages therefore check "Read audio" and then show
+"Prepare audio & model" while the model loads, and both are checked when the first
+transcribing percentage above 0 arrives. A file that is gone is reported as
+`file_not_found` before the engine starts; other decode errors are reported once
+the engine is loaded. Stop and the inference timeout reach the decoder as well as
+the engine. No timeout runs while the file decodes, as before, when the file was decoded
+before any timeout was set: a slow decode never counts. When the decode ends, the
+timeout is `max(audio seconds * 10, 180 s)` from that moment, so it is never
+shorter than for a file decoded in full first. Estimates of the length (what the
+container announces, the length decoded so far) do not set it, so a header that
+understates the length cannot shorten it.
 
 GUI plain imports have run-ID-scoped `plain-transcription-progress` events.
 They lease a warm backend separate from live dictation/training, so Stop cannot

@@ -44,11 +44,44 @@ inputs:
 runs:
   using: composite
   steps:
+    # The downloaded .deb files are cached (SAGA-546): the Azure mirror sometimes serves the ~60 MB at
+    # 66 kB/s. apt still runs `update` and resolves and verifies as before; a miss or a failed restore
+    # downloads as before. The key names the image, whose package index decides the versions, and the
+    # package list (in the script, so its hash). Only main saves; pull requests restore only.
+    - if: ${{ inputs.linux-deps == 'true' }}
+      name: Compute the apt cache key
+      id: apt-key
+      shell: bash
+      env:
+        PACKAGES_HASH: ${{ hashFiles('scripts/ci/apt-install-tauri-deps.sh') }}
+      run: |
+        echo "key=apt-debs-v1-${RUNNER_OS}-${ImageOS:-unknown}-${ImageVersion:-unknown}-${PACKAGES_HASH}" >> "$GITHUB_OUTPUT"
+        echo "dir=${RUNNER_TEMP}/apt-debs" >> "$GITHUB_OUTPUT"
+
+    - if: ${{ inputs.linux-deps == 'true' }}
+      name: Restore apt packages cache
+      id: apt-cache
+      continue-on-error: true
+      uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+      with:
+        path: ${{ steps.apt-key.outputs.dir }}
+        key: ${{ steps.apt-key.outputs.key }}
+
     - if: ${{ inputs.linux-deps == 'true' }}
       name: Install Tauri system dependencies
       shell: bash
+      env:
+        APT_DEB_CACHE_DIR: ${{ steps.apt-key.outputs.dir }}
       # Retries and a per-attempt time limit bound a stalled mirror (SAGA-546); the package list is in the script.
       run: bash scripts/ci/apt-install-tauri-deps.sh
+
+    - if: ${{ inputs.linux-deps == 'true' && success() && github.ref == 'refs/heads/main' && steps.apt-cache.outputs.cache-hit != 'true' }}
+      name: Save apt packages cache
+      continue-on-error: true
+      uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+      with:
+        path: ${{ steps.apt-key.outputs.dir }}
+        key: ${{ steps.apt-key.outputs.key }}
 
     - if: ${{ inputs.python == 'true' }}
       name: Select evaluation Python runtime

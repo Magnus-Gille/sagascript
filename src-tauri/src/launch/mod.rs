@@ -12,6 +12,6 @@ pub(crate) use lifecycle::{handle_run_event, handle_second_instance};
 #[cfg(windows)]
 pub(crate) use mode::{attach_parent_console, cli_args_request_console_output};
 pub(crate) use mode::{gui_launch_mode, GuiLaunchMode};
-pub(crate) use settings::load_settings_with_permission_gate;
+pub(crate) use settings::load_app_settings;
 pub(crate) use startup::setup_app;
 pub(crate) use window::open_settings_window;
