@@ -77,6 +77,7 @@ const TYPESCRIPT_NAMES: &[(&str, &str, Option<&str>)] = &[
         Some("./meeting-types"),
     ),
     ("ModelInfo", "WhisperModel", Some("./api")),
+    ("PreflightReport", "PreflightReport", Some("./acceptance")),
     (
         "ProposalState",
         "ProposalState",
