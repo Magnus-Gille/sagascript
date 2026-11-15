@@ -185,16 +185,16 @@ test("the native build lanes save the models the setup action restored, on main 
 const CACHE_LIMIT_MB = 9536; // 10 GB, conservatively in bytes
 const CACHE_BUDGET = {
   // The setup action's Rust cache, one entry per lane that installs Rust (key: cache-key and OS).
-  // The four gate lanes (test-*, msrv-linux) are the 2026-11-09 sizes, from before Cargo.toml's dev-profile
-  // `opt-level = 3` for dependencies (SAGA-399) roughly doubled them (1621, 1110, 1074, 661 became 2980,
-  // 2095, 1991, 1175). cargo-gates.mjs now overrides it to 0 in CI (SAGA-546), so these are the EXPECTED
-  // sizes: re-measure them after the first main save with the new key, and raise them if they are larger.
+  // The four gate lanes (test-*, msrv-linux) are measured from main's first saves after cargo-gates.mjs
+  // started overriding Cargo.toml's dev-profile `opt-level = 3` for dependencies (SAGA-399) to 0 in CI
+  // (SAGA-546), on 2026-11-15 (main CI run 43765401320). Without the override they were 2980, 2095, 1991
+  // and 1175.
   "ci.yml job test-macos Rust cache": { mb: 1110 }, // sagascript-ci-checks, Darwin
   "ci.yml job build-macos Rust cache": { mb: 640 }, // sagascript-ci-native, Darwin
-  "ci.yml job test-linux Rust cache": { mb: 1621 }, // sagascript-ci, Linux (both workspaces)
+  "ci.yml job test-linux Rust cache": { mb: 2149 }, // sagascript-ci, Linux (both workspaces)
   "ci.yml job msrv-linux Rust cache": { mb: 662 }, // sagascript-msrv, Linux
   "ci.yml job test-windows Rust cache": { mb: 1073 }, // sagascript-ci-checks, Windows
-  "ci.yml job build-windows Rust cache": { mb: 636 }, // sagascript-ci-native, Windows
+  "ci.yml job build-windows Rust cache": { mb: 635 }, // sagascript-ci-native, Windows
   // Steps that save.
   '.github/actions/setup step "Save apt packages cache"': { mb: 59 }, // one key for every Linux lane
   // macos-models restores from the release model set through its `macos-models-` restore key, so it saves 131.
