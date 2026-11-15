@@ -202,11 +202,13 @@ public final class CoreMLEngine: EngineBackend {
         }
         try checkCancelled(isCancelled)
 
+        StageTrace.emit("work_start", window: request.offsetSamples)
         let samples = try readSamples(request: request, paddedTo: loaded.windowSamples)
         let inference = try infer(
             samples: samples,
             numSamples: request.numSamples,
             loaded: loaded,
+            traceWindow: request.offsetSamples,
             boost: request.boost,
             isCancelled: isCancelled
         )
@@ -271,12 +273,14 @@ public final class CoreMLEngine: EngineBackend {
         samples: [Float],
         numSamples: Int,
         loaded: LoadedModel,
+        traceWindow: Int = -1,
         boost: BoostConfig?,
         isCancelled: @escaping () -> Bool
     ) throws -> Inference {
         try checkCancelled(isCancelled)
 
         let preprocessStart = Date()
+        StageTrace.emit("pre_start", window: traceWindow)
         let audioSignal = try makeFloatArray(samples)
         // The reference pipeline rounds the declared length up to a whole
         // encoder frame (1280 samples), which reproduces its text exactly on the
@@ -299,13 +303,16 @@ public final class CoreMLEngine: EngineBackend {
         try checkCancelled(isCancelled)
 
         let encodeStart = Date()
+        StageTrace.emit("enc_start", window: traceWindow)
         let melInput = try converted(mel, to: loaded.encoderMelPrecision, feature: "Encoder input 'mel'")
         let encoderLengthInput = try makeIntArray([melLength])
         let encoderInput = try MLDictionaryFeatureProvider(dictionary: [
             "mel": MLFeatureValue(multiArray: melInput),
             "mel_length": MLFeatureValue(multiArray: encoderLengthInput),
         ])
+        StageTrace.emit("enc_predict_start", window: traceWindow)
         let encoded = try loaded.encoder.prediction(from: encoderInput)
+        StageTrace.emit("enc_predict_end", window: traceWindow)
         guard let encoderOutput = encoded.featureValue(for: "encoder")?.multiArrayValue else {
             throw EngineHostError(
                 code: .engine,
@@ -320,6 +327,7 @@ public final class CoreMLEngine: EngineBackend {
         try checkCancelled(isCancelled)
 
         let decodeStart = Date()
+        StageTrace.emit("dec_start", window: traceWindow)
         let realAudioSeconds = Double(numSamples) / 16_000
         let decoded = try decode(
             encoderOutput: encoderOutput,
@@ -327,8 +335,10 @@ public final class CoreMLEngine: EngineBackend {
             loaded: loaded,
             realAudioSeconds: realAudioSeconds,
             boost: boost,
+            traceWindow: traceWindow,
             isCancelled: isCancelled
         )
+        StageTrace.emit("dec_end", window: traceWindow)
         let decodeMilliseconds = Date().timeIntervalSince(decodeStart) * 1000
 
         return Inference(
@@ -680,6 +690,7 @@ public final class CoreMLEngine: EngineBackend {
         loaded: LoadedModel,
         realAudioSeconds: Double,
         boost: BoostConfig?,
+        traceWindow: Int = -1,
         isCancelled: @escaping () -> Bool
     ) throws -> (tokens: [TranscriptionToken], boostActive: Bool?, boostReason: String?, boostMicroseconds: Int) {
         let actualFrameCount = min(
@@ -713,6 +724,12 @@ public final class CoreMLEngine: EngineBackend {
             isLastChunk: isFinalWindow,
             isCancelled: isCancelled
         )
+        if StageTrace.enabled {
+            StageTrace.emit("dec_calls", window: traceWindow, [
+                ("dec_n", session.traceDecoderCalls), ("dec_ns", session.traceDecoderNanos),
+                ("joint_n", session.traceJointCalls), ("joint_ns", session.traceJointNanos),
+            ])
+        }
         let tokens: [TranscriptionToken] = emissions.compactMap { emission in
             let correctedFrame = max(0, emission.frame - 1)
             let start = Double(correctedFrame) * loaded.frameSeconds
