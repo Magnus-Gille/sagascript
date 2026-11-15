@@ -71,7 +71,7 @@ test("Windows candidates cache only verified models with a candidate primary key
   const cache = section(windowsWorkflow, "name: Cache downloaded models", "name: Pin validated Windows build identity");
   // SHA-pinned (#354); the trailing comment names the v5 release it resolves to. Restore only (SAGA-546):
   // the last step of the job saves the cache, on main.
-  assert.match(cache, /uses: actions\/cache\/restore@[0-9a-f]{40} # v5\.\d+\.\d+$/m);
+  assert.match(cache, /uses: actions\/cache\/restore@[0-9a-f]{40} # v6\.\d+\.\d+$/m);
   assert.match(cache, /id: models-cache/);
   assert.match(cache, /path: ~\\AppData\\Roaming\\Sagascript\\Models/);
   assert.equal((cache.match(/^\s*path:/gm) ?? []).length, 1, "cache must contain one exact model path");
@@ -88,7 +88,7 @@ test("Windows candidates cache only verified models with a candidate primary key
   const saveStart = windowsWorkflow.indexOf("name: Save downloaded models cache");
   const save = windowsWorkflow.slice(saveStart);
   assert.ok(saveStart > windowsWorkflow.indexOf("name: Upload internal Windows candidate"), "the models save must be the last step");
-  assert.match(save, /uses: actions\/cache\/save@[0-9a-f]{40} # v5\.\d+\.\d+$/m);
+  assert.match(save, /uses: actions\/cache\/save@[0-9a-f]{40} # v6\.\d+\.\d+$/m);
   assert.match(save, /key: \$\{\{ steps\.models-cache\.outputs\.cache-primary-key \}\}/);
   assert.equal(save.match(/^\s*path:\s*(.+)$/m)?.[1], "~\\AppData\\Roaming\\Sagascript\\Models");
   assert.match(save, /if: success\(\) && github\.ref == 'refs\/heads\/main' && steps\.models-cache\.outputs\.cache-hit != 'true'/);
