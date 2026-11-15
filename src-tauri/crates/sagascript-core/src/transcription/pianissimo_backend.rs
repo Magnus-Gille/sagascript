@@ -26,9 +26,9 @@ use crate::settings::{EnginePrewarm, Settings};
 use crate::sync::lock_or_recover;
 use crate::transcription::dev_overrides::env_override;
 use crate::transcription::engine_host::{
-    CancelToken, ClientIdentity, EngineHostClient, EngineHostConfig, EngineHostError, ErrorCode,
-    LoadEvent, LoadObserver, LoadSpec, Sink, SinkError, StreamError, Transcription, WarmResult,
-    WindowTiming,
+    CancelToken, Capabilities, ClientIdentity, EngineHostClient, EngineHostConfig, EngineHostError,
+    ErrorCode, LoadEvent, LoadObserver, LoadSpec, Sink, SinkError, StreamError, Transcription,
+    WarmResult, WindowTiming,
 };
 use crate::transcription::pianissimo_model;
 
@@ -77,6 +77,40 @@ pub struct WarmInfo {
     pub was_warm: bool,
     /// Wall time spent making the engine ready (about zero when warm).
     pub load_seconds: f64,
+}
+
+/// Where a warm-up spent its time, phase by phase. `None` means the phase did
+/// not run for this warm-up (a cached client is not verified again, a running
+/// host is not started again, a loaded model is not loaded again).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct WarmTimings {
+    /// Checking the model artifact (`shared_client` when it creates a client).
+    pub verify_ms: Option<u64>,
+    /// Spawning the engine host and its `hello` handshake.
+    pub host_start_ms: Option<u64>,
+    /// The `load` the host reported for the model (this warm-up's own load).
+    pub load_ms: Option<u64>,
+    /// The canary prediction of an already-loaded engine.
+    pub canary_ms: Option<u64>,
+}
+
+fn elapsed_ms(since: Instant) -> u64 {
+    u64::try_from(since.elapsed().as_millis()).unwrap_or(u64::MAX)
+}
+
+impl std::fmt::Display for WarmTimings {
+    /// `verify_ms=12 host_start_ms=- load_ms=830 canary_ms=-` (`-`: did not run).
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let phase = |ms: Option<u64>| ms.map_or("-".to_string(), |ms| ms.to_string());
+        write!(
+            f,
+            "verify_ms={} host_start_ms={} load_ms={} canary_ms={}",
+            phase(self.verify_ms),
+            phase(self.host_start_ms),
+            phase(self.load_ms),
+            phase(self.canary_ms),
+        )
+    }
 }
 
 // ---- platform gate --------------------------------------------------------
@@ -443,6 +477,15 @@ pub fn shared_client(
     settings: &Settings,
     model: PianissimoModel,
 ) -> Result<EngineHostClient, DictationError> {
+    shared_client_timed(settings, model).map(|(client, _)| client)
+}
+
+/// [`shared_client`], also giving how long the model check took (`None` when
+/// the slot already held the client and nothing was checked).
+pub fn shared_client_timed(
+    settings: &Settings,
+    model: PianissimoModel,
+) -> Result<(EngineHostClient, Option<u64>), DictationError> {
     let host = precheck(model)?;
     let config = config_for_host(host, settings, model);
     let key = shared_key(&config, settings);
@@ -482,27 +525,31 @@ fn shared_key(config: &EngineHostConfig, settings: &Settings) -> SharedKey {
 ///   client it had (the error is the caller's);
 /// - then `replace` is given the client being retired (`None` for the first
 ///   one) and returns the new client, which goes into the slot.
+///
+/// Also returns how long `verify_model` took, `None` when it did not run.
 fn client_in_slot(
     slot: &Mutex<Option<Shared>>,
     key: SharedKey,
     verify_model: impl FnOnce() -> Result<(), DictationError>,
     replace: impl FnOnce(Option<Shared>) -> EngineHostClient,
-) -> Result<EngineHostClient, DictationError> {
+) -> Result<(EngineHostClient, Option<u64>), DictationError> {
     let mut slot = slot.lock().map_err(|_| {
         DictationError::TranscriptionFailed("Pianissimo client lock was poisoned".into())
     })?;
     if let Some(shared) = slot.as_ref() {
         if shared.key == key {
-            return Ok(shared.client.clone());
+            return Ok((shared.client.clone(), None));
         }
     }
+    let verify_started = Instant::now();
     verify_model()?;
+    let verify_ms = elapsed_ms(verify_started);
     let client = replace(slot.take());
     *slot = Some(Shared {
         key,
         client: client.clone(),
     });
-    Ok(client)
+    Ok((client, Some(verify_ms)))
 }
 
 /// Shut every shared host down (CLI exit, model deletion, app quit). No-op
@@ -769,26 +816,84 @@ pub(crate) fn warm_or_touch(
     client: &EngineHostClient,
     load_allowed: bool,
 ) -> Result<WarmOutcome, EngineHostError> {
+    warm_or_touch_timed(client, load_allowed).map(|(outcome, _)| outcome)
+}
+
+/// [`warm_or_touch`] with the phase timings of what it did (`verify_ms` is the
+/// caller's to fill: the client exists already here).
+pub(crate) fn warm_or_touch_timed(
+    client: &EngineHostClient,
+    load_allowed: bool,
+) -> Result<(WarmOutcome, WarmTimings), EngineHostError> {
     if client.snapshot().loaded {
-        return match client.warm_canary() {
-            Ok(result) => Ok(WarmOutcome::Canary(result)),
+        let outcome = match client.warm_canary() {
+            Ok(result) => WarmOutcome::Canary(result),
             Err(EngineHostError::Remote {
                 code: ErrorCode::Unsupported,
                 ..
-            }) => Ok(WarmOutcome::CanaryUnsupported),
-            Err(error) => Err(error),
+            }) => WarmOutcome::CanaryUnsupported,
+            Err(error) => return Err(error),
         };
+        let canary_ms = match &outcome {
+            WarmOutcome::Canary(WarmResult {
+                ran: true,
+                canary_ms,
+                ..
+            }) => *canary_ms,
+            _ => None,
+        };
+        return Ok((
+            outcome,
+            WarmTimings {
+                canary_ms,
+                ..WarmTimings::default()
+            },
+        ));
     }
     if !load_allowed {
-        return Ok(WarmOutcome::LoadHeldBack);
+        return Ok((WarmOutcome::LoadHeldBack, WarmTimings::default()));
     }
-    client.warm().map(|_| WarmOutcome::Loaded)
+    let (_, timings) = warm_load_timed(client)?;
+    Ok((WarmOutcome::Loaded, timings))
 }
 
-fn log_warm_outcome(reason: &'static str, started: Instant, outcome: Result<WarmOutcome, String>) {
-    let ms = started.elapsed().as_millis() as u64;
+/// Start the host and load the model like [`EngineHostClient::warm`], timing
+/// the two phases apart. The host start is the time of the `hello` handshake
+/// (`None` when the host was running); the load is the `load_ms` the host
+/// reported for the load this call made (`None` when the model was loaded
+/// already, or another caller loaded it while this one waited).
+pub fn warm_load_timed(
+    client: &EngineHostClient,
+) -> Result<(Capabilities, WarmTimings), EngineHostError> {
+    let before = client.snapshot();
+    let mut timings = WarmTimings::default();
+    if !before.running {
+        let started = Instant::now();
+        client.connect()?;
+        timings.host_start_ms = Some(elapsed_ms(started));
+    }
+    let caps = client.warm()?;
+    let after = client.snapshot();
+    if after.loads > before.loads {
+        timings.load_ms = after.last_load.map(|load| load.load_ms);
+    }
+    Ok((caps, timings))
+}
+
+fn log_warm_outcome(
+    reason: &'static str,
+    started: Instant,
+    outcome: Result<(WarmOutcome, WarmTimings), String>,
+) {
+    let ms = elapsed_ms(started);
+    let (outcome, timings) = match outcome {
+        Ok((outcome, timings)) => (Ok(outcome), timings),
+        Err(error) => (Err(error), WarmTimings::default()),
+    };
     match outcome {
-        Ok(WarmOutcome::Loaded) => tracing::info!(reason, ms, "Pianissimo engine pre-warmed"),
+        Ok(WarmOutcome::Loaded) => {
+            tracing::info!(reason, ms, %timings, "Pianissimo engine pre-warmed")
+        }
         Ok(WarmOutcome::LoadHeldBack) => tracing::debug!(
             reason,
             "Pianissimo pre-warm skipped: recent memory-pressure unload"
@@ -893,24 +998,62 @@ pub fn warm_in_background(
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let load_allowed = !warm_in_pressure_cooldown(reason, last_unload, Instant::now());
-    if in_flight.swap(true, Ordering::SeqCst) {
+    let Some(claim) = WarmClaim::try_claim(in_flight) else {
         return;
-    }
+    };
     let spawned = std::thread::Builder::new()
         .name("pianissimo-warm".into())
         .spawn(move || {
             LOAD_SOURCE.with(|source| source.set(LoadSource::Warm));
-            let started = Instant::now();
-            let outcome = shared_client(&load_settings(), model)
-                .map_err(|e| e.to_string())
-                .and_then(|client| warm_or_touch(&client, load_allowed).map_err(|e| e.to_string()));
-            log_warm_outcome(reason, started, outcome);
-            in_flight.store(false, Ordering::SeqCst);
+            // The outcome is logged by `run_claimed_warm`.
+            let _logged = run_claimed_warm(claim, reason, load_allowed, || {
+                shared_client_timed(&load_settings(), model)
+            });
         });
     if let Err(error) = spawned {
+        // The closure (and with it the claim) was dropped: the flag is clear.
         tracing::warn!(%error, "could not start Pianissimo pre-warm thread");
-        in_flight.store(false, Ordering::SeqCst);
     }
+}
+
+/// The right to run one warm-up for a model: held while it runs, released when
+/// dropped, whatever way the warm-up ended (failure, panic, no thread).
+pub(crate) struct WarmClaim<'a>(&'a AtomicBool);
+
+impl<'a> WarmClaim<'a> {
+    /// `None` when a warm-up already holds `in_flight`.
+    pub(crate) fn try_claim(in_flight: &'a AtomicBool) -> Option<Self> {
+        (!in_flight.swap(true, Ordering::SeqCst)).then(|| Self(in_flight))
+    }
+}
+
+impl Drop for WarmClaim<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+}
+
+/// One background warm-up: attach to the shared client (`attach` also reports
+/// the model check time), load or canary, log. Releases `claim` last, so a
+/// failed warm-up never blocks the next one.
+pub(crate) fn run_claimed_warm(
+    claim: WarmClaim<'_>,
+    reason: &'static str,
+    load_allowed: bool,
+    attach: impl FnOnce() -> Result<(EngineHostClient, Option<u64>), DictationError>,
+) -> Result<(WarmOutcome, WarmTimings), String> {
+    let started = Instant::now();
+    let outcome = attach()
+        .map_err(|e| e.to_string())
+        .and_then(|(client, verify_ms)| {
+            let (outcome, mut timings) =
+                warm_or_touch_timed(&client, load_allowed).map_err(|e| e.to_string())?;
+            timings.verify_ms = verify_ms;
+            Ok((outcome, timings))
+        });
+    log_warm_outcome(reason, started, outcome.clone());
+    drop(claim);
+    outcome
 }
 
 // ---- adapter --------------------------------------------------------------
@@ -1602,6 +1745,7 @@ mod tests {
             },
         )
         .expect("verification passes")
+        .0
     }
 
     #[test]
@@ -1658,6 +1802,74 @@ mod tests {
         assert!(!std::sync::Arc::ptr_eq(&a.inner, &c.inner));
         assert_eq!(calls.created.get(), 3);
         assert_eq!(calls.retired.borrow().len(), 2);
+    }
+
+    #[test]
+    fn concurrent_callers_with_the_same_key_verify_and_create_once() {
+        let slot = Mutex::new(None);
+        let verified = std::sync::atomic::AtomicUsize::new(0);
+        let created = std::sync::atomic::AtomicUsize::new(0);
+        let timed = std::thread::scope(|scope| {
+            let callers: Vec<_> = (0..6)
+                .map(|_| {
+                    scope.spawn(|| {
+                        client_in_slot(
+                            &slot,
+                            key_with_idle_minutes(10),
+                            || {
+                                verified.fetch_add(1, Ordering::SeqCst);
+                                // Long enough for the others to queue on the slot.
+                                std::thread::sleep(Duration::from_millis(50));
+                                Ok(())
+                            },
+                            |_| {
+                                created.fetch_add(1, Ordering::SeqCst);
+                                idle_client()
+                            },
+                        )
+                        .expect("verification passes")
+                    })
+                })
+                .collect();
+            callers
+                .into_iter()
+                .map(|caller| caller.join().unwrap())
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(verified.load(Ordering::SeqCst), 1);
+        assert_eq!(created.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            timed
+                .iter()
+                .filter(|(_, verify_ms)| verify_ms.is_some())
+                .count(),
+            1,
+            "only the caller that created the client reports a model check"
+        );
+        assert!(timed
+            .iter()
+            .all(|(client, _)| std::sync::Arc::ptr_eq(&client.inner, &timed[0].0.inner)));
+    }
+
+    #[test]
+    fn a_cached_client_reports_no_model_check_time() {
+        let slot = Mutex::new(None);
+        let first = client_in_slot(
+            &slot,
+            key_with_idle_minutes(10),
+            || Ok(()),
+            |_| idle_client(),
+        )
+        .unwrap();
+        assert!(first.1.is_some(), "creating a client verifies the model");
+        let second = client_in_slot(
+            &slot,
+            key_with_idle_minutes(10),
+            || unreachable!("a cached client is not verified again"),
+            |_| unreachable!(),
+        )
+        .unwrap();
+        assert_eq!(second.1, None);
     }
 
     #[test]
@@ -1872,6 +2084,50 @@ mod tests {
         ] {
             assert!(!warm_wanted(&off, trigger, None), "{trigger:?}");
         }
+    }
+
+    #[test]
+    fn prewarm_off_never_calls_the_warm_hook_for_any_trigger() {
+        let off = pianissimo_settings(EnginePrewarm::Off);
+        for trigger in [
+            WarmTrigger::AppStart,
+            WarmTrigger::Wake,
+            WarmTrigger::ProfileChange,
+            WarmTrigger::KeyDown,
+        ] {
+            assert!(
+                !warm_on(&off, trigger, None, |_, _| panic!(
+                    "{trigger:?} must not warm when off"
+                )),
+                "{trigger:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_warm_claim_is_exclusive_and_released_on_drop() {
+        let flag = AtomicBool::new(false);
+        let first = WarmClaim::try_claim(&flag).expect("free");
+        assert!(
+            WarmClaim::try_claim(&flag).is_none(),
+            "one warm-up at a time"
+        );
+        drop(first);
+        assert!(WarmClaim::try_claim(&flag).is_some(), "free again");
+    }
+
+    #[test]
+    fn warm_timings_display_marks_phases_that_did_not_run() {
+        let timings = WarmTimings {
+            verify_ms: Some(12),
+            host_start_ms: None,
+            load_ms: Some(830),
+            canary_ms: None,
+        };
+        assert_eq!(
+            timings.to_string(),
+            "verify_ms=12 host_start_ms=- load_ms=830 canary_ms=-"
+        );
     }
 
     #[test]
