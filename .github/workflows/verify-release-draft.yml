@@ -38,7 +38,7 @@ jobs:
       DRAFT_MANIFEST: ${{ inputs.draft_manifest }}
     steps:
       - name: Checkout reviewed verifier
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -48,7 +48,7 @@ jobs:
         run: node scripts/prepare-draft-reverification.mjs preflight
 
       - name: Download original promoted draft snapshot and Windows evidence
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: draft-assets
           path: draft-assets
@@ -63,7 +63,7 @@ jobs:
       # Restore only (SAGA-546): this guarded workflow keeps a single always() condition, and a cache it
       # saved from a non-main ref could never be read again.
       - name: Cache Pianissimo model
-        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/Library/Application Support/Sagascript/Models
           key: macos-models-verify-${{ hashFiles('src-tauri/crates/sagascript-core/src/transcription/pianissimo_model.rs') }}
@@ -75,7 +75,7 @@ jobs:
 
       - name: Save source and asset binding
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: draft-reverification-receipt
           path: draft-reverification-receipt.json
