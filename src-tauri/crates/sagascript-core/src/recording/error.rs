@@ -16,7 +16,7 @@ use std::io;
 use crate::path_scrub::scrub_paths;
 
 /// Why a recording operation did not happen or did not finish.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum RecordingError {
     /// A filesystem call failed. `action` says which step ("create the
     /// recording folder"); the path is deliberately not kept.
@@ -64,6 +64,15 @@ pub enum RecordingError {
     /// the format this store writes). It is left exactly as it was.
     #[error("a track file cannot be read as a recording track: {reason}")]
     CorruptTrack { reason: &'static str },
+    /// The capture source could not be opened or never delivered audio: no
+    /// input device, a stream that would not start, a device that sent no
+    /// block within the start timeout (phase 1b).
+    #[error("the audio source is not available: {reason}")]
+    SourceUnavailable { reason: &'static str },
+    /// The session ended abnormally (its writer thread panicked) or was used
+    /// out of order. The recording folder, if any, is left for recovery.
+    #[error("the recording session failed: {reason}")]
+    SessionFailed { reason: &'static str },
     /// A file of the recording is a symbolic link (or a Windows reparse
     /// point), a directory, a pipe or anything else but a regular file, or a
     /// track file that has more than one name (a hard link, Unix). It is
@@ -135,6 +144,8 @@ impl RecordingError {
             Self::NotRegularFile { .. } => "recording_not_regular_file",
             Self::TracksIncomplete { .. } => "recording_tracks_incomplete",
             Self::Encoder { .. } => "recording_encoder",
+            Self::SourceUnavailable { .. } => "recording_source_unavailable",
+            Self::SessionFailed { .. } => "recording_session_failed",
         }
     }
 

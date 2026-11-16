@@ -9,6 +9,7 @@ use crate::recording::journal::{read_journal, JournalEvent, JournalFault};
 use crate::recording::manifest::parse_manifest;
 use crate::recording::recover::recover_folder;
 use crate::recording::test_signals::*;
+use crate::recording::TRACK_HEADER_LEN;
 
 fn mic_recording() -> NewRecording {
     recording("Team meeting", vec![track("mic", 48_000, 1, 24)])
@@ -41,7 +42,8 @@ fn a_new_recording_is_a_folder_with_its_final_name_and_four_files() {
             "mic.events.jsonl",
             "mic.flac",
             "recording.json",
-            "recording.lock"
+            "recording.lock",
+            "recording.start.json"
         ]
     );
 
@@ -677,6 +679,9 @@ impl TrackEncoder for FaultyEncoder {
     fn clipped_samples(&self) -> u64 {
         self.inner.clipped_samples()
     }
+    fn bytes_written(&self) -> u64 {
+        self.inner.bytes_written()
+    }
     fn sync(&mut self) -> Result<(), RecordingError> {
         if self.fail_sync {
             return Err(injected("sync a track file"));
@@ -864,6 +869,330 @@ fn a_failed_final_sync_leaves_a_committed_gap_and_the_track_goes_on() {
         decoded.samples == pcm[..kept],
         "the audio after the gap is untouched"
     );
+}
+
+// ---- what a live session needs (SAGA-563) ------------------------------------
+
+#[test]
+fn the_in_progress_manifest_is_padded_so_the_last_one_can_be_written_in_place() {
+    let root = TempDir::new();
+    let writer = RecordingStore::new(root.path())
+        .create(mic_recording())
+        .unwrap();
+    let on_disk = std::fs::read(writer.folder().join(MANIFEST_FILE)).unwrap();
+    assert_eq!(on_disk.len(), MANIFEST_RESERVED_BYTES);
+    // Padded, and still sealed: the seal covers the manifest, not the padding.
+    assert_eq!(
+        crate::recording::manifest_integrity(&on_disk),
+        crate::recording::Integrity::Valid
+    );
+    assert_eq!(
+        crate::recording::manifest_integrity(
+            &std::fs::read(writer.folder().join(START_COPY_FILE)).unwrap()
+        ),
+        crate::recording::Integrity::Valid
+    );
+    // Trailing spaces are JSON whitespace: the manifest reads as before.
+    assert_eq!(read_manifest(writer.folder()), *writer.manifest());
+}
+
+#[test]
+fn an_anchor_names_the_stored_frame_it_belongs_to() {
+    let root = TempDir::new();
+    let mut writer = RecordingStore::new(root.path())
+        .create(recording("Anchors", vec![track("mic", 16_000, 1, 16)]))
+        .unwrap();
+    writer.push("mic", &[0.0; 1000]).unwrap();
+    // The resampler holds frames back, so the frame is not "frames pushed".
+    writer.anchor_at("mic", 5_000_000_000, 777).unwrap();
+    writer.anchor("mic", 6_000_000_000).unwrap();
+    let dir = writer.folder().to_path_buf();
+    let manifest = writer.finish(EndedReason::Stopped).unwrap();
+    assert_eq!(
+        manifest.tracks[0].clock.anchors,
+        vec![(1_000_000, 0), (5_000_000_000, 777), (6_000_000_000, 1000)]
+    );
+    assert_eq!(
+        read_journal(&dir.join("mic.events.jsonl")).unwrap().anchors,
+        manifest.tracks[0].clock.anchors
+    );
+}
+
+#[test]
+fn a_track_that_cannot_be_written_any_more_is_cut_back_to_its_last_whole_block() {
+    let root = TempDir::new();
+    let mut writer = RecordingStore::new(root.path())
+        .create(mic_recording())
+        .unwrap();
+    let signal = to_f32(&speechlike(10_240, 4), 24); // two and a half blocks
+    writer.push("mic", &signal).unwrap();
+    writer.gap("mic", 5_000, GapReason::Overrun).unwrap(); // 10 240 .. 15 240
+    writer
+        .push("mic", &to_f32(&speechlike(100, 5), 24))
+        .unwrap();
+    let dir = writer.folder().to_path_buf();
+
+    // 15 340 frames were accepted: three whole blocks (12 288) reached the
+    // file, the rest was waiting for a block.
+    let kept = writer.abort_track("mic", EndedReason::DiskFull).unwrap();
+    assert_eq!(kept, 12_288);
+    assert!(writer.is_track_finished("mic"));
+    assert!(matches!(
+        writer.push("mic", &[0.0; 4]),
+        Err(RecordingError::TrackFinished)
+    ));
+    let manifest = writer.finish(EndedReason::Stopped).unwrap();
+    let track = &manifest.tracks[0];
+    assert_eq!(track.frames, 12_288);
+    assert_eq!(track.ended_reason, Some(EndedReason::DiskFull));
+    // The gap straddled the cut: the part inside is kept.
+    assert_eq!(track.gaps.len(), 1);
+    assert_eq!(
+        (track.gaps[0].at_frame, track.gaps[0].length),
+        (10_240, 2_048)
+    );
+    assert_eq!(manifest.state, RecordingState::Complete);
+
+    let decoded = decode_flac(&std::fs::read(dir.join("mic.flac")).unwrap());
+    assert_eq!(decoded.md5_verified, Some(true));
+    assert_eq!(decoded.samples.len(), 12_288);
+    assert!(decoded.samples[10_240..].iter().all(|s| *s == 0));
+    assert!(!dir.join("mic.tail").exists(), "no space to copy a tail to");
+    assert_eq!(
+        track.audio_sha256.as_deref(),
+        Some(
+            sha256_hex(&std::fs::read(dir.join("mic.flac")).unwrap()[TRACK_HEADER_LEN..]).as_str()
+        )
+    );
+}
+
+#[test]
+fn the_byte_counts_follow_the_files() {
+    let root = TempDir::new();
+    let mut writer = RecordingStore::new(root.path())
+        .create(mic_recording())
+        .unwrap();
+    assert_eq!(writer.bytes_written(), TRACK_HEADER_LEN as u64);
+    writer
+        .push("mic", &to_f32(&speechlike(8_192, 6), 24))
+        .unwrap();
+    assert!(writer.track_bytes("mic") > TRACK_HEADER_LEN as u64);
+    assert_eq!(writer.bytes_written(), writer.track_bytes("mic"));
+    assert_eq!(writer.frames_pushed("mic"), 8_192);
+    let dir = writer.folder().to_path_buf();
+    let expected = writer.bytes_written();
+    writer.sync().unwrap();
+    assert_eq!(
+        std::fs::metadata(dir.join("mic.flac")).unwrap().len(),
+        expected
+    );
+    assert_eq!(writer.track_bytes("nope"), 0);
+}
+
+/// Unix only: a read-only folder takes the place of a full disk, since either
+/// way no second file can be created.
+#[cfg(unix)]
+mod no_room_for_a_second_file {
+    use std::os::unix::fs::PermissionsExt;
+
+    use super::*;
+
+    fn can_create_in(dir: &Path) -> bool {
+        let probe = dir.join("probe");
+        let made = std::fs::File::create(&probe).is_ok();
+        let _ = std::fs::remove_file(&probe);
+        made
+    }
+
+    #[test]
+    fn the_final_manifest_is_written_over_the_old_one_in_place() {
+        let root = TempDir::new();
+        let mut writer = RecordingStore::new(root.path())
+            .create(mic_recording())
+            .unwrap();
+        writer
+            .push("mic", &to_f32(&speechlike(5_000, 7), 24))
+            .unwrap();
+        let dir = writer.folder().to_path_buf();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o500)).unwrap();
+        let restricted = !can_create_in(&dir);
+        let result = writer.finish(EndedReason::Stopped);
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let manifest = result.expect("the manifest fits in the space it reserved");
+        assert_eq!(manifest.state, RecordingState::Complete);
+        assert_eq!(read_manifest(&dir), manifest);
+        if restricted {
+            // Written in place over the padded file, and its seal holds: the
+            // finished recording is not mistaken for a torn one.
+            let on_disk = std::fs::read(dir.join(MANIFEST_FILE)).unwrap();
+            assert_eq!(on_disk.len(), MANIFEST_RESERVED_BYTES);
+            assert_eq!(
+                crate::recording::manifest_integrity(&on_disk),
+                crate::recording::Integrity::Valid
+            );
+            assert!(matches!(
+                crate::recording::recover_folder(&dir),
+                Err(RecordingError::NotRecording)
+            ));
+        }
+        if restricted {
+            // It really was written in place: the reserved size is unchanged.
+            assert_eq!(
+                std::fs::metadata(dir.join(MANIFEST_FILE)).unwrap().len(),
+                MANIFEST_RESERVED_BYTES as u64
+            );
+        }
+    }
+
+    #[test]
+    fn when_even_that_fails_the_recording_stays_open_for_recovery() {
+        let root = TempDir::new();
+        let mut writer = RecordingStore::new(root.path())
+            .create(mic_recording())
+            .unwrap();
+        writer
+            .push("mic", &to_f32(&speechlike(5_000, 8), 24))
+            .unwrap();
+        let dir = writer.folder().to_path_buf();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o500)).unwrap();
+        let manifest_path = dir.join(MANIFEST_FILE);
+        std::fs::set_permissions(&manifest_path, std::fs::Permissions::from_mode(0o400)).unwrap();
+        let restricted = !can_create_in(&dir);
+        let result = writer.finish(EndedReason::Stopped);
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::set_permissions(&manifest_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        if !restricted {
+            return; // running as root: permissions do not apply
+        }
+        assert!(result.is_err());
+        assert_eq!(read_manifest(&dir).state, RecordingState::Recording);
+        // The writer is gone, so the lock is free and recovery can finish it.
+        let recovered = crate::recording::recover_folder(&dir).unwrap();
+        assert_eq!(recovered.manifest.state, RecordingState::Complete);
+        // The tracks had been finished (the last block written) before the
+        // manifest failed, so nothing is lost.
+        assert_eq!(recovered.tracks[0].frames_kept, 5_000);
+    }
+}
+
+// ---- Codex review of 1b -------------------------------------------------------
+
+#[test]
+fn a_full_disk_at_the_journal_sync_of_a_finished_track_still_gives_the_disk_full_manifest() {
+    let root = TempDir::new();
+    let mut writer = RecordingStore::new(root.path())
+        .create(mic_recording())
+        .unwrap();
+    writer
+        .push("mic", &to_f32(&speechlike(6_000, 21), 24))
+        .unwrap();
+    writer.inject_journal_sync_failure("mic");
+    // The last block was written; only the journal's fsync found no room.
+    let error = writer
+        .finish_track("mic", EndedReason::Stopped)
+        .unwrap_err();
+    assert!(error.is_disk_full(), "{error:?}");
+    assert!(writer.is_track_finished("mic"));
+    let dir = writer.folder().to_path_buf();
+    let manifest = writer.finish(EndedReason::Stopped).unwrap();
+    let track = &manifest.tracks[0];
+    assert_eq!(track.ended_reason, Some(EndedReason::DiskFull));
+    assert_eq!(track.frames, 6_000, "the audio was complete");
+    assert_eq!(manifest.state, RecordingState::Complete);
+    let decoded = decode_flac(&std::fs::read(dir.join("mic.flac")).unwrap());
+    assert_eq!(decoded.md5_verified, Some(true));
+    assert_eq!(decoded.samples.len(), 6_000);
+}
+
+/// A rewrite of `recording.json` in place can be cut short anywhere. The
+/// recording must stay recoverable at every offset (Codex finding 1).
+#[test]
+fn an_interrupted_in_place_manifest_write_leaves_a_recording_recovery_can_finish() {
+    let root = TempDir::new();
+    let mut writer = RecordingStore::new(root.path())
+        .create(mic_recording())
+        .unwrap();
+    writer
+        .push("mic", &to_f32(&speechlike(9_000, 22), 24))
+        .unwrap();
+    writer.sync().unwrap();
+    let dir = writer.folder().to_path_buf();
+    let original = std::fs::read(dir.join(MANIFEST_FILE)).unwrap();
+    let mut finished = writer.manifest().clone();
+    finished.state = RecordingState::Complete;
+    finished.tracks[0].frames = 9_000;
+    finished.tracks[0].ended_reason = Some(EndedReason::Stopped);
+    let complete = serialize_manifest_sealed(&finished).unwrap();
+    assert!(complete.len() < original.len());
+    drop(writer); // the process "dies" in the middle of the rewrite
+
+    // Missing only the final newline is not torn: the seal covers the
+    // manifest, and the rewrite had written all of it.
+    {
+        let copy = copy_dir(&dir, &root.path().join("torn-newline"));
+        let mut almost = original.clone();
+        almost[..complete.len() - 1].copy_from_slice(&complete[..complete.len() - 1]);
+        std::fs::write(copy.join(MANIFEST_FILE), &almost).unwrap();
+        assert_eq!(
+            crate::recording::manifest_integrity(&almost),
+            crate::recording::Integrity::Valid
+        );
+        assert!(matches!(
+            crate::recording::recover_folder(&copy),
+            Err(RecordingError::NotRecording)
+        ));
+    }
+
+    let json_len = complete.len();
+    for cut in [
+        0,
+        1,
+        2,
+        17,
+        json_len / 3,
+        json_len / 2,
+        json_len - 3,
+        json_len - 2,
+    ] {
+        let copy = copy_dir(&dir, &root.path().join(format!("torn-{cut}")));
+        let mut torn = original.clone();
+        torn[..cut].copy_from_slice(&complete[..cut]);
+        std::fs::write(copy.join(MANIFEST_FILE), &torn).unwrap();
+        let recovered = crate::recording::recover_folder(&copy)
+            .unwrap_or_else(|e| panic!("cut at {cut} of {json_len}: {e:?}"));
+        assert_eq!(
+            recovered.manifest.state,
+            RecordingState::Complete,
+            "cut {cut}"
+        );
+        assert!(recovered.manifest.recovered, "cut {cut}");
+        assert_eq!(
+            recovered.tracks[0].frames_kept, 8_192,
+            "cut {cut}: whole blocks"
+        );
+        let on_disk = read_manifest(&copy);
+        assert_eq!(on_disk.state, RecordingState::Complete);
+        assert_eq!(on_disk.recording_id, recovered.manifest.recording_id);
+        assert_eq!(
+            on_disk.title, "Team meeting",
+            "the start copy supplied the description"
+        );
+    }
+}
+
+#[test]
+fn a_finished_recording_does_not_keep_the_start_copy() {
+    let root = TempDir::new();
+    let writer = RecordingStore::new(root.path())
+        .create(mic_recording())
+        .unwrap();
+    let dir = writer.folder().to_path_buf();
+    assert!(
+        dir.join(START_COPY_FILE).is_file(),
+        "written with the recording"
+    );
+    writer.finish(EndedReason::Stopped).unwrap();
+    assert!(!dir.join(START_COPY_FILE).exists());
 }
 
 // ---- a track that ended early keeps what came before, and the others are finished ----
