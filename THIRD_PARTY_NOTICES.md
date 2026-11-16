@@ -75,6 +75,7 @@ attribution as well. No matching CoreML encoder is supplied for the fine-tune.
 | block2 | 0.6.2 | MIT | [upstream](https://github.com/madsmtm/objc2) |
 | brotli | 8.0.4 | BSD-3-Clause AND MIT | [upstream](https://github.com/dropbox/rust-brotli) |
 | brotli-decompressor | 5.0.3 | BSD-3-Clause/MIT | [upstream](https://github.com/dropbox/rust-brotli-decompressor) |
+| built | 0.7.7 | MIT | [upstream](https://github.com/lukaslueg/built) |
 | bumpalo | 3.20.1 | MIT OR Apache-2.0 | [upstream](https://github.com/fitzgen/bumpalo) |
 | bytemuck | 1.25.0 | Zlib OR Apache-2.0 OR MIT | [upstream](https://github.com/Lokathor/bytemuck) |
 | byteorder | 1.5.0 | Unlicense OR MIT | [upstream](https://github.com/BurntSushi/byteorder) |
@@ -117,6 +118,8 @@ attribution as well. No matching CoreML encoder is supplied for the fine-tune.
 | cpal | 0.15.3 | Apache-2.0 | [upstream](https://github.com/rustaudio/cpal) |
 | cpufeatures | 0.2.17 | MIT OR Apache-2.0 | [upstream](https://github.com/RustCrypto/utils) |
 | cpufeatures | 0.3.1 | MIT OR Apache-2.0 | [upstream](https://github.com/RustCrypto/utils) |
+| crc | 3.4.0 | MIT OR Apache-2.0 | [upstream](https://github.com/mrhooray/crc-rs.git) |
+| crc-catalog | 2.5.0 | MIT OR Apache-2.0 | [upstream](https://github.com/akhilles/crc-catalog.git) |
 | crc32fast | 1.5.0 | MIT OR Apache-2.0 | [upstream](https://github.com/srijs/rust-crc32fast) |
 | crossbeam-channel | 0.5.15 | MIT OR Apache-2.0 | [upstream](https://github.com/crossbeam-rs/crossbeam) |
 | crossbeam-utils | 0.8.21 | MIT OR Apache-2.0 | [upstream](https://github.com/crossbeam-rs/crossbeam) |
@@ -161,6 +164,7 @@ attribution as well. No matching CoreML encoder is supplied for the fine-tune.
 | fdeflate | 0.3.7 | MIT OR Apache-2.0 | [upstream](https://github.com/image-rs/fdeflate) |
 | filetime | 0.2.27 | MIT/Apache-2.0 | [upstream](https://github.com/alexcrichton/filetime) |
 | find-msvc-tools | 0.1.9 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-lang/cc-rs) |
+| flacenc | 0.5.1 | Apache-2.0 | [upstream](https://github.com/yotarok/flacenc-rs/) |
 | flate2 | 1.1.9 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-lang/flate2-rs) |
 | fnv | 1.0.7 | Apache-2.0 / MIT | [upstream](https://github.com/servo/rust-fnv) |
 | foreign-types | 0.5.0 | MIT/Apache-2.0 | [upstream](https://github.com/sfackler/foreign-types) |
@@ -187,8 +191,10 @@ attribution as well. No matching CoreML encoder is supplied for the fine-tune.
 | glob | 0.3.3 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-lang/glob) |
 | global-hotkey | 0.8.0 | Apache-2.0 OR MIT | [upstream](https://github.com/tauri-apps/global-hotkey) |
 | half | 2.7.1 | MIT OR Apache-2.0 | [upstream](https://github.com/VoidStarKat/half-rs) |
+| hash32 | 0.3.1 | MIT OR Apache-2.0 | [upstream](https://github.com/japaric/hash32) |
 | hashbrown | 0.12.3 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-lang/hashbrown) |
 | hashbrown | 0.16.1 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-lang/hashbrown) |
+| heapless | 0.8.0 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-embedded/heapless) |
 | heck | 0.5.0 | MIT OR Apache-2.0 | [upstream](https://github.com/withoutboats/heck) |
 | hex | 0.4.3 | MIT OR Apache-2.0 | [upstream](https://github.com/KokaKiwi/rust-hex) |
 | hmac-sha256 | 1.1.14 | ISC | [upstream](https://github.com/jedisct1/rust-hmac-sha256) |
@@ -250,6 +256,7 @@ attribution as well. No matching CoreML encoder is supplied for the fine-tune.
 | matches | 0.1.10 | MIT | [upstream](https://github.com/SimonSapin/rust-std-candidates) |
 | matrixmultiply | 0.3.10 | MIT/Apache-2.0 | [upstream](https://github.com/bluss/matrixmultiply/) |
 | matrixmultiply | 0.3.11 | MIT/Apache-2.0 | [upstream](https://github.com/bluss/matrixmultiply/) |
+| md-5 | 0.10.6 | MIT OR Apache-2.0 | [upstream](https://github.com/RustCrypto/hashes) |
 | memchr | 2.8.0 | Unlicense OR MIT | [upstream](https://github.com/BurntSushi/memchr) |
 | memchr | 2.8.3 | Unlicense OR MIT | [upstream](https://github.com/BurntSushi/memchr) |
 | memory-stats | 1.2.0 | MIT OR Apache-2.0 | [upstream](https://github.com/Arc-blroth/memory-stats) |
@@ -368,6 +375,7 @@ attribution as well. No matching CoreML encoder is supplied for the fine-tune.
 | rustls-pki-types | 1.14.0 | MIT OR Apache-2.0 | [upstream](https://github.com/rustls/pki-types) |
 | rustls-platform-verifier | 0.6.2 | MIT OR Apache-2.0 | [upstream](https://github.com/rustls/rustls-platform-verifier) |
 | rustls-webpki | 0.103.16 | ISC | [upstream](https://github.com/rustls/webpki) |
+| rustversion | 1.0.22 | MIT OR Apache-2.0 | [upstream](https://github.com/dtolnay/rustversion) |
 | same-file | 1.0.6 | Unlicense/MIT | [upstream](https://github.com/BurntSushi/same-file) |
 | schemars | 0.8.22 | MIT | [upstream](https://github.com/GREsau/schemars) |
 | schemars | 0.9.0 | MIT | [upstream](https://github.com/GREsau/schemars) |
@@ -378,6 +386,7 @@ attribution as well. No matching CoreML encoder is supplied for the fine-tune.
 | security-framework-sys | 2.16.0 | MIT OR Apache-2.0 | [upstream](https://github.com/kornelski/rust-security-framework) |
 | selectors | 0.24.0 | MPL-2.0 | [upstream](https://github.com/servo/servo) |
 | semver | 1.0.28 | MIT OR Apache-2.0 | [upstream](https://github.com/dtolnay/semver) |
+| seq-macro | 0.3.6 | MIT OR Apache-2.0 | [upstream](https://github.com/dtolnay/seq-macro) |
 | serde | 1.0.229 | MIT OR Apache-2.0 | [upstream](https://github.com/serde-rs/serde) |
 | serde-untagged | 0.1.9 | MIT OR Apache-2.0 | [upstream](https://github.com/dtolnay/serde-untagged) |
 | serde_core | 1.0.229 | MIT OR Apache-2.0 | [upstream](https://github.com/serde-rs/serde) |
@@ -2666,6 +2675,36 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ~~~~
 
+### 20005777a5fe
+
+Components: Rust built@0.7.7
+
+Source filenames: LICENSE
+
+~~~~text
+MIT License
+
+Copyright (c) 2017-2023 Lukas Lueg
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+~~~~
+
 ### 20712cc56fa0
 
 Components: Rust objc@0.2.7
@@ -3220,7 +3259,7 @@ SOFTWARE.
 
 ### 283ea6cc2997
 
-Components: Rust clang-sys@1.8.1, Rust cpal@0.15.3, Rust embed_plist@1.2.2, Rust encoding_rs@0.8.35, Rust iri-string@0.7.10, Rust lzma-rust2@0.15.7, Rust ort-sys@2.0.0-rc.12, Rust ort-sys@2.0.0-rc.13, Rust ort@2.0.0-rc.12, Rust ort@2.0.0-rc.13, Rust rustls-platform-verifier@0.6.2, Rust serialize-to-javascript-impl@0.1.2, Rust serialize-to-javascript@0.1.2, Rust ureq@3.3.0, Rust utf8_iter@1.0.4, Rust zeroize@1.8.2, npm @eslint/config-array@0.23.5, npm @eslint/config-helpers@0.7.0, npm @eslint/core@1.2.1, npm @eslint/object-schema@3.0.5, npm @eslint/plugin-kit@0.7.3, npm @humanfs/core@0.19.2, npm @humanfs/node@0.16.8, npm @humanwhocodes/module-importer@1.0.1, npm @humanwhocodes/retry@0.4.3
+Components: Rust clang-sys@1.8.1, Rust cpal@0.15.3, Rust embed_plist@1.2.2, Rust encoding_rs@0.8.35, Rust flacenc@0.5.1, Rust iri-string@0.7.10, Rust lzma-rust2@0.15.7, Rust ort-sys@2.0.0-rc.12, Rust ort-sys@2.0.0-rc.13, Rust ort@2.0.0-rc.12, Rust ort@2.0.0-rc.13, Rust rustls-platform-verifier@0.6.2, Rust serialize-to-javascript-impl@0.1.2, Rust serialize-to-javascript@0.1.2, Rust ureq@3.3.0, Rust utf8_iter@1.0.4, Rust zeroize@1.8.2, npm @eslint/config-array@0.23.5, npm @eslint/config-helpers@0.7.0, npm @eslint/core@1.2.1, npm @eslint/object-schema@3.0.5, npm @eslint/plugin-kit@0.7.3, npm @humanfs/core@0.19.2, npm @humanfs/node@0.16.8, npm @humanwhocodes/module-importer@1.0.1, npm @humanwhocodes/retry@0.4.3
 
 Source filenames: LICENSE, LICENSE-APACHE, LICENSE-APACHE.txt, LICENSE.txt
 
@@ -3986,7 +4025,7 @@ SOFTWARE.
 
 ### 30fefc3a7d6a
 
-Components: Rust adler2@2.0.1, Rust anyhow@1.0.104, Rust atomic-waker@1.1.2, Rust camino@1.2.2, Rust cargo-platform@0.1.9, Rust cargo_metadata@0.19.2, Rust ctrlc@3.5.2, Rust displaydoc@0.2.5, Rust dtoa@1.0.11, Rust dyn-clone@1.0.20, Rust erased-serde@0.4.9, Rust fastrand@2.3.0, Rust itoa@1.0.17, Rust itoa@1.0.18, Rust kuchikiki@0.8.8-speedreader, Rust minimal-lexical@0.2.1, Rust once_cell@1.21.3, Rust once_cell@1.21.4, Rust pin-project-lite@0.2.16, Rust pin-project-lite@0.2.17, Rust portable-atomic@1.13.1, Rust prettyplease@0.2.37, Rust proc-macro2@1.0.106, Rust proc-macro2@1.0.107, Rust quote@1.0.44, Rust quote@1.0.47, Rust ref-cast-impl@1.0.25, Rust ref-cast@1.0.25, Rust rustc-hash@2.1.1, Rust rustix@1.1.5, Rust semver@1.0.28, Rust serde-untagged@0.1.9, Rust serde@1.0.229, Rust serde_core@1.0.229, Rust serde_derive@1.0.229, Rust serde_derive_internals@0.29.1, Rust serde_json@1.0.154, Rust serde_repr@0.1.20, Rust servo_arc@0.2.0, Rust syn@1.0.109, Rust syn@2.0.116, Rust syn@3.0.4, Rust syn@3.0.9, Rust thiserror-impl@1.0.69, Rust thiserror-impl@2.0.21, Rust thiserror@1.0.69, Rust thiserror@2.0.21, Rust typed-path@0.12.3, Rust typeid@1.0.3, Rust unicode-ident@1.0.24, Rust unicode-ident@1.0.26, Rust utf-8@0.7.6, Rust utf8-zero@0.8.1, Rust zmij@1.0.21, Rust zmij@1.0.23
+Components: Rust adler2@2.0.1, Rust anyhow@1.0.104, Rust atomic-waker@1.1.2, Rust camino@1.2.2, Rust cargo-platform@0.1.9, Rust cargo_metadata@0.19.2, Rust ctrlc@3.5.2, Rust displaydoc@0.2.5, Rust dtoa@1.0.11, Rust dyn-clone@1.0.20, Rust erased-serde@0.4.9, Rust fastrand@2.3.0, Rust itoa@1.0.17, Rust itoa@1.0.18, Rust kuchikiki@0.8.8-speedreader, Rust minimal-lexical@0.2.1, Rust once_cell@1.21.3, Rust once_cell@1.21.4, Rust pin-project-lite@0.2.16, Rust pin-project-lite@0.2.17, Rust portable-atomic@1.13.1, Rust prettyplease@0.2.37, Rust proc-macro2@1.0.106, Rust proc-macro2@1.0.107, Rust quote@1.0.44, Rust quote@1.0.47, Rust ref-cast-impl@1.0.25, Rust ref-cast@1.0.25, Rust rustc-hash@2.1.1, Rust rustix@1.1.5, Rust rustversion@1.0.22, Rust semver@1.0.28, Rust seq-macro@0.3.6, Rust serde-untagged@0.1.9, Rust serde@1.0.229, Rust serde_core@1.0.229, Rust serde_derive@1.0.229, Rust serde_derive_internals@0.29.1, Rust serde_json@1.0.154, Rust serde_repr@0.1.20, Rust servo_arc@0.2.0, Rust syn@1.0.109, Rust syn@2.0.116, Rust syn@3.0.4, Rust syn@3.0.9, Rust thiserror-impl@1.0.69, Rust thiserror-impl@2.0.21, Rust thiserror@1.0.69, Rust thiserror@2.0.21, Rust typed-path@0.12.3, Rust typeid@1.0.3, Rust unicode-ident@1.0.24, Rust unicode-ident@1.0.26, Rust utf-8@0.7.6, Rust utf8-zero@0.8.1, Rust zmij@1.0.21, Rust zmij@1.0.23
 
 Source filenames: LICENSE, LICENSE-MIT
 
@@ -4849,7 +4888,7 @@ SOFTWARE.
 
 ### 4031faf6212e
 
-Components: Rust sha2@0.10.9
+Components: Rust md-5@0.10.6, Rust sha2@0.10.9
 
 Source filenames: LICENSE-MIT
 
@@ -4857,6 +4896,40 @@ Source filenames: LICENSE-MIT
 Copyright (c) 2006-2009 Graydon Hoare
 Copyright (c) 2009-2013 Mozilla Foundation
 Copyright (c) 2016 Artyom Pavlov
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+~~~~
+
+### 42926e590380
+
+Components: Rust hash32@0.3.1
+
+Source filenames: LICENSE-MIT
+
+~~~~text
+Copyright (c) 2018 Jorge Aparicio
 
 Permission is hereby granted, free of charge, to any
 person obtaining a copy of this software and associated
@@ -11627,7 +11700,7 @@ SOFTWARE.
 
 ### 85ad950cce87
 
-Components: Rust anyhow@1.0.104, Rust dtoa@1.0.11, Rust dyn-clone@1.0.20, Rust erased-serde@0.4.9, Rust itoa@1.0.17, Rust itoa@1.0.18, Rust libc@0.2.191, Rust mach2@0.4.3, Rust osakit@0.3.1, Rust prettyplease@0.2.37, Rust proc-macro2@1.0.106, Rust proc-macro2@1.0.107, Rust quote@1.0.44, Rust quote@1.0.47, Rust ref-cast-impl@1.0.25, Rust ref-cast@1.0.25, Rust rustc-hash@2.1.1, Rust semver@1.0.28, Rust serde-untagged@0.1.9, Rust serde@1.0.229, Rust serde_core@1.0.229, Rust serde_derive@1.0.229, Rust serde_derive_internals@0.29.1, Rust serde_json@1.0.154, Rust serde_repr@0.1.20, Rust syn@2.0.116, Rust syn@3.0.4, Rust syn@3.0.9, Rust thiserror-impl@1.0.69, Rust thiserror-impl@2.0.21, Rust thiserror@1.0.69, Rust thiserror@2.0.21, Rust typed-path@0.12.3, Rust typeid@1.0.3, Rust unicode-ident@1.0.24, Rust unicode-ident@1.0.26, Rust utf-8@0.7.6, Rust utf8-zero@0.8.1, Rust utf8parse@0.2.2
+Components: Rust anyhow@1.0.104, Rust dtoa@1.0.11, Rust dyn-clone@1.0.20, Rust erased-serde@0.4.9, Rust itoa@1.0.17, Rust itoa@1.0.18, Rust libc@0.2.191, Rust mach2@0.4.3, Rust osakit@0.3.1, Rust prettyplease@0.2.37, Rust proc-macro2@1.0.106, Rust proc-macro2@1.0.107, Rust quote@1.0.44, Rust quote@1.0.47, Rust ref-cast-impl@1.0.25, Rust ref-cast@1.0.25, Rust rustc-hash@2.1.1, Rust rustversion@1.0.22, Rust semver@1.0.28, Rust seq-macro@0.3.6, Rust serde-untagged@0.1.9, Rust serde@1.0.229, Rust serde_core@1.0.229, Rust serde_derive@1.0.229, Rust serde_derive_internals@0.29.1, Rust serde_json@1.0.154, Rust serde_repr@0.1.20, Rust syn@2.0.116, Rust syn@3.0.4, Rust syn@3.0.9, Rust thiserror-impl@1.0.69, Rust thiserror-impl@2.0.21, Rust thiserror@1.0.69, Rust thiserror@2.0.21, Rust typed-path@0.12.3, Rust typeid@1.0.3, Rust unicode-ident@1.0.24, Rust unicode-ident@1.0.26, Rust utf-8@0.7.6, Rust utf8-zero@0.8.1, Rust utf8parse@0.2.2
 
 Source filenames: LICENSE-APACHE
 
@@ -14980,6 +15053,40 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ~~~~
 
+### 8adee6e9dc6d
+
+Components: Rust heapless@0.8.0
+
+Source filenames: LICENSE-MIT
+
+~~~~text
+Copyright (c) 2017 Jorge Aparicio
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+~~~~
+
 ### 8d1f81ea4e87
 
 Components: Rust lock_api@0.4.14, Rust parking_lot@0.12.5, Rust parking_lot_core@0.9.12, Rust rustc_version@0.4.1, Rust thread_local@1.1.9
@@ -15346,7 +15453,7 @@ DEALINGS IN THE SOFTWARE.
 
 ### 954f335b8baf
 
-Components: Rust arrayvec@0.7.6, Rust atomic-waker@1.1.2, Rust autocfg@1.5.0, Rust autocfg@1.5.1, Rust base64@0.21.7, Rust base64@0.22.1, Rust base64@0.23.1, Rust bitflags@1.3.2, Rust bitflags@2.11.0, Rust bumpalo@3.20.1, Rust camino@1.2.2, Rust cc@1.2.56, Rust cexpr@0.6.0, Rust cfg-if@1.0.4, Rust cfg-if@1.0.5, Rust cmake@0.1.57, Rust cocoa-foundation@0.2.1, Rust cocoa@0.26.1, Rust core-foundation-sys@0.8.7, Rust core-foundation@0.10.1, Rust core-foundation@0.9.4, Rust core-graphics-types@0.2.0, Rust core-graphics@0.24.0, Rust core-graphics@0.25.0, Rust coreaudio-rs@0.11.3, Rust crossbeam-channel@0.5.15, Rust crossbeam-utils@0.8.21, Rust displaydoc@0.2.5, Rust either@1.15.0, Rust equivalent@1.0.2, Rust errno@0.3.14, Rust fastrand@2.3.0, Rust filetime@0.2.27, Rust find-msvc-tools@0.1.9, Rust flate2@1.1.9, Rust fnv@1.0.7, Rust form_urlencoded@1.2.2, Rust fs2@0.4.3, Rust futf@0.1.5, Rust glob@0.3.3, Rust global-hotkey@0.8.0, Rust hashbrown@0.12.3, Rust hashbrown@0.16.1, Rust heck@0.5.0, Rust html5ever@0.29.1, Rust httparse@1.10.1, Rust hyper-rustls@0.27.7, Rust hyper-tls@0.6.0, Rust idna@1.1.0, Rust idna_adapter@1.2.1, Rust indexmap@1.9.3, Rust indexmap@2.13.0, Rust itertools@0.13.0, Rust jobserver@0.1.34, Rust keyboard-types@0.7.0, Rust keyboard-types@0.8.3, Rust lazy_static@1.5.0, Rust lock_api@0.4.14, Rust log@0.4.29, Rust markup5ever@0.14.1, Rust matrixmultiply@0.3.10, Rust matrixmultiply@0.3.11, Rust mime@0.3.17, Rust muda@0.17.2, Rust ndarray@0.17.2, Rust nodrop@0.1.14, Rust num-complex@0.4.6, Rust num-integer@0.1.46, Rust num-integer@0.1.47, Rust num-traits@0.2.19, Rust num_cpus@1.17.0, Rust once_cell@1.21.3, Rust once_cell@1.21.4, Rust parking_lot@0.12.5, Rust parking_lot_core@0.9.12, Rust percent-encoding@2.3.2, Rust png@0.17.16, Rust png@0.18.1, Rust primal-check@0.3.4, Rust proc-macro-hack@0.5.20+deprecated, Rust rawpointer@0.2.1, Rust regex-automata@0.4.18, Rust regex-syntax@0.8.11, Rust regex@1.13.1, Rust rustc_version@0.4.1, Rust rustix@1.1.5, Rust rustls@0.23.46, Rust scopeguard@1.2.0, Rust security-framework-sys@2.16.0, Rust security-framework@3.6.0, Rust serde_with@3.16.1, Rust serde_with_macros@3.16.1, Rust servo_arc@0.2.0, Rust signal-hook-registry@1.4.8, Rust signal-hook@0.3.18, Rust smallvec@1.15.1, Rust smallvec@1.16.2, Rust socket2@0.6.5, Rust stable_deref_trait@1.2.1, Rust string_cache@0.8.9, Rust string_cache_codegen@0.5.4, Rust syn@1.0.109, Rust system-configuration-sys@0.6.0, Rust system-configuration@0.7.0, Rust tar@0.4.46, Rust tempfile@3.27.0, Rust tendril@0.4.3, Rust thread_local@1.1.9, Rust tray-icon@0.21.3, Rust unicode-segmentation@1.12.0, Rust unicode-width@0.2.2, Rust url@2.5.8, Rust uuid@1.21.0, Rust version_check@0.9.5, Rust weezl@0.1.12, Rust window-vibrancy@0.6.0, Rust wry@0.54.4, Rust xattr@1.6.1
+Components: Rust arrayvec@0.7.6, Rust atomic-waker@1.1.2, Rust autocfg@1.5.0, Rust autocfg@1.5.1, Rust base64@0.21.7, Rust base64@0.22.1, Rust base64@0.23.1, Rust bitflags@1.3.2, Rust bitflags@2.11.0, Rust bumpalo@3.20.1, Rust camino@1.2.2, Rust cc@1.2.56, Rust cexpr@0.6.0, Rust cfg-if@1.0.4, Rust cfg-if@1.0.5, Rust cmake@0.1.57, Rust cocoa-foundation@0.2.1, Rust cocoa@0.26.1, Rust core-foundation-sys@0.8.7, Rust core-foundation@0.10.1, Rust core-foundation@0.9.4, Rust core-graphics-types@0.2.0, Rust core-graphics@0.24.0, Rust core-graphics@0.25.0, Rust coreaudio-rs@0.11.3, Rust crossbeam-channel@0.5.15, Rust crossbeam-utils@0.8.21, Rust displaydoc@0.2.5, Rust either@1.15.0, Rust equivalent@1.0.2, Rust errno@0.3.14, Rust fastrand@2.3.0, Rust filetime@0.2.27, Rust find-msvc-tools@0.1.9, Rust flate2@1.1.9, Rust fnv@1.0.7, Rust form_urlencoded@1.2.2, Rust fs2@0.4.3, Rust futf@0.1.5, Rust glob@0.3.3, Rust global-hotkey@0.8.0, Rust hash32@0.3.1, Rust hashbrown@0.12.3, Rust hashbrown@0.16.1, Rust heapless@0.8.0, Rust heck@0.5.0, Rust html5ever@0.29.1, Rust httparse@1.10.1, Rust hyper-rustls@0.27.7, Rust hyper-tls@0.6.0, Rust idna@1.1.0, Rust idna_adapter@1.2.1, Rust indexmap@1.9.3, Rust indexmap@2.13.0, Rust itertools@0.13.0, Rust jobserver@0.1.34, Rust keyboard-types@0.7.0, Rust keyboard-types@0.8.3, Rust lazy_static@1.5.0, Rust lock_api@0.4.14, Rust log@0.4.29, Rust markup5ever@0.14.1, Rust matrixmultiply@0.3.10, Rust matrixmultiply@0.3.11, Rust mime@0.3.17, Rust muda@0.17.2, Rust ndarray@0.17.2, Rust nodrop@0.1.14, Rust num-complex@0.4.6, Rust num-integer@0.1.46, Rust num-integer@0.1.47, Rust num-traits@0.2.19, Rust num_cpus@1.17.0, Rust once_cell@1.21.3, Rust once_cell@1.21.4, Rust parking_lot@0.12.5, Rust parking_lot_core@0.9.12, Rust percent-encoding@2.3.2, Rust png@0.17.16, Rust png@0.18.1, Rust primal-check@0.3.4, Rust proc-macro-hack@0.5.20+deprecated, Rust rawpointer@0.2.1, Rust regex-automata@0.4.18, Rust regex-syntax@0.8.11, Rust regex@1.13.1, Rust rustc_version@0.4.1, Rust rustix@1.1.5, Rust rustls@0.23.46, Rust scopeguard@1.2.0, Rust security-framework-sys@2.16.0, Rust security-framework@3.6.0, Rust serde_with@3.16.1, Rust serde_with_macros@3.16.1, Rust servo_arc@0.2.0, Rust signal-hook-registry@1.4.8, Rust signal-hook@0.3.18, Rust smallvec@1.15.1, Rust smallvec@1.16.2, Rust socket2@0.6.5, Rust stable_deref_trait@1.2.1, Rust string_cache@0.8.9, Rust string_cache_codegen@0.5.4, Rust syn@1.0.109, Rust system-configuration-sys@0.6.0, Rust system-configuration@0.7.0, Rust tar@0.4.46, Rust tempfile@3.27.0, Rust tendril@0.4.3, Rust thread_local@1.1.9, Rust tray-icon@0.21.3, Rust unicode-segmentation@1.12.0, Rust unicode-width@0.2.2, Rust url@2.5.8, Rust uuid@1.21.0, Rust version_check@0.9.5, Rust weezl@0.1.12, Rust window-vibrancy@0.6.0, Rust wry@0.54.4, Rust xattr@1.6.1
 
 Source filenames: LICENSE-APACHE
 
@@ -20447,6 +20554,36 @@ WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION,
 ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 ~~~~
 
+### bec1ff6c8863
+
+Components: Rust crc@3.4.0
+
+Source filenames: LICENSE-MIT
+
+~~~~text
+MIT License
+
+Copyright (c) 2017 crc-rs Developers
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+~~~~
+
 ### bfa0e1441c86
 
 Components: Rust memory-stats@1.2.0
@@ -23409,6 +23546,216 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 ~~~~
 
+### dc08c5cf03ec
+
+Components: Rust crc@3.4.0
+
+Source filenames: LICENSE-APACHE
+
+~~~~text
+Apache License
+                        Version 2.0 January 2004
+                     http://www.apache.org/licenses/
+
+TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
+
+1. Definitions.
+
+   "License" shall mean the terms and conditions for use, reproduction,
+   and distribution as defined by Sections 1 through 9 of this document.
+
+   "Licensor" shall mean the copyright owner or entity authorized by
+   the copyright owner that is granting the License.
+
+   "Legal Entity" shall mean the union of the acting entity and all
+   other entities that control, are controlled by, or are under common
+   control with that entity. For the purposes of this definition,
+   "control" means (i) the power, direct or indirect, to cause the
+   direction or management of such entity, whether by contract or
+   otherwise, or (ii) ownership of fifty percent (50%) or more of the
+   outstanding shares, or (iii) beneficial ownership of such entity.
+
+   "You" (or "Your") shall mean an individual or Legal Entity
+   exercising permissions granted by this License.
+
+   "Source" form shall mean the preferred form for making modifications,
+   including but not limited to software source code, documentation
+   source, and configuration files.
+
+   "Object" form shall mean any form resulting from mechanical
+   transformation or translation of a Source form, including but
+   not limited to compiled object code, generated documentation,
+   and conversions to other media types.
+
+   "Work" shall mean the work of authorship, whether in Source or
+   Object form, made available under the License, as indicated by a
+   copyright notice that is included in or attached to the work
+   (an example is provided in the Appendix below).
+
+   "Derivative Works" shall mean any work, whether in Source or Object
+   form, that is based on (or derived from) the Work and for which the
+   editorial revisions, annotations, elaborations, or other modifications
+   represent, as a whole, an original work of authorship. For the purposes
+   of this License, Derivative Works shall not include works that remain
+   separable from, or merely link (or bind by name) to the interfaces of,
+   the Work and Derivative Works thereof.
+
+   "Contribution" shall mean any work of authorship, including
+   the original version of the Work and any modifications or additions
+   to that Work or Derivative Works thereof, that is intentionally
+   submitted to Licensor for inclusion in the Work by the copyright owner
+   or by an individual or Legal Entity authorized to submit on behalf of
+   the copyright owner. For the purposes of this definition, "submitted"
+   means any form of electronic, verbal, or written communication sent
+   to the Licensor or its representatives, including but not limited to
+   communication on electronic mailing lists, source code control systems,
+   and issue tracking systems that are managed by, or on behalf of, the
+   Licensor for the purpose of discussing and improving the Work, but
+   excluding communication that is conspicuously marked or otherwise
+   designated in writing by the copyright owner as "Not a Contribution."
+
+   "Contributor" shall mean Licensor and any individual or Legal Entity
+   on behalf of whom a Contribution has been received by Licensor and
+   subsequently incorporated within the Work.
+
+2. Grant of Copyright License. Subject to the terms and conditions of
+   this License, each Contributor hereby grants to You a perpetual,
+   worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+   copyright license to reproduce, prepare Derivative Works of,
+   publicly display, publicly perform, sublicense, and distribute the
+   Work and such Derivative Works in Source or Object form.
+
+3. Grant of Patent License. Subject to the terms and conditions of
+   this License, each Contributor hereby grants to You a perpetual,
+   worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+   (except as stated in this section) patent license to make, have made,
+   use, offer to sell, sell, import, and otherwise transfer the Work,
+   where such license applies only to those patent claims licensable
+   by such Contributor that are necessarily infringed by their
+   Contribution(s) alone or by combination of their Contribution(s)
+   with the Work to which such Contribution(s) was submitted. If You
+   institute patent litigation against any entity (including a
+   cross-claim or counterclaim in a lawsuit) alleging that the Work
+   or a Contribution incorporated within the Work constitutes direct
+   or contributory patent infringement, then any patent licenses
+   granted to You under this License for that Work shall terminate
+   as of the date such litigation is filed.
+
+4. Redistribution. You may reproduce and distribute copies of the
+   Work or Derivative Works thereof in any medium, with or without
+   modifications, and in Source or Object form, provided that You
+   meet the following conditions:
+
+   (a) You must give any other recipients of the Work or
+       Derivative Works a copy of this License; and
+
+   (b) You must cause any modified files to carry prominent notices
+       stating that You changed the files; and
+
+   (c) You must retain, in the Source form of any Derivative Works
+       that You distribute, all copyright, patent, trademark, and
+       attribution notices from the Source form of the Work,
+       excluding those notices that do not pertain to any part of
+       the Derivative Works; and
+
+   (d) If the Work includes a "NOTICE" text file as part of its
+       distribution, then any Derivative Works that You distribute must
+       include a readable copy of the attribution notices contained
+       within such NOTICE file, excluding those notices that do not
+       pertain to any part of the Derivative Works, in at least one
+       of the following places: within a NOTICE text file distributed
+       as part of the Derivative Works; within the Source form or
+       documentation, if provided along with the Derivative Works; or,
+       within a display generated by the Derivative Works, if and
+       wherever such third-party notices normally appear. The contents
+       of the NOTICE file are for informational purposes only and
+       do not modify the License. You may add Your own attribution
+       notices within Derivative Works that You distribute, alongside
+       or as an addendum to the NOTICE text from the Work, provided
+       that such additional attribution notices cannot be construed
+       as modifying the License.
+
+   You may add Your own copyright statement to Your modifications and
+   may provide additional or different license terms and conditions
+   for use, reproduction, or distribution of Your modifications, or
+   for any such Derivative Works as a whole, provided Your use,
+   reproduction, and distribution of the Work otherwise complies with
+   the conditions stated in this License.
+
+5. Submission of Contributions. Unless You explicitly state otherwise,
+   any Contribution intentionally submitted for inclusion in the Work
+   by You to the Licensor shall be under the terms and conditions of
+   this License, without any additional terms or conditions.
+   Notwithstanding the above, nothing herein shall supersede or modify
+   the terms of any separate license agreement you may have executed
+   with Licensor regarding such Contributions.
+
+6. Trademarks. This License does not grant permission to use the trade
+   names, trademarks, service marks, or product names of the Licensor,
+   except as required for reasonable and customary use in describing the
+   origin of the Work and reproducing the content of the NOTICE file.
+
+7. Disclaimer of Warranty. Unless required by applicable law or
+   agreed to in writing, Licensor provides the Work (and each
+   Contributor provides its Contributions) on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+   implied, including, without limitation, any warranties or conditions
+   of TITLE, NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A
+   PARTICULAR PURPOSE. You are solely responsible for determining the
+   appropriateness of using or redistributing the Work and assume any
+   risks associated with Your exercise of permissions under this License.
+
+8. Limitation of Liability. In no event and under no legal theory,
+   whether in tort (including negligence), contract, or otherwise,
+   unless required by applicable law (such as deliberate and grossly
+   negligent acts) or agreed to in writing, shall any Contributor be
+   liable to You for damages, including any direct, indirect, special,
+   incidental, or consequential damages of any character arising as a
+   result of this License or out of the use or inability to use the
+   Work (including but not limited to damages for loss of goodwill,
+   work stoppage, computer failure or malfunction, or any and all
+   other commercial damages or losses), even if such Contributor
+   has been advised of the possibility of such damages.
+
+9. Accepting Warranty or Additional Liability. While redistributing
+   the Work or Derivative Works thereof, You may choose to offer,
+   and charge a fee for, acceptance of support, warranty, indemnity,
+   or other liability obligations and/or rights consistent with this
+   License. However, in accepting such obligations, You may act only
+   on Your own behalf and on Your sole responsibility, not on behalf
+   of any other Contributor, and only if You agree to indemnify,
+   defend, and hold each Contributor harmless for any liability
+   incurred by, or claims asserted against, such Contributor by reason
+   of your accepting any such warranty or additional liability.
+
+END OF TERMS AND CONDITIONS
+
+APPENDIX: How to apply the Apache License to your work.
+
+   To apply the Apache License to your work, attach the following
+   boilerplate notice, with the fields enclosed by brackets "[]"
+   replaced with your own identifying information. (Don't include
+   the brackets!)  The text should be enclosed in the appropriate
+   comment syntax for the file format. We also recommend that a
+   file or class name and description of purpose be included on the
+   same "printed page" as the copyright notice for easier
+   identification within third-party archives.
+
+Copyright [yyyy] [name of copyright owner]
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+	http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+~~~~
+
 ### ddb4986a4ed3
 
 Components: npm readdirp@4.1.2
@@ -24123,7 +24470,7 @@ SOFTWARE.
 
 ### e8541ea93f02
 
-Components: Rust base64ct@1.8.3, Rust block-buffer@0.10.4, Rust block-buffer@0.12.1, Rust const-oid@0.10.3, Rust cpufeatures@0.2.17, Rust cpufeatures@0.3.1, Rust crypto-common@0.1.7, Rust crypto-common@0.2.2, Rust der@0.8.2, Rust digest@0.10.7, Rust digest@0.11.3, Rust hybrid-array@0.4.15, Rust pem-rfc7468@1.0.0, Rust sha2@0.10.9, Rust sha2@0.11.1
+Components: Rust base64ct@1.8.3, Rust block-buffer@0.10.4, Rust block-buffer@0.12.1, Rust const-oid@0.10.3, Rust cpufeatures@0.2.17, Rust cpufeatures@0.3.1, Rust crypto-common@0.1.7, Rust crypto-common@0.2.2, Rust der@0.8.2, Rust digest@0.10.7, Rust digest@0.11.3, Rust hybrid-array@0.4.15, Rust md-5@0.10.6, Rust pem-rfc7468@1.0.0, Rust sha2@0.10.9, Rust sha2@0.11.1
 
 Source filenames: LICENSE-APACHE
 

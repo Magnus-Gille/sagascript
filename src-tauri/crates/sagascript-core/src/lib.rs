@@ -15,6 +15,7 @@ pub mod machine;
 pub mod meeting;
 pub mod models;
 pub mod path_scrub;
+pub mod recording;
 pub mod run_context;
 pub mod settings;
 pub mod sync;

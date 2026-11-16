@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "min_reader_version": 1,
+  "recording_id": "6f1d2c3a-0b7e-4c1d-9a55-3e2f8c1b7d40",
+  "title": "Team meeting",
+  "state": "complete",
+  "recovered": false,
+  "started_at": "2026-11-05T14:02:11.482+01:00",
+  "client": {
+    "kind": "desktop",
+    "app_version": "1.4.8",
+    "build": "abc1234"
+  },
+  "quality": "lossless",
+  "tracks": [
+    {
+      "id": "mic",
+      "role": "mic",
+      "file": "mic.flac",
+      "codec": "flac",
+      "lossless": true,
+      "sample_rate": 48000,
+      "bits": 24,
+      "channels": 1,
+      "frames": 168837120,
+      "audio_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "clock": {
+        "domain": "mach_continuous",
+        "start_ns": 123456789,
+        "anchors": [
+          [123456789, 0],
+          [10123456789, 480000]
+        ]
+      },
+      "gaps": [
+        {
+          "at_frame": 1234567,
+          "length": 480,
+          "reason": "overrun"
+        }
+      ],
+      "ended_reason": "stopped",
+      "clipped_samples": 0,
+      "resampled_from": null,
+      "device": "MacBook Pro Microphone"
+    }
+  ]
+}
