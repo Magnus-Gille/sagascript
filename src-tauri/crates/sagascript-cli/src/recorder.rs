@@ -439,6 +439,10 @@ fn transcribe_recording(
         );
         error
     };
+    #[expect(
+        clippy::expect_used,
+        reason = "prepare without save_only always resolves the model, before capture"
+    )]
     let model = prepared
         .model
         .expect("the transcription model is resolved before capture");

@@ -298,6 +298,10 @@ impl TrackDecoder {
             if self.current.is_none() && !self.start_track()? {
                 return Ok(None);
             }
+            #[expect(
+                clippy::expect_used,
+                reason = "a track was current, or start_track just made one"
+            )]
             let mut cursor = self.current.take().expect("a track is current");
 
             if cursor.lead_remaining > 0 {
@@ -344,6 +348,10 @@ impl Cursor {
     /// Decode one packet into `ready`; at the end of the file check the length
     /// and flush the resampler.
     fn fill(&mut self) -> Result<(), RecordingError> {
+        #[expect(
+            clippy::expect_used,
+            reason = "advance opens the audio before it calls fill"
+        )]
         let audio = self.audio.as_mut().expect("audio is open");
         let ready = &mut self.ready;
         let mut emit = |chunk: &[f32]| -> Result<(), std::convert::Infallible> {

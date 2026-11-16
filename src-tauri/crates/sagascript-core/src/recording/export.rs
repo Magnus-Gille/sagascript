@@ -502,7 +502,9 @@ fn export_derived(
         .iter()
         .map(|&i| manifest.tracks[i].sample_rate)
         .max()
-        .expect("at least one track");
+        .ok_or(RecordingError::InvalidInput {
+            reason: "there is no track to export",
+        })?;
     let mut from_rates: Vec<u32> = used
         .iter()
         .map(|&i| manifest.tracks[i].sample_rate)
