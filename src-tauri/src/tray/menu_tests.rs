@@ -90,14 +90,13 @@ fn menu_item_ids_choose_their_actions() {
         menu_action("check_for_updates"),
         Some(MenuAction::CheckForUpdates)
     );
-    // Status lines and the build identity are not actions.
-    for inert in [
-        "status",
-        "update_status",
-        "build_info",
-        "profile_shortcut_x",
-        "",
-    ] {
+    // The update status line opens the update check like the entry does.
+    assert_eq!(
+        menu_action("update_status"),
+        Some(MenuAction::CheckForUpdates)
+    );
+    // The status line and the build identity are not actions.
+    for inert in ["status", "build_info", "profile_shortcut_x", ""] {
         assert_eq!(menu_action(inert), None, "{inert}");
     }
 }

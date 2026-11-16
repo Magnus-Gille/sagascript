@@ -40,7 +40,8 @@ pub(super) fn menu_action(id: &str) -> Option<MenuAction> {
             site: "tray_menu_manage_profiles",
         },
         RECORD_ITEM_ID => MenuAction::Record,
-        "check_for_updates" => MenuAction::CheckForUpdates,
+        // The update status line is actionable once an update is available.
+        "check_for_updates" | "update_status" => MenuAction::CheckForUpdates,
         _ => return None,
     })
 }
