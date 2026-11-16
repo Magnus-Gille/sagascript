@@ -171,9 +171,11 @@ test("the native build lanes save the models the setup action restored, on main 
 });
 
 // SAGA-546: the repository's Actions cache holds 10 GB, and GitHub evicts the least recently used entries
-// first. Every cache that saves therefore has its measured size here. The entries pull requests read must
-// leave 10% headroom under the limit, or the Rust entries every pull request compiles from are the ones
-// evicted; with the best-effort entries, everything must still fit the limit. Sizes in MB
+// first. Every cache that saves therefore has its measured size here. The regular CI entries (every one
+// not marked `bestEffort`, plus npm) must leave 10% headroom under the limit, or the Rust entries every
+// pull request compiles from are the ones evicted; with the best-effort entries, everything must still fit
+// the limit. This is a steady-state budget: eviction goes by last access, so it makes the CI entries'
+// retention likely, not guaranteed. Sizes in MB
 // as `gh cache list` reports them on 2026-11-09 (the Rust entries evicted before then: the restore logs of
 // main's CI run 42484311483). `rows` is the job's matrix size: a saving step in a matrix job saves once
 // per row, so a new row needs a new measurement. A new cache, or a lane that installs Rust through the
@@ -224,7 +226,7 @@ function matrixRows(job) {
   return sizes.reduce((rows, axis) => rows * axis.length, 1) - exclude.length;
 }
 
-test("every cache that saves has a measured size; the pull-request caches leave 10% headroom and all fit the 10 GB limit (SAGA-546)", () => {
+test("every cache that saves has a measured size; the regular CI caches leave 10% headroom and all fit the 10 GB limit (SAGA-546)", () => {
   const setup = loadAction("setup");
   const found = {};
   for (const file of workflowFiles()) {
@@ -251,16 +253,17 @@ test("every cache that saves has a measured size; the pull-request caches leave 
   for (const [unit, rows] of Object.entries(found)) {
     assert.equal(CACHE_BUDGET[unit].rows ?? 1, rows, `${unit} saves once per matrix row: measure ${rows} entries`);
   }
-  // The headroom protects only the entries pull requests compile from: `bestEffort` entries are evicted
-  // first by design, so they need not fit inside the 90%, but everything together must fit the limit, or
-  // they would be evicted on every run instead of only when a new Rust generation is saved.
+  // The headroom covers the regular CI entries. `bestEffort` entries are read only by release and package
+  // runs, so they are usually the least recently used and need not fit inside the 90%; everything together
+  // must still fit the limit, or something would be evicted on every run, not only when a new Rust
+  // generation is saved.
   const sumOf = (entries) => entries.reduce((sum, { mb }) => sum + mb, 0);
   const entries = Object.values(CACHE_BUDGET);
   const protectedMb = sumOf(entries.filter(({ bestEffort }) => !bestEffort)) + NPM_MB;
   const totalMb = sumOf(entries) + NPM_MB;
   assert.ok(
     protectedMb <= CACHE_LIMIT_MB * 0.9,
-    `the caches pull requests read total ${protectedMb} MB, more than 90% of the ${CACHE_LIMIT_MB} MB limit`,
+    `the regular CI caches total ${protectedMb} MB, more than 90% of the ${CACHE_LIMIT_MB} MB limit`,
   );
   assert.ok(totalMb <= CACHE_LIMIT_MB, `all caches total ${totalMb} MB, more than the ${CACHE_LIMIT_MB} MB limit`);
 });

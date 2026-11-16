@@ -660,8 +660,9 @@ the release, Windows package and test builds compile cold. The setup action rest
 models, and those lanes save them last, on main. Every cache that saves has a measured size and matrix
 row count in `scripts/test-pipeline-cache.mjs`. The CI entries are read on every run and survive; the
 LLVM, Windows package model and release model caches are read only by release and package runs, so they
-are best-effort and evicted first. The entries pull requests read (about 7.0 GB) must stay under 90% of
-the limit, and all of them together (about 8.8 GB) must fit the limit.
+are best-effort and usually the least recently used. The regular CI entries (about 7.0 GB) must stay under
+90% of the limit, and all of them together (about 8.8 GB) must fit the limit. That is a steady-state
+budget: GitHub evicts by last access, so a new Rust generation can still push a CI entry out.
 Cargo.toml builds dependencies at `opt-level = 3` in the dev profile for local `cargo tauri build --debug`
 (SAGA-399); that doubled the gate lanes' caches, so `scripts/ci/cargo-gates.mjs` passes
 `--config 'profile.dev.package."*".opt-level=0'` to every compiling gate in CI only (SAGA-546). The gate
