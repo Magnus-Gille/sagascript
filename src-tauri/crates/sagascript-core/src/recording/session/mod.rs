@@ -79,11 +79,12 @@ use self::resampler::COMPACT_RATE;
 pub use self::status::{SessionOutcome, SessionState, SessionStatus, SessionWarning, TrackStatus};
 use self::status::{StatusShared, TrackCounters};
 use super::capture::{
-    system_sleep_probe, track_channel, CaptureSource, ChannelConfig, SessionClock, SignalHandle,
-    SleepDetector, SleepProbe, SourceSignal, SystemClock, HOST_CLOCK_DOMAIN,
+    system_sleep_probe, track_channel, Block, BlockSink, CaptureSource, ChannelConfig,
+    SessionClock, SignalHandle, SleepDetector, SleepProbe, SourceSignal, SystemClock,
+    TrackReceiver, HOST_CLOCK_DOMAIN,
 };
 use super::manifest::{Client, Quality};
-use super::store::{NewRecording, NewTrack, RecordingStore};
+use super::store::{NewRecording, NewTrack, RecordingStore, RecordingWriter};
 use super::RecordingError;
 use crate::sync::lock_or_recover;
 
@@ -345,6 +346,22 @@ impl RecordingSession {
         }
     }
 
+    /// The recording folder for `request`; tests can inject encoders.
+    fn create_writer(&self, request: NewRecording) -> Result<RecordingWriter, RecordingError> {
+        #[cfg(test)]
+        if let Some(encoders) = &self.config.encoders {
+            let encoders = Arc::clone(encoders);
+            return self.store.create_with(
+                request,
+                &mut || uuid::Uuid::new_v4().to_string(),
+                &mut move |path: &std::path::Path, new: &super::store::NewTrack| {
+                    encoders(path, new)
+                },
+            );
+        }
+        self.store.create(request)
+    }
+
     fn start_locked(
         &self,
         inner: &mut Inner,
@@ -354,29 +371,7 @@ impl RecordingSession {
         let compact = config.quality == Quality::Compact;
 
         // What each track will store, before any device is opened.
-        let mut stored = Vec::with_capacity(specs.len());
-        let mut worst_case = 0u64;
-        for spec in &specs {
-            let format = spec.source.format();
-            if !(1..=2).contains(&format.channels) || format.sample_rate == 0 {
-                return Err(RecordingError::UnsupportedFormat {
-                    reason: "a source delivers one or two channels at a real sample rate",
-                });
-            }
-            let (rate, channels, bits) = if compact {
-                (COMPACT_RATE, 1, 16)
-            } else {
-                (format.sample_rate, format.channels, 24)
-            };
-            worst_case += uncompressed_bytes_per_second(rate, channels, bits);
-            stored.push((rate, channels, bits));
-        }
-        let ids: std::collections::BTreeSet<&str> = specs.iter().map(|s| s.id.as_str()).collect();
-        if ids.len() != specs.len() {
-            return Err(RecordingError::InvalidInput {
-                reason: "track ids must be distinct",
-            });
-        }
+        let (stored, worst_case) = stored_formats(&specs, compact)?;
 
         // Space and folder, before the microphone is touched.
         let policy = config
@@ -425,92 +420,22 @@ impl RecordingSession {
             .then(|| SleepDetector::armed(SLEEP_THRESHOLD, Arc::clone(&config.sleep_probe)));
 
         // Open the sources.
-        let mut started = 0;
-        let mut start_error = None;
-        for (spec, sink) in specs.iter_mut().zip(sinks) {
-            match spec.source.start(sink) {
-                Ok(()) => started += 1,
-                Err(error) => {
-                    start_error = Some(error);
-                    break;
-                }
-            }
-        }
-        if let Some(error) = start_error {
-            for spec in specs.iter_mut().take(started) {
-                spec.source.stop();
-            }
-            return Err(error);
-        }
+        start_sources(&mut specs, sinks)?;
 
         // Wait for the first block of every track.
         let deadline = Instant::now() + config.start_timeout;
-        let mut firsts: Vec<Option<super::capture::Block>> =
-            receivers.iter().map(|_| None).collect();
-        while firsts.iter().any(Option::is_none) {
-            for (first, receiver) in firsts.iter_mut().zip(receivers.iter_mut()) {
-                if first.is_none() {
-                    *first = receiver.pop();
-                }
+        let Some(firsts) = wait_for_first_blocks(&mut receivers, deadline) else {
+            for spec in specs.iter_mut() {
+                spec.source.stop();
             }
-            if firsts.iter().all(Option::is_some) {
-                break;
-            }
-            if Instant::now() >= deadline {
-                for spec in specs.iter_mut() {
-                    spec.source.stop();
-                }
-                return Err(RecordingError::SourceUnavailable {
-                    reason: "the source delivered no audio",
-                });
-            }
-            std::thread::sleep(Duration::from_millis(1));
-        }
+            return Err(RecordingError::SourceUnavailable {
+                reason: "the source delivered no audio",
+            });
+        };
 
         // The folder, with each track stamped with the time of its first frame.
-        let request = NewRecording {
-            title: config.title.clone(),
-            started_at: config.started_at.clone(),
-            client: config.client.clone(),
-            quality: config.quality,
-            tracks: specs
-                .iter()
-                .zip(&stored)
-                .zip(&firsts)
-                .map(|((spec, (rate, channels, bits)), first)| {
-                    let native = spec.source.format();
-                    NewTrack {
-                        id: spec.id.clone(),
-                        role: spec.role.clone(),
-                        sample_rate: *rate,
-                        channels: *channels,
-                        bits: *bits,
-                        clock_domain: HOST_CLOCK_DOMAIN.to_string(),
-                        start_ns: first.as_ref().map_or(0, |block| block.host_ns()),
-                        resampled_from: (compact && native.sample_rate != COMPACT_RATE)
-                            .then_some(native.sample_rate),
-                        device: spec.source.device_name(),
-                    }
-                })
-                .collect(),
-        };
-        #[cfg(test)]
-        let created = match &config.encoders {
-            Some(encoders) => {
-                let encoders = Arc::clone(encoders);
-                self.store.create_with(
-                    request,
-                    &mut || uuid::Uuid::new_v4().to_string(),
-                    &mut move |path: &std::path::Path, new: &super::store::NewTrack| {
-                        encoders(path, new)
-                    },
-                )
-            }
-            None => self.store.create(request),
-        };
-        #[cfg(not(test))]
-        let created = self.store.create(request);
-        let writer = match created {
+        let request = new_recording(config, &specs, &stored, &firsts);
+        let writer = match self.create_writer(request) {
             Ok(writer) => writer,
             Err(error) => {
                 for spec in specs.iter_mut() {
@@ -525,23 +450,15 @@ impl RecordingSession {
             .iter()
             .zip(receivers)
             .zip(firsts)
-            .map(|((spec, receiver), first)| PipelineSpec {
+            .map(|((spec, receiver), first_block)| PipelineSpec {
                 id: spec.id.clone(),
                 native: spec.source.format(),
                 compact,
                 receiver,
-                first_block: first.expect("every track has its first block"),
+                first_block,
             })
             .collect();
-        let settings = CoreSettings {
-            stall_timeout_ns: config.stall_timeout.as_nanos() as u64,
-            min_gap_ns: config.min_gap.as_nanos() as u64,
-            max_gap_fill_ns: config.max_gap_fill.as_nanos() as u64,
-            anchor_interval_ns: config.anchor_interval.as_nanos() as u64,
-            device_loss_grace_ns: config.device_loss_grace.as_nanos() as u64,
-            disk: policy,
-            file_limit_bytes: file_limit,
-        };
+        let settings = core_settings(config, policy, file_limit);
         // The sources belong to the set before the core exists: the core
         // processes each track's first block as it is built, and a full disk
         // there ends the track by stopping its source through this set. The
@@ -655,6 +572,139 @@ impl Drop for RecordingSession {
 }
 
 /// Store the terminal result, set the final state and wake waiters.
+/// What a track stores: `(sample_rate, channels, bits)`.
+type StoredFormat = (u32, u8, u8);
+
+/// What each track will store, and the worst-case
+/// uncompressed bytes per second of all of them. Refuses a format the store
+/// does not write and track ids that repeat.
+fn stored_formats(
+    specs: &[SourceSpec],
+    compact: bool,
+) -> Result<(Vec<StoredFormat>, u64), RecordingError> {
+    let mut stored = Vec::with_capacity(specs.len());
+    let mut worst_case = 0u64;
+    for spec in specs {
+        let format = spec.source.format();
+        if !(1..=2).contains(&format.channels) || format.sample_rate == 0 {
+            return Err(RecordingError::UnsupportedFormat {
+                reason: "a source delivers one or two channels at a real sample rate",
+            });
+        }
+        let (rate, channels, bits) = if compact {
+            (COMPACT_RATE, 1, 16)
+        } else {
+            (format.sample_rate, format.channels, 24)
+        };
+        worst_case += uncompressed_bytes_per_second(rate, channels, bits);
+        stored.push((rate, channels, bits));
+    }
+    let ids: std::collections::BTreeSet<&str> = specs.iter().map(|s| s.id.as_str()).collect();
+    if ids.len() != specs.len() {
+        return Err(RecordingError::InvalidInput {
+            reason: "track ids must be distinct",
+        });
+    }
+    Ok((stored, worst_case))
+}
+
+/// Starts every source in order. If one fails, the ones already started are
+/// stopped and its error is returned.
+fn start_sources(specs: &mut [SourceSpec], sinks: Vec<BlockSink>) -> Result<(), RecordingError> {
+    let mut started = 0;
+    let mut start_error = None;
+    for (spec, sink) in specs.iter_mut().zip(sinks) {
+        match spec.source.start(sink) {
+            Ok(()) => started += 1,
+            Err(error) => {
+                start_error = Some(error);
+                break;
+            }
+        }
+    }
+    if let Some(error) = start_error {
+        for spec in specs.iter_mut().take(started) {
+            spec.source.stop();
+        }
+        return Err(error);
+    }
+    Ok(())
+}
+
+/// The first block of every track, in track order, or `None` when one has
+/// not delivered audio by `deadline`.
+fn wait_for_first_blocks(receivers: &mut [TrackReceiver], deadline: Instant) -> Option<Vec<Block>> {
+    let mut firsts: Vec<Option<Block>> = receivers.iter().map(|_| None).collect();
+    loop {
+        for (first, receiver) in firsts.iter_mut().zip(receivers.iter_mut()) {
+            if first.is_none() {
+                *first = receiver.pop();
+            }
+        }
+        if firsts.iter().all(Option::is_some) {
+            return firsts.into_iter().collect();
+        }
+        if Instant::now() >= deadline {
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
+/// The new recording's request: each track stamped with the host time of its
+/// first frame.
+fn new_recording(
+    config: &SessionConfig,
+    specs: &[SourceSpec],
+    stored: &[StoredFormat],
+    firsts: &[Block],
+) -> NewRecording {
+    let compact = config.quality == Quality::Compact;
+    NewRecording {
+        title: config.title.clone(),
+        started_at: config.started_at.clone(),
+        client: config.client.clone(),
+        quality: config.quality,
+        tracks: specs
+            .iter()
+            .zip(stored)
+            .zip(firsts)
+            .map(|((spec, (rate, channels, bits)), first)| {
+                let native = spec.source.format();
+                NewTrack {
+                    id: spec.id.clone(),
+                    role: spec.role.clone(),
+                    sample_rate: *rate,
+                    channels: *channels,
+                    bits: *bits,
+                    clock_domain: HOST_CLOCK_DOMAIN.to_string(),
+                    start_ns: first.host_ns(),
+                    resampled_from: (compact && native.sample_rate != COMPACT_RATE)
+                        .then_some(native.sample_rate),
+                    device: spec.source.device_name(),
+                }
+            })
+            .collect(),
+    }
+}
+
+/// The writer core's limits, from the session's configuration.
+fn core_settings(
+    config: &SessionConfig,
+    disk: DiskPolicy,
+    file_limit_bytes: Option<u64>,
+) -> CoreSettings {
+    CoreSettings {
+        stall_timeout_ns: config.stall_timeout.as_nanos() as u64,
+        min_gap_ns: config.min_gap.as_nanos() as u64,
+        max_gap_fill_ns: config.max_gap_fill.as_nanos() as u64,
+        anchor_interval_ns: config.anchor_interval.as_nanos() as u64,
+        device_loss_grace_ns: config.device_loss_grace.as_nanos() as u64,
+        disk,
+        file_limit_bytes,
+    }
+}
+
 fn finish_with(status: &StatusShared, result: Result<SessionOutcome, RecordingError>) {
     {
         let mut terminal = lock_or_recover(&status.terminal, TERMINAL_LOCK);
@@ -709,6 +759,10 @@ fn writer_loop(
         sources: Arc::clone(&sources),
         armed: true,
     };
+    #[expect(
+        clippy::expect_used,
+        reason = "is_finished means finalize stored the outcome, taken only here"
+    )]
     let result = loop {
         let stopping = stop.load(Ordering::Acquire);
         match core.step(stopping) {
