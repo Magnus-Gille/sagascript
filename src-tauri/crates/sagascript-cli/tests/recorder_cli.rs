@@ -10,7 +10,9 @@
 #![cfg(feature = "record")]
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+#[cfg(unix)]
+use std::process::Stdio;
+use std::process::{Command, Output};
 
 use sagascript_core::recording::capture::TEST_SOURCE_ENV;
 use sagascript_core::recording::{
