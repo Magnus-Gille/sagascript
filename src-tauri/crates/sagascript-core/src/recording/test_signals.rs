@@ -301,11 +301,14 @@ pub(crate) fn copy_dir(from: &Path, to: &Path) -> PathBuf {
     to.to_path_buf()
 }
 
-/// Every file of a folder and its bytes, sorted by name.
+/// Every file of a folder and its bytes, sorted by name. The lock file is
+/// left out: on Windows the byte-range lock a live writer holds makes it
+/// unreadable to any other handle, and it carries no recording data.
 pub(crate) fn snapshot(dir: &Path) -> Vec<(String, Vec<u8>)> {
     let mut files: Vec<(String, Vec<u8>)> = std::fs::read_dir(dir)
         .unwrap()
         .flatten()
+        .filter(|entry| entry.file_name() != super::store::LOCK_FILE)
         .map(|entry| {
             (
                 entry.file_name().to_string_lossy().into_owned(),
