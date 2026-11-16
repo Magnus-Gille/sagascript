@@ -249,3 +249,11 @@ the first dictation does not wait on a cold model.
   `docs/benchmarks/pianissimo-ane-eviction.md`.
 - The overlay shows "Loading model..." only for loads that keep the user
   waiting; background warm-up failures are logged, not shown as dictation errors.
+- Warm-up reports where its time went, phase by phase (SAGA-543). The log line
+  of a background warm-up carries `verify_ms`, `host_start_ms`, `load_ms` and
+  `canary_ms` (`-` for a phase that did not run: a cached client is not verified
+  again, a running host is not started again, a loaded model is not loaded
+  again). `sagascript engine warm` prints `model_verified`, `host_start` and
+  `model_load` on their own lines (`skipped` when the phase did not run), named
+  like the `engine doctor` steps, before the existing "Engine warm in ..." and
+  canary lines.
