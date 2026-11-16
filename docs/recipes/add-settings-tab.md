@@ -34,6 +34,14 @@ Example: a "History" tab with the id `history`.
   scoped CSS does not reach them, so a panel's `<style>` starts with the three rules every
   panel repeats: copy them from the top of `AdvancedPanel.svelte`'s `<style>` and keep the
   element kinds your markup has.
+- A settings change that fails is reported in the tab's own error,
+  `win.errors.of("history")` (`tabErrors.svelte.ts`): pass it to `session.apply` or
+  `session.applyScalar`, which clear it when the change starts and write the message when
+  the change is rejected, or set its `message`. A message that a later event can make untrue
+  is shown with `show` and taken away with `retract`, which leaves whatever was written since
+  (`profileModels.svelte.ts`). The shell shows the tab's error above the panel while the
+  tab shows and marks the tab's button while another tab shows; nothing on another tab shows
+  or clears it. A message that belongs next to one control stays in the panel instead.
 - A panel that asks before the tab changes (unsaved work) sets `win.router.guard`, as
   `SettingsTab.svelte` does for the dictionary editor. A panel that must hold the tabs while
   something is in flight sets `win.router.held`.
@@ -56,7 +64,7 @@ when it closes, like Dictate. With `keepMounted: true` it stays mounted and gets
 must survive a tab change, and render nothing visible while `active` is false (Transcribe
 hides its section with `hidden`; Settings renders its controls inside `{#if active}`).
 
-Nothing else in the frontend names the tabs.
+Nothing else in the frontend lists the tabs; a panel names its own id only for its error.
 
 ## 3. Opening it from the backend (only if needed)
 
@@ -72,6 +80,7 @@ that is not in `SETTINGS_TABS` is ignored by the window.
 | `src/lib/settings/HistoryTab.test.ts` | The panel on its own: `renderPanel(HistoryTab, handlers, { active })` from `src/test/settingsPanel.ts` ([docs/testing/frontend.md](../testing/frontend.md)). |
 | `src/lib/settings/tabs.test.ts` | Add the id and the label to the expected order. |
 | `src/lib/Settings.tabs.test.ts` | Add the label to the expected tab strip and the tab to the `navigate_tab` test. |
+| `src/lib/Settings.tabErrors.test.ts` | Only if the panel reports errors: one that fails shows on its tab and marks its button while another tab shows. |
 | `scripts/fixtures/transcription-browser-mock.js` | An answer for every new command the panel sends while it mounts ([add-tauri-command.md](add-tauri-command.md)). |
 
 ## 5. Verify

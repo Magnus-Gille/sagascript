@@ -14,9 +14,13 @@
   // The tabs are read once, as the window initializes.
   // svelte-ignore state_referenced_locally
   const win = useSettingsWindow(tabs.map((tab) => tab.id));
-  const { session, router, recovery } = win;
+  const { session, router, recovery, errors } = win;
 
   const settings = $derived(session.settings);
+  // A change that fails is reported on its own tab (settings/tabErrors.svelte.ts): the
+  // message of the tab that shows is drawn here, and a tab that has one while another
+  // tab shows is marked in the strip.
+  const tabError = $derived(errors.of(router.active));
   const updatePreparing = $derived(recovery.preparing);
 
   // Height of the sticky notice, so focus scrolling can leave room for it.
@@ -73,8 +77,16 @@
 
   <div class="tabs">
     {#each tabs as tab (tab.id)}
-      <button class="tab" class:active={router.active === tab.id} onclick={() => router.request(tab.id)} disabled={router.held}>
+      {@const hasHiddenError = router.active !== tab.id && errors.of(tab.id).message !== ""}
+      <button
+        class="tab"
+        class:active={router.active === tab.id}
+        aria-label={hasHiddenError ? `${tab.label}, has an error` : undefined}
+        onclick={() => router.request(tab.id)}
+        disabled={router.held}
+      >
         {tab.label}
+        {#if hasHiddenError}<span class="tab-error-mark" aria-hidden="true"></span>{/if}
       </button>
     {/each}
   </div>
@@ -87,8 +99,11 @@
       {#if recovery.readError}
         <div class="transcribe-error" role="alert">{recovery.readError}</div>
       {/if}
-      {#if session.error}
-        <div class="transcribe-error" role={router.asking ? undefined : "alert"}>{session.error}</div>
+      {#if recovery.discardError}
+        <div class="transcribe-error" role="alert">{recovery.discardError}</div>
+      {/if}
+      {#if tabError.message}
+        <div class="transcribe-error" role={router.asking ? undefined : "alert"}>{tabError.message}</div>
       {/if}
       {#if session.unconfirmed}
         <section
@@ -213,6 +228,17 @@
 
   .tab:hover:not(.active) {
     color: var(--text);
+  }
+
+  /* The tab has an error of its own that shows when the tab is opened. */
+  .tab-error-mark {
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    margin-left: 4px;
+    border-radius: 50%;
+    background: var(--danger);
+    vertical-align: middle;
   }
 
   .content {

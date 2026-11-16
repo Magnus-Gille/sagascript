@@ -99,7 +99,7 @@ describe("leaving the Dictate tab", () => {
 });
 
 describe("leaving the Settings tab", () => {
-  test("an Advanced change the backend rejects after the tab was left is reported, and the saved value shows on return", async () => {
+  test("an Advanced change the backend rejects after the tab was left marks the Settings tab, and the error and the saved value show on return", async () => {
     const saving = deferred<void>();
     const { ipc } = await renderSettings(
       settingsBackend({
@@ -121,8 +121,12 @@ describe("leaving the Settings tab", () => {
     await screen.findByRole("button", { name: "Start recording" });
     saving.resolve();
 
-    expect(await screen.findByText("Could not write the settings file.")).toBeInTheDocument();
-    await user.click(tab("Settings"));
+    // The change was made on Settings: Dictate does not show its error, the Settings button is marked.
+    const marked = await screen.findByRole("button", { name: "Settings, has an error" });
+    expect(screen.queryByText("Could not write the settings file.")).toBeNull();
+    await user.click(marked);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not write the settings file.");
+    expect(tab("Settings")).toBeInTheDocument();
     await user.click(await screen.findByText("Advanced"));
     expect(await screen.findByRole("combobox", { name: "Decoding mode" })).toHaveValue("5");
   });

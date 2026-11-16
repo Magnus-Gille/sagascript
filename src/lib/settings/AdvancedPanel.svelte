@@ -13,6 +13,9 @@
   // The window is one object for the life of the panel.
   // svelte-ignore state_referenced_locally
   const { session } = win;
+  // The section is part of the Settings tab: a change that fails here is reported there.
+  // svelte-ignore state_referenced_locally
+  const error = win.errors.of("settings");
 
   const settings = $derived(session.settings!); // the window renders panels only once the settings are loaded
   const engineIdleChoices = [5, 10, 30, 60, 0];
@@ -20,34 +23,34 @@
   async function onBeamSizeChange(e: Event) {
     const select = e.currentTarget as HTMLSelectElement;
     const value = Number(select.value);
-    const saved = await session.applyScalar(() => setBeamSize(value));
+    const saved = await session.applyScalar(() => setBeamSize(value), error);
     if (!saved && settings) select.value = String(settings.beam_size);
   }
 
   async function onTemperatureFallbackToggle() {
     if (!settings) return;
     const next = !settings.temperature_fallback;
-    await session.applyScalar(() => setTemperatureFallback(next));
+    await session.applyScalar(() => setTemperatureFallback(next), error);
   }
 
   async function onEnginePrewarmChange(e: Event) {
     const select = e.currentTarget as HTMLSelectElement;
     const value = select.value as EnginePrewarm;
-    const saved = await session.applyScalar(() => setEnginePrewarm(value));
+    const saved = await session.applyScalar(() => setEnginePrewarm(value), error);
     if (!saved && settings) select.value = settings.engine_prewarm;
   }
 
   async function onEngineIdleChange(e: Event) {
     const select = e.currentTarget as HTMLSelectElement;
     const value = Number(select.value);
-    const saved = await session.applyScalar(() => setEngineIdleUnloadMinutes(value));
+    const saved = await session.applyScalar(() => setEngineIdleUnloadMinutes(value), error);
     if (!saved && settings) select.value = String(settings.engine_idle_unload_minutes);
   }
 
   async function onVadToggle() {
     if (!settings) return;
     const next = !settings.vad_enabled;
-    await session.applyScalar(() => setVadEnabled(next));
+    await session.applyScalar(() => setVadEnabled(next), error);
   }
 </script>
 

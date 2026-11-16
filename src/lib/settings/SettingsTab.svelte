@@ -11,6 +11,9 @@
   // The window is one object for the life of the panel.
   // svelte-ignore state_referenced_locally
   const { session, router, profileModels } = win;
+  // This tab's error: what a change made here that fails is reported in. The shell shows it while the tab shows.
+  // svelte-ignore state_referenced_locally
+  const error = win.errors.of("settings");
 
   const settings = $derived(session.settings!); // the window renders panels only once the settings are loaded
 
@@ -69,11 +72,13 @@
     let saved = false;
     try {
       let rejection: unknown = null;
-      const ok = await session.apply(() =>
-        setLanguage(value).catch((error: unknown) => {
-          rejection = error;
-          throw error;
-        }),
+      const ok = await session.apply(
+        () =>
+          setLanguage(value).catch((reason: unknown) => {
+            rejection = reason;
+            throw reason;
+          }),
+        error,
       );
       saved = ok;
       // The backend names a dictionary that blocks the change by its code
@@ -85,16 +90,16 @@
         const profileId = languageProfileId(current.hotkey_profiles);
         const source = current.profile_glossaries[profileId] ?? "";
         if (source.trim()) blockedLanguageChange = { language: value, source, profileId };
-        else session.error = "The blocking dictionary was cleared elsewhere. Select the language again to retry.";
+        else error.message = "The blocking dictionary was cleared elsewhere. Select the language again to retry.";
       }
-    } catch (error) {
+    } catch (readFailure) {
       // The change was rejected, so nothing was saved; only the preview of the blocking dictionary is missing.
       if (session.restampUnconfirmed(false)) {
         // The failed read locked the window and the notice says so; the language select is disabled
         // until Reload settings, which also lifts the rejection message above.
-        session.rejectionWithoutPreview = session.error;
+        session.rejectionWithoutPreview = { shownIn: error, message: error.message };
       } else {
-        session.error += `${session.error ? " " : ""}The window could not read the settings to show the blocking dictionary (${toErrorMessage(error, "unknown error")}). Select the language again to retry.`;
+        error.message += `${error.message ? " " : ""}The window could not read the settings to show the blocking dictionary (${toErrorMessage(readFailure, "unknown error")}). Select the language again to retry.`;
       }
     } finally {
       // A saved language whose read-back failed is shown as chosen: `settings` is
@@ -116,7 +121,7 @@
     const { profileId } = request;
     const scopeDraft = glossaryEditor?.unsavedDraftOf(profileId) ?? null;
     router.held = true;
-    session.error = "";
+    error.message = "";
     let cleared = false;
     try {
       await setProfileGlossary(profileId, "", request.source);
@@ -129,10 +134,10 @@
       glossaryEditor?.discardChangesOf(profileId);
       const notices = await setLanguage(request.language);
       session.profileModelNotices = Array.isArray(notices) ? notices : [];
-    } catch (error) {
-      const message = toErrorMessage(error, "Unknown error");
+    } catch (failure) {
+      const message = toErrorMessage(failure, "Unknown error");
       if (cleared) glossaryEditor?.preserveDraft(profileId, request.source);
-      session.error = cleared
+      error.message = cleared
         ? `The default dictionary was cleared, but the language change failed: ${message}`
         : `The dictionary could not be cleared; the language was not changed: ${message}`;
       blockedLanguageChange = null;
@@ -141,9 +146,9 @@
         const current = await session.read();
         await profileModels.refresh(current.hotkey_profiles);
         session.restampUnconfirmed(cleared);
-      } catch (error) {
+      } catch (readFailure) {
         // The notice says what happened and offers Reload settings.
-        session.markUnconfirmed(error, cleared);
+        session.markUnconfirmed(readFailure, cleared);
       }
       router.held = false;
       void restoreLanguageFocus();
@@ -153,7 +158,7 @@
   async function onShowOverlayToggle() {
     if (!settings) return;
     const next = !settings.show_overlay;
-    await session.applyScalar(() => setShowOverlay(next));
+    await session.applyScalar(() => setShowOverlay(next), error);
   }
 </script>
 
@@ -228,8 +233,8 @@
   {settings}
   {active}
   languageSaving={router.held}
-  bind:settingsError={session.error}
-  applySetting={session.apply}
+  bind:settingsError={error.message}
+  applySetting={(mutate, errorSink) => session.apply(mutate, null, errorSink)}
   readSettings={session.read}
 />
 {#if active}

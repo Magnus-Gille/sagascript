@@ -28,6 +28,7 @@ import { HotkeyProfiles } from "./hotkeyProfiles.svelte";
 import { useSettingsModelDownloads, type SettingsModelDownloads } from "./modelDownloads.svelte";
 import { ProfileModels } from "./profileModels.svelte";
 import { SettingsSession } from "./settingsSession.svelte";
+import { TabErrors } from "./tabErrors.svelte";
 import { TabRouter } from "./tabRouter.svelte";
 import { UpdateRecoveryController } from "./updateRecovery.svelte";
 
@@ -49,6 +50,8 @@ export class SettingsWindow {
 
   readonly session: SettingsSession;
   readonly router: TabRouter;
+  /** The error of each tab: a change that fails is reported on the tab it was made on. */
+  readonly errors: TabErrors;
   readonly downloads: SettingsModelDownloads;
   readonly profileModels: ProfileModels;
   readonly profiles: HotkeyProfiles;
@@ -73,6 +76,7 @@ export class SettingsWindow {
 
     this.session = new SettingsSession(this);
     this.router = new TabRouter(tabIds);
+    this.errors = new TabErrors(tabIds);
     this.profileModels = new ProfileModels(this);
     this.profiles = new HotkeyProfiles(this);
     this.dictation = new Dictation(this);
@@ -93,9 +97,6 @@ export class SettingsWindow {
       },
       dictation: this.dictation,
       files: this.queue,
-      onDiscardFailed: (message) => {
-        this.session.error = message;
-      },
     });
 
     const errorEvents = useTauriEvent("error", (failure) => this.dictation.onError(failure));

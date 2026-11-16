@@ -211,7 +211,7 @@ Settings.svelte was split this way (SAGA-379). It is a shell; its parts live in
   without the shell. It returns `{ ipc, win, view, setActive }`; `win` is the `SettingsWindow`,
   for what reaches a panel from outside it (`win.router.request("dictate")`,
   `win.queue.addFiles([...])`) and for what the shell shows and the panel does not
-  (`win.session.error`, the banner). The other controllers (`settingsSession`,
+  (`win.errors.of("settings").message`, the tab's error). The other controllers (`settingsSession`,
   `hotkeyProfiles`, `profileModels`, `dictation`, `fileQueue`, `fileModel`) reach each other
   through the window and are tested this way, through the panel that shows them.
   `GlossaryEditor.svelte` takes plain props and is rendered directly in

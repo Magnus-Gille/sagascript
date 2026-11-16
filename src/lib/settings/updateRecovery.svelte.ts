@@ -65,8 +65,6 @@ export interface UpdateRecoveryOptions {
   api: UpdateRecoveryApi;
   dictation: DictationEditorPort;
   files: FileQueuePort;
-  /** The stored drafts could not be deleted: `message` says why, and the drafts stay open. */
-  onDiscardFailed: (message: string) => void;
   /**
    * Resolves once the view has rendered the state changed so far. Svelte's
    * `tick` unless a test replaces it. See `setResultPanel` for what the
@@ -106,11 +104,15 @@ export class UpdateRecoveryController {
   draftsNotice = $state(false);
   /** Why the stored drafts could not be read, or could not be cleaned up after a delivery. */
   readError = $state("");
+  /**
+   * Why "Discard recovered drafts" could not delete the stored drafts; they stay open.
+   * Set only while `draftsNotice` is: the next attempt replaces it, and it leaves with the notice.
+   */
+  discardError = $state("");
 
   readonly #api: UpdateRecoveryApi;
   readonly #dictation: DictationEditorPort;
   readonly #files: FileQueuePort;
-  readonly #onDiscardFailed: (message: string) => void;
   readonly #settle: () => Promise<void>;
 
   #activeNonce: string | null = null;
@@ -134,7 +136,6 @@ export class UpdateRecoveryController {
     this.#api = options.api;
     this.#dictation = options.dictation;
     this.#files = options.files;
-    this.#onDiscardFailed = options.onDiscardFailed;
     this.#settle = options.settle ?? tick;
   }
 
@@ -251,6 +252,7 @@ export class UpdateRecoveryController {
 
   /** Delete the stored drafts and close the ones restored from them. */
   async discardDrafts(): Promise<void> {
+    this.discardError = "";
     try {
       await this.#enqueueMutation(async () => {
         await this.#api.clearUpdateRecovery();
@@ -258,7 +260,8 @@ export class UpdateRecoveryController {
       this.#cleanupWarning = false;
       this.readError = "";
     } catch (error) {
-      this.#onDiscardFailed(`Could not discard recovered drafts: ${toErrorMessage(error)}`);
+      // Shown only with the notice: without it and its button, nothing would replace or clear the message.
+      if (this.draftsNotice) this.discardError = `Could not discard recovered drafts: ${toErrorMessage(error)}`;
       return;
     }
 
@@ -279,6 +282,8 @@ export class UpdateRecoveryController {
     this.#recoveredDictationActive = false;
     this.#lastPersistedDictation = null;
     this.draftsNotice = false;
+    // An earlier attempt may have failed while this one was in flight.
+    this.discardError = "";
     this.#files.selectedId = this.#files.jobs[0]?.id ?? null;
   }
 
@@ -407,6 +412,8 @@ export class UpdateRecoveryController {
   #refreshDraftsNotice(): void {
     if (!this.#recoveredDictationActive && this.#recoveredFileIds.length === 0 && this.#recoveredMeetingIds.length === 0) {
       this.draftsNotice = false;
+      // The button that failed left with the notice: every recovered draft was delivered or closed.
+      this.discardError = "";
     }
   }
 

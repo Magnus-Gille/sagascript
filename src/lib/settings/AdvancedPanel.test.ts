@@ -70,7 +70,8 @@ describe("decoding mode", () => {
 
     await user.selectOptions(decoding(), "Greedy (fast)");
 
-    await waitFor(() => expect(win.session.error).toBe("disk full"));
+    await waitFor(() => expect(win.errors.of("settings").message).toBe("disk full"));
+    expect(win.errors.of("dictate").message).toBe("");
     expect(ipc.callsTo("set_beam_size")).toEqual([{ beamSize: 0 }]);
     expect(decoding()).toHaveDisplayValue("Beam search (accurate)");
   });

@@ -26,14 +26,13 @@
     active: boolean;
     /** A language change is in flight: nothing here saves, discards or navigates meanwhile. */
     languageSaving: boolean;
-    /** The window's error banner. A dictionary conflict is "shown" while it still holds that rejection's message. */
+    /** The Settings tab's error. A dictionary conflict is "shown" while it still holds that rejection's message. */
     settingsError: string;
-    /** The window's save-then-read-back (Settings.svelte `applySetting`); resolves true when the change is saved. */
-    applySetting: (
-      mutate: () => Promise<void | string[]>,
-      errorSink?: { value: string; code: string | null },
-      reportError?: boolean,
-    ) => Promise<boolean>;
+    /**
+     * The window's save-then-read-back (`SettingsSession.apply`); resolves true when the change is saved. A
+     * rejection is written to `errorSink` only: the editor decides what `settingsError` shows.
+     */
+    applySetting: (mutate: () => Promise<void | string[]>, errorSink?: { value: string; code: string | null }) => Promise<boolean>;
     /** Read the persisted settings and show them. */
     readSettings: () => Promise<Settings>;
   } = $props();
@@ -212,7 +211,7 @@
       glossarySaving = true;
       settingsError = "";
       try {
-        const saved = await applySetting(() => setProfileGlossary(scopeId, value, expectedSource), saveError, false);
+        const saved = await applySetting(() => setProfileGlossary(scopeId, value, expectedSource), saveError);
         const conflict = saveError.code === dictionaryConflictCode;
         let requestIsCurrent = isCurrentGlossaryRequest(request);
         if (conflict) {
