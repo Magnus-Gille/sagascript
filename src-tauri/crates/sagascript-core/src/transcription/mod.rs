@@ -19,13 +19,6 @@ pub use whisper as whisper_backend;
 #[cfg(target_os = "macos")]
 mod metal_preflight;
 
-// The personal dictionary moved to `crate::glossary` (#372) so settings need not
-// reach into transcription. Shims for the old paths
-// (`transcription::glossary`, `transcription::Glossary`, ...), which nothing in
-// the workspace names any more (SAGA-478 part B, locked by `OLD_PATHS` in
-// tests/module_layering.rs): remove after the next release.
-pub use crate::glossary;
-pub use crate::glossary::{Glossary, GlossaryCorrection, GlossaryEntry};
 pub use glossary_suggestions::{
     apply_glossary_candidates, is_reviewable_term, suggest_glossary_candidates, GlossarySuggestion,
     GlossarySuggestionKind,
