@@ -53,7 +53,7 @@ use super::flac::format::{
 };
 use super::flac::scan::{scan_frames, walk_frame, Walk};
 use super::io::{create_new_private, open_member, replace_file_durably, sync_dir, sync_file, Open};
-use super::journal::{journal_file_name, read_journal};
+use super::journal::{journal_file_name, read_journal, JournalSummary};
 use super::manifest::{
     is_plain_file_name, parse_manifest, serialize_manifest, Clock, EndedReason, Gap, Manifest,
     RecordingState, Track, MANIFEST_FILE,
@@ -238,21 +238,7 @@ fn recover_track(dir: &Path, track: &Track) -> Result<(Track, TrackRecovery), Re
     let mut tail_bytes = 0u64;
     let mut tail_file = None;
 
-    let mut file = match open_member(&path, Open::Rewrite, "open a track file") {
-        Ok(file) => file,
-        // The process died before the track file existed: nothing was lost.
-        Err(RecordingError::Io {
-            kind: std::io::ErrorKind::NotFound,
-            ..
-        }) => {
-            let file = create_new_private(&path)
-                .map_err(|error| RecordingError::io("create a track file", &error))?;
-            sync_dir(dir)
-                .map_err(|error| RecordingError::io("sync the recording folder", &error))?;
-            file
-        }
-        Err(error) => return Err(error),
-    };
+    let mut file = open_or_create_track(dir, &path)?;
     let length = file
         .metadata()
         .map_err(|error| RecordingError::io("inspect a track file", &error))?
@@ -354,8 +340,46 @@ fn recover_track(dir: &Path, track: &Track) -> Result<(Track, TrackRecovery), Re
 
     // The journal: the clock and the gaps, limited to the audio that is kept.
     let frames = summary.samples;
-    // Only events inside the kept audio count: an event past it counted
-    // samples that were lost with the end of the file.
+    let journal_lines_ignored = journal.ignored_lines;
+    let (mut updated, gaps_dropped) = apply_journal(track, journal, frames);
+    updated.audio_sha256 = Some(sha256.finish_hex());
+    let report = TrackRecovery {
+        id: track.id.clone(),
+        frames_kept: frames,
+        tail_bytes,
+        tail_file,
+        gaps_kept: updated.gaps.len(),
+        gaps_dropped,
+        journal_lines_ignored,
+        header_rebuilt,
+    };
+    Ok((updated, report))
+}
+
+/// Opens a track file for recovery. A process that died before the file
+/// existed lost nothing: the file is created empty.
+fn open_or_create_track(dir: &Path, path: &Path) -> Result<File, RecordingError> {
+    match open_member(path, Open::Rewrite, "open a track file") {
+        Ok(file) => Ok(file),
+        Err(RecordingError::Io {
+            kind: std::io::ErrorKind::NotFound,
+            ..
+        }) => {
+            let file = create_new_private(path)
+                .map_err(|error| RecordingError::io("create a track file", &error))?;
+            sync_dir(dir)
+                .map_err(|error| RecordingError::io("sync the recording folder", &error))?;
+            Ok(file)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// The track entry after recovery kept `frames` samples: the journal's clock,
+/// gaps and clipped count, limited to that audio, and the number of gaps
+/// dropped because they lay past it. Only events inside the kept audio count:
+/// an event past it counted samples that were lost with the end of the file.
+fn apply_journal(track: &Track, journal: JournalSummary, frames: u64) -> (Track, usize) {
     let clipped = journal.clipped_within(frames);
     let mut gaps = Vec::new();
     let mut gaps_dropped = 0;
@@ -381,22 +405,11 @@ fn recover_track(dir: &Path, track: &Track) -> Result<(Track, TrackRecovery), Re
 
     let mut updated = track.clone();
     updated.frames = frames;
-    updated.audio_sha256 = Some(sha256.finish_hex());
     updated.clock = clock;
     updated.gaps = gaps;
     updated.ended_reason = Some(EndedReason::Interrupted);
     updated.clipped_samples = clipped.max(track.clipped_samples);
-    let report = TrackRecovery {
-        id: track.id.clone(),
-        frames_kept: frames,
-        tail_bytes,
-        tail_file,
-        gaps_kept: updated.gaps.len(),
-        gaps_dropped,
-        journal_lines_ignored: journal.ignored_lines,
-        header_rebuilt,
-    };
-    Ok((updated, report))
+    (updated, gaps_dropped)
 }
 
 /// What the first bytes of a track file say about it.
