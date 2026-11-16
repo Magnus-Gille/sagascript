@@ -4,6 +4,7 @@
 // policy lints"); tests may still print (src-tauri/clippy.toml).
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
+pub mod acceptance;
 pub(crate) mod benchmark_config;
 pub mod benchmark_dictation;
 mod benchmark_quality;
@@ -121,7 +122,8 @@ NOTE: Auto-detect uses a generic multilingual model which is less accurate \
 than the dedicated language models (KBLab for Swedish, NbAiLab for Norwegian). \
 Finnish uses the generic multilingual Base model by default; optional \
 Finnish-optimized Tiny is available as fi-whisper-tiny. \
-Danish uses the generic multilingual Small model by default. \
+Danish uses pianissimo-da where Pianissimo runs, otherwise the generic \
+multilingual Medium model. \
 For best results, set a specific language.";
 
 #[cfg(not(feature = "record"))]
@@ -145,7 +147,8 @@ NOTE: Auto-detect uses a generic multilingual model which is less accurate \
 than the dedicated language models (KBLab for Swedish, NbAiLab for Norwegian). \
 Finnish uses the generic multilingual Base model by default; optional \
 Finnish-optimized Tiny is available as fi-whisper-tiny. \
-Danish uses the generic multilingual Small model by default. \
+Danish uses pianissimo-da where Pianissimo runs, otherwise the generic \
+multilingual Medium model. \
 For best results, set a specific language.";
 
 #[cfg(feature = "record")]
@@ -266,8 +269,8 @@ By default, uses the language and model from your persisted settings \
 NOTE: --language auto uses a generic multilingual model which is less \
 accurate than the dedicated language models. Finnish uses the generic \
 multilingual Base model by default; optional Finnish-optimized Tiny is \
-available as fi-whisper-tiny. Danish uses the generic multilingual Small \
-model by default.
+available as fi-whisper-tiny. Danish uses pianissimo-da where Pianissimo \
+runs, otherwise the generic multilingual Medium model.
 
 INTERRUPTION: Press Ctrl+C to terminate the CLI invocation. A retry uses a \
 fresh in-process model backend with no on-disk warm-state lock. Re-run the \
@@ -291,8 +294,8 @@ EXAMPLES:
   # Transcribe in Finnish with the generic multilingual Base model
   sagascript transcribe tal.m4a --language fi --model base
 
-  # Transcribe in Danish with the generic multilingual Small model
-  sagascript transcribe tale.m4a --language da --model small
+  # Transcribe in Danish with the generic multilingual Medium model
+  sagascript transcribe tale.m4a --language da --model medium
 
   # Output as JSON (includes metadata)
   sagascript transcribe podcast.mp3 --json
@@ -337,8 +340,8 @@ Use --output to save the raw audio as a WAV file without transcribing \
 NOTE: --language auto uses a generic multilingual model which is less \
 accurate than the dedicated language models. Finnish uses the generic \
 multilingual Base model by default; optional Finnish-optimized Tiny is \
-available as fi-whisper-tiny. Danish uses the generic multilingual Small \
-model by default.",
+available as fi-whisper-tiny. Danish uses pianissimo-da where Pianissimo \
+runs, otherwise the generic multilingual Medium model.",
         after_long_help = "\
 EXAMPLES:
   # Record until Ctrl+C, then transcribe
@@ -380,8 +383,8 @@ List all available Whisper models with their size and download status.
 Models are organized by language. English uses OpenAI Whisper models, \
 Swedish uses KBLab models, Norwegian uses NbAiLab models, and Finnish uses \
 generic multilingual Whisper models plus an optional Finnish-optimized Tiny \
-(Base is recommended). Danish uses the generic multilingual Whisper models \
-(Small is recommended). \
+(Base is recommended). Danish uses pianissimo-da where Pianissimo runs, \
+otherwise the generic multilingual Whisper models (Medium is recommended). \
 Use --language to filter the list.
 
 The DOWNLOADED column shows whether each model is already available locally.",
@@ -430,7 +433,7 @@ AVAILABLE MODELS:
   Swedish:    kb-whisper-tiny, kb-whisper-base, kb-whisper-small
   Norwegian:  nb-whisper-tiny, nb-whisper-base, nb-whisper-small
   Finnish:    base (generic multilingual default), fi-whisper-tiny
-  Danish:     small (generic multilingual default)
+  Danish:     medium (generic multilingual default)
   Multilingual: tiny, base
 
 DIARIZATION MODELS (requires --features diarization):
@@ -529,6 +532,12 @@ EXAMPLES:
         after_long_help = "EXAMPLES:\n  sagascript permissions status\n  sagascript permissions status --json"
     )]
     Permissions(permissions::PermissionsArgs),
+    /// Read-only acceptance diagnostics for the current process.
+    #[command(
+        long_about = "Inspect the current process against an expected clean source revision, without recording, permission prompts, engine startup or implicit settings access. Reports remaining manual checks; it does not control or inspect another GUI process.",
+        after_long_help = "EXAMPLES:\n  sagascript acceptance preflight --expect-revision <40-character-sha> --json"
+    )]
+    Acceptance(acceptance::AcceptanceArgs),
 
     /// Manage global hint terms and explicit profile-scoped aliases used by live and batch transcription
     #[command(
@@ -616,6 +625,26 @@ pub fn run(cli: Cli) -> ExitCode {
 /// ended (docs/recipes/add-cli-subcommand.md, "Exit codes"). Never exits the
 /// process, so tests call it directly with [`Out::capture`].
 pub fn run_with(cli: Cli, out: &Out) -> Exit {
+    run_with_build(
+        cli,
+        out,
+        sagascript_core::acceptance::BuildObservation::new(
+            env!("CARGO_PKG_VERSION"),
+            env!("SAGASCRIPT_SOURCE_REVISION"),
+            env!("SAGASCRIPT_SOURCE_DIRTY"),
+        ),
+    )
+}
+
+/// Run with the embedding executable's generated build observation.
+/// The desktop binary must supply its own metadata: this library can remain
+/// cached while desktop or frontend source changes. Standalone callers use
+/// [`run_with`], which selects this crate's generated identity.
+pub fn run_with_build(
+    cli: Cli,
+    out: &Out,
+    build: sagascript_core::acceptance::BuildObservation,
+) -> Exit {
     let Some(command) = cli.command else {
         errln!(
             out,
@@ -625,7 +654,9 @@ pub fn run_with(cli: Cli, out: &Out) -> Exit {
     };
     install_engine_identity();
     let json = json_output(&command);
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| dispatch(command, out)));
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        dispatch(command, out, build)
+    }));
 
     // Stop the engine host (if this command started one) before exiting, also
     // when the command panicked: the panic then continues as before (exit 101).
@@ -659,6 +690,10 @@ fn json_output(command: &Command) -> Option<JsonOutput> {
             | engine::EngineAction::Doctor { json: true, .. } => Some(JsonOutput::Pretty),
             _ => None,
         },
+        Command::Acceptance(args) => match args.action {
+            acceptance::AcceptanceAction::Preflight { json: true, .. } => Some(JsonOutput::Pretty),
+            _ => None,
+        },
         Command::Permissions(args) => match args.action {
             permissions::PermissionsAction::Status { json: true } => Some(JsonOutput::Pretty),
             _ => None,
@@ -671,7 +706,11 @@ fn json_output(command: &Command) -> Option<JsonOutput> {
     }
 }
 
-fn dispatch(command: Command, out: &Out) -> Result<(), CliError> {
+fn dispatch(
+    command: Command,
+    out: &Out,
+    build: sagascript_core::acceptance::BuildObservation,
+) -> Result<(), CliError> {
     match command {
         Command::Diarization(args) => diarization::run(args, out)?,
         Command::BenchmarkDictation(args) => {
@@ -715,6 +754,7 @@ fn dispatch(command: Command, out: &Out) -> Result<(), CliError> {
         }
         Command::Config(args) => config::run(args, out)?,
         Command::Permissions(args) => permissions::run(args, out)?,
+        Command::Acceptance(args) => return acceptance::run(args, out, build),
         Command::Engine(args) => return engine::run(args, out),
         Command::Glossary(args) => glossary::run(args, out)?,
         Command::Formats => formats(out)?,

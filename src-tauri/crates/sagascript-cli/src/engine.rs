@@ -15,7 +15,8 @@ use sagascript_core::transcription::engine_host::{
     pipeline, CancelToken, EngineHostClient, EngineHostConfig, EngineHostError, ErrorCode,
     WarmResult,
 };
-use sagascript_core::transcription::{pianissimo_backend, pianissimo_model};
+use sagascript_core::transcription::pianissimo_backend::{self, WarmTimings};
+use sagascript_core::transcription::pianissimo_model;
 use serde_json::{json, Value};
 
 use crate::exit::CliError;
@@ -249,7 +250,7 @@ fn quiet(config: &EngineHostConfig) -> EngineHostClient {
 // ---- status ---------------------------------------------------------------
 
 pub fn status_report(probe: &Probe) -> Value {
-    let requirement = pianissimo_backend::UNSUPPORTED_MESSAGE;
+    let requirement = sagascript_core::models::PIANISSIMO_UNSUPPORTED_MESSAGE;
     let mut host = json!({
         "path": probe.host.as_ref().map(|(p, _)| p.display().to_string()),
         "source": probe.host.as_ref().map_or("none", |(_, s)| *s),
@@ -494,7 +495,7 @@ fn doctor_steps(probe: &Probe, verify_model: bool) -> DoctorReport {
         } else {
             Err(format!(
                 "{} ({} {})",
-                pianissimo_backend::UNSUPPORTED_MESSAGE,
+                sagascript_core::models::PIANISSIMO_UNSUPPORTED_MESSAGE,
                 probe.os,
                 probe.arch
             ))
@@ -686,6 +687,20 @@ fn canary_report(result: &Result<WarmResult, EngineHostError>) -> (String, bool)
     }
 }
 
+/// One line per warm phase, named like the `engine doctor` steps; a phase that
+/// did not run says so. The canary is reported on its own line by `run_canary`.
+fn warm_phase_lines(timings: &WarmTimings) -> Vec<String> {
+    let line = |name: &str, ms: Option<u64>| match ms {
+        Some(ms) => format!("  {name}: {ms} ms"),
+        None => format!("  {name}: skipped"),
+    };
+    vec![
+        line("model_verified", timings.verify_ms),
+        line("host_start", timings.host_start_ms),
+        line("model_load", timings.load_ms),
+    ]
+}
+
 /// Runs one canary and returns its line, counting a failure in `failures`.
 fn run_canary(client: &EngineHostClient, failures: &mut u32) -> String {
     let (line, failed) = canary_report(&client.warm_canary());
@@ -700,13 +715,18 @@ fn warm(
     out: &Out,
 ) -> Result<(), DictationError> {
     let config = pianissimo_backend::engine_config(&sagascript_core::machine::load(), model)?;
+    let verify_started = Instant::now();
     pianissimo_model::verify_downloaded(model)?;
+    let verify_ms = u64::try_from(verify_started.elapsed().as_millis()).unwrap_or(u64::MAX);
     let client = quiet(&config);
     let started = Instant::now();
-    client
-        .warm()
+    let (_, mut timings) = pianissimo_backend::warm_load_timed(&client)
         .map_err(|e| DictationError::TranscriptionFailed(e.to_string()))?;
+    timings.verify_ms = Some(verify_ms);
     let snapshot = client.snapshot();
+    for line in warm_phase_lines(&timings) {
+        errln!(out, "{line}");
+    }
     errln!(
         out,
         "Engine warm in {:.2} s (host pid {}). {}",
@@ -1059,6 +1079,36 @@ mod tests {
         std::env::remove_var("ENGINE_TEST_FORCE_FAILS");
         assert!(normal.ok, "{:?}", normal.steps);
         assert_eq!(forced.failed_step.as_deref(), Some("model_verified"));
+    }
+
+    #[test]
+    fn warm_phase_lines_name_each_phase_and_mark_the_ones_that_did_not_run() {
+        let cold = WarmTimings {
+            verify_ms: Some(12),
+            host_start_ms: Some(40),
+            load_ms: Some(830),
+            canary_ms: None,
+        };
+        assert_eq!(
+            warm_phase_lines(&cold),
+            [
+                "  model_verified: 12 ms",
+                "  host_start: 40 ms",
+                "  model_load: 830 ms"
+            ]
+        );
+        let running = WarmTimings {
+            verify_ms: Some(3),
+            ..WarmTimings::default()
+        };
+        assert_eq!(
+            warm_phase_lines(&running),
+            [
+                "  model_verified: 3 ms",
+                "  host_start: skipped",
+                "  model_load: skipped"
+            ]
+        );
     }
 
     #[test]

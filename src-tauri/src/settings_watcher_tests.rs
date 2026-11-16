@@ -141,9 +141,8 @@ fn watcher_restore_failure_records_inactive_and_could_not_be_restored() {
 
 #[test]
 fn watcher_failure_restores_five_hotkey_fields_and_keeps_other_incoming_settings() {
-    use sagascript_core::settings::{
-        FileModelPreference, HotkeyMode, HotkeyProfile, Language, Settings, WhisperModel,
-    };
+    use sagascript_core::models::{Language, WhisperModel};
+    use sagascript_core::settings::{FileModelPreference, HotkeyMode, HotkeyProfile, Settings};
 
     let mut previous = Settings::default();
     previous.hotkey = "Control+Shift+Space".into();
@@ -192,9 +191,9 @@ fn watcher_failure_restores_five_hotkey_fields_and_keeps_other_incoming_settings
 
 fn settings_with_hotkey(
     shortcut: &str,
-    language: sagascript_core::settings::Language,
+    language: sagascript_core::models::Language,
     mode: sagascript_core::settings::HotkeyMode,
-    model: sagascript_core::settings::WhisperModel,
+    model: sagascript_core::models::WhisperModel,
     prompt: &str,
 ) -> sagascript_core::settings::Settings {
     use sagascript_core::settings::{FileModelPreference, HotkeyProfile, Settings};
@@ -218,7 +217,8 @@ fn settings_with_hotkey(
 
 #[test]
 fn actual_watcher_helper_restores_hotkey_fields_after_registration_failure() {
-    use sagascript_core::settings::{HotkeyMode, Language, WhisperModel};
+    use sagascript_core::models::{Language, WhisperModel};
+    use sagascript_core::settings::HotkeyMode;
 
     let previous = settings_with_hotkey(
         "Control+Shift+Space",
@@ -280,7 +280,8 @@ fn actual_watcher_helper_restores_hotkey_fields_after_registration_failure() {
 
 #[test]
 fn actual_watcher_helper_success_keeps_incoming_settings_and_records_registration() {
-    use sagascript_core::settings::{HotkeyMode, Language, WhisperModel};
+    use sagascript_core::models::{Language, WhisperModel};
+    use sagascript_core::settings::HotkeyMode;
 
     let previous = settings_with_hotkey(
         "Control+Shift+Space",
@@ -329,7 +330,8 @@ fn actual_watcher_helper_success_keeps_incoming_settings_and_records_registratio
 
 #[test]
 fn actual_watcher_helper_old_unregister_failure_restores_only_hotkey_fields() {
-    use sagascript_core::settings::{HotkeyMode, Language, WhisperModel};
+    use sagascript_core::models::{Language, WhisperModel};
+    use sagascript_core::settings::HotkeyMode;
 
     let previous = settings_with_hotkey(
         "Control+Shift+Space",
@@ -380,7 +382,8 @@ fn actual_watcher_helper_old_unregister_failure_restores_only_hotkey_fields() {
 
 #[test]
 fn actual_watcher_helper_cleanup_failure_restores_only_hotkey_fields() {
-    use sagascript_core::settings::{HotkeyMode, Language, WhisperModel};
+    use sagascript_core::models::{Language, WhisperModel};
+    use sagascript_core::settings::HotkeyMode;
 
     let previous = settings_with_hotkey(
         "Control+Shift+Space",
@@ -439,7 +442,8 @@ fn actual_watcher_helper_cleanup_failure_restores_only_hotkey_fields() {
 
 #[test]
 fn actual_watcher_helper_validation_restores_fields_without_os_calls() {
-    use sagascript_core::settings::{HotkeyMode, Language, WhisperModel};
+    use sagascript_core::models::{Language, WhisperModel};
+    use sagascript_core::settings::HotkeyMode;
 
     let previous = settings_with_hotkey(
         "Control+Shift+Space",
@@ -489,7 +493,8 @@ fn actual_watcher_helper_validation_restores_fields_without_os_calls() {
 
 #[test]
 fn actual_watcher_helper_ignores_unchanged_valid_shortcuts() {
-    use sagascript_core::settings::{HotkeyMode, Language, WhisperModel};
+    use sagascript_core::models::{Language, WhisperModel};
+    use sagascript_core::settings::HotkeyMode;
 
     let previous = settings_with_hotkey(
         "Control+Shift+Space",

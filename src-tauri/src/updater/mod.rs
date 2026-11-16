@@ -4,22 +4,30 @@
 //!
 //! The update task runs on the async runtime; every menu change goes through
 //! `dispatch_to_main` because tray calls belong on the main thread (ADR 0003).
+//! The sequence itself is driven by the orchestrator (`orchestrator.rs`),
+//! which sees only the `MenuSink` / `CheckSource` / `UpdateProvider` /
+//! `Recovery` seams implemented here and in `signed.rs` (issue #376).
 
 pub(crate) mod activity;
+mod orchestrator;
 pub(crate) mod recovery;
 #[cfg(any(target_os = "macos", test))]
 mod signed;
 pub(crate) mod updates;
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use sagascript_core::sync::lock_or_recover;
 use tauri::{menu::MenuItem, Manager};
-use tracing::{error, warn};
+use tracing::error;
 
 use crate::{dispatch_to_main, focus_diag};
+use orchestrator::{
+    BoxFuture, CheckSource, CheckedRelease, CheckingGuard, MenuSink, Orchestrator, UpdateFailure,
+    UpdatePhase,
+};
 #[cfg(target_os = "macos")]
-use signed::{finish_update_check_error, install_signed_update};
+use signed::{install_signed_update, SignedCheck};
 
 // Update menu bookkeeping is recovered as-is after a panic (ADR 0005), like the
 // tray's: it only holds menu handles and flags that the next menu update
@@ -36,44 +44,210 @@ struct UpdateMenuState {
     items: Option<UpdateMenuItems>,
     checking: bool,
     installing: bool,
-    available_version: Option<semver::Version>,
+    available_version: Option<String>,
+    /// Numbers each check, so the end of one check task can never reset a newer one.
+    attempt: u64,
 }
 
 type SharedUpdateMenuState = Mutex<UpdateMenuState>;
 
 pub(crate) const UPDATE_CHECK_ACTION: &str = "Check for Updates…";
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum UpdateMenuMode {
-    Available(semver::Version),
-    #[cfg(target_os = "macos")]
+    Checking,
+    Available(String),
+    #[cfg(any(target_os = "macos", test))]
     Installing,
     Idle,
 }
 
-fn update_status_text(result: &updates::UpdateCheck) -> String {
-    match result {
-        updates::UpdateCheck::Available { version } => {
-            format!("Update available — v{version}")
-        }
-        updates::UpdateCheck::UpToDate => "Sagascript is up to date".to_string(),
+impl UpdateMenuMode {
+    fn status_enabled(&self, action_enabled: bool) -> bool {
+        // On macOS only the explicit "Install and Restart" item may install.
+        cfg!(target_os = "windows") && action_enabled && matches!(self, Self::Available(_))
     }
 }
 
-fn update_action_text(result: &updates::UpdateCheck) -> String {
-    match result {
-        updates::UpdateCheck::Available { version } => {
-            format!("Open Release v{version}…")
+#[derive(Debug, PartialEq, Eq)]
+enum UpdateMenuAction {
+    None,
+    Check,
+    Install,
+    OpenRelease,
+}
+
+impl UpdateMenuState {
+    fn action(&self, has_public_key: bool) -> UpdateMenuAction {
+        if self.checking || self.installing {
+            UpdateMenuAction::None
+        } else if self.available_version.is_none() {
+            UpdateMenuAction::Check
+        } else if cfg!(target_os = "macos") && has_public_key {
+            // Only macOS registers the signed updater plugin. A public key in
+            // a Windows build must not turn the release action into a recheck.
+            UpdateMenuAction::Install
+        } else {
+            UpdateMenuAction::OpenRelease
         }
-        updates::UpdateCheck::UpToDate => "Check Again…".to_string(),
     }
 }
 
-fn stable_release_url(version: &semver::Version) -> String {
+struct TrayTexts {
+    status: String,
+    /// The action item's label; `None` keeps the current one (Checking).
+    action: Option<String>,
+    enabled: bool,
+    mode: UpdateMenuMode,
+}
+
+/// Maps orchestrator phases to the tray's texts and menu mode. This is the
+/// only place the user-visible update strings live.
+fn texts_for(phase: &UpdatePhase) -> TrayTexts {
+    let retry = |status: String| TrayTexts {
+        status,
+        action: Some("Try Again…".to_string()),
+        enabled: true,
+        mode: UpdateMenuMode::Idle,
+    };
+    match phase {
+        // A check keeps the label it was started from ("Check Again…",
+        // "Try Again…", "Install and Restart v…") and only disables it, as
+        // before the orchestrator.
+        UpdatePhase::Checking => TrayTexts {
+            status: "Checking for updates…".to_string(),
+            action: None,
+            enabled: false,
+            mode: UpdateMenuMode::Checking,
+        },
+        UpdatePhase::UpToDate => TrayTexts {
+            status: "Sagascript is up to date".to_string(),
+            action: Some("Check Again…".to_string()),
+            enabled: true,
+            mode: UpdateMenuMode::Idle,
+        },
+        UpdatePhase::Available {
+            version,
+            install_offered,
+        } => {
+            let status = format!("Update available — v{version}");
+            let action = if *install_offered {
+                format!("Install and Restart v{version}…")
+            } else {
+                format!("Open Release v{version}…")
+            };
+            TrayTexts {
+                status,
+                action: Some(action),
+                enabled: true,
+                mode: UpdateMenuMode::Available(version.clone()),
+            }
+        }
+        UpdatePhase::Failed { failure } => {
+            let status = match failure {
+                UpdateFailure::Check => "Couldn't check for updates".to_string(),
+                #[cfg(any(target_os = "macos", test))]
+                UpdateFailure::Download => "Update download failed".to_string(),
+                #[cfg(any(target_os = "macos", test))]
+                UpdateFailure::WaitTimedOut => "Update wait timed out".to_string(),
+                #[cfg(any(target_os = "macos", test))]
+                UpdateFailure::PreparationBlocked => "Update preparation blocked".to_string(),
+                #[cfg(any(target_os = "macos", test))]
+                UpdateFailure::PreparationFailed => "Update preparation failed".to_string(),
+                #[cfg(any(target_os = "macos", test))]
+                UpdateFailure::RecoveryConflict => "Could not save drafts for update".to_string(),
+                #[cfg(any(target_os = "macos", test))]
+                UpdateFailure::Install => "Update installation failed".to_string(),
+            };
+            retry(status)
+        }
+        #[cfg(any(target_os = "macos", test))]
+        UpdatePhase::Downloading { version, percent } => TrayTexts {
+            status: format!("Downloading update v{version}…"),
+            action: Some(percent.map_or_else(
+                || "Downloading update…".to_string(),
+                |percent| format!("Downloading update… {percent}%"),
+            )),
+            enabled: false,
+            mode: UpdateMenuMode::Installing,
+        },
+        #[cfg(any(target_os = "macos", test))]
+        UpdatePhase::WaitingForWork => TrayTexts {
+            status: "Waiting for current dictation or transcription to finish…".to_string(),
+            action: Some("Waiting for current work…".to_string()),
+            enabled: false,
+            mode: UpdateMenuMode::Installing,
+        },
+        #[cfg(any(target_os = "macos", test))]
+        UpdatePhase::PreparingDrafts => TrayTexts {
+            status: "Saving recoverable drafts…".to_string(),
+            action: Some("Preparing update…".to_string()),
+            enabled: false,
+            mode: UpdateMenuMode::Installing,
+        },
+        #[cfg(any(target_os = "macos", test))]
+        UpdatePhase::Installing { version } => TrayTexts {
+            status: format!("Installing update v{version}…"),
+            action: Some("Installing update…".to_string()),
+            enabled: false,
+            mode: UpdateMenuMode::Installing,
+        },
+        #[cfg(any(target_os = "macos", test))]
+        UpdatePhase::Installed { version } => TrayTexts {
+            status: format!("Update v{version} installed; restarting Sagascript…"),
+            action: Some("Restarting…".to_string()),
+            enabled: false,
+            mode: UpdateMenuMode::Installing,
+        },
+    }
+}
+
+struct TrayUpdateMenu {
+    app: tauri::AppHandle,
+}
+
+impl TrayUpdateMenu {
+    fn new(app: tauri::AppHandle) -> Self {
+        Self { app }
+    }
+}
+
+impl MenuSink for TrayUpdateMenu {
+    fn show(&self, phase: &UpdatePhase) {
+        let texts = texts_for(phase);
+        set_update_menu(
+            &self.app,
+            texts.status,
+            texts.action,
+            texts.enabled,
+            texts.mode,
+        );
+    }
+}
+
+/// The GitHub release manifest check: announces a release without installing.
+struct ManifestCheck;
+
+impl CheckSource for ManifestCheck {
+    fn check(&self) -> BoxFuture<'_, Result<Option<CheckedRelease>, String>> {
+        Box::pin(async {
+            match updates::check_for_update(env!("CARGO_PKG_VERSION")).await {
+                Ok(updates::UpdateCheck::Available { version }) => Ok(Some(CheckedRelease {
+                    version: version.to_string(),
+                    install_offered: false,
+                })),
+                Ok(updates::UpdateCheck::UpToDate) => Ok(None),
+                Err(error) => Err(error.to_string()),
+            }
+        })
+    }
+}
+
+fn stable_release_url(version: &str) -> String {
     format!("https://github.com/Magnus-Gille/sagascript/releases/tag/v{version}")
 }
 
-fn open_update_release(version: &semver::Version) -> Result<(), updates::UpdateError> {
+fn open_update_release(version: &str) -> Result<(), updates::UpdateError> {
     let url = stable_release_url(version);
 
     #[cfg(target_os = "macos")]
@@ -97,23 +271,28 @@ fn open_update_release(version: &semver::Version) -> Result<(), updates::UpdateE
 fn set_update_menu(
     app: &tauri::AppHandle,
     status_text: impl Into<String>,
-    action_text: impl Into<String>,
+    action_text: Option<String>,
     enabled: bool,
     mode: UpdateMenuMode,
 ) {
     let status_text = status_text.into();
-    let action_text = action_text.into();
+    let status_enabled = mode.status_enabled(enabled);
     dispatch_to_main(app, move |app| {
         let items = {
             let state: tauri::State<'_, SharedUpdateMenuState> = app.state();
             let mut state = lock_or_recover(&state, UPDATE_MENU_LOCK);
             match mode {
+                UpdateMenuMode::Checking => {
+                    state.checking = true;
+                    state.installing = false;
+                    state.available_version = None;
+                }
                 UpdateMenuMode::Available(version) => {
                     state.checking = false;
                     state.installing = false;
                     state.available_version = Some(version);
                 }
-                #[cfg(target_os = "macos")]
+                #[cfg(any(target_os = "macos", test))]
                 UpdateMenuMode::Installing => {
                     state.checking = false;
                     state.installing = true;
@@ -133,8 +312,13 @@ fn set_update_menu(
         if let Err(error) = items.status.set_text(status_text) {
             error!("Failed to update tray update status: {error}");
         }
-        if let Err(error) = items.check.set_text(action_text) {
-            error!("Failed to update tray update action: {error}");
+        if let Err(error) = items.status.set_enabled(status_enabled) {
+            error!("Failed to update tray update status availability: {error}");
+        }
+        if let Some(action_text) = action_text {
+            if let Err(error) = items.check.set_text(action_text) {
+                error!("Failed to update tray update action: {error}");
+            }
         }
         if let Err(error) = items.check.set_enabled(enabled) {
             error!("Failed to update tray update action availability: {error}");
@@ -158,7 +342,7 @@ fn check_for_updates_with_intent(app: tauri::AppHandle, install_when_available: 
     #[cfg(not(target_os = "macos"))]
     let _ = install_when_available;
 
-    let items = {
+    let (items, attempt) = {
         let state: tauri::State<'_, SharedUpdateMenuState> = app.state();
         let mut state = lock_or_recover(&state, UPDATE_MENU_LOCK);
         if state.checking || state.installing {
@@ -168,92 +352,102 @@ fn check_for_updates_with_intent(app: tauri::AppHandle, install_when_available: 
             return;
         };
         state.checking = true;
-        items
+        state.attempt = state.attempt.wrapping_add(1);
+        (items, state.attempt)
     };
 
     if let Err(error) = items.status.set_text("Checking for updates…") {
         error!("Failed to update tray update status: {error}");
+    }
+    if let Err(error) = items.status.set_enabled(false) {
+        error!("Failed to disable update status action: {error}");
     }
     if let Err(error) = items.check.set_enabled(false) {
         error!("Failed to disable update action: {error}");
     }
 
     tauri::async_runtime::spawn(async move {
+        // Ends this check on every exit path, including a panic in the update
+        // task, so a crashed check cannot freeze the menu (#376). The reset is
+        // queued on the main thread behind every phase update this task has
+        // already queued, so it runs after the terminal phase, and the attempt
+        // number keeps it from touching a check that started since.
+        let guard_app = app.clone();
+        let _checking_guard = CheckingGuard::new(move || {
+            dispatch_to_main(&guard_app, move |app| end_check_attempt(app, attempt));
+        });
+        let orchestrator = Orchestrator::new(Arc::new(TrayUpdateMenu::new(app.clone())));
+
         #[cfg(target_os = "macos")]
         if updates::updater_public_key().is_some() {
-            match updates::check_signed_update(&app).await {
-                Ok(Some(update)) => {
-                    let version =
-                        match semver::Version::parse(update.version.trim_start_matches('v')) {
-                            Ok(version) => version,
-                            Err(error) => {
-                                finish_update_check_error(
-                                    &app,
-                                    format!("invalid updater version: {error}"),
-                                );
-                                return;
-                            }
-                        };
-                    if install_when_available {
-                        install_signed_update(app, update, version).await;
-                    } else {
-                        set_update_menu(
-                            &app,
-                            format!("Update available — v{version}"),
-                            format!("Install and Restart v{version}…"),
-                            true,
-                            UpdateMenuMode::Available(version),
-                        );
+            let source = SignedCheck::new(app.clone());
+            if !install_when_available {
+                let _ = orchestrator.check(&source).await;
+                return;
+            }
+            // The user already chose to install: go straight from Checking to
+            // the download, as before the orchestrator, without an actionable
+            // Available phase in between.
+            if let Ok(Some(checked)) = orchestrator.check_for_install(&source).await {
+                match source.take_update() {
+                    Some(update) => {
+                        install_signed_update(&orchestrator, app.clone(), update, &checked.version)
+                            .await;
                     }
-                    return;
-                }
-                Ok(None) => {
-                    set_update_menu(
-                        &app,
-                        "Sagascript is up to date",
-                        "Check Again…",
-                        true,
-                        UpdateMenuMode::Idle,
-                    );
-                    return;
-                }
-                Err(error) => {
-                    finish_update_check_error(&app, error);
-                    return;
+                    None => orchestrator.announce_available(&checked),
                 }
             }
+            return;
         }
 
-        let result = updates::check_for_update(env!("CARGO_PKG_VERSION")).await;
-        let (status_text, action_text, available_version, check_error) = match result {
-            Ok(result) => {
-                let available_version = match &result {
-                    updates::UpdateCheck::Available { version } => Some(version.clone()),
-                    updates::UpdateCheck::UpToDate => None,
-                };
-                (
-                    update_status_text(&result),
-                    update_action_text(&result),
-                    available_version,
-                    None,
-                )
-            }
-            Err(error) => (
-                "Couldn't check for updates".to_string(),
-                "Try Again…".to_string(),
-                None,
-                Some(error),
-            ),
-        };
-        if let Some(error) = check_error {
-            warn!("Update check failed: {error}");
-        }
-        let mode = match available_version {
-            Some(version) => UpdateMenuMode::Available(version),
-            None => UpdateMenuMode::Idle,
-        };
-        set_update_menu(&app, status_text, action_text, true, mode);
+        let _ = orchestrator.check(&ManifestCheck).await;
     });
+}
+
+/// Whether the end of check `attempt` must restore the menu: only when that check is
+/// still the current one and no terminal phase has ended it, which means the task
+/// stopped (panicked or returned) without reporting a result. Clears the flag if so.
+fn check_attempt_needs_reset(state: &mut UpdateMenuState, attempt: u64) -> bool {
+    if state.attempt != attempt || !state.checking {
+        return false;
+    }
+    state.checking = false;
+    state.available_version = None;
+    true
+}
+
+fn end_check_attempt(app: &tauri::AppHandle, attempt: u64) {
+    let items = {
+        let state: tauri::State<'_, SharedUpdateMenuState> = app.state();
+        let mut state = lock_or_recover(&state, UPDATE_MENU_LOCK);
+        if !check_attempt_needs_reset(&mut state, attempt) {
+            return;
+        }
+        state.items.clone()
+    };
+    let Some(items) = items else {
+        return;
+    };
+    let texts = texts_for(&UpdatePhase::Failed {
+        failure: UpdateFailure::Check,
+    });
+    if let Err(error) = items.status.set_text(texts.status) {
+        error!("Failed to update tray update status: {error}");
+    }
+    if let Err(error) = items
+        .status
+        .set_enabled(texts.mode.status_enabled(texts.enabled))
+    {
+        error!("Failed to update tray update status availability: {error}");
+    }
+    if let Some(action) = texts.action {
+        if let Err(error) = items.check.set_text(action) {
+            error!("Failed to update tray update action: {error}");
+        }
+    }
+    if let Err(error) = items.check.set_enabled(texts.enabled) {
+        error!("Failed to update tray update action availability: {error}");
+    }
 }
 
 pub(crate) fn manage_update_menu_state(app: &tauri::App) {
@@ -262,6 +456,7 @@ pub(crate) fn manage_update_menu_state(app: &tauri::App) {
         checking: false,
         installing: false,
         available_version: None,
+        attempt: 0,
     });
     app.manage(update_menu);
 }
@@ -278,24 +473,34 @@ pub(crate) fn register_update_menu_items(
     });
 }
 
-/// The tray's "Check for Updates" entry: check, or install an announced update.
+/// Both tray update entries: check, install, or open the announced release.
 pub(crate) fn handle_check_for_updates_menu_action(app: &tauri::AppHandle) {
-    let (available_version, installing) = {
+    let (available_version, action) = {
         let state: tauri::State<'_, SharedUpdateMenuState> = app.state();
         let state = lock_or_recover(&state, UPDATE_MENU_LOCK);
-        (state.available_version.clone(), state.installing)
+        (
+            state.available_version.clone(),
+            state.action(updates::updater_public_key().is_some()),
+        )
     };
-    if installing {
-        // The updater owns the menu action while it is
-        // downloading, waiting for work, or restarting.
-    } else if let Some(version) = available_version {
-        if updates::updater_public_key().is_some() {
-            check_for_updates_and_install(app.clone());
-        } else if let Err(error) = open_update_release(&version) {
-            error!("Failed to open update release: {error}");
+    match action {
+        UpdateMenuAction::None => {}
+        UpdateMenuAction::Check => check_for_updates(app.clone()),
+        UpdateMenuAction::Install => check_for_updates_and_install(app.clone()),
+        UpdateMenuAction::OpenRelease => {
+            if let Some(version) = available_version {
+                if let Err(error) = open_update_release(&version) {
+                    error!("Failed to open update release: {error}");
+                    set_update_menu(
+                        app,
+                        "Couldn't open update page",
+                        Some(format!("Retry Open Release v{version}…")),
+                        true,
+                        UpdateMenuMode::Available(version),
+                    );
+                }
+            }
         }
-    } else {
-        check_for_updates(app.clone());
     }
 }
 

@@ -409,7 +409,8 @@ pub(crate) fn from_legacy_location(object: &mut Object, same_bundle: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::settings::{EnginePrewarm, FileModelPreference, Language, LineupEnv, WhisperModel};
+    use crate::models::{Language, WhisperModel};
+    use crate::settings::{EnginePrewarm, FileModelPreference, LineupEnv};
     use serde_json::json;
 
     fn object(value: Value) -> Object {

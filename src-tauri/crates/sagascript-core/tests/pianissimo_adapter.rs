@@ -1,13 +1,14 @@
 //! `PianissimoBackend` / `LiveDictationBackend` over the fake engine host:
 //! progress, cancellation and warm reuse (no real model, no network).
 
-use sagascript_core::settings::{Language, WhisperModel};
+use sagascript_core::models::{Language, WhisperModel};
 use sagascript_core::transcription::engine_host::{
     EngineHostClient, EngineHostConfig, EngineHostError, LoadSpec, Timeouts,
 };
 use sagascript_core::transcription::live_dictation::LiveDictationBackend;
-use sagascript_core::transcription::pianissimo_backend::PianissimoBackend;
-use sagascript_core::transcription::pianissimo_backend::WarmOutcome;
+use sagascript_core::transcription::pianissimo_backend::{
+    AudioLength, PianissimoBackend, WarmOutcome, WarmTimings,
+};
 use sagascript_core::transcription::whisper_backend::DictationTimings;
 use sagascript_core::transcription::{TranscribeOptions, WhisperBackend};
 use std::path::Path;
@@ -19,10 +20,18 @@ const FAKE: &str = env!("CARGO_BIN_EXE_sagascript-fake-engine-host");
 const SR: usize = 16_000;
 
 fn client(env: &[(&str, &str)], tmp: &Path) -> EngineHostClient {
+    client_with_model(env, tmp, "/models/ok")
+}
+
+fn client_with_model(env: &[(&str, &str)], tmp: &Path, model_dir: &str) -> EngineHostClient {
+    EngineHostClient::new(config_with_model(env, tmp, model_dir))
+}
+
+fn config_with_model(env: &[(&str, &str)], tmp: &Path, model_dir: &str) -> EngineHostConfig {
     let mut cfg = EngineHostConfig::new(
         FAKE,
         LoadSpec {
-            model_dir: "/models/ok".into(),
+            model_dir: model_dir.into(),
             model_id: "fake-model".into(),
             compute_units: "cpu".into(),
         },
@@ -49,7 +58,7 @@ fn client(env: &[(&str, &str)], tmp: &Path) -> EngineHostClient {
     cfg.idle_unload = None;
     cfg.idle_shutdown = None;
     cfg.temp_dir = Some(tmp.to_path_buf());
-    EngineHostClient::new(cfg)
+    cfg
 }
 
 /// The fake host derives token ids from the sample value (= absolute index).
@@ -421,6 +430,75 @@ fn a_streamed_file_equals_the_decoded_file_and_reports_monotonic_progress() {
     }
 }
 
+/// A caller sizing a time limit from the reported lengths must be able to rely
+/// on them: the announced length first, the length decoded so far in 60 s steps
+/// (a floor a header cannot lower), and the exact length last.
+#[test]
+fn a_streamed_file_reports_its_length_as_it_is_learned() {
+    for (rate, seconds) in [(16_000u32, 150usize), (44_100, 130)] {
+        let tmp = tempfile::tempdir().unwrap();
+        let files = tempfile::tempdir().unwrap();
+        let path = write_wav(files.path(), "speech.wav", rate, seconds);
+        let backend =
+            PianissimoBackend::with_client(client(&[("FAKE_WINDOW_S", "30")], tmp.path()));
+        let lengths = Mutex::new(Vec::new());
+
+        let (_, stats) = backend
+            .transcribe_file_streaming_with_length(
+                &path,
+                |_| {},
+                &AtomicBool::new(false),
+                |length| lengths.lock().unwrap().push(length),
+            )
+            .unwrap();
+
+        let label = format!("{rate} Hz {seconds} s");
+        let reports = lengths.into_inner().unwrap();
+        assert!(
+            matches!(reports.last(), Some(AudioLength::Exact(_))),
+            "{label}: the last report is exact: {reports:?}"
+        );
+        assert!(
+            reports[..reports.len() - 1]
+                .iter()
+                .all(|l| matches!(l, AudioLength::Estimate(_))),
+            "{label}: the others are estimates: {reports:?}"
+        );
+        let lengths: Vec<usize> = reports
+            .iter()
+            .map(|l| match *l {
+                AudioLength::Estimate(n) | AudioLength::Exact(n) => n,
+            })
+            .collect();
+        let exact = stats.audio_samples;
+        assert_eq!(
+            lengths.last(),
+            Some(&exact),
+            "{label}: exact last {lengths:?}"
+        );
+        assert!(
+            lengths.len() >= 3,
+            "{label}: announced length, a 60 s step and the exact length: {lengths:?}"
+        );
+        // The first value is the container's announcement, near the real length.
+        assert!(
+            lengths[0].abs_diff(exact) <= rate as usize,
+            "{label}: announced {lengths:?} vs {exact}"
+        );
+        // The steps in between are floors: never above the real length.
+        assert!(
+            lengths.iter().skip(1).all(|n| *n <= exact),
+            "{label}: {lengths:?}"
+        );
+        let steps: Vec<usize> = lengths[1..lengths.len() - 1].to_vec();
+        assert!(
+            steps.windows(2).all(|w| w[1] >= w[0] + 60 * SR),
+            "{label}: one report per 60 s decoded: {steps:?}"
+        );
+        assert!(steps.iter().all(|n| *n >= 60 * SR), "{label}: {steps:?}");
+    }
+}
+
 #[test]
 fn a_streamed_file_that_is_missing_or_not_audio_fails_with_the_decoders_error() {
     let tmp = tempfile::tempdir().unwrap();
@@ -626,4 +704,186 @@ fn a_host_without_warm_and_a_hanging_canary_leave_the_host_alone() {
     );
     let (text, _) = dictate(&live(&hanging));
     assert!(!text.unwrap().is_empty());
+}
+
+/// SAGA-543: a warm-up and a dictation that meet on a cold engine share one
+/// host start and one model load, whichever gets there first.
+#[test]
+fn a_warm_and_a_dictation_on_a_cold_engine_load_once() {
+    let tmp = tempfile::tempdir().unwrap();
+    let log = tmp.path().join("log");
+    let shared = client(
+        &[
+            ("FAKE_LOG", log.to_str().unwrap()),
+            ("FAKE_LOAD_DELAY_MS", "300"),
+        ],
+        tmp.path(),
+    );
+    let barrier = Arc::new(std::sync::Barrier::new(2));
+    let warm = {
+        let (shared, barrier) = (shared.clone(), barrier.clone());
+        std::thread::spawn(move || {
+            barrier.wait();
+            sagascript_core::testing::warm_or_touch_timed(&shared, true)
+        })
+    };
+    barrier.wait();
+    let (text, _) = dictate(&live(&shared));
+
+    let warmed = warm.join().unwrap();
+    assert!(!text.unwrap().is_empty());
+    assert!(warmed.is_ok(), "{warmed:?}");
+    assert_eq!(ops_logged(&log, "load"), 1, "one load for both callers");
+    assert_eq!(spawn_count(&log), 1, "one host for both callers");
+    let snapshot = shared.snapshot();
+    assert_eq!((snapshot.spawns, snapshot.loads), (1, 1));
+}
+
+/// SAGA-543: a warm-up that fails (here: the model cannot load) frees the
+/// per-model in-flight flag, so the next warm-up attempts again.
+#[test]
+fn a_failed_warm_frees_the_in_flight_flag_for_the_next_attempt() {
+    let tmp = tempfile::tempdir().unwrap();
+    let log = tmp.path().join("log");
+    let broken = client_with_model(
+        &[("FAKE_LOG", log.to_str().unwrap())],
+        tmp.path(),
+        "/models/missing",
+    );
+    let in_flight = AtomicBool::new(false);
+
+    let attach = || Ok((broken.clone(), Some(1)));
+    let first = sagascript_core::testing::warm_attempt(&in_flight, true, attach)
+        .expect("the flag was free");
+    assert!(first.is_err(), "the load must fail: {first:?}");
+    assert!(!in_flight.load(Ordering::SeqCst), "the flag is released");
+    let loads_after_first = ops_logged(&log, "load");
+    assert!(loads_after_first >= 1);
+
+    let second = sagascript_core::testing::warm_attempt(&in_flight, true, attach)
+        .expect("the flag was released by the failed warm");
+    assert!(second.is_err());
+    assert!(
+        ops_logged(&log, "load") > loads_after_first,
+        "the second attempt tried to load again"
+    );
+
+    // An attach failure (model check) releases it too.
+    let refused = sagascript_core::testing::warm_attempt(&in_flight, true, || {
+        Err(sagascript_core::error::DictationError::TranscriptionFailed(
+            "model changed on disk".into(),
+        ))
+    })
+    .expect("free");
+    assert!(refused.is_err());
+    assert!(!in_flight.load(Ordering::SeqCst));
+}
+
+/// SAGA-543: a held flag turns a second warm-up away without running it.
+#[test]
+fn a_warm_attempt_is_skipped_while_another_holds_the_flag() {
+    let in_flight = AtomicBool::new(true);
+    let skipped = sagascript_core::testing::warm_attempt(&in_flight, true, || {
+        unreachable!("a warm-up is already in flight")
+    });
+    assert!(skipped.is_none());
+    assert!(
+        in_flight.load(Ordering::SeqCst),
+        "the holder keeps the flag"
+    );
+}
+
+/// SAGA-543: a cold warm reports start and load (verify is the caller's); a
+/// second warm of the loaded engine reports only the canary.
+#[test]
+fn warm_timings_report_the_phases_that_ran() {
+    let tmp = tempfile::tempdir().unwrap();
+    let shared = client(&[("FAKE_LOAD_DELAY_MS", "50")], tmp.path());
+
+    let (outcome, cold) = sagascript_core::testing::warm_or_touch_timed(&shared, true).unwrap();
+    assert_eq!(outcome, WarmOutcome::Loaded);
+    assert!(cold.host_start_ms.is_some(), "{cold:?}");
+    assert!(cold.load_ms.is_some(), "{cold:?}");
+    assert_eq!((cold.verify_ms, cold.canary_ms), (None, None));
+
+    let (outcome, warm) = sagascript_core::testing::warm_or_touch_timed(&shared, true).unwrap();
+    assert!(matches!(outcome, WarmOutcome::Canary(_)), "{outcome:?}");
+    assert_eq!(
+        (warm.verify_ms, warm.host_start_ms, warm.load_ms),
+        (None, None, None)
+    );
+    assert!(warm.canary_ms.is_some(), "{warm:?}");
+
+    // A held-back load runs no phase at all.
+    let cold_again = client(&[], tmp.path());
+    let (outcome, none) =
+        sagascript_core::testing::warm_or_touch_timed(&cold_again, false).unwrap();
+    assert_eq!(outcome, WarmOutcome::LoadHeldBack);
+    assert_eq!(none, WarmTimings::default());
+}
+
+/// SAGA-543: with the host already running (hello done), a warm reports no
+/// host start, only the load.
+#[test]
+fn warm_timings_skip_the_host_start_when_the_host_already_runs() {
+    let tmp = tempfile::tempdir().unwrap();
+    let shared = client(&[], tmp.path());
+    shared.connect().unwrap();
+
+    let (_, timings) = sagascript_core::testing::warm_or_touch_timed(&shared, true).unwrap();
+
+    assert_eq!(timings.host_start_ms, None);
+    assert!(timings.load_ms.is_some(), "{timings:?}");
+}
+
+/// SAGA-543: when a dictation performs the host start and the load while a warm
+/// waits for the lifecycle lock, the warm did neither and reports neither.
+#[test]
+fn a_warm_that_waited_for_anothers_start_and_load_reports_no_phases() {
+    use sagascript_core::transcription::engine_host::{LoadEvent, LoadObserver};
+    let tmp = tempfile::tempdir().unwrap();
+    let log = tmp.path().join("log");
+    let mut cfg = config_with_model(
+        &[
+            ("FAKE_LOG", log.to_str().unwrap()),
+            ("FAKE_LOAD_DELAY_MS", "300"),
+        ],
+        tmp.path(),
+        "/models/ok",
+    );
+    // The dictation's `Started` (it holds the lifecycle lock then) releases the
+    // warm thread; the warm's own `Started`, later, must not wait again.
+    let release_warm = Arc::new(std::sync::Barrier::new(2));
+    let first = Arc::new(AtomicBool::new(true));
+    {
+        let release_warm = release_warm.clone();
+        cfg.load_observer = Some(LoadObserver(Arc::new(move |event| {
+            if event == LoadEvent::Started && first.swap(false, Ordering::SeqCst) {
+                release_warm.wait();
+            }
+        })));
+    }
+    let shared = EngineHostClient::new(cfg);
+    let warm = {
+        let shared = shared.clone();
+        std::thread::spawn(move || {
+            release_warm.wait();
+            sagascript_core::testing::warm_or_touch_timed(&shared, true)
+        })
+    };
+
+    let (text, _) = dictate(&live(&shared));
+
+    assert!(!text.unwrap().is_empty());
+    let (outcome, timings) = warm.join().unwrap().unwrap();
+    assert!(
+        matches!(outcome, WarmOutcome::Loaded | WarmOutcome::Canary(_)),
+        "{outcome:?}"
+    );
+    assert_eq!(
+        (timings.host_start_ms, timings.load_ms),
+        (None, None),
+        "the dictation did the work: {timings:?}"
+    );
+    assert_eq!((spawn_count(&log), ops_logged(&log, "load")), (1, 1));
 }

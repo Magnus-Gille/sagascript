@@ -5,7 +5,21 @@ import test from "node:test";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { allSteps, commandLines, gateInvocation, loadWorkflow } from "./lib/ci-workflow.mjs";
-import { GATES, OSES, PROFILES, RELEASE_GUARD_PROOF, REPO_ROOT, commandOf, gatesFor, runGates } from "./ci/cargo-gates.mjs";
+import {
+  GATES,
+  OSES,
+  PROFILES,
+  RELEASE_GUARD_ENV,
+  RELEASE_GUARD_PROOF,
+  REPO_ROOT,
+  COMPILING_SUBCOMMANDS,
+  DEV_DEPS_OVERRIDE,
+  cargoArgv,
+  commandOf,
+  gatesFor,
+  runCommandOf,
+  runGates,
+} from "./ci/cargo-gates.mjs";
 
 // The list of cargo gates (scripts/ci/cargo-gates.mjs) is the one source of the cargo commands every
 // lane of ci.yml runs (#358). These tests hold the list, its wiring into the lanes and its runner.
@@ -76,6 +90,24 @@ test("each lane runs exactly the expected cargo commands, in order", () => {
   assert.deepEqual(lines("linux", "msrv"), EXPECTED.msrv, "msrv gates");
 });
 
+test("every compiling gate runs with the dev-profile dependency override CI needs (SAGA-546, SAGA-399)", () => {
+  assert.equal(DEV_DEPS_OVERRIDE, 'profile.dev.package."*".opt-level=0');
+  for (const gate of GATES) {
+    const argv = cargoArgv(gate);
+    if (COMPILING_SUBCOMMANDS.includes(gate.args[0])) {
+      // One argv element right after the subcommand, so it precedes any `--` and needs no shell quoting.
+      assert.deepEqual(argv.slice(0, 3), [gate.args[0], "--config", DEV_DEPS_OVERRIDE], `${gate.id} carries the override`);
+      assert.deepEqual([...argv.slice(0, 1), ...argv.slice(3)], gate.args, `${gate.id}: nothing else changes`);
+      assert.ok(runCommandOf(gate).includes(`--config '${DEV_DEPS_OVERRIDE}'`), `${gate.id}: --list shows it`);
+    } else {
+      assert.deepEqual(argv, gate.args, `${gate.id} compiles nothing or forwards --config elsewhere`);
+      assert.deepEqual(["deny", "fmt", "tree"].includes(gate.args[0]), true, `${gate.id}: only deny, fmt and tree are exempt`);
+    }
+  }
+  // The stated command (verify.mjs and the parity tests compare it) is unchanged: local verify gets no override.
+  assert.ok(GATES.every((gate) => !commandOf(gate).includes("--config")));
+});
+
 test("the core gates run on every OS; every other difference between the OS lists is an exclusion in the list", () => {
   const everywhere = OSES.map((os) => new Set(lines(os)));
   for (const command of COMMON)
@@ -101,6 +133,23 @@ test("the release guard proves its test ran and the dependency-tree gate forbids
   const tree = GATES.find((gate) => gate.id === "no-alsa");
   assert.ok(tree.forbidOutput.pattern.test("├── cpal v0.15.3") && tree.forbidOutput.pattern.test("alsa-sys"));
   assert.ok(!tree.forbidOutput.pattern.test("sagascript-core v1.4.4"));
+});
+
+test("the release guard builds a cheap release profile that still has no debug assertions, and no other gate overrides the environment", () => {
+  const guard = GATES.find((gate) => gate.id === "release-guard");
+  assert.equal(guard.env, RELEASE_GUARD_ENV);
+  assert.deepEqual(RELEASE_GUARD_ENV, {
+    CARGO_PROFILE_RELEASE_OPT_LEVEL: "0",
+    CARGO_PROFILE_RELEASE_LTO: "off",
+    CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "256",
+  });
+  // The guard test is compiled out when debug assertions or the dev-overrides feature are on (SAGA-552).
+  assert.ok(Object.keys(guard.env).every((name) => !/DEBUG_ASSERTIONS|OVERFLOW|PROFILE_(DEV|TEST)/.test(name)));
+  assert.ok(!guard.args.some((argument) => /dev-overrides|--all-features/.test(argument)));
+  assert.deepEqual(
+    GATES.filter((gate) => gate.env !== undefined).map((gate) => gate.id),
+    ["release-guard"],
+  );
 });
 
 test("cargo-deny gates run first, before any gate that compiles", () => {
@@ -160,7 +209,7 @@ test("the prebuilt cargo-deny install pins the version verify.mjs expects and a 
 
 test("windows-package.yml keeps the workspace commands the gates run", () => {
   const workflow = loadWorkflow("windows-package.yml");
-  const step = workflow.jobs[0].steps.find((candidate) => candidate.name === "Test and lint Rust workspace");
+  const step = workflow.job("build-windows-candidate").steps.find((candidate) => candidate.name === "Test and lint Rust workspace");
   const commands = commandLines(step);
   for (const id of ["test-workspace", "clippy-workspace"]) {
     const gate = GATES.find((candidate) => candidate.id === id);
@@ -224,9 +273,27 @@ test("--list prints a lane's commands and runs nothing", () => {
   for (const os of OSES) {
     const result = cli(["--os", os, "--list"]);
     assert.equal(result.status, 0, result.stderr);
-    assert.deepEqual(result.stdout.trim().split("\n"), EXPECTED[os]);
+    assert.deepEqual(
+      result.stdout.trim().split("\n"),
+      gatesFor({ os }).map((gate) => `${gate.cwd}: ${runCommandOf(gate)}`),
+    );
+    assert.equal(
+      result.stdout
+        .trim()
+        .split("\n")
+        .filter((line) => line.includes(`--config '${DEV_DEPS_OVERRIDE}'`)).length,
+      gatesFor({ os }).filter((gate) => COMPILING_SUBCOMMANDS.includes(gate.args[0])).length,
+    );
   }
-  assert.deepEqual(cli(["--profile", "msrv", "--list"]).stdout.trim().split("\n"), EXPECTED.msrv);
+  const msrv = cli(["--profile", "msrv", "--list"]).stdout.trim().split("\n");
+  assert.deepEqual(
+    msrv,
+    gatesFor({ os: "linux", profile: "msrv" }).map((gate) => `${gate.cwd}: ${runCommandOf(gate)}`),
+  );
+  assert.ok(
+    msrv.every((line) => line.includes(`--config '${DEV_DEPS_OVERRIDE}'`)),
+    "every MSRV gate carries the override",
+  );
 });
 
 test("the script refuses to run another OS's gates, an unknown option and an MSRV run without a toolchain", () => {

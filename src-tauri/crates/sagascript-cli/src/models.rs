@@ -3,8 +3,7 @@ use unicode_width::UnicodeWidthStr;
 
 use sagascript_core::error::DictationError;
 use sagascript_core::machine;
-use sagascript_core::models::{ModelInfo, PianissimoModel};
-use sagascript_core::settings::Language;
+use sagascript_core::models::{Language, ModelInfo, PianissimoModel};
 use sagascript_core::transcription::model;
 use sagascript_core::transcription::pianissimo_model;
 
@@ -334,7 +333,7 @@ pub async fn download(args: DownloadModelArgs, out: &Out) -> Result<(), Dictatio
     if let Some(pianissimo) = PianissimoModel::from_id(&args.model) {
         if !sagascript_core::transcription::pianissimo_backend::runtime_supported_on_this_os() {
             return Err(DictationError::TranscriptionFailed(
-                sagascript_core::transcription::pianissimo_backend::UNSUPPORTED_MESSAGE.into(),
+                sagascript_core::models::PIANISSIMO_UNSUPPORTED_MESSAGE.into(),
             ));
         }
         errln!(
@@ -493,8 +492,7 @@ mod progress_tests {
 mod lineup_tests {
     use super::*;
     use crate::transcribe::model_id_string;
-    use sagascript_core::models::{self, FileModel};
-    use sagascript_core::settings::WhisperModel;
+    use sagascript_core::models::{self, FileModel, WhisperModel};
     use sagascript_core::test_support::model_env::FixedModelEnv;
 
     fn whisper_row(model: WhisperModel, language: Language, installed: bool) -> ModelRow {

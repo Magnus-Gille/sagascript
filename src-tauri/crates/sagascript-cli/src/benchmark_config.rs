@@ -1,5 +1,6 @@
 use sagascript_core::error::DictationError;
-use sagascript_core::settings::{Language, Settings, WhisperModel};
+use sagascript_core::models::{Language, WhisperModel};
+use sagascript_core::settings::Settings;
 
 use super::transcribe::{model_id_string, parse_model};
 

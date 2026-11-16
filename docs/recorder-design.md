@@ -3,8 +3,8 @@
 - Ticket: SAGA-547. Related: SAGA-289 (system audio, draft PR #300), SAGA-519 (live meetings, draft PR
   #521), SAGA-303, SAGA-309, and the iPhone recorder epic SAGA-531 (SAGA-533 recording domain, SAGA-534
   storage, SAGA-536 app).
-- Status: **D1, D2 and D4-D6 decided by the owner on 2026-11-06; D3 blocks phase 2; D7-D9 (added by
-  the review) are open.**
+- Status: **D1 to D9 decided as recommended by the owner on 2026-11-06. D3 is decided in direction
+  only: the minimum macOS version and Intel support are fixed before phase 2 starts.**
   Nothing here is implemented. Evidence:
   [recorder-formats-2026-11-05](research/recorder-formats-2026-11-05/README.md). Decision record:
   [ADR 0010](adr/0010-recording-storage.md) (Accepted).
@@ -391,21 +391,22 @@ choice) without touching system-audio capture.
 
 ## 9. Decisions
 
-The owner approved D1, D2 and D4-D6 as recommended on 2026-11-06. D3 stays open, and the review of §11
-added D7 to D9, which are open too. D7 and D9 must be decided before phase 1c; D8 before the delete
-button.
+The owner approved D1 to D9 as recommended on 2026-11-06. D3 is decided in direction (a fresh shared
+`CaptureSource` that takes the best of #521 and #300); the minimum macOS version and Intel support are
+still to be fixed before phase 2 starts. D7 applies to each track on its own: the system-audio track
+of phase 2 is a track, not a channel of the microphone track.
 
 | # | Decision | Outcome |
 |---|---|---|
 | D1 | Compact tier: reduced FLAC (16 kHz / 16-bit, 46 MB/h) or AAC (30 MB/h at 64 kbit/s) | **Decided:** reduced FLAC in v1; add AAC only if users ask for smaller files |
 | D2 | One file per track + manifest, or one multichannel file | **Decided:** per track + manifest (no resampling, independent recovery, matches SAGA-533 "tracks"); offer a single-file export |
-| D3 | Which capture code leads system audio: #521, #300, or a fresh `CaptureSource` that ports both. Includes the minimum macOS version and Intel support: #521 is Apple Silicon and macOS 14.2+ only, while the System Audio Recording permission in this design is cited for 14.4+ | **Open.** Decide before phase 2; recommendation: lean on #521's tap and timeline and #300's Windows backend and CLI shape, and reconcile the OS versions first |
+| D3 | Which capture code leads system audio: #521, #300, or a fresh `CaptureSource` that ports both. Includes the minimum macOS version and Intel support: #521 is Apple Silicon and macOS 14.2+ only, while the System Audio Recording permission in this design is cited for 14.4+ | **Decided in direction (2026-11-06):** a fresh `CaptureSource` that leans on #521's tap and timeline and #300's Windows backend and CLI shape; reconcile the OS versions (minimum macOS, Intel) before phase 2 starts |
 | D4 | Default folder | **Decided:** a visible folder (for example `~/Music/Sagascript`) confirmed on first use |
 | D5 | Keep `record -o file.wav` unchanged | **Decided:** yes |
 | D6 | Ship mic-only (phase 1) before system audio | **Decided:** yes |
-| D7 | Channel policy (added by the review): the mic today is averaged to mono; FLAC holds at most 8 channels and a multi-input interface has more | **Open.** Recommendation: store 1-2 channels as delivered; above 2 the user picks a pair (default 1-2); the compact tier is a mono downmix and says so; size estimates multiply by the channel count |
-| D8 | Deleting a recording (added by the review) | **Open.** Recommendation: the app moves the folder to the Trash / Recycle Bin; `recordings delete` needs `--yes` and removes it |
-| D9 | File-system class and per-OS default folder (added by the review), extending D4 | **Open.** Recommendation: `~/Music/Sagascript` on macOS; on Windows `Music\Sagascript` unless that folder is cloud-synced, then ask; warn on FAT, network and cloud-synced folders |
+| D7 | Channel policy (added by the review): the mic today is averaged to mono; FLAC holds at most 8 channels and a multi-input interface has more | **Decided:** per track, store 1-2 channels as delivered; above 2 the user picks a pair (default 1-2); the compact tier is a mono downmix and says so; size estimates multiply by the channel count |
+| D8 | Deleting a recording (added by the review) | **Decided:** the app moves the folder to the Trash / Recycle Bin; `recordings delete` needs `--yes` and removes it |
+| D9 | File-system class and per-OS default folder (added by the review), extending D4 | **Decided:** `~/Music/Sagascript` on macOS; on Windows `Music\Sagascript` unless that folder is cloud-synced, then ask; warn on FAT, network and cloud-synced folders |
 
 ## 10. Not done in this study
 

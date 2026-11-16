@@ -14,11 +14,10 @@
 //! code a directory of its own, or decide that the module is cross-cutting by
 //! adding it to [`CROSS_CUTTING`] and to the table in `docs/ARCHITECTURE.md`.
 //!
-//! `lib.rs` also re-exports the old paths of modules that moved into `meeting/`
-//! and `diarization/`, for one release, `#[doc(hidden)]`. Nothing in the
-//! workspace names them any more (`tests/module_layering.rs` locks that). They
-//! are listed in [`COMPAT_SHIMS`] so they do not multiply; removing one means
-//! removing it from both places.
+//! A `pub use crate::..;` line in `lib.rs` is an old path kept for callers
+//! outside the workspace; it is listed in [`COMPAT_SHIMS`] so they do not
+//! multiply. The #372 shims went after the 1.4.9 release (SAGA-478), so the
+//! list is empty: a new one is a decision.
 //!
 //! Everything is read as text with `str::lines`, so `\n` and `\r\n` read alike.
 
@@ -46,20 +45,8 @@ const CROSS_CUTTING: [&str; 10] = [
 ];
 
 /// Old paths `lib.rs` re-exports for one release; see the module documentation.
-/// Each goes after the release that ships them (#372).
-const COMPAT_SHIMS: [&str; 11] = [
-    "diarization_evaluation",
-    "diarization_qualification",
-    "diarization_reference",
-    "diarization_report",
-    "diarization_strata",
-    "meeting_media",
-    "meeting_reprocess",
-    "meeting_reprocess_plan",
-    "meeting_reprocess_proposal",
-    "meeting_review",
-    "speaker_hint",
-];
+/// Empty since SAGA-478 removed the #372 shims.
+const COMPAT_SHIMS: [&str; 0] = [];
 
 /// The heading of the table in the architecture document.
 const TABLE_HEADER: &str = "| Top-level module | Why it sits at the top level |";

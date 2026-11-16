@@ -81,7 +81,14 @@ impl AsRef<Path> for TempDir {
 /// Lowercase hexadecimal SHA-256 of `bytes`: the form Sagascript records
 /// source hashes in (`source_sha256`, diarization cache identities).
 pub fn sha256_hex(bytes: impl AsRef<[u8]>) -> String {
-    format!("{:x}", Sha256::digest(bytes.as_ref()))
+    use std::fmt::Write;
+    // sha2 0.11 digests no longer implement `LowerHex`.
+    Sha256::digest(bytes.as_ref())
+        .iter()
+        .fold(String::with_capacity(64), |mut out, byte| {
+            let _ = write!(out, "{byte:02x}");
+            out
+        })
 }
 
 /// The variables [`isolated_cli_env`] passes through to a spawned CLI: the

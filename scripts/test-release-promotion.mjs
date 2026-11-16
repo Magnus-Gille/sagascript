@@ -104,6 +104,9 @@ test("windows-package keeps the console CLI, installed-CLI and portable zip step
   const conditional = w
     .split("\n      - name: ")
     .slice(1)
+    // The build job's own `if:` (SAGA-551) trails the last step of the decide job in this split; it is
+    // checked structurally in test-windows-package-gate.mjs, so only step-level conditions count here.
+    .map((step) => step.split("\n  build-windows-candidate:")[0])
     .filter((step) => /if:[^\n]*github\.event_name/.test(step))
     .map((step) => step.split("\n")[0]);
   assert.deepEqual(conditional, ["Test and lint Rust workspace", "Build lean CLI (debug)"]);
@@ -168,7 +171,7 @@ test("rust-toolchain is pinned by full SHA with an explicit toolchain in the rel
 test("promote-release checkout does not persist credentials", () => {
   const w = workflows.release;
   const promote = w.slice(w.indexOf("  promote-release:"), w.indexOf("  verify-draft:"));
-  assert.match(promote, /actions\/checkout@[0-9a-f]{40} # v6\.\d+\.\d+\s*\n\s+with:\n\s+persist-credentials: false/);
+  assert.match(promote, /actions\/checkout@[0-9a-f]{40} # v7\.\d+\.\d+\s*\n\s+with:\n\s+persist-credentials: false/);
 });
 
 test("locate-prebuild requires unexpired artifacts and logs why it falls back", () => {

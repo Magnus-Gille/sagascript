@@ -161,7 +161,7 @@ mod rejection_tests {
         assert_eq!(error.code(), "pianissimo_unavailable");
         assert_eq!(
             error.to_string(),
-            sagascript_core::transcription::pianissimo_backend::UNSUPPORTED_MESSAGE
+            sagascript_core::models::PIANISSIMO_UNSUPPORTED_MESSAGE
         );
     }
 }

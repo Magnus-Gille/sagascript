@@ -8,9 +8,10 @@
 use std::path::PathBuf;
 
 use sagascript_core::error::DictationError;
+use sagascript_core::glossary::Glossary;
+use sagascript_core::models::{FileModel, Language, PianissimoModel, WhisperModel};
 use sagascript_core::run_context::RunContext;
-use sagascript_core::settings::{FileModel, Language, PianissimoModel, Settings, WhisperModel};
-use sagascript_core::transcription::Glossary;
+use sagascript_core::settings::Settings;
 
 #[cfg(feature = "diarization")]
 use super::args::speaker_hint_from_args;

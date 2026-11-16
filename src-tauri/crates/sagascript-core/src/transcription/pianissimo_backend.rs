@@ -18,25 +18,19 @@ use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 
-use crate::audio::decoder::{decode_audio_file_streaming, StreamInfo};
+use crate::audio::decoder::{decode_audio_file_streaming, StreamInfo, MAX_DECODE_SAMPLES};
 use crate::error::DictationError;
-use crate::models::PianissimoModel;
+use crate::models::{PianissimoModel, PIANISSIMO_UNSUPPORTED_MESSAGE};
 use crate::path_scrub::scrub_paths;
 use crate::settings::{EnginePrewarm, Settings};
 use crate::sync::lock_or_recover;
 use crate::transcription::dev_overrides::env_override;
 use crate::transcription::engine_host::{
-    CancelToken, ClientIdentity, EngineHostClient, EngineHostConfig, EngineHostError, ErrorCode,
-    LoadEvent, LoadObserver, LoadSpec, Sink, SinkError, StreamError, Transcription, WarmResult,
-    WindowTiming,
+    CancelToken, Capabilities, ClientIdentity, EngineHostClient, EngineHostConfig, EngineHostError,
+    ErrorCode, LoadEvent, LoadObserver, LoadSpec, Sink, SinkError, StreamError, Transcription,
+    WarmResult, WindowTiming,
 };
 use crate::transcription::pianissimo_model;
-
-/// Shown wherever Pianissimo is refused for platform reasons. Defined with the
-/// model catalog, which settings need too (#372). Shim for the old path: remove
-/// it, one release on, when its callers (the CLI and the app) use
-/// `models::PIANISSIMO_UNSUPPORTED_MESSAGE`.
-pub const UNSUPPORTED_MESSAGE: &str = crate::models::PIANISSIMO_UNSUPPORTED_MESSAGE;
 
 /// Environment override (development builds only): path of the `sagascript-engine-host` binary.
 pub const ENGINE_HOST_ENV: &str = "SAGASCRIPT_ENGINE_HOST";
@@ -77,6 +71,40 @@ pub struct WarmInfo {
     pub was_warm: bool,
     /// Wall time spent making the engine ready (about zero when warm).
     pub load_seconds: f64,
+}
+
+/// Where a warm-up spent its time, phase by phase. `None` means the phase did
+/// not run for this warm-up (a cached client is not verified again, a running
+/// host is not started again, a loaded model is not loaded again).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct WarmTimings {
+    /// Checking the model artifact (`shared_client` when it creates a client).
+    pub verify_ms: Option<u64>,
+    /// Spawning the engine host and its `hello` handshake.
+    pub host_start_ms: Option<u64>,
+    /// The `load` the host reported for the model (this warm-up's own load).
+    pub load_ms: Option<u64>,
+    /// The canary prediction of an already-loaded engine.
+    pub canary_ms: Option<u64>,
+}
+
+fn elapsed_ms(since: Instant) -> u64 {
+    u64::try_from(since.elapsed().as_millis()).unwrap_or(u64::MAX)
+}
+
+impl std::fmt::Display for WarmTimings {
+    /// `verify_ms=12 host_start_ms=- load_ms=830 canary_ms=-` (`-`: did not run).
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let phase = |ms: Option<u64>| ms.map_or("-".to_string(), |ms| ms.to_string());
+        write!(
+            f,
+            "verify_ms={} host_start_ms={} load_ms={} canary_ms={}",
+            phase(self.verify_ms),
+            phase(self.host_start_ms),
+            phase(self.load_ms),
+            phase(self.canary_ms),
+        )
+    }
 }
 
 // ---- platform gate --------------------------------------------------------
@@ -361,7 +389,7 @@ pub fn config_for_host(
 fn precheck(model: PianissimoModel) -> Result<PathBuf, DictationError> {
     if !runtime_supported_on_this_os() {
         return Err(DictationError::TranscriptionFailed(
-            UNSUPPORTED_MESSAGE.into(),
+            PIANISSIMO_UNSUPPORTED_MESSAGE.into(),
         ));
     }
     let host = resolve_host().ok_or_else(|| {
@@ -443,6 +471,15 @@ pub fn shared_client(
     settings: &Settings,
     model: PianissimoModel,
 ) -> Result<EngineHostClient, DictationError> {
+    shared_client_timed(settings, model).map(|(client, _)| client)
+}
+
+/// [`shared_client`], also giving how long the model check took (`None` when
+/// the slot already held the client and nothing was checked).
+pub fn shared_client_timed(
+    settings: &Settings,
+    model: PianissimoModel,
+) -> Result<(EngineHostClient, Option<u64>), DictationError> {
     let host = precheck(model)?;
     let config = config_for_host(host, settings, model);
     let key = shared_key(&config, settings);
@@ -482,27 +519,31 @@ fn shared_key(config: &EngineHostConfig, settings: &Settings) -> SharedKey {
 ///   client it had (the error is the caller's);
 /// - then `replace` is given the client being retired (`None` for the first
 ///   one) and returns the new client, which goes into the slot.
+///
+/// Also returns how long `verify_model` took, `None` when it did not run.
 fn client_in_slot(
     slot: &Mutex<Option<Shared>>,
     key: SharedKey,
     verify_model: impl FnOnce() -> Result<(), DictationError>,
     replace: impl FnOnce(Option<Shared>) -> EngineHostClient,
-) -> Result<EngineHostClient, DictationError> {
+) -> Result<(EngineHostClient, Option<u64>), DictationError> {
     let mut slot = slot.lock().map_err(|_| {
         DictationError::TranscriptionFailed("Pianissimo client lock was poisoned".into())
     })?;
     if let Some(shared) = slot.as_ref() {
         if shared.key == key {
-            return Ok(shared.client.clone());
+            return Ok((shared.client.clone(), None));
         }
     }
+    let verify_started = Instant::now();
     verify_model()?;
+    let verify_ms = elapsed_ms(verify_started);
     let client = replace(slot.take());
     *slot = Some(Shared {
         key,
         client: client.clone(),
     });
-    Ok(client)
+    Ok((client, Some(verify_ms)))
 }
 
 /// Shut every shared host down (CLI exit, model deletion, app quit). No-op
@@ -769,26 +810,79 @@ pub(crate) fn warm_or_touch(
     client: &EngineHostClient,
     load_allowed: bool,
 ) -> Result<WarmOutcome, EngineHostError> {
+    warm_or_touch_timed(client, load_allowed).map(|(outcome, _)| outcome)
+}
+
+/// [`warm_or_touch`] with the phase timings of what it did (`verify_ms` is the
+/// caller's to fill: the client exists already here).
+pub(crate) fn warm_or_touch_timed(
+    client: &EngineHostClient,
+    load_allowed: bool,
+) -> Result<(WarmOutcome, WarmTimings), EngineHostError> {
     if client.snapshot().loaded {
-        return match client.warm_canary() {
-            Ok(result) => Ok(WarmOutcome::Canary(result)),
+        let outcome = match client.warm_canary() {
+            Ok(result) => WarmOutcome::Canary(result),
             Err(EngineHostError::Remote {
                 code: ErrorCode::Unsupported,
                 ..
-            }) => Ok(WarmOutcome::CanaryUnsupported),
-            Err(error) => Err(error),
+            }) => WarmOutcome::CanaryUnsupported,
+            Err(error) => return Err(error),
         };
+        let canary_ms = match &outcome {
+            WarmOutcome::Canary(WarmResult {
+                ran: true,
+                canary_ms,
+                ..
+            }) => *canary_ms,
+            _ => None,
+        };
+        return Ok((
+            outcome,
+            WarmTimings {
+                canary_ms,
+                ..WarmTimings::default()
+            },
+        ));
     }
     if !load_allowed {
-        return Ok(WarmOutcome::LoadHeldBack);
+        return Ok((WarmOutcome::LoadHeldBack, WarmTimings::default()));
     }
-    client.warm().map(|_| WarmOutcome::Loaded)
+    let (_, timings) = warm_load_timed(client)?;
+    Ok((WarmOutcome::Loaded, timings))
 }
 
-fn log_warm_outcome(reason: &'static str, started: Instant, outcome: Result<WarmOutcome, String>) {
-    let ms = started.elapsed().as_millis() as u64;
+/// Start the host and load the model like [`EngineHostClient::warm`], timing
+/// the two phases apart. The client measures them under its lifecycle lock, so
+/// a phase another caller performed while this one waited is `None` here (the
+/// host start covers spawn and `hello`; the load covers the `load` request).
+pub fn warm_load_timed(
+    client: &EngineHostClient,
+) -> Result<(Capabilities, WarmTimings), EngineHostError> {
+    let (caps, work) = client.warm_timed()?;
+    Ok((
+        caps,
+        WarmTimings {
+            host_start_ms: work.host_start_ms,
+            load_ms: work.load_ms,
+            ..WarmTimings::default()
+        },
+    ))
+}
+
+fn log_warm_outcome(
+    reason: &'static str,
+    started: Instant,
+    outcome: Result<(WarmOutcome, WarmTimings), String>,
+) {
+    let ms = elapsed_ms(started);
+    let (outcome, timings) = match outcome {
+        Ok((outcome, timings)) => (Ok(outcome), timings),
+        Err(error) => (Err(error), WarmTimings::default()),
+    };
     match outcome {
-        Ok(WarmOutcome::Loaded) => tracing::info!(reason, ms, "Pianissimo engine pre-warmed"),
+        Ok(WarmOutcome::Loaded) => {
+            tracing::info!(reason, ms, %timings, "Pianissimo engine pre-warmed")
+        }
         Ok(WarmOutcome::LoadHeldBack) => tracing::debug!(
             reason,
             "Pianissimo pre-warm skipped: recent memory-pressure unload"
@@ -893,24 +987,62 @@ pub fn warm_in_background(
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let load_allowed = !warm_in_pressure_cooldown(reason, last_unload, Instant::now());
-    if in_flight.swap(true, Ordering::SeqCst) {
+    let Some(claim) = WarmClaim::try_claim(in_flight) else {
         return;
-    }
+    };
     let spawned = std::thread::Builder::new()
         .name("pianissimo-warm".into())
         .spawn(move || {
             LOAD_SOURCE.with(|source| source.set(LoadSource::Warm));
-            let started = Instant::now();
-            let outcome = shared_client(&load_settings(), model)
-                .map_err(|e| e.to_string())
-                .and_then(|client| warm_or_touch(&client, load_allowed).map_err(|e| e.to_string()));
-            log_warm_outcome(reason, started, outcome);
-            in_flight.store(false, Ordering::SeqCst);
+            // The outcome is logged by `run_claimed_warm`.
+            let _logged = run_claimed_warm(claim, reason, load_allowed, || {
+                shared_client_timed(&load_settings(), model)
+            });
         });
     if let Err(error) = spawned {
+        // The closure (and with it the claim) was dropped: the flag is clear.
         tracing::warn!(%error, "could not start Pianissimo pre-warm thread");
-        in_flight.store(false, Ordering::SeqCst);
     }
+}
+
+/// The right to run one warm-up for a model: held while it runs, released when
+/// dropped, whatever way the warm-up ended (failure, panic, no thread).
+pub(crate) struct WarmClaim<'a>(&'a AtomicBool);
+
+impl<'a> WarmClaim<'a> {
+    /// `None` when a warm-up already holds `in_flight`.
+    pub(crate) fn try_claim(in_flight: &'a AtomicBool) -> Option<Self> {
+        (!in_flight.swap(true, Ordering::SeqCst)).then(|| Self(in_flight))
+    }
+}
+
+impl Drop for WarmClaim<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+}
+
+/// One background warm-up: attach to the shared client (`attach` also reports
+/// the model check time), load or canary, log. Releases `claim` last, so a
+/// failed warm-up never blocks the next one.
+pub(crate) fn run_claimed_warm(
+    claim: WarmClaim<'_>,
+    reason: &'static str,
+    load_allowed: bool,
+    attach: impl FnOnce() -> Result<(EngineHostClient, Option<u64>), DictationError>,
+) -> Result<(WarmOutcome, WarmTimings), String> {
+    let started = Instant::now();
+    let outcome = attach()
+        .map_err(|e| e.to_string())
+        .and_then(|(client, verify_ms)| {
+            let (outcome, mut timings) =
+                warm_or_touch_timed(&client, load_allowed).map_err(|e| e.to_string())?;
+            timings.verify_ms = verify_ms;
+            Ok((outcome, timings))
+        });
+    log_warm_outcome(reason, started, outcome.clone());
+    drop(claim);
+    outcome
 }
 
 // ---- adapter --------------------------------------------------------------
@@ -1007,14 +1139,28 @@ fn estimate_total_from_bytes(samples: usize, consumed: u64, total: u64) -> Optio
     usize::try_from(estimate).ok()
 }
 
-/// The producer of a streamed file job: decode `path` into `sink` and record
-/// the decoder's stats.
+/// How much more decoded audio (60 s at 16 kHz) triggers the next report of the
+/// length decoded so far to the `on_audio_length` observer.
+const LENGTH_REPORT_STEP_SAMPLES: usize = 60 * 16_000;
+
+/// What a streamed file job knows of its audio's length, in 16 kHz samples.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AudioLength {
+    /// Announced by the container or decoded so far: the decode is still running.
+    Estimate(usize),
+    /// The decode is done and the audio is exactly this long.
+    Exact(usize),
+}
+
+/// The producer of a streamed file job: decode `path` into `sink`, record the
+/// decoder's stats and tell `on_audio_length` what it learns of the length.
 fn stream_decode_into(
     path: &Path,
     sink: &Sink<'_>,
     cancelled: &AtomicBool,
     token: &CancelToken,
     stats: &Mutex<Option<StreamStats>>,
+    on_audio_length: &(dyn Fn(AudioLength) + Sync),
 ) -> Result<(), DictationError> {
     let checkpoint = || {
         if cancelled.load(Ordering::SeqCst) || token.is_cancelled() {
@@ -1025,18 +1171,27 @@ fn stream_decode_into(
     };
     let opened: std::cell::RefCell<Option<StreamInfo>> = std::cell::RefCell::new(None);
     let mut streamed = 0usize;
+    let mut next_length_report = LENGTH_REPORT_STEP_SAMPLES;
     let done = decode_audio_file_streaming(
         path,
         &checkpoint,
         &mut |info| {
             if let Some(expected) = info.expected_samples {
                 sink.set_expected_total(expected);
+                // A header is untrusted: cap it, as the sink does.
+                on_audio_length(AudioLength::Estimate(expected.min(MAX_DECODE_SAMPLES)));
             }
             *opened.borrow_mut() = Some(info.clone());
         },
         &mut |chunk| {
             sink.append(chunk).map_err(sink_error_to_dictation)?;
             streamed += chunk.len();
+            // What was decoded so far is a floor for the length that no header
+            // can understate.
+            if streamed >= next_length_report {
+                on_audio_length(AudioLength::Estimate(streamed));
+                next_length_report = streamed + LENGTH_REPORT_STEP_SAMPLES;
+            }
             if let Some(info) = opened.borrow().as_ref() {
                 if info.expected_samples.is_none() {
                     let consumed = info.consumed_bytes.load(Ordering::Relaxed);
@@ -1050,6 +1205,7 @@ fn stream_decode_into(
             Ok(())
         },
     )?;
+    on_audio_length(AudioLength::Exact(done.samples));
     *lock_or_recover(stats, "pianissimo.stream_stats") = Some(StreamStats {
         audio_samples: done.samples,
         decode_finished_at: Instant::now(),
@@ -1246,6 +1402,30 @@ impl PianissimoBackend {
         progress: impl Fn(u8),
         cancelled: &AtomicBool,
     ) -> Result<(PianissimoResult, StreamStats), DictationError> {
+        self.transcribe_file_streaming_with_length(path, progress, cancelled, |_| {})
+    }
+
+    /// [`Self::transcribe_file_streaming`] that also tells `on_audio_length` what
+    /// is known of the audio's length, in 16 kHz samples, while the file decodes.
+    /// A caller can size a time limit with it for a file whose length is not
+    /// known when the job starts.
+    ///
+    /// `on_audio_length` runs on the decoder thread and receives, in order: the
+    /// length the container announces when it opens (if it does; a header can
+    /// understate or overstate, so it is capped at the longest audio the decoder
+    /// accepts, about 4 hours); the length decoded so far, each time 60 s more
+    /// were decoded (a floor no header can lower); and, last, the exact length. All but the last are
+    /// [`AudioLength::Estimate`]; the last is [`AudioLength::Exact`], once the decode is done.
+    /// The values are not monotonic (a header can be above the real length): a
+    /// caller that wants a limit that never undercuts the real length keeps the
+    /// largest value it has seen.
+    pub fn transcribe_file_streaming_with_length(
+        &self,
+        path: &Path,
+        progress: impl Fn(u8),
+        cancelled: &AtomicBool,
+        on_audio_length: impl Fn(AudioLength) + Sync,
+    ) -> Result<(PianissimoResult, StreamStats), DictationError> {
         if cancelled.load(Ordering::SeqCst) {
             return Err(cancelled_error());
         }
@@ -1270,7 +1450,7 @@ impl PianissimoBackend {
             };
             self.client
                 .transcribe_file_stream(&token, Some(&mut report), |sink| {
-                    stream_decode_into(path, sink, cancelled, &token, &stats)
+                    stream_decode_into(path, sink, cancelled, &token, &stats, &on_audio_length)
                 })
         });
         if let Ok(mut active) = self.active.lock() {
@@ -1554,6 +1734,7 @@ mod tests {
             },
         )
         .expect("verification passes")
+        .0
     }
 
     #[test]
@@ -1610,6 +1791,74 @@ mod tests {
         assert!(!std::sync::Arc::ptr_eq(&a.inner, &c.inner));
         assert_eq!(calls.created.get(), 3);
         assert_eq!(calls.retired.borrow().len(), 2);
+    }
+
+    #[test]
+    fn concurrent_callers_with_the_same_key_verify_and_create_once() {
+        let slot = Mutex::new(None);
+        let verified = std::sync::atomic::AtomicUsize::new(0);
+        let created = std::sync::atomic::AtomicUsize::new(0);
+        let timed = std::thread::scope(|scope| {
+            let callers: Vec<_> = (0..6)
+                .map(|_| {
+                    scope.spawn(|| {
+                        client_in_slot(
+                            &slot,
+                            key_with_idle_minutes(10),
+                            || {
+                                verified.fetch_add(1, Ordering::SeqCst);
+                                // Long enough for the others to queue on the slot.
+                                std::thread::sleep(Duration::from_millis(50));
+                                Ok(())
+                            },
+                            |_| {
+                                created.fetch_add(1, Ordering::SeqCst);
+                                idle_client()
+                            },
+                        )
+                        .expect("verification passes")
+                    })
+                })
+                .collect();
+            callers
+                .into_iter()
+                .map(|caller| caller.join().unwrap())
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(verified.load(Ordering::SeqCst), 1);
+        assert_eq!(created.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            timed
+                .iter()
+                .filter(|(_, verify_ms)| verify_ms.is_some())
+                .count(),
+            1,
+            "only the caller that created the client reports a model check"
+        );
+        assert!(timed
+            .iter()
+            .all(|(client, _)| std::sync::Arc::ptr_eq(&client.inner, &timed[0].0.inner)));
+    }
+
+    #[test]
+    fn a_cached_client_reports_no_model_check_time() {
+        let slot = Mutex::new(None);
+        let first = client_in_slot(
+            &slot,
+            key_with_idle_minutes(10),
+            || Ok(()),
+            |_| idle_client(),
+        )
+        .unwrap();
+        assert!(first.1.is_some(), "creating a client verifies the model");
+        let second = client_in_slot(
+            &slot,
+            key_with_idle_minutes(10),
+            || unreachable!("a cached client is not verified again"),
+            |_| unreachable!(),
+        )
+        .unwrap();
+        assert_eq!(second.1, None);
     }
 
     #[test]
@@ -1824,6 +2073,50 @@ mod tests {
         ] {
             assert!(!warm_wanted(&off, trigger, None), "{trigger:?}");
         }
+    }
+
+    #[test]
+    fn prewarm_off_never_calls_the_warm_hook_for_any_trigger() {
+        let off = pianissimo_settings(EnginePrewarm::Off);
+        for trigger in [
+            WarmTrigger::AppStart,
+            WarmTrigger::Wake,
+            WarmTrigger::ProfileChange,
+            WarmTrigger::KeyDown,
+        ] {
+            assert!(
+                !warm_on(&off, trigger, None, |_, _| panic!(
+                    "{trigger:?} must not warm when off"
+                )),
+                "{trigger:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_warm_claim_is_exclusive_and_released_on_drop() {
+        let flag = AtomicBool::new(false);
+        let first = WarmClaim::try_claim(&flag).expect("free");
+        assert!(
+            WarmClaim::try_claim(&flag).is_none(),
+            "one warm-up at a time"
+        );
+        drop(first);
+        assert!(WarmClaim::try_claim(&flag).is_some(), "free again");
+    }
+
+    #[test]
+    fn warm_timings_display_marks_phases_that_did_not_run() {
+        let timings = WarmTimings {
+            verify_ms: Some(12),
+            host_start_ms: None,
+            load_ms: Some(830),
+            canary_ms: None,
+        };
+        assert_eq!(
+            timings.to_string(),
+            "verify_ms=12 host_start_ms=- load_ms=830 canary_ms=-"
+        );
     }
 
     #[test]

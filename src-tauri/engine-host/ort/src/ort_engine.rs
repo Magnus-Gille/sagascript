@@ -300,6 +300,7 @@ impl OrtEngine {
                 return Ok(result);
             }
         }
+        let _qos = crate::power_qos::high_qos_scope();
         let started = Instant::now();
         let dir = &params.model_dir;
         for file in [
@@ -460,6 +461,9 @@ fn transcribe_loaded(
     if is_cancelled() {
         return Err(cancelled());
     }
+    // HighQoS covers the model work only, not the PCM read above: a slow or stalled file
+    // must not keep the whole process out of EcoQoS.
+    let _qos = crate::power_qos::high_qos_scope();
     run_pipeline(
         loaded,
         Pipeline {
@@ -735,6 +739,9 @@ impl Engine for OrtEngine {
         let loaded = self
             .current()
             .ok_or_else(|| HostError::new(ErrorCode::NotLoaded, "No model is loaded"))?;
+        // `warm` runs this at key-down so the next dictation starts on a hot model; under
+        // Windows EcoQoS that work would be throttled exactly like a real window.
+        let _qos = crate::power_qos::high_qos_scope();
         canary_loaded(&loaded)
     }
 

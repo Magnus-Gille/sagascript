@@ -44,7 +44,7 @@ fn the_digest_is_lowercase_hex() {
 }
 
 /// The spelling the helpers of the workspace used before (`{byte:02x}` per byte)
-/// is the one of `{:x}`.
+/// is the one of `lower_hex`.
 #[test]
 fn it_spells_the_digest_as_the_per_byte_form_did() {
     for n in 0u32..500 {

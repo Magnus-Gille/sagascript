@@ -53,6 +53,7 @@ function fixture() {
   writeFileSync(join(cwd, ".gitignore"), ".fixture-gitconfig\nignored/\n");
   writeFileSync(join(cwd, "src-tauri/tauri.conf.json"), '{\n  "productName": "Sagascript",\n  "version": "9.8.7"\n}\n');
   writeFileSync(join(cwd, "src-tauri/gen/schemas/desktop-schema.json"), "{}\n");
+  writeFileSync(join(cwd, "src-tauri/gen/schemas/macOS-schema.json"), "{}\n");
   writeFileSync(join(cwd, "src-tauri/lib.rs"), "fn main() {}\n");
   git("add", ".");
   git("commit", "-qm", "fixture");
@@ -73,7 +74,14 @@ function identity(repo) {
 function gateAccepts(repo) {
   const result = spawnSync(process.execPath, [join(repo.cwd, "scripts/ci-build-identity.mjs"), "--verify"], {
     cwd: repo.cwd,
-    env: { ...repo.env, GITHUB_SHA: repo.sha, SAGASCRIPT_GIT_HASH: repo.sha, SAGASCRIPT_BUILD_DATE: "2026-10-12" },
+    env: {
+      ...repo.env,
+      GITHUB_SHA: repo.sha,
+      SAGASCRIPT_GIT_HASH: repo.sha,
+      SAGASCRIPT_BUILD_DATE: "2026-10-12",
+      SAGASCRIPT_SOURCE_REVISION_INPUT: repo.sha,
+      SAGASCRIPT_SOURCE_DIRTY_INPUT: "false",
+    },
     encoding: "utf8",
   });
   return result.status === 0;
@@ -108,8 +116,14 @@ test("the script and the CI gate agree on what makes a tree dirty", { skip }, ()
     { name: "modified source", change: (cwd) => writeFileSync(join(cwd, "src-tauri/lib.rs"), "fn main() { }\n"), dirty: true },
     { name: "untracked source", change: (cwd) => writeFileSync(join(cwd, "src-tauri/new.rs"), "\n"), dirty: true },
     {
+      // A local macOS build adds the updater plugin's entries to the tracked macOS schema.
+      name: "rewritten macOS schema",
+      change: (cwd) => writeFileSync(join(cwd, "src-tauri/gen/schemas/macOS-schema.json"), '{"x":1}\n'),
+      dirty: false,
+    },
+    {
       name: "schema not in the list",
-      change: (cwd) => writeFileSync(join(cwd, "src-tauri/gen/schemas/macOS-schema.json"), "{}\n"),
+      change: (cwd) => writeFileSync(join(cwd, "src-tauri/gen/schemas/fixture-only-schema.json"), "{}\n"),
       dirty: true,
     },
     { name: "deleted source", change: (cwd) => rmSync(join(cwd, "src-tauri/lib.rs")), dirty: true },
@@ -124,7 +138,12 @@ test("the script and the CI gate agree on what makes a tree dirty", { skip }, ()
 
 test("every consumer reads the one list of generated files", () => {
   const list = readFileSync(join(scripts, "build-identity-generated-paths.txt"), "utf8");
-  for (const consumer of ["engine-host-identity.sh", "ci-build-identity.mjs", "../src-tauri/engine-host/ort/build_identity.rs"]) {
+  for (const consumer of [
+    "engine-host-identity.sh",
+    "ci-build-identity.mjs",
+    "../src-tauri/engine-host/ort/build_identity.rs",
+    "../src-tauri/build_identity.rs",
+  ]) {
     assert.match(readFileSync(join(scripts, consumer), "utf8"), /build-identity-generated-paths\.txt/, consumer);
   }
   assert.match(readFileSync(join(scripts, "build-engine-host.sh"), "utf8"), /engine-host-identity\.sh/);
