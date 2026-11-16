@@ -253,6 +253,10 @@ impl SessionCore {
         self.outcome.take()
     }
 
+    #[expect(
+        clippy::expect_used,
+        reason = "the writer is only taken by finalize, after which no step runs"
+    )]
     fn writer(&mut self) -> &mut RecordingWriter {
         self.writer
             .as_mut()
@@ -796,6 +800,10 @@ impl SessionCore {
 
     /// Every track has ended: write the manifest (1a's step 5).
     fn finalize(&mut self, now: u64) -> Result<(), RecordingError> {
+        #[expect(
+            clippy::expect_used,
+            reason = "finalize runs once, when every track has ended"
+        )]
         let writer = self
             .writer
             .take()
