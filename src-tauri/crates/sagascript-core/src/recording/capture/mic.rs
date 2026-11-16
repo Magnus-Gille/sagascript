@@ -181,6 +181,8 @@ fn device_id(device: &cpal::Device) -> Option<u64> {
 /// The `audio_device_id` field of `cpal` 0.15.3's `Debug` text for a CoreAudio
 /// device: `Device { audio_device_id: 73, name: Ok("...") }`. Anything else,
 /// including a number that is not a Core Audio object id, is no identity.
+/// Only macOS calls it; the tests run it everywhere.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(crate) fn id_from_debug_text(text: &str) -> Option<u64> {
     const KEY: &str = "audio_device_id: ";
     let rest = &text[text.find(KEY)? + KEY.len()..];
