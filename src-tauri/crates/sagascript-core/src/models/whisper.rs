@@ -335,8 +335,12 @@ impl WhisperModel {
             Language::Swedish => WhisperModel::KbWhisperMedium,
             Language::Norwegian => WhisperModel::NbWhisperBase,
             Language::Finnish => WhisperModel::Base,
-            // Whisper fallback for Danish, where no Danish-specific model runs.
-            Language::Danish => WhisperModel::Small,
+            // Whisper fallback for Danish, where Pianissimo does not run (Windows
+            // x64, macOS 13, Intel Macs). Medium about halves Small's Danish error
+            // rate. Large v3 Turbo is more accurate still, but its encoder costs at
+            // least twice Medium's on every utterance: too slow for CPU-only
+            // dictation.
+            Language::Danish => WhisperModel::Medium,
             Language::Auto => WhisperModel::Base,
         }
     }

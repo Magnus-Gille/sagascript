@@ -2,11 +2,10 @@
 //! the downloads themselves.
 
 use sagascript_core::machine;
-use sagascript_core::models::ModelInfo as CatalogEntry;
-use sagascript_core::settings::{
-    FileModel, FileModelPreference, Language, PianissimoModel, Settings, SettingsError,
-    WhisperModel,
+use sagascript_core::models::{
+    FileModel, Language, ModelInfo as CatalogEntry, PianissimoModel, WhisperModel,
 };
+use sagascript_core::settings::{FileModelPreference, Settings, SettingsError};
 use sagascript_core::transcription::model;
 use sagascript_core::transcription::pianissimo_model;
 use tauri::State;

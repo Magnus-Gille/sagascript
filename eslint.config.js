@@ -1,5 +1,5 @@
 // ESLint (#361): TypeScript and Svelte in src/, and the Node tooling in
-// scripts/ and tests/. `npm run lint` (CI: test-macos; npm run verify).
+// scripts/ and tests/. `npm run lint` (CI: frontend-linux; npm run verify).
 // Formatting is Prettier's job (prettier.config.js); nothing here formats.
 import js from "@eslint/js";
 import { defineConfig, globalIgnores } from "eslint/config";

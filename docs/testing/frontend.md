@@ -4,7 +4,7 @@ How the Svelte/TypeScript frontend is tested ([ADR 0004](../adr/0004-test-strate
 [#361](https://github.com/Magnus-Gille/sagascript/issues/361)). Status: Vitest with unit and
 component tests (happy-dom, `@testing-library/svelte`), the typed IPC mock, Prettier and
 ESLint are in place. The Settings pilot and component migration replaced the private
-source harnesses (mappings below); the updater-owned recovery source test remains. happy-dom and ESLint bring BSD-2-Clause and BlueOak-1.0.0 packages, which
+source harnesses (mappings below); the updater recovery source test is now `FileTranscription.recovery.test.ts`. happy-dom and ESLint bring BSD-2-Clause and BlueOak-1.0.0 packages, which
 the owner accepted for dev tooling only
 ([decision](https://github.com/Magnus-Gille/sagascript/issues/361#issuecomment-6153321272)):
 `scripts/lib/npm-license-policy.mjs` accepts them only for `"dev": true` packages outside the
@@ -20,7 +20,7 @@ a real `vite build` bundles, emits or reads) and `npm run licenses:check` (relea
 | Unit and component (Vitest) | `src/**/*.test.ts`, next to the module or component | `npm run test:unit` (`npm run test:unit:coverage`: report in `coverage/`, no gate) |
 | Lint (ESLint) | `src/`, `scripts/`, `tests/`; `eslint.config.js` | `npm run lint` |
 | Browser flows (Playwright) | `scripts/qa-*.mjs` against `scripts/fixtures/transcription-browser-mock.js` | `npm run test:browser` |
-| Legacy source-text tests | `scripts/test-file-transcription-recovery.mjs` (updater owner); native assertions in Finnish/release scripts | `npm run test:ui`, `npm run test:release`; add no component source assertions |
+| Legacy source-text tests | native assertions in Finnish/release scripts | `npm run test:ui`, `npm run test:release`; add no component source assertions |
 
 ## Where tests live
 
@@ -28,7 +28,8 @@ a real `vite build` bundles, emits or reads) and `npm run licenses:check` (relea
   are `src/lib/<Component>.test.ts` (or `<Component>.<topic>.test.ts`, such as
   `Settings.recovery.test.ts` and `Settings.readback.test.ts`). Name tests after the behaviour they pin.
 - Shared test code lives in `src/test/`: `setup.ts` (runs before every file), `ipc.ts`,
-  `deferred.ts`, `EventProbe.svelte` and backends for rendering components (`settings.ts`). Nothing in the app
+  `deferred.ts`, `EventProbe.svelte` and backends for rendering components (`settings.ts` for the
+  whole Settings window, `settingsPanel.ts` for one of its panels). Nothing in the app
   imports it, so it is never bundled; `svelte-check` type-checks tests like app code.
 - Import `describe`/`test`/`expect` from `"vitest"` (no globals). Every file runs in happy-dom
   (a DOM in Node) with Svelte's browser runtime; logic modules stay DOM-free by design, not by
@@ -153,7 +154,8 @@ await waitFor(() => expect(ipc.callsTo("complete_update_preparation")).toEqual([
 ```
 
 - `renderSettings()` (`src/test/settings.ts`) mounts Settings with an answer for every command
-  it invokes while mounting and waits until its listeners are registered. For another
+  it invokes while mounting and waits until its listeners are registered. `renderPanel()`
+  (`src/test/settingsPanel.ts`) does the same for one panel of the window. For another
   component: `mockIpc({...})`, then `render(Component, props)`; add `mockWindows("main")`
   from `@tauri-apps/api/mocks` when it calls `getCurrentWebview()` or other window APIs.
 - The jest-dom matchers (`toBeInTheDocument`, `toHaveValue`, `toBeDisabled`, …) are
@@ -176,9 +178,8 @@ not.
 - `eslint-suppressions.json` retains existing tooling findings in `scripts/`. There are
   no component or other `src/` entries. New findings fail. Prune resolved entries with
   `npx eslint --prune-suppressions`; never run `--suppress-all`.
-- Prettier includes Svelte components except `FileTranscription.svelte`, whose updater-owned
-  source-text recovery test remains unchanged. Remove that one exclusion when its owner
-  migrates the test. Formatting is verified separately from semantic behavior.
+- Prettier includes Svelte components except `FileTranscription.svelte` (`.prettierignore`); its
+  source-text test is gone, so that exclusion can be removed in a separate formatting-only change. Formatting is verified separately from semantic behavior.
 - Two choices in the configuration itself: `no-regex-spaces` is off for `scripts/` and
   `tests/` (the workflow tests match YAML indentation literally), and `scripts/qa-*.mjs` get
   browser globals for their `page.evaluate()` callbacks.
@@ -195,6 +196,31 @@ Tests reach logic through modules, not through component source:
 3. Move first, behaviour unchanged, in its own commit (ADR 0004 §4); keep the component wired
    to the moved code. Example: MeetingReview.svelte's `<script module>` became
    `src/lib/meeting-review-drafts.ts`.
+
+Settings.svelte was split this way (SAGA-379). It is a shell; its parts live in
+`src/lib/settings/` with their tests next to them, and there are three ways to test them:
+
+- A controller with injected dependencies is constructed directly:
+  `updateRecovery.svelte.ts` (a class with the backend commands injected, and the dictation
+  editor and file queue as two ports a test fills with plain objects),
+  `modelDownloads.svelte.ts` (a store over the shared `ModelDownloads`), `tabRouter.svelte.ts`.
+- A panel (`DictateTab.svelte`, `TranscribeTab.svelte`, `SettingsTab.svelte`,
+  `AdvancedPanel.svelte`, and the shell's `QueueStatus.svelte` and `DownloadStatusBar.svelte`)
+  is rendered on its own with `renderPanel(Panel, handlers, { active })` from
+  `src/test/settingsPanel.ts`: the panel over the window's real controllers and the IPC mock,
+  without the shell. It returns `{ ipc, win, view, setActive }`; `win` is the `SettingsWindow`,
+  for what reaches a panel from outside it (`win.router.request("dictate")`,
+  `win.queue.addFiles([...])`) and for what the shell shows and the panel does not
+  (`win.session.error`, the banner). The other controllers (`settingsSession`,
+  `hotkeyProfiles`, `profileModels`, `dictation`, `fileQueue`, `fileModel`) reach each other
+  through the window and are tested this way, through the panel that shows them.
+  `GlossaryEditor.svelte` takes plain props and is rendered directly in
+  `GlossaryEditor.test.ts`; its exports, such as the dirty guard `requestLeave`, are on
+  `render(...).component`.
+- The `Settings.*.test.ts` files test the same flows through the whole window
+  (`renderSettings`), including what crosses panels: the tab strip, the notices, the guard
+  that stops a tab change. `Settings.tabs.test.ts` adds a fixture panel through the `tabs`
+  prop to show that a panel is one component and one entry in `SETTINGS_TABS`.
 
 Code that more than one component needs lives in shared modules (#362), each with its own
 unit tests: `tauri-events.svelte.ts` (listeners, above), `models.svelte.ts` (`PIANISSIMO_ID`,
@@ -216,11 +242,11 @@ asks `downloadModelById(id)` instead of choosing the command.
 
 ## Remaining source-text boundary
 
-The `ui` manifest has three entries: `test-finnish-language.mjs` and
-`test-danish-language.mjs` retain CLI/core and model-registry checks; `test-file-transcription-recovery.mjs` remains with the updater
-owner. Native window and command-registration checks remain in `test-release-surface.mjs`:
-mocked frontend IPC does not prove native behavior. This migration does not close the
-updater-owned remainder of #361.
+The `ui` manifest has two entries: `test-finnish-language.mjs` and
+`test-danish-language.mjs` retain CLI/core and model-registry checks. The update-recovery
+claims of `FileTranscription.svelte` are executed in `src/lib/FileTranscription.recovery.test.ts`
+(job-scoped hydration, drafts and proposals through MeetingReview, explicit clears, silent unmount). Native window and command-registration checks remain in `test-release-surface.mjs`:
+mocked frontend IPC does not prove native behavior.
 
 The file and meeting integration scripts, their `frontend-errors-source.mjs` loader and
 loader test have been removed after their behaviors passed in production-used typed modules,
@@ -302,7 +328,7 @@ run in fresh contexts against synthetic IPC. They do not claim native Mac accept
 The F03 browser test is needed because happy-dom does not consistently expose a selected
 option through `option:checked`, which Svelte's select binding uses. No product behavior
 was changed to accommodate that test environment. The other seven private cases are
-mapped below. Updater recovery source coverage is owned separately and remains unchanged.
+mapped below. Updater recovery coverage is `FileTranscription.recovery.test.ts`.
 
 
 ## File and meeting harness parity

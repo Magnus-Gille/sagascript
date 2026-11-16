@@ -36,7 +36,7 @@ const read = (path) => readFileSync(path, "utf8").replace(/\r\n?/g, "\n");
 const workflow = parseWorkflow(read(ciPath));
 const packageJson = read(fileURLToPath(new URL("../package.json", import.meta.url)));
 
-const TEST_LANES = ["test-macos", "test-linux", "msrv-linux", "test-windows"];
+const TEST_LANES = ["test-macos", "test-linux", "msrv-linux", "frontend-linux", "test-windows"];
 const NON_TEST_JOBS = {
   scope: "classifies the changed paths so docs-only PRs skip the native lanes; runs no checks",
   "build-macos": "builds the native release binary and runs CLI smoke tests; verify does no release builds",
@@ -392,8 +392,8 @@ test("the release guard proves its test ran, locally as in CI", () => {
 });
 
 test("the browser check gives the QA scripts an output directory, as CI does", () => {
-  const ciStep = expandedSteps(workflow.job("test-macos")).find((step) => commandsIn(step.run).includes("npm run test:browser"));
-  assert.ok(ciStep?.env.QA_OUTPUT_DIR, "test-macos sets QA_OUTPUT_DIR for npm run test:browser");
+  const ciStep = expandedSteps(workflow.job("frontend-linux")).find((step) => commandsIn(step.run).includes("npm run test:browser"));
+  assert.ok(ciStep?.env.QA_OUTPUT_DIR, "frontend-linux sets QA_OUTPUT_DIR for npm run test:browser");
   const [step] = CHECKS.find((check) => check.id === "browser").steps;
   assert.ok(step.env?.QA_OUTPUT_DIR, "verify's browser check sets QA_OUTPUT_DIR");
 });

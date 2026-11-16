@@ -11,11 +11,13 @@ use std::path::{Path, PathBuf};
 use clap::{Args, Subcommand, ValueEnum};
 use sagascript_core::error::DictationError;
 use sagascript_core::fsutil::{PublishFs, RealFs};
+use sagascript_core::glossary::Glossary;
 use sagascript_core::meeting::reprocess::plan::{ReprocessingMode, ReprocessingPlan};
 use sagascript_core::meeting::review::MeetingReview;
+use sagascript_core::models::{FileModel, Language, WhisperModel};
 use sagascript_core::run_context::RunContext;
-use sagascript_core::settings::{FileModel, Language, Settings, WhisperModel};
-use sagascript_core::transcription::{Glossary, WhisperBackend};
+use sagascript_core::settings::Settings;
+use sagascript_core::transcription::WhisperBackend;
 use serde_json::json;
 
 use crate::meeting_proposal::write_json_new;

@@ -11,27 +11,18 @@
 //!     machine        composes settings with transcription's probes
 //! ```
 //!
-//! # The one upward line
+//! # No upward line
 //!
-//! `settings/store.rs` re-exports `machine::{load, update, try_update}`:
-//!
-//! ```text
-//! pub use crate::machine::{load, try_update, update};
-//! ```
-//!
-//! It is a shim for the old paths `settings::store::{load, update, try_update}`,
-//! kept for one release for callers outside the workspace (nothing in it uses
-//! them: `nothing_in_the_workspace_uses_a_compatibility_path`), and it is an edge
-//! from settings up to the layer that imports transcription. It is no longer a
-//! loop at run time: `transcription::pianissimo_backend::{engine_config,
-//! shared_client}` used to call `settings::store::load()`, so transcription
-//! reached `machine::load()` and `machine` reached transcription's probes
-//! again. They now receive the `Settings` (or, for the two deferred callers, the
-//! function that loads them), and only `settings/` and `machine.rs` name the
-//! store at all (`only_settings_and_the_machine_name_the_store`, with the test seam). Until the line
-//! is deleted, `only_the_compat_shim_in_the_store_names_the_machine_module` lets
-//! it name exactly these three paths, so no other `machine` import can slip in
-//! beside them.
+//! Nothing in `settings/` names `machine` or `transcription`
+//! (`nothing_in_core_names_the_machine_module`,
+//! `settings_do_not_reach_into_transcription`). The last upward line, the
+//! #372 shim `pub use crate::machine::{load, try_update, update};` in
+//! `settings/store.rs`, was removed after the 1.4.9 release (SAGA-478).
+//! `transcription::pianissimo_backend::{engine_config, shared_client}` used to
+//! call `settings::store::load()`, a loop at run time through `machine`; they
+//! now receive the `Settings` (or, for the two deferred callers, the function
+//! that loads them), and only `settings/` and `machine.rs` name the store at
+//! all (`only_settings_and_the_machine_name_the_store`, with the test seam).
 //!
 //! # What the scan sees
 //!
@@ -191,12 +182,32 @@ fn join(path: &mut String, segment: &str) {
     path.push_str(segment);
 }
 
+/// The `{ .. }` group starting at `i` (on the `{`), each tree appended to
+/// `out` under `prefix`. Returns the index after it.
+fn use_group(t: &[Token], mut i: usize, prefix: &str, out: &mut Vec<String>) -> usize {
+    i += 1;
+    loop {
+        if t.get(i) == Some(&Token::RBrace) {
+            return i + 1; // `{}` or a trailing comma
+        }
+        i = use_tree(t, i, prefix, out);
+        match t.get(i) {
+            Some(Token::Comma) => i += 1,
+            Some(Token::RBrace) => return i + 1,
+            _ => return i,
+        }
+    }
+}
+
 /// One `use` tree starting at `i`, appended to `out` as full paths. Returns
 /// the index after it. `prefix` is the path of the enclosing group.
 fn use_tree(t: &[Token], mut i: usize, prefix: &str, out: &mut Vec<String>) -> usize {
     let mut path = prefix.to_string();
     if t.get(i) == Some(&Token::PathSep) {
         i += 1; // `use ::std::..`
+    }
+    if t.get(i) == Some(&Token::LBrace) {
+        return use_group(t, i, &path, out); // `use {a, b::c};`
     }
     while let Some(Token::Ident(name)) = t.get(i) {
         if name != "self" {
@@ -208,22 +219,7 @@ fn use_tree(t: &[Token], mut i: usize, prefix: &str, out: &mut Vec<String>) -> u
         }
         i += 1;
         match t.get(i) {
-            Some(Token::LBrace) => {
-                i += 1;
-                loop {
-                    i = use_tree(t, i, &path, out);
-                    match t.get(i) {
-                        Some(Token::Comma) => {
-                            i += 1;
-                            if t.get(i) == Some(&Token::RBrace) {
-                                return i + 1;
-                            }
-                        }
-                        Some(Token::RBrace) => return i + 1,
-                        _ => return i,
-                    }
-                }
-            }
+            Some(Token::LBrace) => return use_group(t, i, &path, out),
             Some(Token::Star) => {
                 join(&mut path, "*");
                 i += 1;
@@ -249,9 +245,18 @@ fn paths(source: &str) -> Vec<String> {
     let mut i = 0;
     while i < t.len() {
         let starts_use = matches!(&t[i], Token::Ident(word) if word == "use")
-            && matches!(t.get(i + 1), Some(Token::Ident(_)) | Some(Token::PathSep));
+            && matches!(
+                t.get(i + 1),
+                Some(Token::Ident(_)) | Some(Token::PathSep) | Some(Token::LBrace)
+            );
+        // `extern crate name [as alias];` names the crate itself.
+        let extern_crate = matches!(&t[i], Token::Ident(word) if word == "extern")
+            && matches!(t.get(i + 1), Some(Token::Ident(word)) if word == "crate");
         if starts_use {
             i = use_tree(&t, i + 1, "", &mut out);
+        } else if let (true, Some(Token::Ident(name))) = (extern_crate, t.get(i + 2)) {
+            out.push(name.clone());
+            i += 3;
         } else {
             rest.push(t[i].clone());
             i += 1;
@@ -397,28 +402,19 @@ fn settings_do_not_reach_into_transcription() {
     );
 }
 
-/// The one upward line (see the module documentation): the paths of the
-/// shim, and nothing else, may name `machine` anywhere in the crate.
+/// `machine` sits above settings and transcription: no module of core names
+/// it. The CLI and the app compose it with the rest.
 #[test]
-fn only_the_compat_shim_in_the_store_names_the_machine_module() {
+fn nothing_in_core_names_the_machine_module() {
     let found: Vec<_> = tree_paths("")
         .into_iter()
         .filter(|(_, path)| names_module(path, "machine"))
         .collect();
-    let expected: Vec<(String, String)> = ["load", "try_update", "update"]
-        .map(|name| {
-            (
-                "settings/store.rs".to_string(),
-                format!("crate::machine::{name}"),
-            )
-        })
-        .to_vec();
-    assert_eq!(
-        found,
-        expected,
-        "nothing but `pub use crate::machine::{{load, try_update, update}};` in settings/store.rs may \
-         import `machine`, which sits above settings and transcription. Removing it is a deliberate \
-         step: see the module documentation of this test for what must change first."
+    assert!(
+        found.is_empty(),
+        "`machine` sits above settings and transcription; take what it computes from the \
+         caller instead of importing it:\n{}",
+        report(&found)
     );
 }
 
@@ -589,105 +585,204 @@ fn the_diarization_feature_is_found_however_it_is_spelled_and_not_in_comments() 
 
 // ---- the compatibility paths have no users -------------------------------
 
-/// The old names `lib.rs` re-exports (`pub use crate::path as name;`, or the
-/// last segment without an `as`). Read from the source, so a new compatibility
-/// line is covered the day it is added and a removed one leaves the scan.
+/// The marker of a compatibility re-export in `lib.rs`. Only the `pub use`
+/// that follows it (after attributes and comments) is an old path; any other
+/// `pub use crate::..;` in `lib.rs` is an ordinary re-export.
+const SHIM_MARKER: &str = "// Shim (";
+
+/// The old top-level names `lib.rs` keeps as marked compatibility re-exports
+/// (`pub use crate::path as name;`, or the last segment without an `as`).
+/// Read from the source, so a new marked line is covered the day it is added.
+/// Empty since SAGA-478 removed the #372 shims.
 fn lib_shims() -> Vec<String> {
-    let lib = fs::read_to_string(src().join("lib.rs")).unwrap();
-    let shims: Vec<String> = lib
-        .lines()
-        .map(str::trim)
-        .filter_map(|line| line.strip_prefix("pub use crate::"))
-        .map(|rest| rest.trim_end_matches(';').trim())
-        .map(|path| match path.split_once(" as ") {
+    marked_shims(&fs::read_to_string(src().join("lib.rs")).unwrap())
+}
+
+fn marked_shims(lib: &str) -> Vec<String> {
+    let mut shims = Vec::new();
+    let mut marked = false;
+    for line in lib.lines().map(str::trim) {
+        if line.starts_with(SHIM_MARKER) {
+            marked = true;
+            continue;
+        }
+        if !marked || line.is_empty() || line.starts_with("#[") || line.starts_with("//") {
+            continue;
+        }
+        marked = false;
+        let Some(rest) = line.strip_prefix("pub use crate::") else {
+            panic!("`{SHIM_MARKER}..` must be followed by `pub use crate::..;`, not: {line}");
+        };
+        let path = rest.trim_end_matches(';').trim();
+        assert!(
+            !path.contains('{'),
+            "write one marked shim per line, without a group: {line}"
+        );
+        let name = match path.split_once(" as ") {
             Some((_, alias)) => alias.trim(),
             None => path.rsplit("::").next().unwrap(),
-        })
-        .map(str::to_string)
-        .collect();
+        };
+        shims.push(name.to_string());
+    }
     assert!(
-        !shims.is_empty(),
-        "lib.rs has no `pub use crate::..;` lines; if the last compatibility path is gone, \
-         delete this check and the scan that uses lib_shims()"
+        !marked,
+        "a `{SHIM_MARKER}..` marker with no `pub use` after it"
     );
     shims
 }
 
-/// The functions `settings/store.rs` re-exports from `machine`: the old
-/// `settings::store::{load, update, try_update}`.
-fn store_shims() -> Vec<String> {
-    let store = fs::read_to_string(src().join("settings/store.rs")).unwrap();
-    paths(&store)
-        .into_iter()
-        .filter_map(|path| path.strip_prefix("crate::machine::").map(str::to_string))
-        .collect()
-}
+/// Old paths below the top level that core still re-exports for callers
+/// outside it (`settings::store::load`-style, relative to the crate root).
+/// The marked lines of `lib.rs` cover the top-level names; list deeper ones here.
+///
+/// Empty since SAGA-478 part B removed the last ones (`settings::WhisperModel`,
+/// `transcription::Glossary`, `pianissimo_backend::UNSUPPORTED_MESSAGE`, ...)
+/// after the 1.4.9 release. The scan stays for the next re-export.
+const OLD_PATHS: [&str; 0] = [];
 
-/// What the scan of one file needs to know about the compatibility paths.
-struct Shims {
-    /// Old top-level module names (`meeting_review`, `speaker_hint`, ..).
-    modules: Vec<String>,
-    /// Old function names under `settings::store` (`load`, `update`, ..).
-    store_functions: Vec<String>,
-}
-
-fn shims() -> Shims {
-    Shims {
-        modules: lib_shims(),
-        store_functions: store_shims(),
-    }
+/// Every old path, relative to the crate root (`meeting_review`,
+/// `settings::store::load`).
+fn old_paths() -> Vec<String> {
+    let mut paths = lib_shims();
+    paths.extend(OLD_PATHS.iter().map(|path| path.to_string()));
+    paths
 }
 
 /// The compatibility paths a source file names, as `path` strings.
 ///
-/// `in_core` is a file of `sagascript-core/src`, where the old module names are
-/// reached as `crate::name` (a bare `speaker_hint::..` is the real module in
-/// `diarization/`); any other file reaches core as `sagascript_core::name`, and
+/// `module` is the module path of a file of `sagascript-core/src` (`None`
+/// elsewhere); there an old path is reached
+/// as `crate::..` (a bare `speaker_hint::..` is the real module in
+/// `diarization/`); any other file reaches core as `sagascript_core::..`, and
 /// a bare `meeting_media::..` there is the app's own module of that name.
 ///
-/// A path counts when it is:
-/// - `crate::<old module>..` (core) or `sagascript_core::<old module>..`;
-/// - `settings::store::<load|update|try_update>` however the prefix is spelt,
-///   or `store::<..>` in a file that imports `sagascript_core::settings::store`;
-/// - a rename of the store module itself (`.. store as s`), which would hide
-///   the later calls from the second rule.
+/// For an old path `a::b::c`, a path counts when it is:
+/// - `<crate>::a::b::c..`;
+/// - `b::c..` in a file that imports `<crate>::a::b` (or `c..` after
+///   importing `<crate>::a::b::c`'s parent group, which is the first rule);
+/// - a rename of such a parent module (`use <crate>::a::b as x;`) whose
+///   alias then reaches the old path (`x::c..`).
 ///
-/// Not seen: `use sagascript_core as core;` and the like; nobody renames the crate.
-fn compat_uses(source: &str, in_core: bool, shims: &Shims) -> Vec<String> {
-    let all = paths(source);
-    let imports_store = all
-        .iter()
-        .any(|path| path == "sagascript_core::settings::store" || path == "crate::settings::store");
+/// A glob or a rename of the crate itself is caught by
+/// `nothing_outside_core_globs_or_renames_the_core_crate`.
+fn compat_uses(source: &str, module: Option<&str>, old: &[String]) -> Vec<String> {
+    let krate = if module.is_some() {
+        "crate"
+    } else {
+        "sagascript_core"
+    };
+    // Inside core, `super::..` and `self::..` are spelt out from the crate root
+    // (`use super::Language;` in `settings/glossary_ops.rs` is
+    // `crate::settings::Language`). A relative glob (`use super::*;` in a test
+    // module) is left alone: it names whatever the parent has in scope.
+    let all: Vec<String> = paths(source)
+        .into_iter()
+        .map(|path| match module {
+            Some(module) if !path.ends_with("::*") => resolve_relative(&path, module),
+            _ => path,
+        })
+        .collect();
+    let tokens = tokens(&code_only(source));
     let mut found = Vec::new();
-    for path in &all {
-        let segments: Vec<&str> = path.split("::").collect();
-        let module_prefix = if in_core { "crate" } else { "sagascript_core" };
-        let old_module = segments.first() == Some(&module_prefix)
-            && segments
-                .get(1)
-                .is_some_and(|name| shims.modules.iter().any(|shim| shim == name));
-        let store_function = |from: usize| {
-            segments.get(from) == Some(&"store")
-                && segments
-                    .get(from + 1)
-                    .is_some_and(|name| shims.store_functions.iter().any(|shim| shim == name))
-        };
-        let old_store_function = (store_function(0) && imports_store)
-            || (1..segments.len())
-                .any(|from| segments[from - 1] == "settings" && store_function(from));
-        if old_module || old_store_function {
-            found.push(path.clone());
+    for old_path in old {
+        let old_segments: Vec<&str> = old_path.split("::").collect();
+        let full = format!("{krate}::{old_path}");
+        for path in &all {
+            if path == &full || path.starts_with(&format!("{full}::")) {
+                found.push(path.clone());
+            }
+        }
+        for depth in 1..old_segments.len() {
+            let parent = format!("{krate}::{}", old_segments[..depth].join("::"));
+            // A glob of a parent module brings the old name in bare.
+            let glob = format!("{parent}::*");
+            if all.iter().any(|path| path == &glob) {
+                found.push(glob);
+            }
+            // Through an imported parent module: `use <crate>::a::b;` then `b::c`.
+            if !all.iter().any(|path| path == &parent) {
+                continue;
+            }
+            let local = old_segments[depth - 1..].join("::");
+            for path in &all {
+                if path == &local || path.starts_with(&format!("{local}::")) {
+                    found.push(path.clone());
+                }
+            }
+            // `use <crate>::a::b as x;` then `x::c`, `x::*` or `x::<next module>`
+            // (which a further import or rename could carry on to `c`).
+            let name = old_segments[depth - 1];
+            let next = old_segments[depth];
+            let renamed = tokens.windows(3).any(|triple| match triple {
+                [Token::Ident(first), Token::Ident(word), Token::Ident(alias)]
+                    if first == name && word == "as" =>
+                {
+                    let through_alias = format!("{alias}::{next}");
+                    all.iter().any(|path| {
+                        path == &format!("{alias}::*")
+                            || path == &through_alias
+                            || path.starts_with(&format!("{through_alias}::"))
+                    })
+                }
+                _ => false,
+            });
+            if renamed {
+                found.push(format!("{parent} as <alias>"));
+            }
         }
     }
-    let tokens = tokens(&code_only(source));
-    let renamed_store = imports_store
-        && tokens.windows(2).any(|pair| {
-            matches!(pair, [Token::Ident(first), Token::Ident(second)] if first == "store" && second == "as")
-        });
-    if renamed_store {
-        found.push("settings::store as <alias>".to_string());
-    }
+    found.sort();
+    found.dedup();
     found
+}
+
+/// `path` with a leading `self::` or `super::` chain replaced by the crate
+/// path of `module` (`settings::glossary_ops`); other paths unchanged.
+fn resolve_relative(path: &str, module: &str) -> String {
+    let mut base: Vec<&str> = module.split("::").filter(|part| !part.is_empty()).collect();
+    let mut rest = path;
+    let mut relative = false;
+    loop {
+        if let Some(tail) = rest.strip_prefix("self::") {
+            rest = tail;
+            relative = true;
+        } else if let Some(tail) = rest.strip_prefix("super::") {
+            base.pop();
+            rest = tail;
+            relative = true;
+        } else {
+            break;
+        }
+    }
+    if !relative {
+        return path.to_string();
+    }
+    let mut resolved = vec!["crate"];
+    resolved.extend(base);
+    resolved.push(rest);
+    resolved.join("::")
+}
+
+/// The module path of a file of `sagascript-core/src`, from its name relative
+/// to `src/`: `lib.rs` is the root, `a/mod.rs` is `a`, `a/b.rs` is `a::b`,
+/// and a test file `a/b_tests.rs` (pulled in with `#[path]` as `mod tests`)
+/// is `a::b::tests`.
+fn core_module_path(file: &str) -> String {
+    let stem = file.trim_end_matches(".rs");
+    let mut parts: Vec<String> = stem.split('/').map(str::to_string).collect();
+    match parts.last().map(String::as_str) {
+        Some("lib") | Some("mod") => {
+            parts.pop();
+        }
+        Some(last) if last.ends_with("_tests") => {
+            let owner = last.trim_end_matches("_tests").to_string();
+            parts.pop();
+            parts.push(owner);
+            parts.push("tests".to_string());
+        }
+        _ => {}
+    }
+    parts.join("::")
 }
 
 /// Every `.rs` file of the workspace that is Rust the repository maintains:
@@ -714,46 +809,109 @@ fn workspace_sources() -> Vec<(String, String)> {
         .collect()
 }
 
-/// The files that define the compatibility paths; everything else must not use them.
-const SHIM_DEFINITIONS: [&str; 2] = [
-    "crates/sagascript-core/src/lib.rs",
-    "crates/sagascript-core/src/settings/store.rs",
-];
-
-/// Core files that still use a compatibility path, until their own change lands:
-/// `(file, path)`. Empty: nothing is left.
-const STILL_USING_A_COMPAT_PATH: [(&str, &str); 0] = [];
+/// The file that defines the compatibility paths; everything else must not use them.
+const SHIM_DEFINITION: &str = "crates/sagascript-core/src/lib.rs";
 
 /// "No internal users" (#372, part 2b): the CLI, the app, the tests and the
 /// rest of core name the new paths, so a compatibility path can be deleted
 /// without touching them and a new caller cannot start leaning on one.
 #[test]
 fn nothing_in_the_workspace_uses_a_compatibility_path() {
-    let shims = shims();
+    let old = old_paths();
     let mut found = Vec::new();
     for (name, text) in workspace_sources() {
-        if SHIM_DEFINITIONS.contains(&name.as_str()) {
+        if name == SHIM_DEFINITION {
             continue;
         }
-        let in_core = name.starts_with("crates/sagascript-core/src/");
-        for path in compat_uses(&text, in_core, &shims) {
+        let module = name
+            .strip_prefix("crates/sagascript-core/src/")
+            .map(core_module_path);
+        for path in compat_uses(&text, module.as_deref(), &old) {
             found.push((name.clone(), path));
         }
     }
-    found.sort();
-    found.dedup();
-    let expected: Vec<(String, String)> = STILL_USING_A_COMPAT_PATH
-        .iter()
-        .map(|(file, path)| (file.to_string(), path.to_string()))
+    assert!(
+        found.is_empty(),
+        "a compatibility path (a re-export marked `{SHIM_MARKER}..` in lib.rs, or one of \
+         OLD_PATHS) is used outside the file that defines it; use the new path:\n{}",
+        report(&found)
+    );
+}
+
+/// SAGA-478 removed the #372 shims after the 1.4.9 release: no file of core
+/// carries the marker any more.
+#[test]
+fn the_372_shims_are_gone() {
+    let mut files = Vec::new();
+    rust_files(&src(), &mut files);
+    let left: Vec<String> = files
+        .into_iter()
+        .filter(|file| fs::read_to_string(file).unwrap().contains("// Shim (#372)"))
+        .map(|file| file.display().to_string())
         .collect();
-    assert_eq!(
-        found,
-        expected,
-        "a compatibility path (an old `sagascript_core::meeting_review`-style module name from \
-         lib.rs, or `settings::store::{{load, update, try_update}}`) is used outside the files \
-         that define it. Use the new path: `meeting::..`, `diarization::..` or \
-         `machine::{{load, update, try_update}}`. The files that define them are exempt: {}",
-        SHIM_DEFINITIONS.join(", ")
+    assert!(left.is_empty(), "#372 shims left in: {left:?}");
+}
+
+// ---- how the CLI and the app reach core -----------------------------------
+
+/// A glob of the crate root (`use sagascript_core::*;`) or a rename of the
+/// crate (`use sagascript_core as core;`), as `paths` reports them.
+fn hides_core_paths(path: &str) -> bool {
+    path == "sagascript_core" || path == "sagascript_core::*"
+}
+
+/// Outside core, every path into it starts with `sagascript_core::`: a glob
+/// of the crate root or a rename of the crate would let a bare
+/// `meeting_review::..` or `core::testing::..` past the scans above.
+#[test]
+fn nothing_outside_core_globs_or_renames_the_core_crate() {
+    let mut found = Vec::new();
+    for (name, text) in workspace_sources() {
+        if name.starts_with("crates/sagascript-core/") {
+            continue;
+        }
+        for path in paths(&text) {
+            if hides_core_paths(&path) {
+                found.push((name.clone(), path));
+            }
+        }
+    }
+    assert!(
+        found.is_empty(),
+        "name core items by their `sagascript_core::..` path, without a glob of the crate root \
+         or a rename of the crate:\n{}",
+        report(&found)
+    );
+}
+
+/// Whether a workspace file is test code: under a `tests/` directory, or a
+/// unit-test file (`*_tests.rs`, or a `tests.rs` module).
+fn is_test_file(name: &str) -> bool {
+    let file = name.rsplit('/').next().unwrap_or(name);
+    name.split('/').any(|part| part == "tests") || file == "tests.rs" || file.ends_with("_tests.rs")
+}
+
+/// `sagascript_core::testing` is a way in for tests (#363): the production
+/// code of the app and the CLI never names it.
+#[test]
+fn the_app_and_the_cli_use_the_test_seams_only_in_tests() {
+    let mut found = Vec::new();
+    for (name, text) in workspace_sources() {
+        let production = name.starts_with("src/") || name.starts_with("crates/sagascript-cli/");
+        if !production || is_test_file(&name) {
+            continue;
+        }
+        for path in paths(&text) {
+            if path == "sagascript_core::testing" || path.starts_with("sagascript_core::testing::")
+            {
+                found.push((name.clone(), path));
+            }
+        }
+    }
+    assert!(
+        found.is_empty(),
+        "`sagascript_core::testing` belongs in tests (`tests/` or a `*_tests.rs` file):\n{}",
+        report(&found)
     );
 }
 
@@ -833,7 +991,7 @@ fn a_grouped_or_renamed_import_of_a_forbidden_module_is_seen() {
         .into_iter()
         .filter(|path| names_module(path, "machine"))
         .collect();
-    assert_eq!(found, ["crate::machine"], "the shim test must flag it");
+    assert_eq!(found, ["crate::machine"], "the machine test must flag it");
 
     // models/sources.rs: `settings` imported under another name, then used.
     let sources = "use crate::{settings as _s, download as _d};\n\
@@ -860,19 +1018,22 @@ fn a_grouped_or_renamed_import_of_a_forbidden_module_is_seen() {
 
 // ---- the scan for compatibility paths itself -------------------------------
 
-fn test_shims() -> Shims {
-    Shims {
-        modules: ["meeting_review", "speaker_hint", "diarization_report"]
-            .map(str::to_string)
-            .to_vec(),
-        store_functions: ["load", "update", "try_update"]
-            .map(str::to_string)
-            .to_vec(),
-    }
+fn test_old_paths() -> Vec<String> {
+    [
+        "meeting_review",
+        "speaker_hint",
+        "diarization_report",
+        "settings::store::load",
+        "settings::store::update",
+        "settings::store::try_update",
+    ]
+    .map(str::to_string)
+    .to_vec()
 }
 
 fn uses(source: &str, in_core: bool) -> Vec<String> {
-    sorted(compat_uses(source, in_core, &test_shims()))
+    let module = in_core.then_some("settings::glossary_ops");
+    sorted(compat_uses(source, module, &test_old_paths()))
 }
 
 /// The mutation of the real check: each of these makes it red.
@@ -907,7 +1068,7 @@ fn a_use_of_an_old_module_or_store_path_is_seen_however_it_is_spelt() {
         uses("use crate::speaker_hint::SpeakerCountHint;", true),
         strings(&["crate::speaker_hint::SpeakerCountHint"])
     );
-    // The store functions: full path, through `settings`, through `store`.
+    // A deeper old path: in full, through an imported `settings`, through `store`.
     assert_eq!(
         uses(
             "fn f() { sagascript_core::settings::store::load(); }",
@@ -936,12 +1097,81 @@ fn a_use_of_an_old_module_or_store_path_is_seen_however_it_is_spelt() {
         ),
         strings(&["sagascript_core::settings::store::load"])
     );
-    // A rename of the module hides the calls, so the rename is the finding.
+    // A rename of a parent module hides the uses, so the rename is the finding.
     let renamed = uses(
         "use sagascript_core::settings::store as s;\nfn f() { s::load(); }",
         false,
     );
-    assert_eq!(renamed, strings(&["settings::store as <alias>"]));
+    assert_eq!(
+        renamed,
+        strings(&["sagascript_core::settings::store as <alias>"])
+    );
+}
+
+/// Review findings on SAGA-478 part B: each of these reached an old path
+/// unseen before the scan resolved them.
+#[test]
+fn relative_paths_parent_globs_and_alias_chains_are_seen() {
+    // Inside core, `super::` from `settings/glossary_ops.rs` is `crate::settings`.
+    assert_eq!(
+        uses("use super::{store::load, Settings};", true),
+        strings(&["crate::settings::store::load"])
+    );
+    assert_eq!(
+        uses("fn f() { self::super::store::update(); }", true),
+        strings(&["crate::settings::store::update"])
+    );
+    // A glob of a parent module brings the old name in bare.
+    assert_eq!(
+        uses(
+            "use sagascript_core::settings::store::*;\nfn f() { load(); }",
+            false
+        ),
+        strings(&["sagascript_core::settings::store::*"])
+    );
+    // A renamed parent module, then a glob or a further import through the alias.
+    assert_eq!(
+        uses(
+            "use sagascript_core::settings as s;\nuse s::*;\nfn f() { store::load(); }",
+            false
+        ),
+        strings(&["sagascript_core::settings as <alias>"])
+    );
+    assert_eq!(
+        uses(
+            "use sagascript_core::settings as s;\nuse s::store as t;\nuse t::load;",
+            false
+        ),
+        strings(&["sagascript_core::settings as <alias>"])
+    );
+    // Not old paths: a relative glob in a test module, another store function.
+    assert!(uses("use super::*;", true).is_empty());
+    assert!(uses("use super::store::load_from;", true).is_empty());
+}
+
+#[test]
+fn core_files_map_to_their_module_paths() {
+    assert_eq!(core_module_path("lib.rs"), "");
+    assert_eq!(core_module_path("settings/mod.rs"), "settings");
+    assert_eq!(
+        core_module_path("settings/glossary_ops.rs"),
+        "settings::glossary_ops"
+    );
+    assert_eq!(
+        core_module_path("settings/manager_tests.rs"),
+        "settings::manager::tests"
+    );
+    assert_eq!(
+        resolve_relative("super::Language", "settings::glossary_ops"),
+        "crate::settings::Language"
+    );
+    assert_eq!(
+        resolve_relative("super::super::models::X", "a::b::c"),
+        "crate::a::models::X"
+    );
+    assert_eq!(resolve_relative("self::x::Y", "a"), "crate::a::x::Y");
+    assert_eq!(resolve_relative("crate::a::B", "z"), "crate::a::B");
+    assert_eq!(resolve_relative("std::fmt", "z"), "std::fmt");
 }
 
 #[test]
@@ -959,6 +1189,8 @@ fn the_new_paths_and_unrelated_names_are_not_compatibility_uses() {
         // Store functions that are not the old three, and `store` of another crate.
         "use sagascript_core::settings::store;\nfn f() { store::load_from(p); store::load_with(m); }",
         "fn f() { other::store::load(); store::update(1); }",
+        // A renamed parent module whose alias never reaches an old path.
+        "use sagascript_core::settings::store as s;\nfn f() { s::load_from(p); }",
     ] {
         assert!(uses(source, false).is_empty(), "wrongly flagged: {source}");
     }
@@ -987,20 +1219,84 @@ fn the_compatibility_scan_reads_crlf_like_lf() {
     );
 }
 
-/// `lib.rs` is the source of the module list: its lines in either spelling.
+/// Only the `pub use` after a marker is a shim; an ordinary re-export is not.
 #[test]
-fn the_shim_lists_come_from_lib_rs_and_the_store() {
-    let modules = lib_shims();
-    for name in ["meeting_review", "speaker_hint", "diarization_report"] {
+fn the_shim_list_is_the_marked_lines_of_lib_rs() {
+    let lib = "pub use crate::models::WhisperModel;\n\
+               // Shim (#372): kept one release.\n\
+               #[doc(hidden)]\n\
+               pub use crate::meeting::review as meeting_review;\n\
+               pub use crate::glossary::Glossary;\n\
+               // Shim (SAGA-478): another.\r\n\
+               pub use crate::diarization::speaker_hint;\r\n";
+    assert_eq!(
+        marked_shims(lib),
+        strings(&["meeting_review", "speaker_hint"])
+    );
+    assert!(marked_shims("pub use crate::models::WhisperModel;\n").is_empty());
+}
+
+#[test]
+#[should_panic(expected = "must be followed by `pub use crate::..;`")]
+fn a_marker_without_its_shim_is_an_error() {
+    marked_shims("// Shim (#372): kept.\nmod x;\n");
+}
+
+#[test]
+fn a_glob_or_rename_of_the_core_crate_is_seen() {
+    for source in [
+        "use sagascript_core::*;\nfn f() { meeting_review::x(); }",
+        "use sagascript_core as core;\nfn f() { core::testing::x(); }",
+        "use sagascript_core::{self as c, settings};",
+        "use ::sagascript_core::*;",
+        "use {sagascript_core as c};\nuse c::testing;",
+        "use {std::fmt, sagascript_core::*};",
+        "extern crate sagascript_core as c;\nuse c::testing;",
+        "extern crate sagascript_core;",
+    ] {
         assert!(
-            modules.iter().any(|shim| shim == name),
-            "{name} in {modules:?}"
+            paths(source).iter().any(|path| hides_core_paths(path)),
+            "not flagged: {source}"
         );
     }
+    for source in [
+        "use sagascript_core::meeting::*;",
+        "use sagascript_core::settings as s;",
+        "use sagascript_core::{settings, models::WhisperModel};",
+        "// use sagascript_core::*;\nfn f() { let _ = \"sagascript_core::*\"; }",
+    ] {
+        assert!(
+            !paths(source).iter().any(|path| hides_core_paths(path)),
+            "wrongly flagged: {source}"
+        );
+    }
+}
+
+#[test]
+fn an_outer_use_group_is_expanded_like_any_other() {
     assert_eq!(
-        sorted(store_shims()),
-        strings(&["load", "try_update", "update"])
+        sorted(paths(
+            "use {sagascript_core::{testing}, std::fmt as f};\nuse {};\n"
+        )),
+        strings(&["sagascript_core::testing", "std::fmt"])
     );
+    assert_eq!(
+        sorted(paths("pub use ::{a::b, c};")),
+        strings(&["a::b", "c"])
+    );
+}
+
+#[test]
+fn test_files_are_under_tests_or_named_tests() {
+    assert!(is_test_file("crates/sagascript-cli/tests/cli.rs"));
+    assert!(is_test_file(
+        "crates/sagascript-cli/src/transcribe_diarized_tests.rs"
+    ));
+    assert!(is_test_file("src/updater/tests.rs"));
+    assert!(!is_test_file(
+        "crates/sagascript-cli/src/transcribe_diarized.rs"
+    ));
+    assert!(!is_test_file("src/testsupport.rs"));
 }
 
 #[test]

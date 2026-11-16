@@ -31,3 +31,34 @@ the step durations directly.
 
 This split keeps fast feedback focused on code and platform behavior while the
 release workflow remains the sole authority for distributable artifacts.
+
+## Windows Package Candidate on pull requests
+
+`windows-package.yml` takes about 30 minutes on two Windows runners and is not
+a required check, so a pull request runs it only when it is relevant. A small
+`decide` job (`scripts/ci/windows-package-gate.mjs`) lets the package build
+run when the pull request carries the label `windows-package`, changes the app
+version (`package.json` or `src-tauri/tauri.conf.json`, a release PR), changes
+a dependency lockfile or `src-tauri/Cargo.toml`, or touches a file only Windows
+packaging reads (the path list, with reasons, is in that script). Otherwise the
+build job is skipped. The `decide` job itself runs on pull requests only, so the
+release prebuild and manual runs never depend on it. To force a run on an open
+pull request, add the label `windows-package`; removing it does nothing. The
+release prebuild (`workflow_call`) and manual runs (`workflow_dispatch`) always
+build both packages.
+
+## Cargo gates
+
+`scripts/ci/cargo-gates.mjs` defines every cargo gate. Its per-command timings
+are in the job summary of each test lane. Measured on 2026-11-06, the release
+guard (`cargo test --release -p sagascript-core --lib dev_overrides`) was the
+slowest single gate of test-linux (133 s) because it relinked core with the
+shipped thin-LTO, one-codegen-unit profile. The guard only depends on
+`cfg(not(debug_assertions))` and the absent `dev-overrides` feature, so the gate
+sets `CARGO_PROFILE_RELEASE_OPT_LEVEL=0`, `..._LTO=off` and
+`..._CODEGEN_UNITS=256` for itself (`RELEASE_GUARD_ENV`); `Cargo.toml` and
+shipped builds are unchanged. Not done yet, because each needs evidence on the
+runners: running the core-only test gates beside `cargo test --workspace`
+(the `sagascript` binary that the CLI tests execute is shared, so the lean CLI
+gate cannot overlap it), sccache, and merging integration-test binaries to cut
+link time.

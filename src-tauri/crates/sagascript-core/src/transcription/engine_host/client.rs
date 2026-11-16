@@ -263,6 +263,17 @@ impl EngineHostConfig {
     }
 }
 
+/// What one `warm` call itself did under the lifecycle lock (SAGA-543). A phase
+/// another caller performed while this one waited is `None`: the durations are
+/// measured by the caller that did the work, not inferred from snapshots.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct WarmWork {
+    /// This call spawned the host and completed `hello`, in ms.
+    pub host_start_ms: Option<u64>,
+    /// This call sent `load` and waited for the model, in ms.
+    pub load_ms: Option<u64>,
+}
+
 /// Point-in-time view for diagnostics and tests.
 #[derive(Debug, Clone)]
 pub struct HostSnapshot {
@@ -462,7 +473,14 @@ impl EngineHostClient {
 
     /// Start the host and load the model now (pre-warm). Returns its capabilities.
     pub fn warm(&self) -> Result<Capabilities> {
-        self.inner.ensure_ready(None).map(|(_, caps)| caps)
+        self.inner.ensure_ready(None).map(|(_, caps, _)| caps)
+    }
+
+    /// [`Self::warm`], also reporting which phases this call performed itself.
+    pub fn warm_timed(&self) -> Result<(Capabilities, WarmWork)> {
+        self.inner
+            .ensure_ready(None)
+            .map(|(_, caps, work)| (caps, work))
     }
 
     /// Like [`Self::warm`], but returns `Cancelled` promptly when `cancel` fires.
@@ -470,7 +488,9 @@ impl EngineHostClient {
     /// Cancelling stops the wait only: the host is not killed and keeps
     /// loading, so a first-use compile still finishes for the next caller.
     pub fn warm_with_cancel(&self, cancel: &CancelToken) -> Result<Capabilities> {
-        self.inner.ensure_ready(Some(cancel)).map(|(_, caps)| caps)
+        self.inner
+            .ensure_ready(Some(cancel))
+            .map(|(_, caps, _)| caps)
     }
 
     /// Run one idle-supervision pass now (tests, through `crate::testing`; the supervisor
@@ -615,7 +635,7 @@ impl EngineHostClient {
         } else {
             (None, Some(inner.reserve_activity()))
         };
-        let (proc, caps) = inner.ensure_ready(Some(cancel))?;
+        let (proc, caps, _) = inner.ensure_ready(Some(cancel))?;
         inner.hook("after_ready");
         if slot.is_none() {
             if caps.max_in_flight == 1
@@ -879,7 +899,7 @@ impl WindowTicket {
                         self.reloaded = true;
                         tracing::warn!("engine host reported not_loaded; reloading and resending");
                         self.inner.mark_unloaded(&self.proc);
-                        let (proc, _) = self.inner.ensure_ready(Some(cancel))?;
+                        let (proc, _, _) = self.inner.ensure_ready(Some(cancel))?;
                         self.proc = proc;
                         self.deadline = Instant::now() + self.timeout;
                         self.pending = Some(self.proc.send(&window_op(&self.req))?);
@@ -1251,12 +1271,12 @@ impl Inner {
     fn ensure_ready(
         &self,
         cancel: Option<&CancelToken>,
-    ) -> Result<(Arc<HostProcess>, Capabilities)> {
+    ) -> Result<(Arc<HostProcess>, Capabilities, WarmWork)> {
         {
             let mut st = self.lock_state();
             if let (Some(p), Some(c)) = (&st.proc, &st.caps) {
                 if st.loaded && p.is_alive() {
-                    let out = (p.clone(), c.clone());
+                    let out = (p.clone(), c.clone(), WarmWork::default());
                     st.last_activity = Instant::now();
                     return Ok(out);
                 }
@@ -1272,14 +1292,14 @@ impl Inner {
             Err(e) => (Err(e), None),
         };
         match &result {
-            Ok((_, load_ms)) => self.notify_load(LoadEvent::Ready { load_ms: *load_ms }),
+            Ok((_, load_ms, _)) => self.notify_load(LoadEvent::Ready { load_ms: *load_ms }),
             Err(error) => self.notify_load(load_event_for(error)),
         }
-        let (proc, _) = result?;
+        let (proc, _, work) = result?;
         let mut st = self.lock_state();
         st.last_activity = Instant::now();
         let caps = st.caps.clone().expect("caps set with proc");
-        Ok((proc, caps))
+        Ok((proc, caps, work))
     }
 
     /// Sleep a pending restart backoff (up to 5 s by default) with the
@@ -1315,19 +1335,29 @@ impl Inner {
     fn start_and_load_locked(
         &self,
         cancel: Option<&CancelToken>,
-    ) -> Result<(Arc<HostProcess>, u64)> {
+    ) -> Result<(Arc<HostProcess>, u64, WarmWork)> {
         let started = Instant::now();
+        let ms = |since: Instant| u64::try_from(since.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let mut work = WarmWork::default();
+        // `spawns` and `loads` only move under the lifecycle lock held here,
+        // so a change across a step is this call's own work.
+        let spawns = self.spawns.load(Ordering::Relaxed);
         let (proc, _) = self.ensure_started_locked(cancel)?;
+        if self.spawns.load(Ordering::Relaxed) > spawns {
+            work.host_start_ms = Some(ms(started));
+        }
         let loaded = self.lock_state().loaded;
         if !loaded {
+            let loads = self.loads.load(Ordering::Relaxed);
+            let load_started = Instant::now();
             let outcome = self.load_and_apply_locked(&proc, cancel);
+            if self.loads.load(Ordering::Relaxed) > loads {
+                work.load_ms = Some(ms(load_started));
+            }
             self.settle_probe(outcome.as_ref().err());
             outcome?;
         }
-        Ok((
-            proc,
-            u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
-        ))
+        Ok((proc, ms(started), work))
     }
 
     /// `load` the model on `proc` and adopt its window limits (lifecycle lock held).

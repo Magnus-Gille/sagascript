@@ -569,7 +569,7 @@ fn a_refused_setting_rejects_with_the_code_of_its_settings_error() {
         || {
             let runtime = runtime();
             let app = app_with(Settings::default());
-            store::update(|s| {
+            machine::update(|s| {
                 s.language = Language::Swedish;
                 s.hotkey_profiles = vec![profile("default", &s.hotkey, Language::Swedish)];
                 s.profile_glossaries
@@ -596,7 +596,7 @@ fn a_refused_setting_rejects_with_the_code_of_its_settings_error() {
                 })
             );
             assert_eq!(
-                store::load().default_profile().language,
+                machine::load().default_profile().language,
                 Language::Swedish,
                 "nothing was written"
             );

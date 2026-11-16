@@ -6,10 +6,12 @@ use std::time::Duration;
 
 use sagascript_core::audio::decoder;
 use sagascript_core::error::DictationError;
-use sagascript_core::settings::{FileModel, SettingsError};
+use sagascript_core::glossary::Glossary;
+use sagascript_core::models::FileModel;
+use sagascript_core::settings::SettingsError;
 use sagascript_core::transcription::whisper_backend::display_transcript;
 use sagascript_core::transcription::{
-    recommended_parallel_chunks, ContextProfile, Glossary, TranscribeRequest,
+    recommended_parallel_chunks, ContextProfile, TranscribeRequest,
 };
 use tauri::State;
 use tracing::{error, info, warn};
@@ -91,7 +93,11 @@ pub async fn transcribe_file(
         )
         .await?;
         activity.set_result_pending(&result_id, true)?;
-        if auto_paste.unwrap_or(true) && lock_controller(&controller).settings().auto_paste {
+        if auto_paste.unwrap_or(true)
+            && crate::paste::auto_paste_allowed_now(
+                lock_controller(&controller).settings().auto_paste,
+            )
+        {
             let paste_text = text.clone();
             app.run_on_main_thread(move || {
                 if let Err(error) = crate::paste::PasteService::new().paste(&paste_text) {
@@ -119,7 +125,11 @@ pub async fn transcribe_file(
         )
         .await?;
         activity.set_result_pending(&result_id, true)?;
-        if auto_paste.unwrap_or(true) && lock_controller(&controller).settings().auto_paste {
+        if auto_paste.unwrap_or(true)
+            && crate::paste::auto_paste_allowed_now(
+                lock_controller(&controller).settings().auto_paste,
+            )
+        {
             let paste_text = text.clone();
             app.run_on_main_thread(move || {
                 if let Err(error) = crate::paste::PasteService::new().paste(&paste_text) {
@@ -302,7 +312,8 @@ pub async fn transcribe_file(
         // Auto-paste if enabled
         let should_paste = {
             let c = lock_controller(&controller);
-            auto_paste.unwrap_or(true) && c.settings().auto_paste
+            auto_paste.unwrap_or(true)
+                && crate::paste::auto_paste_allowed_now(c.settings().auto_paste)
         };
         if should_paste {
             let text_for_paste = text.clone();
@@ -409,7 +420,8 @@ pub async fn transcribe_file(
             // Auto-paste if enabled
             let should_paste = {
                 let c = lock_controller(&controller);
-                auto_paste.unwrap_or(true) && c.settings().auto_paste
+                auto_paste.unwrap_or(true)
+                    && crate::paste::auto_paste_allowed_now(c.settings().auto_paste)
             };
 
             if should_paste {
