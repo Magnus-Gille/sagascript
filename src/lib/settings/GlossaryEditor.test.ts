@@ -12,7 +12,7 @@ import { backendError, mockIpc } from "../../test/ipc";
 import { deferred, settle } from "../../test/deferred";
 import GlossaryEditor from "./GlossaryEditor.svelte";
 
-const customised = settingsFixture.customised as Settings;
+const customised = settingsFixture.customised as unknown as Settings;
 const SAVED = "mergea = mördsa";
 const TYPED = `${SAVED}\nOpenAI = open eye`;
 
