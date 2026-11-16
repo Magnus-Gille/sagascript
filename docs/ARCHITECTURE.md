@@ -658,14 +658,14 @@ The repository's Actions cache holds 10 GB, and GitHub evicts the least recently
 whose lockfile main has no entry for. Only the Rust lanes that use the setup action keep a Rust cache;
 the release, Windows package and test builds compile cold. The setup action restores the native lanes'
 models, and those lanes save them last, on main. Every cache that saves has a measured size and matrix
-row count in `scripts/test-pipeline-cache.mjs`, about 8.2 GB in all, which must stay under 90% of the
-limit. The CI entries are read on every run and survive; the LLVM, Windows package model and release
-model caches are read only by release and package runs, so they are best-effort and evicted first.
+row count in `scripts/test-pipeline-cache.mjs`. The CI entries are read on every run and survive; the
+LLVM, Windows package model and release model caches are read only by release and package runs, so they
+are best-effort and evicted first. The entries pull requests read (about 7.0 GB) must stay under 90% of
+the limit, and all of them together (about 8.8 GB) must fit the limit.
 Cargo.toml builds dependencies at `opt-level = 3` in the dev profile for local `cargo tauri build --debug`
 (SAGA-399); that doubled the gate lanes' caches, so `scripts/ci/cargo-gates.mjs` passes
 `--config 'profile.dev.package."*".opt-level=0'` to every compiling gate in CI only (SAGA-546). The gate
-lanes' budget sizes are the 2026-11-09 measurements taken before that change; re-measure them after the
-first main save.
+lanes' budget sizes are main's first saves after that change (2026-11-15).
 
 ## 6. Known drift and planned changes
 

@@ -69,7 +69,7 @@ test("Windows candidates cache only verified models with a candidate primary key
   assert.ok(nodeStart >= 0 && modelCacheStart > nodeStart && identityStart > modelCacheStart);
 
   const cache = section(windowsWorkflow, "name: Cache downloaded models", "name: Pin validated Windows build identity");
-  // SHA-pinned (#354); the trailing comment names the v5 release it resolves to. Restore only (SAGA-546):
+  // SHA-pinned (#354); the trailing comment names the v6 release it resolves to. Restore only (SAGA-546):
   // the last step of the job saves the cache, on main.
   assert.match(cache, /uses: actions\/cache\/restore@[0-9a-f]{40} # v6\.\d+\.\d+$/m);
   assert.match(cache, /id: models-cache/);
@@ -171,8 +171,9 @@ test("the native build lanes save the models the setup action restored, on main 
 });
 
 // SAGA-546: the repository's Actions cache holds 10 GB, and GitHub evicts the least recently used entries
-// first. Every cache that saves therefore has its measured size here, and the total must leave headroom
-// under the limit, or the Rust entries every pull request compiles from are the ones evicted. Sizes in MB
+// first. Every cache that saves therefore has its measured size here. The entries pull requests read must
+// leave 10% headroom under the limit, or the Rust entries every pull request compiles from are the ones
+// evicted; with the best-effort entries, everything must still fit the limit. Sizes in MB
 // as `gh cache list` reports them on 2026-11-09 (the Rust entries evicted before then: the restore logs of
 // main's CI run 42484311483). `rows` is the job's matrix size: a saving step in a matrix job saves once
 // per row, so a new row needs a new measurement. A new cache, or a lane that installs Rust through the
@@ -223,7 +224,7 @@ function matrixRows(job) {
   return sizes.reduce((rows, axis) => rows * axis.length, 1) - exclude.length;
 }
 
-test("every cache that saves has a measured size, and together they fit the 10 GB limit with headroom (SAGA-546)", () => {
+test("every cache that saves has a measured size; the pull-request caches leave 10% headroom and all fit the 10 GB limit (SAGA-546)", () => {
   const setup = loadAction("setup");
   const found = {};
   for (const file of workflowFiles()) {
@@ -250,8 +251,18 @@ test("every cache that saves has a measured size, and together they fit the 10 G
   for (const [unit, rows] of Object.entries(found)) {
     assert.equal(CACHE_BUDGET[unit].rows ?? 1, rows, `${unit} saves once per matrix row: measure ${rows} entries`);
   }
-  const total = Object.values(CACHE_BUDGET).reduce((sum, { mb }) => sum + mb, 0) + NPM_MB;
-  assert.ok(total <= CACHE_LIMIT_MB * 0.9, `the caches total ${total} MB, more than 90% of the ${CACHE_LIMIT_MB} MB limit`);
+  // The headroom protects only the entries pull requests compile from: `bestEffort` entries are evicted
+  // first by design, so they need not fit inside the 90%, but everything together must fit the limit, or
+  // they would be evicted on every run instead of only when a new Rust generation is saved.
+  const sumOf = (entries) => entries.reduce((sum, { mb }) => sum + mb, 0);
+  const entries = Object.values(CACHE_BUDGET);
+  const protectedMb = sumOf(entries.filter(({ bestEffort }) => !bestEffort)) + NPM_MB;
+  const totalMb = sumOf(entries) + NPM_MB;
+  assert.ok(
+    protectedMb <= CACHE_LIMIT_MB * 0.9,
+    `the caches pull requests read total ${protectedMb} MB, more than 90% of the ${CACHE_LIMIT_MB} MB limit`,
+  );
+  assert.ok(totalMb <= CACHE_LIMIT_MB, `all caches total ${totalMb} MB, more than the ${CACHE_LIMIT_MB} MB limit`);
 });
 
 // SAGA-546: the Linux apt step restores cached .deb files, and only main saves them.
