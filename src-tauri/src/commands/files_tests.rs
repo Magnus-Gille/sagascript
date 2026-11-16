@@ -27,9 +27,9 @@ mod save_name_tests {
 #[cfg(test)]
 mod run_context_parity_tests {
     use super::{file_transcription_context, file_transcription_language};
-    use sagascript_core::models::PianissimoModel;
+    use sagascript_core::models::{PianissimoModel, WhisperModel};
     use sagascript_core::run_context::{RunOverrides, RunSelection};
-    use sagascript_core::settings::{FileModelPreference, Settings, WhisperModel};
+    use sagascript_core::settings::{FileModelPreference, Settings};
     use sagascript_core::test_support::run_context_table::{entries, migrated, shapes, PROMPTS};
 
     #[test]
@@ -163,13 +163,15 @@ mod glossary_options_tests {
 
     #[test]
     fn gui_file_profile_pins_language_model_and_dictionary_together() {
-        let settings = scoped_file_settings();
+        // Auto probes this machine's downloads. Pin a multilingual model so
+        // the fixture has the same result on a user's machine and clean CI.
+        let settings = Settings {
+            file_transcription_model: FileModelPreference::Whisper(WhisperModel::Base),
+            ..scoped_file_settings()
+        };
         let context = file_transcription_context(&settings, Some("swedish"), None).unwrap();
         assert_eq!(context.language, Language::Swedish);
-        assert_eq!(
-            context.model,
-            settings.effective_model_for(Language::Swedish)
-        );
+        assert_eq!(context.model, WhisperModel::Base);
         assert_eq!(
             apply_glossary("merch open router".into(), &context.glossary),
             "merge OpenRouter"

@@ -17,10 +17,10 @@
 use std::str::FromStr;
 
 use sagascript_core::error::DictationError;
+use sagascript_core::models::{FileModel, Language, PianissimoModel, WhisperModel};
 use sagascript_core::settings::{
-    expand_home, validate_hotkey, Accessibility, DictionaryRefusal, EnginePrewarm, FileModel,
-    FileModelPreference, HotkeyMode, HotkeyProfile, Language, ModelResetNotice, PianissimoModel,
-    RecordingQuality, Settings, WhisperModel,
+    expand_home, validate_hotkey, Accessibility, DictionaryRefusal, EnginePrewarm,
+    FileModelPreference, HotkeyMode, HotkeyProfile, ModelResetNotice, RecordingQuality, Settings,
 };
 
 use super::shortcut_warning;

@@ -1,5 +1,5 @@
 use super::*;
-use sagascript_core::settings::Language;
+use sagascript_core::models::Language;
 
 #[test]
 fn profile_menu_label_explains_language_shortcut_and_selection() {

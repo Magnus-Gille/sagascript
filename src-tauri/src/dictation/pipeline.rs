@@ -344,7 +344,7 @@ async fn run(
                     c.language(),
                     effective_model,
                     commands::build_transcribe_options_for_profile(c.settings(), Some(&profile_id)),
-                    sagascript_core::transcription::Glossary::parse(
+                    sagascript_core::glossary::Glossary::parse(
                         &c.settings().effective_glossary_source(Some(&profile_id)),
                     ),
                     use_pianissimo,

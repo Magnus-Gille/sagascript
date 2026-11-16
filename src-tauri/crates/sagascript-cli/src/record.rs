@@ -8,13 +8,13 @@ use indicatif::{ProgressBar, ProgressStyle};
 use sagascript_core::audio::resample::TARGET_SAMPLE_RATE;
 use sagascript_core::audio::AudioCaptureService;
 use sagascript_core::error::DictationError;
-use sagascript_core::settings::{HotkeyProfile, Language, PianissimoModel, Settings, WhisperModel};
+use sagascript_core::glossary::Glossary;
+use sagascript_core::models::{Language, PianissimoModel, WhisperModel};
+use sagascript_core::settings::{HotkeyProfile, Settings};
 use sagascript_core::transcription::live_dictation::LiveDictationBackend;
 use sagascript_core::transcription::model;
 use sagascript_core::transcription::pianissimo_model;
-use sagascript_core::transcription::{
-    Glossary, TranscribeOptions, TranscribeRequest, WhisperBackend,
-};
+use sagascript_core::transcription::{TranscribeOptions, TranscribeRequest, WhisperBackend};
 
 use crate::output::{errln, outln, Out, WriteError};
 use crate::run_request::RunRequest;
@@ -195,8 +195,7 @@ pub(crate) fn prepare(
                 if !sagascript_core::transcription::pianissimo_backend::runtime_supported_on_this_os(
                 ) {
                     return Err(DictationError::TranscriptionFailed(
-                        sagascript_core::transcription::pianissimo_backend::UNSUPPORTED_MESSAGE
-                            .into(),
+                        sagascript_core::models::PIANISSIMO_UNSUPPORTED_MESSAGE.into(),
                     ));
                 }
                 if !pianissimo_model::is_downloaded(pianissimo) {
@@ -526,9 +525,8 @@ mod tests {
     };
     use crate::output::Out;
     use clap::Parser;
-    use sagascript_core::settings::{
-        FileModelPreference, HotkeyProfile, Language, PianissimoModel, Settings, WhisperModel,
-    };
+    use sagascript_core::models::{Language, PianissimoModel, WhisperModel};
+    use sagascript_core::settings::{FileModelPreference, HotkeyProfile, Settings};
 
     const FALLBACK: WhisperModel = WhisperModel::KbWhisperLarge;
 

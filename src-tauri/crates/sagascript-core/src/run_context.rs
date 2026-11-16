@@ -26,8 +26,10 @@
 //! the CLI's `transcribe` and the app's file transcription share.
 
 use crate::error::DictationError;
-use crate::settings::{HotkeyProfile, Language, Settings};
-use crate::transcription::{Glossary, FILE_TRANSCRIBE_BEAM};
+use crate::glossary::Glossary;
+use crate::models::Language;
+use crate::settings::{HotkeyProfile, Settings};
+use crate::transcription::FILE_TRANSCRIBE_BEAM;
 
 /// What a run asked for, already parsed.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

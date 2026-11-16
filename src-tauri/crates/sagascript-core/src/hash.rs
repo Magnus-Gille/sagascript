@@ -12,9 +12,20 @@
 
 use sha2::{Digest, Sha256};
 
+/// Lowercase hex of a digest. sha2 0.11 digests no longer implement `LowerHex`.
+fn lower_hex(digest: &[u8]) -> String {
+    use std::fmt::Write;
+    digest
+        .iter()
+        .fold(String::with_capacity(digest.len() * 2), |mut out, byte| {
+            let _ = write!(out, "{byte:02x}");
+            out
+        })
+}
+
 /// The SHA-256 of `bytes` as 64 lowercase hexadecimal digits.
 pub fn sha256_hex(bytes: impl AsRef<[u8]>) -> String {
-    format!("{:x}", Sha256::digest(bytes.as_ref()))
+    lower_hex(&Sha256::digest(bytes.as_ref()))
 }
 
 /// SHA-256 over data that arrives in pieces; [`finish_hex`](Self::finish_hex)
@@ -33,7 +44,7 @@ impl StreamingSha256 {
 
     /// The digest as 64 lowercase hexadecimal digits.
     pub fn finish_hex(self) -> String {
-        format!("{:x}", self.0.finalize())
+        lower_hex(&self.0.finalize())
     }
 }
 

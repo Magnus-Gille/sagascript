@@ -4,7 +4,8 @@ use sagascript_core::models::PianissimoModel;
 #[cfg(test)]
 mod language_selection_tests {
     use super::apply_language_selection;
-    use sagascript_core::settings::{Language, Settings, WhisperModel};
+    use sagascript_core::models::{Language, WhisperModel};
+    use sagascript_core::settings::Settings;
 
     #[test]
     fn explicit_language_selection_restores_recommended_model() {
@@ -64,10 +65,8 @@ mod mirror_tests {
         mirror_auto_select_model, mirror_language_selection, mirror_pianissimo_dictation,
         mirror_profile_models, mirror_whisper_model,
     };
-    use sagascript_core::models::PianissimoModel;
-    use sagascript_core::settings::{
-        FileModelPreference, HotkeyMode, HotkeyProfile, Language, Settings, WhisperModel,
-    };
+    use sagascript_core::models::{Language, PianissimoModel, WhisperModel};
+    use sagascript_core::settings::{FileModelPreference, HotkeyMode, HotkeyProfile, Settings};
     use std::collections::BTreeMap;
 
     type Mirror = fn(&mut Settings, &Settings);
@@ -394,8 +393,9 @@ mod auto_paste_tests {
 mod transport_contract_tests {
     use super::*;
     use crate::contract;
+    use sagascript_core::models::WhisperModel;
     use sagascript_core::settings::{
-        EnginePrewarm, FileModelPreference, HotkeyMode, HotkeyProfile, WhisperModel,
+        EnginePrewarm, FileModelPreference, HotkeyMode, HotkeyProfile,
     };
     use serde_json::{json, Value};
 

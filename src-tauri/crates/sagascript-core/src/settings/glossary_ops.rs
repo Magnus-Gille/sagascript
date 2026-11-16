@@ -15,8 +15,9 @@
 //! Like the operations of `ops`, these are methods of [`Settings`] that either
 //! change nothing or the whole of what they say.
 
-use super::{Language, Settings, SettingsError};
+use super::{Settings, SettingsError};
 use crate::glossary::Glossary;
+use crate::models::Language;
 
 /// Why an edit of a profile's dictionary was refused.
 #[derive(Debug, Clone, PartialEq, Eq)]

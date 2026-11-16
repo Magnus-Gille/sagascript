@@ -1,7 +1,8 @@
 use std::collections::BTreeSet;
 
 use sagascript_core::error::DictationError;
-use sagascript_core::settings::{HotkeyProfile, Language, SettingsError, WhisperModel};
+use sagascript_core::models::{Language, WhisperModel};
+use sagascript_core::settings::{HotkeyProfile, SettingsError};
 use sagascript_core::transcription::engine_host::LoadEvent;
 use sagascript_core::transcription::pianissimo_backend::{load_state_payload, LoadSource};
 use serde_json::{json, Map, Value};

@@ -2,9 +2,9 @@ use clap::{Args, Subcommand};
 
 use sagascript_core::error::DictationError;
 use sagascript_core::machine;
+use sagascript_core::models::Language;
 use sagascript_core::settings::{
-    self, FileModelPreference, HotkeyMode, HotkeyProfile, Language, ModelResetNotice, Settings,
-    SettingsError,
+    self, FileModelPreference, HotkeyMode, HotkeyProfile, ModelResetNotice, Settings, SettingsError,
 };
 
 use crate::output::{errln, outln, Out};
@@ -626,9 +626,8 @@ fn cmd_path(out: &Out) -> Result<(), DictationError> {
 mod tests {
     use super::keys::{parse_bool, VALID_KEYS};
     use super::*;
-    use sagascript_core::settings::{
-        validate_hotkey, PianissimoModel, RecordingQuality, WhisperModel,
-    };
+    use sagascript_core::models::{PianissimoModel, WhisperModel};
+    use sagascript_core::settings::{validate_hotkey, RecordingQuality};
 
     // The tests name a key as `config` is given it; these run the key's entry
     // in the table (`keys::KEYS`).

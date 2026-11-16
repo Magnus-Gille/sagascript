@@ -15,10 +15,11 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::error::DictationError as WarmError;
 use crate::settings::{store, LineupEnv, Settings};
 use crate::transcription::engine_host::client::TestHook;
 use crate::transcription::engine_host::{EngineHostClient, EngineHostConfig, EngineHostError};
-use crate::transcription::pianissimo_backend::{self, WarmOutcome};
+use crate::transcription::pianissimo_backend::{self, WarmOutcome, WarmTimings};
 #[cfg(feature = "diarization")]
 use crate::{
     diarization::speaker_hint::SpeakerCountHint,
@@ -68,6 +69,32 @@ pub fn warm_or_touch(
     load_allowed: bool,
 ) -> Result<WarmOutcome, EngineHostError> {
     pianissimo_backend::warm_or_touch(client, load_allowed)
+}
+
+/// [`warm_or_touch`] with its phase timings.
+pub fn warm_or_touch_timed(
+    client: &EngineHostClient,
+    load_allowed: bool,
+) -> Result<(WarmOutcome, WarmTimings), EngineHostError> {
+    pianissimo_backend::warm_or_touch_timed(client, load_allowed)
+}
+
+/// One background warm-up as `warm_in_background` runs it on its thread, on
+/// the caller's thread and with the caller's `in_flight` flag and client:
+/// `None` when a warm-up already holds the flag, otherwise its outcome. The
+/// flag is free again when this returns, success or failure.
+pub fn warm_attempt(
+    in_flight: &std::sync::atomic::AtomicBool,
+    load_allowed: bool,
+    attach: impl FnOnce() -> Result<(EngineHostClient, Option<u64>), WarmError>,
+) -> Option<Result<(WarmOutcome, WarmTimings), String>> {
+    let claim = pianissimo_backend::WarmClaim::try_claim(in_flight)?;
+    Some(pianissimo_backend::run_claimed_warm(
+        claim,
+        "test",
+        load_allowed,
+        attach,
+    ))
 }
 
 /// One meeting run on the given `services` and `options`, as the app and reprocessing make it

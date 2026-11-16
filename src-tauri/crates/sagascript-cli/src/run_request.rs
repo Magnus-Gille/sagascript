@@ -80,7 +80,8 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
-    use sagascript_core::settings::{HotkeyProfile, Language};
+    use sagascript_core::models::Language;
+    use sagascript_core::settings::HotkeyProfile;
     use sagascript_testsupport::TempDir;
 
     fn profile(id: &str, language: Language) -> HotkeyProfile {

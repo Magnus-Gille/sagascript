@@ -8,7 +8,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use sagascript_core::error::DictationError;
-use sagascript_core::settings::{Language, WhisperModel};
+use sagascript_core::models::{Language, WhisperModel};
 
 use crate::exit::CliError;
 use crate::output::{ignore_closed, outln, Out};

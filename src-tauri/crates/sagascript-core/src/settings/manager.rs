@@ -7,11 +7,7 @@ use super::{canonical_hotkey, validate_hotkey, LineupEnv, SettingsError};
 
 use crate::glossary::Glossary;
 
-// The model catalog moved to `crate::models` (#372). Re-exported so the old
-// paths (`sagascript_core::settings::{FileModel, Language, WhisperModel}`)
-// keep compiling for the CLI and the app. Shim: remove one release after the
-// callers import from `sagascript_core::models`.
-pub use crate::models::{FileModel, Language, PianissimoModel, WhisperModel};
+use crate::models::{FileModel, Language, PianissimoModel, WhisperModel};
 
 /// Resolve an `Auto` file-model preference against what is downloaded.
 /// `allow_pianissimo` false yields Whisper models only.

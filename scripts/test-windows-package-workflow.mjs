@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { WINDOWS_PACKAGE_PATHS } from "./ci/windows-package-gate.mjs";
 
 // The ordering of ci.yml's Windows build identity gates (they run before `npm ci`, so this file must
 // stay free of npm packages) is asserted in scripts/test-ci-parallel-gates.mjs.
@@ -33,7 +34,8 @@ const acceptanceScript = await readFile(new URL("./accept-windows-candidate.ps1"
 
 test("Windows candidate workflow stays non-publishing and explicitly unsigned", () => {
   assert.match(workflow, /workflow_dispatch:/);
-  assert.match(workflow, /- "\.gitattributes"/, "checkout normalization changes must trigger candidate builds");
+  // The pull_request paths: filter moved into scripts/ci/windows-package-gate.mjs (SAGA-551, scripts/test-windows-package-gate.mjs).
+  assert.ok(WINDOWS_PACKAGE_PATHS.includes(".gitattributes"), "checkout normalization changes must trigger candidate builds");
   assert.match(workflow, /permissions:\s*\n\s*contents: read/);
   assert.match(workflow, /tauri build --ci --bundles nsis,msi --no-sign/);
   assert.match(workflow, /SignaturePolicy Internal/);
@@ -53,31 +55,11 @@ test("Windows candidate workflow stays non-publishing and explicitly unsigned", 
   assert.match(workflow, /CMAKE_CXX_COMPILER_TARGET=aarch64-pc-windows-msvc/);
   assert.match(
     workflow,
-    /concurrency:\s*\n\s*group:\s+\$\{\{ github\.workflow \}\}-\$\{\{ github\.event\.pull_request\.number \|\| github\.run_id \}\}\s*\n\s*cancel-in-progress:\s+true/,
+    /concurrency:\s*\n(?:\s*#[^\n]*\n)*\s*group:\s+\$\{\{ github\.workflow \}\}-\$\{\{ github\.event\.pull_request\.number \|\| github\.run_id \}\}[^\n]*\n\s*cancel-in-progress:\s+true/,
   );
-  assert.match(workflow, /name: Identify Windows runner image/);
-  assert.match(workflow, /\$env:ImageOS/);
-  assert.match(workflow, /\$env:ImageVersion/);
-  assert.match(workflow, /IsNullOrWhiteSpace\(\$imageOs\)/);
-  assert.match(workflow, /IsNullOrWhiteSpace\(\$imageVersion\)/);
-  assert.match(workflow, /GITHUB_OUTPUT/);
-  const imageStart = workflow.indexOf("name: Identify Windows runner image");
-  const cacheStart = workflow.indexOf("name: Cache Rust dependencies");
-  const nodeStart = workflow.indexOf("name: Install Node.js");
-  assert.ok(imageStart >= 0 && cacheStart > imageStart && nodeStart > cacheStart);
-  const rustCache = workflow.slice(cacheStart, nodeStart);
-  assert.match(rustCache, /uses: Swatinem\/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6/);
-  assert.match(rustCache, /workspaces:\s*\|\s*\n\s+src-tauri\s*\n\s+src-tauri\/engine-host\/ort/);
-  assert.doesNotMatch(
-    rustCache,
-    /cache-targets:\s*\$\{\{ matrix\.architecture != 'arm64' \}\}/,
-    "arm64 targets are cacheable now that LLVM has a fixed path",
-  );
-  assert.match(
-    rustCache,
-    /shared-key:\s+windows-package-\$\{\{ matrix\.architecture \}\}-\$\{\{ steps\.windows-image\.outputs\.image_os \}\}-\$\{\{ steps\.windows-image\.outputs\.image_version \}\}-\$\{\{ hashFiles\('\.github\/workflows\/windows-package\.yml', 'scripts\/cmake\/windows-x64-portable\.cmake', 'scripts\/cmake\/windows-arm64-native\.cmake', 'scripts\/verify-windows-x64-cpu-policy\.ps1'\) \}\}/,
-  );
-  assert.doesNotMatch(rustCache, /actions\/cache/, "native cache must use the target-aware Rust cache namespace");
+  // No Rust cache (SAGA-546): its ~1.6 GB entries per architecture never served a later run and evicted
+  // main's CI caches; scripts/test-pipeline-cache.mjs holds the repository's cache budget.
+  assert.doesNotMatch(workflow, /Swatinem\/rust-cache@|name: Identify Windows runner image|steps\.windows-image\./);
   assert.match(workflow, /accept-windows-candidate\.ps1/);
   assert.match(workflow, /norwegian-short-3s\.mp3/);
   assert.match(workflow, /Sagascript-Windows-\$architecture-Portable\.exe/);
@@ -87,8 +69,8 @@ test("Windows candidate workflow stays non-publishing and explicitly unsigned", 
   assert.match(workflow, /-CliExe "artifacts\\Sagascript-Windows-\$architecture-CLI\.exe"/);
   assert.match(workflow, /ChecksumOutput "artifacts\\SHA256SUMS-Windows-\$architecture"/);
   assert.match(workflow, /targetRoot = "src-tauri\\target\\\$\{\{ matrix\.rust_target \}\}\\release"/);
-  assert.match(workflow, /name: Remove cached installer bundles/);
-  assert.match(workflow, /Remove-Item -LiteralPath \$bundleDirectory -Recurse -Force/);
+  // Nothing restores target/ any more (SAGA-546), so there are no stale installer bundles to remove first.
+  assert.doesNotMatch(workflow, /name: Remove cached installer bundles/);
   assert.match(workflow, /\$nsis\.Count -ne 1/);
   assert.match(workflow, /\$msi\.Count -ne 1/);
   assert.match(workflow, /\$nsis\[0\]\.Name -notmatch \[regex\]::Escape\(\$version\)/);
@@ -97,7 +79,7 @@ test("Windows candidate workflow stays non-publishing and explicitly unsigned", 
   assert.doesNotMatch(workflow, /action-gh-release|gh release|contents: write/);
 });
 
-test("Windows ARM64 disables unsupported scalable vectors before restoring native cache", () => {
+test("Windows ARM64 disables unsupported scalable vectors before the native build", () => {
   const start = workflow.indexOf("name: Configure native ARM64 C and C++ toolchain");
   const end = workflow.indexOf("name: Configure portable x64 inference baseline", start);
   assert.ok(start >= 0 && end > start);
@@ -105,19 +87,22 @@ test("Windows ARM64 disables unsupported scalable vectors before restoring nativ
   assert.match(arm, /if: matrix\.architecture == 'arm64'/);
   assert.match(arm, /scripts\/cmake\/windows-arm64-native\.cmake/);
   assert.match(arm, /CMAKE_PROJECT_INCLUDE=\$policy/);
-  assert.ok(end < workflow.indexOf("name: Cache Rust dependencies"));
+  assert.ok(end < workflow.indexOf("name: Install Node.js"));
 });
 
 test("Windows ARM64 pins and validates the LLVM toolchain before native configuration", () => {
   const pinStart = workflow.indexOf("name: Install pinned LLVM for ARM64 bindgen");
   const nativeStart = workflow.indexOf("name: Configure native ARM64 C and C++ toolchain");
-  const cacheStart = workflow.indexOf("name: Cache Rust dependencies");
-  assert.ok(pinStart >= 0 && nativeStart > pinStart && cacheStart > nativeStart);
+  const nodeStart = workflow.indexOf("name: Install Node.js");
+  assert.ok(pinStart >= 0 && nativeStart > pinStart && nodeStart > nativeStart);
 
   const pin = workflow.slice(pinStart, nativeStart);
   assert.match(pin, /if: matrix\.architecture == 'arm64'/);
   assert.match(pin, /https:\/\/github\.com\/llvm\/llvm-project\/releases\/download\/llvmorg-20\.1\.8\/LLVM-20\.1\.8-woa64\.exe/);
   assert.match(pin, /7c4ac97eb2ae6b960ca5f9caf3ff6124c8d2a18cc07a7840a4d2ea15537bad8e/);
+  // SAGA-574: MSVC STL 14.52 rejects clang-cl < 22 (STL1000), so the compiler is pinned separately.
+  assert.match(pin, /https:\/\/github\.com\/llvm\/llvm-project\/releases\/download\/llvmorg-22\.1\.8\/LLVM-22\.1\.8-woa64\.exe/);
+  assert.match(pin, /76f44ef1ba6eeb5a65904e9500f042f588fade49952778ce48f0374daa934396/);
 
   const download = pin.indexOf("Invoke-WebRequest");
   const verifyHash = pin.indexOf("Get-FileHash");
@@ -125,17 +110,30 @@ test("Windows ARM64 pins and validates the LLVM toolchain before native configur
   assert.ok(download >= 0 && verifyHash > download && execute > verifyHash);
   assert.match(pin, /-Algorithm SHA256/);
   assert.match(pin, /if \(\$actualHash -ne \$expectedHash\)/);
-  assert.match(pin, /-ArgumentList @\('\/S', "\/D=\$installRoot"\)/);
+  assert.match(pin, /-ArgumentList @\('\/S', "\/D=\$stagingRoot"\)/);
+  // SAGA-574: a silent LLVM installer uninstalls any registered LLVM, so each pin is copied out
+  // of its staging install before the next installer runs, then every pin is re-checked.
+  const install = pin.indexOf("Start-Process");
+  const copy = pin.indexOf("Copy-Item -LiteralPath $stagingRoot -Destination $installRoot -Recurse");
+  assert.ok(copy > install, "each pin is copied out of its staging install");
+  assert.match(pin, /Pinned LLVM file is missing after installing every pin/);
   assert.match(pin, /if \(\$process\.ExitCode -ne 0\)/);
   assert.doesNotMatch(pin, /NewGuid/, "a per-run LLVM path makes arm64 CMake targets uncacheable");
   assert.match(pin, /C:\\sagascript-tools\\llvm-20\.1\.8/);
-  assert.match(workflow, /path: C:\\sagascript-tools\\llvm-20\.1\.8\s+key: windows-arm64-llvm-20\.1\.8-7c4ac97eb2ae/);
+  assert.match(pin, /C:\\sagascript-tools\\llvm-22\.1\.8/);
+  assert.match(
+    workflow,
+    /path: \|\s+C:\\sagascript-tools\\llvm-20\.1\.8\s+C:\\sagascript-tools\\llvm-22\.1\.8\s+key: windows-arm64-llvm-20\.1\.8-7c4ac97eb2ae-22\.1\.8-76f44ef1ba6e/,
+  );
 
   assert.match(pin, /clang-cl\.exe/);
   assert.match(pin, /libclang\.dll/);
   assert.match(pin, /Test-Path -LiteralPath \$clangPath -PathType Leaf/);
   assert.match(pin, /Test-Path -LiteralPath \$libclangPath -PathType Leaf/);
-  assert.match(pin, /clang version 20\\\.1\\\.8/);
+  assert.match(pin, /Version = '22\\\.1\\\.8'; Role = 'C\/C\+\+ compiler'/);
+  assert.match(pin, /Version = '20\\\.1\\\.8'; Role = 'bindgen libclang'/);
+  assert.match(pin, /\$llvmBin = 'C:\\sagascript-tools\\llvm-22\.1\.8\\bin'/);
+  assert.match(pin, /\$libclangBin = 'C:\\sagascript-tools\\llvm-20\.1\.8\\bin'/);
   assert.match(pin, /Write-Output \$clangVersion/);
   assert.match(pin, /\[regex\]::Match\(\$clangVersion/);
   assert.match(pin, /Target:\\s\*\(\?<target>\\S\+\)/);
@@ -143,16 +141,17 @@ test("Windows ARM64 pins and validates the LLVM toolchain before native configur
   assert.match(pin, /\$targetMatch\.Groups\['target'\]\.Value -ne 'aarch64-pc-windows-msvc'/);
   assert.doesNotMatch(pin, /-dumpmachine/);
   assert.match(pin, /\$llvmBin \| Out-File -FilePath \$env:GITHUB_PATH/);
-  assert.match(pin, /LIBCLANG_PATH=\$llvmBin/);
+  assert.match(pin, /LIBCLANG_PATH=\$libclangBin/);
+  assert.doesNotMatch(pin, /\$libclangBin \| Out-File -FilePath \$env:GITHUB_PATH/, "clang-cl 20 must not shadow clang-cl 22 on PATH");
   assert.match(pin, /rust-bindgen#3264/);
   assert.doesNotMatch(pin, /WHISPER_DONT_GENERATE_BINDINGS|disable ABI asserts/);
 });
 
-test("Windows x64 caches and artifacts use an explicit verified CPU baseline", () => {
+test("Windows x64 builds and artifacts use an explicit verified CPU baseline", () => {
   const policyStart = workflow.indexOf("name: Configure portable x64 inference baseline");
-  const cacheStart = workflow.indexOf("name: Cache Rust dependencies");
-  assert.ok(policyStart >= 0 && policyStart < cacheStart);
-  const policy = workflow.slice(policyStart, cacheStart);
+  const nodeStart = workflow.indexOf("name: Install Node.js");
+  assert.ok(policyStart >= 0 && policyStart < nodeStart);
+  const policy = workflow.slice(policyStart, nodeStart);
   assert.match(policy, /if: matrix\.architecture == 'x64'/);
   assert.match(policy, /CMAKE_PROJECT_INCLUDE=\$policy/);
   assert.match(policy, /SAGASCRIPT_WINDOWS_X64_BASELINE=avx2/);
@@ -247,5 +246,18 @@ test("ARM64 candidate records generated debug and release CPU flags", () => {
     const step = workflow.slice(start, workflow.indexOf("\n      - name:", start));
     assert.match(step, /if: matrix\.architecture == 'arm64'/);
     assert.match(step, /node scripts\/report-windows-arm64-native\.mjs src-tauri\/target/);
+  }
+});
+
+test("Windows candidate downloads retry transient GitHub failures before verifying hashes", () => {
+  // A 504 ("We couldn't respond to your request in time") from the GitHub
+  // release CDN failed the arm64 candidate twice in a row on 2026-11-08.
+  // The release prebuild calls this workflow, so one flaky download must not
+  // stop a release; the SHA-256 check after each download is unchanged.
+  const downloads = workflow.split("\n").filter((line) => line.includes("Invoke-WebRequest"));
+  assert.equal(downloads.length, 2, "expected the LLVM and ONNX Runtime downloads");
+  for (const line of downloads) {
+    assert.match(line, /-MaximumRetryCount [1-9]\d*/, line.trim());
+    assert.match(line, /-RetryIntervalSec [1-9]\d*/, line.trim());
   }
 });

@@ -1,8 +1,8 @@
 //! Reading the settings and the setters that change one setting each.
 
+use sagascript_core::models::{Language, WhisperModel};
 use sagascript_core::settings::{
-    Accessibility, FileModelPreference, HotkeyProfile, Language, ModelResetNotice, Settings,
-    SettingsError, WhisperModel,
+    Accessibility, FileModelPreference, HotkeyProfile, ModelResetNotice, Settings, SettingsError,
 };
 use sagascript_core::transcription::model;
 use tauri::State;

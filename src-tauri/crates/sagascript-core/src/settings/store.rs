@@ -594,23 +594,6 @@ where
     update_locked(&path, legacy_settings_paths(), machine, mutate)
 }
 
-// Shims (#372): the loads and updates that probe *this* machine live in
-// `crate::machine`, above settings and transcription, so this module does not
-// import the transcription code to answer them. These re-exports keep the old
-// paths `settings::store::{load, update, try_update}` for callers outside the
-// workspace; nothing inside it uses them (tests/module_layering.rs checks that).
-// They are the one upward import left in `settings/`, and no longer a loop at
-// run time: `transcription::pianissimo_backend::{engine_config, shared_client}`
-// take the `Settings` from their callers instead of calling `load` here.
-//
-// To remove them, after the next release: delete the line below, and in
-// tests/module_layering.rs the test
-// `only_the_compat_shim_in_the_store_names_the_machine_module` and the
-// `store_shims` assertions.
-// Shim (#372): kept one release; remove after the next release.
-#[doc(hidden)]
-pub use crate::machine::{load, try_update, update};
-
 /// A field update under the settings lock. The latest file is loaded as the
 /// startup load does, with every pending migration step, machine state
 /// included: the save records `schema_version` and the steps' markers, so a

@@ -32,7 +32,7 @@ export const GROUP_NPM_PACKAGES = {
 };
 
 export const TEST_GROUPS = {
-  ui: ["scripts/test-danish-language.mjs", "scripts/test-file-transcription-recovery.mjs", "scripts/test-finnish-language.mjs"],
+  ui: ["scripts/test-danish-language.mjs", "scripts/test-finnish-language.mjs"],
   ci: [
     "scripts/diarization_sv/test_reference_review.mjs",
     "scripts/test-browser-mock-commands.mjs",
@@ -79,6 +79,7 @@ export const TEST_GROUPS = {
     "scripts/test-windows-acceptance.mjs",
     "scripts/test-windows-arm-pianissimo.mjs",
     "scripts/test-windows-arm64-native.mjs",
+    "scripts/test-windows-package-gate.mjs",
     "scripts/test-windows-package-workflow.mjs",
     "scripts/test-windows-release-identity.mjs",
     "scripts/test-windows-x64-cpu-policy.mjs",

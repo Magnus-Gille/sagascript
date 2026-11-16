@@ -5,9 +5,8 @@ use std::time::{Duration, Instant};
 
 use sagascript_core::audio::capture::AudioCaptureMetrics;
 use sagascript_core::error::DictationError;
-use sagascript_core::settings::{
-    FileModelPreference, HotkeyMode, HotkeyProfile, Language, Settings, WhisperModel,
-};
+use sagascript_core::models::{Language, WhisperModel};
+use sagascript_core::settings::{FileModelPreference, HotkeyMode, HotkeyProfile, Settings};
 use sagascript_core::transcription::whisper_backend::DictationTimings;
 use serde_json::{json, Value};
 use tokio::sync::oneshot;

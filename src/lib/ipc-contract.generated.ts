@@ -2,6 +2,7 @@
 // (#347). Do not edit: after changing a command, run
 // `SAGASCRIPT_BLESS_CONTRACTS=1 cargo test -p sagascript contract` in src-tauri/.
 // The app crate's tests fail while this file is out of date.
+import type { PreflightReport } from "./acceptance";
 import type { AppState, BuildInfo, EngineLoadState, EngineStatus, GlossarySuggestion, HotkeyMode, HotkeyProfile, HotkeyStatus, Language, LoadedModelInfo, MeetingJobSnapshot, Settings, TrainingTranscript, WhisperModel } from "./api";
 import type { MeetingReprocessingProposal, ProposalState, ReprocessingMode, ReprocessingRequest, SelectedReprocessingPlan } from "./meeting-reprocessing-types";
 import type { CorrectionFile, CorrectionOperation, MeetingAudioAttachment, MeetingExportFormat, MeetingReview, MeetingReviewState, MeetingTranscript } from "./meeting-types";
@@ -24,6 +25,8 @@ type NoArgs = Record<string, never>;
 export interface CommandMap {
   /** `meeting_reprocessing_commands::accept_meeting_proposal(proposal: MeetingReprocessingProposal, current_review: MeetingReview) -> Result<ReviewState, CommandError>` */
   accept_meeting_proposal: { args: { proposal: MeetingReprocessingProposal; currentReview: MeetingReview }; result: MeetingReviewState; error: BackendError };
+  /** `commands::acceptance_preflight(expect_revision: String) -> Result<sagascript_core::acceptance::PreflightReport, CommandError>` */
+  acceptance_preflight: { args: { expectRevision: string }; result: PreflightReport; error: BackendError };
   /** `commands::acknowledge_recording_consent() -> Result<(), CommandError>` */
   acknowledge_recording_consent: { args: NoArgs; result: void; error: BackendError };
   /** `commands::acknowledge_update_result(expected_text: String) -> Result<bool, CommandError>` */
@@ -231,6 +234,7 @@ export interface CommandMap {
 /** The registered command names, sorted. */
 export const COMMAND_NAMES = [
   "accept_meeting_proposal",
+  "acceptance_preflight",
   "acknowledge_recording_consent",
   "acknowledge_update_result",
   "apply_meeting_corrections",
@@ -340,6 +344,7 @@ export const COMMAND_NAMES = [
  */
 export const BACKEND_ERROR_COMMANDS = [
   "accept_meeting_proposal",
+  "acceptance_preflight",
   "acknowledge_recording_consent",
   "acknowledge_update_result",
   "apply_meeting_corrections",
@@ -454,6 +459,7 @@ export const COMMAND_ARGUMENTS: {
   };
 } = {
   accept_meeting_proposal: { required: ["proposal", "currentReview"], optional: [] },
+  acceptance_preflight: { required: ["expectRevision"], optional: [] },
   acknowledge_recording_consent: { required: [], optional: [] },
   acknowledge_update_result: { required: ["expectedText"], optional: [] },
   apply_meeting_corrections: { required: ["review", "corrections"], optional: [] },

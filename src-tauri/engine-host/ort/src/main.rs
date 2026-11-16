@@ -8,6 +8,7 @@ mod boost;
 mod build_identity;
 mod ort_engine;
 mod pcm;
+mod power_qos;
 mod server;
 mod tdt;
 mod vocab;
