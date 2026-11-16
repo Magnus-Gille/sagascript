@@ -635,24 +635,10 @@ fn marked_shims(lib: &str) -> Vec<String> {
 /// outside it (`settings::store::load`-style, relative to the crate root).
 /// The marked lines of `lib.rs` cover the top-level names; list deeper ones here.
 ///
-/// SAGA-478 part B: the model catalog moved to `models` and the personal
-/// dictionary to `glossary` (#372); these re-exports go one release after
-/// nothing in the workspace names them.
-const OLD_PATHS: [&str; 13] = [
-    "settings::FileModel",
-    "settings::Language",
-    "settings::PianissimoModel",
-    "settings::WhisperModel",
-    "settings::manager::FileModel",
-    "settings::manager::Language",
-    "settings::manager::PianissimoModel",
-    "settings::manager::WhisperModel",
-    "transcription::Glossary",
-    "transcription::GlossaryCorrection",
-    "transcription::GlossaryEntry",
-    "transcription::glossary",
-    "transcription::pianissimo_backend::UNSUPPORTED_MESSAGE",
-];
+/// Empty since SAGA-478 part B removed the last ones (`settings::WhisperModel`,
+/// `transcription::Glossary`, `pianissimo_backend::UNSUPPORTED_MESSAGE`, ...)
+/// after the 1.4.9 release. The scan stays for the next re-export.
+const OLD_PATHS: [&str; 0] = [];
 
 /// Every old path, relative to the crate root (`meeting_review`,
 /// `settings::store::load`).
