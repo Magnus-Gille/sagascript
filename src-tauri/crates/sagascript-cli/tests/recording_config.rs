@@ -5,6 +5,12 @@ use std::process::{Command, Output};
 
 use sagascript_testsupport::{fake_settings, isolated_cli_env, FakeSettings};
 
+/// An absolute path on this platform: `config set` makes a relative one absolute.
+#[cfg(unix)]
+const TAKES: &str = "/Volumes/Audio/Takes";
+#[cfg(windows)]
+const TAKES: &str = r"C:\Volumes\Audio\Takes";
+
 fn cli(settings: &FakeSettings, args: &[&str]) -> Output {
     let mut command = Command::new(env!("CARGO_BIN_EXE_sagascript"));
     isolated_cli_env(&mut command, settings.path());
@@ -33,7 +39,7 @@ fn recorder_keys_get_set_reset_and_persist() {
     for (key, value) in [
         ("recording_quality", "compact"),
         ("recording_channel_pair", "3-3"),
-        ("recording_directory", "/Volumes/Audio/Takes"),
+        ("recording_directory", TAKES),
     ] {
         let set = cli(&settings, &["config", "set", key, value]);
         assert!(
@@ -47,7 +53,7 @@ fn recorder_keys_get_set_reset_and_persist() {
         serde_json::from_str(&std::fs::read_to_string(settings.path()).unwrap()).unwrap();
     assert_eq!(raw["recording_quality"], "compact");
     assert_eq!(raw["recording_channel_pair"], serde_json::json!([3, 3]));
-    assert_eq!(raw["recording_directory"], "/Volumes/Audio/Takes");
+    assert_eq!(raw["recording_directory"], TAKES);
 
     let list = stdout(&cli(&settings, &["config", "list"]));
     for line in [

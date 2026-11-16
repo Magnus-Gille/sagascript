@@ -1644,20 +1644,22 @@ mod tests {
 
     #[test]
     fn recording_settings_can_be_set_reset_and_reject_bad_values() {
+        // An absolute path on this platform: the setter makes a relative one absolute.
+        #[cfg(unix)]
+        const TAKES: &str = "/Volumes/Audio/Takes";
+        #[cfg(windows)]
+        const TAKES: &str = r"C:\Volumes\Audio\Takes";
         let mut settings = Settings::default();
         apply_setting_value(&mut settings, "recording_quality", "compact").unwrap();
         apply_setting_value(&mut settings, "recording_channel_pair", "3-3").unwrap();
-        apply_setting_value(&mut settings, "recording_directory", "/Volumes/Audio/Takes").unwrap();
+        apply_setting_value(&mut settings, "recording_directory", TAKES).unwrap();
         assert_eq!(get_setting_value(&settings, "recording_quality"), "compact");
         assert_eq!(
             get_setting_value(&settings, "recording_channel_pair"),
             "3-3"
         );
         assert_eq!(settings.recording_channel_pair, [3, 3]);
-        assert_eq!(
-            get_setting_value(&settings, "recording_directory"),
-            "/Volumes/Audio/Takes"
-        );
+        assert_eq!(get_setting_value(&settings, "recording_directory"), TAKES);
 
         // A bad value changes nothing and says what is wrong.
         for bad in [
