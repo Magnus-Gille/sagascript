@@ -35,7 +35,7 @@ import soundfile as sf  # noqa: E402
 import torch  # noqa: E402
 import nemo.collections.asr as nemo_asr  # noqa: E402
 
-from components import trace_inputs  # noqa: E402
+from components import SUPPORTED_WINDOWS, trace_inputs  # noqa: E402
 
 
 BLANK_ID = 8192
@@ -359,7 +359,7 @@ def speed(args: argparse.Namespace) -> dict[str, Any]:
             first_predict = time.perf_counter() - first
             for _ in range(3):
                 bundle["Encoder"].predict({"mel": mel, "mel_length": ml})
-                coreml_greedy_tokens(bundle, np.asarray(enc_warm["encoder"], dtype=np.float16), 188 if args.window_s == 15 else 376)
+                coreml_greedy_tokens(bundle, np.asarray(enc_warm["encoder"], dtype=np.float16), trace_inputs(args.window_s)[2])
             enc_times = []
             full_times = []
             for _ in range(args.runs):
@@ -399,7 +399,7 @@ def main() -> None:
         default=bench_dir() / "longform" / "fleurs-sv-distinct-5min.wav",
         help="16 kHz mono wav (default: $SAGASCRIPT_BENCH_DIR/longform/fleurs-sv-distinct-5min.wav)",
     )
-    parser.add_argument("--window-s", type=int, choices=(15, 30), required=True)
+    parser.add_argument("--window-s", type=int, choices=SUPPORTED_WINDOWS, required=True)
     parser.add_argument("--num-windows", type=int, default=8, help="consecutive full windows from t=0")
     parser.add_argument("--compute-units", nargs="+", default=["CPU_AND_NE"])
     parser.add_argument("--report", type=Path)

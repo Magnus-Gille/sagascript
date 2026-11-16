@@ -1,0 +1,34 @@
+{
+  "model": "/Users/magnus/.cache/sagascript-bench/issue-268/models/pianissimo-sv-coreml-r2-30s/Encoder.mlpackage",
+  "compute_units": "ComputeUnit.CPU_AND_NE",
+  "ops": 1282,
+  "counts": {
+    "none": 6,
+    "ANE": 1225,
+    "CPU": 51
+  },
+  "percent": {
+    "none": 0.5,
+    "ANE": 95.6,
+    "CPU": 4.0
+  },
+  "non_ane_ops": {
+    "ios16.relu": {
+      "none": 3
+    },
+    "ios17.cast": {
+      "none": 3,
+      "CPU": 1
+    },
+    "ios17.expand_dims": {
+      "ANE": 1,
+      "CPU": 2
+    },
+    "ios17.gather_along_axis": {
+      "CPU": 24
+    },
+    "select": {
+      "CPU": 24
+    }
+  }
+}
