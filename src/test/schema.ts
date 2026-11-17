@@ -62,6 +62,15 @@ export function array<T>(item: Schema<T>): Schema<T[]> {
   );
 }
 
+/** A fixed pair (a Rust `[T; 2]`). */
+export function pair<T>(item: Schema<T>): Schema<[T, T]> {
+  return schema((value, path) =>
+    Array.isArray(value) && value.length === 2
+      ? [item.parse(value[0], `${path}[0]`), item.parse(value[1], `${path}[1]`)]
+      : fail(path, "an array of two items", value),
+  );
+}
+
 /** A map with string keys (a Rust `BTreeMap<String, T>`). */
 export function record<T>(entry: Schema<T>): Schema<Record<string, T>> {
   return schema((value, path) => {

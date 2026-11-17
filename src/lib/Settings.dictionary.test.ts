@@ -9,8 +9,8 @@ import { backendError } from "../test/ipc";
 import { deferred } from "../test/deferred";
 import { renderSettings, settingsBackend } from "../test/settings";
 
-const defaultSettings = settingsFixture.default as SettingsValue;
-const customisedSettings = settingsFixture.customised as SettingsValue;
+const defaultSettings = settingsFixture.default as unknown as SettingsValue;
+const customisedSettings = settingsFixture.customised as unknown as SettingsValue;
 
 afterEach(() => vi.unstubAllGlobals());
 

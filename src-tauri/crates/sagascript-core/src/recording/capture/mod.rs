@@ -18,6 +18,7 @@
 //! | [`source`] | the [`CaptureSource`] trait |
 //! | [`clock`] | the host clock and its domain, the session clock, sleep detection |
 //! | [`fake`] | [`FakeSource`]: every session test runs on it |
+//! | [`synthetic`] | [`SyntheticSource`]: a real-time sine on its own thread, for the CLI's tests |
 //! | `mic` | [`MicSource`] over `cpal` (feature `record`) |
 //!
 //! The module is portable: only `mic` needs the `record` feature.
@@ -28,6 +29,7 @@ pub mod fake;
 pub mod sink;
 pub mod source;
 pub(crate) mod spsc;
+pub mod synthetic;
 #[cfg(windows)]
 mod win;
 
@@ -46,3 +48,6 @@ pub use sink::{
     track_channel, BlockSink, ChannelConfig, SignalHandle, Signals, SourceSignal, TrackReceiver,
 };
 pub use source::CaptureSource;
+pub use synthetic::{
+    test_source_requested, SyntheticConfig, SyntheticSource, SYNTHETIC_DEVICE_NAME, TEST_SOURCE_ENV,
+};

@@ -107,3 +107,21 @@ fn main_window_reveal_continues_if_normal_window_level_cannot_be_restored() {
         ]
     );
 }
+
+#[test]
+fn the_record_window_is_the_one_the_frontend_routes() {
+    // `App.svelte` shows the recorder for `?window=record`.
+    assert_eq!(RECORD_WINDOW_LABEL, "record");
+    assert_eq!(RECORD_WINDOW_URL, "index.html?window=record");
+}
+
+#[test]
+fn record_window_height_fits_the_screen() {
+    assert_eq!(record_window_height(None), 680.0);
+    assert_eq!(record_window_height(Some(1440.0)), 680.0);
+    assert_eq!(record_window_height(Some(800.0)), 680.0);
+    // A 768p laptop: 90% of the screen.
+    assert!((record_window_height(Some(700.0)) - 630.0).abs() < 1e-9);
+    // Never below the minimum.
+    assert_eq!(record_window_height(Some(400.0)), 520.0);
+}

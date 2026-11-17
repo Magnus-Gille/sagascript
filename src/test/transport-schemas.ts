@@ -1,7 +1,7 @@
 // Schemas of the payloads Rust sends over IPC (#347), one per frontend type.
 // src/test/transport.test.ts proves each equal to its TypeScript type and
 // parses the shared fixtures in contracts/transport/ with it.
-import { array, boolean, literal, nullable, number, object, openObject, record, string, union } from "./schema";
+import { array, boolean, literal, nullable, number, object, openObject, pair, record, string, union } from "./schema";
 
 // -- Settings (`get_settings`) ------------------------------------------------
 
@@ -34,6 +34,11 @@ export const settings = object(
     engine_prewarm: literal("off", "on_app_start", "on_key_down"),
     engine_idle_unload_minutes: number,
     has_completed_onboarding: boolean,
+    recording_quality: literal("lossless", "compact"),
+    recording_directory: string,
+    recording_channel_pair: pair(number),
+    recording_folder_confirmed: boolean,
+    recording_consent_acknowledged: boolean,
   },
   // Migration markers (ADR 0007): written and read by Rust only.
   { ignored: ["profile_glossary_migrated", "model_lineup_version", "engine_defaults_version", "schema_version"] },
@@ -209,6 +214,69 @@ export const engineLoadState = object(
   { optional: { source: literal("warm", "request"), loadMs: number, message: string } },
 );
 
+// -- Recorder (src/lib/record-types.ts, SAGA-564) -------------------------------
+const recordingQuality = literal("lossless", "compact");
+
+export const recordingSessionInfo = object({
+  state: literal("idle", "starting", "recording", "finalizing", "done", "failed"),
+  recording_id: nullable(string),
+  folder_name: nullable(string),
+  title: nullable(string),
+  quality: nullable(recordingQuality),
+  elapsed_ms: number,
+  level: number,
+  clipped: boolean,
+  gap_count: number,
+  gap_ms: number,
+  stalled: boolean,
+  device_lost: boolean,
+  bytes_written: number,
+  free_disk_bytes: nullable(number),
+  warnings: array(string),
+  ended_early: nullable(string),
+  error_code: nullable(string),
+});
+
+export const recordingSummary = object(
+  {
+    folder_name: string,
+    recording_id: string,
+    title: string,
+    state: literal("recording", "complete"),
+    recovered: boolean,
+    started_at: string,
+    quality: recordingQuality,
+    duration_seconds: number,
+    bytes: number,
+    track_count: number,
+    gap_count: number,
+    gap_seconds: number,
+    ended_reason: nullable(string),
+    needs_recovery: boolean,
+    playable: boolean,
+  },
+  { ignored: ["codec", "sample_rate", "channels"] },
+);
+
+export const recordingFinished = object({ summary: recordingSummary, ended_early: nullable(string) });
+
+export const recoveryNote = object({
+  folder_name: string,
+  title: string,
+  outcome: literal("recovered", "already_complete", "skipped_locked", "failed"),
+  frames_kept: number,
+  tail_bytes: number,
+  message: string,
+});
+
+export const recordingFolderInfo = object({
+  path: string,
+  exists: boolean,
+  free_bytes: nullable(number),
+  warnings: array(string),
+  is_default: boolean,
+});
+
 /** One schema per `EventMap` entry. */
 export const eventPayloads = {
   "state-changed": literal("idle", "recording", "loading_model", "transcribing", "error", "settings_reloaded"),
@@ -227,4 +295,6 @@ export const eventPayloads = {
   "update-preparing": string,
   "update-aborted": string,
   navigate_tab: string,
+  "recording-session-changed": recordingSessionInfo,
+  "recordings-recovered": array(recoveryNote),
 };

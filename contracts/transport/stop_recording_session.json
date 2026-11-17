@@ -1,0 +1,71 @@
+{
+  "device_changed": {
+    "ended_early": "device_changed",
+    "summary": {
+      "bytes": 1104000000,
+      "channels": 1,
+      "codec": "flac",
+      "duration_seconds": 3725.5,
+      "ended_reason": "device_changed",
+      "folder_name": "2026-11-06 10.00 Interview [0d2c1f]",
+      "gap_count": 1,
+      "gap_seconds": 0.25,
+      "needs_recovery": false,
+      "playable": true,
+      "quality": "compact",
+      "recording_id": "0d2c1f3a-1111-4222-8333-444455556666",
+      "recovered": false,
+      "sample_rate": 16000,
+      "started_at": "2026-11-06T10:00:00.000+01:00",
+      "state": "complete",
+      "title": "Interview",
+      "track_count": 1
+    }
+  },
+  "interrupted": {
+    "ended_early": null,
+    "summary": {
+      "bytes": 1104000000,
+      "channels": 1,
+      "codec": "flac",
+      "duration_seconds": 0.0,
+      "ended_reason": null,
+      "folder_name": "2026-11-06 10.00 Interview [0d2c1f]",
+      "gap_count": 1,
+      "gap_seconds": 0.25,
+      "needs_recovery": true,
+      "playable": false,
+      "quality": "lossless",
+      "recording_id": "0d2c1f3a-1111-4222-8333-444455556666",
+      "recovered": false,
+      "sample_rate": 48000,
+      "started_at": "2026-11-06T10:00:00.000+01:00",
+      "state": "recording",
+      "title": "Interview",
+      "track_count": 1
+    }
+  },
+  "stopped": {
+    "ended_early": null,
+    "summary": {
+      "bytes": 1104000000,
+      "channels": 1,
+      "codec": "flac",
+      "duration_seconds": 3725.5,
+      "ended_reason": "stopped",
+      "folder_name": "2026-11-06 10.00 Interview [0d2c1f]",
+      "gap_count": 1,
+      "gap_seconds": 0.25,
+      "needs_recovery": false,
+      "playable": true,
+      "quality": "lossless",
+      "recording_id": "0d2c1f3a-1111-4222-8333-444455556666",
+      "recovered": false,
+      "sample_rate": 48000,
+      "started_at": "2026-11-06T10:00:00.000+01:00",
+      "state": "complete",
+      "title": "Interview",
+      "track_count": 1
+    }
+  }
+}

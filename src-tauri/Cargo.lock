@@ -4614,6 +4614,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "windows 0.61.3",
  "windows-sys 0.61.2",
 ]
 
@@ -4622,6 +4623,7 @@ name = "sagascript-cli"
 version = "1.4.9"
 dependencies = [
  "arboard",
+ "chrono",
  "clap",
  "clap_complete",
  "clap_mangen",

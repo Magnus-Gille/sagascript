@@ -34,6 +34,33 @@ struct StatusOutput<'a> {
     schema_version: u8,
     scope: &'static str,
     microphone: &'a MicrophonePermissionReport,
+    recording: RecordingPermission,
+}
+
+/// What the recorder (`sagascript record` in recorder mode) can expect.
+#[derive(Serialize)]
+struct RecordingPermission {
+    /// `granted`, `denied`, `not_determined`, `not_applicable` (this OS has no
+    /// microphone permission to probe) or `unknown`.
+    microphone: &'static str,
+}
+
+fn recording_permission(report: &MicrophonePermissionReport) -> RecordingPermission {
+    RecordingPermission {
+        microphone: recording_microphone(&report.status),
+    }
+}
+
+/// The microphone permission as the recorder needs it. Read-only: the probe
+/// never opens a stream or prompts.
+fn recording_microphone(status: &MicrophonePermissionStatus) -> &'static str {
+    match status {
+        MicrophonePermissionStatus::Authorized => "granted",
+        MicrophonePermissionStatus::Denied | MicrophonePermissionStatus::Restricted => "denied",
+        MicrophonePermissionStatus::NotDetermined => "not_determined",
+        MicrophonePermissionStatus::Unsupported => "not_applicable",
+        MicrophonePermissionStatus::Unknown => "unknown",
+    }
 }
 
 pub fn run(args: PermissionsArgs, out: &Out) -> Result<(), DictationError> {
@@ -45,6 +72,7 @@ pub fn run(args: PermissionsArgs, out: &Out) -> Result<(), DictationError> {
                     schema_version: 1,
                     scope: "current_process",
                     microphone: &report,
+                    recording: recording_permission(&report),
                 })?;
             } else {
                 outln!(out, "{}", format_text(&report))?;
@@ -67,9 +95,10 @@ fn status_name(status: &MicrophonePermissionStatus) -> &'static str {
 
 fn format_text(report: &MicrophonePermissionReport) -> String {
     format!(
-        "Scope: current CLI process\nPlatform: {}\nMicrophone permission: {}\nIn app bundle: {}\n\nThis report describes this CLI process only. It does not inspect the running Sagascript GUI app, request a permission prompt, or record audio.",
+        "Scope: current CLI process\nPlatform: {}\nMicrophone permission: {}\nRecording (microphone): {}\nIn app bundle: {}\n\nThis report describes this CLI process only. It does not inspect the running Sagascript GUI app, request a permission prompt, or record audio.",
         report.platform,
         status_name(&report.status),
+        recording_microphone(&report.status),
         if report.in_app_bundle { "yes" } else { "no" },
     )
 }
@@ -105,7 +134,7 @@ mod tests {
         let report = synthetic_report(MicrophonePermissionStatus::NotDetermined);
         assert_eq!(
             format_text(&report),
-            "Scope: current CLI process\nPlatform: test-platform\nMicrophone permission: not_determined\nIn app bundle: no\n\nThis report describes this CLI process only. It does not inspect the running Sagascript GUI app, request a permission prompt, or record audio."
+            "Scope: current CLI process\nPlatform: test-platform\nMicrophone permission: not_determined\nRecording (microphone): not_determined\nIn app bundle: no\n\nThis report describes this CLI process only. It does not inspect the running Sagascript GUI app, request a permission prompt, or record audio."
         );
     }
 
@@ -116,6 +145,7 @@ mod tests {
             schema_version: 1,
             scope: "current_process",
             microphone: &report,
+            recording: recording_permission(&report),
         })
         .expect("synthetic report should serialize");
 
@@ -124,5 +154,20 @@ mod tests {
         assert_eq!(value["microphone"]["platform"], "test-platform");
         assert_eq!(value["microphone"]["status"], "authorized");
         assert_eq!(value["microphone"]["in_app_bundle"], false);
+        assert_eq!(value["recording"]["microphone"], "granted");
+    }
+
+    #[test]
+    fn the_recorder_sees_every_status_in_its_own_words() {
+        for (status, word) in [
+            (MicrophonePermissionStatus::Authorized, "granted"),
+            (MicrophonePermissionStatus::Denied, "denied"),
+            (MicrophonePermissionStatus::Restricted, "denied"),
+            (MicrophonePermissionStatus::NotDetermined, "not_determined"),
+            (MicrophonePermissionStatus::Unsupported, "not_applicable"),
+            (MicrophonePermissionStatus::Unknown, "unknown"),
+        ] {
+            assert_eq!(recording_microphone(&status), word);
+        }
     }
 }

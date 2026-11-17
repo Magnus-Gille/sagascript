@@ -1,0 +1,19 @@
+{
+  "existing": {
+    "exists": true,
+    "free_bytes": 412000000000,
+    "is_default": false,
+    "path": "/Volumes/Archive/Sagascript",
+    "warnings": [
+      "exfat",
+      "cloud_synced"
+    ]
+  },
+  "not_created_yet": {
+    "exists": false,
+    "free_bytes": null,
+    "is_default": true,
+    "path": "/Users/x/Music/Sagascript",
+    "warnings": []
+  }
+}

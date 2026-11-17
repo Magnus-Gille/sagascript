@@ -28,6 +28,9 @@ serde = "1"
 serde_json = { version = "1", features = ["float_roundtrip"] }
 tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
+# Local time with its UTC offset for a recording's `started_at` (already in the
+# lockfile for the app crate).
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # SIGINT/SIGTERM handling for `record` and cooperative cancellation of file

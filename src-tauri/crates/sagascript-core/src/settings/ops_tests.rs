@@ -424,3 +424,35 @@ fn vad_enabled_is_only_the_stored_value() {
     expected["vad_enabled"] = serde_json::Value::Bool(false);
     assert_eq!(as_json(&settings), expected, "no other field moves");
 }
+
+#[test]
+fn recording_channel_pair_refuses_channel_zero_and_changes_nothing() {
+    let mut settings = Settings::default();
+    settings.set_recording_channel_pair(3, 4).unwrap();
+    assert_eq!(settings.recording_channel_pair, [3, 4]);
+    settings.set_recording_channel_pair(2, 2).unwrap();
+    assert_eq!(settings.recording_channel_pair, [2, 2]);
+    for (first, second) in [(0, 2), (1, 0), (0, 0)] {
+        let error = settings
+            .set_recording_channel_pair(first, second)
+            .unwrap_err();
+        assert_eq!(error.code(), "invalid_setting_value");
+        assert_eq!(settings.recording_channel_pair, [2, 2]);
+    }
+}
+
+#[test]
+fn recording_directory_refuses_a_file_and_trims() {
+    let mut settings = Settings::default();
+    settings
+        .set_recording_directory("  /Volumes/Audio/Takes ", false)
+        .unwrap();
+    assert_eq!(settings.recording_directory, "/Volumes/Audio/Takes");
+    let error = settings
+        .set_recording_directory("/etc/hosts", true)
+        .unwrap_err();
+    assert_eq!(error, SettingsError::RecordingDirectoryIsAFile);
+    assert_eq!(settings.recording_directory, "/Volumes/Audio/Takes");
+    settings.set_recording_directory("", false).unwrap();
+    assert_eq!(settings.recording_directory, "");
+}

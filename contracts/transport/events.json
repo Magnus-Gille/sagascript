@@ -181,6 +181,188 @@
     ],
     "scope": "runId"
   },
+  "recording-session-changed": {
+    "consumer": "gui",
+    "samples": [
+      {
+        "bytes_written": 0,
+        "clipped": false,
+        "device_lost": false,
+        "elapsed_ms": 0,
+        "ended_early": null,
+        "error_code": null,
+        "folder_name": null,
+        "free_disk_bytes": null,
+        "gap_count": 0,
+        "gap_ms": 0,
+        "level": 0.0,
+        "quality": null,
+        "recording_id": null,
+        "stalled": false,
+        "state": "idle",
+        "title": null,
+        "warnings": []
+      },
+      {
+        "bytes_written": 7340032,
+        "clipped": false,
+        "device_lost": false,
+        "elapsed_ms": 83250,
+        "ended_early": null,
+        "error_code": null,
+        "folder_name": "2026-11-06 10.00 Interview [0d2c1f]",
+        "free_disk_bytes": 120000000000,
+        "gap_count": 0,
+        "gap_ms": 0,
+        "level": 0.0,
+        "quality": "lossless",
+        "recording_id": "0d2c1f3a-1111-4222-8333-444455556666",
+        "stalled": false,
+        "state": "starting",
+        "title": "Interview",
+        "warnings": []
+      },
+      {
+        "bytes_written": 7340032,
+        "clipped": false,
+        "device_lost": false,
+        "elapsed_ms": 83250,
+        "ended_early": null,
+        "error_code": null,
+        "folder_name": "2026-11-06 10.00 Interview [0d2c1f]",
+        "free_disk_bytes": 120000000000,
+        "gap_count": 0,
+        "gap_ms": 0,
+        "level": 0.41999998688697815,
+        "quality": "lossless",
+        "recording_id": "0d2c1f3a-1111-4222-8333-444455556666",
+        "stalled": false,
+        "state": "recording",
+        "title": "Interview",
+        "warnings": [
+          "cloud_synced",
+          "low_disk"
+        ]
+      },
+      {
+        "bytes_written": 7340032,
+        "clipped": true,
+        "device_lost": true,
+        "elapsed_ms": 83250,
+        "ended_early": null,
+        "error_code": null,
+        "folder_name": "2026-11-06 10.00 Interview [0d2c1f]",
+        "free_disk_bytes": null,
+        "gap_count": 2,
+        "gap_ms": 4500,
+        "level": 1.0,
+        "quality": "compact",
+        "recording_id": "0d2c1f3a-1111-4222-8333-444455556666",
+        "stalled": true,
+        "state": "recording",
+        "title": "Interview",
+        "warnings": []
+      },
+      {
+        "bytes_written": 7340032,
+        "clipped": false,
+        "device_lost": false,
+        "elapsed_ms": 83250,
+        "ended_early": null,
+        "error_code": null,
+        "folder_name": "2026-11-06 10.00 Interview [0d2c1f]",
+        "free_disk_bytes": 120000000000,
+        "gap_count": 0,
+        "gap_ms": 0,
+        "level": 0.10000000149011612,
+        "quality": "lossless",
+        "recording_id": "0d2c1f3a-1111-4222-8333-444455556666",
+        "stalled": false,
+        "state": "finalizing",
+        "title": "Interview",
+        "warnings": []
+      },
+      {
+        "bytes_written": 7340032,
+        "clipped": false,
+        "device_lost": false,
+        "elapsed_ms": 83250,
+        "ended_early": "device_changed",
+        "error_code": null,
+        "folder_name": "2026-11-06 10.00 Interview [0d2c1f]",
+        "free_disk_bytes": 120000000000,
+        "gap_count": 1,
+        "gap_ms": 500,
+        "level": 0.0,
+        "quality": "lossless",
+        "recording_id": "0d2c1f3a-1111-4222-8333-444455556666",
+        "stalled": false,
+        "state": "done",
+        "title": "Interview",
+        "warnings": []
+      },
+      {
+        "bytes_written": 7340032,
+        "clipped": false,
+        "device_lost": false,
+        "elapsed_ms": 83250,
+        "ended_early": null,
+        "error_code": "recording_disk_full",
+        "folder_name": "2026-11-06 10.00 Interview [0d2c1f]",
+        "free_disk_bytes": 120000000000,
+        "gap_count": 0,
+        "gap_ms": 0,
+        "level": 0.0,
+        "quality": "lossless",
+        "recording_id": "0d2c1f3a-1111-4222-8333-444455556666",
+        "stalled": false,
+        "state": "failed",
+        "title": "Interview",
+        "warnings": []
+      }
+    ]
+  },
+  "recordings-recovered": {
+    "consumer": "gui",
+    "samples": [
+      [
+        {
+          "folder_name": "2026-11-05 15.30 Lecture [a1b2c3]",
+          "frames_kept": 2880000,
+          "message": "Recovered. Everything that was fully saved was kept; the unfinished end was set aside in the recording folder.",
+          "outcome": "recovered",
+          "tail_bytes": 4096,
+          "title": "Lecture"
+        }
+      ],
+      [
+        {
+          "folder_name": "2026-11-04 09.00 Standup [d4e5f6]",
+          "frames_kept": 0,
+          "message": "Already complete; there was nothing to recover.",
+          "outcome": "already_complete",
+          "tail_bytes": 0,
+          "title": "Standup"
+        },
+        {
+          "folder_name": "2026-11-04 11.00 Call [0a0b0c]",
+          "frames_kept": 0,
+          "message": "Another program is still recording this; it was left alone.",
+          "outcome": "skipped_locked",
+          "tail_bytes": 0,
+          "title": "Call"
+        },
+        {
+          "folder_name": "2026-11-03 17.45 Memo [9f8e7d]",
+          "frames_kept": 0,
+          "message": "Could not be recovered (recording_corrupt_track). The recording was left as it was; you can try again.",
+          "outcome": "failed",
+          "tail_bytes": 0,
+          "title": "Memo"
+        }
+      ]
+    ]
+  },
   "state-changed": {
     "consumer": "gui",
     "samples": [

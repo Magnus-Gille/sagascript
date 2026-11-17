@@ -3,11 +3,13 @@
   import Settings from "./lib/Settings.svelte";
   import Onboarding from "./lib/Onboarding.svelte";
   import Overlay from "./lib/Overlay.svelte";
+  import Record from "./lib/Record.svelte";
   import { getSettings } from "./lib/api";
 
   // null = loading, true = show onboarding, false = show settings
   let showOnboarding: boolean | null = null;
   let showOverlay = false;
+  let showRecord = false;
 
   onMount(async () => {
     const params = new URLSearchParams(window.location.search);
@@ -17,6 +19,12 @@
       document.body.style.background = "transparent";
       document.body.style.overflow = "hidden";
       showOverlay = true;
+      return;
+    }
+
+    // The recorder window (tray "Record...").
+    if (params.get("window") === "record") {
+      showRecord = true;
       return;
     }
 
@@ -46,6 +54,8 @@
 <main>
   {#if showOverlay}
     <Overlay />
+  {:else if showRecord}
+    <Record />
   {:else if showOnboarding === null}
     <div class="loading">
       <div class="spinner"></div>

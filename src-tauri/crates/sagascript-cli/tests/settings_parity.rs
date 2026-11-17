@@ -36,6 +36,11 @@ fn args(op: &Op) -> Vec<String> {
         Op::EngineIdleUnloadMinutes(minutes) => {
             set("engine_idle_unload_minutes", minutes.to_string())
         }
+        Op::RecordingQuality(quality) => set("recording_quality", quality.id().into()),
+        Op::RecordingDirectory(directory) => set("recording_directory", directory.clone()),
+        Op::RecordingChannelPair(first, second) => {
+            set("recording_channel_pair", format!("{first}-{second}"))
+        }
         Op::FileTranscriptionModel(choice) => set("file_transcription_model", choice.id().into()),
         Op::HotkeyMode(mode) => set("hotkey_mode", mode.id().into()),
         Op::Hotkey(shortcut) => set("hotkey", (*shortcut).into()),

@@ -99,6 +99,32 @@ function reprocessingResult(task) {
     },
   };
 }
+// Recorder (SAGA-564): the Record window opens at /?window=record. window.qa.recordingSessionChanged(...)
+// emits recording-session-changed; window.qa.recorder holds the fixture state.
+const recorderSettings = { recording_quality: "lossless", recording_directory: "", recording_channel_pair: [1, 2],
+  recording_folder_confirmed: true, recording_consent_acknowledged: true };
+const recorderFolder = { path: "/Users/fixture/Music/Sagascript", exists: true, free_bytes: 120_000_000_000, warnings: [], is_default: true };
+function recordingSession(overrides = {}) {
+  return { state: "idle", recording_id: null, folder_name: null, title: null, quality: null, elapsed_ms: 0, level: 0, clipped: false,
+    gap_count: 0, gap_ms: 0, stalled: false, device_lost: false, bytes_written: 0, free_disk_bytes: 120_000_000_000, warnings: [],
+    ended_early: null, error_code: null, ...overrides };
+}
+function recordingSummary(overrides = {}) {
+  return { folder_name: "2026-11-05 15.30 Lecture", recording_id: "9b1f7c52-3d0e-4a8b-9c61-0f2a7d4e5b13", title: "Lecture", state: "complete",
+    recovered: false, started_at: "2026-11-05T15:30:00Z", quality: "lossless", duration_seconds: 2712, bytes: 222_000_000, track_count: 1,
+    gap_count: 0, gap_seconds: 0, ended_reason: null, needs_recovery: false, playable: true, codec: "flac", sample_rate: 48000, channels: 1,
+    ...overrides };
+}
+const recorder = {
+  session: recordingSession(),
+  recordings: [
+    recordingSummary(),
+    recordingSummary({ folder_name: "2026-11-04 09.00 Interview", recording_id: "4c8e2a10-77d1-4b3f-a2e6-5d9b0c1f8a34", title: "Interview",
+      recovered: true, duration_seconds: 614, bytes: 50_900_000, gap_count: 1, gap_seconds: 0.4, ended_reason: "device_changed" }),
+  ],
+  recoveryNotes: [],
+  folder: recorderFolder,
+};
 window.qa = {
   calls,
   prepareUpdate: (nonce) => {
@@ -119,6 +145,15 @@ window.qa = {
   },
   activePreparationNonce: () => activePreparationNonce,
   dictationResult: (text) => emit("transcription-result", text),
+  recorder,
+  recordingSessionChanged: (overrides = {}) => {
+    recorder.session = recordingSession(overrides);
+    return emit("recording-session-changed", recorder.session);
+  },
+  recordingsRecovered: (notes) => {
+    recorder.recoveryNotes = notes;
+    return emit("recordings-recovered", notes);
+  },
   // The `error` event is the typed { code, message, retryable } of a failed command (ADR 0006).
   dictationError: (text, code = "transcription_failed", retryable = false) => emit("error", { code, message: text, retryable }),
   blockRecovery: (kind) => {
@@ -238,7 +273,7 @@ mockIPC(async (cmd, args = {}) => {
         { id: "swedish", name: "Swedish", language: "sv", shortcut: "Control+Shift+S" },
         { id: "english", name: "English", language: "en", shortcut: "Control+Shift+E" },
       ], profile_models: { ...profileModels }, profile_glossaries: {}, profile_glossary_migrated: true, initial_prompt: "", beam_size: 0,
-      temperature_fallback: true, vad_enabled: false, ...engineSettings, has_completed_onboarding: true };
+      temperature_fallback: true, vad_enabled: false, ...engineSettings, has_completed_onboarding: true, ...recorderSettings };
     // Mirrors the backend lineup where Pianissimo is supported: Pianissimo and
     // KB-Whisper Large only. `include` keeps a selected retired model listed.
     case "get_file_model_options": {
@@ -354,7 +389,36 @@ mockIPC(async (cmd, args = {}) => {
         candidate: proposal.proposed,
       };
     }
-    case "plugin:dialog|open": return ["/fixtures/picked.wav"];
+    case "get_recording_session": return recorder.session;
+    case "start_recording_session":
+      recorder.session = recordingSession({ state: "recording", recording_id: "7a2d9e64-1b3c-4f58-8e07-c4d2a91b6f30",
+        folder_name: "2026-11-06 10.00 Recording", title: args.title ?? "Recording", quality: recorderSettings.recording_quality });
+      return recorder.session;
+    case "stop_recording_session": {
+      const summary = recordingSummary({ folder_name: "2026-11-06 10.00 Recording", recording_id: recorder.session.recording_id ?? "fixture",
+        title: recorder.session.title ?? "Recording", started_at: "2026-11-06T10:00:00Z", duration_seconds: Math.round(recorder.session.elapsed_ms / 1000),
+        quality: recorderSettings.recording_quality });
+      recorder.recordings = [summary, ...recorder.recordings];
+      recorder.session = recordingSession({ state: "done" });
+      return { summary, ended_early: recorder.session.ended_early };
+    }
+    case "list_recordings": return recorder.recordings;
+    case "delete_recording":
+      recorder.recordings = recorder.recordings.filter(recording => recording.folder_name !== args.folderName);
+      return null;
+    case "reveal_recording": return null;
+    case "recover_recordings": return recorder.recoveryNotes;
+    case "transcribe_recording": return `Transcript of ${args.folderName}`;
+    case "get_recording_folder_info": return recorder.folder;
+    case "set_recording_quality": recorderSettings.recording_quality = args.quality; return null;
+    case "set_recording_directory":
+      recorderSettings.recording_directory = args.path;
+      recorder.folder = { ...recorderFolder, path: args.path || recorderFolder.path, is_default: !args.path };
+      return null;
+    case "set_recording_channel_pair": recorderSettings.recording_channel_pair = [args.first, args.second]; return null;
+    case "confirm_recording_folder": recorderSettings.recording_folder_confirmed = true; return null;
+    case "acknowledge_recording_consent": recorderSettings.recording_consent_acknowledged = true; return null;
+    case "plugin:dialog|open": return args.options?.directory ? "/fixtures/Recordings" : ["/fixtures/picked.wav"];
     default: return null;
   }
 }, { shouldMockEvents: true });

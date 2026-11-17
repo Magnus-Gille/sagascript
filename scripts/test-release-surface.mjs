@@ -128,7 +128,10 @@ test("profile and update menu states remain explicit after interaction", () => {
   assert.match(mainSource, /if selected \{ "✓ " \} else \{ "" \}/);
   assert.match(mainSource, /cfg!\(target_os = "macos"\) && has_public_key/);
   assert.match(mainSource, /UpdateMenuAction::Install => check_for_updates_and_install\(app\.clone\(\)\)/);
-  assert.match(mainSource, /"check_for_updates" \| "update_status" => \{\s*handle_check_for_updates_menu_action\(app\);/);
+  // The tray routes ids through `menu_action` (tray/menu.rs): the update entry and
+  // the actionable update status line both open the update check.
+  assert.match(mainSource, /"check_for_updates" \| "update_status" => MenuAction::CheckForUpdates/);
+  assert.match(mainSource, /Some\(MenuAction::CheckForUpdates\) => handle_check_for_updates_menu_action\(app\)/);
   assert.match(mainSource, /state\.available_version = None;/);
   assert.match(mainSource, /items\.check\.set_text\(action_text\)/);
   assert.match(mainSource, /"Check Again…"/);

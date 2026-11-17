@@ -9,6 +9,7 @@
 // listed here.
 import type { EngineLoadState, HotkeyProfile, HotkeyStatus } from "./api";
 import type { BackendError } from "./errors";
+import type { RecordingSessionInfo, RecoveryNote } from "./record-types";
 
 /**
  * The `state-changed` payload: the dictation state, plus `settings_reloaded`,
@@ -52,6 +53,10 @@ export interface EventMap {
   "update-aborted": string;
   /** A Settings tab (`dictate`, `transcribe`). The snake_case name is a named legacy exception. */
   navigate_tab: string;
+  /** The recording session's status: on every state change and every 250 ms while it records or finalizes (SAGA-564). */
+  "recording-session-changed": RecordingSessionInfo;
+  /** Sent once after app start when recovery kept anything. */
+  "recordings-recovered": RecoveryNote[];
 }
 
 export type EventName = keyof EventMap;

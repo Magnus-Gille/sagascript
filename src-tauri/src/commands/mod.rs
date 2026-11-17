@@ -23,6 +23,7 @@
 //! | `dictionary` | Personal dictionary and training suggestions. |
 //! | `update_recovery` | Update-result guard, recovery drafts, update preparation. |
 //! | `permissions` | Accessibility and microphone onboarding queries. |
+//! | `recording` | The recorder (SAGA-564): the session, the library of recordings, folder info and the recorder's settings. |
 //! | `system` | Build info and host platform. |
 //! | `persist` | `persist_and_sync` and its siblings: the only way a command writes settings (file and controller together, one writer at a time). Not commands. |
 //! | `main_thread` | `await_main_thread`: a bounded, non-blocking wait for work handed to the main thread (macOS and tests). Not commands. |
@@ -40,6 +41,7 @@ mod main_thread;
 mod models;
 mod permissions;
 mod persist;
+mod recording;
 mod settings;
 mod state;
 mod system;
@@ -56,6 +58,7 @@ pub use hotkey::*;
 pub use models::*;
 pub use permissions::*;
 pub(crate) use persist::*;
+pub use recording::*;
 pub use settings::*;
 pub use state::*;
 pub use system::*;

@@ -73,6 +73,17 @@ pub enum RecordingError {
     /// out of order. The recording folder, if any, is left for recovery.
     #[error("the recording session failed: {reason}")]
     SessionFailed { reason: &'static str },
+    /// The recording ended early because the input device or its format
+    /// changed (a headset switching profile, an unplugged microphone). What
+    /// was recorded up to then is kept. `reason` is the manifest's
+    /// `ended_reason` (`device_changed`, `format_changed`).
+    #[error("the recording stopped early because the input device changed ({reason})")]
+    DeviceChanged { reason: &'static str },
+    /// The recording was not finished by the process that wrote it (a crash,
+    /// a kill) and must be recovered before it can be played, exported or
+    /// transcribed.
+    #[error("the recording was interrupted and needs recovery first")]
+    RecoveryNeeded,
     /// A file of the recording is a symbolic link (or a Windows reparse
     /// point), a directory, a pipe or anything else but a regular file, or a
     /// track file that has more than one name (a hard link, Unix). It is
@@ -95,6 +106,13 @@ pub enum RecordingError {
     /// sample). The text is scrubbed of paths.
     #[error("the audio encoder failed: {message}")]
     Encoder { message: String },
+}
+
+/// A recording error crosses a boundary as its text, which holds no path.
+impl serde::Serialize for RecordingError {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
 }
 
 fn os_suffix(os_code: &Option<i32>) -> String {
@@ -144,6 +162,8 @@ impl RecordingError {
             Self::NotRegularFile { .. } => "recording_not_regular_file",
             Self::TracksIncomplete { .. } => "recording_tracks_incomplete",
             Self::Encoder { .. } => "recording_encoder",
+            Self::DeviceChanged { .. } => "recording_device_changed",
+            Self::RecoveryNeeded => "recording_recovery_needed",
             Self::SourceUnavailable { .. } => "recording_source_unavailable",
             Self::SessionFailed { .. } => "recording_session_failed",
         }

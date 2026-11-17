@@ -36,6 +36,14 @@
     "default": "pianissimo-sv",
     "english": "base.en"
   },
+  "recording_channel_pair": [
+    1,
+    2
+  ],
+  "recording_consent_acknowledged": false,
+  "recording_directory": "",
+  "recording_folder_confirmed": false,
+  "recording_quality": "lossless",
   "schema_version": 5,
   "show_overlay": true,
   "temperature_fallback": true,

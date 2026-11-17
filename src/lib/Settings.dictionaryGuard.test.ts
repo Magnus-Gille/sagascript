@@ -11,7 +11,7 @@ import { backendError } from "../test/ipc";
 import { deferred, settle } from "../test/deferred";
 import { renderSettings, settingsBackend } from "../test/settings";
 
-const customised = settingsFixture.customised as SettingsValue;
+const customised = settingsFixture.customised as unknown as SettingsValue;
 const SAVED = "mergea = mördsa";
 const TYPED = "mergea = mördsa\nOpenAI = open eye";
 

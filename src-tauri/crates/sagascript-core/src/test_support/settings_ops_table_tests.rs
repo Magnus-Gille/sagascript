@@ -59,6 +59,9 @@ fn the_table_has_accepted_and_refused_cases_for_each_operation() {
         "TemperatureFallback",
         "EnginePrewarm",
         "EngineIdleUnloadMinutes",
+        "RecordingQuality",
+        "RecordingDirectory",
+        "RecordingChannelPair",
         "FileTranscriptionModel",
         "HotkeyMode",
         "Hotkey",
@@ -75,6 +78,8 @@ fn the_table_has_accepted_and_refused_cases_for_each_operation() {
         "WhisperModel",
         "AutoSelectModel",
         "PianissimoDictation",
+        "RecordingDirectory",
+        "RecordingChannelPair",
         "Hotkey",
         "Profiles",
         "ProfileModel",
@@ -127,12 +132,23 @@ fn reset_rows_are_the_setters_with_the_default_value() {
         "temperature_fallback",
         "engine_prewarm",
         "engine_idle_unload_minutes",
+        "recording_quality",
+        "recording_directory",
+        "recording_channel_pair",
         "file_transcription_model",
         "hotkey",
     ] {
         assert!(reset_keys.contains(key), "{key}: no reset row");
     }
     assert!(matches!(reset_as_op("beam_size"), Op::BeamSize(0)));
+    assert!(matches!(
+        reset_as_op("recording_channel_pair"),
+        Op::RecordingChannelPair(1, 2)
+    ));
+    assert!(matches!(
+        reset_as_op("recording_quality"),
+        Op::RecordingQuality(RecordingQuality::Lossless)
+    ));
     assert!(matches!(reset_as_op("show_overlay"), Op::ShowOverlay(true)));
     assert!(matches!(
         reset_as_op("language"),

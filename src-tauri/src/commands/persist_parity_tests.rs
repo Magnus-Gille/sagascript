@@ -59,6 +59,17 @@ fn run_op(app: &App, runtime: &tokio::runtime::Runtime, op: &Op) -> Result<(), S
         Op::EngineIdleUnloadMinutes(minutes) => runtime
             .block_on(set_engine_idle_unload_minutes(state, *minutes))
             .map_err(text),
+        Op::RecordingQuality(quality) => runtime
+            .block_on(set_recording_quality(state, *quality))
+            .map_err(text),
+        Op::RecordingDirectory(directory) => persist_recording_directory(&state, directory)
+            .map(drop)
+            .map_err(text),
+        Op::RecordingChannelPair(first, second) => {
+            persist_recording_channel_pair(&state, *first, *second)
+                .map(drop)
+                .map_err(text)
+        }
         Op::FileTranscriptionModel(choice) => runtime
             .block_on(set_file_transcription_model(state, choice.id().to_string()))
             .map_err(text),
