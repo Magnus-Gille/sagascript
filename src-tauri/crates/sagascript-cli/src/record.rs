@@ -62,6 +62,17 @@ pub struct RecordArgs {
     )]
     pub quality: Option<String>,
 
+    /// Recorder mode: what to record. mic is the microphone; system is what the computer plays
+    /// (macOS 14.4+ on Apple Silicon, or Windows); both records the two as separate tracks and
+    /// falls back to the microphone where system audio is not available (default: mic)
+    #[arg(
+        long,
+        value_name = "SOURCE",
+        value_parser = clap::builder::PossibleValuesParser::new(["mic", "system", "both"]),
+        conflicts_with_all = ["output", "clipboard"]
+    )]
+    pub source: Option<String>,
+
     /// Recorder mode: folder that holds the recordings (default: the recording_directory
     /// setting, else Sagascript in your Music folder)
     #[arg(long, value_name = "DIR", conflicts_with_all = ["output", "clipboard"])]

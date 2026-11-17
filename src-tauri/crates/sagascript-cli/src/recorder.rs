@@ -20,8 +20,10 @@ use std::time::{Duration, Instant};
 use sagascript_core::audio::permission::{microphone_permission, MicrophonePermissionStatus};
 use sagascript_core::error::DictationError;
 use sagascript_core::recording::capture::{
-    test_source_requested, CaptureSource, MicConfig, MicSource, SyntheticConfig,
+    availability::probe as system_audio_support, test_source_requested, CaptureSource, MicConfig,
+    MicSource, SyntheticConfig, SystemAudioSupport, SystemSource,
 };
+use sagascript_core::recording::source_plan::{plan as source_plan, RecordSource, SourcePlan};
 use sagascript_core::recording::{
     decode_tracks, summarize_folder, Client, Quality, RecordingSession, RecordingStore,
     SessionConfig, SessionOutcome, SessionStatus, SessionWarning, SourceSpec, SyntheticSource,
@@ -53,6 +55,7 @@ pub(crate) const STATUS_INTERVAL: Duration = Duration::from_secs(10);
 pub(crate) struct RecorderOptions {
     pub quality: RecordingQuality,
     pub dir: PathBuf,
+    pub source: RecordSource,
     pub title: String,
     pub duration: Option<Duration>,
     pub transcribe: bool,
@@ -65,6 +68,20 @@ impl RecorderOptions {
             Some(id) => RecordingQuality::parse_id(id).map_err(DictationError::from)?,
             None => stored.recording_quality,
         };
+        let source = match args.source.as_deref() {
+            None => RecordSource::Mic,
+            Some(id) => RecordSource::parse(id).ok_or_else(|| {
+                DictationError::SettingsError(format!(
+                    "--source must be mic, system or both, not '{id}'"
+                ))
+            })?,
+        };
+        if args.transcribe && source != RecordSource::Mic {
+            return Err(DictationError::SettingsError(
+                "--transcribe only works with --source mic for now; transcribe the recording afterwards"
+                    .into(),
+            ));
+        }
         let title = match args.name.as_deref().map(str::trim) {
             Some("") => {
                 return Err(DictationError::SettingsError(
@@ -106,6 +123,7 @@ impl RecorderOptions {
         Ok(Self {
             quality,
             dir: args.dir.clone().unwrap_or_else(|| stored.recordings_dir()),
+            source,
             title,
             duration,
             transcribe: args.transcribe,
@@ -125,6 +143,40 @@ pub(crate) fn choose_source(
         Some(config) => Ok(Box::new(SyntheticSource::new(config))),
         None => open_mic(),
     }
+}
+
+/// The sources of `plan`. A synthetic request replaces every source (and counts
+/// system audio as available), so a test environment reaches no device.
+pub(crate) fn choose_sources(
+    requested: Option<SyntheticConfig>,
+    plan: SourcePlan,
+    open_mic: impl FnOnce() -> Result<Box<dyn CaptureSource>, DictationError>,
+    open_system: impl FnOnce() -> Result<Box<dyn CaptureSource>, DictationError>,
+) -> Result<Vec<SourceSpec>, DictationError> {
+    let mut specs = Vec::new();
+    if plan.mic {
+        let source = choose_source(requested.clone(), open_mic)?;
+        specs.push(SourceSpec {
+            id: "mic".into(),
+            role: "mic".into(),
+            source,
+        });
+    }
+    if plan.system {
+        let source = choose_source(
+            requested.map(|c| SyntheticConfig {
+                hz: c.hz * 1.5,
+                ..c
+            }),
+            open_system,
+        )?;
+        specs.push(SourceSpec::system(source));
+    }
+    Ok(specs)
+}
+
+fn open_system() -> Result<Box<dyn CaptureSource>, DictationError> {
+    Ok(SystemSource::open()?)
 }
 
 fn open_mic(channel_pair: (u16, u16), out: &Out) -> Result<Box<dyn CaptureSource>, DictationError> {
@@ -289,23 +341,49 @@ pub(crate) fn run(args: RecordArgs, out: &Out) -> Result<(), DictationError> {
     install_stop_handler(running.clone())?;
 
     let pair = stored.recording_channel_pair_tuple();
-    let source = choose_source(test_source_requested(), || open_mic(pair, out))?;
-    let device = source.device_name();
-    let format = source.format();
+    let requested = test_source_requested();
+    let support = if requested.is_some() {
+        SystemAudioSupport::Supported
+    } else {
+        system_audio_support()
+    };
+    let plan = source_plan(options.source, support)?;
+    if let Some(reason) = plan.fallback {
+        errln!(out, "Recording the microphone only: {reason}.");
+    }
+    let mut specs = choose_sources(requested, plan, || open_mic(pair, out), open_system)?;
+    let mic_info = specs
+        .iter()
+        .find(|spec| spec.id == "mic")
+        .map(|spec| (spec.source.device_name(), spec.source.format()));
+    let system_info = specs
+        .iter()
+        .find(|spec| spec.id == "system")
+        .map(|spec| (spec.source.device_name(), spec.source.format()));
 
     let quality = options.quality.to_quality();
     let config = SessionConfig::new(&options.title, started_at_now(), client(), quality);
     let session = RecordingSession::new(RecordingStore::new(&options.dir), config);
-    errln!(out, "Opening the microphone...");
-    session.start(vec![SourceSpec {
-        id: "mic".into(),
-        role: "mic".into(),
-        source,
-    }])?;
+    errln!(
+        out,
+        "Opening {}...",
+        match (plan.mic, plan.system) {
+            (true, true) => "the microphone and system audio",
+            (false, true) => "system audio",
+            _ => "the microphone",
+        }
+    );
+    session.start(std::mem::take(&mut specs))?;
 
     let folder = session.folder().map(|folder| absolute(&folder));
     if let Some(folder) = &folder {
-        let tracks = describe_tracks(quality, format.sample_rate, format.channels, pair);
+        let (device, tracks) = match &mic_info {
+            Some((device, format)) => (
+                device.clone(),
+                describe_tracks(quality, format.sample_rate, format.channels, pair),
+            ),
+            None => (None, "system audio only".to_string()),
+        };
         for line in banner_lines(
             folder,
             quality,
@@ -314,6 +392,15 @@ pub(crate) fn run(args: RecordArgs, out: &Out) -> Result<(), DictationError> {
             options.duration,
         ) {
             errln!(out, "{line}");
+        }
+        if let Some((device, format)) = &system_info {
+            errln!(
+                out,
+                "System audio: {}, {} Hz, {} channel(s), saved as its own track (system.flac).",
+                device.as_deref().unwrap_or("unknown"),
+                format.sample_rate,
+                format.channels
+            );
         }
     }
 
@@ -582,6 +669,41 @@ mod tests {
             source.device_name().as_deref(),
             Some(sagascript_core::recording::SYNTHETIC_DEVICE_NAME)
         );
+    }
+
+    #[test]
+    fn a_synthetic_request_opens_a_mic_and_a_system_track_without_devices() {
+        let both = SourcePlan {
+            mic: true,
+            system: true,
+            fallback: None,
+        };
+        let specs = choose_sources(
+            Some(SyntheticConfig::default()),
+            both,
+            || panic!("the microphone must not be opened"),
+            || panic!("the system source must not be opened"),
+        )
+        .expect("synthetic sources");
+        let ids: Vec<&str> = specs.iter().map(|spec| spec.id.as_str()).collect();
+        assert_eq!(ids, ["mic", "system"]);
+    }
+
+    #[test]
+    fn only_the_planned_sources_are_opened() {
+        let mic_only = SourcePlan {
+            mic: true,
+            system: false,
+            fallback: None,
+        };
+        let specs = choose_sources(
+            Some(SyntheticConfig::default()),
+            mic_only,
+            || panic!("synthetic"),
+            || panic!("system audio was not planned"),
+        )
+        .expect("mic only");
+        assert_eq!(specs.len(), 1);
     }
 
     #[test]

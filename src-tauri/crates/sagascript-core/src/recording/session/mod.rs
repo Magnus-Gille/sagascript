@@ -114,6 +114,15 @@ impl SourceSpec {
             source: Box::new(source),
         }
     }
+
+    /// The system-audio track (`system.flac`).
+    pub fn system(source: Box<dyn CaptureSource>) -> Self {
+        Self {
+            id: "system".into(),
+            role: "system".into(),
+            source,
+        }
+    }
 }
 
 /// How a session behaves. [`SessionConfig::new`] gives the defaults of the
