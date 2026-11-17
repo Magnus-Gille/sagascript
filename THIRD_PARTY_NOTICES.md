@@ -232,6 +232,9 @@ attribution as well. No matching CoreML encoder is supplied for the fine-tune.
 | itertools | 0.13.0 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-itertools/itertools) |
 | itoa | 1.0.17 | MIT OR Apache-2.0 | [upstream](https://github.com/dtolnay/itoa) |
 | itoa | 1.0.18 | MIT OR Apache-2.0 | [upstream](https://github.com/dtolnay/itoa) |
+| jiff | 0.2.46 | Unlicense OR MIT | [upstream](https://github.com/BurntSushi/jiff) |
+| jiff-core | 0.1.8 | Unlicense OR MIT | [upstream](https://github.com/BurntSushi/jiff) |
+| jiff-static | 0.2.46 | Unlicense OR MIT | [upstream](https://github.com/BurntSushi/jiff) |
 | jobserver | 0.1.34 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-lang/jobserver-rs) |
 | json-patch | 3.0.1 | MIT/Apache-2.0 | [upstream](https://github.com/idubrov/json-patch) |
 | jsonptr | 0.6.3 | MIT OR Apache-2.0 | [upstream](https://github.com/chanced/jsonptr) |
@@ -1824,7 +1827,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 ### 154c1af2b38e
 
-Components: Rust aho-corasick@1.1.4, Rust byteorder-lite@0.1.0, Rust byteorder@1.5.0, Rust memchr@2.8.0, Rust memchr@2.8.3, Rust walkdir@2.5.0
+Components: Rust aho-corasick@1.1.4, Rust byteorder-lite@0.1.0, Rust byteorder@1.5.0, Rust jiff-core@0.1.8, Rust jiff-static@0.2.46, Rust jiff@0.2.46, Rust memchr@2.8.0, Rust memchr@2.8.3, Rust walkdir@2.5.0
 
 Source filenames: LICENSE-MIT
 
@@ -8216,7 +8219,7 @@ DEALINGS IN THE SOFTWARE.
 
 ### 65314a6c9668
 
-Components: Rust aho-corasick@1.1.4, Rust byteorder@1.5.0, Rust memchr@2.8.0, Rust memchr@2.8.3, Rust same-file@1.0.6, Rust walkdir@2.5.0
+Components: Rust aho-corasick@1.1.4, Rust byteorder@1.5.0, Rust jiff-core@0.1.8, Rust jiff-static@0.2.46, Rust jiff@0.2.46, Rust memchr@2.8.0, Rust memchr@2.8.3, Rust same-file@1.0.6, Rust walkdir@2.5.0
 
 Source filenames: COPYING
 

@@ -3,7 +3,6 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
-use chrono::Utc;
 use sagascript_core::sync::lock_or_recover;
 use serde::Serialize;
 use tracing::warn;
@@ -57,7 +56,7 @@ pub fn log_global(
         return;
     };
     let entry = LogEntry {
-        ts: Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        ts: sagascript_core::timestamp::utc_now_millis(),
         level,
         app_session: app_session.clone(),
         dictation_session: GLOBAL_DICTATION.lock().ok().and_then(|g| g.clone()),
@@ -215,7 +214,7 @@ impl LoggingService {
             return;
         }
         let entry = LogEntry {
-            ts: Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            ts: sagascript_core::timestamp::utc_now_millis(),
             level,
             app_session: self.app_session_id.clone(),
             dictation_session: lock_or_recover(&self.dictation_session_id, DICTATION_SESSION_LOCK)

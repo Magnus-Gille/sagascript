@@ -668,7 +668,7 @@ fn client() -> Client {
 
 /// RFC 3339 with the local offset and milliseconds.
 fn started_at_now() -> String {
-    chrono::Local::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, false)
+    sagascript_core::timestamp::local_now_millis()
 }
 
 /// Open the source and start the session. Blocking (the session waits for the
