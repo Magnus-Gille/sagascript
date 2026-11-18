@@ -1268,3 +1268,19 @@ async fn a_recording_that_still_says_recording_is_not_decoded() {
         "recording_recovery_needed"
     );
 }
+
+#[test]
+fn a_status_never_reports_less_elapsed_time_than_the_one_before_it() {
+    let mut earlier = RecordingSessionInfo::idle();
+    earlier.elapsed_ms = 960;
+    let mut later = RecordingSessionInfo::idle();
+    later.elapsed_ms = 933;
+
+    assert_eq!(
+        never_backwards(later.clone(), Some(&earlier)).elapsed_ms,
+        960
+    );
+    assert_eq!(never_backwards(later.clone(), None).elapsed_ms, 933);
+    earlier.elapsed_ms = 100;
+    assert_eq!(never_backwards(later, Some(&earlier)).elapsed_ms, 933);
+}

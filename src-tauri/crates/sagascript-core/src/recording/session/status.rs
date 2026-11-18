@@ -193,6 +193,9 @@ pub(crate) struct StatusShared {
     started_ns: AtomicU64,
     /// Session clock when the session ended; `u64::MAX` while it runs.
     ended_ns: AtomicU64,
+    /// When a stop was asked for: elapsed time stops counting here, so the
+    /// clock does not run on while the manifest is written.
+    stopping_ns: AtomicU64,
     pub bytes_written: AtomicU64,
     /// `u64::MAX` when unknown.
     pub free_bytes: AtomicU64,
@@ -211,6 +214,7 @@ impl StatusShared {
             state: AtomicU8::new(SessionState::Idle as u8),
             started_ns: AtomicU64::new(u64::MAX),
             ended_ns: AtomicU64::new(u64::MAX),
+            stopping_ns: AtomicU64::new(u64::MAX),
             bytes_written: AtomicU64::new(0),
             free_bytes: AtomicU64::new(u64::MAX),
             low_disk: AtomicBool::new(false),
@@ -244,6 +248,15 @@ impl StatusShared {
                 .compare_exchange(u64::MAX, now_ns, Ordering::AcqRel, Ordering::Acquire);
     }
 
+    pub(crate) fn mark_stopping(&self, now_ns: u64) {
+        let _ = self.stopping_ns.compare_exchange(
+            u64::MAX,
+            now_ns,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
+    }
+
     pub(crate) fn mark_ended(&self, now_ns: u64) {
         let _ =
             self.ended_ns
@@ -257,7 +270,15 @@ impl StatusShared {
         let elapsed = if started == u64::MAX {
             Duration::ZERO
         } else {
-            let end = if ended == u64::MAX { now_ns } else { ended };
+            // Counting stops when the stop is asked for, then the end is the
+            // finish; elapsed never runs backwards between the two.
+            let stopping = self.stopping_ns.load(Ordering::Acquire);
+            let end = match (ended != u64::MAX, stopping != u64::MAX) {
+                (true, true) => ended.max(stopping),
+                (true, false) => ended,
+                (false, true) => stopping,
+                (false, false) => now_ns,
+            };
             Duration::from_nanos(end.saturating_sub(started))
         };
         let mut warnings: Vec<SessionWarning> = self
@@ -283,5 +304,50 @@ impl StatusShared {
             error_code: *lock_or_recover(&self.error_code, TERMINAL_LOCK),
             ended_early: lock_or_recover(&self.ended_early, TERMINAL_LOCK).clone(),
         }
+    }
+}
+
+#[cfg(test)]
+mod elapsed_tests {
+    use super::*;
+
+    const MS: u64 = 1_000_000;
+
+    /// A slow manifest write must not make the elapsed time run on and then
+    /// fall back to the end time (a status stream that goes backwards).
+    #[test]
+    fn elapsed_stops_when_the_stop_is_asked_for_and_never_runs_backwards() {
+        let status = StatusShared::new();
+        status.mark_started(1_000 * MS);
+        assert_eq!(
+            status.snapshot(1_500 * MS).elapsed,
+            Duration::from_millis(500)
+        );
+
+        status.mark_stopping(1_900 * MS);
+        // The manifest takes seconds to write: the clock moves, elapsed does not.
+        assert_eq!(
+            status.snapshot(7_000 * MS).elapsed,
+            Duration::from_millis(900)
+        );
+
+        // The end lands a little after the stop request, never before it.
+        status.mark_ended(1_922 * MS);
+        assert_eq!(
+            status.snapshot(9_000 * MS).elapsed,
+            Duration::from_millis(922)
+        );
+    }
+
+    #[test]
+    fn an_end_before_the_stop_request_does_not_pull_elapsed_back() {
+        let status = StatusShared::new();
+        status.mark_started(0);
+        status.mark_stopping(900 * MS);
+        status.mark_ended(880 * MS);
+        assert_eq!(
+            status.snapshot(5_000 * MS).elapsed,
+            Duration::from_millis(900)
+        );
     }
 }
