@@ -258,6 +258,14 @@ impl StatusShared {
     }
 
     pub(crate) fn mark_ended(&self, now_ns: u64) {
+        // The end is never before the stop request that led to it, so elapsed
+        // time cannot step back when the manifest is done.
+        let stopping = self.stopping_ns.load(Ordering::Acquire);
+        let now_ns = if stopping == u64::MAX {
+            now_ns
+        } else {
+            now_ns.max(stopping)
+        };
         let _ =
             self.ended_ns
                 .compare_exchange(u64::MAX, now_ns, Ordering::AcqRel, Ordering::Acquire);
@@ -273,11 +281,12 @@ impl StatusShared {
             // Counting stops when the stop is asked for, then the end is the
             // finish; elapsed never runs backwards between the two.
             let stopping = self.stopping_ns.load(Ordering::Acquire);
-            let end = match (ended != u64::MAX, stopping != u64::MAX) {
-                (true, true) => ended.max(stopping),
-                (true, false) => ended,
-                (false, true) => stopping,
-                (false, false) => now_ns,
+            let end = if ended != u64::MAX {
+                ended
+            } else if stopping != u64::MAX {
+                stopping
+            } else {
+                now_ns
             };
             Duration::from_nanos(end.saturating_sub(started))
         };
@@ -340,7 +349,7 @@ mod elapsed_tests {
     }
 
     #[test]
-    fn an_end_before_the_stop_request_does_not_pull_elapsed_back() {
+    fn an_end_stamped_before_the_stop_request_is_lifted_to_it() {
         let status = StatusShared::new();
         status.mark_started(0);
         status.mark_stopping(900 * MS);
@@ -348,6 +357,20 @@ mod elapsed_tests {
         assert_eq!(
             status.snapshot(5_000 * MS).elapsed,
             Duration::from_millis(900)
+        );
+    }
+
+    /// A session that ended by itself keeps its length however late the stop
+    /// comes (the window's stop button on a recording that already died).
+    #[test]
+    fn a_session_that_ended_by_itself_is_not_lengthened_by_a_late_stop() {
+        let status = StatusShared::new();
+        status.mark_started(0);
+        status.mark_ended(600 * MS);
+        status.mark_stopping(3_600 * MS);
+        assert_eq!(
+            status.snapshot(9_000 * MS).elapsed,
+            Duration::from_millis(600)
         );
     }
 }
