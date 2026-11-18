@@ -498,7 +498,7 @@ attribution as well. No matching CoreML encoder is supplied for the fine-tune.
 | transpose | 0.2.3 | MIT OR Apache-2.0 | [upstream](https://github.com/ejmahler/transpose) |
 | tray-icon | 0.21.3 | MIT OR Apache-2.0 | [upstream](https://github.com/tauri-apps/tray-icon) |
 | try-lock | 0.2.5 | MIT | [upstream](https://github.com/seanmonstar/try-lock) |
-| typed-path | 0.12.3 | MIT OR Apache-2.0 | [upstream](https://github.com/chipsenkbeil/typed-path) |
+| typed-path | 0.13.0 | MIT OR Apache-2.0 | [upstream](https://github.com/chipsenkbeil/typed-path) |
 | typeid | 1.0.3 | MIT OR Apache-2.0 | [upstream](https://github.com/dtolnay/typeid) |
 | typenum | 1.20.1 | MIT OR Apache-2.0 | [upstream](https://github.com/paholg/typenum) |
 | unic-char-property | 0.9.0 | MIT/Apache-2.0 | [upstream](https://github.com/open-i18n/rust-unic/) |
@@ -548,7 +548,7 @@ attribution as well. No matching CoreML encoder is supplied for the fine-tune.
 | zerotrie | 0.2.3 | Unicode-3.0 | [upstream](https://github.com/unicode-org/icu4x) |
 | zerovec | 0.11.5 | Unicode-3.0 | [upstream](https://github.com/unicode-org/icu4x) |
 | zerovec-derive | 0.11.2 | Unicode-3.0 | [upstream](https://github.com/unicode-org/icu4x) |
-| zip | 9.0.4 | MIT | [upstream](https://github.com/zip-rs/zip2) |
+| zip | 9.4.1 | MIT | [upstream](https://github.com/zip-rs/zip2) |
 | zlib-rs | 0.6.2 | Zlib | [upstream](https://github.com/trifectatechfoundation/zlib-rs) |
 | zmij | 1.0.21 | MIT | [upstream](https://github.com/dtolnay/zmij) |
 | zmij | 1.0.23 | MIT | [upstream](https://github.com/dtolnay/zmij) |
@@ -4028,7 +4028,7 @@ SOFTWARE.
 
 ### 30fefc3a7d6a
 
-Components: Rust adler2@2.0.1, Rust anyhow@1.0.104, Rust atomic-waker@1.1.2, Rust camino@1.2.2, Rust cargo-platform@0.1.9, Rust cargo_metadata@0.19.2, Rust ctrlc@3.5.2, Rust displaydoc@0.2.5, Rust dtoa@1.0.11, Rust dyn-clone@1.0.20, Rust erased-serde@0.4.9, Rust fastrand@2.3.0, Rust itoa@1.0.17, Rust itoa@1.0.18, Rust kuchikiki@0.8.8-speedreader, Rust minimal-lexical@0.2.1, Rust once_cell@1.21.3, Rust once_cell@1.21.4, Rust pin-project-lite@0.2.16, Rust pin-project-lite@0.2.17, Rust portable-atomic@1.13.1, Rust prettyplease@0.2.37, Rust proc-macro2@1.0.106, Rust proc-macro2@1.0.107, Rust quote@1.0.44, Rust quote@1.0.47, Rust ref-cast-impl@1.0.25, Rust ref-cast@1.0.25, Rust rustc-hash@2.1.1, Rust rustix@1.1.5, Rust rustversion@1.0.22, Rust semver@1.0.28, Rust seq-macro@0.3.6, Rust serde-untagged@0.1.9, Rust serde@1.0.229, Rust serde_core@1.0.229, Rust serde_derive@1.0.229, Rust serde_derive_internals@0.29.1, Rust serde_json@1.0.154, Rust serde_repr@0.1.20, Rust servo_arc@0.2.0, Rust syn@1.0.109, Rust syn@2.0.116, Rust syn@3.0.4, Rust syn@3.0.9, Rust thiserror-impl@1.0.69, Rust thiserror-impl@2.0.21, Rust thiserror@1.0.69, Rust thiserror@2.0.21, Rust typed-path@0.12.3, Rust typeid@1.0.3, Rust unicode-ident@1.0.24, Rust unicode-ident@1.0.26, Rust utf-8@0.7.6, Rust utf8-zero@0.8.1, Rust zmij@1.0.21, Rust zmij@1.0.23
+Components: Rust adler2@2.0.1, Rust anyhow@1.0.104, Rust atomic-waker@1.1.2, Rust camino@1.2.2, Rust cargo-platform@0.1.9, Rust cargo_metadata@0.19.2, Rust ctrlc@3.5.2, Rust displaydoc@0.2.5, Rust dtoa@1.0.11, Rust dyn-clone@1.0.20, Rust erased-serde@0.4.9, Rust fastrand@2.3.0, Rust itoa@1.0.17, Rust itoa@1.0.18, Rust kuchikiki@0.8.8-speedreader, Rust minimal-lexical@0.2.1, Rust once_cell@1.21.3, Rust once_cell@1.21.4, Rust pin-project-lite@0.2.16, Rust pin-project-lite@0.2.17, Rust portable-atomic@1.13.1, Rust prettyplease@0.2.37, Rust proc-macro2@1.0.106, Rust proc-macro2@1.0.107, Rust quote@1.0.44, Rust quote@1.0.47, Rust ref-cast-impl@1.0.25, Rust ref-cast@1.0.25, Rust rustc-hash@2.1.1, Rust rustix@1.1.5, Rust rustversion@1.0.22, Rust semver@1.0.28, Rust seq-macro@0.3.6, Rust serde-untagged@0.1.9, Rust serde@1.0.229, Rust serde_core@1.0.229, Rust serde_derive@1.0.229, Rust serde_derive_internals@0.29.1, Rust serde_json@1.0.154, Rust serde_repr@0.1.20, Rust servo_arc@0.2.0, Rust syn@1.0.109, Rust syn@2.0.116, Rust syn@3.0.4, Rust syn@3.0.9, Rust thiserror-impl@1.0.69, Rust thiserror-impl@2.0.21, Rust thiserror@1.0.69, Rust thiserror@2.0.21, Rust typed-path@0.13.0, Rust typeid@1.0.3, Rust unicode-ident@1.0.24, Rust unicode-ident@1.0.26, Rust utf-8@0.7.6, Rust utf8-zero@0.8.1, Rust zmij@1.0.21, Rust zmij@1.0.23
 
 Source filenames: LICENSE, LICENSE-MIT
 
@@ -8605,7 +8605,7 @@ THE SOFTWARE.
 
 ### 6ac8711fb340
 
-Components: Rust zip@9.0.4
+Components: Rust zip@9.4.1
 
 Source filenames: LICENSE
 
@@ -11703,7 +11703,7 @@ SOFTWARE.
 
 ### 85ad950cce87
 
-Components: Rust anyhow@1.0.104, Rust dtoa@1.0.11, Rust dyn-clone@1.0.20, Rust erased-serde@0.4.9, Rust itoa@1.0.17, Rust itoa@1.0.18, Rust libc@0.2.191, Rust mach2@0.4.3, Rust osakit@0.3.1, Rust prettyplease@0.2.37, Rust proc-macro2@1.0.106, Rust proc-macro2@1.0.107, Rust quote@1.0.44, Rust quote@1.0.47, Rust ref-cast-impl@1.0.25, Rust ref-cast@1.0.25, Rust rustc-hash@2.1.1, Rust rustversion@1.0.22, Rust semver@1.0.28, Rust seq-macro@0.3.6, Rust serde-untagged@0.1.9, Rust serde@1.0.229, Rust serde_core@1.0.229, Rust serde_derive@1.0.229, Rust serde_derive_internals@0.29.1, Rust serde_json@1.0.154, Rust serde_repr@0.1.20, Rust syn@2.0.116, Rust syn@3.0.4, Rust syn@3.0.9, Rust thiserror-impl@1.0.69, Rust thiserror-impl@2.0.21, Rust thiserror@1.0.69, Rust thiserror@2.0.21, Rust typed-path@0.12.3, Rust typeid@1.0.3, Rust unicode-ident@1.0.24, Rust unicode-ident@1.0.26, Rust utf-8@0.7.6, Rust utf8-zero@0.8.1, Rust utf8parse@0.2.2
+Components: Rust anyhow@1.0.104, Rust dtoa@1.0.11, Rust dyn-clone@1.0.20, Rust erased-serde@0.4.9, Rust itoa@1.0.17, Rust itoa@1.0.18, Rust libc@0.2.191, Rust mach2@0.4.3, Rust osakit@0.3.1, Rust prettyplease@0.2.37, Rust proc-macro2@1.0.106, Rust proc-macro2@1.0.107, Rust quote@1.0.44, Rust quote@1.0.47, Rust ref-cast-impl@1.0.25, Rust ref-cast@1.0.25, Rust rustc-hash@2.1.1, Rust rustversion@1.0.22, Rust semver@1.0.28, Rust seq-macro@0.3.6, Rust serde-untagged@0.1.9, Rust serde@1.0.229, Rust serde_core@1.0.229, Rust serde_derive@1.0.229, Rust serde_derive_internals@0.29.1, Rust serde_json@1.0.154, Rust serde_repr@0.1.20, Rust syn@2.0.116, Rust syn@3.0.4, Rust syn@3.0.9, Rust thiserror-impl@1.0.69, Rust thiserror-impl@2.0.21, Rust thiserror@1.0.69, Rust thiserror@2.0.21, Rust typed-path@0.13.0, Rust typeid@1.0.3, Rust unicode-ident@1.0.24, Rust unicode-ident@1.0.26, Rust utf-8@0.7.6, Rust utf8-zero@0.8.1, Rust utf8parse@0.2.2
 
 Source filenames: LICENSE-APACHE
 
