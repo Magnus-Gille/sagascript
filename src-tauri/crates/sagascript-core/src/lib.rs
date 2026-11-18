@@ -21,6 +21,7 @@ pub mod settings;
 pub mod sync;
 #[doc(hidden)]
 pub mod testing;
+pub mod timestamp;
 pub mod transcription;
 
 /// Test fixtures made of core types (#363); see the module documentation.

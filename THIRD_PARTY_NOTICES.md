@@ -232,6 +232,9 @@ attribution as well. No matching CoreML encoder is supplied for the fine-tune.
 | itertools | 0.13.0 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-itertools/itertools) |
 | itoa | 1.0.17 | MIT OR Apache-2.0 | [upstream](https://github.com/dtolnay/itoa) |
 | itoa | 1.0.18 | MIT OR Apache-2.0 | [upstream](https://github.com/dtolnay/itoa) |
+| jiff | 0.2.46 | Unlicense OR MIT | [upstream](https://github.com/BurntSushi/jiff) |
+| jiff-core | 0.1.8 | Unlicense OR MIT | [upstream](https://github.com/BurntSushi/jiff) |
+| jiff-static | 0.2.46 | Unlicense OR MIT | [upstream](https://github.com/BurntSushi/jiff) |
 | jobserver | 0.1.34 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-lang/jobserver-rs) |
 | json-patch | 3.0.1 | MIT/Apache-2.0 | [upstream](https://github.com/idubrov/json-patch) |
 | jsonptr | 0.6.3 | MIT OR Apache-2.0 | [upstream](https://github.com/chanced/jsonptr) |
@@ -495,7 +498,7 @@ attribution as well. No matching CoreML encoder is supplied for the fine-tune.
 | transpose | 0.2.3 | MIT OR Apache-2.0 | [upstream](https://github.com/ejmahler/transpose) |
 | tray-icon | 0.21.3 | MIT OR Apache-2.0 | [upstream](https://github.com/tauri-apps/tray-icon) |
 | try-lock | 0.2.5 | MIT | [upstream](https://github.com/seanmonstar/try-lock) |
-| typed-path | 0.12.3 | MIT OR Apache-2.0 | [upstream](https://github.com/chipsenkbeil/typed-path) |
+| typed-path | 0.13.0 | MIT OR Apache-2.0 | [upstream](https://github.com/chipsenkbeil/typed-path) |
 | typeid | 1.0.3 | MIT OR Apache-2.0 | [upstream](https://github.com/dtolnay/typeid) |
 | typenum | 1.20.1 | MIT OR Apache-2.0 | [upstream](https://github.com/paholg/typenum) |
 | unic-char-property | 0.9.0 | MIT/Apache-2.0 | [upstream](https://github.com/open-i18n/rust-unic/) |
@@ -545,7 +548,7 @@ attribution as well. No matching CoreML encoder is supplied for the fine-tune.
 | zerotrie | 0.2.3 | Unicode-3.0 | [upstream](https://github.com/unicode-org/icu4x) |
 | zerovec | 0.11.5 | Unicode-3.0 | [upstream](https://github.com/unicode-org/icu4x) |
 | zerovec-derive | 0.11.2 | Unicode-3.0 | [upstream](https://github.com/unicode-org/icu4x) |
-| zip | 9.0.4 | MIT | [upstream](https://github.com/zip-rs/zip2) |
+| zip | 9.4.1 | MIT | [upstream](https://github.com/zip-rs/zip2) |
 | zlib-rs | 0.6.2 | Zlib | [upstream](https://github.com/trifectatechfoundation/zlib-rs) |
 | zmij | 1.0.21 | MIT | [upstream](https://github.com/dtolnay/zmij) |
 | zmij | 1.0.23 | MIT | [upstream](https://github.com/dtolnay/zmij) |
@@ -595,7 +598,7 @@ attribution as well. No matching CoreML encoder is supplied for the fine-tune.
 | @esbuild/win32-x64 | 0.25.12 | MIT | [upstream](https://www.npmjs.com/package/@esbuild/win32-x64/v/0.25.12) |
 | @eslint-community/eslint-utils | 4.10.1 | MIT | [upstream](https://www.npmjs.com/package/@eslint-community/eslint-utils/v/4.10.1) |
 | @eslint-community/regexpp | 4.12.2 | MIT | [upstream](https://www.npmjs.com/package/@eslint-community/regexpp/v/4.12.2) |
-| @eslint/config-array | 0.23.5 | Apache-2.0 | [upstream](https://www.npmjs.com/package/@eslint/config-array/v/0.23.5) |
+| @eslint/config-array | 0.23.6 | Apache-2.0 | [upstream](https://www.npmjs.com/package/@eslint/config-array/v/0.23.6) |
 | @eslint/config-helpers | 0.7.0 | Apache-2.0 | [upstream](https://www.npmjs.com/package/@eslint/config-helpers/v/0.7.0) |
 | @eslint/core | 1.2.1 | Apache-2.0 | [upstream](https://www.npmjs.com/package/@eslint/core/v/1.2.1) |
 | @eslint/js | 10.0.1 | MIT | [upstream](https://www.npmjs.com/package/@eslint/js/v/10.0.1) |
@@ -606,6 +609,7 @@ attribution as well. No matching CoreML encoder is supplied for the fine-tune.
 | @humanfs/types | 0.15.0 | Apache-2.0 | [upstream](https://www.npmjs.com/package/@humanfs/types/v/0.15.0) |
 | @humanwhocodes/module-importer | 1.0.1 | Apache-2.0 | [upstream](https://www.npmjs.com/package/@humanwhocodes/module-importer/v/1.0.1) |
 | @humanwhocodes/retry | 0.4.3 | Apache-2.0 | [upstream](https://www.npmjs.com/package/@humanwhocodes/retry/v/0.4.3) |
+| @isaacs/nonrecursive-glob-match | 1.1.0 | BlueOak-1.0.0 | [upstream](https://www.npmjs.com/package/@isaacs/nonrecursive-glob-match/v/1.1.0) |
 | @jridgewell/gen-mapping | 0.3.13 | MIT | [upstream](https://www.npmjs.com/package/@jridgewell/gen-mapping/v/0.3.13) |
 | @jridgewell/remapping | 2.3.5 | MIT | [upstream](https://www.npmjs.com/package/@jridgewell/remapping/v/2.3.5) |
 | @jridgewell/resolve-uri | 3.1.2 | MIT | [upstream](https://www.npmjs.com/package/@jridgewell/resolve-uri/v/3.1.2) |
@@ -672,16 +676,16 @@ attribution as well. No matching CoreML encoder is supplied for the fine-tune.
 | @types/trusted-types | 2.0.7 | MIT | [upstream](https://www.npmjs.com/package/@types/trusted-types/v/2.0.7) |
 | @types/whatwg-mimetype | 3.0.2 | MIT | [upstream](https://www.npmjs.com/package/@types/whatwg-mimetype/v/3.0.2) |
 | @types/ws | 8.18.1 | MIT | [upstream](https://www.npmjs.com/package/@types/ws/v/8.18.1) |
-| @typescript-eslint/eslint-plugin | 8.71.0 | MIT | [upstream](https://www.npmjs.com/package/@typescript-eslint/eslint-plugin/v/8.71.0) |
-| @typescript-eslint/parser | 8.71.0 | MIT | [upstream](https://www.npmjs.com/package/@typescript-eslint/parser/v/8.71.0) |
-| @typescript-eslint/project-service | 8.71.0 | MIT | [upstream](https://www.npmjs.com/package/@typescript-eslint/project-service/v/8.71.0) |
-| @typescript-eslint/scope-manager | 8.71.0 | MIT | [upstream](https://www.npmjs.com/package/@typescript-eslint/scope-manager/v/8.71.0) |
-| @typescript-eslint/tsconfig-utils | 8.71.0 | MIT | [upstream](https://www.npmjs.com/package/@typescript-eslint/tsconfig-utils/v/8.71.0) |
-| @typescript-eslint/type-utils | 8.71.0 | MIT | [upstream](https://www.npmjs.com/package/@typescript-eslint/type-utils/v/8.71.0) |
-| @typescript-eslint/types | 8.71.0 | MIT | [upstream](https://www.npmjs.com/package/@typescript-eslint/types/v/8.71.0) |
-| @typescript-eslint/typescript-estree | 8.71.0 | MIT | [upstream](https://www.npmjs.com/package/@typescript-eslint/typescript-estree/v/8.71.0) |
-| @typescript-eslint/utils | 8.71.0 | MIT | [upstream](https://www.npmjs.com/package/@typescript-eslint/utils/v/8.71.0) |
-| @typescript-eslint/visitor-keys | 8.71.0 | MIT | [upstream](https://www.npmjs.com/package/@typescript-eslint/visitor-keys/v/8.71.0) |
+| @typescript-eslint/eslint-plugin | 8.73.0 | MIT | [upstream](https://www.npmjs.com/package/@typescript-eslint/eslint-plugin/v/8.73.0) |
+| @typescript-eslint/parser | 8.73.0 | MIT | [upstream](https://www.npmjs.com/package/@typescript-eslint/parser/v/8.73.0) |
+| @typescript-eslint/project-service | 8.73.0 | MIT | [upstream](https://www.npmjs.com/package/@typescript-eslint/project-service/v/8.73.0) |
+| @typescript-eslint/scope-manager | 8.73.0 | MIT | [upstream](https://www.npmjs.com/package/@typescript-eslint/scope-manager/v/8.73.0) |
+| @typescript-eslint/tsconfig-utils | 8.73.0 | MIT | [upstream](https://www.npmjs.com/package/@typescript-eslint/tsconfig-utils/v/8.73.0) |
+| @typescript-eslint/type-utils | 8.73.0 | MIT | [upstream](https://www.npmjs.com/package/@typescript-eslint/type-utils/v/8.73.0) |
+| @typescript-eslint/types | 8.73.0 | MIT | [upstream](https://www.npmjs.com/package/@typescript-eslint/types/v/8.73.0) |
+| @typescript-eslint/typescript-estree | 8.73.0 | MIT | [upstream](https://www.npmjs.com/package/@typescript-eslint/typescript-estree/v/8.73.0) |
+| @typescript-eslint/utils | 8.73.0 | MIT | [upstream](https://www.npmjs.com/package/@typescript-eslint/utils/v/8.73.0) |
+| @typescript-eslint/visitor-keys | 8.73.0 | MIT | [upstream](https://www.npmjs.com/package/@typescript-eslint/visitor-keys/v/8.73.0) |
 | @vitest/coverage-v8 | 5.0.5 | MIT | [upstream](https://www.npmjs.com/package/@vitest/coverage-v8/v/5.0.5) |
 | @vitest/istanbul-lib-coverage | 1.0.2 | MIT | [upstream](https://www.npmjs.com/package/@vitest/istanbul-lib-coverage/v/1.0.2) |
 | @vitest/istanbul-lib-report | 1.0.2 | MIT | [upstream](https://www.npmjs.com/package/@vitest/istanbul-lib-report/v/1.0.2) |
@@ -698,7 +702,7 @@ attribution as well. No matching CoreML encoder is supplied for the fine-tune.
 | ast-v8-to-istanbul | 1.0.7 | MIT | [upstream](https://www.npmjs.com/package/ast-v8-to-istanbul/v/1.0.7) |
 | axobject-query | 4.1.0 | Apache-2.0 | [upstream](https://www.npmjs.com/package/axobject-query/v/4.1.0) |
 | balanced-match | 4.0.4 | MIT | [upstream](https://www.npmjs.com/package/balanced-match/v/4.0.4) |
-| brace-expansion | 5.0.12 | MIT | [upstream](https://www.npmjs.com/package/brace-expansion/v/5.0.12) |
+| brace-expansion | 5.0.13 | MIT | [upstream](https://www.npmjs.com/package/brace-expansion/v/5.0.13) |
 | buffer-image-size | 0.6.4 | MIT | [upstream](https://www.npmjs.com/package/buffer-image-size/v/0.6.4) |
 | cacheable | 2.5.0 | MIT | [upstream](https://www.npmjs.com/package/cacheable/v/2.5.0) |
 | chai | 6.3.0 | MIT | [upstream](https://www.npmjs.com/package/chai/v/6.3.0) |
@@ -718,7 +722,7 @@ attribution as well. No matching CoreML encoder is supplied for the fine-tune.
 | es-module-lexer | 2.3.2 | MIT | [upstream](https://www.npmjs.com/package/es-module-lexer/v/2.3.2) |
 | esbuild | 0.25.12 | MIT | [upstream](https://www.npmjs.com/package/esbuild/v/0.25.12) |
 | escape-string-regexp | 4.0.0 | MIT | [upstream](https://www.npmjs.com/package/escape-string-regexp/v/4.0.0) |
-| eslint | 10.11.0 | MIT | [upstream](https://www.npmjs.com/package/eslint/v/10.11.0) |
+| eslint | 10.15.0 | MIT | [upstream](https://www.npmjs.com/package/eslint/v/10.15.0) |
 | eslint-plugin-svelte | 3.23.0 | MIT | [upstream](https://www.npmjs.com/package/eslint-plugin-svelte/v/3.23.0) |
 | eslint-scope | 8.4.0 | BSD-2-Clause | [upstream](https://www.npmjs.com/package/eslint-scope/v/8.4.0) |
 | eslint-scope | 9.1.2 | BSD-2-Clause | [upstream](https://www.npmjs.com/package/eslint-scope/v/9.1.2) |
@@ -752,7 +756,7 @@ attribution as well. No matching CoreML encoder is supplied for the fine-tune.
 | hookified | 1.15.1 | MIT | [upstream](https://www.npmjs.com/package/hookified/v/1.15.1) |
 | hookified | 2.2.0 | MIT | [upstream](https://www.npmjs.com/package/hookified/v/2.2.0) |
 | ignore | 5.3.2 | MIT | [upstream](https://www.npmjs.com/package/ignore/v/5.3.2) |
-| ignore | 7.0.10 | MIT | [upstream](https://www.npmjs.com/package/ignore/v/7.0.10) |
+| ignore | 7.0.16 | MIT | [upstream](https://www.npmjs.com/package/ignore/v/7.0.16) |
 | imurmurhash | 0.1.4 | MIT | [upstream](https://www.npmjs.com/package/imurmurhash/v/0.1.4) |
 | indent-string | 4.0.0 | MIT | [upstream](https://www.npmjs.com/package/indent-string/v/4.0.0) |
 | is-extglob | 2.1.1 | MIT | [upstream](https://www.npmjs.com/package/is-extglob/v/2.1.1) |
@@ -776,7 +780,7 @@ attribution as well. No matching CoreML encoder is supplied for the fine-tune.
 | magic-string | 1.4.3 | MIT | [upstream](https://www.npmjs.com/package/magic-string/v/1.4.3) |
 | magicast | 0.5.5 | MIT | [upstream](https://www.npmjs.com/package/magicast/v/0.5.5) |
 | min-indent | 1.0.1 | MIT | [upstream](https://www.npmjs.com/package/min-indent/v/1.0.1) |
-| minimatch | 10.2.6 | BlueOak-1.0.0 | [upstream](https://www.npmjs.com/package/minimatch/v/10.2.6) |
+| minimatch | 11.0.9 | BlueOak-1.0.0 | [upstream](https://www.npmjs.com/package/minimatch/v/11.0.9) |
 | mri | 1.2.0 | MIT | [upstream](https://www.npmjs.com/package/mri/v/1.2.0) |
 | ms | 2.1.3 | MIT | [upstream](https://www.npmjs.com/package/ms/v/2.1.3) |
 | nanoid | 3.3.18 | MIT | [upstream](https://www.npmjs.com/package/nanoid/v/3.3.18) |
@@ -824,11 +828,11 @@ attribution as well. No matching CoreML encoder is supplied for the fine-tune.
 | tslib | 2.8.1 | 0BSD | [upstream](https://www.npmjs.com/package/tslib/v/2.8.1) |
 | type-check | 0.4.0 | MIT | [upstream](https://www.npmjs.com/package/type-check/v/0.4.0) |
 | typescript | 5.9.3 | Apache-2.0 | [upstream](https://www.npmjs.com/package/typescript/v/5.9.3) |
-| typescript-eslint | 8.71.0 | MIT | [upstream](https://www.npmjs.com/package/typescript-eslint/v/8.71.0) |
+| typescript-eslint | 8.73.0 | MIT | [upstream](https://www.npmjs.com/package/typescript-eslint/v/8.73.0) |
 | undici-types | 8.9.0 | MIT | [upstream](https://www.npmjs.com/package/undici-types/v/8.9.0) |
 | uri-js | 4.4.1 | BSD-2-Clause | [upstream](https://www.npmjs.com/package/uri-js/v/4.4.1) |
 | util-deprecate | 1.0.2 | MIT | [upstream](https://www.npmjs.com/package/util-deprecate/v/1.0.2) |
-| vite | 6.4.4 | MIT | [upstream](https://www.npmjs.com/package/vite/v/6.4.4) |
+| vite | 6.4.6 | MIT | [upstream](https://www.npmjs.com/package/vite/v/6.4.6) |
 | vitefu | 1.1.1 | MIT | [upstream](https://www.npmjs.com/package/vitefu/v/1.1.1) |
 | vitest | 5.0.5 | MIT | [upstream](https://www.npmjs.com/package/vitest/v/5.0.5) |
 | whatwg-mimetype | 3.0.0 | MIT | [upstream](https://www.npmjs.com/package/whatwg-mimetype/v/3.0.0) |
@@ -1234,7 +1238,7 @@ CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 ### 088a9d7852d7
 
-Components: npm @typescript-eslint/type-utils@8.71.0
+Components: npm @typescript-eslint/type-utils@8.73.0
 
 Source filenames: LICENSE
 
@@ -1824,7 +1828,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 ### 154c1af2b38e
 
-Components: Rust aho-corasick@1.1.4, Rust byteorder-lite@0.1.0, Rust byteorder@1.5.0, Rust memchr@2.8.0, Rust memchr@2.8.3, Rust walkdir@2.5.0
+Components: Rust aho-corasick@1.1.4, Rust byteorder-lite@0.1.0, Rust byteorder@1.5.0, Rust jiff-core@0.1.8, Rust jiff-static@0.2.46, Rust jiff@0.2.46, Rust memchr@2.8.0, Rust memchr@2.8.3, Rust walkdir@2.5.0
 
 Source filenames: LICENSE-MIT
 
@@ -2244,6 +2248,70 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+~~~~
+
+### 1a9975c75cfc
+
+Components: npm @isaacs/nonrecursive-glob-match@1.1.0
+
+Source filenames: LICENSE.md
+
+~~~~text
+# Blue Oak Model License
+
+Version 1.0.0
+
+## Purpose
+
+This license gives everyone as much permission to work with
+this software as possible, while protecting contributors
+from liability.
+
+## Acceptance
+
+In order to receive this license, you must agree to its
+rules.  The rules of this license are both obligations
+under that agreement and conditions to your license.
+You must not do anything with this software that triggers
+a rule that you cannot or will not follow.
+
+## Copyright
+
+Each contributor licenses you to do everything with this
+software that would otherwise infringe that contributor's
+copyright in it.
+
+## Notices
+
+You must ensure that everyone who gets a copy of
+any part of this software from you, with or without
+changes, also gets the text of this license or a link to
+<https://blueoakcouncil.org/license/1.0.0>.
+
+## Excuse
+
+If anyone notifies you in writing that you have not
+complied with [Notices](#notices), you can keep your
+license by taking all practical steps to comply within 30
+days after the notice.  If you do not do so, your license
+ends immediately.
+
+## Patent
+
+Each contributor licenses you to do everything with this
+software that would otherwise infringe any patent claims
+they can license or become able to license.
+
+## Reliability
+
+No contributor can revoke this license.
+
+## No Liability
+
+***As far as the law allows, this software comes as is,
+without any warranty or condition, and no contributor
+will be liable to anyone for any damages related to this
+software or this license, under any kind of legal claim.***
 ~~~~
 
 ### 1b0258c48739
@@ -3259,7 +3327,7 @@ SOFTWARE.
 
 ### 283ea6cc2997
 
-Components: Rust clang-sys@1.8.1, Rust cpal@0.15.3, Rust embed_plist@1.2.2, Rust encoding_rs@0.8.35, Rust flacenc@0.5.1, Rust iri-string@0.7.10, Rust lzma-rust2@0.15.7, Rust ort-sys@2.0.0-rc.12, Rust ort-sys@2.0.0-rc.13, Rust ort@2.0.0-rc.12, Rust ort@2.0.0-rc.13, Rust rustls-platform-verifier@0.6.2, Rust serialize-to-javascript-impl@0.1.2, Rust serialize-to-javascript@0.1.2, Rust ureq@3.3.0, Rust utf8_iter@1.0.4, Rust zeroize@1.8.2, npm @eslint/config-array@0.23.5, npm @eslint/config-helpers@0.7.0, npm @eslint/core@1.2.1, npm @eslint/object-schema@3.0.5, npm @eslint/plugin-kit@0.7.3, npm @humanfs/core@0.19.2, npm @humanfs/node@0.16.8, npm @humanwhocodes/module-importer@1.0.1, npm @humanwhocodes/retry@0.4.3
+Components: Rust clang-sys@1.8.1, Rust cpal@0.15.3, Rust embed_plist@1.2.2, Rust encoding_rs@0.8.35, Rust flacenc@0.5.1, Rust iri-string@0.7.10, Rust lzma-rust2@0.15.7, Rust ort-sys@2.0.0-rc.12, Rust ort-sys@2.0.0-rc.13, Rust ort@2.0.0-rc.12, Rust ort@2.0.0-rc.13, Rust rustls-platform-verifier@0.6.2, Rust serialize-to-javascript-impl@0.1.2, Rust serialize-to-javascript@0.1.2, Rust ureq@3.3.0, Rust utf8_iter@1.0.4, Rust zeroize@1.8.2, npm @eslint/config-array@0.23.6, npm @eslint/config-helpers@0.7.0, npm @eslint/core@1.2.1, npm @eslint/object-schema@3.0.5, npm @eslint/plugin-kit@0.7.3, npm @humanfs/core@0.19.2, npm @humanfs/node@0.16.8, npm @humanwhocodes/module-importer@1.0.1, npm @humanwhocodes/retry@0.4.3
 
 Source filenames: LICENSE, LICENSE-APACHE, LICENSE-APACHE.txt, LICENSE.txt
 
@@ -4025,7 +4093,7 @@ SOFTWARE.
 
 ### 30fefc3a7d6a
 
-Components: Rust adler2@2.0.1, Rust anyhow@1.0.104, Rust atomic-waker@1.1.2, Rust camino@1.2.2, Rust cargo-platform@0.1.9, Rust cargo_metadata@0.19.2, Rust ctrlc@3.5.2, Rust displaydoc@0.2.5, Rust dtoa@1.0.11, Rust dyn-clone@1.0.20, Rust erased-serde@0.4.9, Rust fastrand@2.3.0, Rust itoa@1.0.17, Rust itoa@1.0.18, Rust kuchikiki@0.8.8-speedreader, Rust minimal-lexical@0.2.1, Rust once_cell@1.21.3, Rust once_cell@1.21.4, Rust pin-project-lite@0.2.16, Rust pin-project-lite@0.2.17, Rust portable-atomic@1.13.1, Rust prettyplease@0.2.37, Rust proc-macro2@1.0.106, Rust proc-macro2@1.0.107, Rust quote@1.0.44, Rust quote@1.0.47, Rust ref-cast-impl@1.0.25, Rust ref-cast@1.0.25, Rust rustc-hash@2.1.1, Rust rustix@1.1.5, Rust rustversion@1.0.22, Rust semver@1.0.28, Rust seq-macro@0.3.6, Rust serde-untagged@0.1.9, Rust serde@1.0.229, Rust serde_core@1.0.229, Rust serde_derive@1.0.229, Rust serde_derive_internals@0.29.1, Rust serde_json@1.0.154, Rust serde_repr@0.1.20, Rust servo_arc@0.2.0, Rust syn@1.0.109, Rust syn@2.0.116, Rust syn@3.0.4, Rust syn@3.0.9, Rust thiserror-impl@1.0.69, Rust thiserror-impl@2.0.21, Rust thiserror@1.0.69, Rust thiserror@2.0.21, Rust typed-path@0.12.3, Rust typeid@1.0.3, Rust unicode-ident@1.0.24, Rust unicode-ident@1.0.26, Rust utf-8@0.7.6, Rust utf8-zero@0.8.1, Rust zmij@1.0.21, Rust zmij@1.0.23
+Components: Rust adler2@2.0.1, Rust anyhow@1.0.104, Rust atomic-waker@1.1.2, Rust camino@1.2.2, Rust cargo-platform@0.1.9, Rust cargo_metadata@0.19.2, Rust ctrlc@3.5.2, Rust displaydoc@0.2.5, Rust dtoa@1.0.11, Rust dyn-clone@1.0.20, Rust erased-serde@0.4.9, Rust fastrand@2.3.0, Rust itoa@1.0.17, Rust itoa@1.0.18, Rust kuchikiki@0.8.8-speedreader, Rust minimal-lexical@0.2.1, Rust once_cell@1.21.3, Rust once_cell@1.21.4, Rust pin-project-lite@0.2.16, Rust pin-project-lite@0.2.17, Rust portable-atomic@1.13.1, Rust prettyplease@0.2.37, Rust proc-macro2@1.0.106, Rust proc-macro2@1.0.107, Rust quote@1.0.44, Rust quote@1.0.47, Rust ref-cast-impl@1.0.25, Rust ref-cast@1.0.25, Rust rustc-hash@2.1.1, Rust rustix@1.1.5, Rust rustversion@1.0.22, Rust semver@1.0.28, Rust seq-macro@0.3.6, Rust serde-untagged@0.1.9, Rust serde@1.0.229, Rust serde_core@1.0.229, Rust serde_derive@1.0.229, Rust serde_derive_internals@0.29.1, Rust serde_json@1.0.154, Rust serde_repr@0.1.20, Rust servo_arc@0.2.0, Rust syn@1.0.109, Rust syn@2.0.116, Rust syn@3.0.4, Rust syn@3.0.9, Rust thiserror-impl@1.0.69, Rust thiserror-impl@2.0.21, Rust thiserror@1.0.69, Rust thiserror@2.0.21, Rust typed-path@0.13.0, Rust typeid@1.0.3, Rust unicode-ident@1.0.24, Rust unicode-ident@1.0.26, Rust utf-8@0.7.6, Rust utf8-zero@0.8.1, Rust zmij@1.0.21, Rust zmij@1.0.23
 
 Source filenames: LICENSE, LICENSE-MIT
 
@@ -5349,7 +5417,7 @@ SOFTWARE.
 
 ### 46cde592c339
 
-Components: npm @eslint/js@10.0.1, npm eslint@10.11.0
+Components: npm @eslint/js@10.0.1, npm eslint@10.15.0
 
 Source filenames: LICENSE
 
@@ -6946,7 +7014,7 @@ DEALINGS IN THE SOFTWARE.
 
 ### 51e9b6529a45
 
-Components: npm @typescript-eslint/project-service@8.71.0, npm @typescript-eslint/tsconfig-utils@8.71.0
+Components: npm @typescript-eslint/project-service@8.73.0, npm @typescript-eslint/tsconfig-utils@8.73.0
 
 Source filenames: LICENSE
 
@@ -8216,7 +8284,7 @@ DEALINGS IN THE SOFTWARE.
 
 ### 65314a6c9668
 
-Components: Rust aho-corasick@1.1.4, Rust byteorder@1.5.0, Rust memchr@2.8.0, Rust memchr@2.8.3, Rust same-file@1.0.6, Rust walkdir@2.5.0
+Components: Rust aho-corasick@1.1.4, Rust byteorder@1.5.0, Rust jiff-core@0.1.8, Rust jiff-static@0.2.46, Rust jiff@0.2.46, Rust memchr@2.8.0, Rust memchr@2.8.3, Rust same-file@1.0.6, Rust walkdir@2.5.0
 
 Source filenames: COPYING
 
@@ -8602,7 +8670,7 @@ THE SOFTWARE.
 
 ### 6ac8711fb340
 
-Components: Rust zip@9.0.4
+Components: Rust zip@9.4.1
 
 Source filenames: LICENSE
 
@@ -11700,7 +11768,7 @@ SOFTWARE.
 
 ### 85ad950cce87
 
-Components: Rust anyhow@1.0.104, Rust dtoa@1.0.11, Rust dyn-clone@1.0.20, Rust erased-serde@0.4.9, Rust itoa@1.0.17, Rust itoa@1.0.18, Rust libc@0.2.191, Rust mach2@0.4.3, Rust osakit@0.3.1, Rust prettyplease@0.2.37, Rust proc-macro2@1.0.106, Rust proc-macro2@1.0.107, Rust quote@1.0.44, Rust quote@1.0.47, Rust ref-cast-impl@1.0.25, Rust ref-cast@1.0.25, Rust rustc-hash@2.1.1, Rust rustversion@1.0.22, Rust semver@1.0.28, Rust seq-macro@0.3.6, Rust serde-untagged@0.1.9, Rust serde@1.0.229, Rust serde_core@1.0.229, Rust serde_derive@1.0.229, Rust serde_derive_internals@0.29.1, Rust serde_json@1.0.154, Rust serde_repr@0.1.20, Rust syn@2.0.116, Rust syn@3.0.4, Rust syn@3.0.9, Rust thiserror-impl@1.0.69, Rust thiserror-impl@2.0.21, Rust thiserror@1.0.69, Rust thiserror@2.0.21, Rust typed-path@0.12.3, Rust typeid@1.0.3, Rust unicode-ident@1.0.24, Rust unicode-ident@1.0.26, Rust utf-8@0.7.6, Rust utf8-zero@0.8.1, Rust utf8parse@0.2.2
+Components: Rust anyhow@1.0.104, Rust dtoa@1.0.11, Rust dyn-clone@1.0.20, Rust erased-serde@0.4.9, Rust itoa@1.0.17, Rust itoa@1.0.18, Rust libc@0.2.191, Rust mach2@0.4.3, Rust osakit@0.3.1, Rust prettyplease@0.2.37, Rust proc-macro2@1.0.106, Rust proc-macro2@1.0.107, Rust quote@1.0.44, Rust quote@1.0.47, Rust ref-cast-impl@1.0.25, Rust ref-cast@1.0.25, Rust rustc-hash@2.1.1, Rust rustversion@1.0.22, Rust semver@1.0.28, Rust seq-macro@0.3.6, Rust serde-untagged@0.1.9, Rust serde@1.0.229, Rust serde_core@1.0.229, Rust serde_derive@1.0.229, Rust serde_derive_internals@0.29.1, Rust serde_json@1.0.154, Rust serde_repr@0.1.20, Rust syn@2.0.116, Rust syn@3.0.4, Rust syn@3.0.9, Rust thiserror-impl@1.0.69, Rust thiserror-impl@2.0.21, Rust thiserror@1.0.69, Rust thiserror@2.0.21, Rust typed-path@0.13.0, Rust typeid@1.0.3, Rust unicode-ident@1.0.24, Rust unicode-ident@1.0.26, Rust utf-8@0.7.6, Rust utf8-zero@0.8.1, Rust utf8parse@0.2.2
 
 Source filenames: LICENSE-APACHE
 
@@ -12594,7 +12662,7 @@ SOFTWARE.
 
 ### 8a292beae225
 
-Components: npm vite@6.4.4
+Components: npm vite@6.4.6
 
 Source filenames: LICENSE.md
 
@@ -16299,7 +16367,7 @@ DEALINGS IN THE SOFTWARE.
 
 ### 9c94db23dc4b
 
-Components: npm ignore@5.3.2, npm ignore@7.0.10
+Components: npm ignore@5.3.2, npm ignore@7.0.16
 
 Source filenames: LICENSE-MIT
 
@@ -17803,7 +17871,7 @@ SOFTWARE.
 
 ### aa4c6585f201
 
-Components: npm minimatch@10.2.6
+Components: npm minimatch@11.0.9
 
 Source filenames: LICENSE.md
 
@@ -18451,7 +18519,7 @@ THE SOFTWARE.
 
 ### b263be8715c2
 
-Components: npm @typescript-eslint/eslint-plugin@8.71.0, npm @typescript-eslint/parser@8.71.0, npm @typescript-eslint/scope-manager@8.71.0, npm @typescript-eslint/types@8.71.0, npm @typescript-eslint/typescript-estree@8.71.0, npm @typescript-eslint/utils@8.71.0, npm @typescript-eslint/visitor-keys@8.71.0, npm typescript-eslint@8.71.0
+Components: npm @typescript-eslint/eslint-plugin@8.73.0, npm @typescript-eslint/parser@8.73.0, npm @typescript-eslint/scope-manager@8.73.0, npm @typescript-eslint/types@8.73.0, npm @typescript-eslint/typescript-estree@8.73.0, npm @typescript-eslint/utils@8.73.0, npm @typescript-eslint/visitor-keys@8.73.0, npm typescript-eslint@8.73.0
 
 Source filenames: LICENSE
 
@@ -25581,7 +25649,7 @@ SOFTWARE.
 
 ### f36e2da26df2
 
-Components: npm brace-expansion@5.0.12
+Components: npm brace-expansion@5.0.13
 
 Source filenames: LICENSE
 

@@ -133,7 +133,7 @@ fn main() {
 
     let git_hash = metadata_value("SAGASCRIPT_GIT_HASH", local_git_hash);
     let build_date = metadata_value("SAGASCRIPT_BUILD_DATE", || {
-        chrono::Utc::now().format("%Y-%m-%d").to_string()
+        jiff::Timestamp::now().strftime("%Y-%m-%d").to_string()
     });
 
     println!("cargo:rustc-env=GIT_HASH={git_hash}");
