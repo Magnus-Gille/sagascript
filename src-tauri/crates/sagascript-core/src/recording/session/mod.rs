@@ -525,6 +525,7 @@ impl RecordingSession {
                 None
             } else {
                 inner.shutdown_started = true;
+                self.status.mark_stopping(self.config.clock.now_ns());
                 self.status
                     .transition(SessionState::Recording, SessionState::Finalizing);
                 Some(inner.thread.take())
