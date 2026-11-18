@@ -224,7 +224,7 @@ pub fn decode_tracks(folder: &Path) -> Result<TrackDecoder, RecordingError> {
         }
     }
     let leads = leading_silences(&manifest);
-    let alignments = alignments(&manifest, folder)?;
+    let alignments = alignments(&manifest, folder);
     Ok(TrackDecoder {
         manifest,
         folder: folder.to_path_buf(),
@@ -279,10 +279,10 @@ impl TrackDecoder {
     }
 
     fn open_audio(&self, cursor: &Cursor) -> Result<Audio, RecordingError> {
-        let rate = self
-            .alignments
-            .get(self.index)
-            .map_or_else(|| f64::from(cursor.track.sample_rate), |a| a.effective_rate);
+        let rate = self.alignments.get(self.index).map_or_else(
+            || f64::from(cursor.track.sample_rate),
+            |a| a.resample_rate(cursor.track.sample_rate),
+        );
         Ok(Audio {
             source: NativeTrackReader::open(&cursor.path)?,
             resampler: StreamingResampler::with_effective_rate(cursor.track.sample_rate, rate),

@@ -20,7 +20,6 @@
 use std::path::Path;
 
 use super::decode::start_offsets_ns;
-use super::error::RecordingError;
 use super::journal::{journal_file_name, read_journal};
 use super::manifest::{Manifest, Track};
 
@@ -31,6 +30,14 @@ pub const MIN_SPAN_NS: u64 = 30_000_000_000;
 /// The largest drift believed. Crystals are good to 100 ppm; ten times that
 /// means the anchors, not the clock, are broken.
 pub const MAX_DRIFT_PPM: f64 = 1_000.0;
+
+/// The largest residual a fit may have and still be applied: beyond it the
+/// anchors are not one straight line (a device change, a cluster of stalls)
+/// and a single slope would be wrong for part of the track.
+pub const MAX_RESIDUAL_MS: f64 = 25.0;
+
+/// Below this the correction moves a sample by less than it costs: left alone.
+pub const MIN_DRIFT_PPM: f64 = 2.0;
 
 /// How one track sits on the recording's host-clock timeline.
 #[derive(Debug, Clone, PartialEq)]
@@ -47,6 +54,22 @@ pub struct TrackAlignment {
     /// milliseconds; zero when not measured.
     pub residual_ms: f64,
     pub measured: bool,
+    /// Whether the decoder resamples at `effective_rate`: only when the fit is
+    /// trusted, large enough to matter, and the track shares its clock domain
+    /// with another (alone, there is nothing to align to, and the audio stays
+    /// bit-identical to the plain resample).
+    pub applies: bool,
+}
+
+impl TrackAlignment {
+    /// The rate the decoder resamples from.
+    pub fn resample_rate(&self, nominal_rate: u32) -> f64 {
+        if self.applies {
+            self.effective_rate
+        } else {
+            f64::from(nominal_rate)
+        }
+    }
 }
 
 /// The result of fitting a track's anchors.
@@ -105,6 +128,7 @@ pub fn align_track(track: &Track, anchors: &[(u64, u64)], offset_ns: u64) -> Tra
             drift_ppm: (fit.effective_rate - nominal) / nominal * 1e6,
             residual_ms: fit.residual_ms,
             measured: true,
+            applies: false,
         },
         None => TrackAlignment {
             track_id: track.id.clone(),
@@ -113,29 +137,47 @@ pub fn align_track(track: &Track, anchors: &[(u64, u64)], offset_ns: u64) -> Tra
             drift_ppm: 0.0,
             residual_ms: 0.0,
             measured: false,
+            applies: false,
         },
     }
+}
+
+/// Whether a measured alignment is applied, given how many tracks (itself
+/// included) share its clock domain.
+fn is_applied(alignment: &TrackAlignment, tracks_in_domain: usize) -> bool {
+    alignment.measured
+        && tracks_in_domain >= 2
+        && alignment.drift_ppm.abs() >= MIN_DRIFT_PPM
+        && alignment.residual_ms <= MAX_RESIDUAL_MS
 }
 
 /// The alignment of every track of the finished recording in `folder`, in
 /// manifest order. The anchors are the manifest's start anchor and the ones
 /// the track's journal kept.
-pub fn alignments(
-    manifest: &Manifest,
-    folder: &Path,
-) -> Result<Vec<TrackAlignment>, RecordingError> {
+pub fn alignments(manifest: &Manifest, folder: &Path) -> Vec<TrackAlignment> {
     let offsets = start_offsets_ns(manifest);
     let mut all = Vec::with_capacity(manifest.tracks.len());
     for (track, offset) in manifest.tracks.iter().zip(offsets) {
-        let journal = read_journal(&folder.join(journal_file_name(&track.id)))?;
-        let anchors = if journal.anchors.len() >= track.clock.anchors.len() {
-            journal.anchors
+        // The journal only refines the manifest's anchors: if it cannot be
+        // read, the recording still decodes, on what the manifest has.
+        let kept = read_journal(&folder.join(journal_file_name(&track.id)))
+            .map(|journal| journal.anchors)
+            .unwrap_or_default();
+        let anchors = if kept.len() >= track.clock.anchors.len() {
+            kept
         } else {
             track.clock.anchors.clone()
         };
-        all.push(align_track(track, &anchors, offset));
+        let mut alignment = align_track(track, &anchors, offset);
+        let companions = manifest
+            .tracks
+            .iter()
+            .filter(|other| other.clock.domain == track.clock.domain)
+            .count();
+        alignment.applies = is_applied(&alignment, companions);
+        all.push(alignment);
     }
-    Ok(all)
+    all
 }
 
 #[cfg(test)]
@@ -191,5 +233,39 @@ mod tests {
         let fit = measure(&points, 48_000).expect("measured");
         assert!(fit.residual_ms > 5.0 && fit.residual_ms < 11.0, "{fit:?}");
         assert!((fit.effective_rate - 48_000.0).abs() < 5.0);
+    }
+
+    fn measured(drift_ppm: f64, residual_ms: f64) -> TrackAlignment {
+        TrackAlignment {
+            track_id: "mic".into(),
+            offset_ns: 0,
+            effective_rate: 48_000.0 * (1.0 + drift_ppm / 1e6),
+            drift_ppm,
+            residual_ms,
+            measured: true,
+            applies: false,
+        }
+    }
+
+    #[test]
+    fn a_drift_is_applied_only_when_it_matters_and_can_be_trusted() {
+        assert!(is_applied(&measured(50.0, 1.0), 2));
+        // Alone in its domain: nothing to align to, the audio stays as it was.
+        assert!(!is_applied(&measured(50.0, 1.0), 1));
+        // Too small to move a sample.
+        assert!(!is_applied(&measured(0.5, 1.0), 2));
+        // Anchors that are not one line.
+        assert!(!is_applied(&measured(50.0, 80.0), 2));
+        let mut unmeasured = measured(50.0, 1.0);
+        unmeasured.measured = false;
+        assert!(!is_applied(&unmeasured, 2));
+    }
+
+    #[test]
+    fn an_alignment_that_does_not_apply_resamples_at_the_nominal_rate() {
+        let mut alignment = measured(50.0, 1.0);
+        assert_eq!(alignment.resample_rate(48_000), 48_000.0);
+        alignment.applies = true;
+        assert!((alignment.resample_rate(48_000) - 48_002.4).abs() < 1e-6);
     }
 }
