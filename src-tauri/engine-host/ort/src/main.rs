@@ -1,6 +1,7 @@
 //! `sagascript-engine-host-ort`: Pianissimo on ONNX Runtime (CPU), engine-host protocol v1.
 //! stdout carries protocol lines only; diagnostics go to stderr.
 
+mod backend;
 mod boost;
 // build.rs's dirty-tree rule, compiled here only so its tests run.
 #[cfg(test)]
@@ -9,6 +10,7 @@ mod build_identity;
 mod ort_engine;
 mod pcm;
 mod power_qos;
+mod qnn_cache;
 mod server;
 mod tdt;
 mod vocab;
