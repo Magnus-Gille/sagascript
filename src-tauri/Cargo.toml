@@ -40,7 +40,7 @@ build = "build.rs"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
-chrono = "0.4"
+jiff = "0.2"
 
 [dependencies]
 sagascript-core = { path = "crates/sagascript-core", features = ["record"] }
@@ -54,7 +54,6 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
 uuid = { version = "1", features = ["v4"] }
-chrono = { version = "0.4", features = ["serde"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
 arboard = "3"

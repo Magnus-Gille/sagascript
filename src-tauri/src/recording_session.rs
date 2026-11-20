@@ -668,7 +668,7 @@ fn client() -> Client {
 
 /// RFC 3339 with the local offset and milliseconds.
 fn started_at_now() -> String {
-    chrono::Local::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, false)
+    sagascript_core::timestamp::local_now_millis()
 }
 
 /// Open the source and start the session. Blocking (the session waits for the
@@ -945,6 +945,18 @@ pub async fn start_reserved(
     Ok(info)
 }
 
+/// A status never reports less elapsed time than the one before it: a tick that
+/// raced the stop must not make the clock in the window jump back.
+fn never_backwards(
+    mut info: RecordingSessionInfo,
+    previous: Option<&RecordingSessionInfo>,
+) -> RecordingSessionInfo {
+    if let Some(previous) = previous {
+        info.elapsed_ms = info.elapsed_ms.max(previous.elapsed_ms);
+    }
+    info
+}
+
 /// The thread that sends the status: when it changes, every `interval`, and
 /// once more when the session is over (done or failed) or its entry is dropped.
 /// It reads the status snapshot, which never waits for the writer, and takes no
@@ -963,7 +975,7 @@ fn spawn_event_thread(
             loop {
                 let status = session.status();
                 let over = status.state.is_terminal();
-                let info = session_info(&status, &meta);
+                let info = never_backwards(session_info(&status, &meta), sent.as_ref());
                 if sent.as_ref() != Some(&info) {
                     emit(info.clone());
                     sent = Some(info);
@@ -975,7 +987,8 @@ fn spawn_event_thread(
                     Ok(()) | Err(RecvTimeoutError::Timeout) => {}
                     Err(RecvTimeoutError::Disconnected) => {
                         // The entry is gone (stopped): one last look, then done.
-                        let info = session_info(&session.status(), &meta);
+                        let info =
+                            never_backwards(session_info(&session.status(), &meta), sent.as_ref());
                         if sent.as_ref() != Some(&info) {
                             emit(info);
                         }

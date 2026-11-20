@@ -235,6 +235,7 @@ gets a directory of its own.
 | `run_context` | Which profile, language and dictionary a file, recording or reprocessing run uses (#346), shared by the CLI commands and the app. |
 | `sync` | Poison-tolerant locking ([ADR 0005](adr/0005-mutex-poison-policy.md)), used by `audio`, `download`, `transcription`, the CLI and the app. |
 | `test_support` | Fixtures made of core types for the tests of the crates above core, compiled only under `cfg(test)` or the `test-support` feature (#363). |
+| `timestamp` | Wall-clock timestamps as RFC 3339 text (UTC with `Z`, local with offset, UTC date), the one place that uses `jiff` instead of `chrono` (RUSTSEC-2026-0543); used by the CLI recorder, the app's logging, update recovery and recording start. |
 | `testing` | The test seams: the few functions that let a test reach what production code must not (the startup load of an explicit settings file, the engine-host test hook, one idle-supervision pass). `#[doc(hidden)]` and always compiled, because core's own integration tests build the library without the `test-support` feature; nothing else in core names it (tested). |
 
 **No edge goes up.** `settings/` names neither `machine` nor `transcription` (tested). It

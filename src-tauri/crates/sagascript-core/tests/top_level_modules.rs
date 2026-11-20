@@ -31,7 +31,7 @@ const ROOT_AND_ERROR: [&str; 2] = ["lib", "error"];
 
 /// Cross-cutting modules that belong to no one subsystem. Each has a row in the
 /// table in `docs/ARCHITECTURE.md` section 1.1 saying why.
-const CROSS_CUTTING: [&str; 10] = [
+const CROSS_CUTTING: [&str; 11] = [
     "download",
     "fsutil",
     "glossary",
@@ -42,6 +42,7 @@ const CROSS_CUTTING: [&str; 10] = [
     "sync",
     "test_support",
     "testing",
+    "timestamp",
 ];
 
 /// Old paths `lib.rs` re-exports for one release; see the module documentation.
