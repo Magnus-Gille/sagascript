@@ -32,6 +32,7 @@ use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 
+use super::align::{alignments, TrackAlignment};
 use super::error::RecordingError;
 use super::manifest::{Manifest, RecordingState, Track};
 use super::store::load_manifest;
@@ -202,6 +203,8 @@ pub struct TrackDecoder {
     folder: PathBuf,
     /// Per track: leading silence in 16 kHz samples.
     leads: Vec<u64>,
+    /// Per track: how its clock sits on the host timeline (SAGA-303).
+    alignments: Vec<TrackAlignment>,
     index: usize,
     current: Option<Cursor>,
     failed: bool,
@@ -221,10 +224,12 @@ pub fn decode_tracks(folder: &Path) -> Result<TrackDecoder, RecordingError> {
         }
     }
     let leads = leading_silences(&manifest);
+    let alignments = alignments(&manifest, folder);
     Ok(TrackDecoder {
         manifest,
         folder: folder.to_path_buf(),
         leads,
+        alignments,
         index: 0,
         current: None,
         failed: false,
@@ -268,10 +273,19 @@ impl TrackDecoder {
         &self.manifest
     }
 
+    /// How the tracks sit on the host clock, in manifest order.
+    pub fn alignments(&self) -> &[TrackAlignment] {
+        &self.alignments
+    }
+
     fn open_audio(&self, cursor: &Cursor) -> Result<Audio, RecordingError> {
+        let rate = self.alignments.get(self.index).map_or_else(
+            || f64::from(cursor.track.sample_rate),
+            |a| a.resample_rate(cursor.track.sample_rate),
+        );
         Ok(Audio {
             source: NativeTrackReader::open(&cursor.path)?,
-            resampler: StreamingResampler::new(cursor.track.sample_rate),
+            resampler: StreamingResampler::with_effective_rate(cursor.track.sample_rate, rate),
             interleaved: Vec::new(),
             mono: Vec::new(),
             eof: false,

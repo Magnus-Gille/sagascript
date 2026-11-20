@@ -189,6 +189,9 @@ pub(crate) fn sinc_params() -> SincInterpolationParameters {
 /// 1 kHz.
 pub struct StreamingResampler {
     source_rate: u32,
+    /// The measured rate when it differs from the nominal one (clock drift,
+    /// SAGA-303): the ratio is built from it.
+    effective_rate: Option<f64>,
     /// Created at the first full chunk; `None` while fewer than
     /// [`STREAM_CHUNK`] samples were seen (and always for 16 kHz input).
     resampler: Option<SincFixedIn<f32>>,
@@ -202,21 +205,38 @@ impl StreamingResampler {
     pub fn new(source_rate: u32) -> Self {
         Self {
             source_rate,
+            effective_rate: None,
             resampler: None,
             pending: Vec::new(),
             finished: false,
         }
     }
 
+    /// A resampler for input whose real rate is `effective_rate`, a little
+    /// off the `nominal` one. A non-finite or non-positive rate is ignored.
+    pub fn with_effective_rate(nominal: u32, effective_rate: f64) -> Self {
+        let mut resampler = Self::new(nominal);
+        if effective_rate.is_finite()
+            && effective_rate > 0.0
+            && (effective_rate - f64::from(nominal)).abs() > f64::EPSILON
+        {
+            resampler.effective_rate = Some(effective_rate);
+        }
+        resampler
+    }
+
     fn passthrough(&self) -> bool {
-        self.source_rate == TARGET_SAMPLE_RATE
+        self.source_rate == TARGET_SAMPLE_RATE && self.effective_rate.is_none()
     }
 
     fn build(&self, chunk_size: usize) -> Result<SincFixedIn<f32>, String> {
         if self.source_rate == 0 {
             return Err("source sample rate must be > 0".to_string());
         }
-        let ratio = TARGET_SAMPLE_RATE as f64 / self.source_rate as f64;
+        let rate = self
+            .effective_rate
+            .unwrap_or_else(|| f64::from(self.source_rate));
+        let ratio = f64::from(TARGET_SAMPLE_RATE) / rate;
         SincFixedIn::<f32>::new(ratio, 2.0, sinc_params(), chunk_size, 1)
             .map_err(|e| format!("Failed to create resampler: {e}"))
     }
@@ -645,6 +665,33 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn a_measured_rate_changes_the_length_of_the_output() {
+        // A device whose 48 kHz is really 48.048 kHz delivered 48 000 frames
+        // in a little less than a second: 16 kHz output is shorter by 0.1 %.
+        let input = vec![0.0_f32; 48_000];
+        let run = |mut resampler: StreamingResampler| {
+            let mut out = Vec::new();
+            resampler.push(&input, &mut out).unwrap();
+            resampler.finish(&mut out).unwrap();
+            out.len()
+        };
+        let nominal = run(StreamingResampler::new(48_000));
+        let fast = run(StreamingResampler::with_effective_rate(48_000, 48_048.0));
+        assert!((15_990..=16_010).contains(&nominal), "{nominal}");
+        assert!((15_974..=15_994).contains(&fast), "{fast}");
+        assert!(fast < nominal);
+        // The nominal rate (or nonsense) changes nothing.
+        assert_eq!(
+            run(StreamingResampler::with_effective_rate(48_000, 48_000.0)),
+            nominal
+        );
+        assert_eq!(
+            run(StreamingResampler::with_effective_rate(48_000, f64::NAN)),
+            nominal
+        );
     }
 
     #[test]
