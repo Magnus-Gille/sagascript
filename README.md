@@ -291,7 +291,10 @@ sagascript manpages --dir /usr/local/share/man/man1
 Run `sagascript --help` for the full list of commands.
 
 **Recorder mode.** `sagascript record` with `--quality lossless|compact`, `--dir DIR`,
-`--name TITLE` or `--transcribe` keeps the microphone as a recording folder (one FLAC
+`--name TITLE`, `--source mic|system|both` or `--transcribe` keeps the microphone (and, with
+`--source system|both`, the computer's own audio as a separate `system` track: macOS 14.4+ on
+Apple Silicon, or Windows; elsewhere `both` records the microphone only and `system` is refused)
+as a recording folder (one FLAC
 file per track and a `recording.json` manifest) instead of transcribing in memory;
 the flags cannot be combined with `-o` or `--clipboard`, and `record` and
 `record -o file.wav` work as before. Lossless stores what the device delivers

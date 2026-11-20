@@ -221,6 +221,70 @@ fn a_compact_recording_reports_one_json_object() {
 }
 
 #[test]
+fn source_both_writes_a_mic_track_and_a_system_track() {
+    let settings = fake_settings();
+    let dir = TempDir::new();
+    let output = run(
+        &settings,
+        &[
+            "record",
+            "--source",
+            "both",
+            "--duration",
+            "1",
+            "--dir",
+            s(&dir),
+        ],
+    );
+    ok(&output);
+    let folder = PathBuf::from(stdout(&output).trim());
+    assert!(folder.join("mic.flac").is_file());
+    assert!(folder.join("system.flac").is_file());
+    let manifest = manifest(&folder);
+    let roles: Vec<&str> = manifest["tracks"]
+        .as_array()
+        .expect("tracks")
+        .iter()
+        .map(|track| track["role"].as_str().expect("role"))
+        .collect();
+    assert_eq!(roles, ["mic", "system"]);
+    assert!(stderr(&output).contains("System audio:"));
+}
+
+#[test]
+fn source_system_alone_records_only_the_system_track() {
+    let settings = fake_settings();
+    let dir = TempDir::new();
+    let folder = record_one(&settings, &dir, &["--source", "system"]);
+    assert!(folder.join("system.flac").is_file());
+    assert!(!folder.join("mic.flac").exists());
+}
+
+#[test]
+fn a_bad_source_or_transcribing_a_system_recording_is_refused_up_front() {
+    let settings = fake_settings();
+    let dir = TempDir::new();
+    let bad = run(
+        &settings,
+        &["record", "--source", "speakers", "--dir", s(&dir)],
+    );
+    assert!(!bad.status.success());
+    let both = run(
+        &settings,
+        &[
+            "record",
+            "--source",
+            "both",
+            "--transcribe",
+            "--dir",
+            s(&dir),
+        ],
+    );
+    assert!(!both.status.success());
+    assert!(stderr(&both).contains("--transcribe"), "{}", stderr(&both));
+}
+
+#[test]
 fn the_name_is_a_title_and_a_sanitised_folder_name() {
     let settings = fake_settings();
     let dir = TempDir::new();
