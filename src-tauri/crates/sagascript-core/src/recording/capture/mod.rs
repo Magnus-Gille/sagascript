@@ -23,6 +23,7 @@
 //!
 //! The module is portable: only `mic` needs the `record` feature.
 
+pub mod availability;
 pub mod block;
 pub mod clock;
 pub mod fake;
@@ -30,12 +31,14 @@ pub mod sink;
 pub mod source;
 pub(crate) mod spsc;
 pub mod synthetic;
+pub mod system;
 #[cfg(windows)]
 mod win;
 
 #[cfg(feature = "record")]
 pub mod mic;
 
+pub use availability::{evaluate as evaluate_system_audio, SystemAudioSupport};
 pub use block::{Block, NativeFormat};
 pub use clock::{
     host_now_ns, sleep_offset_ns, system_sleep_probe, ManualClock, SessionClock, SleepDetector,
@@ -51,3 +54,4 @@ pub use source::CaptureSource;
 pub use synthetic::{
     test_source_requested, SyntheticConfig, SyntheticSource, SYNTHETIC_DEVICE_NAME, TEST_SOURCE_ENV,
 };
+pub use system::SystemSource;

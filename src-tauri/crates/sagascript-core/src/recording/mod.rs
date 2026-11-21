@@ -48,6 +48,7 @@ pub mod manifest;
 pub mod naming;
 pub mod recover;
 pub mod session;
+pub mod source_plan;
 pub mod store;
 #[cfg(test)]
 mod test_recordings;
