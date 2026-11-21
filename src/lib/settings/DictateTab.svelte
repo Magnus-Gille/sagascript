@@ -162,6 +162,8 @@
             computer yet.
             {#if downloading === profileModels.models[profile.id].id}
               Downloading now: dictation works when it finishes.
+            {:else if downloading !== null}
+              Another download is running; download this one when it finishes.
             {:else}
               Press "Download speech engine" before you dictate.
             {/if}

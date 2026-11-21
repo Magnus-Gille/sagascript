@@ -412,7 +412,7 @@ fn model_not_downloaded(model: PianissimoModel) -> DictationError {
         "engine_model_missing",
         false,
         &format!(
-            "{} is not downloaded. Download it in Settings > Dictate, or run 'sagascript download-model {}'.",
+            "{} is not downloaded. Download it in Settings, or run 'sagascript download-model {}'.",
             model.display_name(),
             model.id()
         ),
