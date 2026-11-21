@@ -26,6 +26,9 @@ pub enum SystemAudioSupport {
     UnsupportedArch,
     /// An operating system without a system-audio backend (Linux).
     UnsupportedOs,
+    /// The machine could record system audio, but this build has no capture
+    /// backend for it yet ([`BACKEND_BUILT`]).
+    NoBackend,
 }
 
 impl SystemAudioSupport {
@@ -40,7 +43,24 @@ impl SystemAudioSupport {
             Self::OsTooOld => "system audio needs macOS 14.4 or later",
             Self::UnsupportedArch => "system audio needs a Mac with Apple Silicon",
             Self::UnsupportedOs => "system audio is not available on this operating system",
+            Self::NoBackend => "system audio is not built into this version",
         }
+    }
+}
+
+/// Whether this build contains a system-audio capture backend. The macOS
+/// process tap and the Windows loopback (phase 2, part D) flip this per target;
+/// until then a machine that could record system audio is reported as
+/// [`SystemAudioSupport::NoBackend`], so `--source both` falls back to the
+/// microphone instead of failing after the microphone is open.
+pub const BACKEND_BUILT: bool = false;
+
+/// What [`probe`] reports once the build is taken into account.
+pub fn with_backend(support: SystemAudioSupport, backend_built: bool) -> SystemAudioSupport {
+    if support.is_supported() && !backend_built {
+        SystemAudioSupport::NoBackend
+    } else {
+        support
     }
 }
 
@@ -68,6 +88,10 @@ pub fn parse_macos_version(text: &str) -> Option<(u32, u32)> {
 
 /// Support on the machine this runs on.
 pub fn probe() -> SystemAudioSupport {
+    with_backend(probe_machine(), BACKEND_BUILT)
+}
+
+fn probe_machine() -> SystemAudioSupport {
     #[cfg(target_os = "macos")]
     {
         let version = std::process::Command::new("sw_vers")
@@ -122,8 +146,25 @@ mod tests {
     }
 
     #[test]
+    fn a_capable_machine_without_a_backend_is_reported_as_such() {
+        let no = with_backend(SystemAudioSupport::Supported, false);
+        assert_eq!(no, SystemAudioSupport::NoBackend);
+        assert!(!no.is_supported());
+        assert_eq!(
+            with_backend(SystemAudioSupport::Supported, true),
+            SystemAudioSupport::Supported
+        );
+        // A machine that is unsupported for its own reason keeps that reason.
+        assert_eq!(
+            with_backend(SystemAudioSupport::OsTooOld, false),
+            SystemAudioSupport::OsTooOld
+        );
+    }
+
+    #[test]
     fn every_unsupported_case_explains_itself() {
         for s in [
+            SystemAudioSupport::NoBackend,
             SystemAudioSupport::OsTooOld,
             SystemAudioSupport::UnsupportedArch,
             SystemAudioSupport::UnsupportedOs,

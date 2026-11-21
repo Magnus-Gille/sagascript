@@ -83,7 +83,13 @@ mod tests {
 
     #[test]
     fn mic_never_needs_system_audio() {
-        for s in [Supported, OsTooOld, UnsupportedArch, UnsupportedOs] {
+        for s in [
+            Supported,
+            OsTooOld,
+            UnsupportedArch,
+            UnsupportedOs,
+            NoBackend,
+        ] {
             let p = plan(RecordSource::Mic, s).unwrap();
             assert!(p.mic && !p.system && p.fallback.is_none());
         }
@@ -99,7 +105,7 @@ mod tests {
                 fallback: None
             }
         );
-        for s in [OsTooOld, UnsupportedArch, UnsupportedOs] {
+        for s in [OsTooOld, UnsupportedArch, UnsupportedOs, NoBackend] {
             let e = plan(RecordSource::System, s).unwrap_err();
             assert_eq!(e.code(), "recording_source_unavailable");
         }
