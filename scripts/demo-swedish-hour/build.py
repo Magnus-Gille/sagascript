@@ -9,6 +9,9 @@ Usage: build.py [OUT_DIR] [--minutes 60]
 """
 import argparse, array, csv, struct, hashlib, io, json, os, sys, tarfile, urllib.request, wave
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from wer import norm  # noqa: E402
+
 BASE = "https://huggingface.co/datasets/google/fleurs/resolve/main/data/sv_se/"
 RATE = 16000
 GAP = b"\x00\x00" * (RATE // 2)
@@ -91,7 +94,7 @@ def main():
         f.write("\n".join(refs) + "\n")
     sha = hashlib.sha256(open(wav, "rb").read()).hexdigest()
     man = dict(source="google/fleurs sv_se test (CC BY 4.0)", clips=len(refs),
-               seconds=round(total, 1), words=sum(len(r.split()) for r in refs), sha256=sha)
+               seconds=round(total, 1), words=sum(len(norm(r)) for r in refs), sha256=sha)
     json.dump(man, open(os.path.join(a.out, "swedish-fleurs-60min.manifest.json"), "w"), indent=2)
     print(json.dumps(man))
 

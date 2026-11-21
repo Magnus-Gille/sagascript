@@ -4,7 +4,7 @@
 Usage: run.py AUDIO REFERENCE.txt [--model pianissimo-sv] [--language sv]
 Prints JSON: seconds (wall time of the whole command), audio_seconds, wer_percent...
 """
-import argparse, json, os, subprocess, sys, time
+import argparse, json, os, subprocess, sys, time, wave
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from wer import wer
@@ -27,5 +27,11 @@ text = res.get("text") or res.get("result", {}).get("text", "")
 hyp = os.path.splitext(a.audio)[0] + ".hypothesis.txt"
 open(hyp, "w", encoding="utf-8").write(text)
 out = wer(open(a.reference, encoding="utf-8").read(), text)
-out.update(seconds=round(secs, 1), audio_seconds=res.get("duration"), model=a.model, hypothesis=hyp)
+try:
+    with wave.open(a.audio) as w:
+        audio_s = round(w.getnframes() / w.getframerate(), 1)
+except Exception:
+    audio_s = res.get("duration")
+out.update(seconds=round(secs, 1), audio_seconds=audio_s,
+           realtime_factor=round(audio_s / secs) if audio_s else None, model=a.model, hypothesis=hyp)
 print(json.dumps(out))
