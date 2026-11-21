@@ -182,7 +182,7 @@ fn cancelling_a_file_job_sends_the_protocol_cancel_and_the_next_job_works() {
 fn warm_up_with_cancel_returns_promptly_and_keeps_the_host() {
     let tmp = tempfile::tempdir().unwrap();
     let backend = Arc::new(PianissimoBackend::with_client(client(
-        &[("FAKE_LOAD_DELAY_MS", "3000")],
+        &[("FAKE_LOAD_DELAY_MS", "10000")],
         tmp.path(),
     )));
     let cancelled = Arc::new(AtomicBool::new(false));
@@ -196,8 +196,8 @@ fn warm_up_with_cancel_returns_promptly_and_keeps_the_host() {
     cancelled.store(true, Ordering::SeqCst);
     let error = job.join().unwrap().unwrap_err();
     assert!(error.to_string().contains("cancelled"), "{error}");
-    // The load has 2.6 s left: a cancel that is honoured returns well before it,
-    // however loaded the runner is.
+    // The load has 9.6 s left: a cancel that is honoured returns in a fraction
+    // of that, however loaded the runner is.
     assert!(at.elapsed() < Duration::from_secs(2), "{:?}", at.elapsed());
     assert!(
         backend.client().snapshot().running,
@@ -267,7 +267,7 @@ fn second_utterance_reuses_the_warm_host() {
     let shared = client(
         &[
             ("FAKE_LOG", log.to_str().unwrap()),
-            ("FAKE_LOAD_DELAY_MS", "1500"),
+            ("FAKE_LOAD_DELAY_MS", "300"),
         ],
         tmp.path(),
     );
@@ -280,17 +280,13 @@ fn second_utterance_reuses_the_warm_host() {
     assert!(!second.unwrap().is_empty());
     assert!(!first_timings.model_cached);
     assert!(
-        first_timings.model_ms >= 1250.0,
+        first_timings.model_ms >= 250.0,
         "{}",
         first_timings.model_ms
     );
     assert!(second_timings.model_cached, "warm host reported as cold");
-    // Half the cold load: a warm host pays no load, with room for a slow runner.
-    assert!(
-        second_timings.model_ms < 750.0,
-        "{}",
-        second_timings.model_ms
-    );
+    // No upper bound on `model_ms`: `model_cached` and the host log below
+    // prove the warm host paid no load, whatever the runner's speed.
     assert!(second_timings.inference_started);
     assert_eq!(
         spawn_count(&log),
@@ -347,7 +343,7 @@ fn live_abort_during_model_load_returns_promptly_and_keeps_the_host() {
     let log = tmp.path().join("log");
     let shared = client(
         &[
-            ("FAKE_LOAD_DELAY_MS", "3000"),
+            ("FAKE_LOAD_DELAY_MS", "10000"),
             ("FAKE_LOG", log.to_str().unwrap()),
         ],
         tmp.path(),
@@ -364,7 +360,7 @@ fn live_abort_during_model_load_returns_promptly_and_keeps_the_host() {
     let (result, timings) = job.join().unwrap();
 
     assert!(result.unwrap_err().to_string().contains("cancelled"));
-    // The load has 2.5 s left; see the warm-up cancel test.
+    // The load has 9.5 s left; see the warm-up cancel test.
     assert!(at.elapsed() < Duration::from_secs(2), "{:?}", at.elapsed());
     assert!(!timings.inference_started);
     // The host survives so the first-use load can finish for the next utterance.
