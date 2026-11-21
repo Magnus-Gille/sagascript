@@ -428,7 +428,7 @@ fn check_attempt_needs_reset(state: &mut UpdateMenuState, attempt: u64) -> Optio
 }
 
 fn end_check_attempt(app: &tauri::AppHandle, attempt: u64) {
-    let items = {
+    let (items, failure) = {
         let state: tauri::State<'_, SharedUpdateMenuState> = app.state();
         let mut state = lock_or_recover(&state, UPDATE_MENU_LOCK);
         let Some(failure) = check_attempt_needs_reset(&mut state, attempt) else {
@@ -436,7 +436,6 @@ fn end_check_attempt(app: &tauri::AppHandle, attempt: u64) {
         };
         (state.items.clone(), failure)
     };
-    let (items, failure) = items;
     let Some(items) = items else {
         return;
     };
