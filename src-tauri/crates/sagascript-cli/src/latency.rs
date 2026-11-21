@@ -765,7 +765,7 @@ fn budget_passes(
     eligible_groups > 0
 }
 
-/// Warm, successful, pasted samples from debug builds in the budget cohort. They are
+/// Warm, successful samples from debug builds in the budget cohort, whatever their paste outcome. They are
 /// left out of the budget check, because an unoptimized build is not representative.
 fn excluded_debug_samples(report: &Report, length: LengthBucket) -> usize {
     report
@@ -776,7 +776,6 @@ fn excluded_debug_samples(report: &Report, length: LengthBucket) -> usize {
                 && group.length_bucket == length
                 && group.outcome == "success"
                 && group.model_was_warm == Some(true)
-                && group.paste_outcome.as_deref() == Some("succeeded")
         })
         .map(|group| group.samples)
         .sum()

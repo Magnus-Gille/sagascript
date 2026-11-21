@@ -77,7 +77,7 @@ reports `excludedWarmSuccessSamples`: the number of selected-length samples
 with a successful warm transcription but a non-success paste outcome. These
 samples are excluded from eligibility and do not prevent a pass when all
 eligible groups satisfy the requested budget. Groups from debug builds are never
-eligible; their warm, pasted samples are counted in `excludedDebugSamples`. Legacy
+eligible; their warm, successful samples are counted in `excludedDebugSamples`. Legacy
 groups with a null profile stay eligible. Other cohorts are reported but
 are not claimed to meet that selected budget. Invalid input or arguments exit 1
 without emitting JSON; a failed explicit budget is the exception and emits its
