@@ -924,8 +924,9 @@ pub enum MemoryPressure {
 }
 
 impl MemoryPressure {
-    const DISPATCH_WARN: u64 = 0x2;
-    const DISPATCH_CRITICAL: u64 = 0x4;
+    /// `DISPATCH_MEMORYPRESSURE_WARN` / `_CRITICAL` of libdispatch.
+    pub const DISPATCH_WARN: u64 = 0x2;
+    pub const DISPATCH_CRITICAL: u64 = 0x4;
 
     /// Map `dispatch_source_get_data` flags (OR-ed together) to a level; the
     /// worst level present wins. `None` when neither flag is set.

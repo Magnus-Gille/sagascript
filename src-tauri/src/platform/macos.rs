@@ -616,9 +616,6 @@ mod memory_pressure {
     use std::ffi::c_void;
     use std::os::raw::c_ulong;
 
-    const DISPATCH_MEMORYPRESSURE_WARN: c_ulong = 0x2;
-    const DISPATCH_MEMORYPRESSURE_CRITICAL: c_ulong = 0x4;
-
     unsafe extern "C" {
         static _dispatch_source_type_memorypressure: c_void;
         fn dispatch_get_global_queue(identifier: isize, flags: usize) -> *mut c_void;
@@ -663,7 +660,7 @@ mod memory_pressure {
             let source = dispatch_source_create(
                 std::ptr::addr_of!(_dispatch_source_type_memorypressure),
                 0,
-                DISPATCH_MEMORYPRESSURE_WARN | DISPATCH_MEMORYPRESSURE_CRITICAL,
+                MemoryPressure::DISPATCH_WARN | MemoryPressure::DISPATCH_CRITICAL,
                 queue,
             );
             if source.is_null() {

@@ -118,8 +118,17 @@ pub(crate) fn warm_models_at_startup(app: &tauri::App) {
                     sagascript_core::transcription::pianissimo_backend::handle_memory_pressure(
                         level,
                     );
+                // A routine warning that changed nothing is debug-only.
+                let level = if outcome.unloaded.is_empty()
+                    && outcome.level
+                        == sagascript_core::transcription::pianissimo_backend::MemoryPressure::Warning
+                {
+                    "debug"
+                } else {
+                    "info"
+                };
                 crate::logging::log_global(
-                    "info",
+                    level,
                     "Engine",
                     crate::logging::log_events::engine::MEMORY_PRESSURE,
                     serde_json::json!({
