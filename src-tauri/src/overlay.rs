@@ -74,7 +74,6 @@ pub fn hide(app: &tauri::AppHandle) {
 #[cfg(not(target_os = "linux"))]
 fn create_overlay(app: &tauri::AppHandle, present: bool) -> Result<(), Box<dyn std::error::Error>> {
     let position = overlay_position(app);
-    let (x, y) = (position.0, position.1);
 
     let window = tauri::WebviewWindowBuilder::new(
         app,
@@ -83,7 +82,6 @@ fn create_overlay(app: &tauri::AppHandle, present: bool) -> Result<(), Box<dyn s
     )
     .title("")
     .inner_size(OVERLAY_WIDTH, 60.0)
-    .position(x, y)
     .decorations(false)
     .transparent(true)
     .always_on_top(true)
@@ -94,7 +92,7 @@ fn create_overlay(app: &tauri::AppHandle, present: bool) -> Result<(), Box<dyn s
     .skip_taskbar(true)
     .build()?;
 
-    // The builder's logical position is only exact on macOS; place precisely.
+    // Placed after the build, in the unit each platform positions exactly in.
     place(&window, position);
 
     #[cfg(target_os = "macos")]
@@ -147,6 +145,22 @@ impl ScreenArea {
             width: width / scale,
             height: height / scale,
             scale,
+        }
+    }
+}
+
+#[cfg(any(target_os = "macos", test))]
+impl ScreenArea {
+    /// From an AppKit frame `(x, y, width, height)`, whose origin is bottom-left
+    /// with y up and relative to the primary screen, to our top-left, y-down space.
+    fn from_appkit_frame(frame: (f64, f64, f64, f64), primary_height: f64, scale: f64) -> Self {
+        let (x, y, width, height) = frame;
+        Self {
+            x,
+            y: primary_height - (y + height),
+            width,
+            height,
+            scale: if scale > 0.0 { scale } else { 1.0 },
         }
     }
 }
@@ -232,15 +246,16 @@ fn main_screen_area_macos() -> Option<ScreenArea> {
         let frame: NSRect = objc::msg_send![main, frame];
         let primary_frame: NSRect = objc::msg_send![primary, frame];
         let scale: f64 = objc::msg_send![main, backingScaleFactor];
-        // AppKit's origin is bottom-left with y up; ours is top-left with y down.
-        let top = primary_frame.size.height - (frame.origin.y + frame.size.height);
-        Some(ScreenArea {
-            x: frame.origin.x,
-            y: top,
-            width: frame.size.width,
-            height: frame.size.height,
-            scale: if scale > 0.0 { scale } else { 1.0 },
-        })
+        Some(ScreenArea::from_appkit_frame(
+            (
+                frame.origin.x,
+                frame.origin.y,
+                frame.size.width,
+                frame.size.height,
+            ),
+            primary_frame.size.height,
+            scale,
+        ))
     }
 }
 
@@ -292,6 +307,12 @@ fn cursor_screen_area(app: &tauri::AppHandle) -> Option<ScreenArea> {
         .ok()
         .flatten()
         .map(|m| area_from_monitor(&m))
+}
+
+/// No focused-window lookup on other targets: the cursor screen is used.
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+fn focused_screen_area(_app: &tauri::AppHandle) -> Option<ScreenArea> {
+    None
 }
 
 /// Current target position (logical, on the screen the overlay is shown on),
@@ -902,6 +923,38 @@ mod tests {
         let default = pick_overlay_screen(None, || None, || None);
         assert_eq!(default.x, 0.0);
         assert_eq!(default.width, super::FALLBACK_SCREEN_WIDTH);
+    }
+
+    #[test]
+    fn appkit_frames_are_flipped_to_top_left_coordinates() {
+        // 900-high primary at the origin.
+        let primary = ScreenArea::from_appkit_frame((0.0, 0.0, 1440.0, 900.0), 900.0, 2.0);
+        assert_eq!(primary, area(0.0, 0.0, 1440.0, 900.0, 2.0));
+        // A 1080-high screen to the right, its bottom aligned with the primary's.
+        let right = ScreenArea::from_appkit_frame((1440.0, 0.0, 1920.0, 1080.0), 900.0, 1.0);
+        assert_eq!(right.y, -180.0);
+        // A screen stacked above the primary (AppKit y 900..1980) has a negative top.
+        let above = ScreenArea::from_appkit_frame((0.0, 900.0, 1920.0, 1080.0), 900.0, 1.0);
+        assert_eq!(above.y, -1080.0);
+    }
+
+    #[test]
+    fn fallbacks_are_not_evaluated_when_a_focused_screen_exists() {
+        let focused = area(1.0, 0.0, 1000.0, 800.0, 1.0);
+        let calls = Cell::new(0);
+        let picked = pick_overlay_screen(
+            Some(focused),
+            || {
+                calls.set(calls.get() + 1);
+                None
+            },
+            || {
+                calls.set(calls.get() + 1);
+                None
+            },
+        );
+        assert_eq!(picked, focused);
+        assert_eq!(calls.get(), 0);
     }
 
     #[test]
