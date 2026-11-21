@@ -145,11 +145,6 @@ fn cancelling_a_file_job_sends_the_protocol_cancel_and_the_next_job_works() {
         .to_string()
         .contains("cancelled"));
 
-    let lines = std::fs::read_to_string(&log).unwrap_or_default();
-    assert!(
-        lines.lines().any(|line| line.starts_with("cancel ")),
-        "the host must receive a protocol cancel, got:\n{lines}"
-    );
     // The engine is free for the next job: same backend and client, no respawn.
     assert!(
         backend.client().snapshot().running,
@@ -157,6 +152,25 @@ fn cancelling_a_file_job_sends_the_protocol_cancel_and_the_next_job_works() {
     );
     let next = backend.transcribe(&ramp(5), |_| {});
     assert!(next.is_ok(), "{next:?}");
+    // The client's cancel is fire-and-forget, so the log can only be read once
+    // the host has answered a later request: it reads requests in order, hence
+    // the cancel is logged before the next job's window is.
+    let lines = std::fs::read_to_string(&log).unwrap_or_default();
+    let cancel_at = lines
+        .lines()
+        .position(|line| line.starts_with("cancel "))
+        .unwrap_or_else(|| panic!("the host must receive a protocol cancel, got:\n{lines}"));
+    let windows: Vec<usize> = lines
+        .lines()
+        .enumerate()
+        .filter(|(_, line)| line.starts_with("transcribe_window "))
+        .map(|(at, _)| at)
+        .collect();
+    assert_eq!(windows.len(), 2, "one window per job, got:\n{lines}");
+    assert!(
+        cancel_at < windows[1],
+        "the cancel must precede the next job's window, got:\n{lines}"
+    );
     assert_eq!(
         spawn_count(&log),
         1,
