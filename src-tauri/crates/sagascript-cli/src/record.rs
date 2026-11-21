@@ -63,8 +63,9 @@ pub struct RecordArgs {
     pub quality: Option<String>,
 
     /// Recorder mode: what to record. mic is the microphone; system is what the computer plays
-    /// (macOS 14.4+ on Apple Silicon, or Windows); both records the two as separate tracks and
-    /// falls back to the microphone where system audio is not available (default: mic)
+    /// (planned for macOS 14.4+ on Apple Silicon and for Windows; not in this version yet); both
+    /// records the two as separate tracks and falls back to the microphone where system audio is
+    /// not available (default: mic)
     #[arg(
         long,
         value_name = "SOURCE",
@@ -122,13 +123,18 @@ impl<'a> From<&'a RecordArgs> for RunRequest<'a> {
 pub enum RecordMode {
     /// `record`, `record -o file.wav`, `record --clipboard`, ...
     Dictation,
-    /// `--quality`, `--dir`, `--name` or `--transcribe`: a recording folder.
+    /// `--quality`, `--dir`, `--name`, `--source` or `--transcribe`: a recording folder.
     Recorder,
 }
 
 impl RecordArgs {
     pub fn mode(&self) -> RecordMode {
-        if self.quality.is_some() || self.dir.is_some() || self.name.is_some() || self.transcribe {
+        if self.quality.is_some()
+            || self.dir.is_some()
+            || self.name.is_some()
+            || self.source.is_some()
+            || self.transcribe
+        {
             RecordMode::Recorder
         } else {
             RecordMode::Dictation
@@ -592,6 +598,8 @@ mod tests {
             &["--quality", "compact"],
             &["--dir", "takes"],
             &["--name", "Standup"],
+            &["--source", "mic"],
+            &["--source", "both"],
             &["--transcribe"],
             &["--duration", "5", "--json", "--name", "x"],
         ] {
