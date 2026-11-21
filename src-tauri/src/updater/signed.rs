@@ -244,7 +244,7 @@ async fn prepare_update_recovery(app: &tauri::AppHandle) -> Result<(), String> {
             .map_or_else(
                 || serde_json::json!({
                     "schema_version": 1,
-                    "saved_at": chrono::Utc::now().to_rfc3339(),
+                    "saved_at": sagascript_core::timestamp::utc_now_millis(),
                     "dictation": null,
                     "files": [],
                     "meetings": []
@@ -255,7 +255,7 @@ async fn prepare_update_recovery(app: &tauri::AppHandle) -> Result<(), String> {
             return Err("A different unsaved dictation already exists in update recovery. Save or discard that draft before retrying the update.".into());
         }
         payload["dictation"] = serde_json::json!({ "text": last_text });
-        payload["saved_at"] = serde_json::json!(chrono::Utc::now().to_rfc3339());
+        payload["saved_at"] = serde_json::json!(sagascript_core::timestamp::utc_now_millis());
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_err(|error| error.to_string())?
