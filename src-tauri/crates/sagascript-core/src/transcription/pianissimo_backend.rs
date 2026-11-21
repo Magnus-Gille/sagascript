@@ -916,22 +916,72 @@ fn log_warm_outcome(
     }
 }
 
-/// Free the engine's model memory when the system reports memory pressure and
-/// no transcription is running. The next utterance reloads (and shows the
-/// loading state). Never starts anything. Returns whether it unloaded, and
-/// starts the `PRESSURE_WARM_COOLDOWN` when it did.
-pub fn unload_if_idle_for_memory_pressure() -> bool {
-    // Every idle engine goes, not just the first: `|` keeps evaluating.
-    let unloaded = shared_clients()
-        .iter()
-        .fold(false, |any, (_, client)| client.unload_if_idle() | any);
-    if unloaded {
+/// How loud the system's memory-pressure signal is (macOS dispatch source).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemoryPressure {
+    Warning,
+    Critical,
+}
+
+impl MemoryPressure {
+    const DISPATCH_WARN: u64 = 0x2;
+    const DISPATCH_CRITICAL: u64 = 0x4;
+
+    /// Map `dispatch_source_get_data` flags (OR-ed together) to a level; the
+    /// worst level present wins. `None` when neither flag is set.
+    pub fn from_dispatch_flags(flags: u64) -> Option<Self> {
+        if flags & Self::DISPATCH_CRITICAL != 0 {
+            Some(Self::Critical)
+        } else if flags & Self::DISPATCH_WARN != 0 {
+            Some(Self::Warning)
+        } else {
+            None
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Warning => "warning",
+            Self::Critical => "critical",
+        }
+    }
+
+    /// Only `critical` frees the model. `warning` is routine on a busy Mac
+    /// and unloading on it cost a cold load (about 11 s) on the next
+    /// dictation for no real relief (SAGA-578).
+    pub fn unloads_idle_engine(self) -> bool {
+        self == Self::Critical
+    }
+}
+
+/// What [`handle_memory_pressure`] did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PressureOutcome {
+    pub level: MemoryPressure,
+    /// Models that were unloaded (ids); empty when nothing was.
+    pub unloaded: Vec<&'static str>,
+}
+
+/// React to a memory-pressure event: on `critical`, free the model memory of
+/// every idle engine (a transcribing one is left alone); on `warning`, do
+/// nothing. The next utterance reloads (and shows the loading state). Never
+/// starts anything. Starts the `PRESSURE_WARM_COOLDOWN` when it unloaded.
+pub fn handle_memory_pressure(level: MemoryPressure) -> PressureOutcome {
+    let mut unloaded = Vec::new();
+    if level.unloads_idle_engine() {
+        // Every idle engine goes, not just the first.
+        for (model, client) in shared_clients() {
+            if client.unload_if_idle() {
+                unloaded.push(model.id());
+            }
+        }
+    }
+    if !unloaded.is_empty() {
         *LAST_PRESSURE_UNLOAD
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(Instant::now());
-        tracing::info!("Pianissimo engine unloaded under memory pressure");
     }
-    unloaded
+    PressureOutcome { level, unloaded }
 }
 
 /// A model is only worth keeping resident while some profile dictates with it.
@@ -945,16 +995,16 @@ pub(crate) fn should_unload_when_unused(settings: &Settings, model: PianissimoMo
 
 /// Unload each resident model no profile dictates with any more, unless it is
 /// transcribing; a busy engine is left to the idle timer. Never starts
-/// anything. Returns whether it unloaded any.
-pub fn unload_if_unused(settings: &Settings) -> bool {
-    let mut unloaded = false;
+/// anything. Returns the ids of the models it unloaded.
+pub fn unload_if_unused(settings: &Settings) -> Vec<&'static str> {
+    let mut unloaded = Vec::new();
     for (model, client) in shared_clients() {
         if should_unload_when_unused(settings, model) && client.unload_if_idle() {
             tracing::info!(
                 model = model.id(),
                 "Pianissimo engine unloaded: no profile uses it any more"
             );
-            unloaded = true;
+            unloaded.push(model.id());
         }
     }
     unloaded
@@ -2291,7 +2341,30 @@ mod tests {
             );
         }
         // Nothing created yet: nothing to unload, and it never starts anything.
-        assert!(!unload_if_unused(&whisper_settings(EnginePrewarm::Off)));
+        assert!(unload_if_unused(&whisper_settings(EnginePrewarm::Off)).is_empty());
+    }
+
+    #[test]
+    fn only_critical_memory_pressure_unloads_the_engine() {
+        // Regression (SAGA-578): `warning` used to unload an idle model.
+        assert_eq!(
+            MemoryPressure::from_dispatch_flags(0x2),
+            Some(MemoryPressure::Warning)
+        );
+        assert_eq!(
+            MemoryPressure::from_dispatch_flags(0x4),
+            Some(MemoryPressure::Critical)
+        );
+        assert_eq!(
+            MemoryPressure::from_dispatch_flags(0x6),
+            Some(MemoryPressure::Critical)
+        );
+        assert_eq!(MemoryPressure::from_dispatch_flags(0x0), None);
+        assert!(!MemoryPressure::Warning.unloads_idle_engine());
+        assert!(MemoryPressure::Critical.unloads_idle_engine());
+        let outcome = handle_memory_pressure(MemoryPressure::Warning);
+        assert!(outcome.unloaded.is_empty());
+        assert_eq!(outcome.level.as_str(), "warning");
     }
 
     #[test]

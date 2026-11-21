@@ -106,9 +106,9 @@ So it stays off by default and exists for measurement (minimum 60 s).
 
 ## Memory pressure and the app
 
-The app unloads an idle Pianissimo model on a memory-pressure warning (#277), so the host's
-pressure canary (10 s after a warning, 5 s after the return to normal) mostly finds nothing loaded.
-It matters when the model stayed loaded because a dictation or file job was running at that moment.
+The app unloads an idle Pianissimo model on critical memory pressure only (#277; a warning
+unloaded it too until SAGA-578), so after a warning the host's pressure canary (10 s after a
+warning, 5 s after the return to normal) runs against the loaded model.
 Since #397, the 5 min cooldown after such an unload no longer holds back the key-down warm: the
 dictation that follows loads the model anyway, so loading at key-down moves that load in front of
 the user's speech. A wake within the cooldown still does not reload.

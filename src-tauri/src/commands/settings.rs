@@ -235,7 +235,9 @@ fn change_profile_model(
     let _recording_lease = acquire_hotkey_configuration(controller)?;
     let changed = persist_profile_model(controller, change, mirror)?;
     // Outside the controller lock: an unload talks to the engine host.
-    sagascript_core::transcription::pianissimo_backend::unload_if_unused(&changed.settings);
+    let unloaded =
+        sagascript_core::transcription::pianissimo_backend::unload_if_unused(&changed.settings);
+    crate::logging::log_engine_unloaded("unused", &unloaded);
     if let Some(model) = changed.warm {
         sagascript_core::transcription::pianissimo_backend::warm_in_background(
             "profile_change",
