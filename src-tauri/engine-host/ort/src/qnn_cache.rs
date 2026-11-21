@@ -45,7 +45,8 @@ struct Completion {
 
 impl Cache {
     /// Open the cache for an absolute caller-owned root and compatibility identity.
-    /// The returned value holds an OS-exclusive lock for its lifetime.
+    /// On Windows, the QNN target, the returned value holds an OS-exclusive lock for its
+    /// lifetime; other targets only keep the lock file open (QNN does not run there).
     pub fn open(root: &Path, identity: &str) -> Result<Self, String> {
         if !root.is_absolute() {
             return Err("QNN cache root must be absolute".into());
@@ -161,6 +162,38 @@ impl Cache {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Err(error) => Err(format!("cannot invalidate QNN cache generation: {error}")),
         }
+    }
+
+    /// Best-effort removal of a generation that will not be used (a compile that
+    /// failed halfway). Errors are ignored: on Windows a file ORT still maps
+    /// cannot be deleted, and the next [`Cache::prune_except`] retries.
+    pub fn discard(&self, model_path: &Path) {
+        if let Ok(generation) = self.owned_generation(model_path) {
+            let _ = fs::remove_dir_all(generation);
+        }
+    }
+
+    /// Best-effort removal of every other generation of this identity once
+    /// `keep` is published: superseded, invalidated and half-written ones each
+    /// hold about 1.3 GB of weights, so none is kept for later. Returns how many
+    /// were removed; failures are ignored (see [`Cache::discard`]).
+    pub fn prune_except(&self, keep: &Path) -> usize {
+        let Ok(keep) = self.owned_generation(keep) else {
+            return 0;
+        };
+        let Ok(entries) = fs::read_dir(&self.cache_dir) else {
+            return 0;
+        };
+        let mut removed = 0;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let is_generation = entry.file_name().to_string_lossy().starts_with("gen-")
+                && entry.file_type().map(|ty| ty.is_dir()).unwrap_or(false);
+            if is_generation && path != keep && fs::remove_dir_all(&path).is_ok() {
+                removed += 1;
+            }
+        }
+        removed
     }
 
     fn owned_generation(&self, model_path: &Path) -> Result<PathBuf, String> {

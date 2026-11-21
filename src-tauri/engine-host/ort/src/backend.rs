@@ -139,13 +139,27 @@ pub struct Loaded<S> {
     pub session: S,
     pub cache: CacheState,
     pub context: PathBuf,
+    /// Why the cached context did not load, when it was recompiled ([`CacheState::Recovered`]).
+    pub recovered_from: Option<String>,
 }
 
 fn compile<R: QnnRuntime>(cache: &Cache, runtime: &R) -> Result<(R::Session, PathBuf), String> {
     let context = cache.begin_generation()?;
-    let session = runtime.build_session(&context)?;
-    cache.complete_generation(&context)?;
-    Ok((session, context))
+    let published = runtime
+        .build_session(&context)
+        .and_then(|session| cache.complete_generation(&context).map(|()| session));
+    match published {
+        Ok(session) => {
+            // The new generation supersedes every other one (including an invalidated one).
+            cache.prune_except(&context);
+            Ok((session, context))
+        }
+        Err(error) => {
+            // A half-written generation is of no use and would otherwise stay on disk.
+            cache.discard(&context);
+            Err(error)
+        }
+    }
 }
 
 /// Load the NPU encoder: reuse a valid cached context, recompile once if it will not load.
@@ -157,15 +171,19 @@ pub fn load_npu<R: QnnRuntime>(cache: &Cache, runtime: &R) -> Result<Loaded<R::S
                     session,
                     cache: CacheState::Hit,
                     context,
+                    recovered_from: None,
                 })
             }
-            Err(_) => {
+            Err(first) => {
                 cache.invalidate(&context)?;
-                let (session, context) = compile(cache, runtime)?;
+                let (session, context) = compile(cache, runtime).map_err(|error| {
+                    format!("{error} (the cached context also failed to load: {first})")
+                })?;
                 return Ok(Loaded {
                     session,
                     cache: CacheState::Recovered,
                     context,
+                    recovered_from: Some(first),
                 });
             }
         }
@@ -175,6 +193,7 @@ pub fn load_npu<R: QnnRuntime>(cache: &Cache, runtime: &R) -> Result<Loaded<R::S
         session,
         cache: CacheState::Compiled,
         context,
+        recovered_from: None,
     })
 }
 
@@ -287,8 +306,55 @@ mod tests {
         assert_eq!(load_npu(&cache, &rt).unwrap().cache, CacheState::Compiled);
         assert_eq!(load_npu(&cache, &rt).unwrap().cache, CacheState::Hit);
         rt.fail_first.set(1); // the cached context no longer loads
-        assert_eq!(load_npu(&cache, &rt).unwrap().cache, CacheState::Recovered);
+        let recovered = load_npu(&cache, &rt).unwrap();
+        assert_eq!(recovered.cache, CacheState::Recovered);
+        assert_eq!(recovered.recovered_from.as_deref(), Some("boom"));
         assert_eq!(load_npu(&cache, &rt).unwrap().cache, CacheState::Hit);
+        assert_eq!(generations(&cache), 1, "superseded generations are removed");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Every `gen-*` directory anywhere under `dir`.
+    fn count_generations(dir: &Path) -> usize {
+        fs::read_dir(dir)
+            .unwrap()
+            .flatten()
+            .filter(|entry| entry.file_type().is_ok_and(|ty| ty.is_dir()))
+            .map(|entry| {
+                let own = usize::from(entry.file_name().to_string_lossy().starts_with("gen-"));
+                own + count_generations(&entry.path())
+            })
+            .sum()
+    }
+
+    fn generations(cache: &Cache) -> usize {
+        // The cache directory is the parent of any generation; find it from the newest model.
+        let model = cache.cached_model().unwrap().unwrap();
+        let dir = model.parent().unwrap().parent().unwrap().to_path_buf();
+        fs::read_dir(dir)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().starts_with("gen-"))
+            .count()
+    }
+
+    #[test]
+    fn a_failed_recompile_reports_both_errors_and_leaves_no_generation() {
+        let root = temp("both");
+        let cache = Cache::open(&root, "id-3").unwrap();
+        let rt = Fake {
+            fail_first: Cell::new(0),
+            calls: Cell::new(0),
+        };
+        load_npu(&cache, &rt).unwrap();
+        rt.fail_first.set(2); // the cached context and the recompile both fail
+        let error = load_npu(&cache, &rt).unwrap_err();
+        assert!(error.contains("boom"), "{error}");
+        assert!(
+            error.contains("cached context also failed to load: boom"),
+            "{error}"
+        );
+        assert!(cache.cached_model().unwrap().is_none());
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -302,6 +368,8 @@ mod tests {
         };
         assert!(load_npu(&cache, &rt).is_err());
         assert!(cache.cached_model().unwrap().is_none());
+        let leftovers = count_generations(&root);
+        assert_eq!(leftovers, 0, "a failed compile leaves no generation behind");
         let _ = fs::remove_dir_all(&root);
     }
 }
