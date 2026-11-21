@@ -7,7 +7,7 @@ reading of each distinct sentence, joins the clips with 0.5 s of silence into on
 
 Usage: build.py [OUT_DIR] [--minutes 60]
 """
-import argparse, csv, hashlib, io, json, os, sys, tarfile, urllib.request, wave
+import argparse, array, csv, struct, hashlib, io, json, os, sys, tarfile, urllib.request, wave
 
 BASE = "https://huggingface.co/datasets/google/fleurs/resolve/main/data/sv_se/"
 RATE = 16000
@@ -20,6 +20,33 @@ def fetch(url, dest):
         urllib.request.urlretrieve(url, dest + ".part")
         os.replace(dest + ".part", dest)
     return dest
+
+
+def to_pcm16(data, name):
+    """Read a mono 16 kHz WAV (PCM16 or float32, as FLEURS ships) as PCM16 bytes."""
+    pos, fmt, raw = 12, None, None
+    while pos + 8 <= len(data):
+        cid, size = data[pos:pos + 4], struct.unpack("<I", data[pos + 4:pos + 8])[0]
+        body = data[pos + 8:pos + 8 + size]
+        if cid == b"fmt ":
+            fmt = struct.unpack("<HHIIHH", body[:16])
+        elif cid == b"data":
+            raw = body
+        pos += 8 + size + (size & 1)
+    assert fmt and raw is not None, name
+    tag, ch, rate, _, _, bits = fmt
+    assert ch == 1 and rate == RATE, (name, ch, rate)
+    if tag == 3 and bits == 32:
+        f = array.array("f"); f.frombytes(raw[: len(raw) // 4 * 4])
+        if sys.byteorder == "big": f.byteswap()
+        i = array.array("h", (max(-32768, min(32767, round(x * 32767))) for x in f))
+    elif tag == 1 and bits == 16:
+        i = array.array("h"); i.frombytes(raw[: len(raw) // 2 * 2])
+        if sys.byteorder == "big": i.byteswap()
+    else:
+        raise ValueError(f"{name}: unsupported WAV format {tag}/{bits}")
+    if sys.byteorder == "big": i.byteswap()
+    return i.tobytes()
 
 
 def main():
@@ -43,9 +70,7 @@ def main():
         for m in t:
             name = os.path.basename(m.name)
             if name in want:
-                with wave.open(io.BytesIO(t.extractfile(m).read())) as w:
-                    assert (w.getframerate(), w.getnchannels(), w.getsampwidth()) == (RATE, 1, 2), name
-                    pcm[name] = w.readframes(w.getnframes())
+                pcm[name] = to_pcm16(t.extractfile(m).read(), name)
     out, refs, total = [], [], 0.0
     limit = a.minutes * 60
     for fn, raw in rows:
