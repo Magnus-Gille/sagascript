@@ -24,5 +24,8 @@ python3 scripts/demo-swedish-hour/run.py ~/sagascript-demo/swedish-fleurs-60min.
 > `swedish-fleurs-60min.reference.txt` next to it. Tell me the word error rate and
 > how many seconds it took.
 
-`run.py` prints `wer_percent` and `seconds` (wall time of the whole command).
+`run.py` shows each step live (files, engine start, transcription with a progress bar,
+WER) and ends with a summary table: WER, errors, seconds (wall time of the whole
+command), audio length and realtime factor. `--json` prints only one JSON object
+(for agents); `NO_COLOR=1` turns colours off. Stdlib only.
 Normalisation is lowercase, punctuation removed, no number normalisation.
