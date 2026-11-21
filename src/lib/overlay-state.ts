@@ -44,7 +44,7 @@ export function needsLoadingTimer(state: OverlayState): boolean {
  * reports no load percentage, so the bar is indeterminate by design.
  */
 export function showLoadingBar(state: OverlayState): boolean {
-  return isWorking(state.phase) && state.loadingVisible;
+  return isWorking(state.phase) && state.engine === "loading" && state.loadingVisible;
 }
 
 function settle(state: OverlayState): OverlayState {
