@@ -24,6 +24,8 @@ res = json.loads(p.stdout)
 if isinstance(res, list):
     res = res[0]
 text = res.get("text") or res.get("result", {}).get("text", "")
+if not text.strip():
+    sys.exit("no text in sagascript output")
 hyp = os.path.splitext(a.audio)[0] + ".hypothesis.txt"
 open(hyp, "w", encoding="utf-8").write(text)
 out = wer(open(a.reference, encoding="utf-8").read(), text)
@@ -31,7 +33,7 @@ try:
     with wave.open(a.audio) as w:
         audio_s = round(w.getnframes() / w.getframerate(), 1)
 except Exception:
-    audio_s = res.get("duration")
+    audio_s = res.get("duration_seconds")
 out.update(seconds=round(secs, 1), audio_seconds=audio_s,
            realtime_factor=round(audio_s / secs) if audio_s else None, model=a.model, hypothesis=hyp)
 print(json.dumps(out))

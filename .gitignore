@@ -44,6 +44,7 @@ coverage/
 *.xcresult
 benchmark/audio/
 scripts/dictation_eval/__pycache__/
+scripts/demo-swedish-hour/__pycache__/
 scripts/diarization_sv/__pycache__/
 
 # Diarization benchmark — audio binaries (gitignored; fetch with test-audio/diarization/fetch.sh)

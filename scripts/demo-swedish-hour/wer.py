@@ -3,7 +3,7 @@
 
 Normalisation: NFC, lowercase, punctuation -> space, whitespace collapsed; numbers
 are not normalised (same as docs/benchmarks/pianissimo-coreml-2026-09.md).
-Prints one JSON object: wer_percent, ref_words, errors.
+Prints one JSON object: wer_percent, ref_words, hyp_words, errors.
 """
 import json, re, sys, unicodedata
 
@@ -25,6 +25,8 @@ def distance(a, b):
 
 def wer(ref_text, hyp_text):
     ref, hyp = norm(ref_text), norm(hyp_text)
+    if not ref:
+        raise ValueError("empty reference")
     d = distance(ref, hyp)
     return dict(wer_percent=round(100 * d / len(ref), 2), ref_words=len(ref), hyp_words=len(hyp), errors=d)
 

@@ -62,7 +62,7 @@ def main():
     tgz = fetch(BASE + "audio/test.tar.gz", os.path.join(a.out, "fleurs-sv-test.tar.gz"))
     rows, seen = [], set()
     with open(tsv, encoding="utf-8") as f:
-        for r in csv.reader(f, delimiter="\t"):
+        for r in csv.reader(f, delimiter="\t", quoting=csv.QUOTE_NONE):
             fn, raw = r[1], r[2].strip()
             if raw and raw not in seen:
                 seen.add(raw)
@@ -80,7 +80,7 @@ def main():
         if fn not in pcm:
             continue
         dur = len(pcm[fn]) / 2 / RATE
-        if total + dur > limit:
+        if total >= limit:  # include the clip that crosses the limit (307 clips, as in the README benchmark)
             break
         out.append(pcm[fn] + GAP)
         refs.append(raw)

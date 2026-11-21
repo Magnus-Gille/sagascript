@@ -2,7 +2,7 @@
 
 Builds `swedish-fleurs-60min.wav` (about 60 min, 16 kHz mono) from Google FLEURS
 sv_se test (read speech, CC BY 4.0, exact reference text), plus the reference and a
-manifest. It is the same recipe as the README benchmark; it is read speech, not a
+manifest. It is the same recipe and clip selection as the README benchmark (307 clips, about 3,611 s); it is read speech, not a
 conversation.
 
 ```sh
