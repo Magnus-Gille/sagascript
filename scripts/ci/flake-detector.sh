@@ -9,11 +9,16 @@
 set -uo pipefail
 
 runs="${1:-20}"
+if ! [[ $runs =~ ^[1-9][0-9]*$ ]]; then
+  echo "runs must be a positive integer, got '$runs'" >&2
+  exit 64
+fi
 result_file="${FLAKE_RESULT_FILE:-flake-result.json}"
 log_dir="${FLAKE_LOG_DIR:-flake-logs}"
 root="$(cd "$(dirname "$0")/../.." && pwd)"
 case "$log_dir" in /*) ;; *) log_dir="$root/$log_dir" ;; esac
 case "$result_file" in /*) ;; *) result_file="$root/$result_file" ;; esac
+rm -rf "$log_dir" "$result_file"
 mkdir -p "$log_dir"
 
 cd "$root/src-tauri"
@@ -22,11 +27,11 @@ cargo test -p sagascript-core --test engine_host --no-run || exit 2
 # One busy loop per CPU: a 3-vCPU runner is the slowest machine the suite has to survive.
 workers=$(nproc 2>/dev/null || echo 2)
 pids=()
+trap 'kill "${pids[@]}" 2>/dev/null || true' EXIT
 for _ in $(seq "$workers"); do
   (while :; do :; done) &
   pids+=("$!")
 done
-trap 'kill "${pids[@]}" 2>/dev/null || true' EXIT
 
 failed=0
 failed_runs=()

@@ -71,10 +71,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          FAILED: ${{ needs.stress.outputs.failed }}
+          FAILED: ${{ needs.stress.outputs.failed || 'infra' }}
         run: |
           title="Flake detector: engine_host failed under CPU stress"
-          body="The nightly flake detector (SAGA-381) saw ${FAILED} failing run(s) of \`cargo test -p sagascript-core --test engine_host\` under CPU stress (\`build\` means the build itself failed). No retries are made. Logs: ${RUN_URL}"
+          body="The nightly flake detector (SAGA-381) saw ${FAILED} failing run(s) of \`cargo test -p sagascript-core --test engine_host\` under CPU stress (\`build\` means the test build failed, \`infra\` that the job failed before the tests, for example setup or timeout). No retries are made. Logs: ${RUN_URL}"
           existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "\"$title\" in:title" --json number --jq '.[0].number // empty')
           if [ -n "$existing" ]; then
             gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "$body"
