@@ -166,7 +166,8 @@ restore attempts, copy fallbacks, and withdrawn launch activations stay at info.
 - `capture_stopped` reports `captureRequestToStreamPlayReturnMs` and
   `captureRequestToFirstAudioCallbackMs`. These start at the capture request,
   not the shortcut event; they separate stream setup from first-buffer delivery.
-- `dictation_phase_timings` separates model readiness, Whisper duration, and
+- `dictation_phase_timings` also carries `buildProfile` (`release` or `debug`; a debug
+  build is not representative for latency) and separates model readiness, Whisper duration, and
   paste completion. `keyUpToCaptureStoppedMs` includes any minimum-recording
   top-up delay (up to 300 ms); it is not a pure device-stop measurement. In
   toggle mode, the origin is the second shortcut press instead of key-up.

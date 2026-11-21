@@ -13,6 +13,16 @@ fn command_output(args: &[&str]) -> Option<String> {
         .map(|value| value.trim().to_string())
 }
 
+/// `release` for the optimized distribution profile, `debug` for everything else.
+/// A debug build runs unoptimized workspace code and is not representative for latency
+/// (SAGA-399), so a latency measurement must say which one it came from.
+fn build_profile() -> &'static str {
+    match std::env::var("PROFILE").as_deref() {
+        Ok("release") => "release",
+        _ => "debug",
+    }
+}
+
 fn metadata_value(key: &str, fallback: impl FnOnce() -> String) -> String {
     std::env::var(key).ok().unwrap_or_else(fallback)
 }
@@ -149,6 +159,19 @@ fn main() {
 
     println!("cargo:rustc-env=SAGASCRIPT_CLI_GIT_HASH={git_hash}");
     println!("cargo:rustc-env=SAGASCRIPT_CLI_BUILD_DATE={build_date}");
+    println!(
+        "cargo:rustc-env=SAGASCRIPT_BUILD_PROFILE={}",
+        build_profile()
+    );
+    // Release output keeps the exact `--version` shape the release identity gates parse;
+    // only an unoptimized build is marked. The tail is never empty, so no build depends on
+    // how a toolchain treats an empty `rustc-env` value.
+    let version_tail = if build_profile() == "release" {
+        ")"
+    } else {
+        ", debug build)"
+    };
+    println!("cargo:rustc-env=SAGASCRIPT_CLI_VERSION_TAIL={version_tail}");
     println!(
         "cargo:rustc-env=SAGASCRIPT_SOURCE_REVISION={}",
         source_revision()

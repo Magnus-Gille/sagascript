@@ -84,6 +84,10 @@ pub struct Report {
 pub struct Group {
     pub model: Option<String>,
     pub language: Option<String>,
+    /// `release` or `debug`; `None` for log rows written before the field existed.
+    /// Debug builds are never pooled with release builds (SAGA-399).
+    #[serde(rename = "buildProfile")]
+    pub build_profile: Option<String>,
     #[serde(rename = "modelWasWarm")]
     pub model_was_warm: Option<bool>,
     #[serde(rename = "beamSize")]
@@ -138,6 +142,7 @@ pub struct MetricStats {
 struct GroupKey {
     model: Option<String>,
     language: Option<String>,
+    build_profile: Option<String>,
     model_was_warm: Option<bool>,
     beam_size: Option<u32>,
     temperature_fallback: Option<bool>,
@@ -184,6 +189,7 @@ struct CorrelationKey {
 struct PhaseConfig {
     model: Option<String>,
     language: Option<String>,
+    build_profile: Option<String>,
     model_was_warm: Option<bool>,
     beam_size: Option<u32>,
     temperature_fallback: Option<bool>,
@@ -313,6 +319,7 @@ pub fn summarize_reader<R: BufRead>(mut reader: R) -> Result<Report, String> {
         let key = GroupKey {
             model: phase.config.model.clone(),
             language: phase.config.language.clone(),
+            build_profile: phase.config.build_profile.clone(),
             model_was_warm: phase.config.model_was_warm,
             beam_size: phase.config.beam_size,
             temperature_fallback: phase.config.temperature_fallback,
@@ -334,6 +341,7 @@ pub fn summarize_reader<R: BufRead>(mut reader: R) -> Result<Report, String> {
             Ok(Group {
                 model: key.model,
                 language: key.language,
+                build_profile: key.build_profile,
                 model_was_warm: key.model_was_warm,
                 beam_size: key.beam_size,
                 temperature_fallback: key.temperature_fallback,
@@ -414,6 +422,7 @@ fn parse_phase(
     }
 
     let paste_outcome = optional_paste_outcome(data, line)?;
+    let build_profile = optional_build_profile(data, line)?;
     let has_config = CONFIG_FIELDS.iter().any(|field| data.contains_key(*field));
     let config = if outcome == "no_speech" && !has_config {
         if paste_outcome.is_some() {
@@ -424,6 +433,7 @@ fn parse_phase(
         PhaseConfig {
             model: None,
             language: None,
+            build_profile,
             model_was_warm: None,
             beam_size: None,
             temperature_fallback: None,
@@ -451,6 +461,7 @@ fn parse_phase(
         PhaseConfig {
             model: Some(model),
             language: Some(language),
+            build_profile,
             model_was_warm: Some(model_was_warm),
             beam_size: Some(beam_size),
             temperature_fallback: Some(temperature_fallback),
@@ -603,6 +614,21 @@ fn optional_paste_outcome(
     Ok(Some(value.to_owned()))
 }
 
+fn optional_build_profile(
+    data: &serde_json::Map<String, Value>,
+    line: usize,
+) -> Result<Option<String>, String> {
+    match data.get("buildProfile") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(value)) if matches!(value.as_str(), "release" | "debug") => {
+            Ok(Some(value.clone()))
+        }
+        Some(_) => Err(format!(
+            "line {line}: field buildProfile has an unsupported value"
+        )),
+    }
+}
+
 fn normalize_language(value: String, line: usize) -> Result<String, String> {
     let languages = [
         (Language::English, "en"),
@@ -719,7 +745,8 @@ fn budget_passes(
 ) -> bool {
     let mut eligible_groups = 0usize;
     for group in &report.groups {
-        if group.length_bucket != length
+        if group.build_profile.as_deref() == Some("debug")
+            || group.length_bucket != length
             || group.outcome != "success"
             || group.model_was_warm != Some(true)
             || group.paste_outcome.as_deref() != Some("succeeded")
@@ -738,12 +765,30 @@ fn budget_passes(
     eligible_groups > 0
 }
 
+/// Warm, successful, pasted samples from debug builds in the budget cohort. They are
+/// left out of the budget check, because an unoptimized build is not representative.
+fn excluded_debug_samples(report: &Report, length: LengthBucket) -> usize {
+    report
+        .groups
+        .iter()
+        .filter(|group| {
+            group.build_profile.as_deref() == Some("debug")
+                && group.length_bucket == length
+                && group.outcome == "success"
+                && group.model_was_warm == Some(true)
+                && group.paste_outcome.as_deref() == Some("succeeded")
+        })
+        .map(|group| group.samples)
+        .sum()
+}
+
 fn excluded_warm_success_samples(report: &Report, length: LengthBucket) -> usize {
     report
         .groups
         .iter()
         .filter(|group| {
-            group.length_bucket == length
+            group.build_profile.as_deref() != Some("debug")
+                && group.length_bucket == length
                 && group.outcome == "success"
                 && group.model_was_warm == Some(true)
                 && group.paste_outcome.as_deref() != Some("succeeded")
@@ -804,6 +849,7 @@ fn write_report(args: LatencyReportArgs, out: &Out) -> Result<Option<bool>, Dict
             args.min_samples,
             budget_passes(&report, length, threshold, args.min_samples),
             excluded_warm_success_samples(&report, length),
+            excluded_debug_samples(&report, length),
         )),
         (None, None) => None,
         _ => unreachable!("budget arguments validated above"),
@@ -812,13 +858,15 @@ fn write_report(args: LatencyReportArgs, out: &Out) -> Result<Option<bool>, Dict
     let mut output = serde_json::to_value(&report).map_err(|_| {
         DictationError::TranscriptionFailed("latency report serialization failed".to_string())
     })?;
-    if let Some((length, threshold, min_samples, passed, excluded_samples)) = budget {
+    if let Some((length, threshold, min_samples, passed, excluded_samples, excluded_debug)) = budget
+    {
         output["budget"] = serde_json::json!({
             "lengthBucket": length,
             "maxWarmP95Ms": threshold,
             "minSamples": min_samples,
             "passed": passed,
             "excludedWarmSuccessSamples": excluded_samples,
+            "excludedDebugSamples": excluded_debug,
         });
     }
     let encoded = serde_json::to_string(&output).map_err(|_| {
@@ -866,6 +914,60 @@ mod tests {
             app,
             session,
         )
+    }
+
+    fn phase_with_profile(app: &str, session: &str, profile: &str, ms: u32) -> String {
+        phase(app, session, "success", Some("succeeded"), ms).replace(
+            r#""outcome":"success""#,
+            &format!(r#""outcome":"success","buildProfile":{profile}"#),
+        )
+    }
+
+    #[test]
+    fn debug_and_release_rows_are_never_pooled() {
+        let input = [
+            phase_with_profile("a", "d1", r#""release""#, 100),
+            phase_with_profile("a", "d2", r#""debug""#, 900),
+            phase("a", "d3", "success", Some("succeeded"), 100),
+        ]
+        .join("\n");
+        let report = summarize_reader(Cursor::new(input)).unwrap();
+        let mut profiles: Vec<_> = report
+            .groups
+            .iter()
+            .map(|group| (group.build_profile.clone(), group.samples))
+            .collect();
+        profiles.sort();
+        assert_eq!(
+            profiles,
+            vec![
+                (None, 1),
+                (Some("debug".to_string()), 1),
+                (Some("release".to_string()), 1)
+            ]
+        );
+    }
+
+    #[test]
+    fn rejects_an_unknown_build_profile_without_echoing_it() {
+        let input = phase_with_profile("a", "d1", r#""private-value""#, 1);
+        let error = summarize_reader(Cursor::new(input)).unwrap_err();
+        assert!(error.contains("buildProfile"));
+        assert!(!error.contains("private-value"));
+    }
+
+    #[test]
+    fn budget_ignores_debug_samples_and_counts_them() {
+        let input = [
+            phase_with_profile("a", "d1", r#""debug""#, 5_000),
+            phase_with_profile("a", "d2", r#""release""#, 100),
+            capture("a", "d1", 1_000),
+            capture("a", "d2", 1_000),
+        ]
+        .join("\n");
+        let report = summarize_reader(Cursor::new(input)).unwrap();
+        assert!(budget_passes(&report, LengthBucket::Short, 200.0, 1));
+        assert_eq!(excluded_debug_samples(&report, LengthBucket::Short), 1);
     }
 
     #[test]

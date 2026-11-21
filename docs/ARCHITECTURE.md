@@ -104,7 +104,11 @@ stdout. `transcribe`'s three output modes live in one `BatchSink` (`transcribe/o
   is the minimum supported version (MSRV), checked by CI's `msrv-linux` job.
 - Build identity comes from `src-tauri/build.rs` (`GIT_HASH`, `BUILD_DATE`, overridable with
   `SAGASCRIPT_GIT_HASH` / `SAGASCRIPT_BUILD_DATE`) and feeds the tray `BUILD_IDENTITY`, the
-  `get_build_info` command and the engine-host handshake.
+  `get_build_info` command and the engine-host handshake. Both build scripts also emit
+  `SAGASCRIPT_BUILD_PROFILE` (`release` or `debug`, from Cargo's `PROFILE`): it is shown in the
+  tray, Settings and `get_build_info`, appended to CLI `--version` only for a debug build (the
+  release shape is parsed by the Windows identity gates), and logged as `build_profile` in the
+  session event and `buildProfile` in `dictation_phase_timings`.
 
 ### 1.1 Layers inside `sagascript-core`
 

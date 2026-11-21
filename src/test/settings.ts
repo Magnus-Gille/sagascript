@@ -10,7 +10,7 @@ import Settings from "../lib/Settings.svelte";
 import type { BuildInfo, EngineStatus, HotkeyProfile, HotkeyStatus, Settings as SettingsValue, WhisperModel } from "../lib/api";
 import { mockIpc, type CommandHandlers, type IpcMock } from "./ipc";
 
-export const buildInfo: BuildInfo = { version: "1.4.4", git_hash: "a69d5d1", build_date: "2026-10-13" };
+export const buildInfo: BuildInfo = { version: "1.4.4", git_hash: "a69d5d1", build_date: "2026-10-13", build_profile: "release" };
 
 export const engineStatus: EngineStatus = {
   installed: true,
