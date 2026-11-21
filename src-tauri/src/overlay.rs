@@ -166,16 +166,19 @@ fn overlay_origin_for_screen(screen: ScreenArea) -> (f64, f64) {
 #[cfg(any(not(target_os = "linux"), test))]
 fn pick_overlay_screen(
     focused: Option<ScreenArea>,
-    under_cursor: Option<ScreenArea>,
-    primary: Option<ScreenArea>,
+    under_cursor: impl FnOnce() -> Option<ScreenArea>,
+    primary: impl FnOnce() -> Option<ScreenArea>,
 ) -> ScreenArea {
-    focused.or(under_cursor).or(primary).unwrap_or(ScreenArea {
-        x: 0.0,
-        y: 0.0,
-        width: FALLBACK_SCREEN_WIDTH,
-        height: 800.0,
-        scale: 1.0,
-    })
+    focused
+        .or_else(under_cursor)
+        .or_else(primary)
+        .unwrap_or(ScreenArea {
+            x: 0.0,
+            y: 0.0,
+            width: FALLBACK_SCREEN_WIDTH,
+            height: 800.0,
+            scale: 1.0,
+        })
 }
 
 #[cfg(not(target_os = "linux"))]
