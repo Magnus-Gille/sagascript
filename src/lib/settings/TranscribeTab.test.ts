@@ -88,7 +88,11 @@ describe("the file transcription model", () => {
         within(select)
           .getAllByRole("option")
           .map((option) => option.textContent),
-      ).toEqual(["Auto — Pianissimo Swedish (recommended)", "Pianissimo Swedish · 640 MB · ready", "KB-Whisper Medium · 1530 MB · download needed"]),
+      ).toEqual([
+        "Auto — Pianissimo Swedish (recommended)",
+        "Pianissimo Swedish · 640 MB · ready",
+        "KB-Whisper Medium · 1530 MB · download needed",
+      ]),
     );
   });
 
