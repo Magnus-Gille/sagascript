@@ -168,6 +168,14 @@ cargo test -p sagascript-cli --no-default-features
 From the repo root: `npx svelte-check --tsconfig ./tsconfig.json`, `npm run test:unit`,
 `npm run format:check`, `npm run lint` and `npm run test:frontend`.
 
+#### Flaky tests
+
+A test that depends on wall-clock timing is a bug: wait on an event or condition, or compare against
+the delay you injected, never against an absolute limit on a shared runner. The nightly
+`Flake detector` workflow runs `cargo test -p sagascript-core --test engine_host` 20 times in a row
+under CPU stress (`scripts/ci/flake-detector.sh`, also runnable locally) and opens an issue on any
+failure. It makes no retries: a retry would hide the race.
+
 #### Example: a typical feature
 
 Say you add a user setting that changes how dictation pastes. It crosses the CLI/core/GUI
