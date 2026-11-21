@@ -20,6 +20,7 @@ path = "src/main.rs"
 [dependencies]
 sagascript-engine-protocol = { path = "../../crates/sagascript-engine-protocol" }
 serde_json = "1"
+sha2 = "0.10.9"
 # The ONNX Runtime shared library is loaded at run time (ORT_DYLIB_PATH or next to the
 # executable), so building needs no ORT binary and works on every CI platform. Keep
 # default-features off: the defaults enable `download-binaries`, which has no CPU-only
