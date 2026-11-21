@@ -73,7 +73,8 @@ pub fn hide(app: &tauri::AppHandle) {
 
 #[cfg(not(target_os = "linux"))]
 fn create_overlay(app: &tauri::AppHandle, present: bool) -> Result<(), Box<dyn std::error::Error>> {
-    let (x, y) = overlay_position(app);
+    let position = overlay_position(app);
+    let (x, y) = (position.0, position.1);
 
     let window = tauri::WebviewWindowBuilder::new(
         app,
@@ -93,6 +94,9 @@ fn create_overlay(app: &tauri::AppHandle, present: bool) -> Result<(), Box<dyn s
     .skip_taskbar(true)
     .build()?;
 
+    // The builder's logical position is only exact on macOS; place precisely.
+    place(&window, position);
+
     #[cfg(target_os = "macos")]
     configure_macos_window(&window);
 
@@ -108,9 +112,9 @@ fn create_overlay(app: &tauri::AppHandle, present: bool) -> Result<(), Box<dyn s
 
 #[cfg(any(not(target_os = "linux"), test))]
 const OVERLAY_WIDTH: f64 = 220.0;
-#[cfg(not(target_os = "linux"))]
+#[cfg(any(not(target_os = "linux"), test))]
 const OVERLAY_TOP: f64 = 80.0;
-#[cfg(not(target_os = "linux"))]
+#[cfg(any(not(target_os = "linux"), test))]
 const FALLBACK_SCREEN_WIDTH: f64 = 1200.0;
 
 /// Horizontal origin (logical points) that centres the overlay on a screen.
@@ -119,21 +123,213 @@ fn overlay_x_for_screen_width(logical_screen_width: f64) -> f64 {
     logical_screen_width / 2.0 - OVERLAY_WIDTH / 2.0
 }
 
-/// Current target position, computed from the primary monitor at call time.
-#[cfg(not(target_os = "linux"))]
-fn overlay_position(app: &tauri::AppHandle) -> (f64, f64) {
-    let width = match app.primary_monitor() {
-        Ok(Some(monitor)) => monitor.size().width as f64 / monitor.scale_factor(),
-        _ => FALLBACK_SCREEN_WIDTH,
-    };
-    (overlay_x_for_screen_width(width), OVERLAY_TOP)
+/// A screen in the desktop's logical coordinate space (top-left origin, y down;
+/// the primary screen's corner is (0, 0), other screens may be negative) with
+/// the scale factor of that screen.
+#[cfg(any(not(target_os = "linux"), test))]
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ScreenArea {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    scale: f64,
 }
 
-/// Move the (possibly pre-created) overlay to the current screen before it is shown.
+#[cfg(any(not(target_os = "linux"), test))]
+impl ScreenArea {
+    /// From a physical-pixel rectangle and that screen's scale factor.
+    fn from_physical(x: f64, y: f64, width: f64, height: f64, scale: f64) -> Self {
+        let scale = if scale > 0.0 { scale } else { 1.0 };
+        Self {
+            x: x / scale,
+            y: y / scale,
+            width: width / scale,
+            height: height / scale,
+            scale,
+        }
+    }
+}
+
+/// Where the overlay goes on `screen`: centred horizontally, `OVERLAY_TOP` below
+/// the screen's top edge, in logical points.
+#[cfg(any(not(target_os = "linux"), test))]
+fn overlay_origin_for_screen(screen: ScreenArea) -> (f64, f64) {
+    (
+        screen.x + overlay_x_for_screen_width(screen.width),
+        screen.y + OVERLAY_TOP,
+    )
+}
+
+/// The screen the overlay is shown on: the one with the focused window, else
+/// the one under the mouse pointer, else the primary screen, else a default.
+#[cfg(any(not(target_os = "linux"), test))]
+fn pick_overlay_screen(
+    focused: Option<ScreenArea>,
+    under_cursor: Option<ScreenArea>,
+    primary: Option<ScreenArea>,
+) -> ScreenArea {
+    focused.or(under_cursor).or(primary).unwrap_or(ScreenArea {
+        x: 0.0,
+        y: 0.0,
+        width: FALLBACK_SCREEN_WIDTH,
+        height: 800.0,
+        scale: 1.0,
+    })
+}
+
+#[cfg(not(target_os = "linux"))]
+fn area_from_monitor(monitor: &tauri::Monitor) -> ScreenArea {
+    let position = monitor.position();
+    let size = monitor.size();
+    ScreenArea::from_physical(
+        position.x as f64,
+        position.y as f64,
+        size.width as f64,
+        size.height as f64,
+        monitor.scale_factor(),
+    )
+}
+
+/// The screen with the focused window. On macOS the screen of the key window
+/// (`NSScreen.mainScreen`, read on the main thread, ADR 0003); on Windows the
+/// screen holding the foreground window's centre. `None` when unknown.
+#[cfg(target_os = "macos")]
+fn focused_screen_area(app: &tauri::AppHandle) -> Option<ScreenArea> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    // Runs inline on the main thread, otherwise queued; never wait long.
+    app.run_on_main_thread(move || {
+        let _ = tx.send(main_screen_area_macos());
+    })
+    .ok()?;
+    rx.recv_timeout(std::time::Duration::from_millis(150))
+        .ok()
+        .flatten()
+}
+
+/// Must run on the main thread.
+#[cfg(target_os = "macos")]
+#[allow(deprecated, unexpected_cfgs)]
+fn main_screen_area_macos() -> Option<ScreenArea> {
+    use cocoa::base::{id, nil};
+    use cocoa::foundation::{NSRect, NSUInteger};
+
+    unsafe {
+        let main: id = objc::msg_send![objc::class!(NSScreen), mainScreen];
+        let screens: id = objc::msg_send![objc::class!(NSScreen), screens];
+        if main == nil || screens == nil {
+            return None;
+        }
+        let count: NSUInteger = objc::msg_send![screens, count];
+        if count == 0 {
+            return None;
+        }
+        // The first screen carries the menu bar and the global origin.
+        let primary: id = objc::msg_send![screens, objectAtIndex: 0 as NSUInteger];
+        let frame: NSRect = objc::msg_send![main, frame];
+        let primary_frame: NSRect = objc::msg_send![primary, frame];
+        let scale: f64 = objc::msg_send![main, backingScaleFactor];
+        // AppKit's origin is bottom-left with y up; ours is top-left with y down.
+        let top = primary_frame.size.height - (frame.origin.y + frame.size.height);
+        Some(ScreenArea {
+            x: frame.origin.x,
+            y: top,
+            width: frame.size.width,
+            height: frame.size.height,
+            scale: if scale > 0.0 { scale } else { 1.0 },
+        })
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn focused_screen_area(app: &tauri::AppHandle) -> Option<ScreenArea> {
+    use windows_sys::Win32::Foundation::RECT;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowRect};
+
+    let mut rect = RECT {
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+    };
+    // SAFETY: plain Win32 queries; `rect` outlives the call.
+    let found = unsafe {
+        let hwnd = GetForegroundWindow();
+        !hwnd.is_null() && GetWindowRect(hwnd, &mut rect) != 0
+    };
+    if !found {
+        return None;
+    }
+    let centre_x = (rect.left as f64 + rect.right as f64) / 2.0;
+    let centre_y = (rect.top as f64 + rect.bottom as f64) / 2.0;
+    app.monitor_from_point(centre_x, centre_y)
+        .ok()
+        .flatten()
+        .map(|monitor| area_from_monitor(&monitor))
+}
+
+/// The screen under the mouse pointer.
+#[cfg(not(target_os = "linux"))]
+fn cursor_screen_area(app: &tauri::AppHandle) -> Option<ScreenArea> {
+    let p = app.cursor_position().ok()?;
+    // tao reports the macOS pointer in logical points times the primary
+    // screen's scale, but looks monitors up in unscaled points.
+    #[cfg(target_os = "macos")]
+    let (x, y) = {
+        let scale = app
+            .primary_monitor()
+            .ok()
+            .flatten()
+            .map_or(1.0, |m| m.scale_factor());
+        (p.x / scale, p.y / scale)
+    };
+    #[cfg(not(target_os = "macos"))]
+    let (x, y) = (p.x, p.y);
+    app.monitor_from_point(x, y)
+        .ok()
+        .flatten()
+        .map(|m| area_from_monitor(&m))
+}
+
+/// Current target position (logical, on the screen the overlay is shown on),
+/// computed at call time so it follows the user between dictations.
+#[cfg(not(target_os = "linux"))]
+fn overlay_position(app: &tauri::AppHandle) -> (f64, f64, f64) {
+    // Each fallback costs main-thread round trips, so only ask when needed.
+    let screen = pick_overlay_screen(
+        focused_screen_area(app),
+        || cursor_screen_area(app),
+        || {
+            app.primary_monitor()
+                .ok()
+                .flatten()
+                .map(|m| area_from_monitor(&m))
+        },
+    );
+    let (x, y) = overlay_origin_for_screen(screen);
+    (x, y, screen.scale)
+}
+
+/// Put `window` at the logical origin `(x, y)` of a screen with `scale`.
+/// Windows positions in physical pixels so a mixed-DPI desktop lands exactly.
+#[cfg(not(target_os = "linux"))]
+fn place(window: &tauri::WebviewWindow, (x, y, scale): (f64, f64, f64)) {
+    #[cfg(target_os = "windows")]
+    let _ = window.set_position(tauri::PhysicalPosition::new(
+        (x * scale).round() as i32,
+        (y * scale).round() as i32,
+    ));
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = scale;
+        let _ = window.set_position(tauri::LogicalPosition::new(x, y));
+    }
+}
+
+/// Move the (possibly pre-created) overlay to the active screen before it is shown.
 #[cfg(not(target_os = "linux"))]
 fn reposition(app: &tauri::AppHandle, window: &tauri::WebviewWindow) {
-    let (x, y) = overlay_position(app);
-    let _ = window.set_position(tauri::LogicalPosition::new(x, y));
+    place(window, overlay_position(app));
 }
 
 /// Whether a settings change should pre-create the overlay now.
@@ -407,6 +603,7 @@ mod tests {
         OverlaySpaceWindow, RestoreToken, MOVE_TO_ACTIVE_SPACE_BEHAVIOR,
         OVERLAY_COLLECTION_BEHAVIOR,
     };
+    use super::{overlay_origin_for_screen, pick_overlay_screen, ScreenArea};
     use std::cell::{Cell, RefCell};
 
     const CAN_JOIN_ALL_SPACES: u64 = 1;
@@ -634,6 +831,74 @@ mod tests {
     fn centres_overlay_on_screen_width() {
         assert_eq!(super::overlay_x_for_screen_width(1440.0), 610.0);
         assert_eq!(super::overlay_x_for_screen_width(1200.0), 490.0);
+    }
+
+    fn area(x: f64, y: f64, w: f64, h: f64, scale: f64) -> ScreenArea {
+        ScreenArea {
+            x,
+            y,
+            width: w,
+            height: h,
+            scale,
+        }
+    }
+
+    #[test]
+    fn overlay_is_centred_on_the_primary_screen() {
+        let primary = area(0.0, 0.0, 1440.0, 900.0, 2.0);
+        assert_eq!(overlay_origin_for_screen(primary), (610.0, 80.0));
+    }
+
+    #[test]
+    fn overlay_follows_a_screen_to_the_right_of_the_primary() {
+        let right = area(1440.0, 0.0, 1920.0, 1080.0, 1.0);
+        assert_eq!(overlay_origin_for_screen(right), (1440.0 + 850.0, 80.0));
+    }
+
+    #[test]
+    fn overlay_follows_a_screen_with_negative_coordinates() {
+        let left = area(-1920.0, 0.0, 1920.0, 1080.0, 1.0);
+        assert_eq!(overlay_origin_for_screen(left), (-1920.0 + 850.0, 80.0));
+        let above = area(-200.0, -1080.0, 1920.0, 1080.0, 1.0);
+        assert_eq!(
+            overlay_origin_for_screen(above),
+            (-200.0 + 850.0, -1080.0 + 80.0)
+        );
+    }
+
+    #[test]
+    fn physical_monitor_is_converted_with_its_own_scale_factor() {
+        // A 2x screen right of a 1x primary: physical x 3840, logical x 3840 / 2.
+        let retina = ScreenArea::from_physical(3840.0, 0.0, 2880.0, 1800.0, 2.0);
+        assert_eq!(retina, area(1920.0, 0.0, 1440.0, 900.0, 2.0));
+        assert_eq!(overlay_origin_for_screen(retina), (1920.0 + 610.0, 80.0));
+        // A bogus scale factor never divides by zero.
+        assert_eq!(
+            ScreenArea::from_physical(10.0, 20.0, 100.0, 50.0, 0.0).scale,
+            1.0
+        );
+    }
+
+    #[test]
+    fn screen_choice_prefers_focus_then_cursor_then_primary_then_default() {
+        let focused = area(1.0, 0.0, 1000.0, 800.0, 1.0);
+        let cursor = area(2.0, 0.0, 1000.0, 800.0, 1.0);
+        let primary = area(3.0, 0.0, 1000.0, 800.0, 1.0);
+        assert_eq!(
+            pick_overlay_screen(Some(focused), || Some(cursor), || Some(primary)),
+            focused
+        );
+        assert_eq!(
+            pick_overlay_screen(None, || Some(cursor), || Some(primary)),
+            cursor
+        );
+        assert_eq!(
+            pick_overlay_screen(None, || None, || Some(primary)),
+            primary
+        );
+        let default = pick_overlay_screen(None, || None, || None);
+        assert_eq!(default.x, 0.0);
+        assert_eq!(default.width, super::FALLBACK_SCREEN_WIDTH);
     }
 
     #[test]
