@@ -31,8 +31,12 @@ jobs:
         uses: ./.github/actions/setup
         with:
           python: "false"
+          rust: "false" # no Rust cache: a nightly job is not worth a second 2 GB entry of the 10 GB budget (SAGA-546)
           linux-deps: "true"
           cache-key: sagascript-flake
+      # Reads the channel from rust-toolchain.toml, so it cannot drift from the CI lanes.
+      - name: Install the pinned Rust toolchain
+        run: rustup toolchain install
       # tauri::generate_context! embeds ../dist, so building the workspace needs it.
       - name: Build frontend
         run: npm run build
