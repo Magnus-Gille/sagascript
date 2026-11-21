@@ -552,14 +552,14 @@ mod lineup_tests {
         assert_eq!(
             table(&[Language::Swedish], &env),
             [
-                "MODEL ID           NAME                  SIZE  DOWNLOADED  LANGUAGE",
-                "-------------------------------------------------------------------",
-                "kb-whisper-tiny    KB-Whisper Tiny      40 MB  no          Swedish   (hidden in app)",
-                "kb-whisper-base    KB-Whisper Base      60 MB  no          Swedish   (hidden in app)",
-                "kb-whisper-small   KB-Whisper Small    190 MB  no          Swedish   (hidden in app)",
-                "kb-whisper-medium  KB-Whisper Medium   514 MB  no          Swedish",
-                "kb-whisper-large   KB-Whisper Large   1031 MB  yes         Swedish",
-                "pianissimo-sv      Pianissimo         1400 MB  yes         Swedish",
+                "MODEL ID           NAME                   SIZE  DOWNLOADED  LANGUAGE",
+                "--------------------------------------------------------------------",
+                "kb-whisper-tiny    KB-Whisper Tiny       40 MB  no          Swedish   (hidden in app)",
+                "kb-whisper-base    KB-Whisper Base       60 MB  no          Swedish   (hidden in app)",
+                "kb-whisper-small   KB-Whisper Small     190 MB  no          Swedish   (hidden in app)",
+                "kb-whisper-medium  KB-Whisper Medium    514 MB  no          Swedish",
+                "kb-whisper-large   KB-Whisper Large    1031 MB  yes         Swedish",
+                "pianissimo-sv      Pianissimo Swedish  1400 MB  yes         Swedish",
             ]
         );
     }
@@ -624,7 +624,7 @@ mod table_tests {
         let rows = vec![
             row("tiny", "Tiny", "75 MB", "English"),
             row("kb-whisper-large", "KB-Whisper", "1031 MB", "Swedish"),
-            row("pianissimo-sv", "Pianissimo", "900 MB", "Swedish"),
+            row("pianissimo-sv", "Pianissimo Swedish", "900 MB", "Swedish"),
             // Double-width CJK occupies two terminal columns per character.
             row("wide", "日本語", "1 MB", "—"),
         ];

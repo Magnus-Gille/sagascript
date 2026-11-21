@@ -28,7 +28,7 @@ function onboardingBackend(completed = false) {
     set_language: () => [],
     get_effective_model_info: () => ({
       id: "pianissimo-sv",
-      display_name: "Pianissimo",
+      display_name: "Pianissimo Swedish",
       description: "",
       size_mb: 640,
       downloaded: false,

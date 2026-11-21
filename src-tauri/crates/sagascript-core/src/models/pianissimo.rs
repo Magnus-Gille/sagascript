@@ -20,6 +20,15 @@ impl PianissimoModel {
         }
     }
 
+    /// The name every list and message shows: the language is part of it, since
+    /// the checkpoints are separate downloads that each serve one language.
+    pub fn display_name(self) -> &'static str {
+        match self {
+            PianissimoModel::Swedish => "Pianissimo Swedish",
+            PianissimoModel::Danish => "Pianissimo Danish",
+        }
+    }
+
     /// The model with this identifier, if any.
     pub fn from_id(id: &str) -> Option<PianissimoModel> {
         Self::ALL.into_iter().find(|model| model.id() == id)
@@ -51,6 +60,11 @@ mod tests {
             assert_eq!(PianissimoModel::from_id(model.id()), Some(model));
             assert_eq!(PianissimoModel::for_language(model.language()), Some(model));
             assert!(model.id().ends_with(model.language().id()));
+            // Each checkpoint is told apart by its language in every list.
+            assert_eq!(
+                model.display_name(),
+                format!("Pianissimo {}", model.language().display_name())
+            );
         }
         assert_eq!(PianissimoModel::from_id("pianissimo"), None);
         assert_eq!(PianissimoModel::for_language(Language::Finnish), None);

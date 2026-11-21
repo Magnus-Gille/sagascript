@@ -25,7 +25,7 @@ export function whisperModel(id: string, displayName: string, overrides: Partial
   return { id, display_name: displayName, description: "", size_mb: 0, downloaded: true, active: false, ...overrides };
 }
 
-export const pianissimo = whisperModel(PIANISSIMO_ID, "Pianissimo", { size_mb: 640 });
+export const pianissimo = whisperModel(PIANISSIMO_ID, "Pianissimo Swedish", { size_mb: 640 });
 export const kbWhisperMedium = whisperModel("kb-whisper-medium", "KB-Whisper Medium", { size_mb: 1530 });
 
 export const swedishProfile: HotkeyProfile = {

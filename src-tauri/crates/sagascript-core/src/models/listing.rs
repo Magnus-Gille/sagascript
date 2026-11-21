@@ -127,7 +127,7 @@ pub fn model_info(choice: FileModel, env: &dyn ModelEnv) -> ModelInfo {
         FileModel::Pianissimo(model) => ModelInfo {
             model: choice,
             id: model.id(),
-            display_name: "Pianissimo",
+            display_name: model.display_name(),
             description: pianissimo_description(model),
             download_size_mb: megabytes(env.pianissimo_download_bytes(model)),
             installed_size_mb: megabytes(env.pianissimo_installed_bytes(model)),

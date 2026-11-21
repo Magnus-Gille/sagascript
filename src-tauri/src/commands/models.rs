@@ -27,7 +27,7 @@ pub async fn get_loaded_model(
     let effective = match chosen {
         FileModel::Pianissimo(pianissimo) => {
             return Ok(LoadedModelInfo {
-                effective_model: "Pianissimo".into(),
+                effective_model: pianissimo.display_name().into(),
                 effective_model_id: pianissimo.id().into(),
                 loaded_model: None,
                 is_loaded: false,

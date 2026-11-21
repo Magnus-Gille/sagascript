@@ -111,7 +111,7 @@ describe("Dictate: profiles and recording shortcuts", () => {
     expect(pickers.map((picker) => picker.getAttribute("aria-label"))).toEqual(["Model for Svenska", "Model for English"]);
     expect(screen.getByText("Speech model for Svenska")).toContainElement(pickers[0]);
     expect(screen.getByText("Speech model for English")).toContainElement(pickers[1]);
-    await waitFor(() => expect(optionLabels(pickers[0])).toEqual(["Recommended for Swedish", "Pianissimo", "KB-Whisper Medium"]));
+    await waitFor(() => expect(optionLabels(pickers[0])).toEqual(["Recommended for Swedish", "Pianissimo Swedish", "KB-Whisper Medium"]));
     expect(optionLabels(pickers[1])).toEqual(["Recommended for English", "Base (English)", "Small (English)"]);
     expect(ipc.callsTo("get_profile_model_info")).toEqual(expect.arrayContaining([{ profileId: "default" }, { profileId: "english" }]));
     expect(ipc.callsTo("get_file_model_options")).toEqual(
@@ -227,14 +227,14 @@ describe("Swedish model lineup", () => {
       }),
     );
 
-    expect(await screen.findByText("Pianissimo is faster and more accurate for Swedish.")).toBeInTheDocument();
+    expect(await screen.findByText("Pianissimo Swedish is faster and more accurate for Swedish.")).toBeInTheDocument();
     const picker = screen.getByRole("combobox", { name: "Model for Svenska" });
     // Only what the backend lineup returns, never a hardcoded KB-Whisper list.
-    expect(optionLabels(picker)).toEqual(["Recommended for Swedish", "Pianissimo", "KB-Whisper Medium", "KB-Whisper Small"]);
+    expect(optionLabels(picker)).toEqual(["Recommended for Swedish", "Pianissimo Swedish", "KB-Whisper Medium", "KB-Whisper Small"]);
     expect(ipc.callsTo("get_file_model_options")).toContainEqual({ language: "sv", include: "kb-whisper-small" });
 
     const before = ipc.calls.length;
-    await userEvent.setup().click(screen.getByRole("button", { name: "Switch to Pianissimo (download 640 MB)" }));
+    await userEvent.setup().click(screen.getByRole("button", { name: "Switch to Pianissimo Swedish (download 640 MB)" }));
     await waitFor(() => expect(ipc.callsTo("set_profile_model")).toEqual([{ profileId: "default", modelId: PIANISSIMO_ID }]));
     const switched = ipc.calls.slice(before).map((call) => call.command);
     expect(switched.slice(0, 3)).toEqual(["download_pianissimo_model", "set_profile_model", "get_settings"]);
@@ -251,7 +251,7 @@ describe("Swedish model lineup", () => {
     );
 
     const switchButtons = await screen.findAllByRole("button", { name: /^Switch to / });
-    expect(switchButtons.map((button) => button.textContent?.trim())).toEqual(["Switch to Pianissimo"]);
+    expect(switchButtons.map((button) => button.textContent?.trim())).toEqual(["Switch to Pianissimo Swedish"]);
     await userEvent.setup().click(switchButtons[0]);
     await waitFor(() => expect(ipc.callsTo("set_profile_model")).toEqual([{ profileId: "default", modelId: PIANISSIMO_ID }]));
     expect(ipc.callsTo("download_pianissimo_model")).toEqual([]);
@@ -267,7 +267,7 @@ describe("Swedish model lineup", () => {
     await userEvent.setup().click(screen.getByRole("button", { name: "Transcribe" }));
     const picker = screen.getByRole("combobox", { name: "File transcription model" });
     await waitFor(() => expect(optionLabels(picker)[0]).toBe("Auto — KB-Whisper Medium (downloaded)"));
-    expect(optionLabels(picker).slice(1)).toEqual(["Pianissimo · 640 MB · ready", "KB-Whisper Medium · 1530 MB · ready"]);
+    expect(optionLabels(picker).slice(1)).toEqual(["Pianissimo Swedish · 640 MB · ready", "KB-Whisper Medium · 1530 MB · ready"]);
     expect(ipc.callsTo("get_auto_file_model_info")).toContainEqual({ language: "sv" });
   });
 
@@ -275,7 +275,7 @@ describe("Swedish model lineup", () => {
     await renderSettings();
     await userEvent.setup().click(screen.getByRole("button", { name: "Transcribe" }));
     const picker = screen.getByRole("combobox", { name: "File transcription model" });
-    await waitFor(() => expect(optionLabels(picker)[0]).toBe("Auto — Pianissimo (recommended)"));
+    await waitFor(() => expect(optionLabels(picker)[0]).toBe("Auto — Pianissimo Swedish (recommended)"));
   });
 });
 
