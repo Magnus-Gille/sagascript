@@ -213,12 +213,13 @@ impl StreamingResampler {
     }
 
     /// A resampler for input whose real rate is `effective_rate`, a little
-    /// off the `nominal` one. A non-finite or non-positive rate is ignored.
+    /// off the `nominal` one. A non-finite or non-positive rate is ignored, and so is one
+    /// within 0.1 ppm of the nominal rate: that stays on the passthrough path.
     pub fn with_effective_rate(nominal: u32, effective_rate: f64) -> Self {
         let mut resampler = Self::new(nominal);
         if effective_rate.is_finite()
             && effective_rate > 0.0
-            && (effective_rate - f64::from(nominal)).abs() > f64::EPSILON
+            && (effective_rate - f64::from(nominal)).abs() > f64::from(nominal) * 1e-7
         {
             resampler.effective_rate = Some(effective_rate);
         }
@@ -692,6 +693,29 @@ mod tests {
             run(StreamingResampler::with_effective_rate(48_000, f64::NAN)),
             nominal
         );
+    }
+
+    #[test]
+    fn a_rate_within_a_tenth_of_a_ppm_keeps_the_16khz_passthrough() {
+        let input = signal(5000, 7);
+        let run = |mut resampler: StreamingResampler| {
+            let mut out = Vec::new();
+            resampler.push(&input, &mut out).unwrap();
+            resampler.finish(&mut out).unwrap();
+            out
+        };
+        let exact = run(StreamingResampler::new(16_000));
+        let noise = run(StreamingResampler::with_effective_rate(
+            16_000,
+            16_000.000_001,
+        ));
+        assert_eq!(
+            bits(&exact),
+            bits(&noise),
+            "noise must not leave passthrough"
+        );
+        let drifting = run(StreamingResampler::with_effective_rate(16_000, 16_000.8));
+        assert_ne!(drifting.len(), 0);
     }
 
     #[test]

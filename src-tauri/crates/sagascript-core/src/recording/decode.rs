@@ -279,10 +279,16 @@ impl TrackDecoder {
     }
 
     fn open_audio(&self, cursor: &Cursor) -> Result<Audio, RecordingError> {
-        let rate = self.alignments.get(self.index).map_or_else(
-            || f64::from(cursor.track.sample_rate),
-            |a| a.resample_rate(cursor.track.sample_rate),
-        );
+        // By the cursor's own track, not by decoder state: a track is never
+        // resampled with another track's drift.
+        let rate = self
+            .alignments
+            .iter()
+            .find(|a| a.track_id == cursor.track.id)
+            .map_or_else(
+                || f64::from(cursor.track.sample_rate),
+                |a| a.resample_rate(cursor.track.sample_rate),
+            );
         Ok(Audio {
             source: NativeTrackReader::open(&cursor.path)?,
             resampler: StreamingResampler::with_effective_rate(cursor.track.sample_rate, rate),

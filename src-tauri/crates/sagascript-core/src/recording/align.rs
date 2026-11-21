@@ -152,8 +152,8 @@ fn is_applied(alignment: &TrackAlignment, tracks_in_domain: usize) -> bool {
 }
 
 /// The alignment of every track of the finished recording in `folder`, in
-/// manifest order. The anchors are the manifest's start anchor and the ones
-/// the track's journal kept.
+/// manifest order. The anchors are the track's journal anchors, or the
+/// manifest's own when the journal kept fewer (or cannot be read).
 pub fn alignments(manifest: &Manifest, folder: &Path) -> Vec<TrackAlignment> {
     let offsets = start_offsets_ns(manifest);
     let mut all = Vec::with_capacity(manifest.tracks.len());
