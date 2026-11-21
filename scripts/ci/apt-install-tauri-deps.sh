@@ -17,6 +17,11 @@
 # fails over only on errors, not on a slow crawl, so the retry deletes the azure line from that list.
 # Images that name azure.archive.ubuntu.com directly in their sources are rewritten instead.
 #
+# Second fallback: the mirror list also resolves archive.ubuntu.com to a regional EC2 mirror, and that one
+# can crawl as well (main's CI failed twice in a row on a 25 MB libwebkit2gtk download from it). From the
+# third attempt on, the `mirror+file:` sources are rewritten to the canonical archive.ubuntu.com host, so
+# the last attempts do not depend on the mirror list at all.
+#
 # Deb cache (SAGA-546): when APT_DEB_CACHE_DIR is set, the .deb files in it (restored by the setup action
 # from actions/cache) may pre-seed apt's archive directory. apt can reuse a file already in its archive
 # by name and size without rehashing it, so a cached file is only seeded after a successful `update`
@@ -28,7 +33,7 @@
 set -euo pipefail
 
 PACKAGES=(libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libasound2-dev build-essential file xdotool)
-ATTEMPTS="${APT_ATTEMPTS:-3}"
+ATTEMPTS="${APT_ATTEMPTS:-4}"
 ATTEMPT_SECONDS="${APT_ATTEMPT_SECONDS:-240}"
 APT_OPTS=(-o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20)
 SOURCES_DIR="${APT_SOURCES_DIR:-/etc/apt}"
@@ -92,6 +97,14 @@ use_main_archive() {
   done
 }
 
+use_plain_archive() {
+  local file
+  for file in "$SOURCES_DIR/sources.list" "$SOURCES_DIR"/sources.list.d/*.sources "$SOURCES_DIR"/sources.list.d/*.list; do
+    [ -f "$file" ] || continue
+    sudo sed -i -E 's#mirror\+file:[^ ]*apt-mirrors\.txt#http://archive.ubuntu.com/ubuntu/#g' "$file"
+  done
+}
+
 attempt=1
 while true; do
   if timeout "$ATTEMPT_SECONDS" sudo apt-get "${APT_OPTS[@]}" update; then
@@ -106,6 +119,9 @@ while true; do
   fi
   echo "apt attempt $attempt failed or exceeded ${ATTEMPT_SECONDS}s; retrying on archive.ubuntu.com" >&2
   use_main_archive
+  if [ "$attempt" -ge 2 ]; then
+    use_plain_archive
+  fi
   attempt=$((attempt + 1))
 done
 

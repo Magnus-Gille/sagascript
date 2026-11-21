@@ -3,8 +3,8 @@
 - Ticket: SAGA-547. Related: SAGA-289 (system audio, draft PR #300), SAGA-519 (live meetings, draft PR
   #521), SAGA-303, SAGA-309, and the iPhone recorder epic SAGA-531 (SAGA-533 recording domain, SAGA-534
   storage, SAGA-536 app).
-- Status: **D1 to D9 decided as recommended by the owner on 2026-11-06. D3 is decided in direction
-  only: the minimum macOS version and Intel support are fixed before phase 2 starts.**
+- Status: **D1 to D9 decided as recommended by the owner on 2026-11-06. D3 is fully decided on
+  2026-11-17: system audio needs macOS 14.4+ on Apple Silicon.**
   Nothing here is implemented. Evidence:
   [recorder-formats-2026-11-05](research/recorder-formats-2026-11-05/README.md). Decision record:
   [ADR 0010](adr/0010-recording-storage.md) (Accepted).
@@ -391,16 +391,18 @@ choice) without touching system-audio capture.
 
 ## 9. Decisions
 
-The owner approved D1 to D9 as recommended on 2026-11-06. D3 is decided in direction (a fresh shared
-`CaptureSource` that takes the best of #521 and #300); the minimum macOS version and Intel support are
-still to be fixed before phase 2 starts. D7 applies to each track on its own: the system-audio track
+The owner approved D1 to D9 as recommended on 2026-11-06. D3 is decided (a fresh shared
+`CaptureSource` that takes the best of #521 and #300), and on 2026-11-17 the owner fixed the versions:
+system audio requires macOS 14.4 or later on Apple Silicon. Older macOS versions and Intel Macs get
+microphone-only recording (phase 1 behaviour), with the system-audio option unavailable and explained
+in the UI and the CLI. Windows is unaffected. D7 applies to each track on its own: the system-audio track
 of phase 2 is a track, not a channel of the microphone track.
 
 | # | Decision | Outcome |
 |---|---|---|
 | D1 | Compact tier: reduced FLAC (16 kHz / 16-bit, 46 MB/h) or AAC (30 MB/h at 64 kbit/s) | **Decided:** reduced FLAC in v1; add AAC only if users ask for smaller files |
 | D2 | One file per track + manifest, or one multichannel file | **Decided:** per track + manifest (no resampling, independent recovery, matches SAGA-533 "tracks"); offer a single-file export |
-| D3 | Which capture code leads system audio: #521, #300, or a fresh `CaptureSource` that ports both. Includes the minimum macOS version and Intel support: #521 is Apple Silicon and macOS 14.2+ only, while the System Audio Recording permission in this design is cited for 14.4+ | **Decided in direction (2026-11-06):** a fresh `CaptureSource` that leans on #521's tap and timeline and #300's Windows backend and CLI shape; reconcile the OS versions (minimum macOS, Intel) before phase 2 starts |
+| D3 | Which capture code leads system audio: #521, #300, or a fresh `CaptureSource` that ports both. Includes the minimum macOS version and Intel support: #521 is Apple Silicon and macOS 14.2+ only, while the System Audio Recording permission in this design is cited for 14.4+ | **Decided in direction (2026-11-06):** a fresh `CaptureSource` that leans on #521's tap and timeline and #300's Windows backend and CLI shape; **Versions decided (2026-11-17):** system audio needs macOS 14.4+ and Apple Silicon; older macOS and Intel keep microphone-only recording |
 | D4 | Default folder | **Decided:** a visible folder (for example `~/Music/Sagascript`) confirmed on first use |
 | D5 | Keep `record -o file.wav` unchanged | **Decided:** yes |
 | D6 | Ship mic-only (phase 1) before system audio | **Decided:** yes |

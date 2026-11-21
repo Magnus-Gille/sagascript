@@ -7,6 +7,8 @@
 - macOS 13.0 (Ventura) or later (Swedish Pianissimo requires macOS 14 Sonoma or later)
 - Apple Silicon (M1+) is required for the v1 binary release. Intel Macs are not
   supported by the v1 installer.
+- System-audio recording (planned, recorder phase 2) needs macOS 14.4 or later on Apple
+  Silicon; older versions record the microphone only
 - ~200 MB disk space (plus Whisper model files)
 
 ### Download

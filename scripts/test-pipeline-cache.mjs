@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -352,6 +352,46 @@ test(
       const failedExport = run(blocked);
       assert.equal(failedExport.status, 0, failedExport.stderr);
       assert.match(failedExport.stderr, /could not create the apt cache directory/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  },
+);
+
+// A mirror that stalls twice in a row must not exhaust the retries: the second retry drops the
+// mirror list for the canonical archive host (main's CI failed on a crawling regional mirror).
+test(
+  "the apt script leaves the mirror list for archive.ubuntu.com from the third attempt on",
+  { skip: process.platform === "win32" && "bash script" },
+  () => {
+    const root = mkdtempSync(join(tmpdir(), "apt-mirror-"));
+    try {
+      const bin = join(root, "bin");
+      mkdirSync(bin);
+      const sources = join(root, "sources.list");
+      writeFileSync(sources, "deb mirror+file:/etc/apt/apt-mirrors.txt noble main\n");
+      const log = join(root, "seen.log");
+      const stub = (name, body) => {
+        writeFileSync(join(bin, name), `#!/usr/bin/env bash\n${body}\n`);
+        chmodSync(join(bin, name), 0o755);
+      };
+      stub("sudo", 'exec "$@"');
+      stub("timeout", 'shift; exec "$@"');
+      // `update` fails until the sources no longer name the mirror list; each call records them.
+      stub(
+        "apt-get",
+        `case " $* " in *" update "*) cat "${sources}" >> "${log}"; grep -q 'mirror+file' "${sources}" && exit 1;; esac; exit 0`,
+      );
+      const result = spawnSync("bash", [join(REPO_ROOT, "scripts/ci/apt-install-tauri-deps.sh")], {
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, APT_SOURCES_DIR: root, APT_ARCHIVE_DIR: root },
+        encoding: "utf8",
+      });
+      assert.equal(result.status, 0, result.stderr);
+      const seen = readFileSync(log, "utf8").trim().split("\n");
+      assert.equal(seen.length, 3, "two failures on the mirror list, then success on the plain host");
+      assert.match(seen[0], /mirror\+file/);
+      assert.match(seen[1], /mirror\+file/);
+      assert.match(seen[2], /http:\/\/archive\.ubuntu\.com\/ubuntu\//);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
