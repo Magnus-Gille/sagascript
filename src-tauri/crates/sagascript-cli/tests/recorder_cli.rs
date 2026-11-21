@@ -145,7 +145,7 @@ fn a_lossless_recording_is_a_complete_folder_with_banner_and_summary() {
     // `--duration` is a wall-clock cap and the synthetic source runs in real
     // time, so a loaded runner stops late: only the lower bound is a property
     // of the recording, the upper one just catches a runaway.
-    assert!((40_000..=48_000 * 30).contains(&frames), "{frames} frames");
+    assert!((40_000..=48_000 * 10).contains(&frames), "{frames} frames");
 
     let err = stderr(&output);
     assert!(err.contains("Recording to "), "{err}");
@@ -214,7 +214,7 @@ fn a_compact_recording_reports_one_json_object() {
     assert!(report["bytes"].as_u64().unwrap() > 0);
     let seconds = report["duration_seconds"].as_f64().unwrap();
     // Lower bound only matters; see the lossless test on late stops.
-    assert!((0.8..=30.0).contains(&seconds), "{seconds}");
+    assert!((0.8..=10.0).contains(&seconds), "{seconds}");
 
     let manifest = manifest(&folder);
     assert_eq!(manifest["recording_id"], report["recording_id"]);
