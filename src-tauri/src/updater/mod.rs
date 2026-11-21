@@ -404,33 +404,43 @@ fn check_for_updates_with_intent(app: tauri::AppHandle, install_when_available: 
     });
 }
 
-/// Whether the end of check `attempt` must restore the menu: only when that check is
-/// still the current one and no terminal phase has ended it, which means the task
-/// stopped (panicked or returned) without reporting a result. Clears the flag if so.
-fn check_attempt_needs_reset(state: &mut UpdateMenuState, attempt: u64) -> bool {
-    if state.attempt != attempt || !state.checking {
-        return false;
+/// Whether the end of attempt `attempt` must restore the menu, and with which failure:
+/// only when that attempt is still the current one and no terminal phase has ended it,
+/// which means the task stopped (panicked or returned) without reporting a result.
+/// Clears the flags if so. A panic during the install leaves `installing` set, which
+/// would otherwise block every later check and install until restart.
+fn check_attempt_needs_reset(state: &mut UpdateMenuState, attempt: u64) -> Option<UpdateFailure> {
+    if state.attempt != attempt || !(state.checking || state.installing) {
+        return None;
     }
+    #[cfg(any(target_os = "macos", test))]
+    let failure = if state.installing {
+        UpdateFailure::Install
+    } else {
+        UpdateFailure::Check
+    };
+    #[cfg(not(any(target_os = "macos", test)))]
+    let failure = UpdateFailure::Check;
     state.checking = false;
+    state.installing = false;
     state.available_version = None;
-    true
+    Some(failure)
 }
 
 fn end_check_attempt(app: &tauri::AppHandle, attempt: u64) {
     let items = {
         let state: tauri::State<'_, SharedUpdateMenuState> = app.state();
         let mut state = lock_or_recover(&state, UPDATE_MENU_LOCK);
-        if !check_attempt_needs_reset(&mut state, attempt) {
+        let Some(failure) = check_attempt_needs_reset(&mut state, attempt) else {
             return;
-        }
-        state.items.clone()
+        };
+        (state.items.clone(), failure)
     };
+    let (items, failure) = items;
     let Some(items) = items else {
         return;
     };
-    let texts = texts_for(&UpdatePhase::Failed {
-        failure: UpdateFailure::Check,
-    });
+    let texts = texts_for(&UpdatePhase::Failed { failure });
     if let Err(error) = items.status.set_text(texts.status) {
         error!("Failed to update tray update status: {error}");
     }
