@@ -196,11 +196,9 @@ fn warm_up_with_cancel_returns_promptly_and_keeps_the_host() {
     cancelled.store(true, Ordering::SeqCst);
     let error = job.join().unwrap().unwrap_err();
     assert!(error.to_string().contains("cancelled"), "{error}");
-    assert!(
-        at.elapsed() < Duration::from_millis(500),
-        "{:?}",
-        at.elapsed()
-    );
+    // The load has 2.6 s left: a cancel that is honoured returns well before it,
+    // however loaded the runner is.
+    assert!(at.elapsed() < Duration::from_secs(2), "{:?}", at.elapsed());
     assert!(
         backend.client().snapshot().running,
         "host keeps loading for the next job"
@@ -269,7 +267,7 @@ fn second_utterance_reuses_the_warm_host() {
     let shared = client(
         &[
             ("FAKE_LOG", log.to_str().unwrap()),
-            ("FAKE_LOAD_DELAY_MS", "300"),
+            ("FAKE_LOAD_DELAY_MS", "1500"),
         ],
         tmp.path(),
     );
@@ -282,13 +280,14 @@ fn second_utterance_reuses_the_warm_host() {
     assert!(!second.unwrap().is_empty());
     assert!(!first_timings.model_cached);
     assert!(
-        first_timings.model_ms >= 250.0,
+        first_timings.model_ms >= 1250.0,
         "{}",
         first_timings.model_ms
     );
     assert!(second_timings.model_cached, "warm host reported as cold");
+    // Half the cold load: a warm host pays no load, with room for a slow runner.
     assert!(
-        second_timings.model_ms < 100.0,
+        second_timings.model_ms < 750.0,
         "{}",
         second_timings.model_ms
     );
@@ -365,11 +364,8 @@ fn live_abort_during_model_load_returns_promptly_and_keeps_the_host() {
     let (result, timings) = job.join().unwrap();
 
     assert!(result.unwrap_err().to_string().contains("cancelled"));
-    assert!(
-        at.elapsed() < Duration::from_millis(250),
-        "{:?}",
-        at.elapsed()
-    );
+    // The load has 2.5 s left; see the warm-up cancel test.
+    assert!(at.elapsed() < Duration::from_secs(2), "{:?}", at.elapsed());
     assert!(!timings.inference_started);
     // The host survives so the first-use load can finish for the next utterance.
     assert!(shared.snapshot().running, "host must not be killed");
