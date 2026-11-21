@@ -145,11 +145,6 @@ fn cancelling_a_file_job_sends_the_protocol_cancel_and_the_next_job_works() {
         .to_string()
         .contains("cancelled"));
 
-    let lines = std::fs::read_to_string(&log).unwrap_or_default();
-    assert!(
-        lines.lines().any(|line| line.starts_with("cancel ")),
-        "the host must receive a protocol cancel, got:\n{lines}"
-    );
     // The engine is free for the next job: same backend and client, no respawn.
     assert!(
         backend.client().snapshot().running,
@@ -157,6 +152,14 @@ fn cancelling_a_file_job_sends_the_protocol_cancel_and_the_next_job_works() {
     );
     let next = backend.transcribe(&ramp(5), |_| {});
     assert!(next.is_ok(), "{next:?}");
+    // The client's cancel is fire-and-forget, so the log can only be read once
+    // the host has answered a later request: it reads requests in order, hence
+    // the cancel is logged before the next job's window is.
+    let lines = std::fs::read_to_string(&log).unwrap_or_default();
+    assert!(
+        lines.lines().any(|line| line.starts_with("cancel ")),
+        "the host must receive a protocol cancel, got:\n{lines}"
+    );
     assert_eq!(
         spawn_count(&log),
         1,
