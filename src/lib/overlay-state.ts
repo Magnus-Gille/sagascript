@@ -37,6 +37,16 @@ export function needsLoadingTimer(state: OverlayState): boolean {
   return isWorking(state.phase) && state.engine === "loading" && !state.loadingVisible;
 }
 
+/**
+ * The indeterminate bar shares the label's gate: it appears with "Loading
+ * model…" (after LOADING_LABEL_DELAY_MS, so a warm engine never flashes it)
+ * and goes away when the load is ready, failed or cancelled. The engine host
+ * reports no load percentage, so the bar is indeterminate by design.
+ */
+export function showLoadingBar(state: OverlayState): boolean {
+  return isWorking(state.phase) && state.loadingVisible;
+}
+
 function settle(state: OverlayState): OverlayState {
   const waiting = isWorking(state.phase) && state.engine === "loading";
   return waiting || !state.loadingVisible ? state : { ...state, loadingVisible: false };

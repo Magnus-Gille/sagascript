@@ -248,7 +248,8 @@ the first dictation does not wait on a cold model.
   (host environment, at least 60) adds a periodic canary; off by default, see
   `docs/benchmarks/pianissimo-ane-eviction.md`.
 - The overlay shows "Loading model..." only for loads that keep the user
-  waiting; background warm-up failures are logged, not shown as dictation errors.
+  waiting, with an indeterminate progress bar under the label (the engine host reports
+  no load percentage, SAGA-577); background warm-up failures are logged, not shown as dictation errors.
 - Warm-up reports where its time went, phase by phase (SAGA-543). The log line
   of a background warm-up carries `verify_ms`, `host_start_ms`, `load_ms` and
   `canary_ms` (`-` for a phase that did not run: a cached client is not verified
