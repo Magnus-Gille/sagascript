@@ -664,12 +664,12 @@ fn restart_backoff_then_failed_until_reset() {
     assert!(starts[3] >= Duration::from_millis(350), "{starts:?}");
     assert!(matches!(f.client.warm(), Err(EngineHostError::Failed(_))));
     assert!(f.client.snapshot().failed.is_some());
-    // Failed is sticky until reset, and fails fast: no new spawn, so no new crash.
-    let crashes = f.client.snapshot().crashes_in_window;
+    // Failed is sticky until reset, and fails fast: no new spawn.
+    let spawns = f.client.snapshot().spawns;
     assert!(matches!(f.client.warm(), Err(EngineHostError::Failed(_))));
     assert_eq!(
-        f.client.snapshot().crashes_in_window,
-        crashes,
+        f.client.snapshot().spawns,
+        spawns,
         "a failed client must not start the host again"
     );
     f.client.reset();
@@ -2764,7 +2764,7 @@ fn windows_sent_in(log: &Path) -> usize {
 
 #[test]
 fn a_producer_failure_interrupts_a_slow_model_load() {
-    // The load takes 3 s (a first-time Core ML compile takes minutes). The decode
+    // The load takes 20 s (a first-time Core ML compile takes minutes). The decode
     // fails after 150 ms: its error must not wait for the load.
     let mut env = stream_env();
     env.push(("FAKE_LOAD_DELAY_MS", "20000"));
