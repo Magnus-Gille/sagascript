@@ -48,7 +48,7 @@ describe("downloadProfileModel through the shared download", () => {
     const ipc = mockIpc({ download_pianissimo_model: () => undefined });
     const { store } = setup();
 
-    await store.downloadProfileModel("default", whisperModel(PIANISSIMO_ID, "Pianissimo", { downloaded: false }));
+    await store.downloadProfileModel("default", whisperModel(PIANISSIMO_ID, "Pianissimo Swedish", { downloaded: false }));
 
     expect(ipc.calls).toEqual([{ command: "download_pianissimo_model", args: {} }]);
   });

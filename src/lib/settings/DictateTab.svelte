@@ -146,6 +146,7 @@
           {#if !profileModels.models[profile.id].downloaded}
             <button
               class="link-btn profile-engine-action"
+              aria-describedby={`engine-missing-${profile.id}`}
               onclick={() => modelDownloads.downloadProfileModel(profile.id, profileModels.models[profile.id])}
               disabled={downloading !== null}
             >
@@ -155,10 +156,23 @@
             </button>
           {/if}
         </div>
+        {#if !profileModels.models[profile.id].downloaded}
+          <div class="profile-engine-hint" id={`engine-missing-${profile.id}`}>
+            Dictating in {languageLabel(profile.language)} needs {profileModels.models[profile.id].display_name}, which is not on this
+            computer yet.
+            {#if downloading === profileModels.models[profile.id].id}
+              Downloading now: dictation works when it finishes.
+            {:else if downloading !== null}
+              Another download is running; download this one when it finishes.
+            {:else}
+              Press "Download speech engine" before you dictate.
+            {/if}
+          </div>
+        {/if}
         {#if profileModels.retiredSuggestion(profile)}
           {@const suggested = profileModels.retiredSuggestion(profile)!}
           <div class="profile-engine">
-            <span>{suggested.display_name} is faster and more accurate for Swedish.</span>
+            <span>{suggested.display_name} is faster and more accurate for {languageLabel(profile.language)}.</span>
             <button
               class="link-btn profile-engine-action"
               onclick={() => profileModels.switchToRecommended(profile)}
@@ -171,7 +185,12 @@
           </div>
         {/if}
         {#if modelDownloads.profileErrors[profile.id]}
-          <div class="hotkey-error">{modelDownloads.profileErrors[profile.id]}</div>
+          <div class="hotkey-error">
+            {modelDownloads.profileErrors[profile.id]}
+            {#if !profileModels.models[profile.id].downloaded}
+              Check your connection and free disk space, then press "Download speech engine" to try again.
+            {/if}
+          </div>
         {/if}
       {/if}
     </div>
@@ -437,6 +456,12 @@
   .profile-engine .link-btn:disabled {
     cursor: wait;
     opacity: 0.7;
+  }
+
+  .profile-engine-hint {
+    color: var(--text-muted);
+    font-size: 11px;
+    line-height: 1.35;
   }
 
   .profile-engine-action {

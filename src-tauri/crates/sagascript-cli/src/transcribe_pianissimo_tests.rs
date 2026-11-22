@@ -590,7 +590,7 @@ fn the_checks_run_in_a_fixed_order_and_none_of_them_starts_the_host() {
             &[],
             true,
             false,
-            "Pianissimo is not downloaded. Run: sagascript download-model pianissimo-sv",
+            "Pianissimo Swedish is not downloaded. Run: sagascript download-model pianissimo-sv",
         ),
     ];
     // A decoder option comes before the platform and the model.

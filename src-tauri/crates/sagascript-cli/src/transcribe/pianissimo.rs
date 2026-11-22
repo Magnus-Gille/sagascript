@@ -376,7 +376,8 @@ fn check_request(
     }
     if !host.model_installed(model) {
         return Err(DictationError::TranscriptionFailed(format!(
-            "Pianissimo is not downloaded. Run: sagascript download-model {}",
+            "{} is not downloaded. Run: sagascript download-model {}",
+            model.display_name(),
             model.id()
         )));
     }

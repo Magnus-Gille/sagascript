@@ -299,7 +299,7 @@ describe("speech engine download", () => {
     expect(ipc.callsTo("get_effective_model_info")).toEqual([{ language: "sv" }]);
     expect(ipc.callsTo("download_pianissimo_model")).toEqual([{}]);
     expect(ipc.callsTo("download_model")).toEqual([]);
-    expect(screen.queryByText("Pianissimo")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Pianissimo/)).not.toBeInTheDocument();
     expect(screen.getByText(/Preparing the local speech engine \(640 MB\)/)).toBeInTheDocument();
   });
 

@@ -872,7 +872,7 @@ impl Settings {
             };
             let recommended = match FileModel::recommended_for(profile.language, supported) {
                 FileModel::Whisper(model) => model.display_name(),
-                FileModel::Pianissimo(_) => "Pianissimo",
+                FileModel::Pianissimo(model) => model.display_name(),
             };
             self.profile_models
                 .insert(profile.id.clone(), FileModelPreference::Auto);

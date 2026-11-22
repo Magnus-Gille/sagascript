@@ -159,7 +159,7 @@ fn the_profile_methods_follow_the_injected_platform_gate() {
 
 #[test]
 fn a_language_change_names_the_recommendation_of_the_injected_gate() {
-    for (supported, recommended) in [(true, "Pianissimo"), (false, "KB-Whisper Medium")] {
+    for (supported, recommended) in [(true, "Pianissimo Swedish"), (false, "KB-Whisper Medium")] {
         let mut settings = two_language_settings();
         let mut profiles = settings.resolved_hotkey_profiles();
         profiles[1].language = Language::Swedish;

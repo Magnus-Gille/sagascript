@@ -344,7 +344,7 @@ describe("a saved change whose read-back fails", () => {
       ...(await screen.findAllByRole("button", { name: /^Clear .* shortcut for Svenska$/ })),
       screen.getByRole("button", { name: "Remove Svenska" }),
       screen.getByRole("button", { name: "Remove English" }),
-      await screen.findByRole("button", { name: "Switch to Pianissimo" }),
+      await screen.findByRole("button", { name: "Switch to Pianissimo Swedish" }),
       screen.getByRole("button", { name: "Open System Settings" }),
     ];
     expect((await buttons()).filter((button) => button.hasAttribute("disabled"))).toEqual([]);

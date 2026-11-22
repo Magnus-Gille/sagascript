@@ -399,12 +399,24 @@ fn precheck(model: PianissimoModel) -> Result<PathBuf, DictationError> {
         ))
     })?;
     if !pianissimo_model::is_downloaded(model) {
-        return Err(DictationError::TranscriptionFailed(format!(
-            "Pianissimo model is not downloaded. Run 'sagascript download-model {}'",
-            model.id()
-        )));
+        return Err(model_not_downloaded(model));
     }
     Ok(host)
+}
+
+/// The failure of a dictation whose Pianissimo model is not on disk. It carries
+/// the engine's `engine_model_missing` code, so the app offers "Download the
+/// model again" instead of a bare "transcription failed" (SAGA-572).
+fn model_not_downloaded(model: PianissimoModel) -> DictationError {
+    DictationError::engine(
+        "engine_model_missing",
+        false,
+        &format!(
+            "{} is not downloaded. Download it in Settings, or run 'sagascript download-model {}'.",
+            model.display_name(),
+            model.id()
+        ),
+    )
 }
 
 /// Engine-host configuration for the current machine and `settings`, after the
@@ -1545,6 +1557,17 @@ mod tests {
         ));
         let io = sink_error_to_dictation(SinkError::Io(std::io::Error::other("disk full")));
         assert_eq!(io.code(), "engine_io");
+    }
+
+    #[test]
+    fn a_missing_model_fails_with_the_download_code_and_names_its_language() {
+        for model in PianissimoModel::ALL {
+            let error = model_not_downloaded(model);
+            assert_eq!(error.code(), "engine_model_missing");
+            let message = error.to_string();
+            assert!(message.contains(model.display_name()), "{message}");
+            assert!(message.contains(model.id()), "{message}");
+        }
     }
 
     #[test]

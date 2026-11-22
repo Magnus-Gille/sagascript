@@ -34,12 +34,12 @@ describe("a profile's speech engine download", () => {
     await waitFor(() => expect(ipc.callsTo("download_pianissimo_model")).toEqual([{}]));
     ipc.emit("model-download-progress", { progress: 40.4 });
     expect(await screen.findByRole("button", { name: "Downloading 40%" })).toBeDisabled();
-    expect(screen.getByText("Downloading Pianissimo...")).toBeInTheDocument();
+    expect(screen.getByText("Downloading Pianissimo Swedish...")).toBeInTheDocument();
 
     downloaded = true;
     download.resolve();
     await waitFor(() => expect(ipc.callsTo("get_profile_model_info").length).toBeGreaterThan(modelQueries));
-    await waitFor(() => expect(screen.queryByText("Downloading Pianissimo...")).toBeNull());
+    await waitFor(() => expect(screen.queryByText("Downloading Pianissimo Swedish...")).toBeNull());
     expect(screen.queryByRole("button", { name: /^Download/ })).toBeNull();
     expect(ipc.callsTo("download_model")).toEqual([]);
   });
@@ -56,7 +56,7 @@ describe("a profile's speech engine download", () => {
 
     await userEvent.setup().click(await screen.findByRole("button", { name: "Download speech engine" }));
 
-    expect(await screen.findByText("No space left on device")).toBeInTheDocument();
+    expect(await screen.findByText(/No space left on device/)).toBeInTheDocument();
     expect(ipc.callsTo("download_model")).toEqual([{ whisperModel: "kb-whisper-medium" }]);
     expect(ipc.callsTo("download_pianissimo_model")).toEqual([]);
     expect(screen.getByRole("button", { name: "Download speech engine" })).toBeEnabled();
@@ -79,10 +79,10 @@ describe("the file transcription model download", () => {
     await user.click(await screen.findByRole("button", { name: "Download selected model" }));
     await waitFor(() => expect(ipc.callsTo("download_pianissimo_model")).toEqual([{}]));
     ipc.emit("model-download-progress", { progress: 25 });
-    expect(await screen.findByRole("button", { name: "Downloading Pianissimo… 25%" })).toBeDisabled();
+    expect(await screen.findByRole("button", { name: "Downloading Pianissimo Swedish… 25%" })).toBeDisabled();
 
     download.resolve();
-    await waitFor(() => expect(screen.queryByText("Downloading Pianissimo...")).toBeNull());
+    await waitFor(() => expect(screen.queryByText("Downloading Pianissimo Swedish...")).toBeNull());
     expect(ipc.callsTo("get_file_model_options").length).toBeGreaterThan(optionQueries);
     expect(ipc.callsTo("download_model")).toEqual([]);
   });
@@ -97,7 +97,7 @@ describe("the file transcription model download", () => {
     );
     const user = await openTranscribeTab();
 
-    await user.click(await screen.findByRole("button", { name: "Download Pianissimo" }));
+    await user.click(await screen.findByRole("button", { name: "Download Pianissimo Swedish" }));
 
     await waitFor(() => expect(ipc.callsTo("download_pianissimo_model")).toEqual([{}]));
     expect(ipc.callsTo("download_model")).toEqual([]);
@@ -140,7 +140,7 @@ describe("a download on the Dictate tab updates what the Transcribe tab offers",
     );
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "Transcribe" }));
-    expect(await screen.findByRole("button", { name: "Download Pianissimo" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Download Pianissimo Swedish" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Dictate" }));
     return user;
   }
@@ -149,10 +149,10 @@ describe("a download on the Dictate tab updates what the Transcribe tab offers",
     const user = await renderWithPianissimoMissing((lineup) => ({ get_profile_model_info: () => lineup() }));
 
     await user.click(await screen.findByRole("button", { name: "Download speech engine" }));
-    await waitFor(() => expect(screen.queryByText("Downloading Pianissimo...")).toBeNull());
+    await waitFor(() => expect(screen.queryByText("Downloading Pianissimo Swedish...")).toBeNull());
     await user.click(screen.getByRole("button", { name: "Transcribe" }));
 
-    await waitFor(() => expect(screen.queryByRole("button", { name: "Download Pianissimo" })).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Download Pianissimo Swedish" })).toBeNull());
   });
 
   test("switching a retired model to the recommended one downloads it first", async () => {
@@ -163,10 +163,10 @@ describe("a download on the Dictate tab updates what the Transcribe tab offers",
       set_profile_model: () => undefined,
     }));
 
-    await user.click(await screen.findByRole("button", { name: "Switch to Pianissimo (download 640 MB)" }));
-    await waitFor(() => expect(screen.queryByText("Downloading Pianissimo...")).toBeNull());
+    await user.click(await screen.findByRole("button", { name: "Switch to Pianissimo Swedish (download 640 MB)" }));
+    await waitFor(() => expect(screen.queryByText("Downloading Pianissimo Swedish...")).toBeNull());
     await user.click(screen.getByRole("button", { name: "Transcribe" }));
 
-    await waitFor(() => expect(screen.queryByRole("button", { name: "Download Pianissimo" })).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Download Pianissimo Swedish" })).toBeNull());
   });
 });
