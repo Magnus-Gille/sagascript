@@ -289,7 +289,7 @@ impl WhisperBackend {
         request: TranscribeRequest<'_>,
     ) -> Result<String, DictationError> {
         let language = request.language;
-        let prompt = request.options.prompt.clone();
+        let prompt = request.options.echo_guard_prompt().map(str::to_owned);
         let segments = self.transcribe_segments(request)?;
         // Whisper sometimes reads its own vocabulary prompt back over silence;
         // that is never what the user said (SAGA-579).

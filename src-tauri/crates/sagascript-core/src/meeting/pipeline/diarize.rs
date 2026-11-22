@@ -225,6 +225,7 @@ pub fn resolve_diarization_options(
         vad_model_path: vad_enabled.then(|| model::vad_model_path().to_string_lossy().into_owned()),
         segment_timestamps: true,
         parallel_chunks: 1,
+        guard_prompt_echo: true,
     };
     validate_diarization_options(&options)?;
     Ok(options)

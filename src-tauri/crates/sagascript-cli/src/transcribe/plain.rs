@@ -125,6 +125,7 @@ fn resolve_decoder(
         // JSON output. Text decoding remains in no-timestamps mode.
         segment_timestamps: true,
         parallel_chunks: 1,
+        guard_prompt_echo: true,
     };
     options.parallel_chunks = decoder
         .parallel

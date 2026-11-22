@@ -678,6 +678,7 @@ fn legacy_decoder_options() -> TranscribeOptions {
         vad_model_path: None,
         segment_timestamps: true,
         parallel_chunks: 1,
+        guard_prompt_echo: true,
     }
 }
 

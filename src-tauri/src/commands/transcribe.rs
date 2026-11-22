@@ -57,6 +57,7 @@ pub(crate) fn build_transcribe_options_for_profile(
         vad_model_path,
         segment_timestamps: false,
         parallel_chunks: 1,
+        guard_prompt_echo: true,
     }
 }
 
@@ -171,7 +172,10 @@ async fn stop_and_transcribe_impl(
                     return Err(error.into());
                 }
             };
-        let opts = build_transcribe_options_for_profile(ctrl.settings(), Some(&profile_id));
+        let mut opts = build_transcribe_options_for_profile(ctrl.settings(), Some(&profile_id));
+        // Dictionary training is the user reading their own terms aloud; only
+        // ordinary dictation (`allow_empty_not_recording`) guards the prompt.
+        opts.guard_prompt_echo = allow_empty_not_recording;
         let glossary =
             Glossary::parse(&ctrl.settings().effective_glossary_source(Some(&profile_id)));
         (
@@ -321,7 +325,11 @@ pub async fn transcribe_training_file(
         (
             profile.language,
             effective_model,
-            build_transcribe_options_for_profile(ctrl.settings(), Some(&profile_id)),
+            TranscribeOptions {
+                // Training reads the glossary aloud; never set it aside.
+                guard_prompt_echo: false,
+                ..build_transcribe_options_for_profile(ctrl.settings(), Some(&profile_id))
+            },
             Glossary::parse(&ctrl.settings().effective_glossary_source(Some(&profile_id))),
             use_pianissimo,
         )

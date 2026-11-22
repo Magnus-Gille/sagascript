@@ -152,6 +152,11 @@ pub struct TranscribeOptions {
     /// Number of independent Whisper states used for long-file transcription.
     /// Values are clamped to [`MAX_PARALLEL_CHUNKS`]; `0` and `1` are serial.
     pub parallel_chunks: usize,
+    /// Set aside segments where Whisper reads the vocabulary `prompt` back
+    /// (see `diagnostics::analyze_prompt_echo`). On by default; turned off
+    /// where the user is expected to read their own terms aloud (dictionary
+    /// training).
+    pub guard_prompt_echo: bool,
 }
 
 /// Validate decoder settings before starting diarization inference.
@@ -205,6 +210,16 @@ pub fn effective_diarization_decoder_config(
     })
 }
 
+impl TranscribeOptions {
+    /// The prompt to guard against echoes, or `None` when the guard is off or
+    /// there is no prompt.
+    pub fn echo_guard_prompt(&self) -> Option<&str> {
+        self.guard_prompt_echo
+            .then_some(self.prompt.as_deref())
+            .flatten()
+    }
+}
+
 impl Default for TranscribeOptions {
     fn default() -> Self {
         Self {
@@ -214,6 +229,7 @@ impl Default for TranscribeOptions {
             vad_model_path: None,
             segment_timestamps: false,
             parallel_chunks: 1,
+            guard_prompt_echo: true,
         }
     }
 }
