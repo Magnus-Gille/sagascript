@@ -1,7 +1,7 @@
 //! Opt-in vocabulary corrections of transcript segments (#343): the explicit
 //! aliases of the glossary and the strict one-edit `--correct-hints` repair.
 
-use sagascript_core::glossary::Glossary;
+use sagascript_core::glossary::{squash_key, squash_windows, Glossary};
 use sagascript_core::transcription::TranscriptSegment;
 
 /// Segment scores in this band are uncertain enough to consider an explicit
@@ -25,6 +25,7 @@ pub(super) struct VocabularyCorrection {
 pub(super) fn apply_hint_corrections(
     segments: &mut [TranscriptSegment],
     vocabulary: &[String],
+    glossary: &Glossary,
 ) -> Vec<VocabularyCorrection> {
     let mut corrections = Vec::new();
     for (segment_index, segment) in segments.iter_mut().enumerate() {
@@ -37,9 +38,10 @@ pub(super) fn apply_hint_corrections(
             continue;
         }
 
-        let (corrected, segment_corrections) = correct_segment_text(
+        let (corrected, segment_corrections) = correct_segment(
             &segment.text,
             vocabulary,
+            glossary,
             segment_index,
             avg_logprob,
             segment.no_speech_prob,
@@ -74,6 +76,98 @@ pub(super) fn apply_glossary_corrections(
         segment.text = text;
     }
     corrections
+}
+
+/// Shortest squashed hint term a split may repair to (#580); explicit aliases
+/// need 5 characters.
+const SQUASH_MIN_LEN: usize = 4;
+
+/// Repairs split words first (exact squash match, 2–3 words, only to a term
+/// no neighbour word is part of), then runs the one-edit repair on the text
+/// in between, so a repaired term is never edited again.
+fn correct_segment(
+    text: &str,
+    vocabulary: &[String],
+    glossary: &Glossary,
+    segment_index: usize,
+    avg_logprob: f32,
+    no_speech_prob: f32,
+) -> (String, Vec<VocabularyCorrection>) {
+    // Hint terms and the glossary's explicit aliases are the only targets: an
+    // alias in an Auto or hint-only glossary does not exist, so none applies.
+    let mut keys: Vec<(String, &String)> = vocabulary
+        .iter()
+        .map(|term| (squash_key(term), term))
+        .filter(|(key, _)| key.chars().count() >= SQUASH_MIN_LEN)
+        .collect();
+    keys.extend(
+        glossary
+            .squash_aliases()
+            .iter()
+            .map(|(key, canonical)| (key.clone(), canonical)),
+    );
+    keys.sort();
+    keys.dedup();
+    let is_term = |word: &str| {
+        let key = squash_key(word);
+        vocabulary.iter().any(|term| squash_key(term) == key)
+    };
+    let mut windows = squash_windows(text, 3);
+    windows.retain(|window| window.words.len() > 1);
+    // Longest first at each start; the left-to-right scan keeps them disjoint.
+    windows.sort_by(|a, b| a.start.cmp(&b.start).then(b.end.cmp(&a.end)));
+    let mut spans: Vec<(usize, usize, String)> = Vec::new();
+    for window in windows {
+        if spans.last().is_some_and(|(_, end, _)| window.start < *end) {
+            continue;
+        }
+        if window
+            .words
+            .iter()
+            .any(|(start, end)| is_term(&text[*start..*end]))
+        {
+            continue;
+        }
+        let mut matches = keys.iter().filter(|(key, _)| *key == window.key);
+        if let (Some((_, term)), None) = (matches.next(), matches.next()) {
+            spans.push((window.start, window.end, (*term).clone()));
+        }
+    }
+
+    let mut corrected = String::with_capacity(text.len());
+    let mut corrections = Vec::new();
+    let mut cursor = 0;
+    for (start, end, replacement) in spans {
+        let (gap, gap_corrections) = correct_segment_text(
+            &text[cursor..start],
+            vocabulary,
+            segment_index,
+            avg_logprob,
+            no_speech_prob,
+        );
+        corrected.push_str(&gap);
+        corrections.extend(gap_corrections);
+        corrections.push(VocabularyCorrection {
+            segment_index,
+            original: text[start..end].to_string(),
+            replacement: replacement.clone(),
+            method: "squash_split",
+            avg_logprob: Some(avg_logprob),
+            no_speech_prob,
+        });
+        corrected.push_str(&replacement);
+        cursor = end;
+    }
+    let (tail, tail_corrections) = correct_segment_text(
+        &text[cursor..],
+        vocabulary,
+        segment_index,
+        avg_logprob,
+        no_speech_prob,
+    );
+    corrected.push_str(&tail);
+    corrections.extend(tail_corrections);
+    (corrected, corrections)
 }
 
 fn correct_segment_text(
