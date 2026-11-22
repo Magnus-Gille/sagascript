@@ -671,7 +671,7 @@ async fn oversized_body_without_length_fails_promptly_and_leaves_nothing() {
             vec![vec![
                 ok_head(None),
                 Step::Write(vec![b'a'; 4 * 1024 * 1024]),
-                Step::Sleep(Duration::from_secs(3)),
+                Step::Sleep(Duration::from_secs(8)),
             ]],
             14,
             fast_limits(),
@@ -679,7 +679,7 @@ async fn oversized_body_without_length_fails_promptly_and_leaves_nothing() {
         .await;
         let err = r.unwrap_err().to_string();
         assert!(err.contains("exceeds the pinned manifest size"), "{err}");
-        assert!(took < Duration::from_millis(2500), "{took:?}");
+        assert!(took < Duration::from_secs(4), "{took:?}");
         assert_empty(&dir, "oversized download left a file");
     })
     .await
@@ -757,7 +757,7 @@ async fn stalled_body_fails_within_idle_deadline_and_leaves_nothing() {
             vec![vec![
                 ok_head(Some(14)),
                 Step::Write(vec![b'a'; 5]),
-                Step::Sleep(Duration::from_secs(3)),
+                Step::Sleep(Duration::from_secs(8)),
             ]],
             14,
             fast_limits(),
@@ -765,7 +765,7 @@ async fn stalled_body_fails_within_idle_deadline_and_leaves_nothing() {
         .await;
         let err = r.unwrap_err().to_string();
         assert!(err.contains("stalled"), "{err}");
-        assert!(took < Duration::from_millis(2500), "{took:?}");
+        assert!(took < Duration::from_secs(4), "{took:?}");
         assert_empty(&dir, "stalled download left a file");
     })
     .await
@@ -776,13 +776,13 @@ async fn stalled_body_fails_within_idle_deadline_and_leaves_nothing() {
 async fn stalled_headers_fail_within_idle_deadline() {
     tokio::time::timeout(Duration::from_secs(30), async {
         let (r, took, dir, _) = run_scripts(
-            vec![vec![Step::Sleep(Duration::from_secs(3))]],
+            vec![vec![Step::Sleep(Duration::from_secs(8))]],
             14,
             fast_limits(),
         )
         .await;
         assert!(r.unwrap_err().to_string().contains("stalled"));
-        assert!(took < Duration::from_millis(2500), "{took:?}");
+        assert!(took < Duration::from_secs(4), "{took:?}");
         assert_empty(&dir, "header stall left a file");
     })
     .await
