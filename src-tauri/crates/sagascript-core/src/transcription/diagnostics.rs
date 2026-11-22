@@ -543,28 +543,35 @@ fn prompt_terms(prompt: &str) -> Vec<Vec<String>> {
     terms
 }
 
-/// Cover `words` greedily with whole prompt entries (longest first). Returns
-/// how many words were covered and how many different entries matched.
+/// How many words of `words` whole prompt entries cover (greedy, longest
+/// first), and how many different entries occur in `words` at all. Entries that
+/// are parts of other entries ("New York" and "York") each still count.
 fn match_prompt_terms(words: &[String], terms: &[Vec<String>]) -> (usize, usize) {
     let mut covered = 0usize;
-    let mut matched: HashSet<usize> = HashSet::new();
     let mut index = 0usize;
     while index < words.len() {
-        let best = terms
+        let longest = terms
             .iter()
-            .enumerate()
-            .filter(|(_, term)| words[index..].starts_with(term))
-            .max_by_key(|(_, term)| term.len());
-        match best {
-            Some((term_index, term)) => {
-                covered += term.len();
-                matched.insert(term_index);
-                index += term.len();
+            .filter(|term| words[index..].starts_with(term))
+            .map(Vec::len)
+            .max();
+        match longest {
+            Some(len) => {
+                covered += len;
+                index += len;
             }
             None => index += 1,
         }
     }
-    (covered, matched.len())
+    let distinct = terms
+        .iter()
+        .filter(|term| {
+            words
+                .windows(term.len())
+                .any(|window| window == term.as_slice())
+        })
+        .count();
+    (covered, distinct)
 }
 
 fn word_tokens(text: &str) -> Vec<String> {
@@ -1215,6 +1222,13 @@ mod tests {
             .spans
             .is_empty());
         let echo = [heard(" Alpha, Beta, Gamma, Delta.", 0.9, -0.8)];
+        assert_eq!(analyze_prompt_echo(&echo, Some(prompt)).spans.len(), 1);
+    }
+
+    #[test]
+    fn overlapping_entries_each_count_towards_the_echo() {
+        let prompt = "New York, New, York, Alpha, Beta";
+        let echo = [heard(" New York New York Alpha Beta.", 0.9, -0.8)];
         assert_eq!(analyze_prompt_echo(&echo, Some(prompt)).spans.len(), 1);
     }
 
