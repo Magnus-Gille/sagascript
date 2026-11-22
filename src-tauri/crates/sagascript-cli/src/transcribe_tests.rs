@@ -672,6 +672,88 @@ fn does_not_replace_a_word_that_is_already_an_explicit_hint() {
     assert_eq!(segments[0].text, " Grimner");
 }
 
+#[test]
+fn squash_repairs_split_hint_words_inside_the_logprob_band() {
+    let vocabulary = ["worktree".to_string(), "Grimnir".to_string()];
+    let mut segments = vec![segment(
+        " Jag skapar en work tree och Grim nir.",
+        Some(-0.4),
+        0.0,
+    )];
+    let corrections = apply_hint_corrections(&mut segments, &vocabulary);
+
+    assert_eq!(segments[0].text, " Jag skapar en worktree och Grimnir.");
+    assert_eq!(corrections.len(), 2);
+    assert!(corrections.iter().all(|c| c.method == "squash_split"));
+    assert_eq!(corrections[0].original, "work tree");
+}
+
+#[test]
+fn squash_respects_the_confidence_gate_and_engines_without_logprob() {
+    let vocabulary = ["worktree".to_string()];
+    for (avg_logprob, no_speech_prob) in [
+        (Some(-0.2), 0.0),
+        (Some(-0.9), 0.0),
+        (None, 0.0),
+        (Some(-0.4), 0.6),
+    ] {
+        let mut segments = vec![segment(" en work tree", avg_logprob, no_speech_prob)];
+        assert!(apply_hint_corrections(&mut segments, &vocabulary).is_empty());
+        assert_eq!(segments[0].text, " en work tree");
+    }
+}
+
+#[test]
+fn squash_never_swallows_a_neighbour_word_or_crosses_punctuation() {
+    let vocabulary = ["worktree".to_string(), "tree".to_string()];
+    let mut segments = vec![segment(" work tree", Some(-0.4), 0.0)];
+    assert!(apply_hint_corrections(&mut segments, &vocabulary).is_empty());
+
+    let vocabulary = ["worktree".to_string()];
+    for text in [
+        " det work. Tree",
+        " a work tree2",
+        " work trees",
+        " work, tree",
+    ] {
+        let mut segments = vec![segment(text, Some(-0.4), 0.0)];
+        assert!(
+            apply_hint_corrections(&mut segments, &vocabulary).is_empty(),
+            "{text}"
+        );
+        assert_eq!(segments[0].text, text);
+    }
+}
+
+#[test]
+fn squash_rejects_ambiguous_terms_and_does_not_refuzz_its_output() {
+    let mut segments = vec![segment(" Grim nir", Some(-0.4), 0.0)];
+    let corrections = apply_hint_corrections(
+        &mut segments,
+        &["Grimnir".to_string(), "GrimNir".to_string()],
+    );
+    assert!(corrections.is_empty());
+
+    let mut segments = vec![segment(" Grim nir Grimner", Some(-0.4), 0.0)];
+    let corrections = apply_hint_corrections(&mut segments, &["Grimnir".to_string()]);
+    assert_eq!(segments[0].text, " Grimnir Grimnir");
+    assert_eq!(corrections[0].method, "squash_split");
+    assert_eq!(corrections[1].method, "fuzzy_one_edit");
+}
+
+#[test]
+fn alias_squash_repairs_spacing_but_hint_only_glossaries_do_not() {
+    let glossary = Glossary::parse("worktree = work tree");
+    let mut segments = vec![segment(" en work-tree", None, 0.0)];
+    let corrections = apply_glossary_corrections(&mut segments, &glossary);
+    assert_eq!(segments[0].text, " en worktree");
+    assert_eq!(corrections[0].method, "explicit_alias");
+
+    let hints_only = Glossary::parse("worktree");
+    let mut segments = vec![segment(" en work tree", None, 0.0)];
+    assert!(apply_glossary_corrections(&mut segments, &hints_only).is_empty());
+}
+
 // -- resolve_one_run_prompt --
 
 #[test]
