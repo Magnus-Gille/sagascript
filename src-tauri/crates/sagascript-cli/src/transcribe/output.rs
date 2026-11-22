@@ -62,7 +62,7 @@ pub(super) fn assemble_plain_result(input: PlainInput<'_>) -> PlainResult {
     } = input;
     let mut corrections = apply_glossary_corrections(&mut segments, glossary);
     if let Some(vocabulary) = hint_vocabulary {
-        corrections.extend(apply_hint_corrections(&mut segments, vocabulary));
+        corrections.extend(apply_hint_corrections(&mut segments, vocabulary, glossary));
     }
     let repetition = analyze_repetition(&segments);
     let trusted_segments: Vec<TranscriptSegment> = segments

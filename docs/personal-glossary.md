@@ -47,15 +47,16 @@ The GUI live path, GUI file path, CLI `record`, and CLI `transcribe` all use the
 same parser and exact-alias corrector. Batch `--correct-hints` retains its
 additional confidence-gated one-edit correction for plain single-word hints.
 
-Spacing repair (#580): an explicit alias also matches when the transcript spells
-it with different spacing or hyphens over 1–3 adjacent words (alias `work tree`
-repairs `work-tree`); the squashed alias (letters and digits, lowercased) must be
-at least 5 characters and equal the squashed window exactly, and punctuation
-between words blocks a window. The canonical term is never squash-matched
-ungated. Under `--correct-hints`, 2–3 words that squash to exactly one
-single-word hint (`work tree` → `worktree`) are joined, inside the same
-logprob band and only when no word of the window is itself a hint. There is no
-fuzzy threshold, and segments without `avg_logprob` are never rewritten.
+Spacing repair (#580), only under `--correct-hints`: inside the same logprob
+band (and never for segments without `avg_logprob`, such as Pianissimo's), 2–3
+adjacent words are joined when their squashed form (letters and digits,
+lowercased, separated only by whitespace or one hyphen; punctuation blocks a
+window) equals exactly one single-word hint of at least 4 characters or one
+explicit alias of at least 5 characters (alias `work tree` repairs `work-tree`
+to its term). No word of the window may itself be a hint, two terms that squash
+alike fail closed, and there is no fuzzy threshold. Hint-only (Auto or global)
+glossaries have no aliases, so only their hint terms apply. The plain
+exact-alias pass is unchanged.
 
 ## Interfaces
 

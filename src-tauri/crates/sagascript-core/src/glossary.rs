@@ -47,10 +47,17 @@ pub struct SquashWindow {
     pub words: Vec<(usize, usize)>,
 }
 
+/// Letters, digits and combining marks: a combining accent never ends a word,
+/// so a window cannot cut a decomposed word in two.
+fn is_word_char(character: char) -> bool {
+    character.is_alphanumeric()
+        || matches!(character as u32, 0x0300..=0x036F | 0x1AB0..=0x1AFF | 0x1DC0..=0x1DFF | 0x20D0..=0x20FF | 0xFE20..=0xFE2F)
+}
+
 /// The squashed comparison form: lowercase letters and digits only.
 pub fn squash_key(text: &str) -> String {
     text.chars()
-        .filter(|character| character.is_alphanumeric())
+        .filter(|character| is_word_char(*character))
         .flat_map(char::to_lowercase)
         .collect()
 }
@@ -63,7 +70,7 @@ pub fn squash_windows(text: &str, max_words: usize) -> Vec<SquashWindow> {
     let mut words: Vec<(usize, usize)> = Vec::new();
     let mut current: Option<usize> = None;
     for (index, character) in text.char_indices() {
-        if character.is_alphanumeric() {
+        if is_word_char(character) {
             current.get_or_insert(index);
         } else if let Some(start) = current.take() {
             words.push((start, index));
@@ -78,7 +85,7 @@ pub fn squash_windows(text: &str, max_words: usize) -> Vec<SquashWindow> {
         for last in first..words.len().min(first + max_words) {
             if last > first {
                 let gap = &text[words[last - 1].1..words[last].0];
-                if !gap.chars().all(|c| c.is_whitespace() || c == '-') || gap.is_empty() {
+                if !(gap == "-" || (!gap.is_empty() && gap.chars().all(char::is_whitespace))) {
                     break;
                 }
             }
@@ -168,6 +175,13 @@ impl Glossary {
         glossary
     }
 
+    /// Squashed explicit aliases (at least 5 characters, never the canonical
+    /// term) with the term each repairs to, for the confidence-gated
+    /// spacing repair of `transcribe --correct-hints` (#580).
+    pub fn squash_aliases(&self) -> &[(String, String)] {
+        &self.squash_aliases
+    }
+
     pub fn entries(&self) -> &[GlossaryEntry] {
         &self.entries
     }
@@ -237,19 +251,6 @@ impl Glossary {
         }
 
         let mut candidates = Vec::new();
-        if !self.squash_aliases.is_empty() {
-            for window in squash_windows(text, 3) {
-                for (key, canonical) in &self.squash_aliases {
-                    if *key == window.key && text[window.start..window.end] != *canonical {
-                        candidates.push(Candidate {
-                            start: window.start,
-                            end: window.end,
-                            canonical,
-                        });
-                    }
-                }
-            }
-        }
         for matcher in &self.matchers {
             for matched in matcher.pattern.find_iter(text) {
                 if text[matched.start()..matched.end()] != matcher.canonical {
@@ -477,44 +478,35 @@ mod tests {
     use super::*;
 
     #[test]
-    fn alias_squash_repairs_spacing_over_one_to_three_words() {
-        let glossary =
-            Glossary::parse("worktree = work tree\nKubernetes = kuber netes | koo ber netes");
-        let (text, corrections) =
-            glossary.correct_text("Skapa en work-tree och kuber netes, work tree.");
-        assert_eq!(text, "Skapa en worktree och Kubernetes, worktree.");
-        assert_eq!(corrections.len(), 3);
-        let (text, _) = glossary.correct_text("koo ber netes");
-        assert_eq!(text, "Kubernetes");
-    }
-
-    #[test]
-    fn alias_squash_does_not_merge_across_punctuation_or_swallow_neighbours() {
-        let glossary = Glossary::parse("worktree = work tree");
-        let (text, corrections) =
-            glossary.correct_text("Det var work. Tree på bilden, work trees.");
-        assert!(corrections.is_empty(), "{text}");
-        let (text, _) = glossary.correct_text("ett work tree nu");
-        assert_eq!(text, "ett worktree nu");
-    }
-
-    #[test]
-    fn alias_squash_ignores_canonical_hints_short_keys_and_ambiguity() {
-        let hint_only = Glossary::parse("Together, worktree");
-        assert!(hint_only.correct_text("to get her, work tree").1.is_empty());
-        let short = Glossary::parse("Odin = o din\nTherapist = x");
-        assert!(short.correct_text("o-din").1.is_empty());
-        let ambiguous = Glossary::parse("Alpha = foo bar\nBeta = fo obar");
-        assert!(ambiguous.correct_text("foo bar").1.is_empty());
-    }
-
-    #[test]
     fn squash_windows_stay_within_three_words() {
         let keys: Vec<String> = squash_windows("a b c d", 3)
             .into_iter()
             .map(|w| w.key)
             .collect();
         assert_eq!(keys, ["a", "ab", "abc", "b", "bc", "bcd", "c", "cd", "d"]);
+    }
+
+    #[test]
+    fn squash_windows_merge_only_across_plain_spacing_or_one_hyphen() {
+        let keys = |text| -> Vec<usize> {
+            squash_windows(text, 3)
+                .iter()
+                .map(|w| w.words.len())
+                .collect()
+        };
+        assert_eq!(keys("a-b"), [1, 2, 1]);
+        assert_eq!(keys("a - b"), [1, 1]);
+        assert_eq!(keys("a. b"), [1, 1]);
+        assert_eq!(keys("e\u{301}x y"), [1, 2, 1]);
+    }
+
+    #[test]
+    fn squash_aliases_hold_only_long_explicit_aliases() {
+        let glossary = Glossary::parse("worktree = work tree\nOdin = o din\nTogether");
+        assert_eq!(
+            glossary.squash_aliases(),
+            [("worktree".to_string(), "worktree".to_string())]
+        );
     }
 
     #[test]

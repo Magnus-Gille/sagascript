@@ -25,6 +25,7 @@ pub(super) struct VocabularyCorrection {
 pub(super) fn apply_hint_corrections(
     segments: &mut [TranscriptSegment],
     vocabulary: &[String],
+    glossary: &Glossary,
 ) -> Vec<VocabularyCorrection> {
     let mut corrections = Vec::new();
     for (segment_index, segment) in segments.iter_mut().enumerate() {
@@ -40,6 +41,7 @@ pub(super) fn apply_hint_corrections(
         let (corrected, segment_corrections) = correct_segment(
             &segment.text,
             vocabulary,
+            glossary,
             segment_index,
             avg_logprob,
             segment.no_speech_prob,
@@ -76,7 +78,8 @@ pub(super) fn apply_glossary_corrections(
     corrections
 }
 
-/// Shortest squashed term a split may repair to (#580).
+/// Shortest squashed hint term a split may repair to (#580); explicit aliases
+/// need 5 characters.
 const SQUASH_MIN_LEN: usize = 4;
 
 /// Repairs split words first (exact squash match, 2–3 words, only to a term
@@ -85,15 +88,26 @@ const SQUASH_MIN_LEN: usize = 4;
 fn correct_segment(
     text: &str,
     vocabulary: &[String],
+    glossary: &Glossary,
     segment_index: usize,
     avg_logprob: f32,
     no_speech_prob: f32,
 ) -> (String, Vec<VocabularyCorrection>) {
-    let keys: Vec<(String, &String)> = vocabulary
+    // Hint terms and the glossary's explicit aliases are the only targets: an
+    // alias in an Auto or hint-only glossary does not exist, so none applies.
+    let mut keys: Vec<(String, &String)> = vocabulary
         .iter()
         .map(|term| (squash_key(term), term))
         .filter(|(key, _)| key.chars().count() >= SQUASH_MIN_LEN)
         .collect();
+    keys.extend(
+        glossary
+            .squash_aliases()
+            .iter()
+            .map(|(key, canonical)| (key.clone(), canonical)),
+    );
+    keys.sort();
+    keys.dedup();
     let is_term = |word: &str| {
         let key = squash_key(word);
         vocabulary.iter().any(|term| squash_key(term) == key)
