@@ -421,29 +421,24 @@ pub fn analyze_prompt_echo(
     prompt: Option<&str>,
 ) -> PromptEchoDiagnostics {
     let mut spans = Vec::new();
-    let prompt_words = prompt
+    let terms: Vec<Vec<String>> = prompt
         .filter(|prompt| is_vocabulary_list(prompt))
-        .map(word_tokens)
+        .map(prompt_terms)
         .unwrap_or_default();
-    let vocabulary: HashSet<&str> = prompt_words.iter().map(String::as_str).collect();
-    if vocabulary.len() >= PROMPT_ECHO_MIN_DISTINCT_PROMPT_TERMS {
+    // The prompt's words in prompt order, for the verbatim-copy test.
+    let prompt_words: Vec<String> = terms.concat();
+    if terms.len() >= PROMPT_ECHO_MIN_DISTINCT_PROMPT_TERMS {
         for (segment_index, segment) in segments.iter().enumerate() {
             let words = word_tokens(&segment.text);
             if words.len() < PROMPT_ECHO_MIN_TOKENS {
                 continue;
             }
-            let in_prompt = words
-                .iter()
-                .filter(|word| vocabulary.contains(word.as_str()))
-                .count();
-            let distinct_in_prompt = words
-                .iter()
-                .filter(|word| vocabulary.contains(word.as_str()))
-                .collect::<HashSet<_>>()
-                .len();
-            let overlap = in_prompt as f64 / words.len() as f64;
+            // Whole entries, not component words: a multi-word entry spoken
+            // once is one term however many words it has.
+            let (covered_words, distinct_terms) = match_prompt_terms(&words, &terms);
+            let overlap = covered_words as f64 / words.len() as f64;
             if overlap < PROMPT_ECHO_MIN_OVERLAP
-                || distinct_in_prompt < PROMPT_ECHO_MIN_DISTINCT_PROMPT_TERMS
+                || distinct_terms < PROMPT_ECHO_MIN_DISTINCT_PROMPT_TERMS
             {
                 continue;
             }
@@ -534,6 +529,42 @@ fn is_vocabulary_list(prompt: &str) -> bool {
         .collect();
     terms.len() >= PROMPT_ECHO_MIN_DISTINCT_PROMPT_TERMS
         && terms.iter().filter(|&&count| count <= 3).count() * 10 >= terms.len() * 8
+}
+
+/// The prompt's entries (comma, semicolon or line separated), each as its
+/// words, without repeats.
+fn prompt_terms(prompt: &str) -> Vec<Vec<String>> {
+    let mut terms: Vec<Vec<String>> = Vec::new();
+    for term in prompt.split([',', ';', '\n']).map(word_tokens) {
+        if !term.is_empty() && !terms.contains(&term) {
+            terms.push(term);
+        }
+    }
+    terms
+}
+
+/// Cover `words` greedily with whole prompt entries (longest first). Returns
+/// how many words were covered and how many different entries matched.
+fn match_prompt_terms(words: &[String], terms: &[Vec<String>]) -> (usize, usize) {
+    let mut covered = 0usize;
+    let mut matched: HashSet<usize> = HashSet::new();
+    let mut index = 0usize;
+    while index < words.len() {
+        let best = terms
+            .iter()
+            .enumerate()
+            .filter(|(_, term)| words[index..].starts_with(term))
+            .max_by_key(|(_, term)| term.len());
+        match best {
+            Some((term_index, term)) => {
+                covered += term.len();
+                matched.insert(term_index);
+                index += term.len();
+            }
+            None => index += 1,
+        }
+    }
+    (covered, matched.len())
 }
 
 fn word_tokens(text: &str) -> Vec<String> {
@@ -1174,6 +1205,17 @@ mod tests {
 
         assert_eq!(kept.len(), 1);
         assert_eq!(kept[0].text, " Hej på dig.");
+    }
+
+    #[test]
+    fn one_multi_word_entry_is_one_term_not_several() {
+        let prompt = "New York City Department of Records, Alpha, Beta, Gamma, Delta";
+        let segments = [heard(" New York City Department of Records.", 0.02, -0.1)];
+        assert!(analyze_prompt_echo(&segments, Some(prompt))
+            .spans
+            .is_empty());
+        let echo = [heard(" Alpha, Beta, Gamma, Delta.", 0.9, -0.8)];
+        assert_eq!(analyze_prompt_echo(&echo, Some(prompt)).spans.len(), 1);
     }
 
     #[test]
