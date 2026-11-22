@@ -35,6 +35,11 @@ fn every_variant_keeps_its_text_and_has_a_stable_snake_case_code() {
             "invalid_setting_value",
         ),
         (
+            SettingsError::InvalidRecordingSource { value: "x".into() },
+            "recording_source must be mic, system or both, got 'x'",
+            "invalid_setting_value",
+        ),
+        (
             SettingsError::InvalidRecordingChannelPair {
                 first: 0,
                 second: 2,

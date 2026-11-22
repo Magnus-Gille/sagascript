@@ -35,6 +35,7 @@ export const settings = object(
     engine_idle_unload_minutes: number,
     has_completed_onboarding: boolean,
     recording_quality: literal("lossless", "compact"),
+    recording_source: literal("mic", "system", "both"),
     recording_directory: string,
     recording_channel_pair: pair(number),
     recording_folder_confirmed: boolean,

@@ -268,6 +268,7 @@ fn build_app(gui_launch_mode: GuiLaunchMode) -> tauri::App {
             commands::transcribe_recording,
             commands::get_recording_folder_info,
             commands::set_recording_quality,
+            commands::set_recording_source,
             commands::set_recording_directory,
             commands::set_recording_channel_pair,
             commands::confirm_recording_folder,

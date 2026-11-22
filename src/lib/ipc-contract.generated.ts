@@ -6,7 +6,7 @@ import type { PreflightReport } from "./acceptance";
 import type { AppState, BuildInfo, EngineLoadState, EngineStatus, GlossarySuggestion, HotkeyMode, HotkeyProfile, HotkeyStatus, Language, LoadedModelInfo, MeetingJobSnapshot, Settings, TrainingTranscript, WhisperModel } from "./api";
 import type { MeetingReprocessingProposal, ProposalState, ReprocessingMode, ReprocessingRequest, SelectedReprocessingPlan } from "./meeting-reprocessing-types";
 import type { CorrectionFile, CorrectionOperation, MeetingAudioAttachment, MeetingExportFormat, MeetingReview, MeetingReviewState, MeetingTranscript } from "./meeting-types";
-import type { RecordingFinished, RecordingFolderInfo, RecordingQuality, RecordingSessionInfo, RecordingSummary, RecoveryNote } from "./record-types";
+import type { RecordSource, RecordingFinished, RecordingFolderInfo, RecordingQuality, RecordingSessionInfo, RecordingSummary, RecoveryNote } from "./record-types";
 import type { UpdateRecoveryPayload } from "./update-recovery";
 import type { BackendError } from "./errors";
 
@@ -197,6 +197,8 @@ export interface CommandMap {
   set_recording_directory: { args: { path: string }; result: void; error: BackendError };
   /** `commands::set_recording_quality(quality: RecordingQuality) -> Result<(), CommandError>` */
   set_recording_quality: { args: { quality: RecordingQuality }; result: void; error: BackendError };
+  /** `commands::set_recording_source(source: RecordSource) -> Result<(), CommandError>` */
+  set_recording_source: { args: { source: RecordSource }; result: void; error: BackendError };
   /** `commands::set_show_overlay(enabled: bool) -> Result<(), CommandError>` */
   set_show_overlay: { args: { enabled: boolean }; result: void; error: BackendError };
   /** `commands::set_temperature_fallback(enabled: bool) -> Result<(), CommandError>` */
@@ -320,6 +322,7 @@ export const COMMAND_NAMES = [
   "set_recording_channel_pair",
   "set_recording_directory",
   "set_recording_quality",
+  "set_recording_source",
   "set_show_overlay",
   "set_temperature_fallback",
   "set_update_result_pending",
@@ -430,6 +433,7 @@ export const BACKEND_ERROR_COMMANDS = [
   "set_recording_channel_pair",
   "set_recording_directory",
   "set_recording_quality",
+  "set_recording_source",
   "set_show_overlay",
   "set_temperature_fallback",
   "set_update_result_pending",
@@ -545,6 +549,7 @@ export const COMMAND_ARGUMENTS: {
   set_recording_channel_pair: { required: ["first", "second"], optional: [] },
   set_recording_directory: { required: ["path"], optional: [] },
   set_recording_quality: { required: ["quality"], optional: [] },
+  set_recording_source: { required: ["source"], optional: [] },
   set_show_overlay: { required: ["enabled"], optional: [] },
   set_temperature_fallback: { required: ["enabled"], optional: [] },
   set_update_result_pending: { required: ["resultId", "pending"], optional: [] },

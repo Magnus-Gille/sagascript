@@ -98,6 +98,7 @@ fn settings_default_values() {
     assert!(s.temperature_fallback);
     assert!(!s.vad_enabled);
     assert_eq!(s.recording_quality, RecordingQuality::Lossless);
+    assert_eq!(s.recording_source, RecordSource::Mic);
     assert_eq!(s.recording_directory, "");
     assert_eq!(s.recording_channel_pair, [1, 2]);
     assert!(!s.recording_folder_confirmed);
@@ -108,6 +109,7 @@ fn settings_default_values() {
 fn recording_settings_roundtrip_and_use_snake_case() {
     let original = Settings {
         recording_quality: RecordingQuality::Compact,
+        recording_source: RecordSource::Both,
         recording_directory: "/Volumes/Audio/Sagascript".into(),
         recording_channel_pair: [3, 3],
         recording_folder_confirmed: true,
@@ -116,9 +118,11 @@ fn recording_settings_roundtrip_and_use_snake_case() {
     };
     let json = serde_json::to_value(&original).unwrap();
     assert_eq!(json["recording_quality"], "compact");
+    assert_eq!(json["recording_source"], "both");
     assert_eq!(json["recording_channel_pair"], serde_json::json!([3, 3]));
     let decoded: Settings = serde_json::from_value(json).unwrap();
     assert_eq!(decoded.recording_quality, RecordingQuality::Compact);
+    assert_eq!(decoded.recording_source, RecordSource::Both);
     assert_eq!(decoded.recording_directory, "/Volumes/Audio/Sagascript");
     assert_eq!(decoded.recording_channel_pair, [3, 3]);
     assert!(decoded.recording_folder_confirmed);

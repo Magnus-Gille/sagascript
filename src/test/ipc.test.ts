@@ -26,6 +26,7 @@ const settings: Settings = {
   engine_idle_unload_minutes: 10,
   has_completed_onboarding: true,
   recording_quality: "lossless",
+  recording_source: "mic",
   recording_directory: "",
   recording_channel_pair: [1, 2],
   recording_folder_confirmed: false,

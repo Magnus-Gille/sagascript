@@ -229,6 +229,7 @@ const contracts: Contract[] = [
   contract(record.getRecordingFolderInfo, [], "get_recording_folder_info", { path: null }),
   contract(record.getRecordingFolderInfo, ["/Volumes/Archive"], "get_recording_folder_info", { path: "/Volumes/Archive" }),
   contract(record.setRecordingQuality, ["compact"], "set_recording_quality", { quality: "compact" }),
+  contract(record.setRecordingSource, ["both"], "set_recording_source", { source: "both" }),
   contract(record.setRecordingDirectory, ["/Volumes/Archive"], "set_recording_directory", { path: "/Volumes/Archive" }),
   contract(record.setRecordingChannelPair, [3, 4], "set_recording_channel_pair", { first: 3, second: 4 }),
   contract(record.confirmRecordingFolder, [], "confirm_recording_folder", {}),

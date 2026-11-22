@@ -31,6 +31,7 @@ use std::time::Duration;
 use sagascript_core::glossary::Glossary;
 use sagascript_core::machine;
 use sagascript_core::models::{Language, PianissimoModel, WhisperModel};
+use sagascript_core::recording::source_plan::RecordSource;
 use sagascript_core::settings::{
     store, EnginePrewarm, FileModelPreference, HotkeyMode, RecordingQuality, Settings,
 };
@@ -355,6 +356,16 @@ const ROWS: &[Row] = &[
             .map_err(text)
         },
         landed: |s| s.recording_quality == RecordingQuality::Compact,
+    },
+    Row {
+        commands: &["set_recording_source"],
+        mirror: Mirror::Field(&["recording_source"]),
+        arrange: nothing,
+        run: |app, rt| {
+            rt.block_on(set_recording_source(controller(app), RecordSource::Both))
+                .map_err(text)
+        },
+        landed: |s| s.recording_source == RecordSource::Both,
     },
     Row {
         commands: &["set_recording_directory"],

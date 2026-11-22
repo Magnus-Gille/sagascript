@@ -1,5 +1,6 @@
 use super::*;
 use crate::models::{Language, PianissimoModel, WhisperModel};
+use crate::recording::source_plan::RecordSource;
 use crate::settings::{
     EnginePrewarm, FileModelPreference, HotkeyMode, RecordingQuality, ENGINE_DEFAULTS_VERSION,
     MODEL_LINEUP_VERSION,
@@ -1103,6 +1104,7 @@ fn partial_json_fills_defaults() {
     assert!(s.auto_paste);
     assert!(s.auto_select_model);
     assert_eq!(s.recording_quality, RecordingQuality::Lossless);
+    assert_eq!(s.recording_source, RecordSource::Mic);
     assert_eq!(s.recording_directory, "");
     assert_eq!(s.recording_channel_pair, [1, 2]);
 }
@@ -1248,6 +1250,7 @@ fn every_field_set() -> serde_json::Map<String, serde_json::Value> {
         "engine_prewarm": "off",
         "engine_idle_unload_minutes": 30,
         "recording_quality": "compact",
+        "recording_source": "both",
         "recording_directory": "/Volumes/Audio/Sagascript",
         "recording_channel_pair": [3, 4],
         "recording_folder_confirmed": true,
@@ -1324,6 +1327,22 @@ fn unknown_whisper_model_resets_only_that_field_and_an_update_loses_nothing_else
         assert_eq!(raw, serde_json::Value::Object(expected));
         // The dropped value is recoverable from the exact original bytes.
         assert_file_bytes(recovery_copy_path(&path, 0), &original);
+    });
+}
+
+#[test]
+fn unknown_recording_source_resets_only_that_field() {
+    with_temp_settings(|path| {
+        // A source a newer release added.
+        fs::write(
+            &path,
+            every_field_set_but("recording_source", "loopback".into()),
+        )
+        .unwrap();
+        let loaded = load_from(&path);
+        assert_only_reset(&loaded, &["recording_source"]);
+        assert_eq!(loaded.recording_source, RecordSource::Mic);
+        assert_eq!(loaded.recording_quality, RecordingQuality::Compact);
     });
 }
 

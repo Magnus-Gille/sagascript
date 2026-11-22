@@ -60,6 +60,7 @@ fn the_table_has_accepted_and_refused_cases_for_each_operation() {
         "EnginePrewarm",
         "EngineIdleUnloadMinutes",
         "RecordingQuality",
+        "RecordingSource",
         "RecordingDirectory",
         "RecordingChannelPair",
         "FileTranscriptionModel",
@@ -133,6 +134,7 @@ fn reset_rows_are_the_setters_with_the_default_value() {
         "engine_prewarm",
         "engine_idle_unload_minutes",
         "recording_quality",
+        "recording_source",
         "recording_directory",
         "recording_channel_pair",
         "file_transcription_model",
@@ -148,6 +150,10 @@ fn reset_rows_are_the_setters_with_the_default_value() {
     assert!(matches!(
         reset_as_op("recording_quality"),
         Op::RecordingQuality(RecordingQuality::Lossless)
+    ));
+    assert!(matches!(
+        reset_as_op("recording_source"),
+        Op::RecordingSource(RecordSource::Mic)
     ));
     assert!(matches!(reset_as_op("show_overlay"), Op::ShowOverlay(true)));
     assert!(matches!(

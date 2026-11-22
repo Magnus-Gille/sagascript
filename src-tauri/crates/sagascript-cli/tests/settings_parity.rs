@@ -37,6 +37,7 @@ fn args(op: &Op) -> Vec<String> {
             set("engine_idle_unload_minutes", minutes.to_string())
         }
         Op::RecordingQuality(quality) => set("recording_quality", quality.id().into()),
+        Op::RecordingSource(source) => set("recording_source", source.id().into()),
         Op::RecordingDirectory(directory) => set("recording_directory", directory.clone()),
         Op::RecordingChannelPair(first, second) => {
             set("recording_channel_pair", format!("{first}-{second}"))
