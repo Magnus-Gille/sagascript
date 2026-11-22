@@ -41,6 +41,7 @@ pub struct TranscribeArgs {
     /// Output result as JSON: text, language, model, duration, and a
     /// `segments` array with per-segment timing/confidence plus
     /// `coverage_ratio`, `uncovered_spans`, repetition quarantine spans,
+    /// `prompt_echo_spans` (segments repeating the vocabulary prompt),
     /// sampled language regions/probabilities, and warnings. Raw segments
     /// include `quarantined`.
     #[arg(long)]

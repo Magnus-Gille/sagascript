@@ -251,6 +251,7 @@ fn measure(args: BenchmarkDictationArgs, out: &Out) -> Result<Checks, DictationE
         vad_model_path: None,
         segment_timestamps: false,
         parallel_chunks: 1,
+        guard_prompt_echo: true,
     };
 
     let backend = WhisperBackend::new();

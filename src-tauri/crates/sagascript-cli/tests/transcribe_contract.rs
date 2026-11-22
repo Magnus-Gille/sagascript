@@ -1636,6 +1636,7 @@ mod pianissimo_with_the_fake_host {
                 "coverage_ratio": null,
                 "uncovered_spans": [],
                 "repetition_spans": [],
+                "prompt_echo_spans": [],
                 "detected_language": null,
                 "language_redetection_enabled": false,
                 "language_regions": null,

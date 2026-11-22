@@ -769,6 +769,7 @@ fn the_json_result_has_the_documented_keys_and_values() {
             "coverage_ratio": 1.0,
             "uncovered_spans": [],
             "repetition_spans": [],
+            "prompt_echo_spans": [],
             "detected_language": {"language": "en", "probability": 0.99_f32},
             "language_redetection_enabled": false,
             "language_regions": null,
@@ -794,6 +795,7 @@ fn the_json_result_has_the_documented_keys_and_values() {
             "language_redetection_enabled",
             "language_regions",
             "model",
+            "prompt_echo_spans",
             "repetition_spans",
             "segments",
             "text",
@@ -1913,6 +1915,43 @@ mod assembling_the_plain_result {
             result.json["warnings"][0]["code"],
             "repetitive_hallucination"
         );
+    }
+
+    #[test]
+    fn a_prompt_echo_is_quarantined_in_the_json_and_left_out_of_the_text() {
+        let glossary = Glossary::parse("Sagascript, Whisper, Tauri, Svelte, Grimnir, Munin");
+        let mut echo = spoken(5.0, 8.0, " Tauri, Svelte, Munin, Grimnir, Whisper.");
+        echo.no_speech_prob = 0.92;
+        let result = assemble(
+            vec![spoken(0.0, 5.0, " Hello there."), echo],
+            Language::English,
+            &glossary,
+            &evidence(None, None),
+        );
+
+        assert_eq!(result.text, "Hello there.");
+        assert_eq!(result.json["segments"][1]["quarantined"], true);
+        assert_eq!(result.json["segments"][0]["quarantined"], false);
+        let spans = result.json["prompt_echo_spans"].as_array().unwrap();
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0]["segment_index"], 1);
+        let codes: Vec<&str> = result.warnings.iter().map(|w| w.code.as_str()).collect();
+        assert_eq!(codes, ["prompt_echo"]);
+    }
+
+    #[test]
+    fn the_same_words_pass_without_a_vocabulary_prompt() {
+        let mut echo = spoken(5.0, 8.0, " Tauri, Svelte, Munin, Grimnir, Whisper.");
+        echo.no_speech_prob = 0.92;
+        let result = assemble(
+            vec![echo],
+            Language::English,
+            &Glossary::default(),
+            &evidence(None, None),
+        );
+
+        assert_eq!(result.json["prompt_echo_spans"], json!([]));
+        assert_eq!(result.json["segments"][0]["quarantined"], false);
     }
 
     #[test]

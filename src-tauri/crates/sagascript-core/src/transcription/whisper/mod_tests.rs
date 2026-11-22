@@ -95,4 +95,16 @@ mod segment_confidence_tests {
         let json = serde_json::to_value(&seg).unwrap();
         assert!(json["avg_logprob"].is_null());
     }
+
+    #[test]
+    fn the_prompt_echo_guard_is_on_by_default_and_can_be_turned_off() {
+        let mut options = TranscribeOptions {
+            prompt: Some("a, b, c, d".into()),
+            ..TranscribeOptions::default()
+        };
+        assert_eq!(options.echo_guard_prompt(), Some("a, b, c, d"));
+        options.guard_prompt_echo = false;
+        assert_eq!(options.echo_guard_prompt(), None);
+        assert_eq!(TranscribeOptions::default().echo_guard_prompt(), None);
+    }
 }

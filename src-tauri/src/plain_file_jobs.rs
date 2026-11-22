@@ -7,6 +7,7 @@ use crate::events::{EmitEvent, PlainPhase, PlainTranscriptionProgress};
 use sagascript_core::glossary::Glossary;
 use sagascript_core::recording::{decode_tracks, Manifest, RecordingError, TrackChunk};
 use sagascript_core::sync::lock_or_recover;
+use sagascript_core::transcription::diagnostics::without_prompt_echo;
 use sagascript_core::transcription::whisper_backend::display_transcript;
 use sagascript_core::transcription::{
     pianissimo_backend::{AudioLength, PianissimoBackend},
@@ -546,6 +547,8 @@ pub async fn transcribe(
                             })
                             .on_encode_start(&encode_start),
                     )?;
+                    // Set aside segments where Whisper read the vocabulary prompt back (SAGA-579).
+                    let segments = without_prompt_echo(segments, options.prompt.as_deref());
                     Ok(display_transcript(&segments, context.language))
                 })?;
             run.check()?;

@@ -366,6 +366,230 @@ pub fn analyze_repetition(segments: &[TranscriptSegment]) -> RepetitionDiagnosti
     RepetitionDiagnostics { spans, warnings }
 }
 
+const PROMPT_ECHO_MIN_TOKENS: usize = 4;
+const PROMPT_ECHO_MIN_DISTINCT_PROMPT_TERMS: usize = 4;
+const PROMPT_ECHO_MIN_OVERLAP: f64 = 0.80;
+/// Whisper's own per-window "no speech" estimate above which a prompt-shaped
+/// segment is taken as an echo of the prompt rather than something the user said.
+const PROMPT_ECHO_NO_SPEECH_PROB: f32 = 0.6;
+/// A segment that is nothing but a contiguous copy of the prompt, in prompt
+/// order, is an echo whatever Whisper's confidence says. Shorter copies are too
+/// easily a user genuinely reading out a few terms.
+const PROMPT_ECHO_MIN_ORDERED_RUN: usize = 6;
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct PromptEchoSpan {
+    pub start: f64,
+    pub end: f64,
+    pub duration: f64,
+    pub token_count: usize,
+    /// Share of the segment's words that are words of the decoder prompt.
+    pub prompt_overlap: f64,
+    /// `true` when the segment copies the prompt verbatim, in prompt order.
+    pub ordered_copy: bool,
+    pub no_speech_prob: f32,
+    pub avg_logprob: Option<f32>,
+    pub segment_index: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct PromptEchoDiagnostics {
+    pub spans: Vec<PromptEchoSpan>,
+    pub warnings: Vec<TranscriptionWarning>,
+}
+
+impl PromptEchoDiagnostics {
+    pub fn quarantines_segment(&self, segment_index: usize) -> bool {
+        self.spans
+            .iter()
+            .any(|span| span.segment_index == segment_index)
+    }
+}
+
+/// Detect segments where Whisper repeats its own decoder prompt (the glossary
+/// terms) as the transcript, typically over silence or noise.
+///
+/// The test is against the actual prompt text, not a generic "looks like a
+/// list" heuristic: a segment must be made almost entirely of words from the
+/// prompt (at least four distinct ones) and then either carry a high
+/// `no_speech_prob` or be a verbatim, in-order copy of a stretch of the prompt.
+/// A user who really dictates a few glossary terms, out of order and with
+/// speech-like scores, is left alone. An absent or short (under four words)
+/// prompt turns the check off.
+pub fn analyze_prompt_echo(
+    segments: &[TranscriptSegment],
+    prompt: Option<&str>,
+) -> PromptEchoDiagnostics {
+    let mut spans = Vec::new();
+    let listed: Vec<Vec<String>> = prompt
+        .filter(|prompt| is_vocabulary_list(prompt))
+        .map(prompt_terms)
+        .unwrap_or_default();
+    // The prompt's words in prompt order, repeats included, for the
+    // verbatim-copy test; the entries without repeats, for counting.
+    let prompt_words: Vec<String> = listed.concat();
+    let mut terms: Vec<Vec<String>> = Vec::new();
+    for term in listed {
+        if !terms.contains(&term) {
+            terms.push(term);
+        }
+    }
+    if terms.len() >= PROMPT_ECHO_MIN_DISTINCT_PROMPT_TERMS {
+        for (segment_index, segment) in segments.iter().enumerate() {
+            let words = word_tokens(&segment.text);
+            if words.len() < PROMPT_ECHO_MIN_TOKENS {
+                continue;
+            }
+            // Whole entries, not component words: a multi-word entry spoken
+            // once is one term however many words it has.
+            let (covered_words, distinct_terms) = match_prompt_terms(&words, &terms);
+            let overlap = covered_words as f64 / words.len() as f64;
+            if overlap < PROMPT_ECHO_MIN_OVERLAP
+                || distinct_terms < PROMPT_ECHO_MIN_DISTINCT_PROMPT_TERMS
+            {
+                continue;
+            }
+            let ordered_copy = words.len() >= PROMPT_ECHO_MIN_ORDERED_RUN && {
+                // The prompt read round and round: a long echo wraps.
+                let laps = words.len() / prompt_words.len() + 2;
+                let cycled: Vec<&String> = prompt_words
+                    .iter()
+                    .cycle()
+                    .take(prompt_words.len() * laps)
+                    .collect();
+                cycled
+                    .windows(words.len())
+                    .any(|window| window.iter().zip(&words).all(|(a, b)| *a == b))
+            };
+            let silent = segment.no_speech_prob >= PROMPT_ECHO_NO_SPEECH_PROB;
+            if !(silent || ordered_copy) {
+                continue;
+            }
+            spans.push(PromptEchoSpan {
+                start: segment.start,
+                end: segment.end,
+                duration: segment.end - segment.start,
+                token_count: words.len(),
+                prompt_overlap: overlap,
+                ordered_copy,
+                no_speech_prob: segment.no_speech_prob,
+                avg_logprob: segment.avg_logprob,
+                segment_index,
+            });
+        }
+    }
+
+    let warnings = spans
+        .iter()
+        .map(|span| TranscriptionWarning {
+            code: "prompt_echo".to_string(),
+            message: format!(
+                "Quarantined a segment from {:.2}s to {:.2}s that repeats the vocabulary prompt ({} words, {:.0}% from the prompt{}, no_speech_prob {:.3}).",
+                span.start,
+                span.end,
+                span.token_count,
+                span.prompt_overlap * 100.0,
+                if span.ordered_copy { ", verbatim in prompt order" } else { "" },
+                span.no_speech_prob
+            ),
+            start: Some(span.start),
+            end: Some(span.end),
+        })
+        .collect();
+    PromptEchoDiagnostics { spans, warnings }
+}
+
+/// The segments left after setting aside prompt echoes, for callers that only
+/// need the trusted text. Returns the input unchanged without a prompt.
+pub fn without_prompt_echo(
+    segments: Vec<TranscriptSegment>,
+    prompt: Option<&str>,
+) -> Vec<TranscriptSegment> {
+    let echo = analyze_prompt_echo(&segments, prompt);
+    if echo.spans.is_empty() {
+        return segments;
+    }
+    for span in &echo.spans {
+        tracing::info!(
+            duration_s = span.duration,
+            words = span.token_count,
+            ordered_copy = span.ordered_copy,
+            "Set aside a segment that echoes the vocabulary prompt"
+        );
+    }
+    segments
+        .into_iter()
+        .enumerate()
+        .filter(|(index, _)| !echo.quarantines_segment(*index))
+        .map(|(_, segment)| segment)
+        .collect()
+}
+
+/// Only a list of terms (comma, semicolon or line separated, mostly one to
+/// three words each) is a vocabulary. A sentence-style prompt is made of
+/// ordinary words, so matching speech against it would misfire.
+fn is_vocabulary_list(prompt: &str) -> bool {
+    let terms: Vec<usize> = prompt
+        .split([',', ';', '\n'])
+        .map(|term| word_tokens(term).len())
+        .filter(|&count| count > 0)
+        .collect();
+    terms.len() >= PROMPT_ECHO_MIN_DISTINCT_PROMPT_TERMS
+        && terms.iter().filter(|&&count| count <= 3).count() * 10 >= terms.len() * 8
+}
+
+/// The prompt's entries (comma, semicolon or line separated), each as its
+/// words, in prompt order and with repeats kept.
+fn prompt_terms(prompt: &str) -> Vec<Vec<String>> {
+    prompt
+        .split([',', ';', '\n'])
+        .map(word_tokens)
+        .filter(|term| !term.is_empty())
+        .collect()
+}
+
+/// How many words of `words` whole prompt entries cover (greedy, longest
+/// first), and how many different entries occur in `words` at all. Entries that
+/// are parts of other entries ("New York" and "York") each still count.
+fn match_prompt_terms(words: &[String], terms: &[Vec<String>]) -> (usize, usize) {
+    let mut covered = 0usize;
+    let mut index = 0usize;
+    while index < words.len() {
+        let longest = terms
+            .iter()
+            .filter(|term| words[index..].starts_with(term))
+            .map(Vec::len)
+            .max();
+        match longest {
+            Some(len) => {
+                covered += len;
+                index += len;
+            }
+            None => index += 1,
+        }
+    }
+    let distinct = terms
+        .iter()
+        .filter(|term| {
+            words
+                .windows(term.len())
+                .any(|window| window == term.as_slice())
+        })
+        .count();
+    (covered, distinct)
+}
+
+fn word_tokens(text: &str) -> Vec<String> {
+    text.split(|character: char| {
+        !character.is_alphanumeric() && character != '\'' && character != '’'
+    })
+    .filter_map(|word| {
+        let word = word.trim_matches(['\'', '’']).to_lowercase();
+        (!word.is_empty()).then_some(word)
+    })
+    .collect()
+}
+
 /// Consolidate sampled language detections into conservative sustained regions.
 /// Missing sequence numbers (for example, a skipped silent window) break a
 /// region. A single foreign-language sample remains visible but unstable and
@@ -896,5 +1120,152 @@ mod tests {
             language: language.to_string(),
             probability,
         }
+    }
+
+    const PROMPT: &str = "Sagascript, Whisper, Tauri, Svelte, Grimnir, Munin, Hugin";
+
+    fn heard(text: &str, no_speech_prob: f32, avg_logprob: f32) -> TranscriptSegment {
+        TranscriptSegment {
+            start: 0.0,
+            end: 3.0,
+            text: text.to_string(),
+            avg_logprob: Some(avg_logprob),
+            no_speech_prob,
+        }
+    }
+
+    #[test]
+    fn prompt_echo_over_silence_is_quarantined() {
+        let segments = [heard(" Tauri, Svelte, Munin, Hugin, Grimnir.", 0.9, -0.8)];
+        let diagnostics = analyze_prompt_echo(&segments, Some(PROMPT));
+
+        assert_eq!(diagnostics.spans.len(), 1);
+        assert!(diagnostics.quarantines_segment(0));
+        assert_eq!(diagnostics.warnings[0].code, "prompt_echo");
+    }
+
+    #[test]
+    fn confident_verbatim_copy_of_the_prompt_is_quarantined_despite_low_no_speech() {
+        let segments = [heard(
+            " Sagascript, Whisper, Tauri, Svelte, Grimnir, Munin.",
+            0.01,
+            -0.05,
+        )];
+        let diagnostics = analyze_prompt_echo(&segments, Some(PROMPT));
+
+        assert_eq!(diagnostics.spans.len(), 1);
+        assert!(diagnostics.spans[0].ordered_copy);
+    }
+
+    #[test]
+    fn a_real_out_of_order_enumeration_of_glossary_terms_passes() {
+        let segments = [heard(
+            " Munin, Tauri, Hugin, Svelte och Grimnir.",
+            0.02,
+            -0.2,
+        )];
+        // "och" is not in the prompt, but even a clean list of terms passes
+        // when Whisper is confident that someone spoke.
+        assert!(analyze_prompt_echo(&segments, Some(PROMPT))
+            .spans
+            .is_empty());
+        let clean = [heard(" Munin, Tauri, Hugin, Svelte, Grimnir.", 0.02, -0.2)];
+        assert!(analyze_prompt_echo(&clean, Some(PROMPT)).spans.is_empty());
+    }
+
+    #[test]
+    fn short_rhetorical_repetition_passes() {
+        let segments = [heard(" Tauri, Tauri, Tauri, Tauri.", 0.02, -0.2)];
+        assert!(analyze_prompt_echo(&segments, Some(PROMPT))
+            .spans
+            .is_empty());
+        let silent = [heard(" Tauri, Tauri, Tauri, Tauri.", 0.9, -0.8)];
+        // One distinct term is not a vocabulary echo even over silence.
+        assert!(analyze_prompt_echo(&silent, Some(PROMPT)).spans.is_empty());
+    }
+
+    #[test]
+    fn ordinary_speech_over_silence_scores_is_not_an_echo() {
+        let segments = [heard(
+            " Vi bygger Tauri med Svelte i morgon bitti.",
+            0.9,
+            -0.8,
+        )];
+        assert!(analyze_prompt_echo(&segments, Some(PROMPT))
+            .spans
+            .is_empty());
+    }
+
+    #[test]
+    fn empty_or_missing_or_tiny_prompts_change_nothing() {
+        let segments = [heard(" Tauri, Svelte, Munin, Hugin, Grimnir.", 0.9, -0.8)];
+        assert!(analyze_prompt_echo(&segments, None).spans.is_empty());
+        assert!(analyze_prompt_echo(&segments, Some("")).spans.is_empty());
+        assert!(analyze_prompt_echo(&segments, Some("Tauri, Svelte"))
+            .spans
+            .is_empty());
+        assert_eq!(without_prompt_echo(segments.to_vec(), None).len(), 1);
+    }
+
+    #[test]
+    fn without_prompt_echo_drops_only_the_echo() {
+        let segments = vec![
+            heard(" Hej på dig.", 0.01, -0.2),
+            heard(" Tauri, Svelte, Munin, Hugin, Grimnir.", 0.9, -0.8),
+        ];
+        let kept = without_prompt_echo(segments, Some(PROMPT));
+
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].text, " Hej på dig.");
+    }
+
+    #[test]
+    fn one_multi_word_entry_is_one_term_not_several() {
+        let prompt = "New York City Department of Records, Alpha, Beta, Gamma, Delta";
+        let segments = [heard(" New York City Department of Records.", 0.02, -0.1)];
+        assert!(analyze_prompt_echo(&segments, Some(prompt))
+            .spans
+            .is_empty());
+        let echo = [heard(" Alpha, Beta, Gamma, Delta.", 0.9, -0.8)];
+        assert_eq!(analyze_prompt_echo(&echo, Some(prompt)).spans.len(), 1);
+    }
+
+    #[test]
+    fn overlapping_entries_each_count_towards_the_echo() {
+        let prompt = "New York, New, York, Alpha, Beta";
+        let echo = [heard(" New York New York Alpha Beta.", 0.9, -0.8)];
+        assert_eq!(analyze_prompt_echo(&echo, Some(prompt)).spans.len(), 1);
+    }
+
+    #[test]
+    fn a_confident_copy_of_a_prompt_with_a_repeated_entry_is_quarantined() {
+        let prompt = "Alpha, Beta, Alpha, Gamma, Delta, Epsilon";
+        let echo = [heard(
+            " Alpha, Beta, Alpha, Gamma, Delta, Epsilon.",
+            0.01,
+            -0.05,
+        )];
+        assert_eq!(analyze_prompt_echo(&echo, Some(prompt)).spans.len(), 1);
+    }
+
+    #[test]
+    fn a_sentence_style_prompt_is_not_a_vocabulary() {
+        let prompt = "Detta är en dikt om att vi alltid bygger saker och att det går bra";
+        let segments = [heard(" Och det är en dikt om att vi bygger.", 0.9, -0.8)];
+        assert!(analyze_prompt_echo(&segments, Some(prompt))
+            .spans
+            .is_empty());
+    }
+
+    #[test]
+    fn an_echo_that_wraps_round_the_prompt_is_quarantined() {
+        let segments = [heard(
+            " Munin, Hugin, Sagascript, Whisper, Tauri, Svelte, Grimnir, Munin, Hugin.",
+            0.01,
+            -0.05,
+        )];
+        let diagnostics = analyze_prompt_echo(&segments, Some(PROMPT));
+        assert_eq!(diagnostics.spans.len(), 1);
+        assert!(diagnostics.spans[0].ordered_copy);
     }
 }
