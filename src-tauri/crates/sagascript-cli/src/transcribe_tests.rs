@@ -1352,7 +1352,7 @@ mod diarize_threshold_tests {
         assert_eq!(json["performance"]["windows"][0]["audio_seconds"], 1.5);
 
         // Frozen from the NeMo-era release: removing or renaming any of these breaks scripts.
-        const FROZEN_TOP: [&str; 15] = [
+        const FROZEN_TOP: [&str; 16] = [
             "text",
             "segments",
             "language",
