@@ -13,6 +13,16 @@ fn command_output(args: &[&str]) -> Option<String> {
         .map(|value| value.trim().to_string())
 }
 
+/// `release` for the optimized distribution profile, `debug` for everything else.
+/// A debug build runs unoptimized workspace code and is not representative for latency
+/// (SAGA-399), so a latency measurement must say which one it came from.
+fn build_profile() -> &'static str {
+    match std::env::var("PROFILE").as_deref() {
+        Ok("release") => "release",
+        _ => "debug",
+    }
+}
+
 fn metadata_value(key: &str, fallback: impl FnOnce() -> String) -> String {
     std::env::var(key).ok().unwrap_or_else(fallback)
 }
@@ -138,6 +148,10 @@ fn main() {
 
     println!("cargo:rustc-env=GIT_HASH={git_hash}");
     println!("cargo:rustc-env=BUILD_DATE={build_date}");
+    println!(
+        "cargo:rustc-env=SAGASCRIPT_BUILD_PROFILE={}",
+        build_profile()
+    );
     println!(
         "cargo:rustc-env=SAGASCRIPT_SOURCE_REVISION={}",
         source_revision()

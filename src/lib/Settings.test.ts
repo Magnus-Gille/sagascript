@@ -8,6 +8,7 @@ import { describe, expect, expectTypeOf, test } from "vitest";
 import type { HotkeyProfile, Language } from "./api";
 import { PIANISSIMO_ID } from "./models.svelte";
 import {
+  buildInfo,
   engineStatus,
   kbWhisperMedium,
   pianissimo,
@@ -56,7 +57,7 @@ describe("window header and navigation", () => {
     const [header, ...otherHeaders] = screen.getAllByRole("banner");
     expect(otherHeaders).toEqual([]);
     expect(within(header).getByLabelText("Build information")).toHaveTextContent(
-      "Version 1.4.4 · Build a69d5d1 · 2026-10-13 · Engine 0.9.0 (0123456)",
+      "Version 1.4.4 · Build a69d5d1 · 2026-10-13 · release build · Engine 0.9.0 (0123456)",
     );
 
     const tabs = ["Dictate", "Transcribe", "Settings"].map((name) => screen.getByRole("button", { name }));
@@ -65,9 +66,14 @@ describe("window header and navigation", () => {
     expect(precedes(tabs[0], tabs[1]) && precedes(tabs[1], tabs[2])).toBe(true);
   });
 
+  test("the header marks a debug build, which is not representative for latency", async () => {
+    await renderSettings(settingsBackend({ get_build_info: () => ({ ...buildInfo, build_profile: "debug" }) }));
+    expect(screen.getByLabelText("Build information")).toHaveTextContent(/2026-10-13 · debug build/);
+  });
+
   test("the header shows the engine host identity only when the host reports a version", async () => {
     await renderSettings(settingsBackend({ engine_status: () => ({ ...engineStatus, host_version: null, host_git_sha: null }) }));
-    expect(screen.getByLabelText("Build information")).toHaveTextContent(/^Version 1\.4\.4 · Build a69d5d1 · 2026-10-13$/);
+    expect(screen.getByLabelText("Build information")).toHaveTextContent(/^Version 1\.4\.4 · Build a69d5d1 · 2026-10-13 · release build$/);
   });
 });
 

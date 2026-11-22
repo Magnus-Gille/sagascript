@@ -506,6 +506,7 @@ impl AppController {
         self.session_data = Some(serde_json::json!({
             "version": env!("CARGO_PKG_VERSION"),
             "git_hash": env!("GIT_HASH"),
+            "build_profile": env!("SAGASCRIPT_BUILD_PROFILE"),
             "language": profile.language,
             "model": session_model,
             "audio_ms": null,
@@ -659,7 +660,14 @@ impl AppController {
         self.logging.end_dictation_session();
     }
 
-    pub fn log_dictation_performance(&self, data: serde_json::Value) {
+    pub fn log_dictation_performance(&self, mut data: serde_json::Value) {
+        // A debug build is not representative for latency, so every timing row names its profile.
+        if let Some(object) = data.as_object_mut() {
+            object.insert(
+                "buildProfile".to_string(),
+                serde_json::json!(env!("SAGASCRIPT_BUILD_PROFILE")),
+            );
+        }
         self.logging.log(
             "info",
             "Performance",

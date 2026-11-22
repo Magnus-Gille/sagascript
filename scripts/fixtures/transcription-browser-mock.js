@@ -249,7 +249,7 @@ mockIPC(async (cmd, args = {}) => {
       }
       if (strictPreparationNonce) activePreparationNonce = null;
       return null;
-    case "get_build_info": return { version: "test", git_hash: "synthetic-qa", build_date: "fixture" };
+    case "get_build_info": return { version: "test", git_hash: "synthetic-qa", build_date: "fixture", build_profile: "release" };
     case "get_last_transcription":
       await waitForQaGate("last-transcription");
       if (window.qaLastNativeDelayMs) await new Promise((resolve) => setTimeout(resolve, window.qaLastNativeDelayMs));

@@ -443,3 +443,53 @@ fn a_failed_budget_exits_with_the_check_failed_code() {
         "input errors stay runtime failures"
     );
 }
+
+fn tag_build_profile(entries: &mut [Value], profile: &str) {
+    for entry in entries {
+        if entry["event"] == "dictation_phase_timings" {
+            entry["data"]["buildProfile"] = json!(profile);
+        }
+    }
+}
+
+#[test]
+fn debug_build_samples_are_excluded_from_the_budget_and_counted() {
+    let mut release = Vec::new();
+    for index in 0..20 {
+        sample_events(&mut release, index, 1_000, 100, true, "succeeded");
+    }
+    tag_build_profile(&mut release, "release");
+    let mut debug = Vec::new();
+    for index in 20..40 {
+        sample_events(&mut debug, index, 1_000, 5_000, true, "succeeded");
+    }
+    tag_build_profile(&mut debug, "debug");
+    release.extend(debug);
+    let fixture = fixture(release);
+    let output = run_report(
+        &fixture.input,
+        &["--budget-length", "short", "--max-warm-p95-ms", "100"],
+    );
+
+    assert!(output.status.success(), "stderr={:?}", output.stderr);
+    let report = assert_budget(&output, true);
+    assert_eq!(report["budget"]["excludedDebugSamples"], 20);
+}
+
+#[test]
+fn a_debug_only_log_has_no_eligible_group_and_fails_the_budget() {
+    let mut entries = Vec::new();
+    for index in 0..20 {
+        sample_events(&mut entries, index, 1_000, 100, true, "succeeded");
+    }
+    tag_build_profile(&mut entries, "debug");
+    let fixture = fixture(entries);
+    let output = run_report(
+        &fixture.input,
+        &["--budget-length", "short", "--max-warm-p95-ms", "100"],
+    );
+
+    assert_eq!(output.status.code(), Some(3));
+    let report = assert_budget(&output, false);
+    assert_eq!(report["budget"]["excludedDebugSamples"], 20);
+}

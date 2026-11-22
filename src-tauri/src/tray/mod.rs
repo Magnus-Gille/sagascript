@@ -40,6 +40,9 @@ const BUILD_IDENTITY: &str = concat!(
     env!("GIT_HASH"),
     " · ",
     env!("BUILD_DATE"),
+    " · ",
+    env!("SAGASCRIPT_BUILD_PROFILE"),
+    " build",
 );
 
 /// Shared tray status menu item for updating from anywhere

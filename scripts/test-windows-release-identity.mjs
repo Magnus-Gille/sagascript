@@ -154,6 +154,7 @@ test("Windows release verifier enforces clean full build identity", (t) => {
       `sagascript ${expectedVersion} (git ${"0".repeat(40)}, built 2026-09-06)`,
       `sagascript ${expectedVersion} (git ${expectedGitHash}, built 2026-09-06) trailing`,
       `sagascript ${expectedVersion} (git ${expectedGitHash}, built 2026-02-30)`,
+      `sagascript ${expectedVersion} (git ${expectedGitHash}, built 2026-09-06, debug build)`,
       `sagascript ${expectedVersion} (git ${expectedGitHash}deadbeef, built 2026-09-06)`,
     ];
     for (const output of rejectedOutputs) {

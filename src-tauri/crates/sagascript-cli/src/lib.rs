@@ -76,7 +76,8 @@ pub(crate) fn set_transcription_progress(progress: &indicatif::ProgressBar, perc
     progress.set_position(percentage.clamp(0, 100) as u64);
 }
 
-/// `--version` deliberately includes the source revision and build date. A
+/// `--version` deliberately includes the source revision and build date, and marks an
+/// unoptimized (`debug build`) binary. A
 /// semantic version alone cannot distinguish a stale app-bundle executable
 /// from a rebuilt release candidate with the same pre-release version.
 pub const LONG_VERSION: &str = concat!(
@@ -85,8 +86,11 @@ pub const LONG_VERSION: &str = concat!(
     env!("SAGASCRIPT_CLI_GIT_HASH"),
     ", built ",
     env!("SAGASCRIPT_CLI_BUILD_DATE"),
-    ")"
+    env!("SAGASCRIPT_CLI_VERSION_TAIL")
 );
+
+/// Cargo profile of this build: `release` or `debug` (any non-release profile).
+pub const BUILD_PROFILE: &str = env!("SAGASCRIPT_BUILD_PROFILE");
 
 /// Short source revision of this build (`--version`, tray menu, engine host handshake).
 pub const GIT_HASH: &str = env!("SAGASCRIPT_CLI_GIT_HASH");
@@ -991,6 +995,13 @@ mod tests {
         assert!(LONG_VERSION.contains(env!("CARGO_PKG_VERSION")));
         assert!(LONG_VERSION.contains("git "));
         assert!(LONG_VERSION.contains("built "));
+
+        // The release shape `(git X, built D)` is parsed by the release identity gates.
+        if BUILD_PROFILE == "release" {
+            assert!(LONG_VERSION.ends_with(")") && !LONG_VERSION.contains("debug build"));
+        } else {
+            assert!(LONG_VERSION.ends_with(", debug build)"));
+        }
 
         let command = Cli::command();
         assert_eq!(command.get_long_version(), Some(LONG_VERSION));
