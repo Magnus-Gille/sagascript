@@ -1,0 +1,87 @@
+name: Flake detector
+
+# Nightly (SAGA-381): the engine_host integration tests, 20 runs in a row under CPU stress,
+# with no automatic retries. A red run opens (or updates) one issue; a retry would hide the race.
+on:
+  schedule:
+    - cron: "43 2 * * *"
+  workflow_dispatch:
+    inputs:
+      runs:
+        description: Number of consecutive runs
+        required: false
+        default: "20"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: flake-detector
+  cancel-in-progress: false
+
+jobs:
+  stress:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    outputs:
+      failed: ${{ steps.detect.outputs.failed }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up toolchain
+        uses: ./.github/actions/setup
+        with:
+          python: "false"
+          rust: "false" # no Rust cache: a nightly job is not worth a second 2 GB entry of the 10 GB budget (SAGA-546)
+          linux-deps: "true"
+          cache-key: sagascript-flake
+      # Reads the channel from rust-toolchain.toml, so it cannot drift from the CI lanes.
+      - name: Install the pinned Rust toolchain
+        run: rustup toolchain install
+      # tauri::generate_context! embeds ../dist, so building the workspace needs it.
+      - name: Build frontend
+        run: npm run build
+      - name: Run engine_host under CPU stress
+        id: detect
+        env:
+          RUNS: ${{ inputs.runs || '20' }}
+        run: |
+          status=0
+          bash scripts/ci/flake-detector.sh "$RUNS" || status=$?
+          if [ -f flake-result.json ]; then
+            echo "failed=$(jq -r .failed flake-result.json)" >> "$GITHUB_OUTPUT"
+          else
+            echo "failed=build" >> "$GITHUB_OUTPUT"
+          fi
+          exit "$status"
+      - name: Upload run logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: flake-logs
+          path: |
+            flake-logs
+            flake-result.json
+          if-no-files-found: ignore
+
+  report:
+    needs: stress
+    if: ${{ always() && needs.stress.result == 'failure' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      issues: write # opens or updates the flake issue
+    steps:
+      - name: Open or update the flake issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          FAILED: ${{ needs.stress.outputs.failed || 'infra' }}
+        run: |
+          title="Flake detector: engine_host failed under CPU stress"
+          body="The nightly flake detector (SAGA-381) saw ${FAILED} failing run(s) of \`cargo test -p sagascript-core --test engine_host\` under CPU stress (\`build\` means the test build failed, \`infra\` that the job failed before the tests, for example setup or timeout). No retries are made. Logs: ${RUN_URL}"
+          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "\"$title\" in:title" --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "$body"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "$body"
+          fi
