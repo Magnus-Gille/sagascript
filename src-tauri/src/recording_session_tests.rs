@@ -3,8 +3,9 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use sagascript_core::recording::capture::{SyntheticConfig, SyntheticSource};
+use sagascript_core::recording::capture::{SyntheticConfig, SyntheticSource, SystemAudioSupport};
 use sagascript_core::recording::session::fsclass::FolderWarning;
+use sagascript_core::recording::source_plan::RecordSource;
 use sagascript_core::recording::{RecoveredRecording, TrackRecovery, TrackStatus};
 use sagascript_testsupport::TempDir;
 use serde_json::{json, Value};
@@ -415,6 +416,9 @@ fn the_wire_names_of_a_note_are_the_ones_the_window_reads() {
 struct SyntheticFactory {
     pairs: Mutex<Vec<(u16, u16)>>,
     refuse: Option<RecordingError>,
+    /// What the machine claims to support; `None` asks the real probe.
+    support: Option<SystemAudioSupport>,
+    system_opens: Mutex<u32>,
 }
 
 impl SourceFactory for SyntheticFactory {
@@ -424,6 +428,16 @@ impl SourceFactory for SyntheticFactory {
             Some(error) => Err(error.clone()),
             None => Ok(Box::new(SyntheticSource::new(SyntheticConfig::default()))),
         }
+    }
+
+    fn system_audio_support(&self) -> SystemAudioSupport {
+        self.support
+            .unwrap_or_else(|| sagascript_core::recording::capture::availability::probe())
+    }
+
+    fn open_system(&self) -> Result<Box<dyn CaptureSource>, RecordingError> {
+        *self.system_opens.lock().expect("lock") += 1;
+        Ok(Box::new(SyntheticSource::new(SyntheticConfig::default())))
     }
 }
 
@@ -487,6 +501,70 @@ impl Harness {
     fn events(&self) -> Vec<RecordingSessionInfo> {
         self.events.lock().expect("lock").clone()
     }
+}
+
+fn with_source(h: &Harness, source: RecordSource) -> Settings {
+    Settings {
+        recording_source: source,
+        ..h.settings()
+    }
+}
+
+#[tokio::test]
+async fn a_system_request_without_system_audio_is_refused_before_any_device_opens() {
+    let h = Harness::with(SyntheticFactory {
+        support: Some(SystemAudioSupport::NoBackend),
+        ..Default::default()
+    });
+    let error = start_session(
+        &h.recorder,
+        with_source(&h, RecordSource::System),
+        None,
+        h.emit(),
+    )
+    .await
+    .expect_err("system audio is not available");
+    assert_eq!(error.code(), "recording_source_unavailable");
+    assert!(h.factory.pairs.lock().expect("lock").is_empty());
+    assert_eq!(*h.factory.system_opens.lock().expect("lock"), 0);
+    assert!(!h.recorder.is_active());
+}
+
+#[tokio::test]
+async fn both_without_system_audio_records_the_microphone_alone() {
+    let h = Harness::with(SyntheticFactory {
+        support: Some(SystemAudioSupport::OsTooOld),
+        ..Default::default()
+    });
+    let started = start_session(
+        &h.recorder,
+        with_source(&h, RecordSource::Both),
+        None,
+        h.emit(),
+    )
+    .await
+    .expect("falls back to the microphone");
+    assert_eq!(started.state, RecordingSessionState::Recording);
+    assert_eq!(h.factory.pairs.lock().expect("lock").len(), 1);
+    assert_eq!(*h.factory.system_opens.lock().expect("lock"), 0);
+}
+
+#[tokio::test]
+async fn both_with_system_audio_opens_the_two_sources() {
+    let h = Harness::with(SyntheticFactory {
+        support: Some(SystemAudioSupport::Supported),
+        ..Default::default()
+    });
+    start_session(
+        &h.recorder,
+        with_source(&h, RecordSource::Both),
+        None,
+        h.emit(),
+    )
+    .await
+    .expect("starts");
+    assert_eq!(h.factory.pairs.lock().expect("lock").len(), 1);
+    assert_eq!(*h.factory.system_opens.lock().expect("lock"), 1);
 }
 
 #[tokio::test]

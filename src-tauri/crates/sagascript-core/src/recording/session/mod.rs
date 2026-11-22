@@ -115,6 +115,15 @@ impl SourceSpec {
         }
     }
 
+    /// The microphone track from an already boxed source.
+    pub fn mic_boxed(source: Box<dyn CaptureSource>) -> Self {
+        Self {
+            id: "mic".into(),
+            role: "mic".into(),
+            source,
+        }
+    }
+
     /// The system-audio track (`system.flac`).
     pub fn system(source: Box<dyn CaptureSource>) -> Self {
         Self {

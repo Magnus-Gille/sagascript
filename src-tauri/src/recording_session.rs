@@ -52,9 +52,13 @@ use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use sagascript_core::recording::capture::{CaptureSource, MicConfig, MicSource};
+use sagascript_core::recording::capture::availability::probe as system_audio_support;
+use sagascript_core::recording::capture::{
+    CaptureSource, MicConfig, MicSource, SystemAudioSupport, SystemSource,
+};
 use sagascript_core::recording::session::disk::{FreeSpace, VolumeFreeSpace};
 use sagascript_core::recording::session::fsclass::{folder_warnings, FolderWarning};
+use sagascript_core::recording::source_plan::plan as source_plan;
 use sagascript_core::recording::{
     default_recordings_dir, lock_recording_for_removal, read_recording, summarize_folder, Client,
     EndedReason, RecordingError, RecordingSession, RecordingStore, RecordingSummary,
@@ -436,6 +440,16 @@ pub trait SourceFactory: Send + Sync {
     /// The microphone, or a stand-in: `channel_pair` is `recording_channel_pair`
     /// (1-based, `(n, n)` is mono channel `n`). Blocking.
     fn open(&self, channel_pair: (u16, u16)) -> Result<Box<dyn CaptureSource>, RecordingError>;
+
+    /// What this machine can capture besides the microphone (decision D3).
+    fn system_audio_support(&self) -> SystemAudioSupport {
+        system_audio_support()
+    }
+
+    /// The system-audio source, or why it is not available. Blocking.
+    fn open_system(&self) -> Result<Box<dyn CaptureSource>, RecordingError> {
+        SystemSource::open()
+    }
 }
 
 /// The default input device.
@@ -678,7 +692,20 @@ fn start_blocking(
     settings: &Settings,
     title: &str,
 ) -> Result<Started, RecordingError> {
-    let source = factory.open(settings.recording_channel_pair_tuple())?;
+    // Plan first, so a `system` request on a machine that cannot do it fails
+    // before any device is opened, and `both` falls back to the microphone.
+    let plan = source_plan(settings.recording_source, factory.system_audio_support())?;
+    let mut specs = Vec::new();
+    if plan.mic {
+        let source = factory.open(settings.recording_channel_pair_tuple())?;
+        specs.push(SourceSpec::mic_boxed(source));
+    }
+    if plan.system {
+        specs.push(SourceSpec::system(factory.open_system()?));
+    }
+    if let Some(reason) = plan.fallback {
+        tracing::warn!("Recording the microphone only: {reason}");
+    }
     let config = SessionConfig::new(
         title,
         started_at_now(),
@@ -689,11 +716,7 @@ fn start_blocking(
         RecordingStore::new(settings.recordings_dir()),
         config,
     ));
-    session.start(vec![SourceSpec {
-        id: "mic".into(),
-        role: "mic".into(),
-        source,
-    }])?;
+    session.start(specs)?;
     let summary = session
         .folder()
         .ok_or(RecordingError::SessionFailed {
