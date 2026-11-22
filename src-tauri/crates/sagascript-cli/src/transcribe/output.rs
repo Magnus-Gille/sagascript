@@ -8,7 +8,7 @@ use sagascript_core::error::DictationError;
 use sagascript_core::glossary::Glossary;
 use sagascript_core::models::{Language, WhisperModel};
 use sagascript_core::transcription::diagnostics::{
-    analyze_coverage, analyze_repetition, TranscriptionWarning,
+    analyze_coverage, analyze_prompt_echo, analyze_repetition, TranscriptionWarning,
 };
 use sagascript_core::transcription::whisper_backend::assemble_transcript;
 use sagascript_core::transcription::{normalize_nonspeech_markers, TranscriptSegment};
@@ -65,10 +65,14 @@ pub(super) fn assemble_plain_result(input: PlainInput<'_>) -> PlainResult {
         corrections.extend(apply_hint_corrections(&mut segments, vocabulary));
     }
     let repetition = analyze_repetition(&segments);
+    let prompt_echo = analyze_prompt_echo(&segments, glossary.decoder_prompt().as_deref());
+    let quarantined = |index: usize| {
+        repetition.quarantines_segment(index) || prompt_echo.quarantines_segment(index)
+    };
     let trusted_segments: Vec<TranscriptSegment> = segments
         .iter()
         .enumerate()
-        .filter(|(index, _)| !repetition.quarantines_segment(*index))
+        .filter(|(index, _)| !quarantined(*index))
         .map(|(_, segment)| segment.clone())
         .collect();
     // Keep timestamped segment text source-faithful, while the rendered
@@ -86,6 +90,7 @@ pub(super) fn assemble_plain_result(input: PlainInput<'_>) -> PlainResult {
         warnings.extend(diagnostics.warnings.clone());
     }
     warnings.extend(repetition.warnings.clone());
+    warnings.extend(prompt_echo.warnings.clone());
 
     // Per-segment confidence (#81): avg_logprob is the mean token
     // log-probability (null when a segment has no scoreable tokens);
@@ -100,7 +105,7 @@ pub(super) fn assemble_plain_result(input: PlainInput<'_>) -> PlainResult {
                 "text": segment.text.trim(),
                 "avg_logprob": segment.avg_logprob,
                 "no_speech_prob": segment.no_speech_prob,
-                "quarantined": repetition.quarantines_segment(index),
+                "quarantined": quarantined(index),
             })
         })
         .collect();
@@ -114,6 +119,7 @@ pub(super) fn assemble_plain_result(input: PlainInput<'_>) -> PlainResult {
         "coverage_ratio": coverage.coverage_ratio,
         "uncovered_spans": coverage.uncovered_spans,
         "repetition_spans": repetition.spans,
+        "prompt_echo_spans": prompt_echo.spans,
         "detected_language": language_evidence.detected_language,
         "language_redetection_enabled": language_evidence.language_regions.is_some(),
         "language_regions": language_evidence.language_regions.as_ref().map(|diagnostics| &diagnostics.regions),

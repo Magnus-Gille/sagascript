@@ -1362,6 +1362,7 @@ mod diarize_threshold_tests {
             "coverage_ratio",
             "uncovered_spans",
             "repetition_spans",
+            "prompt_echo_spans",
             "detected_language",
             "language_redetection_enabled",
             "language_regions",

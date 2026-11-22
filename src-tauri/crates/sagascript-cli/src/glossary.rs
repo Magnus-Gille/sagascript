@@ -13,6 +13,7 @@ use sagascript_core::settings::DictionaryRefusal;
 use sagascript_core::transcription::model;
 use sagascript_core::transcription::pianissimo_backend::PianissimoBackend;
 use sagascript_core::transcription::pianissimo_model;
+use sagascript_core::transcription::whisper_backend::display_transcript;
 use sagascript_core::transcription::{
     apply_glossary_candidates, suggest_glossary_candidates, GlossarySuggestionKind,
     TranscribeOptions, TranscribeRequest, WhisperBackend,
@@ -342,7 +343,14 @@ fn load_training_input(
                 prompt: glossary.decoder_prompt(),
                 ..TranscribeOptions::default()
             };
-            backend.transcribe_text(TranscribeRequest::new(&audio, profile.language, &options))?
+            // Training input is the user reading their own terms aloud, so the
+            // prompt-echo quarantine of `transcribe_text` must not apply.
+            let segments = backend.transcribe_segments(TranscribeRequest::new(
+                &audio,
+                profile.language,
+                &options,
+            ))?;
+            display_transcript(&segments, profile.language)
         }
         FileModel::Pianissimo(pianissimo) => {
             errln!(

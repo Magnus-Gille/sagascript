@@ -17,6 +17,7 @@ use super::{
     ContextProfile, DictationTimings, TranscribeOptions, TranscribeRequest, TranscriptSegment,
     WhisperBackend,
 };
+use crate::transcription::diagnostics::without_prompt_echo;
 
 /// Mean of per-token log-probabilities; `None` for an empty slice.
 fn mean_logprob(plogs: &[f32]) -> Option<f32> {
@@ -288,7 +289,11 @@ impl WhisperBackend {
         request: TranscribeRequest<'_>,
     ) -> Result<String, DictationError> {
         let language = request.language;
+        let prompt = request.options.prompt.clone();
         let segments = self.transcribe_segments(request)?;
+        // Whisper sometimes reads its own vocabulary prompt back over silence;
+        // that is never what the user said (SAGA-579).
+        let segments = without_prompt_echo(segments, prompt.as_deref());
         Ok(display_transcript(&segments, language))
     }
 
