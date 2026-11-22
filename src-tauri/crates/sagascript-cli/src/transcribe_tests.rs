@@ -2200,3 +2200,34 @@ mod language_check_seam_tests {
         assert_eq!(run.loads.len(), 1, "no second detector after no answer");
     }
 }
+
+mod correction_vocabulary_gate_tests {
+    use super::*;
+    use crate::transcribe::plan::correction_vocabulary;
+    use clap::Parser;
+
+    #[derive(Parser)]
+    struct TestCli {
+        #[command(flatten)]
+        args: TranscribeArgs,
+    }
+
+    fn hints_args() -> TranscribeArgs {
+        TestCli::try_parse_from(["sagascript", "a.wav", "--json", "--correct-hints"])
+            .expect("flags parse")
+            .args
+    }
+
+    #[test]
+    fn a_dictionary_of_only_a_squashable_alias_is_admitted() {
+        let glossary = Glossary::parse("Cloud Flare = cloudflare");
+        assert!(glossary.single_word_terms().is_empty());
+        assert!(correction_vocabulary(&hints_args(), &glossary).is_ok());
+    }
+
+    #[test]
+    fn a_dictionary_without_vocabulary_or_alias_is_still_refused() {
+        let glossary = Glossary::parse("Erik Fredlund");
+        assert!(correction_vocabulary(&hints_args(), &glossary).is_err());
+    }
+}
