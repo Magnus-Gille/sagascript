@@ -60,12 +60,13 @@ pub(super) fn assemble_plain_result(input: PlainInput<'_>) -> PlainResult {
         hint_vocabulary,
         language_evidence,
     } = input;
+    // On Whisper's own words, before the corrections move them towards the prompt.
+    let prompt_echo = analyze_prompt_echo(&segments, glossary.decoder_prompt().as_deref());
     let mut corrections = apply_glossary_corrections(&mut segments, glossary);
     if let Some(vocabulary) = hint_vocabulary {
         corrections.extend(apply_hint_corrections(&mut segments, vocabulary));
     }
     let repetition = analyze_repetition(&segments);
-    let prompt_echo = analyze_prompt_echo(&segments, glossary.decoder_prompt().as_deref());
     let quarantined = |index: usize| {
         repetition.quarantines_segment(index) || prompt_echo.quarantines_segment(index)
     };

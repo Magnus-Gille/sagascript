@@ -421,7 +421,10 @@ pub fn analyze_prompt_echo(
     prompt: Option<&str>,
 ) -> PromptEchoDiagnostics {
     let mut spans = Vec::new();
-    let prompt_words = prompt.map(word_tokens).unwrap_or_default();
+    let prompt_words = prompt
+        .filter(|prompt| is_vocabulary_list(prompt))
+        .map(word_tokens)
+        .unwrap_or_default();
     let vocabulary: HashSet<&str> = prompt_words.iter().map(String::as_str).collect();
     if vocabulary.len() >= PROMPT_ECHO_MIN_DISTINCT_PROMPT_TERMS {
         for (segment_index, segment) in segments.iter().enumerate() {
@@ -444,10 +447,18 @@ pub fn analyze_prompt_echo(
             {
                 continue;
             }
-            let ordered_copy = words.len() >= PROMPT_ECHO_MIN_ORDERED_RUN
-                && prompt_words
+            let ordered_copy = words.len() >= PROMPT_ECHO_MIN_ORDERED_RUN && {
+                // The prompt read round and round: a long echo wraps.
+                let laps = words.len() / prompt_words.len() + 2;
+                let cycled: Vec<&String> = prompt_words
+                    .iter()
+                    .cycle()
+                    .take(prompt_words.len() * laps)
+                    .collect();
+                cycled
                     .windows(words.len())
-                    .any(|window| window == words.as_slice());
+                    .any(|window| window.iter().zip(&words).all(|(a, b)| *a == b))
+            };
             let silent = segment.no_speech_prob >= PROMPT_ECHO_NO_SPEECH_PROB;
             if !(silent || ordered_copy) {
                 continue;
@@ -510,6 +521,19 @@ pub fn without_prompt_echo(
         .filter(|(index, _)| !echo.quarantines_segment(*index))
         .map(|(_, segment)| segment)
         .collect()
+}
+
+/// Only a list of terms (comma, semicolon or line separated, mostly one to
+/// three words each) is a vocabulary. A sentence-style prompt is made of
+/// ordinary words, so matching speech against it would misfire.
+fn is_vocabulary_list(prompt: &str) -> bool {
+    let terms: Vec<usize> = prompt
+        .split([',', ';', '\n'])
+        .map(|term| word_tokens(term).len())
+        .filter(|&count| count > 0)
+        .collect();
+    terms.len() >= PROMPT_ECHO_MIN_DISTINCT_PROMPT_TERMS
+        && terms.iter().filter(|&&count| count <= 3).count() * 10 >= terms.len() * 8
 }
 
 fn word_tokens(text: &str) -> Vec<String> {
@@ -1150,5 +1174,26 @@ mod tests {
 
         assert_eq!(kept.len(), 1);
         assert_eq!(kept[0].text, " Hej på dig.");
+    }
+
+    #[test]
+    fn a_sentence_style_prompt_is_not_a_vocabulary() {
+        let prompt = "Detta är en dikt om att vi alltid bygger saker och att det går bra";
+        let segments = [heard(" Och det är en dikt om att vi bygger.", 0.9, -0.8)];
+        assert!(analyze_prompt_echo(&segments, Some(prompt))
+            .spans
+            .is_empty());
+    }
+
+    #[test]
+    fn an_echo_that_wraps_round_the_prompt_is_quarantined() {
+        let segments = [heard(
+            " Munin, Hugin, Sagascript, Whisper, Tauri, Svelte, Grimnir, Munin, Hugin.",
+            0.01,
+            -0.05,
+        )];
+        let diagnostics = analyze_prompt_echo(&segments, Some(PROMPT));
+        assert_eq!(diagnostics.spans.len(), 1);
+        assert!(diagnostics.spans[0].ordered_copy);
     }
 }
