@@ -306,9 +306,10 @@ pub(crate) fn start_settings_watcher(app: tauri::AppHandle) {
                     sagascript_core::machine::load,
                 );
             }
-            sagascript_core::transcription::pianissimo_backend::unload_if_unused(
+            let unloaded = sagascript_core::transcription::pianissimo_backend::unload_if_unused(
                 &settings_for_unload,
             );
+            crate::logging::log_engine_unloaded("unused", &unloaded);
             update_profiles_menu(&app, &profiles);
 
             // Notify frontend so UI reflects external changes

@@ -20,3 +20,9 @@ pub mod transcription {
 pub mod session {
     pub const DICTATION_STARTED: &str = "dictation_session_started";
 }
+
+pub mod engine {
+    pub const UNLOADED: &str = "engine_unloaded";
+    #[cfg(target_os = "macos")]
+    pub const MEMORY_PRESSURE: &str = "memory_pressure";
+}

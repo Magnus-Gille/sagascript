@@ -18,8 +18,8 @@ No decoder/model defaults change without measured accuracy evidence.
 The JSON report has schema version 1 and emits only fixed metric names,
 validated configuration identifiers, numeric aggregates and fixed labels.
 `reporterVersion` identifies the reporting executable, including its build ID.
-Legacy phase events do not identify the source app build, so `sourceBuild` is
-null: never mistake the reporter version for the measured app version. Keep
+Phase events carry only the build profile (`buildProfile`: `release` or `debug`),
+not the source app build, so `sourceBuild` is null: never mistake the reporter version for the measured app version. Keep
 datasets from different app builds separate and record the tested app's
 `sagascript --version` beside each private dataset before comparing releases.
 It never echoes raw rows, transcripts, paths, session IDs, device names,
@@ -36,7 +36,9 @@ eligible samples.
 ## Cohorts and statistics
 
 Never combine different model, language, warm state, beam size, temperature
-fallback, VAD setting, outcome or paste outcome. Normalize known producer
+fallback, VAD setting, build profile, outcome or paste outcome. A debug build is
+unoptimized and not representative for latency (SAGA-399); rows from before the field
+existed report `buildProfile: null` and are never pooled with either profile. Normalize known producer
 display names to existing model IDs and language codes; reject unknown names.
 Missing configuration in early no-speech events remains null, not a default.
 
@@ -74,7 +76,9 @@ report even on a budget failure, then exit 3 (a failed check). The budget object
 reports `excludedWarmSuccessSamples`: the number of selected-length samples
 with a successful warm transcription but a non-success paste outcome. These
 samples are excluded from eligibility and do not prevent a pass when all
-eligible groups satisfy the requested budget. Other cohorts are reported but
+eligible groups satisfy the requested budget. Groups from debug builds are never
+eligible; their warm, successful samples are counted in `excludedDebugSamples`. Legacy
+groups with a null profile stay eligible. Other cohorts are reported but
 are not claimed to meet that selected budget. Invalid input or arguments exit 1
 without emitting JSON; a failed explicit budget is the exception and emits its
 JSON report before exiting 3.

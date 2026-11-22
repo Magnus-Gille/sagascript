@@ -70,6 +70,8 @@ export interface BuildInfo {
   version: string;
   git_hash: string;
   build_date: string;
+  /** `release`, or `debug` for an unoptimized build. */
+  build_profile: string;
 }
 
 export interface LoadedModelInfo {

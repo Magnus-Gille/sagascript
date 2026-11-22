@@ -9,12 +9,14 @@
     needsLoadingTimer,
     overlayLabel,
     reduceOverlay,
+    showLoadingBar,
     type OverlayAction,
   } from "./overlay-state";
 
   let profile = $state<HotkeyProfile | null>(null);
   let overlay = $state(initialOverlayState);
   const working = $derived(isWorking(overlay.phase));
+  const loadingBar = $derived(showLoadingBar(overlay));
   const failed = $derived(overlay.phase === "error");
   const label = $derived(overlayLabel(overlay, profile?.language ?? null, navigator.language));
 
@@ -67,8 +69,14 @@
 </script>
 
 <div class="pill" role="status" aria-live="polite" aria-busy={working}>
-  <span class:working class:failed class="dot" aria-hidden="true"></span>
-  <span class="label">{label}</span>
+  <div class="row">
+    <span class:working class:failed class="dot" aria-hidden="true"></span>
+    <span class="label" id="overlay-label">{label}</span>
+  </div>
+  {#if loadingBar}
+    <!-- No aria-valuenow: a progressbar without a value is indeterminate. -->
+    <div class="bar" role="progressbar" aria-labelledby="overlay-label"><span class="bar-fill"></span></div>
+  {/if}
 </div>
 
 <style>
@@ -78,8 +86,8 @@
     left: 50%;
     transform: translate(-50%, -50%);
     display: flex;
-    align-items: center;
-    gap: 10px;
+    flex-direction: column;
+    gap: 8px;
     padding: 10px 20px;
     background: rgba(30, 30, 30, 0.85);
     backdrop-filter: blur(12px);
@@ -110,6 +118,39 @@
     animation: none;
   }
 
+  /* Dot and label stay on one line; the bar sits under them without widening
+     the pill (the overlay window is 220x60 logical px). */
+  .row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .bar {
+    height: 4px;
+    border-radius: 2px;
+    background: rgba(255, 255, 255, 0.18);
+    overflow: hidden;
+  }
+
+  .bar-fill {
+    display: block;
+    width: 40%;
+    height: 100%;
+    border-radius: 2px;
+    background: #9cc7ff;
+    animation: slide 1.2s ease-in-out infinite;
+  }
+
+  @keyframes slide {
+    from {
+      transform: translateX(-100%);
+    }
+    to {
+      transform: translateX(250%);
+    }
+  }
+
   @keyframes spin {
     to {
       transform: rotate(360deg);
@@ -119,6 +160,13 @@
   @media (prefers-reduced-motion: reduce) {
     .dot,
     .dot.working {
+      animation: none;
+    }
+
+    /* No motion: a full dimmed bar; the label carries the meaning. */
+    .bar-fill {
+      width: 100%;
+      opacity: 0.5;
       animation: none;
     }
   }

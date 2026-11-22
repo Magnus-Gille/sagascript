@@ -62,15 +62,15 @@ try {
   const englishModelChoice = page.getByRole("combobox", { name: "Model for English" });
   await englishModelChoice.waitFor();
   assert.equal(await englishModelChoice.inputValue(), "base.en");
-  // Swedish lineup: Recommended (= Pianissimo), Pianissimo, KB-Whisper Large. The
+  // Swedish lineup: Recommended (= Pianissimo Swedish), Pianissimo Swedish, KB-Whisper Large. The
   // retired KB-Whisper Tiny/Base/Small are hidden.
   assert.deepEqual(await profileModelChoice.locator("option").allTextContents(), [
     "Recommended for Swedish",
-    "Pianissimo",
+    "Pianissimo Swedish",
     "KB-Whisper Large",
   ]);
   assert.equal(await profileModelChoice.inputValue(), "auto");
-  await page.getByText("Pianissimo required", { exact: true }).waitFor();
+  await page.getByText("Pianissimo Swedish required", { exact: true }).waitFor();
   // Expand the list so the shot shows the choices a native dropdown would.
   const swedishSelect = page.locator('select[aria-label="Model for Swedish"]');
   await swedishSelect.evaluate((select) => {
@@ -89,7 +89,7 @@ try {
   );
   await page.getByRole("button", { name: "Download speech engine" }).click();
   await page.waitForFunction(() => window.qa.calls.some((call) => call.cmd === "download_pianissimo_model"));
-  await page.getByText("Pianissimo · Ready", { exact: true }).waitFor();
+  await page.getByText("Pianissimo Swedish · Ready", { exact: true }).waitFor();
   assert.equal(await englishModelChoice.inputValue(), "base.en", "Swedish model changes cannot rewrite another profile");
   await page.getByRole("button", { name: "Transcribe", exact: true }).click();
   assert.equal(await page.locator("#file-model").inputValue(), "auto");
@@ -97,7 +97,7 @@ try {
   assert.equal(await profileModelChoice.inputValue(), "pianissimo-sv");
   // Repair a selected model whose cached artifact was removed outside the UI.
   await page.evaluate(() => window.qa.removePianissimo());
-  await page.getByText("Pianissimo required", { exact: true }).waitFor();
+  await page.getByText("Pianissimo Swedish required", { exact: true }).waitFor();
   await page.evaluate(() => window.qa.holdNextPianissimoDownload());
   await page.getByRole("button", { name: "Download speech engine" }).click();
   await page.waitForFunction(() => window.qa.calls.filter((call) => call.cmd === "download_pianissimo_model").length === 2);
@@ -109,19 +109,19 @@ try {
   await page.evaluate(() => window.qa.releasePianissimo());
   await profileModelChoice.waitFor({ state: "visible" });
   await page.waitForFunction(() => !document.querySelector(".test-record-btn").disabled);
-  await page.getByText("Pianissimo · Ready", { exact: true }).waitFor();
+  await page.getByText("Pianissimo Swedish · Ready", { exact: true }).waitFor();
   await page.screenshot({ path: outputPath("sagascript-pianissimo-dictation.png"), fullPage: true });
   // Engine host identity sits next to the build identity.
   await page.getByText("Engine 1.3.2 (abcdef0)").waitFor();
   // The size comes from the backend model list, never a hardcoded string.
   await page.evaluate(() => window.qa.setPianissimoSize(321));
   await page.evaluate(() => window.qa.removePianissimo());
-  await page.getByText("Pianissimo required · 321 MB", { exact: true }).waitFor();
+  await page.getByText("Pianissimo Swedish required · 321 MB", { exact: true }).waitFor();
   await page.evaluate(() => {
     window.qa.setPianissimoSize(0);
     window.qa.removePianissimo();
   });
-  await page.getByText("Pianissimo required", { exact: true }).waitFor();
+  await page.getByText("Pianissimo Swedish required", { exact: true }).waitFor();
   assert.equal(await page.getByText(/714|Q8|macOS 13/).count(), 0, "No outdated Pianissimo strings");
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   assert.equal(await page.locator("#dictionary-scope").inputValue(), "swedish");
@@ -161,12 +161,12 @@ try {
   });
   // Any profile-model change refreshes every profile's engine state.
   await englishModelChoice.selectOption("base.en");
-  const switchButton = page.getByRole("button", { name: "Switch to Pianissimo (download 608 MB)", exact: true });
+  const switchButton = page.getByRole("button", { name: "Switch to Pianissimo Swedish (download 608 MB)", exact: true });
   await switchButton.waitFor();
   assert.equal(await profileModelChoice.inputValue(), "kb-whisper-base");
   assert.deepEqual(await profileModelChoice.locator("option").allTextContents(), [
     "Recommended for Swedish",
-    "Pianissimo",
+    "Pianissimo Swedish",
     "KB-Whisper Large",
     "KB-Whisper Base",
   ]);
@@ -177,7 +177,7 @@ try {
       (call) => call.cmd === "set_profile_model" && call.args.profileId === "swedish" && call.args.modelId === "pianissimo-sv",
     ),
   );
-  await page.getByText("Pianissimo · Ready", { exact: true }).waitFor();
+  await page.getByText("Pianissimo Swedish · Ready", { exact: true }).waitFor();
   assert.equal(await switchButton.count(), 0, "No suggestion once on the recommended model");
   await page.getByRole("button", { name: "Transcribe", exact: true }).click();
   const optionsBox = await page.locator(".transcribe-options").boundingBox();

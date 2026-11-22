@@ -221,8 +221,8 @@ the rest of it (not yet observed on a real eviction; see
   clock in the host's once-a-second parent check). `SAGASCRIPT_ENGINE_KEEPALIVE_S` (at least 60,
   unset by default) adds a canary every that many seconds while a model is loaded; it is off by
   default (see `docs/benchmarks/pianissimo-ane-eviction.md` for its cost). The app unloads an idle
-  model on memory pressure (see `unload_if_idle_for_memory_pressure`), so in the app the pressure
-  canary mostly finds `not_loaded`; it matters when the model stayed loaded.
+  model only on `critical` memory pressure (see `handle_memory_pressure`), so on a warning the
+  pressure canary runs against the loaded model.
 - Every canary that ran writes one stderr line: `warm canary trigger=<request|memory_pressure|wake|keep_alive> ms=<n> probable_recompile=<bool>`;
   a probable recompile is prefixed `info: `, which the client logs at INFO (other host stderr
   lines are logged at debug).

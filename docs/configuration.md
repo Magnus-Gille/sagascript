@@ -156,6 +156,11 @@ when comparing a Bluetooth headset microphone with the Mac microphone.
 The new performance events contain timings, sample counts, sample rate, and
 decoder settings, but no audio, transcript text, or device names.
 
+Engine events (category `Engine`): `engine_unloaded` with `reason`
+(`memory_pressure` or `unused`) and the unloaded `models`, and `memory_pressure`
+with the `level` and what was `unloaded`. An unload by the idle timer happens
+inside the engine host and is not logged. Use these to explain a cold load.
+
 Focus and paste-target diagnostics (hotkey, overlay, activation steps, allowed
 paste checks, startup events) are logged at debug level. They appear in
 `~/Library/Logs/Sagascript/sagascript.log` only when `RUST_LOG` contains
@@ -166,7 +171,8 @@ restore attempts, copy fallbacks, and withdrawn launch activations stay at info.
 - `capture_stopped` reports `captureRequestToStreamPlayReturnMs` and
   `captureRequestToFirstAudioCallbackMs`. These start at the capture request,
   not the shortcut event; they separate stream setup from first-buffer delivery.
-- `dictation_phase_timings` separates model readiness, Whisper duration, and
+- `dictation_phase_timings` also carries `buildProfile` (`release` or `debug`; a debug
+  build is not representative for latency) and separates model readiness, Whisper duration, and
   paste completion. `keyUpToCaptureStoppedMs` includes any minimum-recording
   top-up delay (up to 300 ms); it is not a pure device-stop measurement. In
   toggle mode, the origin is the second shortcut press instead of key-up.
@@ -233,7 +239,8 @@ the first dictation does not wait on a cold model.
 - `engine_idle_unload_minutes` defaults to 60 (was 10).
 - Migration (`engine_defaults_version` 1): settings still on the old defaults
   move to the new ones once; an explicit non-default choice is kept.
-- The model is unloaded when memory pressure is reported (idle engine only;
+- The model is unloaded when the system reports `critical` memory pressure (a
+  `warning` only logs; idle engine only;
   a wake then does not reload it for 5 minutes) and when no profile uses
   Pianissimo any more. A busy engine is left to the idle timer. Key-down is not
   held back: the dictation that follows loads the model anyway, so loading at
@@ -248,7 +255,8 @@ the first dictation does not wait on a cold model.
   (host environment, at least 60) adds a periodic canary; off by default, see
   `docs/benchmarks/pianissimo-ane-eviction.md`.
 - The overlay shows "Loading model..." only for loads that keep the user
-  waiting; background warm-up failures are logged, not shown as dictation errors.
+  waiting, with an indeterminate progress bar under the label (the engine host reports
+  no load percentage, SAGA-577); background warm-up failures are logged, not shown as dictation errors.
 - Warm-up reports where its time went, phase by phase (SAGA-543). The log line
   of a background warm-up carries `verify_ms`, `host_start_ms`, `load_ms` and
   `canary_ms` (`-` for a phase that did not run: a cached client is not verified

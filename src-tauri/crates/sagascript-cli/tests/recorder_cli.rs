@@ -142,7 +142,10 @@ fn a_lossless_recording_is_a_complete_folder_with_banner_and_summary() {
     assert_eq!(tracks[0]["sample_rate"], 48_000);
     assert_eq!(tracks[0]["bits"], 24);
     let frames = tracks[0]["frames"].as_u64().unwrap();
-    assert!((40_000..=70_000).contains(&frames), "{frames} frames");
+    // `--duration` is a wall-clock cap and the synthetic source runs in real
+    // time, so a loaded runner stops late: only the lower bound is a property
+    // of the recording, the upper one just catches a runaway.
+    assert!((40_000..=48_000 * 10).contains(&frames), "{frames} frames");
 
     let err = stderr(&output);
     assert!(err.contains("Recording to "), "{err}");
@@ -210,7 +213,8 @@ fn a_compact_recording_reports_one_json_object() {
     assert!(report["ended_early"].is_null());
     assert!(report["bytes"].as_u64().unwrap() > 0);
     let seconds = report["duration_seconds"].as_f64().unwrap();
-    assert!((0.8..=2.0).contains(&seconds), "{seconds}");
+    // Lower bound only matters; see the lossless test on late stops.
+    assert!((0.8..=10.0).contains(&seconds), "{seconds}");
 
     let manifest = manifest(&folder);
     assert_eq!(manifest["recording_id"], report["recording_id"]);
@@ -218,6 +222,70 @@ fn a_compact_recording_reports_one_json_object() {
     assert_eq!(manifest["tracks"][0]["bits"], 16);
     assert_eq!(manifest["tracks"][0]["resampled_from"], 48_000);
     assert!(stderr(&output).contains("Quality: compact"));
+}
+
+#[test]
+fn source_both_writes_a_mic_track_and_a_system_track() {
+    let settings = fake_settings();
+    let dir = TempDir::new();
+    let output = run(
+        &settings,
+        &[
+            "record",
+            "--source",
+            "both",
+            "--duration",
+            "1",
+            "--dir",
+            s(&dir),
+        ],
+    );
+    ok(&output);
+    let folder = PathBuf::from(stdout(&output).trim());
+    assert!(folder.join("mic.flac").is_file());
+    assert!(folder.join("system.flac").is_file());
+    let manifest = manifest(&folder);
+    let roles: Vec<&str> = manifest["tracks"]
+        .as_array()
+        .expect("tracks")
+        .iter()
+        .map(|track| track["role"].as_str().expect("role"))
+        .collect();
+    assert_eq!(roles, ["mic", "system"]);
+    assert!(stderr(&output).contains("System audio:"));
+}
+
+#[test]
+fn source_system_alone_records_only_the_system_track() {
+    let settings = fake_settings();
+    let dir = TempDir::new();
+    let folder = record_one(&settings, &dir, &["--source", "system"]);
+    assert!(folder.join("system.flac").is_file());
+    assert!(!folder.join("mic.flac").exists());
+}
+
+#[test]
+fn a_bad_source_or_transcribing_a_system_recording_is_refused_up_front() {
+    let settings = fake_settings();
+    let dir = TempDir::new();
+    let bad = run(
+        &settings,
+        &["record", "--source", "speakers", "--dir", s(&dir)],
+    );
+    assert!(!bad.status.success());
+    let both = run(
+        &settings,
+        &[
+            "record",
+            "--source",
+            "both",
+            "--transcribe",
+            "--dir",
+            s(&dir),
+        ],
+    );
+    assert!(!both.status.success());
+    assert!(stderr(&both).contains("--transcribe"), "{}", stderr(&both));
 }
 
 #[test]

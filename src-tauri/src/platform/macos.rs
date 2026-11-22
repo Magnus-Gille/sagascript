@@ -612,11 +612,9 @@ pub fn observe_system_wake(on_wake: impl Fn() + Send + Sync + 'static) {
 }
 
 mod memory_pressure {
+    use sagascript_core::transcription::pianissimo_backend::MemoryPressure;
     use std::ffi::c_void;
     use std::os::raw::c_ulong;
-
-    const DISPATCH_MEMORYPRESSURE_WARN: c_ulong = 0x2;
-    const DISPATCH_MEMORYPRESSURE_CRITICAL: c_ulong = 0x4;
 
     unsafe extern "C" {
         static _dispatch_source_type_memorypressure: c_void;
@@ -636,20 +634,21 @@ mod memory_pressure {
         fn dispatch_resume(object: *mut c_void);
     }
 
-    static HANDLER: std::sync::OnceLock<Box<dyn Fn() + Send + Sync>> = std::sync::OnceLock::new();
+    static HANDLER: std::sync::OnceLock<Box<dyn Fn(MemoryPressure) + Send + Sync>> =
+        std::sync::OnceLock::new();
 
     extern "C" fn on_event(source: *mut c_void) {
         // SAFETY: `source` is the live dispatch source this handler was set on
         // (its context points at itself) and is never released.
         let flags = unsafe { dispatch_source_get_data(source) };
-        if flags & (DISPATCH_MEMORYPRESSURE_WARN | DISPATCH_MEMORYPRESSURE_CRITICAL) != 0 {
+        if let Some(level) = MemoryPressure::from_dispatch_flags(flags) {
             if let Some(handler) = HANDLER.get() {
-                handler();
+                handler(level);
             }
         }
     }
 
-    pub fn observe(handler: impl Fn() + Send + Sync + 'static) {
+    pub fn observe(handler: impl Fn(MemoryPressure) + Send + Sync + 'static) {
         if HANDLER.set(Box::new(handler)).is_err() {
             return;
         }
@@ -661,7 +660,7 @@ mod memory_pressure {
             let source = dispatch_source_create(
                 std::ptr::addr_of!(_dispatch_source_type_memorypressure),
                 0,
-                DISPATCH_MEMORYPRESSURE_WARN | DISPATCH_MEMORYPRESSURE_CRITICAL,
+                MemoryPressure::DISPATCH_WARN | MemoryPressure::DISPATCH_CRITICAL,
                 queue,
             );
             if source.is_null() {
@@ -675,9 +674,14 @@ mod memory_pressure {
     }
 }
 
-/// Run `on_pressure` on the system's memory-pressure warning or critical
+/// Run `on_pressure` with the level on the system's memory-pressure warning or critical
 /// events (libdispatch memory-pressure source). Runs on a libdispatch worker
 /// thread for the rest of the process; first registration wins.
-pub fn observe_memory_pressure(on_pressure: impl Fn() + Send + Sync + 'static) {
+pub fn observe_memory_pressure(
+    on_pressure: impl Fn(sagascript_core::transcription::pianissimo_backend::MemoryPressure)
+        + Send
+        + Sync
+        + 'static,
+) {
     memory_pressure::observe(on_pressure);
 }

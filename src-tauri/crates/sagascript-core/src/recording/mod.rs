@@ -35,6 +35,7 @@
 //! CLI while the app starts, a second app instance) from recovering a
 //! recording that is still being written.
 
+pub mod align;
 pub mod capture;
 pub mod decode;
 pub mod encoder;
@@ -48,6 +49,7 @@ pub mod manifest;
 pub mod naming;
 pub mod recover;
 pub mod session;
+pub mod source_plan;
 pub mod store;
 #[cfg(test)]
 mod test_recordings;

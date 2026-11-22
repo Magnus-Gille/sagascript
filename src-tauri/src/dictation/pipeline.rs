@@ -366,7 +366,9 @@ async fn run(
     };
 
     let model_name = if use_pianissimo {
-        "Pianissimo"
+        // Each language has its own Pianissimo checkpoint: name the one in use.
+        sagascript_core::models::PianissimoModel::for_language(language)
+            .map_or("Pianissimo", |model| model.display_name())
     } else {
         effective_model.display_name()
     }

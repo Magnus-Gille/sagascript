@@ -10,7 +10,7 @@ import Settings from "../lib/Settings.svelte";
 import type { BuildInfo, EngineStatus, HotkeyProfile, HotkeyStatus, Settings as SettingsValue, WhisperModel } from "../lib/api";
 import { mockIpc, type CommandHandlers, type IpcMock } from "./ipc";
 
-export const buildInfo: BuildInfo = { version: "1.4.4", git_hash: "a69d5d1", build_date: "2026-10-13" };
+export const buildInfo: BuildInfo = { version: "1.4.4", git_hash: "a69d5d1", build_date: "2026-10-13", build_profile: "release" };
 
 export const engineStatus: EngineStatus = {
   installed: true,
@@ -25,7 +25,7 @@ export function whisperModel(id: string, displayName: string, overrides: Partial
   return { id, display_name: displayName, description: "", size_mb: 0, downloaded: true, active: false, ...overrides };
 }
 
-export const pianissimo = whisperModel(PIANISSIMO_ID, "Pianissimo", { size_mb: 640 });
+export const pianissimo = whisperModel(PIANISSIMO_ID, "Pianissimo Swedish", { size_mb: 640 });
 export const kbWhisperMedium = whisperModel("kb-whisper-medium", "KB-Whisper Medium", { size_mb: 1530 });
 
 export const swedishProfile: HotkeyProfile = {

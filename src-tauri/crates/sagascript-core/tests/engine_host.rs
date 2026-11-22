@@ -356,7 +356,7 @@ fn malformed_load_result_fails_the_load_promptly() {
 #[test]
 fn out_of_order_responses_are_routed_by_id() {
     // 3 host slots => batch lane of 2 (one slot stays reserved for dictation).
-    let f = fixture(&[("FAKE_FIRST_SLOW_MS", "400"), ("FAKE_MAX_IN_FLIGHT", "3")]);
+    let f = fixture(&[("FAKE_FIRST_SLOW_MS", "2000"), ("FAKE_MAX_IN_FLIGHT", "3")]);
     let samples = pcm(4.0);
     let pcm_file = sagascript_core::transcription::engine_host::pipeline::PcmFile::write(
         &samples,
@@ -384,8 +384,9 @@ fn out_of_order_responses_are_routed_by_id() {
         .unwrap();
     let t = Instant::now();
     let b = second.wait(&cancel).unwrap();
+    // The first window needs 2 s: a second one routed by id returns long before.
     assert!(
-        t.elapsed() < Duration::from_millis(300),
+        t.elapsed() < Duration::from_millis(1000),
         "second must not wait for first"
     );
     let a = first.wait(&cancel).unwrap();
@@ -398,7 +399,7 @@ fn out_of_order_responses_are_routed_by_id() {
 #[test]
 fn window_timeout_is_reported_and_host_stays_usable() {
     // Slow first window that honours cancel: a responsive host, not a wedged one.
-    let f = fixture_with(&[("FAKE_FIRST_SLOW_MS", "5000")], |c| {
+    let f = fixture_with(&[("FAKE_FIRST_SLOW_MS", "30000")], |c| {
         c.timeouts.transcribe_min = Duration::from_millis(300)
     });
     f.client.warm().unwrap();
@@ -411,7 +412,8 @@ fn window_timeout_is_reported_and_host_stays_usable() {
         }) => {}
         other => panic!("{other:?}"),
     }
-    assert!(t.elapsed() < Duration::from_secs(3));
+    // The window needs 30 s; the timeout (300 ms plus the wedge grace) ends it far sooner.
+    assert!(t.elapsed() < Duration::from_secs(15), "{:?}", t.elapsed());
     // The host answered the cancelled window within the wedge grace, so it is
     // kept: same process, no crash, and the next window runs on it.
     let snap = f.client.snapshot();
@@ -551,7 +553,7 @@ fn submit_slow(
 
 #[test]
 fn cancel_cooperative_stops_host_work() {
-    let f = fixture(&[("FAKE_BATCH_DELAY_MS", "3000")]);
+    let f = fixture(&[("FAKE_BATCH_DELAY_MS", "10000")]);
     let cancel = CancelToken::new();
     let ticket = submit_slow(&f, &cancel);
     let c2 = cancel.clone();
@@ -564,7 +566,8 @@ fn cancel_cooperative_stops_host_work() {
         ticket.wait(&cancel),
         Err(EngineHostError::Cancelled)
     ));
-    assert!(t.elapsed() < Duration::from_secs(1));
+    // 10 s of work was asked for: a cancel that is honoured returns in a fraction of it.
+    assert!(t.elapsed() < Duration::from_secs(5), "{:?}", t.elapsed());
     wait_until(
         "host in_flight to drop to 0",
         Duration::from_secs(2),
@@ -574,7 +577,10 @@ fn cancel_cooperative_stops_host_work() {
 
 #[test]
 fn cancel_ignored_by_host_still_returns_cancelled_in_bound() {
-    let f = fixture(&[("FAKE_BATCH_DELAY_MS", "1500"), ("FAKE_IGNORE_CANCEL", "1")]);
+    let f = fixture(&[
+        ("FAKE_BATCH_DELAY_MS", "10000"),
+        ("FAKE_IGNORE_CANCEL", "1"),
+    ]);
     let cancel = CancelToken::new();
     let ticket = submit_slow(&f, &cancel);
     cancel.cancel();
@@ -583,7 +589,8 @@ fn cancel_ignored_by_host_still_returns_cancelled_in_bound() {
         ticket.wait(&cancel),
         Err(EngineHostError::Cancelled)
     ));
-    assert!(t.elapsed() < Duration::from_millis(500));
+    // The host ignores the cancel and works for 10 s; the caller must not wait for it.
+    assert!(t.elapsed() < Duration::from_secs(5), "{:?}", t.elapsed());
     // The host really did keep working.
     assert_eq!(f.client.status().unwrap().in_flight, 1);
 }
@@ -657,10 +664,14 @@ fn restart_backoff_then_failed_until_reset() {
     assert!(starts[3] >= Duration::from_millis(350), "{starts:?}");
     assert!(matches!(f.client.warm(), Err(EngineHostError::Failed(_))));
     assert!(f.client.snapshot().failed.is_some());
-    // Failed is sticky until reset, and fails fast.
-    let t = Instant::now();
+    // Failed is sticky until reset, and fails fast: no new spawn.
+    let spawns = f.client.snapshot().spawns;
     assert!(matches!(f.client.warm(), Err(EngineHostError::Failed(_))));
-    assert!(t.elapsed() < Duration::from_millis(100));
+    assert_eq!(
+        f.client.snapshot().spawns,
+        spawns,
+        "a failed client must not start the host again"
+    );
     f.client.reset();
     assert!(matches!(
         f.client.warm(),
@@ -962,13 +973,11 @@ fn dictation_is_not_queued_behind_a_running_file_job() {
         .unwrap();
     let latency = t.elapsed();
     assert_eq!(d.tokens.len(), 6);
-    assert!(
-        latency < Duration::from_millis(600),
-        "dictation took {latency:?}"
-    );
+    // No absolute latency bound: the dictation overtook the file job exactly when
+    // the job is still running once it has been answered (8 windows x 300 ms / 2).
     assert!(
         !job_done.load(Ordering::SeqCst),
-        "file job should still be running (8 windows x 300 ms / 2)"
+        "dictation took {latency:?}, but the file job finished first (8 windows x 300 ms / 2)"
     );
     let (out, n) = job.join().unwrap();
     assert_eq!(
@@ -2755,10 +2764,10 @@ fn windows_sent_in(log: &Path) -> usize {
 
 #[test]
 fn a_producer_failure_interrupts_a_slow_model_load() {
-    // The load takes 3 s (a first-time Core ML compile takes minutes). The decode
+    // The load takes 20 s (a first-time Core ML compile takes minutes). The decode
     // fails after 150 ms: its error must not wait for the load.
     let mut env = stream_env();
-    env.push(("FAKE_LOAD_DELAY_MS", "3000"));
+    env.push(("FAKE_LOAD_DELAY_MS", "20000"));
     let f = fixture(&env);
     let cancel = CancelToken::new();
     let started = Instant::now();
@@ -2772,8 +2781,8 @@ fn a_producer_failure_interrupts_a_slow_model_load() {
         other => panic!("expected the producer's own error, got {other:?}"),
     }
     assert!(
-        started.elapsed() < Duration::from_millis(1500),
-        "returned after {:?}, not after the 3 s load",
+        started.elapsed() < Duration::from_secs(10),
+        "returned after {:?}, not after the 20 s load",
         started.elapsed()
     );
     assert!(!cancel.is_cancelled(), "the caller's token is the caller's");

@@ -249,7 +249,7 @@ mockIPC(async (cmd, args = {}) => {
       }
       if (strictPreparationNonce) activePreparationNonce = null;
       return null;
-    case "get_build_info": return { version: "test", git_hash: "synthetic-qa", build_date: "fixture" };
+    case "get_build_info": return { version: "test", git_hash: "synthetic-qa", build_date: "fixture", build_profile: "release" };
     case "get_last_transcription":
       await waitForQaGate("last-transcription");
       if (window.qaLastNativeDelayMs) await new Promise((resolve) => setTimeout(resolve, window.qaLastNativeDelayMs));
@@ -281,7 +281,7 @@ mockIPC(async (cmd, args = {}) => {
         return [{ id: "base.en", display_name: "Base English", description: "Fixture", size_mb: 0, downloaded: true, active: false }];
       }
       const lineup = [
-        { id: "pianissimo-sv", display_name: "Pianissimo", description: "Fixture",
+        { id: "pianissimo-sv", display_name: "Pianissimo Swedish", description: "Fixture",
           size_mb: pianissimoSizeMb, downloaded: pianissimoDownloaded, active: false },
         { id: "kb-whisper-large", display_name: "KB-Whisper Large", description: "Most accurate, slower",
           size_mb: 1031, downloaded: true, active: false },
@@ -294,7 +294,7 @@ mockIPC(async (cmd, args = {}) => {
     }
     case "set_profile_model": profileModels[args.profileId] = args.modelId; return null;
     case "get_profile_model_info": return profileModels[args.profileId] === "pianissimo-sv"
-      ? { id: "pianissimo-sv", display_name: "Pianissimo", description: "Fixture", size_mb: pianissimoSizeMb, downloaded: pianissimoDownloaded, active: true }
+      ? { id: "pianissimo-sv", display_name: "Pianissimo Swedish", description: "Fixture", size_mb: pianissimoSizeMb, downloaded: pianissimoDownloaded, active: true }
       : args.profileId === "english"
         ? { id: "base.en", display_name: "Base English", description: "Fixture", size_mb: 0, downloaded: true, active: true }
       : profileModels[args.profileId] === "kb-whisper-base"
@@ -302,7 +302,7 @@ mockIPC(async (cmd, args = {}) => {
       : profileModels[args.profileId] === "kb-whisper-large"
         ? { id: "kb-whisper-large", display_name: "KB-Whisper Large", description: "Fixture", size_mb: 1031, downloaded: true, active: true }
       // "auto" resolves to the recommendation: Pianissimo where supported.
-      : { id: "pianissimo-sv", display_name: "Pianissimo", description: "Fixture", size_mb: pianissimoSizeMb, downloaded: pianissimoDownloaded, active: true };
+      : { id: "pianissimo-sv", display_name: "Pianissimo Swedish", description: "Fixture", size_mb: pianissimoSizeMb, downloaded: pianissimoDownloaded, active: true };
     case "download_pianissimo_model": {
       pianissimoDownloaded = true;
       if (holdPianissimoDownload) {
@@ -315,7 +315,7 @@ mockIPC(async (cmd, args = {}) => {
     }
     case "get_auto_file_model_info":
     case "get_effective_model_info": return args.language === "sv"
-      ? { id: "pianissimo-sv", display_name: "Pianissimo", description: "Fixture", size_mb: pianissimoSizeMb, downloaded: pianissimoDownloaded, active: true }
+      ? { id: "pianissimo-sv", display_name: "Pianissimo Swedish", description: "Fixture", size_mb: pianissimoSizeMb, downloaded: pianissimoDownloaded, active: true }
       : { id: "base.en", display_name: "Base English", description: "Fixture", size_mb: 0, downloaded: true, active: true };
     case "engine_status": return { installed: pianissimoDownloaded, supported: true, host_path: "/fixture/sagascript-engine-host",
       host_version: "1.3.2", host_git_sha: "abcdef0123456789", warm: false };

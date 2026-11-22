@@ -75,4 +75,21 @@ describe("dictation indicator", () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(indicator()).toHaveTextContent("Transcribing…");
   });
+
+  test("shows an indeterminate progress bar while the model loads and removes it when ready (SAGA-577)", async () => {
+    const ipc = await renderOverlay(backend({ get_state: () => "transcribing" }));
+    await waitFor(() => expect(indicator()).toHaveTextContent("Transcribing…"));
+    expect(screen.queryByRole("progressbar")).toBeNull();
+
+    ipc.emit("engine-load-state", { state: "loading", source: "request" });
+    const bar = await screen.findByRole("progressbar");
+    expect(indicator()).toHaveTextContent("Loading model…");
+    // No value: the host reports no percentage, so the bar is indeterminate.
+    expect(bar).not.toHaveAttribute("aria-valuenow");
+    expect(bar).toHaveAccessibleName("Loading model…");
+
+    ipc.emit("engine-load-state", { state: "ready", source: "request", loadMs: 1200 });
+    await waitFor(() => expect(screen.queryByRole("progressbar")).toBeNull());
+    expect(indicator()).toHaveTextContent("Transcribing…");
+  });
 });

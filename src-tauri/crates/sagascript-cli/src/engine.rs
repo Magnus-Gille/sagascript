@@ -876,6 +876,18 @@ mod tests {
     }
 
     fn probe(host: PathBuf, supported: bool, installed: bool) -> TestProbe {
+        probe_with(host, supported, installed, |_| Ok(()))
+    }
+
+    /// A probe whose verifier is `verify`: a test that needs a failing verifier passes one in,
+    /// so no test touches the process-global environment (`set_var` is `unsafe` in edition 2024
+    /// and races the parallel tests).
+    fn probe_with(
+        host: PathBuf,
+        supported: bool,
+        installed: bool,
+        verify: fn(bool) -> Result<(), DictationError>,
+    ) -> TestProbe {
         let pcm_dir = tempfile::tempdir().unwrap();
         let mut config = EngineHostConfig::new(
             host.clone(),
@@ -897,13 +909,7 @@ mod tests {
             model_overridden: false,
             model_installed: installed,
             config: Some(config),
-            verify: |force| {
-                if force && std::env::var_os("ENGINE_TEST_FORCE_FAILS").is_some() {
-                    Err(DictationError::ModelDownloadFailed("hash mismatch".into()))
-                } else {
-                    Ok(())
-                }
-            },
+            verify,
         };
         TestProbe { probe, pcm_dir }
     }
@@ -1073,10 +1079,15 @@ mod tests {
     #[test]
     fn verify_model_flag_reaches_the_forced_verifier() {
         // The probe's verifier fails only for forced verification.
-        std::env::set_var("ENGINE_TEST_FORCE_FAILS", "1");
-        let normal = doctor_report(&probe(fake_host(), true, true), false);
-        let forced = doctor_report(&probe(fake_host(), true, true), true);
-        std::env::remove_var("ENGINE_TEST_FORCE_FAILS");
+        fn verify(force: bool) -> Result<(), DictationError> {
+            if force {
+                Err(DictationError::ModelDownloadFailed("hash mismatch".into()))
+            } else {
+                Ok(())
+            }
+        }
+        let normal = doctor_report(&probe_with(fake_host(), true, true, verify), false);
+        let forced = doctor_report(&probe_with(fake_host(), true, true, verify), true);
         assert!(normal.ok, "{:?}", normal.steps);
         assert_eq!(forced.failed_step.as_deref(), Some("model_verified"));
     }

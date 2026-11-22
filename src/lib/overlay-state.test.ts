@@ -5,6 +5,7 @@ import {
   needsLoadingTimer,
   overlayLabel,
   reduceOverlay,
+  showLoadingBar,
   type OverlayAction,
   type OverlayState,
 } from "./overlay-state";
@@ -135,4 +136,21 @@ test("seeding from the cached backend state shows loading for an app-start warm"
   expect(label(s)).toBe("Loading model…");
   // Seeded "unknown" leaves a fresh overlay untouched.
   expect(run([engine("unknown")])).toStrictEqual(initialOverlayState);
+});
+
+test("the loading bar follows the loading label: delayed, then gone on ready, failed or cancelled (SAGA-577)", () => {
+  let s = run([state("transcribing"), engine("loading")]);
+  // Under the threshold a warm engine never flashes the bar.
+  expect(showLoadingBar(s)).toBe(false);
+  s = run([elapsed], s);
+  expect(showLoadingBar(s)).toBe(true);
+  expect(showLoadingBar(run([engine("ready")], s))).toBe(false);
+  expect(showLoadingBar(run([engine("failed")], s))).toBe(false);
+  expect(showLoadingBar(run([engine("unknown")], s))).toBe(false);
+  expect(showLoadingBar(run([state("recording")], s))).toBe(false);
+});
+
+test("no loading bar while only recording, or for a plain transcription", () => {
+  expect(showLoadingBar(run([state("recording"), engine("loading")]))).toBe(false);
+  expect(showLoadingBar(run([state("transcribing"), engine("ready")]))).toBe(false);
 });

@@ -46,7 +46,7 @@ describe("the profile cards", () => {
       within(model)
         .getAllByRole("option")
         .map((option) => option.textContent),
-    ).toEqual(["Recommended for Swedish", "Pianissimo", "KB-Whisper Medium"]);
+    ).toEqual(["Recommended for Swedish", "Pianissimo Swedish", "KB-Whisper Medium"]);
     expect(model).toHaveValue("auto");
     expect(screen.getByRole("button", { name: "Svenska Hold to record shortcut" })).toHaveTextContent("Ctrl + Shift + Space");
     expect(screen.getByRole("button", { name: "Svenska Press to start/stop shortcut" })).toHaveTextContent("Not set");
@@ -189,6 +189,25 @@ describe("a profile whose model is not downloaded", () => {
     await waitFor(() => expect(screen.queryByRole("button", { name: /Downloading|Download speech engine/ })).not.toBeInTheDocument());
   });
 
+  test("a Danish profile says which model it needs, in which language, and how to get it", async () => {
+    const danish = whisperModel("pianissimo-da", "Pianissimo Danish", { size_mb: 640, downloaded: false });
+    await render({ get_profile_model_info: () => danish });
+
+    expect(await screen.findByText("Pianissimo Danish required · 640 MB")).toBeInTheDocument();
+    // The hint names the model of the profile's language, not just "Pianissimo".
+    const hint = screen.getByText(/needs Pianissimo Danish/);
+    expect(hint).toHaveTextContent(/needs Pianissimo Danish, which is not on this computer yet/);
+    expect(hint).toHaveTextContent(/Download speech engine/);
+    expect(screen.getByRole("button", { name: "Download speech engine" })).toBeEnabled();
+  });
+
+  test("an installed model shows ready and no missing-model hint", async () => {
+    await render({ get_profile_model_info: () => pianissimo });
+
+    expect(await screen.findByText("Pianissimo Swedish · Ready")).toBeInTheDocument();
+    expect(screen.queryByText(/which is not on this computer yet/)).not.toBeInTheDocument();
+  });
+
   test("a failed download shows its message under the profile and offers the download again", async () => {
     await render({
       ...withMissingModel,
@@ -199,7 +218,8 @@ describe("a profile whose model is not downloaded", () => {
 
     await userEvent.setup().click(await screen.findByRole("button", { name: "Download speech engine" }));
 
-    expect(await screen.findByText("No space left on the disk")).toBeInTheDocument();
+    expect(await screen.findByText(/No space left on the disk/)).toBeInTheDocument();
+    expect(screen.getByText(/then press "Download speech engine" to try again/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Download speech engine" })).toBeEnabled();
   });
 });

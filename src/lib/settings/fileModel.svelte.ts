@@ -120,7 +120,7 @@ export class FileModel {
 
   /** "Download the model again" for the Pianissimo models `ids`; rejects when a download fails. */
   downloadEngineModelAgain = (ids: readonly string[]): Promise<void> => {
-    return this.#win.downloads.downloadAgain(ids, (id) => this.options.find((model) => model.id === id)?.display_name ?? "Pianissimo");
+    return this.#win.downloads.downloadAgain(ids, (id) => this.options.find((model) => model.id === id)?.display_name ?? "speech engine");
   };
 
   /**

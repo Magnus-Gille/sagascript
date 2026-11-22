@@ -31,7 +31,7 @@ in the app (`Sagascript.app/Contents/Resources/EngineHost/sagascript-engine-host
 On Windows on ARM (Snapdragon) it runs on the CPU through an ONNX Runtime host
 bundled in `engine-host\` beside the app. It requires **macOS 14+ on Apple Silicon
 or Windows on ARM (Snapdragon)**. In **Dictate**, select
-**Pianissimo** for a Swedish profile, then download its model if
+**Pianissimo Swedish** (or **Pianissimo Danish** for a Danish profile), then download its model if
 prompted. Each profile owns its language, shortcut(s), dictionary, and model;
 another Swedish profile can keep Whisper. **Auto** means the recommended model
 for the profile's language. Each Pianissimo model serves one language:
@@ -291,7 +291,11 @@ sagascript manpages --dir /usr/local/share/man/man1
 Run `sagascript --help` for the full list of commands.
 
 **Recorder mode.** `sagascript record` with `--quality lossless|compact`, `--dir DIR`,
-`--name TITLE` or `--transcribe` keeps the microphone as a recording folder (one FLAC
+`--name TITLE`, `--source mic|system|both` or `--transcribe` keeps the microphone (and, with
+`--source system|both`, the computer's own audio as a separate `system` track, planned for macOS
+14.4+ on Apple Silicon and for Windows; this version has no system-audio backend yet, so `both`
+records the microphone only and `system` is refused)
+as a recording folder (one FLAC
 file per track and a `recording.json` manifest) instead of transcribing in memory;
 the flags cannot be combined with `-o` or `--clipboard`, and `record` and
 `record -o file.wav` work as before. Lossless stores what the device delivers

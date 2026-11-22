@@ -62,7 +62,7 @@
     <h1 class="window-title" bind:this={windowTitleEl} tabindex="-1">Sagascript</h1>
     <div class="build-info" aria-label="Build information">
       {#if win.buildInfo}
-        Version {win.buildInfo.version} · Build {win.buildInfo.git_hash} · {win.buildInfo.build_date}{win.engineHostIdentity
+        Version {win.buildInfo.version} · Build {win.buildInfo.git_hash} · {win.buildInfo.build_date} · {win.buildInfo.build_profile} build{win.engineHostIdentity
           ? ` · ${win.engineHostIdentity}`
           : ""}
       {:else}

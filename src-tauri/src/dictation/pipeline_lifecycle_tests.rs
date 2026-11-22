@@ -1829,6 +1829,7 @@ async fn every_terminal_path_logs_once_releases_its_work_and_allows_the_next_ses
                 [
                     "version",
                     "git_hash",
+                    "build_profile",
                     "language",
                     "model",
                     "audio_ms",

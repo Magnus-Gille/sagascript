@@ -10,6 +10,7 @@ pub async fn get_build_info() -> Result<BuildInfo, CommandError> {
         version: env!("CARGO_PKG_VERSION").to_string(),
         git_hash: env!("GIT_HASH").to_string(),
         build_date: env!("BUILD_DATE").to_string(),
+        build_profile: env!("SAGASCRIPT_BUILD_PROFILE").to_string(),
     })
 }
 
@@ -18,6 +19,8 @@ pub struct BuildInfo {
     version: String,
     git_hash: String,
     build_date: String,
+    /// `release` or `debug`; a debug build is unoptimized and not representative for latency.
+    build_profile: String,
 }
 
 /// The host OS as the frontend reads it (`src/lib/platform.ts`): `macos`,

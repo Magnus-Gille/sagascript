@@ -90,7 +90,11 @@ fn an_entry_carries_the_names_of_its_model() {
     }
     let pianissimo = model_info(FileModel::Pianissimo(PianissimoModel::Swedish), &env);
     assert_eq!(pianissimo.id, PianissimoModel::Swedish.id());
-    assert_eq!(pianissimo.display_name, "Pianissimo");
+    assert_eq!(pianissimo.display_name, "Pianissimo Swedish");
+    // The Danish checkpoint is not listed under the Swedish name.
+    let danish = model_info(FileModel::Pianissimo(PianissimoModel::Danish), &env);
+    assert_eq!(danish.display_name, "Pianissimo Danish");
+    assert_ne!(danish.display_name, pianissimo.display_name);
     assert!(pianissimo
         .description
         .starts_with("Swedish file transcription"));

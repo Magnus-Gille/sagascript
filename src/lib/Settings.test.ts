@@ -8,6 +8,7 @@ import { describe, expect, expectTypeOf, test } from "vitest";
 import type { HotkeyProfile, Language } from "./api";
 import { PIANISSIMO_ID } from "./models.svelte";
 import {
+  buildInfo,
   engineStatus,
   kbWhisperMedium,
   pianissimo,
@@ -56,7 +57,7 @@ describe("window header and navigation", () => {
     const [header, ...otherHeaders] = screen.getAllByRole("banner");
     expect(otherHeaders).toEqual([]);
     expect(within(header).getByLabelText("Build information")).toHaveTextContent(
-      "Version 1.4.4 · Build a69d5d1 · 2026-10-13 · Engine 0.9.0 (0123456)",
+      "Version 1.4.4 · Build a69d5d1 · 2026-10-13 · release build · Engine 0.9.0 (0123456)",
     );
 
     const tabs = ["Dictate", "Transcribe", "Settings"].map((name) => screen.getByRole("button", { name }));
@@ -65,9 +66,14 @@ describe("window header and navigation", () => {
     expect(precedes(tabs[0], tabs[1]) && precedes(tabs[1], tabs[2])).toBe(true);
   });
 
+  test("the header marks a debug build, which is not representative for latency", async () => {
+    await renderSettings(settingsBackend({ get_build_info: () => ({ ...buildInfo, build_profile: "debug" }) }));
+    expect(screen.getByLabelText("Build information")).toHaveTextContent(/2026-10-13 · debug build/);
+  });
+
   test("the header shows the engine host identity only when the host reports a version", async () => {
     await renderSettings(settingsBackend({ engine_status: () => ({ ...engineStatus, host_version: null, host_git_sha: null }) }));
-    expect(screen.getByLabelText("Build information")).toHaveTextContent(/^Version 1\.4\.4 · Build a69d5d1 · 2026-10-13$/);
+    expect(screen.getByLabelText("Build information")).toHaveTextContent(/^Version 1\.4\.4 · Build a69d5d1 · 2026-10-13 · release build$/);
   });
 });
 
@@ -111,7 +117,7 @@ describe("Dictate: profiles and recording shortcuts", () => {
     expect(pickers.map((picker) => picker.getAttribute("aria-label"))).toEqual(["Model for Svenska", "Model for English"]);
     expect(screen.getByText("Speech model for Svenska")).toContainElement(pickers[0]);
     expect(screen.getByText("Speech model for English")).toContainElement(pickers[1]);
-    await waitFor(() => expect(optionLabels(pickers[0])).toEqual(["Recommended for Swedish", "Pianissimo", "KB-Whisper Medium"]));
+    await waitFor(() => expect(optionLabels(pickers[0])).toEqual(["Recommended for Swedish", "Pianissimo Swedish", "KB-Whisper Medium"]));
     expect(optionLabels(pickers[1])).toEqual(["Recommended for English", "Base (English)", "Small (English)"]);
     expect(ipc.callsTo("get_profile_model_info")).toEqual(expect.arrayContaining([{ profileId: "default" }, { profileId: "english" }]));
     expect(ipc.callsTo("get_file_model_options")).toEqual(
@@ -227,14 +233,14 @@ describe("Swedish model lineup", () => {
       }),
     );
 
-    expect(await screen.findByText("Pianissimo is faster and more accurate for Swedish.")).toBeInTheDocument();
+    expect(await screen.findByText("Pianissimo Swedish is faster and more accurate for Swedish.")).toBeInTheDocument();
     const picker = screen.getByRole("combobox", { name: "Model for Svenska" });
     // Only what the backend lineup returns, never a hardcoded KB-Whisper list.
-    expect(optionLabels(picker)).toEqual(["Recommended for Swedish", "Pianissimo", "KB-Whisper Medium", "KB-Whisper Small"]);
+    expect(optionLabels(picker)).toEqual(["Recommended for Swedish", "Pianissimo Swedish", "KB-Whisper Medium", "KB-Whisper Small"]);
     expect(ipc.callsTo("get_file_model_options")).toContainEqual({ language: "sv", include: "kb-whisper-small" });
 
     const before = ipc.calls.length;
-    await userEvent.setup().click(screen.getByRole("button", { name: "Switch to Pianissimo (download 640 MB)" }));
+    await userEvent.setup().click(screen.getByRole("button", { name: "Switch to Pianissimo Swedish (download 640 MB)" }));
     await waitFor(() => expect(ipc.callsTo("set_profile_model")).toEqual([{ profileId: "default", modelId: PIANISSIMO_ID }]));
     const switched = ipc.calls.slice(before).map((call) => call.command);
     expect(switched.slice(0, 3)).toEqual(["download_pianissimo_model", "set_profile_model", "get_settings"]);
@@ -251,7 +257,7 @@ describe("Swedish model lineup", () => {
     );
 
     const switchButtons = await screen.findAllByRole("button", { name: /^Switch to / });
-    expect(switchButtons.map((button) => button.textContent?.trim())).toEqual(["Switch to Pianissimo"]);
+    expect(switchButtons.map((button) => button.textContent?.trim())).toEqual(["Switch to Pianissimo Swedish"]);
     await userEvent.setup().click(switchButtons[0]);
     await waitFor(() => expect(ipc.callsTo("set_profile_model")).toEqual([{ profileId: "default", modelId: PIANISSIMO_ID }]));
     expect(ipc.callsTo("download_pianissimo_model")).toEqual([]);
@@ -267,7 +273,7 @@ describe("Swedish model lineup", () => {
     await userEvent.setup().click(screen.getByRole("button", { name: "Transcribe" }));
     const picker = screen.getByRole("combobox", { name: "File transcription model" });
     await waitFor(() => expect(optionLabels(picker)[0]).toBe("Auto — KB-Whisper Medium (downloaded)"));
-    expect(optionLabels(picker).slice(1)).toEqual(["Pianissimo · 640 MB · ready", "KB-Whisper Medium · 1530 MB · ready"]);
+    expect(optionLabels(picker).slice(1)).toEqual(["Pianissimo Swedish · 640 MB · ready", "KB-Whisper Medium · 1530 MB · ready"]);
     expect(ipc.callsTo("get_auto_file_model_info")).toContainEqual({ language: "sv" });
   });
 
@@ -275,7 +281,7 @@ describe("Swedish model lineup", () => {
     await renderSettings();
     await userEvent.setup().click(screen.getByRole("button", { name: "Transcribe" }));
     const picker = screen.getByRole("combobox", { name: "File transcription model" });
-    await waitFor(() => expect(optionLabels(picker)[0]).toBe("Auto — Pianissimo (recommended)"));
+    await waitFor(() => expect(optionLabels(picker)[0]).toBe("Auto — Pianissimo Swedish (recommended)"));
   });
 });
 

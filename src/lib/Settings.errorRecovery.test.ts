@@ -160,7 +160,7 @@ describe("Download the model again", () => {
     await waitFor(() => expect(ipc.callsTo("download_pianissimo_model")).toHaveLength(1));
     expect(ipc.callsTo("download_model")).toHaveLength(0);
     // The progress the window shows for every download, and no second click.
-    await waitFor(() => expect(document.querySelector(".download-status-label")?.textContent).toBe("Downloading Pianissimo..."));
+    await waitFor(() => expect(document.querySelector(".download-status-label")?.textContent).toBe("Downloading Pianissimo Swedish..."));
     expect(screen.getByRole("button", { name: "Download the model again" })).toHaveAttribute("aria-disabled", "true");
 
     download.resolve();

@@ -21,6 +21,7 @@ const workflows = Object.fromEntries(
 // writer must be added here, which puts it in front of a reviewer.
 const WRITERS = new Map([
   ["download-metrics.yml:snapshot:contents", "pushes the daily snapshot to the metrics/downloads branch"],
+  ["flake-detector.yml:report:issues", "opens or updates the issue when the nightly flake detector sees a failure"],
   ["release.yml:promote-release:contents", "creates the draft releases from a verified prebuild"],
   ["release.yml:publish-release:contents", "creates the draft release on the fallback path"],
   ["sbom.yml:attach:contents", "uploads the SBOMs to a published release"],
