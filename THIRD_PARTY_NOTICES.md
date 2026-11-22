@@ -170,7 +170,7 @@ attribution as well. No matching CoreML encoder is supplied for the fine-tune.
 | foreign-types | 0.5.0 | MIT/Apache-2.0 | [upstream](https://github.com/sfackler/foreign-types) |
 | foreign-types-macros | 0.2.3 | MIT/Apache-2.0 | [upstream](https://github.com/sfackler/foreign-types) |
 | foreign-types-shared | 0.3.1 | MIT/Apache-2.0 | [upstream](https://github.com/sfackler/foreign-types) |
-| form_urlencoded | 1.2.2 | MIT OR Apache-2.0 | [upstream](https://github.com/servo/rust-url) |
+| form_urlencoded | 1.2.3 | MIT OR Apache-2.0 | [upstream](https://github.com/servo/rust-url) |
 | fs2 | 0.4.3 | MIT/Apache-2.0 | [upstream](https://github.com/danburkert/fs2-rs) |
 | fs_extra | 1.3.0 | MIT | [upstream](https://github.com/webdesus/fs_extra) |
 | fsevent-sys | 4.1.0 | MIT | [upstream](https://github.com/octplane/fsevent-rust/tree/master/fsevent-sys) |
@@ -514,7 +514,7 @@ attribution as well. No matching CoreML encoder is supplied for the fine-tune.
 | untrusted | 0.9.0 | ISC | [upstream](https://github.com/briansmith/untrusted) |
 | ureq | 3.3.0 | MIT OR Apache-2.0 | [upstream](https://github.com/algesten/ureq) |
 | ureq-proto | 0.6.0 | MIT OR Apache-2.0 | [upstream](https://github.com/algesten/ureq-proto) |
-| url | 2.5.8 | MIT OR Apache-2.0 | [upstream](https://github.com/servo/rust-url) |
+| url | 2.5.9 | MIT OR Apache-2.0 | [upstream](https://github.com/servo/rust-url) |
 | urlpattern | 0.3.0 | MIT | [upstream](https://github.com/denoland/rust-urlpattern) |
 | utf-8 | 0.7.6 | MIT OR Apache-2.0 | [upstream](https://github.com/SimonSapin/rust-utf8) |
 | utf8-zero | 0.8.1 | MIT OR Apache-2.0 | [upstream](https://github.com/algesten/utf8-zero) |
@@ -4182,7 +4182,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ### 33ed9a8ecf55
 
-Components: Rust form_urlencoded@1.2.2
+Components: Rust form_urlencoded@1.2.3
 
 Source filenames: LICENSE-MIT
 
@@ -10491,7 +10491,7 @@ DEALINGS IN THE SOFTWARE.
 
 ### 7a8093fb4a93
 
-Components: Rust idna@1.1.0, Rust percent-encoding@2.3.2, Rust url@2.5.8
+Components: Rust idna@1.1.0, Rust percent-encoding@2.3.2, Rust url@2.5.9
 
 Source filenames: LICENSE-MIT
 
@@ -15521,7 +15521,7 @@ DEALINGS IN THE SOFTWARE.
 
 ### 954f335b8baf
 
-Components: Rust arrayvec@0.7.6, Rust atomic-waker@1.1.2, Rust autocfg@1.5.0, Rust autocfg@1.5.1, Rust base64@0.21.7, Rust base64@0.22.1, Rust base64@0.23.1, Rust bitflags@1.3.2, Rust bitflags@2.11.0, Rust bumpalo@3.20.1, Rust camino@1.2.2, Rust cc@1.2.56, Rust cexpr@0.6.0, Rust cfg-if@1.0.4, Rust cfg-if@1.0.5, Rust cmake@0.1.57, Rust cocoa-foundation@0.2.1, Rust cocoa@0.26.1, Rust core-foundation-sys@0.8.7, Rust core-foundation@0.10.1, Rust core-foundation@0.9.4, Rust core-graphics-types@0.2.0, Rust core-graphics@0.24.0, Rust core-graphics@0.25.0, Rust coreaudio-rs@0.11.3, Rust crossbeam-channel@0.5.15, Rust crossbeam-utils@0.8.21, Rust displaydoc@0.2.5, Rust either@1.15.0, Rust equivalent@1.0.2, Rust errno@0.3.14, Rust fastrand@2.3.0, Rust filetime@0.2.27, Rust find-msvc-tools@0.1.9, Rust flate2@1.1.9, Rust fnv@1.0.7, Rust form_urlencoded@1.2.2, Rust fs2@0.4.3, Rust futf@0.1.5, Rust glob@0.3.3, Rust global-hotkey@0.8.0, Rust hash32@0.3.1, Rust hashbrown@0.12.3, Rust hashbrown@0.16.1, Rust heapless@0.8.0, Rust heck@0.5.0, Rust html5ever@0.29.1, Rust httparse@1.10.1, Rust hyper-rustls@0.27.7, Rust hyper-tls@0.6.0, Rust idna@1.1.0, Rust idna_adapter@1.2.1, Rust indexmap@1.9.3, Rust indexmap@2.13.0, Rust itertools@0.13.0, Rust jobserver@0.1.34, Rust keyboard-types@0.7.0, Rust keyboard-types@0.8.3, Rust lazy_static@1.5.0, Rust lock_api@0.4.14, Rust log@0.4.29, Rust markup5ever@0.14.1, Rust matrixmultiply@0.3.10, Rust matrixmultiply@0.3.11, Rust mime@0.3.17, Rust muda@0.17.2, Rust ndarray@0.17.2, Rust nodrop@0.1.14, Rust num-complex@0.4.6, Rust num-integer@0.1.46, Rust num-integer@0.1.47, Rust num-traits@0.2.19, Rust num_cpus@1.17.0, Rust once_cell@1.21.3, Rust once_cell@1.21.4, Rust parking_lot@0.12.5, Rust parking_lot_core@0.9.12, Rust percent-encoding@2.3.2, Rust png@0.17.16, Rust png@0.18.1, Rust primal-check@0.3.4, Rust proc-macro-hack@0.5.20+deprecated, Rust rawpointer@0.2.1, Rust regex-automata@0.4.18, Rust regex-syntax@0.8.11, Rust regex@1.13.1, Rust rustc_version@0.4.1, Rust rustix@1.1.5, Rust rustls@0.23.46, Rust scopeguard@1.2.0, Rust security-framework-sys@2.16.0, Rust security-framework@3.6.0, Rust serde_with@3.16.1, Rust serde_with_macros@3.16.1, Rust servo_arc@0.2.0, Rust signal-hook-registry@1.4.8, Rust signal-hook@0.3.18, Rust smallvec@1.15.1, Rust smallvec@1.16.2, Rust socket2@0.6.5, Rust stable_deref_trait@1.2.1, Rust string_cache@0.8.9, Rust string_cache_codegen@0.5.4, Rust syn@1.0.109, Rust system-configuration-sys@0.6.0, Rust system-configuration@0.7.0, Rust tar@0.4.46, Rust tempfile@3.27.0, Rust tendril@0.4.3, Rust thread_local@1.1.9, Rust tray-icon@0.21.3, Rust unicode-segmentation@1.12.0, Rust unicode-width@0.2.2, Rust url@2.5.8, Rust uuid@1.21.0, Rust version_check@0.9.5, Rust weezl@0.1.12, Rust window-vibrancy@0.6.0, Rust wry@0.54.4, Rust xattr@1.6.1
+Components: Rust arrayvec@0.7.6, Rust atomic-waker@1.1.2, Rust autocfg@1.5.0, Rust autocfg@1.5.1, Rust base64@0.21.7, Rust base64@0.22.1, Rust base64@0.23.1, Rust bitflags@1.3.2, Rust bitflags@2.11.0, Rust bumpalo@3.20.1, Rust camino@1.2.2, Rust cc@1.2.56, Rust cexpr@0.6.0, Rust cfg-if@1.0.4, Rust cfg-if@1.0.5, Rust cmake@0.1.57, Rust cocoa-foundation@0.2.1, Rust cocoa@0.26.1, Rust core-foundation-sys@0.8.7, Rust core-foundation@0.10.1, Rust core-foundation@0.9.4, Rust core-graphics-types@0.2.0, Rust core-graphics@0.24.0, Rust core-graphics@0.25.0, Rust coreaudio-rs@0.11.3, Rust crossbeam-channel@0.5.15, Rust crossbeam-utils@0.8.21, Rust displaydoc@0.2.5, Rust either@1.15.0, Rust equivalent@1.0.2, Rust errno@0.3.14, Rust fastrand@2.3.0, Rust filetime@0.2.27, Rust find-msvc-tools@0.1.9, Rust flate2@1.1.9, Rust fnv@1.0.7, Rust form_urlencoded@1.2.3, Rust fs2@0.4.3, Rust futf@0.1.5, Rust glob@0.3.3, Rust global-hotkey@0.8.0, Rust hash32@0.3.1, Rust hashbrown@0.12.3, Rust hashbrown@0.16.1, Rust heapless@0.8.0, Rust heck@0.5.0, Rust html5ever@0.29.1, Rust httparse@1.10.1, Rust hyper-rustls@0.27.7, Rust hyper-tls@0.6.0, Rust idna@1.1.0, Rust idna_adapter@1.2.1, Rust indexmap@1.9.3, Rust indexmap@2.13.0, Rust itertools@0.13.0, Rust jobserver@0.1.34, Rust keyboard-types@0.7.0, Rust keyboard-types@0.8.3, Rust lazy_static@1.5.0, Rust lock_api@0.4.14, Rust log@0.4.29, Rust markup5ever@0.14.1, Rust matrixmultiply@0.3.10, Rust matrixmultiply@0.3.11, Rust mime@0.3.17, Rust muda@0.17.2, Rust ndarray@0.17.2, Rust nodrop@0.1.14, Rust num-complex@0.4.6, Rust num-integer@0.1.46, Rust num-integer@0.1.47, Rust num-traits@0.2.19, Rust num_cpus@1.17.0, Rust once_cell@1.21.3, Rust once_cell@1.21.4, Rust parking_lot@0.12.5, Rust parking_lot_core@0.9.12, Rust percent-encoding@2.3.2, Rust png@0.17.16, Rust png@0.18.1, Rust primal-check@0.3.4, Rust proc-macro-hack@0.5.20+deprecated, Rust rawpointer@0.2.1, Rust regex-automata@0.4.18, Rust regex-syntax@0.8.11, Rust regex@1.13.1, Rust rustc_version@0.4.1, Rust rustix@1.1.5, Rust rustls@0.23.46, Rust scopeguard@1.2.0, Rust security-framework-sys@2.16.0, Rust security-framework@3.6.0, Rust serde_with@3.16.1, Rust serde_with_macros@3.16.1, Rust servo_arc@0.2.0, Rust signal-hook-registry@1.4.8, Rust signal-hook@0.3.18, Rust smallvec@1.15.1, Rust smallvec@1.16.2, Rust socket2@0.6.5, Rust stable_deref_trait@1.2.1, Rust string_cache@0.8.9, Rust string_cache_codegen@0.5.4, Rust syn@1.0.109, Rust system-configuration-sys@0.6.0, Rust system-configuration@0.7.0, Rust tar@0.4.46, Rust tempfile@3.27.0, Rust tendril@0.4.3, Rust thread_local@1.1.9, Rust tray-icon@0.21.3, Rust unicode-segmentation@1.12.0, Rust unicode-width@0.2.2, Rust url@2.5.9, Rust uuid@1.21.0, Rust version_check@0.9.5, Rust weezl@0.1.12, Rust window-vibrancy@0.6.0, Rust wry@0.54.4, Rust xattr@1.6.1
 
 Source filenames: LICENSE-APACHE
 

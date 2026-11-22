@@ -148,7 +148,7 @@ pub(super) fn plan_run_with(
 }
 
 /// The vocabulary `--correct-hints` repairs towards, or none without the flag.
-fn correction_vocabulary(
+pub(super) fn correction_vocabulary(
     args: &TranscribeArgs,
     glossary: &Glossary,
 ) -> Result<Vec<String>, DictationError> {
@@ -162,7 +162,8 @@ fn correction_vocabulary(
         ));
     }
     let vocabulary = glossary.single_word_terms();
-    if vocabulary.is_empty() {
+    // An explicit alias is a spacing-repair target on its own (#580).
+    if vocabulary.is_empty() && glossary.squash_aliases().is_empty() {
         return Err(DictationError::SettingsError(
             "--correct-hints requires at least one single-word vocabulary item in the hint"
                 .to_string(),

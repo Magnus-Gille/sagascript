@@ -31,6 +31,76 @@ pub struct GlossaryCorrection {
     pub end: usize,
 }
 
+/// Shortest squashed form an explicit alias may repair by spacing alone;
+/// shorter keys would match ordinary phrases such as "to get her".
+const MIN_SQUASH_ALIAS_LEN: usize = 5;
+
+/// A run of 1–3 adjacent words whose letters, with the spacing and hyphens
+/// between them removed, may spell a dictionary term (#580).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SquashWindow {
+    pub start: usize,
+    pub end: usize,
+    /// Lowercased letters and digits of the window, without separators.
+    pub key: String,
+    /// Byte ranges of the words inside the window.
+    pub words: Vec<(usize, usize)>,
+}
+
+/// Letters, digits and combining marks: a combining accent never ends a word,
+/// so a window cannot cut a decomposed word in two.
+fn is_word_char(character: char) -> bool {
+    character.is_alphanumeric()
+        || matches!(character as u32, 0x0300..=0x036F | 0x1AB0..=0x1AFF | 0x1DC0..=0x1DFF | 0x20D0..=0x20FF | 0xFE20..=0xFE2F)
+}
+
+/// The squashed comparison form: lowercase letters and digits only.
+pub fn squash_key(text: &str) -> String {
+    text.chars()
+        .filter(|character| is_word_char(*character))
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+/// Every window of `1..=max_words` adjacent words in `text`. Words are maximal
+/// alphanumeric runs and only whitespace or a hyphen may separate the words of
+/// a window, so punctuation (a clause boundary) never lets a window merge
+/// words. A window spans exactly its first word's start to its last word's end.
+pub fn squash_windows(text: &str, max_words: usize) -> Vec<SquashWindow> {
+    let mut words: Vec<(usize, usize)> = Vec::new();
+    let mut current: Option<usize> = None;
+    for (index, character) in text.char_indices() {
+        if is_word_char(character) {
+            current.get_or_insert(index);
+        } else if let Some(start) = current.take() {
+            words.push((start, index));
+        }
+    }
+    if let Some(start) = current {
+        words.push((start, text.len()));
+    }
+    let mut windows = Vec::new();
+    for first in 0..words.len() {
+        let mut key = String::new();
+        for last in first..words.len().min(first + max_words) {
+            if last > first {
+                let gap = &text[words[last - 1].1..words[last].0];
+                if !(gap == "-" || (!gap.is_empty() && gap.chars().all(char::is_whitespace))) {
+                    break;
+                }
+            }
+            key.push_str(&squash_key(&text[words[last].0..words[last].1]));
+            windows.push(SquashWindow {
+                start: words[first].0,
+                end: words[last].1,
+                key: key.clone(),
+                words: words[first..=last].to_vec(),
+            });
+        }
+    }
+    windows
+}
+
 #[derive(Debug, Clone)]
 struct AliasMatcher {
     canonical: String,
@@ -42,6 +112,9 @@ pub struct Glossary {
     source: String,
     entries: Vec<GlossaryEntry>,
     matchers: Vec<AliasMatcher>,
+    /// Squashed explicit aliases (never the canonical term) and the term each
+    /// repairs to.
+    squash_aliases: Vec<(String, String)>,
 }
 
 impl Glossary {
@@ -96,9 +169,17 @@ impl Glossary {
             source,
             entries,
             matchers: Vec::new(),
+            squash_aliases: Vec::new(),
         };
         glossary.rebuild_matchers();
         glossary
+    }
+
+    /// Squashed explicit aliases (at least 5 characters, never the canonical
+    /// term) with the term each repairs to, for the confidence-gated
+    /// spacing repair of `transcribe --correct-hints` (#580).
+    pub fn squash_aliases(&self) -> &[(String, String)] {
+        &self.squash_aliases
     }
 
     pub fn entries(&self) -> &[GlossaryEntry] {
@@ -326,6 +407,18 @@ impl Glossary {
                     })
             })
             .collect();
+        self.squash_aliases = self
+            .entries
+            .iter()
+            .flat_map(|entry| {
+                entry
+                    .aliases
+                    .iter()
+                    .filter(|alias| has_word_edges(alias))
+                    .map(|alias| (squash_key(alias), entry.canonical.clone()))
+            })
+            .filter(|(key, _)| key.chars().count() >= MIN_SQUASH_ALIAS_LEN)
+            .collect();
     }
 }
 
@@ -383,6 +476,38 @@ fn escaped_alias_pattern(alias: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn squash_windows_stay_within_three_words() {
+        let keys: Vec<String> = squash_windows("a b c d", 3)
+            .into_iter()
+            .map(|w| w.key)
+            .collect();
+        assert_eq!(keys, ["a", "ab", "abc", "b", "bc", "bcd", "c", "cd", "d"]);
+    }
+
+    #[test]
+    fn squash_windows_merge_only_across_plain_spacing_or_one_hyphen() {
+        let keys = |text| -> Vec<usize> {
+            squash_windows(text, 3)
+                .iter()
+                .map(|w| w.words.len())
+                .collect()
+        };
+        assert_eq!(keys("a-b"), [1, 2, 1]);
+        assert_eq!(keys("a - b"), [1, 1]);
+        assert_eq!(keys("a. b"), [1, 1]);
+        assert_eq!(keys("e\u{301}x y"), [1, 2, 1]);
+    }
+
+    #[test]
+    fn squash_aliases_hold_only_long_explicit_aliases() {
+        let glossary = Glossary::parse("worktree = work tree\nOdin = o din\nTogether");
+        assert_eq!(
+            glossary.squash_aliases(),
+            [("worktree".to_string(), "worktree".to_string())]
+        );
+    }
 
     #[test]
     fn legacy_prompt_remains_byte_for_byte_decoder_context() {

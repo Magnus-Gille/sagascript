@@ -64,7 +64,7 @@ pub(super) fn assemble_plain_result(input: PlainInput<'_>) -> PlainResult {
     let prompt_echo = analyze_prompt_echo(&segments, glossary.decoder_prompt().as_deref());
     let mut corrections = apply_glossary_corrections(&mut segments, glossary);
     if let Some(vocabulary) = hint_vocabulary {
-        corrections.extend(apply_hint_corrections(&mut segments, vocabulary));
+        corrections.extend(apply_hint_corrections(&mut segments, vocabulary, glossary));
     }
     let repetition = analyze_repetition(&segments);
     let quarantined = |index: usize| {
