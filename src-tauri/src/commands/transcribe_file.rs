@@ -9,6 +9,7 @@ use sagascript_core::error::DictationError;
 use sagascript_core::glossary::Glossary;
 use sagascript_core::models::FileModel;
 use sagascript_core::settings::SettingsError;
+use sagascript_core::transcription::diagnostics::without_prompt_echo;
 use sagascript_core::transcription::whisper_backend::display_transcript;
 use sagascript_core::transcription::{
     recommended_parallel_chunks, ContextProfile, TranscribeRequest,
@@ -407,6 +408,8 @@ pub async fn transcribe_file(
                     })
                     .on_encode_start(&on_encode_start),
             )?;
+            // Set aside segments where Whisper read the vocabulary prompt back (SAGA-579).
+            let segments = without_prompt_echo(segments, opts.prompt.as_deref());
             Ok(display_transcript(&segments, language))
         })
     });
