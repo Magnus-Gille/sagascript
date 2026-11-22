@@ -432,7 +432,7 @@ impl SourceFactory for SyntheticFactory {
 
     fn system_audio_support(&self) -> SystemAudioSupport {
         self.support
-            .unwrap_or_else(|| sagascript_core::recording::capture::availability::probe())
+            .unwrap_or_else(sagascript_core::recording::capture::availability::probe)
     }
 
     fn open_system(&self) -> Result<Box<dyn CaptureSource>, RecordingError> {
