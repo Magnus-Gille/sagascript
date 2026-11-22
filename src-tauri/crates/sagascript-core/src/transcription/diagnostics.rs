@@ -421,12 +421,19 @@ pub fn analyze_prompt_echo(
     prompt: Option<&str>,
 ) -> PromptEchoDiagnostics {
     let mut spans = Vec::new();
-    let terms: Vec<Vec<String>> = prompt
+    let listed: Vec<Vec<String>> = prompt
         .filter(|prompt| is_vocabulary_list(prompt))
         .map(prompt_terms)
         .unwrap_or_default();
-    // The prompt's words in prompt order, for the verbatim-copy test.
-    let prompt_words: Vec<String> = terms.concat();
+    // The prompt's words in prompt order, repeats included, for the
+    // verbatim-copy test; the entries without repeats, for counting.
+    let prompt_words: Vec<String> = listed.concat();
+    let mut terms: Vec<Vec<String>> = Vec::new();
+    for term in listed {
+        if !terms.contains(&term) {
+            terms.push(term);
+        }
+    }
     if terms.len() >= PROMPT_ECHO_MIN_DISTINCT_PROMPT_TERMS {
         for (segment_index, segment) in segments.iter().enumerate() {
             let words = word_tokens(&segment.text);
@@ -532,15 +539,13 @@ fn is_vocabulary_list(prompt: &str) -> bool {
 }
 
 /// The prompt's entries (comma, semicolon or line separated), each as its
-/// words, without repeats.
+/// words, in prompt order and with repeats kept.
 fn prompt_terms(prompt: &str) -> Vec<Vec<String>> {
-    let mut terms: Vec<Vec<String>> = Vec::new();
-    for term in prompt.split([',', ';', '\n']).map(word_tokens) {
-        if !term.is_empty() && !terms.contains(&term) {
-            terms.push(term);
-        }
-    }
-    terms
+    prompt
+        .split([',', ';', '\n'])
+        .map(word_tokens)
+        .filter(|term| !term.is_empty())
+        .collect()
 }
 
 /// How many words of `words` whole prompt entries cover (greedy, longest
@@ -1229,6 +1234,17 @@ mod tests {
     fn overlapping_entries_each_count_towards_the_echo() {
         let prompt = "New York, New, York, Alpha, Beta";
         let echo = [heard(" New York New York Alpha Beta.", 0.9, -0.8)];
+        assert_eq!(analyze_prompt_echo(&echo, Some(prompt)).spans.len(), 1);
+    }
+
+    #[test]
+    fn a_confident_copy_of_a_prompt_with_a_repeated_entry_is_quarantined() {
+        let prompt = "Alpha, Beta, Alpha, Gamma, Delta, Epsilon";
+        let echo = [heard(
+            " Alpha, Beta, Alpha, Gamma, Delta, Epsilon.",
+            0.01,
+            -0.05,
+        )];
         assert_eq!(analyze_prompt_echo(&echo, Some(prompt)).spans.len(), 1);
     }
 
