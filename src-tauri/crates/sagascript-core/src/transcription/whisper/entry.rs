@@ -1,7 +1,10 @@
 use std::time::Instant;
 
 use tracing::{info, warn};
-use whisper_rs::{get_lang_str, FullParams, SamplingStrategy, WhisperState, WhisperVadParams};
+use whisper_rs::{
+    get_lang_str, FullParams, SamplingStrategy, WhisperState, WhisperVadContext,
+    WhisperVadContextParams, WhisperVadParams,
+};
 
 use crate::error::DictationError;
 use crate::models::{Language, WhisperModel};
@@ -126,6 +129,9 @@ fn recover_gaps(
     );
     let mut redecode_options = options.clone();
     redecode_options.parallel_chunks = 1;
+    // The first pass's VAD already judged these spans silent; re-decode them
+    // as plain audio or the retry would repeat the same decision.
+    redecode_options.vad_model_path = None;
     let recovered = crate::transcription::gap_redecode::redecode_uncovered_speech_cancellable(
         audio,
         segments,
@@ -435,6 +441,78 @@ impl WhisperBackend {
                     token_eot,
                 },
         } = job;
+        if let Some(vad_path) = &opts.vad_model_path {
+            // `WhisperState::full` is whisper.cpp's `whisper_full_with_state`,
+            // which never applies the VAD parameters (only `whisper_full`
+            // does), so VAD is applied here: detect speech spans and decode
+            // each one separately, with no context carried between spans.
+            if self.is_cancel_requested() {
+                return Err(DictationError::Cancelled);
+            }
+            let spans = vad_speech_spans(vad_path, audio)?;
+            if self.is_cancel_requested() {
+                return Err(DictationError::Cancelled);
+            }
+            let mut plain = opts.clone();
+            plain.vad_model_path = None;
+            let total = spans.len().max(1) as i32;
+            let mut on_progress = on_progress;
+            let mut segments = Vec::new();
+            for (index, (start, end)) in spans.into_iter().enumerate() {
+                segments.extend(self.transcribe_chunk_plain(
+                    state,
+                    ChunkJob {
+                        audio: &audio[start..end],
+                        offset_seconds: offset_seconds + start as f64 / 16_000.0,
+                        settings: DecodeSettings {
+                            model,
+                            language,
+                            options: &plain,
+                            token_eot,
+                        },
+                    },
+                    |_| {},
+                )?);
+                on_progress((index as i32 + 1) * 100 / total);
+            }
+            // No speech at all is still a completed chunk.
+            on_progress(100);
+            return Ok(segments);
+        }
+        self.transcribe_chunk_plain(
+            state,
+            ChunkJob {
+                audio,
+                offset_seconds,
+                settings: DecodeSettings {
+                    model,
+                    language,
+                    options: opts,
+                    token_eot,
+                },
+            },
+            on_progress,
+        )
+    }
+
+    /// Decode one chunk on `state` in a single Whisper call (no VAD split).
+    fn transcribe_chunk_plain(
+        &self,
+        state: &mut WhisperState,
+        job: ChunkJob<'_>,
+        on_progress: impl FnMut(i32) + 'static,
+    ) -> Result<Vec<TranscriptSegment>, DictationError> {
+        let ChunkJob {
+            audio,
+            offset_seconds,
+            settings:
+                DecodeSettings {
+                    model,
+                    language,
+                    options: opts,
+                    token_eot,
+                },
+        } = job;
         let mut params = self.full_params(model, language, opts, on_progress)?;
         self.install_abort_callback(&mut params);
         state.full(params, audio).map_err(|error| {
@@ -540,6 +618,71 @@ impl WhisperBackend {
     }
 }
 
+/// Silence of at least this long ends a speech span (VAD segmented decode).
+const VAD_MIN_SILENCE_MS: i32 = 400;
+/// Padding kept around each span so word edges are not clipped.
+const VAD_SPAN_PAD_SAMPLES: usize = 16_000 / 5;
+/// A span never exceeds this, so one decode stays within Whisper's window.
+const VAD_MAX_SPEECH_S: f32 = 28.0;
+
+/// Speech spans (start, end sample offsets) found by the Silero VAD, padded
+/// and merged when the padding makes neighbours touch. Empty when no speech.
+fn vad_speech_spans(vad_path: &str, audio: &[f32]) -> Result<Vec<(usize, usize)>, DictationError> {
+    model::verify_vad_model(std::path::Path::new(vad_path))?;
+    let mut context =
+        WhisperVadContext::new(vad_path, WhisperVadContextParams::new()).map_err(|error| {
+            DictationError::TranscriptionFailed(format!("VAD init failed: {error}"))
+        })?;
+    let mut vad = WhisperVadParams::new();
+    vad.set_threshold(0.5);
+    vad.set_min_silence_duration(VAD_MIN_SILENCE_MS);
+    vad.set_max_speech_duration(VAD_MAX_SPEECH_S);
+    vad.set_speech_pad(50);
+    let segments = context
+        .segments_from_samples(vad, audio)
+        .map_err(|error| DictationError::TranscriptionFailed(format!("VAD failed: {error}")))?;
+    let to_sample = |centiseconds: f32| (centiseconds.max(0.0) as f64 * 160.0).round() as usize;
+    let raw: Vec<(usize, usize)> = segments
+        .map(|segment| (to_sample(segment.start), to_sample(segment.end)))
+        .collect();
+    let padded = pad_and_merge_spans(&raw, audio.len(), VAD_SPAN_PAD_SAMPLES);
+    Ok(split_long_spans(&padded, VAD_MAX_SPAN_SAMPLES))
+}
+
+/// Longest span handed to one decode; a longer one is split evenly.
+const VAD_MAX_SPAN_SAMPLES: usize = 28 * 16_000;
+
+/// Split any span longer than `max` into equal parts no longer than `max`.
+fn split_long_spans(spans: &[(usize, usize)], max: usize) -> Vec<(usize, usize)> {
+    let mut out = Vec::with_capacity(spans.len());
+    for &(start, end) in spans {
+        let len = end - start;
+        let parts = len.div_ceil(max).max(1);
+        for part in 0..parts {
+            out.push((start + len * part / parts, start + len * (part + 1) / parts));
+        }
+    }
+    out
+}
+
+/// Pad every span by `pad` samples on both sides, clamp to `len` and merge
+/// spans that then overlap or touch. Input spans are in time order.
+fn pad_and_merge_spans(spans: &[(usize, usize)], len: usize, pad: usize) -> Vec<(usize, usize)> {
+    let mut merged: Vec<(usize, usize)> = Vec::with_capacity(spans.len());
+    for &(start, end) in spans {
+        let start = start.saturating_sub(pad).min(len);
+        let end = (end + pad).min(len);
+        if end <= start {
+            continue;
+        }
+        match merged.last_mut() {
+            Some(last) if start <= last.1 => last.1 = last.1.max(end),
+            _ => merged.push((start, end)),
+        }
+    }
+    merged
+}
+
 /// Choose at most 30 seconds from the first five minutes for language
 /// detection, preferring the non-overlapping window with the highest RMS
 /// energy. Scanning non-overlapping windows keeps this linear in the bounded
@@ -608,3 +751,31 @@ fn macos_perf_cores() -> Option<i32> {
 #[cfg(test)]
 #[path = "entry_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod vad_span_tests {
+    use super::pad_and_merge_spans;
+
+    #[test]
+    fn pads_clamps_and_merges_touching_spans() {
+        let spans = [(100, 200), (250, 400), (5_000, 5_100)];
+        assert_eq!(
+            pad_and_merge_spans(&spans, 5_150, 100),
+            vec![(0, 500), (4_900, 5_150)]
+        );
+    }
+
+    #[test]
+    fn long_spans_are_split_evenly_under_the_limit() {
+        use super::split_long_spans;
+        assert_eq!(
+            split_long_spans(&[(0, 250), (300, 400)], 100),
+            vec![(0, 83), (83, 166), (166, 250), (300, 400)]
+        );
+    }
+
+    #[test]
+    fn no_speech_gives_no_spans() {
+        assert!(pad_and_merge_spans(&[], 1_000, 100).is_empty());
+    }
+}
