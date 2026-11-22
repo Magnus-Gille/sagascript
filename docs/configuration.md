@@ -156,6 +156,11 @@ when comparing a Bluetooth headset microphone with the Mac microphone.
 The new performance events contain timings, sample counts, sample rate, and
 decoder settings, but no audio, transcript text, or device names.
 
+Engine events (category `Engine`): `engine_unloaded` with `reason`
+(`memory_pressure` or `unused`) and the unloaded `models`, and `memory_pressure`
+with the `level` and what was `unloaded`. An unload by the idle timer happens
+inside the engine host and is not logged. Use these to explain a cold load.
+
 Focus and paste-target diagnostics (hotkey, overlay, activation steps, allowed
 paste checks, startup events) are logged at debug level. They appear in
 `~/Library/Logs/Sagascript/sagascript.log` only when `RUST_LOG` contains
@@ -234,7 +239,8 @@ the first dictation does not wait on a cold model.
 - `engine_idle_unload_minutes` defaults to 60 (was 10).
 - Migration (`engine_defaults_version` 1): settings still on the old defaults
   move to the new ones once; an explicit non-default choice is kept.
-- The model is unloaded when memory pressure is reported (idle engine only;
+- The model is unloaded when the system reports `critical` memory pressure (a
+  `warning` only logs; idle engine only;
   a wake then does not reload it for 5 minutes) and when no profile uses
   Pianissimo any more. A busy engine is left to the idle timer. Key-down is not
   held back: the dictation that follows loads the model anyway, so loading at

@@ -113,8 +113,30 @@ pub(crate) fn warm_models_at_startup(app: &tauri::App) {
         );
         #[cfg(target_os = "macos")]
         {
-            platform::macos::observe_memory_pressure(|| {
-                sagascript_core::transcription::pianissimo_backend::unload_if_idle_for_memory_pressure();
+            platform::macos::observe_memory_pressure(|level| {
+                let outcome =
+                    sagascript_core::transcription::pianissimo_backend::handle_memory_pressure(
+                        level,
+                    );
+                // A routine warning that changed nothing is debug-only.
+                let level = if outcome.unloaded.is_empty()
+                    && outcome.level
+                        == sagascript_core::transcription::pianissimo_backend::MemoryPressure::Warning
+                {
+                    "debug"
+                } else {
+                    "info"
+                };
+                crate::logging::log_global(
+                    level,
+                    "Engine",
+                    crate::logging::log_events::engine::MEMORY_PRESSURE,
+                    serde_json::json!({
+                        "level": outcome.level.as_str(),
+                        "unloaded": outcome.unloaded,
+                    }),
+                );
+                crate::logging::log_engine_unloaded("memory_pressure", &outcome.unloaded);
             });
             let wake_app = handle.clone();
             platform::macos::observe_system_wake(move || {
