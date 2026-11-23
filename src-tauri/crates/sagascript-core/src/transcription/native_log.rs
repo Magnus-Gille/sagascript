@@ -71,10 +71,22 @@ pub(crate) fn install() {
 }
 
 unsafe extern "C" fn trampoline(level: ggml_log_level, text: *const c_char, _: *mut c_void) {
+    // A panic must never cross the FFI boundary: unwinding out of an
+    // `extern "C"` function aborts the process. The tracing subscriber can
+    // panic (e.g. its stderr write fails with EPIPE after the parent went
+    // away), so contain it and drop the log line.
+    let _ = std::panic::catch_unwind(|| {
+        // SAFETY: whisper.cpp passes null or a valid NUL-terminated string.
+        unsafe { route(level, text) }
+    });
+}
+
+/// # Safety
+/// `text` must be null or point to a valid NUL-terminated string.
+unsafe fn route(level: ggml_log_level, text: *const c_char) {
     if text.is_null() {
         return;
     }
-    // SAFETY: whisper.cpp passes a valid NUL-terminated string.
     let text = unsafe { CStr::from_ptr(text) }.to_string_lossy();
     let text = text.trim();
     match GGMLLogLevel::from(level) {
@@ -162,5 +174,42 @@ mod tests {
             "whisper_init_state: failed to load Core ML model /m/kb-whisper-large-encoder.mlmodelc",
             &expected
         ));
+    }
+
+    /// Subscriber that panics on every event, like a stderr writer failing.
+    struct PanickingSubscriber;
+    impl tracing::Subscriber for PanickingSubscriber {
+        fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+            true
+        }
+        fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+        fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+        fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+        fn event(&self, _: &tracing::Event<'_>) {
+            panic!("simulated log sink failure");
+        }
+        fn enter(&self, _: &tracing::span::Id) {}
+        fn exit(&self, _: &tracing::span::Id) {}
+    }
+
+    #[test]
+    fn trampoline_survives_panicking_subscriber() {
+        // Regression (SAGA-584): a panic inside this `extern "C"` function
+        // aborts the process; it must be contained instead.
+        tracing::subscriber::with_default(PanickingSubscriber, || {
+            let msg = std::ffi::CString::new("whisper: hello").unwrap();
+            for level in 0..6 {
+                unsafe { trampoline(level, msg.as_ptr(), std::ptr::null_mut()) };
+            }
+        });
+    }
+
+    #[test]
+    fn trampoline_accepts_null_and_invalid_utf8() {
+        unsafe { trampoline(2, std::ptr::null(), std::ptr::null_mut()) };
+        let bad = std::ffi::CString::new(vec![b'a', 0xff, 0xfe, b'z']).unwrap();
+        unsafe { trampoline(2, bad.as_ptr(), std::ptr::null_mut()) };
     }
 }

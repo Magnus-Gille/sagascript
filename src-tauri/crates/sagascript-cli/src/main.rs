@@ -17,6 +17,7 @@ fn main() -> ExitCode {
     // Warn-level logging to stderr keeps stdout clean for piped output.
     let configured_filter = std::env::var("RUST_LOG").ok();
     tracing_subscriber::fmt()
+        .log_internal_errors(false)
         .with_env_filter(EnvFilter::new(sagascript_cli::effective_log_filter(
             configured_filter.as_deref(),
             "warn",

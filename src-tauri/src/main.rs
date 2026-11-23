@@ -80,6 +80,7 @@ fn main() -> std::process::ExitCode {
             // CLI mode uses warn-level logging to keep stdout clean
             let configured_filter = std::env::var("RUST_LOG").ok();
             tracing_subscriber::fmt()
+                .log_internal_errors(false)
                 .with_env_filter(EnvFilter::new(sagascript_cli::effective_log_filter(
                     configured_filter.as_deref(),
                     "warn",
@@ -111,6 +112,7 @@ fn main() -> std::process::ExitCode {
     // GUI mode: initialize tracing (console logging)
     let configured_filter = std::env::var("RUST_LOG").ok();
     tracing_subscriber::fmt()
+        .log_internal_errors(false)
         .with_env_filter(EnvFilter::new(sagascript_cli::effective_log_filter(
             configured_filter.as_deref(),
             "info",
