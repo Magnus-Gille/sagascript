@@ -300,8 +300,8 @@ file per track and a `recording.json` manifest) instead of transcribing in memor
 the flags cannot be combined with `-o` or `--clipboard`, and `record` and
 `record -o file.wav` work as before. Lossless stores what the device delivers
 (24-bit, native rate, about 300 MB per hour); compact stores 16 kHz, 16-bit (about
-50 MB per hour). Defaults come from the `recording_quality`, `recording_directory`
-and `recording_channel_pair` settings (`sagascript config`). Recording is never
+50 MB per hour). Defaults come from the `recording_quality`, `recording_source`,
+`recording_directory` and `recording_channel_pair` settings (`sagascript config`). Recording is never
 silent: stderr shows a start banner (folder, quality, device, a reminder that
 recording other people may need their consent), a status line every 10 seconds
 (elapsed time, level, gaps, free disk) and a summary; Ctrl-C, SIGTERM and

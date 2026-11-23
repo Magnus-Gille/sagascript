@@ -32,6 +32,7 @@ use serde_json::Value;
 
 use crate::glossary::Glossary;
 use crate::models::{Language, WhisperModel};
+use crate::recording::source_plan::RecordSource;
 use crate::settings::{
     Accessibility, EnginePrewarm, FileModelPreference, HotkeyMode, HotkeyProfile, RecordingQuality,
     Settings,
@@ -144,6 +145,7 @@ pub enum Op {
     EnginePrewarm(EnginePrewarm),
     EngineIdleUnloadMinutes(u32),
     RecordingQuality(RecordingQuality),
+    RecordingSource(RecordSource),
     /// The folder as the surface is given it (absolute: the CLI would make a
     /// relative one absolute against its own directory, the app refuses it).
     RecordingDirectory(String),
@@ -203,6 +205,7 @@ pub fn reset_as_op(key: &str) -> Op {
             Op::EngineIdleUnloadMinutes(defaults.engine_idle_unload_minutes)
         }
         "recording_quality" => Op::RecordingQuality(defaults.recording_quality),
+        "recording_source" => Op::RecordingSource(defaults.recording_source),
         "recording_directory" => Op::RecordingDirectory(defaults.recording_directory.clone()),
         "recording_channel_pair" => Op::RecordingChannelPair(
             defaults.recording_channel_pair[0],
@@ -442,6 +445,7 @@ pub fn customised() -> Settings {
         engine_prewarm: EnginePrewarm::Off,
         engine_idle_unload_minutes: 7,
         recording_quality: RecordingQuality::Compact,
+        recording_source: RecordSource::Both,
         recording_directory: a_folder(),
         recording_channel_pair: [3, 4],
         ..english()
@@ -673,6 +677,11 @@ pub fn cases() -> Vec<Case> {
         "recording_quality compact",
         english(),
         Op::RecordingQuality(RecordingQuality::Compact),
+    );
+    add(
+        "recording_source both",
+        english(),
+        Op::RecordingSource(RecordSource::Both),
     );
     add(
         "recording_directory a folder",
@@ -962,6 +971,7 @@ pub fn cases() -> Vec<Case> {
         "engine_prewarm",
         "engine_idle_unload_minutes",
         "recording_quality",
+        "recording_source",
         "recording_directory",
         "recording_channel_pair",
     ] {
@@ -1123,6 +1133,7 @@ fn apply(
         Op::EnginePrewarm(mode) => settings.engine_prewarm = *mode,
         Op::EngineIdleUnloadMinutes(minutes) => settings.engine_idle_unload_minutes = *minutes,
         Op::RecordingQuality(quality) => settings.recording_quality = *quality,
+        Op::RecordingSource(source) => settings.recording_source = *source,
         Op::RecordingDirectory(directory) => {
             let is_file = std::path::Path::new(directory).is_file();
             settings.set_recording_directory(directory, is_file)?;

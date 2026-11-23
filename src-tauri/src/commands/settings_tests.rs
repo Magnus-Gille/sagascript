@@ -449,6 +449,7 @@ mod transport_contract_tests {
             vad_enabled: true,
             has_completed_onboarding: true,
             recording_quality: sagascript_core::settings::RecordingQuality::Compact,
+            recording_source: sagascript_core::recording::source_plan::RecordSource::Both,
             recording_directory: "/Volumes/Archive/Sagascript".into(),
             recording_channel_pair: [3, 4],
             recording_folder_confirmed: true,

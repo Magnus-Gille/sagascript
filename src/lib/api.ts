@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { RecordingQuality } from "./record-types";
+import type { RecordingQuality, RecordSource } from "./record-types";
 import type { UpdateRecoveryPayload } from "./update-recovery";
 import type { PreflightReport } from "./acceptance";
 import type {
@@ -56,6 +56,7 @@ export interface Settings {
   has_completed_onboarding: boolean;
   /** The tier new recordings are made in (SAGA-564). */
   recording_quality: RecordingQuality;
+  recording_source: RecordSource;
   /** Empty = the default folder. */
   recording_directory: string;
   /** 1-based input channels; `[n, n]` records channel n as mono. */

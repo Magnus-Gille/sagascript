@@ -101,7 +101,7 @@ function reprocessingResult(task) {
 }
 // Recorder (SAGA-564): the Record window opens at /?window=record. window.qa.recordingSessionChanged(...)
 // emits recording-session-changed; window.qa.recorder holds the fixture state.
-const recorderSettings = { recording_quality: "lossless", recording_directory: "", recording_channel_pair: [1, 2],
+const recorderSettings = { recording_quality: "lossless", recording_source: "mic", recording_directory: "", recording_channel_pair: [1, 2],
   recording_folder_confirmed: true, recording_consent_acknowledged: true };
 const recorderFolder = { path: "/Users/fixture/Music/Sagascript", exists: true, free_bytes: 120_000_000_000, warnings: [], is_default: true };
 function recordingSession(overrides = {}) {
@@ -411,6 +411,7 @@ mockIPC(async (cmd, args = {}) => {
     case "transcribe_recording": return `Transcript of ${args.folderName}`;
     case "get_recording_folder_info": return recorder.folder;
     case "set_recording_quality": recorderSettings.recording_quality = args.quality; return null;
+    case "set_recording_source": recorderSettings.recording_source = args.source; return null;
     case "set_recording_directory":
       recorderSettings.recording_directory = args.path;
       recorder.folder = { ...recorderFolder, path: args.path || recorderFolder.path, is_default: !args.path };

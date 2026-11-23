@@ -7,8 +7,12 @@
 
 use super::capture::SystemAudioSupport;
 use super::RecordingError;
+use crate::settings::SettingsError;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+/// Stored as `recording_source` in the settings file (`mic`, `system`, `both`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum RecordSource {
     #[default]
     Mic,
@@ -17,6 +21,19 @@ pub enum RecordSource {
 }
 
 impl RecordSource {
+    pub const ALL: [RecordSource; 3] = [Self::Mic, Self::System, Self::Both];
+
+    /// Stable identifier used in the settings file and by `sagascript config`.
+    pub fn id(self) -> &'static str {
+        self.as_str()
+    }
+
+    pub fn parse_id(value: &str) -> Result<Self, SettingsError> {
+        Self::parse(value).ok_or_else(|| SettingsError::InvalidRecordingSource {
+            value: value.to_string(),
+        })
+    }
+
     pub fn parse(value: &str) -> Option<Self> {
         match value {
             "mic" => Some(Self::Mic),

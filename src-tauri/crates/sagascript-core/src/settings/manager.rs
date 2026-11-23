@@ -8,6 +8,7 @@ use super::{canonical_hotkey, validate_hotkey, LineupEnv, SettingsError};
 use crate::glossary::Glossary;
 
 use crate::models::{FileModel, Language, PianissimoModel, WhisperModel};
+use crate::recording::source_plan::RecordSource;
 
 /// Resolve an `Auto` file-model preference against what is downloaded.
 /// `allow_pianissimo` false yields Whisper models only.
@@ -305,6 +306,10 @@ pub struct Settings {
     pub engine_idle_unload_minutes: u32,
     /// Quality tier of new recordings.
     pub recording_quality: RecordingQuality,
+    /// What new recordings capture: the microphone, the system audio or both.
+    /// `system` and `both` need system audio support (decision D3); `both`
+    /// falls back to the microphone, `system` is refused.
+    pub recording_source: RecordSource,
     /// Folder the recordings are kept in. Empty = the default folder
     /// ([`Settings::recordings_dir`]); created on the first recording.
     pub recording_directory: String,
@@ -384,6 +389,7 @@ impl Default for Settings {
             engine_prewarm: EnginePrewarm::default(),
             engine_idle_unload_minutes: DEFAULT_ENGINE_IDLE_UNLOAD_MINUTES,
             recording_quality: RecordingQuality::default(),
+            recording_source: RecordSource::default(),
             recording_directory: String::new(),
             recording_channel_pair: DEFAULT_RECORDING_CHANNEL_PAIR,
             recording_folder_confirmed: false,

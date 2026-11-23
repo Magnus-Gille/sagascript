@@ -69,7 +69,7 @@ impl RecorderOptions {
             None => stored.recording_quality,
         };
         let source = match args.source.as_deref() {
-            None => RecordSource::Mic,
+            None => stored.recording_source,
             Some(id) => RecordSource::parse(id).ok_or_else(|| {
                 DictationError::SettingsError(format!(
                     "--source must be mic, system or both, not '{id}'"
@@ -607,12 +607,20 @@ mod tests {
     fn defaults_come_from_the_settings() {
         let settings = Settings {
             recording_quality: RecordingQuality::Compact,
+            recording_source: RecordSource::Both,
             recording_directory: "/tmp/takes".into(),
             ..Settings::default()
         };
         let options =
             RecorderOptions::from_args(&record_args(&["--name", "x"]), &settings).unwrap();
         assert_eq!(options.quality, RecordingQuality::Compact);
+        assert_eq!(options.source, RecordSource::Both);
+        let explicit = RecorderOptions::from_args(
+            &record_args(&["--name", "x", "--source", "mic"]),
+            &settings,
+        )
+        .unwrap();
+        assert_eq!(explicit.source, RecordSource::Mic);
         assert_eq!(options.dir, PathBuf::from("/tmp/takes"));
         assert_eq!(options.title, "x");
     }

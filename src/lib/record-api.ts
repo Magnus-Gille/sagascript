@@ -7,6 +7,7 @@ import type {
   RecordingFinished,
   RecordingFolderInfo,
   RecordingQuality,
+  RecordSource,
   RecordingSessionInfo,
   RecordingSummary,
   RecoveryNote,
@@ -56,6 +57,10 @@ export async function transcribeRecording(folderName: string): Promise<string | 
 /** `path` null asks about the configured folder. */
 export async function getRecordingFolderInfo(path: string | null = null): Promise<RecordingFolderInfo> {
   return invoke("get_recording_folder_info", { path });
+}
+
+export async function setRecordingSource(source: RecordSource): Promise<void> {
+  return invoke("set_recording_source", { source });
 }
 
 export async function setRecordingQuality(quality: RecordingQuality): Promise<void> {

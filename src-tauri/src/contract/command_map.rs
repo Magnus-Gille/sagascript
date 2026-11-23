@@ -93,6 +93,7 @@ const TYPESCRIPT_NAMES: &[(&str, &str, Option<&str>)] = &[
         "ReprocessingRequest",
         Some("./meeting-reprocessing-types"),
     ),
+    ("RecordSource", "RecordSource", Some("./record-types")),
     (
         "RecordingFinished",
         "RecordingFinished",

@@ -62,6 +62,9 @@ fn run_op(app: &App, runtime: &tokio::runtime::Runtime, op: &Op) -> Result<(), S
         Op::RecordingQuality(quality) => runtime
             .block_on(set_recording_quality(state, *quality))
             .map_err(text),
+        Op::RecordingSource(source) => runtime
+            .block_on(set_recording_source(state, *source))
+            .map_err(text),
         Op::RecordingDirectory(directory) => persist_recording_directory(&state, directory)
             .map(drop)
             .map_err(text),

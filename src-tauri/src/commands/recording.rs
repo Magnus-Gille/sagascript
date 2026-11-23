@@ -10,6 +10,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+use sagascript_core::recording::source_plan::RecordSource;
 use sagascript_core::recording::{
     list_recordings as list_recordings_in, summarize_folder, RecordingError, RecordingSummary,
 };
@@ -282,6 +283,18 @@ pub async fn set_recording_quality(
         settings.recording_quality = quality;
     })?;
     info!("Recording quality: {}", quality.id());
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn set_recording_source(
+    controller: State<'_, SharedController>,
+    source: RecordSource,
+) -> Result<(), CommandError> {
+    persist_and_sync(&controller, |settings| {
+        settings.recording_source = source;
+    })?;
+    info!("Recording source: {}", source.id());
     Ok(())
 }
 

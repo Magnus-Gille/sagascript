@@ -36,6 +36,7 @@
   "recording_directory": "",
   "recording_folder_confirmed": false,
   "recording_quality": "lossless",
+  "recording_source": "mic",
   "schema_version": 4,
   "show_overlay": false,
   "temperature_fallback": true,

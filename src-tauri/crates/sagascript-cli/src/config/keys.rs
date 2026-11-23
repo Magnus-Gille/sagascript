@@ -18,6 +18,7 @@ use std::str::FromStr;
 
 use sagascript_core::error::DictationError;
 use sagascript_core::models::{FileModel, Language, PianissimoModel, WhisperModel};
+use sagascript_core::recording::source_plan::RecordSource;
 use sagascript_core::settings::{
     expand_home, validate_hotkey, Accessibility, DictionaryRefusal, EnginePrewarm,
     FileModelPreference, HotkeyMode, HotkeyProfile, ModelResetNotice, RecordingQuality, Settings,
@@ -375,6 +376,22 @@ pub(super) const KEYS: &[Key] = &[
         },
         reset: |settings, defaults| {
             settings.recording_quality = defaults.recording_quality;
+            Ok(Vec::new())
+        },
+        warning: no_warning,
+    },
+    Key {
+        name: "recording_source",
+        note: None,
+        help: &["mic, system, both (what new recordings capture; system and both need macOS 14.4+ on Apple Silicon or Windows)"],
+        get: |settings| settings.recording_source.id().to_string(),
+        set: |settings, value| {
+            settings.recording_source =
+                RecordSource::parse_id(value).map_err(DictationError::from)?;
+            Ok(Vec::new())
+        },
+        reset: |settings, defaults| {
+            settings.recording_source = defaults.recording_source;
             Ok(Vec::new())
         },
         warning: no_warning,

@@ -40,6 +40,10 @@ pub enum SettingsError {
     #[error("recording_quality must be lossless or compact, got '{value}'")]
     InvalidRecordingQuality { value: String },
 
+    /// `recording_source` is not `mic`, `system` or `both`.
+    #[error("recording_source must be mic, system or both, got '{value}'")]
+    InvalidRecordingSource { value: String },
+
     /// A recording channel is 0; channels count from 1.
     #[error("recording_channel_pair channels count from 1, got {first}-{second}")]
     InvalidRecordingChannelPair { first: u16, second: u16 },
@@ -187,6 +191,7 @@ impl SettingsError {
             Self::UnknownModelPreference { .. }
             | Self::InvalidEnginePrewarm { .. }
             | Self::InvalidRecordingQuality { .. }
+            | Self::InvalidRecordingSource { .. }
             | Self::InvalidRecordingChannelPair { .. }
             | Self::RecordingDirectoryIsAFile => "invalid_setting_value",
             Self::UnknownProfile { .. } | Self::UnknownDictationProfile { .. } => "unknown_profile",

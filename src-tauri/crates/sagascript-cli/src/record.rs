@@ -65,7 +65,7 @@ pub struct RecordArgs {
     /// Recorder mode: what to record. mic is the microphone; system is what the computer plays
     /// (planned for macOS 14.4+ on Apple Silicon and for Windows; not in this version yet); both
     /// records the two as separate tracks and falls back to the microphone where system audio is
-    /// not available (default: mic)
+    /// not available (default: the recording_source setting, else mic)
     #[arg(
         long,
         value_name = "SOURCE",

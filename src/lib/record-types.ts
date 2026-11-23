@@ -10,6 +10,9 @@ export type RecordingSessionState = "idle" | "starting" | "recording" | "finaliz
 
 export type RecordingQuality = "lossless" | "compact";
 
+/** What new recordings capture (`recording_source`). */
+export type RecordSource = "mic" | "system" | "both";
+
 /** A condition of the recording folder or the disk, shown as a warning (never blocks recording). */
 export type RecordingWarning = "low_disk" | "fat32" | "exfat" | "network_volume" | "cloud_synced";
 
